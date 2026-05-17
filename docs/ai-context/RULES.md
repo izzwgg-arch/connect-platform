@@ -75,11 +75,12 @@
 - **CRM Command Center dashboard (Phase 18A)** — `/crm/dashboard` is the workflow landing: prioritize actionable counts and short previews backed by existing CRM APIs; avoid vanity KPIs, fake activity feeds, and dense primary tables. Guidance stays inline or in compact empty states—not repeated warning banners.
 - **CRM + Workspace single visual language (Phase 19A)** — CRM pages use `apps/portal/components/crm/*` primitives and `--crm-*` / `bg-crm-*` Tailwind tokens mapped to portal dark theme variables. Do not introduce light-mode card surfaces (`bg-white`, `bg-gray-50`) on CRM routes; keep dark shell continuity with `console-shell`. See `docs/ai-context/UI_SYSTEM.md`.
 - **CRM dashboard hierarchy (Phase 19B)** — `/crm/dashboard` is the only route that uses dashboard chart primitives (`components/crm/charts/*`, `components/crm/dashboard/*`). Visuals must map to **real** API fields (contacts stats, daily report, follow-ups, campaigns, queue preview, tasks stats, import batches). No fabricated time series, sparklines without backing data, or marketing widgets. Prefer charts + compact KPI strips over paragraph hints and equal-weight text cards.
-- **CRM campaign operational workspace (Phase 19E+)** — `/crm/campaigns` and `/crm/campaigns/[id]` are outbound **command centers**. Always use `crm.pageInnerCampaign` + **`crm.campaignWorkspace`** so inputs/buttons stay dark when portal `data-theme=light`. **No light-token leakage**: ban `bg-white`, `bg-gray-*`, `bg-blue-50/100`, native white inputs, disabled white buttons — use `crm.input`, `crm.select`, `crm.btn*` with dark disabled states. **No duplicate metrics**: live snapshot in `CampaignCommandHeader` owns counts; `CampaignPerformancePanel` is funnel/status mix only; sidebar is exceptions/actions. Detail grid must assign sidebar `crm.campaignAsideCol` (never omit `col-span` — causes ~1-column squeeze). Never invent metrics; preserve queue/import/distribute behavior.
+- **CRM campaign operational workspace (Phase 19E+)** — `/crm/campaigns` and `/crm/campaigns/[id]` are outbound **command centers**. Always use `crm.pageInnerCampaign` + **`crm.campaignWorkspace`** so inputs/buttons stay dark when portal `data-theme=light`. **No light-token leakage**: ban `bg-white`, `bg-gray-*`, `bg-blue-50/100`, native white inputs, disabled white buttons — use `crm.input`, `crm.select`, `crm.btn*` with dark disabled states. **No duplicate metrics**: live snapshot in `CampaignCommandHeader` owns counts; `CampaignPerformancePanel` is funnel/status mix only; sidebar is exceptions/actions. Detail grid must assign sidebar `crm.campaignAsideCol` (never omit `col-span` — causes ~1-column squeeze). **Index cards (19E.2):** compact but readable — full metric labels in `crm.campaignIndexMetric*` tiles (not cramped shorthand like “CB”/“Conv”); labeled Queue/Power/Pause/Archive actions; `list-none` on campaign rows; primary CTA **Open campaign**. Never invent metrics; preserve queue/import/distribute behavior.
 - **CRM queue workbench (Phase 19C / 19C.1 / 19C.2)** — `/crm/queue` uses `crm.pageInnerQueue` (wide, up to ~1680px). **Single source for queue snapshot counts:** top `QueueCountPill` row only — sidebar must not repeat pending/due/overdue/upcoming bars or duplicate today metrics. Command sidebar = in-view total + next action + activity today + campaign; attention panel = exceptions only (tasks, personal callback pressure, campaign context). **No light-token leakage** on queue/power surfaces. Power mode uses `QueuePowerSessionBar` with dark chips throughout.
 - **CRM contacts index (Phase 19D.1 / 19D.2)** — `/crm/contacts` uses `crm.pageInnerContacts` + **`crm.contactsWorkspace`** + `CRMPageHeader` + visual `SummaryStatTile` strip. **Not a database directory UI** — wide desk layout, command search bar, divided relationship rows with prominent Open/Workspace actions. **No white chips or light browser controls** on the command bar: stage/list/assigned pills = `crm.filterPill*`; search = `crm.input`; checkboxes = `crm.checkbox`; bulk select = `crm.selectCompact`. Page-scoped stats only (no fake insights). Preserve search, pagination, stage/archive/assigned filters, bulk assign, import link, permissions.
 - **CRM contact relationship workspace (Phase 19D)** — `/crm/contacts/[id]` uses `components/crm/contact/*` + `crm.pageInnerContact`. **Timeline-first** main column (quick note, SMS panel, `ContactTimeline`); sticky **operational sidebar** (next step, `ContactRelationshipHealth`, open tasks, outreach rules, contact info). Header = `ContactWorkspaceHeader` + `ContactStickyActionBar` on scroll. Metrics from contact fields, open tasks, timeline recency, and optional queue member match (`GET /crm/queue?filter=all`) — **no** fake scores or sentiment. Preserve all mutations (notes, SMS, tasks, merge, archive, workspace link). Queue/campaign continuity via `returnTo`, `memberId`, `campaignId` query params.
 - **CRM live call workspace (Phase 19F)** — `/crm/live-call` uses `components/crm/live/*` + `crm.pageInnerLive`. **No fake live call state** — telephony badge/timer only from `useTelephony()` when a matching call exists; otherwise show explicit idle/context copy. Idle route must be a **ready desk** (`LiveWorkspaceIdle`), not a centered “no contact” dead end. All panels use real APIs (contact, timeline, tasks, scripts, checklists, disposition, SMS, originate, queue PATCH). **Workspace continuity:** preserve screen-pop and queue URLs (`contactId`, `memberId`, `campaignId`, `returnTo`, `linkedId`, `from`, `mode=power`); do not rewrite routing or PBX/call-control backends.
+- **CRM task command desk (Phase 19H)** — /crm/tasks uses components/crm/tasks/* + crm.pageInnerTasks + crm.tasksWorkspace. No light-token leakage: ban bg-white, bg-gray-50, light inputs, inline var(--border) style props — use crm.input, crm.select, crm.btn*. No fake task metrics: KPI strip and tab counts read from GET /crm/tasks/stats (real API). Task completion calls real PATCH /crm/contacts/:id/tasks/:id and quick-add calls POST /crm/contacts/:id/tasks. Urgency hierarchy is client-side partitioning of server-returned data — TaskFeed is the single owner. Keyboard shortcut N is guarded against INPUT/TEXTAREA/SELECT focus and modifier keys.
 
 ---
 
@@ -223,6 +224,14 @@
     - `CrmChecklistItem` rows are deleted only when their parent checklist's items are replaced via `PATCH /crm/checklists/:id` with a new `items` array (full replace).
     - `CrmChecklistResponse` rows are immutable once created. No update or delete endpoints.
 
+93. **`/crm/scripts` must use the scripts playbook visual system (Phase 19I).**
+    - Layout: `crm.pageInnerScripts` + `crm.scriptsWorkspace` (dark token lock) + `crm.scriptsGrid`.
+    - No `bg-white`, `bg-gray-50`, `style={{background:'#fff'}}`, or `var(--input-bg, #fff)` on any script-route element.
+    - Script body is stored as freetext; sections are parsed client-side by `---` delimiters. No schema change needed.
+    - `ScriptEditModal` serializes sections via `serializeScriptSections()` — keep this as the single serialization path.
+    - Templates (`SCRIPT_TEMPLATES`) are client-only starter strings; they do not create backend records until the user saves.
+    - Checklist mode is a UI-only step-through toggle — it does NOT write `CrmChecklistResponse` rows (that is the live-call checklist panel's job).
+
 42. **Disposition saves are transactional for primary data, non-blocking for timeline.**
     - `POST /crm/contacts/:id/disposition` wraps `CrmContactMeta` update + optional `CrmContactNote` + optional `CrmContactTask` in a single `db.$transaction([...])`.
     - All `writeTimelineEvent()` calls happen **after** the transaction, without `await`.
@@ -232,6 +241,14 @@
 43. **`STAGE_CHANGED` from disposition only fires if the stage actually changes.**
     - Compare `nextStage` against `CrmContactMeta.stage` before writing the event.
     - Do not write `STAGE_CHANGED` if `nextStage === currentStage` or if `nextStage` is not provided.
+
+92. **CRM checklist workspace (Phase 19J) uses the 3-column dark workspace pattern.**
+    - `/crm/checklists` uses `crm.pageInnerChecklist` + **`crm.checklistWorkspace`** dark token lock (same as campaign/task/script routes).
+    - Layout: library (`checklistLibraryCol`) · workspace (`checklistWorkspaceCol`) · progress panel (`checklistSideCol`).
+    - Items render as **numbered workflow steps** — not plain textarea rows. Required steps use `crm.checklistStepRequired` (warning accent); optional use `crm.checklistStepPending`.
+    - 6 starter templates (`ChecklistTemplates.ts`) pre-fill the create form; they never call the API directly — the user confirms.
+    - **No light-token leakage:** ban `bg-white`, `bg-gray-*`, inline `style={{ background }}`, native white inputs. Use `crm.input`, `crm.checkbox`, `crm.btn*`.
+    - Progress panel is advisory (management view) — it shows item stats and warnings, not live call completion state. Live completion happens in the `ChecklistPanel` on `/crm/live-call`.
 
 41. **Live Call Workspace must not call or modify telephony state.**
     - `LiveCallBanner` reads from `useTelephony()` (read-only context).
@@ -525,6 +542,20 @@
     - "On call" badge suppresses idle/attention badges for that agent row (one badge at a time).
     - This is read-only. Do not add any telephony control action to the on-call row.
     - The extension lookup is a single `findMany` scoped to `{ tenantId, ownerUserId: { in: userIds }, status: "ACTIVE" }` — bounded, no N+1.
+
+93. **Wallboard surfaces must always use dark CRM tokens — no light-mode cards or ad-hoc `gray-*` surfaces. (Phase 19G)**
+    - The wallboard page must apply `crm.wallboardWorkspace` on its root element so dark CSS vars
+      override the portal light theme. Never use `bg-white`, `bg-gray-50`, `bg-gray-100`, or ad-hoc
+      `bg-gray-800/bg-gray-900` Tailwind classes on wallboard panels or the page background.
+    - All wallboard panels use `WallboardPanel` (or equivalent `border-crm-border bg-crm-surface`
+      surface). Page background is `var(--crm-bg, var(--bg-soft, #101923))`.
+    - Agent badges/chips in the wallboard must use `crm-danger/crm-warning/crm-success` semantic tokens —
+      never `bg-red-100 text-red-700`, `bg-orange-100`, or other light-mode Tailwind status chips.
+    - Wallboard metrics must come from real API endpoints only: `/crm/reports/daily`,
+      `/crm/reports/campaigns`, `/crm/reports/agents`, `/crm/reports/follow-ups`, and
+      `useTelephony().activeCalls`. Do not fabricate, mock, or hardcode wallboard counts.
+    - TV mode remains a `fixed inset-0 z-50` overlay (Rule 77 unchanged). Do not reintroduce the
+      pre-19G `bg-gradient-to-r from-blue-800 to-blue-700` header or `bg-white` panel surfaces.
 
 80. **CRM recording playback must always route through the existing safe recording endpoint.**
     - Use `GET /voice/recording/:linkedId/stream` (or `/download`). These are the ONLY paths

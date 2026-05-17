@@ -63,7 +63,27 @@
 
 ---
 
-## 5. Live Workflow
+## 5. Checklist Workspace (Phase 19J)
+
+| Step | How to verify |
+|------|--------------|
+| `/crm/checklists` loads with dark workspace | No `bg-white`, no `bg-gray-50`, no inline `style={{ background: '#fff' }}` anywhere on the route |
+| 3-column layout renders | Library (left) · Workspace (center) · Progress panel (right) all visible on ≥ lg screen |
+| Library shows active + archived checklists | Active list top; collapsed Archived section below; template section collapsible |
+| Template section in library | Click **Templates** to expand → 6 templates visible (Cold call, Appointment, Insurance, Callback, Objection, Follow-up) |
+| Select from template → pre-fills create form | Template name + items appear; **no API call until Create is confirmed** |
+| Create blank | Library `+` button → name field + empty steps → Add step → Create Checklist → `POST /crm/checklists` → 201 |
+| Edit existing | Select checklist → Edit button → name + numbered item rows → Save → `PATCH /crm/checklists/:id` |
+| Required toggle | Checkbox marks item required → step renders with amber warning ring |
+| Archive / restore | Archive button → checklist moves to archived section in library; Restore reverses |
+| Progress panel updates | Selecting a checklist updates the progress ring, required-step list, and status banner |
+| Required warnings | Checklist with no required steps → amber "No required steps" banner in progress panel |
+| Ready confirmation | Checklist with ≥1 required step and isActive → green "Ready for live call usage" banner |
+| Empty state template grid | No checklist selected → template cards + "Start from blank" CTA (not a dead centered icon) |
+
+---
+
+## 6. Live Workflow
 
 | Step | How to verify |
 |------|--------------|
@@ -257,18 +277,22 @@
 | Function | Create, lifecycle, import preview/run, bulk assign, member status/callback, export CSV unchanged |
 | Typecheck | `pnpm exec tsc -p apps/portal` — no errors in `crm/campaigns/**` or `components/crm/campaign/**` |
 
-### Phase 19E.2 — Campaign dark-mode correctness (visual smoke)
+### Phase 19E.2 — Campaign card readability + dark surfaces (visual smoke)
 
 | Check | Expected |
 |-------|----------|
 | Theme | `crm.campaignWorkspace` on index + detail — search/select/buttons dark even if portal theme is light |
-| Inputs | No white search bars or filter dropdowns; `crm.input` / `crm.select` everywhere |
-| Buttons | Ghost/secondary/disabled states use `crm-surface-2`, not white/transparent chips |
+| Filter bar | `crm.campaignFilterBar` on index — polished dark search + status `crm.select` |
+| Index card layout | 3-zone row (identity · metric tiles · actions); `min-h-[5.75rem]`; not sparse giant card |
+| Metric labels | Readable: Members, In queue, Callbacks, Converted — not cramped “CB”/“Conv” shorthand |
+| Actions | Primary **Open campaign**; Queue + Power labeled; Pause/Archive with text (not icon-only) |
+| List markers | Campaign `<ul>` uses `list-none` — no bullet/dot beside status strip |
+| Active emphasis | Status accent strip + ring on ACTIVE; wider strip optional |
 | Detail grid | Sidebar readable width (`lg:col-span-5`, min ~18rem); not a 1-column sliver |
 | Metrics | Counts once in live snapshot; performance panel has no duplicate member/converted rings |
-| Layout | Command header 12-col; cards align; empty member state compact `CampaignGuidedEmpty` |
-| Forbidden grep | No `bg-white`, `bg-gray-50`, `bg-blue-50`, `border-gray-200` on campaign paths |
-| Behavior | Queue, power, import, distribute, filters unchanged |
+| Forbidden grep | No `bg-white`, `bg-gray-50`, `bg-green-100`, `bg-amber-50`, `text-green-700`, light blue chips on campaign paths |
+| Behavior | Search, status filter, New campaign, Open, Queue, Power, Start/Pause/Resume/Archive unchanged |
+| Typecheck | `pnpm exec tsc -p apps/portal` passes |
 
 ### Phase 19E.1 — Campaign visual polish (visual smoke)
 
@@ -410,6 +434,29 @@
 | Sidebar | One column (`xl:col-span-4`): command + attention stacked with `gap-3`. |
 | Exceptions | Attention: tasks, personal overdue callbacks, campaign — not generic queue backlog counts. |
 | Behavior | Unchanged. |
+
+
+### Phase 19H — Task command desk (visual smoke)
+
+| Check | Expected |
+|-------|----------|
+| /crm/tasks loads | TaskCommandDesk renders; CRMPageHeader with title + New task button; no g-white/g-gray-50 anywhere |
+| KPI strip | 4 tiles (Overdue, Due today, Assigned to me, All open); danger/warning tones when > 0; clicking tile changes tab |
+| Overdue tab | Tasks partitioned as Overdue section with danger rail and section header; overdue tile shows count |
+| Due today tab | Warning-toned section header; tasks with 	ext-crm-warning due label |
+| My tasks tab | Urgency-partitioned: Overdue → Due today → Upcoming → No due date sections |
+| All tab | Same partitioning + Completed section at bottom |
+| Empty — overdue | Success checkmark, caught-up copy, Go to queue button |
+| Empty — today | Contextual copy; link to overdue if any; Add task CTA |
+| Empty — mine | Add task CTA + My queue link; no giant blank void |
+| Task cards | Priority rail (border/accent/warning/danger); contact link; due badge with color; quick-action column |
+| Quick add | Collapsed to dashed row; expands to inline composer; N keyboard shortcut opens it |
+| Quick add form | Contact autocomplete works; creates task via real POST /crm/contacts/:id/tasks; closes on success |
+| Task complete | Circle → check animation; calls real PATCH; task removed from view; KPI refreshed |
+| Sidebar | Urgency ring (my overdue vs. open); workload tiles; quick-focus links; workspace shortcuts |
+| Dark theme | No g-white, g-gray-50, inline ar(--border) style props, or light native inputs |
+| Keyboard | N key opens quick-add; guarded — does not fire inside inputs or with modifier keys |
+| Typecheck | pnpm exec tsc -p apps/portal --noEmit passes |
 
 ---
 
@@ -1923,6 +1970,172 @@ After Phase 13B cleanup, a tenant may have **no ACTIVE campaigns**. Admin must c
 [ ] 7. Phone system unaffected
         - /health returns {"ok":true}
         - No telephony changes
+```
+
+---
+
+## Phase 19G — Wallboard Dark SaaS Redesign smoke checklist
+
+```
+[ ] 1. Visual — no light-mode surfaces
+        - /crm/wallboard: no bg-white, bg-gray-50, bg-gray-100 classes in rendered HTML
+        - Panel cards use border-crm-border + bg-crm-surface (dark navy)
+        - Page background is dark (#101923 / --crm-bg)
+        - Header is dark sticky surface, NOT a blue gradient
+        - Agent status badges use dark CRM danger/warning tokens, not bg-red-100/bg-orange-100
+
+[ ] 2. KPI strip
+        - 8 metric tiles visible: Active Calls, Queue Remaining, Overdue Callbacks, Due Today (CB),
+          Dispositions Today, Contacts Created, Active Campaigns, Overdue Tasks
+        - Text-3xl numbers on normal / text-5xl on TV mode
+        - Overdue tiles have danger tinted border when count > 0
+        - Due Today tile has warning tinted border when count > 0
+        - All 8 tiles show real values from /crm/reports/daily + activeCalls (no zeros unless genuinely zero)
+        - Clickable tiles navigate to correct pages
+
+[ ] 3. Visual panels — dark surfaces
+        - Active Calls panel: dark surface, no bg-white; empty state uses centered icon + text
+        - Agent Activity panel: visual bar rows (not a table); disposition bars (accent),
+          callback bars (warning), queue bars (muted); bar widths animate on render
+        - Campaign Progress panel: segmented progress bars on dark bg-crm-surface-2 track;
+          no bg-gray-100 bar track
+        - Follow-Up Urgency panel: CRMRingMetric pair visible when totalUrgent > 0;
+          "All caught up" green banner when zero urgency
+
+[ ] 4. Agent leaderboard behavior
+        - Each agent row: name + role + ext on left, 1–3 activity bars center, conv. on right
+        - On-call badge: bg-crm-success/15 text-crm-success (green), NOT bg-green-100 text-green-800
+        - Needs-attention badge: bg-crm-danger/15 text-crm-danger (not bg-red-100)
+        - Callbacks-due badge: bg-crm-warning/15 text-crm-warning (not bg-orange-100)
+
+[ ] 5. CRMRingMetric rings render correctly
+        - Follow-Up Urgency panel shows rings when overdue callbacks or tasks > 0
+        - Ring "Overdue Callbacks" uses var(--crm-danger) stroke color (red)
+        - Ring "Overdue Tasks" uses var(--crm-warning) stroke color (amber)
+        - sublabel shows correct "N due today" count
+        - When totalUrgent = 0: green "All caught up" banner shown; rings not shown
+
+[ ] 6. TV mode
+        - TV Mode button toggles ?tv=1 in URL (no full page navigation)
+        - TV mode renders fixed inset-0 z-50 overlay — AppShell sidebar not affected
+        - TV mode: dark header with large center clock (text-5xl tabular-nums)
+        - TV mode: text-5xl KPI numbers, text-base panel headings
+        - TV mode: Exit TV button removes ?tv=1 and restores normal mode
+        - TV mode clock ticks every 10s (not every 1s)
+
+[ ] 7. Live data
+        - Active Calls count matches telephony WS (useTelephony().activeCalls.length)
+        - WS Live badge shows pulsing green dot when isLive = true
+        - Connecting badge shows amber when isLive = false
+        - Page auto-refreshes every 60s (countdown visible in header)
+        - Manual Refresh button triggers immediate reload + resets 60s interval
+        - Last updated timestamp updates after every refresh
+
+[ ] 8. Timers cleaned up on unmount
+        - refreshTimerRef, countdownTimerRef, clockTimerRef all use useRef + clearInterval in useEffect cleanup
+        - LiveCallsPanel tick timer also clears on unmount
+
+[ ] 9. Responsive layout
+        - KPI strip: 4-col on mobile, 8-col on sm+
+        - Panel grid: 1-col on mobile, 2-col on xl+
+        - Header: countdown/last-updated hidden on xs (hidden sm:block)
+        - Refresh/TV text labels hidden on xs (hidden sm:inline)
+
+[ ] 10. Portal typecheck passes
+        pnpm exec tsc -p apps/portal --noEmit → 0 errors
+
+[ ] 11. No light-mode regressions (grep check)
+        grep -r "bg-white\|bg-gray-50\|bg-gray-100" apps/portal/app/(platform)/crm/wallboard/
+        → no matches expected
+
+[ ] 12. No telephony/PBX changes
+        - /health still returns {"ok":true}
+        - No changes to apps/api, apps/telephony, apps/worker
+```
+
+---
+
+## Phase 19I — Scripts Playbook Workspace
+
+```
+[ ] 1. Library panel
+        - Script cards show name + relative updated-time + status strip
+        - Active scripts show green/accent strip; archived show gray, italic, opacity-60
+        - Search filters by name (client-side)
+        - Archived section is collapsed by default; toggling it shows archived scripts
+        - Selecting a card loads the workspace (GET /crm/scripts/:id)
+
+[ ] 2. Empty state (no scripts yet)
+        - Library panel shows 6 template cards (Cold Call, Follow-Up, Re-Engagement, Callback, Voicemail, Closing)
+        - Clicking a template opens ScriptEditModal pre-filled with that template body
+        - "Start from scratch" opens ScriptEditModal with empty sections
+        - No fake metrics or placeholder data shown
+
+[ ] 3. Script workspace — Playbook mode (default)
+        - Script name + active/archived badge in command header
+        - Section count + updated date shown in subtitle
+        - Sections parsed from body by --- delimiter
+        - Each ScriptSectionBlock: numbered badge, title, collapsible body
+        - Body renders: bold headers (** **), bullets (- / *), body paragraphs
+        - First section open by default; others collapsed
+        - Copy section button visible on hover; copies section title + content
+        - Copy all button in header copies full body
+
+[ ] 4. Script workspace — Checklist mode
+        - Clicking "Checklist" mode tab resets all checkboxes and switches mode
+        - Body lines render as interactive checkbox rows (Square → CheckCircle2)
+        - Bold header lines render as section labels (not checkboxes)
+        - Progress bar shows sectionsDone/total with smooth animation
+        - When all sections 100% checked: green success banner shown
+        - Switching back to Playbook mode restores normal view
+
+[ ] 5. Section navigation
+        - Section pill nav shows truncated section titles (or §N fallback)
+        - Clicking a pill scrolls to that section's anchor (#section-N)
+        - Live-call ExternalLink button navigates to /crm/live-call
+
+[ ] 6. Create script
+        - New button opens ScriptEditModal (isCreate = true)
+        - Name field required (Save button disabled when empty)
+        - At least one section with content required (error shown on attempt)
+        - Section editor: title (optional) + textarea content
+        - Add section button appends a new blank section
+        - Remove section button hidden when only 1 section remains
+        - Save calls POST /crm/scripts → script appended to library + auto-selected
+        - Cancel closes modal without any API call
+
+[ ] 7. Edit script
+        - Edit button in workspace header opens ScriptEditModal (isCreate = false)
+        - Modal pre-fills name + parses body into sections
+        - Save calls PATCH /crm/scripts/:id → library name/updatedAt updated, workspace refreshed
+        - Format hints visible in modal (** for header, - for bullet, --- for separator)
+
+[ ] 8. Archive / restore
+        - Archive button visible when script.isActive = true
+        - Calls PATCH /crm/scripts/:id { isActive: false }
+        - Script moves to Archived section in library; workspace shows "Archived" badge
+        - Restore button visible when script.isActive = false
+        - Calls PATCH /crm/scripts/:id { isActive: true }
+        - Script moves back to active list; "Active" badge shown
+
+[ ] 9. Dark surface check
+        grep -r "bg-white\|bg-gray-50\|input-bg\|var(--input-bg" apps/portal/app/(platform)/crm/scripts/
+        grep -r "bg-white\|bg-gray-50\|input-bg\|var(--input-bg" apps/portal/components/crm/scripts/
+        → 0 matches expected
+
+[ ] 10. TypeScript
+        pnpm exec tsc -p apps/portal --noEmit → 0 errors
+
+[ ] 11. Responsive layout
+        - Desktop (xl+): 3+9 col split library/workspace
+        - Laptop (lg): library still left, workspace right (12-col grid adjusts)
+        - Narrow: library stacks above workspace
+        - Modal: max-w-2xl, scrollable, dark surface
+
+[ ] 12. No backend changes
+        - No schema changes, no new API routes
+        - Only existing: GET /crm/scripts, GET /crm/scripts/:id, POST /crm/scripts, PATCH /crm/scripts/:id
+        - No telephony or PBX changes
 ```
 
 ---

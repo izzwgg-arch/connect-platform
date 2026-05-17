@@ -12,6 +12,8 @@ import {
 import { apiGet } from "../../../../services/apiClient";
 import { useTelephony } from "../../../../contexts/TelephonyContext";
 import type { LiveCall } from "../../../../types/liveCall";
+import { crm } from "../../../../components/crm/crmClasses";
+import { CRMRingMetric } from "../../../../components/crm/charts/CRMRingMetric";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -172,45 +174,58 @@ function findAgentCall(extensions: string[], calls: LiveCall[]): LiveCall | null
   return null;
 }
 
-// ── Summary strip stat card ───────────────────────────────────────────────────
+// ── WallboardKpiTile — TV-ready big metric card ────────────────────────────────
 
-function StripStat({
-  label, value, icon, urgent, href, tv,
+function WallboardKpiTile({
+  label, value, icon, tone = "neutral", href, tv,
 }: {
-  label: string; value: number | string; icon: React.ReactNode;
-  urgent?: boolean; href?: string; tv?: boolean;
+  label: string;
+  value: number | string;
+  icon: React.ReactNode;
+  tone?: "neutral" | "warn" | "danger" | "positive";
+  href?: string;
+  tv?: boolean;
 }) {
-  const base = `flex flex-col items-center justify-center gap-1 rounded-xl flex-1 ${
-    tv ? "p-5 min-w-[130px]" : "p-4 min-w-[110px]"
-  } ${
-    urgent && Number(value) > 0
-      ? "bg-red-600/80 ring-2 ring-red-400"
-      : tv ? "bg-white/10" : "bg-white/10"
-  }`;
-  const numCls = `font-bold tabular-nums ${tv ? "text-5xl" : "text-3xl"} ${
-    urgent && Number(value) > 0 ? "text-red-100" : "text-white"
-  }`;
-  const lblCls = `font-medium text-center leading-tight ${tv ? "text-sm" : "text-xs"} ${
-    urgent && Number(value) > 0 ? "text-red-200" : "text-white/70"
-  }`;
+  const isActive = Number(value) > 0;
 
-  const inner = (
-    <div className={base}>
-      <div className={`mb-0.5 ${tv ? "text-white/50" : "text-white/60"}`}>{icon}</div>
-      <div className={numCls}>{value}</div>
-      <div className={lblCls}>{label}</div>
+  const borderCls =
+    tone === "danger" && isActive ? "border-crm-danger/45"
+    : tone === "warn"  && isActive ? "border-crm-warning/35"
+    : tone === "positive"          ? "border-crm-success/30"
+    : "border-crm-border";
+
+  const valueCls =
+    tone === "danger" && isActive ? "text-crm-danger"
+    : tone === "warn"  && isActive ? "text-crm-warning"
+    : tone === "positive"          ? "text-crm-success"
+    : "text-crm-text";
+
+  const iconCls =
+    tone === "danger" && isActive ? "text-crm-danger/60"
+    : tone === "warn"  && isActive ? "text-crm-warning/60"
+    : tone === "positive"          ? "text-crm-success/60"
+    : "text-crm-muted";
+
+  const tile = (
+    <div className={`rounded-crm-lg border ${borderCls} bg-crm-surface flex flex-col items-center justify-center gap-1 px-3 ${
+      tv ? "py-5 min-h-[120px]" : "py-4 min-h-[88px]"
+    } ${href ? "transition-colors hover:bg-crm-surface-2/40 hover:border-crm-accent/30" : ""}`}>
+      <div className={`${iconCls} mb-0.5`}>{icon}</div>
+      <div className={`font-bold tabular-nums leading-none ${tv ? "text-5xl" : "text-3xl"} ${valueCls}`}>
+        {value}
+      </div>
+      <div className={`${tv ? "text-sm" : "text-[11px]"} font-medium text-center leading-tight text-crm-muted`}>
+        {label}
+      </div>
     </div>
   );
-  return href ? (
-    <Link href={href} className="flex-1 min-w-[110px] hover:opacity-90 transition-opacity">
-      {inner}
-    </Link>
-  ) : inner;
+
+  return href ? <Link href={href} className="block">{tile}</Link> : tile;
 }
 
-// ── Panel wrapper ─────────────────────────────────────────────────────────────
+// ── WallboardPanel — dark panel wrapper using CRM tokens ───────────────────────
 
-function Panel({
+function WallboardPanel({
   title, icon, count, children, href, badge, badgeUrgent, tv,
 }: {
   title: string;
@@ -222,48 +237,33 @@ function Panel({
   badgeUrgent?: boolean;
   tv?: boolean;
 }) {
-  const panelCls = tv
-    ? "bg-gray-800 rounded-2xl border border-gray-700 shadow-lg flex flex-col overflow-hidden"
-    : "bg-white rounded-2xl border border-gray-200 shadow-sm flex flex-col overflow-hidden";
-  const headerCls = tv
-    ? "flex items-center justify-between px-5 py-4 border-b border-gray-700 bg-gray-900/60"
-    : "flex items-center justify-between px-5 py-3.5 border-b border-gray-100 bg-gray-50/60";
-  const titleCls = tv
-    ? "text-base font-bold text-gray-100 tracking-tight"
-    : "text-sm font-bold text-gray-800 tracking-tight";
-  const iconCls = tv ? "text-gray-400" : "text-gray-400";
-
   return (
-    <div className={panelCls}>
-      <div className={headerCls}>
+    <div className="rounded-crm-lg border border-crm-border bg-crm-surface shadow-crm flex flex-col overflow-hidden">
+      <div className="flex items-center justify-between px-5 py-3.5 border-b border-crm-border bg-crm-surface-2/30">
         <div className="flex items-center gap-2.5">
-          <span className={iconCls}>{icon}</span>
-          <h2 className={titleCls}>{title}</h2>
+          <span className="text-crm-muted">{icon}</span>
+          <h2 className={`font-bold text-crm-text tracking-tight ${tv ? "text-base" : "text-sm"}`}>{title}</h2>
           {count !== undefined && (
-            <span className={`px-2 py-0.5 rounded-full font-bold ${
-              tv ? "text-sm" : "text-xs"
-            } ${
+            <span className={`px-2 py-0.5 rounded-full font-bold border ${tv ? "text-sm" : "text-xs"} ${
               badgeUrgent && count > 0
-                ? "bg-red-100 text-red-700"
-                : tv ? "bg-gray-700 text-gray-300" : "bg-gray-100 text-gray-500"
+                ? "bg-crm-danger/12 text-crm-danger border-crm-danger/30"
+                : "bg-crm-surface-2 text-crm-muted border-crm-border"
             }`}>
               {count}
             </span>
           )}
           {badge && (
-            <span className={`px-2 py-0.5 rounded-full font-medium ${
-              tv ? "text-sm" : "text-xs"
-            } ${
+            <span className={`px-2 py-0.5 rounded-full font-medium border ${tv ? "text-sm" : "text-xs"} ${
               badgeUrgent
-                ? "bg-red-100 text-red-700"
-                : tv ? "bg-blue-900 text-blue-300" : "bg-blue-50 text-blue-600"
+                ? "bg-crm-danger/12 text-crm-danger border-crm-danger/30"
+                : "bg-crm-accent/12 text-crm-accent border-crm-accent/25"
             }`}>
               {badge}
             </span>
           )}
         </div>
         {href && !tv && (
-          <Link href={href} className="text-xs text-blue-600 hover:underline flex items-center gap-1 shrink-0">
+          <Link href={href} className="text-xs text-crm-muted hover:text-crm-accent flex items-center gap-1 shrink-0 transition-colors">
             View all <ChevronRight className="h-3 w-3" />
           </Link>
         )}
@@ -273,35 +273,35 @@ function Panel({
   );
 }
 
-// ── Agent status badge ────────────────────────────────────────────────────────
+// ── AgentBadge ────────────────────────────────────────────────────────────────
 
 function AgentBadge({ flag, tv }: { flag: AgentStatusFlag; tv?: boolean }) {
   const sz = tv ? "text-xs px-2 py-1" : "text-xs px-1.5 py-0.5";
   if (flag === "needs-attention") {
     return (
-      <span className={`inline-flex items-center gap-1 rounded-full font-semibold bg-red-100 text-red-700 ${sz}`}>
-        <AlertTriangle className="h-3 w-3" /> Needs attention
+      <span className={`inline-flex items-center gap-1 rounded-full font-semibold border bg-crm-danger/15 text-crm-danger border-crm-danger/30 ${sz}`}>
+        <AlertTriangle className="h-3 w-3 shrink-0" /> Needs attention
       </span>
     );
   }
   if (flag === "callbacks-due") {
     return (
-      <span className={`inline-flex items-center gap-1 rounded-full font-semibold bg-orange-100 text-orange-700 ${sz}`}>
-        <CalendarClock className="h-3 w-3" /> Callbacks due
+      <span className={`inline-flex items-center gap-1 rounded-full font-semibold border bg-crm-warning/15 text-crm-warning border-crm-warning/25 ${sz}`}>
+        <CalendarClock className="h-3 w-3 shrink-0" /> Callbacks due
       </span>
     );
   }
   if (flag === "no-outcomes") {
     return (
-      <span className={`inline-flex items-center gap-1 rounded-full font-semibold bg-amber-100 text-amber-700 ${sz}`}>
-        <Clock className="h-3 w-3" /> No outcomes today
+      <span className={`inline-flex items-center gap-1 rounded-full font-semibold border bg-amber-500/12 text-amber-400 border-amber-500/25 ${sz}`}>
+        <Clock className="h-3 w-3 shrink-0" /> No outcomes today
       </span>
     );
   }
   return null;
 }
 
-// ── On-call badge ─────────────────────────────────────────────────────────────
+// ── OnCallBadge ───────────────────────────────────────────────────────────────
 
 function OnCallBadge({ call, tv }: { call: LiveCall; tv?: boolean }) {
   const sz      = tv ? "text-xs px-2.5 py-1.5" : "text-xs px-2 py-0.5";
@@ -313,18 +313,14 @@ function OnCallBadge({ call, tv }: { call: LiveCall; tv?: boolean }) {
                 : isOut ? PhoneOutgoing
                         : Phone;
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full font-semibold ${sz} ${
-      tv
-        ? "bg-green-900/70 text-green-300 ring-1 ring-green-600"
-        : "bg-green-100 text-green-800"
-    }`}>
+    <span className={`inline-flex items-center gap-1.5 rounded-full font-semibold border bg-crm-success/15 text-crm-success border-crm-success/25 ${sz}`}>
       <DirIcon className={`${iconSz} shrink-0`} />
       On call · {dur}
     </span>
   );
 }
 
-// ── Live Calls Panel ──────────────────────────────────────────────────────────
+// ── LiveCallsPanel ────────────────────────────────────────────────────────────
 
 function LiveCallsPanel({ calls, isLive, tv }: { calls: LiveCall[]; isLive: boolean; tv?: boolean }) {
   const [, setTick] = useState(0);
@@ -333,40 +329,26 @@ function LiveCallsPanel({ calls, isLive, tv }: { calls: LiveCall[]; isLive: bool
     return () => clearInterval(id);
   }, []);
 
-  const callStateColor: Record<string, string> = tv
-    ? {
-        ringing: "bg-yellow-900/80 text-yellow-300",
-        dialing: "bg-blue-900/80 text-blue-300",
-        up:      "bg-green-900/80 text-green-300",
-        held:    "bg-gray-700 text-gray-400",
-        unknown: "bg-gray-700 text-gray-400",
-      }
-    : {
-        ringing: "bg-yellow-100 text-yellow-800",
-        dialing: "bg-blue-100 text-blue-700",
-        up:      "bg-green-100 text-green-800",
-        held:    "bg-gray-100 text-gray-600",
-        unknown: "bg-gray-100 text-gray-500",
-      };
+  const callStateCls: Record<string, string> = {
+    ringing: "bg-crm-warning/15 text-crm-warning border border-crm-warning/30",
+    dialing: "bg-crm-accent/15 text-crm-accent border border-crm-accent/30",
+    up:      "bg-crm-success/15 text-crm-success border border-crm-success/30",
+    held:    "bg-crm-surface-2 text-crm-muted border border-crm-border",
+    unknown: "bg-crm-surface-2 text-crm-muted border border-crm-border",
+  };
 
   function DirectionIcon({ direction }: { direction: LiveCall["direction"] }) {
-    if (direction === "inbound")  return <PhoneIncoming className={`${tv ? "h-4 w-4" : "h-3.5 w-3.5"} text-green-500`} />;
-    if (direction === "outbound") return <PhoneOutgoing className={`${tv ? "h-4 w-4" : "h-3.5 w-3.5"} text-blue-400`} />;
-    return <Phone className={`${tv ? "h-4 w-4" : "h-3.5 w-3.5"} text-gray-400`} />;
+    if (direction === "inbound")  return <PhoneIncoming className={`${tv ? "h-4 w-4" : "h-3.5 w-3.5"} text-crm-success`} />;
+    if (direction === "outbound") return <PhoneOutgoing  className={`${tv ? "h-4 w-4" : "h-3.5 w-3.5"} text-crm-accent`} />;
+    return <Phone className={`${tv ? "h-4 w-4" : "h-3.5 w-3.5"} text-crm-muted`} />;
   }
 
-  const emptyTextCls = tv ? "text-gray-500 text-base" : "text-gray-400 text-sm";
-  const emptyIconCls = tv ? "h-10 w-10 mx-auto mb-3 text-gray-700" : "h-8 w-8 mx-auto mb-2 text-gray-200";
-  const rowCls = tv ? "flex items-center gap-4 px-5 py-4 border-b border-gray-700/60" : "flex items-center gap-3 px-5 py-3 hover:bg-gray-50/60";
-  const fromCls = tv ? "text-base font-semibold text-gray-100 truncate" : "text-sm font-medium text-gray-900 truncate";
-  const toCls = tv ? "text-base text-gray-300 truncate" : "text-sm text-gray-600 truncate";
-  const subCls = tv ? "text-sm text-gray-500 mt-0.5 flex items-center gap-2" : "flex items-center gap-2 mt-0.5 text-xs text-gray-400";
-  const badgeCls = (state: string) =>
-    `font-medium ${tv ? "text-sm px-3 py-1" : "text-xs px-2 py-0.5"} rounded-full ${callStateColor[state] ?? callStateColor.unknown}`;
-  const durCls = tv ? "text-sm text-gray-400 tabular-nums" : "text-xs text-gray-400 tabular-nums";
+  const rowCls = tv
+    ? "flex items-center gap-4 px-5 py-4 border-b border-crm-border/50 last:border-0"
+    : "flex items-center gap-3 px-5 py-3 border-b border-crm-border/40 last:border-0 hover:bg-crm-surface-2/20 transition-colors";
 
   return (
-    <Panel
+    <WallboardPanel
       title="Active Calls"
       icon={<PhoneCall className={tv ? "h-5 w-5" : "h-4 w-4"} />}
       count={calls.length}
@@ -374,35 +356,35 @@ function LiveCallsPanel({ calls, isLive, tv }: { calls: LiveCall[]; isLive: bool
       tv={tv}
     >
       {calls.length === 0 ? (
-        <div className={`py-12 text-center ${emptyTextCls}`}>
-          <Phone className={emptyIconCls} />
-          <p>No active calls right now</p>
-          <p className={`mt-1 ${tv ? "text-sm text-gray-600" : "text-xs text-gray-300"}`}>
-            New calls will appear here in real time
-          </p>
+        <div className="flex flex-col items-center justify-center py-14 text-center px-6">
+          <Phone className={`mb-3 text-crm-border ${tv ? "h-10 w-10" : "h-8 w-8"}`} />
+          <p className={`font-medium text-crm-text ${tv ? "text-base" : "text-sm"}`}>No active calls right now</p>
+          <p className={`mt-1 text-crm-muted ${tv ? "text-sm" : "text-xs"}`}>New calls will appear here in real time</p>
         </div>
       ) : (
-        <div className={tv ? "" : "divide-y divide-gray-100"}>
+        <div>
           {calls.map((c) => (
             <div key={c.id} className={rowCls}>
               <DirectionIcon direction={c.direction} />
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className={fromCls}>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className={`font-semibold text-crm-text truncate ${tv ? "text-base" : "text-sm"}`}>
                     {c.fromName ? `${c.fromName} (${c.from ?? "?"})` : (c.from ?? "Unknown")}
                   </span>
-                  <span className={tv ? "text-gray-600" : "text-gray-400 text-xs"}>→</span>
-                  <span className={toCls}>{c.to ?? "?"}</span>
+                  <span className="text-crm-border text-xs">→</span>
+                  <span className={`text-crm-muted truncate ${tv ? "text-base" : "text-sm"}`}>{c.to ?? "?"}</span>
                 </div>
-                <div className={subCls}>
+                <div className={`flex items-center gap-2 mt-0.5 text-crm-muted ${tv ? "text-sm" : "text-xs"}`}>
                   <span>{c.direction}</span>
                   {c.queueId && <span>· Queue: {c.queueId}</span>}
                   {c.trunk    && <span>· {c.trunk}</span>}
                 </div>
               </div>
               <div className="flex flex-col items-end gap-1.5 shrink-0">
-                <span className={badgeCls(c.state)}>{c.state}</span>
-                <span className={durCls}>
+                <span className={`font-medium rounded-crm ${tv ? "text-sm px-3 py-1" : "text-xs px-2 py-0.5"} ${callStateCls[c.state] ?? callStateCls.unknown}`}>
+                  {c.state}
+                </span>
+                <span className={`text-crm-muted tabular-nums ${tv ? "text-sm" : "text-xs"}`}>
                   <Clock className={`${tv ? "h-3.5 w-3.5" : "h-3 w-3"} inline mr-0.5 align-text-bottom`} />
                   {callDuration(c.startedAt, c.answeredAt)}
                 </span>
@@ -411,24 +393,17 @@ function LiveCallsPanel({ calls, isLive, tv }: { calls: LiveCall[]; isLive: bool
           ))}
         </div>
       )}
-    </Panel>
+    </WallboardPanel>
   );
 }
 
-// ── Agent Activity Panel ──────────────────────────────────────────────────────
+// ── AgentActivityPanel — visual leaderboard with bars ─────────────────────────
 
-function AgentPanel({ agents, activeCalls, tv }: { agents: AgentRow[]; activeCalls: LiveCall[]; tv?: boolean }) {
-  const thCls = tv
-    ? "px-5 py-3 text-sm text-gray-400 uppercase tracking-wide font-semibold"
-    : "px-3 py-2 text-xs text-gray-400 uppercase tracking-wide font-semibold";
-  const tdNum = (active: boolean, color: string) =>
-    `font-bold ${tv ? "text-base" : "text-sm"} ${active ? color : tv ? "text-gray-700" : "text-gray-300"}`;
-
-  const emptyTextCls = tv ? "text-gray-500 text-base" : "text-gray-400 text-sm";
-  const emptyIconCls = tv ? "h-10 w-10 mx-auto mb-3 text-gray-700" : "h-8 w-8 mx-auto mb-2 text-gray-200";
+function AgentActivityPanel({ agents, activeCalls, tv }: { agents: AgentRow[]; activeCalls: LiveCall[]; tv?: boolean }) {
+  const maxDisp = Math.max(1, ...agents.map((a) => a.dispositionsToday));
 
   return (
-    <Panel
+    <WallboardPanel
       title="Agent Activity"
       icon={<Users className={tv ? "h-5 w-5" : "h-4 w-4"} />}
       count={agents.length}
@@ -436,101 +411,119 @@ function AgentPanel({ agents, activeCalls, tv }: { agents: AgentRow[]; activeCal
       tv={tv}
     >
       {agents.length === 0 ? (
-        <div className={`py-12 text-center ${emptyTextCls}`}>
-          <Inbox className={emptyIconCls} />
-          <p>No CRM agents configured</p>
-          <p className={`mt-1 ${tv ? "text-sm text-gray-600" : "text-xs text-gray-300"}`}>
-            Enable CRM access for users in CRM Settings
-          </p>
+        <div className="flex flex-col items-center justify-center py-14 text-center px-6">
+          <Inbox className={`mb-3 text-crm-border ${tv ? "h-10 w-10" : "h-8 w-8"}`} />
+          <p className={`font-medium text-crm-muted ${tv ? "text-base" : "text-sm"}`}>No CRM agents configured</p>
+          <p className={`mt-1 text-crm-muted/60 ${tv ? "text-sm" : "text-xs"}`}>Enable CRM access for users in CRM Settings</p>
         </div>
       ) : (
-        <div className="overflow-x-auto">
-          <table className={`w-full ${tv ? "text-base" : "text-sm"}`}>
-            <thead>
-              <tr className={`text-left border-b ${tv ? "border-gray-700" : "border-gray-100"}`}>
-                <th className={`${thCls} text-left`}>Agent</th>
-                <th className={`${thCls} text-right`}>Dispositions</th>
-                <th className={`${thCls} text-right`}>Queue</th>
-                <th className={`${thCls} text-right`}>Callbacks</th>
-                <th className={`${thCls} text-right`}>Tasks</th>
-                <th className={`${thCls} text-right`}>Conv.</th>
-              </tr>
-            </thead>
-            <tbody className={`divide-y ${tv ? "divide-gray-700/60" : "divide-gray-50"}`}>
-              {agents.map((a) => {
-                const flag       = agentStatus(a);
-                const activeCall = findAgentCall(a.extensions ?? [], activeCalls);
-                return (
-                  <tr key={a.userId} className={tv ? "hover:bg-gray-700/30" : "hover:bg-gray-50/60"}>
-                    <td className={`px-5 ${tv ? "py-3.5" : "py-2.5"}`}>
-                      <div className={`font-semibold truncate max-w-[160px] ${tv ? "text-gray-100" : "text-gray-900"}`}>
-                        {a.displayName}
+        <div className="divide-y divide-crm-border/40">
+          {agents.map((a) => {
+            const flag       = agentStatus(a);
+            const activeCall = findAgentCall(a.extensions ?? [], activeCalls);
+            const dispPct    = maxDisp > 0 ? Math.min(100, (a.dispositionsToday / maxDisp) * 100) : 0;
+            const cbPct      = Math.min(100, a.callbacksDueToday * 10);
+            const qPct       = Math.min(100, a.assignedQueue * 5);
+
+            return (
+              <div
+                key={a.userId}
+                className={`flex items-start gap-4 px-5 ${tv ? "py-4" : "py-3"} hover:bg-crm-surface-2/20 transition-colors`}
+              >
+                {/* Agent identity */}
+                <div className={`shrink-0 ${tv ? "w-[200px]" : "w-[148px]"}`}>
+                  <div className={`font-semibold text-crm-text truncate ${tv ? "text-base" : "text-sm"}`}>
+                    {a.displayName}
+                  </div>
+                  <div className="text-[11px] text-crm-muted uppercase tracking-wide mt-0.5">
+                    {a.crmRole}
+                    {a.extensions.length > 0 && (
+                      <span className="ml-1 text-crm-muted/50">· ext {a.extensions.join(", ")}</span>
+                    )}
+                  </div>
+                  <div className="mt-1">
+                    {activeCall ? (
+                      <OnCallBadge call={activeCall} tv={tv} />
+                    ) : (
+                      flag !== "active" && flag !== "idle" && <AgentBadge flag={flag} tv={tv} />
+                    )}
+                  </div>
+                </div>
+
+                {/* Activity bars (visual leaderboard) */}
+                <div className="flex-1 flex flex-col gap-1.5 justify-center min-w-0 pt-0.5">
+                  {/* Dispositions — always shown */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-medium text-crm-muted shrink-0 w-14 text-right">Disp</span>
+                    <div className="flex-1 h-1.5 rounded-full bg-crm-surface-2 overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-crm-accent transition-[width] duration-500 ease-out"
+                        style={{ width: `${dispPct}%` }}
+                      />
+                    </div>
+                    <span className={`text-xs font-bold tabular-nums shrink-0 w-5 text-right ${a.dispositionsToday > 0 ? "text-crm-accent" : "text-crm-muted/40"}`}>
+                      {a.dispositionsToday}
+                    </span>
+                  </div>
+
+                  {/* Callbacks due — shown only when > 0 */}
+                  {a.callbacksDueToday > 0 && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-medium text-crm-warning/80 shrink-0 w-14 text-right">CB Due</span>
+                      <div className="flex-1 h-1.5 rounded-full bg-crm-surface-2 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-crm-warning transition-[width] duration-500 ease-out"
+                          style={{ width: `${cbPct}%` }}
+                        />
                       </div>
-                      <div className={`uppercase ${tv ? "text-sm text-gray-500 mt-0.5" : "text-xs text-gray-400"}`}>
-                        {a.crmRole}
-                        {a.extensions.length > 0 && (
-                          <span className={`ml-1.5 ${tv ? "text-gray-600" : "text-gray-300"}`}>
-                            · ext {a.extensions.join(", ")}
-                          </span>
-                        )}
-                      </div>
-                      <div className="mt-1">
-                        {/* On-call takes visual priority; suppress idle badges when on a call */}
-                        {activeCall ? (
-                          <OnCallBadge call={activeCall} tv={tv} />
-                        ) : (
-                          flag !== "active" && flag !== "idle" && (
-                            <AgentBadge flag={flag} tv={tv} />
-                          )
-                        )}
-                      </div>
-                    </td>
-                    <td className={`px-3 ${tv ? "py-3.5" : "py-2.5"} text-right`}>
-                      <span className={tdNum(a.dispositionsToday > 0, tv ? "text-blue-400" : "text-blue-700")}>
-                        {a.dispositionsToday}
-                      </span>
-                    </td>
-                    <td className={`px-3 ${tv ? "py-3.5" : "py-2.5"} text-right`}>
-                      <span className={a.assignedQueue > 0 ? (tv ? "text-gray-200" : "text-gray-700") : (tv ? "text-gray-700" : "text-gray-300")}>
-                        {a.assignedQueue}
-                      </span>
-                    </td>
-                    <td className={`px-3 ${tv ? "py-3.5" : "py-2.5"} text-right`}>
-                      <span className={tdNum(a.callbacksDueToday > 0, tv ? "text-orange-400" : "text-orange-600")}>
+                      <span className="text-xs font-bold tabular-nums text-crm-warning shrink-0 w-5 text-right">
                         {a.callbacksDueToday}
                       </span>
-                    </td>
-                    <td className={`px-3 ${tv ? "py-3.5" : "py-2.5"} text-right`}>
-                      <span className={a.openTasks > 0 ? (tv ? "text-gray-300" : "text-gray-600") : (tv ? "text-gray-700" : "text-gray-300")}>
-                        {a.openTasks}
+                    </div>
+                  )}
+
+                  {/* Queue — shown only when > 0 */}
+                  {a.assignedQueue > 0 && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-medium text-crm-muted shrink-0 w-14 text-right">Queue</span>
+                      <div className="flex-1 h-1.5 rounded-full bg-crm-surface-2 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-crm-muted/30 transition-[width] duration-500 ease-out"
+                          style={{ width: `${qPct}%` }}
+                        />
+                      </div>
+                      <span className="text-xs tabular-nums text-crm-muted/50 shrink-0 w-5 text-right">
+                        {a.assignedQueue}
                       </span>
-                    </td>
-                    <td className={`px-3 ${tv ? "py-3.5" : "py-2.5"} text-right`}>
-                      <span className={tdNum(a.convertedLast > 0, tv ? "text-green-400" : "text-green-700")}>
-                        {a.convertedLast}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                    </div>
+                  )}
+                </div>
+
+                {/* Conversions — shown only when > 0 */}
+                {a.convertedLast > 0 && (
+                  <div className="shrink-0 text-center pt-0.5">
+                    <div className={`font-bold tabular-nums text-crm-success ${tv ? "text-lg" : "text-sm"}`}>
+                      {a.convertedLast}
+                    </div>
+                    <div className="text-[10px] text-crm-muted">conv.</div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
-    </Panel>
+    </WallboardPanel>
   );
 }
 
-// ── Campaign Progress Panel ───────────────────────────────────────────────────
+// ── CampaignProgressPanel ─────────────────────────────────────────────────────
 
-function CampaignPanel({ campaigns, tv }: { campaigns: CampaignRow[]; tv?: boolean }) {
+function CampaignProgressPanel({ campaigns, tv }: { campaigns: CampaignRow[]; tv?: boolean }) {
   const active = campaigns.filter((c) => c.status === "ACTIVE");
 
-  const emptyTextCls = tv ? "text-gray-500 text-base" : "text-gray-400 text-sm";
-  const emptyIconCls = tv ? "h-10 w-10 mx-auto mb-3 text-gray-700" : "h-8 w-8 mx-auto mb-2 text-gray-200";
-
   return (
-    <Panel
+    <WallboardPanel
       title="Active Campaigns"
       icon={<Megaphone className={tv ? "h-5 w-5" : "h-4 w-4"} />}
       count={active.length}
@@ -538,64 +531,63 @@ function CampaignPanel({ campaigns, tv }: { campaigns: CampaignRow[]; tv?: boole
       tv={tv}
     >
       {active.length === 0 ? (
-        <div className={`py-12 text-center ${emptyTextCls}`}>
-          <Inbox className={emptyIconCls} />
-          <p>No active campaigns</p>
-          <p className={`mt-1 ${tv ? "text-sm text-gray-600" : "text-xs text-gray-300"}`}>
-            Activate a campaign to track progress here
-          </p>
+        <div className="flex flex-col items-center justify-center py-14 text-center px-6">
+          <Inbox className={`mb-3 text-crm-border ${tv ? "h-10 w-10" : "h-8 w-8"}`} />
+          <p className={`font-medium text-crm-muted ${tv ? "text-base" : "text-sm"}`}>No active campaigns</p>
+          <p className={`mt-1 text-crm-muted/60 ${tv ? "text-sm" : "text-xs"}`}>Activate a campaign to track progress here</p>
         </div>
       ) : (
-        <div className={`divide-y ${tv ? "divide-gray-700/60" : "divide-gray-100"}`}>
+        <div className="divide-y divide-crm-border/40">
           {active.map((c) => {
             const done = c.contacted + c.converted + c.dnc;
             const pct  = c.total > 0 ? Math.round((done / c.total) * 100) : 0;
-            const nameCls = tv
-              ? "text-base font-bold text-gray-100 hover:text-blue-300 truncate"
-              : "text-sm font-semibold text-gray-900 hover:text-blue-600 truncate";
-            const barH    = tv ? "h-3" : "h-2";
-            const statCls = tv ? "text-sm text-gray-400 flex-wrap" : "text-xs text-gray-500 flex-wrap";
             return (
-              <div key={c.id} className={`px-5 ${tv ? "py-5" : "py-3.5"} hover:${tv ? "bg-gray-700/20" : "bg-gray-50/60"}`}>
+              <div key={c.id} className={`px-5 ${tv ? "py-5" : "py-4"} hover:bg-crm-surface-2/20 transition-colors`}>
                 <div className="flex items-center justify-between gap-3 mb-2.5">
-                  <Link href={`/crm/campaigns/${c.id}`} className={nameCls}>{c.name}</Link>
+                  <Link
+                    href={`/crm/campaigns/${c.id}`}
+                    className={`font-bold text-crm-text hover:text-crm-accent truncate transition-colors ${tv ? "text-base" : "text-sm"}`}
+                  >
+                    {c.name}
+                  </Link>
                   <div className="flex items-center gap-2 shrink-0">
                     {c.conversionRate > 0 && (
-                      <span className={`font-bold bg-green-900/50 text-green-400 rounded ${tv ? "text-sm px-2 py-1" : "text-xs px-1.5 py-0.5"}`}>
+                      <span className={`font-bold rounded-crm border bg-crm-success/15 text-crm-success border-crm-success/25 ${tv ? "text-sm px-2 py-1" : "text-xs px-1.5 py-0.5"}`}>
                         {c.conversionRate}%
                       </span>
                     )}
-                    <span className={tv ? "text-sm text-gray-500" : "text-xs text-gray-400"}>{pct}% done</span>
+                    <span className={`text-crm-muted tabular-nums ${tv ? "text-sm" : "text-xs"}`}>{pct}% done</span>
                   </div>
                 </div>
-                <div className={`w-full ${barH} bg-${tv ? "gray-700" : "gray-100"} rounded-full overflow-hidden mb-2.5`}>
+                {/* Segmented progress bar */}
+                <div className={`w-full ${tv ? "h-2.5" : "h-2"} bg-crm-surface-2 rounded-full overflow-hidden mb-2.5`}>
                   <div className="flex h-full">
-                    <div style={{ width: `${c.total > 0 ? (c.contacted / c.total) * 100 : 0}%` }} className="bg-purple-500" />
-                    <div style={{ width: `${c.total > 0 ? (c.callbacks / c.total) * 100 : 0}%` }} className="bg-yellow-400" />
-                    <div style={{ width: `${c.total > 0 ? (c.converted / c.total) * 100 : 0}%` }} className="bg-green-500" />
-                    <div style={{ width: `${c.total > 0 ? (c.dnc / c.total) * 100 : 0}%` }} className={tv ? "bg-gray-600" : "bg-gray-300"} />
+                    <div style={{ width: `${c.total > 0 ? (c.contacted / c.total) * 100 : 0}%` }} className="bg-purple-500 transition-[width] duration-300" />
+                    <div style={{ width: `${c.total > 0 ? (c.callbacks / c.total) * 100 : 0}%` }} className="bg-amber-400 transition-[width] duration-300" />
+                    <div style={{ width: `${c.total > 0 ? (c.converted / c.total) * 100 : 0}%` }} className="bg-crm-success transition-[width] duration-300" />
+                    <div style={{ width: `${c.total > 0 ? (c.dnc / c.total) * 100 : 0}%` }} className="bg-crm-border/60 transition-[width] duration-300" />
                   </div>
                 </div>
-                <div className={`flex gap-3 ${statCls}`}>
-                  <span><span className={`font-semibold ${tv ? "text-gray-200" : "text-gray-700"}`}>{c.pending}</span> pending</span>
+                <div className={`flex flex-wrap gap-3 ${tv ? "text-sm" : "text-xs"} text-crm-muted`}>
+                  <span><span className="font-semibold text-crm-text">{c.pending}</span> pending</span>
                   <span><span className="font-semibold text-purple-400">{c.contacted}</span> contacted</span>
-                  <span><span className="font-semibold text-yellow-400">{c.callbacks}</span> callbacks</span>
-                  <span><span className="font-semibold text-green-400">{c.converted}</span> converted</span>
-                  {c.dnc > 0 && <span><span className={`font-semibold ${tv ? "text-gray-600" : "text-gray-400"}`}>{c.dnc}</span> DNC/skip</span>}
-                  <span className={tv ? "text-gray-600" : "text-gray-400"}>· {c.total} total</span>
+                  <span><span className="font-semibold text-amber-400">{c.callbacks}</span> callbacks</span>
+                  <span><span className="font-semibold text-crm-success">{c.converted}</span> converted</span>
+                  {c.dnc > 0 && <span><span className="font-semibold text-crm-muted">{c.dnc}</span> DNC</span>}
+                  <span className="text-crm-muted/50">· {c.total} total</span>
                 </div>
               </div>
             );
           })}
         </div>
       )}
-    </Panel>
+    </WallboardPanel>
   );
 }
 
-// ── Follow-Up Urgency Panel ───────────────────────────────────────────────────
+// ── FollowUpUrgencyPanel ───────────────────────────────────────────────────────
 
-function FollowUpsPanel({ data, tv }: { data: FollowUpsReport; tv?: boolean }) {
+function FollowUpUrgencyPanel({ data, tv }: { data: FollowUpsReport; tv?: boolean }) {
   const overdueCallbacks = data.callbacks.overdue;
   const dueCallbacks     = data.callbacks.dueToday;
   const overdueTasks     = data.tasks.overdue;
@@ -635,19 +627,8 @@ function FollowUpsPanel({ data, tv }: { data: FollowUpsReport; tv?: boolean }) {
     })),
   ].slice(0, 10);
 
-  const tileCls = (isUrgent: boolean) =>
-    `rounded-lg text-center p-${tv ? "4" : "2.5"} hover:opacity-90 transition-opacity ${
-      isUrgent
-        ? "bg-red-900/60 border border-red-700"
-        : tv ? "bg-gray-900/60 border border-gray-700" : "bg-white border border-gray-100"
-    }`;
-  const tileNumCls = (isUrgent: boolean) =>
-    `font-bold ${tv ? "text-3xl" : "text-xl"} ${isUrgent ? "text-red-300" : tv ? "text-gray-200" : "text-gray-800"}`;
-  const tileLblCls = (isUrgent: boolean) =>
-    `mt-0.5 ${tv ? "text-sm" : "text-xs"} ${isUrgent ? "text-red-400" : tv ? "text-gray-500" : "text-gray-500"}`;
-
   return (
-    <Panel
+    <WallboardPanel
       title="Follow-Up Urgency"
       icon={<CalendarClock className={tv ? "h-5 w-5" : "h-4 w-4"} />}
       count={totalUrgent}
@@ -655,45 +636,90 @@ function FollowUpsPanel({ data, tv }: { data: FollowUpsReport; tv?: boolean }) {
       href="/crm/reports"
       tv={tv}
     >
+      {/* Pressure rings OR all-clear banner */}
+      {totalUrgent > 0 ? (
+        <div className={`flex items-center gap-6 px-5 ${tv ? "py-5" : "py-4"} border-b border-crm-border bg-crm-surface-2/20`}>
+          <CRMRingMetric
+            value={overdueCallbacks.count}
+            max={Math.max(1, overdueCallbacks.count + dueCallbacks.count)}
+            label="Overdue Callbacks"
+            sublabel={`${dueCallbacks.count} due today`}
+            color="var(--crm-danger)"
+            size={tv ? 88 : 72}
+          />
+          <CRMRingMetric
+            value={overdueTasks.count}
+            max={Math.max(1, overdueTasks.count + dueTasks.count)}
+            label="Overdue Tasks"
+            sublabel={`${dueTasks.count} due today`}
+            color="var(--crm-warning)"
+            size={tv ? 88 : 72}
+          />
+        </div>
+      ) : (
+        <div className={`flex items-center gap-2 px-5 ${tv ? "py-4" : "py-3"} border-b border-crm-border bg-crm-success/8`}>
+          <CheckCheck className={`text-crm-success shrink-0 ${tv ? "h-5 w-5" : "h-4 w-4"}`} />
+          <span className={`font-medium text-crm-success ${tv ? "text-sm" : "text-xs"}`}>
+            All caught up — no overdue callbacks or tasks
+          </span>
+        </div>
+      )}
+
       {/* Summary count tiles */}
-      <div className={`grid grid-cols-2 gap-2 px-5 py-3 border-b ${tv ? "border-gray-700 bg-gray-900/40" : "border-gray-100 bg-gray-50/40"}`}>
+      <div className="grid grid-cols-2 gap-2 px-5 py-3 border-b border-crm-border bg-crm-surface-2/20">
         {[
-          { label: "Overdue Callbacks", value: overdueCallbacks.count, isUrgent: overdueCallbacks.count > 0, href: "/crm/queue?mode=power&filter=overdue" },
-          { label: "Due Today (CB)",    value: dueCallbacks.count,     isUrgent: false,                    href: "/crm/queue?mode=power&filter=due" },
-          { label: "Overdue Tasks",     value: overdueTasks.count,     isUrgent: overdueTasks.count > 0,   href: "/crm/tasks" },
-          { label: "Tasks Due Today",   value: dueTasks.count,         isUrgent: false,                    href: "/crm/tasks" },
-        ].map(({ label, value, isUrgent, href }) => (
-          <Link key={label} href={href} className={tileCls(isUrgent)}>
-            <div className={tileNumCls(isUrgent)}>{value}</div>
-            <div className={tileLblCls(isUrgent)}>{label}</div>
+          { label: "Overdue Callbacks", value: overdueCallbacks.count, isDanger: overdueCallbacks.count > 0, href: "/crm/queue?mode=power&filter=overdue" },
+          { label: "Due Today (CB)",    value: dueCallbacks.count,     isDanger: false,                     href: "/crm/queue?mode=power&filter=due" },
+          { label: "Overdue Tasks",     value: overdueTasks.count,     isDanger: overdueTasks.count > 0,    href: "/crm/tasks" },
+          { label: "Tasks Due Today",   value: dueTasks.count,         isDanger: false,                     href: "/crm/tasks" },
+        ].map(({ label, value, isDanger, href }) => (
+          <Link
+            key={label}
+            href={href}
+            className={`rounded-crm border text-center hover:opacity-90 transition-opacity ${tv ? "p-4" : "p-2.5"} ${
+              isDanger
+                ? "border-crm-danger/30 bg-crm-danger/10"
+                : "border-crm-border bg-crm-surface-2/50"
+            }`}
+          >
+            <div className={`font-bold tabular-nums ${tv ? "text-3xl" : "text-xl"} ${isDanger ? "text-crm-danger" : "text-crm-text"}`}>
+              {value}
+            </div>
+            <div className={`mt-0.5 ${tv ? "text-sm" : "text-xs"} ${isDanger ? "text-crm-danger/70" : "text-crm-muted"}`}>
+              {label}
+            </div>
           </Link>
         ))}
       </div>
 
       {/* Actionable rows */}
       {urgent.length === 0 ? (
-        <div className={`py-10 text-center ${tv ? "text-gray-500 text-base" : "text-gray-400 text-sm"}`}>
-          <CheckCheck className={`mx-auto mb-2 text-green-500 ${tv ? "h-10 w-10" : "h-7 w-7"}`} />
-          <p className="font-medium">All caught up!</p>
-          <p className={`mt-1 ${tv ? "text-sm text-gray-600" : "text-xs text-gray-300"}`}>No overdue callbacks or tasks</p>
+        <div className="flex flex-col items-center justify-center py-10 text-center">
+          <CheckCheck className={`mb-2 text-crm-success ${tv ? "h-10 w-10" : "h-7 w-7"}`} />
+          <p className={`font-medium text-crm-text ${tv ? "text-base" : "text-sm"}`}>All caught up!</p>
+          <p className={`mt-1 text-crm-muted ${tv ? "text-sm" : "text-xs"}`}>No overdue callbacks or tasks</p>
         </div>
       ) : (
-        <div className={`divide-y ${tv ? "divide-gray-700/60" : "divide-gray-50"}`}>
+        <div className="divide-y divide-crm-border/40">
           {urgent.map((item) => (
-            <Link key={item.key} href={item.href} className={`flex items-center gap-3 px-5 ${tv ? "py-3.5" : "py-2.5"} hover:${tv ? "bg-gray-700/30" : "bg-gray-50/70"} group`}>
-              <span className={`rounded-full shrink-0 ${item.isOverdue ? "bg-red-500" : "bg-yellow-400"} ${tv ? "w-2.5 h-2.5" : "w-2 h-2"}`} />
+            <Link
+              key={item.key}
+              href={item.href}
+              className={`flex items-center gap-3 px-5 ${tv ? "py-3.5" : "py-2.5"} hover:bg-crm-surface-2/20 group transition-colors`}
+            >
+              <span className={`rounded-full shrink-0 ${item.isOverdue ? "bg-crm-danger" : "bg-amber-400"} ${tv ? "w-2.5 h-2.5" : "w-2 h-2"}`} />
               <div className="flex-1 min-w-0">
-                <div className={`font-semibold truncate group-hover:text-blue-400 ${tv ? "text-base text-gray-100" : "text-sm text-gray-900"}`}>
+                <div className={`font-semibold text-crm-text group-hover:text-crm-accent truncate transition-colors ${tv ? "text-base" : "text-sm"}`}>
                   {item.label}
                 </div>
-                <div className={`truncate ${tv ? "text-sm text-gray-500" : "text-xs text-gray-400"}`}>{item.sub}</div>
+                <div className={`text-crm-muted truncate ${tv ? "text-sm" : "text-xs"}`}>{item.sub}</div>
               </div>
-              <ArrowRight className={`shrink-0 ${tv ? "h-4 w-4 text-gray-600 group-hover:text-blue-400" : "h-3.5 w-3.5 text-gray-300 group-hover:text-blue-400"}`} />
+              <ArrowRight className={`shrink-0 text-crm-muted/50 group-hover:text-crm-accent transition-colors ${tv ? "h-4 w-4" : "h-3.5 w-3.5"}`} />
             </Link>
           ))}
         </div>
       )}
-    </Panel>
+    </WallboardPanel>
   );
 }
 
@@ -704,15 +730,15 @@ export default function WallboardPage() {
   const activeCalls = telephony.activeCalls;
   const isLive      = telephony.isLive;
 
-  const [data, setData]           = useState<WallboardData | null>(null);
-  const [loading, setLoading]     = useState(true);
-  const [error, setError]         = useState<string | null>(null);
+  const [data, setData]               = useState<WallboardData | null>(null);
+  const [loading, setLoading]         = useState(true);
+  const [error, setError]             = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
-  const [countdown, setCountdown] = useState(COUNTDOWN_S);
-  const [tvMode, setTvMode]       = useState(false);
-  const [clockTime, setClockTime] = useState<Date>(() => new Date());
+  const [countdown, setCountdown]     = useState(COUNTDOWN_S);
+  const [tvMode, setTvMode]           = useState(false);
+  const [clockTime, setClockTime]     = useState<Date>(() => new Date());
 
-  const refreshTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
+  const refreshTimerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const clockTimerRef     = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -814,33 +840,35 @@ export default function WallboardPage() {
     setTvMode((v) => !v);
   }, [tvMode]);
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // ── Loading state ────────────────────────────────────────────────────────────
 
   if (loading && !data) {
-    const bg = tvMode ? "bg-gray-900" : "bg-gray-50";
-    const textCls = tvMode ? "text-gray-400" : "text-gray-400";
-    const iconCls = tvMode ? "text-gray-700" : "text-gray-200";
     return (
-      <div className={`min-h-screen ${bg} flex items-center justify-center ${tvMode ? "fixed inset-0 z-50" : ""}`}>
-        <div className={`text-center ${textCls}`}>
-          <LayoutGrid className={`h-12 w-12 mx-auto mb-3 ${iconCls} animate-pulse`} />
+      <div
+        className={`${crm.wallboardWorkspace} min-h-screen flex items-center justify-center ${tvMode ? "fixed inset-0 z-50" : ""}`}
+        style={{ background: "var(--crm-bg, var(--bg-soft, #101923))" }}
+      >
+        <div className="text-center text-crm-muted">
+          <LayoutGrid className="h-12 w-12 mx-auto mb-3 text-crm-border animate-pulse" />
           <p className="text-sm">Loading wallboard…</p>
         </div>
       </div>
     );
   }
 
+  // ── Error state ──────────────────────────────────────────────────────────────
+
   if (error && !data) {
     return (
-      <div className={`min-h-screen ${tvMode ? "bg-gray-900 fixed inset-0 z-50" : "bg-gray-50"} flex items-center justify-center`}>
-        <div className="text-center text-red-500 text-sm max-w-sm">
-          <AlertCircle className="h-10 w-10 mx-auto mb-3 text-red-300" />
-          <p className="font-semibold mb-2">Failed to load wallboard</p>
-          <p className="text-gray-500 mb-4">{error}</p>
-          <button
-            onClick={handleManualRefresh}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
-          >
+      <div
+        className={`${crm.wallboardWorkspace} min-h-screen flex items-center justify-center ${tvMode ? "fixed inset-0 z-50" : ""}`}
+        style={{ background: "var(--crm-bg, var(--bg-soft, #101923))" }}
+      >
+        <div className="text-center max-w-sm px-4">
+          <AlertCircle className="h-10 w-10 mx-auto mb-3 text-crm-danger" />
+          <p className="font-semibold mb-2 text-crm-danger">Failed to load wallboard</p>
+          <p className="text-crm-muted text-sm mb-4">{error}</p>
+          <button onClick={handleManualRefresh} className={crm.btnPrimary}>
             Try Again
           </button>
         </div>
@@ -851,65 +879,109 @@ export default function WallboardPage() {
   const { daily, campaigns, agents, followUps } = data!;
   const totalUrgent = followUps.callbacks.overdue.count + followUps.tasks.overdue.count;
 
-  // Countdown display: show seconds or "refreshing…"
+  // Countdown display
   const countdownLabel = loading
     ? "Refreshing…"
     : countdown === 0
     ? "Refreshing soon…"
     : `Refreshes in ${countdown}s`;
 
+  // ── Shared UI elements ───────────────────────────────────────────────────────
+
+  const LiveBadge = (
+    <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-semibold border shrink-0 ${
+      isLive
+        ? "bg-crm-success/12 text-crm-success border-crm-success/25"
+        : "bg-crm-warning/12 text-crm-warning border-crm-warning/25"
+    }`}>
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isLive ? "bg-crm-success animate-pulse" : "bg-crm-warning"}`} />
+      {isLive ? "WS Live" : "Connecting…"}
+    </span>
+  );
+
+  const UrgentBadge = totalUrgent > 0 ? (
+    <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-semibold border bg-crm-danger/12 text-crm-danger border-crm-danger/25 shrink-0">
+      <AlertTriangle className="h-3 w-3" />
+      {totalUrgent} urgent
+    </span>
+  ) : null;
+
+  // KPI strip shared between normal and TV
+  const KpiStrip = ({ isTv }: { isTv: boolean }) => (
+    <div className="grid grid-cols-4 sm:grid-cols-8 gap-3">
+      <WallboardKpiTile label="Active Calls"       value={activeCalls.length}         icon={<PhoneCall     className={isTv ? "h-6 w-6" : "h-5 w-5"} />} tv={isTv} />
+      <WallboardKpiTile label="Queue Remaining"    value={daily.queueRemaining}        icon={<Zap           className={isTv ? "h-6 w-6" : "h-5 w-5"} />} href="/crm/queue" tv={isTv} />
+      <WallboardKpiTile label="Overdue Callbacks"  value={daily.overdueCallbacks}      icon={<AlertCircle   className={isTv ? "h-6 w-6" : "h-5 w-5"} />} tone="danger" href="/crm/queue?mode=power&filter=overdue" tv={isTv} />
+      <WallboardKpiTile label="Due Today (CB)"     value={daily.callbacksDueToday}     icon={<CalendarClock className={isTv ? "h-6 w-6" : "h-5 w-5"} />} tone="warn" href="/crm/queue?mode=power&filter=due" tv={isTv} />
+      <WallboardKpiTile label="Dispositions Today" value={daily.dispositionsToday}     icon={<TrendingUp    className={isTv ? "h-6 w-6" : "h-5 w-5"} />} tone="positive" tv={isTv} />
+      <WallboardKpiTile label="Contacts Created"   value={daily.contactsCreatedToday}  icon={<Users         className={isTv ? "h-6 w-6" : "h-5 w-5"} />} href="/crm/contacts" tv={isTv} />
+      <WallboardKpiTile label="Active Campaigns"   value={daily.activeCampaigns}       icon={<Megaphone     className={isTv ? "h-6 w-6" : "h-5 w-5"} />} href="/crm/campaigns" tv={isTv} />
+      <WallboardKpiTile label="Overdue Tasks"      value={daily.overdueTasks}          icon={<CheckSquare   className={isTv ? "h-6 w-6" : "h-5 w-5"} />} tone="danger" href="/crm/tasks" tv={isTv} />
+    </div>
+  );
+
+  // Panel grid shared between normal and TV
+  const PanelGrid = ({ isTv }: { isTv: boolean }) => (
+    <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+      <LiveCallsPanel     calls={activeCalls} isLive={isLive} tv={isTv} />
+      <AgentActivityPanel agents={agents} activeCalls={activeCalls} tv={isTv} />
+      <CampaignProgressPanel campaigns={campaigns} tv={isTv} />
+      <FollowUpUrgencyPanel  data={followUps} tv={isTv} />
+    </div>
+  );
+
   // ── TV Mode render ─────────────────────────────────────────────────────────
+  // TV mode is a fixed-overlay (position:fixed inset-0 z-50) per Rule 77.
+  // It does NOT modify AppShell, PlatformLayout, or any shared layout provider.
 
   if (tvMode) {
     return (
-      <div className="fixed inset-0 z-50 bg-gray-900 text-white overflow-auto">
-
-        {/* TV header */}
-        <div className="bg-gray-950 border-b border-gray-800 px-6 py-4">
-          <div className="max-w-[1600px] mx-auto flex items-center justify-between">
-            {/* Left: title + status */}
-            <div className="flex items-center gap-4">
-              <LayoutGrid className="h-7 w-7 text-blue-400" />
-              <h1 className="text-2xl font-bold text-white">Live Wallboard</h1>
-              <span className={`inline-flex items-center gap-2 text-sm px-3 py-1 rounded-full font-semibold ${
-                isLive ? "bg-green-900/60 text-green-300" : "bg-yellow-900/60 text-yellow-300"
-              }`}>
-                <span className={`w-2 h-2 rounded-full ${isLive ? "bg-green-400 animate-pulse" : "bg-yellow-400"}`} />
-                {isLive ? "WS Live" : "Connecting…"}
-              </span>
+      <div
+        className={`fixed inset-0 z-50 overflow-auto ${crm.wallboardWorkspace}`}
+        style={{ background: "var(--crm-bg, var(--bg-soft, #101923))" }}
+      >
+        {/* TV Header */}
+        <div className="border-b border-crm-border bg-crm-surface">
+          <div className="max-w-[1600px] mx-auto px-6 py-4 grid grid-cols-3 items-center gap-4">
+            {/* Left: title + badges */}
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="flex h-9 w-9 items-center justify-center rounded-crm bg-crm-accent/15 text-crm-accent shrink-0">
+                <LayoutGrid className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-xl font-bold text-crm-text">Live Wallboard</h1>
+                <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                  {LiveBadge}
+                  {UrgentBadge}
+                </div>
+              </div>
             </div>
 
-            {/* Center: clock */}
+            {/* Center: large clock */}
             <div className="text-center">
-              <div className="text-5xl font-bold tabular-nums text-white tracking-tight">
+              <div className="text-5xl font-bold tabular-nums text-crm-text tracking-tight">
                 {formatClock(clockTime)}
               </div>
-              <div className="text-sm text-gray-500 mt-0.5">{formatClockDate(clockTime)}</div>
+              <div className="text-sm text-crm-muted mt-0.5">{formatClockDate(clockTime)}</div>
             </div>
 
-            {/* Right: refresh info + exit */}
-            <div className="flex items-center gap-4 text-sm text-gray-400">
-              <div className="text-right">
-                {lastRefresh && (
-                  <div>Updated {relTime(lastRefresh.toISOString())}</div>
-                )}
-                <div className={countdown <= 10 ? "text-amber-400 font-semibold" : "text-gray-500"}>
+            {/* Right: refresh info + controls */}
+            <div className="flex items-center justify-end gap-3">
+              <div className="text-right text-sm text-crm-muted">
+                {lastRefresh && <div>Updated {relTime(lastRefresh.toISOString())}</div>}
+                <div className={countdown <= 10 ? "text-crm-warning font-semibold" : "text-crm-muted"}>
                   {countdownLabel}
                 </div>
               </div>
               <button
                 onClick={handleManualRefresh}
                 disabled={loading}
-                className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
+                className={`${crm.btnSecondary} disabled:opacity-50`}
               >
                 <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
                 Refresh
               </button>
-              <button
-                onClick={toggleTvMode}
-                className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors text-gray-300"
-                title="Exit TV mode"
-              >
+              <button onClick={toggleTvMode} className={crm.btnGhost} title="Exit TV mode">
                 <X className="h-4 w-4" />
                 Exit TV
               </button>
@@ -917,29 +989,17 @@ export default function WallboardPage() {
           </div>
         </div>
 
-        {/* TV summary strip */}
-        <div className="bg-gray-800/60 border-b border-gray-800 px-6 py-4">
-          <div className="max-w-[1600px] mx-auto flex gap-3 overflow-x-auto">
-            <StripStat label="Active Calls" value={activeCalls.length} icon={<PhoneCall className="h-6 w-6" />} tv />
-            <StripStat label="Queue Remaining" value={daily.queueRemaining} icon={<Zap className="h-6 w-6" />} href="/crm/queue" tv />
-            <StripStat label="Overdue Callbacks" value={daily.overdueCallbacks} icon={<AlertCircle className="h-6 w-6" />} urgent href="/crm/queue?mode=power&filter=overdue" tv />
-            <StripStat label="Due Today (CB)" value={daily.callbacksDueToday} icon={<CalendarClock className="h-6 w-6" />} href="/crm/queue?mode=power&filter=due" tv />
-            <StripStat label="Dispositions Today" value={daily.dispositionsToday} icon={<TrendingUp className="h-6 w-6" />} tv />
-            <StripStat label="Contacts Created" value={daily.contactsCreatedToday} icon={<Users className="h-6 w-6" />} tv />
-            <StripStat label="Active Campaigns" value={daily.activeCampaigns} icon={<Megaphone className="h-6 w-6" />} tv />
-            <StripStat label="Overdue Tasks" value={daily.overdueTasks} icon={<CheckSquare className="h-6 w-6" />} urgent href="/crm/tasks" tv />
+        {/* TV KPI strip */}
+        <div className="border-b border-crm-border bg-crm-surface-2/20">
+          <div className="max-w-[1600px] mx-auto px-6 py-5">
+            <KpiStrip isTv />
           </div>
         </div>
 
         {/* TV panel grid */}
         <div className="max-w-[1600px] mx-auto px-6 py-6">
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-            <LiveCallsPanel calls={activeCalls} isLive={isLive} tv />
-            <AgentPanel agents={agents} activeCalls={activeCalls} tv />
-            <CampaignPanel campaigns={campaigns} tv />
-            <FollowUpsPanel data={followUps} tv />
-          </div>
-          <p className="text-center text-sm text-gray-700 mt-6">
+          <PanelGrid isTv />
+          <p className="text-center text-sm text-crm-muted/30 mt-6">
             CRM data refreshes every {REFRESH_MS / 1000}s · Live calls via WebSocket · Read-only view
           </p>
         </div>
@@ -950,83 +1010,61 @@ export default function WallboardPage() {
   // ── Normal mode render ─────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-gray-50">
-
-      {/* Summary strip */}
-      <div className="bg-gradient-to-r from-blue-800 to-blue-700 text-white">
-        <div className="max-w-[1400px] mx-auto px-4 py-4">
-
-          {/* Title row */}
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <LayoutGrid className="h-6 w-6 text-blue-200" />
-              <h1 className="text-xl font-bold">Live Wallboard</h1>
-              <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-semibold ${
-                isLive ? "bg-green-500/20 text-green-200" : "bg-yellow-500/20 text-yellow-200"
-              }`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${isLive ? "bg-green-400 animate-pulse" : "bg-yellow-400"}`} />
-                {isLive ? "WS Live" : "Connecting…"}
-              </span>
-              {totalUrgent > 0 && (
-                <span className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-semibold bg-red-500/30 text-red-200">
-                  <AlertTriangle className="h-3 w-3" />
-                  {totalUrgent} urgent
-                </span>
-              )}
+    <div
+      className={`min-h-screen ${crm.wallboardWorkspace}`}
+      style={{ background: "var(--crm-bg, var(--bg-soft, #101923))" }}
+    >
+      {/* Sticky header */}
+      <div className="sticky top-0 z-10 border-b border-crm-border bg-crm-surface/95 backdrop-blur-sm">
+        <div className="max-w-[1600px] mx-auto px-5 py-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex h-8 w-8 items-center justify-center rounded-crm bg-crm-accent/15 text-crm-accent shrink-0">
+              <LayoutGrid className="h-4 w-4" />
             </div>
-            <div className="flex items-center gap-3 text-sm text-blue-200">
-              <span className={`text-xs ${countdown <= 10 ? "text-amber-300 font-semibold" : "text-blue-300"}`}>
-                {countdownLabel}
-              </span>
+            <h1 className="text-lg font-bold text-crm-text truncate">Live Wallboard</h1>
+            {LiveBadge}
+            {UrgentBadge}
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="text-right text-xs hidden sm:block mr-1">
               {lastRefresh && (
-                <span className="text-blue-300 text-xs">· Updated {relTime(lastRefresh.toISOString())}</span>
+                <div className="text-crm-muted">Updated {relTime(lastRefresh.toISOString())}</div>
               )}
-              <button
-                onClick={handleManualRefresh}
-                disabled={loading}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-                Refresh
-              </button>
-              <button
-                onClick={toggleTvMode}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-medium transition-colors"
-                title="Enter TV mode"
-              >
-                <Tv className="h-3.5 w-3.5" />
-                TV Mode
-              </button>
+              <div className={countdown <= 10 ? "text-crm-warning font-semibold" : "text-crm-muted"}>
+                {countdownLabel}
+              </div>
             </div>
+            <button
+              onClick={handleManualRefresh}
+              disabled={loading}
+              className={`${crm.btnGhost} disabled:opacity-50`}
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              <span className="hidden sm:inline">Refresh</span>
+            </button>
+            <button onClick={toggleTvMode} className={crm.btnSecondary}>
+              <Tv className="h-4 w-4" />
+              <span className="hidden sm:inline">TV Mode</span>
+            </button>
           </div>
+        </div>
+      </div>
 
-          {/* Stat strip */}
-          <div className="flex gap-3 overflow-x-auto pb-1">
-            <StripStat label="Active Calls" value={activeCalls.length} icon={<PhoneCall className="h-5 w-5" />} />
-            <StripStat label="Queue Remaining" value={daily.queueRemaining} icon={<Zap className="h-5 w-5" />} href="/crm/queue" />
-            <StripStat label="Overdue Callbacks" value={daily.overdueCallbacks} icon={<AlertCircle className="h-5 w-5" />} urgent href="/crm/queue?mode=power&filter=overdue" />
-            <StripStat label="Due Today (CB)" value={daily.callbacksDueToday} icon={<CalendarClock className="h-5 w-5" />} href="/crm/queue?mode=power&filter=due" />
-            <StripStat label="Dispositions Today" value={daily.dispositionsToday} icon={<TrendingUp className="h-5 w-5" />} />
-            <StripStat label="Contacts Created" value={daily.contactsCreatedToday} icon={<Users className="h-5 w-5" />} href="/crm/contacts" />
-            <StripStat label="Active Campaigns" value={daily.activeCampaigns} icon={<Megaphone className="h-5 w-5" />} href="/crm/campaigns" />
-            <StripStat label="Overdue Tasks" value={daily.overdueTasks} icon={<CheckSquare className="h-5 w-5" />} urgent href="/crm/tasks" />
-          </div>
+      {/* KPI strip */}
+      <div className="border-b border-crm-border bg-crm-surface-2/20">
+        <div className="max-w-[1600px] mx-auto px-5 py-5">
+          <KpiStrip isTv={false} />
         </div>
       </div>
 
       {/* Panel grid */}
-      <div className="max-w-[1400px] mx-auto px-4 py-6">
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-          <LiveCallsPanel calls={activeCalls} isLive={isLive} />
-          <AgentPanel agents={agents} activeCalls={activeCalls} />
-          <CampaignPanel campaigns={campaigns} />
-          <FollowUpsPanel data={followUps} />
-        </div>
-        <p className="text-center text-xs text-gray-400 mt-6">
+      <div className="max-w-[1600px] mx-auto px-5 py-6">
+        <PanelGrid isTv={false} />
+        <p className="text-center text-xs text-crm-muted/30 mt-6">
           CRM data refreshes every {REFRESH_MS / 1000}s · Live calls update via WebSocket · Read-only view
         </p>
       </div>
-
     </div>
   );
 }
