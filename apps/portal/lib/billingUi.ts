@@ -37,6 +37,25 @@ export function invoiceStatusClass(status: string | undefined | null): string {
   }
 }
 
+/** Finance table chip tone (portal display only). */
+export function invoiceFinanceStatusTone(status: string | undefined | null): "draft" | "pending" | "paid" | "failed" | "overdue" | "void" | "neutral" {
+  switch (String(status || "").toUpperCase()) {
+    case "DRAFT": return "draft";
+    case "OPEN": return "pending";
+    case "PAID": return "paid";
+    case "FAILED": return "failed";
+    case "OVERDUE": return "overdue";
+    case "VOID": return "void";
+    default: return "neutral";
+  }
+}
+
+export function invoiceFilterStatusLabel(status: string): string {
+  if (status === "ALL") return "All";
+  if (status === "OPEN") return "Pending";
+  return invoiceStatusLabel(status);
+}
+
 export function transactionStatusLabel(status: string | undefined | null): string {
   switch (String(status || "").toUpperCase()) {
     case "APPROVED": return "Approved";

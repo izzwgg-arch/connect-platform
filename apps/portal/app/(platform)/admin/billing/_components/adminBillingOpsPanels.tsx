@@ -12,7 +12,9 @@ import { BillingActionPanel } from "../../../../../components/billing/BillingAct
 import { BillingActivityList } from "../../../../../components/billing/BillingActivityList";
 import { BillingEmptyState } from "../../../../../components/billing/BillingEmptyState";
 import { BillingTableSkeleton } from "../../../../../components/billing/BillingTableSkeleton";
-import { dollars, invoiceStatusLabel, transactionStatusLabel } from "../../../../../lib/billingUi";
+import { BillingFinanceChip } from "../../../../../components/billing/BillingFinanceChip";
+import { InvoiceRowMenu } from "../../../../../components/billing/InvoiceRowMenu";
+import { dollars, invoiceFilterStatusLabel, invoiceStatusLabel, transactionStatusLabel } from "../../../../../lib/billingUi";
 import { useAppContext } from "../../../../../hooks/useAppContext";
 import type { AdminOpsTab } from "./adminBillingLinks";
 
@@ -209,7 +211,7 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
   return (
     <>
     <div className="billing-p8-overlay" role="dialog" aria-modal="true" aria-labelledby="billing-invoice-drawer-title" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="billing-p8-drawer" onClick={(e) => e.stopPropagation()}>
+      <div className="billing-p8-drawer billing-fin-drawer" onClick={(e) => e.stopPropagation()}>
         <div className="billing-p8-drawer__head">
           <h3 id="billing-invoice-drawer-title">
             Invoice {inv?.invoiceNumber || invoiceId.slice(0, 8)}
@@ -217,34 +219,61 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
           <button className="btn ghost" type="button" onClick={onClose}>Close</button>
         </div>
 
-        <div className="billing-p8-drawer__body">
+        <div className="billing-p8-drawer__body billing-fin-drawer__body">
         {data.status === "loading" ? <BillingTableSkeleton variant="invoice" rows={5} /> : null}
         {data.status === "error" ? <ErrorState message={data.error} /> : null}
 
         {inv ? (
           <div className="stack compact-stack">
-            {/* Summary */}
-            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 8 }}>
-              <div><span className="muted" style={{ fontSize: 12 }}>Status</span><br /><span className={`billing-status-pill ${invStatusClass(inv.status)}`}>{inv.status}</span></div>
-              <div><span className="muted" style={{ fontSize: 12 }}>Total</span><br /><strong>{dollars(inv.totalCents)}</strong></div>
-              {inv.balanceDueCents > 0 && inv.status !== "PAID" ? (
-                <div><span className="muted" style={{ fontSize: 12 }}>Balance due</span><br /><strong style={{ color: "var(--danger, #dc2626)" }}>{dollars(inv.balanceDueCents)}</strong></div>
-              ) : null}
-              {inv.taxCents > 0 ? <div><span className="muted" style={{ fontSize: 12 }}>Tax</span><br />{dollars(inv.taxCents)}</div> : null}
-              <div><span className="muted" style={{ fontSize: 12 }}>Due</span><br />{fmtDate(inv.dueDate)}</div>
-              {inv.paidAt ? <div><span className="muted" style={{ fontSize: 12 }}>Paid</span><br />{fmtDate(inv.paidAt)}</div> : null}
-              <div><span className="muted" style={{ fontSize: 12 }}>Tenant</span><br />{inv.tenant?.name}</div>
+            <div className="billing-fin-drawer__hero">
+              <div className="billing-fin-drawer__hero-main">
+                <h4>Invoice</h4>
+                <p className="billing-fin-drawer__hero-num">{inv.invoiceNumber || invoiceId.slice(0, 8)}</p>
+                <p className="billing-fin-drawer__hero-sub">{inv.tenant?.name}</p>
+                <BillingFinanceChip status={inv.status} style={{ marginTop: 8 }} />
+              </div>
+              <div className="billing-fin-drawer__hero-amount">
+                <strong>{dollars(inv.totalCents)}</strong>
+                <span>Total</span>
+                {inv.balanceDueCents > 0 && inv.status !== "PAID" ? (
+                  <span style={{ display: "block", marginTop: 4, color: "#fbbf24" }}>Due {dollars(inv.balanceDueCents)}</span>
+                ) : null}
+              </div>
             </div>
+
+            <div className="billing-p8-drawer__summary">
+              <div className="billing-p8-drawer__stat">
+                <label>Due date</label>
+                <strong>{fmtDate(inv.dueDate)}</strong>
+              </div>
+              <div className="billing-p8-drawer__stat">
+                <label>Period</label>
+                <strong>{fmtPeriod(inv.periodStart, inv.periodEnd) || "—"}</strong>
+              </div>
+              {inv.paidAt ? (
+                <div className="billing-p8-drawer__stat">
+                  <label>Paid</label>
+                  <strong>{fmtDate(inv.paidAt)}</strong>
+                </div>
+              ) : null}
+              {inv.taxCents > 0 ? (
+                <div className="billing-p8-drawer__stat">
+                  <label>Tax</label>
+                  <strong>{dollars(inv.taxCents)}</strong>
+                </div>
+              ) : null}
+            </div>
+
             {inv.paymentMethod ? (
-              <p className="muted" style={{ fontSize: 12, margin: 0 }}>
-                Card on invoice: {cardLabel(inv.paymentMethod)}
+              <p className="muted" style={{ fontSize: 12, margin: "0 0 12px" }}>
+                Card on file: {cardLabel(inv.paymentMethod)}
               </p>
             ) : null}
 
-            {/* Line items */}
+            <section className="billing-fin-drawer__section">
             {inv.lineItems?.length > 0 ? (
               <>
-                <h4 style={{ margin: "16px 0 6px" }}>Line Items</h4>
+                <h4 className="billing-p8-drawer__section-title">Line items</h4>
                 <DataTable
                   rows={inv.lineItems.map((li) => ({ ...li, id: li.id }))}
                   columns={[
@@ -262,11 +291,13 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
                 message="This invoice has no service or fee lines yet. It may still be a draft or was created without detail rows."
               />
             )}
+            </section>
 
+            <section className="billing-fin-drawer__section">
             {/* Payment transactions */}
             {inv.transactions?.length > 0 ? (
               <>
-                <h4 style={{ margin: "16px 0 6px" }}>Payment Attempts</h4>
+                <h4 className="billing-p8-drawer__section-title">Payment history</h4>
                 <div className="billing-ops-table-wrap billing-ops-scroll">
                 <DataTable
                   rows={inv.transactions.map((t) => ({ ...t, id: t.id }))}
@@ -286,13 +317,14 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
               </>
             ) : (
               <BillingEmptyState
-                title="No payment attempts yet"
+                title="No payments yet"
                 message="When a card is charged or retried, each attempt appears here with the processor response."
               />
             )}
+            </section>
 
-            {/* Event log */}
-            <h4 style={{ margin: "16px 0 6px" }}>Activity</h4>
+            <section className="billing-fin-drawer__section">
+            <h4 className="billing-p8-drawer__section-title">Activity</h4>
             {inv.events?.length ? (
               <BillingActivityList events={inv.events.map((e) => ({ ...e, id: e.id || `${invoiceId}-${e.createdAt}` }))} />
             ) : (
@@ -301,6 +333,7 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
                 message="Audit events (emails, charges, plan changes) will show here as they occur."
               />
             )}
+            </section>
 
             {/* Collections controls */}
             {(() => {
@@ -1296,7 +1329,7 @@ export function InvoicesTab() {
         </div>
       ) : null}
 
-      <div className="billing-inv-toolbar billing-inv-toolbar--sticky">
+      <div className="billing-inv-toolbar billing-inv-toolbar--sticky billing-fin-toolbar">
         <div className="billing-p8-filter-bar billing-inv-toolbar__filters">
           {INV_STATUSES.map((s) => (
             <button
@@ -1308,7 +1341,7 @@ export function InvoicesTab() {
                 setPage(1);
               }}
             >
-              {s === "ALL" ? "All" : s}
+              {invoiceFilterStatusLabel(s)}
             </button>
           ))}
         </div>
@@ -1343,13 +1376,13 @@ export function InvoicesTab() {
 
       {data.status === "success" ? (
         <>
-          <p className={`billing-inv-meta${searchPending ? " billing-inv-meta--pending" : ""}`}>
-            {data.data.total} invoice{data.data.total !== 1 ? "s" : ""}
+          <p className={`billing-fin-meta billing-inv-meta${searchPending ? " billing-inv-meta--pending" : ""}`}>
+            <span className="billing-fin-meta__count">{data.data.total} invoice{data.data.total !== 1 ? "s" : ""}</span>
             {statusFilter !== "ALL" ? ` · ${statusFilter}` : ""}
             {search ? ` · “${search}”` : ""}
           </p>
           <div className="billing-p8-table-scroll">
-          <div className="billing-inv-table billing-inv-table--sticky">
+          <div className="billing-inv-table billing-inv-table--sticky billing-fin-table">
             <div className="billing-inv-table__head" aria-hidden>
               <span>Invoice</span>
               <span>Period</span>
@@ -1359,7 +1392,7 @@ export function InvoicesTab() {
             </div>
             {rows.length === 0 ? (
               <BillingEmptyState
-                title={search ? "No invoices match your search" : "No invoices in this view"}
+                title={search ? "No invoices match this filter" : "No invoices in this view"}
                 message={
                   search
                     ? `Nothing found for “${search}”. Try another invoice number or company name, or clear filters.`
@@ -1376,123 +1409,61 @@ export function InvoicesTab() {
 
               return (
                 <div key={inv.id} className={`billing-inv-row-group${isLogOpen ? " billing-inv-row-group--open" : ""}`}>
-                  <div className={`billing-inv-row${isRowActive ? " billing-inv-row--active" : ""}`}>
+                  <div
+                    className={`billing-inv-row billing-fin-row${isRowActive ? " billing-inv-row--active" : ""}`}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Open invoice ${inv.invoiceNumber || inv.id.slice(0, 8)}`}
+                    onClick={() => setDetailInvoiceId(inv.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setDetailInvoiceId(inv.id);
+                      }
+                    }}
+                  >
                   <div>
-                    <div className="billing-inv-row__num">{inv.invoiceNumber || inv.id.slice(0, 8)}</div>
-                    <div className="billing-inv-row__sub">{inv.tenant?.name || inv.tenantId}</div>
+                    <div className="billing-fin-row__num billing-inv-row__num">{inv.invoiceNumber || inv.id.slice(0, 8)}</div>
+                    <div className="billing-fin-row__company billing-inv-row__sub">{inv.tenant?.name || inv.tenantId}</div>
                   </div>
-                  <div className="billing-inv-row__sub">
-                    {period || "—"}
-                    <div className="billing-inv-row__due">
+                  <div>
+                    <div className="billing-fin-row__period">{period || "—"}</div>
+                    <div className={`billing-fin-row__due billing-inv-row__due${inv.status === "OVERDUE" || inv.status === "FAILED" ? " billing-fin-row__due--late" : ""}`}>
                       Due {fmtDate(inv.dueDate)}
                       {inv.paidAt ? ` · Paid ${fmtDate(inv.paidAt)}` : ""}
                       {inv.failedAt && !inv.paidAt ? ` · Failed ${fmtDate(inv.failedAt)}` : ""}
                     </div>
                   </div>
-                  <div className="billing-inv-row__amount">
+                  <div className="billing-fin-row__amount billing-inv-row__amount">
                     {dollars(inv.totalCents)}
                     {inv.balanceDueCents > 0 && inv.status !== "PAID" ? (
-                      <div className="billing-inv-row__balance">Due {dollars(inv.balanceDueCents)}</div>
+                      <div className={`billing-fin-row__balance billing-inv-row__balance${inv.balanceDueCents > 0 ? " billing-fin-row__balance--due" : ""}`}>
+                        Due {dollars(inv.balanceDueCents)}
+                      </div>
                     ) : null}
                   </div>
-                  <span className={`billing-status-pill ${invStatusClass(inv.status)}`}>{invoiceStatusLabel(inv.status)}</span>
+                  <BillingFinanceChip status={inv.status} />
 
-                  <div className="billing-inv-row__actions">
-                    <button className="btn primary" type="button" onClick={() => setDetailInvoiceId(inv.id)}>
-                      View
-                    </button>
-
-                    <details className="b3-menu">
-                      <summary>More actions</summary>
-                      <div className="b3-menu-panel" onClick={(e) => e.stopPropagation()}>
-                        {canAct ? (
-                          <button
-                            type="button"
-                            disabled={!!busy}
-                            onClick={(e) => {
-                              void act(inv.id, "Send", `/admin/billing/invoices/${inv.id}/send`);
-                              (e.currentTarget as HTMLButtonElement).closest("details")?.removeAttribute("open");
-                            }}
-                          >
-                            {isBusy("Send") ? "Sending…" : "Email invoice"}
-                          </button>
-                        ) : null}
-                        {canAct ? (
-                          <button
-                            type="button"
-                            disabled={!!busy}
-                            onClick={(e) => {
-                              void act(inv.id, "Email link", `/billing/platform/invoices/${inv.id}/email-payment-link`);
-                              (e.currentTarget as HTMLButtonElement).closest("details")?.removeAttribute("open");
-                            }}
-                          >
-                            {isBusy("Email link") ? "Sending…" : "Email payment link"}
-                          </button>
-                        ) : null}
-                        {canAct ? (
-                          <button
-                            type="button"
-                            disabled={!!busy}
-                            onClick={(e) => {
-                              setPayInvoice(inv);
-                              (e.currentTarget as HTMLButtonElement).closest("details")?.removeAttribute("open");
-                            }}
-                          >
-                            Retry payment…
-                          </button>
-                        ) : null}
-                        {canAct ? (
-                          <button
-                            type="button"
-                            disabled={!!busy}
-                            onClick={(e) => {
-                              setMarkPaidTarget(inv);
-                              (e.currentTarget as HTMLButtonElement).closest("details")?.removeAttribute("open");
-                            }}
-                          >
-                            Mark paid…
-                          </button>
-                        ) : null}
-                        <button type="button" onClick={() => openAdminInvoicePdf(inv.id)}>
-                          Download PDF
-                        </button>
-                        {canAct ? (
-                          <button
-                            type="button"
-                            className="b3-menu-danger"
-                            disabled={!!busy}
-                            onClick={(e) => {
-                              setVoidTarget(inv);
-                              (e.currentTarget as HTMLButtonElement).closest("details")?.removeAttribute("open");
-                            }}
-                          >
-                            Void invoice…
-                          </button>
-                        ) : null}
-                        {canAct ? (
-                          <button
-                            type="button"
-                            disabled={!!busy}
-                            onClick={(e) => {
-                              setSmsInvoice(inv);
-                              (e.currentTarget as HTMLButtonElement).closest("details")?.removeAttribute("open");
-                            }}
-                          >
-                            SMS payment link
-                          </button>
-                        ) : null}
-                      </div>
-                    </details>
-
-                    <button className="btn ghost" type="button" onClick={() => void toggleLog(inv.id)}>
-                      {isLogOpen ? "Hide log" : "Activity"}
-                    </button>
-                  </div>
+                  <InvoiceRowMenu
+                    disabled={!!busy}
+                    canAct={canAct}
+                    isBusy={isBusy}
+                    activityOpen={isLogOpen}
+                    onOpen={() => setDetailInvoiceId(inv.id)}
+                    onPdf={() => openAdminInvoicePdf(inv.id)}
+                    onActivity={() => void toggleLog(inv.id)}
+                    onSend={canAct ? () => void act(inv.id, "Send", `/admin/billing/invoices/${inv.id}/send`) : undefined}
+                    onEmailLink={canAct ? () => void act(inv.id, "Email link", `/billing/platform/invoices/${inv.id}/email-payment-link`) : undefined}
+                    onRetry={canAct ? () => setPayInvoice(inv) : undefined}
+                    onMarkPaid={canAct ? () => setMarkPaidTarget(inv) : undefined}
+                    onVoid={canAct ? () => setVoidTarget(inv) : undefined}
+                    onSms={canAct ? () => setSmsInvoice(inv) : undefined}
+                  />
                   </div>
 
                   {/* Inline event log */}
                   {isLogOpen ? (
-                    <div className="billing-inv-log">
+                    <div className="billing-inv-log billing-fin-log">
                       {logLoading ? <p className="muted" style={{ margin: 0, fontSize: 12 }}>Loading events…</p> : null}
                       {logError ? <ErrorState message={logError} /> : null}
                       {!logLoading && !logError && logEvents.length === 0 ? (

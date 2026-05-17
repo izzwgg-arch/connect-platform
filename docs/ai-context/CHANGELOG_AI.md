@@ -4,6 +4,30 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-17 — billing: premium invoice operations UI (portal)
+
+**Task:** Redesign admin **Invoices** tab — finance-grade table rows, `BillingFinanceChip`, icon action menu, premium detail drawer, upgraded filter bar. **Portal only.**  
+**Risk:** medium (UI only).
+
+### What changed
+
+- **`billingInvoices.css`**: `billing-fin-row`, `billing-fin-chip`, `billing-fin-menu`, `billing-fin-drawer`, `billing-fin-toolbar` — hover accent, tabular amounts, dark-native surfaces.
+- **`BillingFinanceChip.tsx`**, **`InvoiceRowMenu.tsx`**: refined status pills + compact ⋯ menu (send, payment link, retry, mark paid, PDF, SMS, void, activity).
+- **`adminBillingOpsPanels.tsx`**: clickable rows open drawer; filter pills use human labels (`Pending` for OPEN); drawer hero + sectioned line items / payments / activity.
+- **`billingUi.ts`**: `invoiceFinanceStatusTone`, `invoiceFilterStatusLabel`.
+
+**No API, Prisma, worker, or billing math changes.**
+
+### Deploy verification (portal bundle)
+
+```bash
+docker exec app-portal-1 sh -c 'grep -rl billing-fin-chip /app/apps/portal/.next/static 2>/dev/null | head -1'
+docker exec app-portal-1 sh -c 'grep -rl billing-fin-drawer /app/apps/portal/.next/static 2>/dev/null | head -1'
+docker exec app-portal-1 sh -c 'grep -rl billing-fin-row /app/apps/portal/.next/static 2>/dev/null | head -1'
+```
+
+---
+
 ## 2026-05-17 — billing: admin pricing page SaaS redesign (portal)
 
 **Task:** Redesign **`/admin/billing/settings?billingSection=plans-pricing`** into a dark-native SaaS pricing workspace — plan card, override summary, four rate cards, compact overrides table, collapsed **Advanced pricing details**. **Portal only.**  
