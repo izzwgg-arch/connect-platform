@@ -1,6 +1,6 @@
 "use client";
 
-import { billingEventIcon, billingEventLabel, formatDateTime } from "../../lib/billingUi";
+import { billingEventIcon, billingEventLabel, formatDateTime, groupBillingEventsByDay } from "../../lib/billingUi";
 
 export type BillingActivityRow = {
   id: string;
@@ -12,22 +12,24 @@ export type BillingActivityRow = {
 
 export function BillingActivityList({ events }: { events: BillingActivityRow[] }) {
   if (!events.length) return null;
+  const groups = groupBillingEventsByDay(events);
   return (
     <div className="billing-timeline-v2">
-      {events.map((ev) => (
-        <div className="billing-timeline-v2__item" key={ev.id}>
-          <div className="billing-timeline-v2__icon" aria-hidden>
-            {billingEventIcon(ev.type)}
-          </div>
-          <div>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>{billingEventLabel(ev.type)}</div>
-            <div className="billing-timeline-v2__time">{formatDateTime(ev.createdAt)}</div>
-            {ev.message ? (
-              <div className="muted" style={{ fontSize: 13, marginTop: 4, lineHeight: 1.45 }}>
-                {ev.message}
+      {groups.map((group) => (
+        <div key={group.label}>
+          <div className="billing-p8-timeline-day">{group.label}</div>
+          {group.items.map((ev) => (
+            <div className="billing-timeline-v2__item" key={ev.id}>
+              <div className="billing-timeline-v2__icon" aria-hidden>
+                {billingEventIcon(ev.type)}
               </div>
-            ) : null}
-          </div>
+              <div>
+                <div className="billing-timeline-v2__label">{billingEventLabel(ev.type)}</div>
+                <div className="billing-timeline-v2__time">{formatDateTime(ev.createdAt)}</div>
+                {ev.message ? <div className="billing-timeline-v2__msg">{ev.message}</div> : null}
+              </div>
+            </div>
+          ))}
         </div>
       ))}
     </div>

@@ -1,7 +1,7 @@
 # Billing UX overhaul — Phase 1: Information architecture & flow
 
-> **Status:** Product / UX architecture only — **no implementation in this phase.**  
-> **Constraints honored:** No backend billing logic, invoice math, SOLA, worker, webhooks, telephony, mobile, or CRM changes.  
+> **Status:** Phase 1 = IA / flows document. **Phases 7–9 (2026-05)** implemented the stable admin workspace described here (tenant rail, dedicated routes, SaaS tables) without reopening this IA doc for structural changes.  
+> **Constraints honored:** No backend billing logic, invoice math, SOLA, worker, webhooks, telephony, mobile, or CRM changes in portal polish phases.  
 > **Read first:** `CURSOR_START_HERE.md`, `BILLING.md`, `BILLING_OPERATOR_RUNBOOK.md`.
 
 **Principles (non-negotiable)**  

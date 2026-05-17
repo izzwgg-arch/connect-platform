@@ -891,6 +891,14 @@ ssh connect "curl -s 'http://127.0.0.1:3910/ops/deploy/jobs/<jobid>/log?lines=40
 ssh connect "docker exec app-<service>-1 grep -n '<unique new line>' /app/<path>"
 ```
 
+**Admin billing portal polish (Phase 8–9, display-only):** After a **`portal`** deploy, confirm SaaS polish classes shipped in the client bundle:
+
+```bash
+ssh connect "docker exec app-portal-1 sh -c 'grep -o billing-p8-skeleton /app/apps/portal/.next/static/chunks/*.js | head -1'"
+ssh connect "docker exec app-portal-1 sh -c 'grep -o billing-inv-toolbar--sticky /app/apps/portal/.next/static/chunks/*.js | head -1'"
+ssh connect "docker exec app-portal-1 sh -c 'grep -o billing-p8-drawer /app/apps/portal/.next/static/chunks/*.js | head -1'"
+```
+
 If a dry-run log shows `DRY RUN checkout safety: BLOCKED`, read the listed
 paths and do not enqueue the real deploy until those production-clone edits are
 reviewed, committed/ported, or explicitly restored.

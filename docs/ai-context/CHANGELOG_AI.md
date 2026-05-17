@@ -4,6 +4,36 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-17 — billing: admin portal operational polish (Phase 9)
+
+**Task:** Billing workspace operational refinement — speed, responsiveness, perceived performance, drawer/skeleton polish. **Portal only.**  
+**Risk:** medium (UI only).
+
+### What changed
+
+- **`billingPhase9.css`**: sticky filter toolbar, horizontal table scroll, shimmer table skeletons, dark-native overlay/drawer/modal, timeline day separators, responsive breakpoints (1280 / 1024 / 768).
+- **`BillingTableSkeleton.tsx`**: invoice/tx loading placeholders (`billing-p8-skeleton`).
+- **`BillingActivityList.tsx`**: day-grouped audit feed via **`groupBillingEventsByDay`** (`billingUi.ts`).
+- **`adminBillingOpsPanels.tsx`**: faster search debounce (200ms), clear-search control, empty-search states, **`BillingTableSkeleton`** on invoices/payments load, invoice drawer uses **`billing-p8-drawer`** + **Escape** to close, theme modals (`billing-p8-modal--*`).
+- **`billingWorkspaceSections.tsx`**: methods/activity aligned with Phase 8/9 components.
+- **`layout.tsx`**: imports **`billingPhase9.css`**.
+
+**Docs:** **`BILLING.md`**, **`BILLING_UX_OVERHAUL_PHASE1_IA.md`**, **`CHANGELOG_AI.md`**, **`DEBUGGING.md`**.
+
+### What was NOT changed
+
+- Billing **IA** (no nav/route restructure), **API**, Prisma, worker, SOLA, telephony, mobile, CRM.
+
+### Deploy verification (portal bundle)
+
+```bash
+docker exec app-portal-1 sh -c 'grep -o billing-p8-skeleton /app/apps/portal/.next/static/chunks/*.js | head -1'
+docker exec app-portal-1 sh -c 'grep -o billing-inv-toolbar--sticky /app/apps/portal/.next/static/chunks/*.js | head -1'
+docker exec app-portal-1 sh -c 'grep -o billing-p8-drawer /app/apps/portal/.next/static/chunks/*.js | head -1'
+```
+
+---
+
 ## 2026-05-14 — billing: current-plan assignment + normalized pricing state
 
 **Task:** SUPER_ADMIN **`assign-plan-preview`** / **`assign-current-plan`** routes (no invoices/charges), **`deriveBillingPricingState`** (`billingPricingState.ts`), **`pricingState`** on **`pricing-diagnostics`**, portal **Current Billing Plan** card + warnings banner + assign modal; audit **`billing_plan.current_assigned`**.  

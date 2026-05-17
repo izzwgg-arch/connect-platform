@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useAsyncResource } from "../../../../../hooks/useAsyncResource";
 import { apiDelete, apiGet, apiPost, getPortalApiBaseUrl } from "../../../../../services/apiClient";
 import { DataTable } from "../../../../../components/DataTable";
@@ -11,6 +11,7 @@ import { billingErrorMessage } from "../../../../../components/BillingActionToas
 import { BillingActionPanel } from "../../../../../components/billing/BillingActionPanel";
 import { BillingActivityList } from "../../../../../components/billing/BillingActivityList";
 import { BillingEmptyState } from "../../../../../components/billing/BillingEmptyState";
+import { BillingTableSkeleton } from "../../../../../components/billing/BillingTableSkeleton";
 import { dollars, invoiceStatusLabel, transactionStatusLabel } from "../../../../../lib/billingUi";
 import { useAppContext } from "../../../../../hooks/useAppContext";
 import type { AdminOpsTab } from "./adminBillingLinks";
@@ -169,20 +170,19 @@ function Pager({ page, pages, onPage }: { page: number; pages: number; onPage: (
   );
 }
 
-const overlayStyle: React.CSSProperties = {
-  position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 1000,
-  display: "flex", alignItems: "flex-start", justifyContent: "flex-end", overflow: "auto",
-};
-
-const drawerStyle: React.CSSProperties = {
-  background: "var(--surface, #fff)", width: "min(680px, 100vw)", minHeight: "100vh",
-  boxShadow: "-4px 0 24px rgba(0,0,0,0.18)", padding: "24px 28px", overflowY: "auto",
-};
-
-const modalStyle: React.CSSProperties = {
-  background: "var(--surface, #fff)", borderRadius: 10, padding: "28px 32px",
-  width: "min(520px, 96vw)", margin: "60px auto", boxShadow: "0 8px 40px rgba(0,0,0,0.22)",
-};
+function useEscapeClose(active: boolean, onClose: () => void) {
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [active, onClose]);
+}
 
 // ── InvoiceDetailModal ────────────────────────────────────────────────────────
 
@@ -204,18 +204,21 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
   const [collectionsBusy, setCollectionsBusy] = useState(false);
   const [collectionsDncConfirm, setCollectionsDncConfirm] = useState(false);
 
+  useEscapeClose(true, onClose);
+
   return (
     <>
-    <div style={overlayStyle} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={drawerStyle}>
-        <div className="row-actions" style={{ marginBottom: 16 }}>
-          <h3 style={{ margin: 0, flex: 1 }}>
+    <div className="billing-p8-overlay" role="dialog" aria-modal="true" aria-labelledby="billing-invoice-drawer-title" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="billing-p8-drawer" onClick={(e) => e.stopPropagation()}>
+        <div className="billing-p8-drawer__head">
+          <h3 id="billing-invoice-drawer-title">
             Invoice {inv?.invoiceNumber || invoiceId.slice(0, 8)}
           </h3>
-          <button className="btn ghost" type="button" onClick={onClose}>✕ Close</button>
+          <button className="btn ghost" type="button" onClick={onClose}>Close</button>
         </div>
 
-        {data.status === "loading" ? <LoadingSkeleton rows={6} /> : null}
+        <div className="billing-p8-drawer__body">
+        {data.status === "loading" ? <BillingTableSkeleton variant="invoice" rows={5} /> : null}
         {data.status === "error" ? <ErrorState message={data.error} /> : null}
 
         {inv ? (
@@ -413,6 +416,7 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
             </div>
           </div>
         ) : null}
+        </div>
       </div>
     </div>
 
@@ -753,8 +757,8 @@ function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantId: stri
 
   return (
     <>
-    <div style={{ ...overlayStyle, alignItems: "center", justifyContent: "center" }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ ...modalStyle, width: "min(640px, 96vw)", maxHeight: "90vh", overflowY: "auto" }}>
+    <div className="billing-p8-overlay billing-p8-overlay--center" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="billing-p8-modal billing-p8-modal--wide" onClick={(e) => e.stopPropagation()}>
         <div className="row-actions" style={{ marginBottom: 16 }}>
           <h3 style={{ margin: 0, flex: 1 }}>Saved Cards — {tenantName}</h3>
           <button className="btn ghost" type="button" onClick={onClose}>✕</button>
@@ -956,8 +960,8 @@ function TransactionDetailModal({ txId, onClose }: { txId: string; onClose: () =
   }, [tx]);
 
   return (
-    <div style={{ ...overlayStyle, alignItems: "center", justifyContent: "center" }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ ...modalStyle, width: "min(580px, 96vw)" }}>
+    <div className="billing-p8-overlay billing-p8-overlay--center" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="billing-p8-modal billing-p8-modal--md" onClick={(e) => e.stopPropagation()}>
         <div className="row-actions" style={{ marginBottom: 16 }}>
           <h3 style={{ margin: 0, flex: 1 }}>Transaction Detail</h3>
           <button className="btn ghost" type="button" onClick={onClose}>✕ Close</button>
@@ -1089,8 +1093,8 @@ function SmsPaymentLinkModal({ invoice, onClose, onSuccess }: { invoice: Invoice
   }
 
   return (
-    <div style={{ ...overlayStyle, alignItems: "center", justifyContent: "center" }} onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ ...modalStyle, width: "min(500px, 96vw)" }}>
+    <div className="billing-p8-overlay billing-p8-overlay--center" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="billing-p8-modal billing-p8-modal--sm" onClick={(e) => e.stopPropagation()}>
         <div className="row-actions" style={{ marginBottom: 16 }}>
           <h3 style={{ margin: 0, flex: 1 }}>
             Send Payment Link via SMS
@@ -1228,9 +1232,11 @@ export function InvoicesTab() {
   const [listRev, setListRev] = useState(0);
   const [markPaidTarget, setMarkPaidTarget] = useState<InvoiceRow | null>(null);
   const [voidTarget, setVoidTarget] = useState<InvoiceRow | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const searchPending = searchInput.trim() !== search.trim();
 
   useEffect(() => {
-    const t = setTimeout(() => { setSearch(searchInput); setPage(1); }, 350);
+    const t = setTimeout(() => { setSearch(searchInput.trim()); setPage(1); }, 200);
     return () => clearTimeout(t);
   }, [searchInput]);
 
@@ -1290,7 +1296,7 @@ export function InvoicesTab() {
         </div>
       ) : null}
 
-      <div className="billing-inv-toolbar">
+      <div className="billing-inv-toolbar billing-inv-toolbar--sticky">
         <div className="billing-p8-filter-bar billing-inv-toolbar__filters">
           {INV_STATUSES.map((s) => (
             <button
@@ -1306,25 +1312,43 @@ export function InvoicesTab() {
             </button>
           ))}
         </div>
-        <input
-          type="search"
-          className="input billing-inv-search"
-          placeholder="Search invoice # or company…"
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-        />
+        <div className="billing-p8-search-wrap">
+          <input
+            ref={searchRef}
+            type="search"
+            className="input billing-inv-search"
+            placeholder="Search invoice # or company…"
+            aria-label="Search invoices"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+          />
+          {searchInput ? (
+            <button
+              type="button"
+              className="billing-p8-search-clear"
+              aria-label="Clear search"
+              onClick={() => {
+                setSearchInput("");
+                searchRef.current?.focus();
+              }}
+            >
+              ×
+            </button>
+          ) : null}
+        </div>
       </div>
 
-      {data.status === "loading" ? <LoadingSkeleton rows={8} /> : null}
+      {data.status === "loading" ? <BillingTableSkeleton variant="invoice" rows={8} /> : null}
       {data.status === "error" ? <ErrorState message={data.error} /> : null}
 
       {data.status === "success" ? (
         <>
-          <p className="billing-inv-meta">
+          <p className={`billing-inv-meta${searchPending ? " billing-inv-meta--pending" : ""}`}>
             {data.data.total} invoice{data.data.total !== 1 ? "s" : ""}
             {statusFilter !== "ALL" ? ` · ${statusFilter}` : ""}
             {search ? ` · “${search}”` : ""}
           </p>
+          <div className="billing-p8-table-scroll">
           <div className="billing-inv-table billing-inv-table--sticky">
             <div className="billing-inv-table__head" aria-hidden>
               <span>Invoice</span>
@@ -1335,8 +1359,12 @@ export function InvoicesTab() {
             </div>
             {rows.length === 0 ? (
               <BillingEmptyState
-                title="No invoices in this view"
-                message="Try clearing the status filter or widening your search. Invoices appear here as soon as they are generated for any company."
+                title={search ? "No invoices match your search" : "No invoices in this view"}
+                message={
+                  search
+                    ? `Nothing found for “${search}”. Try another invoice number or company name, or clear filters.`
+                    : "Try clearing the status filter or widening your search. Invoices appear here as soon as they are generated for any company."
+                }
               />
             ) : null}
             {rows.map((inv) => {
@@ -1485,6 +1513,7 @@ export function InvoicesTab() {
               );
             })}
           </div>
+          </div>
           <Pager page={data.data.page} pages={data.data.pages} onPage={(p) => setPage(p)} />
         </>
       ) : null}
@@ -1617,7 +1646,7 @@ export function TransactionsTab() {
 
   return (
     <div data-testid="billing-admin-tab-panel-payments">
-      <div className="billing-inv-toolbar" style={{ marginBottom: 10 }}>
+      <div className="billing-inv-toolbar billing-inv-toolbar--sticky" style={{ marginBottom: 10 }}>
         <div className="billing-p8-filter-bar">
           {TX_STATUSES.map((s) => (
             <button
@@ -1632,7 +1661,7 @@ export function TransactionsTab() {
         </div>
       </div>
 
-      {data.status === "loading" ? <LoadingSkeleton rows={8} /> : null}
+      {data.status === "loading" ? <BillingTableSkeleton variant="tx" rows={8} /> : null}
       {data.status === "error" ? <ErrorState message={data.error} /> : null}
 
       {data.status === "success" ? (
@@ -1647,6 +1676,7 @@ export function TransactionsTab() {
               message="Adjust the status filter or try another page. Each row is a processor attempt tied to an invoice when available."
             />
           ) : (
+            <div className="billing-p8-table-scroll">
             <div className="billing-p8-tx-table billing-inv-table--sticky">
               <div className="billing-p8-tx-table__head" aria-hidden>
                 <span>Date</span>
@@ -1695,6 +1725,7 @@ export function TransactionsTab() {
                   </div>
                 );
               })}
+            </div>
             </div>
           )}
           <Pager page={data.data.page} pages={data.data.pages} onPage={(p) => setPage(p)} />

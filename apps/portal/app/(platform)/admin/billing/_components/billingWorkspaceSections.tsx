@@ -5,14 +5,10 @@ import { useState } from "react";
 import { apiGet } from "../../../../../services/apiClient";
 import { DetailCard } from "../../../../../components/DetailCard";
 import { ErrorState } from "../../../../../components/ErrorState";
+import { BillingActivityList } from "../../../../../components/billing/BillingActivityList";
 import { BillingEmptyState } from "../../../../../components/billing/BillingEmptyState";
-import {
-  billingEventIcon,
-  billingEventLabel,
-  dollars,
-  formatDate,
-  invoiceStatusLabel,
-} from "../../../../../lib/billingUi";
+import { BillingTableSkeleton } from "../../../../../components/billing/BillingTableSkeleton";
+import { dollars, formatDate, invoiceStatusLabel } from "../../../../../lib/billingUi";
 import type { TenantDetail } from "./tenantBillingConfigForms";
 import { mergeSearchParams, OPS_TAB_QUERY } from "./adminBillingLinks";
 
@@ -126,26 +122,11 @@ export function BillingActivitySection({ detail }: { detail: TenantDetail }) {
               </div>
               {openId === invoice.id ? (
                 <div className="billing-inv-log" style={{ gridColumn: "1 / -1" }}>
-                  {loading ? <p className="muted">Loading…</p> : null}
+                  {loading ? <BillingTableSkeleton variant="invoice" rows={3} /> : null}
                   {err ? <ErrorState message={err} /> : null}
                   {!loading && !err && events.length === 0 ? <p className="muted">No events on this invoice.</p> : null}
                   {!loading && !err && events.length > 0 ? (
-                    <div className="billing-timeline-v2">
-                      {events.slice(0, 16).map((ev) => (
-                        <div className="billing-timeline-v2__item" key={ev.id}>
-                          <div className="billing-timeline-v2__icon" aria-hidden>
-                            {billingEventIcon(ev.type)}
-                          </div>
-                          <div>
-                            <strong>{billingEventLabel(ev.type)}</strong>
-                            <div className="billing-timeline-v2__time">
-                              {new Date(ev.createdAt).toLocaleString()}
-                              {ev.message ? ` · ${ev.message}` : ""}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                    <BillingActivityList events={events.slice(0, 16).map((ev) => ({ ...ev, id: ev.id }))} />
                   ) : null}
                 </div>
               ) : null}

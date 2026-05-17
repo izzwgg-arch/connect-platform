@@ -22,6 +22,24 @@ Portal UIs documented in this file use the **`BillingInvoice`** stack unless not
 
 - **Phase 3 (2026-05):** Admin billing shell + company workspace layout; calmer invoices register (View + More actions); humanized pricing mode labels (`billingUi.ts`).
 - **Phase 4 (2026-05):** Guided **`BillingActionPanel`** drawers for collect/retry pay, mark paid, void, remove card, collections “do not auto-charge”, assign plan, reset-to-plan; **`BillingActivityList`** + humanized **`billingEventLabel`** / **`billingEventIcon`** for audit text; operational **`BillingEmptyState`** blocks; **`billingPhase4.css`** table/timeline polish. **No** API, Prisma, worker, or invoice-engine changes in this phase.
+- **Phase 7–8 (2026-05):** Stable **tenant rail + dedicated routes** (`/admin/billing/invoices`, `/payments`, `/methods`, `/collections`, `/reports`, `/activity`); compact segmented workspace nav; SaaS-style invoice/payment row grids; dark-native surfaces (`billingPhase7.css`, `billingPhase8.css`); pill filters; sticky table headers; **`BillingEmptyState`** refresh.
+- **Phase 9 (2026-05):** Operational speed + perceived performance (**no IA change**). **`billingPhase9.css`**: sticky filter toolbar (`billing-inv-toolbar--sticky`), horizontal table scroll (`billing-p8-table-scroll`), table-shaped **`BillingTableSkeleton`**, theme-native invoice drawer (`billing-p8-overlay` / `billing-p8-drawer`), search clear + 200ms debounce, empty-search copy, activity timeline day groups (`groupBillingEventsByDay` in `billingUi.ts`), responsive breakpoints (1280 / 1024 / 768). **Escape** closes invoice detail drawer.
+
+### Admin billing workspace routes (current)
+
+| Route | Panel / purpose |
+|-------|-----------------|
+| `/admin/billing` | Company overview (summary; generation actions) |
+| `/admin/billing/invoices` | Invoice register + row actions + detail drawer |
+| `/admin/billing/payments` | Processor transactions (SaaS row grid) |
+| `/admin/billing/methods` | Saved cards + autopay summary |
+| `/admin/billing/collections` | Retry queue overview + next-sweep preview |
+| `/admin/billing/reports` | CSV exports + aging / failed-payment reports |
+| `/admin/billing/activity` | Per-invoice activity timelines |
+| `/admin/billing/settings` | Pricing, SOLA, collections config (`billingSection` query) |
+| `/admin/billing/plans` | Catalog BillingPlan CRUD |
+
+Shell: **`AdminBillingShell`** + CSS scopes **`billing-ws-scope`**, **`billing-p8-scope`**. Ops tables: **`adminBillingOpsPanels.tsx`** (`InvoicesTab`, `TransactionsTab`, `ReportsTab`, `CollectionsTab`).
 
 ## Where the code lives
 

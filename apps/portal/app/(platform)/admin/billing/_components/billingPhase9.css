@@ -1,0 +1,394 @@
+/* Phase 9 — operational speed, responsiveness, perceived performance (extends Phase 8) */
+
+/* ── Sticky filter toolbar ── */
+
+.billing-inv-toolbar--sticky {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  margin: -2px 0 10px;
+  padding: 8px 0 10px;
+  background: color-mix(in srgb, var(--billing-surface, var(--panel)) 92%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--billing-border);
+}
+
+.billing-p8-search-wrap {
+  position: relative;
+  flex: 1 1 200px;
+  min-width: 160px;
+  max-width: 320px;
+}
+
+.billing-p8-search-wrap .billing-inv-search {
+  width: 100%;
+  max-width: none;
+  padding-right: 32px;
+}
+
+.billing-p8-search-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--billing-muted);
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.billing-p8-search-clear:hover {
+  color: var(--billing-text);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.billing-p8-search-clear:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 1px;
+}
+
+.billing-inv-meta--pending {
+  opacity: 0.72;
+}
+
+.billing-inv-meta--pending::after {
+  content: " · updating…";
+  font-style: italic;
+}
+
+/* ── Horizontal table scroll (no layout explosion) ── */
+
+.billing-p8-table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0 -2px;
+  padding: 0 2px;
+}
+
+.billing-p8-table-scroll .billing-inv-table,
+.billing-p8-table-scroll .billing-p8-tx-table {
+  min-width: min(100%, 720px);
+}
+
+/* ── Table skeletons ── */
+
+.billing-p8-skeleton {
+  border: 1px solid var(--billing-border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--billing-surface) 94%, transparent);
+  animation: billing-p8-fade-in 0.18s ease;
+}
+
+.billing-p8-skeleton__head {
+  height: 34px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--billing-surface-raised) 70%, transparent) 0%,
+    color-mix(in srgb, var(--billing-muted) 18%, transparent) 50%,
+    color-mix(in srgb, var(--billing-surface-raised) 70%, transparent) 100%
+  );
+  background-size: 200% 100%;
+  animation: billing-p8-shimmer 1.2s ease-in-out infinite;
+}
+
+.billing-p8-skeleton__row {
+  height: 42px;
+  border-top: 1px solid color-mix(in srgb, var(--billing-border) 45%, transparent);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--billing-surface-raised) 55%, transparent) 0%,
+    color-mix(in srgb, var(--billing-muted) 12%, transparent) 50%,
+    color-mix(in srgb, var(--billing-surface-raised) 55%, transparent) 100%
+  );
+  background-size: 200% 100%;
+  animation: billing-p8-shimmer 1.2s ease-in-out infinite;
+  animation-delay: calc(var(--row-i, 0) * 40ms);
+}
+
+.billing-p8-skeleton--tx .billing-p8-skeleton__row {
+  height: 46px;
+}
+
+@keyframes billing-p8-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+@keyframes billing-p8-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ── Overlay + drawer (dark-native) ── */
+
+.billing-p8-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  overflow: auto;
+  background: color-mix(in srgb, #000 52%, transparent);
+  animation: billing-p8-overlay-in 0.16s ease;
+}
+
+.billing-p8-overlay--center {
+  align-items: center;
+  justify-content: center;
+}
+
+@keyframes billing-p8-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.billing-p8-drawer {
+  width: min(680px, 100vw);
+  min-height: 100vh;
+  max-height: 100vh;
+  overflow-y: auto;
+  padding: 0;
+  background: color-mix(in srgb, var(--billing-surface) 98%, transparent);
+  border-left: 1px solid var(--billing-border);
+  box-shadow: -8px 0 32px color-mix(in srgb, #000 28%, transparent);
+  color: var(--billing-text);
+  animation: billing-p8-drawer-in 0.2s ease;
+}
+
+@keyframes billing-p8-drawer-in {
+  from {
+    transform: translateX(12px);
+    opacity: 0.85;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.billing-p8-drawer__head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--billing-border);
+  background: color-mix(in srgb, var(--billing-surface) 94%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.billing-p8-drawer__head h3 {
+  margin: 0;
+  flex: 1;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.billing-p8-drawer__body {
+  padding: 16px 20px 24px;
+}
+
+.billing-p8-drawer__summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px 14px;
+  margin-bottom: 14px;
+}
+
+.billing-p8-drawer__stat label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--billing-muted);
+  margin-bottom: 3px;
+}
+
+.billing-p8-drawer__stat strong {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.billing-p8-drawer__section-title {
+  margin: 18px 0 8px;
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--billing-muted);
+}
+
+.billing-p8-modal {
+  width: min(520px, 96vw);
+  margin: 48px auto;
+  padding: 24px 28px;
+  border-radius: 12px;
+  border: 1px solid var(--billing-border);
+  background: color-mix(in srgb, var(--billing-surface) 98%, transparent);
+  box-shadow: 0 12px 40px color-mix(in srgb, #000 32%, transparent);
+  color: var(--billing-text);
+  animation: billing-p8-fade-in 0.18s ease;
+}
+
+.billing-p8-modal--wide {
+  width: min(640px, 96vw);
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.billing-p8-modal--md {
+  width: min(580px, 96vw);
+}
+
+.billing-p8-modal--sm {
+  width: min(500px, 96vw);
+}
+
+/* ── Activity timeline: day groups ── */
+
+.billing-p8-timeline-day {
+  margin: 14px 0 6px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--billing-muted);
+  position: sticky;
+  top: 0;
+  padding: 4px 0;
+  background: color-mix(in srgb, var(--billing-surface) 90%, transparent);
+  backdrop-filter: blur(6px);
+  z-index: 1;
+}
+
+.billing-p8-timeline-day:first-child {
+  margin-top: 0;
+}
+
+.billing-p8-scope .billing-timeline-v2__label {
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.billing-p8-scope .billing-timeline-v2__msg {
+  font-size: 12px;
+  color: var(--billing-muted);
+  margin-top: 4px;
+  line-height: 1.45;
+}
+
+/* ── Row keyboard focus ── */
+
+.billing-inv-row[tabindex="0"]:focus-visible,
+.billing-p8-tx-row[tabindex="0"]:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  outline-offset: -2px;
+}
+
+/* ── Action menu (details) ── */
+
+.billing-p8-scope .b3-menu > summary {
+  font-size: 12px;
+  padding: 4px 10px;
+  min-height: 28px;
+  border-radius: 8px;
+  cursor: pointer;
+  list-style: none;
+  transition: background 0.1s ease;
+}
+
+.billing-p8-scope .b3-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.billing-p8-scope .b3-menu > summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
+.billing-p8-scope .b3-menu-panel {
+  animation: billing-p8-fade-in 0.12s ease;
+}
+
+/* ── Responsive: laptop / tablet ── */
+
+@media (max-width: 1280px) {
+  .billing-inv-table__head,
+  .billing-inv-row {
+    grid-template-columns: minmax(100px, 1fr) minmax(88px, 0.85fr) minmax(72px, 0.6fr) minmax(64px, 0.5fr) minmax(120px, auto);
+    gap: 6px 8px;
+  }
+
+  .billing-p8-tx-table__head,
+  .billing-p8-tx-row {
+    grid-template-columns: minmax(100px, 1fr) minmax(88px, 0.8fr) minmax(72px, 0.55fr) minmax(68px, 0.5fr) minmax(88px, 0.65fr) minmax(64px, auto);
+  }
+
+  .billing-p8-drawer {
+    width: min(560px, 100vw);
+  }
+}
+
+@media (max-width: 1024px) {
+  .billing-ws-split {
+    grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
+  }
+
+  .billing-inv-toolbar--sticky {
+    padding-top: 6px;
+  }
+
+  .billing-p8-filter-bar {
+    flex: 1 1 100%;
+  }
+
+  .billing-p8-search-wrap {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  .billing-inv-row__actions {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 768px) {
+  .billing-p8-drawer__head,
+  .billing-p8-drawer__body {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .billing-p8-drawer__summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .billing-inv-table--sticky {
+    max-height: min(65vh, 640px);
+  }
+}

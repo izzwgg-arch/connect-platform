@@ -112,6 +112,26 @@ export function billingEventIcon(type: string | undefined | null): string {
   return "•";
 }
 
+/** Group audit events by calendar day label (display only, preserves order within each day). */
+export function groupBillingEventsByDay<T extends { createdAt: string }>(
+  events: T[],
+): { label: string; items: T[] }[] {
+  const order: string[] = [];
+  const map = new Map<string, T[]>();
+  for (const ev of events) {
+    const d = new Date(ev.createdAt);
+    const label = Number.isNaN(d.getTime())
+      ? "Unknown date"
+      : d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", year: "numeric" });
+    if (!map.has(label)) {
+      map.set(label, []);
+      order.push(label);
+    }
+    map.get(label)!.push(ev);
+  }
+  return order.map((label) => ({ label, items: map.get(label)! }));
+}
+
 export function billingEventLabel(type: string | undefined | null): string {
   switch (String(type || "")) {
     case "invoice_created": return "Invoice created";
