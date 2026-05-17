@@ -1,14 +1,17 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { ClipboardList } from "lucide-react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
 import { apiGet, apiPost, apiPatch } from "../../../../services/apiClient";
 import { crm } from "../../../../components/crm/crmClasses";
-import { CRMPageHeader } from "../../../../components/crm/CRMPageHeader";
+import {
+  ChecklistCommandHeader,
+  type ChecklistHeaderTab,
+} from "../../../../components/crm/checklists/ChecklistCommandHeader";
 import { ChecklistLibraryPanel } from "../../../../components/crm/checklists/ChecklistLibraryPanel";
 import { ChecklistWorkspace } from "../../../../components/crm/checklists/ChecklistWorkspace";
 import { ChecklistProgressPanel } from "../../../../components/crm/checklists/ChecklistProgressPanel";
+import { ChecklistQuickTipsStrip } from "../../../../components/crm/checklists/ChecklistQuickTipsStrip";
 import { CHECKLIST_TEMPLATES } from "../../../../components/crm/checklists/ChecklistTemplates";
 import { cn } from "../../../../components/crm/cn";
 
@@ -32,7 +35,16 @@ type Checklist = {
 
 type EditItem = { label: string; required: boolean; sortOrder: number };
 
-// ── Page ───────────────────────────────────────────────────────────────────────
+function isLiveReady(c: Checklist) {
+  return c.isActive && c.items.length > 0 && c.items.some((i) => i.required);
+}
+
+function requiredRatio(c: Checklist) {
+  if (c.items.length === 0) return 0;
+  return Math.round(
+    (c.items.filter((i) => i.required).length / c.items.length) * 100
+  );
+}
 
 export default function CrmChecklistsPage() {
   const [checklists, setChecklists] = useState<Checklist[]>([]);
@@ -40,12 +52,31 @@ export default function CrmChecklistsPage() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Checklist | null>(null);
   const [savedMsg, setSavedMsg] = useState("");
+  const [headerTab, setHeaderTab] = useState<ChecklistHeaderTab>("active");
 
   // Create state
   const [creating, setCreating] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createItems, setCreateItems] = useState<EditItem[]>([]);
   const [createSaving, setCreateSaving] = useState(false);
+
+  const activeChecklists = useMemo(
+    () => checklists.filter((c) => c.isActive),
+    [checklists]
+  );
+  const archivedCount = useMemo(
+    () => checklists.filter((c) => !c.isActive).length,
+    [checklists]
+  );
+  const liveReadyCount = useMemo(
+    () => activeChecklists.filter(isLiveReady).length,
+    [activeChecklists]
+  );
+  const avgRequiredPct = useMemo(() => {
+    if (activeChecklists.length === 0) return 0;
+    const sum = activeChecklists.reduce((acc, c) => acc + requiredRatio(c), 0);
+    return Math.round(sum / activeChecklists.length);
+  }, [activeChecklists]);
 
   async function loadList() {
     try {
@@ -64,19 +95,34 @@ export default function CrmChecklistsPage() {
     loadList();
   }, []);
 
-  // Select a checklist by id (may already be loaded with full items)
-  function handleSelect(id: string) {
-    const found = checklists.find((c) => c.id === id) ?? null;
-    setSelected(found);
-    setCreating(false);
-  }
-
-  // Start blank create
   function handleNewBlank() {
     setCreating(true);
     setSelected(null);
     setCreateName("");
     setCreateItems([{ label: "", required: false, sortOrder: 0 }]);
+    setHeaderTab("active");
+  }
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const tgt = e.target as HTMLElement | null;
+      if (!tgt) return;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(tgt.tagName)) return;
+      if (tgt.getAttribute("contenteditable") === "true") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key.toLowerCase() !== "n") return;
+      e.preventDefault();
+      handleNewBlank();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  function handleSelect(id: string) {
+    const found = checklists.find((c) => c.id === id) ?? null;
+    setSelected(found);
+    setCreating(false);
+    setHeaderTab("active");
   }
 
   // Start from template
@@ -93,6 +139,7 @@ export default function CrmChecklistsPage() {
         sortOrder: idx,
       }))
     );
+    setHeaderTab("active");
   }
 
   const handleConfirmCreate = useCallback(async () => {
@@ -171,7 +218,8 @@ export default function CrmChecklistsPage() {
     }
   }, [checklists, selected]);
 
-  // ── Render ──
+  const templatesFocus = headerTab === "templates";
+  const progressHighlight = headerTab === "progress";
 
   if (loading) {
     return (
@@ -185,12 +233,20 @@ export default function CrmChecklistsPage() {
 
   return (
     <div className={cn(crm.checklistWorkspace, "crm-page-shell")}>
-      <div className={crm.pageInnerChecklist}>
-        {/* Page header */}
-        <CRMPageHeader
-          icon={<ClipboardList size={18} />}
-          title="Checklists"
-          subtitle="Workflow checklists for agents — used during live calls and campaign outreach."
+      <div className={crm.checklistAmbientLayer} aria-hidden>
+        <span className="checklist-ambient-orb left-[-8%] top-[8%] h-64 w-64 bg-crm-accent/10" />
+        <span className="checklist-ambient-orb right-[-5%] top-[35%] h-48 w-48 bg-indigo-500/8" />
+        <span className="checklist-ambient-orb bottom-[5%] left-[30%] h-56 w-56 bg-crm-accent/6" />
+      </div>
+      <div className={cn(crm.pageInnerChecklist, "gap-3")}>
+        <ChecklistCommandHeader
+          activeCount={activeChecklists.length}
+          archivedCount={archivedCount}
+          avgRequiredPct={avgRequiredPct}
+          liveReadyCount={liveReadyCount}
+          tab={headerTab}
+          onTabChange={setHeaderTab}
+          onNewBlank={handleNewBlank}
         />
 
         {error && (
@@ -216,6 +272,7 @@ export default function CrmChecklistsPage() {
               onNewBlank={handleNewBlank}
               onNewFromTemplate={handleNewFromTemplate}
               isCreating={creating}
+              templatesExpanded={templatesFocus}
             />
           </div>
 
@@ -237,14 +294,23 @@ export default function CrmChecklistsPage() {
               createSaving={createSaving}
               onPickTemplate={handleNewFromTemplate}
               onNewBlank={handleNewBlank}
+              templatesFocus={templatesFocus}
+              onBrowseTemplates={() => setHeaderTab("templates")}
             />
           </div>
 
-          {/* Right: progress / context */}
-          <div className={crm.checklistSideCol}>
+          <div
+            className={cn(
+              crm.checklistSideCol,
+              progressHighlight &&
+                "rounded-crm-lg ring-1 ring-crm-accent/25 transition-shadow"
+            )}
+          >
             <ChecklistProgressPanel checklist={selected} />
           </div>
         </div>
+
+        <ChecklistQuickTipsStrip />
       </div>
     </div>
   );

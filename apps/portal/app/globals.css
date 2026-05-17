@@ -98,7 +98,60 @@
   opacity: 1 !important;
 }
 
-/* Phase 19J.1 — checklist workspace depth + live indicators */
+/* Phase 19E.4 — campaign command-center depth */
+.crm-campaign-command-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 90% 70% at 10% -30%, rgba(56, 189, 248, 0.14), transparent 55%),
+    radial-gradient(ellipse 60% 50% at 95% 20%, rgba(79, 123, 255, 0.08), transparent 50%),
+    linear-gradient(180deg, rgba(26, 38, 53, 0.55) 0%, transparent 42%);
+  pointer-events: none;
+}
+.crm-campaign-index-row-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.95), rgba(56, 189, 248, 0.35));
+  border-radius: 0.75rem 0 0 0.75rem;
+}
+.crm-campaign-performance-surface {
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(56, 189, 248, 0.06), transparent 55%),
+    var(--crm-surface);
+}
+.crm-campaign-quick-strip {
+  background: linear-gradient(180deg, rgba(26, 38, 53, 0.92) 0%, rgba(20, 31, 43, 0.96) 100%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .crm-campaign-index-row {
+    transition: border-color 0.15s ease;
+  }
+  .crm-campaign-index-row:hover {
+    transform: none;
+  }
+}
+
+/* Phase 19J — checklist cinematic workspace */
+.crm-checklist-workspace {
+  background:
+    radial-gradient(ellipse 100% 60% at 50% -20%, rgba(56, 189, 248, 0.09), transparent 55%),
+    radial-gradient(ellipse 70% 50% at 100% 40%, rgba(99, 102, 241, 0.05), transparent 50%),
+    radial-gradient(ellipse 50% 40% at 0% 70%, rgba(56, 189, 248, 0.04), transparent 45%),
+    #040810;
+}
+
+.crm-checklist-workspace .checklist-ambient-orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(60px);
+  pointer-events: none;
+}
+
 @keyframes checklist-live-dot {
   0%,
   100% {
@@ -107,36 +160,146 @@
   }
   50% {
     opacity: 1;
-    box-shadow: 0 0 8px 1px rgba(52, 211, 153, 0.35);
+    box-shadow: 0 0 10px 2px rgba(52, 211, 153, 0.4);
   }
 }
 .crm-checklist-workspace .checklist-live-dot {
   animation: checklist-live-dot 2.6s ease-in-out infinite;
 }
-.crm-checklist-workspace .checklist-template-card {
-  transition:
-    transform 0.2s ease,
-    border-color 0.2s ease,
-    box-shadow 0.2s ease;
-}
+
 @keyframes checklist-orb-pulse {
   0%,
   100% {
     transform: scale(1);
-    opacity: 0.35;
+    opacity: 0.3;
   }
   50% {
-    transform: scale(1.12);
+    transform: scale(1.14);
     opacity: 0.55;
   }
 }
 .crm-checklist-workspace .checklist-orb-pulse {
-  animation: checklist-orb-pulse 3.2s ease-in-out infinite;
+  animation: checklist-orb-pulse 3.6s ease-in-out infinite;
 }
+
+@keyframes checklist-orb-ring {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.03);
+    opacity: 0.75;
+  }
+}
+.crm-checklist-workspace .checklist-orb-ring {
+  animation: checklist-orb-ring 4.5s ease-in-out infinite;
+}
+
+@keyframes checklist-hero-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+.crm-checklist-workspace .checklist-hero-orb {
+  animation: checklist-hero-float 5s ease-in-out infinite;
+}
+
+@keyframes checklist-particle-drift {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+    opacity: 0.15;
+  }
+  33% {
+    transform: translate(4px, -8px) scale(1.2);
+    opacity: 0.45;
+  }
+  66% {
+    transform: translate(-3px, 4px) scale(0.9);
+    opacity: 0.25;
+  }
+}
+.crm-checklist-workspace .checklist-particle {
+  position: absolute;
+  border-radius: 9999px;
+  background: rgba(56, 189, 248, 0.7);
+  box-shadow: 0 0 8px 1px rgba(56, 189, 248, 0.35);
+  animation: checklist-particle-drift 7s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.crm-checklist-workspace .checklist-cinematic-hero {
+  background:
+    linear-gradient(165deg, rgba(26, 42, 66, 0.95) 0%, rgba(14, 22, 40, 0.98) 42%, rgba(6, 10, 20, 1) 100%);
+}
+
+.crm-checklist-workspace .checklist-panel-cinematic::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: inset 0 0 80px -40px rgba(56, 189, 248, 0.12);
+}
+
+.crm-checklist-workspace .checklist-template-card {
+  transition:
+    transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 0.3s ease,
+    box-shadow 0.35s ease;
+}
+.crm-checklist-workspace .checklist-template-card:hover {
+  transform: translateY(-3px) scale(1.01);
+}
+.crm-checklist-workspace .checklist-template-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  opacity: 0.5;
+  pointer-events: none;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.06) 0%,
+    transparent 42%,
+    transparent 100%
+  );
+}
+
+.crm-checklist-workspace .checklist-feature-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.25), transparent);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.crm-checklist-workspace .checklist-feature-card:hover::before {
+  opacity: 1;
+}
+
+.crm-checklist-workspace .checklist-side-panel {
+  transition:
+    border-color 0.25s ease,
+    box-shadow 0.25s ease;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .crm-checklist-workspace .checklist-live-dot {
-    animation: none;
-    opacity: 1;
+  .crm-checklist-workspace .checklist-live-dot,
+  .crm-checklist-workspace .checklist-orb-pulse,
+  .crm-checklist-workspace .checklist-orb-ring,
+  .crm-checklist-workspace .checklist-hero-orb,
+  .crm-checklist-workspace .checklist-particle {
+    animation: none !important;
   }
   .crm-checklist-workspace .checklist-template-card {
     transition: border-color 0.15s ease;
@@ -145,8 +308,7 @@
     transform: none;
   }
   .crm-checklist-workspace .checklist-orb-pulse {
-    animation: none;
-    opacity: 0.4;
+    opacity: 0.35;
   }
 }
 

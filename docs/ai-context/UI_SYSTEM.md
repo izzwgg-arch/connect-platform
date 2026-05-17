@@ -215,6 +215,8 @@ Campaign routes use **`crm.pageInnerCampaign`** (wide desk, up to ~1680px) and *
 
 **Visual hierarchy (19J.1):** Center column uses **`crm.checklistPanelPrimary`** (navy gradient + radial glow). Library and progress use **`crm.checklistPanelSupport`** (quieter support surfaces). Template cards: left accent strip, icon glow box, hover lift (`checklist-template-card` in globals.css, `prefers-reduced-motion` safe). Progress panel: richer ring + compact stat rows.
 
+**Premium command surface (19J.2):** `ChecklistCommandHeader` — KPI tiles, live/updated strip, segmented tabs. **Cinematic pass (19J.3):** Page bg `#040810` + ambient blur orbs; center `checklist-panel-cinematic` with cyan edge glow; `ChecklistCinematicHero` (vignette, grid, particles, floating orb rings, operational badge). Template cards: `rounded-2xl`, layered icon ring, playbook badge, accent radial glow on hover. Side panels: `checklist-side-panel` (muted, backdrop-blur). Motion: `checklist-particle-drift`, `checklist-hero-float`, `checklist-orb-ring` — all disabled under `prefers-reduced-motion`. **Keyboard:** `N` → new checklist.
+
 **Dark surfaces:** Ban `bg-white`, `bg-gray-*`, inline `style={{ background: '#fff' }}`, native white inputs. Use `crm.input`, `crm.checkbox`, `crm.btn*` throughout.
 
 ---

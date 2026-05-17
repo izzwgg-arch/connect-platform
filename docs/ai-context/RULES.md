@@ -243,10 +243,12 @@
     - Compare `nextStage` against `CrmContactMeta.stage` before writing the event.
     - Do not write `STAGE_CHANGED` if `nextStage === currentStage` or if `nextStage` is not provided.
 
-92. **CRM checklist workspace (Phase 19J / 19J.1) uses the 3-column dark workspace pattern.**
+92. **CRM checklist workspace (Phase 19J / 19J.1 / 19J.2) uses the 3-column dark workspace pattern.**
     - `/crm/checklists` uses `crm.pageInnerChecklist` + **`crm.checklistWorkspace`** dark token lock (same as campaign/task/script routes).
     - Layout: library (`checklistLibraryCol`) · workspace (`checklistWorkspaceCol`) · progress panel (`checklistSideCol`).
+    - **Command header (19J.2):** `ChecklistCommandHeader` with honest KPIs (no fake completion analytics), tabs, live/updated strip. **Quick tips:** `ChecklistQuickTipsStrip` at page bottom. **`N`** opens new checklist when not typing in a field.
     - **Visual hierarchy (19J.1):** center = `crm.checklistPanelPrimary` (gradient command surface); sides = `crm.checklistPanelSupport`. No flat gray slabs — ban uniform `crm.card` on all three columns.
+    - **Premium surfaces (19J.2):** depth tokens `#081120` / `#101a2d` / `#13203a` / `#182746`; onboarding orb + feature strip in center; template accents cyan/amber/blue/green/violet/teal.
     - Template cards use per-playbook accents (`ChecklistTemplates.accent` + `TEMPLATE_ACCENT_CLASSES`). Empty state = command-center hero, not static centered block.
     - Items render as **numbered workflow steps** — not plain textarea rows. Required steps use `crm.checklistStepRequired` (warning accent); optional use `crm.checklistStepPending`.
     - 6 starter templates (`ChecklistTemplates.ts`) pre-fill the create form; they never call the API directly — the user confirms.

@@ -75,6 +75,66 @@ export const crm = {
   campaignModalBackdrop: "fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]",
   campaignGuidedEmpty:
     "rounded-crm border border-dashed border-crm-border/80 bg-crm-surface-2/50 px-4 py-4 sm:px-5",
+  /** Phase 19E.4 — premium command-center surfaces */
+  campaignCommandHero:
+    "crm-campaign-command-hero relative overflow-hidden rounded-crm-lg border border-crm-border/80 bg-crm-surface shadow-[0_8px_40px_-12px_rgba(0,0,0,0.55)]",
+  campaignCommandHeroInner: "relative z-[1] flex flex-col gap-4 p-4 sm:p-5 lg:p-6",
+  campaignCommandHeroKpiGrid:
+    "grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-5",
+  campaignCommandHeroKpi:
+    "rounded-crm border border-crm-border/70 bg-crm-surface-2/60 px-3 py-2.5 backdrop-blur-sm transition-colors hover:border-crm-border/90",
+  campaignCommandHeroKpiUrgent: "border-crm-warning/40 bg-crm-warning/8",
+  campaignCommandHeroKpiAccent: "border-crm-accent/35 bg-crm-accent/8",
+  campaignCommandHeroKpiValue: "text-2xl font-bold tabular-nums leading-none text-crm-text sm:text-[1.65rem]",
+  campaignCommandHeroKpiLabel:
+    "text-[10px] font-bold uppercase tracking-wider text-crm-muted",
+  campaignIndexRowList: "m-0 flex list-none flex-col gap-1.5 p-0",
+  campaignIndexRow:
+    "crm-campaign-index-row group relative flex min-h-[4.75rem] w-full min-w-0 overflow-hidden rounded-crm-lg border border-crm-border/80 bg-crm-surface transition-[border-color,box-shadow,transform] duration-200 hover:border-crm-border hover:shadow-[0_8px_28px_-10px_rgba(0,0,0,0.5)] hover:-translate-y-px",
+  campaignIndexRowActive:
+    "crm-campaign-index-row-active border-crm-accent/50 shadow-[0_0_0_1px_rgba(56,189,248,0.1),0_0_36px_-8px_rgba(56,189,248,0.2)]",
+  campaignIndexRowQueueGlow:
+    "shadow-[0_0_0_1px_rgba(56,189,248,0.14),0_0_40px_-6px_rgba(56,189,248,0.22)]",
+  campaignIndexRowPaused: "border-crm-warning/35",
+  campaignIndexRowDraft: "border-dashed border-crm-border/70",
+  campaignIndexRowMetric:
+    "flex min-w-[4.25rem] flex-col gap-0.5 px-2 py-1 sm:min-w-[5rem] lg:px-3",
+  campaignIndexRowMetricValue: "text-lg font-bold tabular-nums leading-none text-crm-text sm:text-xl",
+  campaignIndexRowMetricLabel: "text-[10px] font-semibold uppercase tracking-wide text-crm-muted/90",
+  campaignPerformanceSurface:
+    "crm-campaign-performance-surface overflow-hidden rounded-crm-lg border border-crm-border/80 bg-crm-surface shadow-crm",
+  campaignPerformanceSurfaceInner:
+    "grid gap-0 lg:grid-cols-[minmax(0,220px)_minmax(0,1fr)_minmax(0,200px)] lg:divide-x lg:divide-crm-border/60",
+  campaignPerformanceZone: "flex min-w-0 flex-col justify-center p-4 sm:p-5",
+  campaignOpsCell:
+    "flex min-h-[7.5rem] min-w-0 flex-col rounded-crm-lg border border-crm-border/75 bg-crm-surface-2/40 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] sm:p-3.5",
+  campaignOpsCellHeader: "mb-2 flex items-center justify-between gap-2",
+  campaignOpsRow:
+    "flex items-center justify-between gap-2 rounded-crm border border-crm-border/60 bg-crm-surface/80 px-2.5 py-2 text-xs",
+  campaignRosterShell:
+    "overflow-hidden rounded-crm-lg border border-crm-border/80 bg-crm-surface shadow-crm",
+  campaignRosterToolbar:
+    "flex flex-wrap items-center gap-2 border-b border-crm-border/70 bg-crm-surface-2/40 px-3 py-2.5 sm:px-4",
+  campaignRosterTableHead:
+    "hidden lg:grid lg:grid-cols-[minmax(0,1.6fr)_minmax(0,0.7fr)_minmax(0,0.75fr)_minmax(0,0.55fr)_minmax(0,0.55fr)_minmax(0,0.65fr)_auto] lg:gap-3 lg:border-b lg:border-crm-border/60 lg:bg-crm-surface-2/50 lg:px-4 lg:py-2 text-[10px] font-bold uppercase tracking-wider text-crm-muted",
+  campaignRosterBody: "flex flex-col gap-1 p-2 sm:p-2.5",
+  campaignMemberRow:
+    "crm-campaign-member-row grid grid-cols-1 gap-2 rounded-crm border border-crm-border/70 bg-crm-surface-2/30 px-3 py-2.5 transition-colors hover:border-crm-border hover:bg-crm-surface-2/50 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,0.7fr)_minmax(0,0.75fr)_minmax(0,0.55fr)_minmax(0,0.55fr)_minmax(0,0.65fr)_auto] lg:items-center lg:gap-3 lg:px-4 lg:py-2",
+  campaignQuickStrip:
+    "crm-campaign-quick-strip sticky bottom-0 z-30 mt-auto flex flex-wrap items-stretch gap-0 overflow-hidden rounded-crm-lg border border-crm-border/80 bg-crm-surface-2/90 shadow-[0_-8px_32px_-8px_rgba(0,0,0,0.45)] backdrop-blur-md",
+  campaignQuickStripItem:
+    "flex min-w-0 flex-1 flex-col justify-center gap-0.5 border-r border-crm-border/50 px-3 py-2.5 text-left transition-colors last:border-r-0 hover:bg-crm-accent/8 sm:px-4 sm:py-3",
+  campaignQuickStripKbd:
+    "inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded border border-crm-border/80 bg-crm-surface px-1 text-[10px] font-bold text-crm-muted",
+  campaignQuickStripLabel: "text-xs font-semibold text-crm-text sm:text-sm",
+  campaignQuickStripHint: "text-[10px] leading-snug text-crm-muted",
+  campaignDetailHeroKpiGrid:
+    "grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6",
+  campaignDetailHeroKpi:
+    "rounded-crm border border-crm-border/70 bg-crm-surface-2/50 px-2.5 py-2 sm:px-3 sm:py-2.5",
+  campaignDetailHeroKpiValue: "text-xl font-bold tabular-nums text-crm-text sm:text-2xl",
+  campaignSortSelect:
+    "rounded-crm border border-crm-border bg-crm-surface-2 py-2 pl-3 pr-8 text-xs font-medium text-crm-text shadow-none focus:border-crm-accent/50 focus:outline-none focus:ring-2 focus:ring-crm-accent/30 [color-scheme:dark]",
   /** Phase 19F — live call agent workspace */
   pageInnerLive:
     "mx-auto w-full max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8 flex flex-col gap-4 min-h-0",
@@ -208,47 +268,65 @@ export const crm = {
 
   /** Phase 19J — checklist operational workspace */
   pageInnerChecklist:
-    "mx-auto w-full max-w-[min(100%,1600px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-3 min-h-0",
+    "relative mx-auto w-full max-w-[min(100%,1600px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-3 min-h-0 z-[1]",
   /** Forces dark CRM tokens on checklist routes when portal data-theme=light */
   checklistWorkspace:
-    "crm-checklist-workspace [color-scheme:dark] [--panel:#101a2d] [--panel-2:#13203a] [--bg-soft:#081120] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#101a2d] [--crm-surface-2:#13203a] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",
+    "crm-checklist-workspace relative min-h-full [color-scheme:dark] [--panel:#101a2d] [--panel-2:#13203a] [--bg-soft:#040810] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#101a2d] [--crm-surface-2:#13203a] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",
+  checklistAmbientLayer:
+    "pointer-events-none absolute inset-0 z-0 overflow-hidden",
   checklistCommandHeader:
-    "relative overflow-hidden rounded-crm-lg border border-crm-border/60 bg-gradient-to-br from-[#13203a] via-[#101a2d] to-[#081120] shadow-[0_12px_40px_-16px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.05)]",
+    "relative z-[1] overflow-hidden rounded-2xl border border-crm-border/50 bg-gradient-to-br from-[#152238]/95 via-[#0e1628]/98 to-[#060b14] shadow-[0_16px_48px_-20px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.06),0_0_0_1px_rgba(56,189,248,0.06)]",
   checklistCommandHeaderGlow:
-    "pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_70%_80%_at_10%_-20%,rgba(56,189,248,0.12),transparent_50%),radial-gradient(ellipse_50%_60%_at_90%_100%,rgba(99,102,241,0.06),transparent_55%)]",
+    "pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_70%_at_8%_-30%,rgba(56,189,248,0.16),transparent_52%),radial-gradient(ellipse_55%_50%_at_95%_110%,rgba(99,102,241,0.08),transparent_50%)]",
   checklistCommandIcon:
-    "flex h-11 w-11 shrink-0 items-center justify-center rounded-crm-lg border border-crm-accent/35 bg-crm-accent/12 text-crm-accent shadow-[0_0_28px_-6px_rgba(56,189,248,0.4)]",
+    "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-crm-accent/40 bg-gradient-to-br from-crm-accent/20 to-crm-accent/5 text-crm-accent shadow-[0_0_32px_-4px_rgba(56,189,248,0.55),inset_0_1px_0_rgba(255,255,255,0.12)]",
   checklistKpiTile:
-    "rounded-crm border px-3 py-2.5 transition-colors hover:border-crm-border/80",
+    "rounded-xl border px-3 py-2.5 backdrop-blur-sm transition-all duration-300 hover:-translate-y-px hover:shadow-[0_8px_24px_-12px_rgba(0,0,0,0.5)]",
   checklistTab:
-    "rounded-crm px-3.5 py-1.5 text-xs font-medium text-crm-muted transition-all hover:bg-crm-surface-2/50 hover:text-crm-text",
+    "rounded-lg px-3.5 py-1.5 text-xs font-medium text-crm-muted transition-all hover:bg-white/[0.04] hover:text-crm-text",
   checklistTabActive:
-    "rounded-crm border border-crm-accent/45 bg-crm-accent/12 px-3.5 py-1.5 text-xs font-semibold text-crm-accent shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]",
+    "rounded-lg border border-crm-accent/50 bg-crm-accent/14 px-3.5 py-1.5 text-xs font-semibold text-crm-accent shadow-[0_0_20px_-8px_rgba(56,189,248,0.35),inset_0_1px_0_rgba(255,255,255,0.08)]",
   checklistTipsStrip:
-    "rounded-crm-lg border border-crm-border/45 bg-gradient-to-r from-[#101a2d] via-[#0d1522] to-[#101a2d] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
+    "relative z-[1] overflow-hidden rounded-2xl border border-crm-border/35 bg-gradient-to-r from-[#0c1424]/95 via-[#080e18]/98 to-[#0c1424]/95 px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_8px_32px_-16px_rgba(0,0,0,0.6)]",
   checklistTipSegment:
-    "flex min-w-0 flex-1 items-center gap-2.5 rounded-crm border border-transparent px-2.5 py-2 transition-colors hover:border-crm-border/40 hover:bg-[#13203a]/60",
+    "flex min-w-0 flex-1 items-center gap-2.5 rounded-xl border border-transparent px-2.5 py-2 transition-all hover:border-crm-accent/20 hover:bg-crm-accent/[0.06]",
+  checklistCinematicHero:
+    "checklist-cinematic-hero relative isolate min-h-[min(26rem,48vh)] overflow-hidden rounded-2xl border border-crm-accent/15",
+  checklistCinematicHeroVignette:
+    "pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_90%_70%_at_50%_40%,transparent_35%,rgba(4,8,16,0.75)_100%)]",
+  checklistCinematicHeroGlowTop:
+    "pointer-events-none absolute -left-1/4 -top-1/3 h-[70%] w-[150%] bg-[radial-gradient(ellipse_at_center,rgba(56,189,248,0.22),transparent_62%)]",
+  checklistCinematicHeroGlowFloor:
+    "pointer-events-none absolute -bottom-1/4 left-1/2 h-1/2 w-[120%] -translate-x-1/2 bg-[radial-gradient(ellipse_at_center,rgba(56,189,248,0.08),transparent_65%)]",
+  checklistCinematicHeroGrid:
+    "pointer-events-none absolute inset-0 opacity-[0.04] [background-image:linear-gradient(rgba(255,255,255,0.5)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.5)_1px,transparent_1px)] [background-size:28px_28px]",
+  checklistOrbRingOuter:
+    "pointer-events-none absolute -inset-8 rounded-full border border-crm-accent/10 bg-crm-accent/[0.03] checklist-orb-ring",
+  checklistOrbRingMid:
+    "pointer-events-none absolute -inset-4 rounded-full border border-crm-accent/20 bg-gradient-to-br from-crm-accent/10 to-transparent",
   checklistOnboardingOrb:
-    "relative flex h-24 w-24 items-center justify-center rounded-full border border-crm-accent/30 bg-crm-accent/10 shadow-[0_0_48px_-8px_rgba(56,189,248,0.45)]",
+    "relative z-[1] flex h-28 w-28 items-center justify-center rounded-full border border-crm-accent/35 bg-gradient-to-br from-crm-accent/25 via-crm-accent/10 to-[#0a1525] shadow-[0_0_64px_-8px_rgba(56,189,248,0.55),inset_0_1px_0_rgba(255,255,255,0.15)]",
   checklistOnboardingOrbPulse:
-    "pointer-events-none absolute inset-0 rounded-full bg-crm-accent/15 checklist-orb-pulse",
+    "pointer-events-none absolute inset-[-12px] rounded-full bg-crm-accent/12 checklist-orb-pulse",
+  checklistCtaGlow:
+    "shadow-[0_0_28px_-6px_rgba(56,189,248,0.45)] hover:shadow-[0_0_36px_-4px_rgba(56,189,248,0.55)]",
   checklistFeatureCard:
-    "flex flex-col gap-1 rounded-crm border border-crm-border/50 bg-[#101923]/80 px-3 py-2.5 transition-all hover:border-crm-border/80 hover:bg-[#13203a]/90",
-  checklistGrid: "grid gap-3 lg:grid-cols-12 lg:items-start",
+    "checklist-feature-card group relative flex flex-col gap-1.5 overflow-hidden rounded-xl border border-crm-border/40 bg-gradient-to-br from-[#121e30]/90 to-[#0a101c]/95 px-3.5 py-3 transition-all duration-300 hover:border-crm-accent/25 hover:shadow-[0_12px_32px_-16px_rgba(56,189,248,0.2)]",
+  checklistGrid: "relative z-[1] grid gap-3 lg:grid-cols-12 lg:items-stretch",
   checklistLibraryCol:
-    "lg:col-span-3 xl:col-span-3 flex flex-col gap-2.5 min-w-0",
+    "lg:col-span-3 xl:col-span-3 flex flex-col min-w-0 opacity-[0.92] lg:pt-1",
   checklistWorkspaceCol:
-    "lg:col-span-6 xl:col-span-6 flex flex-col gap-2.5 min-w-0 min-h-[28rem]",
+    "lg:col-span-6 xl:col-span-6 flex flex-col min-w-0 min-h-[30rem] z-[2]",
   checklistSideCol:
-    "lg:col-span-3 xl:col-span-3 flex flex-col gap-2.5 min-w-0",
+    "lg:col-span-3 xl:col-span-3 flex flex-col min-w-0 opacity-[0.92] lg:pt-1",
   /** Quieter support column (library + progress) */
   checklistPanelSupport:
-    "rounded-crm-lg border border-crm-border/45 bg-[#121a24]/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] backdrop-blur-[2px]",
-  /** Primary center workspace — layered navy depth */
+    "checklist-side-panel rounded-2xl border border-crm-border/30 bg-[#0a101c]/75 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] backdrop-blur-md",
+  /** Primary center workspace — cinematic hero elevation */
   checklistPanelPrimary:
-    "relative overflow-hidden rounded-crm-lg border border-crm-border/70 bg-gradient-to-b from-[#1c2a3a] via-[#141f2b] to-[#0f1720] shadow-[0_12px_40px_-16px_rgba(0,0,0,0.65),inset_0_1px_0_rgba(255,255,255,0.05)]",
+    "checklist-panel-cinematic relative overflow-hidden rounded-2xl border border-crm-accent/20 bg-gradient-to-b from-[#1a2a42]/95 via-[#121c2e] to-[#0a101c] shadow-[0_0_0_1px_rgba(56,189,248,0.08),0_0_80px_-24px_rgba(56,189,248,0.18),0_28px_72px_-28px_rgba(0,0,0,0.9),inset_0_1px_0_rgba(255,255,255,0.07)]",
   checklistPanelPrimaryGlow:
-    "pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(56,189,248,0.08),transparent_55%)]",
+    "pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_100%_60%_at_50%_-15%,rgba(56,189,248,0.14),transparent_58%),radial-gradient(ellipse_50%_40%_at_100%_100%,rgba(99,102,241,0.06),transparent_50%)]",
   checklistWorkspaceHeader:
     "border-b border-crm-border/50 bg-gradient-to-r from-crm-surface-2/40 via-transparent to-transparent px-4 py-3",
   checklistHeroBand:
@@ -275,14 +353,23 @@ export const crm = {
     "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-crm-warning/50 bg-crm-warning/15 text-[11px] font-bold tabular-nums text-crm-warning shadow-[0_0_10px_-4px_rgba(245,158,11,0.35)]",
   /** Template card base (accent via TEMPLATE_ACCENT_CLASSES) */
   checklistTemplateCard:
-    "checklist-template-card group relative flex w-full flex-col gap-2 overflow-hidden rounded-crm-lg border border-crm-border/55 bg-gradient-to-br from-[#1a2635]/90 to-[#101923]/95 p-3.5 text-left transition-all duration-200 hover:-translate-y-px cursor-pointer",
-  checklistTemplateStrip: "absolute left-0 top-0 bottom-0 w-1 rounded-l-crm-lg",
+    "checklist-template-card group relative w-full overflow-hidden rounded-2xl border text-left cursor-pointer",
+  checklistTemplateCardInner:
+    "relative z-[2] flex flex-col gap-3 p-4 sm:p-[1.125rem]",
+  checklistTemplateStrip:
+    "absolute left-0 top-0 bottom-0 w-[3px] rounded-l-2xl opacity-90",
+  checklistTemplateGlow:
+    "pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover:opacity-100",
+  checklistTemplateIconWrap:
+    "relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl transition-transform duration-300 group-hover:scale-105",
   checklistTemplateIcon:
-    "flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border text-lg transition-transform duration-200 group-hover:scale-105",
+    "relative z-[1] flex h-10 w-10 items-center justify-center rounded-lg border text-lg shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]",
+  checklistTemplateBadge:
+    "shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider",
   checklistMetricChip:
-    "inline-flex items-center gap-1 rounded-crm border border-crm-border/50 bg-[#101923]/60 px-2 py-0.5 text-[10px] font-medium tabular-nums text-crm-muted",
+    "inline-flex items-center gap-1 rounded-md border border-white/[0.06] bg-black/20 px-2 py-0.5 text-[10px] font-medium tabular-nums backdrop-blur-sm",
   checklistProgressCard:
-    "rounded-crm-lg border border-crm-border/45 bg-gradient-to-b from-[#161f2b] to-[#101923] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
+    "checklist-side-panel rounded-2xl border border-crm-border/30 bg-gradient-to-b from-[#101a2d]/80 to-[#0a101c]/90 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-md",
 
   /** Phase 19I / 19I.1 — scripts premium playbook command center */
   pageInnerScripts:

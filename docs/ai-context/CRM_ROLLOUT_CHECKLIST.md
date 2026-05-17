@@ -96,6 +96,23 @@
 | Responsive | 1024px: 3-column stacks gracefully; wide desktop: center column is visual focus |
 | Behavior | CRUD, templates, archive, progress math unchanged — visual-only pass |
 
+### Phase 19J.2 — Checklist premium command workspace (smoke)
+
+| Check | Expected |
+|-------|----------|
+| Command header | KPI row (active, templates, avg required %, checklist mode), Live + Updated, tabs Active/Templates/Progress |
+| Center onboarding | Glowing orb, “Choose a playbook to begin”, Browse templates + Start from blank, four feature-strip cards |
+| Templates tab | Header **Templates** → library templates expanded + center shows starter playbook grid |
+| Progress tab | Progress column gets accent ring highlight (UI only) |
+| Library CTA | Full-width **New checklist** button; active rows show In use / Draft pill |
+| Template accents | Cold call cyan, Appointment amber, Insurance blue, Callback green, Objection violet, Follow-up teal |
+| Status banner | Progress panel shows Ready for live calls / Needs required steps / Archived (honest readiness) |
+| Quick tips strip | Bottom strip: Press N, checklist mode, copy steps, go live (links to live-call) |
+| Keyboard N | Outside inputs, **N** opens new checklist create flow |
+| Dark grep | No `bg-white`, `bg-gray-50`, `bg-gray-100` on checklist route |
+| tsc | `pnpm exec tsc -p apps/portal --noEmit` passes |
+| Behavior | No API/schema changes — visual + tab focus only |
+
 ---
 
 ## 6. Live Workflow
