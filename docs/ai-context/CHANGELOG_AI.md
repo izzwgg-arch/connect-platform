@@ -4,6 +4,38 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-17 — Billing: tenant pricing workspace operational redesign (portal)
+
+**Task:** Redesign admin **Plans & pricing** into a tenant billing control center — quantities, live monthly estimate, inline unit pricing, overrides visibility.  
+**Risk:** Medium (portal UX; display-only estimate helpers).
+
+### Shipped
+
+- **`AdminPricingWorkspace`**: billing profile strip, four **billing-item cards** (extensions, virtual extensions, phone numbers, SMS), live **monthly estimate** panel, compact overrides table (default / override / qty / monthly), sticky **Save pricing** bar, collapsed **Advanced** (diagnostics + reset).
+- **`billingUi.ts`**: `computeTenantMonthlyEstimate`, `previewServiceSubtotalCents` (operational preview only).
+- **`billingPricing.css`**: profile strip, item cards, steppers, summary panel, save bar (dark-native).
+
+### Quantity truth (no fake persistence)
+
+- **Extensions / phone numbers:** read-only counts from `GET …/platform/tenants/:id` → `usage` (`calculateTenantBillingUsage`).
+- **SMS:** `0` or `1` via existing **`smsBillingEnabled`** setting (stepper saves settings).
+- **Virtual extensions:** not billed separately — UI labels **planned** / uses extension rate.
+
+### Explicitly NOT changed
+
+- Invoice engine, worker, recurring/SOLA charge execution, Prisma billing math, billing IA/routes.
+
+### Deploy
+
+- **Portal only** (no API/worker).
+
+### Files (primary)
+
+- `apps/portal/.../AdminPricingWorkspace.tsx`, `billingPricing.css`, `lib/billingUi.ts`
+- `docs/ai-context/BILLING.md`, `BILLING_UX_OVERHAUL_PHASE1_IA.md`, `CHANGELOG_AI.md`
+
+---
+
 ## 2026-05-17 — Billing: Sola external schedule import Phase B (read-only sync + mapping UI)
 
 **Task:** Implement read-only Sola recurring schedule sync and SUPER_ADMIN mapping UI.  

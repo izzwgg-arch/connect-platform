@@ -6,10 +6,14 @@ import { apiGet, apiPost, apiPut } from "../../../../../services/apiClient";
 import { BillingActionToast, billingErrorMessage } from "../../../../../components/BillingActionToast";
 import { BillingActionPanel } from "../../../../../components/billing/BillingActionPanel";
 import {
+  adminTenantStandingHeadline,
+  computeTenantMonthlyEstimate,
   dollars,
   formatDateTime,
   humanizePricingStateMode,
   humanizeStoredPricingMode,
+  previewServiceSubtotalCents,
+  worstNonTerminalInvoiceStatus,
 } from "../../../../../lib/billingUi";
 import type { TenantDetail } from "./tenantBillingConfigForms";
 import {
@@ -50,11 +54,19 @@ const PRICING_ROWS: { key: PricingFieldKey; label: string; type: "money" | "bool
   { key: "firstPhoneNumberFree", label: "First number free", type: "bool" },
 ];
 
+type DraftPricing = {
+  extensionPriceCents: number;
+  additionalPhoneNumberPriceCents: number;
+  smsPriceCents: number;
+  firstPhoneNumberFree: boolean;
+  smsBillingEnabled: boolean;
+};
+
 function toDollars(cents: number | undefined | null) {
   return (Number(cents || 0) / 100).toFixed(2);
 }
 
-function toCents(value: FormDataEntryValue | null) {
+function parseDollarsInput(value: string) {
   const n = Number(String(value || "0").replace(/[^0-9. -]/g, ""));
   return Number.isFinite(n) ? Math.round(n * 100) : 0;
 }
@@ -63,6 +75,64 @@ function badgeFromFieldBadges(key: string, badges: Record<string, string> | unde
   const b = String(badges?.[key] || "");
   if (b === "tenant_override") return "custom";
   return "default";
+}
+
+function draftFromDetail(detail: TenantDetail, catalogLocked: boolean): DraftPricing {
+  const settings = detail.settings || {};
+  const pr = detail.preview?.pricingResolution as Record<string, unknown> | undefined;
+  return {
+    extensionPriceCents: Number(catalogLocked && pr ? pr.extensionPriceCents : settings.extensionPriceCents) || 0,
+    additionalPhoneNumberPriceCents:
+      Number(catalogLocked && pr ? pr.additionalPhoneNumberPriceCents : settings.additionalPhoneNumberPriceCents) || 0,
+    smsPriceCents: Number(catalogLocked && pr ? pr.smsPriceCents : settings.smsPriceCents) || 0,
+    firstPhoneNumberFree: catalogLocked && pr ? pr.firstPhoneNumberFree !== false : settings.firstPhoneNumberFree !== false,
+    smsBillingEnabled: Boolean(detail.usage?.smsEnabled ?? settings.smsBillingEnabled),
+  };
+}
+
+function QuantityStepper({
+  value,
+  min,
+  max,
+  disabled,
+  readOnly,
+  onChange,
+  testId,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  disabled?: boolean;
+  readOnly?: boolean;
+  onChange: (next: number) => void;
+  testId?: string;
+}) {
+  const locked = disabled || readOnly;
+  return (
+    <div className="billing-item-stepper" data-testid={testId}>
+      <button
+        type="button"
+        className="billing-item-stepper__btn"
+        disabled={locked || value <= min}
+        aria-label="Decrease quantity"
+        onClick={() => onChange(Math.max(min, value - 1))}
+      >
+        −
+      </button>
+      <span className="billing-item-stepper__value" aria-live="polite">
+        {value}
+      </span>
+      <button
+        type="button"
+        className="billing-item-stepper__btn"
+        disabled={locked || value >= max}
+        aria-label="Increase quantity"
+        onClick={() => onChange(Math.min(max, value + 1))}
+      >
+        +
+      </button>
+    </div>
+  );
 }
 
 export function AdminPricingWorkspace({
@@ -83,26 +153,62 @@ export function AdminPricingWorkspace({
   const [diag, setDiag] = useState<TenantPricingDiagnostics | null>(null);
   const [diagLoading, setDiagLoading] = useState(true);
   const [modeSaving, setModeSaving] = useState(false);
-  const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
-  const [editOpen, setEditOpen] = useState(false);
   const [priceSaving, setPriceSaving] = useState(false);
+  const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [advancedDiag, setAdvancedDiag] = useState<TenantPricingDiagnostics | null>(null);
   const [advancedLoading, setAdvancedLoading] = useState(false);
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
+  const [activeItemKey, setActiveItemKey] = useState<string | null>(null);
   const openAssignRef = useRef<(() => void) | null>(null);
 
   const settings = detail.settings || {};
+  const usage = detail.usage || {};
+  const preview = detail.preview || {};
   const pricingMode = parseStoredPricingMode(settings.metadata);
   const catalogLocked = pricingMode === "catalog";
-  const pr = detail.preview?.pricingResolution as Record<string, unknown> | undefined;
+  const pr = preview.pricingResolution as Record<string, unknown> | undefined;
   const fieldBadges = (pr?.fieldBadges || {}) as Record<string, string>;
 
-  const displayExtension = catalogLocked && pr ? Number(pr.extensionPriceCents) : Number(settings.extensionPriceCents);
-  const displayPhone =
-    catalogLocked && pr ? Number(pr.additionalPhoneNumberPriceCents) : Number(settings.additionalPhoneNumberPriceCents);
-  const displaySms = catalogLocked && pr ? Number(pr.smsPriceCents) : Number(settings.smsPriceCents);
-  const displayFirstFree =
-    catalogLocked && pr ? pr.firstPhoneNumberFree !== false : settings.firstPhoneNumberFree !== false;
+  const savedDraft = useMemo(() => draftFromDetail(detail, catalogLocked), [detail, catalogLocked]);
+  const [draft, setDraft] = useState<DraftPricing>(savedDraft);
+
+  useEffect(() => {
+    setDraft(savedDraft);
+  }, [savedDraft]);
+
+  const extensionCount = Number(usage.extensionCount || 0);
+  const additionalPhoneCount = Number(usage.additionalPhoneNumberCount || 0);
+  const phoneNumberCount = Number(usage.phoneNumberCount || 0);
+  const smsQty = draft.smsBillingEnabled ? 1 : 0;
+
+  const isDirty = useMemo(() => {
+    if (catalogLocked) {
+      return draft.smsBillingEnabled !== savedDraft.smsBillingEnabled;
+    }
+    return (
+      draft.extensionPriceCents !== savedDraft.extensionPriceCents ||
+      draft.additionalPhoneNumberPriceCents !== savedDraft.additionalPhoneNumberPriceCents ||
+      draft.smsPriceCents !== savedDraft.smsPriceCents ||
+      draft.firstPhoneNumberFree !== savedDraft.firstPhoneNumberFree ||
+      draft.smsBillingEnabled !== savedDraft.smsBillingEnabled
+    );
+  }, [draft, savedDraft, catalogLocked]);
+
+  const estimate = useMemo(() => {
+    const addPhoneQty = draft.firstPhoneNumberFree === false ? phoneNumberCount : additionalPhoneCount;
+    return computeTenantMonthlyEstimate({
+      extensionCount,
+      additionalPhoneNumberCount: addPhoneQty,
+      smsEnabled: draft.smsBillingEnabled,
+      extensionPriceCents: draft.extensionPriceCents,
+      additionalPhoneNumberPriceCents: draft.additionalPhoneNumberPriceCents,
+      smsPriceCents: draft.smsPriceCents,
+      creditsCents: Number(settings.creditsCents || 0),
+      discountPercent: Number(settings.discountPercent || 0),
+      previewServiceSubtotalCents: previewServiceSubtotalCents(preview),
+      previewTaxCents: Number(preview.taxCents || 0),
+    });
+  }, [draft, extensionCount, additionalPhoneCount, phoneNumberCount, settings, preview]);
 
   const loadDiag = useCallback(async () => {
     setDiagLoading(true);
@@ -128,15 +234,31 @@ export function AdminPricingWorkspace({
     return PRICING_ROWS.filter((r) => flags[r.key]).map((r) => {
       const stored = diag.tenantStoredPricing[r.key];
       const baseline = diag.catalogBaselinePricing?.[r.key];
+      const qty =
+        r.key === "extensionPriceCents"
+          ? extensionCount
+          : r.key === "additionalPhoneNumberPriceCents"
+            ? additionalPhoneCount
+            : r.key === "smsPriceCents"
+              ? smsQty
+              : 1;
+      const unit =
+        r.key === "extensionPriceCents"
+          ? draft.extensionPriceCents
+          : r.key === "additionalPhoneNumberPriceCents"
+            ? draft.additionalPhoneNumberPriceCents
+            : r.key === "smsPriceCents"
+              ? draft.smsPriceCents
+              : 0;
       return {
         ...r,
+        quantity: qty,
+        monthlySubtotal: r.type === "bool" ? "—" : dollars(qty * unit),
         custom: r.type === "bool" ? (stored ? "Yes" : "No") : dollars(Number(stored ?? 0)),
         defaultVal: r.type === "bool" ? (baseline ? "Yes" : "No") : dollars(Number(baseline ?? 0)),
       };
     });
-  }, [diag]);
-
-  const overrideCount = overrideRows.length;
+  }, [diag, extensionCount, additionalPhoneCount, smsQty, draft]);
 
   async function saveMode(next: PricingModeUi) {
     setModeSaving(true);
@@ -153,6 +275,35 @@ export function AdminPricingWorkspace({
     } finally {
       setModeSaving(false);
     }
+  }
+
+  async function savePricing() {
+    setPriceSaving(true);
+    setToast(null);
+    try {
+      const payload: Record<string, unknown> = {
+        smsBillingEnabled: draft.smsBillingEnabled,
+      };
+      if (!catalogLocked) {
+        payload.extensionPriceCents = draft.extensionPriceCents;
+        payload.additionalPhoneNumberPriceCents = draft.additionalPhoneNumberPriceCents;
+        payload.smsPriceCents = draft.smsPriceCents;
+        payload.firstPhoneNumberFree = draft.firstPhoneNumberFree;
+      }
+      await apiPut(`/admin/billing/tenants/${detail.tenant.id}/settings`, payload);
+      onSaved();
+      void loadDiag();
+      setToast({ kind: "ok", text: "Pricing saved." });
+    } catch (err: unknown) {
+      setToast({ kind: "err", text: billingErrorMessage(err, "Could not save pricing.") });
+    } finally {
+      setPriceSaving(false);
+    }
+  }
+
+  function resetDraft() {
+    setDraft(savedDraft);
+    setToast(null);
   }
 
   async function loadAdvancedDetails() {
@@ -175,22 +326,84 @@ export function AdminPricingWorkspace({
   }
 
   const planName = diag?.billingPlanCurrent?.name || settings.billingPlan?.name || "No plan linked";
-  const planActive = diag?.billingPlanCurrent?.active !== false;
-  const lastUpdated = settings.updatedAt ? formatDateTime(settings.updatedAt) : null;
-
+  const standing = worstNonTerminalInvoiceStatus(detail.invoices);
+  const standingLabel = adminTenantStandingHeadline(standing);
   const taxBillingHref = settingsSectionHref("tax-billing");
+
+  const billingItems = [
+    {
+      key: "extensions",
+      icon: "☎",
+      title: "Extensions",
+      quantity: extensionCount,
+      quantityAuto: true,
+      quantityNote: `${extensionCount} active · billable`,
+      unitCents: draft.extensionPriceCents,
+      priceKey: "extensionPriceCents" as const,
+      chip: badgeFromFieldBadges("extensionPriceCents", fieldBadges),
+    },
+    {
+      key: "virtual",
+      icon: "⊞",
+      title: "Virtual extensions",
+      quantity: null as number | null,
+      quantityAuto: true,
+      quantityNote: "Not billed separately",
+      unitCents: draft.extensionPriceCents,
+      priceKey: null,
+      chip: "default" as const,
+      planned: true,
+    },
+    {
+      key: "phone_numbers",
+      icon: "#",
+      title: "Phone numbers",
+      quantity: draft.firstPhoneNumberFree ? additionalPhoneCount : phoneNumberCount,
+      quantityAuto: true,
+      quantityNote: draft.firstPhoneNumberFree
+        ? `${phoneNumberCount} total · ${additionalPhoneCount} billable`
+        : `${phoneNumberCount} billable`,
+      unitCents: draft.additionalPhoneNumberPriceCents,
+      priceKey: "additionalPhoneNumberPriceCents" as const,
+      chip:
+        badgeFromFieldBadges("additionalPhoneNumberPriceCents", fieldBadges) === "custom" ||
+        badgeFromFieldBadges("firstPhoneNumberFree", fieldBadges) === "custom"
+          ? ("custom" as const)
+          : ("default" as const),
+    },
+    {
+      key: "sms",
+      icon: "✉",
+      title: "SMS packages",
+      quantity: smsQty,
+      quantityAuto: false,
+      quantityNote: draft.smsBillingEnabled ? "Package billed monthly" : "SMS billing off",
+      unitCents: draft.smsPriceCents,
+      priceKey: "smsPriceCents" as const,
+      chip: badgeFromFieldBadges("smsPriceCents", fieldBadges),
+      smsToggle: true,
+    },
+  ];
 
   return (
     <div className="billing-pricing-page billing-p8-scope" data-testid="billing-admin-pricing-workspace">
       <header className="billing-pricing-page__head">
         <div>
           <h2>Pricing</h2>
-          <p>Manage this company&apos;s billing plan and custom rates.</p>
+          <p>Manage this company&apos;s billing setup, quantities, and pricing.</p>
         </div>
         <div className="billing-pricing-page__actions">
-          <Link href="/admin/billing/plans" className="btn ghost" style={{ fontSize: 13 }}>
+          <Link href="/admin/billing/plans" className="btn ghost billing-pricing-page__action">
             Plan catalog
           </Link>
+          <button
+            type="button"
+            className="btn primary billing-pricing-page__action"
+            data-testid="billing-admin-assign-plan-open"
+            onClick={() => openAssignRef.current?.()}
+          >
+            Change plan
+          </button>
         </div>
       </header>
 
@@ -208,171 +421,179 @@ export function AdminPricingWorkspace({
 
       {toast ? <BillingActionToast kind={toast.kind} text={toast.text} /> : null}
 
-      <div className="billing-pricing-grid-top">
-        <article className="billing-pricing-card" data-testid="billing-pricing-current-plan">
-          <div className="billing-pricing-card__label">Current billing plan</div>
-          {diagLoading ? (
-            <p className="billing-pricing-card__meta">Loading…</p>
-          ) : (
-            <>
-              <h3 className="billing-pricing-card__title">{planName}</h3>
-              <div className="billing-pricing-card__row">
-                <span className={`billing-status-pill ${planActive && diag?.billingPlanCurrent ? "good" : ""}`} style={{ fontSize: 11 }}>
-                  {diag?.billingPlanCurrent ? (planActive ? "Active" : "Inactive plan") : "No linked plan"}
-                </span>
-                <button
-                  type="button"
-                  className="btn ghost"
-                  style={{ fontSize: 12 }}
-                  data-testid="billing-admin-assign-plan-open"
-                  onClick={() => openAssignRef.current?.()}
-                >
-                  Change plan
-                </button>
-              </div>
-              <p className="billing-pricing-card__meta">
-                {diag?.billingPlanEffectiveForPreview?.name &&
-                diag.billingPlanCurrent &&
-                diag.billingPlanEffectiveForPreview.id !== diag.billingPlanCurrent.id
-                  ? `Preview month uses ${diag.billingPlanEffectiveForPreview.name}.`
-                  : diag?.billingPlanCurrent
-                    ? `Linked to ${diag.billingPlanCurrent.name}.`
-                    : "Assign a plan from the catalog to enable plan-based pricing."}
-              </p>
-              <div className="billing-pricing-card__label" style={{ marginTop: 10 }}>
-                Pricing mode
-              </div>
-              <div className="billing-pricing-mode-chips" role="radiogroup" aria-label="Pricing mode">
-                {(["legacy", "catalog", "custom"] as const).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    className={`billing-pricing-mode-chip${pricingMode === m ? " active" : ""}`}
-                    disabled={modeSaving}
-                    onClick={() => void saveMode(m)}
-                  >
-                    {humanizeStoredPricingMode(m)}
-                  </button>
-                ))}
-              </div>
-              <p className="billing-pricing-card__meta" style={{ marginBottom: 0 }}>
-                {humanizePricingStateMode(diag?.mode || pricingMode)}
-                {catalogLocked ? " · Unit rates follow the active plan." : null}
-              </p>
-            </>
-          )}
-        </article>
-
-        <article className="billing-pricing-card" data-testid="billing-pricing-overrides-summary">
-          <div className="billing-pricing-card__label">Pricing overrides</div>
-          <h3 className="billing-pricing-card__title">{overrideCount === 0 ? "None" : `${overrideCount} custom`}</h3>
-          <p className="billing-pricing-card__meta">
-            {lastUpdated ? `Last saved ${lastUpdated}` : "No recent changes"}
-          </p>
-          <div className="billing-pricing-card__row">
-            <span className="billing-pricing-rate__chip" style={{ marginTop: 0 }}>
-              {overrideCount === 0 ? "Follows default plan" : "Row differs from plan"}
-            </span>
-            <button type="button" className="btn primary" style={{ fontSize: 12 }} onClick={() => setEditOpen(true)}>
-              {catalogLocked ? "View rates" : "Edit pricing"}
+      <section className="billing-pricing-profile" data-testid="billing-pricing-profile">
+        <div className="billing-pricing-profile__segment">
+          <span className="billing-pricing-profile__label">Plan</span>
+          <strong>{diagLoading ? "…" : planName}</strong>
+        </div>
+        <div className="billing-pricing-profile__segment">
+          <span className="billing-pricing-profile__label">Pricing mode</span>
+          <strong>{humanizeStoredPricingMode(pricingMode)}</strong>
+        </div>
+        <div className="billing-pricing-profile__segment">
+          <span className="billing-pricing-profile__label">Account</span>
+          <strong>{standingLabel}</strong>
+        </div>
+        <div className="billing-pricing-profile__segment billing-pricing-profile__segment--estimate">
+          <span className="billing-pricing-profile__label">Estimated monthly</span>
+          <strong className="billing-pricing-profile__total" data-testid="billing-pricing-monthly-total">
+            {dollars(estimate.totalCents)}
+          </strong>
+        </div>
+        <div className="billing-pricing-profile__segment">
+          <span className="billing-pricing-profile__label">Autopay</span>
+          <strong>{settings.autoBillingEnabled ? "Enabled" : "Off"}</strong>
+        </div>
+        <div className="billing-pricing-profile__modes" role="radiogroup" aria-label="Pricing mode">
+          {(["legacy", "catalog", "custom"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              className={`billing-pricing-mode-chip${pricingMode === m ? " active" : ""}`}
+              disabled={modeSaving}
+              onClick={() => void saveMode(m)}
+            >
+              {humanizeStoredPricingMode(m)}
             </button>
-          </div>
-        </article>
-      </div>
+          ))}
+        </div>
+      </section>
 
-      <div className="billing-pricing-rates">
-        <article className="billing-pricing-rate">
-          <div className="billing-pricing-rate__icon" aria-hidden>
-            ☎
-          </div>
-          <div className="billing-pricing-rate__name">Extensions</div>
-          <div className="billing-pricing-rate__unit">Per extension / month</div>
-          <div className="billing-pricing-rate__price">${toDollars(displayExtension)}</div>
-          <span className={`billing-pricing-rate__chip${badgeFromFieldBadges("extensionPriceCents", fieldBadges) === "custom" ? " custom" : ""}`}>
-            {badgeFromFieldBadges("extensionPriceCents", fieldBadges) === "custom" ? "Custom" : "Uses default"}
-          </span>
-        </article>
+      <section className="billing-items-grid" aria-label="Billing items">
+        {billingItems.map((item) => {
+          const subtotal = item.planned || item.quantity == null ? 0 : item.quantity * item.unitCents;
+          const isActive = activeItemKey === item.key;
+          return (
+            <article
+              key={item.key}
+              className={`billing-item-card${isActive ? " billing-item-card--active" : ""}${item.planned ? " billing-item-card--planned" : ""}`}
+              data-testid={`billing-item-card-${item.key}`}
+              onFocus={() => setActiveItemKey(item.key)}
+              onMouseEnter={() => setActiveItemKey(item.key)}
+            >
+              <div className="billing-item-card__head">
+                <span className="billing-item-card__icon" aria-hidden>
+                  {item.icon}
+                </span>
+                <div className="billing-item-card__title-wrap">
+                  <h3 className="billing-item-card__title">{item.title}</h3>
+                  <p className="billing-item-card__qty-note">{item.quantityNote}</p>
+                </div>
+              </div>
 
-        <article className="billing-pricing-rate billing-pricing-rate--disabled" title="Dedicated virtual extension pricing is not yet stored separately. Extension rates apply until a backend field is added.">
-          <div className="billing-pricing-rate__icon" aria-hidden>
-            ⊞
-          </div>
-          <div className="billing-pricing-rate__name">Virtual extensions</div>
-          <div className="billing-pricing-rate__unit">Per virtual extension / month</div>
-          <div className="billing-pricing-rate__price">—</div>
-          <span className="billing-pricing-rate__chip planned">Planned — uses extension rate</span>
-        </article>
+              <div className="billing-item-card__qty-row">
+                <span className="billing-item-card__field-label">Quantity</span>
+                {item.planned ? (
+                  <span className="billing-item-card__auto-qty">—</span>
+                ) : item.smsToggle ? (
+                  <QuantityStepper
+                    testId="billing-item-sms-qty"
+                    value={smsQty}
+                    min={0}
+                    max={1}
+                    onChange={(n) => setDraft((d) => ({ ...d, smsBillingEnabled: n >= 1 }))}
+                  />
+                ) : (
+                  <QuantityStepper value={item.quantity ?? 0} min={0} max={9999} readOnly onChange={() => {}} />
+                )}
+                {item.quantityAuto && !item.planned ? (
+                  <span className="billing-item-card__auto-chip">Auto-calculated</span>
+                ) : null}
+              </div>
 
-        <article className="billing-pricing-rate">
-          <div className="billing-pricing-rate__icon" aria-hidden>
-            ✉
-          </div>
-          <div className="billing-pricing-rate__name">SMS</div>
-          <div className="billing-pricing-rate__unit">SMS package / month</div>
-          <div className="billing-pricing-rate__price">${toDollars(displaySms)}</div>
-          <span className={`billing-pricing-rate__chip${badgeFromFieldBadges("smsPriceCents", fieldBadges) === "custom" ? " custom" : ""}`}>
-            {badgeFromFieldBadges("smsPriceCents", fieldBadges) === "custom" ? "Custom" : "Uses default"}
-          </span>
-        </article>
+              <label className="billing-item-card__price-row">
+                <span className="billing-item-card__field-label">Unit price</span>
+                <div className="billing-item-card__price-input-wrap">
+                  <span className="billing-item-card__currency">$</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    className="billing-item-card__price-input"
+                    readOnly={catalogLocked || item.planned || !item.priceKey}
+                    value={toDollars(item.unitCents)}
+                    onChange={(e) => {
+                      if (!item.priceKey || catalogLocked) return;
+                      const cents = parseDollarsInput(e.target.value);
+                      setDraft((d) => ({ ...d, [item.priceKey!]: cents }));
+                    }}
+                  />
+                </div>
+              </label>
 
-        <article className="billing-pricing-rate">
-          <div className="billing-pricing-rate__icon" aria-hidden>
-            #
-          </div>
-          <div className="billing-pricing-rate__name">Phone numbers</div>
-          <div className="billing-pricing-rate__unit">
-            Additional number / month
-            {displayFirstFree ? " · first free" : ""}
-          </div>
-          <div className="billing-pricing-rate__price">${toDollars(displayPhone)}</div>
-          <span
-            className={`billing-pricing-rate__chip${
-              badgeFromFieldBadges("additionalPhoneNumberPriceCents", fieldBadges) === "custom" ||
-              badgeFromFieldBadges("firstPhoneNumberFree", fieldBadges) === "custom"
-                ? " custom"
-                : ""
-            }`}
-          >
-            {badgeFromFieldBadges("additionalPhoneNumberPriceCents", fieldBadges) === "custom" ||
-            badgeFromFieldBadges("firstPhoneNumberFree", fieldBadges) === "custom"
-              ? "Custom"
-              : "Uses default"}
-          </span>
-        </article>
-      </div>
+              <div className="billing-item-card__subtotal" data-testid={`billing-item-subtotal-${item.key}`}>
+                <span>Monthly subtotal</span>
+                <strong className="billing-item-card__subtotal-value">{item.planned ? "—" : dollars(subtotal)}</strong>
+              </div>
 
-      <p className="billing-pricing-footnote">
-        Prices exclude taxes and regulatory fees.{" "}
-        <Link href={taxBillingHref}>Taxes and invoice settings</Link> manage tax profiles and presentation.
-      </p>
+              <span
+                className={`billing-pricing-rate__chip${item.chip === "custom" ? " custom" : ""}${item.planned ? " planned" : ""}`}
+              >
+                {item.planned
+                  ? "Uses extension rate"
+                  : item.chip === "custom"
+                    ? "Custom pricing"
+                    : "Using plan default"}
+              </span>
+            </article>
+          );
+        })}
+      </section>
+
+      <section className="billing-monthly-summary" data-testid="billing-monthly-summary">
+        <div className="billing-monthly-summary__head">
+          <h3>Monthly estimate</h3>
+          <p>Operational preview — not a finalized invoice. Taxes scale from current preview rules.</p>
+        </div>
+        <ul className="billing-monthly-summary__lines">
+          {estimate.lines.map((line) => (
+            <li key={line.key} className={line.omitted ? "billing-monthly-summary__line--muted" : undefined}>
+              <span>
+                {line.label}
+                {line.autoQuantity ? <span className="billing-monthly-summary__auto"> · auto</span> : null}
+              </span>
+              <span className="billing-monthly-summary__amount">{line.omitted ? "—" : dollars(line.subtotalCents)}</span>
+            </li>
+          ))}
+          {estimate.taxEstimateCents > 0 ? (
+            <li>
+              <span>Taxes &amp; fees (est.)</span>
+              <span className="billing-monthly-summary__amount">{dollars(estimate.taxEstimateCents)}</span>
+            </li>
+          ) : (
+            <li className="billing-monthly-summary__line--muted">
+              <span>Taxes &amp; fees</span>
+              <span>Per tax profile when enabled</span>
+            </li>
+          )}
+        </ul>
+        <div className="billing-monthly-summary__total">
+          <span>Estimated total</span>
+          <strong>{dollars(estimate.totalCents)}</strong>
+        </div>
+        <p className="billing-pricing-footnote">
+          Quantities for extensions and phone numbers come from active workspace resources.{" "}
+          <Link href={taxBillingHref}>Taxes &amp; invoice settings</Link> control tax profiles and presentation.
+        </p>
+      </section>
 
       <div className="billing-pricing-table-wrap" data-testid="billing-pricing-overrides-table">
         <div className="billing-pricing-table__head">
           <span>Item</span>
-          <span>Type</span>
-          <span>Custom</span>
           <span>Default</span>
-          <span />
+          <span>Override</span>
+          <span>Qty</span>
+          <span>Monthly</span>
         </div>
         {overrideRows.length === 0 ? (
-          <div className="billing-empty-state" style={{ padding: "20px 14px", border: "none", background: "transparent" }}>
-            <p className="billing-empty-state__title" style={{ fontSize: 14 }}>
-              No custom pricing yet
-            </p>
-            <p className="billing-empty-state__body" style={{ fontSize: 12 }}>
-              This company follows the default billing plan.
-            </p>
-          </div>
+          <div className="billing-pricing-table__empty">This company follows the standard billing profile.</div>
         ) : (
           overrideRows.map((row) => (
             <div key={row.key} className="billing-pricing-table__row">
               <span>{row.label}</span>
-              <span>{row.type === "bool" ? "Flag" : "Unit price"}</span>
+              <span className="billing-pricing-table__muted">{row.defaultVal}</span>
               <span>{row.custom}</span>
-              <span style={{ color: "var(--billing-muted, var(--text-dim))" }}>{row.defaultVal}</span>
-              <button type="button" className="btn ghost" style={{ fontSize: 11, padding: "4px 8px" }} onClick={() => setEditOpen(true)}>
-                Edit
-              </button>
+              <span>{row.quantity}</span>
+              <span className="billing-pricing-table__amount">{row.monthlySubtotal}</span>
             </div>
           ))
         )}
@@ -384,21 +605,22 @@ export function AdminPricingWorkspace({
         onToggle={(e) => handleAdvancedToggle((e.target as HTMLDetailsElement).open)}
         data-testid="billing-pricing-advanced-details"
       >
-        <summary>Advanced pricing details</summary>
+        <summary>Advanced</summary>
         <div className="billing-pricing-advanced__body">
           {(advancedDiag?.warnings || diag?.pricingState?.warnings || []).map((w) => (
             <div key={w} className="billing-status-pill warn">
               {w}
             </div>
           ))}
-          {advancedLoading ? <p className="muted" style={{ fontSize: 13 }}>Loading…</p> : null}
+          {advancedLoading ? <p className="muted billing-pricing-advanced__meta">Loading…</p> : null}
           {advancedDiag && !advancedLoading ? (
             <>
-              <p style={{ fontSize: 12, color: "var(--billing-muted)", margin: "0 0 10px" }}>
-                Preview period: {previewMonth}/{previewYear} · Mode: {humanizePricingStateMode(advancedDiag.mode)}
+              <p className="billing-pricing-advanced__meta">
+                Preview {previewMonth}/{previewYear} · {humanizePricingStateMode(advancedDiag.mode)}
+                {diag?.billingPlanCurrent ? ` · Linked plan ${diag.billingPlanCurrent.name}` : ""}
               </p>
               {(advancedDiag.pricingPreviewExplanation?.explanationLines || []).length > 0 ? (
-                <ul style={{ fontSize: 12, paddingLeft: 18, margin: "0 0 12px", color: "var(--billing-muted)" }}>
+                <ul className="billing-pricing-advanced__lines">
                   {advancedDiag.pricingPreviewExplanation!.explanationLines!.map((line, i) => (
                     <li key={i}>{line}</li>
                   ))}
@@ -414,10 +636,13 @@ export function AdminPricingWorkspace({
                   void loadAdvancedDetails();
                 }}
               />
-              <button type="button" className="btn ghost" style={{ fontSize: 12, marginTop: 10 }} onClick={() => void loadAdvancedDetails()}>
-                Refresh pricing details
+              <button type="button" className="btn ghost billing-pricing-advanced__refresh" onClick={() => void loadAdvancedDetails()}>
+                Refresh diagnostics
               </button>
             </>
+          ) : null}
+          {settings.updatedAt ? (
+            <p className="billing-pricing-advanced__meta">Last saved {formatDateTime(settings.updatedAt)}</p>
           ) : null}
         </div>
       </details>
@@ -439,88 +664,16 @@ export function AdminPricingWorkspace({
         />
       </div>
 
-      {editOpen ? (
-        <div
-          className="billing-pricing-edit-overlay"
-          role="dialog"
-          aria-modal
-          aria-labelledby="billing-pricing-edit-title"
-          onClick={(e) => {
-            if (e.target === e.currentTarget && !priceSaving) setEditOpen(false);
-          }}
-        >
-          <div className="billing-pricing-edit-panel" onClick={(e) => e.stopPropagation()}>
-            <h3 id="billing-pricing-edit-title">{catalogLocked ? "Company rates (read-only)" : "Edit company pricing"}</h3>
-            <p>
-              {catalogLocked
-                ? "Rates follow the active billing plan. Switch to custom pricing to edit amounts here, or use Change plan."
-                : "Unit prices stored on this company row. Taxes and autopay are under Taxes & invoices."}
-            </p>
-            <form
-              className="billing-form"
-              onSubmit={async (event) => {
-                event.preventDefault();
-                if (catalogLocked) {
-                  setEditOpen(false);
-                  return;
-                }
-                setPriceSaving(true);
-                try {
-                  const form = new FormData(event.currentTarget);
-                  await apiPut(`/admin/billing/tenants/${detail.tenant.id}/settings`, {
-                    extensionPriceCents: toCents(form.get("extensionPrice")),
-                    additionalPhoneNumberPriceCents: toCents(form.get("numberPrice")),
-                    smsPriceCents: toCents(form.get("smsPrice")),
-                    firstPhoneNumberFree: form.get("firstPhoneNumberFree") === "on",
-                    smsBillingEnabled: form.get("smsBillingEnabled") === "on",
-                  });
-                  onSaved();
-                  void loadDiag();
-                  setEditOpen(false);
-                  setToast({ kind: "ok", text: "Pricing saved." });
-                } catch (err: unknown) {
-                  setToast({ kind: "err", text: billingErrorMessage(err, "Could not save pricing.") });
-                } finally {
-                  setPriceSaving(false);
-                }
-              }}
-            >
-              <label>
-                Per extension
-                <input name="extensionPrice" readOnly={catalogLocked} defaultValue={toDollars(displayExtension)} />
-              </label>
-              <label>
-                Additional phone number
-                <input name="numberPrice" readOnly={catalogLocked} defaultValue={toDollars(displayPhone)} />
-              </label>
-              <label>
-                SMS package
-                <input name="smsPrice" readOnly={catalogLocked} defaultValue={toDollars(displaySms)} />
-              </label>
-              <label className="billing-checkbox" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <input
-                  name="firstPhoneNumberFree"
-                  type="checkbox"
-                  disabled={catalogLocked}
-                  defaultChecked={displayFirstFree}
-                />
-                First phone number free
-              </label>
-              <label className="billing-checkbox" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <input name="smsBillingEnabled" type="checkbox" defaultChecked={!!settings.smsBillingEnabled} />
-                Bill SMS package
-              </label>
-              <div className="row-actions" style={{ marginTop: 12 }}>
-                <button type="button" className="btn ghost" disabled={priceSaving} onClick={() => setEditOpen(false)}>
-                  {catalogLocked ? "Close" : "Cancel"}
-                </button>
-                {!catalogLocked ? (
-                  <button type="submit" className="btn primary" disabled={priceSaving}>
-                    {priceSaving ? "Saving…" : "Save pricing"}
-                  </button>
-                ) : null}
-              </div>
-            </form>
+      {isDirty ? (
+        <div className="billing-pricing-save-bar" data-testid="billing-pricing-save-bar">
+          <span className="billing-pricing-save-bar__hint">Unsaved pricing changes</span>
+          <div className="billing-pricing-save-bar__actions">
+            <button type="button" className="btn ghost" disabled={priceSaving} onClick={resetDraft}>
+              Reset changes
+            </button>
+            <button type="button" className="btn primary" disabled={priceSaving} onClick={() => void savePricing()}>
+              {priceSaving ? "Saving…" : "Save pricing"}
+            </button>
           </div>
         </div>
       ) : null}
@@ -574,7 +727,7 @@ function AdvancedPricingResetControl({
 
   return (
     <>
-      <button type="button" className="btn ghost" style={{ fontSize: 12 }} disabled={busy || !bp} onClick={() => void openReset()}>
+      <button type="button" className="btn ghost billing-pricing-advanced__reset" disabled={busy || !bp} onClick={() => void openReset()}>
         {busy ? "Loading…" : "Reset to plan pricing"}
       </button>
       {overlay && payload?.resetToPlanPreview.after ? (

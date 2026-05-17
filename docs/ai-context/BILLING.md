@@ -121,7 +121,18 @@ Uses Node’s **`--experimental-test-module-mocks`** (see `apps/api/package.json
 
 Merge helpers for deterministic tests/admin parity: **`mergeTenantBillingSettingsMetadata`** in **`billingTenantSettingsMetadata.ts`**.
 
-**Portal:** **`/admin/billing/settings?billingSection=plans-pricing`** — **`AdminPricingWorkspace`** (2026-05-17): current plan + pricing mode chips, override summary, four rate cards (extensions / SMS / phone numbers; **virtual extensions** shown as **planned** — no dedicated stored field yet), compact overrides table, **Edit pricing** modal, one-line tax footnote (full tax profile under **Taxes & invoices**). **Advanced pricing details** (`<details>`, collapsed by default) holds diagnostics warnings, explanation lines, and **Reset to plan pricing**. **Change plan** uses embedded **`AdminCurrentBillingPlanAssignCard`** modal. **Taxes & invoices** section: **`AdminTenantBillingCycleForm`** (tax profile, autopay, billing day, credits) + invoice branding. **No backend pricing behavior changed** for this UI pass.
+**Portal:** **`/admin/billing/settings?billingSection=plans-pricing`** — **`AdminPricingWorkspace`** (2026-05-17, operational redesign): compact **billing profile** strip (plan, pricing mode, account standing, estimated monthly total, autopay); **billing items grid** with per-line quantity + unit price + monthly subtotal; **live monthly estimate** panel; compact **price overrides** table; **Advanced** (`<details>`, collapsed) for diagnostics + reset. **Change plan** via header + embedded **`AdminCurrentBillingPlanAssignCard`**. Sticky **Save pricing** bar when dirty. **Taxes & invoices** tab: **`AdminTenantBillingCycleForm`** + invoice branding.
+
+**Quantity sources (real — do not fake):**
+
+| Line item | Quantity source | Operator control |
+|-----------|-----------------|------------------|
+| Extensions | `calculateTenantBillingUsage` — active billable `Extension` rows | **Auto-calculated** (read-only stepper); manage extensions in workspace |
+| Phone numbers | Active `PhoneNumber` rows; `additionalPhoneNumberCount` when first number free | **Auto-calculated** |
+| SMS package | `0` or `1` from `smsBillingEnabled` / tenant SMS flags | **0/1 stepper** → saves `smsBillingEnabled` on tenant settings |
+| Virtual extensions | **Not a separate invoice line** | Card shows **planned** — billed at extension rate if ever split |
+
+Monthly estimate uses **`computeTenantMonthlyEstimate`** in **`billingUi.ts`** (display math only; taxes scaled from current invoice preview). **No invoice engine, worker, or Prisma billing calculation changes** for this pass.
 
 Stored in **`metadata` JSON only** (no migration). Worker/SOLA/charge paths unchanged for this rollout.
 

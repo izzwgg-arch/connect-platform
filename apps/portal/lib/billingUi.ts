@@ -279,6 +279,122 @@ export function adminTenantStandingHeadline(status: string): string {
   return "In good standing";
 }
 
+/** Operational monthly estimate for admin pricing workspace (display only — not invoice math). */
+export type TenantBillingEstimateLine = {
+  key: string;
+  label: string;
+  quantity: number;
+  unitCents: number;
+  subtotalCents: number;
+  /** Quantity comes from live usage, not operator-editable billing settings. */
+  autoQuantity?: boolean;
+  omitted?: boolean;
+  note?: string;
+};
+
+export function computeTenantMonthlyEstimate(input: {
+  extensionCount: number;
+  additionalPhoneNumberCount: number;
+  smsEnabled: boolean;
+  extensionPriceCents: number;
+  additionalPhoneNumberPriceCents: number;
+  smsPriceCents: number;
+  creditsCents?: number;
+  discountPercent?: number;
+  /** When set, scales tax estimate proportionally to service subtotal changes. */
+  previewServiceSubtotalCents?: number;
+  previewTaxCents?: number;
+}): {
+  lines: TenantBillingEstimateLine[];
+  serviceSubtotalCents: number;
+  taxEstimateCents: number;
+  totalCents: number;
+} {
+  const lines: TenantBillingEstimateLine[] = [];
+  if (input.extensionCount > 0) {
+    const sub = input.extensionCount * input.extensionPriceCents;
+    lines.push({
+      key: "extensions",
+      label: "Extensions",
+      quantity: input.extensionCount,
+      unitCents: input.extensionPriceCents,
+      subtotalCents: sub,
+      autoQuantity: true,
+    });
+  }
+  if (input.additionalPhoneNumberCount > 0) {
+    const sub = input.additionalPhoneNumberCount * input.additionalPhoneNumberPriceCents;
+    lines.push({
+      key: "phone_numbers",
+      label: "Phone numbers",
+      quantity: input.additionalPhoneNumberCount,
+      unitCents: input.additionalPhoneNumberPriceCents,
+      subtotalCents: sub,
+      autoQuantity: true,
+    });
+  }
+  if (input.smsEnabled) {
+    lines.push({
+      key: "sms",
+      label: "SMS package",
+      quantity: 1,
+      unitCents: input.smsPriceCents,
+      subtotalCents: input.smsPriceCents,
+      autoQuantity: true,
+      note: "Bill SMS package enabled",
+    });
+  } else {
+    lines.push({
+      key: "sms",
+      label: "SMS package",
+      quantity: 0,
+      unitCents: input.smsPriceCents,
+      subtotalCents: 0,
+      autoQuantity: true,
+      omitted: true,
+      note: "SMS billing off",
+    });
+  }
+
+  let serviceSubtotalCents = lines.filter((l) => !l.omitted).reduce((sum, l) => sum + l.subtotalCents, 0);
+  const credit = Math.max(0, Number(input.creditsCents || 0));
+  if (credit > 0) {
+    const creditLine = -credit;
+    lines.push({ key: "credit", label: "Account credit", quantity: 1, unitCents: creditLine, subtotalCents: creditLine });
+    serviceSubtotalCents += creditLine;
+  }
+  const discount = Number(input.discountPercent || 0);
+  if (discount > 0 && serviceSubtotalCents > 0) {
+    const discountCents = -Math.round(serviceSubtotalCents * discount);
+    lines.push({
+      key: "discount",
+      label: `Discount (${(discount * 100).toFixed(0)}%)`,
+      quantity: 1,
+      unitCents: discountCents,
+      subtotalCents: discountCents,
+    });
+    serviceSubtotalCents += discountCents;
+  }
+
+  const previewSvc = Number(input.previewServiceSubtotalCents || 0);
+  const previewTax = Number(input.previewTaxCents || 0);
+  const taxEstimateCents =
+    previewSvc > 0 && previewTax > 0
+      ? Math.max(0, Math.round((previewTax * Math.max(0, serviceSubtotalCents)) / previewSvc))
+      : 0;
+  const totalCents = Math.max(0, serviceSubtotalCents + taxEstimateCents);
+  return { lines, serviceSubtotalCents, taxEstimateCents, totalCents };
+}
+
+/** Sum service line types from an invoice preview payload (display helper). */
+export function previewServiceSubtotalCents(preview: { lineItems?: Array<{ type?: string; amountCents?: number }> } | null | undefined): number {
+  if (!preview?.lineItems?.length) return 0;
+  const serviceTypes = new Set(["EXTENSION", "PHONE_NUMBER", "SMS_PACKAGE", "CREDIT", "DISCOUNT"]);
+  return preview.lineItems
+    .filter((item) => serviceTypes.has(String(item.type || "")))
+    .reduce((sum, item) => sum + Number(item.amountCents || 0), 0);
+}
+
 /** Earliest due date among non-settled invoices (display only). */
 export function nextOpenInvoiceDueSummary(invoices: any[] | undefined | null): string | null {
   const open = (invoices || []).filter((i) =>
