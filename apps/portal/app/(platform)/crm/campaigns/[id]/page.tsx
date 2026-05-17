@@ -8,7 +8,21 @@ import {
   PhoneCall, X, Edit2, Save, Download, UserPlus, CheckSquare2, Square, CalendarClock,
   Shuffle, BarChart2, Upload, History, ListOrdered, ChevronDown,
 } from "lucide-react";
-import { CRMPageShell } from "../../../../../components/crm";
+import {
+  CRMPageShell,
+  CRMSection,
+  CRMActionBar,
+  CRMEmptyState,
+  CampaignCommandHeader,
+  CampaignPerformancePanel,
+  CampaignMemberCard,
+  CampaignOperationalSidebar,
+  deriveCampaignHealth,
+  type CampaignDetail,
+  type CampaignMember,
+} from "../../../../../components/crm";
+import { crm } from "../../../../../components/crm/crmClasses";
+import { cn } from "../../../../../components/crm/cn";
 import { apiGet, apiPost, apiPatch } from "../../../../../services/apiClient";
 import { useAppContext } from "../../../../../hooks/useAppContext";
 
@@ -28,6 +42,8 @@ type Campaign = {
   checklistId: string | null;
   script: { id: string; name: string } | null;
   checklist: { id: string; name: string } | null;
+  createdAt: string;
+  updatedAt: string;
   memberCount: number;
   statusCounts: Record<string, number>;
 };
@@ -92,9 +108,9 @@ type CampaignImportHistoryRow = {
 
 const CAMPAIGN_IMPORT_STATUS_STYLE: Record<string, string> = {
   PENDING: "bg-crm-surface-2 text-crm-text border-crm-border",
-  PROCESSING: "bg-crm-accent/15 text-blue-800 border-blue-200",
-  DONE: "bg-green-50 text-green-800 border-green-200",
-  PARTIAL: "bg-amber-50 text-crm-warning border-crm-warning/35",
+  PROCESSING: "bg-crm-accent/15 text-crm-accent border-crm-accent/30",
+  DONE: "bg-crm-success/10 text-crm-success border-crm-success/30",
+  PARTIAL: "bg-crm-warning/10 text-crm-warning border-crm-warning/35",
   FAILED: "bg-crm-danger/15 text-red-800 border-crm-danger/35",
 };
 
@@ -288,161 +304,10 @@ type Checklist = { id: string; name: string };
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const STATUS_LABELS: Record<CampaignStatus, string> = {
-  DRAFT: "Draft", ACTIVE: "Active", PAUSED: "Paused", COMPLETED: "Completed", ARCHIVED: "Archived",
-};
-
-const STATUS_COLORS: Record<CampaignStatus, string> = {
-  DRAFT: "bg-crm-surface-2 text-crm-muted",
-  ACTIVE: "bg-green-100 text-green-700",
-  PAUSED: "bg-yellow-100 text-crm-warning",
-  COMPLETED: "bg-blue-100 text-crm-accent",
-  ARCHIVED: "bg-crm-surface-2 text-crm-muted/80",
-};
-
-const PRIORITY_LABELS: Record<CampaignPriority, string> = {
-  LOW: "Low", NORMAL: "Normal", HIGH: "High", URGENT: "Urgent",
-};
-
-const PRIORITY_COLORS: Record<CampaignPriority, string> = {
-  LOW: "bg-crm-surface-2 text-crm-muted",
-  NORMAL: "bg-crm-surface-2 text-crm-muted",
-  HIGH: "bg-orange-100 text-orange-700",
-  URGENT: "bg-red-100 text-crm-danger",
-};
-
 const MEMBER_STATUS_LABELS: Record<MemberStatus, string> = {
   PENDING: "Pending", IN_PROGRESS: "In Progress", CONTACTED: "Contacted",
   CALLBACK: "Callback", CONVERTED: "Converted", SKIPPED: "Skipped", DO_NOT_CALL: "DNC",
 };
-
-const MEMBER_STATUS_COLORS: Record<MemberStatus, string> = {
-  PENDING: "bg-crm-surface-2 text-crm-muted",
-  IN_PROGRESS: "bg-blue-100 text-crm-accent",
-  CONTACTED: "bg-purple-100 text-purple-700",
-  CALLBACK: "bg-yellow-100 text-crm-warning",
-  CONVERTED: "bg-green-100 text-green-700",
-  SKIPPED: "bg-crm-surface-2 text-crm-muted",
-  DO_NOT_CALL: "bg-red-100 text-crm-danger",
-};
-
-function HealthTile({
-  label,
-  value,
-  hint,
-  urgent,
-}: {
-  label: string;
-  value: string | number;
-  hint?: string;
-  urgent?: boolean;
-}) {
-  return (
-    <div
-      className={`rounded-crm border px-3 py-2.5 ${
-        urgent ? "border-crm-warning/35 bg-amber-50/60" : "border-crm-border bg-crm-bg/80"
-      }`}
-    >
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-crm-muted">{label}</p>
-      <p className={`text-xl font-bold tabular-nums ${urgent ? "text-crm-warning" : "text-crm-text"}`}>{value}</p>
-      {hint ? <p className="text-[11px] text-crm-muted mt-0.5 leading-snug">{hint}</p> : null}
-    </div>
-  );
-}
-
-// ── Callback Cell ─────────────────────────────────────────────────────────────
-
-function CallbackCell({ member, campaignId, onUpdated, token, readOnly }: {
-  member: Member; campaignId: string; onUpdated: () => void; token: string | undefined;
-  readOnly?: boolean;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(() => {
-    if (!member.callbackAt) return "";
-    const d = new Date(member.callbackAt);
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  });
-  const [saving, setSaving] = useState(false);
-
-  async function save() {
-    setSaving(true);
-    try {
-      await apiPatch(
-        `/crm/campaigns/${campaignId}/members/${member.id}`,
-        {
-          callbackAt: value ? new Date(value).toISOString() : null,
-          ...(value && member.status !== "CALLBACK" ? { status: "CALLBACK" } : {}),
-        },
-        token
-      );
-      setEditing(false);
-      onUpdated();
-    } catch {}
-    setSaving(false);
-  }
-
-  async function clear() {
-    setSaving(true);
-    try {
-      await apiPatch(`/crm/campaigns/${campaignId}/members/${member.id}`, { callbackAt: null, callbackNote: null }, token);
-      setValue("");
-      setEditing(false);
-      onUpdated();
-    } catch {}
-    setSaving(false);
-  }
-
-  if (readOnly) {
-    if (member.callbackAt) {
-      const d = new Date(member.callbackAt);
-      return (
-        <span className="text-xs text-crm-muted">
-          {d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}{" "}
-          {d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
-        </span>
-      );
-    }
-    return <span className="text-xs text-crm-muted/80">—</span>;
-  }
-
-  if (editing) {
-    return (
-      <div className="flex items-center gap-1">
-        <input
-          type="datetime-local"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          className="border border-crm-border rounded px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-crm-accent/30 w-36"
-        />
-        <button onClick={save} disabled={saving} className="text-xs px-1.5 py-1 bg-crm-accent text-white rounded hover:brightness-110 disabled:opacity-50">✓</button>
-        <button onClick={() => setEditing(false)} className="text-xs px-1.5 py-1 border border-crm-border rounded hover:bg-crm-bg">✕</button>
-      </div>
-    );
-  }
-
-  if (member.callbackAt) {
-    const d = new Date(member.callbackAt);
-    const isPast = d < new Date();
-    return (
-      <div className="flex items-center gap-1">
-        <span className={`text-xs ${isPast ? "text-crm-danger font-medium" : "text-crm-warning"}`}>
-          {d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} {d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
-        </span>
-        <button onClick={() => setEditing(true)} className="text-crm-muted/80 hover:text-crm-muted p-0.5"><Edit2 className="h-3 w-3" /></button>
-        <button onClick={clear} disabled={saving} className="text-crm-muted/80 hover:text-red-500 p-0.5"><X className="h-3 w-3" /></button>
-      </div>
-    );
-  }
-
-  return (
-    <button onClick={() => setEditing(true)} className="text-xs text-crm-muted/80 hover:text-crm-accent flex items-center gap-1">
-      <CalendarClock className="h-3.5 w-3.5" />Set
-    </button>
-  );
-}
-
-// ── Add Contacts Modal (server-side search) ───────────────────────────────────
 
 function AddContactsModal({ campaignId, onClose, onAdded }: {
   campaignId: string; onClose: () => void; onAdded: () => void;
@@ -599,15 +464,16 @@ export default function CampaignDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const campaignId = params.id;
-  const { backendJwtRole } = useAppContext();
+  const { backendJwtRole, can } = useAppContext();
+  const canQueue = can("can_view_crm_queue");
 
   const isAdmin =
     backendJwtRole === "ADMIN" ||
     backendJwtRole === "TENANT_ADMIN" ||
     backendJwtRole === "SUPER_ADMIN";
 
-  const [campaign, setCampaign] = useState<Campaign | null>(null);
-  const [members, setMembers] = useState<Member[]>([]);
+  const [campaign, setCampaign] = useState<CampaignDetail | null>(null);
+  const [members, setMembers] = useState<CampaignMember[]>([]);
   const [membersTotal, setMembersTotal] = useState(0);
   const [crmUsers, setCrmUsers] = useState<CrmUser[]>([]);
   const [scripts, setScripts] = useState<Script[]>([]);
@@ -925,39 +791,10 @@ export default function CampaignDetailPage() {
 
   const queueFilteredHref = `/crm/queue?campaignId=${encodeURIComponent(campaignId)}`;
 
-  const healthDerived = useMemo(() => {
+  const health = useMemo(() => {
     if (!campaign) return null;
-    const sc = campaign.statusCounts;
-    const pending = sc["PENDING"] ?? 0;
-    const inProgress = sc["IN_PROGRESS"] ?? 0;
-    const callback = sc["CALLBACK"] ?? 0;
-    const contactedOnly = sc["CONTACTED"] ?? 0;
-    const converted = sc["CONVERTED"] ?? 0;
-    const skipped = sc["SKIPPED"] ?? 0;
-    const dnc = sc["DO_NOT_CALL"] ?? 0;
-    const total = campaign.memberCount;
-    const activeQueueWork = pending + inProgress;
-    const unassignedRow = workload.find((w) => w.userId === null);
-    const unassignedMembers = unassignedRow?.total ?? 0;
-    const contactedProgress = contactedOnly + callback + converted;
-    const terminal = converted + skipped + dnc;
-    const archivedInLoaded = members.filter((m) => m.queueWorkEligible === false).length;
-    return {
-      pending,
-      inProgress,
-      callback,
-      contactedOnly,
-      converted,
-      skipped,
-      dnc,
-      total,
-      activeQueueWork,
-      unassignedMembers,
-      contactedProgress,
-      terminal,
-      archivedInLoaded,
-    };
-  }, [campaign, workload, members]);
+    return deriveCampaignHealth(campaign, workload);
+  }, [campaign, workload]);
 
   const importCtxKey = importFile ? importPreviewContextKey(importFile, importAssigneeId) : null;
   const importReady =
@@ -999,10 +836,10 @@ export default function CampaignDetailPage() {
     );
   }
 
-  const hd = healthDerived!;
+  const hd = health!;
 
   return (
-    <CRMPageShell>
+    <CRMPageShell innerClassName={crm.pageInnerCampaign}>
       {showAddContacts && (
         <AddContactsModal
           campaignId={campaignId}
@@ -1010,473 +847,6 @@ export default function CampaignDetailPage() {
           onAdded={() => { loadCampaign(); loadMembers(); }}
         />
       )}
-
-        {/* Back */}
-        <button onClick={() => router.push("/crm/campaigns")} className="flex items-center gap-1.5 text-sm text-crm-muted hover:text-crm-text mb-5">
-          <ArrowLeft className="h-4 w-4" />
-          Campaigns
-        </button>
-
-        {/* Campaign hero + primary actions */}
-        <div className="rounded-crm-lg border border-crm-border bg-crm-surface shadow-crm p-4 sm:p-6 mb-5">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0 flex-1">
-              {editingName ? (
-                <div className="flex items-center gap-2 flex-wrap">
-                  <input
-                    autoFocus
-                    value={nameInput}
-                    onChange={(e) => setNameInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") saveName(); if (e.key === "Escape") setEditingName(false); }}
-                    className="text-xl font-bold border border-crm-border rounded-lg px-3 py-1 focus:outline-none focus:ring-2 focus:ring-crm-accent/30 w-full max-w-md"
-                  />
-                  <button type="button" onClick={saveName} className="p-1.5 bg-crm-accent text-white rounded hover:brightness-110"><Save className="h-4 w-4" /></button>
-                  <button type="button" onClick={() => setEditingName(false)} className="p-1.5 border border-crm-border rounded hover:bg-crm-bg"><X className="h-4 w-4" /></button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h1 className="text-2xl font-bold text-crm-text tracking-tight">{campaign.name}</h1>
-                  <button type="button" onClick={() => setEditingName(true)} className="p-1 text-crm-muted/80 hover:text-crm-muted rounded" aria-label="Edit campaign name"><Edit2 className="h-4 w-4" /></button>
-                </div>
-              )}
-              <p className="text-sm text-crm-muted mt-1.5">
-                {campaign.description?.trim()
-                  ? campaign.description
-                  : `${STATUS_LABELS[campaign.status]} · ${PRIORITY_LABELS[campaign.priority ?? "NORMAL"]} priority · ${hd.total} member${hd.total !== 1 ? "s" : ""}`}
-              </p>
-              <div className="flex flex-wrap items-center gap-2 mt-2.5">
-                <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold ${STATUS_COLORS[campaign.status]}`}>
-                  {STATUS_LABELS[campaign.status]}
-                </span>
-                <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold ${PRIORITY_COLORS[campaign.priority ?? "NORMAL"]}`}>
-                  {PRIORITY_LABELS[campaign.priority ?? "NORMAL"]}
-                </span>
-                {campaign.script && (
-                  <span className="text-xs text-crm-muted">Script: <span className="font-medium text-crm-text">{campaign.script.name}</span></span>
-                )}
-                {campaign.checklist && (
-                  <span className="text-xs text-crm-muted">Checklist: <span className="font-medium text-crm-text">{campaign.checklist.name}</span></span>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2 mt-5 pt-4 border-t border-crm-border/60">
-            {isAdmin && (
-              <button
-                type="button"
-                onClick={() => {
-                  setImportOpen(true);
-                  setImportErr("");
-                  setImportSummary(null);
-                  setImportFile(null);
-                  setImportAssigneeId("");
-                  setImportPreview(null);
-                  setImportPreviewContextKeyState(null);
-                  setImportCompareBaseline(null);
-                }}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-crm text-sm font-semibold bg-crm-accent text-white hover:brightness-110 shadow-crm"
-              >
-                <Upload className="h-4 w-4 shrink-0" />
-                Import leads
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setShowAddContacts(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-crm text-sm font-semibold border border-crm-border text-crm-text bg-crm-surface hover:bg-crm-bg"
-            >
-              <Plus className="h-4 w-4 shrink-0" />
-              Add existing contacts
-            </button>
-            {isAdmin && (
-              <button
-                type="button"
-                onClick={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-crm text-sm font-semibold border border-crm-border text-crm-text bg-crm-surface hover:bg-crm-bg"
-              >
-                <Shuffle className="h-4 w-4 shrink-0" />
-                Distribute leads
-              </button>
-            )}
-            <Link
-              href={queueFilteredHref}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-crm text-sm font-semibold border border-blue-200 text-blue-800 bg-crm-accent/15/80 hover:bg-blue-100"
-            >
-              <ListOrdered className="h-4 w-4 shrink-0" />
-              View My Queue
-            </Link>
-          </div>
-
-          <div className="flex flex-wrap gap-2 mt-3">
-            {campaign.status === "DRAFT" && (
-              <button type="button" onClick={() => updateCampaign({ status: "ACTIVE" })} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-green-200 text-green-800 bg-green-50 hover:bg-green-100">
-                <Play className="h-3.5 w-3.5" />Start campaign
-              </button>
-            )}
-            {campaign.status === "ACTIVE" && (
-              <button type="button" onClick={() => updateCampaign({ status: "PAUSED" })} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-crm-warning/35 text-crm-warning bg-amber-50 hover:bg-crm-warning/15">
-                <Pause className="h-3.5 w-3.5" />Pause
-              </button>
-            )}
-            {campaign.status === "PAUSED" && (
-              <button type="button" onClick={() => updateCampaign({ status: "ACTIVE" })} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-green-200 text-green-800 bg-green-50 hover:bg-green-100">
-                <Play className="h-3.5 w-3.5" />Resume
-              </button>
-            )}
-            {(campaign.status === "ACTIVE" || campaign.status === "PAUSED") && (
-              <button type="button" onClick={() => { if (confirm("Archive this campaign?")) updateCampaign({ status: "ARCHIVED" }); }} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-crm-border text-crm-muted hover:bg-crm-bg">
-                <Archive className="h-3.5 w-3.5" />Archive
-              </button>
-            )}
-            <button type="button" onClick={exportCsv} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-crm-border text-crm-muted hover:bg-crm-bg" title="Export member CSV">
-              <Download className="h-3.5 w-3.5" />Export CSV
-            </button>
-          </div>
-        </div>
-
-        {/* Health snapshot — real aggregates only */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
-          <HealthTile label="Total members" value={hd.total} />
-          <HealthTile label="Active queue work" value={hd.activeQueueWork} hint="Pending + in progress" />
-          <HealthTile label="Callbacks scheduled" value={hd.callback} hint="Members in CALLBACK status" urgent={hd.callback > 0} />
-          {isAdmin ? (
-            <HealthTile label="Unassigned" value={hd.unassignedMembers} hint="No owner on member rows" urgent={hd.unassignedMembers > 0} />
-          ) : (
-            <HealthTile label="Terminal outcomes" value={hd.terminal} hint="Converted, skipped, DNC" />
-          )}
-        </div>
-        <div className="rounded-crm border border-crm-border/60 bg-crm-surface px-3 py-2.5 mb-5 text-sm text-crm-text flex flex-wrap gap-x-6 gap-y-1 items-center">
-          <span>
-            <span className="text-crm-muted">Converted</span>{" "}
-            <strong className="text-crm-text tabular-nums">{hd.converted}</strong>
-            <span className="text-crm-muted/80"> / {hd.total}</span>
-          </span>
-          <span className="text-crm-border hidden sm:inline">|</span>
-          <span>
-            <span className="text-crm-muted">Contacted + engaged</span>{" "}
-            <strong className="text-crm-text tabular-nums">{hd.contactedProgress}</strong>
-            <span className="text-crm-muted/80"> with outcomes or callbacks</span>
-          </span>
-          {importHistory[0] ? (
-            <>
-              <span className="text-crm-border hidden sm:inline">|</span>
-              <span className="text-crm-muted">
-                Last import: <span className="text-crm-text font-medium">{formatImportTimestamp(importHistory[0].createdAt)}</span>
-                {importHistory[0].fileName ? ` · ${importHistory[0].fileName}` : ""}
-              </span>
-            </>
-          ) : !importHistoryLoading ? (
-            <>
-              <span className="text-crm-border hidden sm:inline">|</span>
-              <span className="text-crm-muted">No campaign CSV imports recorded yet.</span>
-            </>
-          ) : null}
-          {hd.archivedInLoaded > 0 ? (
-            <>
-              <span className="text-crm-border hidden sm:inline">|</span>
-              <span className="text-crm-warning text-xs">
-                Read-only / archived in this list: {hd.archivedInLoaded}
-                {membersTotal > members.length ? " (visible page)" : ""}
-              </span>
-            </>
-          ) : null}
-        </div>
-
-        {/* Manager next steps — links and modals only; no invented metrics */}
-        <div className="rounded-crm border border-crm-border bg-crm-surface p-4 sm:p-5 mb-5 shadow-crm">
-          <h2 className="text-xs font-bold text-crm-muted uppercase tracking-wide mb-3">Next operational actions</h2>
-          <ul className="space-y-2.5">
-            {isAdmin && hd.unassignedMembers > 0 ? (
-              <li className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border border-amber-100 bg-amber-50/50 px-3 py-2.5">
-                <div>
-                  <p className="text-sm font-semibold text-crm-text">Unassigned members</p>
-                  <p className="text-xs text-crm-muted mt-0.5">{hd.unassignedMembers} lead{hd.unassignedMembers !== 1 ? "s" : ""} still need an owner — distribute across agents.</p>
-                </div>
-                <div className="flex flex-wrap gap-2 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
-                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-crm-accent text-white hover:brightness-110"
-                  >
-                    Distribute…
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setAssigneeFilter("UNASSIGNED"); loadMembers("UNASSIGNED"); }}
-                    className="px-3 py-1.5 text-xs font-medium rounded-lg border border-crm-border text-crm-text hover:bg-crm-surface"
-                  >
-                    Filter members
-                  </button>
-                </div>
-              </li>
-            ) : null}
-            {hd.callback > 0 ? (
-              <li className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border border-crm-border/60 bg-crm-bg/80 px-3 py-2.5">
-                <div>
-                  <p className="text-sm font-semibold text-crm-text">Scheduled callbacks</p>
-                  <p className="text-xs text-crm-muted mt-0.5">{hd.callback} member{hd.callback !== 1 ? "s" : ""} in CALLBACK status — work them from the queue.</p>
-                </div>
-                <div className="flex flex-wrap gap-2 shrink-0">
-                  <Link href={`${queueFilteredHref}&filter=overdue`} className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-crm-border text-crm-text hover:bg-crm-surface">
-                    Overdue queue
-                  </Link>
-                  <Link href={`${queueFilteredHref}&filter=due`} className="px-3 py-1.5 text-xs font-medium rounded-lg border border-crm-border text-crm-text hover:bg-crm-surface">
-                    Due today
-                  </Link>
-                </div>
-              </li>
-            ) : null}
-            {hd.total === 0 ? (
-              <li className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border border-crm-accent/25 bg-crm-accent/15/40 px-3 py-2.5">
-                <div>
-                  <p className="text-sm font-semibold text-crm-text">No members yet</p>
-                  <p className="text-xs text-crm-muted mt-0.5">Import a CSV or add existing contacts to populate this campaign.</p>
-                </div>
-                <div className="flex flex-wrap gap-2 shrink-0">
-                  {isAdmin && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setImportOpen(true);
-                        setImportErr("");
-                        setImportSummary(null);
-                        setImportFile(null);
-                        setImportAssigneeId("");
-                        setImportPreview(null);
-                        setImportPreviewContextKeyState(null);
-                        setImportCompareBaseline(null);
-                      }}
-                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-crm-accent text-white hover:brightness-110"
-                    >
-                      Import leads
-                    </button>
-                  )}
-                  <button type="button" onClick={() => setShowAddContacts(true)} className="px-3 py-1.5 text-xs font-medium rounded-lg border border-crm-border text-crm-text hover:bg-crm-surface">
-                    Add contacts
-                  </button>
-                </div>
-              </li>
-            ) : null}
-            {isAdmin && hd.total > 0 && importHistory.length === 0 && !importHistoryLoading ? (
-              <li className="rounded-lg border border-crm-border/60 bg-crm-bg/60 px-3 py-2.5 text-sm text-crm-text">
-                <span className="font-semibold text-crm-text">Import history is empty.</span>{" "}
-                <span className="text-xs text-crm-muted">When you run a campaign CSV import, batches will appear in Recent imports below.</span>
-              </li>
-            ) : null}
-            {hd.pending > 50 && hd.unassignedMembers === 0 && isAdmin ? (
-              <li className="rounded-lg border border-crm-border/60 px-3 py-2.5 text-xs text-crm-muted">
-                High pending volume ({hd.pending}) — review workload below and balance assignments if needed.
-              </li>
-            ) : null}
-            {!((isAdmin && hd.unassignedMembers > 0) || hd.callback > 0 || hd.total === 0 || (isAdmin && hd.total > 0 && importHistory.length === 0 && !importHistoryLoading) || (hd.pending > 50 && hd.unassignedMembers === 0 && isAdmin)) ? (
-              <li className="text-xs text-crm-muted px-1 py-1">
-                No extra alerts for this snapshot — use members, queue, or imports above as needed.
-              </li>
-            ) : null}
-          </ul>
-        </div>
-
-        {/* Script / Checklist / Priority — collapsed by default to reduce clutter */}
-        <details className="group rounded-crm border border-crm-border bg-crm-surface mb-5 shadow-crm open:ring-1 open:ring-gray-100">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-semibold text-crm-text hover:bg-crm-bg/80 rounded-crm [&::-webkit-details-marker]:hidden">
-            <span>Campaign settings</span>
-            <ChevronDown className="h-4 w-4 text-crm-muted/80 transition-transform group-open:rotate-180" />
-          </summary>
-          <div className="px-4 pb-4 pt-0 border-t border-crm-border/60">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4 pt-4">
-            <div>
-              <label className="block text-xs text-crm-muted mb-1">Call Script</label>
-              <select
-                value={campaign.scriptId ?? ""}
-                onChange={(e) => updateCampaign({ scriptId: e.target.value || null })}
-                className="w-full border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
-              >
-                <option value="">None</option>
-                {scripts.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-crm-muted mb-1">Checklist</label>
-              <select
-                value={campaign.checklistId ?? ""}
-                onChange={(e) => updateCampaign({ checklistId: e.target.value || null })}
-                className="w-full border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
-              >
-                <option value="">None</option>
-                {checklists.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs text-crm-muted mb-2">Smart Queue Priority</label>
-            <div className="flex gap-2 flex-wrap">
-              {(["LOW", "NORMAL", "HIGH", "URGENT"] as CampaignPriority[]).map((p) => (
-                <button
-                  key={p}
-                  onClick={() => updateCampaign({ priority: p })}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-                    (campaign.priority ?? "NORMAL") === p
-                      ? p === "URGENT"
-                        ? "bg-red-600 text-white border-red-600"
-                        : p === "HIGH"
-                          ? "bg-orange-500 text-white border-orange-500"
-                          : p === "LOW"
-                            ? "bg-crm-muted text-white border-crm-muted"
-                            : "bg-crm-accent text-white border-blue-600"
-                      : "border-crm-border text-crm-muted hover:bg-crm-bg"
-                  }`}
-                >
-                  {PRIORITY_LABELS[p]}
-                </button>
-              ))}
-            </div>
-            <p className="text-xs text-crm-muted/80 mt-1.5">
-              {(campaign.priority ?? "NORMAL") === "URGENT"
-                ? "Leads in this campaign surface above all others in Smart Queue (after callbacks)."
-                : (campaign.priority ?? "NORMAL") === "HIGH"
-                  ? "Leads rank above Normal campaigns in Smart Queue."
-                  : (campaign.priority ?? "NORMAL") === "LOW"
-                    ? "Leads rank below Normal campaigns in Smart Queue."
-                    : "Default ranking — same as other Normal campaigns."}
-            </p>
-          </div>
-          </div>
-        </details>
-
-        {/* Campaign CSV import history (real CrmImportBatch rows only) */}
-        <div className="rounded-crm-lg border border-crm-border bg-crm-surface p-4 sm:p-5 mb-5 shadow-crm">
-          <div className="flex items-center gap-2 mb-3">
-            <History className="h-4 w-4 text-crm-muted" />
-            <h2 className="text-sm font-bold text-crm-text tracking-tight">Recent imports</h2>
-          </div>
-          {importHistoryLoading ? (
-            <p className="text-sm text-crm-muted/80">Loading import history…</p>
-          ) : importHistory.length === 0 ? (
-            <div className="text-sm text-crm-muted space-y-1">
-              <p>No campaign-linked import batches yet.</p>
-              <p className="text-crm-muted text-xs">
-                CSV runs started with <strong>Import CSV</strong> on this page appear here. Standalone imports from Import Leads stay on that page only. Older data may be missing if it predates this linkage.
-              </p>
-            </div>
-          ) : (
-            <ul className="space-y-2">
-              {importHistory.map((row) => {
-                const st = CAMPAIGN_IMPORT_STATUS_STYLE[row.status] ?? "bg-crm-bg text-crm-text border-crm-border";
-                const hasIssues = row.errorCount > 0 || row.status === "PARTIAL" || row.status === "FAILED";
-                return (
-                  <li key={row.id} className="rounded-crm border border-crm-border/60 bg-crm-surface px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 hover:border-crm-border shadow-crm">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm font-medium text-crm-text truncate" title={row.fileName}>
-                          {row.fileName}
-                        </span>
-                        <span
-                          className={`text-[11px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded border ${st}`}
-                        >
-                          {campaignImportStatusLabel(row.status)}
-                        </span>
-                      </div>
-                      <p className="text-xs text-crm-muted mt-0.5">
-                        {formatImportTimestamp(row.createdAt)}
-                        {row.createdBy ? ` · ${row.createdBy.displayName}` : ""}
-                        {row.totalRows > 0
-                          ? ` · ${row.totalRows} row${row.totalRows !== 1 ? "s" : ""}`
-                          : ""}
-                      </p>
-                      <p className="text-xs text-crm-muted mt-1">
-                        <span className="text-green-700 font-medium">{row.createdCount}</span> created
-                        <span className="text-crm-muted/80 mx-1">·</span>
-                        <span className="text-crm-accent font-medium">{row.updatedCount}</span> updated
-                        <span className="text-crm-muted/80 mx-1">·</span>
-                        <span className="text-crm-muted font-medium">{row.skippedCount}</span> skipped
-                        {row.errorCount > 0 && (
-                          <>
-                            <span className="text-crm-muted/80 mx-1">·</span>
-                            <span className="text-crm-danger font-medium">{row.errorCount}</span> errors
-                          </>
-                        )}
-                      </p>
-                      {hasIssues && row.errorCount === 0 && (
-                        <p className="text-[11px] text-crm-warning mt-1">Review import details for skipped rows or enrollment notes.</p>
-                      )}
-                    </div>
-                    <Link
-                      href={`/crm/import?batch=${encodeURIComponent(row.id)}`}
-                      className="text-sm font-medium text-crm-accent hover:text-blue-800 shrink-0"
-                    >
-                      Batch details →
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-
-        {/* Members */}
-        <div className="rounded-crm-lg border border-crm-border bg-crm-surface shadow-crm p-4 sm:p-5">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between mb-4">
-            <div>
-              <h2 className="text-lg font-bold text-crm-text tracking-tight">
-                Members <span className="text-crm-muted/80 font-semibold text-sm">({membersTotal})</span>
-              </h2>
-              <p className="text-xs text-crm-muted mt-0.5">
-                Filters apply server-side (100 per load). Import, distribute, and queue shortcuts live in the header above.
-              </p>
-            </div>
-          </div>
-
-          {/* Workload — admin only; always visible when data exists */}
-          {isAdmin && (
-            <div className="mb-5 rounded-crm border border-crm-border/60 bg-crm-bg/80 p-3 sm:p-4">
-              <div className="flex items-center justify-between gap-2 mb-3">
-                <h3 className="text-xs font-bold text-crm-muted uppercase tracking-wide flex items-center gap-1.5">
-                  <BarChart2 className="h-3.5 w-3.5" />
-                  Team workload
-                </h3>
-                {workloadLoading ? <span className="text-xs text-crm-muted/80">Loading…</span> : null}
-              </div>
-              {workload.length === 0 && !workloadLoading ? (
-                <p className="text-xs text-crm-muted">No assignment rows yet — add or import members first.</p>
-              ) : (
-                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                  {workload.map((row) => {
-                    const active = row.pending + row.inProgress;
-                    const terminal = row.converted + row.skipped + row.dnc;
-                    return (
-                      <div
-                        key={row.userId ?? "__unassigned__"}
-                        className={`rounded-crm border bg-crm-surface px-3 py-2.5 ${row.userId === null ? "border-crm-warning/35 bg-amber-50/40" : "border-crm-border"}`}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <p className={`text-sm font-semibold truncate ${row.userId === null ? "text-crm-warning italic" : "text-crm-text"}`}>
-                            {row.displayName}
-                          </p>
-                          <span className="text-xs font-bold text-crm-text tabular-nums shrink-0">{row.total}</span>
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-crm-muted">
-                          <span><span className="text-crm-muted/80">Active</span> {active}</span>
-                          <span><span className="text-crm-muted/80">CB</span> {row.callbacks}</span>
-                          <span><span className="text-crm-muted/80">Contacted</span> {row.contacted}</span>
-                          <span><span className="text-crm-muted/80">Terminal</span> {terminal}</span>
-                        </div>
-                        {row.userId === null && row.total > 0 ? (
-                          <button
-                            type="button"
-                            onClick={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
-                            className="mt-2 w-full sm:w-auto text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-crm-accent text-white hover:brightness-110"
-                          >
-                            Redistribute unassigned…
-                          </button>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
 
           {/* Distribute modal */}
           {isAdmin && distributeOpen && (
@@ -1514,7 +884,7 @@ export default function CampaignDetailPage() {
                   )}
                 </div>
                 {distributeMsg && (
-                  <p className={`text-sm mb-3 ${distributeMsg.startsWith("Distributed") ? "text-green-600" : "text-amber-600"}`}>{distributeMsg}</p>
+                  <p className={`text-sm mb-3 ${distributeMsg.startsWith("Distributed") ? "text-crm-success" : "text-crm-warning"}`}>{distributeMsg}</p>
                 )}
                 <div className="flex gap-2 justify-end">
                   <button onClick={() => setDistributeOpen(false)} className="px-4 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-bg">
@@ -1608,12 +978,12 @@ export default function CampaignDetailPage() {
                       </p>
                     </div>
                     {importPreview.invalidRows > 0 && (
-                      <p className="text-crm-warning text-sm bg-amber-50 border border-amber-100 rounded-md px-2 py-1.5">
+                      <p className="text-crm-warning text-sm bg-crm-warning/10 border border-crm-warning/35 rounded-md px-2 py-1.5">
                         {importPreview.invalidRows} row{importPreview.invalidRows !== 1 ? "s" : ""} will be skipped (no usable phone/email or could not be processed in preview). They are still listed in samples or errors where applicable.
                       </p>
                     )}
                     {importPreview.wouldSkipExistingMembers > 0 && (
-                      <p className="text-crm-warning text-sm bg-amber-50 border border-amber-100 rounded-md px-2 py-1.5">
+                      <p className="text-crm-warning text-sm bg-crm-warning/10 border border-crm-warning/35 rounded-md px-2 py-1.5">
                         {importPreview.wouldSkipExistingMembers} row{importPreview.wouldSkipExistingMembers !== 1 ? "s" : ""} match contacts already in this campaign — they will not be added again as members.
                       </p>
                     )}
@@ -1628,7 +998,7 @@ export default function CampaignDetailPage() {
                       </div>
                       <div className="rounded-lg border border-crm-accent/25 bg-crm-surface p-2 shadow-crm">
                         <p className="text-[11px] text-crm-muted uppercase tracking-wide">New campaign members</p>
-                        <p className="text-lg font-semibold text-green-800">{importPreview.wouldAddMembers}</p>
+                        <p className="text-lg font-semibold text-crm-success">{importPreview.wouldAddMembers}</p>
                       </div>
                       <div className="rounded-lg border border-crm-accent/25 bg-crm-surface p-2 shadow-crm">
                         <p className="text-[11px] text-crm-muted uppercase tracking-wide">Already in campaign</p>
@@ -1639,7 +1009,7 @@ export default function CampaignDetailPage() {
                         <p className="text-lg font-semibold text-crm-warning">{importPreview.invalidRows}</p>
                       </div>
                     </div>
-                    <p className="text-sm font-medium text-green-800 bg-green-50 border border-green-100 rounded-md px-2 py-1.5">
+                    <p className="text-sm font-medium text-crm-success bg-crm-success/10 border border-crm-success/30 rounded-md px-2 py-1.5">
                       Ready to import this file — preview matches the selected CSV and assignee.
                     </p>
                     {importSampleGroups.length > 0 ? (
@@ -1724,7 +1094,7 @@ export default function CampaignDetailPage() {
                     {importCompareBaseline ? (
                       <>
                         {importCoreMismatch && (
-                          <p className="text-crm-warning text-sm font-medium border border-crm-warning/35 bg-amber-50 rounded-md px-2 py-1.5">
+                          <p className="text-crm-warning text-sm font-medium border border-crm-warning/35 bg-crm-warning/10 rounded-md px-2 py-1.5">
                             Data may have changed since preview — core totals differ from the dry-run.
                           </p>
                         )}
@@ -1753,7 +1123,7 @@ export default function CampaignDetailPage() {
                                     <td className="py-1.5 pr-2">{label}</td>
                                     <td className="py-1.5 pr-2 tabular-nums">{exp}</td>
                                     <td className="py-1.5 pr-2 tabular-nums">{act}</td>
-                                    <td className="py-1.5">{ok ? <span className="text-green-700">Yes</span> : <span className="text-crm-warning font-medium">No</span>}</td>
+                                    <td className="py-1.5">{ok ? <span className="text-crm-success">Yes</span> : <span className="text-crm-warning font-medium">No</span>}</td>
                                   </tr>
                                 );
                               })}
@@ -1772,7 +1142,7 @@ export default function CampaignDetailPage() {
                     <p>Contacts created: {importSummary.createdContacts}</p>
                     <p>Contacts updated: {importSummary.updatedContacts}</p>
                     <p>Rows skipped (no phone/email): {importSummary.skippedRows}</p>
-                    <p className="text-green-700 font-medium">Members added to campaign: {importSummary.addedMembers}</p>
+                    <p className="text-crm-success font-medium">Members added to campaign: {importSummary.addedMembers}</p>
                     <p>Already in campaign (skipped): {importSummary.skippedExistingMembers}</p>
                     {importSummary.errorCount > 0 && (
                       <p className="text-amber-700">Row errors: {importSummary.errorCount}</p>
@@ -1836,6 +1206,49 @@ export default function CampaignDetailPage() {
             </div>
           )}
 
+
+        <button type="button" onClick={() => router.push("/crm/campaigns")} className="flex items-center gap-1.5 text-sm text-crm-muted hover:text-crm-text">
+          <ArrowLeft className="h-4 w-4" />
+          Campaigns
+        </button>
+
+        <CampaignCommandHeader
+          campaign={campaign}
+          health={hd}
+          importHistory={importHistory}
+          isAdmin={isAdmin}
+          canQueue={canQueue}
+          editingName={editingName}
+          nameInput={nameInput}
+          onNameInput={setNameInput}
+          onStartEditName={() => setEditingName(true)}
+          onSaveName={saveName}
+          onCancelEditName={() => setEditingName(false)}
+          onUpdateStatus={(status: CampaignStatus) => updateCampaign({ status })}
+          onExport={exportCsv}
+          onImport={() => {
+            setImportOpen(true);
+            setImportErr("");
+            setImportSummary(null);
+            setImportFile(null);
+            setImportAssigneeId("");
+            setImportPreview(null);
+            setImportPreviewContextKeyState(null);
+            setImportCompareBaseline(null);
+          }}
+          onAddContacts={() => setShowAddContacts(true)}
+          onDistribute={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
+        />
+
+        <CampaignPerformancePanel campaign={campaign} health={hd} />
+
+        <div className="grid gap-4 lg:grid-cols-12 lg:items-start">
+          <div className="lg:col-span-8 flex flex-col gap-4">
+
+            <CRMSection
+              title={`Members (${membersTotal})`}
+              description="Operational roster — filters are server-side (100 per load)."
+            >
           {/* Filters */}
           <div className="flex gap-2 mb-4 flex-wrap">
             <div className="relative flex-1 min-w-[160px] max-w-xs">
@@ -1909,11 +1322,40 @@ export default function CampaignDetailPage() {
           {membersLoading ? (
             <div className="py-12 text-center text-crm-muted/80 text-sm">Loading members…</div>
           ) : filteredMembers.length === 0 ? (
-            <div className="py-12 text-center">
-              <Users className="h-8 w-8 text-crm-border mx-auto mb-2" />
-              <p className="text-crm-muted text-sm">No members yet.</p>
-              <button onClick={() => setShowAddContacts(true)} className="mt-3 text-sm text-crm-accent hover:underline">Add contacts to get started</button>
-            </div>
+            <CRMEmptyState
+              icon={<Users className="h-8 w-8" />}
+              title={hd.total === 0 ? "No members yet" : "No members match filters"}
+              description={
+                hd.total === 0
+                  ? "Import a CSV, add existing contacts, or distribute assignments to populate outbound work."
+                  : "Try clearing search or status filters to see more of the roster."
+              }
+              action={
+                <div className="flex flex-wrap justify-center gap-2">
+                  {isAdmin && hd.total === 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setImportOpen(true);
+                        setImportErr("");
+                        setImportSummary(null);
+                        setImportFile(null);
+                        setImportAssigneeId("");
+                        setImportPreview(null);
+                        setImportPreviewContextKeyState(null);
+                        setImportCompareBaseline(null);
+                      }}
+                      className={crm.btnPrimary}
+                    >
+                      Import leads
+                    </button>
+                  )}
+                  <button type="button" onClick={() => setShowAddContacts(true)} className={crm.btnSecondary}>
+                    Add contacts
+                  </button>
+                </div>
+              }
+            />
           ) : (
             <div className="space-y-2">
               <div className="flex items-center gap-2 px-1 pb-1">
@@ -1928,92 +1370,54 @@ export default function CampaignDetailPage() {
                 const archivedLead = m.queueWorkEligible === false;
                 const agentCannotAct = !isAdmin && archivedLead;
                 return (
-                  <div
+                  <CampaignMemberCard
                     key={m.id}
-                    className={`rounded-crm border px-3 py-3 transition-colors ${
-                      selected.has(m.id) ? "border-crm-accent/40 bg-crm-accent/15/40" : "border-crm-border bg-crm-surface hover:border-crm-border"
-                    } ${archivedLead ? "opacity-85 bg-crm-bg/90" : ""}`}
-                  >
-                    <div className="flex flex-col lg:flex-row lg:items-start gap-3">
-                      <div className="flex items-start gap-2 shrink-0">
-                        <input
-                          type="checkbox"
-                          checked={selected.has(m.id)}
-                          disabled={agentCannotAct}
-                          onChange={(e) => {
-                            const s = new Set(selected);
-                            if (e.target.checked) s.add(m.id);
-                            else s.delete(m.id);
-                            setSelected(s);
-                          }}
-                          className="rounded mt-1 disabled:opacity-40"
-                          aria-label={`Select ${m.contact?.displayName ?? "member"}`}
-                        />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => router.push(`/crm/contacts/${m.contactId}`)}
-                            className="font-semibold text-crm-accent hover:underline text-left"
-                          >
-                            {m.contact?.displayName ?? "Unknown"}
-                          </button>
-                          {archivedLead && (
-                            <span className="text-[10px] font-semibold uppercase tracking-wide text-crm-warning bg-crm-warning/15 px-1.5 py-0.5 rounded">
-                              Archived
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-xs text-crm-muted mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
-                          <span>{m.contact?.primaryPhone ?? "—"}</span>
-                          <span className="text-crm-muted/80">Stage: {m.contact?.crmStage ?? "—"}</span>
-                          <span className="text-crm-muted/80">{m.attemptCount} attempt{m.attemptCount !== 1 ? "s" : ""}</span>
-                          <span className="text-crm-muted/80">{m.assignedTo?.displayName ?? "Unassigned"}</span>
-                        </p>
-                      </div>
-                      <div className="flex flex-col sm:flex-row flex-wrap gap-2 lg:justify-end lg:items-center shrink-0">
-                        {agentCannotAct ? (
-                          <span className={`text-xs px-2 py-1.5 rounded-lg ${MEMBER_STATUS_COLORS[m.status]}`}>
-                            {MEMBER_STATUS_LABELS[m.status]}
-                          </span>
-                        ) : (
-                          <select
-                            value={m.status}
-                            onChange={(e) => updateMemberStatus(m.id, e.target.value as MemberStatus)}
-                            className={`text-xs px-2 py-1.5 rounded-lg border border-crm-border cursor-pointer ${MEMBER_STATUS_COLORS[m.status]} focus:outline-none focus:ring-2 focus:ring-blue-400`}
-                          >
-                            {(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => (
-                              <option key={s} value={s}>{MEMBER_STATUS_LABELS[s]}</option>
-                            ))}
-                          </select>
-                        )}
-                        <div className="min-w-[8rem]">
-                          <CallbackCell
-                            member={m}
-                            campaignId={campaignId}
-                            onUpdated={loadMembers}
-                            token={token}
-                            readOnly={agentCannotAct}
-                          />
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => router.push(`/crm/live-call?contactId=${m.contactId}&campaignId=${campaignId}&memberId=${m.id}`)}
-                          disabled={agentCannotAct}
-                          className="inline-flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-semibold bg-crm-accent text-white rounded-lg hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
-                          title={agentCannotAct ? "Lead is archived — not live queue work" : "Open Live Workspace"}
-                        >
-                          <PhoneCall className="h-3.5 w-3.5 shrink-0" />
-                          Workspace
-                        </button>
-                      </div>
-                    </div>
-                  </div>
+                    member={m}
+                    campaignId={campaignId}
+                    selected={selected.has(m.id)}
+                    readOnly={agentCannotAct}
+                    onSelect={(checked) => {
+                      const s = new Set(selected);
+                      if (checked) s.add(m.id);
+                      else s.delete(m.id);
+                      setSelected(s);
+                    }}
+                    onUpdated={loadMembers}
+                    onStatusChange={updateMemberStatus}
+                    token={token}
+                  />
                 );
               })}
             </div>
           )}
+            </CRMSection>
+          </div>
+
+          <CampaignOperationalSidebar
+            campaign={campaign}
+            health={hd}
+            workload={workload}
+            workloadLoading={workloadLoading}
+            importHistory={importHistory}
+            importHistoryLoading={importHistoryLoading}
+            isAdmin={isAdmin}
+            canQueue={canQueue}
+            scripts={scripts}
+            checklists={checklists}
+            onUpdateCampaign={updateCampaign}
+            onDistribute={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
+            onImport={() => {
+              setImportOpen(true);
+              setImportErr("");
+              setImportSummary(null);
+              setImportFile(null);
+              setImportAssigneeId("");
+              setImportPreview(null);
+              setImportPreviewContextKeyState(null);
+              setImportCompareBaseline(null);
+            }}
+            onFilterUnassigned={() => { setAssigneeFilter("UNASSIGNED"); loadMembers("UNASSIGNED"); }}
+          />
         </div>
     </CRMPageShell>
   );
