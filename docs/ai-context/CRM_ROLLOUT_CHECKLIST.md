@@ -301,6 +301,22 @@
 | Function | Search, pagination, filters, scopes, open contact, workspace link, bulk assign unchanged |
 | Typecheck | `pnpm exec tsc -p apps/portal` — no errors in `crm/contacts/page.tsx` |
 
+### Phase 19D.2 — Contacts dark controls (visual smoke)
+
+| Check | Expected |
+|-------|----------|
+| Theme lock | `crm.contactsWorkspace` on shell — pills/inputs stay dark when portal theme is light |
+| Stage pills | All stages use `crm.filterPill` / `filterPillActive` — no white capsules |
+| List scope | Active / Archived / All in `crm.filterPillGroup` — same pill styling as stages |
+| Assigned to me | Same pill classes as stage filters (not a lone white chip) |
+| Search | `crm.input` — dark background, no default browser white field |
+| Bulk select | Assign dropdown uses `crm.selectCompact` (dark) |
+| Checkboxes | Select-all + row checkboxes use `crm.checkbox`; aligned with avatar row |
+| Row actions | Open (primary) + Workspace (secondary) aligned, consistent min-width |
+| Dark grep | No `bg-white`, `bg-gray-*`, `bg-blue-100`, `text-gray-*` on contacts page |
+| Function | Search, pagination, filters, scopes, select-all, open, workspace, bulk assign unchanged |
+| Typecheck | `pnpm exec tsc -p apps/portal` passes |
+
 ### Phase 19D — Contact relationship workspace (visual smoke)
 
 | Check | Expected |

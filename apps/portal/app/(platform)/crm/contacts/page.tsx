@@ -145,11 +145,6 @@ function formatShortDate(iso: string | null | undefined): string {
   }
 }
 
-const STAGE_PILL_ACTIVE =
-  "border-crm-accent/50 bg-crm-accent text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]";
-const STAGE_PILL_IDLE =
-  "border-crm-border bg-crm-surface-2/80 text-crm-text hover:border-crm-border/90 hover:bg-crm-surface-2";
-
 function SummaryStatTile({
   label,
   value,
@@ -551,7 +546,7 @@ export default function CrmContactsPage() {
   };
 
   return (
-    <CRMPageShell innerClassName={crm.pageInnerContacts}>
+    <CRMPageShell innerClassName={cn(crm.pageInnerContacts, crm.contactsWorkspace)}>
       {showAdd && <AddContactModal onClose={() => setShowAdd(false)} onCreated={handleContactCreated} />}
 
       <CRMPageHeader
@@ -666,11 +661,7 @@ export default function CrmContactsPage() {
                     setPage(0);
                     setStage(tab);
                   }}
-                  className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
-                    stage === tab
-                      ? STAGE_PILL_ACTIVE
-                      : STAGE_PILL_IDLE
-                  }`}
+                  className={stage === tab ? crm.filterPillActive : crm.filterPill}
                 >
                   {STAGE_LABELS[tab]}
                 </button>
@@ -678,8 +669,8 @@ export default function CrmContactsPage() {
             </div>
 
             {isAdmin && (
-              <div className="flex flex-wrap items-center gap-1.5 rounded-full bg-crm-bg px-2 py-1">
-                <span className="pl-1.5 text-[10px] font-semibold uppercase tracking-wide text-crm-muted/80">List</span>
+              <div className={crm.filterPillGroup} role="group" aria-label="List scope">
+                <span className="pl-1 text-[10px] font-semibold uppercase tracking-wide text-crm-muted/80">List</span>
                 {(["active", "archived", "all"] as const).map((key) => (
                   <button
                     key={key}
@@ -688,11 +679,7 @@ export default function CrmContactsPage() {
                       setPage(0);
                       setArchiveScope(key);
                     }}
-                    className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
-                      archiveScope === key
-                        ? "border-crm-accent bg-crm-accent text-white"
-                        : "border-transparent bg-crm-surface text-crm-text shadow-crm hover:bg-crm-bg"
-                    }`}
+                    className={archiveScope === key ? crm.filterPillActive : crm.filterPill}
                   >
                     {ARCHIVE_SCOPE_LABELS[key]}
                   </button>
@@ -706,11 +693,7 @@ export default function CrmContactsPage() {
                 setPage(0);
                 setAssignedToMe((v) => !v);
               }}
-              className={`rounded-full border px-3 py-1.5 text-xs font-medium lg:ml-auto ${
-                assignedToMe
-                  ? STAGE_PILL_ACTIVE
-                  : STAGE_PILL_IDLE
-              }`}
+              className={cn(assignedToMe ? crm.filterPillActive : crm.filterPill, "lg:ml-auto")}
             >
               Assigned to me
             </button>
@@ -727,7 +710,7 @@ export default function CrmContactsPage() {
                 setBulkAssignUserId(e.target.value);
                 void loadCrmUsers();
               }}
-              className="rounded-lg border border-crm-border px-2 py-1.5 text-sm"
+              className={crm.selectCompact}
             >
               <option value="">Assign to…</option>
               {crmUsers.map((u) => (
@@ -870,7 +853,7 @@ export default function CrmContactsPage() {
                     checked={allSelectableSelected}
                     onChange={toggleSelectAll}
                     disabled={selectableRows.length === 0}
-                    className="h-4 w-4 rounded border-crm-border text-crm-accent focus:ring-crm-accent/30"
+                    className={crm.checkbox}
                   />
                   <span>Select active on this page</span>
                 </label>
@@ -890,9 +873,9 @@ export default function CrmContactsPage() {
                   )}
                 >
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="flex min-w-0 flex-1 items-start gap-3 sm:gap-4">
+                    <div className="flex min-w-0 flex-1 items-center gap-3 sm:gap-4">
                       {isAdmin && (
-                        <div className="flex h-12 shrink-0 items-center" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex w-9 shrink-0 items-center justify-center sm:w-10" onClick={(e) => e.stopPropagation()}>
                           {!archived ? (
                             <input
                               type="checkbox"
@@ -901,7 +884,7 @@ export default function CrmContactsPage() {
                                 toggleSelect(c.id);
                                 void loadCrmUsers();
                               }}
-                              className="h-4 w-4 rounded border-crm-border text-crm-accent focus:ring-crm-accent/30"
+                              className={crm.checkbox}
                               aria-label={`Select ${c.displayName}`}
                             />
                           ) : (
@@ -909,10 +892,10 @@ export default function CrmContactsPage() {
                           )}
                         </div>
                       )}
-                      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border-2 border-crm-accent/35 bg-gradient-to-br from-crm-accent to-crm-accent/70 text-sm font-bold text-white shadow-crm">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border-2 border-crm-accent/35 bg-gradient-to-br from-crm-accent to-crm-accent/70 text-sm font-bold text-white shadow-crm sm:h-12 sm:w-12">
                         {initials(c.displayName)}
                       </div>
-                      <div className="min-w-0 flex-1 space-y-1">
+                      <div className="min-w-0 flex-1 space-y-1 py-0.5">
                         <div className="flex flex-wrap items-center gap-2">
                           <h2 className="truncate text-lg font-semibold tracking-tight text-crm-text">{c.displayName}</h2>
                           {archived && (
@@ -969,18 +952,18 @@ export default function CrmContactsPage() {
                         </div>
                       </div>
                     </div>
-                    <div className="flex flex-wrap gap-2 lg:shrink-0 lg:pl-4">
+                    <div className="flex flex-wrap items-center gap-2 sm:justify-end lg:shrink-0 lg:pl-2">
                       <Link
                         href={`/crm/contacts/${c.id}`}
-                        className={crm.btnPrimary}
+                        className={cn(crm.btnPrimary, "min-w-[5.5rem]")}
                       >
                         Open
-                        <ExternalLink className="h-3.5 w-3.5 text-crm-muted/80" aria-hidden />
+                        <ExternalLink className="h-3.5 w-3.5 opacity-80" aria-hidden />
                       </Link>
                       {canLiveWorkspace && !archived && (
                         <Link
                           href={`/crm/live-call?contactId=${encodeURIComponent(c.id)}`}
-                          className={crm.btnSecondary}
+                          className={cn(crm.btnSecondary, "min-w-[6.5rem]")}
                         >
                           <Radio className="h-3.5 w-3.5 text-crm-muted" aria-hidden />
                           Workspace

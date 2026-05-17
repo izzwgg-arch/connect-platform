@@ -141,7 +141,7 @@ Campaign routes use **`crm.pageInnerCampaign`** (wide desk, up to ~1680px) and *
 - `/crm/dashboard` (Phase 19B: command-center charts + wide layout)
 - `/crm/queue` (Phase 19C: operational workbench layout)
 - `/crm/campaigns`, `/crm/campaigns/[id]` (Phase 19E: operational workspace)
-- `/crm/contacts` (Phase 19D.1: contacts index relationship command center)
+- `/crm/contacts` (Phase 19D.1 index + 19D.2 dark command controls)
 - `/crm/contacts/[id]` (Phase 19D: contact relationship workspace)
 - `/crm/live-call` (Phase 19F: live agent workspace)
 
@@ -162,6 +162,18 @@ Reports, wallboard, tasks, scripts, checklists: migrate opportunistically; live-
 | Rows | Divided list inside `CRMCard` — avatar, stage chip, contact channels, owner/activity, **Open** (primary) + **Workspace** |
 
 **Don't:** `max-w-6xl` centered directory; text-only summary strip; light skeletons (`gray-50`); bullet separators between meta fields.
+
+### Contacts command bar — dark controls only (Phase 19D.2)
+
+| Pattern | Rule |
+|---------|------|
+| Theme lock | `crm.pageInnerContacts` + **`crm.contactsWorkspace`** — same CSS-var override as campaigns when portal `data-theme=light` |
+| Filter pills | `crm.filterPill` / `crm.filterPillActive` for stage, list scope (Active/Archived/All), and **Assigned to me** — never white capsules or `bg-crm-surface` idle pills |
+| Inputs | Search = `crm.input`; bulk assign select = `crm.selectCompact`; `[color-scheme:dark]` on native controls |
+| Checkboxes | `crm.checkbox` — dark surface + accent; row column aligned with avatar (`items-center`, fixed width) |
+| Row actions | `crm.btnPrimary` (Open) + `crm.btnSecondary` (Workspace) in a single aligned flex row |
+
+**Don't:** native white checkboxes; transparent/light archive-scope pills; mixed pill styles per control group.
 
 ---
 

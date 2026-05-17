@@ -22,6 +22,9 @@ export const crm = {
   /** Forces dark CRM tokens even when portal data-theme=light (campaign routes only). */
   campaignWorkspace:
     "crm-campaign-workspace [color-scheme:dark] [--panel:#141f2b] [--panel-2:#1a2635] [--bg-soft:#101923] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#141f2b] [--crm-surface-2:#1a2635] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",
+  /** Phase 19D.2 — contacts index command bar stays dark when portal data-theme=light */
+  contactsWorkspace:
+    "crm-contacts-workspace [color-scheme:dark] [--panel:#141f2b] [--panel-2:#1a2635] [--bg-soft:#101923] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#141f2b] [--crm-surface-2:#1a2635] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",
   campaignDetailGrid: "grid gap-4 lg:grid-cols-12 lg:items-start",
   campaignMainCol: "lg:col-span-7 xl:col-span-8 flex flex-col gap-3 min-w-0",
   campaignAsideCol:
@@ -78,6 +81,18 @@ export const crm = {
   chip:
     "inline-flex items-center gap-1 rounded-full border border-crm-border bg-crm-surface-2 px-2.5 py-0.5 text-xs font-medium text-crm-muted",
   chipActive: "border-crm-accent/40 bg-crm-accent/12 text-crm-accent",
+
+  /** Phase 19D.2 — contacts command bar filter pills (dark surfaces, no white capsules) */
+  filterPill:
+    "rounded-full border border-crm-border bg-crm-surface-2 px-3 py-1.5 text-xs font-medium text-crm-text transition-colors hover:border-crm-border/90 hover:bg-crm-surface [color-scheme:dark]",
+  filterPillActive:
+    "rounded-full border border-crm-accent/50 bg-crm-accent px-3 py-1.5 text-xs font-medium text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] [color-scheme:dark]",
+  filterPillGroup:
+    "inline-flex flex-wrap items-center gap-1.5 rounded-full border border-crm-border/70 bg-crm-surface-2/50 px-2 py-1 [color-scheme:dark]",
+  checkbox:
+    "h-4 w-4 shrink-0 cursor-pointer rounded border border-crm-border bg-crm-surface-2 text-crm-accent accent-crm-accent focus:ring-2 focus:ring-crm-accent/30 focus:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50 [color-scheme:dark]",
+  selectCompact:
+    "rounded-crm border border-crm-border !bg-crm-surface-2 px-2 py-1.5 text-sm !text-crm-text shadow-none focus:border-crm-accent/50 focus:!bg-crm-surface focus:outline-none focus:ring-2 focus:ring-crm-accent/30 disabled:cursor-not-allowed disabled:opacity-70 [color-scheme:dark]",
 
   /** Phase 19C.1 — queue filter count pills (always dark surface). */
   queueCountPill:
