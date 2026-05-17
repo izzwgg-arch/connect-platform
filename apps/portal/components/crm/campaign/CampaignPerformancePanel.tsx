@@ -1,13 +1,14 @@
 "use client";
 
-import { CRMCard } from "../CRMCard";
-import { CRMDonutChart, CRMHorizontalBars } from "../charts";
+import { CRMHorizontalBars } from "../charts";
+import { CRMRingMetric } from "../charts/CRMRingMetric";
 import { CRM_CHART_COLORS } from "../charts/chartColors";
 import { crm } from "../crmClasses";
+import { cn } from "../cn";
 import type { CampaignDetail } from "./campaignTypes";
 import type { CampaignHealth } from "./campaignUtils";
 
-/** Funnel + status mix only — roster counts live in CampaignCommandHeader snapshot. */
+/** Integrated performance surface — conversion ring, funnel, queue pressure (real health only). */
 export function CampaignPerformancePanel({
   campaign: _campaign,
   health,
@@ -15,15 +16,6 @@ export function CampaignPerformancePanel({
   campaign: CampaignDetail;
   health: CampaignHealth;
 }) {
-  const statusSegments = [
-    { label: "Pending", value: health.pending, color: CRM_CHART_COLORS.muted },
-    { label: "In progress", value: health.inProgress, color: CRM_CHART_COLORS.accent },
-    { label: "Callback", value: health.callback, color: CRM_CHART_COLORS.warning },
-    { label: "Contacted", value: health.contactedOnly, color: CRM_CHART_COLORS.violet },
-    { label: "Converted", value: health.converted, color: CRM_CHART_COLORS.success },
-    { label: "Skipped / DNC", value: health.skipped + health.dnc, color: CRM_CHART_COLORS.danger },
-  ].filter((s) => s.value > 0);
-
   const funnelBars = [
     { label: "Active queue", value: health.activeQueueWork, color: CRM_CHART_COLORS.accent },
     { label: "Callbacks", value: health.callback, color: CRM_CHART_COLORS.warning },
@@ -31,43 +23,88 @@ export function CampaignPerformancePanel({
     { label: "Converted", value: health.converted, color: CRM_CHART_COLORS.success },
   ];
 
-  const terminalPct =
-    health.total > 0 ? Math.round((health.terminal / health.total) * 100) : 0;
+  const queuePressurePct =
+    health.total > 0 ? Math.min(100, Math.round((health.activeQueueWork / health.total) * 100)) : 0;
+  const callbackSharePct =
+    health.total > 0 ? Math.min(100, Math.round((health.callback / health.total) * 100)) : 0;
 
   return (
-    <CRMCard className="p-3 sm:p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-        <p className={crm.label}>Performance</p>
-        <p className="text-[11px] text-crm-muted">Status mix and funnel — counts are in live snapshot above</p>
-      </div>
-      <div className="grid gap-4 md:grid-cols-[minmax(0,200px)_minmax(0,1fr)] md:items-center">
-        <div className="flex flex-col items-center md:items-start">
-          <CRMDonutChart
-            segments={statusSegments.length ? statusSegments : [{ label: "Empty", value: 1, color: CRM_CHART_COLORS.muted }]}
-            size={96}
-            stroke={12}
-            centerLabel="Status mix"
-          />
+    <section className={crm.campaignPerformanceSurface} aria-label="Campaign performance">
+      <div className={crm.campaignPerformanceSurfaceInner}>
+        <div className={crm.campaignPerformanceZone}>
+          <p className={crm.label}>Conversion</p>
+          <div className="mt-3 flex flex-col items-center sm:items-start">
+            <CRMRingMetric
+              value={health.conversionPct}
+              max={100}
+              label={`${health.conversionPct}% converted`}
+              sublabel={`${health.converted} of ${health.total} members`}
+              color="var(--crm-success)"
+              size={104}
+              stroke={11}
+            />
+          </div>
         </div>
-        <div className="min-w-0 space-y-3">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted mb-2">Contact funnel</p>
+
+        <div className={crm.campaignPerformanceZone}>
+          <p className={crm.label}>Contact funnel</p>
+          <div className="mt-3 min-w-0">
             <CRMHorizontalBars items={funnelBars} />
           </div>
-          <div className="rounded-crm border border-crm-border/70 bg-crm-surface-2/40 px-3 py-2.5">
-            <div className="flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-wide text-crm-muted">
-              <span>Terminal outcomes</span>
-              <span className="tabular-nums text-crm-text">{terminalPct}%</span>
-            </div>
-            <div className="mt-2 h-2 rounded-full bg-crm-surface-2 overflow-hidden">
-              <div className="h-full rounded-full bg-crm-success" style={{ width: `${terminalPct}%` }} />
-            </div>
-            <p className="mt-1.5 text-[10px] text-crm-muted">
-              Share of roster in converted, skipped, or DNC — not a forecast.
-            </p>
+          <p className="mt-3 text-[10px] leading-snug text-crm-muted">
+            Counts from live roster status — not a forecast.
+          </p>
+        </div>
+
+        <div className={crm.campaignPerformanceZone}>
+          <p className={crm.label}>Queue pressure</p>
+          <div className="mt-3 space-y-3">
+            <PressureMeter
+              label="Active queue work"
+              value={health.activeQueueWork}
+              pct={queuePressurePct}
+              tone="accent"
+            />
+            <PressureMeter
+              label="Callbacks"
+              value={health.callback}
+              pct={callbackSharePct}
+              tone="warn"
+            />
           </div>
+          <p className="mt-3 text-[10px] leading-snug text-crm-muted">
+            Share of roster in pending + in progress, and in CALLBACK.
+          </p>
         </div>
       </div>
-    </CRMCard>
+    </section>
+  );
+}
+
+function PressureMeter({
+  label,
+  value,
+  pct,
+  tone,
+}: {
+  label: string;
+  value: number;
+  pct: number;
+  tone: "accent" | "warn";
+}) {
+  const barClass = tone === "warn" ? "bg-crm-warning" : "bg-crm-accent";
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-2 text-xs">
+        <span className="font-medium text-crm-text">{label}</span>
+        <span className="tabular-nums font-bold text-crm-text">
+          {value}
+          <span className="ml-1 text-[10px] font-semibold text-crm-muted">({pct}%)</span>
+        </span>
+      </div>
+      <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-crm-surface-2">
+        <div className={cn("h-full rounded-full transition-[width] duration-500", barClass)} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
   );
 }

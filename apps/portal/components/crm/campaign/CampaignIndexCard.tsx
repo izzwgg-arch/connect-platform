@@ -5,6 +5,8 @@ import {
   Archive,
   ChevronRight,
   ListOrdered,
+  Megaphone,
+  MoreHorizontal,
   Pause,
   Play,
   Zap,
@@ -15,14 +17,6 @@ import { getCampaignQueuePressure } from "./campaignIndexInsights";
 import type { CampaignListItem, CampaignReportRow } from "./campaignTypes";
 import { CampaignPriorityBadge, CampaignStatusBadge } from "./CampaignStatusBadge";
 import { formatShortDate, queueHref } from "./campaignUtils";
-
-const STATUS_STRIP: Record<CampaignListItem["status"], string> = {
-  ACTIVE: "bg-crm-accent",
-  PAUSED: "bg-crm-warning",
-  DRAFT: "bg-crm-muted/50",
-  COMPLETED: "bg-crm-success/70",
-  ARCHIVED: "bg-crm-muted/30",
-};
 
 const PRESSURE_TONE: Record<
   ReturnType<typeof getCampaignQueuePressure>["tone"],
@@ -61,211 +55,158 @@ export function CampaignIndexCard({
   return (
     <article
       className={cn(
-        crm.campaignCard,
-        "flex min-h-[6rem] overflow-hidden",
-        isActive && crm.campaignCardActive,
-        isActive && queueGlow && crm.campaignCardQueueGlow,
-        isPaused && crm.campaignCardPaused,
-        isDraft && crm.campaignCardDraft,
+        crm.campaignIndexRow,
+        isActive && crm.campaignIndexRowActive,
+        isActive && queueGlow && crm.campaignIndexRowQueueGlow,
+        isPaused && crm.campaignIndexRowPaused,
+        isDraft && crm.campaignIndexRowDraft,
       )}
     >
-      <div
-        className={cn(
-          crm.campaignStatusStrip,
-          STATUS_STRIP[campaign.status],
-          isActive && crm.campaignStatusStripLive,
-        )}
-        aria-hidden
-      />
-
-      <div className="grid min-w-0 flex-1 grid-cols-1 gap-3 p-3.5 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.05fr)_auto] lg:items-stretch lg:gap-4">
-        {/* Identity */}
-        <div className="flex min-w-0 flex-col justify-center">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <Link
-              href={`/crm/campaigns/${campaign.id}`}
-              className="truncate text-base font-semibold leading-snug text-crm-text hover:text-crm-accent"
-            >
-              {campaign.name}
-            </Link>
-            {isActive ? (
-              <span
-                className="crm-campaign-live-dot inline-flex h-2 w-2 shrink-0 rounded-full bg-crm-accent shadow-[0_0_8px_rgba(56,189,248,0.5)]"
-                title="Live program"
-                aria-hidden
-              />
-            ) : null}
-            <CampaignStatusBadge status={campaign.status} variant="index" />
-            <CampaignPriorityBadge priority={campaign.priority ?? "NORMAL"} hideNormal />
-          </div>
-          {campaign.description ? (
-            <p className="mt-1 line-clamp-1 text-xs leading-relaxed text-crm-muted">{campaign.description}</p>
-          ) : null}
-          <p className="mt-1.5 text-[11px] text-crm-muted/75">Updated {formatShortDate(campaign.updatedAt)}</p>
-        </div>
-
-        {/* Metrics + pressure */}
-        <div className="flex min-w-0 flex-col justify-center gap-2">
-          <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
-            <MetricCluster
-              title="Volume"
-              items={[
-                { label: "Members", value: members },
-                {
-                  label: "In queue",
-                  value: activeWork,
-                  warn: isActive && activeWork > 0,
-                },
-              ]}
-            />
-            <MetricCluster
-              title="Outcome"
-              items={
-                metrics
-                  ? [
-                      {
-                        label: "Callbacks",
-                        value: callbacks,
-                        warn: callbacks > 0,
-                      },
-                      {
-                        label: "Converted",
-                        value: converted,
-                        sub: conversionRate > 0 ? `${conversionRate}%` : undefined,
-                      },
-                    ]
-                  : [
-                      { label: "Callbacks", value: "—", muted: true },
-                      { label: "Converted", value: "—", muted: true },
-                    ]
-              }
-            />
-          </div>
-          <p className={cn(crm.campaignPressureLine, PRESSURE_TONE[pressure.tone])}>{pressure.label}</p>
-        </div>
-
-        {/* Actions */}
-        <div className="flex min-w-[10.5rem] flex-col justify-center gap-2 lg:items-end lg:pl-1">
-          <Link
-            href={`/crm/campaigns/${campaign.id}`}
+      <div className="flex min-w-0 flex-1 items-stretch gap-3 p-3 sm:gap-4 sm:p-3.5 lg:flex-row lg:items-center">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <div
             className={cn(
-              crm.btnPrimary,
-              "w-full justify-center text-xs py-2 px-4 lg:min-w-[9.5rem]",
+              "flex h-10 w-10 shrink-0 items-center justify-center rounded-crm border border-crm-border/80 bg-crm-surface-2/80",
+              isActive && "border-crm-accent/35 bg-crm-accent/10",
             )}
           >
-            Open campaign
-            <ChevronRight className="h-3.5 w-3.5 opacity-85" aria-hidden />
-          </Link>
+            <Megaphone className={cn("h-4 w-4", isActive ? "text-crm-accent" : "text-crm-muted")} aria-hidden />
+          </div>
 
-          {(canQueue || isAdmin) && (
-            <div className="flex w-full flex-wrap items-center gap-1.5 lg:justify-end">
-              {canQueue && (
-                <Link href={queueHref(campaign.id)} className={cn(crm.campaignBtnSecondaryCompact, "flex-1 lg:flex-none")}>
-                  <ListOrdered className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                  Queue
-                </Link>
-              )}
-              {canQueue && isActive && (
-                <Link
-                  href={`/crm/queue?mode=power&campaignId=${encodeURIComponent(campaign.id)}`}
-                  className={cn(crm.campaignBtnSecondaryCompact, "flex-1 lg:flex-none")}
-                >
-                  <Zap className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                  Power
-                </Link>
-              )}
-              {isAdmin && isDraft && (
-                <button
-                  type="button"
-                  onClick={(e) => onQuickStatus(campaign.id, "ACTIVE", e)}
-                  className={cn(
-                    crm.campaignBtnSecondaryCompact,
-                    "flex-1 text-crm-success border-crm-success/30 lg:flex-none",
-                  )}
-                >
-                  <Play className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                  Start
-                </button>
-              )}
-              {isAdmin && isPaused && (
-                <button
-                  type="button"
-                  onClick={(e) => onQuickStatus(campaign.id, "ACTIVE", e)}
-                  className={cn(
-                    crm.campaignBtnSecondaryCompact,
-                    "flex-1 text-crm-success border-crm-success/30 lg:flex-none",
-                  )}
-                >
-                  <Play className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                  Resume
-                </button>
-              )}
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <Link
+                href={`/crm/campaigns/${campaign.id}`}
+                className="truncate text-base font-semibold text-crm-text hover:text-crm-accent sm:text-[1.05rem]"
+              >
+                {campaign.name}
+              </Link>
+              {isActive ? (
+                <span
+                  className="crm-campaign-live-dot inline-flex h-2 w-2 shrink-0 rounded-full bg-crm-accent shadow-[0_0_8px_rgba(56,189,248,0.5)]"
+                  title="Live program"
+                  aria-hidden
+                />
+              ) : null}
+              <CampaignStatusBadge status={campaign.status} variant="index" />
+              <CampaignPriorityBadge priority={campaign.priority ?? "NORMAL"} hideNormal />
             </div>
-          )}
+            <p className={cn("mt-0.5 text-[11px] leading-snug", PRESSURE_TONE[pressure.tone])}>{pressure.label}</p>
+            <p className="mt-0.5 text-[10px] text-crm-muted/75">Updated {formatShortDate(campaign.updatedAt)}</p>
+          </div>
+        </div>
 
-          {isAdmin && (isActive || isPaused) && (
-            <div className="flex w-full items-center justify-end gap-0.5 border-t border-crm-border/40 pt-1.5">
-              {isActive && (
-                <button
-                  type="button"
-                  onClick={(e) => onQuickStatus(campaign.id, "PAUSED", e)}
-                  className={cn(crm.campaignBtnTertiary, "text-crm-warning hover:text-crm-warning")}
-                >
-                  <Pause className="h-3 w-3 shrink-0 opacity-80" aria-hidden />
-                  Pause
-                </button>
-              )}
+        <div className="hidden shrink-0 items-stretch divide-x divide-crm-border/60 border-l border-crm-border/50 pl-3 lg:flex">
+          <IndexMetric label="Members" value={members} />
+          <IndexMetric label="Queue" value={activeWork} warn={isActive && activeWork > 0} />
+          <IndexMetric label="Callbacks" value={metrics ? callbacks : "—"} warn={callbacks > 0} />
+          <IndexMetric
+            label="Converted"
+            value={metrics ? converted : "—"}
+            sub={metrics && conversionRate > 0 ? `${conversionRate}%` : undefined}
+          />
+        </div>
+
+        <div className="flex shrink-0 flex-col justify-center gap-1.5 sm:min-w-[11rem] lg:items-end lg:pl-2">
+          <Link
+            href={`/crm/campaigns/${campaign.id}`}
+            className={cn(crm.btnPrimary, "w-full justify-center px-4 py-2 text-sm font-semibold lg:min-w-[10.5rem]")}
+          >
+            Open campaign
+            <ChevronRight className="h-4 w-4 opacity-90" aria-hidden />
+          </Link>
+          <div className="flex w-full items-center gap-1.5 lg:justify-end">
+            {canQueue && (
+              <Link
+                href={queueHref(campaign.id)}
+                className={cn(crm.campaignBtnSecondaryCompact, "flex-1 text-[11px] py-1.5 lg:flex-none lg:min-w-0")}
+              >
+                <ListOrdered className="h-3 w-3 shrink-0" aria-hidden />
+                Queue
+              </Link>
+            )}
+            {canQueue && isActive && (
+              <Link
+                href={`/crm/queue?mode=power&campaignId=${encodeURIComponent(campaign.id)}`}
+                className={cn(crm.campaignBtnSecondaryCompact, "flex-1 text-[11px] py-1.5 lg:flex-none")}
+              >
+                <Zap className="h-3 w-3 shrink-0" aria-hidden />
+                Power
+              </Link>
+            )}
+            {isAdmin && (isDraft || isPaused) && (
               <button
                 type="button"
-                onClick={(e) => onQuickStatus(campaign.id, "ARCHIVED", e)}
-                className={cn(crm.campaignBtnTertiary, "hover:text-crm-danger")}
+                onClick={(e) => onQuickStatus(campaign.id, "ACTIVE", e)}
+                className={cn(crm.campaignBtnSecondaryCompact, "flex-1 text-[11px] py-1.5 text-crm-success lg:flex-none")}
               >
-                <Archive className="h-3 w-3 shrink-0 opacity-70" aria-hidden />
-                Archive
+                <Play className="h-3 w-3 shrink-0" aria-hidden />
+                {isDraft ? "Start" : "Resume"}
               </button>
-            </div>
-          )}
+            )}
+            {isAdmin && (isActive || isPaused) && (
+              <div className="relative group/menu">
+                <button
+                  type="button"
+                  className={cn(crm.campaignBtnTertiary, "px-2 py-1.5")}
+                  aria-label="Campaign actions"
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </button>
+                <div className="absolute right-0 top-full z-20 mt-1 hidden min-w-[7rem] flex-col rounded-crm border border-crm-border bg-crm-surface-2 py-1 shadow-lg group-hover/menu:flex group-focus-within/menu:flex">
+                  {isActive && (
+                    <button
+                      type="button"
+                      onClick={(e) => onQuickStatus(campaign.id, "PAUSED", e)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-left text-xs text-crm-warning hover:bg-crm-surface"
+                    >
+                      <Pause className="h-3 w-3" /> Pause
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={(e) => onQuickStatus(campaign.id, "ARCHIVED", e)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-left text-xs text-crm-muted hover:bg-crm-surface hover:text-crm-danger"
+                  >
+                    <Archive className="h-3 w-3" /> Archive
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
+      </div>
+
+      <div className="grid grid-cols-4 gap-1 border-t border-crm-border/50 px-3 py-2 lg:hidden">
+        <IndexMetric label="Members" value={members} compact />
+        <IndexMetric label="Queue" value={activeWork} warn={isActive && activeWork > 0} compact />
+        <IndexMetric label="CB" value={metrics ? callbacks : "—"} warn={callbacks > 0} compact />
+        <IndexMetric label="Conv" value={metrics ? converted : "—"} sub={metrics && conversionRate > 0 ? `${conversionRate}%` : undefined} compact />
       </div>
     </article>
   );
 }
 
-function MetricCluster({
-  title,
-  items,
+function IndexMetric({
+  label,
+  value,
+  sub,
+  warn,
+  compact,
 }: {
-  title: string;
-  items: {
-    label: string;
-    value: string | number;
-    sub?: string;
-    warn?: boolean;
-    muted?: boolean;
-  }[];
+  label: string;
+  value: string | number;
+  sub?: string;
+  warn?: boolean;
+  compact?: boolean;
 }) {
   return (
-    <div className={crm.campaignMetricCluster}>
-      <p className={crm.campaignMetricClusterTitle}>{title}</p>
-      <div className="grid grid-cols-2 gap-x-3 gap-y-0">
-        {items.map((item) => (
-          <div key={item.label} className={crm.campaignIndexMetric}>
-            <p className={crm.campaignIndexMetricLabel}>{item.label}</p>
-            <p
-              className={cn(
-                crm.campaignIndexMetricValue,
-                item.warn && "text-crm-warning",
-                item.muted && "text-crm-muted text-base",
-              )}
-            >
-              {item.value}
-            </p>
-            {item.sub ? (
-              <p className="text-[10px] leading-tight text-crm-muted">{item.sub}</p>
-            ) : null}
-          </div>
-        ))}
-      </div>
+    <div className={cn(crm.campaignIndexRowMetric, compact && "min-w-0 px-1.5 py-0.5 sm:min-w-0")}>
+      <p className={crm.campaignIndexRowMetricLabel}>{label}</p>
+      <p className={cn(crm.campaignIndexRowMetricValue, compact && "text-base sm:text-lg", warn && "text-crm-warning")}>
+        {value}
+      </p>
+      {sub ? <p className="text-[10px] text-crm-muted">{sub}</p> : null}
     </div>
   );
 }

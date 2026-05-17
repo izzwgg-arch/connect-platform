@@ -17,6 +17,7 @@ import {
   CampaignPerformancePanel,
   CampaignMemberCard,
   CampaignDetailCommandPanel,
+  CampaignQuickActionStrip,
   deriveCampaignHealth,
   type CampaignDetail,
   type CampaignMember,
@@ -839,7 +840,7 @@ export default function CampaignDetailPage() {
   const hd = health!;
 
   return (
-    <CRMPageShell innerClassName={cn(crm.pageInnerCampaign, crm.campaignWorkspace)}>
+    <CRMPageShell innerClassName={cn(crm.pageInnerCampaign, crm.campaignWorkspace, "pb-32")}>
       {showAddContacts && (
         <AddContactsModal
           campaignId={campaignId}
@@ -1269,12 +1270,12 @@ export default function CampaignDetailPage() {
           onFilterUnassigned={() => { setAssigneeFilter("UNASSIGNED"); loadMembers("UNASSIGNED"); }}
         />
 
-            <CRMSection
-              title={`Members (${membersTotal})`}
-              description="Operational roster — filters are server-side (100 per load)."
-            >
-          {/* Filters */}
-          <div className="flex gap-2 mb-4 flex-wrap">
+            <section className={crm.campaignRosterShell} aria-label={`Members (${membersTotal})`}>
+              <div className="border-b border-crm-border/70 px-3 py-2.5 sm:px-4">
+                <h2 className="text-base font-semibold text-crm-text">Members ({membersTotal})</h2>
+                <p className="text-[11px] text-crm-muted">Operational roster — server-side filters, 100 per load</p>
+              </div>
+          <div className={cn(crm.campaignRosterToolbar, "mb-0 border-b-0")}>
             <div className="relative flex-1 min-w-[160px] max-w-xs">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-crm-muted/80" />
               <input
@@ -1403,8 +1404,17 @@ export default function CampaignDetailPage() {
               }
             />
           ) : (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2 px-1 pb-1">
+            <div className={crm.campaignRosterBody}>
+              <div className={crm.campaignRosterTableHead}>
+                <span>Member</span>
+                <span>Agent</span>
+                <span>Status</span>
+                <span>Attempts</span>
+                <span>Last touch</span>
+                <span>Next</span>
+                <span className="text-right">Actions</span>
+</div>
+              <div className="flex items-center gap-2 px-1 pb-1 lg:px-2">
                 <button type="button" onClick={toggleSelectAll} className="p-1 rounded border border-transparent hover:border-crm-border hover:bg-crm-surface-2" aria-label="Select all visible members">
                   {selected.size > 0 && bulkSelectableMembers.length > 0 && bulkSelectableMembers.every((m) => selected.has(m.id))
                     ? <CheckSquare2 className="h-4 w-4 text-crm-accent" />
@@ -1420,6 +1430,7 @@ export default function CampaignDetailPage() {
                     key={m.id}
                     member={m}
                     campaignId={campaignId}
+                    rowMode
                     selected={selected.has(m.id)}
                     readOnly={agentCannotAct}
                     onSelect={(checked) => {
@@ -1436,8 +1447,17 @@ export default function CampaignDetailPage() {
               })}
             </div>
           )}
-            </CRMSection>
+            </section>
         </div>
+
+        <CampaignQuickActionStrip
+          variant="detail"
+          campaignId={campaignId}
+          canQueue={canQueue}
+          isAdmin={isAdmin}
+          queueWork={hd.activeQueueWork}
+          callbacks={hd.callback}
+        />
     </CRMPageShell>
   );
 }

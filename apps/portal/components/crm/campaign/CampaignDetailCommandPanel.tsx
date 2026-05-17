@@ -4,7 +4,6 @@ import Link from "next/link";
 import { BarChart2, ChevronDown, History, ListOrdered, Shuffle, Upload } from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
-import { CRMCard } from "../CRMCard";
 import type { CampaignDetail, CampaignImportHistoryRow, CampaignPriority, WorkloadRow } from "./campaignTypes";
 import { CAMPAIGN_PRIORITY_LABELS } from "./campaignTypes";
 import { CampaignImportEventCard } from "./CampaignImportEventCard";
@@ -84,8 +83,10 @@ export function CampaignDetailCommandPanel({
 
   return (
     <section className={cn(crm.campaignDetailCommandGrid, "min-w-0")} aria-label="Campaign operations">
-      <CRMCard className="p-3 sm:p-4 min-h-[8rem]">
-        <p className={crm.label}>Next actions</p>
+      <div className={crm.campaignOpsCell}>
+        <div className={crm.campaignOpsCellHeader}>
+          <p className={crm.label}>Next actions</p>
+        </div>
         {alerts.length === 0 ? (
           <p className="mt-2 text-xs leading-relaxed text-crm-muted">No alerts — roster looks balanced for this snapshot.</p>
         ) : (
@@ -105,11 +106,11 @@ export function CampaignDetailCommandPanel({
             Open campaign queue ({health.activeQueueWork})
           </Link>
         )}
-      </CRMCard>
+      </div>
 
       {isAdmin && (
-        <CRMCard className="p-3 sm:p-4 min-h-[8rem]">
-          <div className="mb-2 flex items-center justify-between gap-2">
+        <div className={crm.campaignOpsCell}>
+          <div className={crm.campaignOpsCellHeader}>
             <p className={crm.label}>
               <BarChart2 className="-mt-0.5 mr-1 inline h-3.5 w-3.5" />
               Assignment load
@@ -144,10 +145,10 @@ export function CampaignDetailCommandPanel({
               })}
             </ul>
           )}
-        </CRMCard>
+        </div>
       )}
 
-      <CRMCard className="p-3 sm:p-4 min-h-[8rem]">
+      <div className={crm.campaignOpsCell}>
         <div className="mb-2 flex items-center gap-2">
           <History className="h-4 w-4 shrink-0 text-crm-muted" />
           <p className={crm.label}>Import events</p>
@@ -183,9 +184,9 @@ export function CampaignDetailCommandPanel({
             <Upload className="h-3.5 w-3.5 shrink-0" /> New import
           </button>
         )}
-      </CRMCard>
+      </div>
 
-      <CRMCard className="p-0 overflow-hidden sm:col-span-2 xl:col-span-1">
+      <div className={cn(crm.campaignOpsCell, "p-0 overflow-hidden")}>
         <details className="group h-full open:ring-1 open:ring-crm-accent/15">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-semibold text-crm-text hover:bg-crm-surface-2/50 [&::-webkit-details-marker]:hidden">
             Campaign settings
@@ -252,7 +253,7 @@ export function CampaignDetailCommandPanel({
             )}
           </div>
         </details>
-      </CRMCard>
+      </div>
     </section>
   );
 }

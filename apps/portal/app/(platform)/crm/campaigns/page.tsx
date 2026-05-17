@@ -6,10 +6,10 @@ import Link from "next/link";
 import { FileUp, ListOrdered, Megaphone, Plus, Search } from "lucide-react";
 import {
   CRMPageShell,
-  CRMPageHeader,
   CRMActionBar,
-  CRMStat,
   CampaignIndexCard,
+  CampaignIndexCommandHero,
+  CampaignQuickActionStrip,
   CampaignGuidedEmpty,
   type CampaignListItem,
   type CampaignReportRow,
@@ -29,6 +29,8 @@ const STATUS_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: "COMPLETED", label: CAMPAIGN_STATUS_LABELS.COMPLETED },
   { value: "ARCHIVED", label: CAMPAIGN_STATUS_LABELS.ARCHIVED },
 ];
+
+type CampaignSort = "status" | "updated" | "name";
 
 function CreateCampaignModal({
   onClose,
@@ -146,6 +148,7 @@ export default function CampaignsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [sortBy, setSortBy] = useState<CampaignSort>("status");
   const [showCreate, setShowCreate] = useState(false);
   const [error, setError] = useState("");
 
@@ -193,13 +196,33 @@ export default function CampaignsPage() {
     let list = campaigns;
     if (q) list = list.filter((c) => c.name.toLowerCase().includes(q));
     return [...list].sort((a, b) => {
+      if (sortBy === "name") return a.name.localeCompare(b.name);
+      if (sortBy === "updated") {
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+      }
       const order = (s: CampaignStatus) =>
         s === "ACTIVE" ? 0 : s === "PAUSED" ? 1 : s === "DRAFT" ? 2 : 3;
       const d = order(a.status) - order(b.status);
       if (d !== 0) return d;
       return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
     });
-  }, [campaigns, search]);
+  }, [campaigns, search, sortBy]);
+
+  useEffect(() => {
+    function onKey(e: globalThis.KeyboardEvent) {
+      if (!isAdmin) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.tagName === "INPUT" || t?.tagName === "TEXTAREA" || t?.tagName === "SELECT" || t?.isContentEditable) {
+        return;
+      }
+      if (e.key === "n" || e.key === "N") {
+        e.preventDefault();
+        setShowCreate(true);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isAdmin]);
 
   const summary = useMemo(() => {
     let active = 0;
@@ -224,7 +247,7 @@ export default function CampaignsPage() {
   const listEmptyAfterFilter = !loading && !error && campaigns.length > 0 && filtered.length === 0;
 
   return (
-    <CRMPageShell innerClassName={cn(crm.pageInnerCampaign, crm.campaignWorkspace)}>
+    <CRMPageShell innerClassName={cn(crm.pageInnerCampaign, crm.campaignWorkspace, "pb-32")}>
       {showCreate && isAdmin && (
         <CreateCampaignModal
           onClose={() => setShowCreate(false)}
@@ -236,10 +259,9 @@ export default function CampaignsPage() {
         />
       )}
 
-      <CRMPageHeader
-        icon={<Megaphone className="h-5 w-5" />}
+      <CampaignIndexCommandHero
         title="Campaigns"
-        subtitle="Outbound command center — open a program, monitor queue pressure, and jump into power dialing."
+        subtitle="Live outbound programs — scan queue pressure, open a desk, and jump into power dialing."
         actions={
           <>
             {isAdmin && (
@@ -262,21 +284,22 @@ export default function CampaignsPage() {
             )}
           </>
         }
+        kpis={
+          loading || error || campaigns.length === 0
+            ? []
+            : [
+                { label: "Active", value: summary.active, tone: summary.active > 0 ? "accent" : "default" },
+                { label: "Paused", value: summary.paused },
+                { label: "Queue work", value: summary.queueWork, tone: summary.queueWork > 0 ? "warn" : "default" },
+                { label: "Callbacks", value: summary.callbacks, tone: summary.callbacks > 0 ? "warn" : "default" },
+                { label: "Members", value: summary.members },
+              ]
+        }
       />
 
-      {!loading && !error && campaigns.length > 0 && (
-        <div className="flex flex-wrap gap-x-6 gap-y-2 rounded-crm-lg border border-crm-border bg-crm-surface px-4 py-3">
-          <CRMStat label="Active" value={summary.active} emphasize={summary.active > 0 ? "default" : undefined} />
-          <CRMStat label="Paused" value={summary.paused} />
-          <CRMStat label="Queue work (all)" value={summary.queueWork} emphasize={summary.queueWork > 0 ? "warn" : undefined} />
-          <CRMStat label="Callbacks" value={summary.callbacks} emphasize={summary.callbacks > 0 ? "warn" : undefined} />
-          <CRMStat label="Members" value={summary.members} />
-        </div>
-      )}
-
       <div className={crm.campaignCommandSticky}>
-        <CRMActionBar className={cn(crm.campaignFilterBar, "gap-3 sm:gap-4")}>
-          <div className="relative min-w-[12rem] flex-1 max-w-lg">
+        <CRMActionBar className={cn(crm.campaignFilterBar, "gap-2 sm:gap-3 flex-wrap")}>
+          <div className="relative min-w-[10rem] flex-1 max-w-md">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-crm-muted" />
             <input
               value={search}
@@ -298,6 +321,19 @@ export default function CampaignsPage() {
               </button>
             ))}
           </div>
+          <label className="ml-auto flex shrink-0 items-center gap-2 text-[11px] font-medium text-crm-muted">
+            Sort
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as CampaignSort)}
+              className={crm.campaignSortSelect}
+              aria-label="Sort campaigns"
+            >
+              <option value="status">Status</option>
+              <option value="updated">Updated</option>
+              <option value="name">Name</option>
+            </select>
+          </label>
         </CRMActionBar>
       </div>
 
@@ -348,7 +384,7 @@ export default function CampaignsPage() {
           }
         />
       ) : (
-        <ul className="m-0 flex list-none flex-col gap-3 p-0">
+        <ul className={crm.campaignIndexRowList}>
           {filtered.map((campaign) => (
             <li key={campaign.id} className="list-none">
               <CampaignIndexCard
@@ -362,6 +398,17 @@ export default function CampaignsPage() {
           ))}
         </ul>
       )}
+
+      {!loading && !error && campaigns.length > 0 ? (
+        <CampaignQuickActionStrip
+          variant="index"
+          canQueue={canQueue}
+          isAdmin={isAdmin}
+          queueWork={summary.queueWork}
+          callbacks={summary.callbacks}
+          onNewCampaign={() => setShowCreate(true)}
+        />
+      ) : null}
     </CRMPageShell>
   );
 }

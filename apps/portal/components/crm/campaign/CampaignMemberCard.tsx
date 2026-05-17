@@ -15,6 +15,7 @@ export function CampaignMemberCard({
   campaignId,
   selected,
   readOnly,
+  rowMode,
   onSelect,
   onUpdated,
   onStatusChange,
@@ -24,6 +25,7 @@ export function CampaignMemberCard({
   campaignId: string;
   selected: boolean;
   readOnly: boolean;
+  rowMode?: boolean;
   onSelect: (checked: boolean) => void;
   onUpdated: () => void;
   onStatusChange: (memberId: string, status: MemberStatus) => void;
@@ -36,6 +38,142 @@ export function CampaignMemberCard({
   const cb = callbackUrgency(member.callbackAt);
   const nextAction = memberNextAction(member.status, member.callbackAt);
   const isOverdue = cb.tier === "overdue";
+  const lastTouch =
+    member.contact?.lastActivityAt
+      ? relativeTime(member.contact.lastActivityAt)
+      : member.lastAttemptAt
+        ? relativeTime(member.lastAttemptAt)
+        : "—";
+
+  if (rowMode) {
+    return (
+      <article
+        className={cn(
+          crm.campaignMemberRow,
+          selected && "border-crm-accent/40 bg-crm-accent/8 ring-1 ring-crm-accent/20",
+          !selected && activeWork && !archivedLead && "border-crm-accent/30",
+          !selected && isOverdue && "border-crm-danger/40 bg-crm-danger/5",
+          !selected && terminal && "opacity-80",
+          archivedLead && "opacity-85",
+        )}
+      >
+        <div className="flex min-w-0 items-start gap-2 lg:items-center">
+          <input
+            type="checkbox"
+            checked={selected}
+            disabled={readOnly}
+            onChange={(e) => onSelect(e.target.checked)}
+            className="mt-0.5 shrink-0 rounded border-crm-border disabled:opacity-40 lg:mt-0"
+            aria-label={`Select ${member.contact?.displayName ?? "member"}`}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => router.push(`/crm/contacts/${member.contactId}`)}
+                className="truncate text-left text-sm font-semibold text-crm-text hover:text-crm-accent"
+              >
+                {member.contact?.displayName ?? "Unknown"}
+              </button>
+              {archivedLead && (
+                <span className="text-[9px] font-bold uppercase tracking-wide text-crm-warning bg-crm-warning/12 px-1 py-0.5 rounded border border-crm-warning/30">
+                  Archived
+                </span>
+              )}
+            </div>
+            <p className="truncate text-xs text-crm-muted">{member.contact?.primaryPhone ?? "—"}</p>
+            {member.contact?.lastDisposition ? (
+              <p className="mt-0.5 truncate text-[10px] text-crm-muted lg:hidden">
+                {member.contact.lastDisposition}
+              </p>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="text-xs">
+          <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Agent</span>
+          <p className="truncate font-medium text-crm-text">{member.assignedTo?.displayName ?? "Unassigned"}</p>
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Status</span>
+          {readOnly ? (
+            <span className={cn("inline-flex w-fit rounded border px-2 py-0.5 text-[10px] font-semibold uppercase", MEMBER_STATUS_CHIP[member.status])}>
+              {MEMBER_STATUS_LABELS[member.status]}
+            </span>
+          ) : (
+            <select
+              value={member.status}
+              onChange={(e) => onStatusChange(member.id, e.target.value as MemberStatus)}
+              className={cn(crm.input, "w-full max-w-[9rem] text-xs py-1", MEMBER_STATUS_CHIP[member.status])}
+            >
+              {(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => (
+                <option key={s} value={s}>
+                  {MEMBER_STATUS_LABELS[s]}
+                </option>
+              ))}
+            </select>
+          )}
+          {member.status === "CALLBACK" && member.callbackAt ? (
+            <span
+              className={cn(
+                "w-fit text-[10px] font-semibold px-1.5 py-0.5 rounded",
+                isOverdue ? "text-crm-danger bg-crm-danger/10" : "text-crm-warning bg-crm-warning/10",
+              )}
+            >
+              {cb.label}
+            </span>
+          ) : null}
+        </div>
+
+        <div>
+          <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Attempts</span>
+          <p className="tabular-nums text-sm font-semibold text-crm-text">{member.attemptCount}</p>
+        </div>
+
+        <div>
+          <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Last touch</span>
+          <p className="text-xs text-crm-text">{lastTouch}</p>
+        </div>
+
+        <div>
+          <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Next</span>
+          <p className="text-[11px] font-semibold leading-snug text-crm-accent">{nextAction}</p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5 lg:justify-end">
+          <MemberCallbackEditor
+            member={member}
+            campaignId={campaignId}
+            readOnly={readOnly}
+            token={token}
+            onUpdated={onUpdated}
+          />
+          <button
+            type="button"
+            onClick={() =>
+              router.push(
+                `/crm/live-call?contactId=${member.contactId}&campaignId=${campaignId}&memberId=${member.id}`,
+              )
+            }
+            disabled={readOnly}
+            className={cn(crm.btnPrimary, "text-xs py-1.5 px-2 disabled:opacity-40")}
+          >
+            <PhoneCall className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Workspace</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push(`/crm/contacts/${member.contactId}`)}
+            className={cn(crm.campaignDetailBtnTertiary, "p-1.5")}
+            aria-label="Open contact"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </article>
+    );
+  }
 
   return (
     <article
