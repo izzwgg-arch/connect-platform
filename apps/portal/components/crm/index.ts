@@ -9,6 +9,7 @@ export { CRMEmptyState } from "./CRMEmptyState";
 export { CRMActionBar } from "./CRMActionBar";
 export * from "./charts";
 export * from "./dashboard";
+export * from "./contact";
 export type {
   MemberStatus as QueueMemberStatus,
   QueueMember,
