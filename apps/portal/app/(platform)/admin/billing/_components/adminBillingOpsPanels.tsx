@@ -16,7 +16,8 @@ import { BillingFinanceChip } from "../../../../../components/billing/BillingFin
 import { InvoiceRowMenu } from "../../../../../components/billing/InvoiceRowMenu";
 import { dollars, invoiceFilterStatusLabel, invoiceStatusLabel, transactionStatusLabel } from "../../../../../lib/billingUi";
 import { useAppContext } from "../../../../../hooks/useAppContext";
-import type { AdminOpsTab } from "./adminBillingLinks";
+import { adminBillingTenantQuery, type AdminOpsTab } from "./adminBillingLinks";
+import { useAdminBillingTenant } from "./useAdminBillingTenant";
 
 function openAdminInvoicePdf(invoiceId: string) {
   const token = localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "";
@@ -1243,9 +1244,20 @@ function SmsPaymentLinkModal({ invoice, onClose, onSuccess }: { invoice: Invoice
   );
 }
 
+function BillingScopedNotice() {
+  const { effectiveTenantId, displayName } = useAdminBillingTenant();
+  if (!effectiveTenantId) return null;
+  return (
+    <p className="billing-inv-meta" style={{ marginBottom: 8 }} data-testid="billing-admin-scoped-notice">
+      Showing billing for <strong>{displayName}</strong> only. Use <strong>All workspaces</strong> in the header for cross-tenant data.
+    </p>
+  );
+}
+
 // ── Invoices tab ──────────────────────────────────────────────────────────────
 
 export function InvoicesTab() {
+  const { effectiveTenantId } = useAdminBillingTenant();
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -1273,14 +1285,20 @@ export function InvoicesTab() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
+  useEffect(() => {
+    setPage(1);
+    setListRev((r) => r + 1);
+  }, [effectiveTenantId]);
+
   const url = useMemo(() => {
-    const p = new URLSearchParams();
-    if (statusFilter !== "ALL") p.set("status", statusFilter);
-    if (search) p.set("search", search);
-    p.set("page", String(page));
-    p.set("limit", "50");
-    return `/admin/billing/invoices?${p.toString()}`;
-  }, [statusFilter, search, page, listRev]); // eslint-disable-line react-hooks/exhaustive-deps
+    const qs = adminBillingTenantQuery(effectiveTenantId || undefined, {
+      status: statusFilter !== "ALL" ? statusFilter : undefined,
+      search: search || undefined,
+      page,
+      limit: 50,
+    });
+    return `/admin/billing/invoices${qs}`;
+  }, [effectiveTenantId, statusFilter, search, page, listRev]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const data = useAsyncResource<InvoiceListResult>(() => apiGet<InvoiceListResult>(url), [url]);
   const rows = data.status === "success" ? data.data.invoices : [];
@@ -1323,6 +1341,7 @@ export function InvoicesTab() {
 
   return (
     <div data-testid="billing-admin-tab-panel-invoices">
+      <BillingScopedNotice />
       {toast ? (
         <div className={`billing-p8-toast billing-p8-toast--${toast.kind === "ok" ? "ok" : "err"}`} role="status">
           {toast.text}
@@ -1601,22 +1620,29 @@ export function InvoicesTab() {
 // ── Transactions tab ──────────────────────────────────────────────────────────
 
 export function TransactionsTab() {
+  const { effectiveTenantId } = useAdminBillingTenant();
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [page, setPage] = useState(1);
   const [detailTxId, setDetailTxId] = useState<string | null>(null);
 
+  useEffect(() => {
+    setPage(1);
+  }, [effectiveTenantId]);
+
   const url = useMemo(() => {
-    const p = new URLSearchParams();
-    if (statusFilter !== "ALL") p.set("status", statusFilter);
-    p.set("page", String(page));
-    p.set("limit", "50");
-    return `/admin/billing/transactions?${p.toString()}`;
-  }, [statusFilter, page]);
+    const qs = adminBillingTenantQuery(effectiveTenantId || undefined, {
+      status: statusFilter !== "ALL" ? statusFilter : undefined,
+      page,
+      limit: 50,
+    });
+    return `/admin/billing/transactions${qs}`;
+  }, [effectiveTenantId, statusFilter, page]);
 
   const data = useAsyncResource<TxListResult>(() => apiGet<TxListResult>(url), [url]);
 
   return (
     <div data-testid="billing-admin-tab-panel-payments">
+      <BillingScopedNotice />
       <div className="billing-inv-toolbar billing-inv-toolbar--sticky" style={{ marginBottom: 10 }}>
         <div className="billing-p8-filter-bar">
           {TX_STATUSES.map((s) => (
@@ -1751,6 +1777,8 @@ function CappedNotice({ visible }: { visible: boolean }) {
 }
 
 export function ReportsTab() {
+  const { effectiveTenantId, isGlobalScope } = useAdminBillingTenant();
+
   // Aging report state
   const [agingData, setAgingData] = useState<AgingResult | null>(null);
   const [agingLoading, setAgingLoading] = useState(false);
@@ -1765,16 +1793,24 @@ export function ReportsTab() {
   const [exportStatus, setExportStatus] = useState("ALL");
 
   function buildExportHref(type: "invoices" | "transactions") {
-    const p = new URLSearchParams();
-    if (exportStatus !== "ALL") p.set("status", exportStatus);
-    return `/api/admin/billing/reports/export/${type}?${p.toString()}`;
+    const qs = adminBillingTenantQuery(effectiveTenantId || undefined, {
+      status: exportStatus !== "ALL" ? exportStatus : undefined,
+    });
+    return `/api/admin/billing/reports/export/${type}${qs}`;
   }
+
+  const reportScopeQs = adminBillingTenantQuery(effectiveTenantId || undefined);
+
+  useEffect(() => {
+    setAgingData(null);
+    setFailedData(null);
+  }, [effectiveTenantId]);
 
   async function loadAging() {
     setAgingLoading(true);
     setAgingError(null);
     try {
-      const result = await apiGet<AgingResult>("/admin/billing/reports/aging");
+      const result = await apiGet<AgingResult>(`/admin/billing/reports/aging${reportScopeQs}`);
       setAgingData(result);
     } catch (err: unknown) {
       setAgingError(billingErrorMessage(err, "Failed to load aging report."));
@@ -1787,7 +1823,7 @@ export function ReportsTab() {
     setFailedLoading(true);
     setFailedError(null);
     try {
-      const result = await apiGet<FailedPaymentsResult>("/admin/billing/reports/failed-payments");
+      const result = await apiGet<FailedPaymentsResult>(`/admin/billing/reports/failed-payments${reportScopeQs}`);
       setFailedData(result);
     } catch (err: unknown) {
       setFailedError(billingErrorMessage(err, "Failed to load failed payments report."));
@@ -1832,6 +1868,12 @@ export function ReportsTab() {
 
   return (
     <div className="stack compact-stack" data-testid="billing-admin-tab-panel-reports">
+      <BillingScopedNotice />
+      {isGlobalScope && !effectiveTenantId ? (
+        <p className="billing-inv-meta" style={{ marginBottom: 0 }} data-testid="billing-admin-reports-global-notice">
+          Reports below include all workspaces. Select a company in the header to scope exports and aging to one tenant.
+        </p>
+      ) : null}
       <div className="billing-p8-panel">
         <h4 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 650 }}>CSV Exports</h4>
         <p className="billing-p8-panel__desc">
@@ -1884,16 +1926,16 @@ export function ReportsTab() {
           >
             {agingLoading ? "Loading…" : agingData ? "↻ Refresh" : "Load report"}
           </button>
-          {agingData && (
+          {agingData ? (
             <a
               className="btn ghost"
-              href="/api/admin/billing/reports/aging/export"
+              href={`/api/admin/billing/reports/aging/export${reportScopeQs}`}
               download
               style={{ fontSize: 13, textDecoration: "none" }}
             >
               ⬇ CSV
             </a>
-          )}
+          ) : null}
         </div>
         <p className="billing-p8-panel__desc">
           All open invoices with outstanding balance, sorted by due date ascending.
@@ -1937,16 +1979,16 @@ export function ReportsTab() {
           >
             {failedLoading ? "Loading…" : failedData ? "↻ Refresh" : "Load report"}
           </button>
-          {failedData && (
+          {failedData ? (
             <a
               className="btn ghost"
-              href="/api/admin/billing/reports/failed-payments/export"
+              href={`/api/admin/billing/reports/failed-payments/export${reportScopeQs}`}
               download
               style={{ fontSize: 13, textDecoration: "none" }}
             >
               ⬇ CSV
             </a>
-          )}
+          ) : null}
         </div>
         <p className="billing-p8-panel__desc">
           Invoices in FAILED or OVERDUE status with last processor response.
@@ -2056,6 +2098,8 @@ function CollectionsRowTable({ rows, onOpenInvoice }: { rows: CollectionsRow[]; 
 }
 
 export function CollectionsTab() {
+  const { effectiveTenantId } = useAdminBillingTenant();
+  const collectionsQs = adminBillingTenantQuery(effectiveTenantId || undefined);
   const [openInvoiceId, setOpenInvoiceId] = useState<string | null>(null);
   const [overviewRev, setOverviewRev] = useState(0);
   const [previewRev, setPreviewRev] = useState(0);
@@ -2074,7 +2118,7 @@ export function CollectionsTab() {
     setOverviewLoading(true);
     setOverviewError(null);
     try {
-      const r = await apiGet<CollectionsOverview>("/admin/billing/collections/overview");
+      const r = await apiGet<CollectionsOverview>(`/admin/billing/collections/overview${collectionsQs}`);
       setOverview(r);
       setOverviewLoaded(true);
     } catch (err: unknown) {
@@ -2082,13 +2126,13 @@ export function CollectionsTab() {
     } finally {
       setOverviewLoading(false);
     }
-  }, []);
+  }, [collectionsQs]);
 
   const loadPreview = useCallback(async () => {
     setPreviewLoading(true);
     setPreviewError(null);
     try {
-      const r = await apiGet<PreviewRetriesResult>("/admin/billing/collections/preview-retries");
+      const r = await apiGet<PreviewRetriesResult>(`/admin/billing/collections/preview-retries${collectionsQs}`);
       setPreview(r);
       setPreviewLoaded(true);
     } catch (err: unknown) {
@@ -2096,7 +2140,14 @@ export function CollectionsTab() {
     } finally {
       setPreviewLoading(false);
     }
-  }, []);
+  }, [collectionsQs]);
+
+  useEffect(() => {
+    setOverview(null);
+    setPreview(null);
+    setOverviewLoaded(false);
+    setPreviewLoaded(false);
+  }, [effectiveTenantId]);
 
   // Re-load on rev bump
   useEffect(() => {
@@ -2116,6 +2167,7 @@ export function CollectionsTab() {
 
   return (
     <div className="stack compact-stack" data-testid="billing-admin-tab-panel-collections">
+      <BillingScopedNotice />
       <p className="billing-p8-panel__desc" style={{ marginBottom: 12, maxWidth: 720 }}>
         Track automatic payment retries. Pausing or skipping affects the next scheduled run only — changes are picked up on the regular retry cycle.
       </p>

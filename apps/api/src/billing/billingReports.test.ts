@@ -191,6 +191,23 @@ test("aging report: capped=false when results are within limit", async () => {
   assert.equal(capped, false);
 });
 
+test("aging report: tenantId filter adds tenantId to Prisma where", async () => {
+  let capturedWhere: Record<string, unknown> | undefined;
+  const db: ReportDb = {
+    billingInvoice: {
+      findMany: async (args: { where?: Record<string, unknown> }) => {
+        capturedWhere = args?.where;
+        return [makeInvoice({ tenantId: "tenant-a" })];
+      },
+    },
+    paymentTransaction: { findMany: async () => [] },
+  };
+  const { rows } = await queryAgingReport(db, { tenantId: "tenant-a" });
+  assert.equal(capturedWhere?.tenantId, "tenant-a");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].tenantId, "tenant-a");
+});
+
 // ── queryFailedPaymentsReport ─────────────────────────────────────────────────
 
 test("failed payments: maps invoice fields correctly", async () => {

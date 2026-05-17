@@ -196,12 +196,18 @@ export type CollectionsDb = {
 
 // ── Collections overview ──────────────────────────────────────────────────────
 
-export async function queryCollectionsOverview(cdb: CollectionsDb): Promise<CollectionsOverview> {
+export type CollectionsQueryScope = { tenantId?: string };
+
+export async function queryCollectionsOverview(
+  cdb: CollectionsDb,
+  scope: CollectionsQueryScope = {},
+): Promise<CollectionsOverview> {
   // Fetch all OPEN/FAILED/OVERDUE invoices with outstanding balance
   const raw = await cdb.billingInvoice.findMany({
     where: {
       balanceDueCents: { gt: 0 },
       status: { in: ["OPEN", "FAILED", "OVERDUE"] },
+      ...(scope.tenantId ? { tenantId: scope.tenantId } : {}),
     },
     orderBy: [{ failedAt: "desc" }, { dueDate: "asc" }],
     take: 500,
@@ -281,11 +287,15 @@ export async function queryCollectionsOverview(cdb: CollectionsDb): Promise<Coll
 }
 
 /** Preview which invoices would be picked up by the next dunning sweep. */
-export async function queryPreviewRetries(cdb: CollectionsDb): Promise<{ rows: CollectionsInvoiceRow[]; note: string }> {
+export async function queryPreviewRetries(
+  cdb: CollectionsDb,
+  scope: CollectionsQueryScope = {},
+): Promise<{ rows: CollectionsInvoiceRow[]; note: string }> {
   const raw = await cdb.billingInvoice.findMany({
     where: {
       balanceDueCents: { gt: 0 },
       status: { in: ["OPEN", "FAILED"] },
+      ...(scope.tenantId ? { tenantId: scope.tenantId } : {}),
     },
     include: { tenant: { include: { billingSettings: true } } },
     orderBy: { updatedAt: "asc" },

@@ -1,8 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { useAsyncResource } from "../../../../../hooks/useAsyncResource";
+import { useAdminBillingTenant } from "./useAdminBillingTenant";
 import { apiGet } from "../../../../../services/apiClient";
 import { ErrorState } from "../../../../../components/ErrorState";
 import { BillingEmptyState } from "../../../../../components/billing/BillingEmptyState";
@@ -65,8 +65,7 @@ function Pager({ page, pages, onPage }: { page: number; pages: number; onPage: (
 }
 
 export function PaymentsWorkspace() {
-  const searchParams = useSearchParams();
-  const tenantId = String(searchParams.get("tenantId") || "").trim();
+  const { effectiveTenantId: tenantId } = useAdminBillingTenant();
 
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [page, setPage] = useState(1);

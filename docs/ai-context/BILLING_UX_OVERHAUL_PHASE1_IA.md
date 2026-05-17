@@ -38,7 +38,7 @@
 ### 1.2 Tenant context patterns (resolved 2026-05-17)
 
 1. **Global workspace switcher** (`TenantSwitcher`) — sets `cc-tenant-id` + `cc-admin-scope` (TENANT vs GLOBAL); drives `x-tenant-context` on API calls.  
-2. **Admin Billing** — reads the same context via `useAdminBillingTenant`; syncs `?tenantId=` for deep links when scope is TENANT; **no** left-rail company list.  
+2. **Admin Billing** — reads the same context via `useAdminBillingTenant`; syncs `?tenantId=` for deep links when scope is TENANT; **no** left-rail company list. List/report fetches include `?tenantId=` when a workspace is selected (server-side filter, not client-only).  
 3. **All workspaces mode** — cross-tenant overview and list routes (invoices, payments aggregate, reports); tenant-scoped configuration still uses `?tenantId=` from the switcher or a bookmarked link.  
 
 **Historical problem (pre-2026-05-17):** duplicate billing rail + global switcher — **removed**.

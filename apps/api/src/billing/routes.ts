@@ -1795,15 +1795,17 @@ export async function registerBillingRoutes(app: FastifyInstance) {
   app.get("/admin/billing/reports/aging", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
-    const { rows, capped } = await queryAgingReport(db as any);
+    const q = req.query as { tenantId?: string };
+    const { rows, capped } = await queryAgingReport(db as any, { tenantId: q.tenantId });
     return { rows, capped, rowCap: rows.length };
   });
 
   app.get("/admin/billing/reports/aging/export", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
+    const q = req.query as { tenantId?: string };
     const generatedBy = (u as any).email || (u as any).sub || "SUPER_ADMIN";
-    const { rows, capped } = await queryAgingReport(db as any);
+    const { rows, capped } = await queryAgingReport(db as any, { tenantId: q.tenantId });
     const meta = csvMeta("Billing Aging Report", generatedBy);
     const csv = agingToCsv(rows, meta);
     const filename = `billing-aging-${todayDateSuffix()}.csv`;
@@ -1817,15 +1819,17 @@ export async function registerBillingRoutes(app: FastifyInstance) {
   app.get("/admin/billing/reports/failed-payments", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
-    const { rows, capped } = await queryFailedPaymentsReport(db as any);
+    const q = req.query as { tenantId?: string };
+    const { rows, capped } = await queryFailedPaymentsReport(db as any, { tenantId: q.tenantId });
     return { rows, capped, rowCap: rows.length };
   });
 
   app.get("/admin/billing/reports/failed-payments/export", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
+    const q = req.query as { tenantId?: string };
     const generatedBy = (u as any).email || (u as any).sub || "SUPER_ADMIN";
-    const { rows, capped } = await queryFailedPaymentsReport(db as any);
+    const { rows, capped } = await queryFailedPaymentsReport(db as any, { tenantId: q.tenantId });
     const meta = csvMeta("Billing Failed Payments Report", generatedBy);
     const csv = failedPaymentsToCsv(rows, meta);
     const filename = `billing-failed-payments-${todayDateSuffix()}.csv`;
@@ -1873,14 +1877,16 @@ export async function registerBillingRoutes(app: FastifyInstance) {
   app.get("/admin/billing/collections/overview", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
-    const overview = await queryCollectionsOverview(db as any);
+    const q = req.query as { tenantId?: string };
+    const overview = await queryCollectionsOverview(db as any, { tenantId: q.tenantId });
     return overview;
   });
 
   app.get("/admin/billing/collections/preview-retries", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
-    const preview = await queryPreviewRetries(db as any);
+    const q = req.query as { tenantId?: string };
+    const preview = await queryPreviewRetries(db as any, { tenantId: q.tenantId });
     return preview;
   });
 

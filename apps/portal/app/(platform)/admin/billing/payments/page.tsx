@@ -1,16 +1,15 @@
 "use client";
 
 import { Suspense } from "react";
-import { useSearchParams } from "next/navigation";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { PaymentsWorkspace } from "../_components/adminBillingPaymentsWorkspace";
 import { TransactionsTab } from "../_components/adminBillingOpsPanels";
+import { useAdminBillingTenant } from "../_components/useAdminBillingTenant";
 
 function AdminBillingPaymentsBody() {
-  const searchParams = useSearchParams();
-  const tenantId = String(searchParams.get("tenantId") || "").trim();
+  const { effectiveTenantId } = useAdminBillingTenant();
 
-  if (!tenantId) {
+  if (!effectiveTenantId) {
     return (
       <div className="billing-ws-section billing-p8-scope billing-pay-scope" data-testid="billing-admin-payments-global">
         <TransactionsTab />

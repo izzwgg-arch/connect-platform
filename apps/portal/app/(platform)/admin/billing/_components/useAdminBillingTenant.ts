@@ -15,14 +15,17 @@ export function useAdminBillingTenant(validTenantIds?: string[]) {
   const effectiveTenantId = useMemo(() => {
     const isValid = (id: string) => !validTenantIds?.length || validTenantIds.includes(id);
 
-    if (urlTenantId && isValid(urlTenantId)) return urlTenantId;
-
-    if (isGlobalScope) return "";
-
-    if (globalTenantId && globalTenantId !== "local" && isValid(globalTenantId)) {
-      return globalTenantId;
+    // Tenant workspace: global switcher wins (URL is synced by AdminBillingShell).
+    if (!isGlobalScope) {
+      if (globalTenantId && globalTenantId !== "local" && isValid(globalTenantId)) {
+        return globalTenantId;
+      }
+      if (urlTenantId && isValid(urlTenantId)) return urlTenantId;
+      return "";
     }
 
+    // All workspaces: cross-tenant unless deep-linked with ?tenantId=
+    if (urlTenantId && isValid(urlTenantId)) return urlTenantId;
     return "";
   }, [urlTenantId, isGlobalScope, globalTenantId, validTenantIds]);
 

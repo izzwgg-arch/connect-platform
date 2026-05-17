@@ -159,9 +159,18 @@ export function todayDateSuffix(): string {
 
 // ── Aging report ─────────────────────────────────────────────────────────────
 
-export async function queryAgingReport(reportDb: ReportDb): Promise<{ rows: AgingRow[]; capped: boolean }> {
+export type BillingReportScope = { tenantId?: string };
+
+export async function queryAgingReport(
+  reportDb: ReportDb,
+  scope: BillingReportScope = {},
+): Promise<{ rows: AgingRow[]; capped: boolean }> {
   const raw = await reportDb.billingInvoice.findMany({
-    where: { status: { in: ["OPEN", "FAILED", "OVERDUE"] }, balanceDueCents: { gt: 0 } },
+    where: {
+      status: { in: ["OPEN", "FAILED", "OVERDUE"] },
+      balanceDueCents: { gt: 0 },
+      ...(scope.tenantId ? { tenantId: scope.tenantId } : {}),
+    },
     orderBy: [{ dueDate: "asc" }],
     take: AGING_ROW_CAP + 1,
     select: {
@@ -215,9 +224,15 @@ export function agingToCsv(rows: AgingRow[], meta: string): string {
 
 // ── Failed payments report ────────────────────────────────────────────────────
 
-export async function queryFailedPaymentsReport(reportDb: ReportDb): Promise<{ rows: FailedPaymentRow[]; capped: boolean }> {
+export async function queryFailedPaymentsReport(
+  reportDb: ReportDb,
+  scope: BillingReportScope = {},
+): Promise<{ rows: FailedPaymentRow[]; capped: boolean }> {
   const raw = await reportDb.billingInvoice.findMany({
-    where: { status: { in: ["FAILED", "OVERDUE"] } },
+    where: {
+      status: { in: ["FAILED", "OVERDUE"] },
+      ...(scope.tenantId ? { tenantId: scope.tenantId } : {}),
+    },
     orderBy: [{ failedAt: "desc" }, { dueDate: "asc" }],
     take: FAILED_PAYMENTS_ROW_CAP + 1,
     select: {

@@ -1,13 +1,13 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { apiGet } from "../../../../../services/apiClient";
 import { ErrorState } from "../../../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { useAppContext } from "../../../../../hooks/useAppContext";
 import type { TenantDetail } from "../_components/tenantBillingConfigForms";
 import { BillingActivitySection } from "../_components/billingWorkspaceSections";
+import { useAdminBillingTenant } from "../_components/useAdminBillingTenant";
 
 export default function AdminBillingActivityPage() {
   return (
@@ -19,12 +19,11 @@ export default function AdminBillingActivityPage() {
 
 function AdminBillingActivityBody() {
   const { can, backendJwtRole } = useAppContext();
-  const searchParams = useSearchParams();
   const canAdmin = backendJwtRole === "SUPER_ADMIN" && can("can_view_admin_billing");
   const [detail, setDetail] = useState<TenantDetail | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const tenantId = String(searchParams.get("tenantId") || "").trim();
+  const { effectiveTenantId: tenantId } = useAdminBillingTenant();
 
   const load = useCallback(async (id: string) => {
     setLoading(true);
@@ -40,7 +39,12 @@ function AdminBillingActivityBody() {
   }, []);
 
   useEffect(() => {
-    if (tenantId) void load(tenantId);
+    if (!tenantId) {
+      setDetail(null);
+      setError("");
+      return;
+    }
+    void load(tenantId);
   }, [tenantId, load]);
 
   if (!canAdmin) {

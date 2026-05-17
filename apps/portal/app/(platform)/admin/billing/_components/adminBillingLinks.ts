@@ -32,6 +32,23 @@ export function isBillingSettingsSection(v: string | null): v is BillingSettings
   );
 }
 
+/** Build `?tenantId=` for admin billing list/report APIs when a workspace is selected. */
+export function adminBillingTenantQuery(
+  tenantId: string | undefined,
+  extra?: Record<string, string | number | null | undefined>,
+): string {
+  const p = new URLSearchParams();
+  if (tenantId) p.set("tenantId", tenantId);
+  if (extra) {
+    for (const [k, val] of Object.entries(extra)) {
+      if (val == null || val === "") continue;
+      p.set(k, String(val));
+    }
+  }
+  const s = p.toString();
+  return s ? `?${s}` : "";
+}
+
 /** Append or replace query params preserving existing unrelated keys except `except`. */
 export function mergeSearchParams(base: URLSearchParams, patch: Record<string, string | null | undefined>): string {
   const next = new URLSearchParams(base.toString());

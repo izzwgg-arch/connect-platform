@@ -4,6 +4,35 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-17 — Admin billing: enforce global tenant data scoping
+
+**Task:** Fix correctness bug — UI followed workspace switcher but list/report APIs returned all tenants.  
+**Risk:** high (billing data visibility; filtering only).
+
+### Root cause
+
+List tabs (`InvoicesTab`, `TransactionsTab`, collections, reports) called platform-wide endpoints **without** `?tenantId=`. `useAdminBillingTenant` also preferred stale URL `tenantId` over the global switcher in tenant mode.
+
+### Portal
+
+- `useAdminBillingTenant` — tenant workspace prefers `useAppContext().tenantId` over URL
+- `adminBillingTenantQuery()` — shared query builder for scoped fetches
+- Invoices, payments/transactions, collections, reports pass `tenantId` when a workspace is selected
+- Methods, activity, payments workspace use hook (not raw `searchParams`)
+
+### API (minimal)
+
+- `GET /admin/billing/reports/aging` (+ export), `failed-payments` (+ export), `collections/overview`, `collections/preview-retries` accept optional `?tenantId=`
+
+### Verification
+
+| Check | Result |
+|-------|--------|
+| `pnpm --filter @connect/portal typecheck` | pass |
+| `pnpm run test:billing` (api) | 197 pass |
+
+---
+
 ## 2026-05-17 — Admin billing: global workspace tenant context (rail removed)
 
 **Task:** Remove duplicate billing company sidebar; scope Admin Billing from the portal **workspace switcher** (`TenantSwitcher` / `useAppContext`).  
