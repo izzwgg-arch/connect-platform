@@ -48,7 +48,11 @@ function AdminBillingMethodsBody() {
   }
 
   if (!tenantId) {
-    return <p className="muted">Select a company from the rail.</p>;
+    return (
+      <p className="muted">
+        Select a workspace from the header switcher, or open Billing from All workspaces for cross-tenant views.
+      </p>
+    );
   }
 
   return (

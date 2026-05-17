@@ -19,6 +19,7 @@ import {
 import { AdminPricingWorkspace } from "../_components/AdminPricingWorkspace";
 import { dollars, formatDate, humanizePricingStateMode } from "../../../../../lib/billingUi";
 import { BILLING_SECTION_QUERY, isBillingSettingsSection, mergeSearchParams, OPS_TAB_QUERY, type BillingSettingsSection } from "../_components/adminBillingLinks";
+import { useAdminBillingTenant } from "../_components/useAdminBillingTenant";
 
 type TenantRow = { id: string; name: string };
 
@@ -747,8 +748,6 @@ function AdminBillingSettingsBody() {
   const { can, backendJwtRole } = useAppContext();
   const canPlatformAdminBilling = backendJwtRole === "SUPER_ADMIN" && can("can_view_admin_billing");
   const searchParams = useSearchParams();
-  const tenantIdParam = String(searchParams.get("tenantId") || "").trim();
-
   const [tenants, setTenants] = useState<TenantRow[]>([]);
   const [tenantsError, setTenantsError] = useState("");
   const [tenantsLoading, setTenantsLoading] = useState(true);
@@ -789,8 +788,8 @@ function AdminBillingSettingsBody() {
     void loadTenants();
   }, [loadTenants]);
 
-  const effectiveTenantId =
-    tenantIdParam && tenants.some((t) => t.id === tenantIdParam) ? tenantIdParam : tenants[0]?.id || "";
+  const tenantIds = useMemo(() => tenants.map((t) => t.id), [tenants]);
+  const { effectiveTenantId } = useAdminBillingTenant(tenantIds);
 
   useEffect(() => {
     if (effectiveTenantId) void loadDetail(effectiveTenantId);
@@ -828,6 +827,10 @@ function AdminBillingSettingsBody() {
 
       {!tenantsLoading && !tenantsError && tenants.length === 0 ? (
         <div className="state-box">No tenants found.</div>
+      ) : null}
+
+      {!tenantsLoading && !tenantsError && tenants.length > 0 && !effectiveTenantId ? (
+        <p className="muted">Select a workspace from the header switcher to configure billing for that company.</p>
       ) : null}
 
       {detailLoading ? <LoadingSkeleton rows={6} /> : null}

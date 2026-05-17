@@ -48,7 +48,11 @@ function AdminBillingActivityBody() {
   }
 
   if (!tenantId) {
-    return <p className="muted">Select a company from the rail.</p>;
+    return (
+      <p className="muted">
+        Select a workspace from the header switcher to view activity for that company.
+      </p>
+    );
   }
 
   return (

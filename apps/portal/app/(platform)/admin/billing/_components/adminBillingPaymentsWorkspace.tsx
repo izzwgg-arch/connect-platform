@@ -130,8 +130,8 @@ export function PaymentsWorkspace() {
     return (
       <div className="billing-ws-section billing-p8-scope billing-pay-scope" data-testid="billing-admin-payments-workspace">
         <BillingEmptyState
-          title="Select a company"
-          message="Choose a company from the rail to run charges, manage cards, and review payments."
+          title="Select a workspace"
+          message="Choose a company in the header workspace switcher to run charges, manage cards, and review tenant payments. In All workspaces mode, use the transaction list below for cross-tenant payment history."
         />
       </div>
     );

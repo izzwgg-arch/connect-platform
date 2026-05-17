@@ -27,96 +27,15 @@
   overflow: hidden;
 }
 
-.billing-ws-split {
+/* Full-width workspace (tenant rail removed — global workspace switcher is source of truth) */
+
+.billing-ws-shell--context-wide .billing-ws-main--wide {
   flex: 1;
   min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(220px, 272px) minmax(0, 1fr);
-  gap: 0;
-  border-top: 1px solid var(--billing-border);
-}
-
-/* ── Left company rail (independent scroll) ── */
-
-.billing-ws-rail {
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  border-right: 1px solid var(--billing-border);
-  background: color-mix(in srgb, var(--billing-surface) 88%, transparent);
+  border-top: 1px solid var(--billing-border);
 }
-
-.billing-ws-rail-head {
-  flex-shrink: 0;
-  padding: 10px 12px 8px;
-  border-bottom: 1px solid var(--billing-border);
-}
-
-.billing-ws-rail-head label {
-  display: block;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--billing-muted);
-  margin-bottom: 6px;
-}
-
-.billing-ws-rail-search {
-  width: 100%;
-  font-size: 13px;
-  padding: 7px 10px;
-  border-radius: 8px;
-}
-
-.billing-ws-rail-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 8px;
-}
-
-.billing-ws-rail-item {
-  width: 100%;
-  text-align: left;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--billing-text);
-  border-radius: 10px;
-  padding: 9px 10px;
-  cursor: pointer;
-  font: inherit;
-  transition: background 0.12s ease, border-color 0.12s ease;
-}
-
-.billing-ws-rail-item:hover {
-  background: color-mix(in srgb, var(--billing-accent) 8%, var(--billing-surface));
-}
-
-.billing-ws-rail-item.active {
-  background: color-mix(in srgb, var(--billing-accent) 14%, var(--billing-surface));
-  border-color: color-mix(in srgb, var(--billing-accent) 32%, transparent);
-}
-
-.billing-ws-rail-item strong {
-  display: block;
-  font-size: 13px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.billing-ws-rail-item small {
-  display: block;
-  margin-top: 2px;
-  font-size: 11px;
-  color: var(--billing-muted);
-  line-height: 1.35;
-}
-
-/* ── Main column: toolbar + content scroll ── */
 
 .billing-ws-main {
   display: flex;
@@ -150,10 +69,20 @@
   font-size: 14px;
   font-weight: 650;
   letter-spacing: -0.02em;
-  max-width: 200px;
+  max-width: min(420px, 40vw);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.billing-global-tenant-table__head {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--billing-muted);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--billing-border);
 }
 
 .billing-ws-toolbar-balance {
@@ -403,18 +332,3 @@
   margin-left: 4px;
 }
 
-@media (max-width: 900px) {
-  .billing-ws-split {
-    grid-template-columns: 1fr;
-  }
-
-  .billing-ws-rail {
-    max-height: 200px;
-    border-right: none;
-    border-bottom: 1px solid var(--billing-border);
-  }
-
-  .billing-ws-rail-scroll {
-    max-height: 140px;
-  }
-}

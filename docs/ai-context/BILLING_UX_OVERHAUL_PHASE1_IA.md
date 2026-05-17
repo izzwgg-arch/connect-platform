@@ -1,6 +1,6 @@
 # Billing UX overhaul — Phase 1: Information architecture & flow
 
-> **Status:** Phase 1 = IA / flows document. **Phases 7–9 (2026-05)** implemented the stable admin workspace described here (tenant rail, dedicated routes, SaaS tables) without reopening this IA doc for structural changes.  
+> **Status:** Phase 1 = IA / flows document. **Phases 7–9 (2026-05)** implemented the stable admin workspace (dedicated routes, SaaS tables). **2026-05-17:** in-billing tenant rail removed — **global workspace switcher** is the single company scope control (see `BILLING.md` tenant context note).  
 > **Constraints honored:** No backend billing logic, invoice math, SOLA, worker, webhooks, telephony, mobile, or CRM changes in portal polish phases.  
 > **Read first:** `CURSOR_START_HERE.md`, `BILLING.md`, `BILLING_OPERATOR_RUNBOOK.md`.
 
@@ -35,13 +35,13 @@
 - **Admin section:** Admin Billing, Admin Billing Settings (SUPER_ADMIN only).  
 - **Settings section:** “Billing Settings” → `/billing/settings` (duplicate of billing → settings).
 
-### 1.2 Tenant context patterns (confusing today)
+### 1.2 Tenant context patterns (resolved 2026-05-17)
 
 1. **Global workspace switcher** (`TenantSwitcher`) — sets `cc-tenant-id` + `cc-admin-scope` (TENANT vs GLOBAL); drives `x-tenant-context` on API calls.  
-2. **Admin Billing overview** — **separate** left-rail tenant list + `selectedTenantId` **local to the page** (not the same control as global switcher).  
-3. **Admin Billing Settings** — URL `?tenantId=` + `<select>`; can disagree with global switcher if operator does not align them.  
+2. **Admin Billing** — reads the same context via `useAdminBillingTenant`; syncs `?tenantId=` for deep links when scope is TENANT; **no** left-rail company list.  
+3. **All workspaces mode** — cross-tenant overview and list routes (invoices, payments aggregate, reports); tenant-scoped configuration still uses `?tenantId=` from the switcher or a bookmarked link.  
 
-**Problem:** Three ways to think about “which company” without a single source of truth in the admin mental model.
+**Historical problem (pre-2026-05-17):** duplicate billing rail + global switcher — **removed**.
 
 ### 1.3 Where high-risk actions live today
 

@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
 import { apiGet } from "../../../../services/apiClient";
@@ -17,8 +16,8 @@ import {
   worstNonTerminalInvoiceStatus,
 } from "../../../../lib/billingUi";
 import type { TenantDetail } from "./_components/tenantBillingConfigForms";
-import { parseStoredPricingMode } from "./_components/tenantBillingConfigForms";
 import { BILLING_SECTION_QUERY, mergeSearchParams, OPS_TAB_QUERY } from "./_components/adminBillingLinks";
+import { useAdminBillingTenant } from "./_components/useAdminBillingTenant";
 
 type TenantRow = {
   id: string;
@@ -28,7 +27,6 @@ type TenantRow = {
 };
 
 export default function AdminBillingPage() {
-  const searchParams = useSearchParams();
   const { can, backendJwtRole } = useAppContext();
   const canPlatformAdminBilling = backendJwtRole === "SUPER_ADMIN" && can("can_view_admin_billing");
   const [detail, setDetail] = useState<TenantDetail | null>(null);
@@ -36,11 +34,8 @@ export default function AdminBillingPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const tenants = useAsyncResource<TenantRow[]>(() => apiGet<TenantRow[]>("/admin/billing/platform/tenants"), []);
   const tenantRows = tenants.status === "success" ? tenants.data : [];
-  const tidParam = String(searchParams.get("tenantId") || "").trim();
-  const selectedTenantId = useMemo(() => {
-    if (tidParam && tenantRows.some((t) => t.id === tidParam)) return tidParam;
-    return tenantRows[0]?.id || "";
-  }, [tidParam, tenantRows]);
+  const tenantIds = useMemo(() => tenantRows.map((t) => t.id), [tenantRows]);
+  const { effectiveTenantId: selectedTenantId, isGlobalScope } = useAdminBillingTenant(tenantIds);
 
   const loadDetail = useCallback(async (tenantId: string) => {
     if (!tenantId) return;
@@ -56,7 +51,12 @@ export default function AdminBillingPage() {
   }, []);
 
   useEffect(() => {
-    if (selectedTenantId) void loadDetail(selectedTenantId);
+    if (!selectedTenantId) {
+      setDetail(null);
+      setDetailError("");
+      return;
+    }
+    void loadDetail(selectedTenantId);
   }, [loadDetail, selectedTenantId]);
 
   if (!canPlatformAdminBilling) {
@@ -86,6 +86,9 @@ export default function AdminBillingPage() {
   const tid = detail?.tenant.id || selectedTenantId;
   const qp = (extra: Record<string, string>) =>
     mergeSearchParams(new URLSearchParams(tid ? { tenantId: tid } : {}), extra);
+
+  const globalTotalDue = tenantRows.reduce((sum, t) => sum + (t.balanceDueCents ?? 0), 0);
+  const globalNeedsAttention = tenantRows.filter((t) => worstNonTerminalInvoiceStatus(t.invoices) !== "—").length;
 
   return (
     <div className="billing-ws-section billing-p8-scope" data-testid="billing-admin-overview-panel">
@@ -170,8 +173,75 @@ export default function AdminBillingPage() {
             )}
           </div>
         </>
+      ) : !detailLoading && !selectedTenantId && isGlobalScope ? (
+        <>
+          <div className="billing-ov-summary" data-testid="billing-admin-global-overview">
+            <div className="billing-ov-summary__card">
+              <label>Total balance due</label>
+              <strong>{dollars(globalTotalDue)}</strong>
+              <small>Across {tenantRows.length} workspaces</small>
+            </div>
+            <div className="billing-ov-summary__card">
+              <label>Workspaces</label>
+              <strong>{tenantRows.length}</strong>
+              <small>{globalNeedsAttention} need attention</small>
+            </div>
+            <div className="billing-ov-summary__card">
+              <label>Scope</label>
+              <strong>All workspaces</strong>
+              <small>Use Invoices or Payments for cross-tenant operations</small>
+            </div>
+          </div>
+          <div className="billing-ov-panel">
+            <h3>Workspaces</h3>
+            <div className="billing-inv-table billing-global-tenant-table">
+              <div className="billing-inv-row billing-global-tenant-table__head" style={{ gridTemplateColumns: "1.4fr auto auto auto" }}>
+                <span>Company</span>
+                <span>Balance due</span>
+                <span>Standing</span>
+                <span />
+              </div>
+              {tenantRows.map((row) => {
+                const w = worstNonTerminalInvoiceStatus(row.invoices);
+                const rowStanding = adminTenantStandingHeadline(w);
+                const rowChip = w === "—" ? "good" : w === "FAILED" ? "bad" : w === "OVERDUE" ? "bad" : "warn";
+                return (
+                  <div key={row.id} className="billing-inv-row" style={{ gridTemplateColumns: "1.4fr auto auto auto" }}>
+                    <div>
+                      <div className="billing-inv-row__num">{row.name}</div>
+                    </div>
+                    <div className="billing-inv-row__sub" style={{ alignSelf: "center" }}>
+                      {dollars(row.balanceDueCents ?? 0)}
+                    </div>
+                    <span className={`billing-p5-status-chip ${rowChip}`} style={{ alignSelf: "center", fontSize: 11 }}>
+                      {rowStanding}
+                    </span>
+                    <Link
+                      className="btn ghost"
+                      style={{ fontSize: 12, alignSelf: "center" }}
+                      href={`/admin/billing${mergeSearchParams(new URLSearchParams(), { tenantId: row.id })}`}
+                    >
+                      Open
+                    </Link>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div className="billing-ov-links">
+            <Link className="btn ghost" href="/admin/billing/invoices">
+              All invoices
+            </Link>
+            <Link className="btn ghost" href="/admin/billing/payments">
+              All payments
+            </Link>
+            <Link className="btn ghost" href="/admin/billing/reports">
+              Reports
+            </Link>
+          </div>
+        </>
       ) : !detailLoading && !selectedTenantId ? (
-        <p className="muted">Select a company from the rail to view billing summary.</p>
+        <p className="muted">Select a workspace from the header switcher to view billing for that company.</p>
       ) : null}
     </div>
   );

@@ -4,6 +4,30 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-17 — Admin billing: global workspace tenant context (rail removed)
+
+**Task:** Remove duplicate billing company sidebar; scope Admin Billing from the portal **workspace switcher** (`TenantSwitcher` / `useAppContext`).  
+**Risk:** medium (portal layout + routing only; no billing math / API / workers).
+
+### Behavior
+
+- **Tenant scope** (`adminScope === "TENANT"`): billing auto-scopes to `tenantId`; `?tenantId=` synced for deep links; compact toolbar shows company name, balance due, standing chip.
+- **All workspaces** (`adminScope === "GLOBAL"`): cross-tenant overview on `/admin/billing`; invoices/collections/reports use platform list APIs; `/admin/billing/payments` without `tenantId` shows **TransactionsTab** (aggregate). Deep links with `?tenantId=` still honored.
+- **Removed:** billing companies rail, in-billing tenant search, duplicate tenant cards.
+
+### Portal
+
+- `useAdminBillingTenant.ts`, `AdminBillingShell.tsx` (full-width `billing-ws-shell--context-wide`), `billingPhase7.css`
+- Overview global dashboard; payments global fallback; empty-state copy on methods/activity/settings
+
+### Verification
+
+| Check | Result |
+|-------|--------|
+| `pnpm --filter @connect/portal typecheck` | pass |
+
+---
+
 ## 2026-05-17 — Admin billing payments operations workspace
 
 **Task:** Redesign `/admin/billing/payments` into a tenant-scoped payment operations center (charge customer, cards on file, void/refund, dark finance UI).  

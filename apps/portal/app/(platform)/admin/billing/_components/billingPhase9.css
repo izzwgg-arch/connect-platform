@@ -355,10 +355,6 @@
 }
 
 @media (max-width: 1024px) {
-  .billing-ws-split {
-    grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
-  }
-
   .billing-inv-toolbar--sticky {
     padding-top: 6px;
   }
