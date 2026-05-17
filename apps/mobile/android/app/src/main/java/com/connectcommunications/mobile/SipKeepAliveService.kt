@@ -305,9 +305,25 @@ class SipKeepAliveService : Service() {
           speakerOn = intent.getBooleanExtra(EXTRA_SPEAKER_ON, false),
           muted = intent.getBooleanExtra(EXTRA_MUTED, false),
         )
+        Log.i(TAG, "[CONNECT_CALL_UI] active_call_notification_posted callerName=${inCall?.callerName ?: ""}")
       }
       ACTION_EXIT_CALL -> {
         inCall = null
+        // stopForeground(REMOVE) atomically cancels notification 4242 and releases
+        // the PHONE_CALL foreground type association. Without this, the
+        // CallStyle.forOngoingCall chip persists on OEM lock screens (confirmed
+        // on OxygenOS/OnePlus) even after startForeground replaces the notification
+        // content, because the channel transition (IN_CALL_CHANNEL_ID → CHANNEL_ID)
+        // is not handled atomically by all Android ROMs.
+        // startForegroundSafely() immediately re-enters FGS with the idle
+        // notification, so there is no foreground gap.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+          stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+          @Suppress("DEPRECATION")
+          stopForeground(true)
+        }
+        Log.i(TAG, "[CONNECT_CALL_UI] active_call_notification_cleared startId=$startId")
       }
       ACTION_UPDATE_CALL -> {
         inCall = inCall?.copy(
@@ -321,6 +337,9 @@ class SipKeepAliveService : Service() {
     if (foregrounded) {
       isRunning = true
       acquireWakeLock()
+      if (action == ACTION_EXIT_CALL) {
+        Log.i(TAG, "[CONNECT_CALL_UI] foreground_service_idle — idle notification reposted after call exit")
+      }
     } else {
       // We could not enter foreground state. Returning START_STICKY would let
       // the system silently restart us into the same failure. Stop the service
@@ -329,6 +348,9 @@ class SipKeepAliveService : Service() {
       // fall back to the wake-then-dial path entirely.
       isRunning = false
       Log.w(TAG, "onStartCommand: startForeground failed, stopping service to avoid silent restart loop")
+      if (action == ACTION_EXIT_CALL) {
+        Log.w(TAG, "[CONNECT_CALL_UI] foreground_service_stopped — could not re-enter FGS after call exit")
+      }
       stopSelf(startId)
       return START_NOT_STICKY
     }

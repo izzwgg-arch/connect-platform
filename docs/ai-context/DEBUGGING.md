@@ -1524,6 +1524,132 @@ When a call is not showing up in the CRM contact timeline:
 
 ---
 
+---
+
+## Debugging voicemail audio playback latency
+
+Voicemail playback uses a two-path strategy:
+
+| Path | When | Log tag |
+|------|------|---------|
+| **Cache (local file)** | `useVoicemailAudioCache` preloaded the file | `[VOICEMAIL_AUDIO] play_from_cache` |
+| **Remote stream** | Cache miss or cache_play_failed | `[VOICEMAIL_AUDIO] play_stream_fallback` |
+
+### Log filter (Metro / adb logcat)
+
+```powershell
+adb logcat -v time ReactNativeJS:V *:S 2>&1 | Select-String "VOICEMAIL_AUDIO"
+```
+
+Expected sequence on first open:
+```
+[VOICEMAIL_AUDIO] preload_start vmId=<id>
+[VOICEMAIL_AUDIO] preload_done  vmId=<id> sizeBytes=<n> elapsedMs=<n>
+```
+
+Expected sequence on Play tap (after preload):
+```
+[VOICEMAIL_AUDIO] play_from_cache vmId=<id> elapsedMs=<n>
+```
+
+Expected sequence on Play tap (no preload / cache miss):
+```
+[VOICEMAIL_AUDIO] play_stream_fallback vmId=<id> preloadStatus=idle
+```
+
+Expected sequence on cache file corrupt:
+```
+[VOICEMAIL_AUDIO] cache_play_failed vmId=<id> error=<msg>
+[VOICEMAIL_AUDIO] play_stream_fallback vmId=<id> preloadStatus=ready
+```
+(falls back to remote stream automatically)
+
+### API side — confirm ?raw=1 works
+
+```bash
+curl -v "https://app.connectcomunications.com/api/voice/voicemail/<id>/stream?token=<jwt>&raw=1" \
+  -H "Range: bytes=0-0" 2>&1 | grep -E "HTTP/|Content-Type|Content-Length"
+```
+
+Expected: `206`, `Content-Type: audio/wav` (or original format), no ffmpeg delay.
+
+### API side — confirm already-compressed skips transcode
+
+In API logs: absence of `voicemail: mp3 transcode failed` for MP3-source voicemails
+confirms the early-exit path. Enable debug logging to see `rawMode=true` in the stream request log.
+
+### Preload cache bounds
+
+| Setting | Value |
+|---------|-------|
+| Max preloads per list update | 5 |
+| Max cached files (LRU) | 10 |
+| Max total cached bytes | 30 MB |
+| Max single file | 5 MB (larger files stream-only) |
+
+Cache files live in `FileSystem.cacheDirectory` (app-private, OS-managed, cleared under
+storage pressure). Check cache hit with:
+```
+adb shell run-as com.connectcommunications.mobile ls cache/vm-audio-*.raw 2>/dev/null
+```
+
+---
+
+## Debugging lock-screen call chip (Android)
+
+The lock-screen "call chip" (e.g. "Home 00:05") is created by `SipKeepAliveService`
+notification ID `4242` using `CallStyle.forOngoingCall` + `setUsesChronometer(true)`.
+
+### Expected lifecycle
+
+| Event | What happens |
+|---|---|
+| `callState === "connected"` in `SipContext.tsx` | `startInCallNotification()` → `ACTION_ENTER_CALL` → chip appears |
+| `callState === "ended"` in `SipContext.tsx` | `stopInCallNotification()` → `ACTION_EXIT_CALL` → `stopForeground(REMOVE)` → chip disappears |
+
+### Logcat filter
+
+```powershell
+adb logcat -v time SipKeepAliveService:V *:S 2>&1 | Select-String "CONNECT_CALL_UI"
+```
+
+Expected sequence on hangup:
+```
+[CONNECT_CALL_UI] active_call_notification_cleared startId=N
+[CONNECT_CALL_UI] foreground_service_idle — idle notification reposted after call exit
+```
+
+JS side (Metro/logcat):
+```
+[CONNECT_CALL_UI] remote_hangup_cleanup or local_hangup_cleanup — callState=ended
+[CONNECT_CALL_UI] active_call_notification_cleared — dispatching stopInCallNotification
+```
+
+### If chip persists after hangup
+
+1. Check whether `callState === "ended"` fires in JS:
+   ```powershell
+   adb logcat -v time ReactNativeJS:V *:S 2>&1 | Select-String "CONNECT_CALL_UI"
+   ```
+   Missing `remote_hangup_cleanup` → SIP library didn't fire `onCallState("ended")`.
+   Check `[CALL_EVENT] session_ended` in JsSIP logs.
+
+2. Check whether `ACTION_EXIT_CALL` reached the service:
+   ```powershell
+   adb logcat -v time SipKeepAliveService:V *:S 2>&1 | Select-String "ACTION_EXIT_CALL|CONNECT_CALL_UI"
+   ```
+   Missing → `startForegroundService(ACTION_EXIT_CALL)` was dropped (OEM kill, process crash).
+   Fix: re-open the app; the FGS notification should auto-clear when the app is reopened and
+   idle `startForeground` fires.
+
+3. Verify `stopForeground` ran:
+   `[CONNECT_CALL_UI] active_call_notification_cleared` must appear BEFORE
+   `startForeground posted ongoing notification id=4242` in the logcat.
+   If the order is reversed, the chip might flash briefly but should still clear.
+
+4. If the chip persists through a process restart, it is an OEM display artifact
+   (OxygenOS lockscreen cache). Force-stop the app to clear it.
+
 ## WebSocket debugging notes
 
 - Connect with a JWT-authed `wscat`-style client to:

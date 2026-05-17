@@ -980,6 +980,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         try {
           const mod = NativeModules.IncomingCallUi;
           if (mod && typeof mod.startInCallNotification === "function") {
+            console.log("[CONNECT_CALL_UI] active_call_notification_posted callerName=" + (remoteParty || "On a call"));
             mod.startInCallNotification(
               remoteParty || "On a call",
               callConnectedAtRef.current,
@@ -993,6 +994,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       }
     }
     if (callState === "ended" && prev !== "ended") {
+      console.log("[CONNECT_CALL_UI] remote_hangup_cleanup or local_hangup_cleanup — callState=ended prev=" + prev);
       logCallFlow("SIP_CALL_STATE_ENDED", {
         inviteId: null,
         extra: { previous: prev },
@@ -1013,9 +1015,12 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         // Drop SipKeepAliveService back to idle mode — the FGS goes from
         // MICROPHONE-typed back to PHONE_CALL|DATA_SYNC, and the notification
         // returns to the minimal "Ready to receive calls" surface.
+        // Native side calls stopForeground(REMOVE) before reposting idle to
+        // atomically clear the lock-screen call chip.
         try {
           const mod = NativeModules.IncomingCallUi;
           if (mod && typeof mod.stopInCallNotification === "function") {
+            console.log("[CONNECT_CALL_UI] active_call_notification_cleared — dispatching stopInCallNotification");
             mod.stopInCallNotification();
           }
         } catch (e) {
@@ -1056,6 +1061,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         console.log("[IN_CALL_NOTIF] action received", { action, value });
         switch (action) {
           case "hangup": {
+            console.log("[CONNECT_CALL_UI] local_hangup_cleanup — triggered via notification End button");
             clientRef.current.hangup().catch((err) => {
               console.warn("[IN_CALL_NOTIF] hangup from notification failed:", String(err));
             });

@@ -135,6 +135,17 @@ export function buildVoicemailStreamUri(token: string, vmId: string): string {
   return `${API_BASE}/voice/voicemail/${encodeURIComponent(vmId)}/stream?token=${encodeURIComponent(token)}`;
 }
 
+/**
+ * Preload URL — same as stream but with `raw=1` so the API skips the ffmpeg
+ * transcode step and returns the original audio file (WAV/PCM) directly.
+ * Android MediaPlayer (expo-av) handles WAV natively; this saves 500ms–2s of
+ * server-side processing per preload request. Only use for local file caching;
+ * do not pass to Audio.Sound directly without the cache fallback guard.
+ */
+export function buildVoicemailPreloadUri(token: string, vmId: string): string {
+  return `${API_BASE}/voice/voicemail/${encodeURIComponent(vmId)}/stream?token=${encodeURIComponent(token)}&raw=1`;
+}
+
 /** Lightweight probe to distinguish 403 (forbidden) from transport/audio errors. */
 export async function probeVoicemailStreamStatus(token: string, vmId: string): Promise<number> {
   const url = buildVoicemailStreamUri(token, vmId);

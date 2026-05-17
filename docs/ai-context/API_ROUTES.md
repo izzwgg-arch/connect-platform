@@ -369,6 +369,18 @@ will keep playing `mohN`.
 `streamVoicemailAudio`) — VitalPBX **`pbxRecfile`** / REST first; **Phase 2** may call on-PBX **`POST /voicemail/spool/audio`**
 and log **`helper_audio_fallback: true`** (`TELEPHONY.md`).
 
+**Stream query params:**
+- `?token=<JWT>` — auth for clients that cannot set `Authorization` header (e.g. `<audio>` element).
+- `?raw=1` — skip ffmpeg transcode; returns original audio (WAV/PCM from PBX) without MP3 conversion.
+  Android MediaPlayer handles WAV natively. Used by the mobile preloader
+  (`useVoicemailAudioCache`) to download audio ~0.5–2s faster. Non-breaking;
+  existing callers without `?raw=1` receive the same transcoded MP3 as before.
+  Already-compressed formats (mp3/m4a/aac/ogg) also skip transcode unconditionally.
+
+**Transcode behavior (updated 2026-05-17):**
+- `asAttachment=false` (stream): run ffmpeg WAV→MP3 **unless** `?raw=1` or source is already mp3/m4a/aac/ogg.
+- `asAttachment=true` (download): never transcodes (unchanged).
+
 ---
 
 ## Customers / Contacts / Automation

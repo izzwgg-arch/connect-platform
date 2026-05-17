@@ -15152,6 +15152,7 @@ async function finishVoicemailStreamFromBuffer(
   mailbox: string,
   sourceBuf: Buffer,
   fileExtForMime: string,
+  skipTranscode = false,
 ): Promise<void> {
   const ext = (fileExtForMime.match(/^[a-z0-9]+$/i) ? fileExtForMime : "wav").toLowerCase();
   const mimeByExt: Record<string, string> = {
@@ -15172,7 +15173,12 @@ async function finishVoicemailStreamFromBuffer(
     : contentType.includes("mp4") ? "m4a"
     : "wav";
 
-  if (!asAttachment) {
+  // Skip ffmpeg transcode when:
+  //  • asAttachment (download): caller never needed it
+  //  • skipTranscode (?raw=1 query param): mobile pre-loader requesting original audio
+  //  • source is already MP3/M4A/AAC/OGG: transcoding a compressed format again is wasteful
+  const alreadyCompressed = ext === "mp3" || ext === "m4a" || ext === "aac" || ext === "ogg" || ext === "opus";
+  if (!asAttachment && !skipTranscode && !alreadyCompressed) {
     try {
       buf = await transcodeVoicemailToMp3(sourceBuf, ext);
       responseContentType = "audio/mpeg";
@@ -15200,6 +15206,7 @@ async function streamVoicemailAudio(
   vm: { id: string; tenantId: string | null; extension: string; pbxExtensionId: string | null; pbxMessageId: string; pbxFolder: string | null; pbxMsgNum: string | null; pbxRecfile: string | null; folder: string; receivedAt: Date; readAt: Date | null },
   reply: any,
   asAttachment: boolean,
+  skipTranscode = false,
 ): Promise<void> {
   if (!vm.tenantId) { reply.code(503).send({ error: "audio_unavailable" }); return; }
   const link = await db.tenantPbxLink.findFirst({
@@ -15246,7 +15253,7 @@ async function streamVoicemailAudio(
         },
         "voicemail: helper_audio_fallback",
       );
-      await finishVoicemailStreamFromBuffer(req, vm, reply, asAttachment, mailbox, sourceBuf, ext);
+      await finishVoicemailStreamFromBuffer(req, vm, reply, asAttachment, mailbox, sourceBuf, ext, skipTranscode);
       return true;
     } catch (err: any) {
       app.log.warn(
@@ -15367,7 +15374,7 @@ async function streamVoicemailAudio(
   const recfileLower = (recfile ?? "").toLowerCase();
   const fileExt = recfileLower.match(/\.([a-z0-9]+)$/)?.[1] ?? "wav";
   const sourceBuf = Buffer.from(await pbxResp.arrayBuffer());
-  await finishVoicemailStreamFromBuffer(req, vm, reply, asAttachment, mailbox, sourceBuf, fileExt);
+  await finishVoicemailStreamFromBuffer(req, vm, reply, asAttachment, mailbox, sourceBuf, fileExt, skipTranscode);
 }
 
 // ── GET /voice/voicemail/:id/stream ─────────────────────────────────────────
@@ -15384,11 +15391,15 @@ app.get("/voice/voicemail/:id/stream", async (req, reply) => {
   const vm = await db.voicemail.findUnique({ where: { id } });
   if (!vm || vm.deletedAt) return reply.code(404).send({ error: "not_found" });
   if (!(await canAccessVoicemail(vm, user, reply))) return;
+  // ?raw=1 — mobile preloader requests original audio (no ffmpeg transcode).
+  // Android MediaPlayer (used by expo-av) handles WAV/PCM natively; skipping
+  // transcode removes 500ms–2s of latency per preload request.
+  const rawMode = (req.query as Record<string, string | undefined>)["raw"] === "1";
   app.log.info(
-    { vmId: id, ext: vm.extension, hasRecfile: !!vm.pbxRecfile, folder: vm.folder },
+    { vmId: id, ext: vm.extension, hasRecfile: !!vm.pbxRecfile, folder: vm.folder, rawMode },
     "voicemail: stream request",
   );
-  try { return await streamVoicemailAudio(req, vm, reply, false); }
+  try { return await streamVoicemailAudio(req, vm, reply, false, rawMode); }
   catch (err: any) {
     app.log.warn({ id, err: err?.message, stack: err?.stack }, "voicemail: stream failed");
     return reply.code(503).send({ error: "audio_unavailable" });

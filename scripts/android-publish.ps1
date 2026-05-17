@@ -169,10 +169,11 @@ chmod 644 "$REMOTE_DIR/$MANIFEST_NAME"
 
 ls -la "$REMOTE_DIR" | grep -E 'connectcomms|^total' || true
 '@
-  # Save the bash helper as ASCII without trailing newline noise. Avoid
-  # Set-Content -Encoding UTF8 because PowerShell 5.x adds a BOM, which
-  # `bash` rejects on the very first byte (#! line).
-  [System.IO.File]::WriteAllText($helperPath, $helper, (New-Object System.Text.UTF8Encoding($false)))
+  # Save the bash helper as UTF-8 LF (no BOM). PowerShell here-strings use
+  # CRLF on Windows; normalize to LF before writing so bash doesn't choke on
+  # the carriage-return bytes ($'\r': command not found).
+  $helperLF = $helper -replace "`r`n", "`n"
+  [System.IO.File]::WriteAllText($helperPath, $helperLF, (New-Object System.Text.UTF8Encoding($false)))
 
   # Step A: ensure remote dir.
   Write-Step "Ensure remote download directory"

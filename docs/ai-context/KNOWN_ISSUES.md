@@ -1029,6 +1029,66 @@ When you find a new fragile area, add it here.
   The production DB was not affected because the CRM had not yet been deployed at the
   time of the fix.
 
+## Mobile — voicemail Play latency (fixed 2026-05-17)
+
+- **Root cause:** The `/voice/voicemail/:id/stream` API route downloaded the full
+  audio from PBX into memory (`Buffer.from(await pbxResp.arrayBuffer())`), then ran
+  an ffmpeg WAV→MP3 transcode before sending a single byte. This added 0.5–2s of
+  latency before the mobile client could start buffering. Additionally, `expo-av`
+  `loadAsync` was called only on Play tap — no preloading.
+
+- **Fix (API):** Skip transcode when source is already MP3/M4A/AAC/OGG. New `?raw=1`
+  query param skips transcode entirely (original WAV returned). Android MediaPlayer
+  handles WAV natively.
+
+- **Fix (mobile):** New `useVoicemailAudioCache` hook (`apps/mobile/src/hooks/`)
+  preloads top-5 unread/newest voicemails to `FileSystem.cacheDirectory` using
+  `?raw=1` when the list loads. `play()` in `VoicemailTab.tsx` checks for a cached
+  local file first → plays instantly; falls back to remote stream on `cache_play_failed`.
+
+- **Diagnostics:** Filter logcat/Metro for `[VOICEMAIL_AUDIO]`:
+  ```
+  preload_start     vmId=... 
+  preload_done      vmId=... sizeBytes=... elapsedMs=...
+  preload_failed    vmId=... reason=... 
+  play_from_cache   vmId=... elapsedMs=...
+  play_stream_fallback vmId=... preloadStatus=...
+  cache_play_failed vmId=... error=...
+  ```
+
+## Mobile — lock-screen call chip persists after hangup
+
+- **Root cause (fixed 2026-05-17):** After a connected call is hung up, `SipKeepAliveService`
+  processed `ACTION_EXIT_CALL` by setting `inCall = null` and calling `startForeground(4242,
+  idleNotification)`. This replaces the `CallStyle.forOngoingCall` notification content, but
+  does NOT atomically clear the lock-screen call chip on OEM ROMs (confirmed on OxygenOS/OnePlus)
+  because the channel transition (`connect_in_call_v2` → `connect_sip_keepalive`) is not
+  handled atomically — the system's PHONE_CALL foreground type association lingers.
+
+- **Fix:** `stopForeground(STOP_FOREGROUND_REMOVE)` is now called inside the `ACTION_EXIT_CALL`
+  branch before `startForegroundSafely()`. This forces Android to cancel notification 4242 and
+  release the FGS+PHONE_CALL association immediately. `startForegroundSafely()` then immediately
+  re-enters FGS with the idle notification — no foreground gap, no ANR risk.
+
+- **Chip creation:** `SipContext.tsx` calls `startInCallNotification()` when
+  `callState === "connected"`. This sends `ACTION_ENTER_CALL` to `SipKeepAliveService`, which
+  builds a `CallStyle.forOngoingCall` notification (id 4242, channel `connect_in_call_v2`)
+  with `setUsesChronometer(true)`.
+
+- **Chip removal:** `SipContext.tsx` calls `stopInCallNotification()` when
+  `callState === "ended"`. This sends `ACTION_EXIT_CALL`. With the fix, the chip is cleared
+  atomically via `stopForeground(REMOVE)`.
+
+- **Diagnostics:** Filter logcat by `[CONNECT_CALL_UI]` to trace the notification lifecycle:
+  ```
+  [CONNECT_CALL_UI] active_call_notification_posted  — chip created (native)
+  [CONNECT_CALL_UI] active_call_notification_cleared — chip removed (native + JS)
+  [CONNECT_CALL_UI] foreground_service_idle          — idle FGS reposted
+  [CONNECT_CALL_UI] foreground_service_stopped       — FGS could not re-enter (rare)
+  [CONNECT_CALL_UI] local_hangup_cleanup             — user tapped End in notification
+  [CONNECT_CALL_UI] remote_hangup_cleanup or local_hangup_cleanup — callState=ended fired
+  ```
+
 ## Build / repo hygiene
 
 - **Many leftover `_check-*` / `_diag-*` / `pbx-*.txt` files at repo root.** They

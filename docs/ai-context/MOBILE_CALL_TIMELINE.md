@@ -476,6 +476,50 @@ What Phase A explicitly does NOT do (still TODO):
 
 ---
 
+---
+
+## In-call notification / lock-screen chip lifecycle
+
+`SipKeepAliveService` (id `4242`, channel `connect_in_call_v2`) manages the persistent
+call notification. It posts `CallStyle.forOngoingCall` with `setUsesChronometer(true)` during
+an active call, which renders as the lock-screen "call chip" (bottom pill with timer).
+
+### Chip posted
+
+`SipContext.tsx`, `callState === "connected"` effect:
+1. Records `callConnectedAtMs = Date.now()`
+2. Calls `mod.startInCallNotification(callerName, callConnectedAtMs, speakerOn, muted)`
+3. This sends `ACTION_ENTER_CALL` to `SipKeepAliveService.onStartCommand`
+4. Service builds `buildInCallNotification()` → `startForeground(4242, notification)`
+5. Chip appears on lock screen
+
+### Chip cleared
+
+`SipContext.tsx`, `callState === "ended"` effect (fires for local hangup, remote hangup,
+call failure, voicemail divert — any SIP session `ended`/`failed` that is the last live session):
+1. Calls `mod.stopInCallNotification()`
+2. This sends `ACTION_EXIT_CALL` to `SipKeepAliveService.onStartCommand`
+3. Service: `inCall = null`
+4. **`stopForeground(STOP_FOREGROUND_REMOVE)`** — atomically cancels notification 4242
+   and releases PHONE_CALL foreground type (chip disappears immediately)
+5. `startForegroundSafely()` re-enters FGS with `buildIdleNotification()` on `connect_sip_keepalive`
+
+### Why `stopForeground` is required (not just `startForeground`)
+
+The in-call notification uses channel `connect_in_call_v2` (IMPORTANCE_DEFAULT).
+The idle notification uses `connect_sip_keepalive` (IMPORTANCE_MIN). On OEM ROMs
+(confirmed OxygenOS/OnePlus), replacing a `CallStyle.forOngoingCall` FGS notification
+via `startForeground` alone does not atomically clear the lock-screen chip when the
+notification channel changes — the PHONE_CALL foreground type association lingers.
+`stopForeground(REMOVE)` forces the OS to cancel the association immediately.
+
+### Diagnostics
+
+Logcat filter: `SipKeepAliveService:V *:S` then grep `CONNECT_CALL_UI`.
+JS filter: `adb logcat ReactNativeJS:V *:S` then grep `CONNECT_CALL_UI`.
+
+---
+
 ## What this doc deliberately does NOT cover
 
 - Outbound calls (covered tangentially by `SipContext`/`useSipPhone`).

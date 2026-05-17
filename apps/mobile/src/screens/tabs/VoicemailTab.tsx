@@ -32,6 +32,7 @@ import {
   probeVoicemailStreamStatus,
   voicemailQueryUserScope,
 } from '../../api/client';
+import { useVoicemailAudioCache } from '../../hooks/useVoicemailAudioCache';
 import { consumeVoicemailScopeKeyChange } from '../../api/voicemailClientScope';
 import { subscribeToVoicemail } from '../../api/realtime';
 import type { Voicemail } from '../../types';
@@ -123,6 +124,10 @@ export function VoicemailTab() {
   const [menuVm, setMenuVm] = useState<Voicemail | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+
+  // Bounded audio preload/cache: downloads top-5 unread/newest voicemails to
+  // cacheDirectory so Play starts from a local file instead of a cold API fetch.
+  const audioCache = useVoicemailAudioCache(rows, token);
 
   const removeVoicemailRowEverywhere = useCallback(
     (id: string) => {
@@ -254,29 +259,66 @@ export function VoicemailTab() {
       setPlaybackError('This voicemail cannot be played yet.');
       return;
     }
-    const streamUri = buildVoicemailStreamUri(token, vm.id);
-    try {
-      if (activeId === vm.id && sound) {
-        await sound.pauseAsync();
-        setActiveId(null);
-        return;
-      }
-      if (sound) await sound.unloadAsync().catch(() => undefined);
+
+    // Toggle-off: tap the active voicemail to pause
+    if (activeId === vm.id && sound) {
+      await sound.pauseAsync();
+      setActiveId(null);
+      return;
+    }
+
+    if (sound) await sound.unloadAsync().catch(() => undefined);
+
+    const localUri  = audioCache.getLocalUri(vm.id);
+    const remoteUri = buildVoicemailStreamUri(token, vm.id);
+    const startMs   = Date.now();
+
+    const tryLoadUri = async (uri: string, isLocal: boolean): Promise<Audio.Sound> => {
       const next = new Audio.Sound();
-      await next.loadAsync(
-        { uri: streamUri, headers: { Authorization: `Bearer ${token}` } },
-        { shouldPlay: true },
-      );
-      next.setOnPlaybackStatusUpdate(updatePlayback);
-      setSound(next);
-      setActiveId(vm.id);
-      setProgress({ position: 0, duration: vm.durationSec });
+      const source = isLocal
+        ? { uri }
+        : { uri, headers: { Authorization: `Bearer ${token}` } };
+      await next.loadAsync(source, { shouldPlay: true });
+      return next;
+    };
+
+    const markListened = () => {
       if (!vm.listened) {
         markVoicemailListened(token, vm.id, true)
           .then(() => queryClient.invalidateQueries({ queryKey: ['mobile', 'voicemails'] }).catch(() => undefined))
           .catch(() => undefined);
         setRows((current) => current.map((row) => row.id === vm.id ? { ...row, listened: true } : row));
       }
+    };
+
+    // ── Path A: play from preloaded local file ────────────────────────────────
+    if (localUri) {
+      try {
+        const next = await tryLoadUri(localUri, true);
+        next.setOnPlaybackStatusUpdate(updatePlayback);
+        setSound(next);
+        setActiveId(vm.id);
+        setProgress({ position: 0, duration: vm.durationSec });
+        markListened();
+        console.log(`[VOICEMAIL_AUDIO] play_from_cache vmId=${vm.id} elapsedMs=${Date.now() - startMs}`);
+        return;
+      } catch (cacheErr: any) {
+        // Cached file is corrupt / missing — fall through to remote stream
+        console.warn(`[VOICEMAIL_AUDIO] cache_play_failed vmId=${vm.id} error=${String(cacheErr?.message ?? cacheErr)}`);
+      }
+    } else {
+      const status = audioCache.preloadStatus(vm.id);
+      console.log(`[VOICEMAIL_AUDIO] play_stream_fallback vmId=${vm.id} preloadStatus=${status}`);
+    }
+
+    // ── Path B: stream from remote (cache miss or cache_play_failed) ──────────
+    try {
+      const next = await tryLoadUri(remoteUri, false);
+      next.setOnPlaybackStatusUpdate(updatePlayback);
+      setSound(next);
+      setActiveId(vm.id);
+      setProgress({ position: 0, duration: vm.durationSec });
+      markListened();
     } catch {
       const st = await probeVoicemailStreamStatus(token, vm.id);
       if (st === 403) {
@@ -288,7 +330,7 @@ export function VoicemailTab() {
       setPlaybackError('Could not play voicemail audio.');
       setActiveId(null);
     }
-  }, [activeId, queryClient, removeVoicemailRowEverywhere, sound, token, updatePlayback]);
+  }, [activeId, audioCache, queryClient, removeVoicemailRowEverywhere, sound, token, updatePlayback]);
 
   const toggleListened = useCallback((vm: Voicemail) => {
     if (!token) return;
