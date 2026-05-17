@@ -12,13 +12,11 @@ import { billingErrorMessage } from "../../../../../components/BillingActionToas
 import { useAppContext } from "../../../../../hooks/useAppContext";
 import type { TenantDetail } from "../_components/tenantBillingConfigForms";
 import {
-  AdminBillingPricingWarningsBanner,
-  AdminCurrentBillingPlanAssignCard,
+  AdminTenantBillingCycleForm,
   AdminTenantInvoiceBrandingForm,
-  AdminTenantMonthlyPricingForm,
-  AdminTenantPricingSourceCard,
   AdminTenantSolaGatewayForm,
 } from "../_components/tenantBillingConfigForms";
+import { AdminPricingWorkspace } from "../_components/AdminPricingWorkspace";
 import { dollars, formatDate, humanizePricingStateMode } from "../../../../../lib/billingUi";
 import { BILLING_SECTION_QUERY, isBillingSettingsSection, mergeSearchParams, OPS_TAB_QUERY, type BillingSettingsSection } from "../_components/adminBillingLinks";
 
@@ -837,66 +835,58 @@ function AdminBillingSettingsBody() {
 
       {detail && !detailLoading ? (
         <>
-          <nav className="billing-settings-links" aria-label="Settings areas">
-            <Link href={settingsSectionHref("plans-pricing")} className={settingsView === "plans-pricing" ? "active" : ""}>
-              Pricing
-            </Link>
-            <Link href={settingsSectionHref("tax-billing")} className={settingsView === "tax-billing" ? "active" : ""}>
-              Taxes &amp; invoices
-            </Link>
-            <Link href={settingsSectionHref("gateway")} className={settingsView === "gateway" ? "active" : ""}>
-              Payment gateway
-            </Link>
-            <Link href="/admin/billing/plans">Plan catalog</Link>
-          </nav>
-
           {settingsView === "plans-pricing" ? (
-            <div className="billing-p5-settings-section">
-              <h3 className="billing-p5-settings-section__title">Company pricing</h3>
-              <p className="billing-p5-settings-section__summary">
-                Default plan plus optional overrides for extension, SMS, virtual extension, and phone numbers for{" "}
-                <strong>{detail.tenant.name}</strong>.
-              </p>
-              <AdminBillingPricingWarningsBanner
-                tenantId={detail.tenant.id}
-                previewMonth={previewMonth}
-                previewYear={previewYear}
-              />
-              <section className="billing-setup-grid">
-                <AdminCurrentBillingPlanAssignCard
-                  tenantId={detail.tenant.id}
-                  tenantName={detail.tenant.name}
-                  previewMonth={previewMonth}
-                  previewYear={previewYear}
-                  onAssigned={() => void loadDetail(detail.tenant.id)}
-                />
-                <AdminTenantPricingSourceCard
-                  detail={detail}
-                  onSaved={() => void loadDetail(detail.tenant.id)}
-                  previewPeriodMonth={previewMonth}
-                  previewPeriodYear={previewYear}
-                />
-                <AdminTenantMonthlyPricingForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
-              </section>
-            </div>
+            <AdminPricingWorkspace
+              detail={detail}
+              onSaved={() => void loadDetail(detail.tenant.id)}
+              previewMonth={previewMonth}
+              previewYear={previewYear}
+              settingsSectionHref={settingsSectionHref}
+              activeSection={settingsView}
+            />
           ) : null}
 
           {settingsView === "tax-billing" ? (
-            <div className="billing-p5-settings-section">
-              <h3 className="billing-p5-settings-section__title">Taxes &amp; invoice presentation</h3>
-              <p className="billing-p5-settings-section__summary">
-                Customer-facing invoice fields and tax behavior on PDFs and billing emails.
-              </p>
+            <div className="billing-p5-settings-section billing-p8-scope billing-pricing-page">
+              <header className="billing-pricing-page__head">
+                <div>
+                  <h2>Taxes &amp; invoices</h2>
+                  <p className="billing-p5-settings-section__summary" style={{ margin: 0 }}>
+                    Tax profiles, billing cycle, and customer-facing invoice presentation for <strong>{detail.tenant.name}</strong>.
+                  </p>
+                </div>
+              </header>
+              <nav className="billing-pricing-tabs" aria-label="Billing settings sections">
+                <Link href={settingsSectionHref("plans-pricing")}>Plans &amp; Pricing</Link>
+                <Link href={settingsSectionHref("tax-billing")} className="active">
+                  Invoice Branding
+                </Link>
+                <Link href={settingsSectionHref("gateway")}>Payment Gateway</Link>
+              </nav>
               <section className="billing-setup-grid">
+                <AdminTenantBillingCycleForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
                 <AdminTenantInvoiceBrandingForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
               </section>
             </div>
           ) : null}
 
           {settingsView === "gateway" ? (
-            <div className="billing-p5-settings-section">
-              <h3 className="billing-p5-settings-section__title">Payment gateway</h3>
-              <p className="billing-p5-settings-section__summary">Processor credentials and capture behavior for this company.</p>
+            <div className="billing-p5-settings-section billing-p8-scope billing-pricing-page">
+              <header className="billing-pricing-page__head">
+                <div>
+                  <h2>Payment gateway</h2>
+                  <p className="billing-p5-settings-section__summary" style={{ margin: 0 }}>
+                    Processor credentials and capture behavior for this company.
+                  </p>
+                </div>
+              </header>
+              <nav className="billing-pricing-tabs" aria-label="Billing settings sections">
+                <Link href={settingsSectionHref("plans-pricing")}>Plans &amp; Pricing</Link>
+                <Link href={settingsSectionHref("tax-billing")}>Invoice Branding</Link>
+                <Link href={settingsSectionHref("gateway")} className="active">
+                  Payment Gateway
+                </Link>
+              </nav>
               <section className="billing-setup-grid">
                 <AdminTenantSolaGatewayForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
               </section>

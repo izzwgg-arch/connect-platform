@@ -332,6 +332,87 @@ export function AdminTenantPricingSourceCard({
   );
 }
 
+/** Tax profile, billing cycle, and autopay — lives under Taxes & invoices, not Pricing. */
+export function AdminTenantBillingCycleForm({ detail, onSaved }: { detail: TenantDetail; onSaved: () => void }) {
+  const [saving, setSaving] = useState(false);
+  const settings = detail.settings || {};
+  const meta = settings.metadata && typeof settings.metadata === "object" && !Array.isArray(settings.metadata) ? settings.metadata : {};
+  const taxProviderId = String((meta as Record<string, unknown>).taxProviderId || "tax_profile_v1");
+
+  return (
+    <DetailCard title="Taxes & billing cycle" dataTestId="billing-admin-billing-cycle-card">
+      <p className="muted" style={{ marginBottom: 12, fontSize: 13, lineHeight: 1.45 }}>
+        Prices exclude taxes and regulatory fees. Confirm rates with your tax advisor before production billing.
+      </p>
+      <form
+        className="billing-form"
+        onSubmit={async (event) => {
+          event.preventDefault();
+          setSaving(true);
+          try {
+            const form = new FormData(event.currentTarget);
+            await apiPut(`/admin/billing/tenants/${detail.tenant.id}/settings`, {
+              taxEnabled: form.get("taxEnabled") === "on",
+              taxProfileId: String(form.get("taxProfileId") || "") || null,
+              taxProviderId: String(form.get("taxProviderId") || "tax_profile_v1"),
+              autoBillingEnabled: form.get("autoBillingEnabled") === "on",
+              billingDayOfMonth: Number(form.get("billingDayOfMonth") || 1),
+              paymentTermsDays: Number(form.get("paymentTermsDays") || 15),
+              billingEmail: String(form.get("billingEmail") || "") || null,
+              creditsCents: toCents(form.get("credits")),
+            });
+            onSaved();
+          } finally {
+            setSaving(false);
+          }
+        }}
+      >
+        <label>
+          Billing email <input name="billingEmail" type="email" defaultValue={settings.billingEmail || ""} placeholder="billing@tenant.com" />
+        </label>
+        <label>
+          Billing day <input name="billingDayOfMonth" type="number" min={1} max={28} defaultValue={settings.billingDayOfMonth || 1} />
+        </label>
+        <label>
+          Payment terms <input name="paymentTermsDays" type="number" min={0} max={90} defaultValue={settings.paymentTermsDays || 15} />
+        </label>
+        <label>
+          Credits this month <input name="credits" defaultValue={toDollars(settings.creditsCents)} />
+        </label>
+        <label>
+          Tax profile
+          <select name="taxProfileId" defaultValue={settings.taxProfileId || ""}>
+            <option value="">No tax profile</option>
+            {detail.taxProfiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>
+                {profile.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Tax calculation provider
+          <select name="taxProviderId" defaultValue={taxProviderId}>
+            <option value="tax_profile_v1">Tax profile (configurable rates in Connect)</option>
+            <option value="external_telecom_stub">External telecom stub (no tax lines — placeholder)</option>
+          </select>
+        </label>
+        <div className="billing-check-grid">
+          <label>
+            <input name="taxEnabled" type="checkbox" defaultChecked={!!settings.taxEnabled} /> Apply taxes and fees
+          </label>
+          <label>
+            <input name="autoBillingEnabled" type="checkbox" defaultChecked={!!settings.autoBillingEnabled} /> Auto-charge monthly
+          </label>
+        </div>
+        <button className="btn primary" type="submit" disabled={saving}>
+          {saving ? "Saving…" : "Save billing settings"}
+        </button>
+      </form>
+    </DetailCard>
+  );
+}
+
 export function AdminTenantMonthlyPricingForm({ detail, onSaved }: { detail: TenantDetail; onSaved: () => void }) {
   const [saving, setSaving] = useState(false);
   const settings = detail.settings || {};
@@ -803,12 +884,17 @@ export function AdminCurrentBillingPlanAssignCard({
   previewMonth,
   previewYear,
   onAssigned,
+  embedded = false,
+  onRegisterOpenModal,
 }: {
   tenantId: string;
   tenantName?: string | null;
   previewMonth: number;
   previewYear: number;
   onAssigned: () => void;
+  /** When true, only modal + assign API — UI lives in AdminPricingWorkspace. */
+  embedded?: boolean;
+  onRegisterOpenModal?: (open: () => void) => void;
 }) {
   const [diag, setDiag] = useState<TenantPricingDiagApi | null>(null);
   const [diagLoading, setDiagLoading] = useState(true);
@@ -841,7 +927,7 @@ export function AdminCurrentBillingPlanAssignCard({
     void loadDiag();
   }, [loadDiag]);
 
-  async function openModal() {
+  const openModal = useCallback(async () => {
     setToast(null);
     setPreviewData(null);
     setModalOpen(true);
@@ -859,7 +945,7 @@ export function AdminCurrentBillingPlanAssignCard({
     } catch (err: unknown) {
       setToast({ kind: "err", text: billingErrorMessage(err, "Could not load billing plans.") });
     }
-  }
+  }, [diag?.billingPlanCurrent?.id]);
 
   const refreshPreview = useCallback(async () => {
     if (!selectedPlanId) return;
@@ -891,6 +977,11 @@ export function AdminCurrentBillingPlanAssignCard({
     const t = setTimeout(() => void refreshPreview(), 200);
     return () => clearTimeout(t);
   }, [modalOpen, selectedPlanId, refreshPreview]);
+
+  useEffect(() => {
+    if (!embedded || !onRegisterOpenModal) return;
+    onRegisterOpenModal(() => void openModal());
+  }, [embedded, onRegisterOpenModal, openModal]);
 
   async function confirmAssign() {
     if (!selectedPlanId) return;
@@ -929,55 +1020,13 @@ export function AdminCurrentBillingPlanAssignCard({
     </span>
   );
 
-  return (
-    <DetailCard title="Current Billing Plan" dataTestId="billing-admin-current-plan-card">
-      {diagLoading ? <p className="muted" style={{ fontSize: 13 }}>Loading…</p> : null}
-      {!diagLoading && diag ? (
-        <div style={{ fontSize: 13, lineHeight: 1.5 }}>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 10 }}>
-            <span style={pricingModeBadgeStyle(ps?.mode || "legacy")}>{humanizePricingStateMode(ps?.mode || "legacy")}</span>
-            {matchBadge}
-          </div>
-          <p style={{ margin: "0 0 8px" }}>
-            Linked plan (FK):{" "}
-            <strong>{diag.billingPlanCurrent ? `${diag.billingPlanCurrent.name} (${diag.billingPlanCurrent.code})` : "—"}</strong>
-            {diag.billingPlanCurrent && diag.billingPlanCurrent.active === false ? (
-              <span style={{ color: "#b45309", marginLeft: 8 }}>(inactive)</span>
-            ) : null}
-          </p>
-          <p style={{ margin: "0 0 8px", color: "var(--muted)", fontSize: 12 }}>
-            Active plan for preview period:{" "}
-            <strong>{ps?.activePlanForPeriod?.name || "—"}</strong>
-            {ps?.scheduledNext ? (
-              <>
-                {" "}
-                · Scheduled next: <strong>{ps.scheduledNext.plan.name}</strong> effective {new Date(ps.scheduledNext.effectiveAt).toLocaleDateString()}
-              </>
-            ) : (
-              <> · No scheduled plan change</>
-            )}
-          </p>
-          <button
-            className="btn primary"
-            type="button"
-            style={{ fontSize: 13 }}
-            data-testid="billing-admin-assign-plan-open"
-            onClick={() => void openModal()}
-          >
-            Assign current plan…
-          </button>
-        </div>
-      ) : null}
-
-      {toast ? <BillingActionToast kind={toast.kind} text={toast.text} /> : null}
-
-      {modalOpen ? (
+  const assignModal = modalOpen ? (
         <BillingActionPanel
           layout="center"
           centerWidth="min(580px, 96vw)"
           onClose={() => { if (!saving) setModalOpen(false); }}
           eyebrow={tenantName || undefined}
-          title="Assign current billing plan"
+          title="Change billing plan"
           subtitle="Updates the linked plan immediately. Optionally copy catalog prices to the company row and/or change how prices are calculated. The scheduled next plan is not changed here. No invoice is created."
           warning="Invoice preview totals below may use the scheduled plan for the selected month — assigning still only updates the current plan pointer."
           children={(
@@ -1019,17 +1068,8 @@ export function AdminCurrentBillingPlanAssignCard({
               Copy plan pricing into tenant row (all four fields)
             </label>
 
-            <div style={{ fontSize: 12, background: "#fefce8", border: "1px solid #fbbf24", borderRadius: 6, padding: "8px 10px", marginBottom: 12, color: "#92400e" }}>
-              <strong>Reset-to-plan</strong> (separate control above) resets to the CURRENT linked plan only — not the future scheduled plan.
-            </div>
-
             {previewLoading ? <p className="muted" style={{ fontSize: 13 }}>Updating preview…</p> : null}
 
-            {previewData?.scheduledPlanActiveForPreviewPeriod ? (
-              <div style={{ fontSize: 12, background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 6, padding: "8px 10px", marginBottom: 12, color: "#1e40af" }}>
-                This preview period uses the <strong>scheduled next</strong> plan for invoice math. Assign-current-plan still only changes the current FK — it does not apply the scheduled plan early.
-              </div>
-            ) : null}
 
             {previewData?.notes?.length ? (
               <ul style={{ fontSize: 12, color: "var(--muted)", paddingLeft: 18, margin: "0 0 12px" }}>
@@ -1106,7 +1146,60 @@ export function AdminCurrentBillingPlanAssignCard({
             </>
           )}
         />
+      ) : null;
+
+  if (embedded) {
+    return (
+      <>
+        {toast ? <BillingActionToast kind={toast.kind} text={toast.text} /> : null}
+        {assignModal}
+      </>
+    );
+  }
+
+  return (
+    <DetailCard title="Current Billing Plan" dataTestId="billing-admin-current-plan-card">
+      {diagLoading ? <p className="muted" style={{ fontSize: 13 }}>Loading…</p> : null}
+      {!diagLoading && diag ? (
+        <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 10 }}>
+            <span style={pricingModeBadgeStyle(ps?.mode || "legacy")}>{humanizePricingStateMode(ps?.mode || "legacy")}</span>
+            {matchBadge}
+          </div>
+          <p style={{ margin: "0 0 8px" }}>
+            Linked plan:{" "}
+            <strong>{diag.billingPlanCurrent ? `${diag.billingPlanCurrent.name} (${diag.billingPlanCurrent.code})` : "—"}</strong>
+            {diag.billingPlanCurrent && diag.billingPlanCurrent.active === false ? (
+              <span style={{ color: "#b45309", marginLeft: 8 }}>(inactive)</span>
+            ) : null}
+          </p>
+          <p style={{ margin: "0 0 8px", color: "var(--muted)", fontSize: 12 }}>
+            Active plan for preview period:{" "}
+            <strong>{ps?.activePlanForPeriod?.name || "—"}</strong>
+            {ps?.scheduledNext ? (
+              <>
+                {" "}
+                · Scheduled next: <strong>{ps.scheduledNext.plan.name}</strong> effective {new Date(ps.scheduledNext.effectiveAt).toLocaleDateString()}
+              </>
+            ) : (
+              <> · No scheduled plan change</>
+            )}
+          </p>
+          <button
+            className="btn primary"
+            type="button"
+            style={{ fontSize: 13 }}
+            data-testid="billing-admin-assign-plan-open"
+            onClick={() => void openModal()}
+          >
+            Change plan
+          </button>
+        </div>
       ) : null}
+
+      {toast ? <BillingActionToast kind={toast.kind} text={toast.text} /> : null}
+      {assignModal}
     </DetailCard>
   );
 }
+

@@ -297,6 +297,7 @@ Not pixel-perfect in Phase 1 — **patterns** to implement later:
 | **Phase 1 (done)** | IA + flows + this document | Alignment before code |
 | **Phase 2** | **Navigation + layout shell** | New admin billing nav model, sticky company selector contract, route placeholders, redirect plan, tenant layout differentiation (shell only) |
 | **Phase 3** | **Admin company workspace** | Move/re-skin existing admin features into Summary / Plans & pricing / Tax & profile sections; reduce long settings page |
+| **Phase 3a (2026-05-17)** | **Settings → Plans & pricing** | **`AdminPricingWorkspace`** on **`plans-pricing`**: SaaS plan/rate cards, override table, collapsed **Advanced pricing details**; tax/autopay on **Taxes & invoices** tab; virtual extension card **planned** (UI only) |
 | **Phase 4** | **Tenant billing redesign** | Overview, invoices, payments, settings consolidation, copy pass, remove admin patterns |
 | **Phase 5** | **Invoice / payment UX polish** | Side panels, steppers, action hierarchy, PDF/pay flows |
 | **Phase 6** | **Collections & reporting UX** | Dedicated admin surfaces, dashboards, fewer nested tabs |

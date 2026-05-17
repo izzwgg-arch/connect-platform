@@ -114,7 +114,7 @@ Uses Node’s **`--experimental-test-module-mocks`** (see `apps/api/package.json
 
 Merge helpers for deterministic tests/admin parity: **`mergeTenantBillingSettingsMetadata`** in **`billingTenantSettingsMetadata.ts`**.
 
-**Portal:** **`/admin/billing/settings`** — **`pricingState`** warning banners (aligned preview period), **Current Billing Plan** card + assign modal (preview diff, **`POST`** confirm), **Pricing explanation** (diagnostics) section + shared **preview period**, **billing pricing source** card (catalog stale-row hint + reset diff confirmation), invoice preview shows **`pricingPreviewExplanation`** block alongside totals.
+**Portal:** **`/admin/billing/settings?billingSection=plans-pricing`** — **`AdminPricingWorkspace`** (2026-05-17): current plan + pricing mode chips, override summary, four rate cards (extensions / SMS / phone numbers; **virtual extensions** shown as **planned** — no dedicated stored field yet), compact overrides table, **Edit pricing** modal, one-line tax footnote (full tax profile under **Taxes & invoices**). **Advanced pricing details** (`<details>`, collapsed by default) holds diagnostics warnings, explanation lines, and **Reset to plan pricing**. **Change plan** uses embedded **`AdminCurrentBillingPlanAssignCard`** modal. **Taxes & invoices** section: **`AdminTenantBillingCycleForm`** (tax profile, autopay, billing day, credits) + invoice branding. **No backend pricing behavior changed** for this UI pass.
 
 Stored in **`metadata` JSON only** (no migration). Worker/SOLA/charge paths unchanged for this rollout.
 

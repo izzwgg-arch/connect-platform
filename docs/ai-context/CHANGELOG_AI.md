@@ -4,6 +4,29 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-17 — billing: admin pricing page SaaS redesign (portal)
+
+**Task:** Redesign **`/admin/billing/settings?billingSection=plans-pricing`** into a dark-native SaaS pricing workspace — plan card, override summary, four rate cards, compact overrides table, collapsed **Advanced pricing details**. **Portal only.**  
+**Risk:** medium (UI/copy only).
+
+### What changed
+
+- **`AdminPricingWorkspace.tsx`** + **`billingPricing.css`**: pricing page layout (`billing-pricing-*`), edit-pricing modal, virtual extension **planned** card (no separate API field yet).
+- **`settings/page.tsx`**: pricing section uses workspace; tax/autopay/billing cycle moved to **Taxes & invoices** via **`AdminTenantBillingCycleForm`**; compact section tabs on all three settings areas.
+- **`tenantBillingConfigForms.tsx`**: **`AdminTenantBillingCycleForm`**; **`AdminCurrentBillingPlanAssignCard`** supports **`embedded`** + **Change plan** modal from workspace.
+- **`billingUi.ts`**: **Standard pricing** label (display only).
+- **No API, Prisma, worker, or billing math changes.**
+
+### Deploy verification (portal bundle)
+
+```bash
+docker exec app-portal-1 sh -c 'grep -o billing-pricing-rate /app/apps/portal/.next/static/chunks/*.js | head -1'
+docker exec app-portal-1 sh -c 'grep -o billing-pricing-advanced /app/apps/portal/.next/static/chunks/*.js | head -1'
+docker exec app-portal-1 sh -c 'grep -o "Virtual extensions" /app/apps/portal/.next/static/chunks/*.js | head -1'
+```
+
+---
+
 ## 2026-05-17 — billing: admin portal operational polish (Phase 9)
 
 **Task:** Billing workspace operational refinement — speed, responsiveness, perceived performance, drawer/skeleton polish. **Portal only.**  

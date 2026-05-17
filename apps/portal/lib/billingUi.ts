@@ -164,7 +164,7 @@ export function humanizeStoredPricingMode(mode: "legacy" | "catalog" | "custom" 
       return "Custom company pricing";
     case "legacy":
     default:
-      return "Standard (blended rates)";
+      return "Standard pricing";
   }
 }
 
