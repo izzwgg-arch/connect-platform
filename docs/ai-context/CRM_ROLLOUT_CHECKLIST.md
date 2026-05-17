@@ -201,6 +201,19 @@
 | Bulk assign | Admin-only bulk reassign behavior unchanged if present; archive/restore remains on detail page unless bulk already existed. |
 | Typecheck | `pnpm exec tsc -p apps/portal` passes. |
 
+### Phase 18F — Contact detail SaaS UX (smoke)
+
+| Check | Expected |
+|-------|----------|
+| Route | `/crm/contacts/[id]` loads; all data from existing CRM contact/timeline/tasks/SMS APIs — no fabricated activity or AI summaries. |
+| Command header | Name, stage, archived/DNC badges, primary phone/email, lifecycle subtitle (**last activity** copy only when `lastActivityAt` is present); primary actions: **Workspace** when `can_view_crm_live_call` and not archived, **Add note**, **Schedule task**, **Send SMS** when not blocked; **Edit fields** + calm **Archive** / **Restore** (admin) secondary. |
+| Quick facts | Real fields only: phone/email counts, stage, owner, last activity timestamp or em dash, SMS allowed vs opt-out. |
+| Next step | Rule-based card only (archived read-only, add phone, open/due task, SMS opt-out messaging, or catch-up note) — no scoring or recommendations beyond listed rules. |
+| Timeline | Scan-friendly card rows; recordings + SMS metadata unchanged; note edit/delete still author-gated. |
+| SMS | Conversation + composer stay Phase 11C–compatible; integrated panel styling; opt-out and archived read-only messaging; composer hidden/disabled when archived or `doNotSms`. |
+| Tasks / notes | Same `POST`/`PATCH`/`DELETE` behavior; archive hides mutating controls where applicable. |
+| Typecheck | `pnpm exec tsc -p apps/portal` passes. |
+
 ---
 
 ## 7. Reports

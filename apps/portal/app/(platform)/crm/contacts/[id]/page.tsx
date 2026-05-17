@@ -1,13 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft, Phone, Mail, Clock, User, MessageSquare,
   GitCommitHorizontal, UserPlus, Pencil, Trash2,
-  CheckSquare, Circle, Plus, PhoneIncoming, PhoneOutgoing, Mic,
+  CheckSquare, Circle, Plus, PhoneIncoming, PhoneOutgoing,
   ClipboardList, CheckCheck, GitMerge, AlertTriangle, Calendar, MessageSquareDot, Send,
-  Archive, ArchiveRestore,
+  Archive, ArchiveRestore, Radio, ExternalLink, ChevronRight,
 } from "lucide-react";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { CrmRecordingPlayer } from "../../../../../components/CrmRecordingPlayer";
@@ -188,7 +189,7 @@ const btnSmall: React.CSSProperties = {
 // ── Timeline item component ────────────────────────────────────────────────────
 
 function TimelineIcon({ type }: { type: string }) {
-  const sz = 13;
+  const sz = 15;
   if (type === "NOTE_ADDED" || type === "NOTE_EDITED")
     return <MessageSquare size={sz} style={{ color: "#6366f1" }} />;
   if (type === "STAGE_CHANGED")
@@ -235,19 +236,19 @@ function TimelineItem({
   const isDeleted = event.body === "(deleted)";
 
   return (
-    <div style={{ display: "flex", gap: "0.625rem", padding: "0.625rem 0", borderBottom: "1px solid var(--border)" }}>
+    <div className="mb-2 flex gap-3 rounded-xl border border-gray-200/80 bg-white px-3 py-2.5 shadow-sm dark:border-gray-700/80 dark:bg-gray-900/40">
       {/* Icon column */}
-      <div style={{ paddingTop: "0.1rem", flexShrink: 0, width: 20, display: "flex", justifyContent: "center" }}>
+      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-800">
         <TimelineIcon type={event.type} />
       </div>
 
       {/* Content */}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "0.5rem" }}>
-          <span style={{ fontSize: "0.8125rem", fontWeight: 600, color: "var(--text)" }}>
+          <span className="text-[0.8125rem] font-semibold text-gray-900 dark:text-gray-100">
             {event.title}
           </span>
-          <span style={{ fontSize: "0.75rem", color: "var(--text-dim)", flexShrink: 0 }}>
+          <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
             {formatDateTime(event.createdAt)}
           </span>
         </div>
@@ -405,7 +406,9 @@ function TimelineItem({
 export default function CrmContactDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { backendJwtRole, user: appUser } = useAppContext();
+  const { backendJwtRole, user: appUser, can } = useAppContext();
+
+  const canLiveWorkspace = can("can_view_crm_live_call");
 
   const isAdmin =
     backendJwtRole === "ADMIN" ||
@@ -456,6 +459,9 @@ export default function CrmContactDetailPage() {
   const [notePosting, setNotePosting] = useState(false);
   const [noteError, setNoteError] = useState<string | null>(null);
   const noteTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const noteComposerRef = useRef<HTMLDivElement>(null);
+  const smsPanelRef = useRef<HTMLDivElement>(null);
+  const tasksPanelRef = useRef<HTMLDivElement>(null);
 
   // Inline note edit
   const [editingNoteLinkedId, setEditingNoteLinkedId] = useState<string | null>(null);
@@ -828,174 +834,359 @@ export default function CrmContactDetailPage() {
 
   const lastSmsIn = smsEvents.find((e) => e.type === "SMS_RECEIVED") ?? null;
 
+  const primaryPhoneRow = contact.phones.find((p) => p.isPrimary) ?? contact.phones[0] ?? null;
+  const primaryEmailRow = contact.emails.find((e) => e.isPrimary) ?? contact.emails[0] ?? null;
+
+  const scrollToNoteComposer = () => {
+    noteComposerRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    setTimeout(() => noteTextareaRef.current?.focus(), 300);
+  };
+
+  const scrollToTasks = () => {
+    tasksPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
+
+  const scrollToSms = () => {
+    smsPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
+
+  const nextStep = useMemo((): {
+    title: string;
+    detail: string;
+    actionLabel?: string;
+    action: "none" | "add_phone" | "scroll_tasks" | "scroll_notes";
+  } => {
+    if (isArchived) {
+      return {
+        title: "Archived — read-only",
+        detail:
+          "This record is out of active CRM rotation. Review the timeline below; restore from the banner when you need to edit or message again.",
+        action: "none",
+      };
+    }
+    if (contact.phones.length === 0) {
+      return {
+        title: "Add a phone number",
+        detail: "Voice and SMS both need a number on file. Add one under Contact info.",
+        actionLabel: "Add phone",
+        action: "add_phone",
+      };
+    }
+    const open = tasks.filter((t) => t.status !== "DONE" && t.status !== "CANCELED");
+    const sorted = [...open].sort((a, b) => {
+      const ta = a.dueAt ? new Date(a.dueAt).getTime() : Infinity;
+      const tb = b.dueAt ? new Date(b.dueAt).getTime() : Infinity;
+      return ta - tb;
+    });
+    const dueSoon = sorted.find((t) => t.dueAt);
+    const overdue = sorted.find((t) => t.dueAt && new Date(t.dueAt) < new Date());
+    if (overdue || dueSoon) {
+      const t = overdue ?? dueSoon;
+      if (t) {
+        const late = t.dueAt && new Date(t.dueAt) < new Date();
+        return {
+          title: late ? "Overdue follow-up" : "Open task",
+          detail: `${t.title}${t.dueAt ? ` · Due ${formatDate(t.dueAt)}` : ""}`,
+          actionLabel: "View tasks",
+          action: "scroll_tasks",
+        };
+      }
+    }
+    if (contact.doNotSms) {
+      return {
+        title: "SMS opted out",
+        detail: "This contact cannot receive SMS. Use voice or email, and log updates in the timeline.",
+        actionLabel: "Add note",
+        action: "scroll_notes",
+      };
+    }
+    return {
+      title: "Keep the record current",
+      detail: "Review recent activity, add a note, or schedule a follow-up so the next touch is intentional.",
+      actionLabel: "Add note",
+      action: "scroll_notes",
+    };
+  }, [contact.phones.length, contact.doNotSms, isArchived, tasks]);
+
   return (
-    <div className="stack compact-stack">
-      {/* ── Back link ──────────────────────────────────────────────────────── */}
-      <button
-        onClick={() => router.push("/crm/contacts")}
-        style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", fontSize: "0.875rem", padding: 0, width: "fit-content" }}
-      >
-        <ArrowLeft size={14} /> Back to Contacts
-      </button>
-
-      {isArchived && (
-        <div
-          style={{
-            padding: "0.625rem 0.875rem",
-            borderRadius: "0.375rem",
-            background: "#fef3c7",
-            border: "1px solid #fcd34d",
-            fontSize: "0.8125rem",
-            color: "#92400e",
-            lineHeight: 1.45,
-          }}
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
+      <div className="mx-auto max-w-6xl space-y-4 px-4 py-6 md:space-y-5 md:py-8">
+        <button
+          type="button"
+          onClick={() => router.push("/crm/contacts")}
+          className="flex items-center gap-1.5 text-sm font-medium text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100"
         >
-          <strong>Archived</strong> — Hidden from active lists and search. Timeline and history stay available for review.
-          Restore the contact to edit fields or send SMS.
-        </div>
-      )}
+          <ArrowLeft className="h-4 w-4 shrink-0" />
+          Back to Contacts
+        </button>
 
-      {/* ── Profile header ─────────────────────────────────────────────────── */}
-      <div
-        className="panel"
-        style={{ padding: "1.5rem", display: "flex", alignItems: "flex-start", gap: "1.25rem", flexWrap: "wrap" }}
-      >
-        <div style={{
-          width: 56, height: 56, borderRadius: "50%",
-          background: stageColor(stage), color: "#fff",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: "1.125rem", fontWeight: 700, flexShrink: 0,
-        }}>
-          {initials(contact.displayName)}
-        </div>
+        {/* Command header */}
+        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900 md:p-6">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
+            <div
+              className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl text-lg font-bold text-white"
+              style={{ background: stageColor(stage) }}
+            >
+              {initials(contact.displayName)}
+            </div>
 
-        <div style={{ flex: 1, minWidth: 200 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
-            <h1 style={{ margin: 0, fontSize: "1.25rem", fontWeight: 700 }}>
-              {contact.displayName}
-            </h1>
-            <span style={{
-              padding: "0.2rem 0.6rem",
-              borderRadius: "0.25rem",
-              fontSize: "0.75rem",
-              fontWeight: 600,
-              background: stageColor(stage) + "22",
-              color: stageColor(stage),
-              textTransform: "uppercase",
-              letterSpacing: "0.04em",
-            }}>
-              {stageLabel(stage)}
-            </span>
-            {isArchived && (
-              <span
-                style={{
-                  padding: "0.2rem 0.6rem",
-                  borderRadius: "0.25rem",
-                  fontSize: "0.75rem",
-                  fontWeight: 600,
-                  background: "#e5e7eb",
-                  color: "#374151",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.04em",
-                }}
-              >
-                Archived
-              </span>
-            )}
-            {contact.doNotCall && (
-              <span style={{ fontSize: "0.75rem", color: "#ef4444", fontWeight: 600 }}>✕ DNC</span>
-            )}
-          </div>
-
-          {(contact.title || contact.company) && (
-            <p style={{ margin: "0.25rem 0 0", fontSize: "0.9rem", color: "var(--text-dim)" }}>
-              {[contact.title, contact.company].filter(Boolean).join(" · ")}
-            </p>
-          )}
-
-          {contact.assignedTo && (
-            <p style={{ margin: "0.375rem 0 0", fontSize: "0.8125rem", color: "var(--text-dim)", display: "flex", alignItems: "center", gap: "0.3rem" }}>
-              <User size={12} />
-              {contact.assignedTo.displayName ||
-                [contact.assignedTo.firstName, contact.assignedTo.lastName].filter(Boolean).join(" ") ||
-                contact.assignedTo.email}
-            </p>
-          )}
-        </div>
-
-        {/* Edit / archive actions */}
-        <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", flexWrap: "wrap" }}>
-          {!isArchived && (
-            <>
-              {!editing ? (
-                <button
-                  onClick={() => setEditing(true)}
-                  style={{ ...btnSmall, color: "var(--text)" }}
+            <div className="min-w-0 flex-1 space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">
+                  {contact.displayName}
+                </h1>
+                <span
+                  className="rounded-full px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide"
+                  style={{
+                    background: stageColor(stage) + "22",
+                    color: stageColor(stage),
+                  }}
                 >
-                  Edit
-                </button>
-              ) : (
-                <>
-                  <button
-                    onClick={() => { setEditing(false); setSaveError(null); }}
-                    style={btnSmall}
-                    disabled={saving}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleSave}
-                    disabled={saving}
-                    style={{ ...btnSmall, background: "var(--accent)", color: "#fff", borderColor: "var(--accent)", fontWeight: 600 }}
-                  >
-                    {saving ? "Saving…" : "Save"}
-                  </button>
-                </>
+                  {stageLabel(stage)}
+                </span>
+                {isArchived && (
+                  <span className="rounded-full bg-gray-200 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-gray-700 dark:bg-gray-700 dark:text-gray-200">
+                    Archived
+                  </span>
+                )}
+                {contact.doNotCall && (
+                  <span className="text-xs font-semibold text-red-600 dark:text-red-400">DNC</span>
+                )}
+              </div>
+
+              <p className="text-sm leading-relaxed text-gray-600 dark:text-gray-300">
+                {isArchived
+                  ? "Read-only archive — timeline stays visible; restore when you need to work the record again."
+                  : contact.lastActivityAt
+                    ? `Last activity ${formatDate(contact.lastActivityAt)}${
+                        contact.assignedTo
+                          ? ` · Owner: ${
+                              contact.assignedTo.displayName ||
+                              [contact.assignedTo.firstName, contact.assignedTo.lastName].filter(Boolean).join(" ") ||
+                              contact.assignedTo.email
+                            }`
+                          : ""
+                      }`
+                    : contact.assignedTo
+                      ? `Owner: ${
+                          contact.assignedTo.displayName ||
+                          [contact.assignedTo.firstName, contact.assignedTo.lastName].filter(Boolean).join(" ") ||
+                          contact.assignedTo.email
+                        } — add a note or task to capture the next touch.`
+                      : "Capture the next touch with a note, task, or workspace session."}
+              </p>
+
+              <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm text-gray-700 dark:text-gray-200">
+                {primaryPhoneRow ? (
+                  <span className="inline-flex min-w-0 items-center gap-1.5">
+                    <Phone className="h-4 w-4 shrink-0 text-gray-400" aria-hidden />
+                    <span className="truncate font-medium tabular-nums">{primaryPhoneRow.numberRaw}</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-amber-700 dark:text-amber-400">
+                    <Phone className="h-4 w-4 shrink-0" aria-hidden />
+                    No phone on file
+                  </span>
+                )}
+                {primaryEmailRow ? (
+                  <span className="inline-flex min-w-0 items-center gap-1.5">
+                    <Mail className="h-4 w-4 shrink-0 text-gray-400" aria-hidden />
+                    <span className="truncate">{primaryEmailRow.email}</span>
+                  </span>
+                ) : (
+                  <span className="text-gray-400">No email on file</span>
+                )}
+              </div>
+
+              {(contact.title || contact.company) && (
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  {[contact.title, contact.company].filter(Boolean).join(" · ")}
+                </p>
               )}
-            </>
-          )}
-          {isAdmin && !isArchived && (
+            </div>
+
+            <div className="flex w-full flex-col gap-2 border-t border-gray-100 pt-4 lg:w-auto lg:min-w-[200px] lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0 dark:border-gray-800">
+              <div className="flex flex-wrap gap-2">
+                {canLiveWorkspace && !isArchived && (
+                  <Link
+                    href={`/crm/live-call?contactId=${encodeURIComponent(contact.id)}`}
+                    className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 lg:flex-none"
+                  >
+                    <Radio className="h-4 w-4" aria-hidden />
+                    Workspace
+                    <ExternalLink className="h-3.5 w-3.5 opacity-80" aria-hidden />
+                  </Link>
+                )}
+                <button
+                  type="button"
+                  disabled={isArchived}
+                  onClick={scrollToNoteComposer}
+                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-45 dark:border-gray-700 dark:bg-gray-900 dark:hover:bg-gray-800 lg:flex-none"
+                >
+                  <MessageSquare className="h-4 w-4" aria-hidden />
+                  Add note
+                </button>
+                <button
+                  type="button"
+                  disabled={isArchived}
+                  onClick={() => {
+                    setAddingTask(true);
+                    scrollToTasks();
+                  }}
+                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-45 dark:border-gray-700 dark:bg-gray-900 dark:hover:bg-gray-800 lg:flex-none"
+                >
+                  <Calendar className="h-4 w-4" aria-hidden />
+                  Schedule task
+                </button>
+                <button
+                  type="button"
+                  disabled={isArchived || contact.phones.length === 0 || contact.doNotSms}
+                  onClick={scrollToSms}
+                  title={
+                    contact.doNotSms
+                      ? "SMS opt-out"
+                      : contact.phones.length === 0
+                        ? "Add a phone first"
+                        : "Open SMS"
+                  }
+                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-45 dark:border-gray-700 dark:bg-gray-900 dark:hover:bg-gray-800 lg:flex-none"
+                >
+                  <MessageSquareDot className="h-4 w-4" aria-hidden />
+                  Send SMS
+                </button>
+              </div>
+
+              <div className="flex flex-wrap gap-2 border-t border-gray-100 pt-3 dark:border-gray-800">
+                {!isArchived && (
+                  <>
+                    {!editing ? (
+                      <button
+                        type="button"
+                        onClick={() => setEditing(true)}
+                        className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                        Edit fields
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditing(false);
+                            setSaveError(null);
+                          }}
+                          disabled={saving}
+                          className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-600 dark:border-gray-700"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSave}
+                          disabled={saving}
+                          className="rounded-lg bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+                        >
+                          {saving ? "Saving…" : "Save"}
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
+                {isAdmin && !isArchived && (
+                  <button
+                    type="button"
+                    onClick={handleArchiveContact}
+                    disabled={archivePosting}
+                    className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
+                  >
+                    <Archive className="h-3.5 w-3.5" />
+                    {archivePosting ? "…" : "Archive"}
+                  </button>
+                )}
+                {isAdmin && isArchived && (
+                  <button
+                    type="button"
+                    onClick={handleRestoreContact}
+                    disabled={restorePosting}
+                    className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-50 dark:border-emerald-900 dark:text-emerald-300 dark:hover:bg-emerald-950/30"
+                  >
+                    <ArchiveRestore className="h-3.5 w-3.5" />
+                    {restorePosting ? "…" : "Restore"}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Next step — rule-based, real data only */}
+        <div className="rounded-2xl border border-blue-100 bg-white p-4 shadow-sm dark:border-blue-900/50 dark:bg-gray-900 md:flex md:items-start md:justify-between md:gap-4">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-400">Next step</p>
+            <p className="mt-1 text-base font-semibold text-gray-900 dark:text-gray-50">{nextStep.title}</p>
+            <p className="mt-1 text-sm leading-relaxed text-gray-600 dark:text-gray-300">{nextStep.detail}</p>
+          </div>
+          {nextStep.actionLabel && nextStep.action !== "none" && (
             <button
               type="button"
-              onClick={handleArchiveContact}
-              disabled={archivePosting}
-              title="Archive contact (soft)"
-              style={{
-                ...btnSmall,
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "0.3rem",
-                color: "#991b1b",
-                borderColor: "#fca5a5",
+              onClick={() => {
+                if (nextStep.action === "add_phone") setAddingPhone(true);
+                if (nextStep.action === "scroll_tasks") scrollToTasks();
+                if (nextStep.action === "scroll_notes") scrollToNoteComposer();
               }}
+              className="mt-3 inline-flex shrink-0 items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 md:mt-0"
             >
-              <Archive size={13} />
-              {archivePosting ? "…" : "Archive"}
-            </button>
-          )}
-          {isAdmin && isArchived && (
-            <button
-              type="button"
-              onClick={handleRestoreContact}
-              disabled={restorePosting}
-              title="Restore contact to active list"
-              style={{
-                ...btnSmall,
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "0.3rem",
-                color: "#065f46",
-                borderColor: "#6ee7b7",
-              }}
-            >
-              <ArchiveRestore size={13} />
-              {restorePosting ? "…" : "Restore"}
+              {nextStep.actionLabel}
+              <ChevronRight className="h-4 w-4" aria-hidden />
             </button>
           )}
         </div>
-      </div>
 
-      {/* ── Inline edit panel for identity fields ──────────────────────────────── */}
+        {/* Quick facts */}
+        <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Quick facts</h2>
+          <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+              <dt className="text-xs font-medium text-gray-400">Phones</dt>
+              <dd className="mt-0.5 font-medium text-gray-900 dark:text-gray-100">
+                {contact.phones.length ? `${contact.phones.length} on file` : "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs font-medium text-gray-400">Emails</dt>
+              <dd className="mt-0.5 font-medium text-gray-900 dark:text-gray-100">
+                {contact.emails.length ? `${contact.emails.length} on file` : "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs font-medium text-gray-400">Stage</dt>
+              <dd className="mt-0.5 font-medium text-gray-900 dark:text-gray-100">{stageLabel(stage)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs font-medium text-gray-400">Owner</dt>
+              <dd className="mt-0.5 font-medium text-gray-900 dark:text-gray-100">
+                {contact.assignedTo
+                  ? contact.assignedTo.displayName ||
+                    [contact.assignedTo.firstName, contact.assignedTo.lastName].filter(Boolean).join(" ") ||
+                    contact.assignedTo.email
+                  : "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs font-medium text-gray-400">Last activity</dt>
+              <dd className="mt-0.5 font-medium text-gray-900 dark:text-gray-100">
+                {contact.lastActivityAt ? formatDate(contact.lastActivityAt) : "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs font-medium text-gray-400">SMS</dt>
+              <dd className="mt-0.5 font-medium text-gray-900 dark:text-gray-100">
+                {contact.doNotSms ? "Opt-out (do not send)" : "Allowed"}
+              </dd>
+            </div>
+          </dl>
+        </div>
       {editing && !isArchived && (
         <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.875rem" }}>
           <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>Edit Contact</h3>
@@ -1029,14 +1220,16 @@ export default function CrmContactDetailPage() {
       )}
 
       {/* ── Two-column body ───────────────────────────────────────────────────── */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.5fr", gap: "1rem", alignItems: "start" }}>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.12fr)] lg:items-start">
 
         {/* ── Left column: CRM details ───────────────────────────────────────── */}
         <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
 
           {/* CRM fields */}
-          <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
-            <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>CRM Details</h3>
+          <div className="panel rounded-2xl border border-gray-100 shadow-sm dark:border-gray-800" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
+            <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>
+              Outreach rules &amp; signal
+            </h3>
 
             <div>
               <label style={labelStyle}>Stage</label>
@@ -1133,7 +1326,7 @@ export default function CrmContactDetailPage() {
           </div>
 
           {/* ── Open tasks panel ──────────────────────────────────────────── */}
-          <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
+          <div ref={tasksPanelRef} className="panel rounded-2xl border border-gray-100 shadow-sm dark:border-gray-800" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>
                 Open Tasks {tasks.length > 0 && <span style={{ fontWeight: 400, color: "var(--accent)" }}>({tasks.length})</span>}
@@ -1429,7 +1622,11 @@ export default function CrmContactDetailPage() {
           </div>
           {/* ── SMS conversation panel — history + composer ─────────────────── */}
           {contact.phones.length > 0 && (
-            <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+            <div
+              ref={smsPanelRef}
+              className="panel rounded-2xl border border-gray-200 bg-gray-50/40 shadow-sm dark:border-gray-700 dark:bg-gray-900/50"
+              style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.75rem" }}
+            >
 
               {/* Header */}
               <div style={{ display: "flex", alignItems: "center", gap: "0.375rem" }}>
@@ -1599,12 +1796,11 @@ export default function CrmContactDetailPage() {
         </div>
 
         {/* ── Right column: Timeline + Notes ───────────────────────────────────── */}
-        <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
-          <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>
-            Activity &amp; Notes
-          </h3>
-
-          {/* ── Quick note composer ─────────────────────────────────────────── */}
+        <div className="panel rounded-2xl border border-gray-100 shadow-sm dark:border-gray-800" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
+          <div ref={noteComposerRef}>
+            <h3 style={{ margin: "0 0 0.75rem", fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>
+              Activity &amp; notes
+            </h3>
           {isArchived ? (
             <p style={{ margin: 0, fontSize: "0.8125rem", color: "var(--text-dim)", lineHeight: 1.5 }}>
               Notes cannot be added while this contact is archived. Timeline below is read-only.
@@ -1670,8 +1866,10 @@ export default function CrmContactDetailPage() {
           </div>
           )}
 
+          </div>
+
           {/* ── Timeline feed ───────────────────────────────────────────────── */}
-          <div style={{ marginTop: "0.25rem" }}>
+          <div className="mt-4 border-t border-gray-100 pt-4 dark:border-gray-800">
             {timelineLoading ? (
               <LoadingSkeleton rows={4} />
             ) : timeline.length === 0 ? (
@@ -1696,6 +1894,7 @@ export default function CrmContactDetailPage() {
 
           </div>
         </div>
+      </div>
       </div>
 
       {/* ── Merge confirmation modal ──────────────────────────────────────────── */}
