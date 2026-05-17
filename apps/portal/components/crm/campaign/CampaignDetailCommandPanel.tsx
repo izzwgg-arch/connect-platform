@@ -54,7 +54,7 @@ export function CampaignDetailCommandPanel({
     alerts.push({
       title: "Unassigned members",
       body: `${health.unassignedMembers} lead${health.unassignedMembers !== 1 ? "s" : ""} need an owner.`,
-      icon: "text-[#a78bfa]",
+      icon: "cinema-alert-icon-violet",
       action: (
         <div className="mt-3 flex flex-wrap gap-2">
           <button type="button" onClick={onDistribute} className={mk.btnSecondary}>
@@ -71,7 +71,7 @@ export function CampaignDetailCommandPanel({
     alerts.push({
       title: "Callback pressure",
       body: `${health.callback} in CALLBACK — work from queue.`,
-      icon: "text-[#fb923c]",
+      icon: "cinema-alert-icon-orange",
       action: (
         <div className="mt-3 flex flex-wrap gap-2">
           <Link href={`${queueHref(campaign.id)}&filter=overdue`} className={mk.btnQueueRow}>
@@ -92,18 +92,15 @@ export function CampaignDetailCommandPanel({
       <div className={mk.opsCard}>
         <p className={mk.opsTitle}>Next actions</p>
         {alerts.length === 0 ? (
-          <p className="mt-3 text-xs leading-relaxed text-[#8b9cb3]">
+          <p className="cinema-ops-empty">
             No alerts — roster looks balanced for this snapshot.
           </p>
         ) : (
           <ul className="mt-3 space-y-2">
             {alerts.map((a) => (
-              <li
-                key={a.title}
-                className="rounded-xl border border-white/[0.08] bg-[#0f1522]/60 px-3 py-3"
-              >
-                <p className={cn("text-sm font-bold text-white", a.icon)}>{a.title}</p>
-                <p className="mt-0.5 text-xs text-[#8b9cb3]">{a.body}</p>
+              <li key={a.title} className={mk.opsAlert}>
+                <p className={cn("cinema-alert-title", a.icon)}>{a.title}</p>
+                <p className="mt-0.5 text-xs text-[var(--cinema-text-muted)]">{a.body}</p>
                 {a.action}
               </li>
             ))}
@@ -124,9 +121,9 @@ export function CampaignDetailCommandPanel({
             Assignment load
           </p>
           {workloadLoading ? (
-            <p className="mt-3 text-xs text-[#8b9cb3]">Loading…</p>
+            <p className="cinema-ops-empty">Loading…</p>
           ) : workload.length === 0 ? (
-            <p className="mt-3 text-xs text-[#8b9cb3]">No assignments yet.</p>
+            <p className="cinema-ops-empty">No assignments yet.</p>
           ) : (
             <ul className="mt-4 space-y-3">
               {workload.map((row, i) => {
@@ -137,15 +134,15 @@ export function CampaignDetailCommandPanel({
                     <div className="flex justify-between gap-2 text-xs">
                       <span
                         className={cn(
-                          "truncate font-semibold text-[#e2e9f4]",
-                          row.userId === null && "italic text-[#fcd34d]",
+                          "truncate cinema-load-name",
+                          row.userId === null && "cinema-load-name-unassigned",
                         )}
                       >
                         {row.displayName}
                       </span>
-                      <span className="shrink-0 font-bold tabular-nums text-white">{row.total}</span>
+                      <span className="cinema-load-total">{row.total}</span>
                     </div>
-                    <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-[#0f1522]">
+                    <div className="cinema-load-bar-track">
                       <div
                         className="h-full rounded-full transition-[width] duration-500"
                         style={{ width: `${pct}%`, background: color }}
@@ -165,7 +162,7 @@ export function CampaignDetailCommandPanel({
           Import events
         </p>
         {importHistoryLoading ? (
-          <p className="mt-3 text-xs text-[#8b9cb3]">Loading…</p>
+          <p className="cinema-ops-empty">Loading…</p>
         ) : importHistory.length === 0 ? (
           <div className="mt-3">
             <CampaignGuidedEmpty
@@ -200,14 +197,14 @@ export function CampaignDetailCommandPanel({
       </div>
 
       <div className={cn(mk.opsCard, "p-0 overflow-hidden")}>
-        <details className="group h-full open:ring-1 open:ring-[#3b82f6]/20">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-5 py-4 text-sm font-bold text-white hover:bg-white/[0.03] [&::-webkit-details-marker]:hidden">
+        <details className="cinema-settings-details group h-full">
+          <summary className="cinema-settings-summary [&::-webkit-details-marker]:hidden">
             Campaign settings
-            <ChevronDown className="h-4 w-4 shrink-0 text-[#8b9cb3] transition-transform group-open:rotate-180" />
+            <ChevronDown className="cinema-settings-chevron h-4 w-4" />
           </summary>
-          <div className="space-y-4 border-t border-white/[0.06] px-5 pb-5 pt-4">
+          <div className="cinema-settings-body space-y-4">
             <div>
-              <label className="mb-1 block text-xs text-[#8b9cb3]">Call script</label>
+              <label className="cinema-field-label">Call script</label>
               <select
                 value={campaign.scriptId ?? ""}
                 onChange={(e) => onUpdateCampaign({ scriptId: e.target.value || null })}
@@ -222,7 +219,7 @@ export function CampaignDetailCommandPanel({
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-xs text-[#8b9cb3]">Checklist</label>
+              <label className="cinema-field-label">Checklist</label>
               <select
                 value={campaign.checklistId ?? ""}
                 onChange={(e) => onUpdateCampaign({ checklistId: e.target.value || null })}
@@ -237,7 +234,7 @@ export function CampaignDetailCommandPanel({
               </select>
             </div>
             <div>
-              <label className="mb-2 block text-xs text-[#8b9cb3]">Smart queue priority</label>
+              <label className="cinema-field-label mb-2">Smart queue priority</label>
               <div className="flex flex-wrap gap-1.5">
                 {(["LOW", "NORMAL", "HIGH", "URGENT"] as CampaignPriority[]).map((p) => (
                   <button
@@ -245,10 +242,8 @@ export function CampaignDetailCommandPanel({
                     type="button"
                     onClick={() => onUpdateCampaign({ priority: p })}
                     className={cn(
-                      "rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors",
-                      (campaign.priority ?? "NORMAL") === p
-                        ? "border-[#3b82f6]/45 bg-[#3b82f6]/15 text-[#93c5fd]"
-                        : "border-white/10 bg-[#0f1522] text-[#8b9cb3] hover:border-white/18",
+                      "cinema-priority-pill",
+                      (campaign.priority ?? "NORMAL") === p && "cinema-priority-pill-active",
                     )}
                   >
                     {CAMPAIGN_PRIORITY_LABELS[p]}

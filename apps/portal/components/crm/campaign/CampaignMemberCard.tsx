@@ -54,8 +54,8 @@ export function CampaignMemberCard({
       <article
         className={cn(
           mk.memberRow,
-          selected && "bg-[#3b82f6]/10 shadow-[inset_0_0_32px_-12px_rgba(59,130,246,0.25)]",
-          !selected && isOverdue && "bg-[#f87171]/5",
+          selected && "cinema-member-row-selected",
+          !selected && isOverdue && "cinema-member-row-overdue",
           terminal && "opacity-85",
           archivedLead && "opacity-80",
         )}
@@ -66,13 +66,10 @@ export function CampaignMemberCard({
             checked={selected}
             disabled={readOnly}
             onChange={(e) => onSelect(e.target.checked)}
-            className="mt-0.5 shrink-0 rounded border-white/20 disabled:opacity-40 lg:mt-0"
+            className="cinema-member-checkbox mt-0.5 lg:mt-0 disabled:opacity-40"
             aria-label={`Select ${displayName}`}
           />
-          <div
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#3b82f6]/30 bg-gradient-to-br from-[#3b82f6]/25 to-[#1a2438] text-sm font-bold text-[#93c5fd]"
-            aria-hidden
-          >
+          <div className={mk.memberAvatar} aria-hidden>
             {avatarInitial}
           </div>
           <div className="min-w-0 flex-1">
@@ -80,7 +77,7 @@ export function CampaignMemberCard({
               <button
                 type="button"
                 onClick={() => router.push(`/crm/contacts/${member.contactId}`)}
-                className="truncate text-left text-sm font-semibold text-white hover:text-[#93c5fd]"
+                className="truncate cinema-member-name"
               >
                 {displayName}
               </button>
@@ -90,7 +87,7 @@ export function CampaignMemberCard({
                 </span>
               )}
             </div>
-            <p className="truncate text-xs text-[#8b9cb3]">{member.contact?.primaryPhone ?? "—"}</p>
+            <p className="truncate cinema-member-phone">{member.contact?.primaryPhone ?? "—"}</p>
             {member.contact?.lastDisposition ? (
               <p className="mt-0.5 truncate text-[10px] text-crm-muted lg:hidden">
                 {member.contact.lastDisposition}
@@ -100,8 +97,8 @@ export function CampaignMemberCard({
         </div>
 
         <div className="text-xs">
-          <span className="text-[10px] font-semibold uppercase text-[#6d7f99] lg:hidden">Agent</span>
-          <p className="truncate font-medium text-[#e2e9f4]">{member.assignedTo?.displayName ?? "Unassigned"}</p>
+          <span className="cinema-member-col-label lg:hidden">Agent</span>
+          <p className="truncate cinema-member-agent">{member.assignedTo?.displayName ?? "Unassigned"}</p>
         </div>
 
         <div className="flex flex-col gap-1">
@@ -137,17 +134,17 @@ export function CampaignMemberCard({
 
         <div>
           <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Attempts</span>
-          <p className="tabular-nums text-sm font-semibold text-white">{member.attemptCount}</p>
+          <p className="cinema-member-attempts">{member.attemptCount}</p>
         </div>
 
         <div>
           <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Last touch</span>
-          <p className="text-xs text-[#9aa8be]">{lastTouch}</p>
+          <p className="cinema-member-touch">{lastTouch}</p>
         </div>
 
         <div>
-          <span className="text-[10px] font-semibold uppercase text-[#6d7f99] lg:hidden">Next</span>
-          <p className="text-[11px] font-semibold leading-snug text-[#93c5fd]">{nextAction}</p>
+          <span className="cinema-member-col-label lg:hidden">Next</span>
+          <p className="cinema-member-next">{nextAction}</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 lg:justify-end">

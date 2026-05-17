@@ -104,10 +104,7 @@ export function CampaignQuickActionStrip({
         ];
 
   return (
-    <nav
-      className="fixed bottom-0 left-0 right-0 z-40 border-t border-white/[0.06] bg-[#080b12]/90 px-3 py-3 backdrop-blur-xl sm:px-6"
-      aria-label="Campaign quick actions"
-    >
+    <nav className={mk.stripDock} aria-label="Campaign quick actions">
       <div className={cn("mx-auto max-w-[min(100%,1680px)]", mk.stripGrid)}>
         {items.map((item) => {
           const accent = STRIP_ACCENT[item.key];
@@ -121,7 +118,7 @@ export function CampaignQuickActionStrip({
                 <span className="flex items-center gap-2">
                   <span className={mk.stripTitle}>{item.label}</span>
                   {"kbd" in item && item.kbd ? (
-                    <kbd className="rounded border border-white/15 bg-white/5 px-1.5 py-0.5 text-[10px] font-bold text-[#8b9cb3]">
+                    <kbd className={mk.stripKbd}>
                       {item.kbd}
                     </kbd>
                   ) : null}

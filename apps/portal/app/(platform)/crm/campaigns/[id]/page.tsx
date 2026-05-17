@@ -1268,10 +1268,10 @@ export default function CampaignDetailPage() {
 
             <section className={mk.rosterShell} aria-label={`Members (${membersTotal})`}>
               <div className={mk.rosterHead}>
-                <h2 className="text-lg font-bold text-white">Members ({membersTotal})</h2>
-                <p className="mt-0.5 text-xs text-[#8b9cb3]">Operational roster — server-side filters, 100 per load</p>
+                <h2 className="cinema-roster-title">Members ({membersTotal})</h2>
+                <p className="cinema-roster-sub">Operational roster — server-side filters, 100 per load</p>
               </div>
-          <div className="flex flex-wrap items-center gap-2 border-b border-white/[0.06] px-4 py-3 sm:px-6">
+          <div className={mk.rosterToolbar}>
             <div className="relative flex-1 min-w-[160px] max-w-xs">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-crm-muted/80" />
               <input

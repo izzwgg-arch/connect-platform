@@ -85,11 +85,11 @@ export function CampaignCommandHeader({
 
       <div className={mk.detailHeroInner}>
         <p className={mk.breadcrumb}>
-          <Link href="/crm/campaigns" className="hover:text-[#93c5fd]">
+          <Link href="/crm/campaigns" className="cinema-breadcrumb-link">
             Campaigns
           </Link>
-          <span className="mx-1.5 text-white/25">/</span>
-          <span className="text-[#9aa8be]">{campaign.name}</span>
+          <span className="cinema-breadcrumb-sep">/</span>
+          <span className="cinema-breadcrumb-current">{campaign.name}</span>
         </p>
 
         <div className={mk.detailTitleRow}>
@@ -119,32 +119,32 @@ export function CampaignCommandHeader({
                 </div>
               ) : (
                 <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">{campaign.name}</h1>
+                  <h1 className="cinema-detail-title">{campaign.name}</h1>
                   <span className={cn(mk.pill, isActive ? mk.statusPillActive : mk.statusPillPaused)}>
                     {CAMPAIGN_STATUS_LABELS[campaign.status]}
                   </span>
                   <button
                     type="button"
                     onClick={onStartEditName}
-                    className="rounded-lg border border-white/10 p-1.5 text-[#8b9cb3] hover:border-white/20 hover:text-white"
+                    className="cinema-btn-icon-edit"
                     aria-label="Edit campaign name"
                   >
                     <Edit2 className="h-4 w-4" />
                   </button>
                 </div>
               )}
-              <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[#9aa8be]">{objective}</p>
+              <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[var(--cinema-text-muted)]">{objective}</p>
               {(campaign.script || campaign.checklist) && (
-                <p className="mt-2 text-xs text-[#6d7f99]">
+                <p className="mt-2 cinema-detail-meta">
                   {campaign.script ? (
                     <>
-                      Script: <span className="font-medium text-[#e2e9f4]">{campaign.script.name}</span>
+                      Script: <span className="cinema-detail-meta-strong">{campaign.script.name}</span>
                     </>
                   ) : null}
                   {campaign.script && campaign.checklist ? " · " : null}
                   {campaign.checklist ? (
                     <>
-                      Checklist: <span className="font-medium text-[#e2e9f4]">{campaign.checklist.name}</span>
+                      Checklist: <span className="cinema-detail-meta-strong">{campaign.checklist.name}</span>
                     </>
                   ) : null}
                 </p>
@@ -169,7 +169,7 @@ export function CampaignCommandHeader({
             {canQueue && isActive && (
               <Link
                 href={powerQueueHref(campaign.id)}
-                className="inline-flex items-center gap-2 rounded-xl border border-[#fb923c]/35 bg-[#fb923c]/10 px-4 py-2.5 text-sm font-semibold text-[#fdba74] hover:border-[#fb923c]/50"
+                className={mk.btnPowerOrange}
               >
                 <Zap className="h-4 w-4" />
                 Power mode
@@ -184,16 +184,16 @@ export function CampaignCommandHeader({
               key={k.label}
               className={cn(
                 mk.detailKpiTile,
-                k.urgent && "border-[#fbbf24]/35 bg-[#fbbf24]/8",
+                k.urgent && "cinema-detail-kpi-urgent",
               )}
             >
-              <dt className="text-[10px] font-bold uppercase tracking-wider text-[#6d7f99]">{k.label}</dt>
-              <dd className={cn(mk.detailKpiValue, k.urgent && "text-[#fcd34d]")}>{k.value}</dd>
+              <dt className="cinema-detail-kpi-label">{k.label}</dt>
+              <dd className={cn(mk.detailKpiValue, k.urgent && "cinema-detail-kpi-urgent-value")}>{k.value}</dd>
             </div>
           ))}
         </dl>
 
-        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/[0.06] pt-4">
+        <div className="cinema-detail-toolbar">
           {campaign.status === "DRAFT" && isAdmin && (
             <button type="button" onClick={() => onUpdateStatus("ACTIVE")} className={mk.btnPrimary}>
               <Play className="h-4 w-4" /> Start campaign
@@ -221,7 +221,7 @@ export function CampaignCommandHeader({
             <button
               type="button"
               onClick={() => onUpdateStatus("PAUSED")}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-[#fbbf24]/30 px-3 py-2 text-xs font-semibold text-[#fcd34d] hover:bg-[#fbbf24]/10"
+              className="cinema-btn-pause-toolbar"
             >
               <Pause className="h-3.5 w-3.5" /> Pause
             </button>
@@ -232,7 +232,7 @@ export function CampaignCommandHeader({
               onClick={() => {
                 if (confirm("Archive this campaign?")) onUpdateStatus("ARCHIVED");
               }}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-2 text-xs font-semibold text-[#8b9cb3] hover:text-[#f87171]"
+              className="cinema-btn-archive-toolbar"
             >
               <Archive className="h-3.5 w-3.5" /> Archive
             </button>
@@ -240,10 +240,10 @@ export function CampaignCommandHeader({
           <button type="button" onClick={onExport} className={mk.btnSecondary}>
             <Download className="h-4 w-4" /> Export
           </button>
-          <p className="ml-auto w-full text-[11px] text-[#6d7f99] sm:w-auto">
+          <p className="ml-auto w-full cinema-detail-meta sm:w-auto">
             {lastImport ? (
               <>
-                Last import: <span className="font-medium text-[#9aa8be]">{lastImport}</span>
+                Last import: <span className="cinema-detail-meta-strong">{lastImport}</span>
               </>
             ) : (
               "No campaign CSV imports on record yet."

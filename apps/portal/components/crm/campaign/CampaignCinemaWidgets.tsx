@@ -18,10 +18,7 @@ export function CampaignCinemaRing({
   return (
     <div className="flex flex-col items-center gap-3 sm:items-start">
       <div className="relative" style={{ width: size, height: size }}>
-        <div
-          className="pointer-events-none absolute inset-[-24%] rounded-full bg-[radial-gradient(circle,rgba(52,211,153,0.4),transparent_68%)]"
-          aria-hidden
-        />
+        <div className="cinema-widget-ring-glow pointer-events-none absolute inset-[-24%] rounded-full" aria-hidden />
         <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="relative z-[1]">
           <defs>
             <linearGradient id="cinema-ring-grad" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -35,7 +32,7 @@ export function CampaignCinemaRing({
             cy={size / 2}
             r={r}
             fill="none"
-            stroke="rgba(255,255,255,0.07)"
+            stroke="var(--cinema-ring-track)"
             strokeWidth={stroke}
           />
           <circle
@@ -51,12 +48,12 @@ export function CampaignCinemaRing({
           />
         </svg>
         <div className="absolute inset-0 z-[2] flex flex-col items-center justify-center">
-          <span className="text-[2rem] font-bold tabular-nums text-white">{pct}%</span>
+          <span className="text-[2rem] font-bold tabular-nums text-[var(--cinema-text)]">{pct}%</span>
         </div>
       </div>
       <div>
-        <p className="text-sm font-bold text-white">Conversion rate</p>
-        <p className="mt-1 text-xs text-[#8b9cb3]">
+        <p className="cinema-widget-title">Conversion rate</p>
+        <p className="cinema-widget-sub mt-1">
           {converted} of {total} members
         </p>
       </div>
@@ -87,8 +84,8 @@ export function CampaignCinemaFunnel({
               }}
             />
             <div className="min-w-[5.5rem] shrink-0 text-right">
-              <p className="text-xs font-bold text-white">{s.label}</p>
-              <p className="text-[10px] tabular-nums text-[#a5b4fc]">
+              <p className="cinema-widget-funnel-label">{s.label}</p>
+              <p className="cinema-widget-funnel-meta">
                 {s.value} · {s.pct}%
               </p>
             </div>
@@ -118,10 +115,7 @@ export function CampaignCinemaGauge({
   return (
     <div className="flex flex-col items-center">
       <div className="relative">
-        <div
-          className="pointer-events-none absolute inset-[-30%] rounded-full bg-[radial-gradient(circle,rgba(251,191,36,0.25),transparent_70%)]"
-          aria-hidden
-        />
+        <div className="cinema-widget-gauge-glow pointer-events-none absolute inset-[-30%] rounded-full" aria-hidden />
         <svg width={w} height={h + 10} viewBox={`0 0 ${w} ${h + 10}`} className="relative z-[1]" aria-hidden>
           <defs>
             <linearGradient id="cinema-gauge-grad" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -133,7 +127,7 @@ export function CampaignCinemaGauge({
           <path
             d={`M ${stroke / 2} ${h} A ${r} ${r} 0 0 1 ${w - stroke / 2} ${h}`}
             fill="none"
-            stroke="rgba(255,255,255,0.08)"
+            stroke="var(--cinema-ring-track)"
             strokeWidth={stroke}
             strokeLinecap="round"
           />
@@ -150,8 +144,8 @@ export function CampaignCinemaGauge({
       <p className="-mt-1 text-[1.65rem] font-bold" style={{ color: toneColor }}>
         {tone}
       </p>
-      <p className="text-xs font-medium text-[#8b9cb3]">{waiting} calls waiting</p>
-      <p className="mt-0.5 text-[10px] tabular-nums text-[#6d7f99]">{pct}% queue share</p>
+      <p className="cinema-widget-sub">{waiting} calls waiting</p>
+      <p className="mt-0.5 text-[10px] tabular-nums text-[var(--cinema-text-dim)]">{pct}% queue share</p>
     </div>
   );
 }

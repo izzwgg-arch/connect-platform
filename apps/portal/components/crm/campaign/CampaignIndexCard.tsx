@@ -54,13 +54,13 @@ export function CampaignIndexCard({
         isActive && mk.rowActive,
         isActive && queueGlow && "shadow-[0_0_56px_-6px_rgba(52,211,153,0.42)]",
         isPaused && mk.rowPaused,
-        isDraft && "border-dashed border-white/10",
+        isDraft && "cinema-row-draft",
       )}
     >
       {statusStyle.edge ? (
         <div
           className={cn(
-            "pointer-events-none absolute left-0 top-0 bottom-0 w-1 rounded-l-2xl bg-gradient-to-b to-transparent",
+            "pointer-events-none absolute left-0 top-0 bottom-0 w-1 rounded-l-2xl",
             statusStyle.edge,
           )}
           aria-hidden
@@ -82,7 +82,7 @@ export function CampaignIndexCard({
           </Link>
           {isActive ? (
             <span
-              className="inline-flex h-2 w-2 rounded-full bg-[#34d399] shadow-[0_0_10px_rgba(52,211,153,0.7)]"
+              className="cinema-live-dot"
               title="Live program"
               aria-hidden
             />
@@ -91,7 +91,7 @@ export function CampaignIndexCard({
         <p className={mk.rowDesc}>
           {campaign.description?.trim() || "Outbound program — open desk to work the roster."}
         </p>
-        <p className={cn(mk.rowMeta, pressure.tone === "warn" && "text-[#fcd34d]")}>{pressure.label}</p>
+        <p className={cn(mk.rowMeta, pressure.tone === "warn" && "cinema-pressure-warn")}>{pressure.label}</p>
         <p className={mk.rowMeta}>Updated {formatShortDate(campaign.updatedAt)}</p>
       </div>
 
@@ -121,7 +121,7 @@ export function CampaignIndexCard({
             <button
               type="button"
               onClick={(e) => onQuickStatus(campaign.id, "ACTIVE", e)}
-              className={cn(mk.btnQueueRow, "flex-1 text-[#6ee7b7]")}
+              className={cn(mk.btnQueueRow, "flex-1 cinema-btn-resume")}
             >
               <Play className="h-4 w-4 shrink-0" aria-hidden />
               {isDraft ? "Start" : "Resume"}
@@ -136,12 +136,12 @@ export function CampaignIndexCard({
               >
                 <MoreHorizontal className="h-4 w-4" />
               </button>
-              <div className="absolute right-0 top-full z-30 mt-1 hidden min-w-[8rem] flex-col rounded-xl border border-white/10 bg-[#1a2438] py-1 shadow-xl group-hover/menu:flex group-focus-within/menu:flex">
+              <div className={mk.menuPanel}>
                 {isActive && (
                   <button
                     type="button"
                     onClick={(e) => onQuickStatus(campaign.id, "PAUSED", e)}
-                    className="flex items-center gap-2 px-3 py-2 text-left text-xs text-[#fcd34d] hover:bg-white/5"
+                    className={cn(mk.menuItem, mk.menuItemWarn)}
                   >
                     <Pause className="h-3 w-3" /> Pause
                   </button>
@@ -149,7 +149,7 @@ export function CampaignIndexCard({
                 <button
                   type="button"
                   onClick={(e) => onQuickStatus(campaign.id, "ARCHIVED", e)}
-                  className="flex items-center gap-2 px-3 py-2 text-left text-xs text-[#8b9cb3] hover:bg-white/5 hover:text-[#f87171]"
+                  className={cn(mk.menuItem, mk.menuItemDanger)}
                 >
                   <Archive className="h-3 w-3" /> Archive
                 </button>
@@ -174,7 +174,7 @@ function RowMetric({
   return (
     <div className={mk.rowMetricCol}>
       <p className={mk.rowMetricLabel}>{label}</p>
-      <p className={cn(mk.rowMetricValue, warn && "text-[#fcd34d]")}>{value}</p>
+      <p className={cn(mk.rowMetricValue, warn && "cinema-metric-warn")}>{value}</p>
     </div>
   );
 }

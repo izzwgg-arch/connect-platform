@@ -326,7 +326,7 @@ export default function CampaignsPage() {
       <div className="sticky top-0 z-20">
         <CRMActionBar className={cn(mk.filterBar, "gap-2 sm:gap-3 flex-wrap")}>
           <div className="relative min-w-[10rem] flex-1 max-w-md">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#6d7f99]" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--cinema-text-dim)]" />
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -335,13 +335,13 @@ export default function CampaignsPage() {
               aria-label="Search campaigns"
             />
           </div>
-          <div className={cn(crm.filterPillGroup, "shrink-0")} role="group" aria-label="Filter by status">
+          <div className={cn(mk.filterPillGroup, "shrink-0")} role="group" aria-label="Filter by status">
             {STATUS_FILTER_OPTIONS.map((opt) => (
               <button
                 key={opt.value}
                 type="button"
                 onClick={() => setStatusFilter(opt.value)}
-                className={cn(crm.filterPill, statusFilter === opt.value && crm.filterPillActive)}
+                className={cn(mk.filterPill, statusFilter === opt.value && mk.filterPillActive)}
               >
                 {opt.label}
               </button>
