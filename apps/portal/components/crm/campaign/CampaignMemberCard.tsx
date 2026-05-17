@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { CalendarClock, Edit2, ExternalLink, PhoneCall, X } from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
+import { mk } from "./campaignCinemaClasses";
 import { apiPatch } from "../../../services/apiClient";
 import type { CampaignMember, MemberStatus } from "./campaignTypes";
 import { MEMBER_STATUS_CHIP, MEMBER_STATUS_LABELS } from "./campaignTypes";
@@ -46,15 +47,17 @@ export function CampaignMemberCard({
         : "—";
 
   if (rowMode) {
+    const displayName = member.contact?.displayName ?? "Unknown";
+    const avatarInitial = displayName.charAt(0).toUpperCase();
+
     return (
       <article
         className={cn(
-          crm.campaignMemberRow,
-          selected && "border-crm-accent/40 bg-crm-accent/8 ring-1 ring-crm-accent/20",
-          !selected && activeWork && !archivedLead && "border-crm-accent/30",
-          !selected && isOverdue && "border-crm-danger/40 bg-crm-danger/5",
-          !selected && terminal && "opacity-80",
-          archivedLead && "opacity-85",
+          mk.memberRow,
+          selected && "bg-[#3b82f6]/10 shadow-[inset_0_0_32px_-12px_rgba(59,130,246,0.25)]",
+          !selected && isOverdue && "bg-[#f87171]/5",
+          terminal && "opacity-85",
+          archivedLead && "opacity-80",
         )}
       >
         <div className="flex min-w-0 items-start gap-2 lg:items-center">
@@ -63,17 +66,23 @@ export function CampaignMemberCard({
             checked={selected}
             disabled={readOnly}
             onChange={(e) => onSelect(e.target.checked)}
-            className="mt-0.5 shrink-0 rounded border-crm-border disabled:opacity-40 lg:mt-0"
-            aria-label={`Select ${member.contact?.displayName ?? "member"}`}
+            className="mt-0.5 shrink-0 rounded border-white/20 disabled:opacity-40 lg:mt-0"
+            aria-label={`Select ${displayName}`}
           />
+          <div
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[#3b82f6]/30 bg-gradient-to-br from-[#3b82f6]/25 to-[#1a2438] text-sm font-bold text-[#93c5fd]"
+            aria-hidden
+          >
+            {avatarInitial}
+          </div>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-1.5">
               <button
                 type="button"
                 onClick={() => router.push(`/crm/contacts/${member.contactId}`)}
-                className="truncate text-left text-sm font-semibold text-crm-text hover:text-crm-accent"
+                className="truncate text-left text-sm font-semibold text-white hover:text-[#93c5fd]"
               >
-                {member.contact?.displayName ?? "Unknown"}
+                {displayName}
               </button>
               {archivedLead && (
                 <span className="text-[9px] font-bold uppercase tracking-wide text-crm-warning bg-crm-warning/12 px-1 py-0.5 rounded border border-crm-warning/30">
@@ -81,7 +90,7 @@ export function CampaignMemberCard({
                 </span>
               )}
             </div>
-            <p className="truncate text-xs text-crm-muted">{member.contact?.primaryPhone ?? "—"}</p>
+            <p className="truncate text-xs text-[#8b9cb3]">{member.contact?.primaryPhone ?? "—"}</p>
             {member.contact?.lastDisposition ? (
               <p className="mt-0.5 truncate text-[10px] text-crm-muted lg:hidden">
                 {member.contact.lastDisposition}
@@ -91,14 +100,14 @@ export function CampaignMemberCard({
         </div>
 
         <div className="text-xs">
-          <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Agent</span>
-          <p className="truncate font-medium text-crm-text">{member.assignedTo?.displayName ?? "Unassigned"}</p>
+          <span className="text-[10px] font-semibold uppercase text-[#6d7f99] lg:hidden">Agent</span>
+          <p className="truncate font-medium text-[#e2e9f4]">{member.assignedTo?.displayName ?? "Unassigned"}</p>
         </div>
 
         <div className="flex flex-col gap-1">
           <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Status</span>
           {readOnly ? (
-            <span className={cn("inline-flex w-fit rounded border px-2 py-0.5 text-[10px] font-semibold uppercase", MEMBER_STATUS_CHIP[member.status])}>
+            <span className={cn(mk.pill, "inline-flex w-fit", MEMBER_STATUS_CHIP[member.status])}>
               {MEMBER_STATUS_LABELS[member.status]}
             </span>
           ) : (
@@ -128,17 +137,17 @@ export function CampaignMemberCard({
 
         <div>
           <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Attempts</span>
-          <p className="tabular-nums text-sm font-semibold text-crm-text">{member.attemptCount}</p>
+          <p className="tabular-nums text-sm font-semibold text-white">{member.attemptCount}</p>
         </div>
 
         <div>
           <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Last touch</span>
-          <p className="text-xs text-crm-text">{lastTouch}</p>
+          <p className="text-xs text-[#9aa8be]">{lastTouch}</p>
         </div>
 
         <div>
-          <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Next</span>
-          <p className="text-[11px] font-semibold leading-snug text-crm-accent">{nextAction}</p>
+          <span className="text-[10px] font-semibold uppercase text-[#6d7f99] lg:hidden">Next</span>
+          <p className="text-[11px] font-semibold leading-snug text-[#93c5fd]">{nextAction}</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 lg:justify-end">
@@ -157,7 +166,7 @@ export function CampaignMemberCard({
               )
             }
             disabled={readOnly}
-            className={cn(crm.btnPrimary, "text-xs py-1.5 px-2 disabled:opacity-40")}
+            className={cn(mk.btnPrimary, "text-xs py-1.5 px-2 disabled:opacity-40")}
           >
             <PhoneCall className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Workspace</span>
@@ -165,7 +174,7 @@ export function CampaignMemberCard({
           <button
             type="button"
             onClick={() => router.push(`/crm/contacts/${member.contactId}`)}
-            className={cn(crm.campaignDetailBtnTertiary, "p-1.5")}
+            className={cn(mk.btnQueueRow, "p-1.5")}
             aria-label="Open contact"
           >
             <ExternalLink className="h-3.5 w-3.5" />

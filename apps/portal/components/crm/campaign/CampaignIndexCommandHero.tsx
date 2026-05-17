@@ -2,7 +2,8 @@
 
 import type { ReactNode } from "react";
 import { cn } from "../cn";
-import { crm } from "../crmClasses";
+import { mk, KPI_ACCENT, type CampaignKpiAccent } from "./campaignCinemaClasses";
+import { CampaignKpiSparkline } from "./CampaignKpiSparkline";
 
 export function CampaignIndexCommandHero({
   title,
@@ -16,39 +17,47 @@ export function CampaignIndexCommandHero({
   kpis: {
     label: string;
     value: number | string;
-    tone?: "default" | "warn" | "accent";
+    accent?: CampaignKpiAccent;
+    sub?: string;
   }[];
 }) {
   return (
-    <header className={crm.campaignCommandHero}>
-      <div className={crm.campaignCommandHeroInner}>
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+    <header className={mk.heroShell}>
+      <div className={mk.atmosphere} aria-hidden>
+        <div className="absolute -left-[10%] top-[-40%] h-[70%] w-[55%] rounded-full bg-[radial-gradient(circle,rgba(59,130,246,0.22),transparent_70%)]" />
+        <div className="absolute right-[-5%] top-[-20%] h-[55%] w-[45%] rounded-full bg-[radial-gradient(circle,rgba(139,92,246,0.14),transparent_68%)]" />
+      </div>
+      <div className={mk.heroInner}>
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
-            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-crm-accent/90">Outbound desk</p>
-            <h1 className="mt-1 text-2xl font-bold tracking-tight text-crm-text sm:text-3xl">{title}</h1>
-            <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-crm-muted">{subtitle}</p>
+            <h1 className={mk.heroTitle}>{title}</h1>
+            <p className={mk.heroSubtitle}>{subtitle}</p>
           </div>
-          {actions ? <div className="flex flex-wrap items-center gap-2 shrink-0">{actions}</div> : null}
+          {actions ? <div className={mk.heroActions}>{actions}</div> : null}
         </div>
 
         {kpis.length > 0 ? (
-          <dl className={crm.campaignCommandHeroKpiGrid}>
-            {kpis.map((k) => (
-              <div
-                key={k.label}
-                className={cn(
-                  crm.campaignCommandHeroKpi,
-                  k.tone === "warn" && crm.campaignCommandHeroKpiUrgent,
-                  k.tone === "accent" && crm.campaignCommandHeroKpiAccent,
-                )}
-              >
-                <dt className={crm.campaignCommandHeroKpiLabel}>{k.label}</dt>
-                <dd className={cn(crm.campaignCommandHeroKpiValue, k.tone === "warn" && "text-crm-warning")}>
-                  {k.value}
-                </dd>
-              </div>
-            ))}
-          </dl>
+          <div className={mk.kpiGrid}>
+            {kpis.map((k) => {
+              const accent = k.accent ?? "blue";
+              const a = KPI_ACCENT[accent];
+              return (
+                <div
+                  key={k.label}
+                  className={cn(mk.kpiCard, a.border, a.glow)}
+                >
+                  <p className={mk.kpiLabel}>{k.label}</p>
+                  <p className={mk.kpiValue}>{k.value}</p>
+                  {k.sub ? <p className={cn(mk.kpiSub, a.sub)}>{k.sub}</p> : null}
+                  <CampaignKpiSparkline
+                    seed={`${k.label}-${k.value}`}
+                    color={a.spark}
+                    className={mk.kpiSpark}
+                  />
+                </div>
+              );
+            })}
+          </div>
         ) : null}
       </div>
     </header>

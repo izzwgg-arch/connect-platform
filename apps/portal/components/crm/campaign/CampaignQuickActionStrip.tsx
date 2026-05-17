@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Keyboard, ListOrdered, Megaphone, PhoneCall, Zap } from "lucide-react";
 import { cn } from "../cn";
-import { crm } from "../crmClasses";
+import { mk, STRIP_ACCENT } from "./campaignCinemaClasses";
 import { powerQueueHref, queueHref } from "./campaignUtils";
 
 export function CampaignQuickActionStrip({
@@ -33,115 +33,129 @@ export function CampaignQuickActionStrip({
     variant === "index"
       ? [
           {
-            key: "new",
+            key: "new" as const,
             label: "New campaign",
-            hint: isAdmin ? "Press N" : "Admin only",
-            icon: <Keyboard className="h-3.5 w-3.5 shrink-0 text-crm-muted" />,
+            hint: isAdmin ? "Press N to create" : "Admin only",
+            icon: Keyboard,
             kbd: isAdmin ? "N" : undefined,
             onClick: isAdmin ? onNewCampaign : undefined,
             href: undefined as string | undefined,
             disabled: !isAdmin,
           },
           {
-            key: "callbacks",
-            label: "Review callbacks",
-            hint: callbacks > 0 ? `${callbacks} across programs` : "No callback pressure",
-            icon: <PhoneCall className="h-3.5 w-3.5 shrink-0 text-crm-warning" />,
-            href: canQueue ? callbackLink : undefined,
+            key: "power" as const,
+            label: "Power mode",
+            hint: "Outbound dialing session",
+            icon: Zap,
+            href: canQueue ? powerLink : undefined,
             disabled: !canQueue,
           },
           {
-            key: "queue",
-            label: "Queue work",
+            key: "queue" as const,
+            label: "Check queue",
             hint: queueWork > 0 ? `${queueWork} items waiting` : "Queue is clear",
-            icon: <ListOrdered className="h-3.5 w-3.5 shrink-0 text-crm-accent" />,
+            icon: ListOrdered,
             href: canQueue ? queueLink : undefined,
             disabled: !canQueue,
           },
           {
-            key: "power",
-            label: "Power mode",
-            hint: campaignId ? "Dial this program" : "Open power queue",
-            icon: <Zap className="h-3.5 w-3.5 shrink-0 text-crm-accent" />,
-            href: canQueue && campaignId ? powerLink : canQueue ? "/crm/queue?mode=power" : undefined,
+            key: "callbacks" as const,
+            label: "Review callbacks",
+            hint: callbacks > 0 ? `${callbacks} across programs` : "No callback pressure",
+            icon: PhoneCall,
+            href: canQueue ? callbackLink : undefined,
             disabled: !canQueue,
           },
         ]
       : [
           {
-            key: "new",
+            key: "new" as const,
             label: "New campaign",
             hint: "Create another program",
-            icon: <Megaphone className="h-3.5 w-3.5 shrink-0 text-crm-muted" />,
+            icon: Megaphone,
             href: isAdmin ? "/crm/campaigns" : undefined,
             onClick: isAdmin ? onNewCampaign : undefined,
             disabled: !isAdmin,
           },
           {
-            key: "power",
+            key: "power" as const,
             label: "Power mode",
-            hint: "Outbound dialing session",
-            icon: <Zap className="h-3.5 w-3.5 shrink-0 text-crm-accent" />,
+            hint: "Dial this program",
+            icon: Zap,
             href: canQueue && campaignId ? powerLink : undefined,
             disabled: !canQueue || !campaignId,
           },
           {
-            key: "queue",
+            key: "queue" as const,
             label: "Check queue",
             hint: queueWork > 0 ? `${queueWork} in queue` : "Open work queue",
-            icon: <ListOrdered className="h-3.5 w-3.5 shrink-0 text-crm-accent" />,
+            icon: ListOrdered,
             href: canQueue && campaignId ? queueLink : undefined,
             disabled: !canQueue || !campaignId,
           },
           {
-            key: "callbacks",
+            key: "callbacks" as const,
             label: "Review callbacks",
             hint: callbacks > 0 ? `${callbacks} callbacks` : "Callback queue",
-            icon: <PhoneCall className="h-3.5 w-3.5 shrink-0 text-crm-warning" />,
+            icon: PhoneCall,
             href: canQueue && campaignId ? callbackLink : undefined,
             disabled: !canQueue || !campaignId,
           },
         ];
 
   return (
-    <nav className={crm.campaignQuickStrip} aria-label="Campaign quick actions">
-      {items.map((item) => {
-        const inner = (
-          <>
-            <span className="flex items-center gap-1.5">
-              {item.icon}
-              <span className={crm.campaignQuickStripLabel}>{item.label}</span>
-              {"kbd" in item && item.kbd ? (
-                <kbd className={crm.campaignQuickStripKbd}>{item.kbd}</kbd>
-              ) : null}
-            </span>
-            <span className={crm.campaignQuickStripHint}>{item.hint}</span>
-          </>
-        );
-
-        if (item.href && !item.disabled) {
-          return (
-            <Link key={item.key} href={item.href} className={crm.campaignQuickStripItem}>
-              {inner}
-            </Link>
+    <nav
+      className="fixed bottom-0 left-0 right-0 z-40 border-t border-white/[0.06] bg-[#080b12]/90 px-3 py-3 backdrop-blur-xl sm:px-6"
+      aria-label="Campaign quick actions"
+    >
+      <div className={cn("mx-auto max-w-[min(100%,1680px)]", mk.stripGrid)}>
+        {items.map((item) => {
+          const accent = STRIP_ACCENT[item.key];
+          const Icon = item.icon;
+          const body = (
+            <>
+              <span className={cn(mk.stripIcon, accent.icon)}>
+                <Icon className="h-5 w-5 shrink-0" aria-hidden />
+              </span>
+              <span className="min-w-0">
+                <span className="flex items-center gap-2">
+                  <span className={mk.stripTitle}>{item.label}</span>
+                  {"kbd" in item && item.kbd ? (
+                    <kbd className="rounded border border-white/15 bg-white/5 px-1.5 py-0.5 text-[10px] font-bold text-[#8b9cb3]">
+                      {item.kbd}
+                    </kbd>
+                  ) : null}
+                </span>
+                <span className={mk.stripHint}>{item.hint}</span>
+              </span>
+            </>
           );
-        }
 
-        return (
-          <button
-            key={item.key}
-            type="button"
-            disabled={item.disabled}
-            onClick={item.onClick}
-            className={cn(
-              crm.campaignQuickStripItem,
-              item.disabled && "cursor-not-allowed opacity-50 hover:bg-transparent",
-            )}
-          >
-            {inner}
-          </button>
-        );
-      })}
+          if (item.href && !item.disabled) {
+            return (
+              <Link
+                key={item.key}
+                href={item.href}
+                className={cn(mk.stripCard, accent.card)}
+              >
+                {body}
+              </Link>
+            );
+          }
+
+          return (
+            <button
+              key={item.key}
+              type="button"
+              disabled={item.disabled}
+              onClick={item.onClick}
+              className={cn(mk.stripCard, accent.card, item.disabled && "cursor-not-allowed")}
+            >
+              {body}
+            </button>
+          );
+        })}
+      </div>
     </nav>
   );
 }

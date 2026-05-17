@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  ArrowLeft, Play, Pause, Archive, Users, Plus, Search,
+  Play, Pause, Archive, Users, Plus, Search,
   PhoneCall, X, Edit2, Save, Download, UserPlus, CheckSquare2, Square, CalendarClock,
   Shuffle, BarChart2, Upload, History, ListOrdered, ChevronDown,
 } from "lucide-react";
@@ -23,6 +23,7 @@ import {
   type CampaignMember,
 } from "../../../../../components/crm";
 import { crm } from "../../../../../components/crm/crmClasses";
+import { mk } from "../../../../../components/crm/campaign/campaignCinemaClasses";
 import { cn } from "../../../../../components/crm/cn";
 import { apiGet, apiPost, apiPatch } from "../../../../../services/apiClient";
 import { useAppContext } from "../../../../../hooks/useAppContext";
@@ -840,7 +841,7 @@ export default function CampaignDetailPage() {
   const hd = health!;
 
   return (
-    <CRMPageShell innerClassName={cn(crm.pageInnerCampaign, crm.campaignWorkspace, "pb-32")}>
+    <CRMPageShell innerClassName={cn(mk.pageInner, mk.workspace, "pb-36")}>
       {showAddContacts && (
         <AddContactsModal
           campaignId={campaignId}
@@ -1208,11 +1209,6 @@ export default function CampaignDetailPage() {
           )}
 
 
-        <button type="button" onClick={() => router.push("/crm/campaigns")} className="flex items-center gap-1.5 text-sm text-crm-muted hover:text-crm-text">
-          <ArrowLeft className="h-4 w-4" />
-          Campaigns
-        </button>
-
         <CampaignCommandHeader
           campaign={campaign}
           health={hd}
@@ -1241,7 +1237,7 @@ export default function CampaignDetailPage() {
           onDistribute={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
         />
 
-        <div className={crm.campaignDetailStack}>
+        <div className="flex w-full min-w-0 flex-col gap-5">
         <CampaignPerformancePanel campaign={campaign} health={hd} />
 
         <CampaignDetailCommandPanel
@@ -1270,12 +1266,12 @@ export default function CampaignDetailPage() {
           onFilterUnassigned={() => { setAssigneeFilter("UNASSIGNED"); loadMembers("UNASSIGNED"); }}
         />
 
-            <section className={crm.campaignRosterShell} aria-label={`Members (${membersTotal})`}>
-              <div className="border-b border-crm-border/70 px-3 py-2.5 sm:px-4">
-                <h2 className="text-base font-semibold text-crm-text">Members ({membersTotal})</h2>
-                <p className="text-[11px] text-crm-muted">Operational roster — server-side filters, 100 per load</p>
+            <section className={mk.rosterShell} aria-label={`Members (${membersTotal})`}>
+              <div className={mk.rosterHead}>
+                <h2 className="text-lg font-bold text-white">Members ({membersTotal})</h2>
+                <p className="mt-0.5 text-xs text-[#8b9cb3]">Operational roster — server-side filters, 100 per load</p>
               </div>
-          <div className={cn(crm.campaignRosterToolbar, "mb-0 border-b-0")}>
+          <div className="flex flex-wrap items-center gap-2 border-b border-white/[0.06] px-4 py-3 sm:px-6">
             <div className="relative flex-1 min-w-[160px] max-w-xs">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-crm-muted/80" />
               <input
@@ -1405,7 +1401,7 @@ export default function CampaignDetailPage() {
             />
           ) : (
             <div className={crm.campaignRosterBody}>
-              <div className={crm.campaignRosterTableHead}>
+              <div className={mk.rosterTableHead}>
                 <span>Member</span>
                 <span>Agent</span>
                 <span>Status</span>

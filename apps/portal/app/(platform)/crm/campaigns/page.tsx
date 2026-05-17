@@ -16,6 +16,7 @@ import {
   type CampaignStatus,
 } from "../../../../components/crm";
 import { crm } from "../../../../components/crm/crmClasses";
+import { mk } from "../../../../components/crm/campaign/campaignCinemaClasses";
 import { apiGet, apiPost, apiPatch } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { cn } from "../../../../components/crm/cn";
@@ -247,7 +248,7 @@ export default function CampaignsPage() {
   const listEmptyAfterFilter = !loading && !error && campaigns.length > 0 && filtered.length === 0;
 
   return (
-    <CRMPageShell innerClassName={cn(crm.pageInnerCampaign, crm.campaignWorkspace, "pb-32")}>
+    <CRMPageShell innerClassName={cn(mk.pageInner, mk.workspace, "pb-36")}>
       {showCreate && isAdmin && (
         <CreateCampaignModal
           onClose={() => setShowCreate(false)}
@@ -265,19 +266,19 @@ export default function CampaignsPage() {
         actions={
           <>
             {isAdmin && (
-              <button type="button" onClick={() => setShowCreate(true)} className={crm.btnPrimary}>
+              <button type="button" onClick={() => setShowCreate(true)} className={mk.btnPrimary}>
                 <Plus className="h-4 w-4" />
                 New campaign
               </button>
             )}
             {canImport && (
-              <Link href="/crm/import" className={crm.btnSecondary}>
+              <Link href="/crm/import" className={mk.btnSecondary}>
                 <FileUp className="h-4 w-4" />
                 Import leads
               </Link>
             )}
             {canQueue && (
-              <Link href="/crm/queue" className={crm.btnSecondary}>
+              <Link href="/crm/queue" className={mk.btnSecondary}>
                 <ListOrdered className="h-4 w-4" />
                 My queue
               </Link>
@@ -288,23 +289,48 @@ export default function CampaignsPage() {
           loading || error || campaigns.length === 0
             ? []
             : [
-                { label: "Active", value: summary.active, tone: summary.active > 0 ? "accent" : "default" },
-                { label: "Paused", value: summary.paused },
-                { label: "Queue work", value: summary.queueWork, tone: summary.queueWork > 0 ? "warn" : "default" },
-                { label: "Callbacks", value: summary.callbacks, tone: summary.callbacks > 0 ? "warn" : "default" },
-                { label: "Members", value: summary.members },
+                {
+                  label: "Active campaigns",
+                  value: summary.active,
+                  accent: "green" as const,
+                  sub: summary.active > 0 ? "Programs live" : "None active",
+                },
+                {
+                  label: "Paused",
+                  value: summary.paused,
+                  accent: "amber" as const,
+                  sub: summary.paused > 0 ? "On hold" : "All clear",
+                },
+                {
+                  label: "Queue work",
+                  value: summary.queueWork,
+                  accent: "violet" as const,
+                  sub: summary.queueWork > 0 ? "Needs attention" : "Queue clear",
+                },
+                {
+                  label: "Callbacks",
+                  value: summary.callbacks,
+                  accent: "orange" as const,
+                  sub: summary.callbacks > 0 ? "Follow up" : "No pressure",
+                },
+                {
+                  label: "Members",
+                  value: summary.members,
+                  accent: "cyan" as const,
+                  sub: "Across programs",
+                },
               ]
         }
       />
 
-      <div className={crm.campaignCommandSticky}>
-        <CRMActionBar className={cn(crm.campaignFilterBar, "gap-2 sm:gap-3 flex-wrap")}>
+      <div className="sticky top-0 z-20">
+        <CRMActionBar className={cn(mk.filterBar, "gap-2 sm:gap-3 flex-wrap")}>
           <div className="relative min-w-[10rem] flex-1 max-w-md">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-crm-muted" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#6d7f99]" />
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className={crm.campaignSearchInput}
+              className={mk.searchInput}
               placeholder="Search campaigns…"
               aria-label="Search campaigns"
             />
@@ -384,7 +410,7 @@ export default function CampaignsPage() {
           }
         />
       ) : (
-        <ul className={crm.campaignIndexRowList}>
+        <ul className={mk.rowList}>
           {filtered.map((campaign) => (
             <li key={campaign.id} className="list-none">
               <CampaignIndexCard

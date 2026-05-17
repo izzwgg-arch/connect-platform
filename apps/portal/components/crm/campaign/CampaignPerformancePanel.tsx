@@ -1,14 +1,14 @@
 "use client";
 
-import { CRMHorizontalBars } from "../charts";
-import { CRMRingMetric } from "../charts/CRMRingMetric";
-import { CRM_CHART_COLORS } from "../charts/chartColors";
-import { crm } from "../crmClasses";
-import { cn } from "../cn";
+import { mk } from "./campaignCinemaClasses";
 import type { CampaignDetail } from "./campaignTypes";
 import type { CampaignHealth } from "./campaignUtils";
+import {
+  CampaignCinemaFunnel,
+  CampaignCinemaGauge,
+  CampaignCinemaRing,
+} from "./CampaignCinemaWidgets";
 
-/** Integrated performance surface — conversion ring, funnel, queue pressure (real health only). */
 export function CampaignPerformancePanel({
   campaign: _campaign,
   health,
@@ -16,95 +16,91 @@ export function CampaignPerformancePanel({
   campaign: CampaignDetail;
   health: CampaignHealth;
 }) {
-  const funnelBars = [
-    { label: "Active queue", value: health.activeQueueWork, color: CRM_CHART_COLORS.accent },
-    { label: "Callbacks", value: health.callback, color: CRM_CHART_COLORS.warning },
-    { label: "Contacted+", value: health.contactedProgress, color: CRM_CHART_COLORS.violet },
-    { label: "Converted", value: health.converted, color: CRM_CHART_COLORS.success },
+  const funnelStages = [
+    {
+      label: "Active queue",
+      value: health.activeQueueWork,
+      pct: health.total > 0 ? Math.round((health.activeQueueWork / health.total) * 100) : 0,
+    },
+    {
+      label: "Callbacks",
+      value: health.callback,
+      pct: health.total > 0 ? Math.round((health.callback / health.total) * 100) : 0,
+    },
+    {
+      label: "Contacted+",
+      value: health.contactedProgress,
+      pct: health.total > 0 ? Math.round((health.contactedProgress / health.total) * 100) : 0,
+    },
+    {
+      label: "Converted",
+      value: health.converted,
+      pct: health.conversionPct,
+    },
   ];
 
   const queuePressurePct =
     health.total > 0 ? Math.min(100, Math.round((health.activeQueueWork / health.total) * 100)) : 0;
-  const callbackSharePct =
-    health.total > 0 ? Math.min(100, Math.round((health.callback / health.total) * 100)) : 0;
 
   return (
-    <section className={crm.campaignPerformanceSurface} aria-label="Campaign performance">
-      <div className={crm.campaignPerformanceSurfaceInner}>
-        <div className={crm.campaignPerformanceZone}>
-          <p className={crm.label}>Conversion</p>
-          <div className="mt-3 flex flex-col items-center sm:items-start">
-            <CRMRingMetric
-              value={health.conversionPct}
-              max={100}
-              label={`${health.conversionPct}% converted`}
-              sublabel={`${health.converted} of ${health.total} members`}
-              color="var(--crm-success)"
-              size={104}
-              stroke={11}
+    <section className={mk.perfShell} aria-label="Performance overview">
+      <div className="border-b border-white/[0.06] px-5 py-4 sm:px-6">
+        <h2 className="text-lg font-bold text-white">Performance overview</h2>
+        <p className="mt-0.5 text-xs text-[#8b9cb3]">Live roster snapshot — not a forecast</p>
+      </div>
+      <div className={mk.perfGrid}>
+        <div className={mk.perfWidget}>
+          <div
+            className={mk.perfWidgetGlow}
+            style={{
+              background:
+                "radial-gradient(ellipse 80% 70% at 30% 20%, rgba(52,211,153,0.2), transparent 60%)",
+            }}
+          />
+          <p className="relative z-[1] text-[10px] font-bold uppercase tracking-wider text-[#6d7f99]">
+            Conversion ring
+          </p>
+          <div className="relative z-[1] mt-4 flex flex-1 items-center justify-center lg:justify-start">
+            <CampaignCinemaRing
+              pct={health.conversionPct}
+              converted={health.converted}
+              total={health.total}
             />
           </div>
         </div>
 
-        <div className={crm.campaignPerformanceZone}>
-          <p className={crm.label}>Contact funnel</p>
-          <div className="mt-3 min-w-0">
-            <CRMHorizontalBars items={funnelBars} />
-          </div>
-          <p className="mt-3 text-[10px] leading-snug text-crm-muted">
-            Counts from live roster status — not a forecast.
+        <div className={mk.perfWidget}>
+          <div
+            className={mk.perfWidgetGlow}
+            style={{
+              background:
+                "radial-gradient(ellipse 80% 70% at 50% 30%, rgba(99,102,241,0.22), transparent 65%)",
+            }}
+          />
+          <p className="relative z-[1] text-[10px] font-bold uppercase tracking-wider text-[#6d7f99]">
+            Conversion funnel
           </p>
+          <div className="relative z-[1] mt-2">
+            <CampaignCinemaFunnel stages={funnelStages} />
+          </div>
         </div>
 
-        <div className={crm.campaignPerformanceZone}>
-          <p className={crm.label}>Queue pressure</p>
-          <div className="mt-3 space-y-3">
-            <PressureMeter
-              label="Active queue work"
-              value={health.activeQueueWork}
-              pct={queuePressurePct}
-              tone="accent"
-            />
-            <PressureMeter
-              label="Callbacks"
-              value={health.callback}
-              pct={callbackSharePct}
-              tone="warn"
-            />
-          </div>
-          <p className="mt-3 text-[10px] leading-snug text-crm-muted">
-            Share of roster in pending + in progress, and in CALLBACK.
+        <div className={mk.perfWidget}>
+          <div
+            className={mk.perfWidgetGlow}
+            style={{
+              background:
+                "radial-gradient(ellipse 80% 70% at 60% 40%, rgba(251,191,36,0.18), transparent 65%)",
+            }}
+          />
+          <p className="relative z-[1] text-[10px] font-bold uppercase tracking-wider text-[#6d7f99]">
+            Live queue pressure
           </p>
+          <div className="relative z-[1] mt-4 flex flex-1 items-center justify-center">
+            <CampaignCinemaGauge waiting={health.activeQueueWork} pct={queuePressurePct} />
+          </div>
         </div>
       </div>
     </section>
-  );
-}
-
-function PressureMeter({
-  label,
-  value,
-  pct,
-  tone,
-}: {
-  label: string;
-  value: number;
-  pct: number;
-  tone: "accent" | "warn";
-}) {
-  const barClass = tone === "warn" ? "bg-crm-warning" : "bg-crm-accent";
-  return (
-    <div>
-      <div className="flex items-baseline justify-between gap-2 text-xs">
-        <span className="font-medium text-crm-text">{label}</span>
-        <span className="tabular-nums font-bold text-crm-text">
-          {value}
-          <span className="ml-1 text-[10px] font-semibold text-crm-muted">({pct}%)</span>
-        </span>
-      </div>
-      <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-crm-surface-2">
-        <div className={cn("h-full rounded-full transition-[width] duration-500", barClass)} style={{ width: `${pct}%` }} />
-      </div>
-    </div>
   );
 }

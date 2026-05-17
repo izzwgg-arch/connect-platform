@@ -3,9 +3,11 @@
 import Link from "next/link";
 import {
   Archive,
+  ChevronDown,
   Download,
   Edit2,
   ListOrdered,
+  Megaphone,
   Pause,
   Play,
   Plus,
@@ -17,11 +19,10 @@ import {
 } from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
-import { CRMCard } from "../CRMCard";
+import { mk, ROW_STATUS } from "./campaignCinemaClasses";
 import type { CampaignDetail, CampaignImportHistoryRow } from "./campaignTypes";
-import { CampaignPriorityBadge, CampaignStatusBadge } from "./CampaignStatusBadge";
-import type { CampaignHealth } from "./campaignUtils";
 import { CAMPAIGN_PRIORITY_LABELS, CAMPAIGN_STATUS_LABELS } from "./campaignTypes";
+import type { CampaignHealth } from "./campaignUtils";
 import { lastImportLabel, powerQueueHref, queueHref } from "./campaignUtils";
 
 export function CampaignCommandHeader({
@@ -60,174 +61,196 @@ export function CampaignCommandHeader({
   onDistribute: () => void;
 }) {
   const lastImport = lastImportLabel(importHistory);
+  const statusStyle = ROW_STATUS[campaign.status] ?? ROW_STATUS.DRAFT;
+  const isActive = campaign.status === "ACTIVE";
   const objective =
     campaign.description?.trim() ||
-    `${CAMPAIGN_STATUS_LABELS[campaign.status]} program · ${CAMPAIGN_PRIORITY_LABELS[campaign.priority ?? "NORMAL"]} queue priority`;
+    `${CAMPAIGN_STATUS_LABELS[campaign.status]} program · ${CAMPAIGN_PRIORITY_LABELS[campaign.priority ?? "NORMAL"]} priority`;
+
+  const kpis = [
+    { label: "Members", value: health.total },
+    { label: "Queue work", value: health.activeQueueWork, urgent: health.activeQueueWork > 0 },
+    { label: "Callbacks", value: health.callback, urgent: health.callback > 0 },
+    { label: "Contacted", value: health.contactedProgress },
+    { label: "Converted", value: health.converted },
+    { label: "Conv. rate", value: `${health.conversionPct}%` },
+  ];
 
   return (
-    <CRMCard className="overflow-hidden p-0">
-      <div className="grid gap-0 lg:grid-cols-12">
-        <div className="border-b border-crm-border/60 p-3 sm:p-4 lg:col-span-4 lg:border-b-0 lg:border-r">
-          {editingName ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                autoFocus
-                value={nameInput}
-                onChange={(e) => onNameInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") onSaveName();
-                  if (e.key === "Escape") onCancelEditName();
-                }}
-                className={cn(crm.input, "max-w-md text-lg font-semibold")}
-              />
-              <button type="button" onClick={onSaveName} className={crm.btnPrimary} aria-label="Save name">
-                <Save className="h-4 w-4" />
-              </button>
-              <button type="button" onClick={onCancelEditName} className={crm.campaignDetailBtnTertiary} aria-label="Cancel">
-                <X className="h-4 w-4" />
-              </button>
+    <header className={mk.detailHero}>
+      <div className={mk.atmosphere} aria-hidden>
+        <div className="absolute left-[-8%] top-[-35%] h-[65%] w-[50%] rounded-full bg-[radial-gradient(circle,rgba(52,211,153,0.16),transparent_70%)]" />
+        <div className="absolute right-[-5%] top-0 h-[50%] w-[40%] rounded-full bg-[radial-gradient(circle,rgba(59,130,246,0.12),transparent_68%)]" />
+      </div>
+
+      <div className={mk.detailHeroInner}>
+        <p className={mk.breadcrumb}>
+          <Link href="/crm/campaigns" className="hover:text-[#93c5fd]">
+            Campaigns
+          </Link>
+          <span className="mx-1.5 text-white/25">/</span>
+          <span className="text-[#9aa8be]">{campaign.name}</span>
+        </p>
+
+        <div className={mk.detailTitleRow}>
+          <div className="flex min-w-0 flex-1 gap-4">
+            <div className={cn(mk.rowBadge, statusStyle.badge, "h-16 w-16 shrink-0")}>
+              <Megaphone className={cn("h-8 w-8", statusStyle.icon)} aria-hidden />
             </div>
-          ) : (
-            <div className="flex items-start gap-2">
-              <h1 className="text-xl font-bold tracking-tight text-crm-text sm:text-2xl">{campaign.name}</h1>
-              <button
-                type="button"
-                onClick={onStartEditName}
-                className={cn(crm.campaignDetailBtnTertiary, "mt-0.5 shrink-0 p-1.5")}
-                aria-label="Edit campaign name"
-              >
-                <Edit2 className="h-4 w-4" />
-              </button>
+            <div className="min-w-0 flex-1">
+              {editingName ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    autoFocus
+                    value={nameInput}
+                    onChange={(e) => onNameInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") onSaveName();
+                      if (e.key === "Escape") onCancelEditName();
+                    }}
+                    className={cn(crm.input, "max-w-md text-xl font-bold")}
+                  />
+                  <button type="button" onClick={onSaveName} className={mk.btnGreen} aria-label="Save name">
+                    <Save className="h-4 w-4" />
+                  </button>
+                  <button type="button" onClick={onCancelEditName} className={mk.btnSecondary} aria-label="Cancel">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">{campaign.name}</h1>
+                  <span className={cn(mk.pill, isActive ? mk.statusPillActive : mk.statusPillPaused)}>
+                    {CAMPAIGN_STATUS_LABELS[campaign.status]}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onStartEditName}
+                    className="rounded-lg border border-white/10 p-1.5 text-[#8b9cb3] hover:border-white/20 hover:text-white"
+                    aria-label="Edit campaign name"
+                  >
+                    <Edit2 className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
+              <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[#9aa8be]">{objective}</p>
+              {(campaign.script || campaign.checklist) && (
+                <p className="mt-2 text-xs text-[#6d7f99]">
+                  {campaign.script ? (
+                    <>
+                      Script: <span className="font-medium text-[#e2e9f4]">{campaign.script.name}</span>
+                    </>
+                  ) : null}
+                  {campaign.script && campaign.checklist ? " · " : null}
+                  {campaign.checklist ? (
+                    <>
+                      Checklist: <span className="font-medium text-[#e2e9f4]">{campaign.checklist.name}</span>
+                    </>
+                  ) : null}
+                </p>
+              )}
             </div>
-          )}
-          <p className="mt-2 line-clamp-3 text-sm leading-snug text-crm-muted">{objective}</p>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <CampaignStatusBadge status={campaign.status} variant="index" />
-            <CampaignPriorityBadge priority={campaign.priority ?? "NORMAL"} />
           </div>
-          {(campaign.script || campaign.checklist) && (
-            <p className="mt-2 text-xs text-crm-muted">
-              {campaign.script ? (
-                <>
-                  Script: <span className="font-medium text-crm-text">{campaign.script.name}</span>
-                </>
-              ) : null}
-              {campaign.script && campaign.checklist ? " · " : null}
-              {campaign.checklist ? (
-                <>
-                  Checklist: <span className="font-medium text-crm-text">{campaign.checklist.name}</span>
-                </>
-              ) : null}
-            </p>
-          )}
+
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center lg:justify-end">
+            {canQueue && isActive && (
+              <Link href={powerQueueHref(campaign.id)} className={mk.btnGreen}>
+                <Zap className="h-4 w-4 shrink-0" />
+                Open in dialer
+              </Link>
+            )}
+            {canQueue && (
+              <Link href={queueHref(campaign.id)} className={mk.btnSecondary}>
+                <ListOrdered className="h-4 w-4 shrink-0" />
+                Queue
+                <ChevronDown className="h-3.5 w-3.5 opacity-60" aria-hidden />
+              </Link>
+            )}
+            {canQueue && isActive && (
+              <Link
+                href={powerQueueHref(campaign.id)}
+                className="inline-flex items-center gap-2 rounded-xl border border-[#fb923c]/35 bg-[#fb923c]/10 px-4 py-2.5 text-sm font-semibold text-[#fdba74] hover:border-[#fb923c]/50"
+              >
+                <Zap className="h-4 w-4" />
+                Power mode
+              </Link>
+            )}
+          </div>
         </div>
 
-        <div className="border-b border-crm-border/60 bg-crm-surface-2/30 p-3 sm:p-4 lg:col-span-5 lg:border-b-0 lg:border-r">
-          <p className={crm.label}>Live snapshot</p>
-          <dl className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
-            <HeaderStat label="Queue work" value={health.activeQueueWork} hint="Pending + in progress" urgent={health.activeQueueWork > 0} />
-            <HeaderStat label="Callbacks" value={health.callback} hint="CALLBACK status" urgent={health.callback > 0} />
-            <HeaderStat label="Members" value={health.total} />
-            <HeaderStat label="Converted" value={`${health.converted} (${health.conversionPct}%)`} />
-            <HeaderStat label="Assigned agents" value={health.activeAgents} hint="With roster load" />
-            <HeaderStat
-              label="Unassigned"
-              value={health.unassignedMembers}
-              hint="Needs distribute"
-              urgent={isAdmin && health.unassignedMembers > 0}
-            />
-          </dl>
-          <p className="mt-3 text-[11px] leading-snug text-crm-muted">
+        <dl className={mk.detailKpiBand}>
+          {kpis.map((k) => (
+            <div
+              key={k.label}
+              className={cn(
+                mk.detailKpiTile,
+                k.urgent && "border-[#fbbf24]/35 bg-[#fbbf24]/8",
+              )}
+            >
+              <dt className="text-[10px] font-bold uppercase tracking-wider text-[#6d7f99]">{k.label}</dt>
+              <dd className={cn(mk.detailKpiValue, k.urgent && "text-[#fcd34d]")}>{k.value}</dd>
+            </div>
+          ))}
+        </dl>
+
+        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/[0.06] pt-4">
+          {campaign.status === "DRAFT" && isAdmin && (
+            <button type="button" onClick={() => onUpdateStatus("ACTIVE")} className={mk.btnPrimary}>
+              <Play className="h-4 w-4" /> Start campaign
+            </button>
+          )}
+          {campaign.status === "PAUSED" && isAdmin && (
+            <button type="button" onClick={() => onUpdateStatus("ACTIVE")} className={mk.btnPrimary}>
+              <Play className="h-4 w-4" /> Resume
+            </button>
+          )}
+          {isAdmin && (
+            <button type="button" onClick={onImport} className={mk.btnSecondary}>
+              <Upload className="h-4 w-4" /> Import CSV
+            </button>
+          )}
+          <button type="button" onClick={onAddContacts} className={mk.btnSecondary}>
+            <Plus className="h-4 w-4" /> Add contacts
+          </button>
+          {isAdmin && (
+            <button type="button" onClick={onDistribute} className={mk.btnSecondary}>
+              <Shuffle className="h-4 w-4" /> Distribute
+            </button>
+          )}
+          {campaign.status === "ACTIVE" && isAdmin && (
+            <button
+              type="button"
+              onClick={() => onUpdateStatus("PAUSED")}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-[#fbbf24]/30 px-3 py-2 text-xs font-semibold text-[#fcd34d] hover:bg-[#fbbf24]/10"
+            >
+              <Pause className="h-3.5 w-3.5" /> Pause
+            </button>
+          )}
+          {(campaign.status === "ACTIVE" || campaign.status === "PAUSED") && isAdmin && (
+            <button
+              type="button"
+              onClick={() => {
+                if (confirm("Archive this campaign?")) onUpdateStatus("ARCHIVED");
+              }}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-3 py-2 text-xs font-semibold text-[#8b9cb3] hover:text-[#f87171]"
+            >
+              <Archive className="h-3.5 w-3.5" /> Archive
+            </button>
+          )}
+          <button type="button" onClick={onExport} className={mk.btnSecondary}>
+            <Download className="h-4 w-4" /> Export
+          </button>
+          <p className="ml-auto w-full text-[11px] text-[#6d7f99] sm:w-auto">
             {lastImport ? (
               <>
-                Last import: <span className="font-medium text-crm-text">{lastImport}</span>
+                Last import: <span className="font-medium text-[#9aa8be]">{lastImport}</span>
               </>
             ) : (
               "No campaign CSV imports on record yet."
             )}
           </p>
         </div>
-
-        <div className="flex min-w-0 flex-col gap-2 p-3 sm:p-4 lg:col-span-3">
-          <p className={crm.label}>Operations</p>
-          <div className="mt-1 flex flex-col gap-1.5">
-            {campaign.status === "DRAFT" && isAdmin && (
-              <button type="button" onClick={() => onUpdateStatus("ACTIVE")} className={cn(crm.btnPrimary, "w-full justify-center text-sm py-2")}>
-                <Play className="h-4 w-4 shrink-0" /> Start campaign
-              </button>
-            )}
-            {campaign.status === "PAUSED" && isAdmin && (
-              <button type="button" onClick={() => onUpdateStatus("ACTIVE")} className={cn(crm.btnPrimary, "w-full justify-center text-sm py-2")}>
-                <Play className="h-4 w-4 shrink-0" /> Resume campaign
-              </button>
-            )}
-            {canQueue && (
-              <Link href={queueHref(campaign.id)} className={cn(crm.btnPrimary, "w-full justify-center text-sm py-2")}>
-                <ListOrdered className="h-4 w-4 shrink-0" /> Open queue
-              </Link>
-            )}
-            {canQueue && campaign.status === "ACTIVE" && (
-              <Link href={powerQueueHref(campaign.id)} className={cn(crm.campaignDetailBtnSecondary, "w-full justify-center text-sm")}>
-                <Zap className="h-4 w-4 shrink-0" /> Power session
-              </Link>
-            )}
-            {isAdmin && (
-              <button type="button" onClick={onImport} className={cn(crm.campaignDetailBtnSecondary, "w-full justify-center text-sm")}>
-                <Upload className="h-4 w-4 shrink-0" /> Import
-              </button>
-            )}
-            <button type="button" onClick={onAddContacts} className={cn(crm.campaignDetailBtnSecondary, "w-full justify-center text-sm")}>
-              <Plus className="h-4 w-4 shrink-0" /> Add contacts
-            </button>
-            {isAdmin && (
-              <button type="button" onClick={onDistribute} className={cn(crm.campaignDetailBtnSecondary, "w-full justify-center text-sm")}>
-                <Shuffle className="h-4 w-4 shrink-0" /> Distribute
-              </button>
-            )}
-          </div>
-          <div className="mt-auto flex flex-wrap gap-1 border-t border-crm-border/50 pt-2">
-            {campaign.status === "ACTIVE" && isAdmin && (
-              <button type="button" onClick={() => onUpdateStatus("PAUSED")} className={cn(crm.campaignDetailBtnTertiary, "text-crm-warning")}>
-                <Pause className="h-3.5 w-3.5 shrink-0" /> Pause
-              </button>
-            )}
-            {(campaign.status === "ACTIVE" || campaign.status === "PAUSED") && isAdmin && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (confirm("Archive this campaign?")) onUpdateStatus("ARCHIVED");
-                }}
-                className={crm.campaignDetailBtnTertiary}
-              >
-                <Archive className="h-3.5 w-3.5 shrink-0" /> Archive
-              </button>
-            )}
-            <button type="button" onClick={onExport} className={crm.campaignDetailBtnTertiary} title="Export CSV">
-              <Download className="h-3.5 w-3.5 shrink-0" /> Export
-            </button>
-          </div>
-        </div>
       </div>
-    </CRMCard>
-  );
-}
-
-function HeaderStat({
-  label,
-  value,
-  hint,
-  urgent,
-}: {
-  label: string;
-  value: string | number;
-  hint?: string;
-  urgent?: boolean;
-}) {
-  return (
-    <div className={cn("rounded-crm border px-2.5 py-2", urgent ? "border-crm-warning/35 bg-crm-warning/8" : "border-crm-border/70 bg-crm-surface/80")}>
-      <dt className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">{label}</dt>
-      <dd className={cn("mt-0.5 text-xl font-bold tabular-nums", urgent ? "text-crm-warning" : "text-crm-text")}>{value}</dd>
-      {hint ? <p className="mt-0.5 text-[10px] leading-snug text-crm-muted">{hint}</p> : null}
-    </div>
+    </header>
   );
 }
