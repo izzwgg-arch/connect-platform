@@ -15,7 +15,7 @@ test.describe("SUPER_ADMIN billing smoke", () => {
     await loginAsSuperAdmin(page);
   });
 
-  test("admin billing settings — load, diagnostics, modals, preview, harmless branding save", async ({ page }, testInfo) => {
+  test("admin billing settings — pricing, modals, harmless branding save", async ({ page }, testInfo) => {
     await page.goto(
       `/admin/billing/settings?tenantId=${encodeURIComponent(tenantId)}`,
       { waitUntil: "domcontentloaded" },
@@ -25,27 +25,20 @@ test.describe("SUPER_ADMIN billing smoke", () => {
     await expect(tenantSelect).toBeAttached({ timeout: 60_000 });
     await expect(tenantSelect).toHaveValue(tenantId);
 
-    await page.locator("details.billing-p6-advanced summary").click();
-
-    const diagCard = page.getByTestId("billing-admin-pricing-diagnostics");
-    await expect(diagCard).toBeVisible({ timeout: 60_000 });
-    await expect(diagCard.getByRole("table")).toBeVisible({ timeout: 60_000 });
-
-    await page.getByTestId("billing-admin-refresh-diagnostics").click();
-    await expect(diagCard.getByRole("table")).toBeVisible();
-
-    /** Harmless PUT: invoice branding fields only, values unchanged — see portal form defaults. */
+    await page.getByRole("link", { name: "Taxes & invoices" }).click();
     const brandingSave = page.getByTestId("billing-admin-save-branding");
-    await expect(brandingSave).toBeVisible();
-    const brandingPut = page.waitForResponse(
-      (r) =>
-        r.request().method() === "PUT" &&
-        /\/admin\/billing\/tenants\/[^/]+\/settings\b/.test(r.url()) &&
-        r.ok(),
-      { timeout: 60_000 },
-    );
-    await brandingSave.click();
-    await brandingPut;
+    await expect(brandingSave).toBeVisible({ timeout: 60_000 });
+    if (await brandingSave.isVisible()) {
+      const brandingPut = page.waitForResponse(
+        (r) =>
+          r.request().method() === "PUT" &&
+          /\/admin\/billing\/tenants\/[^/]+\/settings\b/.test(r.url()) &&
+          r.ok(),
+        { timeout: 60_000 },
+      );
+      await brandingSave.click();
+      await brandingPut;
+    }
 
     await page.getByTestId("billing-admin-assign-plan-open").click();
     const assignDialog = page.getByTestId("billing-admin-assign-plan-dialog");
@@ -63,12 +56,6 @@ test.describe("SUPER_ADMIN billing smoke", () => {
     await expect(resetDialog).toBeVisible({ timeout: 60_000 });
     await resetDialog.getByTestId("billing-admin-reset-plan-cancel").click();
     await expect(page.getByTestId("billing-admin-reset-plan-dialog")).toHaveCount(0);
-
-    const previewCard = page.getByTestId("billing-admin-invoice-preview-card");
-    await previewCard.getByTestId("billing-admin-preview-next-invoice").click();
-    await expect(previewCard.locator("tfoot").getByText("Total", { exact: true })).toBeVisible({
-      timeout: 60_000,
-    });
   });
 
   test("admin billing plans — list, create modal, clone modal", async ({ page }) => {
@@ -88,13 +75,14 @@ test.describe("SUPER_ADMIN billing smoke", () => {
     await expect(page.getByTestId("billing-admin-plans-panel-clone")).toHaveCount(0);
   });
 
-  test("admin payment operations — invoices, collections, reports tabs", async ({ page }) => {
+  test("admin payment operations — invoices, collections, reports routes", async ({ page }) => {
     await page.goto(`/admin/billing/invoices?tenantId=${encodeURIComponent(tenantId)}`, { waitUntil: "domcontentloaded" });
     await expect(page.getByTestId("billing-admin-tab-panel-invoices")).toBeVisible({ timeout: 60_000 });
+    await expect(page.locator(".billing-inv-toolbar")).toBeVisible();
 
     await page.getByTestId("billing-admin-ws-nav-collections").click();
     await expect(page.getByTestId("billing-admin-tab-panel-collections")).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByRole("heading", { name: "Collections Overview" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Collections overview" })).toBeVisible();
 
     await page.getByTestId("billing-admin-ws-nav-reports").click();
     await expect(page.getByTestId("billing-admin-tab-panel-reports")).toBeVisible({ timeout: 60_000 });

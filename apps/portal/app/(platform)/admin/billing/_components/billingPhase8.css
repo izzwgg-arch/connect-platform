@@ -1,0 +1,294 @@
+/* Phase 8 — section specialization, SaaS invoice table, dark-native surfaces */
+
+.billing-p8-scope {
+  --billing-surface: var(--panel);
+  --billing-surface-raised: var(--panel-2);
+  --billing-border: color-mix(in srgb, var(--border) 82%, transparent);
+  --billing-muted: var(--text-dim);
+  --billing-text: var(--text);
+}
+
+.billing-ws-section {
+  padding: 12px 14px 16px;
+  min-height: 0;
+}
+
+/* ── Overview (account summary only) ── */
+
+.billing-ov-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.billing-ov-summary__card {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--billing-border);
+  background: color-mix(in srgb, var(--billing-surface-raised) 88%, transparent);
+}
+
+.billing-ov-summary__card label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--billing-muted);
+  margin-bottom: 4px;
+}
+
+.billing-ov-summary__card strong {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.billing-ov-summary__card small {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--billing-muted);
+  line-height: 1.35;
+}
+
+.billing-ov-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.billing-ov-panel {
+  border: 1px solid var(--billing-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--billing-surface) 92%, transparent);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.billing-ov-panel h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+/* ── SaaS invoice register ── */
+
+.billing-inv-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--billing-border);
+}
+
+.billing-inv-toolbar__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.billing-inv-toolbar__filters .btn {
+  font-size: 12px;
+  padding: 5px 10px;
+  min-height: 30px;
+}
+
+.billing-inv-search {
+  flex: 1 1 200px;
+  min-width: 180px;
+  max-width: 320px;
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--billing-border);
+  background: color-mix(in srgb, var(--billing-surface-raised) 90%, transparent);
+  color: var(--billing-text);
+}
+
+.billing-inv-search::placeholder {
+  color: var(--billing-muted);
+}
+
+.billing-inv-meta {
+  font-size: 12px;
+  color: var(--billing-muted);
+  margin: 0 0 8px;
+}
+
+.billing-inv-table {
+  border: 1px solid var(--billing-border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--billing-surface) 94%, transparent);
+}
+
+.billing-inv-table__head,
+.billing-inv-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.2fr) minmax(100px, 1fr) minmax(88px, 0.7fr) minmax(72px, 0.55fr) minmax(140px, auto);
+  gap: 8px 12px;
+  align-items: center;
+  padding: 10px 12px;
+}
+
+.billing-inv-table__head {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--billing-muted);
+  background: color-mix(in srgb, var(--billing-surface-raised) 75%, transparent);
+  border-bottom: 1px solid var(--billing-border);
+}
+
+.billing-inv-row {
+  border-bottom: 1px solid color-mix(in srgb, var(--billing-border) 55%, transparent);
+  font-size: 13px;
+  transition: background 0.1s ease;
+}
+
+.billing-inv-row:last-child {
+  border-bottom: none;
+}
+
+.billing-inv-row:hover {
+  background: color-mix(in srgb, var(--accent) 6%, var(--billing-surface));
+}
+
+.billing-inv-row__num {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.billing-inv-row__sub {
+  font-size: 11px;
+  color: var(--billing-muted);
+  margin-top: 2px;
+}
+
+.billing-inv-row__amount {
+  text-align: right;
+  font-weight: 600;
+}
+
+.billing-inv-row__due {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--billing-muted);
+}
+
+.billing-inv-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.billing-inv-row__actions .btn {
+  font-size: 12px;
+  padding: 4px 8px;
+  min-height: 28px;
+}
+
+.billing-inv-log {
+  grid-column: 1 / -1;
+  padding: 8px 10px 4px;
+  border-top: 1px dashed color-mix(in srgb, var(--billing-border) 70%, transparent);
+  background: color-mix(in srgb, var(--billing-surface-raised) 50%, transparent);
+  border-radius: 0 0 8px 8px;
+  margin: 4px -12px -10px;
+}
+
+/* Settings: single-section workspace */
+
+.billing-settings-section-only {
+  max-width: 920px;
+}
+
+.billing-settings-section-only .billing-setup-grid {
+  gap: 10px;
+}
+
+.billing-settings-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--billing-border);
+}
+
+.billing-settings-links a {
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--billing-border);
+  color: var(--billing-muted);
+  text-decoration: none;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.billing-settings-links a:hover {
+  color: var(--billing-text);
+  background: color-mix(in srgb, var(--accent) 8%, var(--billing-surface));
+}
+
+.billing-settings-links a.active {
+  color: var(--billing-text);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--billing-surface));
+}
+
+/* Dark: kill light fallbacks inside billing workspace */
+
+.billing-p8-scope .panel,
+.billing-p8-scope .DetailCard,
+.billing-p8-scope [class*="b3-health"],
+.billing-p8-scope [style*="background: #"],
+.billing-p8-scope [style*="background:#"] {
+  background: color-mix(in srgb, var(--billing-surface) 94%, transparent) !important;
+  border-color: var(--billing-border) !important;
+  color: var(--billing-text);
+}
+
+.billing-p8-scope [style*="background: #f"],
+.billing-p8-scope [style*="background: #e"],
+.billing-p8-scope [style*="background: #fef"],
+.billing-p8-scope [style*="background: #eff"],
+.billing-p8-scope [style*="background: var(--surface"],
+.billing-p8-scope [style*="background:var(--surface"] {
+  background: color-mix(in srgb, var(--billing-surface-raised) 88%, transparent) !important;
+  color: var(--billing-text) !important;
+}
+
+.billing-p8-scope input,
+.billing-p8-scope select,
+.billing-p8-scope textarea {
+  background: color-mix(in srgb, var(--billing-surface-raised) 92%, transparent);
+  border-color: var(--billing-border);
+  color: var(--billing-text);
+}
+
+@media (max-width: 960px) {
+  .billing-inv-table__head {
+    display: none;
+  }
+
+  .billing-inv-row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "inv amount"
+      "meta status"
+      "actions actions";
+  }
+
+  .billing-inv-row__actions {
+    grid-area: actions;
+    justify-content: flex-start;
+  }
+}

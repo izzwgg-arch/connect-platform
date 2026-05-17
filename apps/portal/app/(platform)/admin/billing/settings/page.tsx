@@ -803,30 +803,12 @@ function AdminBillingSettingsBody() {
     ? billingSectionRaw
     : "plans-pricing";
 
-  const [advDetailsOpen, setAdvDetailsOpen] = useState(false);
-  useEffect(() => {
-    setAdvDetailsOpen(activeBillingSection === "preview" || activeBillingSection === "pricing-explanation");
-  }, [activeBillingSection]);
-
-  useEffect(() => {
-    if (!billingSectionRaw || typeof document === "undefined") return;
-    const map: Record<string, string> = {
-      "plans-pricing": "billing-section-plans-pricing",
-      collections: "billing-section-collections",
-      "tax-billing": "billing-section-tax-billing",
-      gateway: "billing-section-gateway",
-      preview: "billing-section-preview",
-      "pricing-explanation": "billing-section-pricing-explanation",
-    };
-    const id = map[billingSectionRaw];
-    if (!id) return;
-    const t = window.setTimeout(() => {
-      document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 120);
-    return () => window.clearTimeout(t);
-  }, [billingSectionRaw, detail?.tenant.id]);
-
-  const sectionAnchorStyle: CSSProperties = { scrollMarginTop: 72 };
+  const settingsView =
+    activeBillingSection === "tax-billing"
+      ? "tax-billing"
+      : activeBillingSection === "gateway"
+        ? "gateway"
+        : "plans-pricing";
 
   if (!canPlatformAdminBilling) {
     return (
@@ -836,18 +818,13 @@ function AdminBillingSettingsBody() {
     );
   }
 
-  const qp = mergeSearchParams(
-    new URLSearchParams({ ...(effectiveTenantId ? { tenantId: effectiveTenantId } : {}) }),
-    {},
-  );
-
   function settingsSectionHref(section: BillingSettingsSection) {
     if (!effectiveTenantId) return "/admin/billing/settings";
     return `/admin/billing/settings${mergeSearchParams(new URLSearchParams({ tenantId: effectiveTenantId }), { [BILLING_SECTION_QUERY]: section })}`;
   }
 
   return (
-    <div className="billing-ws-scope billing-p5-scope billing-p6-scope">
+    <div className="billing-ws-section billing-p8-scope billing-settings-section-only">
       {tenantsLoading ? <LoadingSkeleton rows={2} /> : null}
       {tenantsError ? <ErrorState message={tenantsError} /> : null}
 
@@ -859,38 +836,27 @@ function AdminBillingSettingsBody() {
       {detailError ? <ErrorState message={detailError} /> : null}
 
       {detail && !detailLoading ? (
-        <div className="billing-p5-settings-shell">
-          <nav className="billing-p5-settings-nav" aria-label="Billing settings sections">
-            <h3>Setup</h3>
-            <Link href={settingsSectionHref("plans-pricing")}>Pricing &amp; plan</Link>
-            <Link href={settingsSectionHref("tax-billing")}>Taxes &amp; invoice fields</Link>
-            <Link href={settingsSectionHref("gateway")}>Payment gateway</Link>
-            <Link href={settingsSectionHref("collections")}>Dunning &amp; automation</Link>
-            <h3>Advanced</h3>
-            <Link href={settingsSectionHref("preview")}>Preview schedules &amp; diagnostics</Link>
+        <>
+          <nav className="billing-settings-links" aria-label="Settings areas">
+            <Link href={settingsSectionHref("plans-pricing")} className={settingsView === "plans-pricing" ? "active" : ""}>
+              Pricing
+            </Link>
+            <Link href={settingsSectionHref("tax-billing")} className={settingsView === "tax-billing" ? "active" : ""}>
+              Taxes &amp; invoices
+            </Link>
+            <Link href={settingsSectionHref("gateway")} className={settingsView === "gateway" ? "active" : ""}>
+              Payment gateway
+            </Link>
+            <Link href="/admin/billing/plans">Plan catalog</Link>
           </nav>
-          <div className="billing-p5-settings-main">
-            <div id="billing-section-plans-pricing" className="billing-p5-settings-section" style={sectionAnchorStyle}>
-              <h3 className="billing-p5-settings-section__title">Pricing &amp; plan</h3>
+
+          {settingsView === "plans-pricing" ? (
+            <div className="billing-p5-settings-section">
+              <h3 className="billing-p5-settings-section__title">Company pricing</h3>
               <p className="billing-p5-settings-section__summary">
-                Catalog defaults plus optional overrides for this company. Nothing here charges a card.
+                Default plan plus optional overrides for extension, SMS, virtual extension, and phone numbers for{" "}
+                <strong>{detail.tenant.name}</strong>.
               </p>
-              <div className="billing-p6-pricing-split">
-                <div>
-                  <h4>Platform catalog defaults</h4>
-                  <p>
-                    Extension, SMS, virtual extension, and phone-number defaults live on{" "}
-                    <Link href="/admin/billing/plans">billing plans in the catalog</Link>. Tax templates and catalog line items apply across companies until overridden.
-                  </p>
-                </div>
-                <div>
-                  <h4>This company overrides</h4>
-                  <p>
-                    Plan assignment, custom unit rates, and monthly line items below replace or extend catalog pricing for invoices for{" "}
-                    <strong>{detail.tenant.name}</strong> only.
-                  </p>
-                </div>
-              </div>
               <AdminBillingPricingWarningsBanner
                 tenantId={detail.tenant.id}
                 previewMonth={previewMonth}
@@ -913,60 +879,30 @@ function AdminBillingSettingsBody() {
                 <AdminTenantMonthlyPricingForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
               </section>
             </div>
+          ) : null}
 
-            <div id="billing-section-tax-billing" className="billing-p5-settings-section" style={sectionAnchorStyle}>
-              <h3 className="billing-p5-settings-section__title">Customer invoice presentation</h3>
+          {settingsView === "tax-billing" ? (
+            <div className="billing-p5-settings-section">
+              <h3 className="billing-p5-settings-section__title">Taxes &amp; invoice presentation</h3>
               <p className="billing-p5-settings-section__summary">
-                Names, logos, and support contacts that appear on PDFs and billing emails — tuned for customer trust, not internal jargon.
+                Customer-facing invoice fields and tax behavior on PDFs and billing emails.
               </p>
               <section className="billing-setup-grid">
                 <AdminTenantInvoiceBrandingForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
               </section>
             </div>
+          ) : null}
 
-            <div id="billing-section-gateway" className="billing-p5-settings-section" style={sectionAnchorStyle}>
+          {settingsView === "gateway" ? (
+            <div className="billing-p5-settings-section">
               <h3 className="billing-p5-settings-section__title">Payment gateway</h3>
               <p className="billing-p5-settings-section__summary">Processor credentials and capture behavior for this company.</p>
               <section className="billing-setup-grid">
                 <AdminTenantSolaGatewayForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
               </section>
             </div>
-
-            <div id="billing-section-collections" className="billing-p5-settings-section" style={sectionAnchorStyle}>
-              <h3 className="billing-p5-settings-section__title">Collections automation</h3>
-              <p className="billing-p5-settings-section__summary">Dunning cadence overrides for this tenant — worker enforced on each sweep.</p>
-              <section className="billing-setup-grid">
-                <AdminTenantCollectionsConfigForm tenantId={detail.tenant.id} onSaved={() => void loadDetail(detail.tenant.id)} />
-              </section>
-            </div>
-
-            <details
-              className="billing-p6-advanced"
-              open={advDetailsOpen}
-              onToggle={(e) => setAdvDetailsOpen((e.currentTarget as HTMLDetailsElement).open)}
-            >
-              <summary>Advanced — preview schedules &amp; pricing diagnostics</summary>
-
-            <div id="billing-section-preview" className="billing-p5-settings-section" style={sectionAnchorStyle}>
-              <h3 className="billing-p5-settings-section__title">Schedules &amp; invoice preview</h3>
-              <p className="billing-p5-settings-section__summary">
-                Model upcoming invoices for a UTC month. Nothing here charges a card or posts to the ledger.
-              </p>
-              <ScheduledPlanChangeCard tenantId={detail.tenant.id} onChanged={() => void loadDetail(detail.tenant.id)} />
-              <AdminPreviewPeriodCard month={previewMonth} year={previewYear} onMonth={setPreviewMonth} onYear={setPreviewYear} />
-              <AdminInvoicePreviewCard tenantId={detail.tenant.id} month={previewMonth} year={previewYear} />
-            </div>
-
-            <div id="billing-section-pricing-explanation" className="billing-p5-settings-section" style={sectionAnchorStyle}>
-              <h3 className="billing-p5-settings-section__title">Pricing diagnostics</h3>
-              <p className="billing-p5-settings-section__summary">
-                Deep read on how catalog rows, tenant overrides, and effective invoice math align for operators.
-              </p>
-              <AdminPricingDiagnosticsCard tenantId={detail.tenant.id} month={previewMonth} year={previewYear} />
-            </div>
-            </details>
-          </div>
-        </div>
+          ) : null}
+        </>
       ) : null}
     </div>
   );
