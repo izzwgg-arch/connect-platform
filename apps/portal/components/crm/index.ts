@@ -27,4 +27,6 @@ export {
   QueueEmptyOperational,
   QueueCountPill,
 } from "./queue";
+export * from "./contact";
+export * from "./campaign";
 export * from "./campaign";
