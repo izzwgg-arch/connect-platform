@@ -12,7 +12,7 @@ import {
   CRMPageShell,
   CRMSection,
   CRMActionBar,
-  CRMEmptyState,
+  CampaignGuidedEmpty,
   CampaignCommandHeader,
   CampaignPerformancePanel,
   CampaignMemberCard,
@@ -407,7 +407,7 @@ function AddContactsModal({ campaignId, onClose, onAdded }: {
           ) : (
             <>
               {contacts.map((c) => (
-                <label key={c.id} className="flex items-center gap-3 px-4 py-3 hover:bg-crm-bg cursor-pointer border-b last:border-b-0">
+                <label key={c.id} className="flex items-center gap-3 px-4 py-3 hover:bg-crm-surface-2 cursor-pointer border-b last:border-b-0">
                   <input
                     type="checkbox"
                     checked={selected.has(c.id)}
@@ -426,7 +426,7 @@ function AddContactsModal({ campaignId, onClose, onAdded }: {
                     </p>
                   </div>
                   {c.crmStage && (
-                    <span className="text-xs text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded shrink-0">{c.crmStage}</span>
+                    <span className="text-xs text-crm-accent bg-crm-accent/12 border border-crm-accent/25 px-1.5 py-0.5 rounded-crm shrink-0">{c.crmStage}</span>
                   )}
                 </label>
               ))}
@@ -437,9 +437,9 @@ function AddContactsModal({ campaignId, onClose, onAdded }: {
         {/* Pagination */}
         {totalPages > 1 && (
           <div className="px-4 py-2 border-t flex items-center justify-between text-xs text-crm-muted">
-            <button disabled={page === 1} onClick={() => handlePageChange(page - 1)} className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-crm-bg">Previous</button>
+            <button disabled={page === 1} onClick={() => handlePageChange(page - 1)} className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-crm-surface-2">Previous</button>
             <span>Page {page} of {totalPages}</span>
-            <button disabled={page === totalPages} onClick={() => handlePageChange(page + 1)} className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-crm-bg">Next</button>
+            <button disabled={page === totalPages} onClick={() => handlePageChange(page + 1)} className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-crm-surface-2">Next</button>
           </div>
         )}
 
@@ -447,7 +447,7 @@ function AddContactsModal({ campaignId, onClose, onAdded }: {
           <span className="text-sm text-crm-muted">{selected.size} selected</span>
           {error && <span className="text-xs text-crm-danger">{error}</span>}
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-3 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-bg">Cancel</button>
+            <button onClick={onClose} className="px-3 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-surface-2">Cancel</button>
             <button onClick={handleAdd} disabled={saving || selected.size === 0} className="px-4 py-2 text-sm bg-crm-accent text-white rounded-lg hover:brightness-110 disabled:opacity-50">
               {saving ? "Adding…" : `Add ${selected.size > 0 ? selected.size : ""} Contacts`}
             </button>
@@ -860,12 +860,12 @@ export default function CampaignDetailPage() {
                   Unassigned pending leads will be distributed evenly (round-robin) across the agents you select below.
                   This action only affects unassigned leads — already-assigned leads are untouched.
                 </p>
-                <div className="mb-4 max-h-48 overflow-y-auto border border-crm-border rounded-lg divide-y divide-gray-100">
+                <div className="mb-4 max-h-48 overflow-y-auto border border-crm-border rounded-lg divide-y divide-crm-border/60">
                   {crmUsers.filter((u) => u.crmEnabled).length === 0 ? (
                     <p className="p-3 text-sm text-crm-muted/80">No CRM-enabled agents found.</p>
                   ) : (
                     crmUsers.filter((u) => u.crmEnabled).map((u) => (
-                      <label key={u.userId} className="flex items-center gap-3 px-3 py-2.5 hover:bg-crm-bg cursor-pointer">
+                      <label key={u.userId} className="flex items-center gap-3 px-3 py-2.5 hover:bg-crm-surface-2 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={distributeUserIds.has(u.userId)}
@@ -887,7 +887,7 @@ export default function CampaignDetailPage() {
                   <p className={`text-sm mb-3 ${distributeMsg.startsWith("Distributed") ? "text-crm-success" : "text-crm-warning"}`}>{distributeMsg}</p>
                 )}
                 <div className="flex gap-2 justify-end">
-                  <button onClick={() => setDistributeOpen(false)} className="px-4 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-bg">
+                  <button onClick={() => setDistributeOpen(false)} className="px-4 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-surface-2">
                     Cancel
                   </button>
                   <button
@@ -960,7 +960,7 @@ export default function CampaignDetailPage() {
                     type="button"
                     onClick={() => void handleCampaignImportPreview()}
                     disabled={importPreviewing || !importFile}
-                    className="px-4 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-bg disabled:opacity-50"
+                    className="px-4 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-surface-2 disabled:opacity-50"
                   >
                     {importPreviewing ? "Previewing…" : "Preview import"}
                   </button>
@@ -1020,7 +1020,7 @@ export default function CampaignDetailPage() {
                             <div className="max-h-36 overflow-y-auto border border-crm-accent/25 rounded bg-crm-surface">
                               <table className="w-full text-xs">
                                 <thead>
-                                  <tr className="text-left text-crm-muted border-b bg-crm-bg">
+                                  <tr className="text-left text-crm-muted border-b bg-crm-surface-2/60">
                                     <th className="p-1.5">Row</th>
                                     <th className="p-1.5">Phone</th>
                                     <th className="p-1.5">Email</th>
@@ -1030,7 +1030,7 @@ export default function CampaignDetailPage() {
                                 </thead>
                                 <tbody>
                                   {rows.map((s) => (
-                                    <tr key={s.row} className="border-b border-gray-50">
+                                    <tr key={s.row} className="border-b border-crm-border/50">
                                       <td className="p-1.5">{s.row}</td>
                                       <td className="p-1.5">{s.phone ?? "—"}</td>
                                       <td className="p-1.5 truncate max-w-[100px]" title={s.email}>{s.email ?? "—"}</td>
@@ -1055,7 +1055,7 @@ export default function CampaignDetailPage() {
                         <div className="max-h-36 overflow-y-auto border border-crm-accent/25 rounded bg-crm-surface">
                           <table className="w-full text-xs">
                             <thead>
-                              <tr className="text-left text-crm-muted border-b bg-crm-bg">
+                              <tr className="text-left text-crm-muted border-b bg-crm-surface-2/60">
                                 <th className="p-1.5">Row</th>
                                 <th className="p-1.5">Phone</th>
                                 <th className="p-1.5">Email</th>
@@ -1065,7 +1065,7 @@ export default function CampaignDetailPage() {
                             </thead>
                             <tbody>
                               {importPreview.sampleRows.map((s) => (
-                                <tr key={s.row} className="border-b border-gray-50">
+                                <tr key={s.row} className="border-b border-crm-border/50">
                                   <td className="p-1.5">{s.row}</td>
                                   <td className="p-1.5">{s.phone ?? "—"}</td>
                                   <td className="p-1.5 truncate max-w-[100px]" title={s.email}>{s.email ?? "—"}</td>
@@ -1089,7 +1089,7 @@ export default function CampaignDetailPage() {
                 )}
                 {importErr && <p className="text-sm text-crm-danger mb-3">{importErr}</p>}
                 {importSummary && (
-                  <div className="mb-4 p-3 bg-crm-bg border border-crm-border rounded-lg text-sm space-y-3">
+                  <div className="mb-4 p-3 bg-crm-surface-2/60 border border-crm-border rounded-lg text-sm space-y-3">
                     <p className="font-semibold text-crm-text">Import complete — {importSummary.status}</p>
                     {importCompareBaseline ? (
                       <>
@@ -1168,7 +1168,7 @@ export default function CampaignDetailPage() {
                         setImportPreviewContextKeyState(null);
                         setImportCompareBaseline(null);
                       }}
-                      className="px-4 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-bg mr-auto"
+                      className="px-4 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-surface-2 mr-auto"
                     >
                       Import another
                     </button>
@@ -1185,7 +1185,7 @@ export default function CampaignDetailPage() {
                       setImportPreviewContextKeyState(null);
                       setImportCompareBaseline(null);
                     }}
-                    className="px-4 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-bg"
+                    className="px-4 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-surface-2"
                   >
                     {importSummary ? "Close" : "Cancel"}
                   </button>
@@ -1242,8 +1242,8 @@ export default function CampaignDetailPage() {
 
         <CampaignPerformancePanel campaign={campaign} health={hd} />
 
-        <div className="grid gap-4 lg:grid-cols-12 lg:items-start">
-          <div className="lg:col-span-8 flex flex-col gap-4">
+        <div className="grid gap-3 lg:grid-cols-12 lg:items-start">
+          <div className="lg:col-span-8 flex flex-col gap-3 min-w-0">
 
             <CRMSection
               title={`Members (${membersTotal})`}
@@ -1256,14 +1256,14 @@ export default function CampaignDetailPage() {
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 border border-crm-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
+                className={cn(crm.input, "pl-9")}
                 placeholder="Search members…"
               />
             </div>
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
+              className={cn(crm.input, "w-auto min-w-[9rem]")}
             >
               <option value="">All statuses</option>
               {(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => (
@@ -1278,7 +1278,7 @@ export default function CampaignDetailPage() {
                 setAssigneeFilter(v);
                 loadMembers(v);
               }}
-              className="border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
+              className={cn(crm.input, "w-auto min-w-[9rem]")}
             >
               <option value="">All agents</option>
               <option value="UNASSIGNED">Unassigned</option>
@@ -1290,8 +1290,8 @@ export default function CampaignDetailPage() {
 
           {/* Bulk action bar */}
           {selected.size > 0 && (
-            <div className="mb-4 flex items-center gap-3 p-3 bg-crm-accent/15 border border-blue-200 rounded-lg flex-wrap">
-              <span className="text-sm font-medium text-blue-800">{selected.size} selected</span>
+            <div className="mb-4 flex items-center gap-3 p-3 bg-crm-accent/10 border border-crm-accent/30 rounded-crm flex-wrap">
+              <span className="text-sm font-medium text-crm-text">{selected.size} selected</span>
               <div className="flex items-center gap-2 flex-1 min-w-0">
                 <UserPlus className="h-4 w-4 text-crm-accent shrink-0" />
                 <select
@@ -1312,7 +1312,7 @@ export default function CampaignDetailPage() {
               >
                 {bulkAssigning ? "Assigning…" : "Apply"}
               </button>
-              <button onClick={() => setSelected(new Set())} className="p-1 text-blue-500 hover:text-crm-accent shrink-0">
+              <button onClick={() => setSelected(new Set())} className="p-1 text-crm-muted hover:text-crm-accent shrink-0">
                 <X className="h-4 w-4" />
               </button>
               {bulkMsg && <span className="text-xs text-crm-accent font-medium">{bulkMsg}</span>}
@@ -1322,16 +1322,20 @@ export default function CampaignDetailPage() {
           {membersLoading ? (
             <div className="py-12 text-center text-crm-muted/80 text-sm">Loading members…</div>
           ) : filteredMembers.length === 0 ? (
-            <CRMEmptyState
-              icon={<Users className="h-8 w-8" />}
+            <CampaignGuidedEmpty
+              icon={<Users className="h-5 w-5" />}
               title={hd.total === 0 ? "No members yet" : "No members match filters"}
-              description={
+              steps={
                 hd.total === 0
-                  ? "Import a CSV, add existing contacts, or distribute assignments to populate outbound work."
-                  : "Try clearing search or status filters to see more of the roster."
+                  ? [
+                      { label: "Import leads", hint: "CSV with preview" },
+                      { label: "Add existing contacts", hint: "from CRM roster" },
+                      { label: "Distribute work", hint: "assign agents" },
+                    ]
+                  : [{ label: "Clear filters", hint: "search or status" }]
               }
               action={
-                <div className="flex flex-wrap justify-center gap-2">
+                <>
                   {isAdmin && hd.total === 0 && (
                     <button
                       type="button"
@@ -1353,13 +1357,31 @@ export default function CampaignDetailPage() {
                   <button type="button" onClick={() => setShowAddContacts(true)} className={crm.btnSecondary}>
                     Add contacts
                   </button>
-                </div>
+                  {isAdmin && hd.total === 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDistributeOpen(true);
+                        setDistributeMsg("");
+                        setDistributeUserIds(new Set());
+                      }}
+                      className={crm.btnGhost}
+                    >
+                      Distribute
+                    </button>
+                  )}
+                  {canQueue && hd.activeQueueWork > 0 && (
+                    <Link href={`/crm/queue?campaignId=${encodeURIComponent(campaignId)}`} className={crm.btnGhost}>
+                      Open queue
+                    </Link>
+                  )}
+                </>
               }
             />
           ) : (
             <div className="space-y-2">
               <div className="flex items-center gap-2 px-1 pb-1">
-                <button type="button" onClick={toggleSelectAll} className="p-1 rounded border border-transparent hover:border-crm-border hover:bg-crm-bg" aria-label="Select all visible members">
+                <button type="button" onClick={toggleSelectAll} className="p-1 rounded border border-transparent hover:border-crm-border hover:bg-crm-surface-2" aria-label="Select all visible members">
                   {selected.size > 0 && bulkSelectableMembers.length > 0 && bulkSelectableMembers.every((m) => selected.has(m.id))
                     ? <CheckSquare2 className="h-4 w-4 text-crm-accent" />
                     : <Square className="h-4 w-4 text-crm-muted/80" />}

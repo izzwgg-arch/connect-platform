@@ -8,6 +8,7 @@ import { CRMCard } from "../CRMCard";
 import type { CampaignDetail, CampaignImportHistoryRow, CampaignPriority, WorkloadRow } from "./campaignTypes";
 import { CAMPAIGN_PRIORITY_LABELS } from "./campaignTypes";
 import { CampaignImportEventCard } from "./CampaignImportEventCard";
+import { CampaignGuidedEmpty } from "./CampaignGuidedEmpty";
 import type { CampaignHealth } from "./campaignUtils";
 import { powerQueueHref, queueHref } from "./campaignUtils";
 
@@ -96,8 +97,8 @@ export function CampaignOperationalSidebar({
   }
 
   return (
-    <aside className="flex flex-col gap-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
-      <CRMCard className="p-4">
+    <aside className="flex flex-col gap-3 lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
+      <CRMCard className="p-3 sm:p-4">
         <p className={crm.label}>Next actions</p>
         {alerts.length === 0 ? (
           <p className="mt-2 text-xs text-crm-muted">No alerts — roster looks balanced for this snapshot.</p>
@@ -168,9 +169,22 @@ export function CampaignOperationalSidebar({
         {importHistoryLoading ? (
           <p className="text-xs text-crm-muted">Loading…</p>
         ) : importHistory.length === 0 ? (
-          <p className="text-xs text-crm-muted leading-relaxed">
-            No campaign CSV batches yet. Use Import on this workspace — standalone Import Leads stays separate.
-          </p>
+          <CampaignGuidedEmpty
+            compact
+            title="No imports yet"
+            steps={[
+              { label: "Import CSV", hint: "preview before commit" },
+              { label: "Add existing contacts", hint: "from your CRM roster" },
+              { label: "Distribute", hint: "assign unowned leads" },
+            ]}
+            action={
+              isAdmin ? (
+                <button type="button" onClick={onImport} className={cn(crm.btnSecondary, "text-xs py-1.5")}>
+                  <Upload className="h-3.5 w-3.5" /> Import CSV
+                </button>
+              ) : undefined
+            }
+          />
         ) : (
           <ul className="space-y-2 max-h-64 overflow-y-auto">
             {importHistory.slice(0, 5).map((row) => (
@@ -230,16 +244,13 @@ export function CampaignOperationalSidebar({
                   type="button"
                   onClick={() => onUpdateCampaign({ priority: p })}
                   className={cn(
-                    "px-2.5 py-1 text-xs font-medium rounded-crm border transition-colors",
-                    (campaign.priority ?? "NORMAL") === p
-                      ? p === "URGENT"
-                        ? "bg-crm-danger text-white border-crm-danger"
+                    crm.campaignPriorityPill,
+                    (campaign.priority ?? "NORMAL") === p &&
+                      (p === "URGENT"
+                        ? crm.campaignPriorityPillUrgent
                         : p === "HIGH"
-                          ? "bg-orange-500 text-white border-orange-500"
-                          : p === "LOW"
-                            ? "bg-crm-muted text-white border-crm-muted"
-                            : "bg-crm-accent text-white border-crm-accent"
-                      : "border-crm-border text-crm-muted hover:bg-crm-surface-2",
+                          ? crm.campaignPriorityPillHigh
+                          : crm.campaignPriorityPillActive),
                   )}
                 >
                   {CAMPAIGN_PRIORITY_LABELS[p]}

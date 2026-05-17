@@ -1,9 +1,9 @@
 "use client";
 
 import { CRMCard } from "../CRMCard";
-import { CRMSection } from "../CRMSection";
-import { CRMDonutChart, CRMChartLegend, CRMHorizontalBars, CRMRingMetric } from "../charts";
+import { CRMDonutChart, CRMHorizontalBars, CRMRingMetric } from "../charts";
 import { CRM_CHART_COLORS } from "../charts/chartColors";
+import { crm } from "../crmClasses";
 import type { CampaignDetail } from "./campaignTypes";
 import type { CampaignHealth } from "./campaignUtils";
 
@@ -35,60 +35,61 @@ export function CampaignPerformancePanel({
   const pacingOpen = Math.max(0, health.total - pacingDone);
 
   return (
-    <CRMSection title="Performance" description="From campaign member status counts — no estimates.">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <CRMCard className="flex flex-col items-center p-4 sm:col-span-2 xl:col-span-1">
+    <CRMCard className="p-3 sm:p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <p className={crm.label}>Performance</p>
+        <p className="text-[11px] text-crm-muted">Member status counts — no estimates</p>
+      </div>
+      <div className="grid gap-3 lg:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] lg:items-center">
+        <div className="flex justify-center lg:justify-start">
           <CRMDonutChart
             segments={statusSegments.length ? statusSegments : [{ label: "Empty", value: 1, color: CRM_CHART_COLORS.muted }]}
-            size={112}
-            stroke={14}
+            size={88}
+            stroke={11}
             centerValue={health.total}
             centerLabel="members"
           />
-          <div className="mt-3 w-full">
-            <CRMChartLegend segments={statusSegments} />
-          </div>
-        </CRMCard>
-
-        <CRMCard className="p-4">
-          <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted mb-3">Contact funnel</p>
+        </div>
+        <div className="min-w-0 px-1">
+          <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted mb-2">Funnel</p>
           <CRMHorizontalBars items={funnelBars} />
-        </CRMCard>
-
-        <CRMCard className="p-4 flex flex-col justify-center gap-4">
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:gap-3">
           <CRMRingMetric
             value={health.converted}
             max={health.total || 1}
-            label="Conversion progress"
-            sublabel={`${health.conversionPct}% converted`}
+            label="Converted"
+            sublabel={`${health.conversionPct}%`}
             color={CRM_CHART_COLORS.success}
+            size={64}
+            stroke={7}
           />
           <CRMRingMetric
             value={pacingOpen}
             max={health.total || 1}
-            label="Open workload"
-            sublabel={`${pacingDone} terminal outcomes`}
+            label="Open"
+            sublabel={`${pacingDone} done`}
             color={CRM_CHART_COLORS.accent}
+            size={64}
+            stroke={7}
           />
-        </CRMCard>
-
-        <CRMCard className="p-4 sm:col-span-2 xl:col-span-1">
-          <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted mb-2">Callback pressure</p>
-          <p className="text-3xl font-bold tabular-nums text-crm-text">{health.callback}</p>
-          <p className="text-xs text-crm-muted mt-1">Members in CALLBACK status</p>
-          <div className="mt-4 h-2 rounded-full bg-crm-surface-2 overflow-hidden">
-            <div
-              className="h-full rounded-full bg-crm-warning"
-              style={{
-                width: `${health.total > 0 ? Math.min(100, (health.callback / health.total) * 100) : 0}%`,
-              }}
-            />
+          <div className="col-span-2 rounded-crm border border-crm-border/70 bg-crm-surface-2/40 px-2.5 py-2">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Callback pressure</p>
+            <p className="text-xl font-bold tabular-nums text-crm-text">{health.callback}</p>
+            <div className="mt-1.5 h-1.5 rounded-full bg-crm-surface-2 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-crm-warning"
+                style={{
+                  width: `${health.total > 0 ? Math.min(100, (health.callback / health.total) * 100) : 0}%`,
+                }}
+              />
+            </div>
+            <p className="mt-1 text-[10px] text-crm-muted">
+              Pending {sc["PENDING"] ?? 0} · In progress {sc["IN_PROGRESS"] ?? 0}
+            </p>
           </div>
-          <p className="mt-2 text-[11px] text-crm-muted">
-            Pending {sc["PENDING"] ?? 0} · In progress {sc["IN_PROGRESS"] ?? 0}
-          </p>
-        </CRMCard>
+        </div>
       </div>
-    </CRMSection>
+    </CRMCard>
   );
 }

@@ -68,7 +68,7 @@ export function CampaignCommandHeader({
     <CRMCard className="p-0 overflow-hidden">
       <div className="grid gap-0 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1.2fr)_minmax(0,0.9fr)]">
         {/* Left — identity */}
-        <div className="border-b border-crm-border/60 p-4 sm:p-5 lg:border-b-0 lg:border-r">
+        <div className="border-b border-crm-border/60 p-3 sm:p-4 lg:border-b-0 lg:border-r">
           {editingName ? (
             <div className="flex flex-wrap items-center gap-2">
               <input
@@ -116,9 +116,9 @@ export function CampaignCommandHeader({
         </div>
 
         {/* Center — live operational stats */}
-        <div className="border-b border-crm-border/60 bg-crm-surface-2/30 p-4 sm:p-5 lg:border-b-0 lg:border-r">
+        <div className="border-b border-crm-border/60 bg-crm-surface-2/30 p-3 sm:p-4 lg:border-b-0 lg:border-r">
           <p className={crm.label}>Live snapshot</p>
-          <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <dl className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
             <HeaderStat label="Queue work" value={health.activeQueueWork} hint="Pending + in progress" urgent={health.activeQueueWork > 0} />
             <HeaderStat label="Callbacks" value={health.callback} hint="CALLBACK status" urgent={health.callback > 0} />
             <HeaderStat label="Members" value={health.total} />
@@ -141,44 +141,44 @@ export function CampaignCommandHeader({
         </div>
 
         {/* Right — primary actions */}
-        <div className="flex flex-col gap-2 p-4 sm:p-5">
+        <div className="flex flex-col gap-2 p-3 sm:p-4 lg:min-w-[11.5rem]">
           <p className={crm.label}>Operations</p>
           <div className="flex flex-col gap-1.5 mt-1">
             {campaign.status === "DRAFT" && isAdmin && (
-              <button type="button" onClick={() => onUpdateStatus("ACTIVE")} className={crm.btnPrimary}>
+              <button type="button" onClick={() => onUpdateStatus("ACTIVE")} className={cn(crm.btnPrimary, "text-sm py-2")}>
                 <Play className="h-4 w-4" /> Start campaign
               </button>
             )}
             {campaign.status === "PAUSED" && isAdmin && (
-              <button type="button" onClick={() => onUpdateStatus("ACTIVE")} className={crm.btnPrimary}>
+              <button type="button" onClick={() => onUpdateStatus("ACTIVE")} className={cn(crm.btnPrimary, "text-sm py-2")}>
                 <Play className="h-4 w-4" /> Resume campaign
               </button>
             )}
             {canQueue && (
-              <Link href={queueHref(campaign.id)} className={crm.btnSecondary}>
+              <Link href={queueHref(campaign.id)} className={cn(crm.btnPrimary, "text-sm py-2")}>
                 <ListOrdered className="h-4 w-4" /> Open queue
               </Link>
             )}
             {canQueue && campaign.status === "ACTIVE" && (
-              <Link href={powerQueueHref(campaign.id)} className={crm.btnSecondary}>
-                <Zap className="h-4 w-4" /> Continue power session
+              <Link href={powerQueueHref(campaign.id)} className={cn(crm.btnSecondary, "text-sm py-2")}>
+                <Zap className="h-4 w-4" /> Power session
               </Link>
             )}
             {isAdmin && (
-              <button type="button" onClick={onImport} className={crm.btnSecondary}>
-                <Upload className="h-4 w-4" /> Import contacts
+              <button type="button" onClick={onImport} className={cn(crm.btnSecondary, "text-sm py-2")}>
+                <Upload className="h-4 w-4" /> Import
               </button>
             )}
-            <button type="button" onClick={onAddContacts} className={crm.btnGhost}>
-              <Plus className="h-4 w-4" /> Add contacts
+            <button type="button" onClick={onAddContacts} className={cn(crm.btnGhost, "text-xs py-1.5")}>
+              <Plus className="h-3.5 w-3.5" /> Add contacts
             </button>
             {isAdmin && (
-              <button type="button" onClick={onDistribute} className={crm.btnGhost}>
-                <Shuffle className="h-4 w-4" /> Distribute
+              <button type="button" onClick={onDistribute} className={cn(crm.btnGhost, "text-xs py-1.5")}>
+                <Shuffle className="h-3.5 w-3.5" /> Distribute
               </button>
             )}
           </div>
-          <div className="mt-auto flex flex-wrap gap-1.5 pt-2 border-t border-crm-border/50">
+          <div className="mt-auto flex flex-wrap gap-1 pt-2 border-t border-crm-border/50">
             {campaign.status === "ACTIVE" && isAdmin && (
               <button type="button" onClick={() => onUpdateStatus("PAUSED")} className={cn(crm.btnGhost, "text-xs py-1.5")}>
                 <Pause className="h-3.5 w-3.5" /> Pause

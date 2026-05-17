@@ -7,10 +7,10 @@ import { FileUp, ListOrdered, Megaphone, Plus, Search } from "lucide-react";
 import {
   CRMPageShell,
   CRMPageHeader,
-  CRMEmptyState,
   CRMActionBar,
   CRMStat,
   CampaignIndexCard,
+  CampaignGuidedEmpty,
   type CampaignListItem,
   type CampaignReportRow,
   type CampaignStatus,
@@ -53,7 +53,7 @@ function CreateCampaignModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div className={crm.campaignModalBackdrop}>
       <div className={cn(crm.card, "w-full max-w-md p-6 shadow-xl")}>
         <h2 className="text-lg font-semibold text-crm-text mb-4">New campaign</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -75,7 +75,7 @@ function CreateCampaignModal({
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              className={cn(crm.input, "resize-none")}
+              className={cn(crm.input, "resize-none min-h-[5.5rem] bg-crm-surface-2/90")}
               rows={3}
               placeholder="Objective for agents…"
               maxLength={2000}
@@ -90,8 +90,13 @@ function CreateCampaignModal({
                   type="button"
                   onClick={() => setPriority(p)}
                   className={cn(
-                    "px-3 py-1.5 text-xs font-medium rounded-crm border",
-                    priority === p ? "bg-crm-accent text-white border-crm-accent" : "border-crm-border text-crm-muted hover:bg-crm-surface-2",
+                    crm.campaignPriorityPill,
+                    priority === p &&
+                      (p === "URGENT"
+                        ? crm.campaignPriorityPillUrgent
+                        : p === "HIGH"
+                          ? crm.campaignPriorityPillHigh
+                          : crm.campaignPriorityPillActive),
                   )}
                 >
                   {p}
@@ -290,12 +295,16 @@ export default function CampaignsPage() {
       ) : error ? (
         <p className="py-16 text-center text-sm text-crm-danger">{error}</p>
       ) : listEmptyNoCampaigns ? (
-        <CRMEmptyState
-          icon={<Megaphone className="h-10 w-10" />}
+        <CampaignGuidedEmpty
+          icon={<Megaphone className="h-5 w-5" />}
           title="No campaigns yet"
-          description="Create a campaign to group leads and scripts, then route work through My Queue or import leads first."
+          steps={[
+            { label: "Create a campaign", hint: "group leads and scripts" },
+            { label: "Import or add contacts", hint: "build the roster" },
+            { label: "Open queue", hint: "start outbound work" },
+          ]}
           action={
-            <div className="flex flex-wrap justify-center gap-2">
+            <>
               {isAdmin && (
                 <button type="button" onClick={() => setShowCreate(true)} className={crm.btnPrimary}>
                   <Plus className="h-4 w-4" /> New campaign
@@ -306,21 +315,29 @@ export default function CampaignsPage() {
                   <FileUp className="h-4 w-4" /> Import leads
                 </Link>
               )}
-            </div>
+            </>
           }
         />
       ) : listEmptyAfterFilter ? (
-        <CRMEmptyState
+        <CampaignGuidedEmpty
+          compact
           title="No campaigns match"
-          description="Try another name or clear the search."
+          steps={[{ label: "Clear search or filters", hint: "to see more programs" }]}
           action={
-            <button type="button" onClick={() => setSearch("")} className={crm.btnSecondary}>
-              Clear search
+            <button
+              type="button"
+              onClick={() => {
+                setSearch("");
+                setStatusFilter("all");
+              }}
+              className={crm.btnSecondary}
+            >
+              Reset filters
             </button>
           }
         />
       ) : (
-        <ul className="flex flex-col gap-3">
+        <ul className="flex flex-col gap-2">
           {filtered.map((campaign) => (
             <li key={campaign.id}>
               <CampaignIndexCard

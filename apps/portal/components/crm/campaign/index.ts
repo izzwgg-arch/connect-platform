@@ -6,4 +6,6 @@ export { CampaignCommandHeader } from "./CampaignCommandHeader";
 export { CampaignPerformancePanel } from "./CampaignPerformancePanel";
 export { CampaignMemberCard } from "./CampaignMemberCard";
 export { CampaignImportEventCard } from "./CampaignImportEventCard";
+export { CampaignGuidedEmpty } from "./CampaignGuidedEmpty";
+export type { CampaignGuidedStep } from "./CampaignGuidedEmpty";
 export { CampaignOperationalSidebar } from "./CampaignOperationalSidebar";
