@@ -91,7 +91,12 @@ function WorkspaceSegButton({
 }
 
 export function AdminBillingShell({ children }: { children: ReactNode }) {
-  const { can, backendJwtRole, tenantId: globalTenantId, setTenantId, setAdminScope } = useAppContext();
+  // NOTE: we read globalTenantId only as a fallback hint for initial tenant
+  // selection. We intentionally do NOT call setTenantId here: the billing
+  // admin workspace manages its own tenant selection and writing back to the
+  // global context caused an oscillation loop with useAppContext's reset
+  // guard (which resets tenantId when it's not in the switcher list).
+  const { can, backendJwtRole, tenantId: globalTenantId } = useAppContext();
   const pathname = usePathname() || "";
   const rawSearchParams = useSearchParams();
   const router = useRouter();
@@ -159,9 +164,11 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
     } catch {
       /* ignore */
     }
-    setAdminScope("TENANT");
-    setTenantId(effectiveTenantId);
-  }, [canAdmin, effectiveTenantId, setTenantId, setAdminScope]);
+    // Do NOT call setTenantId / setAdminScope here. Writing the billing
+    // tenant selection back to the global AppContext caused an infinite
+    // oscillation: useAppContext resets tenantId when it's not in the
+    // super-admin switcher list, which in turn re-fires this effect.
+  }, [canAdmin, effectiveTenantId]);
 
   function selectTenant(id: string) {
     try {
@@ -169,8 +176,6 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
     } catch {
       /* ignore */
     }
-    setAdminScope("TENANT");
-    setTenantId(id);
     if (pathnameIsCatalog(pathname)) {
       router.push(`/admin/billing?tenantId=${encodeURIComponent(id)}`);
       return;
