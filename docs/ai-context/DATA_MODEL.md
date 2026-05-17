@@ -96,6 +96,8 @@
   **First-number-free** applies to **local** DIDs only; all active toll-free numbers are billable.
 - **Tenant toll-free unit price:** optional `TenantBillingSettings.metadata.billingTollFreeDidPriceCents`
   (API `tollFreeDidPriceCents` on settings PUT); falls back to local DID price / default.
+- **Quantity overrides:** `metadata.billingQuantityOverrides.tollFreeNumbers` — `{ mode: "auto"|"manual", quantity }`;
+  must be parsed/validated with the same key list as other billing lines (`BILLING_QUANTITY_OVERRIDE_KEYS`).
 
 ## ConnectCdr — *the* call-history model
 - **Schema:** line 1686

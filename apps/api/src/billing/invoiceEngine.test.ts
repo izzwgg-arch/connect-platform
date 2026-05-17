@@ -511,6 +511,33 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   assert.equal(localAuto!.quantity, 1);
 
   phoneNumberRows = [];
+  state.settings.metadata = {
+    billingTollFreeDidPriceCents: 1500,
+    billingQuantityOverrides: {
+      tollFreeNumbers: { mode: "manual", quantity: 1 },
+    },
+  };
+  const tfManualPreview = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
+  const tfManualLine = tfManualPreview.lineItems.find(
+    (l) => l.type === "PHONE_NUMBER" && (l.metadata as Record<string, unknown>)?.lineItemKind === "toll_free_phone_numbers",
+  );
+  assert.ok(tfManualLine, "manual toll-free qty 1 should emit toll-free line with no active DIDs");
+  assert.equal(tfManualLine!.quantity, 1);
+  assert.equal(tfManualLine!.unitPriceCents, 1500);
+
+  state.settings.metadata = {
+    billingTollFreeDidPriceCents: 1500,
+    billingQuantityOverrides: {
+      tollFreeNumbers: { mode: "manual", quantity: 0 },
+    },
+  };
+  const tfZeroPreview = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
+  const tfZeroLine = tfZeroPreview.lineItems.find(
+    (l) => (l.metadata as Record<string, unknown>)?.lineItemKind === "toll_free_phone_numbers",
+  );
+  assert.equal(tfZeroLine, undefined);
+
+  phoneNumberRows = [];
 
   // Reset state
   state.settings.extensionPriceCents = 3000;

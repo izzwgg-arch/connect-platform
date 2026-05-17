@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mergeTenantBillingSettingsMetadata } from "./billingTenantSettingsMetadata";
 import {
+  BILLING_QUANTITY_OVERRIDE_KEYS,
   mergeBillingQuantityOverridesIntoMetadata,
+  parseBillingQuantityOverrides,
   resolveBillingQuantities,
   validateBillingQuantityOverridesInput,
 } from "./billingQuantityOverrides";
@@ -59,6 +61,53 @@ test("validateBillingQuantityOverridesInput: rejects negative manual quantity", 
   assert.equal(r.ok, false);
 });
 
+test("validateBillingQuantityOverridesInput: persists tollFreeNumbers manual qty", () => {
+  const r = validateBillingQuantityOverridesInput({
+    tollFreeNumbers: { mode: "manual", quantity: 1 },
+  });
+  assert.equal(r.ok, true);
+  if (!r.ok) return;
+  assert.equal(r.value?.tollFreeNumbers?.mode, "manual");
+  assert.equal(r.value?.tollFreeNumbers?.quantity, 1);
+});
+
+test("validateBillingQuantityOverridesInput: rejects negative tollFreeNumbers", () => {
+  const r = validateBillingQuantityOverridesInput({
+    tollFreeNumbers: { mode: "manual", quantity: -1 },
+  });
+  assert.equal(r.ok, false);
+});
+
+test("parseBillingQuantityOverrides: reads tollFreeNumbers from metadata", () => {
+  const parsed = parseBillingQuantityOverrides({
+    billingQuantityOverrides: {
+      tollFreeNumbers: { mode: "manual", quantity: 1 },
+      extensions: { mode: "auto", quantity: null },
+    },
+  });
+  assert.equal(parsed?.tollFreeNumbers?.mode, "manual");
+  assert.equal(parsed?.tollFreeNumbers?.quantity, 1);
+});
+
+test("resolveBillingQuantities: manual tollFreeNumbers when suggested is 0", () => {
+  const r = resolveBillingQuantities({
+    usage: { ...baseUsage, tollFreePhoneNumberCount: 0, tollFreeBillablePhoneNumberCount: 0 },
+    metadata: {
+      billingQuantityOverrides: {
+        tollFreeNumbers: { mode: "manual", quantity: 1 },
+      },
+    },
+    firstPhoneNumberFree: true,
+  });
+  assert.equal(r.suggested.tollFreeNumbersBillable, 0);
+  assert.equal(r.billing.tollFreeNumbers, 1);
+  assert.equal(r.modes.tollFreeNumbers, "manual");
+});
+
+test("BILLING_QUANTITY_OVERRIDE_KEYS includes tollFreeNumbers", () => {
+  assert.ok(BILLING_QUANTITY_OVERRIDE_KEYS.includes("tollFreeNumbers"));
+});
+
 test("mergeTenantBillingSettingsMetadata: preserves flat rate when patching quantity overrides", () => {
   const merged = mergeTenantBillingSettingsMetadata(
     { billingFlatRate: { enabled: true, amountCents: 50000, appliesTo: "extensions" }, taxProviderId: "tax_profile_v1" },
@@ -74,6 +123,22 @@ test("mergeTenantBillingSettingsMetadata: preserves flat rate when patching quan
     (merged.billingQuantityOverrides as { extensions: { quantity: number } }).extensions.quantity,
     10,
   );
+});
+
+test("mergeTenantBillingSettingsMetadata: tollFreeNumbers override round-trip via validate", () => {
+  const validated = validateBillingQuantityOverridesInput({
+    tollFreeNumbers: { mode: "manual", quantity: 1 },
+    phoneNumbers: { mode: "auto", quantity: null },
+  });
+  assert.equal(validated.ok, true);
+  if (!validated.ok) return;
+  const merged = mergeTenantBillingSettingsMetadata(
+    { billingFlatRate: { enabled: true, amountCents: 50000, appliesTo: "extensions" }, billingTollFreeDidPriceCents: 1500 },
+    { billingQuantityOverrides: validated.value },
+  );
+  const parsed = parseBillingQuantityOverrides(merged);
+  assert.equal(parsed?.tollFreeNumbers?.quantity, 1);
+  assert.equal(merged.billingTollFreeDidPriceCents, 1500);
 });
 
 test("mergeBillingQuantityOverridesIntoMetadata: null removes key", () => {

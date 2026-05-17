@@ -4,6 +4,30 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-17 — Billing: fix toll-free manual quantity override persistence
+
+**Task:** Manual `billingQuantityOverrides.tollFreeNumbers` did not survive save/reload.  
+**Risk:** High (invoice quantities).
+
+### Root cause
+
+`parseBillingQuantityOverrides` and `validateBillingQuantityOverridesInput` iterated only `extensions`, `virtualExtensions`, `phoneNumbers`, `smsPackages` — **`tollFreeNumbers` was dropped on PUT** even though Zod and the portal payload included it.
+
+### Shipped
+
+- **`billingQuantityOverrides.ts`**: shared `BILLING_QUANTITY_OVERRIDE_KEYS` includes `tollFreeNumbers` in parse + validate.
+- **Tests:** validate/parse/merge round-trip; invoice preview manual qty 1 with zero active toll-free DIDs; qty 0 omits line.
+
+### Explicitly NOT changed
+
+- Portal UI, SOLA, payment execution, Prisma schema.
+
+### Deploy
+
+- **API** and **worker** (shared billing override resolution).
+
+---
+
 ## 2026-05-17 — Billing: local vs toll-free DID pricing (invoice engine + admin UI)
 
 **Task:** Split local and toll-free phone number billing — separate quantities, unit prices, invoice lines, monthly estimate, and admin overrides.  

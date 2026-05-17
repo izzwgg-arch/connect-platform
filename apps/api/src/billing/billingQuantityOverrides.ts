@@ -22,6 +22,15 @@ export type BillingQuantityOverridesConfig = Partial<
 
 export const MAX_BILLING_QUANTITY = 100_000;
 
+/** All supported override keys — keep parse + validate in sync. */
+export const BILLING_QUANTITY_OVERRIDE_KEYS: BillingQuantityOverrideKey[] = [
+  "extensions",
+  "virtualExtensions",
+  "phoneNumbers",
+  "tollFreeNumbers",
+  "smsPackages",
+];
+
 export type BillingSuggestedQuantities = {
   extensions: number;
   virtualExtensions: number;
@@ -73,9 +82,8 @@ export function parseBillingQuantityOverrides(metadata: unknown): BillingQuantit
   const raw = (metadata as Record<string, unknown>)[BILLING_QUANTITY_OVERRIDES_METADATA_KEY];
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const o = raw as Record<string, unknown>;
-  const keys: BillingQuantityOverrideKey[] = ["extensions", "virtualExtensions", "phoneNumbers", "smsPackages"];
   const out: BillingQuantityOverridesConfig = {};
-  for (const key of keys) {
+  for (const key of BILLING_QUANTITY_OVERRIDE_KEYS) {
     const item = o[key];
     if (!item || typeof item !== "object" || Array.isArray(item)) continue;
     const row = item as Record<string, unknown>;
@@ -96,9 +104,8 @@ export function validateBillingQuantityOverridesInput(
   if (typeof input !== "object" || Array.isArray(input)) {
     return { ok: false, error: "billingQuantityOverrides must be an object." };
   }
-  const keys: BillingQuantityOverrideKey[] = ["extensions", "virtualExtensions", "phoneNumbers", "smsPackages"];
   const value: BillingQuantityOverridesConfig = {};
-  for (const key of keys) {
+  for (const key of BILLING_QUANTITY_OVERRIDE_KEYS) {
     const item = input[key];
     if (item === undefined) continue;
     if (!item || typeof item !== "object" || Array.isArray(item)) {

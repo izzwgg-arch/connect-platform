@@ -174,7 +174,7 @@ Shape: `{ extensions?: { mode: "auto"|"manual", quantity: number|null }, … }`.
 
 **Pricing:** Local unit price = `additionalPhoneNumberPriceCents` (plan/settings). Toll-free = `metadata.billingTollFreeDidPriceCents` when set, else local price, else default **1500¢**. Settings PUT: optional **`tollFreeDidPriceCents`**.
 
-**Quantity overrides:** `phoneNumbers` = local billable qty; `tollFreeNumbers` = toll-free billable qty.
+**Quantity overrides:** `phoneNumbers` = local billable qty; `tollFreeNumbers` = toll-free billable qty. Both keys must be accepted by `validateBillingQuantityOverridesInput` and `parseBillingQuantityOverrides` (`BILLING_QUANTITY_OVERRIDE_KEYS` in `billingQuantityOverrides.ts`) — omitting `tollFreeNumbers` from those loops caused manual toll-free qty to be stripped on save (fixed 2026-05-17).
 
 **Invoice lines:** Both use `BillingLineItemType.PHONE_NUMBER` with `metadata.lineItemKind`:
 - `local_phone_numbers` — description **Local phone numbers**
