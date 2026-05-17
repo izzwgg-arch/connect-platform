@@ -9,6 +9,7 @@ import {
   PhoneMissed, Voicemail, ThumbsUp, ThumbsDown, CheckCircle2,
   Sparkles, Megaphone,
 } from "lucide-react";
+import { CRMPageShell } from "../../../../components/crm";
 import { apiGet, apiPatch, apiPost } from "../../../../services/apiClient";
 import { useSipPhone } from "../../../../hooks/useSipPhone";
 
@@ -114,13 +115,13 @@ function priorityReason(member: QueueMember): string | null {
 }
 
 const MEMBER_STATUS_COLORS: Record<MemberStatus, string> = {
-  PENDING: "bg-gray-100 text-gray-600",
-  IN_PROGRESS: "bg-blue-100 text-blue-700",
+  PENDING: "bg-crm-surface-2 text-crm-muted",
+  IN_PROGRESS: "bg-blue-100 text-crm-accent",
   CONTACTED: "bg-purple-100 text-purple-700",
-  CALLBACK: "bg-yellow-100 text-yellow-700",
+  CALLBACK: "bg-yellow-100 text-crm-warning",
   CONVERTED: "bg-green-100 text-green-700",
-  SKIPPED: "bg-gray-100 text-gray-500",
-  DO_NOT_CALL: "bg-red-100 text-red-700",
+  SKIPPED: "bg-crm-surface-2 text-crm-muted",
+  DO_NOT_CALL: "bg-red-100 text-crm-danger",
 };
 
 const MEMBER_STATUS_LABELS: Record<MemberStatus, string> = {
@@ -166,40 +167,40 @@ function SetCallbackModal({ member, onClose, onSaved }: {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm">
+      <div className="bg-crm-surface rounded-crm border border-crm-border shadow-xl p-6 w-full max-w-sm">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="font-semibold text-gray-900 flex items-center gap-2">
+          <h2 className="font-semibold text-crm-text flex items-center gap-2">
             <CalendarClock className="h-5 w-5 text-yellow-500" />
             Schedule Callback
           </h2>
-          <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded"><X className="h-4 w-4" /></button>
+          <button onClick={onClose} className="p-1 hover:bg-crm-surface-2 rounded"><X className="h-4 w-4" /></button>
         </div>
-        <p className="text-sm text-gray-500 mb-4 truncate">{member.contact?.displayName ?? "Contact"}</p>
+        <p className="text-sm text-crm-muted mb-4 truncate">{member.contact?.displayName ?? "Contact"}</p>
         <div className="space-y-3">
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Callback date &amp; time</label>
+            <label className="block text-xs text-crm-muted mb-1">Callback date &amp; time</label>
             <input
               type="datetime-local"
               value={datetime}
               onChange={(e) => setDatetime(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400"
+              className="w-full border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400"
             />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Note <span className="text-gray-400">(optional)</span></label>
+            <label className="block text-xs text-crm-muted mb-1">Note <span className="text-crm-muted/80">(optional)</span></label>
             <textarea
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400 resize-none"
+              className="w-full border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400 resize-none"
               rows={2}
               placeholder="Reason for callback…"
               maxLength={1000}
             />
           </div>
         </div>
-        {error && <p className="text-xs text-red-600 mt-2">{error}</p>}
+        {error && <p className="text-xs text-crm-danger mt-2">{error}</p>}
         <div className="flex gap-2 justify-end mt-4">
-          <button onClick={onClose} className="px-3 py-2 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">Cancel</button>
+          <button onClick={onClose} className="px-3 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-bg">Cancel</button>
           <button onClick={handleSave} disabled={saving || !datetime} className="px-4 py-2 text-sm bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 disabled:opacity-50 font-medium">
             {saving ? "Saving…" : "Schedule"}
           </button>
@@ -223,12 +224,12 @@ type OutcomeDef = {
 };
 
 const OUTCOME_DEFS: OutcomeDef[] = [
-  { label: "No Answer",      icon: PhoneMissed,    colorClass: "border-gray-300 text-gray-700 hover:bg-gray-50" },
-  { label: "Voicemail",      icon: Voicemail,      colorClass: "border-gray-300 text-gray-700 hover:bg-gray-50" },
+  { label: "No Answer",      icon: PhoneMissed,    colorClass: "border-crm-border text-crm-text hover:bg-crm-bg" },
+  { label: "Voicemail",      icon: Voicemail,      colorClass: "border-crm-border text-crm-text hover:bg-crm-bg" },
   { label: "Interested",     icon: ThumbsUp,       colorClass: "border-green-300 text-green-700 hover:bg-green-50" },
   { label: "Not Interested", icon: ThumbsDown,     colorClass: "border-orange-300 text-orange-700 hover:bg-orange-50" },
-  { label: "Callback",       icon: CalendarClock,  colorClass: "border-yellow-300 text-yellow-700 hover:bg-yellow-50" },
-  { label: "Converted",      icon: CheckCircle2,   colorClass: "border-emerald-400 text-emerald-700 hover:bg-emerald-50" },
+  { label: "Callback",       icon: CalendarClock,  colorClass: "border-crm-warning/40 text-crm-warning hover:bg-crm-warning/10" },
+  { label: "Converted",      icon: CheckCircle2,   colorClass: "border-emerald-400 text-emerald-700 hover:bg-crm-success/10" },
 ];
 
 function PowerCard({
@@ -324,26 +325,26 @@ function PowerCard({
 
   if (!actionable) {
     return (
-      <div className="bg-gray-100 rounded-2xl p-6 border-2 border-gray-300 shadow-lg mb-4 opacity-90">
-        <div className="flex items-center gap-2 mb-3 text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-sm">
+      <div className="bg-crm-surface-2 rounded-crm-lg p-6 border-2 border-crm-border shadow-lg mb-4 opacity-90">
+        <div className="flex items-center gap-2 mb-3 text-crm-warning bg-amber-50 border border-crm-warning/35 rounded-lg px-3 py-2 text-sm">
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span>This lead is archived or inactive and is not live queue work. Refresh the queue or contact an admin.</span>
         </div>
-        <h2 className="text-xl font-bold text-gray-600 mb-1">{contact?.displayName ?? "Unknown"}</h2>
-        {phone ? <p className="text-gray-500 font-mono">{phone}</p> : null}
-        <p className="text-xs text-gray-500 mt-3">Outcomes and queue actions are disabled for this lead.</p>
+        <h2 className="text-xl font-bold text-crm-muted mb-1">{contact?.displayName ?? "Unknown"}</h2>
+        {phone ? <p className="text-crm-muted font-mono">{phone}</p> : null}
+        <p className="text-xs text-crm-muted mt-3">Outcomes and queue actions are disabled for this lead.</p>
       </div>
     );
   }
 
   return (
-    <div className="bg-white rounded-2xl p-6 border-2 border-blue-400 shadow-lg mb-4">
+    <div className="bg-crm-surface rounded-crm-lg border border-crm-border p-6 border-2 border-crm-accent shadow-lg mb-4">
       {/* Status badge */}
       <div className="flex items-start justify-between gap-3 mb-4">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-bold text-blue-600 uppercase tracking-wider">Next best lead</span>
+          <span className="text-xs font-bold text-crm-accent uppercase tracking-wider">Next best lead</span>
           {member.attemptCount > 0 && (
-            <span className="text-xs text-gray-400">{member.attemptCount} previous attempt{member.attemptCount !== 1 ? "s" : ""}</span>
+            <span className="text-xs text-crm-muted/80">{member.attemptCount} previous attempt{member.attemptCount !== 1 ? "s" : ""}</span>
           )}
           {sortMode === "smart" && (() => {
             const reason = priorityReason(member);
@@ -355,10 +356,10 @@ function PowerCard({
                 title="Why this lead?"
                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold shrink-0 cursor-default ${
                   isUrgent
-                    ? "bg-red-100 text-red-700"
+                    ? "bg-red-100 text-crm-danger"
                     : isHigh
                       ? "bg-orange-100 text-orange-700"
-                      : "bg-indigo-50 text-indigo-700"
+                      : "bg-crm-accent/12 text-crm-accent"
                 }`}
               >
                 <Sparkles className="h-3 w-3" />
@@ -374,13 +375,13 @@ function PowerCard({
 
       {/* Contact info */}
       <div className="mb-4">
-        <h2 className="text-2xl font-bold text-gray-900 mb-1">{contact?.displayName ?? "Unknown"}</h2>
+        <h2 className="text-2xl font-bold text-crm-text mb-1">{contact?.displayName ?? "Unknown"}</h2>
         {phone
-          ? <p className="text-lg text-gray-600 font-mono">{phone}</p>
-          : <p className="text-sm text-gray-400 italic">No phone number on file</p>
+          ? <p className="text-lg text-crm-muted font-mono">{phone}</p>
+          : <p className="text-sm text-crm-muted/80 italic">No phone number on file</p>
         }
         {member.campaign && (
-          <span className="inline-block mt-1.5 text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
+          <span className="inline-block mt-1.5 text-xs text-crm-muted bg-crm-surface-2 px-2 py-0.5 rounded">
             {member.campaign.name}
           </span>
         )}
@@ -389,12 +390,12 @@ function PowerCard({
       {/* Context pills — help agent prepare before calling */}
       <div className="flex flex-wrap gap-1.5 mb-4 text-xs">
         {contact?.crmStage && (
-          <span className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full font-medium">
+          <span className="bg-crm-accent/12 text-crm-accent px-2 py-0.5 rounded-full font-medium">
             {contact.crmStage}
           </span>
         )}
         {contact?.lastDisposition && (
-          <span className="bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full flex items-center gap-1">
+          <span className="bg-crm-accent/10 text-crm-accent px-2 py-0.5 rounded-full flex items-center gap-1">
             <CheckCheck className="h-3 w-3" />
             {contact.lastDisposition}
             {contact.lastDispositionAt && (
@@ -403,13 +404,13 @@ function PowerCard({
           </span>
         )}
         {member.attemptCount > 0 && member.lastAttemptAt && (
-          <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full flex items-center gap-1">
+          <span className="bg-crm-accent/15 text-crm-accent px-2 py-0.5 rounded-full flex items-center gap-1">
             <PhoneCall className="h-3 w-3" />
             Called {member.attemptCount}× · {relativeTime(member.lastAttemptAt)}
           </span>
         )}
         {contact?.lastActivityAt && !member.lastAttemptAt && (
-          <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+          <span className="bg-crm-surface-2 text-crm-muted px-2 py-0.5 rounded-full">
             Active {relativeTime(contact.lastActivityAt)}
           </span>
         )}
@@ -417,7 +418,7 @@ function PowerCard({
 
       {/* Callback banner */}
       {cb && (
-        <div className={`flex items-center gap-2 text-sm px-3 py-2 rounded-lg mb-4 border ${cb.urgent ? "bg-red-50 text-red-700 border-red-200" : "bg-yellow-50 text-yellow-700 border-yellow-200"}`}>
+        <div className={`flex items-center gap-2 text-sm px-3 py-2 rounded-lg mb-4 border ${cb.urgent ? "bg-crm-danger/15 text-crm-danger border-crm-danger/35" : "bg-crm-warning/15 text-crm-warning border-yellow-200"}`}>
           {cb.urgent && <AlertCircle className="h-4 w-4 shrink-0" />}
           <CalendarClock className="h-4 w-4 shrink-0" />
           <span>{cb.label}</span>
@@ -429,7 +430,7 @@ function PowerCard({
 
       {/* SIP warning */}
       {!sipReady && (
-        <div className="flex items-center gap-2 text-amber-700 bg-amber-50 text-sm px-3 py-2 rounded-lg mb-4 border border-amber-200">
+        <div className="flex items-center gap-2 text-amber-700 bg-amber-50 text-sm px-3 py-2 rounded-lg mb-4 border border-crm-warning/35">
           <AlertCircle className="h-4 w-4 shrink-0" />
           SIP phone not registered — connect your softphone before calling.
         </div>
@@ -437,7 +438,7 @@ function PowerCard({
 
       {/* Paused notice */}
       {paused && (
-        <div className="flex items-center gap-2 text-gray-600 bg-gray-50 text-sm px-3 py-2 rounded-lg mb-4 border border-gray-200">
+        <div className="flex items-center gap-2 text-crm-muted bg-crm-bg text-sm px-3 py-2 rounded-lg mb-4 border border-crm-border">
           <Pause className="h-4 w-4 shrink-0" />
           Power Dialer is paused. Resume above to re-enable shortcuts.
         </div>
@@ -455,15 +456,15 @@ function PowerCard({
       <button
         onClick={onCall}
         disabled={!phone || !sipReady || anyBusy || paused}
-        className="w-full flex items-center justify-center gap-3 py-4 px-6 rounded-xl font-bold text-white text-lg mb-5 bg-green-500 hover:bg-green-600 active:bg-green-700 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed shadow-md disabled:shadow-none transition-all"
+        className="w-full flex items-center justify-center gap-3 py-4 px-6 rounded-crm font-bold text-white text-lg mb-5 bg-green-500 hover:bg-green-600 active:bg-green-700 disabled:bg-crm-surface-2 disabled:text-crm-muted/80 disabled:cursor-not-allowed shadow-md disabled:shadow-none transition-all"
       >
         <PhoneCall className="h-6 w-6" />
         {phone ? `Call ${phone}` : "No phone number"}
       </button>
 
       {/* ── Inline outcome panel ─────────────────────────────────────────────── */}
-      <div className="border-t border-gray-100 pt-4 mb-4">
-        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Log Outcome</p>
+      <div className="border-t border-crm-border/60 pt-4 mb-4">
+        <p className="text-xs font-semibold text-crm-muted/80 uppercase tracking-wider mb-3">Log Outcome</p>
 
         {/* 3-column outcome button grid */}
         <div className="grid grid-cols-3 gap-2 mb-3">
@@ -474,7 +475,7 @@ function PowerCard({
                 key={def.label}
                 onClick={() => handleOutcomeClick(def)}
                 disabled={anyBusy}
-                className={`flex flex-col items-center gap-1.5 px-2 py-3 border rounded-xl text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${def.colorClass}`}
+                className={`flex flex-col items-center gap-1.5 px-2 py-3 border rounded-crm text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${def.colorClass}`}
               >
                 <Icon className="h-4 w-4" />
                 <span>{def.label}</span>
@@ -490,17 +491,17 @@ function PowerCard({
               <button
                 onClick={() => setOutcomeNoteOpen(true)}
                 disabled={anyBusy}
-                className="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-40"
+                className="text-xs text-crm-muted/80 hover:text-crm-muted disabled:opacity-40"
               >
                 + Add note
               </button>
             ) : (
               <div className="mt-1">
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs text-gray-500 font-medium">Note <span className="text-gray-400">(optional — saved with outcome)</span></span>
+                  <span className="text-xs text-crm-muted font-medium">Note <span className="text-crm-muted/80">(optional — saved with outcome)</span></span>
                   <button
                     onClick={() => { setOutcomeNoteOpen(false); setOutcomeNoteText(""); }}
-                    className="text-xs text-gray-400 hover:text-gray-600"
+                    className="text-xs text-crm-muted/80 hover:text-crm-muted"
                   >
                     Clear
                   </button>
@@ -511,7 +512,7 @@ function PowerCard({
                   placeholder="Quick note about this call…"
                   maxLength={1000}
                   rows={2}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none bg-gray-50"
+                  className="w-full border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 resize-none bg-crm-bg"
                 />
               </div>
             )}
@@ -520,36 +521,36 @@ function PowerCard({
 
         {/* Inline callback time picker */}
         {callbackPickerOpen && (
-          <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded-xl">
+          <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded-crm">
             <p className="text-sm font-semibold text-yellow-900 mb-2 flex items-center gap-1.5">
               <CalendarClock className="h-4 w-4" />Schedule Callback
             </p>
             <div className="space-y-2 mb-3">
               <div>
-                <label className="block text-xs text-gray-600 mb-1">Date &amp; time</label>
+                <label className="block text-xs text-crm-muted mb-1">Date &amp; time</label>
                 <input
                   type="datetime-local"
                   value={callbackDatetime}
                   onChange={(e) => setCallbackDatetime(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400 bg-white"
+                  className="w-full border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400 bg-crm-surface"
                 />
               </div>
               <div>
-                <label className="block text-xs text-gray-600 mb-1">Note <span className="text-gray-400">(optional)</span></label>
+                <label className="block text-xs text-crm-muted mb-1">Note <span className="text-crm-muted/80">(optional)</span></label>
                 <input
                   type="text"
                   value={callbackNoteText}
                   onChange={(e) => setCallbackNoteText(e.target.value)}
                   placeholder="Reason for callback…"
                   maxLength={200}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400 bg-white"
+                  className="w-full border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400 bg-crm-surface"
                 />
               </div>
             </div>
             <div className="flex gap-2">
               <button
                 onClick={closeCallbackPicker}
-                className="px-3 py-1.5 text-xs border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+                className="px-3 py-1.5 text-xs border border-crm-border rounded-lg text-crm-text hover:bg-crm-bg"
               >
                 Cancel
               </button>
@@ -566,7 +567,7 @@ function PowerCard({
 
         {/* Outcome API error */}
         {outcomeError && (
-          <div className="mt-2 flex items-center gap-2 text-red-700 bg-red-50 text-xs px-3 py-2 rounded-lg border border-red-200">
+          <div className="mt-2 flex items-center gap-2 text-crm-danger bg-crm-danger/15 text-xs px-3 py-2 rounded-lg border border-crm-danger/35">
             <AlertCircle className="h-3.5 w-3.5 shrink-0" />
             {outcomeError}
           </div>
@@ -574,18 +575,18 @@ function PowerCard({
 
         {/* Outcome saving spinner */}
         {outcomeSaving && !callbackPickerOpen && (
-          <div className="mt-2 text-xs text-gray-500 text-center">Saving outcome…</div>
+          <div className="mt-2 text-xs text-crm-muted text-center">Saving outcome…</div>
         )}
       </div>
 
       {/* ── Queue management actions ──────────────────────────────────────────── */}
-      <div className="border-t border-gray-100 pt-4">
-        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Queue Actions</p>
+      <div className="border-t border-crm-border/60 pt-4">
+        <p className="text-xs font-semibold text-crm-muted/80 uppercase tracking-wider mb-3">Queue Actions</p>
         <div className="flex flex-wrap gap-2 mb-4">
           <button
             onClick={onOpenWorkspace}
             disabled={anyBusy}
-            className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-50"
+            className="flex items-center gap-1.5 px-3 py-2 border border-crm-border text-crm-text rounded-lg text-sm hover:bg-crm-bg disabled:opacity-50"
           >
             <ExternalLink className="h-3.5 w-3.5" />Full Workspace
           </button>
@@ -593,7 +594,7 @@ function PowerCard({
             <button
               onClick={() => onAction("skip")}
               disabled={anyBusy || paused}
-              className="flex items-center gap-1.5 px-2.5 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-50"
+              className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-border text-crm-text rounded-lg text-sm hover:bg-crm-bg disabled:opacity-50"
             >
               <SkipForward className="h-3.5 w-3.5" />Skip
             </button>
@@ -602,7 +603,7 @@ function PowerCard({
             <button
               onClick={() => onAction("defer")}
               disabled={anyBusy || paused}
-              className="flex items-center gap-1.5 px-2.5 py-2 border border-gray-300 text-gray-700 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-50"
+              className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-border text-crm-text rounded-lg text-sm hover:bg-crm-bg disabled:opacity-50"
             >
               <Clock className="h-3.5 w-3.5" />Defer
             </button>
@@ -610,7 +611,7 @@ function PowerCard({
           <button
             onClick={() => onAction("set-callback-modal")}
             disabled={anyBusy}
-            className="flex items-center gap-1.5 px-2.5 py-2 border border-yellow-300 text-yellow-700 rounded-lg text-sm hover:bg-yellow-50 disabled:opacity-50"
+            className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-warning/40 text-crm-warning rounded-lg text-sm hover:bg-crm-warning/10 disabled:opacity-50"
           >
             <CalendarClock className="h-3.5 w-3.5" />
             {isCallback ? "Edit Callback" : "Reschedule"}
@@ -618,7 +619,7 @@ function PowerCard({
           <button
             onClick={() => { if (confirm(`Mark ${contact?.displayName ?? "this contact"} as Do Not Call?`)) onAction("dnc"); }}
             disabled={anyBusy || paused}
-            className="flex items-center gap-1.5 px-2.5 py-2 border border-red-200 text-red-600 rounded-lg text-sm hover:bg-red-50 disabled:opacity-50"
+            className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-danger/35 text-crm-danger rounded-lg text-sm hover:bg-crm-danger/15 disabled:opacity-50"
           >
             <Ban className="h-3.5 w-3.5" />DNC
           </button>
@@ -626,11 +627,11 @@ function PowerCard({
 
         {/* Keyboard hints */}
         {!paused && (
-          <div className="text-xs text-gray-400 text-center select-none">
+          <div className="text-xs text-crm-muted/80 text-center select-none">
             Keyboard: &nbsp;
-            <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono">C</kbd> call &nbsp;
-            <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono">S</kbd> skip &nbsp;
-            <kbd className="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono">D</kbd> defer
+            <kbd className="px-1.5 py-0.5 bg-crm-surface-2 rounded text-xs font-mono">C</kbd> call &nbsp;
+            <kbd className="px-1.5 py-0.5 bg-crm-surface-2 rounded text-xs font-mono">S</kbd> skip &nbsp;
+            <kbd className="px-1.5 py-0.5 bg-crm-surface-2 rounded text-xs font-mono">D</kbd> defer
           </div>
         )}
       </div>
@@ -672,9 +673,9 @@ function MemberCard({
   }
 
   return (
-    <div className={`bg-white rounded-2xl p-5 mb-4 ${isTop ? "border-2 border-blue-400 shadow-md" : "border border-gray-200 shadow-sm"} ${!actionable ? "opacity-75 border-amber-200 bg-amber-50/30" : ""}`}>
+    <div className={`bg-crm-surface rounded-crm-lg border border-crm-border p-5 mb-4 ${isTop ? "border-2 border-crm-accent shadow-md" : "border border-crm-border shadow-crm"} ${!actionable ? "opacity-75 border-crm-warning/35 bg-crm-warning/10" : ""}`}>
       {!actionable && (
-        <div className="mb-3 flex items-center gap-2 text-amber-900 bg-amber-100 border border-amber-200 rounded-lg px-3 py-2 text-xs">
+        <div className="mb-3 flex items-center gap-2 text-crm-warning bg-crm-warning/15 border border-crm-warning/35 rounded-lg px-3 py-2 text-xs">
           <AlertCircle className="h-3.5 w-3.5 shrink-0" />
           Archived / inactive lead — not actionable. Refresh if this looks wrong.
         </div>
@@ -682,12 +683,12 @@ function MemberCard({
       <div className="flex items-start justify-between gap-3 mb-3">
         <div className="min-w-0">
           {isTop ? (
-            <p className="text-xs font-bold text-blue-600 uppercase tracking-wider mb-1">Next best lead</p>
+            <p className="text-xs font-bold text-crm-accent uppercase tracking-wider mb-1">Next best lead</p>
           ) : null}
           <div className="flex items-center gap-2 flex-wrap">
-            <h2 className={`font-bold text-gray-900 truncate ${isTop ? "text-xl" : "text-base"}`}>{contact?.displayName ?? "Unknown"}</h2>
+            <h2 className={`font-bold text-crm-text truncate ${isTop ? "text-xl" : "text-base"}`}>{contact?.displayName ?? "Unknown"}</h2>
             {member.campaign && (
-              <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded shrink-0">{member.campaign.name}</span>
+              <span className="text-xs text-crm-muted bg-crm-surface-2 px-2 py-0.5 rounded shrink-0">{member.campaign.name}</span>
             )}
           </div>
           {isTop && priorityReason(member) && (
@@ -697,7 +698,7 @@ function MemberCard({
             </p>
           )}
           {contact?.primaryPhone && (
-            <p className="text-sm text-gray-600 mt-0.5">{contact.primaryPhone}</p>
+            <p className="text-sm text-crm-muted mt-0.5">{contact.primaryPhone}</p>
           )}
         </div>
         <div className="shrink-0 text-right">
@@ -705,37 +706,37 @@ function MemberCard({
             {MEMBER_STATUS_LABELS[member.status]}
           </span>
           {member.attemptCount > 0 && (
-            <p className="text-xs text-gray-400 mt-1">{member.attemptCount} attempt{member.attemptCount !== 1 ? "s" : ""}</p>
+            <p className="text-xs text-crm-muted/80 mt-1">{member.attemptCount} attempt{member.attemptCount !== 1 ? "s" : ""}</p>
           )}
         </div>
       </div>
 
       <div className="flex flex-wrap gap-1.5 mb-4 text-xs">
         {contact?.crmStage && (
-          <span className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">{contact.crmStage}</span>
+          <span className="bg-crm-accent/12 text-crm-accent px-2 py-0.5 rounded-full">{contact.crmStage}</span>
         )}
         {contact?.lastDisposition && (
-          <span className="bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full flex items-center gap-1">
+          <span className="bg-crm-accent/10 text-crm-accent px-2 py-0.5 rounded-full flex items-center gap-1">
             <CheckCheck className="h-3 w-3" />Last: {contact.lastDisposition}
           </span>
         )}
         {contact?.lastActivityAt && (
-          <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">Active {relativeTime(contact.lastActivityAt)}</span>
+          <span className="bg-crm-surface-2 text-crm-muted px-2 py-0.5 rounded-full">Active {relativeTime(contact.lastActivityAt)}</span>
         )}
         {cb && (
-          <span className={`px-2 py-0.5 rounded-full flex items-center gap-1 ${cb.urgent ? "bg-red-50 text-red-700 font-semibold" : "bg-yellow-50 text-yellow-700"}`}>
+          <span className={`px-2 py-0.5 rounded-full flex items-center gap-1 ${cb.urgent ? "bg-crm-danger/15 text-crm-danger font-semibold" : "bg-crm-warning/15 text-crm-warning"}`}>
             {cb.urgent && <AlertCircle className="h-3 w-3" />}
             <CalendarClock className="h-3 w-3" />
             {cb.label}
           </span>
         )}
         {member.callbackNote && (
-          <span className="bg-yellow-50 text-yellow-800 px-2 py-0.5 rounded-full italic">&ldquo;{member.callbackNote.slice(0, 60)}{member.callbackNote.length > 60 ? "…" : ""}&rdquo;</span>
+          <span className="bg-crm-warning/15 text-crm-warning px-2 py-0.5 rounded-full italic">&ldquo;{member.callbackNote.slice(0, 60)}{member.callbackNote.length > 60 ? "…" : ""}&rdquo;</span>
         )}
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <button onClick={openWorkspace} disabled={acting || !actionable} className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 shadow-sm">
+        <button onClick={openWorkspace} disabled={acting || !actionable} className="flex items-center gap-1.5 px-3 py-2 bg-crm-accent text-white rounded-crm text-sm font-semibold hover:brightness-110 disabled:opacity-50 shadow-crm">
           <PhoneCall className="h-4 w-4" />Open workspace
         </button>
         {isTop && onDial && contact?.primaryPhone && (
@@ -743,44 +744,44 @@ function MemberCard({
             type="button"
             onClick={onDial}
             disabled={acting || !actionable || !sipReady}
-            className="flex items-center gap-1.5 px-3 py-2 bg-green-600 text-white rounded-xl text-sm font-semibold hover:bg-green-700 disabled:opacity-50 shadow-sm"
+            className="flex items-center gap-1.5 px-3 py-2 bg-crm-success text-white rounded-crm text-sm font-semibold hover:brightness-110 disabled:opacity-50 shadow-crm"
             title={!sipReady ? "Register your softphone to place calls" : undefined}
           >
             <PhoneCall className="h-4 w-4" />Call
           </button>
         )}
-        <button onClick={() => router.push(`/crm/contacts/${member.contactId}`)} disabled={acting} className="flex items-center gap-1.5 px-2.5 py-2 border border-emerald-300 text-emerald-800 rounded-xl text-sm hover:bg-emerald-50">
+        <button onClick={() => router.push(`/crm/contacts/${member.contactId}`)} disabled={acting} className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-success/40 text-crm-success rounded-crm text-sm hover:bg-crm-success/10">
           <CheckCheck className="h-3.5 w-3.5" />Log outcome
         </button>
         {!isCallback && (
-          <button onClick={() => onAction("set-callback-modal")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-yellow-300 text-yellow-700 rounded-xl text-sm hover:bg-yellow-50">
+          <button onClick={() => onAction("set-callback-modal")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-warning/40 text-crm-warning rounded-crm text-sm hover:bg-crm-warning/10">
             <CalendarClock className="h-3.5 w-3.5" />Set Callback
           </button>
         )}
         {isCallback && (
-          <button onClick={() => onAction("set-callback-modal")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-yellow-300 text-yellow-700 rounded-xl text-sm hover:bg-yellow-50">
+          <button onClick={() => onAction("set-callback-modal")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-warning/40 text-crm-warning rounded-crm text-sm hover:bg-crm-warning/10">
             <Edit2 className="h-3.5 w-3.5" />Edit Callback
           </button>
         )}
         {isCallback && (
-          <button onClick={() => onAction("clear-callback")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-gray-300 text-gray-600 rounded-xl text-sm hover:bg-gray-50">
+          <button onClick={() => onAction("clear-callback")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-border text-crm-muted rounded-crm text-sm hover:bg-crm-bg">
             <X className="h-3.5 w-3.5" />Clear Callback
           </button>
         )}
-        <button onClick={() => onAction("assign-to-me")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-gray-300 text-gray-700 rounded-xl text-sm hover:bg-gray-50">
+        <button onClick={() => onAction("assign-to-me")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-border text-crm-text rounded-crm text-sm hover:bg-crm-bg">
           <UserCheck className="h-3.5 w-3.5" />Assign to Me
         </button>
         {!isCallback && (
-          <button onClick={() => onAction("skip")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-gray-300 text-gray-700 rounded-xl text-sm hover:bg-gray-50">
+          <button onClick={() => onAction("skip")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-border text-crm-text rounded-crm text-sm hover:bg-crm-bg">
             <SkipForward className="h-3.5 w-3.5" />Skip
           </button>
         )}
         {!isCallback && (
-          <button onClick={() => onAction("defer")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-gray-300 text-gray-700 rounded-xl text-sm hover:bg-gray-50">
+          <button onClick={() => onAction("defer")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-border text-crm-text rounded-crm text-sm hover:bg-crm-bg">
             <Clock className="h-3.5 w-3.5" />Defer
           </button>
         )}
-        <button onClick={() => { if (confirm(`Mark ${contact?.displayName ?? "this contact"} as Do Not Call?`)) onAction("dnc"); }} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-red-200 text-red-600 rounded-xl text-sm hover:bg-red-50">
+        <button onClick={() => { if (confirm(`Mark ${contact?.displayName ?? "this contact"} as Do Not Call?`)) onAction("dnc"); }} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-danger/35 text-crm-danger rounded-crm text-sm hover:bg-crm-danger/15">
           <Ban className="h-3.5 w-3.5" />DNC
         </button>
       </div>
@@ -809,14 +810,14 @@ function CountPill({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`flex flex-col items-start min-w-[4.5rem] px-2.5 py-2 rounded-xl border text-left transition-colors disabled:opacity-50 ${
+      className={`flex flex-col items-start min-w-[4.5rem] px-2.5 py-2 rounded-crm border text-left transition-colors disabled:opacity-50 ${
         active
-          ? "bg-white border-blue-300 shadow-sm ring-1 ring-blue-100"
-          : "bg-gray-50/80 border-gray-200 hover:bg-white hover:border-gray-300"
+          ? "bg-crm-surface border-crm-accent/40 shadow-crm ring-1 ring-crm-accent/20"
+          : "bg-crm-bg/80 border-crm-border hover:bg-crm-surface hover:border-crm-border"
       }`}
     >
-      <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">{label}</span>
-      <span className={`text-lg font-bold tabular-nums ${urgent && count > 0 ? "text-red-600" : "text-gray-900"}`}>{count}</span>
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-crm-muted">{label}</span>
+      <span className={`text-lg font-bold tabular-nums ${urgent && count > 0 ? "text-crm-danger" : "text-crm-text"}`}>{count}</span>
     </button>
   );
 }
@@ -832,50 +833,50 @@ function QueueLeadCard({ member, rank }: { member: QueueMember; rank: number }) 
     <button
       type="button"
       onClick={() => router.push(`/crm/contacts/${member.contactId}`)}
-      className={`w-full text-left rounded-xl border px-3 py-3 mb-2 transition-colors ${
-        actionable ? "border-gray-200 bg-white hover:border-blue-200 hover:bg-blue-50/40" : "border-amber-200 bg-amber-50/50 opacity-90"
+      className={`w-full text-left rounded-crm border px-3 py-3 mb-2 transition-colors ${
+        actionable ? "border-crm-border bg-crm-surface hover:border-blue-200 hover:bg-crm-accent/10" : "border-crm-warning/35 bg-crm-warning/10 opacity-90"
       }`}
     >
       <div className="flex items-start gap-3">
-        <span className="text-xs text-gray-400 font-mono w-6 text-right shrink-0 pt-0.5">{rank}</span>
+        <span className="text-xs text-crm-muted/80 font-mono w-6 text-right shrink-0 pt-0.5">{rank}</span>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-semibold text-gray-900 truncate">{member.contact?.displayName ?? "Unknown"}</span>
+            <span className="font-semibold text-crm-text truncate">{member.contact?.displayName ?? "Unknown"}</span>
             {!actionable && (
-              <span className="text-[10px] font-bold uppercase tracking-wide text-amber-900 bg-amber-100 px-1.5 py-0.5 rounded">Read-only</span>
+              <span className="text-[10px] font-bold uppercase tracking-wide text-crm-warning bg-crm-warning/15 px-1.5 py-0.5 rounded">Read-only</span>
             )}
             <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium shrink-0 ${MEMBER_STATUS_COLORS[member.status]}`}>
               {MEMBER_STATUS_LABELS[member.status]}
             </span>
           </div>
           {member.campaign && (
-            <p className="text-xs text-gray-500 mt-0.5 truncate flex items-center gap-1">
+            <p className="text-xs text-crm-muted mt-0.5 truncate flex items-center gap-1">
               <Megaphone className="h-3 w-3 shrink-0" />
               {member.campaign.name}
             </p>
           )}
-          <div className="flex flex-wrap gap-1.5 mt-1.5 text-[11px] text-gray-600">
+          <div className="flex flex-wrap gap-1.5 mt-1.5 text-[11px] text-crm-muted">
             {member.contact?.crmStage && (
-              <span className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">{member.contact.crmStage}</span>
+              <span className="bg-crm-accent/12 text-crm-accent px-2 py-0.5 rounded-full">{member.contact.crmStage}</span>
             )}
             {pr && (
               <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">{pr}</span>
             )}
             {cb && (
-              <span className={`px-2 py-0.5 rounded-full flex items-center gap-1 ${cb.urgent ? "bg-red-50 text-red-700 font-medium" : "bg-yellow-50 text-yellow-800"}`}>
+              <span className={`px-2 py-0.5 rounded-full flex items-center gap-1 ${cb.urgent ? "bg-crm-danger/15 text-crm-danger font-medium" : "bg-crm-warning/15 text-crm-warning"}`}>
                 {cb.urgent && <AlertCircle className="h-3 w-3" />}
                 {cb.label}
               </span>
             )}
             {member.attemptCount > 0 && (
-              <span className="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+              <span className="bg-crm-surface-2 text-crm-muted px-2 py-0.5 rounded-full">
                 {member.attemptCount} attempt{member.attemptCount !== 1 ? "s" : ""}
                 {member.lastAttemptAt ? ` · ${relativeTime(member.lastAttemptAt)}` : ""}
               </span>
             )}
           </div>
         </div>
-        <ChevronRight className="h-4 w-4 text-gray-300 shrink-0 mt-1" />
+        <ChevronRight className="h-4 w-4 text-crm-border shrink-0 mt-1" />
       </div>
     </button>
   );
@@ -904,7 +905,7 @@ function WrapUpOverlay({
   const contact = nextLead?.contact ?? null;
 
   return (
-    <div className="bg-white rounded-2xl p-6 border-2 border-green-400 shadow-lg mb-4">
+    <div className="bg-crm-surface rounded-crm-lg border border-crm-border p-6 border-2 border-green-400 shadow-lg mb-4">
       {/* Countdown header */}
       <div className="text-center mb-5">
         <div className="inline-flex items-center gap-2 text-green-600 font-semibold text-base mb-3">
@@ -913,8 +914,8 @@ function WrapUpOverlay({
         </div>
         {!paused ? (
           <>
-            <p className="text-5xl font-bold text-gray-800 tabular-nums leading-none mb-2">{countdown}</p>
-            <p className="text-gray-400 text-sm">Next lead ready in {countdown}… press <kbd className="bg-gray-100 px-1 rounded text-xs">G</kbd> to go now</p>
+            <p className="text-5xl font-bold text-crm-text tabular-nums leading-none mb-2">{countdown}</p>
+            <p className="text-crm-muted/80 text-sm">Next lead ready in {countdown}… press <kbd className="bg-crm-surface-2 px-1 rounded text-xs">G</kbd> to go now</p>
           </>
         ) : (
           <p className="text-amber-700 text-sm font-medium">Queue paused — resume to continue</p>
@@ -923,23 +924,23 @@ function WrapUpOverlay({
 
       {/* Next lead preview — uses already-loaded queue data, no extra API calls */}
       {nextLead && contact ? (
-        <div className="bg-gray-50 rounded-xl p-4 mb-5 border border-gray-200">
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">Up Next</p>
-          <p className="font-semibold text-gray-900 text-base truncate">{contact.displayName}</p>
+        <div className="bg-crm-bg rounded-crm p-4 mb-5 border border-crm-border">
+          <p className="text-xs font-semibold text-crm-muted/80 uppercase tracking-wider mb-1.5">Up Next</p>
+          <p className="font-semibold text-crm-text text-base truncate">{contact.displayName}</p>
           <div className="flex flex-wrap gap-1.5 mt-2">
             {contact.crmStage && (
-              <span className="text-xs px-2 py-0.5 bg-blue-50 text-blue-700 rounded-full font-medium">
+              <span className="text-xs px-2 py-0.5 bg-crm-accent/15 text-crm-accent rounded-full font-medium">
                 {contact.crmStage}
               </span>
             )}
             {contact.lastDisposition && (
-              <span className="text-xs px-2 py-0.5 bg-purple-50 text-purple-700 rounded-full">
+              <span className="text-xs px-2 py-0.5 bg-crm-accent/10 text-crm-accent rounded-full">
                 {contact.lastDisposition}
                 {contact.lastDispositionAt ? ` · ${relativeTime(contact.lastDispositionAt)}` : ""}
               </span>
             )}
             {nextLead.attemptCount > 0 && (
-              <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full">
+              <span className="text-xs px-2 py-0.5 bg-crm-surface-2 text-crm-muted rounded-full">
                 Called {nextLead.attemptCount}×
                 {nextLead.lastAttemptAt ? ` · last ${relativeTime(nextLead.lastAttemptAt)}` : ""}
               </span>
@@ -947,8 +948,8 @@ function WrapUpOverlay({
             {nextLead.callbackAt && (
               <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                 callbackTimeLabel(nextLead.callbackAt).urgent
-                  ? "bg-red-100 text-red-700"
-                  : "bg-yellow-50 text-yellow-700"
+                  ? "bg-red-100 text-crm-danger"
+                  : "bg-crm-warning/15 text-crm-warning"
               }`}>
                 {callbackTimeLabel(nextLead.callbackAt).label}
               </span>
@@ -956,7 +957,7 @@ function WrapUpOverlay({
           </div>
         </div>
       ) : (
-        <div className="text-center text-gray-400 text-sm py-3 mb-5">
+        <div className="text-center text-crm-muted/80 text-sm py-3 mb-5">
           No more leads in this filter — queue complete after this.
         </div>
       )}
@@ -965,14 +966,14 @@ function WrapUpOverlay({
       <div className="flex gap-3">
         <button
           onClick={onGoNow}
-          className="flex-1 flex items-center justify-center gap-2 py-3 bg-blue-600 text-white rounded-xl font-bold text-base hover:bg-blue-700 active:bg-blue-800 transition-colors shadow-sm"
+          className="flex-1 flex items-center justify-center gap-2 py-3 bg-crm-accent text-white rounded-crm font-bold text-base hover:brightness-110 active:bg-blue-800 transition-colors shadow-crm"
         >
           <ArrowRight className="h-5 w-5" />
           Go Now
         </button>
         <button
           onClick={onPause}
-          className="flex items-center gap-1.5 px-4 py-3 bg-amber-100 text-amber-800 rounded-xl font-medium text-sm hover:bg-amber-200 transition-colors"
+          className="flex items-center gap-1.5 px-4 py-3 bg-crm-warning/15 text-crm-warning rounded-crm font-medium text-sm hover:bg-amber-200 transition-colors"
         >
           <Pause className="h-4 w-4" />
           Pause
@@ -980,16 +981,16 @@ function WrapUpOverlay({
         <button
           onClick={onSkipNext}
           disabled={!nextLead}
-          className="flex items-center gap-1.5 px-4 py-3 bg-gray-100 text-gray-600 rounded-xl text-sm hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          className="flex items-center gap-1.5 px-4 py-3 bg-crm-surface-2 text-crm-muted rounded-crm text-sm hover:bg-crm-surface-2 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           <SkipForward className="h-4 w-4" />
           Skip Next
         </button>
       </div>
-      <p className="text-center text-xs text-gray-400 mt-2.5">
-        <kbd className="bg-gray-100 px-1 rounded">G</kbd> Go Now ·{" "}
-        <kbd className="bg-gray-100 px-1 rounded">P</kbd> Pause/Resume ·{" "}
-        <kbd className="bg-gray-100 px-1 rounded">X</kbd> Skip Next
+      <p className="text-center text-xs text-crm-muted/80 mt-2.5">
+        <kbd className="bg-crm-surface-2 px-1 rounded">G</kbd> Go Now ·{" "}
+        <kbd className="bg-crm-surface-2 px-1 rounded">P</kbd> Pause/Resume ·{" "}
+        <kbd className="bg-crm-surface-2 px-1 rounded">X</kbd> Skip Next
       </p>
     </div>
   );
@@ -1396,7 +1397,7 @@ function QueuePageInner() {
   const rest = queue.slice(1);
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <CRMPageShell>
       {callbackModalMember && (
         <SetCallbackModal
           member={callbackModalMember}
@@ -1407,14 +1408,14 @@ function QueuePageInner() {
 
       {/* Sticky Power Dialer action bar */}
       {powerModeActive && (
-        <div className="sticky top-0 z-20 bg-blue-700 text-white shadow-lg">
-          <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+        <div className="sticky top-0 z-20 -mx-4 border-b border-crm-border bg-crm-surface-2 shadow-crm sm:-mx-0 sm:rounded-crm-lg sm:border">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-1 py-3 sm:px-2">
             <div className="flex items-center gap-2 min-w-0 flex-wrap">
               <Zap className="h-4 w-4 shrink-0" />
               <span className="font-bold text-sm shrink-0">Power Dialer</span>
 
               {/* Filter toggle — Pending / Due / Overdue */}
-              <div className="flex rounded-lg overflow-hidden border border-blue-500 text-xs shrink-0">
+              <div className="flex shrink-0 overflow-hidden rounded-crm border border-crm-border text-xs">
                 {(
                   [
                     { f: "pending" as QueueFilter, label: "Pending", count: counts.pending },
@@ -1427,8 +1428,8 @@ function QueuePageInner() {
                     onClick={() => { setWrapUpActive(false); switchPowerFilter(f); }}
                     className={`px-2.5 py-1 font-medium transition-colors flex items-center gap-1 ${
                       filter === f
-                        ? "bg-white text-blue-700"
-                        : "text-blue-100 hover:bg-blue-600"
+                        ? "bg-crm-surface text-crm-accent"
+                        : "text-crm-muted hover:bg-crm-surface"
                     }`}
                   >
                     {label}
@@ -1437,8 +1438,8 @@ function QueuePageInner() {
                         f === "overdue" && count > 0
                           ? "bg-red-400 text-white"
                           : filter === f
-                            ? "bg-blue-100 text-blue-700"
-                            : "bg-blue-600 text-blue-100"
+                            ? "bg-blue-100 text-crm-accent"
+                            : "bg-crm-accent text-blue-100"
                       }`}>
                         {count}
                       </span>
@@ -1448,13 +1449,13 @@ function QueuePageInner() {
               </div>
 
               {paused && (
-                <span className="bg-amber-400 text-amber-900 text-xs font-bold px-2 py-0.5 rounded shrink-0">
+                <span className="bg-amber-400 text-crm-warning text-xs font-bold px-2 py-0.5 rounded shrink-0">
                   PAUSED
                 </span>
               )}
               {/* Smart sort indicator */}
               {sortMode === "smart" && !paused && (
-                <span className="flex items-center gap-1 text-blue-100 text-xs shrink-0">
+                <span className="flex shrink-0 items-center gap-1 text-xs text-crm-muted">
                   <Sparkles className="h-3 w-3" />
                   Smart priority on
                 </span>
@@ -1464,7 +1465,7 @@ function QueuePageInner() {
                 const c = campaigns.find((c) => c.id === campaignId);
                 if (!c) return null;
                 return (
-                  <span className="flex items-center gap-1 text-blue-100 text-xs shrink-0 max-w-[120px] truncate">
+                  <span className="flex max-w-[120px] shrink-0 items-center gap-1 truncate text-xs text-crm-muted">
                     <Megaphone className="h-3 w-3 shrink-0" />
                     {c.name}
                   </span>
@@ -1478,7 +1479,7 @@ function QueuePageInner() {
                 className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                   sortMode === "smart"
                     ? "bg-indigo-500 hover:bg-indigo-400 text-white"
-                    : "bg-white/20 hover:bg-white/30 text-blue-100"
+                    : "bg-crm-surface hover:bg-crm-surface-2 text-crm-muted"
                 }`}
                 title={sortMode === "smart" ? "Switch to original order" : "Switch to smart priority order"}
               >
@@ -1488,7 +1489,7 @@ function QueuePageInner() {
               <button
                 onClick={() => load()}
                 disabled={loading || acting}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white/15 hover:bg-white/25 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-crm-surface/15 hover:bg-crm-surface/25 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
                 title="Reload queue"
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
@@ -1496,21 +1497,21 @@ function QueuePageInner() {
               </button>
               <button
                 onClick={() => { setPaused((p) => !p); setWrapUpActive(false); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-crm-accent hover:bg-crm-accent/150 rounded-lg text-sm font-medium transition-colors"
               >
                 {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
                 {paused ? "Resume" : "Pause"}
               </button>
               <button
                 onClick={() => router.push("/crm/queue")}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-medium transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-crm-surface/20 hover:bg-crm-surface/30 rounded-lg text-sm font-medium transition-colors"
               >
                 <ZapOff className="h-3.5 w-3.5" />
                 Stop
               </button>
             </div>
           </div>
-          <div className="max-w-3xl mx-auto px-4 pb-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-blue-100/95 border-t border-blue-600/50 pt-2">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-crm-border/60 px-1 pb-2.5 pt-2 text-[11px] text-crm-muted sm:px-2">
             <span className="inline-flex items-center gap-1">
               <CalendarClock className="h-3 w-3 opacity-80" />
               Upcoming <strong className="text-white">{counts.upcoming}</strong>
@@ -1536,25 +1537,25 @@ function QueuePageInner() {
 
       <div className="max-w-3xl mx-auto px-4 py-6 sm:py-8">
         {powerModeActive && !loading && (
-          <div className="mb-4 rounded-xl border border-gray-200 bg-white/90 px-3 py-2 text-sm text-gray-700 flex flex-wrap items-center gap-2">
-            <ListOrdered className="h-4 w-4 text-blue-600 shrink-0" />
-            <span className="font-semibold text-gray-900">My Queue</span>
-            <span className="text-gray-400">·</span>
-            <span className="text-gray-600">Power session</span>
-            <span className="text-gray-400">·</span>
-            <span className="text-gray-500">{total} in this view</span>
+          <div className="mb-4 rounded-crm border border-crm-border bg-crm-surface/90 px-3 py-2 text-sm text-crm-text flex flex-wrap items-center gap-2">
+            <ListOrdered className="h-4 w-4 text-crm-accent shrink-0" />
+            <span className="font-semibold text-crm-text">My Queue</span>
+            <span className="text-crm-muted/80">·</span>
+            <span className="text-crm-muted">Power session</span>
+            <span className="text-crm-muted/80">·</span>
+            <span className="text-crm-muted">{total} in this view</span>
           </div>
         )}
 
         {powerModeActive && campaigns.length > 0 && (
-          <div className="mb-5 flex flex-wrap items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2">
-            <Megaphone className="h-4 w-4 text-gray-400 shrink-0" />
-            <label htmlFor="crm-queue-campaign-power" className="text-xs font-semibold text-gray-500 uppercase shrink-0">Campaign</label>
+          <div className="mb-5 flex flex-wrap items-center gap-2 rounded-crm border border-crm-border bg-crm-surface px-3 py-2">
+            <Megaphone className="h-4 w-4 text-crm-muted/80 shrink-0" />
+            <label htmlFor="crm-queue-campaign-power" className="text-xs font-semibold text-crm-muted uppercase shrink-0">Campaign</label>
             <select
               id="crm-queue-campaign-power"
               value={campaignId ?? ""}
               onChange={(e) => switchCampaign(e.target.value || null)}
-              className="flex-1 min-w-[10rem] max-w-md border border-gray-200 rounded-lg px-2 py-1.5 text-sm bg-gray-50/80"
+              className="flex-1 min-w-[10rem] max-w-md border border-crm-border rounded-lg px-2 py-1.5 text-sm bg-crm-bg/80"
               disabled={loading}
             >
               <option value="">All campaigns</option>
@@ -1563,7 +1564,7 @@ function QueuePageInner() {
               ))}
             </select>
             {campaignId ? (
-              <button type="button" onClick={() => switchCampaign(null)} className="text-xs text-blue-600 font-medium hover:underline">
+              <button type="button" onClick={() => switchCampaign(null)} className="text-xs text-crm-accent font-medium hover:underline">
                 Clear
               </button>
             ) : null}
@@ -1572,32 +1573,32 @@ function QueuePageInner() {
 
         {/* Manual mode — work header + counts (replaces separate tabs + banner) */}
         {!powerModeActive && (
-          <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 sm:p-5 mb-5">
+          <div className="rounded-crm-lg border border-crm-border bg-crm-surface shadow-crm p-4 sm:p-5 mb-5">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <ListOrdered className="h-7 w-7 text-blue-600 shrink-0" />
-                  <h1 className="text-2xl font-bold text-gray-900 tracking-tight">My Queue</h1>
+                  <ListOrdered className="h-7 w-7 text-crm-accent shrink-0" />
+                  <h1 className="text-2xl font-bold text-crm-text tracking-tight">My Queue</h1>
                 </div>
                 {!loading && (
-                  <p className="text-sm text-gray-500 mt-1">
+                  <p className="text-sm text-crm-muted mt-1">
                     {total === 0 ? "Nothing in this view" : `${total} lead${total !== 1 ? "s" : ""} · use counts below to switch focus`}
                   </p>
                 )}
                 {!loading && (counts.overdue > 0 || counts.due > 0) && (
-                  <p className="text-xs text-gray-600 mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <p className="text-xs text-crm-muted mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
                     {counts.overdue > 0 && (
-                      <button type="button" onClick={() => switchFilter("overdue")} className="font-semibold text-red-700 hover:underline">
+                      <button type="button" onClick={() => switchFilter("overdue")} className="font-semibold text-crm-danger hover:underline">
                         {counts.overdue} overdue
                       </button>
                     )}
-                    {counts.overdue > 0 && counts.due > 0 && <span className="text-gray-300">·</span>}
+                    {counts.overdue > 0 && counts.due > 0 && <span className="text-crm-border">·</span>}
                     {counts.due > 0 && (
-                      <button type="button" onClick={() => switchFilter("due")} className="font-semibold text-amber-800 hover:underline">
+                      <button type="button" onClick={() => switchFilter("due")} className="font-semibold text-crm-warning hover:underline">
                         {counts.due} due today
                       </button>
                     )}
-                    <span className="text-gray-400 hidden sm:inline">— tap or pick a column</span>
+                    <span className="text-crm-muted/80 hidden sm:inline">— tap or pick a column</span>
                   </p>
                 )}
               </div>
@@ -1606,10 +1607,10 @@ function QueuePageInner() {
                   type="button"
                   onClick={toggleSortMode}
                   disabled={loading}
-                  className={`flex items-center gap-1.5 px-3 py-2 border rounded-xl text-sm font-medium transition-colors disabled:opacity-50 ${
+                  className={`flex items-center gap-1.5 px-3 py-2 border rounded-crm text-sm font-medium transition-colors disabled:opacity-50 ${
                     sortMode === "smart"
-                      ? "border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
-                      : "border-gray-300 text-gray-600 hover:bg-gray-50"
+                      ? "border-indigo-300 bg-crm-accent/12 text-crm-accent hover:bg-indigo-100"
+                      : "border-crm-border text-crm-muted hover:bg-crm-bg"
                   }`}
                   title={sortMode === "smart" ? "Smart priority — click for original order" : "Original order — click for smart priority"}
                 >
@@ -1620,13 +1621,13 @@ function QueuePageInner() {
                   type="button"
                   onClick={() => router.push("/crm/queue?mode=power")}
                   disabled={loading || total === 0}
-                  className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                  className="flex items-center gap-1.5 px-3 py-2 bg-crm-accent text-white rounded-crm text-sm font-semibold hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed shadow-crm"
                   title={total === 0 ? "No leads in this view" : "Focused power session"}
                 >
                   <Zap className="h-4 w-4" />
                   Power mode
                 </button>
-                <button type="button" onClick={() => load()} disabled={loading || acting} className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 rounded-xl text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                <button type="button" onClick={() => load()} disabled={loading || acting} className="flex items-center gap-1.5 px-3 py-2 border border-crm-border rounded-crm text-sm text-crm-text hover:bg-crm-bg disabled:opacity-50">
                   <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
                   Refresh
                 </button>
@@ -1641,14 +1642,14 @@ function QueuePageInner() {
             </div>
 
             {campaigns.length > 0 && (
-              <div className="mt-4 flex flex-wrap items-center gap-2 pt-3 border-t border-gray-100">
-                <Megaphone className="h-4 w-4 text-gray-400 shrink-0" />
-                <label htmlFor="crm-queue-campaign" className="text-xs font-semibold text-gray-500 uppercase tracking-wide shrink-0">Campaign</label>
+              <div className="mt-4 flex flex-wrap items-center gap-2 pt-3 border-t border-crm-border/60">
+                <Megaphone className="h-4 w-4 text-crm-muted/80 shrink-0" />
+                <label htmlFor="crm-queue-campaign" className="text-xs font-semibold text-crm-muted uppercase tracking-wide shrink-0">Campaign</label>
                 <select
                   id="crm-queue-campaign"
                   value={campaignId ?? ""}
                   onChange={(e) => switchCampaign(e.target.value || null)}
-                  className="flex-1 min-w-[12rem] max-w-md border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-gray-50/80"
+                  className="flex-1 min-w-[12rem] max-w-md border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-crm-bg/80"
                   disabled={loading}
                 >
                   <option value="">All campaigns</option>
@@ -1657,7 +1658,7 @@ function QueuePageInner() {
                   ))}
                 </select>
                 {campaignId ? (
-                  <button type="button" onClick={() => switchCampaign(null)} className="text-xs text-blue-600 hover:underline font-medium">
+                  <button type="button" onClick={() => switchCampaign(null)} className="text-xs text-crm-accent hover:underline font-medium">
                     Clear filter
                   </button>
                 ) : null}
@@ -1668,7 +1669,7 @@ function QueuePageInner() {
 
         {/* Content */}
         {loading ? (
-          <div className="py-24 text-center text-gray-400 text-sm">Loading…</div>
+          <div className="py-24 text-center text-crm-muted/80 text-sm">Loading…</div>
         ) : error ? (
           <div className="py-24 text-center text-red-500 text-sm">{error}</div>
         ) : !next ? (
@@ -1676,11 +1677,11 @@ function QueuePageInner() {
             // Power mode — queue exhausted
             <div className="py-24 text-center">
               <CheckCheck className="h-14 w-14 text-green-400 mx-auto mb-4" />
-              <p className="text-gray-800 font-bold text-2xl mb-1">Queue Complete!</p>
-              <p className="text-gray-400 text-sm mb-6">You&apos;ve worked through all pending leads.</p>
+              <p className="text-crm-text font-bold text-2xl mb-1">Queue Complete!</p>
+              <p className="text-crm-muted/80 text-sm mb-6">You&apos;ve worked through all pending leads.</p>
               <button
                 onClick={() => router.push("/crm/queue")}
-                className="px-5 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 shadow"
+                className="px-5 py-2.5 bg-crm-accent text-white rounded-crm text-sm font-semibold hover:brightness-110 shadow"
               >
                 Exit Power Dialer
               </button>
@@ -1688,14 +1689,14 @@ function QueuePageInner() {
           ) : (
             // Manual mode — empty state
             <div className="py-24 text-center max-w-md mx-auto px-2">
-              <Inbox className="h-12 w-12 text-gray-300 mx-auto mb-3" />
-              <p className="text-gray-600 font-medium text-lg">
+              <Inbox className="h-12 w-12 text-crm-border mx-auto mb-3" />
+              <p className="text-crm-muted font-medium text-lg">
                 {filter === "pending" ? "You're caught up" :
                  filter === "due" ? "No due callbacks" :
                  filter === "overdue" ? "No overdue callbacks" :
                  "No upcoming callbacks"}
               </p>
-              <p className="text-gray-400 text-sm mt-1">
+              <p className="text-crm-muted/80 text-sm mt-1">
                 {campaignId
                   ? "Nothing in this campaign for this view. Try clearing the campaign filter or another snapshot above."
                   : filter === "pending"
@@ -1703,12 +1704,12 @@ function QueuePageInner() {
                     : "Nothing scheduled in this bucket. Pending leads may still be waiting."}
               </p>
               {campaignId && (
-                <button type="button" onClick={() => switchCampaign(null)} className="mt-4 text-sm text-blue-600 hover:underline">
+                <button type="button" onClick={() => switchCampaign(null)} className="mt-4 text-sm text-crm-accent hover:underline">
                   Clear campaign filter
                 </button>
               )}
               {!campaignId && filter !== "pending" && (
-                <button type="button" onClick={() => switchFilter("pending")} className="mt-4 text-sm text-blue-600 hover:underline">
+                <button type="button" onClick={() => switchFilter("pending")} className="mt-4 text-sm text-crm-accent hover:underline">
                   Switch to pending
                 </button>
               )}
@@ -1752,8 +1753,8 @@ function QueuePageInner() {
 
             {/* Up next list */}
             {rest.length > 0 && (
-              <div className="rounded-2xl border border-gray-200 bg-white/80 p-3 sm:p-4 shadow-sm">
-                <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-3 px-1">
+              <div className="rounded-crm-lg border border-crm-border bg-crm-surface/80 p-3 sm:p-4 shadow-crm">
+                <h2 className="text-xs font-bold text-crm-muted uppercase tracking-wide mb-3 px-1">
                   Up next ({rest.length + 1} in this pull)
                 </h2>
                 <div>
@@ -1762,7 +1763,7 @@ function QueuePageInner() {
                   ))}
                 </div>
                 {total > queue.length && (
-                  <p className="text-center text-xs text-gray-400 mt-3 px-1">
+                  <p className="text-center text-xs text-crm-muted/80 mt-3 px-1">
                     + {total - queue.length} more in queue
                   </p>
                 )}
@@ -1783,8 +1784,8 @@ function QueuePageInner() {
             />
 
             {rest.length > 0 && (
-              <div className="rounded-2xl border border-gray-200 bg-white/80 p-3 sm:p-4 shadow-sm">
-                <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-3 px-1">
+              <div className="rounded-crm-lg border border-crm-border bg-crm-surface/80 p-3 sm:p-4 shadow-crm">
+                <h2 className="text-xs font-bold text-crm-muted uppercase tracking-wide mb-3 px-1">
                   {filter === "pending" ? `More in queue (${rest.length + 1} shown)` :
                    filter === "overdue" ? `Also overdue (${rest.length + 1} shown)` :
                    filter === "due" ? `Also due today (${rest.length + 1} shown)` :
@@ -1796,7 +1797,7 @@ function QueuePageInner() {
                   ))}
                 </div>
                 {total > queue.length && (
-                  <p className="text-center text-xs text-gray-400 mt-3 px-1">
+                  <p className="text-center text-xs text-crm-muted/80 mt-3 px-1">
                     + {total - queue.length} more in queue (open filters or refresh)
                   </p>
                 )}
@@ -1805,7 +1806,7 @@ function QueuePageInner() {
           </>
         )}
       </div>
-    </div>
+    </CRMPageShell>
   );
 }
 
@@ -1813,7 +1814,7 @@ function QueuePageInner() {
 
 export default function QueuePage() {
   return (
-    <Suspense fallback={<div className="py-24 text-center text-gray-400 text-sm">Loading…</div>}>
+    <Suspense fallback={<div className="py-24 text-center text-crm-muted/80 text-sm">Loading…</div>}>
       <QueuePageInner />
     </Suspense>
   );

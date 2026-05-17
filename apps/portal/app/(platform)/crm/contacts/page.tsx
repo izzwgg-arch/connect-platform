@@ -17,6 +17,7 @@ import {
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
+import { CRMPageShell } from "../../../../components/crm";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 
@@ -76,11 +77,11 @@ const STAGE_LABELS: Record<CrmStage | "all", string> = {
 };
 
 const STAGE_BADGE_CLASS: Record<CrmStage, string> = {
-  LEAD: "bg-indigo-50 text-indigo-800 border-indigo-200",
-  CONTACTED: "bg-amber-50 text-amber-900 border-amber-200",
-  QUALIFIED: "bg-emerald-50 text-emerald-900 border-emerald-200",
-  CUSTOMER: "bg-blue-50 text-blue-800 border-blue-200",
-  CLOSED_LOST: "bg-gray-100 text-gray-700 border-gray-200",
+  LEAD: "bg-crm-accent/12 text-crm-accent border-crm-accent/30",
+  CONTACTED: "bg-crm-warning/15 text-crm-warning border-crm-warning/35",
+  QUALIFIED: "bg-crm-success/15 text-crm-success border-crm-success/35",
+  CUSTOMER: "bg-crm-accent/15 text-crm-accent border-crm-accent/40",
+  CLOSED_LOST: "bg-crm-surface-2 text-crm-muted border-crm-border",
 };
 
 const FILTER_TABS = ["all", "LEAD", "CONTACTED", "QUALIFIED", "CUSTOMER", "CLOSED_LOST"] as const;
@@ -199,13 +200,13 @@ function AddContactModal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-6 shadow-xl">
+      <div className="w-full max-w-md rounded-crm border border-crm-border bg-crm-surface p-6 shadow-xl">
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-base font-semibold text-gray-900">New contact</h3>
+          <h3 className="text-base font-semibold text-crm-text">New contact</h3>
           <button
             type="button"
             onClick={onClose}
-            className="rounded p-1 text-gray-500 hover:bg-gray-100"
+            className="rounded p-1 text-crm-muted hover:bg-crm-surface-2"
             aria-label="Close"
           >
             <X className="h-4 w-4" />
@@ -214,32 +215,32 @@ function AddContactModal({
 
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
-            <label className="mb-1 block text-xs font-medium text-gray-700">Name *</label>
+            <label className="mb-1 block text-xs font-medium text-crm-text">Name *</label>
             <input
               ref={firstRef}
               value={form.displayName}
               onChange={(e) => setForm((f) => ({ ...f, displayName: e.target.value }))}
               placeholder="Full name"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-crm-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
             />
           </div>
 
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="mb-1 block text-xs font-medium text-gray-700">Company</label>
+              <label className="mb-1 block text-xs font-medium text-crm-text">Company</label>
               <input
                 value={form.company}
                 onChange={(e) => setForm((f) => ({ ...f, company: e.target.value }))}
                 placeholder="Optional"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full rounded-lg border border-crm-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-gray-700">Stage</label>
+              <label className="mb-1 block text-xs font-medium text-crm-text">Stage</label>
               <select
                 value={form.stage}
                 onChange={(e) => setForm((f) => ({ ...f, stage: e.target.value as CrmStage }))}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full rounded-lg border border-crm-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
               >
                 {(Object.keys(STAGE_LABELS) as Array<CrmStage | "all">)
                   .filter((k) => k !== "all")
@@ -253,41 +254,41 @@ function AddContactModal({
           </div>
 
           <div>
-            <label className="mb-1 block text-xs font-medium text-gray-700">Phone</label>
+            <label className="mb-1 block text-xs font-medium text-crm-text">Phone</label>
             <input
               type="tel"
               value={form.phone}
               onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
               placeholder="+1 …"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-crm-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-xs font-medium text-gray-700">Email</label>
+            <label className="mb-1 block text-xs font-medium text-crm-text">Email</label>
             <input
               type="email"
               value={form.email}
               onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
               placeholder="name@company.com"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-crm-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
             />
           </div>
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-crm-danger">{error}</p>}
 
           <div className="flex justify-end gap-2 pt-2">
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              className="rounded-lg border border-crm-border px-4 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={saving}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              className="rounded-lg bg-crm-accent px-4 py-2 text-sm font-medium text-white hover:brightness-110 disabled:opacity-50"
             >
               {saving ? "Creating…" : "Create contact"}
             </button>
@@ -502,20 +503,18 @@ export default function CrmContactsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <CRMPageShell>
       {showAdd && <AddContactModal onClose={() => setShowAdd(false)} onCreated={handleContactCreated} />}
-
-      <div className="mx-auto max-w-6xl px-4 py-8">
         {/* Command header */}
-        <div className="mb-6 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+        <div className="mb-6 rounded-crm-lg border border-crm-border bg-crm-surface p-6 shadow-crm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="flex min-w-0 gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-crm bg-crm-accent/15 text-crm-accent">
                 <Users className="h-5 w-5" aria-hidden />
               </div>
               <div className="min-w-0">
-                <h1 className="text-2xl font-semibold tracking-tight text-gray-900">Contacts</h1>
-                <p className="mt-1 max-w-xl text-sm text-gray-500">
+                <h1 className="text-2xl font-semibold tracking-tight text-crm-text">Contacts</h1>
+                <p className="mt-1 max-w-xl text-sm text-crm-muted">
                   Find people fast, open records, jump to the live workspace when enabled, and bulk-assign when you are
                   admin.
                 </p>
@@ -525,7 +524,7 @@ export default function CrmContactsPage() {
               <button
                 type="button"
                 onClick={() => setShowAdd(true)}
-                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                className="inline-flex items-center gap-2 rounded-lg bg-crm-accent px-4 py-2 text-sm font-medium text-white hover:brightness-110"
               >
                 <Plus className="h-4 w-4" />
                 New contact
@@ -533,9 +532,9 @@ export default function CrmContactsPage() {
               {canImport && (
                 <Link
                   href="/crm/import"
-                  className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className="inline-flex items-center gap-2 rounded-lg border border-crm-border bg-crm-surface px-3 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg"
                 >
-                  <FileUp className="h-4 w-4 text-gray-500" />
+                  <FileUp className="h-4 w-4 text-crm-muted" />
                   Import leads
                 </Link>
               )}
@@ -545,47 +544,47 @@ export default function CrmContactsPage() {
 
         {/* Compact operational summary — server total + honest page-scoped counts */}
         {!loading && !error && (rows.length > 0 || total > 0) && (
-          <div className="mb-4 rounded-2xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
+          <div className="mb-4 rounded-crm-lg border border-crm-border bg-crm-surface px-4 py-3 shadow-crm">
             <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center lg:justify-between">
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm">
-                <span className="font-semibold tabular-nums text-gray-900">{total}</span>
-                <span className="text-gray-500">matching current filters</span>
-                <span className="hidden sm:inline text-gray-300" aria-hidden>
+                <span className="font-semibold tabular-nums text-crm-text">{total}</span>
+                <span className="text-crm-muted">matching current filters</span>
+                <span className="hidden sm:inline text-crm-border" aria-hidden>
                   ·
                 </span>
-                <span className="text-xs text-gray-500">
+                <span className="text-xs text-crm-muted">
                   Showing{" "}
-                  <span className="font-medium tabular-nums text-gray-700">
+                  <span className="font-medium tabular-nums text-crm-text">
                     {sliceFrom}–{sliceTo}
                   </span>
                 </span>
               </div>
-              <dl className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-gray-600">
+              <dl className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-crm-muted">
                 <div className="flex items-center gap-1.5">
-                  <dt className="text-gray-400">Active (page)</dt>
-                  <dd className="font-semibold tabular-nums text-gray-900">{summary.activeOnPage}</dd>
+                  <dt className="text-crm-muted/80">Active (page)</dt>
+                  <dd className="font-semibold tabular-nums text-crm-text">{summary.activeOnPage}</dd>
                 </div>
                 {isAdmin && (
                   <div className="flex items-center gap-1.5">
-                    <dt className="text-gray-400">Archived (page)</dt>
-                    <dd className="font-semibold tabular-nums text-gray-900">{summary.archivedOnPage}</dd>
+                    <dt className="text-crm-muted/80">Archived (page)</dt>
+                    <dd className="font-semibold tabular-nums text-crm-text">{summary.archivedOnPage}</dd>
                   </div>
                 )}
                 <div className="flex items-center gap-1.5">
-                  <dt className="text-gray-400">No phone</dt>
-                  <dd className="font-semibold tabular-nums text-amber-800">{summary.missingPhone}</dd>
+                  <dt className="text-crm-muted/80">No phone</dt>
+                  <dd className="font-semibold tabular-nums text-crm-warning">{summary.missingPhone}</dd>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <dt className="text-gray-400">No email</dt>
-                  <dd className="font-semibold tabular-nums text-amber-800">{summary.missingEmail}</dd>
+                  <dt className="text-crm-muted/80">No email</dt>
+                  <dd className="font-semibold tabular-nums text-crm-warning">{summary.missingEmail}</dd>
                 </div>
-                <div className="flex items-center gap-1.5 border-l border-gray-200 pl-4">
-                  <dt className="text-gray-400">Stage</dt>
-                  <dd className="font-medium text-gray-800">{stage === "all" ? "All stages" : STAGE_LABELS[stage]}</dd>
+                <div className="flex items-center gap-1.5 border-l border-crm-border pl-4">
+                  <dt className="text-crm-muted/80">Stage</dt>
+                  <dd className="font-medium text-crm-text">{stage === "all" ? "All stages" : STAGE_LABELS[stage]}</dd>
                 </div>
               </dl>
             </div>
-            <p className="mt-2 border-t border-gray-100 pt-2 text-[11px] leading-relaxed text-gray-500">
+            <p className="mt-2 border-t border-crm-border/60 pt-2 text-[11px] leading-relaxed text-crm-muted">
               Phone, email, and active/archived splits count only contacts on this page. Totals are never blended with
               tenant-wide analytics you have not loaded.
             </p>
@@ -593,15 +592,15 @@ export default function CrmContactsPage() {
         )}
 
         {/* Search + filters — single control surface */}
-        <div className="mb-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+        <div className="mb-4 rounded-crm-lg border border-crm-border bg-crm-surface p-4 shadow-crm">
           <div className="relative max-w-2xl">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-crm-muted/80" />
             <input
               ref={searchRef}
               value={search}
               onChange={(e) => handleSearchChange(e.target.value)}
               placeholder="Search by name, phone, email, or company…"
-              className="w-full rounded-xl border border-gray-200 bg-gray-50/50 py-2.5 pl-10 pr-10 text-sm transition-colors focus:border-blue-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-crm border border-crm-border bg-crm-surface-2/50 py-2.5 pl-10 pr-10 text-sm transition-colors focus:border-crm-accent/40 focus:bg-crm-surface focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
               aria-label="Search contacts"
             />
             {search && (
@@ -613,7 +612,7 @@ export default function CrmContactsPage() {
                   if (debounceRef.current) clearTimeout(debounceRef.current);
                   void load("", stage, assignedToMe, isAdmin ? archiveScope : "active", 0);
                 }}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:bg-gray-100"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-crm-muted/80 hover:bg-crm-surface-2"
                 aria-label="Clear search"
               >
                 <X className="h-4 w-4" />
@@ -633,8 +632,8 @@ export default function CrmContactsPage() {
                   }}
                   className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
                     stage === tab
-                      ? "border-blue-600 bg-blue-600 text-white"
-                      : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                      ? "border-blue-600 bg-crm-accent text-white"
+                      : "border-crm-border bg-crm-surface text-crm-text hover:bg-crm-bg"
                   }`}
                 >
                   {STAGE_LABELS[tab]}
@@ -643,8 +642,8 @@ export default function CrmContactsPage() {
             </div>
 
             {isAdmin && (
-              <div className="flex flex-wrap items-center gap-1.5 rounded-full bg-gray-50 px-2 py-1">
-                <span className="pl-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400">List</span>
+              <div className="flex flex-wrap items-center gap-1.5 rounded-full bg-crm-bg px-2 py-1">
+                <span className="pl-1.5 text-[10px] font-semibold uppercase tracking-wide text-crm-muted/80">List</span>
                 {(["active", "archived", "all"] as const).map((key) => (
                   <button
                     key={key}
@@ -655,8 +654,8 @@ export default function CrmContactsPage() {
                     }}
                     className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
                       archiveScope === key
-                        ? "border-gray-900 bg-gray-900 text-white"
-                        : "border-transparent bg-white text-gray-700 shadow-sm hover:bg-gray-50"
+                        ? "border-crm-accent bg-crm-accent text-white"
+                        : "border-transparent bg-crm-surface text-crm-text shadow-crm hover:bg-crm-bg"
                     }`}
                   >
                     {ARCHIVE_SCOPE_LABELS[key]}
@@ -674,7 +673,7 @@ export default function CrmContactsPage() {
               className={`rounded-full border px-3 py-1.5 text-xs font-medium lg:ml-auto ${
                 assignedToMe
                   ? "border-violet-600 bg-violet-600 text-white"
-                  : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                  : "border-crm-border bg-crm-surface text-crm-text hover:bg-crm-bg"
               }`}
             >
               Assigned to me
@@ -684,15 +683,15 @@ export default function CrmContactsPage() {
 
         {/* Bulk bar — compact, not full-width promo */}
         {isAdmin && selectedIds.size > 0 && (
-          <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
-            <span className="text-sm font-medium text-gray-800">{selectedIds.size} selected</span>
+          <div className="mb-4 flex flex-wrap items-center gap-3 rounded-crm border border-crm-border bg-crm-surface px-4 py-3 shadow-crm">
+            <span className="text-sm font-medium text-crm-text">{selectedIds.size} selected</span>
             <select
               value={bulkAssignUserId}
               onChange={(e) => {
                 setBulkAssignUserId(e.target.value);
                 void loadCrmUsers();
               }}
-              className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
+              className="rounded-lg border border-crm-border px-2 py-1.5 text-sm"
             >
               <option value="">Assign to…</option>
               {crmUsers.map((u) => (
@@ -705,7 +704,7 @@ export default function CrmContactsPage() {
               type="button"
               onClick={() => handleBulkReassign(bulkAssignUserId || null)}
               disabled={bulkAssigning || !bulkAssignUserId}
-              className="inline-flex items-center gap-1 rounded-lg border border-gray-300 bg-gray-50 px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-100 disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-lg border border-crm-border bg-crm-bg px-3 py-1.5 text-sm font-medium text-crm-text hover:bg-crm-surface-2 disabled:opacity-50"
             >
               <UserCheck className="h-3.5 w-3.5" />
               {bulkAssigning ? "Assigning…" : "Assign"}
@@ -714,15 +713,15 @@ export default function CrmContactsPage() {
               type="button"
               onClick={() => handleBulkReassign(null)}
               disabled={bulkAssigning}
-              className="text-sm font-medium text-gray-600 hover:text-gray-900 disabled:opacity-50"
+              className="text-sm font-medium text-crm-muted hover:text-crm-text disabled:opacity-50"
             >
               Clear assignment
             </button>
-            {bulkError && <span className="text-xs text-red-600">{bulkError}</span>}
+            {bulkError && <span className="text-xs text-crm-danger">{bulkError}</span>}
             <button
               type="button"
               onClick={clearSelection}
-              className="ml-auto text-sm text-gray-500 hover:text-gray-800"
+              className="ml-auto text-sm text-crm-muted hover:text-crm-text"
             >
               Dismiss
             </button>
@@ -735,21 +734,21 @@ export default function CrmContactsPage() {
             {[0, 1, 2].map((i) => (
               <div
                 key={i}
-                className="h-24 animate-pulse rounded-2xl border border-gray-200 bg-gradient-to-r from-gray-100 via-gray-50 to-gray-100"
+                className="h-24 animate-pulse rounded-crm-lg border border-crm-border bg-gradient-to-r from-gray-100 via-gray-50 to-gray-100"
               />
             ))}
           </div>
         )}
 
-        {!loading && error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+        {!loading && error && <div className="rounded-crm border border-crm-danger/35 bg-crm-danger/15 px-4 py-3 text-sm text-crm-danger">{error}</div>}
 
         {!loading && !error && rows.length === 0 && (
-          <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-6 py-14 text-center">
-            <UserRound className="mx-auto mb-3 h-10 w-10 text-gray-300" aria-hidden />
+          <div className="rounded-crm-lg border border-dashed border-crm-border bg-crm-surface px-6 py-14 text-center">
+            <UserRound className="mx-auto mb-3 h-10 w-10 text-crm-border" aria-hidden />
             {hasListFilters ? (
               <>
-                <p className="text-base font-medium text-gray-800">No contacts match these filters</p>
-                <p className="mx-auto mt-2 max-w-md text-sm text-gray-500">
+                <p className="text-base font-medium text-crm-text">No contacts match these filters</p>
+                <p className="mx-auto mt-2 max-w-md text-sm text-crm-muted">
                   Adjust search, stage, assignment, or list scope — or reset everything to see the default active
                   directory.
                 </p>
@@ -757,7 +756,7 @@ export default function CrmContactsPage() {
                   <button
                     type="button"
                     onClick={resetFilters}
-                    className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50"
+                    className="rounded-lg border border-crm-border bg-crm-surface px-4 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg"
                   >
                     Reset filters
                   </button>
@@ -770,7 +769,7 @@ export default function CrmContactsPage() {
                         if (debounceRef.current) clearTimeout(debounceRef.current);
                         void load("", stage, assignedToMe, isAdmin ? archiveScope : "active", 0);
                       }}
-                      className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                      className="rounded-lg bg-crm-accent px-4 py-2 text-sm font-medium text-white hover:brightness-110"
                     >
                       Clear search only
                     </button>
@@ -779,8 +778,8 @@ export default function CrmContactsPage() {
               </>
             ) : isAdmin && archiveScope === "archived" ? (
               <>
-                <p className="text-base font-medium text-gray-800">No archived contacts</p>
-                <p className="mx-auto mt-2 max-w-md text-sm text-gray-500">
+                <p className="text-base font-medium text-crm-text">No archived contacts</p>
+                <p className="mx-auto mt-2 max-w-md text-sm text-crm-muted">
                   Archived contacts are hidden from the active list. When you archive from a contact record, it will
                   appear here for admins.
                 </p>
@@ -790,22 +789,22 @@ export default function CrmContactsPage() {
                     setArchiveScope("active");
                     setPage(0);
                   }}
-                  className="mt-5 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50"
+                  className="mt-5 rounded-lg border border-crm-border bg-crm-surface px-4 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg"
                 >
                   View active contacts
                 </button>
               </>
             ) : (
               <>
-                <p className="text-base font-medium text-gray-800">No contacts yet</p>
-                <p className="mx-auto mt-2 max-w-md text-sm text-gray-500">
+                <p className="text-base font-medium text-crm-text">No contacts yet</p>
+                <p className="mx-auto mt-2 max-w-md text-sm text-crm-muted">
                   Add a person manually or bring in a file from Import Leads. Records stay in this tenant only.
                 </p>
                 <div className="mt-6 flex flex-wrap justify-center gap-2">
                   <button
                     type="button"
                     onClick={() => setShowAdd(true)}
-                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                    className="inline-flex items-center gap-2 rounded-lg bg-crm-accent px-4 py-2 text-sm font-medium text-white hover:brightness-110"
                   >
                     <Plus className="h-4 w-4" />
                     New contact
@@ -813,9 +812,9 @@ export default function CrmContactsPage() {
                   {canImport && (
                     <Link
                       href="/crm/import"
-                      className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                      className="inline-flex items-center gap-2 rounded-lg border border-crm-border bg-crm-surface px-4 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg"
                     >
-                      <FileUp className="h-4 w-4 text-gray-500" />
+                      <FileUp className="h-4 w-4 text-crm-muted" />
                       Import leads
                     </Link>
                   )}
@@ -828,13 +827,13 @@ export default function CrmContactsPage() {
         {!loading && !error && rows.length > 0 && (
           <div className="mb-4 flex items-center justify-between gap-2">
             {isAdmin && (
-              <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-600">
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-crm-muted">
                 <input
                   type="checkbox"
                   checked={allSelectableSelected}
                   onChange={toggleSelectAll}
                   disabled={selectableRows.length === 0}
-                  className="rounded border-gray-300"
+                  className="rounded border-crm-border"
                 />
                 <span>Select active on page</span>
               </label>
@@ -850,8 +849,8 @@ export default function CrmContactsPage() {
               return (
                 <li
                   key={c.id}
-                  className={`rounded-2xl border bg-white p-4 shadow-sm transition-colors ${
-                    archived ? "border-gray-200 opacity-80" : "border-gray-200 hover:border-gray-300"
+                  className={`rounded-crm-lg border bg-crm-surface p-4 shadow-crm transition-colors ${
+                    archived ? "border-crm-border opacity-80" : "border-crm-border hover:border-crm-border"
                   }`}
                 >
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -868,31 +867,31 @@ export default function CrmContactsPage() {
                                 toggleSelect(c.id);
                                 void loadCrmUsers();
                               }}
-                              className="rounded border-gray-300"
+                              className="rounded border-crm-border"
                               aria-label={`Select ${c.displayName}`}
                             />
                           )}
                         </div>
                       )}
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-crm-accent text-xs font-bold text-white">
                         {initials(c.displayName)}
                       </div>
                       <div className="min-w-0 flex-1 space-y-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          <h2 className="truncate text-lg font-semibold tracking-tight text-gray-900">{c.displayName}</h2>
+                          <h2 className="truncate text-lg font-semibold tracking-tight text-crm-text">{c.displayName}</h2>
                           {archived && (
-                            <span className="rounded bg-gray-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-700">
+                            <span className="rounded bg-crm-surface-2 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-crm-text">
                               Archived
                             </span>
                           )}
                           {c.doNotCall && (
-                            <span className="rounded bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-700">
+                            <span className="rounded bg-crm-danger/15 px-2 py-0.5 text-[10px] font-semibold text-crm-danger">
                               DNC
                             </span>
                           )}
                         </div>
-                        {c.company && <p className="text-sm text-gray-600">{c.company}</p>}
-                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+                        {c.company && <p className="text-sm text-crm-muted">{c.company}</p>}
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-crm-muted">
                           {c.primaryPhone ? (
                             <span className="inline-flex items-center gap-1">
                               <Phone className="h-3.5 w-3.5 shrink-0" aria-hidden />
@@ -910,7 +909,7 @@ export default function CrmContactsPage() {
                             <span className="text-amber-700">No email</span>
                           )}
                         </div>
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-crm-muted">
                           {c.crmStage && (
                             <span
                               className={`inline-flex rounded border px-2 py-0.5 text-[11px] font-semibold ${STAGE_BADGE_CLASS[c.crmStage]}`}
@@ -919,13 +918,13 @@ export default function CrmContactsPage() {
                             </span>
                           )}
                           {hasLastActivity && (
-                            <span className="text-gray-600">
+                            <span className="text-crm-muted">
                               Last activity {formatShortDate(c.lastActivityAt)}
                             </span>
                           )}
-                          <span className="inline-flex items-center gap-1.5 text-gray-500">
-                            {hasLastActivity && <span className="text-gray-300" aria-hidden>·</span>}
-                            <span className="text-gray-400">Owner</span>
+                          <span className="inline-flex items-center gap-1.5 text-crm-muted">
+                            {hasLastActivity && <span className="text-crm-border" aria-hidden>·</span>}
+                            <span className="text-crm-muted/80">Owner</span>
                             <span>{assignedLabel(c.assignedTo)}</span>
                           </span>
                         </div>
@@ -934,18 +933,18 @@ export default function CrmContactsPage() {
                     <div className="flex flex-wrap gap-2 lg:shrink-0 lg:pl-4">
                       <Link
                         href={`/crm/contacts/${c.id}`}
-                        className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50"
+                        className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-crm-border bg-crm-surface px-3 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg"
                       >
                         Open contact
-                        <ExternalLink className="h-3.5 w-3.5 text-gray-400" aria-hidden />
+                        <ExternalLink className="h-3.5 w-3.5 text-crm-muted/80" aria-hidden />
                       </Link>
                       {canLiveWorkspace && !archived && (
                         <Link
                           href={`/crm/live-call?contactId=${encodeURIComponent(c.id)}`}
-                          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50"
+                          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-crm-border bg-crm-surface px-3 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg"
                         >
                           Workspace
-                          <Radio className="h-3.5 w-3.5 text-gray-400" aria-hidden />
+                          <Radio className="h-3.5 w-3.5 text-crm-muted/80" aria-hidden />
                         </Link>
                       )}
                     </div>
@@ -958,13 +957,13 @@ export default function CrmContactsPage() {
 
         {!loading && !error && total > 0 && (canPrev || canNext) && (
           <nav
-            className="mt-6 flex flex-col items-stretch gap-3 rounded-2xl border border-gray-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between"
+            className="mt-6 flex flex-col items-stretch gap-3 rounded-crm-lg border border-crm-border bg-crm-surface px-4 py-3 shadow-crm sm:flex-row sm:items-center sm:justify-between"
             aria-label="Contacts pagination"
           >
-            <p className="text-center text-sm text-gray-600 sm:text-left">
+            <p className="text-center text-sm text-crm-muted sm:text-left">
               Page{" "}
-              <span className="font-medium tabular-nums text-gray-900">{page + 1}</span> of{" "}
-              <span className="font-medium tabular-nums text-gray-900">
+              <span className="font-medium tabular-nums text-crm-text">{page + 1}</span> of{" "}
+              <span className="font-medium tabular-nums text-crm-text">
                 {Math.max(1, Math.ceil(total / CONTACTS_PAGE_LIMIT))}
               </span>
             </p>
@@ -973,7 +972,7 @@ export default function CrmContactsPage() {
                 type="button"
                 disabled={!canPrev}
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
-                className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+                className="inline-flex items-center gap-1 rounded-lg border border-crm-border bg-crm-surface px-3 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <ChevronLeft className="h-4 w-4" aria-hidden />
                 Previous
@@ -982,7 +981,7 @@ export default function CrmContactsPage() {
                 type="button"
                 disabled={!canNext}
                 onClick={() => setPage((p) => p + 1)}
-                className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+                className="inline-flex items-center gap-1 rounded-lg border border-crm-border bg-crm-surface px-3 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Next
                 <ChevronRight className="h-4 w-4" aria-hidden />
@@ -990,7 +989,6 @@ export default function CrmContactsPage() {
             </div>
           </nav>
         )}
-      </div>
-    </div>
+    </CRMPageShell>
   );
 }

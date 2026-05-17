@@ -8,6 +8,7 @@ import {
   PhoneCall, X, Edit2, Save, Download, UserPlus, CheckSquare2, Square, CalendarClock,
   Shuffle, BarChart2, Upload, History, ListOrdered, ChevronDown,
 } from "lucide-react";
+import { CRMPageShell } from "../../../../../components/crm";
 import { apiGet, apiPost, apiPatch } from "../../../../../services/apiClient";
 import { useAppContext } from "../../../../../hooks/useAppContext";
 
@@ -90,11 +91,11 @@ type CampaignImportHistoryRow = {
 };
 
 const CAMPAIGN_IMPORT_STATUS_STYLE: Record<string, string> = {
-  PENDING: "bg-gray-100 text-gray-700 border-gray-200",
-  PROCESSING: "bg-blue-50 text-blue-800 border-blue-200",
+  PENDING: "bg-crm-surface-2 text-crm-text border-crm-border",
+  PROCESSING: "bg-crm-accent/15 text-blue-800 border-blue-200",
   DONE: "bg-green-50 text-green-800 border-green-200",
-  PARTIAL: "bg-amber-50 text-amber-900 border-amber-200",
-  FAILED: "bg-red-50 text-red-800 border-red-200",
+  PARTIAL: "bg-amber-50 text-crm-warning border-crm-warning/35",
+  FAILED: "bg-crm-danger/15 text-red-800 border-crm-danger/35",
 };
 
 function campaignImportStatusLabel(s: string) {
@@ -292,11 +293,11 @@ const STATUS_LABELS: Record<CampaignStatus, string> = {
 };
 
 const STATUS_COLORS: Record<CampaignStatus, string> = {
-  DRAFT: "bg-gray-100 text-gray-600",
+  DRAFT: "bg-crm-surface-2 text-crm-muted",
   ACTIVE: "bg-green-100 text-green-700",
-  PAUSED: "bg-yellow-100 text-yellow-700",
-  COMPLETED: "bg-blue-100 text-blue-700",
-  ARCHIVED: "bg-gray-100 text-gray-400",
+  PAUSED: "bg-yellow-100 text-crm-warning",
+  COMPLETED: "bg-blue-100 text-crm-accent",
+  ARCHIVED: "bg-crm-surface-2 text-crm-muted/80",
 };
 
 const PRIORITY_LABELS: Record<CampaignPriority, string> = {
@@ -304,10 +305,10 @@ const PRIORITY_LABELS: Record<CampaignPriority, string> = {
 };
 
 const PRIORITY_COLORS: Record<CampaignPriority, string> = {
-  LOW: "bg-gray-100 text-gray-500",
-  NORMAL: "bg-gray-100 text-gray-600",
+  LOW: "bg-crm-surface-2 text-crm-muted",
+  NORMAL: "bg-crm-surface-2 text-crm-muted",
   HIGH: "bg-orange-100 text-orange-700",
-  URGENT: "bg-red-100 text-red-700",
+  URGENT: "bg-red-100 text-crm-danger",
 };
 
 const MEMBER_STATUS_LABELS: Record<MemberStatus, string> = {
@@ -316,13 +317,13 @@ const MEMBER_STATUS_LABELS: Record<MemberStatus, string> = {
 };
 
 const MEMBER_STATUS_COLORS: Record<MemberStatus, string> = {
-  PENDING: "bg-gray-100 text-gray-600",
-  IN_PROGRESS: "bg-blue-100 text-blue-700",
+  PENDING: "bg-crm-surface-2 text-crm-muted",
+  IN_PROGRESS: "bg-blue-100 text-crm-accent",
   CONTACTED: "bg-purple-100 text-purple-700",
-  CALLBACK: "bg-yellow-100 text-yellow-700",
+  CALLBACK: "bg-yellow-100 text-crm-warning",
   CONVERTED: "bg-green-100 text-green-700",
-  SKIPPED: "bg-gray-100 text-gray-500",
-  DO_NOT_CALL: "bg-red-100 text-red-700",
+  SKIPPED: "bg-crm-surface-2 text-crm-muted",
+  DO_NOT_CALL: "bg-red-100 text-crm-danger",
 };
 
 function HealthTile({
@@ -338,13 +339,13 @@ function HealthTile({
 }) {
   return (
     <div
-      className={`rounded-xl border px-3 py-2.5 ${
-        urgent ? "border-amber-200 bg-amber-50/60" : "border-gray-200 bg-gray-50/80"
+      className={`rounded-crm border px-3 py-2.5 ${
+        urgent ? "border-crm-warning/35 bg-amber-50/60" : "border-crm-border bg-crm-bg/80"
       }`}
     >
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">{label}</p>
-      <p className={`text-xl font-bold tabular-nums ${urgent ? "text-amber-900" : "text-gray-900"}`}>{value}</p>
-      {hint ? <p className="text-[11px] text-gray-500 mt-0.5 leading-snug">{hint}</p> : null}
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-crm-muted">{label}</p>
+      <p className={`text-xl font-bold tabular-nums ${urgent ? "text-crm-warning" : "text-crm-text"}`}>{value}</p>
+      {hint ? <p className="text-[11px] text-crm-muted mt-0.5 leading-snug">{hint}</p> : null}
     </div>
   );
 }
@@ -396,13 +397,13 @@ function CallbackCell({ member, campaignId, onUpdated, token, readOnly }: {
     if (member.callbackAt) {
       const d = new Date(member.callbackAt);
       return (
-        <span className="text-xs text-gray-500">
+        <span className="text-xs text-crm-muted">
           {d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}{" "}
           {d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
         </span>
       );
     }
-    return <span className="text-xs text-gray-400">—</span>;
+    return <span className="text-xs text-crm-muted/80">—</span>;
   }
 
   if (editing) {
@@ -412,10 +413,10 @@ function CallbackCell({ member, campaignId, onUpdated, token, readOnly }: {
           type="datetime-local"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          className="border border-gray-300 rounded px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 w-36"
+          className="border border-crm-border rounded px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-crm-accent/30 w-36"
         />
-        <button onClick={save} disabled={saving} className="text-xs px-1.5 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">✓</button>
-        <button onClick={() => setEditing(false)} className="text-xs px-1.5 py-1 border border-gray-300 rounded hover:bg-gray-50">✕</button>
+        <button onClick={save} disabled={saving} className="text-xs px-1.5 py-1 bg-crm-accent text-white rounded hover:brightness-110 disabled:opacity-50">✓</button>
+        <button onClick={() => setEditing(false)} className="text-xs px-1.5 py-1 border border-crm-border rounded hover:bg-crm-bg">✕</button>
       </div>
     );
   }
@@ -425,17 +426,17 @@ function CallbackCell({ member, campaignId, onUpdated, token, readOnly }: {
     const isPast = d < new Date();
     return (
       <div className="flex items-center gap-1">
-        <span className={`text-xs ${isPast ? "text-red-600 font-medium" : "text-yellow-700"}`}>
+        <span className={`text-xs ${isPast ? "text-crm-danger font-medium" : "text-crm-warning"}`}>
           {d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} {d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
         </span>
-        <button onClick={() => setEditing(true)} className="text-gray-400 hover:text-gray-600 p-0.5"><Edit2 className="h-3 w-3" /></button>
-        <button onClick={clear} disabled={saving} className="text-gray-400 hover:text-red-500 p-0.5"><X className="h-3 w-3" /></button>
+        <button onClick={() => setEditing(true)} className="text-crm-muted/80 hover:text-crm-muted p-0.5"><Edit2 className="h-3 w-3" /></button>
+        <button onClick={clear} disabled={saving} className="text-crm-muted/80 hover:text-red-500 p-0.5"><X className="h-3 w-3" /></button>
       </div>
     );
   }
 
   return (
-    <button onClick={() => setEditing(true)} className="text-xs text-gray-400 hover:text-blue-600 flex items-center gap-1">
+    <button onClick={() => setEditing(true)} className="text-xs text-crm-muted/80 hover:text-crm-accent flex items-center gap-1">
       <CalendarClock className="h-3.5 w-3.5" />Set
     </button>
   );
@@ -511,37 +512,37 @@ function AddContactsModal({ campaignId, onClose, onAdded }: {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col">
+      <div className="bg-crm-surface rounded-crm shadow-xl w-full max-w-lg max-h-[85vh] flex flex-col">
         <div className="p-4 border-b flex items-center justify-between">
-          <h2 className="font-semibold text-gray-900">Add Contacts to Campaign</h2>
-          <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded"><X className="h-4 w-4" /></button>
+          <h2 className="font-semibold text-crm-text">Add Contacts to Campaign</h2>
+          <button onClick={onClose} className="p-1 hover:bg-crm-surface-2 rounded"><X className="h-4 w-4" /></button>
         </div>
         <div className="p-3 border-b">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-crm-muted/80" />
             <input
               autoFocus
               value={search}
               onChange={(e) => handleSearchChange(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full pl-9 pr-3 py-2 border border-crm-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
               placeholder="Search by name, phone, or email…"
             />
           </div>
           {total > 0 && (
-            <p className="text-xs text-gray-400 mt-1.5 px-1">{total} contact{total !== 1 ? "s" : ""} available</p>
+            <p className="text-xs text-crm-muted/80 mt-1.5 px-1">{total} contact{total !== 1 ? "s" : ""} available</p>
           )}
         </div>
         <div className="flex-1 overflow-y-auto">
           {loading ? (
-            <div className="p-8 text-center text-gray-400 text-sm">Searching…</div>
+            <div className="p-8 text-center text-crm-muted/80 text-sm">Searching…</div>
           ) : contacts.length === 0 ? (
-            <div className="p-8 text-center text-gray-400 text-sm">
+            <div className="p-8 text-center text-crm-muted/80 text-sm">
               {search ? "No contacts match your search." : "All CRM contacts are already in this campaign."}
             </div>
           ) : (
             <>
               {contacts.map((c) => (
-                <label key={c.id} className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 cursor-pointer border-b last:border-b-0">
+                <label key={c.id} className="flex items-center gap-3 px-4 py-3 hover:bg-crm-bg cursor-pointer border-b last:border-b-0">
                   <input
                     type="checkbox"
                     checked={selected.has(c.id)}
@@ -554,8 +555,8 @@ function AddContactsModal({ campaignId, onClose, onAdded }: {
                     className="rounded"
                   />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-gray-900 truncate">{c.displayName}</p>
-                    <p className="text-xs text-gray-500 truncate">
+                    <p className="text-sm font-medium text-crm-text truncate">{c.displayName}</p>
+                    <p className="text-xs text-crm-muted truncate">
                       {[c.primaryPhone, c.primaryEmail, c.company].filter(Boolean).join(" · ")}
                     </p>
                   </div>
@@ -570,19 +571,19 @@ function AddContactsModal({ campaignId, onClose, onAdded }: {
 
         {/* Pagination */}
         {totalPages > 1 && (
-          <div className="px-4 py-2 border-t flex items-center justify-between text-xs text-gray-500">
-            <button disabled={page === 1} onClick={() => handlePageChange(page - 1)} className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-50">Previous</button>
+          <div className="px-4 py-2 border-t flex items-center justify-between text-xs text-crm-muted">
+            <button disabled={page === 1} onClick={() => handlePageChange(page - 1)} className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-crm-bg">Previous</button>
             <span>Page {page} of {totalPages}</span>
-            <button disabled={page === totalPages} onClick={() => handlePageChange(page + 1)} className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-gray-50">Next</button>
+            <button disabled={page === totalPages} onClick={() => handlePageChange(page + 1)} className="px-2 py-1 border rounded disabled:opacity-40 hover:bg-crm-bg">Next</button>
           </div>
         )}
 
         <div className="p-4 border-t flex items-center justify-between gap-2">
-          <span className="text-sm text-gray-500">{selected.size} selected</span>
-          {error && <span className="text-xs text-red-600">{error}</span>}
+          <span className="text-sm text-crm-muted">{selected.size} selected</span>
+          {error && <span className="text-xs text-crm-danger">{error}</span>}
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-3 py-2 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">Cancel</button>
-            <button onClick={handleAdd} disabled={saving || selected.size === 0} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
+            <button onClick={onClose} className="px-3 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-bg">Cancel</button>
+            <button onClick={handleAdd} disabled={saving || selected.size === 0} className="px-4 py-2 text-sm bg-crm-accent text-white rounded-lg hover:brightness-110 disabled:opacity-50">
               {saving ? "Adding…" : `Add ${selected.size > 0 ? selected.size : ""} Contacts`}
             </button>
           </div>
@@ -983,13 +984,25 @@ export default function CampaignDetailPage() {
   const importSkippedMismatch =
     !!(importSummary && importCompareBaseline && importCompareBaseline.invalidRows !== importSummary.skippedRows);
 
-  if (loading) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><p className="text-gray-400">Loading…</p></div>;
-  if (!campaign) return <div className="min-h-screen bg-gray-50 flex items-center justify-center"><p className="text-red-500">{error || "Campaign not found"}</p></div>;
+  if (loading) {
+    return (
+      <CRMPageShell innerClassName="flex min-h-[40vh] items-center justify-center">
+        <p className="text-crm-muted">Loading…</p>
+      </CRMPageShell>
+    );
+  }
+  if (!campaign) {
+    return (
+      <CRMPageShell innerClassName="flex min-h-[40vh] items-center justify-center">
+        <p className="text-crm-danger">{error || "Campaign not found"}</p>
+      </CRMPageShell>
+    );
+  }
 
   const hd = healthDerived!;
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <CRMPageShell>
       {showAddContacts && (
         <AddContactsModal
           campaignId={campaignId}
@@ -998,15 +1011,14 @@ export default function CampaignDetailPage() {
         />
       )}
 
-      <div className="max-w-6xl mx-auto px-4 py-8">
         {/* Back */}
-        <button onClick={() => router.push("/crm/campaigns")} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-5">
+        <button onClick={() => router.push("/crm/campaigns")} className="flex items-center gap-1.5 text-sm text-crm-muted hover:text-crm-text mb-5">
           <ArrowLeft className="h-4 w-4" />
           Campaigns
         </button>
 
         {/* Campaign hero + primary actions */}
-        <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 sm:p-6 mb-5">
+        <div className="rounded-crm-lg border border-crm-border bg-crm-surface shadow-crm p-4 sm:p-6 mb-5">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0 flex-1">
               {editingName ? (
@@ -1016,18 +1028,18 @@ export default function CampaignDetailPage() {
                     value={nameInput}
                     onChange={(e) => setNameInput(e.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter") saveName(); if (e.key === "Escape") setEditingName(false); }}
-                    className="text-xl font-bold border border-gray-300 rounded-lg px-3 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 w-full max-w-md"
+                    className="text-xl font-bold border border-crm-border rounded-lg px-3 py-1 focus:outline-none focus:ring-2 focus:ring-crm-accent/30 w-full max-w-md"
                   />
-                  <button type="button" onClick={saveName} className="p-1.5 bg-blue-600 text-white rounded hover:bg-blue-700"><Save className="h-4 w-4" /></button>
-                  <button type="button" onClick={() => setEditingName(false)} className="p-1.5 border border-gray-300 rounded hover:bg-gray-50"><X className="h-4 w-4" /></button>
+                  <button type="button" onClick={saveName} className="p-1.5 bg-crm-accent text-white rounded hover:brightness-110"><Save className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => setEditingName(false)} className="p-1.5 border border-crm-border rounded hover:bg-crm-bg"><X className="h-4 w-4" /></button>
                 </div>
               ) : (
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h1 className="text-2xl font-bold text-gray-900 tracking-tight">{campaign.name}</h1>
-                  <button type="button" onClick={() => setEditingName(true)} className="p-1 text-gray-400 hover:text-gray-600 rounded" aria-label="Edit campaign name"><Edit2 className="h-4 w-4" /></button>
+                  <h1 className="text-2xl font-bold text-crm-text tracking-tight">{campaign.name}</h1>
+                  <button type="button" onClick={() => setEditingName(true)} className="p-1 text-crm-muted/80 hover:text-crm-muted rounded" aria-label="Edit campaign name"><Edit2 className="h-4 w-4" /></button>
                 </div>
               )}
-              <p className="text-sm text-gray-600 mt-1.5">
+              <p className="text-sm text-crm-muted mt-1.5">
                 {campaign.description?.trim()
                   ? campaign.description
                   : `${STATUS_LABELS[campaign.status]} · ${PRIORITY_LABELS[campaign.priority ?? "NORMAL"]} priority · ${hd.total} member${hd.total !== 1 ? "s" : ""}`}
@@ -1040,16 +1052,16 @@ export default function CampaignDetailPage() {
                   {PRIORITY_LABELS[campaign.priority ?? "NORMAL"]}
                 </span>
                 {campaign.script && (
-                  <span className="text-xs text-gray-500">Script: <span className="font-medium text-gray-700">{campaign.script.name}</span></span>
+                  <span className="text-xs text-crm-muted">Script: <span className="font-medium text-crm-text">{campaign.script.name}</span></span>
                 )}
                 {campaign.checklist && (
-                  <span className="text-xs text-gray-500">Checklist: <span className="font-medium text-gray-700">{campaign.checklist.name}</span></span>
+                  <span className="text-xs text-crm-muted">Checklist: <span className="font-medium text-crm-text">{campaign.checklist.name}</span></span>
                 )}
               </div>
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2 mt-5 pt-4 border-t border-gray-100">
+          <div className="flex flex-wrap gap-2 mt-5 pt-4 border-t border-crm-border/60">
             {isAdmin && (
               <button
                 type="button"
@@ -1063,7 +1075,7 @@ export default function CampaignDetailPage() {
                   setImportPreviewContextKeyState(null);
                   setImportCompareBaseline(null);
                 }}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold bg-blue-600 text-white hover:bg-blue-700 shadow-sm"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-crm text-sm font-semibold bg-crm-accent text-white hover:brightness-110 shadow-crm"
               >
                 <Upload className="h-4 w-4 shrink-0" />
                 Import leads
@@ -1072,7 +1084,7 @@ export default function CampaignDetailPage() {
             <button
               type="button"
               onClick={() => setShowAddContacts(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-crm text-sm font-semibold border border-crm-border text-crm-text bg-crm-surface hover:bg-crm-bg"
             >
               <Plus className="h-4 w-4 shrink-0" />
               Add existing contacts
@@ -1081,7 +1093,7 @@ export default function CampaignDetailPage() {
               <button
                 type="button"
                 onClick={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-crm text-sm font-semibold border border-crm-border text-crm-text bg-crm-surface hover:bg-crm-bg"
               >
                 <Shuffle className="h-4 w-4 shrink-0" />
                 Distribute leads
@@ -1089,7 +1101,7 @@ export default function CampaignDetailPage() {
             )}
             <Link
               href={queueFilteredHref}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold border border-blue-200 text-blue-800 bg-blue-50/80 hover:bg-blue-100"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-crm text-sm font-semibold border border-blue-200 text-blue-800 bg-crm-accent/15/80 hover:bg-blue-100"
             >
               <ListOrdered className="h-4 w-4 shrink-0" />
               View My Queue
@@ -1103,7 +1115,7 @@ export default function CampaignDetailPage() {
               </button>
             )}
             {campaign.status === "ACTIVE" && (
-              <button type="button" onClick={() => updateCampaign({ status: "PAUSED" })} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-amber-200 text-amber-900 bg-amber-50 hover:bg-amber-100">
+              <button type="button" onClick={() => updateCampaign({ status: "PAUSED" })} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-crm-warning/35 text-crm-warning bg-amber-50 hover:bg-crm-warning/15">
                 <Pause className="h-3.5 w-3.5" />Pause
               </button>
             )}
@@ -1113,11 +1125,11 @@ export default function CampaignDetailPage() {
               </button>
             )}
             {(campaign.status === "ACTIVE" || campaign.status === "PAUSED") && (
-              <button type="button" onClick={() => { if (confirm("Archive this campaign?")) updateCampaign({ status: "ARCHIVED" }); }} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50">
+              <button type="button" onClick={() => { if (confirm("Archive this campaign?")) updateCampaign({ status: "ARCHIVED" }); }} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-crm-border text-crm-muted hover:bg-crm-bg">
                 <Archive className="h-3.5 w-3.5" />Archive
               </button>
             )}
-            <button type="button" onClick={exportCsv} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-gray-200 text-gray-600 hover:bg-gray-50" title="Export member CSV">
+            <button type="button" onClick={exportCsv} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border border-crm-border text-crm-muted hover:bg-crm-bg" title="Export member CSV">
               <Download className="h-3.5 w-3.5" />Export CSV
             </button>
           </div>
@@ -1134,36 +1146,36 @@ export default function CampaignDetailPage() {
             <HealthTile label="Terminal outcomes" value={hd.terminal} hint="Converted, skipped, DNC" />
           )}
         </div>
-        <div className="rounded-xl border border-gray-100 bg-white px-3 py-2.5 mb-5 text-sm text-gray-700 flex flex-wrap gap-x-6 gap-y-1 items-center">
+        <div className="rounded-crm border border-crm-border/60 bg-crm-surface px-3 py-2.5 mb-5 text-sm text-crm-text flex flex-wrap gap-x-6 gap-y-1 items-center">
           <span>
-            <span className="text-gray-500">Converted</span>{" "}
-            <strong className="text-gray-900 tabular-nums">{hd.converted}</strong>
-            <span className="text-gray-400"> / {hd.total}</span>
+            <span className="text-crm-muted">Converted</span>{" "}
+            <strong className="text-crm-text tabular-nums">{hd.converted}</strong>
+            <span className="text-crm-muted/80"> / {hd.total}</span>
           </span>
-          <span className="text-gray-300 hidden sm:inline">|</span>
+          <span className="text-crm-border hidden sm:inline">|</span>
           <span>
-            <span className="text-gray-500">Contacted + engaged</span>{" "}
-            <strong className="text-gray-900 tabular-nums">{hd.contactedProgress}</strong>
-            <span className="text-gray-400"> with outcomes or callbacks</span>
+            <span className="text-crm-muted">Contacted + engaged</span>{" "}
+            <strong className="text-crm-text tabular-nums">{hd.contactedProgress}</strong>
+            <span className="text-crm-muted/80"> with outcomes or callbacks</span>
           </span>
           {importHistory[0] ? (
             <>
-              <span className="text-gray-300 hidden sm:inline">|</span>
-              <span className="text-gray-500">
-                Last import: <span className="text-gray-800 font-medium">{formatImportTimestamp(importHistory[0].createdAt)}</span>
+              <span className="text-crm-border hidden sm:inline">|</span>
+              <span className="text-crm-muted">
+                Last import: <span className="text-crm-text font-medium">{formatImportTimestamp(importHistory[0].createdAt)}</span>
                 {importHistory[0].fileName ? ` · ${importHistory[0].fileName}` : ""}
               </span>
             </>
           ) : !importHistoryLoading ? (
             <>
-              <span className="text-gray-300 hidden sm:inline">|</span>
-              <span className="text-gray-500">No campaign CSV imports recorded yet.</span>
+              <span className="text-crm-border hidden sm:inline">|</span>
+              <span className="text-crm-muted">No campaign CSV imports recorded yet.</span>
             </>
           ) : null}
           {hd.archivedInLoaded > 0 ? (
             <>
-              <span className="text-gray-300 hidden sm:inline">|</span>
-              <span className="text-amber-800 text-xs">
+              <span className="text-crm-border hidden sm:inline">|</span>
+              <span className="text-crm-warning text-xs">
                 Read-only / archived in this list: {hd.archivedInLoaded}
                 {membersTotal > members.length ? " (visible page)" : ""}
               </span>
@@ -1172,27 +1184,27 @@ export default function CampaignDetailPage() {
         </div>
 
         {/* Manager next steps — links and modals only; no invented metrics */}
-        <div className="rounded-xl border border-gray-200 bg-white p-4 sm:p-5 mb-5 shadow-sm">
-          <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-3">Next operational actions</h2>
+        <div className="rounded-crm border border-crm-border bg-crm-surface p-4 sm:p-5 mb-5 shadow-crm">
+          <h2 className="text-xs font-bold text-crm-muted uppercase tracking-wide mb-3">Next operational actions</h2>
           <ul className="space-y-2.5">
             {isAdmin && hd.unassignedMembers > 0 ? (
               <li className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border border-amber-100 bg-amber-50/50 px-3 py-2.5">
                 <div>
-                  <p className="text-sm font-semibold text-gray-900">Unassigned members</p>
-                  <p className="text-xs text-gray-600 mt-0.5">{hd.unassignedMembers} lead{hd.unassignedMembers !== 1 ? "s" : ""} still need an owner — distribute across agents.</p>
+                  <p className="text-sm font-semibold text-crm-text">Unassigned members</p>
+                  <p className="text-xs text-crm-muted mt-0.5">{hd.unassignedMembers} lead{hd.unassignedMembers !== 1 ? "s" : ""} still need an owner — distribute across agents.</p>
                 </div>
                 <div className="flex flex-wrap gap-2 shrink-0">
                   <button
                     type="button"
                     onClick={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
-                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-crm-accent text-white hover:brightness-110"
                   >
                     Distribute…
                   </button>
                   <button
                     type="button"
                     onClick={() => { setAssigneeFilter("UNASSIGNED"); loadMembers("UNASSIGNED"); }}
-                    className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 text-gray-800 hover:bg-white"
+                    className="px-3 py-1.5 text-xs font-medium rounded-lg border border-crm-border text-crm-text hover:bg-crm-surface"
                   >
                     Filter members
                   </button>
@@ -1200,26 +1212,26 @@ export default function CampaignDetailPage() {
               </li>
             ) : null}
             {hd.callback > 0 ? (
-              <li className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border border-gray-100 bg-gray-50/80 px-3 py-2.5">
+              <li className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border border-crm-border/60 bg-crm-bg/80 px-3 py-2.5">
                 <div>
-                  <p className="text-sm font-semibold text-gray-900">Scheduled callbacks</p>
-                  <p className="text-xs text-gray-600 mt-0.5">{hd.callback} member{hd.callback !== 1 ? "s" : ""} in CALLBACK status — work them from the queue.</p>
+                  <p className="text-sm font-semibold text-crm-text">Scheduled callbacks</p>
+                  <p className="text-xs text-crm-muted mt-0.5">{hd.callback} member{hd.callback !== 1 ? "s" : ""} in CALLBACK status — work them from the queue.</p>
                 </div>
                 <div className="flex flex-wrap gap-2 shrink-0">
-                  <Link href={`${queueFilteredHref}&filter=overdue`} className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-gray-300 text-gray-800 hover:bg-white">
+                  <Link href={`${queueFilteredHref}&filter=overdue`} className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-crm-border text-crm-text hover:bg-crm-surface">
                     Overdue queue
                   </Link>
-                  <Link href={`${queueFilteredHref}&filter=due`} className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 text-gray-800 hover:bg-white">
+                  <Link href={`${queueFilteredHref}&filter=due`} className="px-3 py-1.5 text-xs font-medium rounded-lg border border-crm-border text-crm-text hover:bg-crm-surface">
                     Due today
                   </Link>
                 </div>
               </li>
             ) : null}
             {hd.total === 0 ? (
-              <li className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border border-blue-100 bg-blue-50/40 px-3 py-2.5">
+              <li className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-lg border border-crm-accent/25 bg-crm-accent/15/40 px-3 py-2.5">
                 <div>
-                  <p className="text-sm font-semibold text-gray-900">No members yet</p>
-                  <p className="text-xs text-gray-600 mt-0.5">Import a CSV or add existing contacts to populate this campaign.</p>
+                  <p className="text-sm font-semibold text-crm-text">No members yet</p>
+                  <p className="text-xs text-crm-muted mt-0.5">Import a CSV or add existing contacts to populate this campaign.</p>
                 </div>
                 <div className="flex flex-wrap gap-2 shrink-0">
                   {isAdmin && (
@@ -1235,30 +1247,30 @@ export default function CampaignDetailPage() {
                         setImportPreviewContextKeyState(null);
                         setImportCompareBaseline(null);
                       }}
-                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+                      className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-crm-accent text-white hover:brightness-110"
                     >
                       Import leads
                     </button>
                   )}
-                  <button type="button" onClick={() => setShowAddContacts(true)} className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 text-gray-800 hover:bg-white">
+                  <button type="button" onClick={() => setShowAddContacts(true)} className="px-3 py-1.5 text-xs font-medium rounded-lg border border-crm-border text-crm-text hover:bg-crm-surface">
                     Add contacts
                   </button>
                 </div>
               </li>
             ) : null}
             {isAdmin && hd.total > 0 && importHistory.length === 0 && !importHistoryLoading ? (
-              <li className="rounded-lg border border-gray-100 bg-gray-50/60 px-3 py-2.5 text-sm text-gray-700">
-                <span className="font-semibold text-gray-900">Import history is empty.</span>{" "}
-                <span className="text-xs text-gray-600">When you run a campaign CSV import, batches will appear in Recent imports below.</span>
+              <li className="rounded-lg border border-crm-border/60 bg-crm-bg/60 px-3 py-2.5 text-sm text-crm-text">
+                <span className="font-semibold text-crm-text">Import history is empty.</span>{" "}
+                <span className="text-xs text-crm-muted">When you run a campaign CSV import, batches will appear in Recent imports below.</span>
               </li>
             ) : null}
             {hd.pending > 50 && hd.unassignedMembers === 0 && isAdmin ? (
-              <li className="rounded-lg border border-gray-100 px-3 py-2.5 text-xs text-gray-600">
+              <li className="rounded-lg border border-crm-border/60 px-3 py-2.5 text-xs text-crm-muted">
                 High pending volume ({hd.pending}) — review workload below and balance assignments if needed.
               </li>
             ) : null}
             {!((isAdmin && hd.unassignedMembers > 0) || hd.callback > 0 || hd.total === 0 || (isAdmin && hd.total > 0 && importHistory.length === 0 && !importHistoryLoading) || (hd.pending > 50 && hd.unassignedMembers === 0 && isAdmin)) ? (
-              <li className="text-xs text-gray-500 px-1 py-1">
+              <li className="text-xs text-crm-muted px-1 py-1">
                 No extra alerts for this snapshot — use members, queue, or imports above as needed.
               </li>
             ) : null}
@@ -1266,30 +1278,30 @@ export default function CampaignDetailPage() {
         </div>
 
         {/* Script / Checklist / Priority — collapsed by default to reduce clutter */}
-        <details className="group rounded-xl border border-gray-200 bg-white mb-5 shadow-sm open:ring-1 open:ring-gray-100">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-semibold text-gray-900 hover:bg-gray-50/80 rounded-xl [&::-webkit-details-marker]:hidden">
+        <details className="group rounded-crm border border-crm-border bg-crm-surface mb-5 shadow-crm open:ring-1 open:ring-gray-100">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-semibold text-crm-text hover:bg-crm-bg/80 rounded-crm [&::-webkit-details-marker]:hidden">
             <span>Campaign settings</span>
-            <ChevronDown className="h-4 w-4 text-gray-400 transition-transform group-open:rotate-180" />
+            <ChevronDown className="h-4 w-4 text-crm-muted/80 transition-transform group-open:rotate-180" />
           </summary>
-          <div className="px-4 pb-4 pt-0 border-t border-gray-100">
+          <div className="px-4 pb-4 pt-0 border-t border-crm-border/60">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4 pt-4">
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Call Script</label>
+              <label className="block text-xs text-crm-muted mb-1">Call Script</label>
               <select
                 value={campaign.scriptId ?? ""}
                 onChange={(e) => updateCampaign({ scriptId: e.target.value || null })}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
               >
                 <option value="">None</option>
                 {scripts.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Checklist</label>
+              <label className="block text-xs text-crm-muted mb-1">Checklist</label>
               <select
                 value={campaign.checklistId ?? ""}
                 onChange={(e) => updateCampaign({ checklistId: e.target.value || null })}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
               >
                 <option value="">None</option>
                 {checklists.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -1297,7 +1309,7 @@ export default function CampaignDetailPage() {
             </div>
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-2">Smart Queue Priority</label>
+            <label className="block text-xs text-crm-muted mb-2">Smart Queue Priority</label>
             <div className="flex gap-2 flex-wrap">
               {(["LOW", "NORMAL", "HIGH", "URGENT"] as CampaignPriority[]).map((p) => (
                 <button
@@ -1310,16 +1322,16 @@ export default function CampaignDetailPage() {
                         : p === "HIGH"
                           ? "bg-orange-500 text-white border-orange-500"
                           : p === "LOW"
-                            ? "bg-gray-400 text-white border-gray-400"
-                            : "bg-blue-600 text-white border-blue-600"
-                      : "border-gray-300 text-gray-600 hover:bg-gray-50"
+                            ? "bg-crm-muted text-white border-crm-muted"
+                            : "bg-crm-accent text-white border-blue-600"
+                      : "border-crm-border text-crm-muted hover:bg-crm-bg"
                   }`}
                 >
                   {PRIORITY_LABELS[p]}
                 </button>
               ))}
             </div>
-            <p className="text-xs text-gray-400 mt-1.5">
+            <p className="text-xs text-crm-muted/80 mt-1.5">
               {(campaign.priority ?? "NORMAL") === "URGENT"
                 ? "Leads in this campaign surface above all others in Smart Queue (after callbacks)."
                 : (campaign.priority ?? "NORMAL") === "HIGH"
@@ -1333,30 +1345,30 @@ export default function CampaignDetailPage() {
         </details>
 
         {/* Campaign CSV import history (real CrmImportBatch rows only) */}
-        <div className="rounded-2xl border border-gray-200 bg-white p-4 sm:p-5 mb-5 shadow-sm">
+        <div className="rounded-crm-lg border border-crm-border bg-crm-surface p-4 sm:p-5 mb-5 shadow-crm">
           <div className="flex items-center gap-2 mb-3">
-            <History className="h-4 w-4 text-gray-500" />
-            <h2 className="text-sm font-bold text-gray-900 tracking-tight">Recent imports</h2>
+            <History className="h-4 w-4 text-crm-muted" />
+            <h2 className="text-sm font-bold text-crm-text tracking-tight">Recent imports</h2>
           </div>
           {importHistoryLoading ? (
-            <p className="text-sm text-gray-400">Loading import history…</p>
+            <p className="text-sm text-crm-muted/80">Loading import history…</p>
           ) : importHistory.length === 0 ? (
-            <div className="text-sm text-gray-600 space-y-1">
+            <div className="text-sm text-crm-muted space-y-1">
               <p>No campaign-linked import batches yet.</p>
-              <p className="text-gray-500 text-xs">
+              <p className="text-crm-muted text-xs">
                 CSV runs started with <strong>Import CSV</strong> on this page appear here. Standalone imports from Import Leads stay on that page only. Older data may be missing if it predates this linkage.
               </p>
             </div>
           ) : (
             <ul className="space-y-2">
               {importHistory.map((row) => {
-                const st = CAMPAIGN_IMPORT_STATUS_STYLE[row.status] ?? "bg-gray-50 text-gray-800 border-gray-200";
+                const st = CAMPAIGN_IMPORT_STATUS_STYLE[row.status] ?? "bg-crm-bg text-crm-text border-crm-border";
                 const hasIssues = row.errorCount > 0 || row.status === "PARTIAL" || row.status === "FAILED";
                 return (
-                  <li key={row.id} className="rounded-xl border border-gray-100 bg-white px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 hover:border-gray-200 shadow-sm">
+                  <li key={row.id} className="rounded-crm border border-crm-border/60 bg-crm-surface px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 hover:border-crm-border shadow-crm">
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm font-medium text-gray-900 truncate" title={row.fileName}>
+                        <span className="text-sm font-medium text-crm-text truncate" title={row.fileName}>
                           {row.fileName}
                         </span>
                         <span
@@ -1365,33 +1377,33 @@ export default function CampaignDetailPage() {
                           {campaignImportStatusLabel(row.status)}
                         </span>
                       </div>
-                      <p className="text-xs text-gray-500 mt-0.5">
+                      <p className="text-xs text-crm-muted mt-0.5">
                         {formatImportTimestamp(row.createdAt)}
                         {row.createdBy ? ` · ${row.createdBy.displayName}` : ""}
                         {row.totalRows > 0
                           ? ` · ${row.totalRows} row${row.totalRows !== 1 ? "s" : ""}`
                           : ""}
                       </p>
-                      <p className="text-xs text-gray-600 mt-1">
+                      <p className="text-xs text-crm-muted mt-1">
                         <span className="text-green-700 font-medium">{row.createdCount}</span> created
-                        <span className="text-gray-400 mx-1">·</span>
-                        <span className="text-blue-700 font-medium">{row.updatedCount}</span> updated
-                        <span className="text-gray-400 mx-1">·</span>
-                        <span className="text-gray-600 font-medium">{row.skippedCount}</span> skipped
+                        <span className="text-crm-muted/80 mx-1">·</span>
+                        <span className="text-crm-accent font-medium">{row.updatedCount}</span> updated
+                        <span className="text-crm-muted/80 mx-1">·</span>
+                        <span className="text-crm-muted font-medium">{row.skippedCount}</span> skipped
                         {row.errorCount > 0 && (
                           <>
-                            <span className="text-gray-400 mx-1">·</span>
-                            <span className="text-red-700 font-medium">{row.errorCount}</span> errors
+                            <span className="text-crm-muted/80 mx-1">·</span>
+                            <span className="text-crm-danger font-medium">{row.errorCount}</span> errors
                           </>
                         )}
                       </p>
                       {hasIssues && row.errorCount === 0 && (
-                        <p className="text-[11px] text-amber-800 mt-1">Review import details for skipped rows or enrollment notes.</p>
+                        <p className="text-[11px] text-crm-warning mt-1">Review import details for skipped rows or enrollment notes.</p>
                       )}
                     </div>
                     <Link
                       href={`/crm/import?batch=${encodeURIComponent(row.id)}`}
-                      className="text-sm font-medium text-blue-600 hover:text-blue-800 shrink-0"
+                      className="text-sm font-medium text-crm-accent hover:text-blue-800 shrink-0"
                     >
                       Batch details →
                     </Link>
@@ -1403,13 +1415,13 @@ export default function CampaignDetailPage() {
         </div>
 
         {/* Members */}
-        <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-4 sm:p-5">
+        <div className="rounded-crm-lg border border-crm-border bg-crm-surface shadow-crm p-4 sm:p-5">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between mb-4">
             <div>
-              <h2 className="text-lg font-bold text-gray-900 tracking-tight">
-                Members <span className="text-gray-400 font-semibold text-sm">({membersTotal})</span>
+              <h2 className="text-lg font-bold text-crm-text tracking-tight">
+                Members <span className="text-crm-muted/80 font-semibold text-sm">({membersTotal})</span>
               </h2>
-              <p className="text-xs text-gray-500 mt-0.5">
+              <p className="text-xs text-crm-muted mt-0.5">
                 Filters apply server-side (100 per load). Import, distribute, and queue shortcuts live in the header above.
               </p>
             </div>
@@ -1417,16 +1429,16 @@ export default function CampaignDetailPage() {
 
           {/* Workload — admin only; always visible when data exists */}
           {isAdmin && (
-            <div className="mb-5 rounded-xl border border-gray-100 bg-gray-50/80 p-3 sm:p-4">
+            <div className="mb-5 rounded-crm border border-crm-border/60 bg-crm-bg/80 p-3 sm:p-4">
               <div className="flex items-center justify-between gap-2 mb-3">
-                <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+                <h3 className="text-xs font-bold text-crm-muted uppercase tracking-wide flex items-center gap-1.5">
                   <BarChart2 className="h-3.5 w-3.5" />
                   Team workload
                 </h3>
-                {workloadLoading ? <span className="text-xs text-gray-400">Loading…</span> : null}
+                {workloadLoading ? <span className="text-xs text-crm-muted/80">Loading…</span> : null}
               </div>
               {workload.length === 0 && !workloadLoading ? (
-                <p className="text-xs text-gray-500">No assignment rows yet — add or import members first.</p>
+                <p className="text-xs text-crm-muted">No assignment rows yet — add or import members first.</p>
               ) : (
                 <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                   {workload.map((row) => {
@@ -1435,25 +1447,25 @@ export default function CampaignDetailPage() {
                     return (
                       <div
                         key={row.userId ?? "__unassigned__"}
-                        className={`rounded-xl border bg-white px-3 py-2.5 ${row.userId === null ? "border-amber-200 bg-amber-50/40" : "border-gray-200"}`}
+                        className={`rounded-crm border bg-crm-surface px-3 py-2.5 ${row.userId === null ? "border-crm-warning/35 bg-amber-50/40" : "border-crm-border"}`}
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <p className={`text-sm font-semibold truncate ${row.userId === null ? "text-amber-900 italic" : "text-gray-900"}`}>
+                          <p className={`text-sm font-semibold truncate ${row.userId === null ? "text-crm-warning italic" : "text-crm-text"}`}>
                             {row.displayName}
                           </p>
-                          <span className="text-xs font-bold text-gray-700 tabular-nums shrink-0">{row.total}</span>
+                          <span className="text-xs font-bold text-crm-text tabular-nums shrink-0">{row.total}</span>
                         </div>
-                        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-gray-600">
-                          <span><span className="text-gray-400">Active</span> {active}</span>
-                          <span><span className="text-gray-400">CB</span> {row.callbacks}</span>
-                          <span><span className="text-gray-400">Contacted</span> {row.contacted}</span>
-                          <span><span className="text-gray-400">Terminal</span> {terminal}</span>
+                        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-crm-muted">
+                          <span><span className="text-crm-muted/80">Active</span> {active}</span>
+                          <span><span className="text-crm-muted/80">CB</span> {row.callbacks}</span>
+                          <span><span className="text-crm-muted/80">Contacted</span> {row.contacted}</span>
+                          <span><span className="text-crm-muted/80">Terminal</span> {terminal}</span>
                         </div>
                         {row.userId === null && row.total > 0 ? (
                           <button
                             type="button"
                             onClick={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
-                            className="mt-2 w-full sm:w-auto text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+                            className="mt-2 w-full sm:w-auto text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-crm-accent text-white hover:brightness-110"
                           >
                             Redistribute unassigned…
                           </button>
@@ -1469,21 +1481,21 @@ export default function CampaignDetailPage() {
           {/* Distribute modal */}
           {isAdmin && distributeOpen && (
             <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+              <div className="bg-crm-surface rounded-crm-lg shadow-2xl w-full max-w-md p-6">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold text-gray-900">Distribute Unassigned Leads</h3>
-                  <button onClick={() => setDistributeOpen(false)} className="p-1 text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
+                  <h3 className="font-bold text-crm-text">Distribute Unassigned Leads</h3>
+                  <button onClick={() => setDistributeOpen(false)} className="p-1 text-crm-muted/80 hover:text-crm-muted"><X className="h-5 w-5" /></button>
                 </div>
-                <p className="text-sm text-gray-500 mb-4">
+                <p className="text-sm text-crm-muted mb-4">
                   Unassigned pending leads will be distributed evenly (round-robin) across the agents you select below.
                   This action only affects unassigned leads — already-assigned leads are untouched.
                 </p>
-                <div className="mb-4 max-h-48 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                <div className="mb-4 max-h-48 overflow-y-auto border border-crm-border rounded-lg divide-y divide-gray-100">
                   {crmUsers.filter((u) => u.crmEnabled).length === 0 ? (
-                    <p className="p-3 text-sm text-gray-400">No CRM-enabled agents found.</p>
+                    <p className="p-3 text-sm text-crm-muted/80">No CRM-enabled agents found.</p>
                   ) : (
                     crmUsers.filter((u) => u.crmEnabled).map((u) => (
-                      <label key={u.userId} className="flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50 cursor-pointer">
+                      <label key={u.userId} className="flex items-center gap-3 px-3 py-2.5 hover:bg-crm-bg cursor-pointer">
                         <input
                           type="checkbox"
                           checked={distributeUserIds.has(u.userId)}
@@ -1495,8 +1507,8 @@ export default function CampaignDetailPage() {
                           }}
                           className="rounded"
                         />
-                        <span className="text-sm text-gray-800">{u.displayName || u.email}</span>
-                        <span className="text-xs text-gray-400 ml-auto">{u.crmRole ?? "AGENT"}</span>
+                        <span className="text-sm text-crm-text">{u.displayName || u.email}</span>
+                        <span className="text-xs text-crm-muted/80 ml-auto">{u.crmRole ?? "AGENT"}</span>
                       </label>
                     ))
                   )}
@@ -1505,13 +1517,13 @@ export default function CampaignDetailPage() {
                   <p className={`text-sm mb-3 ${distributeMsg.startsWith("Distributed") ? "text-green-600" : "text-amber-600"}`}>{distributeMsg}</p>
                 )}
                 <div className="flex gap-2 justify-end">
-                  <button onClick={() => setDistributeOpen(false)} className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">
+                  <button onClick={() => setDistributeOpen(false)} className="px-4 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-bg">
                     Cancel
                   </button>
                   <button
                     onClick={handleDistribute}
                     disabled={distributing || distributeUserIds.size === 0}
-                    className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+                    className="px-4 py-2 text-sm bg-crm-accent text-white rounded-lg hover:brightness-110 disabled:opacity-50 flex items-center gap-1.5"
                   >
                     <Shuffle className="h-3.5 w-3.5" />
                     {distributing ? "Distributing…" : `Distribute across ${distributeUserIds.size} agent${distributeUserIds.size !== 1 ? "s" : ""}`}
@@ -1524,9 +1536,9 @@ export default function CampaignDetailPage() {
           {/* Import CSV modal */}
           {isAdmin && importOpen && (
             <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-              <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
+              <div className="bg-crm-surface rounded-crm-lg shadow-2xl w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold text-gray-900">Import leads to campaign</h3>
+                  <h3 className="font-bold text-crm-text">Import leads to campaign</h3>
                   <button
                     type="button"
                     onClick={() => {
@@ -1539,92 +1551,92 @@ export default function CampaignDetailPage() {
                       setImportPreviewContextKeyState(null);
                       setImportCompareBaseline(null);
                     }}
-                    className="p-1 text-gray-400 hover:text-gray-600"
+                    className="p-1 text-crm-muted/80 hover:text-crm-muted"
                   >
                     <X className="h-5 w-5" />
                   </button>
                 </div>
-                <p className="text-sm text-gray-600 mb-3">
+                <p className="text-sm text-crm-muted mb-3">
                   Upload a CSV (max 5 MB, up to 5,000 rows). Headers are auto-detected — include at least a{" "}
                   <strong>phone</strong> or <strong>email</strong> column (e.g. &quot;Phone&quot;, &quot;Mobile&quot;, &quot;Email&quot;).
                   Existing contacts are matched by phone/email and updated (blank fields only); they are not duplicated.
                   Contacts already in this campaign are skipped for enrollment.
                 </p>
                 <div className="mb-4">
-                  <label className="block text-xs font-medium text-gray-500 mb-1">CSV file</label>
+                  <label className="block text-xs font-medium text-crm-muted mb-1">CSV file</label>
                   <input
                     type="file"
                     accept=".csv,text/csv"
                     onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
-                    className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-blue-50 file:text-blue-700"
+                    className="block w-full text-sm text-crm-muted file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-crm-accent/15 file:text-crm-accent"
                   />
                 </div>
                 <div className="mb-4">
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Assign new members to (optional)</label>
+                  <label className="block text-xs font-medium text-crm-muted mb-1">Assign new members to (optional)</label>
                   <select
                     value={importAssigneeId}
                     onChange={(e) => setImportAssigneeId(e.target.value)}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
                   >
                     <option value="">— Unassigned —</option>
                     {crmUsers.filter((u) => u.crmEnabled).map((u) => (
                       <option key={u.userId} value={u.userId}>{u.displayName || u.email}</option>
                     ))}
                   </select>
-                  <p className="text-xs text-gray-400 mt-1">Changing the assignee clears the preview — run Preview import again.</p>
+                  <p className="text-xs text-crm-muted/80 mt-1">Changing the assignee clears the preview — run Preview import again.</p>
                 </div>
                 <div className="mb-4 flex flex-wrap gap-2">
                   <button
                     type="button"
                     onClick={() => void handleCampaignImportPreview()}
                     disabled={importPreviewing || !importFile}
-                    className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-800 hover:bg-gray-50 disabled:opacity-50"
+                    className="px-4 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-bg disabled:opacity-50"
                   >
                     {importPreviewing ? "Previewing…" : "Preview import"}
                   </button>
                 </div>
                 {importFile && !importPreview && !importPreviewing && (
-                  <p className="text-sm text-gray-600 mb-3">Select a CSV and run Preview import to see exactly what will happen.</p>
+                  <p className="text-sm text-crm-muted mb-3">Select a CSV and run Preview import to see exactly what will happen.</p>
                 )}
                 {importPreview && importFile && importCtxKey === importPreviewContextKeyState && (
-                  <div className="mb-4 p-3 bg-blue-50 border border-blue-100 rounded-lg text-sm space-y-3">
+                  <div className="mb-4 p-3 bg-crm-accent/15 border border-crm-accent/25 rounded-lg text-sm space-y-3">
                     <div>
-                      <p className="font-semibold text-gray-800">Preview (dry-run — nothing saved yet)</p>
-                      <p className="text-gray-600 text-xs mt-0.5">
+                      <p className="font-semibold text-crm-text">Preview (dry-run — nothing saved yet)</p>
+                      <p className="text-crm-muted text-xs mt-0.5">
                         Total rows: {importPreview.totalRows} · Valid rows: {importPreview.validRows} · Data rows counted as invalid in preview:{" "}
                         {importPreview.invalidRows}
                       </p>
                     </div>
                     {importPreview.invalidRows > 0 && (
-                      <p className="text-amber-900 text-sm bg-amber-50 border border-amber-100 rounded-md px-2 py-1.5">
+                      <p className="text-crm-warning text-sm bg-amber-50 border border-amber-100 rounded-md px-2 py-1.5">
                         {importPreview.invalidRows} row{importPreview.invalidRows !== 1 ? "s" : ""} will be skipped (no usable phone/email or could not be processed in preview). They are still listed in samples or errors where applicable.
                       </p>
                     )}
                     {importPreview.wouldSkipExistingMembers > 0 && (
-                      <p className="text-amber-900 text-sm bg-amber-50 border border-amber-100 rounded-md px-2 py-1.5">
+                      <p className="text-crm-warning text-sm bg-amber-50 border border-amber-100 rounded-md px-2 py-1.5">
                         {importPreview.wouldSkipExistingMembers} row{importPreview.wouldSkipExistingMembers !== 1 ? "s" : ""} match contacts already in this campaign — they will not be added again as members.
                       </p>
                     )}
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                      <div className="rounded-lg border border-blue-100 bg-white p-2 shadow-sm">
-                        <p className="text-[11px] text-gray-500 uppercase tracking-wide">New contacts</p>
-                        <p className="text-lg font-semibold text-gray-900">{importPreview.wouldCreateContacts}</p>
+                      <div className="rounded-lg border border-crm-accent/25 bg-crm-surface p-2 shadow-crm">
+                        <p className="text-[11px] text-crm-muted uppercase tracking-wide">New contacts</p>
+                        <p className="text-lg font-semibold text-crm-text">{importPreview.wouldCreateContacts}</p>
                       </div>
-                      <div className="rounded-lg border border-blue-100 bg-white p-2 shadow-sm">
-                        <p className="text-[11px] text-gray-500 uppercase tracking-wide">Contacts updated</p>
-                        <p className="text-lg font-semibold text-gray-900">{importPreview.wouldUpdateContacts}</p>
+                      <div className="rounded-lg border border-crm-accent/25 bg-crm-surface p-2 shadow-crm">
+                        <p className="text-[11px] text-crm-muted uppercase tracking-wide">Contacts updated</p>
+                        <p className="text-lg font-semibold text-crm-text">{importPreview.wouldUpdateContacts}</p>
                       </div>
-                      <div className="rounded-lg border border-blue-100 bg-white p-2 shadow-sm">
-                        <p className="text-[11px] text-gray-500 uppercase tracking-wide">New campaign members</p>
+                      <div className="rounded-lg border border-crm-accent/25 bg-crm-surface p-2 shadow-crm">
+                        <p className="text-[11px] text-crm-muted uppercase tracking-wide">New campaign members</p>
                         <p className="text-lg font-semibold text-green-800">{importPreview.wouldAddMembers}</p>
                       </div>
-                      <div className="rounded-lg border border-blue-100 bg-white p-2 shadow-sm">
-                        <p className="text-[11px] text-gray-500 uppercase tracking-wide">Already in campaign</p>
-                        <p className="text-lg font-semibold text-gray-800">{importPreview.wouldSkipExistingMembers}</p>
+                      <div className="rounded-lg border border-crm-accent/25 bg-crm-surface p-2 shadow-crm">
+                        <p className="text-[11px] text-crm-muted uppercase tracking-wide">Already in campaign</p>
+                        <p className="text-lg font-semibold text-crm-text">{importPreview.wouldSkipExistingMembers}</p>
                       </div>
-                      <div className="rounded-lg border border-blue-100 bg-white p-2 shadow-sm">
-                        <p className="text-[11px] text-gray-500 uppercase tracking-wide">Invalid / skipped rows</p>
-                        <p className="text-lg font-semibold text-amber-900">{importPreview.invalidRows}</p>
+                      <div className="rounded-lg border border-crm-accent/25 bg-crm-surface p-2 shadow-crm">
+                        <p className="text-[11px] text-crm-muted uppercase tracking-wide">Invalid / skipped rows</p>
+                        <p className="text-lg font-semibold text-crm-warning">{importPreview.invalidRows}</p>
                       </div>
                     </div>
                     <p className="text-sm font-medium text-green-800 bg-green-50 border border-green-100 rounded-md px-2 py-1.5">
@@ -1634,11 +1646,11 @@ export default function CampaignDetailPage() {
                       <div className="space-y-3">
                         {importSampleGroups.map(({ bucket, rows }) => (
                           <div key={bucket}>
-                            <p className="text-xs font-semibold text-gray-700 mb-1">{PREVIEW_SAMPLE_BUCKET_LABEL[bucket]} (sample)</p>
-                            <div className="max-h-36 overflow-y-auto border border-blue-100 rounded bg-white">
+                            <p className="text-xs font-semibold text-crm-text mb-1">{PREVIEW_SAMPLE_BUCKET_LABEL[bucket]} (sample)</p>
+                            <div className="max-h-36 overflow-y-auto border border-crm-accent/25 rounded bg-crm-surface">
                               <table className="w-full text-xs">
                                 <thead>
-                                  <tr className="text-left text-gray-500 border-b bg-gray-50">
+                                  <tr className="text-left text-crm-muted border-b bg-crm-bg">
                                     <th className="p-1.5">Row</th>
                                     <th className="p-1.5">Phone</th>
                                     <th className="p-1.5">Email</th>
@@ -1667,13 +1679,13 @@ export default function CampaignDetailPage() {
                       </div>
                     ) : importPreview.sampleRows && importPreview.sampleRows.length > 0 ? (
                       <div>
-                        <p className="text-xs font-medium text-gray-600 mb-1">
+                        <p className="text-xs font-medium text-crm-muted mb-1">
                           Sample rows — shown in one list (could not group by outcome from this response).
                         </p>
-                        <div className="max-h-36 overflow-y-auto border border-blue-100 rounded bg-white">
+                        <div className="max-h-36 overflow-y-auto border border-crm-accent/25 rounded bg-crm-surface">
                           <table className="w-full text-xs">
                             <thead>
-                              <tr className="text-left text-gray-500 border-b bg-gray-50">
+                              <tr className="text-left text-crm-muted border-b bg-crm-bg">
                                 <th className="p-1.5">Row</th>
                                 <th className="p-1.5">Phone</th>
                                 <th className="p-1.5">Email</th>
@@ -1697,7 +1709,7 @@ export default function CampaignDetailPage() {
                       </div>
                     ) : null}
                     {importPreview.errors?.length > 0 && (
-                      <ul className="text-xs text-amber-900 list-disc pl-4 max-h-24 overflow-y-auto">
+                      <ul className="text-xs text-crm-warning list-disc pl-4 max-h-24 overflow-y-auto">
                         {importPreview.errors.map((er) => (
                           <li key={`${er.row}-${er.reason}`}>Row {er.row}: {er.reason}</li>
                         ))}
@@ -1705,28 +1717,28 @@ export default function CampaignDetailPage() {
                     )}
                   </div>
                 )}
-                {importErr && <p className="text-sm text-red-600 mb-3">{importErr}</p>}
+                {importErr && <p className="text-sm text-crm-danger mb-3">{importErr}</p>}
                 {importSummary && (
-                  <div className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg text-sm space-y-3">
-                    <p className="font-semibold text-gray-800">Import complete — {importSummary.status}</p>
+                  <div className="mb-4 p-3 bg-crm-bg border border-crm-border rounded-lg text-sm space-y-3">
+                    <p className="font-semibold text-crm-text">Import complete — {importSummary.status}</p>
                     {importCompareBaseline ? (
                       <>
                         {importCoreMismatch && (
-                          <p className="text-amber-900 text-sm font-medium border border-amber-200 bg-amber-50 rounded-md px-2 py-1.5">
+                          <p className="text-crm-warning text-sm font-medium border border-crm-warning/35 bg-amber-50 rounded-md px-2 py-1.5">
                             Data may have changed since preview — core totals differ from the dry-run.
                           </p>
                         )}
                         <div className="overflow-x-auto">
                           <table className="w-full text-xs border-collapse min-w-[420px]">
                             <thead>
-                              <tr className="text-left text-gray-500 border-b border-gray-200">
+                              <tr className="text-left text-crm-muted border-b border-crm-border">
                                 <th className="py-2 pr-2 font-medium">Metric</th>
                                 <th className="py-2 pr-2 font-medium">Preview (expected)</th>
                                 <th className="py-2 pr-2 font-medium">Import (actual)</th>
                                 <th className="py-2 font-medium">Match</th>
                               </tr>
                             </thead>
-                            <tbody className="text-gray-800">
+                            <tbody className="text-crm-text">
                               {(
                                 [
                                   ["Contacts created", importCompareBaseline.wouldCreateContacts, importSummary.createdContacts],
@@ -1737,11 +1749,11 @@ export default function CampaignDetailPage() {
                               ).map(([label, exp, act]) => {
                                 const ok = exp === act;
                                 return (
-                                  <tr key={label} className="border-b border-gray-100">
+                                  <tr key={label} className="border-b border-crm-border/60">
                                     <td className="py-1.5 pr-2">{label}</td>
                                     <td className="py-1.5 pr-2 tabular-nums">{exp}</td>
                                     <td className="py-1.5 pr-2 tabular-nums">{act}</td>
-                                    <td className="py-1.5">{ok ? <span className="text-green-700">Yes</span> : <span className="text-amber-800 font-medium">No</span>}</td>
+                                    <td className="py-1.5">{ok ? <span className="text-green-700">Yes</span> : <span className="text-crm-warning font-medium">No</span>}</td>
                                   </tr>
                                 );
                               })}
@@ -1749,14 +1761,14 @@ export default function CampaignDetailPage() {
                           </table>
                         </div>
                         {importSkippedMismatch && (
-                          <p className="text-xs text-gray-600">
+                          <p className="text-xs text-crm-muted">
                             Preview counted {importCompareBaseline.invalidRows} invalid row{importCompareBaseline.invalidRows !== 1 ? "s" : ""}; import skipped{" "}
                             {importSummary.skippedRows} row{importSummary.skippedRows !== 1 ? "s" : ""} (e.g. no phone/email). Small differences can be normal if rows overlap categories.
                           </p>
                         )}
                       </>
                     ) : null}
-                    <p className="text-gray-700">Rows processed: {importSummary.totalRows}</p>
+                    <p className="text-crm-text">Rows processed: {importSummary.totalRows}</p>
                     <p>Contacts created: {importSummary.createdContacts}</p>
                     <p>Contacts updated: {importSummary.updatedContacts}</p>
                     <p>Rows skipped (no phone/email): {importSummary.skippedRows}</p>
@@ -1766,7 +1778,7 @@ export default function CampaignDetailPage() {
                       <p className="text-amber-700">Row errors: {importSummary.errorCount}</p>
                     )}
                     {importSummary.errors?.length > 0 && (
-                      <ul className="text-xs text-gray-600 max-h-24 overflow-y-auto list-disc pl-4 mt-1">
+                      <ul className="text-xs text-crm-muted max-h-24 overflow-y-auto list-disc pl-4 mt-1">
                         {importSummary.errors.slice(0, 10).map((er) => (
                           <li key={`${er.row}-${er.reason}`}>Row {er.row}: {er.reason}</li>
                         ))}
@@ -1786,7 +1798,7 @@ export default function CampaignDetailPage() {
                         setImportPreviewContextKeyState(null);
                         setImportCompareBaseline(null);
                       }}
-                      className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 mr-auto"
+                      className="px-4 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-bg mr-auto"
                     >
                       Import another
                     </button>
@@ -1803,7 +1815,7 @@ export default function CampaignDetailPage() {
                       setImportPreviewContextKeyState(null);
                       setImportCompareBaseline(null);
                     }}
-                    className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+                    className="px-4 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-bg"
                   >
                     {importSummary ? "Close" : "Cancel"}
                   </button>
@@ -1812,7 +1824,7 @@ export default function CampaignDetailPage() {
                       type="button"
                       onClick={() => void handleCampaignImport()}
                       disabled={importing || importPreviewing || !importReady}
-                      className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1.5"
+                      className="px-4 py-2 text-sm bg-crm-accent text-white rounded-lg hover:brightness-110 disabled:opacity-50 flex items-center gap-1.5"
                       title={!importReady ? "Preview import first for this file and assignee" : undefined}
                     >
                       <Upload className="h-3.5 w-3.5" />
@@ -1827,18 +1839,18 @@ export default function CampaignDetailPage() {
           {/* Filters */}
           <div className="flex gap-2 mb-4 flex-wrap">
             <div className="relative flex-1 min-w-[160px] max-w-xs">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-crm-muted/80" />
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full pl-9 pr-3 py-2 border border-crm-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
                 placeholder="Search members…"
               />
             </div>
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
             >
               <option value="">All statuses</option>
               {(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => (
@@ -1853,7 +1865,7 @@ export default function CampaignDetailPage() {
                 setAssigneeFilter(v);
                 loadMembers(v);
               }}
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
             >
               <option value="">All agents</option>
               <option value="UNASSIGNED">Unassigned</option>
@@ -1865,14 +1877,14 @@ export default function CampaignDetailPage() {
 
           {/* Bulk action bar */}
           {selected.size > 0 && (
-            <div className="mb-4 flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-lg flex-wrap">
+            <div className="mb-4 flex items-center gap-3 p-3 bg-crm-accent/15 border border-blue-200 rounded-lg flex-wrap">
               <span className="text-sm font-medium text-blue-800">{selected.size} selected</span>
               <div className="flex items-center gap-2 flex-1 min-w-0">
-                <UserPlus className="h-4 w-4 text-blue-600 shrink-0" />
+                <UserPlus className="h-4 w-4 text-crm-accent shrink-0" />
                 <select
                   value={bulkAssignUserId}
                   onChange={(e) => setBulkAssignUserId(e.target.value)}
-                  className="flex-1 border border-blue-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white min-w-0"
+                  className="flex-1 border border-crm-accent/40 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30 bg-crm-surface min-w-0"
                 >
                   <option value="">— Clear assignment —</option>
                   {crmUsers.filter((u) => u.crmEnabled).map((u) => (
@@ -1883,34 +1895,34 @@ export default function CampaignDetailPage() {
               <button
                 onClick={handleBulkAssign}
                 disabled={bulkAssigning}
-                className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 shrink-0"
+                className="px-3 py-1.5 bg-crm-accent text-white rounded-lg text-sm font-medium hover:brightness-110 disabled:opacity-50 shrink-0"
               >
                 {bulkAssigning ? "Assigning…" : "Apply"}
               </button>
-              <button onClick={() => setSelected(new Set())} className="p-1 text-blue-500 hover:text-blue-700 shrink-0">
+              <button onClick={() => setSelected(new Set())} className="p-1 text-blue-500 hover:text-crm-accent shrink-0">
                 <X className="h-4 w-4" />
               </button>
-              {bulkMsg && <span className="text-xs text-blue-700 font-medium">{bulkMsg}</span>}
+              {bulkMsg && <span className="text-xs text-crm-accent font-medium">{bulkMsg}</span>}
             </div>
           )}
 
           {membersLoading ? (
-            <div className="py-12 text-center text-gray-400 text-sm">Loading members…</div>
+            <div className="py-12 text-center text-crm-muted/80 text-sm">Loading members…</div>
           ) : filteredMembers.length === 0 ? (
             <div className="py-12 text-center">
-              <Users className="h-8 w-8 text-gray-300 mx-auto mb-2" />
-              <p className="text-gray-500 text-sm">No members yet.</p>
-              <button onClick={() => setShowAddContacts(true)} className="mt-3 text-sm text-blue-600 hover:underline">Add contacts to get started</button>
+              <Users className="h-8 w-8 text-crm-border mx-auto mb-2" />
+              <p className="text-crm-muted text-sm">No members yet.</p>
+              <button onClick={() => setShowAddContacts(true)} className="mt-3 text-sm text-crm-accent hover:underline">Add contacts to get started</button>
             </div>
           ) : (
             <div className="space-y-2">
               <div className="flex items-center gap-2 px-1 pb-1">
-                <button type="button" onClick={toggleSelectAll} className="p-1 rounded border border-transparent hover:border-gray-200 hover:bg-gray-50" aria-label="Select all visible members">
+                <button type="button" onClick={toggleSelectAll} className="p-1 rounded border border-transparent hover:border-crm-border hover:bg-crm-bg" aria-label="Select all visible members">
                   {selected.size > 0 && bulkSelectableMembers.length > 0 && bulkSelectableMembers.every((m) => selected.has(m.id))
-                    ? <CheckSquare2 className="h-4 w-4 text-blue-600" />
-                    : <Square className="h-4 w-4 text-gray-400" />}
+                    ? <CheckSquare2 className="h-4 w-4 text-crm-accent" />
+                    : <Square className="h-4 w-4 text-crm-muted/80" />}
                 </button>
-                <span className="text-xs text-gray-500">Select all eligible in this list</span>
+                <span className="text-xs text-crm-muted">Select all eligible in this list</span>
               </div>
               {filteredMembers.map((m) => {
                 const archivedLead = m.queueWorkEligible === false;
@@ -1918,9 +1930,9 @@ export default function CampaignDetailPage() {
                 return (
                   <div
                     key={m.id}
-                    className={`rounded-xl border px-3 py-3 transition-colors ${
-                      selected.has(m.id) ? "border-blue-300 bg-blue-50/40" : "border-gray-200 bg-white hover:border-gray-300"
-                    } ${archivedLead ? "opacity-85 bg-gray-50/90" : ""}`}
+                    className={`rounded-crm border px-3 py-3 transition-colors ${
+                      selected.has(m.id) ? "border-crm-accent/40 bg-crm-accent/15/40" : "border-crm-border bg-crm-surface hover:border-crm-border"
+                    } ${archivedLead ? "opacity-85 bg-crm-bg/90" : ""}`}
                   >
                     <div className="flex flex-col lg:flex-row lg:items-start gap-3">
                       <div className="flex items-start gap-2 shrink-0">
@@ -1943,21 +1955,21 @@ export default function CampaignDetailPage() {
                           <button
                             type="button"
                             onClick={() => router.push(`/crm/contacts/${m.contactId}`)}
-                            className="font-semibold text-blue-700 hover:underline text-left"
+                            className="font-semibold text-crm-accent hover:underline text-left"
                           >
                             {m.contact?.displayName ?? "Unknown"}
                           </button>
                           {archivedLead && (
-                            <span className="text-[10px] font-semibold uppercase tracking-wide text-amber-900 bg-amber-100 px-1.5 py-0.5 rounded">
+                            <span className="text-[10px] font-semibold uppercase tracking-wide text-crm-warning bg-crm-warning/15 px-1.5 py-0.5 rounded">
                               Archived
                             </span>
                           )}
                         </div>
-                        <p className="text-xs text-gray-600 mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+                        <p className="text-xs text-crm-muted mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
                           <span>{m.contact?.primaryPhone ?? "—"}</span>
-                          <span className="text-gray-400">Stage: {m.contact?.crmStage ?? "—"}</span>
-                          <span className="text-gray-400">{m.attemptCount} attempt{m.attemptCount !== 1 ? "s" : ""}</span>
-                          <span className="text-gray-400">{m.assignedTo?.displayName ?? "Unassigned"}</span>
+                          <span className="text-crm-muted/80">Stage: {m.contact?.crmStage ?? "—"}</span>
+                          <span className="text-crm-muted/80">{m.attemptCount} attempt{m.attemptCount !== 1 ? "s" : ""}</span>
+                          <span className="text-crm-muted/80">{m.assignedTo?.displayName ?? "Unassigned"}</span>
                         </p>
                       </div>
                       <div className="flex flex-col sm:flex-row flex-wrap gap-2 lg:justify-end lg:items-center shrink-0">
@@ -1969,7 +1981,7 @@ export default function CampaignDetailPage() {
                           <select
                             value={m.status}
                             onChange={(e) => updateMemberStatus(m.id, e.target.value as MemberStatus)}
-                            className={`text-xs px-2 py-1.5 rounded-lg border border-gray-200 cursor-pointer ${MEMBER_STATUS_COLORS[m.status]} focus:outline-none focus:ring-2 focus:ring-blue-400`}
+                            className={`text-xs px-2 py-1.5 rounded-lg border border-crm-border cursor-pointer ${MEMBER_STATUS_COLORS[m.status]} focus:outline-none focus:ring-2 focus:ring-blue-400`}
                           >
                             {(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => (
                               <option key={s} value={s}>{MEMBER_STATUS_LABELS[s]}</option>
@@ -1989,7 +2001,7 @@ export default function CampaignDetailPage() {
                           type="button"
                           onClick={() => router.push(`/crm/live-call?contactId=${m.contactId}&campaignId=${campaignId}&memberId=${m.id}`)}
                           disabled={agentCannotAct}
-                          className="inline-flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-semibold bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                          className="inline-flex items-center justify-center gap-1 px-3 py-1.5 text-xs font-semibold bg-crm-accent text-white rounded-lg hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
                           title={agentCannotAct ? "Lead is archived — not live queue work" : "Open Live Workspace"}
                         >
                           <PhoneCall className="h-3.5 w-3.5 shrink-0" />
@@ -2003,7 +2015,6 @@ export default function CampaignDetailPage() {
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </CRMPageShell>
   );
 }

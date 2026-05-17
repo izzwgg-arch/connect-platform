@@ -225,6 +225,19 @@
 | `/crm/contacts/[id]` | Hero / quick facts / Next step panels styled. |
 | `/crm/dashboard` | Command center unchanged; dark shell not reset by Tailwind preflight. |
 
+### Phase 19A — CRM unified SaaS theme (smoke)
+
+| Check | Expected |
+|-------|----------|
+| Theme | All Phase 19A routes use dark `bg-crm-surface` cards — no white/gray-50 page backgrounds or card shells. |
+| Dashboard | Command center uses `CRMCard` / `CRMPageShell`; matches queue/contacts card radius and borders. |
+| Queue | Power dialer bar uses `crm-surface-2` (not bright blue banner); member cards share border/radius with contacts. |
+| Campaigns index + detail | Headers, summary tiles, member rows, import preview modal — same surface system. |
+| Contacts index + detail | List cards, filters, hero, Next step, timeline rows — dark surfaces only. |
+| Workspace fit | Sidebar/topbar unchanged; CRM content does not look like a separate light admin app. |
+| Function | Filters, queue actions, campaign controls, contact mutations, recordings, archive read-only — unchanged. |
+| Typecheck | `pnpm exec tsc -p apps/portal` passes. |
+
 ---
 
 ## 7. Reports

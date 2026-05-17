@@ -10,6 +10,7 @@ import {
   ClipboardList, CheckCheck, GitMerge, AlertTriangle, Calendar, MessageSquareDot, Send,
   Archive, ArchiveRestore, Radio, ExternalLink, ChevronRight,
 } from "lucide-react";
+import { CRMPageShell } from "../../../../../components/crm";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { CrmRecordingPlayer } from "../../../../../components/CrmRecordingPlayer";
 import { apiGet, apiPatch, apiPost, apiDelete } from "../../../../../services/apiClient";
@@ -236,19 +237,19 @@ function TimelineItem({
   const isDeleted = event.body === "(deleted)";
 
   return (
-    <div className="mb-2 flex gap-3 rounded-xl border border-gray-200/80 bg-white px-3 py-2.5 shadow-sm dark:border-gray-700/80 dark:bg-gray-900/40">
+    <div className="mb-2 flex gap-3 rounded-crm border border-crm-border/80 bg-crm-surface px-3 py-2.5 shadow-crm">
       {/* Icon column */}
-      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-800">
+      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-crm-surface-2">
         <TimelineIcon type={event.type} />
       </div>
 
       {/* Content */}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "0.5rem" }}>
-          <span className="text-[0.8125rem] font-semibold text-gray-900 dark:text-gray-100">
+          <span className="text-[0.8125rem] font-semibold text-crm-text">
             {event.title}
           </span>
-          <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">
+          <span className="shrink-0 text-xs text-crm-muted">
             {formatDateTime(event.createdAt)}
           </span>
         </div>
@@ -909,22 +910,22 @@ export default function CrmContactDetailPage() {
   }, [contact.phones.length, contact.doNotSms, isArchived, tasks]);
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
-      <div className="mx-auto max-w-6xl space-y-4 px-4 py-6 md:space-y-5 md:py-8">
+    <CRMPageShell>
+      <div className="space-y-4 md:space-y-5">
         <button
           type="button"
           onClick={() => router.push("/crm/contacts")}
-          className="flex items-center gap-1.5 text-sm font-medium text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-100"
+          className="flex items-center gap-1.5 text-sm font-medium text-crm-muted hover:text-crm-text"
         >
           <ArrowLeft className="h-4 w-4 shrink-0" />
           Back to Contacts
         </button>
 
         {/* Command header */}
-        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900 md:p-6">
+        <div className="rounded-crm-lg border border-crm-border bg-crm-surface p-5 shadow-crm md:p-6">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
             <div
-              className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl text-lg font-bold text-white"
+              className="flex h-14 w-14 shrink-0 items-center justify-center rounded-crm-lg text-lg font-bold text-white"
               style={{ background: stageColor(stage) }}
             >
               {initials(contact.displayName)}
@@ -932,7 +933,7 @@ export default function CrmContactDetailPage() {
 
             <div className="min-w-0 flex-1 space-y-3">
               <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">
+                <h1 className="text-2xl font-semibold tracking-tight text-crm-text">
                   {contact.displayName}
                 </h1>
                 <span
@@ -945,16 +946,16 @@ export default function CrmContactDetailPage() {
                   {stageLabel(stage)}
                 </span>
                 {isArchived && (
-                  <span className="rounded-full bg-gray-200 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-gray-700 dark:bg-gray-700 dark:text-gray-200">
+                  <span className="rounded-full bg-gray-200 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide text-crm-text">
                     Archived
                   </span>
                 )}
                 {contact.doNotCall && (
-                  <span className="text-xs font-semibold text-red-600 dark:text-red-400">DNC</span>
+                  <span className="text-xs font-semibold text-crm-danger">DNC</span>
                 )}
               </div>
 
-              <p className="text-sm leading-relaxed text-gray-600 dark:text-gray-300">
+              <p className="text-sm leading-relaxed text-crm-muted">
                 {isArchived
                   ? "Read-only archive — timeline stays visible; restore when you need to work the record again."
                   : contact.lastActivityAt
@@ -976,41 +977,41 @@ export default function CrmContactDetailPage() {
                       : "Capture the next touch with a note, task, or workspace session."}
               </p>
 
-              <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm text-gray-700 dark:text-gray-200">
+              <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm text-crm-text">
                 {primaryPhoneRow ? (
                   <span className="inline-flex min-w-0 items-center gap-1.5">
-                    <Phone className="h-4 w-4 shrink-0 text-gray-400" aria-hidden />
+                    <Phone className="h-4 w-4 shrink-0 text-crm-muted/80" aria-hidden />
                     <span className="truncate font-medium tabular-nums">{primaryPhoneRow.numberRaw}</span>
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1.5 text-amber-700 dark:text-amber-400">
+                  <span className="inline-flex items-center gap-1.5 text-amber-700">
                     <Phone className="h-4 w-4 shrink-0" aria-hidden />
                     No phone on file
                   </span>
                 )}
                 {primaryEmailRow ? (
                   <span className="inline-flex min-w-0 items-center gap-1.5">
-                    <Mail className="h-4 w-4 shrink-0 text-gray-400" aria-hidden />
+                    <Mail className="h-4 w-4 shrink-0 text-crm-muted/80" aria-hidden />
                     <span className="truncate">{primaryEmailRow.email}</span>
                   </span>
                 ) : (
-                  <span className="text-gray-400">No email on file</span>
+                  <span className="text-crm-muted/80">No email on file</span>
                 )}
               </div>
 
               {(contact.title || contact.company) && (
-                <p className="text-sm text-gray-500 dark:text-gray-400">
+                <p className="text-sm text-crm-muted">
                   {[contact.title, contact.company].filter(Boolean).join(" · ")}
                 </p>
               )}
             </div>
 
-            <div className="flex w-full flex-col gap-2 border-t border-gray-100 pt-4 lg:w-auto lg:min-w-[200px] lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0 dark:border-gray-800">
+            <div className="flex w-full flex-col gap-2 border-t border-crm-border/60 pt-4 lg:w-auto lg:min-w-[200px] lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
               <div className="flex flex-wrap gap-2">
                 {canLiveWorkspace && !isArchived && (
                   <Link
                     href={`/crm/live-call?contactId=${encodeURIComponent(contact.id)}`}
-                    className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 lg:flex-none"
+                    className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-crm-accent px-3 py-2 text-sm font-medium text-white hover:brightness-110 lg:flex-none"
                   >
                     <Radio className="h-4 w-4" aria-hidden />
                     Workspace
@@ -1021,7 +1022,7 @@ export default function CrmContactDetailPage() {
                   type="button"
                   disabled={isArchived}
                   onClick={scrollToNoteComposer}
-                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-45 dark:border-gray-700 dark:bg-gray-900 dark:hover:bg-gray-800 lg:flex-none"
+                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-crm-border bg-crm-surface px-3 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg disabled:cursor-not-allowed disabled:opacity-45 lg:flex-none"
                 >
                   <MessageSquare className="h-4 w-4" aria-hidden />
                   Add note
@@ -1033,7 +1034,7 @@ export default function CrmContactDetailPage() {
                     setAddingTask(true);
                     scrollToTasks();
                   }}
-                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-45 dark:border-gray-700 dark:bg-gray-900 dark:hover:bg-gray-800 lg:flex-none"
+                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-crm-border bg-crm-surface px-3 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg disabled:cursor-not-allowed disabled:opacity-45 lg:flex-none"
                 >
                   <Calendar className="h-4 w-4" aria-hidden />
                   Schedule task
@@ -1049,21 +1050,21 @@ export default function CrmContactDetailPage() {
                         ? "Add a phone first"
                         : "Open SMS"
                   }
-                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-45 dark:border-gray-700 dark:bg-gray-900 dark:hover:bg-gray-800 lg:flex-none"
+                  className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-crm-border bg-crm-surface px-3 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg disabled:cursor-not-allowed disabled:opacity-45 lg:flex-none"
                 >
                   <MessageSquareDot className="h-4 w-4" aria-hidden />
                   Send SMS
                 </button>
               </div>
 
-              <div className="flex flex-wrap gap-2 border-t border-gray-100 pt-3 dark:border-gray-800">
+              <div className="flex flex-wrap gap-2 border-t border-crm-border/60 pt-3">
                 {!isArchived && (
                   <>
                     {!editing ? (
                       <button
                         type="button"
                         onClick={() => setEditing(true)}
-                        className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+                        className="inline-flex items-center gap-1 rounded-lg border border-crm-border px-2.5 py-1.5 text-xs font-medium text-crm-muted hover:bg-crm-bg"
                       >
                         <Pencil className="h-3.5 w-3.5" />
                         Edit fields
@@ -1077,7 +1078,7 @@ export default function CrmContactDetailPage() {
                             setSaveError(null);
                           }}
                           disabled={saving}
-                          className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-600 dark:border-gray-700"
+                          className="rounded-lg border border-crm-border px-2.5 py-1.5 text-xs font-medium text-crm-muted"
                         >
                           Cancel
                         </button>
@@ -1085,7 +1086,7 @@ export default function CrmContactDetailPage() {
                           type="button"
                           onClick={handleSave}
                           disabled={saving}
-                          className="rounded-lg bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+                          className="rounded-lg bg-crm-accent px-2.5 py-1.5 text-xs font-medium text-white hover:brightness-110"
                         >
                           {saving ? "Saving…" : "Save"}
                         </button>
@@ -1098,7 +1099,7 @@ export default function CrmContactDetailPage() {
                     type="button"
                     onClick={handleArchiveContact}
                     disabled={archivePosting}
-                    className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
+                    className="inline-flex items-center gap-1 rounded-lg border border-crm-danger/35 px-2.5 py-1.5 text-xs font-medium text-crm-danger hover:bg-crm-danger/15"
                   >
                     <Archive className="h-3.5 w-3.5" />
                     {archivePosting ? "…" : "Archive"}
@@ -1109,7 +1110,7 @@ export default function CrmContactDetailPage() {
                     type="button"
                     onClick={handleRestoreContact}
                     disabled={restorePosting}
-                    className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-50 dark:border-emerald-900 dark:text-emerald-300 dark:hover:bg-emerald-950/30"
+                    className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-crm-success/10"
                   >
                     <ArchiveRestore className="h-3.5 w-3.5" />
                     {restorePosting ? "…" : "Restore"}
@@ -1121,11 +1122,11 @@ export default function CrmContactDetailPage() {
         </div>
 
         {/* Next step — rule-based, real data only */}
-        <div className="rounded-2xl border border-blue-100 bg-white p-4 shadow-sm dark:border-blue-900/50 dark:bg-gray-900 md:flex md:items-start md:justify-between md:gap-4">
+        <div className="rounded-crm-lg border border-crm-accent/25 bg-crm-surface p-4 shadow-crm md:flex md:items-start md:justify-between md:gap-4">
           <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-400">Next step</p>
-            <p className="mt-1 text-base font-semibold text-gray-900 dark:text-gray-50">{nextStep.title}</p>
-            <p className="mt-1 text-sm leading-relaxed text-gray-600 dark:text-gray-300">{nextStep.detail}</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-crm-accent">Next step</p>
+            <p className="mt-1 text-base font-semibold text-crm-text">{nextStep.title}</p>
+            <p className="mt-1 text-sm leading-relaxed text-crm-muted">{nextStep.detail}</p>
           </div>
           {nextStep.actionLabel && nextStep.action !== "none" && (
             <button
@@ -1135,7 +1136,7 @@ export default function CrmContactDetailPage() {
                 if (nextStep.action === "scroll_tasks") scrollToTasks();
                 if (nextStep.action === "scroll_notes") scrollToNoteComposer();
               }}
-              className="mt-3 inline-flex shrink-0 items-center gap-1 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 md:mt-0"
+              className="mt-3 inline-flex shrink-0 items-center gap-1 rounded-lg bg-crm-accent px-3 py-2 text-sm font-medium text-white hover:brightness-110 md:mt-0"
             >
               {nextStep.actionLabel}
               <ChevronRight className="h-4 w-4" aria-hidden />
@@ -1144,28 +1145,28 @@ export default function CrmContactDetailPage() {
         </div>
 
         {/* Quick facts */}
-        <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Quick facts</h2>
+        <div className="rounded-crm-lg border border-crm-border bg-crm-surface p-4 shadow-crm">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-crm-muted">Quick facts</h2>
           <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
             <div>
-              <dt className="text-xs font-medium text-gray-400">Phones</dt>
-              <dd className="mt-0.5 font-medium text-gray-900 dark:text-gray-100">
+              <dt className="text-xs font-medium text-crm-muted/80">Phones</dt>
+              <dd className="mt-0.5 font-medium text-crm-text">
                 {contact.phones.length ? `${contact.phones.length} on file` : "—"}
               </dd>
             </div>
             <div>
-              <dt className="text-xs font-medium text-gray-400">Emails</dt>
-              <dd className="mt-0.5 font-medium text-gray-900 dark:text-gray-100">
+              <dt className="text-xs font-medium text-crm-muted/80">Emails</dt>
+              <dd className="mt-0.5 font-medium text-crm-text">
                 {contact.emails.length ? `${contact.emails.length} on file` : "—"}
               </dd>
             </div>
             <div>
-              <dt className="text-xs font-medium text-gray-400">Stage</dt>
-              <dd className="mt-0.5 font-medium text-gray-900 dark:text-gray-100">{stageLabel(stage)}</dd>
+              <dt className="text-xs font-medium text-crm-muted/80">Stage</dt>
+              <dd className="mt-0.5 font-medium text-crm-text">{stageLabel(stage)}</dd>
             </div>
             <div>
-              <dt className="text-xs font-medium text-gray-400">Owner</dt>
-              <dd className="mt-0.5 font-medium text-gray-900 dark:text-gray-100">
+              <dt className="text-xs font-medium text-crm-muted/80">Owner</dt>
+              <dd className="mt-0.5 font-medium text-crm-text">
                 {contact.assignedTo
                   ? contact.assignedTo.displayName ||
                     [contact.assignedTo.firstName, contact.assignedTo.lastName].filter(Boolean).join(" ") ||
@@ -1174,14 +1175,14 @@ export default function CrmContactDetailPage() {
               </dd>
             </div>
             <div>
-              <dt className="text-xs font-medium text-gray-400">Last activity</dt>
-              <dd className="mt-0.5 font-medium text-gray-900 dark:text-gray-100">
+              <dt className="text-xs font-medium text-crm-muted/80">Last activity</dt>
+              <dd className="mt-0.5 font-medium text-crm-text">
                 {contact.lastActivityAt ? formatDate(contact.lastActivityAt) : "—"}
               </dd>
             </div>
             <div>
-              <dt className="text-xs font-medium text-gray-400">SMS</dt>
-              <dd className="mt-0.5 font-medium text-gray-900 dark:text-gray-100">
+              <dt className="text-xs font-medium text-crm-muted/80">SMS</dt>
+              <dd className="mt-0.5 font-medium text-crm-text">
                 {contact.doNotSms ? "Opt-out (do not send)" : "Allowed"}
               </dd>
             </div>
@@ -1226,7 +1227,7 @@ export default function CrmContactDetailPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
 
           {/* CRM fields */}
-          <div className="panel rounded-2xl border border-gray-100 shadow-sm dark:border-gray-800" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
+          <div className="panel rounded-crm-lg border border-crm-border/60 shadow-crm" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
             <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>
               Outreach rules &amp; signal
             </h3>
@@ -1326,7 +1327,7 @@ export default function CrmContactDetailPage() {
           </div>
 
           {/* ── Open tasks panel ──────────────────────────────────────────── */}
-          <div ref={tasksPanelRef} className="panel rounded-2xl border border-gray-100 shadow-sm dark:border-gray-800" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
+          <div ref={tasksPanelRef} className="panel rounded-crm-lg border border-crm-border/60 shadow-crm" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>
                 Open Tasks {tasks.length > 0 && <span style={{ fontWeight: 400, color: "var(--accent)" }}>({tasks.length})</span>}
@@ -1624,7 +1625,7 @@ export default function CrmContactDetailPage() {
           {contact.phones.length > 0 && (
             <div
               ref={smsPanelRef}
-              className="panel rounded-2xl border border-gray-200 bg-gray-50/40 shadow-sm dark:border-gray-700 dark:bg-gray-900/50"
+              className="panel rounded-crm-lg border border-crm-border bg-crm-bg/40 shadow-crm"
               style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.75rem" }}
             >
 
@@ -1796,7 +1797,7 @@ export default function CrmContactDetailPage() {
         </div>
 
         {/* ── Right column: Timeline + Notes ───────────────────────────────────── */}
-        <div className="panel rounded-2xl border border-gray-100 shadow-sm dark:border-gray-800" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
+        <div className="panel rounded-crm-lg border border-crm-border/60 shadow-crm" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
           <div ref={noteComposerRef}>
             <h3 style={{ margin: "0 0 0.75rem", fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>
               Activity &amp; notes
@@ -1869,7 +1870,7 @@ export default function CrmContactDetailPage() {
           </div>
 
           {/* ── Timeline feed ───────────────────────────────────────────────── */}
-          <div className="mt-4 border-t border-gray-100 pt-4 dark:border-gray-800">
+          <div className="mt-4 border-t border-crm-border/60 pt-4">
             {timelineLoading ? (
               <LoadingSkeleton rows={4} />
             ) : timeline.length === 0 ? (
@@ -1945,6 +1946,6 @@ export default function CrmContactDetailPage() {
           </div>
         </div>
       )}
-    </div>
+    </CRMPageShell>
   );
 }

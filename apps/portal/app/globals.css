@@ -18,6 +18,27 @@
   --danger: #ea6068;
   --info: #4ab2ff;
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.24);
+
+  /* CRM Phase 19A — unified dark operational surfaces (Workspace-aligned) */
+  --crm-bg: var(--bg-soft);
+  --crm-surface: var(--panel);
+  --crm-surface-2: var(--panel-2);
+  --crm-border: var(--border);
+  --crm-text: var(--text);
+  --crm-text-muted: var(--text-dim);
+  --crm-accent: var(--accent);
+  --crm-accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  --crm-danger: var(--danger);
+  --crm-warning: var(--warning);
+  --crm-success: var(--success);
+  --crm-radius: 0.75rem;
+  --crm-radius-lg: 1rem;
+  --crm-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --crm-section-gap: 1rem;
+}
+
+.crm-page-shell {
+  width: 100%;
 }
 
 :root[data-theme="light"] {

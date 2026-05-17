@@ -73,6 +73,7 @@
 - **Archiving preserves historical CRM data** — timeline, SMS-linked events, campaign memberships, and tasks stay in the database for admin review. Default list/search and screen-pop exclude archived rows; admins may use `GET /crm/contacts?includeArchived=true` or open an archived contact in the portal to audit before **Restore**.
 - **Archived or inactive contacts are not live actionable queue work (Phase 16C)** — `GET /crm/queue`, its tab counts, `POST /crm/queue/next`, and agent metrics that represent “my queue” / live callbacks exclude members whose `Contact` is `active=false` or `archivedAt != null`. `CrmCampaignMember` rows are not deleted; campaign history and `/crm/reports/campaigns` roster-style totals can still include archived contacts unless the metric is explicitly live-queue scoped.
 - **CRM Command Center dashboard (Phase 18A)** — `/crm/dashboard` is the workflow landing: prioritize actionable counts and short previews backed by existing CRM APIs; avoid vanity KPIs, fake activity feeds, and dense primary tables. Guidance stays inline or in compact empty states—not repeated warning banners.
+- **CRM + Workspace single visual language (Phase 19A)** — CRM pages use `apps/portal/components/crm/*` primitives and `--crm-*` / `bg-crm-*` Tailwind tokens mapped to portal dark theme variables. Do not introduce light-mode card surfaces (`bg-white`, `bg-gray-50`) on CRM routes; keep dark shell continuity with `console-shell`. See `docs/ai-context/UI_SYSTEM.md`.
 
 ---
 

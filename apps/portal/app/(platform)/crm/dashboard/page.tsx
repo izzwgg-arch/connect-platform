@@ -29,6 +29,7 @@ import {
   LayoutDashboard,
 } from "lucide-react";
 import { PageHeader } from "../../../../components/PageHeader";
+import { CRMCard, CRMPageShell } from "../../../../components/crm";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
 import { apiGet } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
@@ -162,29 +163,6 @@ function formatShortDate(iso: string): string {
 
 // ── Subcomponents ─────────────────────────────────────────────────────────────
 
-function SoftPanel({
-  children,
-  style,
-}: {
-  children: React.ReactNode;
-  style?: React.CSSProperties;
-}) {
-  return (
-    <div
-      className="panel"
-      style={{
-        borderRadius: "0.75rem",
-        border: "1px solid var(--border)",
-        background: "var(--surface)",
-        boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
-        ...style,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
 function KpiTile({
   label,
   value,
@@ -250,7 +228,7 @@ function KpiTile({
   );
 
   return (
-    <SoftPanel style={{ padding: 0, overflow: "hidden", border: accentBorder }}>
+    <CRMCard padding="none" style={{ overflow: "hidden", border: accentBorder }}>
       {href ? (
         <Link href={href} style={{ textDecoration: "none", color: "inherit" }}>
           {inner}
@@ -258,7 +236,7 @@ function KpiTile({
       ) : (
         inner
       )}
-    </SoftPanel>
+    </CRMCard>
   );
 }
 
@@ -703,14 +681,14 @@ export default function CrmDashboardPage() {
   const recentImports = (importBatches ?? []).slice(0, 4);
 
   return (
-    <div className="stack compact-stack" style={{ maxWidth: "1200px", margin: "0 auto" }}>
+    <CRMPageShell innerClassName="stack compact-stack max-w-[1200px]">
       <PageHeader
         title="Command center"
         subtitle="A focused view of what matters today—priorities first, details on demand."
       />
 
       {/* A — Hero / command strip */}
-      <SoftPanel style={{ padding: "1.25rem 1.35rem" }}>
+      <CRMCard style={{ padding: "1.25rem 1.35rem" }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "1rem", alignItems: "flex-start", justifyContent: "space-between" }}>
           <div style={{ display: "flex", gap: "0.85rem", alignItems: "flex-start" }}>
             <div
@@ -881,11 +859,11 @@ export default function CrmDashboardPage() {
           </div>
         ) : null}
 
-      </SoftPanel>
+      </CRMCard>
 
       {/* Admin: compact workspace health (replaces giant readiness grid) */}
       {isPlatformAdmin ? (
-        <SoftPanel style={{ padding: "1rem 1.15rem" }}>
+        <CRMCard style={{ padding: "1rem 1.15rem" }}>
           <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.75rem" }}>
             <div style={{ fontSize: "0.8125rem", fontWeight: 700, color: "var(--text)" }}>Workspace health</div>
             <span style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>Live counts · same sources as diagnostics</span>
@@ -933,7 +911,7 @@ export default function CrmDashboardPage() {
               </div>
             ) : null}
           </div>
-        </SoftPanel>
+        </CRMCard>
       ) : null}
 
       {/* B — KPI row */}
@@ -1023,7 +1001,7 @@ export default function CrmDashboardPage() {
               ) : (
                 <>
                   {(queueOverduePreview?.queue ?? []).length === 0 && (queueDuePreview?.queue ?? []).length === 0 ? (
-                    <SoftPanel style={{ padding: "0.9rem 1rem" }}>
+                    <CRMCard style={{ padding: "0.9rem 1rem" }}>
                       <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
                         <Inbox size={18} style={{ color: "var(--text-dim)", flexShrink: 0, marginTop: 2 }} />
                         <div>
@@ -1038,7 +1016,7 @@ export default function CrmDashboardPage() {
                           </Link>
                         </div>
                       </div>
-                    </SoftPanel>
+                    </CRMCard>
                   ) : null}
                   {(queueOverduePreview?.queue ?? []).map((m) => (
                     <MiniListRow
@@ -1099,7 +1077,7 @@ export default function CrmDashboardPage() {
                 </>
               ) : null}
               {!loading && activeCampaignRows.length === 0 && activeCampaignsCount === 0 ? (
-                <SoftPanel style={{ padding: "0.9rem 1rem" }}>
+                <CRMCard style={{ padding: "0.9rem 1rem" }}>
                   <div style={{ display: "flex", gap: "0.6rem" }}>
                     <Sparkles size={18} style={{ color: "var(--accent)", flexShrink: 0 }} />
                     <div>
@@ -1112,7 +1090,7 @@ export default function CrmDashboardPage() {
                       </Link>
                     </div>
                   </div>
-                </SoftPanel>
+                </CRMCard>
               ) : null}
             </div>
           </div>
@@ -1124,9 +1102,9 @@ export default function CrmDashboardPage() {
             <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
               {loading ? <LoadingSkeleton rows={2} /> : null}
               {!loading && recentImports.length === 0 ? (
-                <SoftPanel style={{ padding: "0.9rem 1rem", fontSize: "0.8125rem", color: "var(--text-dim)", lineHeight: 1.45 }}>
+                <CRMCard style={{ padding: "0.9rem 1rem", fontSize: "0.8125rem", color: "var(--text-dim)", lineHeight: 1.45 }}>
                   No batches yet. Upload a CSV to seed your pipeline; you can tie uploads to a campaign from the campaign screen.
-                </SoftPanel>
+                </CRMCard>
               ) : null}
               {recentImports.map((b) => (
                 <MiniListRow
@@ -1179,24 +1157,24 @@ export default function CrmDashboardPage() {
       {(adminActions.length > 0 || agentActions.length > 0) && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))", gap: "1rem" }}>
           {adminActions.length > 0 ? (
-            <SoftPanel style={{ padding: "1.1rem 1.15rem" }}>
+            <CRMCard style={{ padding: "1.1rem 1.15rem" }}>
               <h3 style={{ margin: "0 0 0.65rem", fontSize: "0.9375rem", fontWeight: 700 }}>Admin shortcuts</h3>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
                 {adminActions.map((a) => (
                   <ActionLinkRow key={a.key} href={a.href} icon={a.icon} label={a.label} hint={a.hint} />
                 ))}
               </div>
-            </SoftPanel>
+            </CRMCard>
           ) : null}
           {agentActions.length > 0 ? (
-            <SoftPanel style={{ padding: "1.1rem 1.15rem" }}>
+            <CRMCard style={{ padding: "1.1rem 1.15rem" }}>
               <h3 style={{ margin: "0 0 0.65rem", fontSize: "0.9375rem", fontWeight: 700 }}>Agent shortcuts</h3>
               <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
                 {agentActions.map((a) => (
                   <ActionLinkRow key={a.key} href={a.href} icon={a.icon} label={a.label} hint={a.hint} />
                 ))}
               </div>
-            </SoftPanel>
+            </CRMCard>
           ) : null}
         </div>
       )}
@@ -1225,6 +1203,6 @@ export default function CrmDashboardPage() {
           />
         </div>
       </section>
-    </div>
+    </CRMPageShell>
   );
 }

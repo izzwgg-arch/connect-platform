@@ -15,6 +15,7 @@ import {
   ListOrdered,
   ExternalLink,
 } from "lucide-react";
+import { CRMPageShell } from "../../../../components/crm";
 import { apiGet, apiPost, apiPatch } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 
@@ -50,11 +51,11 @@ const STATUS_LABELS: Record<CampaignStatus, string> = {
 };
 
 const STATUS_COLORS: Record<CampaignStatus, string> = {
-  DRAFT: "bg-gray-100 text-gray-600",
+  DRAFT: "bg-crm-surface-2 text-crm-muted",
   ACTIVE: "bg-green-100 text-green-700",
-  PAUSED: "bg-yellow-100 text-yellow-700",
-  COMPLETED: "bg-blue-100 text-blue-700",
-  ARCHIVED: "bg-gray-100 text-gray-400",
+  PAUSED: "bg-yellow-100 text-crm-warning",
+  COMPLETED: "bg-blue-100 text-crm-accent",
+  ARCHIVED: "bg-crm-surface-2 text-crm-muted/80",
 };
 
 const PRIORITY_LABELS: Record<CampaignPriority, string> = {
@@ -62,10 +63,10 @@ const PRIORITY_LABELS: Record<CampaignPriority, string> = {
 };
 
 const PRIORITY_COLORS: Record<CampaignPriority, string> = {
-  LOW: "bg-gray-100 text-gray-500",
+  LOW: "bg-crm-surface-2 text-crm-muted",
   NORMAL: "", // not shown — normal is the baseline
   HIGH: "bg-orange-100 text-orange-700",
-  URGENT: "bg-red-100 text-red-700",
+  URGENT: "bg-red-100 text-crm-danger",
 };
 
 // ── Components ─────────────────────────────────────────────────────────────────
@@ -129,33 +130,33 @@ function CreateCampaignModal({ onClose, onCreate }: { onClose: () => void; onCre
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">New Campaign</h2>
+      <div className="bg-crm-surface rounded-crm border border-crm-border shadow-xl p-6 w-full max-w-md">
+        <h2 className="text-lg font-semibold text-crm-text mb-4">New Campaign</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Campaign Name</label>
+            <label className="block text-sm font-medium text-crm-text mb-1">Campaign Name</label>
             <input
               autoFocus
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
               placeholder="e.g. Q3 Outbound"
               maxLength={200}
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Description <span className="text-gray-400">(optional)</span></label>
+            <label className="block text-sm font-medium text-crm-text mb-1">Description <span className="text-crm-muted/80">(optional)</span></label>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+              className="w-full border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30 resize-none"
               rows={3}
               placeholder="What is this campaign about?"
               maxLength={2000}
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Smart Queue Priority</label>
+            <label className="block text-sm font-medium text-crm-text mb-1">Smart Queue Priority</label>
             <div className="flex gap-2 flex-wrap">
               {(["NORMAL", "HIGH", "URGENT"] as CampaignPriority[]).map((p) => (
                 <button
@@ -168,15 +169,15 @@ function CreateCampaignModal({ onClose, onCreate }: { onClose: () => void; onCre
                         ? "bg-red-600 text-white border-red-600"
                         : p === "HIGH"
                           ? "bg-orange-500 text-white border-orange-500"
-                          : "bg-blue-600 text-white border-blue-600"
-                      : "border-gray-300 text-gray-600 hover:bg-gray-50"
+                          : "bg-crm-accent text-white border-blue-600"
+                      : "border-crm-border text-crm-muted hover:bg-crm-bg"
                   }`}
                 >
                   {PRIORITY_LABELS[p]}
                 </button>
               ))}
             </div>
-            <p className="text-xs text-gray-400 mt-1">
+            <p className="text-xs text-crm-muted/80 mt-1">
               {priority === "URGENT"
                 ? "Leads in this campaign surface above all others in Smart Queue."
                 : priority === "HIGH"
@@ -184,10 +185,10 @@ function CreateCampaignModal({ onClose, onCreate }: { onClose: () => void; onCre
                   : "Default ranking in Smart Queue."}
             </p>
           </div>
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-crm-danger">{error}</p>}
           <div className="flex gap-2 justify-end pt-2">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-sm border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">Cancel</button>
-            <button type="submit" disabled={saving || !name.trim()} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-bg">Cancel</button>
+            <button type="submit" disabled={saving || !name.trim()} className="px-4 py-2 text-sm bg-crm-accent text-white rounded-lg hover:brightness-110 disabled:opacity-50">
               {saving ? "Creating..." : "Create Campaign"}
             </button>
           </div>
@@ -290,7 +291,7 @@ export default function CampaignsPage() {
   const listEmptyNoCampaigns = !loading && !error && campaigns.length === 0;
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <CRMPageShell>
       {showCreate && isAdmin && (
         <CreateCampaignModal
           onClose={() => setShowCreate(false)}
@@ -303,17 +304,16 @@ export default function CampaignsPage() {
         />
       )}
 
-      <div className="max-w-6xl mx-auto px-4 py-8">
         {/* Command header */}
-        <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm mb-6">
+        <div className="rounded-crm-lg border border-crm-border bg-crm-surface p-6 shadow-crm mb-6">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex gap-3 min-w-0">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-crm bg-crm-accent/15 text-crm-accent">
                 <Megaphone className="h-5 w-5" aria-hidden />
               </div>
               <div className="min-w-0">
-                <h1 className="text-2xl font-semibold tracking-tight text-gray-900">Campaigns</h1>
-                <p className="mt-1 text-sm text-gray-500 max-w-xl">
+                <h1 className="text-2xl font-semibold tracking-tight text-crm-text">Campaigns</h1>
+                <p className="mt-1 text-sm text-crm-muted max-w-xl">
                   Run outbound work by campaign: open a program, pull its queue in My Queue, or adjust lifecycle status from the campaign record.
                 </p>
               </div>
@@ -323,7 +323,7 @@ export default function CampaignsPage() {
                 <button
                   type="button"
                   onClick={() => setShowCreate(true)}
-                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                  className="inline-flex items-center gap-2 rounded-lg bg-crm-accent px-4 py-2 text-sm font-medium text-white hover:brightness-110"
                 >
                   <Plus className="h-4 w-4" />
                   New campaign
@@ -332,18 +332,18 @@ export default function CampaignsPage() {
               {canImport && (
                 <Link
                   href="/crm/import"
-                  className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className="inline-flex items-center gap-2 rounded-lg border border-crm-border bg-crm-surface px-3 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg"
                 >
-                  <FileUp className="h-4 w-4 text-gray-500" />
+                  <FileUp className="h-4 w-4 text-crm-muted" />
                   Import leads
                 </Link>
               )}
               {canQueue && (
                 <Link
                   href="/crm/queue"
-                  className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className="inline-flex items-center gap-2 rounded-lg border border-crm-border bg-crm-surface px-3 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg"
                 >
-                  <ListOrdered className="h-4 w-4 text-gray-500" />
+                  <ListOrdered className="h-4 w-4 text-crm-muted" />
                   My Queue
                 </Link>
               )}
@@ -367,21 +367,21 @@ export default function CampaignsPage() {
               ).map((tile) => (
                 <div
                   key={tile.key}
-                  className="rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-sm"
+                  className="rounded-crm border border-crm-border bg-crm-surface px-4 py-3 shadow-crm"
                 >
-                  <p className="text-xs font-medium uppercase tracking-wide text-gray-500">{tile.label}</p>
-                  <p className="mt-1 text-2xl font-semibold tabular-nums text-gray-900">{tile.value}</p>
+                  <p className="text-xs font-medium uppercase tracking-wide text-crm-muted">{tile.label}</p>
+                  <p className="mt-1 text-2xl font-semibold tabular-nums text-crm-text">{tile.value}</p>
                 </div>
               ))}
             </div>
             {statusFilter === "all" && (
-              <p className="mt-2 text-xs text-gray-500">
-                <span className="font-medium text-gray-600">All statuses</span> excludes archived campaigns. Choose{" "}
-                <span className="font-medium text-gray-700">Archived</span> in the filter to load them.
+              <p className="mt-2 text-xs text-crm-muted">
+                <span className="font-medium text-crm-muted">All statuses</span> excludes archived campaigns. Choose{" "}
+                <span className="font-medium text-crm-text">Archived</span> in the filter to load them.
               </p>
             )}
             {statusFilter !== "all" && (
-              <p className="mt-2 text-xs text-gray-500">
+              <p className="mt-2 text-xs text-crm-muted">
                 Figures reflect the campaigns returned for the current status filter (and search only hides rows below).
               </p>
             )}
@@ -391,11 +391,11 @@ export default function CampaignsPage() {
         {/* Filters */}
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3 mb-5">
           <div className="relative flex-1 sm:max-w-xs">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-crm-muted/80" />
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-crm-border py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
               placeholder="Search by name…"
               aria-label="Search campaigns by name"
             />
@@ -403,7 +403,7 @@ export default function CampaignsPage() {
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 sm:w-auto w-full"
+            className="rounded-lg border border-crm-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30 sm:w-auto w-full"
             aria-label="Filter by status"
           >
             <option value="all">All statuses</option>
@@ -417,14 +417,14 @@ export default function CampaignsPage() {
 
         {/* Content */}
         {loading ? (
-          <div className="py-20 text-center text-gray-400 text-sm">Loading campaigns…</div>
+          <div className="py-20 text-center text-crm-muted/80 text-sm">Loading campaigns…</div>
         ) : error ? (
           <div className="py-20 text-center text-red-500 text-sm">{error}</div>
         ) : listEmptyNoCampaigns ? (
-          <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-6 py-16 text-center">
-            <Megaphone className="mx-auto mb-3 h-10 w-10 text-gray-300" aria-hidden />
-            <p className="text-base font-medium text-gray-800">No campaigns yet</p>
-            <p className="mx-auto mt-2 max-w-md text-sm text-gray-500">
+          <div className="rounded-crm-lg border border-dashed border-crm-border bg-crm-surface px-6 py-16 text-center">
+            <Megaphone className="mx-auto mb-3 h-10 w-10 text-crm-border" aria-hidden />
+            <p className="text-base font-medium text-crm-text">No campaigns yet</p>
+            <p className="mx-auto mt-2 max-w-md text-sm text-crm-muted">
               Create a campaign to group leads and scripts, then route work through My Queue. If leads arrive via file import, start from Import Leads and attach them to a campaign from there.
             </p>
             <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
@@ -432,7 +432,7 @@ export default function CampaignsPage() {
                 <button
                   type="button"
                   onClick={() => setShowCreate(true)}
-                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                  className="inline-flex items-center gap-2 rounded-lg bg-crm-accent px-4 py-2 text-sm font-medium text-white hover:brightness-110"
                 >
                   <Plus className="h-4 w-4" />
                   New campaign
@@ -441,25 +441,25 @@ export default function CampaignsPage() {
               {canImport && (
                 <Link
                   href="/crm/import"
-                  className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className="inline-flex items-center gap-2 rounded-lg border border-crm-border bg-crm-surface px-4 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg"
                 >
-                  <FileUp className="h-4 w-4 text-gray-500" />
+                  <FileUp className="h-4 w-4 text-crm-muted" />
                   Import leads
                 </Link>
               )}
             </div>
             {!isAdmin && !canImport && (
-              <p className="mt-4 text-xs text-gray-500">Ask a CRM admin to create a campaign or grant import access if you need to load leads.</p>
+              <p className="mt-4 text-xs text-crm-muted">Ask a CRM admin to create a campaign or grant import access if you need to load leads.</p>
             )}
           </div>
         ) : listEmptyAfterFilter ? (
-          <div className="rounded-2xl border border-gray-200 bg-white px-6 py-14 text-center">
-            <p className="text-base font-medium text-gray-800">No campaigns match this search</p>
-            <p className="mt-2 text-sm text-gray-500">Try another name or clear the search to see all loaded campaigns.</p>
+          <div className="rounded-crm-lg border border-crm-border bg-crm-surface px-6 py-14 text-center">
+            <p className="text-base font-medium text-crm-text">No campaigns match this search</p>
+            <p className="mt-2 text-sm text-crm-muted">Try another name or clear the search to see all loaded campaigns.</p>
             <button
               type="button"
               onClick={() => setSearch("")}
-              className="mt-5 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              className="mt-5 rounded-lg border border-crm-border bg-crm-surface px-4 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg"
             >
               Clear search
             </button>
@@ -471,28 +471,28 @@ export default function CampaignsPage() {
               return (
                 <li
                   key={campaign.id}
-                  className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm transition-colors hover:border-gray-300"
+                  className="rounded-crm-lg border border-crm-border bg-crm-surface p-4 shadow-crm transition-colors hover:border-crm-border"
                 >
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0 flex-1 space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <h2 className="truncate text-base font-semibold text-gray-900">{campaign.name}</h2>
+                        <h2 className="truncate text-base font-semibold text-crm-text">{campaign.name}</h2>
                         <StatusBadge status={campaign.status} />
                         <PriorityBadge priority={campaign.priority ?? "NORMAL"} />
                       </div>
                       {campaign.description ? (
-                        <p className="text-sm text-gray-500 line-clamp-2">{campaign.description}</p>
+                        <p className="text-sm text-crm-muted line-clamp-2">{campaign.description}</p>
                       ) : null}
-                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-crm-muted">
                         <span className="inline-flex items-center gap-1">
                           <Users className="h-3.5 w-3.5 shrink-0" aria-hidden />
                           {members} member{members === 1 ? "" : "s"}
                         </span>
                         <span>Updated {formatShortDate(campaign.updatedAt)}</span>
-                        <span className="text-gray-400">Created {formatShortDate(campaign.createdAt)}</span>
+                        <span className="text-crm-muted/80">Created {formatShortDate(campaign.createdAt)}</span>
                       </div>
                       {(campaign.script || campaign.checklist) && (
-                        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500">
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-crm-muted">
                           {campaign.script && <span>Script: {campaign.script.name}</span>}
                           {campaign.checklist && <span>Checklist: {campaign.checklist.name}</span>}
                         </div>
@@ -501,18 +501,18 @@ export default function CampaignsPage() {
                     <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center lg:justify-end lg:pl-4 shrink-0">
                       <Link
                         href={`/crm/campaigns/${campaign.id}`}
-                        className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50"
+                        className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-crm-border bg-crm-surface px-3 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg"
                       >
                         Open campaign
-                        <ExternalLink className="h-3.5 w-3.5 text-gray-400" aria-hidden />
+                        <ExternalLink className="h-3.5 w-3.5 text-crm-muted/80" aria-hidden />
                       </Link>
                       {canQueue && (
                         <Link
                           href={`/crm/queue?campaignId=${encodeURIComponent(campaign.id)}`}
-                          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50"
+                          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-crm-border bg-crm-surface px-3 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg"
                         >
                           View queue
-                          <ListOrdered className="h-3.5 w-3.5 text-gray-400" aria-hidden />
+                          <ListOrdered className="h-3.5 w-3.5 text-crm-muted/80" aria-hidden />
                         </Link>
                       )}
                       {isAdmin && campaign.status === "DRAFT" && (
@@ -530,7 +530,7 @@ export default function CampaignsPage() {
                         <button
                           type="button"
                           onClick={(e) => handleQuickStatus(campaign.id, "PAUSED", e)}
-                          className="inline-flex items-center justify-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900 hover:bg-amber-100"
+                          className="inline-flex items-center justify-center gap-1 rounded-lg border border-crm-warning/35 bg-amber-50 px-3 py-2 text-sm font-medium text-crm-warning hover:bg-crm-warning/15"
                           title="Pause campaign"
                         >
                           <Pause className="h-3.5 w-3.5" />
@@ -552,7 +552,7 @@ export default function CampaignsPage() {
                         <button
                           type="button"
                           onClick={(e) => handleQuickStatus(campaign.id, "ARCHIVED", e)}
-                          className="inline-flex items-center justify-center rounded-lg p-2 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                          className="inline-flex items-center justify-center rounded-lg p-2 text-crm-muted hover:bg-crm-surface-2 hover:text-crm-text"
                           title="Archive campaign"
                           aria-label="Archive campaign"
                         >
@@ -566,7 +566,6 @@ export default function CampaignsPage() {
             })}
           </ul>
         )}
-      </div>
-    </div>
+    </CRMPageShell>
   );
 }
