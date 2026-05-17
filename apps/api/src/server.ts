@@ -15227,12 +15227,24 @@ async function streamVoicemailAudio(
     if (!/^msg[0-9]+$/.test(msgNum)) return false;
     const folder = pbxHelperSpoolFolderFromVoicemail(vm);
     if (!folder) return false;
+
+    // When pbxRecfile is a raw Asterisk spool path we can parse the voicemail
+    // context directly from it and pass it to the helper. This allows the helper
+    // to serve voicemails from non-primary contexts (e.g. a message left when
+    // the extension used trimpro-voicemail before a PBX migration) rather than
+    // always defaulting to the tenant's current mailbox context.
+    //   /var/spool/asterisk/voicemail/<context>/<ext>/<folder>/<msg>.wav
+    const recfileContext = vm.pbxRecfile
+      ? (/\/var\/spool\/asterisk\/voicemail\/([^/]+)\//.exec(vm.pbxRecfile) ?? [])[1] ?? null
+      : null;
+
     try {
       const { contentType, buffer } = await fetchVoicemailSpoolAudioFromHelper(helperCfg, {
         tenantId: tid,
         extension: vm.extension,
         folder,
         msgNum,
+        voicemailContext: recfileContext ?? undefined,
       });
       const sourceBuf = Buffer.from(buffer);
       let ext = "wav";
@@ -15247,6 +15259,7 @@ async function streamVoicemailAudio(
           ext: vm.extension,
           folder,
           msgNum,
+          voicemailContext: recfileContext ?? null,
           helper_audio_fallback: true,
           byteLength: sourceBuf.byteLength,
           helperContentType: contentType,
@@ -15257,7 +15270,15 @@ async function streamVoicemailAudio(
       return true;
     } catch (err: any) {
       app.log.warn(
-        { vmId: vm.id, ext: vm.extension, helper_audio_fallback: false, err: err?.message },
+        {
+          vmId: vm.id,
+          ext: vm.extension,
+          folder,
+          msgNum,
+          voicemailContext: recfileContext ?? null,
+          helper_audio_fallback: false,
+          err: err?.message,
+        },
         "voicemail: helper_audio_fallback_failed",
       );
       return false;
@@ -15286,9 +15307,18 @@ async function streamVoicemailAudio(
     signal: AbortSignal.timeout(15_000),
   });
 
-  // No recfile stored yet — try to look it up from PBX before giving up.
+  // audioUrl is null when:
+  //   (a) pbxRecfile is missing — fetch from VitalPBX REST to populate it, or
+  //   (b) pbxRecfile is a raw /var/spool/ path — isConnectVitalVoicemailRecfileRef
+  //       returns false for spool paths; tryStreamFromHelperSpool (called below)
+  //       handles those via voicemailContext override.
   if (!audioUrl && vm.pbxExtensionId) {
-    app.log.info({ vmId: vm.id }, "voicemail: no stored recfile — fetching from PBX");
+    app.log.info(
+      { vmId: vm.id, recfileReason: recfile ? "spool_path_only" : "missing", storedRecfile: recfile ?? null },
+      recfile
+        ? "voicemail: recfile is spool-path (not URL) — checking VitalPBX for updated recfile, then helper fallback"
+        : "voicemail: no stored recfile — fetching from PBX",
+    );
     try {
       const pbx = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
       const records = await pbx.getExtensionVoicemailRecords(vm.pbxExtensionId, link.pbxTenantId ?? undefined);
