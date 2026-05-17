@@ -214,6 +214,17 @@
 | Tasks / notes | Same `POST`/`PATCH`/`DELETE` behavior; archive hides mutating controls where applicable. |
 | Typecheck | `pnpm exec tsc -p apps/portal` passes. |
 
+### Portal Tailwind — Phase 18 styling (smoke)
+
+| Check | Expected |
+|-------|----------|
+| Build | `apps/portal` has `tailwind.config.js`, `postcss.config.js`, `@tailwind` in `globals.css`, `preflight: false`; production CSS includes utilities (`.flex`, `.grid`, `.rounded-2xl`, `.bg-white`, `.gap-4`). |
+| `/crm/contacts` | Card/flex layout — not unstyled bullet list. |
+| `/crm/queue` | Queue member cards styled — not raw white bars. |
+| `/crm/campaigns` | Command header + summary grid styled. |
+| `/crm/contacts/[id]` | Hero / quick facts / Next step panels styled. |
+| `/crm/dashboard` | Command center unchanged; dark shell not reset by Tailwind preflight. |
+
 ---
 
 ## 7. Reports
