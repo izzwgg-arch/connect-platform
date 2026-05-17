@@ -92,16 +92,15 @@ test.describe("SUPER_ADMIN billing smoke", () => {
     await page.goto(`/admin/billing/invoices?tenantId=${encodeURIComponent(tenantId)}`, { waitUntil: "domcontentloaded" });
     await expect(page.getByTestId("billing-admin-tab-panel-invoices")).toBeVisible({ timeout: 60_000 });
 
-    const nav = page.getByTestId("billing-admin-workspace-nav");
-    await nav.selectOption("collections");
+    await page.getByTestId("billing-admin-ws-nav-collections").click();
     await expect(page.getByTestId("billing-admin-tab-panel-collections")).toBeVisible({ timeout: 60_000 });
     await expect(page.getByRole("heading", { name: "Collections Overview" })).toBeVisible();
 
-    await nav.selectOption("reports");
+    await page.getByTestId("billing-admin-ws-nav-reports").click();
     await expect(page.getByTestId("billing-admin-tab-panel-reports")).toBeVisible({ timeout: 60_000 });
     await expect(page.getByRole("heading", { name: "CSV Exports" })).toBeVisible();
 
-    await nav.selectOption("invoices");
+    await page.getByTestId("billing-admin-ws-nav-invoices").click();
     await expect(page.getByTestId("billing-admin-tab-panel-invoices")).toBeVisible();
   });
 

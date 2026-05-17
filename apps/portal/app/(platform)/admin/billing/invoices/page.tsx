@@ -2220,12 +2220,7 @@ function AdminBillingInvoicesBody() {
   }
 
   return (
-    <div className="stack compact-stack billing-admin-shell billing-p5-scope billing-p6-scope">
-      <p className="muted billing-p6-invoices-hint" style={{ margin: "0 0 8px", fontSize: 12, lineHeight: 1.45 }}>
-        Invoices, ledger, exports, and invoice-level collections for the company selected in the header. Switch views with the{" "}
-        <strong>Billing workspace</strong> menu above.
-      </p>
-
+    <div className="billing-ws-scope billing-p5-scope billing-p6-scope">
       {activeTab === "invoices" ? <InvoicesTab /> : activeTab === "transactions" ? <TransactionsTab /> : activeTab === "reports" ? <ReportsTab /> : <CollectionsTab />}
     </div>
   );

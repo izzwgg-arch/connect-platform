@@ -140,10 +140,7 @@ export default function AdminBillingPage() {
     (Number(selectedTenant.balanceDueCents || 0) > 0 || payState === "FAILED" || payState === "OVERDUE");
 
   return (
-    <div className="stack compact-stack billing-p5-scope billing-p6-scope billing-phase3">
-      <p className="b3-muted" style={{ margin: "0 0 8px", maxWidth: 720, fontSize: 12, lineHeight: 1.45 }}>
-        Fleet metrics cover every company; the rail and header toolbar scope actions to one account.
-      </p>
+    <div className="billing-ws-scope billing-phase3 billing-p5-scope billing-p6-scope">
 
       {platformToast ? (
         <div className={`billing-toast billing-toast--${platformToast.kind}`} style={{ position: "relative", bottom: "auto", right: "auto", maxWidth: "100%" }} role="status">
@@ -156,23 +153,11 @@ export default function AdminBillingPage() {
       {tenants.status === "error" ? <ErrorState message={tenants.error} /> : null}
 
       {overview.status === "success" ? (
-        <div className="b3-fleet-strip">
-          <div className="b3-fleet-metric">
-            <small>Recurring (est.)</small>
-            <strong>{dollars(overview.data.mrrCents)}</strong>
-          </div>
-          <div className="b3-fleet-metric">
-            <small>Open balance</small>
-            <strong>{dollars(overview.data.openCents)}</strong>
-          </div>
-          <div className="b3-fleet-metric">
-            <small>Needs attention</small>
-            <strong>{String(overview.data.counts?.failed || 0)}</strong>
-          </div>
-          <div className="b3-fleet-metric">
-            <small>No card on file</small>
-            <strong>{String(overview.data.counts?.tenantsWithoutCards || 0)}</strong>
-          </div>
+        <div className="billing-ws-fleet-bar" role="status">
+          <span>Fleet MRR<strong>{dollars(overview.data.mrrCents)}</strong></span>
+          <span>Open<strong>{dollars(overview.data.openCents)}</strong></span>
+          <span>Attention<strong>{String(overview.data.counts?.failed || 0)}</strong></span>
+          <span>No card<strong>{String(overview.data.counts?.tenantsWithoutCards || 0)}</strong></span>
         </div>
       ) : null}
 
@@ -215,58 +200,12 @@ export default function AdminBillingPage() {
       ) : null}
       {runs.status === "error" ? <ErrorState message={runs.error} /> : null}
 
-      <div className="billing-admin-grid">
-        <aside className="billing-tenant-rail">
-          <div className="billing-panel-head">
-            <span>Companies</span>
-            <strong>{tenantRows.length}</strong>
-          </div>
-          <div className="billing-tenant-list">
-            {tenantRows.map((tenant) => {
-              const active = tenant.id === selectedTenant?.id;
-              const w = worstNonTerminalInvoiceStatus(tenant.invoices);
-              const hasCard = (tenant.paymentMethods || []).length > 0;
-              return (
-                <button
-                  key={tenant.id}
-                  type="button"
-                  className={`billing-tenant-item ${active ? "active" : ""}`}
-                  onClick={() => router.push(`/admin/billing?tenantId=${encodeURIComponent(tenant.id)}`)}
-                >
-                  <span>
-                    <strong>{tenant.name}</strong>
-                    <small>
-                      {w !== "—" ? `${adminTenantStandingHeadline(w)} · ` : ""}
-                      {hasCard ? "Card on file" : "No card"}
-                      {" · "}
-                      {dollars(tenant.balanceDueCents || 0)} open
-                    </small>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </aside>
 
-        <main className="billing-tenant-workspace">
           {detailLoading ? <LoadingSkeleton rows={6} /> : null}
           {detailError ? <ErrorState message={detailError} /> : null}
           {detail ? (
             <>
-              <p className="billing-p6-overview-meta muted" style={{ fontSize: 12, margin: "0 0 10px", lineHeight: 1.5 }}>
-                <strong>{detail.tenant.name}</strong>
-                {" · "}
-                Projected {dollars(projectedMrr)}/mo
-                {" · "}
-                Plan {planName}
-                {" · "}
-                Autopay {detail.settings?.autoBillingEnabled ? `on (day ${detail.settings.billingDayOfMonth ?? "—"})` : "off"}
-                {nextBill ? ` · ${nextBill}` : ""}
-                {" · "}
-                Cards {detail.paymentMethods?.length ? `${detail.paymentMethods.length} saved` : "none"}
-              </p>
-
-              <p className="b3-section-title">Quick actions</p>
+<p className="b3-section-title">Quick actions</p>
               <div className="billing-p5-action-bar">
                 <div className="billing-p5-action-bar__primary">
                   {primaryCollect ? (
@@ -334,42 +273,11 @@ export default function AdminBillingPage() {
                 </div>
               </div>
 
-              <p className="b3-section-title">Account health</p>
-              <div className="b3-health-grid">
-                <div className={`b3-health-card ${unpaidCount ? "b3-health-warn" : "b3-health-ok"}`}>
-                  <h4>Unpaid invoices</h4>
-                  <p>{unpaidCount ? `${unpaidCount} open — review payment or terms.` : "No open invoices for this company."}</p>
-                </div>
-                <div className={`b3-health-card ${failedCount ? "b3-health-bad" : "b3-health-ok"}`}>
-                  <h4>Failed charges</h4>
-                  <p>{failedCount ? `${failedCount} invoice(s) need a successful payment.` : "No failed payment state on recent invoices."}</p>
-                </div>
-                <div className={`b3-health-card ${colFlags.paused || colFlags.doNotCharge ? "b3-health-warn" : "b3-health-ok"}`}>
-                  <h4>Collections</h4>
-                  <p>
-                    {colFlags.paused || colFlags.doNotCharge
-                      ? "Some invoices have retries paused or auto-charge turned off. Review in Invoices → Collections."
-                      : "No collection holds detected on this company’s open invoices."}
-                  </p>
-                </div>
-                <div className={`b3-health-card ${!(detail.paymentMethods || []).length ? "b3-health-warn" : "b3-health-ok"}`}>
-                  <h4>Payment method</h4>
-                  <p>{!(detail.paymentMethods || []).length ? "No saved card — autopay cannot run until a card is added." : "At least one card is saved."}</p>
-                </div>
-                <div className={`b3-health-card ${pricingMode === "custom" || expl?.tenantOverridesDetected ? "b3-health-warn" : "b3-health-ok"}`}>
-                  <h4>Pricing</h4>
-                  <p>
-                    {expl?.tenantOverridesDetected && pricingMode === "catalog"
-                      ? "Row amounts differ from the active plan — invoices still follow the plan until you align or reset."
-                      : pricingMode === "custom"
-                        ? "Custom company pricing is active."
-                        : "Pricing follows the standard rules for this company."}
-                  </p>
-                </div>
-                <div className={`b3-health-card ${expl?.scheduledPlanSummary ? "b3-health-warn" : "b3-health-ok"}`}>
-                  <h4>Scheduled plan change</h4>
-                  <p>{expl?.scheduledPlanSummary || "No upcoming plan switch scheduled."}</p>
-                </div>
+              <div className="billing-ws-stat-row">
+                <div className="billing-ws-stat"><label>Unpaid</label><span>{unpaidCount || 0}</span></div>
+                <div className="billing-ws-stat"><label>Failed</label><span>{failedCount || 0}</span></div>
+                <div className="billing-ws-stat"><label>Cards</label><span>{detail.paymentMethods?.length || 0}</span></div>
+                <div className="billing-ws-stat"><label>Pricing</label><span>{humanizeStoredPricingMode(pricingMode)}</span></div>
               </div>
 
               <div id="payment-methods" style={{ scrollMarginTop: 72 }}>
@@ -385,9 +293,7 @@ export default function AdminBillingPage() {
               </div>
             </>
           ) : null}
-        </main>
-      </div>
-
+        
       <details className="b3-details-muted">
         <summary>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>

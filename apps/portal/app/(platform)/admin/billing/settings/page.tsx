@@ -847,35 +847,7 @@ function AdminBillingSettingsBody() {
   }
 
   return (
-    <div className="stack compact-stack billing-admin-shell billing-p5-scope billing-p6-scope">
-      <div style={{ marginBottom: 2 }}>
-        <h2 style={{ margin: "0 0 4px", fontSize: "1.05rem", fontWeight: 700 }}>Company billing setup</h2>
-        <p className="muted" style={{ margin: 0, fontSize: 12, maxWidth: 720, lineHeight: 1.45 }}>
-          Pricing overrides, taxes, autopay, gateway, and invoice presentation for the company in the header. Use the workspace menu for registers and overview.
-        </p>
-        {tenantIdParam && tenants.length > 0 && !tenants.some((t) => t.id === tenantIdParam) ? (
-          <p className="muted" style={{ marginTop: 8, marginBottom: 0, fontSize: 13 }}>
-            The URL company id did not match a tenant — loaded <strong>{tenants.find((t) => t.id === effectiveTenantId)?.name || "first company"}</strong> instead.
-          </p>
-        ) : null}
-      </div>
-
-      <div className="row-actions" style={{ flexWrap: "wrap", gap: 6, marginTop: 6 }}>
-        <Link className="btn ghost" style={{ fontSize: 12, padding: "5px 10px" }} href={`/admin/billing${qp}`}>
-          ← Overview
-        </Link>
-        <Link
-          className="btn ghost"
-          style={{ fontSize: 12, padding: "5px 10px" }}
-          href={`/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: effectiveTenantId, [OPS_TAB_QUERY]: "invoices" })}`}
-        >
-          Invoices
-        </Link>
-        <Link className="btn ghost" style={{ fontSize: 12, padding: "5px 10px" }} href="/admin/billing/plans">
-          Plan catalog
-        </Link>
-      </div>
-
+    <div className="billing-ws-scope billing-p5-scope billing-p6-scope">
       {tenantsLoading ? <LoadingSkeleton rows={2} /> : null}
       {tenantsError ? <ErrorState message={tenantsError} /> : null}
 
