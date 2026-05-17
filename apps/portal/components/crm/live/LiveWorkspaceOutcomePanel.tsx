@@ -1,0 +1,217 @@
+"use client";
+
+import type { ReactNode } from "react";
+import { CalendarClock, CheckCheck } from "lucide-react";
+import { CRMCard } from "../CRMCard";
+import { CRMSection } from "../CRMSection";
+import { crm } from "../crmClasses";
+import { cn } from "../cn";
+import { STAGE_OPTIONS } from "../contact/contactFormatters";
+import type { CrmStage, LiveContact } from "./liveTypes";
+import { DISPOSITION_OPTIONS } from "./liveTypes";
+
+export function LiveWorkspaceOutcomePanel({
+  id,
+  contact,
+  disposition,
+  setDisposition,
+  outcomeNote,
+  setOutcomeNote,
+  followUpOption,
+  setFollowUpOption,
+  followUpCustom,
+  setFollowUpCustom,
+  nextStage,
+  setNextStage,
+  savingOutcome,
+  outcomeSaved,
+  outcomeError,
+  isPowerMode,
+  onSave,
+  disabled,
+}: {
+  id?: string;
+  contact: LiveContact | null;
+  disposition: string;
+  setDisposition: (v: string) => void;
+  outcomeNote: string;
+  setOutcomeNote: (v: string) => void;
+  followUpOption: "" | "today" | "tomorrow" | "nextweek" | "custom";
+  setFollowUpOption: (v: "" | "today" | "tomorrow" | "nextweek" | "custom") => void;
+  followUpCustom: string;
+  setFollowUpCustom: (v: string) => void;
+  nextStage: CrmStage | "";
+  setNextStage: (v: CrmStage | "") => void;
+  savingOutcome: boolean;
+  outcomeSaved: boolean;
+  outcomeError: string;
+  isPowerMode: boolean;
+  onSave: () => void;
+  disabled?: boolean;
+}) {
+  const stage = contact?.crmStage;
+
+  return (
+    <div id={id ?? "live-outcome-panel"} className="scroll-mt-24">
+    <CRMCard padding="md">
+      <CRMSection
+        title="Call outcome"
+        description="Disposition, follow-up, and optional stage advance."
+      >
+        <div className="space-y-4">
+          <div>
+            <p className={crm.label}>Disposition *</p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {DISPOSITION_OPTIONS.map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => setDisposition(d)}
+                  className={cn(
+                    "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                    disposition === d
+                      ? "border-crm-accent bg-crm-accent text-white"
+                      : "border-crm-border text-crm-muted hover:border-crm-accent/40",
+                  )}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <p className={crm.label}>Advance stage (optional)</p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <Chip active={nextStage === ""} onClick={() => setNextStage("")} disabled={disabled}>
+                No change
+              </Chip>
+              {STAGE_OPTIONS.map((s) => (
+                <Chip
+                  key={s.value}
+                  active={nextStage === s.value}
+                  onClick={() => setNextStage(s.value)}
+                  disabled={disabled}
+                >
+                  {s.label}
+                </Chip>
+              ))}
+            </div>
+            {nextStage && stage && nextStage !== stage ? (
+              <p className="mt-1 text-xs text-crm-accent">
+                Stage will change on save
+              </p>
+            ) : null}
+          </div>
+
+          <div>
+            <p className={crm.label}>Outcome note (optional)</p>
+            <textarea
+              value={outcomeNote}
+              onChange={(e) => setOutcomeNote(e.target.value)}
+              placeholder="Add a call outcome note…"
+              rows={3}
+              disabled={disabled}
+              className={cn(crm.input, "mt-2")}
+            />
+          </div>
+
+          <div>
+            <p className={cn(crm.label, "flex items-center gap-1")}>
+              <CalendarClock className="h-3 w-3" />
+              Follow-up (optional)
+            </p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {(["today", "tomorrow", "nextweek", "custom"] as const).map((opt) => (
+                <Chip
+                  key={opt}
+                  active={followUpOption === opt}
+                  onClick={() => setFollowUpOption(followUpOption === opt ? "" : opt)}
+                  disabled={disabled}
+                >
+                  {opt === "today"
+                    ? "Today"
+                    : opt === "tomorrow"
+                      ? "Tomorrow"
+                      : opt === "nextweek"
+                        ? "Next week"
+                        : "Custom"}
+                </Chip>
+              ))}
+            </div>
+            {followUpOption === "custom" ? (
+              <input
+                type="datetime-local"
+                value={followUpCustom}
+                onChange={(e) => setFollowUpCustom(e.target.value)}
+                disabled={disabled}
+                className={cn(crm.input, "mt-2")}
+              />
+            ) : null}
+          </div>
+
+          {outcomeError ? <p className="text-xs text-crm-danger">{outcomeError}</p> : null}
+          {outcomeSaved ? (
+            <p className="flex items-center gap-1.5 text-sm font-medium text-crm-success">
+              <CheckCheck className="h-4 w-4" />
+              Outcome saved — contact, tasks, and timeline updated.
+            </p>
+          ) : null}
+
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={!disposition || savingOutcome || disabled}
+            className={cn(crm.btnPrimary, "w-full")}
+          >
+            {savingOutcome
+              ? "Saving…"
+              : isPowerMode
+                ? "Save outcome & next lead →"
+                : "Save outcome"}
+          </button>
+          {!disposition ? (
+            <p className="text-center text-xs text-crm-muted">
+              Select a disposition to enable save
+              {isPowerMode ? " — then advances to next lead" : ""}
+            </p>
+          ) : null}
+          {isPowerMode && !savingOutcome ? (
+            <p className="text-center text-xs text-crm-muted">
+              Keyboard: <kbd className="rounded border border-crm-border bg-crm-surface-2 px-1 font-mono">O</kbd> to
+              save
+            </p>
+          ) : null}
+        </div>
+      </CRMSection>
+    </CRMCard>
+    </div>
+  );
+}
+
+function Chip({
+  children,
+  active,
+  onClick,
+  disabled,
+}: {
+  children: ReactNode;
+  active: boolean;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        "rounded-full border px-2.5 py-1 text-xs font-medium",
+        active ? "border-crm-accent bg-crm-accent/15 text-crm-accent" : "border-crm-border text-crm-muted",
+      )}
+    >
+      {children}
+    </button>
+  );
+}

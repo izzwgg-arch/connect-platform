@@ -29,4 +29,4 @@ export {
 } from "./queue";
 export * from "./contact";
 export * from "./campaign";
-export * from "./campaign";
+export * from "./live";
