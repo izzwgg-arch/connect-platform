@@ -14,6 +14,7 @@ import {
   validateCatalogBillingPlanForAssignment,
 } from "./billingAssignment";
 import { validateBillingFlatRateInput } from "./billingFlatRate";
+import { validateBillingQuantityOverridesInput } from "./billingQuantityOverrides";
 import { mergeTenantBillingSettingsMetadata } from "./billingTenantSettingsMetadata";
 import { getBillingSolaAdapter, storeSolaPaymentMethod } from "./solaGateway";
 import { invoiceReadyEmail } from "./emailTemplates";
@@ -638,6 +639,23 @@ export async function registerBillingRoutes(app: FastifyInstance) {
           })
           .nullable()
           .optional(),
+        billingQuantityOverrides: z
+          .object({
+            extensions: z
+              .object({ mode: z.enum(["auto", "manual"]), quantity: z.number().int().min(0).max(100_000).nullable() })
+              .optional(),
+            virtualExtensions: z
+              .object({ mode: z.enum(["auto", "manual"]), quantity: z.number().int().min(0).max(100_000).nullable() })
+              .optional(),
+            phoneNumbers: z
+              .object({ mode: z.enum(["auto", "manual"]), quantity: z.number().int().min(0).max(100_000).nullable() })
+              .optional(),
+            smsPackages: z
+              .object({ mode: z.enum(["auto", "manual"]), quantity: z.number().int().min(0).max(100_000).nullable() })
+              .optional(),
+          })
+          .nullable()
+          .optional(),
       })
       .merge(invoiceBrandingPutSchema)
       .parse(req.body || {});
@@ -659,19 +677,32 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       taxProviderId,
       billingPricingMode,
       billingFlatRate,
+      billingQuantityOverrides,
       ...pricing
     } = input as any;
     const pricingData = Object.fromEntries(Object.entries(pricing).filter(([, v]) => v !== undefined));
     let mergedMetadata: Record<string, unknown> | undefined;
     let pricingModeChangeFrom: ReturnType<typeof parseBillingPricingMode> | null = null;
     let flatRatePatch: ReturnType<typeof validateBillingFlatRateInput> | null = null;
+    let quantityOverridesPatch: ReturnType<typeof validateBillingQuantityOverridesInput> | null = null;
     if (billingFlatRate !== undefined) {
       flatRatePatch = validateBillingFlatRateInput(billingFlatRate);
       if (!flatRatePatch.ok) {
         return reply.code(400).send({ error: "invalid_billing_flat_rate", message: flatRatePatch.error });
       }
     }
-    if (taxProviderId !== undefined || billingPricingMode !== undefined || billingFlatRate !== undefined) {
+    if (billingQuantityOverrides !== undefined) {
+      quantityOverridesPatch = validateBillingQuantityOverridesInput(billingQuantityOverrides);
+      if (!quantityOverridesPatch.ok) {
+        return reply.code(400).send({ error: "invalid_billing_quantity_overrides", message: quantityOverridesPatch.error });
+      }
+    }
+    if (
+      taxProviderId !== undefined ||
+      billingPricingMode !== undefined ||
+      billingFlatRate !== undefined ||
+      billingQuantityOverrides !== undefined
+    ) {
       const cur = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId } });
       if (billingPricingMode !== undefined) {
         pricingModeChangeFrom = parseBillingPricingMode(cur?.metadata);
@@ -680,6 +711,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         ...(taxProviderId !== undefined ? { taxProviderId } : {}),
         ...(billingPricingMode !== undefined ? { billingPricingMode } : {}),
         ...(flatRatePatch?.ok ? { billingFlatRate: flatRatePatch.value } : {}),
+        ...(quantityOverridesPatch?.ok ? { billingQuantityOverrides: quantityOverridesPatch.value } : {}),
       });
     }
     const createUpdate = { ...pricingData, ...brandingPatch, ...(mergedMetadata !== undefined ? { metadata: mergedMetadata } : {}) };

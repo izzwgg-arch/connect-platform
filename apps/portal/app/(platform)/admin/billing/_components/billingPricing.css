@@ -194,6 +194,97 @@
   line-height: 1.45;
 }
 
+.billing-qty-override {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--billing-border, var(--border)) 65%, transparent);
+}
+
+.billing-qty-override__suggested {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--billing-muted, var(--text-dim));
+}
+
+.billing-qty-override__suggested-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 2px;
+  color: var(--billing-muted, var(--text-dim));
+}
+
+.billing-qty-override__modes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.billing-qty-override__mode {
+  border: 1px solid var(--billing-border, var(--border));
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  background: transparent;
+  color: var(--billing-muted, var(--text-dim));
+  cursor: pointer;
+}
+
+.billing-qty-override__mode.active {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--billing-border, var(--border)));
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text, #e8eaed);
+}
+
+.billing-qty-override__billing {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.billing-qty-override__input {
+  width: 100%;
+  max-width: 120px;
+  border: 1px solid var(--billing-border, var(--border));
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--billing-surface, var(--panel));
+  color: var(--text, #e8eaed);
+}
+
+.billing-qty-override__input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.billing-qty-override__hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--billing-muted, var(--text-dim));
+}
+
+.billing-item-card__sms-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--billing-muted, var(--text-dim));
+  cursor: pointer;
+}
+
 /* Billing items grid */
 .billing-items-grid {
   display: grid;

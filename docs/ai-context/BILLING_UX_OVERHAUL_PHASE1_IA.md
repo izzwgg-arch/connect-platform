@@ -299,6 +299,7 @@ Not pixel-perfect in Phase 1 — **patterns** to implement later:
 | **Phase 3** | **Admin company workspace** | Move/re-skin existing admin features into Summary / Plans & pricing / Tax & profile sections; reduce long settings page |
 | **Phase 3a (2026-05-17)** | **Settings → Plans & pricing** | **`AdminPricingWorkspace`**: billing profile strip, editable billing-item cards (auto qty for extensions/DIDs, SMS 0/1 via `smsBillingEnabled`), live monthly estimate, overrides table, sticky save bar, collapsed **Advanced**; virtual extensions **planned** (no stored field) |
 | **Phase 3c (2026-05-17)** | **Extensions flat monthly rate** | **`metadata.billingFlatRate`** + invoice engine single **EXTENSION** line; admin card + overrides row + **Flat rate** chip; **`PUT …/settings`** validation; no SOLA/payment/schema change |
+| **Phase 3d (2026-05-17)** | **Billing quantity overrides** | **`metadata.billingQuantityOverrides`** (auto/manual per extensions, virtual extensions, phone numbers, SMS); invoice engine + worker; pricing cards show suggested vs billing qty |
 | **Phase 3b (2026-05-17)** | **Invoices register** | Premium finance table (`billing-fin-*`), status chips, icon action menu, clickable rows, drawer hero + sections |
 | **Phase 4** | **Tenant billing redesign** | Overview, invoices, payments, settings consolidation, copy pass, remove admin patterns |
 | **Phase 5** | **Invoice / payment UX polish** | Side panels, steppers, action hierarchy, PDF/pay flows |

@@ -308,6 +308,146 @@ export function activeExtensionsFlatRateFromMetadata(metadata: unknown): Billing
   return cfg;
 }
 
+export type BillingQuantityOverrideKey = "extensions" | "virtualExtensions" | "phoneNumbers" | "smsPackages";
+
+export type BillingQuantityOverrideItem = {
+  mode: "auto" | "manual";
+  quantity: number | null;
+};
+
+export type BillingQuantityOverridesConfig = Partial<Record<BillingQuantityOverrideKey, BillingQuantityOverrideItem>>;
+
+const QTY_OVERRIDE_KEYS: BillingQuantityOverrideKey[] = [
+  "extensions",
+  "virtualExtensions",
+  "phoneNumbers",
+  "smsPackages",
+];
+
+export function parseBillingQuantityOverridesFromMetadata(metadata: unknown): BillingQuantityOverridesConfig | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const raw = (metadata as Record<string, unknown>).billingQuantityOverrides;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  const out: BillingQuantityOverridesConfig = {};
+  for (const key of QTY_OVERRIDE_KEYS) {
+    const item = o[key];
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const row = item as Record<string, unknown>;
+    out[key] = {
+      mode: row.mode === "manual" ? "manual" : "auto",
+      quantity:
+        row.quantity === null || row.quantity === undefined
+          ? null
+          : Math.max(0, Math.round(Number(row.quantity))),
+    };
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+export type PortalBillingSuggestedQuantities = {
+  extensions: number;
+  virtualExtensions: number;
+  phoneNumbersBillable: number;
+  phoneNumbersTotal: number;
+  phoneNumbersIncluded: number;
+  smsPackages: number;
+};
+
+export type PortalBillingResolvedQuantities = {
+  suggested: PortalBillingSuggestedQuantities;
+  billing: {
+    extensions: number;
+    virtualExtensions: number;
+    phoneNumbers: number;
+    smsPackages: number;
+  };
+  modes: Record<BillingQuantityOverrideKey, "auto" | "manual">;
+};
+
+export function resolveBillingQuantitiesForPortal(input: {
+  extensionCount: number;
+  phoneNumberCount: number;
+  additionalPhoneNumberCount: number;
+  smsEnabled: boolean;
+  firstPhoneNumberFree: boolean;
+  overrides: BillingQuantityOverridesConfig | null;
+}): PortalBillingResolvedQuantities {
+  const phoneNumbersIncluded = input.firstPhoneNumberFree === false ? 0 : 1;
+  const suggested: PortalBillingSuggestedQuantities = {
+    extensions: input.extensionCount,
+    virtualExtensions: 0,
+    phoneNumbersBillable: input.additionalPhoneNumberCount,
+    phoneNumbersTotal: input.phoneNumberCount,
+    phoneNumbersIncluded,
+    smsPackages: input.smsEnabled ? 1 : 0,
+  };
+  const resolve = (key: BillingQuantityOverrideKey, autoQty: number): { billing: number; mode: "auto" | "manual" } => {
+    const item = input.overrides?.[key];
+    if (item?.mode === "manual" && item.quantity != null) {
+      return { billing: Math.max(0, Math.round(item.quantity)), mode: "manual" };
+    }
+    return { billing: Math.max(0, Math.round(autoQty)), mode: "auto" };
+  };
+  const ext = resolve("extensions", suggested.extensions);
+  const virt = resolve("virtualExtensions", suggested.virtualExtensions);
+  const phone = resolve("phoneNumbers", suggested.phoneNumbersBillable);
+  const sms = resolve("smsPackages", suggested.smsPackages);
+  return {
+    suggested,
+    billing: {
+      extensions: ext.billing,
+      virtualExtensions: virt.billing,
+      phoneNumbers: phone.billing,
+      smsPackages: sms.billing,
+    },
+    modes: {
+      extensions: ext.mode,
+      virtualExtensions: virt.mode,
+      phoneNumbers: phone.mode,
+      smsPackages: sms.mode,
+    },
+  };
+}
+
+export function defaultQuantityOverrideDraft(
+  metadata: unknown,
+  suggested: PortalBillingSuggestedQuantities,
+): Record<BillingQuantityOverrideKey, { mode: "auto" | "manual"; quantity: number }> {
+  const stored = parseBillingQuantityOverridesFromMetadata(metadata);
+  const out = {} as Record<BillingQuantityOverrideKey, { mode: "auto" | "manual"; quantity: number }>;
+  for (const key of QTY_OVERRIDE_KEYS) {
+    const item = stored?.[key];
+    const autoQty =
+      key === "extensions"
+        ? suggested.extensions
+        : key === "virtualExtensions"
+          ? suggested.virtualExtensions
+          : key === "phoneNumbers"
+            ? suggested.phoneNumbersBillable
+            : suggested.smsPackages;
+    out[key] = {
+      mode: item?.mode === "manual" ? "manual" : "auto",
+      quantity: item?.mode === "manual" && item.quantity != null ? item.quantity : autoQty,
+    };
+  }
+  return out;
+}
+
+export function buildBillingQuantityOverridesPayload(
+  draft: Record<BillingQuantityOverrideKey, { mode: "auto" | "manual"; quantity: number }>,
+): BillingQuantityOverridesConfig {
+  const payload: BillingQuantityOverridesConfig = {};
+  for (const key of QTY_OVERRIDE_KEYS) {
+    const row = draft[key];
+    payload[key] = {
+      mode: row.mode,
+      quantity: row.mode === "manual" ? Math.max(0, Math.round(row.quantity)) : null,
+    };
+  }
+  return payload;
+}
+
 /** Operational monthly estimate for admin pricing workspace (display only — not invoice math). */
 export type TenantBillingEstimateLine = {
   key: string;
@@ -328,6 +468,11 @@ export function computeTenantMonthlyEstimate(input: {
   extensionPriceCents: number;
   additionalPhoneNumberPriceCents: number;
   smsPriceCents: number;
+  /** Billing quantities (after manual overrides). */
+  billingExtensionCount?: number;
+  billingVirtualExtensionCount?: number;
+  billingPhoneNumberCount?: number;
+  billingSmsPackageCount?: number;
   /** When set, extensions bill as one flat monthly line (qty 1). */
   extensionsFlatRateCents?: number | null;
   creditsCents?: number;
@@ -341,40 +486,57 @@ export function computeTenantMonthlyEstimate(input: {
   taxEstimateCents: number;
   totalCents: number;
 } {
+  const extQty = input.billingExtensionCount ?? input.extensionCount;
+  const virtQty = input.billingVirtualExtensionCount ?? 0;
+  const phoneQty = input.billingPhoneNumberCount ?? input.additionalPhoneNumberCount;
+  const smsQty = input.billingSmsPackageCount ?? (input.smsEnabled ? 1 : 0);
+
   const lines: TenantBillingEstimateLine[] = [];
-  if (input.extensionCount > 0) {
+  if (extQty > 0) {
     const flat = input.extensionsFlatRateCents != null && input.extensionsFlatRateCents > 0;
-    const sub = flat ? input.extensionsFlatRateCents! : input.extensionCount * input.extensionPriceCents;
+    const sub = flat ? input.extensionsFlatRateCents! : extQty * input.extensionPriceCents;
     lines.push({
       key: "extensions",
       label: flat ? "Extensions (flat monthly rate)" : "Extensions",
-      quantity: flat ? 1 : input.extensionCount,
+      quantity: flat ? 1 : extQty,
       unitCents: flat ? input.extensionsFlatRateCents! : input.extensionPriceCents,
       subtotalCents: sub,
-      autoQuantity: true,
-      note: flat ? `Covers ${input.extensionCount} active extension${input.extensionCount === 1 ? "" : "s"}` : undefined,
+      autoQuantity: false,
+      note: flat
+        ? `Billing qty ${extQty} extension${extQty === 1 ? "" : "s"} · flat monthly`
+        : undefined,
     });
   }
-  if (input.additionalPhoneNumberCount > 0) {
-    const sub = input.additionalPhoneNumberCount * input.additionalPhoneNumberPriceCents;
+  if (virtQty > 0) {
+    lines.push({
+      key: "virtual_extensions",
+      label: "Virtual extensions",
+      quantity: virtQty,
+      unitCents: input.extensionPriceCents,
+      subtotalCents: virtQty * input.extensionPriceCents,
+      autoQuantity: false,
+    });
+  }
+  if (phoneQty > 0) {
+    const sub = phoneQty * input.additionalPhoneNumberPriceCents;
     lines.push({
       key: "phone_numbers",
       label: "Phone numbers",
-      quantity: input.additionalPhoneNumberCount,
+      quantity: phoneQty,
       unitCents: input.additionalPhoneNumberPriceCents,
       subtotalCents: sub,
-      autoQuantity: true,
+      autoQuantity: false,
     });
   }
-  if (input.smsEnabled) {
+  if (smsQty > 0) {
     lines.push({
       key: "sms",
       label: "SMS package",
-      quantity: 1,
+      quantity: smsQty,
       unitCents: input.smsPriceCents,
-      subtotalCents: input.smsPriceCents,
-      autoQuantity: true,
-      note: "Bill SMS package enabled",
+      subtotalCents: smsQty * input.smsPriceCents,
+      autoQuantity: false,
+      note: "Billable SMS packages",
     });
   } else {
     lines.push({
@@ -383,9 +545,9 @@ export function computeTenantMonthlyEstimate(input: {
       quantity: 0,
       unitCents: input.smsPriceCents,
       subtotalCents: 0,
-      autoQuantity: true,
+      autoQuantity: false,
       omitted: true,
-      note: "SMS billing off",
+      note: input.smsEnabled ? "Manual billing quantity is 0" : "SMS billing off",
     });
   }
 

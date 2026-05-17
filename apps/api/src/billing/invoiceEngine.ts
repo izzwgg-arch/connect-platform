@@ -7,6 +7,7 @@ import { resolveTaxProvider } from "./taxProvider";
 import type { BillingPricingResolution } from "./billingPricingResolution";
 import { activeBillingPlanRowForPeriod, parseBillingPricingMode, resolveTenantBillingPricing } from "./billingPricingResolution";
 import { buildExtensionInvoiceLine } from "./billingFlatRate";
+import { resolveBillingQuantities, type BillingResolvedQuantities } from "./billingQuantityOverrides";
 import { buildPricingPreviewExplanation, type PricingPreviewExplanation } from "./billingPricingExplanation";
 
 export type BillingInvoicePreview = {
@@ -16,6 +17,8 @@ export type BillingInvoicePreview = {
   periodEnd: Date;
   dueDate: Date;
   usage: BillingUsageSnapshot;
+  /** Suggested vs billing quantities (manual overrides from metadata). */
+  billingQuantities?: BillingResolvedQuantities;
   lineItems: Array<{
     type: string;
     description: string;
@@ -123,6 +126,12 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
     smsBillingEnabled: settings.smsBillingEnabled,
   });
 
+  const billingQuantities = resolveBillingQuantities({
+    usage,
+    metadata: settings.metadata,
+    firstPhoneNumberFree: pricingResolution.firstPhoneNumberFree,
+  });
+
   const extensionPrice = pricingResolution.extensionPriceCents;
   const numberPrice = pricingResolution.additionalPhoneNumberPriceCents;
   const smsPrice = pricingResolution.smsPriceCents;
@@ -131,29 +140,58 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
   const lineItems: BillingInvoicePreview["lineItems"] = [];
   const extensionLine = buildExtensionInvoiceLine({
     usage,
+    extensionBillableCount: billingQuantities.billing.extensions,
     extensionPriceCents: extensionPrice,
     metadata: settings.metadata,
   });
   if (extensionLine) lineItems.push(extensionLine);
-  if (usage.additionalPhoneNumberCount > 0) {
+  if (billingQuantities.billing.virtualExtensions > 0) {
+    const qty = billingQuantities.billing.virtualExtensions;
+    lineItems.push({
+      type: "EXTENSION",
+      description: "Virtual extensions",
+      quantity: qty,
+      unitPriceCents: extensionPrice,
+      amountCents: qty * extensionPrice,
+      taxable: true,
+      metadata: {
+        lineItemKind: "virtual_extensions",
+        suggestedVirtualExtensionCount: billingQuantities.suggested.virtualExtensions,
+        quantityMode: billingQuantities.modes.virtualExtensions,
+      },
+    });
+  }
+  if (billingQuantities.billing.phoneNumbers > 0) {
+    const qty = billingQuantities.billing.phoneNumbers;
     lineItems.push({
       type: "PHONE_NUMBER",
       description: effectiveFirstFree === false ? "Tenant phone numbers" : "Additional phone numbers",
-      quantity: usage.additionalPhoneNumberCount,
+      quantity: qty,
       unitPriceCents: numberPrice,
-      amountCents: usage.additionalPhoneNumberCount * numberPrice,
+      amountCents: qty * numberPrice,
       taxable: true,
-      metadata: { phoneNumberIds: usage.phoneNumberIds, firstFree: effectiveFirstFree },
+      metadata: {
+        phoneNumberIds: usage.phoneNumberIds,
+        firstFree: effectiveFirstFree,
+        suggestedBillableCount: billingQuantities.suggested.phoneNumbersBillable,
+        phoneNumbersTotal: billingQuantities.suggested.phoneNumbersTotal,
+        quantityMode: billingQuantities.modes.phoneNumbers,
+      },
     });
   }
-  if (usage.smsEnabled) {
+  if (billingQuantities.billing.smsPackages > 0) {
+    const qty = billingQuantities.billing.smsPackages;
     lineItems.push({
       type: "SMS_PACKAGE",
       description: "SMS package",
-      quantity: 1,
+      quantity: qty,
       unitPriceCents: smsPrice,
-      amountCents: smsPrice,
+      amountCents: qty * smsPrice,
       taxable: true,
+      metadata: {
+        suggestedSmsPackages: billingQuantities.suggested.smsPackages,
+        quantityMode: billingQuantities.modes.smsPackages,
+      },
     });
   }
   if (Number(settings.creditsCents || 0) > 0) {
@@ -196,7 +234,7 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
     taxProfile: settings.taxProfile || null,
     taxProfileId: settings.taxProfileId || null,
     taxableSubtotalCents,
-    extensionCount: usage.extensionCount,
+    extensionCount: billingQuantities.billing.extensions,
   });
   for (const line of taxResult.lines) {
     lineItems.push({
@@ -241,6 +279,7 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
     periodEnd: bounds.periodEnd,
     dueDate,
     usage,
+    billingQuantities,
     lineItems,
     subtotalCents,
     taxCents,

@@ -53,6 +53,7 @@ Shell: **`AdminBillingShell`** + CSS scopes **`billing-ws-scope`**, **`billing-p
 | JWT role gates for those routes | `apps/api/src/billing/billingAuth.ts` |
 | Invoice preview / create (+ discount line, pricing modes + **preview explanations**) | `apps/api/src/billing/invoiceEngine.ts` |
 | Tenant extensions **flat monthly rate** (metadata; invoice line builder) | `apps/api/src/billing/billingFlatRate.ts` |
+| Tenant **billing quantity overrides** (auto vs manual per line) | `apps/api/src/billing/billingQuantityOverrides.ts` |
 | Pricing preview explanations (derived only; **no totals math**) | `apps/api/src/billing/billingPricingExplanation.ts` |
 | Tenant pricing mode resolver + reset payload helpers | `apps/api/src/billing/billingPricingResolution.ts` |
 | Assembler for **pricing-diagnostics** (warnings + differsFromPlan + reset preview + **`pricingState`**) | `apps/api/src/billing/billingPricingDiagnostics.ts` |
@@ -147,20 +148,35 @@ Negotiated **one monthly charge for all billable extensions** (e.g. $500/mo for 
 
 **Explicitly unchanged:** SOLA charge execution, payment execution, Cardknox/iFields, worker dunning logic (worker rebuild only if it bundles updated `invoiceEngine`).
 
+## Tenant billing quantity overrides (`TenantBillingSettings.metadata.billingQuantityOverrides`)
+
+Per-line **suggested** (from `calculateTenantBillingUsage`) vs **billing** quantity (what invoices use).
+
+| Key | Auto suggested | Manual billing quantity means |
+|-----|----------------|------------------------------|
+| `extensions` | Active billable extensions | Billable extension count (flat rate still emits qty `1` line; E911/tax use billing extension count) |
+| `virtualExtensions` | `0` (not tracked in system) | Billable virtual extension count — invoice line type **`EXTENSION`** with description **Virtual extensions** and `metadata.lineItemKind: "virtual_extensions"` (no Prisma enum migration) |
+| `phoneNumbers` | Billable DIDs after first-free | Billable phone number count (manual `4` bills 4 even if system suggests `2`) |
+| `smsPackages` | `0` or `1` from SMS flags | Billable SMS package count |
+
+Shape: `{ extensions?: { mode: "auto"|"manual", quantity: number|null }, … }`. **`PUT …/settings`** accepts **`billingQuantityOverrides`**; **`400 invalid_billing_quantity_overrides`** on invalid manual qty. Merge preserves **`billingFlatRate`**, **`billingPricingMode`**, etc.
+
+**Worker / preview / create:** `resolveBillingQuantities` in `invoiceEngine.ts` before line builders — same path for monthly worker (`createBillingInvoice` → preview).
+
+**Portal:** Plans & pricing cards show **Suggested**, **Auto/Manual**, editable **Billing quantity**, chips **Auto** / **Manual override**; live estimate uses billing quantities.
+
 **Portal:** **`/admin/billing/settings?billingSection=plans-pricing`** — **`AdminPricingWorkspace`** (2026-05-17, operational redesign): compact **billing profile** strip (plan, pricing mode, account standing, estimated monthly total, autopay); **billing items grid** with per-line quantity + unit price + monthly subtotal; **live monthly estimate** panel; compact **price overrides** table; **Advanced** (`<details>`, collapsed) for diagnostics + reset. **Change plan** via header + embedded **`AdminCurrentBillingPlanAssignCard`**. Sticky **Save pricing** bar when dirty. **Taxes & invoices** tab: **`AdminTenantBillingCycleForm`** + invoice branding.
 
-**Quantity sources (real — do not fake):**
+**Quantity sources:**
 
-| Line item | Quantity source | Operator control |
-|-----------|-----------------|------------------|
-| Extensions | `calculateTenantBillingUsage` — active billable `Extension` rows | **Auto-calculated** (read-only stepper); manage extensions in workspace |
-| Phone numbers | Active `PhoneNumber` rows; `additionalPhoneNumberCount` when first number free | **Auto-calculated** |
-| SMS package | `0` or `1` from `smsBillingEnabled` / tenant SMS flags | **0/1 stepper** → saves `smsBillingEnabled` on tenant settings |
-| Virtual extensions | **Not a separate invoice line** | Card shows **planned** — billed at extension rate if ever split |
+| Line item | Suggested (auto) | Operator control |
+|-----------|------------------|------------------|
+| Extensions | `calculateTenantBillingUsage` — active billable extensions | **Auto** or **Manual** billing quantity (`metadata.billingQuantityOverrides`) |
+| Phone numbers | Active DIDs; billable = total minus first-free when enabled | **Auto** or **Manual** billable phone count |
+| SMS package | `0` or `1` from SMS flags / `smsBillingEnabled` | **Auto** or **Manual** package count; SMS enabled toggle still affects auto suggestion |
+| Virtual extensions | `0` (not tracked in system) | **Manual** quantity only — separate invoice line at extension unit price |
 
-Monthly estimate uses **`computeTenantMonthlyEstimate`** in **`billingUi.ts`** (display math only; taxes scaled from current invoice preview). **No invoice engine, worker, or Prisma billing calculation changes** for this pass.
-
-Stored in **`metadata` JSON only** (no migration). Worker/SOLA/charge paths unchanged for this rollout.
+Monthly estimate uses **`computeTenantMonthlyEstimate`** with **billing** quantities (aligned with invoice engine when overrides saved).
 
 ## Customer billing portal — page inventory
 

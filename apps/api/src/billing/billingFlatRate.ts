@@ -93,18 +93,19 @@ export function mergeBillingFlatRateIntoMetadata(
 
 export function buildExtensionInvoiceLine(input: {
   usage: BillingUsageSnapshot;
+  extensionBillableCount: number;
   extensionPriceCents: number;
   metadata: unknown;
 }): ExtensionInvoiceLine | null {
-  const { usage, extensionPriceCents, metadata } = input;
-  if (usage.extensionCount <= 0) return null;
+  const { usage, extensionBillableCount, extensionPriceCents, metadata } = input;
+  if (extensionBillableCount <= 0) return null;
 
   const flat = activeExtensionsFlatRate(metadata);
   if (flat) {
     const baseLabel = flat.label?.trim() || "Extensions flat monthly rate";
     const description =
-      usage.extensionCount > 0
-        ? `${baseLabel} (${usage.extensionCount} active extension${usage.extensionCount === 1 ? "" : "s"})`
+      extensionBillableCount > 0
+        ? `${baseLabel} (${extensionBillableCount} billing extension${extensionBillableCount === 1 ? "" : "s"}; ${usage.extensionCount} active)`
         : baseLabel;
     return {
       type: "EXTENSION",
@@ -117,7 +118,8 @@ export function buildExtensionInvoiceLine(input: {
         flatRate: true,
         flatRateAppliesTo: "extensions",
         flatRateAmountCents: flat.amountCents,
-        extensionCount: usage.extensionCount,
+        extensionCount: extensionBillableCount,
+        suggestedExtensionCount: usage.extensionCount,
         extensionIds: usage.extensionIds,
       },
     };
@@ -126,10 +128,13 @@ export function buildExtensionInvoiceLine(input: {
   return {
     type: "EXTENSION",
     description: "Billable extensions",
-    quantity: usage.extensionCount,
+    quantity: extensionBillableCount,
     unitPriceCents: extensionPriceCents,
-    amountCents: usage.extensionCount * extensionPriceCents,
+    amountCents: extensionBillableCount * extensionPriceCents,
     taxable: true,
-    metadata: { extensionIds: usage.extensionIds },
+    metadata: {
+      extensionIds: usage.extensionIds,
+      suggestedExtensionCount: usage.extensionCount,
+    },
   };
 }

@@ -46,6 +46,7 @@ test("buildExtensionInvoiceLine: flat rate uses qty 1 and flat amount", () => {
   };
   const line = buildExtensionInvoiceLine({
     usage,
+    extensionBillableCount: 32,
     extensionPriceCents: 3000,
     metadata: { billingFlatRate: { enabled: true, amountCents: 50000, appliesTo: "extensions" } },
   });
@@ -69,6 +70,7 @@ test("buildExtensionInvoiceLine: per-extension when flat rate off", () => {
   };
   const line = buildExtensionInvoiceLine({
     usage,
+    extensionBillableCount: 2,
     extensionPriceCents: 3000,
     metadata: {},
   });

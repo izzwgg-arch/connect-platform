@@ -4,6 +4,29 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-17 — Billing: tenant billing quantity overrides (auto vs manual)
+
+**Task:** Let SUPER_ADMIN override billable quantities per tenant (extensions, virtual extensions, phone numbers, SMS) while keeping system counts as suggestions.  
+**Risk:** High (invoice line quantities; metadata only).
+
+### Shipped
+
+- **`billingQuantityOverrides.ts`**: parse/validate/merge metadata; **`resolveBillingQuantities`** for preview/create.
+- **`invoiceEngine.ts`**: all service lines use billing quantities; virtual extensions as **`EXTENSION`** + `metadata.lineItemKind: "virtual_extensions"`; E911 uses billing extension count.
+- **`routes.ts`**: **`PUT …/settings`** accepts **`billingQuantityOverrides`**; **`400 invalid_billing_quantity_overrides`**.
+- **Portal `AdminPricingWorkspace`**: suggested + Auto/Manual + billing qty per card; live estimate; overrides table rows for manual qty.
+- **Tests:** `billingQuantityOverrides.test.ts`; invoice engine cases in main test block — **217/217** `test:billing` pass.
+
+### Explicitly NOT changed
+
+- SOLA/payment execution, Prisma schema, `BillingLineItemType` enum (virtual line uses **`EXTENSION`** + metadata).
+
+### Deploy
+
+- **API**, **portal**, **worker** (worker imports `invoiceEngine`).
+
+---
+
 ## 2026-05-17 — Billing: tenant extensions flat monthly rate (invoice engine + admin UI)
 
 **Task:** Allow SUPER_ADMIN to set a tenant-specific **flat monthly rate for all extensions** (real billing, not display-only).  

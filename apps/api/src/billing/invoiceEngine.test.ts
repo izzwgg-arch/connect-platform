@@ -454,6 +454,34 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   assert.equal(perExt?.unitPriceCents, 3000);
   assert.equal(perExt?.amountCents, 3000);
 
+  db.phoneNumber.findMany = async () => [{ id: "p1" }, { id: "p2" }, { id: "p3" }];
+  state.settings.metadata = {
+    billingQuantityOverrides: {
+      extensions: { mode: "manual", quantity: 5 },
+      phoneNumbers: { mode: "manual", quantity: 4 },
+      smsPackages: { mode: "manual", quantity: 2 },
+      virtualExtensions: { mode: "manual", quantity: 2 },
+    },
+  };
+  state.settings.taxEnabled = true;
+  state.settings.taxProfile = fakeTaxProfile;
+  state.settings.taxProfileId = "tp1";
+  const qtyPreview = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
+  const extLines = qtyPreview.lineItems.filter((l) => l.type === "EXTENSION");
+  const physExt = extLines.find((l) => !(l.metadata as Record<string, unknown>)?.lineItemKind);
+  const virtExt = extLines.find((l) => (l.metadata as Record<string, unknown>)?.lineItemKind === "virtual_extensions");
+  assert.equal(physExt?.quantity, 5);
+  assert.equal(virtExt?.quantity, 2);
+  assert.equal(virtExt?.description, "Virtual extensions");
+  const phoneLine = qtyPreview.lineItems.find((l) => l.type === "PHONE_NUMBER");
+  assert.equal(phoneLine?.quantity, 4);
+  const smsLine = qtyPreview.lineItems.find((l) => l.type === "SMS_PACKAGE");
+  assert.equal(smsLine?.quantity, 2);
+  const e911Manual = qtyPreview.lineItems.find((l) => l.type === "E911_FEE");
+  assert.equal(e911Manual?.quantity, 5);
+
+  db.phoneNumber.findMany = async () => [];
+
   // Reset state
   state.settings.extensionPriceCents = 3000;
   state.settings.billingPlan = null;

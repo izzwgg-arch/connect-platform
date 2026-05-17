@@ -1,5 +1,7 @@
 import type { BillingFlatRateConfig } from "./billingFlatRate";
 import { mergeBillingFlatRateIntoMetadata } from "./billingFlatRate";
+import type { BillingQuantityOverridesConfig } from "./billingQuantityOverrides";
+import { mergeBillingQuantityOverridesIntoMetadata } from "./billingQuantityOverrides";
 import { BILLING_PRICING_MODE_METADATA_KEY } from "./billingPricingResolution";
 
 export type TenantBillingMetaPatchInput = {
@@ -8,12 +10,14 @@ export type TenantBillingMetaPatchInput = {
   billingPricingMode?: "catalog" | "custom" | null;
   /** Omit = leave flat rate untouched; null = remove */
   billingFlatRate?: BillingFlatRateConfig | null;
+  /** Omit = leave quantity overrides untouched; null = remove */
+  billingQuantityOverrides?: BillingQuantityOverridesConfig | null;
 };
 /** Same merge semantics as `PUT /admin/billing/tenants/:tenantId/settings` for audit tests. */
 export function mergeTenantBillingSettingsMetadata(prev: unknown, input: TenantBillingMetaPatchInput): Record<string, unknown> {
   const prevMeta =
     prev && typeof prev === "object" && !Array.isArray(prev) ? { ...(prev as Record<string, unknown>) } : {};
-  const merged: Record<string, unknown> = { ...prevMeta };
+  let merged: Record<string, unknown> = { ...prevMeta };
   if (input.taxProviderId !== undefined) {
     merged.taxProviderId = input.taxProviderId;
   }
@@ -25,7 +29,10 @@ export function mergeTenantBillingSettingsMetadata(prev: unknown, input: TenantB
     }
   }
   if (input.billingFlatRate !== undefined) {
-    return mergeBillingFlatRateIntoMetadata(merged, input.billingFlatRate);
+    merged = mergeBillingFlatRateIntoMetadata(merged, input.billingFlatRate);
+  }
+  if (input.billingQuantityOverrides !== undefined) {
+    merged = mergeBillingQuantityOverridesIntoMetadata(merged, input.billingQuantityOverrides);
   }
   return merged;
 }

@@ -8,14 +8,18 @@ import { BillingActionPanel } from "../../../../../components/billing/BillingAct
 import {
   activeExtensionsFlatRateFromMetadata,
   adminTenantStandingHeadline,
+  buildBillingQuantityOverridesPayload,
   computeTenantMonthlyEstimate,
+  defaultQuantityOverrideDraft,
   dollars,
   formatDateTime,
   humanizePricingStateMode,
   humanizeStoredPricingMode,
   parseBillingFlatRateFromMetadata,
   previewServiceSubtotalCents,
+  resolveBillingQuantitiesForPortal,
   worstNonTerminalInvoiceStatus,
+  type BillingQuantityOverrideKey,
 } from "../../../../../lib/billingUi";
 import type { TenantDetail } from "./tenantBillingConfigForms";
 import {
@@ -64,6 +68,7 @@ type DraftPricing = {
   smsBillingEnabled: boolean;
   flatRateEnabled: boolean;
   flatRateAmountCents: number;
+  quantityOverrides: Record<BillingQuantityOverrideKey, { mode: "auto" | "manual"; quantity: number }>;
 };
 
 function toDollars(cents: number | undefined | null) {
@@ -83,18 +88,93 @@ function badgeFromFieldBadges(key: string, badges: Record<string, string> | unde
 
 function draftFromDetail(detail: TenantDetail, catalogLocked: boolean): DraftPricing {
   const settings = detail.settings || {};
+  const usage = detail.usage || {};
   const pr = detail.preview?.pricingResolution as Record<string, unknown> | undefined;
   const flat = parseBillingFlatRateFromMetadata(settings.metadata);
+  const firstPhoneNumberFree =
+    catalogLocked && pr ? pr.firstPhoneNumberFree !== false : settings.firstPhoneNumberFree !== false;
+  const smsBillingEnabled = Boolean(usage.smsEnabled ?? settings.smsBillingEnabled);
+  const suggested = {
+    extensions: Number(usage.extensionCount || 0),
+    virtualExtensions: 0,
+    phoneNumbersBillable: Number(
+      usage.additionalPhoneNumberCount ??
+        Math.max(0, Number(usage.phoneNumberCount || 0) - (firstPhoneNumberFree ? 1 : 0)),
+    ),
+    phoneNumbersTotal: Number(usage.phoneNumberCount || 0),
+    phoneNumbersIncluded: firstPhoneNumberFree ? 1 : 0,
+    smsPackages: smsBillingEnabled ? 1 : 0,
+  };
   return {
     extensionPriceCents: Number(catalogLocked && pr ? pr.extensionPriceCents : settings.extensionPriceCents) || 0,
     additionalPhoneNumberPriceCents:
       Number(catalogLocked && pr ? pr.additionalPhoneNumberPriceCents : settings.additionalPhoneNumberPriceCents) || 0,
     smsPriceCents: Number(catalogLocked && pr ? pr.smsPriceCents : settings.smsPriceCents) || 0,
-    firstPhoneNumberFree: catalogLocked && pr ? pr.firstPhoneNumberFree !== false : settings.firstPhoneNumberFree !== false,
-    smsBillingEnabled: Boolean(detail.usage?.smsEnabled ?? settings.smsBillingEnabled),
+    firstPhoneNumberFree,
+    smsBillingEnabled,
     flatRateEnabled: flat?.enabled === true,
     flatRateAmountCents: flat?.amountCents ?? 0,
+    quantityOverrides: defaultQuantityOverrideDraft(settings.metadata, suggested),
   };
+}
+
+function BillingQuantityOverrideControl({
+  suggestedLabel,
+  billingQuantity,
+  mode,
+  onModeChange,
+  onQuantityChange,
+  testId,
+}: {
+  suggestedLabel: string;
+  billingQuantity: number;
+  mode: "auto" | "manual";
+  onModeChange: (mode: "auto" | "manual") => void;
+  onQuantityChange: (qty: number) => void;
+  testId?: string;
+}) {
+  return (
+    <div className="billing-qty-override" data-testid={testId}>
+      <p className="billing-qty-override__suggested">
+        <span className="billing-qty-override__suggested-label">Suggested</span>
+        {suggestedLabel}
+      </p>
+      <div className="billing-qty-override__modes" role="radiogroup" aria-label="Quantity mode">
+        <button
+          type="button"
+          className={`billing-qty-override__mode${mode === "auto" ? " active" : ""}`}
+          onClick={() => onModeChange("auto")}
+        >
+          Auto
+        </button>
+        <button
+          type="button"
+          className={`billing-qty-override__mode${mode === "manual" ? " active" : ""}`}
+          onClick={() => onModeChange("manual")}
+        >
+          Manual
+        </button>
+        <span className={`billing-pricing-rate__chip${mode === "manual" ? " custom" : ""}`}>
+          {mode === "manual" ? "Manual override" : "Auto"}
+        </span>
+      </div>
+      <label className="billing-qty-override__billing">
+        <span className="billing-item-card__field-label">Billing quantity</span>
+        <input
+          type="number"
+          min={0}
+          max={100000}
+          className="billing-qty-override__input"
+          disabled={mode === "auto"}
+          value={billingQuantity}
+          onChange={(e) => onQuantityChange(Math.max(0, Math.min(100000, Math.round(Number(e.target.value) || 0))))}
+        />
+      </label>
+      <p className="billing-qty-override__hint">
+        Auto uses active resources. Manual uses your entered billing quantity.
+      </p>
+    </div>
+  );
 }
 
 function QuantityStepper({
@@ -186,17 +266,50 @@ export function AdminPricingWorkspace({
   const extensionCount = Number(usage.extensionCount || 0);
   const additionalPhoneCount = Number(usage.additionalPhoneNumberCount || 0);
   const phoneNumberCount = Number(usage.phoneNumberCount || 0);
-  const smsQty = draft.smsBillingEnabled ? 1 : 0;
+
+  const resolvedQuantities = useMemo(
+    () =>
+      resolveBillingQuantitiesForPortal({
+        extensionCount,
+        phoneNumberCount,
+        additionalPhoneNumberCount: additionalPhoneCount,
+        smsEnabled: draft.smsBillingEnabled,
+        firstPhoneNumberFree: draft.firstPhoneNumberFree,
+        overrides: buildBillingQuantityOverridesPayload(draft.quantityOverrides),
+      }),
+    [
+      extensionCount,
+      phoneNumberCount,
+      additionalPhoneCount,
+      draft.smsBillingEnabled,
+      draft.firstPhoneNumberFree,
+      draft.quantityOverrides,
+    ],
+  );
+
+  const billingExtensionCount = resolvedQuantities.billing.extensions;
+  const billingPhoneCount = resolvedQuantities.billing.phoneNumbers;
+  const billingSmsCount = resolvedQuantities.billing.smsPackages;
+  const billingVirtualCount = resolvedQuantities.billing.virtualExtensions;
 
   const extensionsFlatActive =
-    draft.flatRateEnabled && draft.flatRateAmountCents > 0 && extensionCount > 0;
+    draft.flatRateEnabled && draft.flatRateAmountCents > 0 && billingExtensionCount > 0;
+
+  const quantityOverridesDirty = useMemo(() => {
+    const keys: BillingQuantityOverrideKey[] = ["extensions", "virtualExtensions", "phoneNumbers", "smsPackages"];
+    return keys.some((k) => {
+      const a = draft.quantityOverrides[k];
+      const b = savedDraft.quantityOverrides[k];
+      return a.mode !== b.mode || a.quantity !== b.quantity;
+    });
+  }, [draft.quantityOverrides, savedDraft.quantityOverrides]);
 
   const isDirty = useMemo(() => {
     const flatDirty =
       draft.flatRateEnabled !== savedDraft.flatRateEnabled ||
       draft.flatRateAmountCents !== savedDraft.flatRateAmountCents;
     if (catalogLocked) {
-      return draft.smsBillingEnabled !== savedDraft.smsBillingEnabled || flatDirty;
+      return draft.smsBillingEnabled !== savedDraft.smsBillingEnabled || flatDirty || quantityOverridesDirty;
     }
     return (
       draft.extensionPriceCents !== savedDraft.extensionPriceCents ||
@@ -204,26 +317,41 @@ export function AdminPricingWorkspace({
       draft.smsPriceCents !== savedDraft.smsPriceCents ||
       draft.firstPhoneNumberFree !== savedDraft.firstPhoneNumberFree ||
       draft.smsBillingEnabled !== savedDraft.smsBillingEnabled ||
-      flatDirty
+      flatDirty ||
+      quantityOverridesDirty
     );
-  }, [draft, savedDraft, catalogLocked]);
+  }, [draft, savedDraft, catalogLocked, quantityOverridesDirty]);
 
   const estimate = useMemo(() => {
-    const addPhoneQty = draft.firstPhoneNumberFree === false ? phoneNumberCount : additionalPhoneCount;
     return computeTenantMonthlyEstimate({
       extensionCount,
-      additionalPhoneNumberCount: addPhoneQty,
+      additionalPhoneNumberCount: additionalPhoneCount,
       smsEnabled: draft.smsBillingEnabled,
       extensionPriceCents: draft.extensionPriceCents,
       additionalPhoneNumberPriceCents: draft.additionalPhoneNumberPriceCents,
       smsPriceCents: draft.smsPriceCents,
+      billingExtensionCount,
+      billingVirtualExtensionCount: billingVirtualCount,
+      billingPhoneNumberCount: billingPhoneCount,
+      billingSmsPackageCount: billingSmsCount,
       extensionsFlatRateCents: extensionsFlatActive ? draft.flatRateAmountCents : null,
       creditsCents: Number(settings.creditsCents || 0),
       discountPercent: Number(settings.discountPercent || 0),
       previewServiceSubtotalCents: previewServiceSubtotalCents(preview),
       previewTaxCents: Number(preview.taxCents || 0),
     });
-  }, [draft, extensionCount, additionalPhoneCount, phoneNumberCount, settings, preview, extensionsFlatActive]);
+  }, [
+    draft,
+    extensionCount,
+    additionalPhoneCount,
+    settings,
+    preview,
+    extensionsFlatActive,
+    billingExtensionCount,
+    billingVirtualCount,
+    billingPhoneCount,
+    billingSmsCount,
+  ]);
 
   const loadDiag = useCallback(async () => {
     setDiagLoading(true);
@@ -251,11 +379,11 @@ export function AdminPricingWorkspace({
       const baseline = diag.catalogBaselinePricing?.[r.key];
       const qty =
         r.key === "extensionPriceCents"
-          ? extensionCount
+          ? billingExtensionCount
           : r.key === "additionalPhoneNumberPriceCents"
-            ? additionalPhoneCount
+            ? billingPhoneCount
             : r.key === "smsPriceCents"
-              ? smsQty
+              ? billingSmsCount
               : 1;
       const unit =
         r.key === "extensionPriceCents"
@@ -273,7 +401,27 @@ export function AdminPricingWorkspace({
         defaultVal: r.type === "bool" ? (baseline ? "Yes" : "No") : dollars(Number(baseline ?? 0)),
       };
     });
-  }, [diag, extensionCount, additionalPhoneCount, smsQty, draft]);
+  }, [diag, billingExtensionCount, billingPhoneCount, billingSmsCount, draft]);
+
+  const manualQtyTableRows = useMemo(() => {
+    const rows: Array<{ key: string; label: string; defaultVal: string; custom: string; quantity: string; monthlySubtotal: string }> = [];
+    const add = (key: BillingQuantityOverrideKey, label: string, suggested: number, billing: number, unitCents: number) => {
+      if (resolvedQuantities.modes[key] !== "manual") return;
+      rows.push({
+        key: `qty-${key}`,
+        label,
+        defaultVal: `Suggested ${suggested}`,
+        custom: "Manual billing qty",
+        quantity: String(billing),
+        monthlySubtotal: dollars(billing * unitCents),
+      });
+    };
+    add("extensions", "Extensions", extensionCount, billingExtensionCount, extensionsFlatActive ? draft.flatRateAmountCents : draft.extensionPriceCents);
+    add("virtualExtensions", "Virtual extensions", 0, billingVirtualCount, draft.extensionPriceCents);
+    add("phoneNumbers", "Phone numbers", resolvedQuantities.suggested.phoneNumbersBillable, billingPhoneCount, draft.additionalPhoneNumberPriceCents);
+    add("smsPackages", "SMS packages", resolvedQuantities.suggested.smsPackages, billingSmsCount, draft.smsPriceCents);
+    return rows;
+  }, [resolvedQuantities, extensionCount, billingExtensionCount, billingVirtualCount, billingPhoneCount, billingSmsCount, draft, extensionsFlatActive]);
 
   const flatRateTableRow = extensionsFlatActive
     ? {
@@ -286,7 +434,11 @@ export function AdminPricingWorkspace({
       }
     : null;
 
-  const tableRows = flatRateTableRow ? [flatRateTableRow, ...overrideRows] : overrideRows;
+  const tableRows = [
+    ...(flatRateTableRow ? [flatRateTableRow] : []),
+    ...manualQtyTableRows,
+    ...overrideRows,
+  ];
 
   async function saveMode(next: PricingModeUi) {
     setModeSaving(true);
@@ -311,6 +463,7 @@ export function AdminPricingWorkspace({
     try {
       const payload: Record<string, unknown> = {
         smsBillingEnabled: draft.smsBillingEnabled,
+        billingQuantityOverrides: buildBillingQuantityOverridesPayload(draft.quantityOverrides),
         billingFlatRate: draft.flatRateEnabled
           ? {
               enabled: true,
@@ -376,11 +529,12 @@ export function AdminPricingWorkspace({
       key: "extensions",
       icon: "☎",
       title: "Extensions",
-      quantity: extensionsFlatActive ? 1 : extensionCount,
-      quantityAuto: true,
-      quantityNote: extensionsFlatActive
-        ? `${extensionCount} active · covered by flat rate`
-        : `${extensionCount} active · billable`,
+      quantity: extensionsFlatActive ? 1 : billingExtensionCount,
+      billingQty: billingExtensionCount,
+      qtyOverrideKey: "extensions" as const,
+      suggestedLabel: `${extensionCount} active extension${extensionCount === 1 ? "" : "s"}${
+        extensionsFlatActive ? " · flat monthly rate applies" : ""
+      }`,
       unitCents: extensionsFlatActive ? draft.flatRateAmountCents : draft.extensionPriceCents,
       priceKey: extensionsFlatActive ? null : ("extensionPriceCents" as const),
       chip: extensionsFlatActive ? ("flat" as const) : badgeFromFieldBadges("extensionPriceCents", fieldBadges),
@@ -389,28 +543,30 @@ export function AdminPricingWorkspace({
       key: "virtual",
       icon: "⊞",
       title: "Virtual extensions",
-      quantity: null as number | null,
-      quantityAuto: true,
-      quantityNote: "Not billed separately",
+      quantity: billingVirtualCount,
+      billingQty: billingVirtualCount,
+      qtyOverrideKey: "virtualExtensions" as const,
+      suggestedLabel: "0 tracked in system · not auto-counted",
       unitCents: draft.extensionPriceCents,
       priceKey: null,
-      chip: "default" as const,
-      planned: true,
+      chip: resolvedQuantities.modes.virtualExtensions === "manual" ? ("custom" as const) : ("default" as const),
     },
     {
       key: "phone_numbers",
       icon: "#",
       title: "Phone numbers",
-      quantity: draft.firstPhoneNumberFree ? additionalPhoneCount : phoneNumberCount,
-      quantityAuto: true,
-      quantityNote: draft.firstPhoneNumberFree
-        ? `${phoneNumberCount} total · ${additionalPhoneCount} billable`
-        : `${phoneNumberCount} billable`,
+      quantity: billingPhoneCount,
+      billingQty: billingPhoneCount,
+      qtyOverrideKey: "phoneNumbers" as const,
+      suggestedLabel: draft.firstPhoneNumberFree
+        ? `${phoneNumberCount} active · ${resolvedQuantities.suggested.phoneNumbersIncluded} included · ${resolvedQuantities.suggested.phoneNumbersBillable} billable`
+        : `${phoneNumberCount} active · all billable`,
       unitCents: draft.additionalPhoneNumberPriceCents,
       priceKey: "additionalPhoneNumberPriceCents" as const,
       chip:
         badgeFromFieldBadges("additionalPhoneNumberPriceCents", fieldBadges) === "custom" ||
-        badgeFromFieldBadges("firstPhoneNumberFree", fieldBadges) === "custom"
+        badgeFromFieldBadges("firstPhoneNumberFree", fieldBadges) === "custom" ||
+        resolvedQuantities.modes.phoneNumbers === "manual"
           ? ("custom" as const)
           : ("default" as const),
     },
@@ -418,12 +574,19 @@ export function AdminPricingWorkspace({
       key: "sms",
       icon: "✉",
       title: "SMS packages",
-      quantity: smsQty,
-      quantityAuto: false,
-      quantityNote: draft.smsBillingEnabled ? "Package billed monthly" : "SMS billing off",
+      quantity: billingSmsCount,
+      billingQty: billingSmsCount,
+      qtyOverrideKey: "smsPackages" as const,
+      suggestedLabel: draft.smsBillingEnabled
+        ? "1 package (SMS billing enabled)"
+        : "0 packages (SMS billing off)",
       unitCents: draft.smsPriceCents,
       priceKey: "smsPriceCents" as const,
-      chip: badgeFromFieldBadges("smsPriceCents", fieldBadges),
+      chip:
+        badgeFromFieldBadges("smsPriceCents", fieldBadges) === "custom" ||
+        resolvedQuantities.modes.smsPackages === "manual"
+          ? ("custom" as const)
+          : ("default" as const),
       smsToggle: true,
     },
   ];
@@ -542,12 +705,14 @@ export function AdminPricingWorkspace({
 
       <section className="billing-items-grid" aria-label="Billing items">
         {billingItems.map((item) => {
-          const subtotal = item.planned || item.quantity == null ? 0 : item.quantity * item.unitCents;
+          const subtotal = item.quantity * item.unitCents;
           const isActive = activeItemKey === item.key;
+          const overrideKey = item.qtyOverrideKey;
+          const overrideRow = draft.quantityOverrides[overrideKey];
           return (
             <article
               key={item.key}
-              className={`billing-item-card${isActive ? " billing-item-card--active" : ""}${item.planned ? " billing-item-card--planned" : ""}`}
+              className={`billing-item-card${isActive ? " billing-item-card--active" : ""}`}
               data-testid={`billing-item-card-${item.key}`}
               onFocus={() => setActiveItemKey(item.key)}
               onMouseEnter={() => setActiveItemKey(item.key)}
@@ -558,29 +723,77 @@ export function AdminPricingWorkspace({
                 </span>
                 <div className="billing-item-card__title-wrap">
                   <h3 className="billing-item-card__title">{item.title}</h3>
-                  <p className="billing-item-card__qty-note">{item.quantityNote}</p>
                 </div>
               </div>
 
-              <div className="billing-item-card__qty-row">
-                <span className="billing-item-card__field-label">Quantity</span>
-                {item.planned ? (
-                  <span className="billing-item-card__auto-qty">—</span>
-                ) : item.smsToggle ? (
-                  <QuantityStepper
-                    testId="billing-item-sms-qty"
-                    value={smsQty}
-                    min={0}
-                    max={1}
-                    onChange={(n) => setDraft((d) => ({ ...d, smsBillingEnabled: n >= 1 }))}
+              <BillingQuantityOverrideControl
+                testId={`billing-qty-override-${item.key}`}
+                suggestedLabel={item.suggestedLabel}
+                mode={overrideRow.mode}
+                billingQuantity={overrideRow.mode === "auto" ? item.billingQty : overrideRow.quantity}
+                onModeChange={(mode) => {
+                  setDraft((d) => {
+                    const suggested =
+                      overrideKey === "extensions"
+                        ? extensionCount
+                        : overrideKey === "virtualExtensions"
+                          ? 0
+                          : overrideKey === "phoneNumbers"
+                            ? resolvedQuantities.suggested.phoneNumbersBillable
+                            : d.smsBillingEnabled
+                              ? 1
+                              : 0;
+                    return {
+                      ...d,
+                      quantityOverrides: {
+                        ...d.quantityOverrides,
+                        [overrideKey]: {
+                          mode,
+                          quantity: mode === "auto" ? suggested : d.quantityOverrides[overrideKey].quantity,
+                        },
+                      },
+                    };
+                  });
+                }}
+                onQuantityChange={(quantity) =>
+                  setDraft((d) => ({
+                    ...d,
+                    quantityOverrides: {
+                      ...d.quantityOverrides,
+                      [overrideKey]: { mode: "manual", quantity },
+                    },
+                  }))
+                }
+              />
+
+              {item.smsToggle ? (
+                <label className="billing-item-card__sms-toggle">
+                  <input
+                    type="checkbox"
+                    checked={draft.smsBillingEnabled}
+                    onChange={(e) => {
+                      const enabled = e.target.checked;
+                      setDraft((d) => ({
+                        ...d,
+                        smsBillingEnabled: enabled,
+                        quantityOverrides: {
+                          ...d.quantityOverrides,
+                          smsPackages: {
+                            mode: d.quantityOverrides.smsPackages.mode,
+                            quantity:
+                              d.quantityOverrides.smsPackages.mode === "auto"
+                                ? enabled
+                                  ? 1
+                                  : 0
+                                : d.quantityOverrides.smsPackages.quantity,
+                          },
+                        },
+                      }));
+                    }}
                   />
-                ) : (
-                  <QuantityStepper value={item.quantity ?? 0} min={0} max={9999} readOnly onChange={() => {}} />
-                )}
-                {item.quantityAuto && !item.planned ? (
-                  <span className="billing-item-card__auto-chip">Auto-calculated</span>
-                ) : null}
-              </div>
+                  <span>SMS billing enabled (affects suggested quantity when Auto)</span>
+                </label>
+              ) : null}
 
               <label className="billing-item-card__price-row">
                 <span className="billing-item-card__field-label">Unit price</span>
@@ -590,7 +803,7 @@ export function AdminPricingWorkspace({
                     type="text"
                     inputMode="decimal"
                     className="billing-item-card__price-input"
-                    readOnly={catalogLocked || item.planned || !item.priceKey}
+                    readOnly={catalogLocked || !item.priceKey}
                     value={toDollars(item.unitCents)}
                     onChange={(e) => {
                       if (!item.priceKey || catalogLocked) return;
@@ -603,21 +816,19 @@ export function AdminPricingWorkspace({
 
               <div className="billing-item-card__subtotal" data-testid={`billing-item-subtotal-${item.key}`}>
                 <span>Monthly subtotal</span>
-                <strong className="billing-item-card__subtotal-value">{item.planned ? "—" : dollars(subtotal)}</strong>
+                <strong className="billing-item-card__subtotal-value">{dollars(subtotal)}</strong>
               </div>
 
               <span
                 className={`billing-pricing-rate__chip${
                   item.chip === "custom" || item.chip === "flat" ? " custom" : ""
-                }${item.planned ? " planned" : ""}`}
+                }`}
               >
-                {item.planned
-                  ? "Uses extension rate"
-                  : item.chip === "flat"
-                    ? "Flat rate"
-                    : item.chip === "custom"
-                      ? "Custom pricing"
-                      : "Using plan default"}
+                {item.chip === "flat"
+                  ? "Flat rate"
+                  : item.chip === "custom"
+                    ? "Custom pricing"
+                    : "Using plan default"}
               </span>
             </article>
           );
@@ -656,7 +867,7 @@ export function AdminPricingWorkspace({
           <strong>{dollars(estimate.totalCents)}</strong>
         </div>
         <p className="billing-pricing-footnote">
-          Quantities for extensions and phone numbers come from active workspace resources.{" "}
+          Suggested quantities come from active resources; billing quantities follow Auto or Manual overrides saved on this company.{" "}
           <Link href={taxBillingHref}>Taxes &amp; invoice settings</Link> control tax profiles and presentation.
         </p>
       </section>
