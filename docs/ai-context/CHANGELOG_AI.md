@@ -4,6 +4,40 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-17 — portal: deploy blocker — CRM barrel exports (invoice UI not at fault)
+
+**Task:** Unblock portal deploy after invoice UI commit `0c756ae` failed on server `next build`.  
+**Risk:** low (portal barrel only; no billing/API/worker changes).
+
+### Root cause
+
+Deploy job **`de88bdba-5e18-4892-a28e-8f0292d259ad`** (portal, `0c756ae`) failed at TypeScript check:
+
+- `contacts/[id]/page.tsx` imports `ContactContextBar`, `formatDate`, `stageLabel`, etc. from `components/crm`
+- `campaigns` pages import `CampaignCommandHeader` and related symbols the same way
+- At **`0c756ae`**, workspace modules under `apps/portal/components/crm/{contact,campaign,live}/` were **committed**, but **`components/crm/index.ts` did not re-export** `./contact`, `./campaign`, or `./live` — only queue + dashboard barrels were wired
+
+The **billing invoice UI diff was valid**; the failure was a **missing CRM public barrel**, not invoice code.
+
+### Fix (already on `billing/restore-platform-lifecycle`)
+
+- **`50cd1fd`** — `export * from "./contact";`
+- **`6e87303`** — `export * from "./contact"`, `export * from "./campaign"`, `export * from "./live";`
+- Later CRM phase commits (`ae93716`, `cd86c45`) add campaign/live page wiring; HEAD includes invoice UI + fixes
+
+### Verification
+
+| Check | Result |
+|-------|--------|
+| `pnpm --filter @connect/portal typecheck` | pass @ `cd86c45` |
+| `pnpm --filter @connect/portal build` | pass (local) |
+| Portal deploy | **`70eac1f2-beea-426a-afd0-2fa005bb1cf8`** → `[deploy-portal] done cd86c45` |
+| Invoice bundle (`billing-fin-chip`, `billing-fin-drawer`, `billing-fin-row`) | present in `app-portal-1` static chunks |
+
+**No API, worker, Prisma, SOLA, or billing math changes.**
+
+---
+
 ## 2026-05-17 — billing: premium invoice operations UI (portal)
 
 **Task:** Redesign admin **Invoices** tab — finance-grade table rows, `BillingFinanceChip`, icon action menu, premium detail drawer, upgraded filter bar. **Portal only.**  
