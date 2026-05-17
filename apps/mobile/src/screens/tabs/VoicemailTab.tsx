@@ -272,13 +272,16 @@ export function VoicemailTab() {
     const localUri  = audioCache.getLocalUri(vm.id);
     const remoteUri = buildVoicemailStreamUri(token, vm.id);
     const startMs   = Date.now();
+    console.log(`[VOICEMAIL_AUDIO] play_tap vmId=${vm.id} hasCache=${!!localUri}`);
 
     const tryLoadUri = async (uri: string, isLocal: boolean): Promise<Audio.Sound> => {
+      console.log(`[VOICEMAIL_AUDIO] load_async_start vmId=${vm.id} isLocal=${isLocal} uriScheme=${uri.slice(0, 8)} elapsedMs=${Date.now() - startMs}`);
       const next = new Audio.Sound();
       const source = isLocal
         ? { uri }
         : { uri, headers: { Authorization: `Bearer ${token}` } };
       await next.loadAsync(source, { shouldPlay: true });
+      console.log(`[VOICEMAIL_AUDIO] load_async_done vmId=${vm.id} isLocal=${isLocal} elapsedMs=${Date.now() - startMs}`);
       return next;
     };
 
@@ -308,7 +311,7 @@ export function VoicemailTab() {
       }
     } else {
       const status = audioCache.preloadStatus(vm.id);
-      console.log(`[VOICEMAIL_AUDIO] play_stream_fallback vmId=${vm.id} preloadStatus=${status}`);
+      console.log(`[VOICEMAIL_AUDIO] play_stream_fallback vmId=${vm.id} preloadStatus=${status} elapsedMs=${Date.now() - startMs}`);
     }
 
     // ── Path B: stream from remote (cache miss or cache_play_failed) ──────────
