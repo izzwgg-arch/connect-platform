@@ -29,6 +29,7 @@ type Props = {
   onNewBlank: () => void;
   onNewFromTemplate: (templateId: string) => void;
   isCreating: boolean;
+  templatesExpanded?: boolean;
 };
 
 export function ChecklistLibraryPanel({
@@ -38,29 +39,30 @@ export function ChecklistLibraryPanel({
   onNewBlank,
   onNewFromTemplate,
   isCreating,
+  templatesExpanded,
 }: Props) {
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(true);
 
   const active = checklists.filter((c) => c.isActive);
   const archived = checklists.filter((c) => !c.isActive);
+  const showTemplates = templatesExpanded ?? templatesOpen;
 
   return (
     <div className={cn(crm.checklistPanelSupport, "flex flex-col overflow-hidden")}>
-      <div className="flex items-center justify-between border-b border-crm-border/40 bg-[#101923]/40 px-3 py-2.5">
-        <span className={crm.label}>Library</span>
+      <div className="border-b border-crm-border/25 bg-gradient-to-r from-[#13203a]/40 to-transparent px-3 py-3">
+        <span className={crm.label}>Checklist library</span>
         <button
           type="button"
           onClick={onNewBlank}
           className={cn(
-            crm.btnGhost,
-            "h-7 w-7 !p-0 shrink-0",
-            isCreating && "border-crm-accent/40 text-crm-accent bg-crm-accent/10"
+            crm.btnPrimary,
+            "mt-2.5 w-full justify-center text-xs",
+            isCreating && "ring-1 ring-crm-accent/40"
           )}
-          title="New checklist"
-          aria-label="New checklist"
         >
-          <Plus size={13} />
+          <Plus size={14} />
+          New checklist
         </button>
       </div>
 
@@ -95,9 +97,16 @@ export function ChecklistLibraryPanel({
           </div>
         )}
 
+        {active.length > 0 && (
+          <p className="px-1 pb-1 pt-2 text-[10px] font-bold uppercase tracking-wider text-crm-muted">
+            Active checklists
+          </p>
+        )}
+
         {active.map((c) => {
           const isSelected = selectedId === c.id;
           const requiredCount = c.items.filter((i) => i.required).length;
+          const liveReady = c.items.length > 0 && requiredCount > 0;
           return (
             <button
               key={c.id}
@@ -106,13 +115,17 @@ export function ChecklistLibraryPanel({
               className={cn(
                 crm.checklistCard,
                 isSelected && crm.checklistCardActive,
-                "w-full text-left"
+                "w-full text-left transition-all duration-300 hover:-translate-y-px hover:shadow-[0_8px_24px_-12px_rgba(56,189,248,0.15)]"
               )}
             >
               <span
                 className={cn(
                   crm.checklistStatusStrip,
-                  isSelected ? "bg-crm-accent" : "bg-crm-border/50"
+                  isSelected
+                    ? "bg-crm-accent"
+                    : liveReady
+                      ? "bg-crm-success"
+                      : "bg-crm-warning/70"
                 )}
               />
               <div className="flex min-w-0 flex-1 items-start gap-2 px-2 py-2">
@@ -124,13 +137,25 @@ export function ChecklistLibraryPanel({
                   )}
                 />
                 <div className="min-w-0 flex-1">
-                  <div
-                    className={cn(
-                      "truncate text-xs font-medium",
-                      isSelected ? "text-crm-accent" : "text-crm-text"
-                    )}
-                  >
-                    {c.name}
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className={cn(
+                        "truncate text-xs font-medium",
+                        isSelected ? "text-crm-accent" : "text-crm-text"
+                      )}
+                    >
+                      {c.name}
+                    </span>
+                    <span
+                      className={cn(
+                        "shrink-0 rounded-full border px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide",
+                        liveReady
+                          ? "border-crm-success/35 bg-crm-success/10 text-crm-success"
+                          : "border-crm-warning/35 bg-crm-warning/10 text-crm-warning"
+                      )}
+                    >
+                      {liveReady ? "In use" : "Draft"}
+                    </span>
                   </div>
                   <div className="mt-0.5 flex items-center gap-1.5">
                     <span className="text-[10px] text-crm-muted tabular-nums">
@@ -152,20 +177,23 @@ export function ChecklistLibraryPanel({
           <button
             type="button"
             onClick={() => setTemplatesOpen((v) => !v)}
-            className="flex w-full items-center gap-1.5 rounded-crm px-2 py-1.5 text-left transition-colors hover:bg-crm-surface-2/40"
+            className={cn(
+              "flex w-full items-center gap-1.5 rounded-crm px-2 py-1.5 text-left transition-colors hover:bg-[#182746]/80",
+              templatesExpanded && "bg-crm-accent/8 ring-1 ring-crm-accent/20"
+            )}
           >
             <Layers size={11} className="shrink-0 text-crm-accent/70" />
             <span className={cn(crm.label, "flex-1 text-[10px]")}>
-              Quick templates
+              Templates
             </span>
-            {templatesOpen ? (
+            {showTemplates ? (
               <ChevronDown size={11} className="text-crm-muted/60" />
             ) : (
               <ChevronRight size={11} className="text-crm-muted/60" />
             )}
           </button>
 
-          {templatesOpen && (
+          {showTemplates && (
             <div className="mt-1 flex flex-col gap-1 pl-0.5">
               {CHECKLIST_TEMPLATES.map((t) => {
                 const accent = TEMPLATE_ACCENT_CLASSES[t.accent];
@@ -174,8 +202,18 @@ export function ChecklistLibraryPanel({
                     key={t.id}
                     type="button"
                     onClick={() => onNewFromTemplate(t.id)}
-                    className="group flex w-full items-center gap-2 rounded-crm border border-transparent px-2 py-1.5 text-left transition-all hover:border-crm-border/50 hover:bg-[#1a2635]/80"
+                    className={cn(
+                      "group relative flex w-full items-center gap-2 overflow-hidden rounded-crm border border-crm-border/40 px-2 py-1.5 text-left transition-all duration-200 hover:-translate-y-px hover:border-crm-border/60 hover:bg-[#182746]/90",
+                      accent.card
+                    )}
                   >
+                    <span
+                      className={cn(
+                        "absolute left-0 top-0 bottom-0 w-0.5",
+                        accent.strip
+                      )}
+                      aria-hidden
+                    />
                     <span
                       className={cn(
                         "flex h-6 w-6 shrink-0 items-center justify-center rounded-crm border text-xs",
@@ -207,7 +245,7 @@ export function ChecklistLibraryPanel({
               className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left"
             >
               <span className={cn(crm.label, "flex-1 text-[10px]")}>
-                Archived ({archived.length})
+                Archived checklists ({archived.length})
               </span>
               {archivedOpen ? (
                 <ChevronDown size={11} className="text-crm-muted/60" />

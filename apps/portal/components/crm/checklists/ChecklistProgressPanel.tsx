@@ -27,6 +27,42 @@ type Props = {
   checklist: Checklist | null;
 };
 
+type ReadinessStatus = {
+  label: string;
+  hint: string;
+  tone: "success" | "warning" | "muted";
+};
+
+function readinessStatus(checklist: Checklist): ReadinessStatus {
+  if (!checklist.isActive) {
+    return {
+      label: "Archived",
+      hint: "Restore to use in live calls",
+      tone: "muted",
+    };
+  }
+  if (checklist.items.length === 0) {
+    return {
+      label: "Needs required steps",
+      hint: "Add workflow steps before going live",
+      tone: "warning",
+    };
+  }
+  const requiredCount = checklist.items.filter((i) => i.required).length;
+  if (requiredCount === 0) {
+    return {
+      label: "Needs required steps",
+      hint: "Mark key steps as required for agents",
+      tone: "warning",
+    };
+  }
+  return {
+    label: "Ready for live calls",
+    hint: "On track for live call workspace",
+    tone: "success",
+  };
+}
+
 function ProgressRing({
   requiredCount,
   total,
@@ -116,11 +152,11 @@ export function ChecklistProgressPanel({ checklist }: Props) {
   if (!checklist) {
     return (
       <div className={cn(crm.checklistPanelSupport, crm.checklistProgressCard)}>
-        <span className={crm.label}>Progress</span>
+        <span className={crm.label}>Overall progress</span>
         <div
           className={cn(
             crm.emptyWrap,
-            "mt-3 border-crm-border/40 bg-[#101923]/40 py-8"
+            "mt-3 border-crm-border/40 bg-[#13203a]/40 py-8"
           )}
         >
           <ClipboardCheck
@@ -142,12 +178,13 @@ export function ChecklistProgressPanel({ checklist }: Props) {
   const optionalCount = optional.length;
   const coveragePct =
     total > 0 ? Math.round((requiredCount / total) * 100) : 0;
+  const status = readinessStatus(checklist);
 
   return (
     <div className="flex flex-col gap-2.5">
       <div className={cn(crm.checklistProgressCard, "flex flex-col gap-4")}>
         <div className="flex items-center justify-between gap-2">
-          <span className={crm.label}>Checklist overview</span>
+          <span className={crm.label}>Overall progress</span>
           {checklist.isActive && total > 0 && requiredCount > 0 && (
             <span className="checklist-live-dot h-1.5 w-1.5 shrink-0 rounded-full bg-crm-success" />
           )}
@@ -156,7 +193,7 @@ export function ChecklistProgressPanel({ checklist }: Props) {
         <div className="flex items-center gap-4">
           <div className="relative shrink-0">
             <div
-              className="absolute inset-0 rounded-full bg-crm-accent/5 blur-md"
+              className="absolute inset-0 rounded-full bg-crm-accent/12 blur-xl"
               aria-hidden
             />
             <ProgressRing
@@ -197,55 +234,37 @@ export function ChecklistProgressPanel({ checklist }: Props) {
           </div>
         </div>
 
-        {!checklist.isActive && (
-          <div
-            className={cn(
-              crm.bannerWarning,
-              "flex items-center gap-2 rounded-crm px-3 py-2"
+        <div
+          className={cn(
+            "rounded-crm-lg border px-3 py-2.5",
+            status.tone === "success" &&
+              "border-crm-success/35 bg-gradient-to-r from-crm-success/12 to-transparent",
+            status.tone === "warning" &&
+              "border-crm-warning/35 bg-gradient-to-r from-crm-warning/12 to-transparent",
+            status.tone === "muted" &&
+              "border-crm-border/50 bg-[#13203a]/60"
+          )}
+        >
+          <div className="flex items-center gap-2">
+            {status.tone === "success" ? (
+              <CheckCircle2 size={14} className="shrink-0 text-crm-success" />
+            ) : (
+              <AlertTriangle
+                size={14}
+                className={cn(
+                  "shrink-0",
+                  status.tone === "warning"
+                    ? "text-crm-warning"
+                    : "text-crm-muted"
+                )}
+              />
             )}
-          >
-            <AlertTriangle size={13} className="shrink-0" />
-            <span className="text-xs">Archived — not shown in live call</span>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-crm-text">{status.label}</p>
+              <p className="text-[10px] text-crm-muted">{status.hint}</p>
+            </div>
           </div>
-        )}
-
-        {checklist.isActive && requiredCount === 0 && total > 0 && (
-          <div
-            className={cn(
-              crm.bannerWarning,
-              "flex items-center gap-2 rounded-crm px-3 py-2"
-            )}
-          >
-            <AlertTriangle size={13} className="shrink-0" />
-            <span className="text-xs">
-              No required steps — agents may skip all items
-            </span>
-          </div>
-        )}
-
-        {checklist.isActive && total === 0 && (
-          <div
-            className={cn(
-              crm.bannerWarning,
-              "flex items-center gap-2 rounded-crm px-3 py-2"
-            )}
-          >
-            <AlertTriangle size={13} className="shrink-0" />
-            <span className="text-xs">Add steps before assigning to calls</span>
-          </div>
-        )}
-
-        {checklist.isActive && total > 0 && requiredCount > 0 && (
-          <div
-            className={cn(
-              crm.bannerSuccess,
-              "flex items-center gap-2 rounded-crm px-3 py-2"
-            )}
-          >
-            <CheckCircle2 size={13} className="shrink-0" />
-            <span className="text-xs">Ready for live call usage</span>
-          </div>
-        )}
+        </div>
       </div>
 
       {required.length > 0 && (

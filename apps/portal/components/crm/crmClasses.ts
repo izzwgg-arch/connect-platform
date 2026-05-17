@@ -75,6 +75,66 @@ export const crm = {
   campaignModalBackdrop: "fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]",
   campaignGuidedEmpty:
     "rounded-crm border border-dashed border-crm-border/80 bg-crm-surface-2/50 px-4 py-4 sm:px-5",
+  /** Phase 19E.4 — premium command-center surfaces */
+  campaignCommandHero:
+    "crm-campaign-command-hero relative overflow-hidden rounded-crm-lg border border-crm-border/80 bg-crm-surface shadow-[0_8px_40px_-12px_rgba(0,0,0,0.55)]",
+  campaignCommandHeroInner: "relative z-[1] flex flex-col gap-4 p-4 sm:p-5 lg:p-6",
+  campaignCommandHeroKpiGrid:
+    "grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-5",
+  campaignCommandHeroKpi:
+    "rounded-crm border border-crm-border/70 bg-crm-surface-2/60 px-3 py-2.5 backdrop-blur-sm transition-colors hover:border-crm-border/90",
+  campaignCommandHeroKpiUrgent: "border-crm-warning/40 bg-crm-warning/8",
+  campaignCommandHeroKpiAccent: "border-crm-accent/35 bg-crm-accent/8",
+  campaignCommandHeroKpiValue: "text-2xl font-bold tabular-nums leading-none text-crm-text sm:text-[1.65rem]",
+  campaignCommandHeroKpiLabel:
+    "text-[10px] font-bold uppercase tracking-wider text-crm-muted",
+  campaignIndexRowList: "m-0 flex list-none flex-col gap-1.5 p-0",
+  campaignIndexRow:
+    "crm-campaign-index-row group relative flex min-h-[4.75rem] w-full min-w-0 overflow-hidden rounded-crm-lg border border-crm-border/80 bg-crm-surface transition-[border-color,box-shadow,transform] duration-200 hover:border-crm-border hover:shadow-[0_8px_28px_-10px_rgba(0,0,0,0.5)] hover:-translate-y-px",
+  campaignIndexRowActive:
+    "crm-campaign-index-row-active border-crm-accent/50 shadow-[0_0_0_1px_rgba(56,189,248,0.1),0_0_36px_-8px_rgba(56,189,248,0.2)]",
+  campaignIndexRowQueueGlow:
+    "shadow-[0_0_0_1px_rgba(56,189,248,0.14),0_0_40px_-6px_rgba(56,189,248,0.22)]",
+  campaignIndexRowPaused: "border-crm-warning/35",
+  campaignIndexRowDraft: "border-dashed border-crm-border/70",
+  campaignIndexRowMetric:
+    "flex min-w-[4.25rem] flex-col gap-0.5 px-2 py-1 sm:min-w-[5rem] lg:px-3",
+  campaignIndexRowMetricValue: "text-lg font-bold tabular-nums leading-none text-crm-text sm:text-xl",
+  campaignIndexRowMetricLabel: "text-[10px] font-semibold uppercase tracking-wide text-crm-muted/90",
+  campaignPerformanceSurface:
+    "crm-campaign-performance-surface overflow-hidden rounded-crm-lg border border-crm-border/80 bg-crm-surface shadow-crm",
+  campaignPerformanceSurfaceInner:
+    "grid gap-0 lg:grid-cols-[minmax(0,220px)_minmax(0,1fr)_minmax(0,200px)] lg:divide-x lg:divide-crm-border/60",
+  campaignPerformanceZone: "flex min-w-0 flex-col justify-center p-4 sm:p-5",
+  campaignOpsCell:
+    "flex min-h-[7.5rem] min-w-0 flex-col rounded-crm-lg border border-crm-border/75 bg-crm-surface-2/40 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] sm:p-3.5",
+  campaignOpsCellHeader: "mb-2 flex items-center justify-between gap-2",
+  campaignOpsRow:
+    "flex items-center justify-between gap-2 rounded-crm border border-crm-border/60 bg-crm-surface/80 px-2.5 py-2 text-xs",
+  campaignRosterShell:
+    "overflow-hidden rounded-crm-lg border border-crm-border/80 bg-crm-surface shadow-crm",
+  campaignRosterToolbar:
+    "flex flex-wrap items-center gap-2 border-b border-crm-border/70 bg-crm-surface-2/40 px-3 py-2.5 sm:px-4",
+  campaignRosterTableHead:
+    "hidden lg:grid lg:grid-cols-[minmax(0,1.6fr)_minmax(0,0.7fr)_minmax(0,0.75fr)_minmax(0,0.55fr)_minmax(0,0.55fr)_minmax(0,0.65fr)_auto] lg:gap-3 lg:border-b lg:border-crm-border/60 lg:bg-crm-surface-2/50 lg:px-4 lg:py-2 text-[10px] font-bold uppercase tracking-wider text-crm-muted",
+  campaignRosterBody: "flex flex-col gap-1 p-2 sm:p-2.5",
+  campaignMemberRow:
+    "crm-campaign-member-row grid grid-cols-1 gap-2 rounded-crm border border-crm-border/70 bg-crm-surface-2/30 px-3 py-2.5 transition-colors hover:border-crm-border hover:bg-crm-surface-2/50 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,0.7fr)_minmax(0,0.75fr)_minmax(0,0.55fr)_minmax(0,0.55fr)_minmax(0,0.65fr)_auto] lg:items-center lg:gap-3 lg:px-4 lg:py-2",
+  campaignQuickStrip:
+    "crm-campaign-quick-strip sticky bottom-0 z-30 mt-auto flex flex-wrap items-stretch gap-0 overflow-hidden rounded-crm-lg border border-crm-border/80 bg-crm-surface-2/90 shadow-[0_-8px_32px_-8px_rgba(0,0,0,0.45)] backdrop-blur-md",
+  campaignQuickStripItem:
+    "flex min-w-0 flex-1 flex-col justify-center gap-0.5 border-r border-crm-border/50 px-3 py-2.5 text-left transition-colors last:border-r-0 hover:bg-crm-accent/8 sm:px-4 sm:py-3",
+  campaignQuickStripKbd:
+    "inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded border border-crm-border/80 bg-crm-surface px-1 text-[10px] font-bold text-crm-muted",
+  campaignQuickStripLabel: "text-xs font-semibold text-crm-text sm:text-sm",
+  campaignQuickStripHint: "text-[10px] leading-snug text-crm-muted",
+  campaignDetailHeroKpiGrid:
+    "grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6",
+  campaignDetailHeroKpi:
+    "rounded-crm border border-crm-border/70 bg-crm-surface-2/50 px-2.5 py-2 sm:px-3 sm:py-2.5",
+  campaignDetailHeroKpiValue: "text-xl font-bold tabular-nums text-crm-text sm:text-2xl",
+  campaignSortSelect:
+    "rounded-crm border border-crm-border bg-crm-surface-2 py-2 pl-3 pr-8 text-xs font-medium text-crm-text shadow-none focus:border-crm-accent/50 focus:outline-none focus:ring-2 focus:ring-crm-accent/30 [color-scheme:dark]",
   /** Phase 19F — live call agent workspace */
   pageInnerLive:
     "mx-auto w-full max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8 flex flex-col gap-4 min-h-0",

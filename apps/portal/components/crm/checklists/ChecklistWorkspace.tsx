@@ -22,6 +22,7 @@ import {
   CHECKLIST_TEMPLATES,
   TEMPLATE_ACCENT_CLASSES,
 } from "./ChecklistTemplates";
+import { ChecklistCinematicHero } from "./ChecklistCinematicHero";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -60,6 +61,7 @@ type Props = {
   onPickTemplate: (templateId: string) => void;
   onNewBlank: () => void;
   templatesFocus?: boolean;
+  onBrowseTemplates?: () => void;
 };
 
 function PrimaryPanel({
@@ -174,27 +176,40 @@ function TemplateCard({
     <button
       type="button"
       onClick={() => onPick(template.id)}
-      className={cn(crm.checklistTemplateCard, accent.card)}
+      className={cn(
+        crm.checklistTemplateCard,
+        accent.cardBase,
+        accent.card
+      )}
     >
       <span className={cn(crm.checklistTemplateStrip, accent.strip)} aria-hidden />
-      <div className="flex items-start gap-3 pl-2">
-        <span className={cn(crm.checklistTemplateIcon, accent.iconBox)}>
-          {template.icon}
-        </span>
-        <div className="min-w-0 flex-1 text-left">
-          <div className="flex items-start justify-between gap-2">
-            <span className="text-sm font-semibold leading-tight text-crm-text group-hover:text-white">
-              {template.name}
+      <span
+        className={cn(crm.checklistTemplateGlow, accent.cardGlow)}
+        aria-hidden
+      />
+      <div className={crm.checklistTemplateCardInner}>
+        <div className="flex items-start gap-3">
+          <span className={cn(crm.checklistTemplateIconWrap, accent.iconRing)}>
+            <span className={cn(crm.checklistTemplateIcon, accent.iconBox)}>
+              {template.icon}
             </span>
-            <ArrowRight
-              size={14}
-              className="mt-0.5 shrink-0 text-crm-muted/40 transition-transform duration-200 group-hover:translate-x-0.5 group-hover:text-crm-accent"
-            />
+          </span>
+          <div className="min-w-0 flex-1 text-left">
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-sm font-semibold leading-snug text-crm-text transition-colors group-hover:text-white">
+                {template.name}
+              </span>
+              <span className={cn(crm.checklistTemplateBadge, accent.badge)}>
+                Playbook
+              </span>
+            </div>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-crm-muted/90 line-clamp-2">
+              {template.description}
+            </p>
           </div>
-          <p className="mt-1 text-[11px] leading-snug text-crm-muted line-clamp-2">
-            {template.description}
-          </p>
-          <div className="mt-2 flex flex-wrap gap-1.5">
+        </div>
+        <div className="flex items-center justify-between gap-2 border-t border-white/[0.06] pt-2.5">
+          <div className="flex flex-wrap gap-1.5">
             <span className={crm.checklistMetricChip}>
               {template.items.length} steps
             </span>
@@ -204,6 +219,10 @@ function TemplateCard({
               </span>
             )}
           </div>
+          <ArrowRight
+            size={14}
+            className="shrink-0 text-crm-muted/30 transition-all duration-300 group-hover:translate-x-1 group-hover:text-crm-accent"
+          />
         </div>
       </div>
     </button>
@@ -215,25 +234,25 @@ const FEATURE_STRIP = [
     title: "Proven playbooks",
     body: "Cold call, callback, and follow-up flows",
     icon: Sparkles,
-    tone: "text-crm-accent border-crm-accent/30 bg-crm-accent/8",
+    tone: "text-crm-accent border-crm-accent/30 bg-crm-accent/10 shadow-[0_0_16px_-6px_rgba(56,189,248,0.2)]",
   },
   {
     title: "Checklist mode",
     body: "Guided steps during live calls",
     icon: Layers,
-    tone: "text-crm-warning border-crm-warning/30 bg-crm-warning/8",
+    tone: "text-crm-warning border-crm-warning/30 bg-crm-warning/10",
   },
   {
     title: "Live call ready",
     body: "Required steps surface in workspace",
     icon: ClipboardList,
-    tone: "text-crm-success border-crm-success/30 bg-crm-success/8",
+    tone: "text-crm-success border-crm-success/30 bg-crm-success/10",
   },
   {
     title: "Drive results",
     body: "Structured outreach for agents",
     icon: ArrowRight,
-    tone: "text-violet-300 border-violet-400/30 bg-violet-400/8",
+    tone: "text-violet-300 border-violet-400/30 bg-violet-400/10",
   },
 ] as const;
 
@@ -241,70 +260,74 @@ function TemplateGrid({
   onPick,
   onBlank,
   templatesFocus,
+  onBrowseTemplates,
 }: {
   onPick: (id: string) => void;
   onBlank: () => void;
   templatesFocus?: boolean;
+  onBrowseTemplates?: () => void;
 }) {
   const templateCount = CHECKLIST_TEMPLATES.length;
 
+  const handleBrowse = () => {
+    if (onBrowseTemplates) {
+      onBrowseTemplates();
+      return;
+    }
+    const first = CHECKLIST_TEMPLATES[0];
+    if (first) onPick(first.id);
+  };
+
   return (
-    <div className="flex flex-col gap-4 p-4 sm:p-5">
-      <div className={crm.checklistHeroBand}>
-        <div className={crm.checklistHeroGlow} aria-hidden />
-        <div className="relative flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex min-w-0 items-start gap-3">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-crm-lg border border-crm-accent/30 bg-crm-accent/12 text-crm-accent shadow-[0_0_24px_-6px_rgba(56,189,248,0.35)]">
-              <Sparkles className="h-5 w-5" />
+    <div className="flex flex-col gap-5 p-3 sm:p-4">
+      <ChecklistCinematicHero
+        templateCount={templateCount}
+        onBrowseTemplates={handleBrowse}
+        onBlank={onBlank}
+      />
+
+      {templatesFocus && (
+        <div>
+          <div className="mb-3 flex items-center gap-2 px-1">
+            <Layers size={14} className="text-crm-accent" />
+            <span className={crm.label}>Starter playbooks</span>
+            <span className="ml-auto text-[10px] tabular-nums text-crm-muted">
+              {templateCount} templates
             </span>
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-crm-accent">
-                Playbook command center
-              </p>
-              <h2 className="mt-0.5 text-base font-semibold text-crm-text sm:text-lg">
-                Choose a playbook to begin
-              </h2>
-              <p className="mt-1 max-w-md text-sm text-crm-muted">
-                Start with a proven outreach workflow, or build a custom checklist
-                for your team.
-              </p>
-            </div>
           </div>
-          <span
-            className={cn(
-              crm.checklistMetricChip,
-              "shrink-0 self-start border-crm-accent/25 bg-crm-accent/8 text-crm-accent sm:self-center"
-            )}
-          >
-            {templateCount} operational templates
-          </span>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {CHECKLIST_TEMPLATES.map((t) => (
+              <TemplateCard key={t.id} template={t} onPick={onPick} />
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
-      <div>
-        <div className="mb-2.5 flex items-center gap-2">
-          <Layers size={13} className="text-crm-accent/80" />
-          <span className={crm.label}>Starter playbooks</span>
-        </div>
-        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-          {CHECKLIST_TEMPLATES.map((t) => (
-            <TemplateCard key={t.id} template={t} onPick={onPick} />
-          ))}
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between gap-3 border-t border-crm-border/40 pt-3">
-        <p className="text-xs text-crm-muted">
-          Need full control? Build from scratch.
-        </p>
-        <button type="button" onClick={onBlank} className={crm.btnSecondary}>
-          <Plus size={13} />
-          Start from blank
-        </button>
+      <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+        {FEATURE_STRIP.map((f) => {
+          const Icon = f.icon;
+          return (
+            <div key={f.title} className={crm.checklistFeatureCard}>
+              <span
+                className={cn(
+                  "flex h-8 w-8 items-center justify-center rounded-lg border",
+                  f.tone
+                )}
+              >
+                <Icon size={14} />
+              </span>
+              <span className="text-xs font-semibold text-crm-text">{f.title}</span>
+              <span className="text-[10px] leading-snug text-crm-muted/90">
+                {f.body}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
+
 
 function ItemListEditor({
   items,
@@ -394,6 +417,8 @@ export function ChecklistWorkspace({
   createSaving,
   onPickTemplate,
   onNewBlank,
+  templatesFocus,
+  onBrowseTemplates,
 }: Props) {
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState("");
@@ -488,7 +513,12 @@ export function ChecklistWorkspace({
   if (!selected) {
     return (
       <PrimaryPanel>
-        <TemplateGrid onPick={onPickTemplate} onBlank={onNewBlank} />
+        <TemplateGrid
+          onPick={onPickTemplate}
+          onBlank={onNewBlank}
+          templatesFocus={templatesFocus}
+          onBrowseTemplates={onBrowseTemplates}
+        />
       </PrimaryPanel>
     );
   }

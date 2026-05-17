@@ -32,51 +32,95 @@ export const TEMPLATE_ACCENT_CLASSES: Record<
   {
     strip: string;
     iconBox: string;
+    iconRing: string;
     card: string;
+    cardBase: string;
+    cardGlow: string;
+    badge: string;
     meta: string;
   }
 > = {
   cyan: {
     strip: "bg-crm-accent",
     iconBox:
-      "border-crm-accent/35 bg-crm-accent/12 text-crm-accent shadow-[0_0_20px_-4px_rgba(56,189,248,0.35)]",
-    card: "hover:border-crm-accent/45 hover:shadow-[0_0_28px_-8px_rgba(56,189,248,0.22)]",
-    meta: "text-crm-accent",
+      "border-crm-accent/40 bg-gradient-to-br from-crm-accent/25 to-crm-accent/5 text-crm-accent",
+    iconRing:
+      "shadow-[0_0_28px_-6px_rgba(56,189,248,0.5)] ring-1 ring-crm-accent/30",
+    cardBase:
+      "border-crm-border/40 bg-gradient-to-br from-[#152535]/95 via-[#101a2d] to-[#0a101c]",
+    cardGlow:
+      "bg-[radial-gradient(ellipse_at_top_left,rgba(56,189,248,0.12),transparent_55%)]",
+    card: "hover:border-crm-accent/50 hover:shadow-[0_16px_40px_-12px_rgba(56,189,248,0.28),0_0_0_1px_rgba(56,189,248,0.15)]",
+    badge: "border-crm-accent/35 bg-crm-accent/12 text-crm-accent",
+    meta: "text-crm-accent border-crm-accent/25",
   },
   amber: {
     strip: "bg-crm-warning",
     iconBox:
-      "border-crm-warning/35 bg-crm-warning/12 text-crm-warning shadow-[0_0_20px_-4px_rgba(245,158,11,0.3)]",
-    card: "hover:border-crm-warning/40 hover:shadow-[0_0_28px_-8px_rgba(245,158,11,0.18)]",
-    meta: "text-crm-warning",
+      "border-crm-warning/40 bg-gradient-to-br from-crm-warning/25 to-crm-warning/5 text-crm-warning",
+    iconRing:
+      "shadow-[0_0_28px_-6px_rgba(245,158,11,0.4)] ring-1 ring-crm-warning/30",
+    cardBase:
+      "border-crm-border/40 bg-gradient-to-br from-[#1f1a14]/95 via-[#141210] to-[#0a101c]",
+    cardGlow:
+      "bg-[radial-gradient(ellipse_at_top_left,rgba(245,158,11,0.1),transparent_55%)]",
+    card: "hover:border-crm-warning/45 hover:shadow-[0_16px_40px_-12px_rgba(245,158,11,0.22)]",
+    badge: "border-crm-warning/35 bg-crm-warning/12 text-crm-warning",
+    meta: "text-crm-warning border-crm-warning/25",
   },
   blue: {
     strip: "bg-sky-400",
     iconBox:
-      "border-sky-400/35 bg-sky-400/12 text-sky-300 shadow-[0_0_20px_-4px_rgba(56,189,248,0.28)]",
-    card: "hover:border-sky-400/40 hover:shadow-[0_0_28px_-8px_rgba(56,189,248,0.16)]",
-    meta: "text-sky-300",
+      "border-sky-400/40 bg-gradient-to-br from-sky-400/25 to-sky-400/5 text-sky-300",
+    iconRing: "shadow-[0_0_28px_-6px_rgba(56,189,248,0.38)] ring-1 ring-sky-400/30",
+    cardBase:
+      "border-crm-border/40 bg-gradient-to-br from-[#14202e]/95 via-[#101a28] to-[#0a101c]",
+    cardGlow:
+      "bg-[radial-gradient(ellipse_at_top_left,rgba(56,189,248,0.1),transparent_55%)]",
+    card: "hover:border-sky-400/45 hover:shadow-[0_16px_40px_-12px_rgba(56,189,248,0.2)]",
+    badge: "border-sky-400/35 bg-sky-400/12 text-sky-300",
+    meta: "text-sky-300 border-sky-400/25",
   },
   green: {
     strip: "bg-crm-success",
     iconBox:
-      "border-crm-success/35 bg-crm-success/12 text-crm-success shadow-[0_0_20px_-4px_rgba(52,211,153,0.28)]",
-    card: "hover:border-crm-success/40 hover:shadow-[0_0_28px_-8px_rgba(52,211,153,0.16)]",
-    meta: "text-crm-success",
+      "border-crm-success/40 bg-gradient-to-br from-crm-success/25 to-crm-success/5 text-crm-success",
+    iconRing:
+      "shadow-[0_0_28px_-6px_rgba(52,211,153,0.38)] ring-1 ring-crm-success/30",
+    cardBase:
+      "border-crm-border/40 bg-gradient-to-br from-[#122018]/95 via-[#101a14] to-[#0a101c]",
+    cardGlow:
+      "bg-[radial-gradient(ellipse_at_top_left,rgba(52,211,153,0.1),transparent_55%)]",
+    card: "hover:border-crm-success/45 hover:shadow-[0_16px_40px_-12px_rgba(52,211,153,0.2)]",
+    badge: "border-crm-success/35 bg-crm-success/12 text-crm-success",
+    meta: "text-crm-success border-crm-success/25",
   },
   violet: {
     strip: "bg-violet-400",
     iconBox:
-      "border-violet-400/35 bg-violet-400/12 text-violet-300 shadow-[0_0_20px_-4px_rgba(167,139,250,0.28)]",
-    card: "hover:border-violet-400/40 hover:shadow-[0_0_28px_-8px_rgba(167,139,250,0.16)]",
-    meta: "text-violet-300",
+      "border-violet-400/40 bg-gradient-to-br from-violet-400/25 to-violet-400/5 text-violet-300",
+    iconRing:
+      "shadow-[0_0_28px_-6px_rgba(167,139,250,0.38)] ring-1 ring-violet-400/30",
+    cardBase:
+      "border-crm-border/40 bg-gradient-to-br from-[#1a1428]/95 via-[#12101c] to-[#0a101c]",
+    cardGlow:
+      "bg-[radial-gradient(ellipse_at_top_left,rgba(167,139,250,0.1),transparent_55%)]",
+    card: "hover:border-violet-400/45 hover:shadow-[0_16px_40px_-12px_rgba(167,139,250,0.2)]",
+    badge: "border-violet-400/35 bg-violet-400/12 text-violet-300",
+    meta: "text-violet-300 border-violet-400/25",
   },
   teal: {
     strip: "bg-teal-400",
     iconBox:
-      "border-teal-400/35 bg-teal-400/12 text-teal-300 shadow-[0_0_20px_-4px_rgba(45,212,191,0.28)]",
-    card: "hover:border-teal-400/40 hover:shadow-[0_0_28px_-8px_rgba(45,212,191,0.16)]",
-    meta: "text-teal-300",
+      "border-teal-400/40 bg-gradient-to-br from-teal-400/25 to-teal-400/5 text-teal-300",
+    iconRing: "shadow-[0_0_28px_-6px_rgba(45,212,191,0.38)] ring-1 ring-teal-400/30",
+    cardBase:
+      "border-crm-border/40 bg-gradient-to-br from-[#102220]/95 via-[#101a18] to-[#0a101c]",
+    cardGlow:
+      "bg-[radial-gradient(ellipse_at_top_left,rgba(45,212,191,0.1),transparent_55%)]",
+    card: "hover:border-teal-400/45 hover:shadow-[0_16px_40px_-12px_rgba(45,212,191,0.2)]",
+    badge: "border-teal-400/35 bg-teal-400/12 text-teal-300",
+    meta: "text-teal-300 border-teal-400/25",
   },
 };
 
