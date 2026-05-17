@@ -164,17 +164,16 @@ function SummaryStatTile({
         : "text-xl font-semibold tabular-nums text-crm-text";
 
   return (
-    <div className="flex min-w-[7.5rem] flex-1 flex-col gap-2 rounded-crm border border-crm-border bg-crm-surface-2/60 px-4 py-3 sm:min-w-0">
+    <div className={cn(crm.contactsKpiTile, "border-crm-border bg-crm-surface-2/60")}>
       <div className="flex items-center gap-2 text-crm-muted">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-crm bg-crm-surface text-crm-accent">
-          {icon}
-        </span>
+        <span className={cn(crm.contactsKpiIcon, "bg-crm-surface text-crm-accent")}>{icon}</span>
         <span className="text-[11px] font-semibold uppercase tracking-wide">{label}</span>
       </div>
       <p className={valueClass}>{value}</p>
     </div>
   );
 }
+
 
 // ── Add Contact Modal ─────────────────────────────────────────────────────────
 
@@ -238,12 +237,12 @@ function AddContactModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+      className={crm.contactsModalBackdrop}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-md rounded-crm border border-crm-border bg-crm-surface p-6 shadow-xl">
+      <div className={cn(crm.contactsModalPanel, "border-crm-border bg-crm-surface shadow-xl")}>
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-base font-semibold text-crm-text">New contact</h3>
           <button
@@ -264,7 +263,7 @@ function AddContactModal({
               value={form.displayName}
               onChange={(e) => setForm((f) => ({ ...f, displayName: e.target.value }))}
               placeholder="Full name"
-              className="w-full rounded-lg border border-crm-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
+              className={crm.input}
             />
           </div>
 
@@ -275,7 +274,7 @@ function AddContactModal({
                 value={form.company}
                 onChange={(e) => setForm((f) => ({ ...f, company: e.target.value }))}
                 placeholder="Optional"
-                className="w-full rounded-lg border border-crm-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
+                className={crm.input}
               />
             </div>
             <div>
@@ -283,7 +282,7 @@ function AddContactModal({
               <select
                 value={form.stage}
                 onChange={(e) => setForm((f) => ({ ...f, stage: e.target.value as CrmStage }))}
-                className="w-full rounded-lg border border-crm-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
+                className={crm.select}
               >
                 {(Object.keys(STAGE_LABELS) as Array<CrmStage | "all">)
                   .filter((k) => k !== "all")
@@ -303,7 +302,7 @@ function AddContactModal({
               value={form.phone}
               onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
               placeholder="+1 …"
-              className="w-full rounded-lg border border-crm-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
+              className={crm.input}
             />
           </div>
 
@@ -314,25 +313,17 @@ function AddContactModal({
               value={form.email}
               onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
               placeholder="name@company.com"
-              className="w-full rounded-lg border border-crm-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
+              className={crm.input}
             />
           </div>
 
           {error && <p className="text-sm text-crm-danger">{error}</p>}
 
           <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-lg border border-crm-border px-4 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg"
-            >
+            <button type="button" onClick={onClose} className={crm.btnSecondary}>
               Cancel
             </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="rounded-lg bg-crm-accent px-4 py-2 text-sm font-medium text-white hover:brightness-110 disabled:opacity-50"
-            >
+            <button type="submit" disabled={saving} className={crm.btnPrimary}>
               {saving ? "Creating…" : "Create contact"}
             </button>
           </div>
@@ -550,6 +541,7 @@ export default function CrmContactsPage() {
       {showAdd && <AddContactModal onClose={() => setShowAdd(false)} onCreated={handleContactCreated} />}
 
       <CRMPageHeader
+        className={crm.contactsHeaderPanel}
         icon={<Users className="h-5 w-5" aria-hidden />}
         title="Contacts"
         subtitle="Relationship command center — search, open records, work the live desk, and bulk-assign when you are admin."
@@ -574,7 +566,7 @@ export default function CrmContactsPage() {
       />
 
       {!loading && !error && (rows.length > 0 || total > 0) && (
-        <CRMCard className="p-4 sm:p-5">
+        <CRMCard className={cn(crm.contactsPanel, "p-4 sm:p-5")}>
           <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <p className={crm.label}>Matching filters</p>
@@ -622,7 +614,7 @@ export default function CrmContactsPage() {
         </CRMCard>
       )}
 
-      <CRMCard className="p-4 sm:p-5">
+      <CRMCard className={cn(crm.contactsPanel, crm.contactsFilterBar, "p-4 sm:p-5")}>
           <p className={cn(crm.label, "mb-3")}>Find & filter</p>
           <div className="relative w-full">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-crm-muted/80" />
@@ -702,7 +694,7 @@ export default function CrmContactsPage() {
 
         {/* Bulk bar — compact, not full-width promo */}
         {isAdmin && selectedIds.size > 0 && (
-          <div className="mb-4 flex flex-wrap items-center gap-3 rounded-crm border border-crm-border bg-crm-surface px-4 py-3 shadow-crm">
+          <div className={cn(crm.contactsBulkBar, "border-crm-border bg-crm-surface shadow-crm")}>
             <span className="text-sm font-medium text-crm-text">{selectedIds.size} selected</span>
             <select
               value={bulkAssignUserId}
@@ -723,7 +715,7 @@ export default function CrmContactsPage() {
               type="button"
               onClick={() => handleBulkReassign(bulkAssignUserId || null)}
               disabled={bulkAssigning || !bulkAssignUserId}
-              className="inline-flex items-center gap-1 rounded-lg border border-crm-border bg-crm-bg px-3 py-1.5 text-sm font-medium text-crm-text hover:bg-crm-surface-2 disabled:opacity-50"
+              className={cn(crm.btnSecondary, "px-3 py-1.5 text-sm disabled:opacity-50")}
             >
               <UserCheck className="h-3.5 w-3.5" />
               {bulkAssigning ? "Assigning…" : "Assign"}
@@ -762,7 +754,7 @@ export default function CrmContactsPage() {
         {!loading && error && <div className="rounded-crm border border-crm-danger/35 bg-crm-danger/15 px-4 py-3 text-sm text-crm-danger">{error}</div>}
 
         {!loading && !error && rows.length === 0 && (
-          <div className="rounded-crm-lg border border-dashed border-crm-border bg-crm-surface px-6 py-14 text-center">
+          <div className={cn(crm.contactsEmpty, "border-crm-border bg-crm-surface")}>
             <UserRound className="mx-auto mb-3 h-10 w-10 text-crm-border" aria-hidden />
             {hasListFilters ? (
               <>
@@ -775,7 +767,7 @@ export default function CrmContactsPage() {
                   <button
                     type="button"
                     onClick={resetFilters}
-                    className="rounded-lg border border-crm-border bg-crm-surface px-4 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg"
+                    className={crm.btnSecondary}
                   >
                     Reset filters
                   </button>
@@ -788,7 +780,7 @@ export default function CrmContactsPage() {
                         if (debounceRef.current) clearTimeout(debounceRef.current);
                         void load("", stage, assignedToMe, isAdmin ? archiveScope : "active", 0);
                       }}
-                      className="rounded-lg bg-crm-accent px-4 py-2 text-sm font-medium text-white hover:brightness-110"
+                      className={crm.btnPrimary}
                     >
                       Clear search only
                     </button>
@@ -808,7 +800,7 @@ export default function CrmContactsPage() {
                     setArchiveScope("active");
                     setPage(0);
                   }}
-                  className="mt-5 rounded-lg border border-crm-border bg-crm-surface px-4 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg"
+                  className={cn(crm.btnSecondary, "mt-5")}
                 >
                   View active contacts
                 </button>
@@ -823,7 +815,7 @@ export default function CrmContactsPage() {
                   <button
                     type="button"
                     onClick={() => setShowAdd(true)}
-                    className="inline-flex items-center gap-2 rounded-lg bg-crm-accent px-4 py-2 text-sm font-medium text-white hover:brightness-110"
+                    className={cn(crm.btnPrimary, "inline-flex items-center gap-2")}
                   >
                     <Plus className="h-4 w-4" />
                     New contact
@@ -831,7 +823,7 @@ export default function CrmContactsPage() {
                   {canImport && (
                     <Link
                       href="/crm/import"
-                      className="inline-flex items-center gap-2 rounded-lg border border-crm-border bg-crm-surface px-4 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg"
+                      className={cn(crm.btnSecondary, "inline-flex items-center gap-2")}
                     >
                       <FileUp className="h-4 w-4 text-crm-muted" />
                       Import leads
@@ -844,9 +836,9 @@ export default function CrmContactsPage() {
         )}
 
         {!loading && !error && rows.length > 0 && (
-          <CRMCard className="overflow-hidden p-0">
+          <CRMCard className={cn(crm.contactsPanel, crm.contactsListShell)}>
             {isAdmin && (
-              <div className="flex items-center gap-3 border-b border-crm-border bg-crm-surface-2/40 px-4 py-2.5">
+              <div className={cn(crm.contactsListSelectBar, "border-crm-border bg-crm-surface-2/40")}>
                 <label className="flex cursor-pointer items-center gap-2.5 text-sm text-crm-muted">
                   <input
                     type="checkbox"
@@ -868,7 +860,7 @@ export default function CrmContactsPage() {
                 <li
                   key={c.id}
                   className={cn(
-                    "group px-4 py-4 transition-colors sm:px-5",
+                    crm.contactsListRow,
                     archived ? "bg-crm-bg/40 opacity-85" : "hover:bg-crm-surface-2/35",
                   )}
                 >
@@ -980,7 +972,7 @@ export default function CrmContactsPage() {
 
         {!loading && !error && total > 0 && (canPrev || canNext) && (
           <nav
-            className="mt-6 flex flex-col items-stretch gap-3 rounded-crm-lg border border-crm-border bg-crm-surface px-4 py-3 shadow-crm sm:flex-row sm:items-center sm:justify-between"
+            className={cn(crm.contactsPagination, "border-crm-border bg-crm-surface shadow-crm")}
             aria-label="Contacts pagination"
           >
             <p className="text-center text-sm text-crm-muted sm:text-left">
@@ -995,7 +987,7 @@ export default function CrmContactsPage() {
                 type="button"
                 disabled={!canPrev}
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
-                className="inline-flex items-center gap-1 rounded-lg border border-crm-border bg-crm-surface px-3 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg disabled:cursor-not-allowed disabled:opacity-40"
+                className={cn(crm.btnSecondary, "disabled:cursor-not-allowed disabled:opacity-40")}
               >
                 <ChevronLeft className="h-4 w-4" aria-hidden />
                 Previous
@@ -1004,7 +996,7 @@ export default function CrmContactsPage() {
                 type="button"
                 disabled={!canNext}
                 onClick={() => setPage((p) => p + 1)}
-                className="inline-flex items-center gap-1 rounded-lg border border-crm-border bg-crm-surface px-3 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg disabled:cursor-not-allowed disabled:opacity-40"
+                className={cn(crm.btnSecondary, "disabled:cursor-not-allowed disabled:opacity-40")}
               >
                 Next
                 <ChevronRight className="h-4 w-4" aria-hidden />
