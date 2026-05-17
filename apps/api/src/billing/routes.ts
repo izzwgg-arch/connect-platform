@@ -2366,8 +2366,19 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       const result = await syncSolaExternalSchedules({ operatorId: u.sub, tenantId: body.tenantId || null });
       return result;
     } catch (e: any) {
+      if (e?.code === "SOLA_NOT_ENABLED") {
+        return reply.code(400).send({
+          error: "sola_not_enabled",
+          message:
+            "SOLA is saved for this company but not enabled. Open Admin Billing → Settings → Payment gateway, test the connection, then enable SOLA.",
+        });
+      }
       if (e?.code === "SOLA_NOT_CONFIGURED" || e?.code === "SOLA_RECURRING_NOT_CONFIGURED") {
-        return reply.code(400).send({ error: "sola_not_configured", message: "SOLA API key is not configured for import." });
+        return reply.code(400).send({
+          error: "sola_not_configured",
+          message:
+            "No SOLA API key available for import. Enable SOLA under Admin Billing → Settings for a company, or set SOLA_CARDKNOX_API_KEY on the API service.",
+        });
       }
       throw e;
     }

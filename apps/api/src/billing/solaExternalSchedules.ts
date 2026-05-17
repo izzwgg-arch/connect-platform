@@ -165,28 +165,53 @@ export function mapSolaScheduleActiveStatus(row: SolaRecurringScheduleRow): bool
   return s === "true" || s === "1";
 }
 
-export async function resolveSolaRecurringClientConfig(tenantId?: string | null): Promise<SolaRecurringClientConfig> {
+function configFromBillingSolaRow(row: {
+  credentialsEncrypted: string;
+  simulate: boolean;
+}): SolaRecurringClientConfig | null {
+  const secrets = decryptJson<{ apiKey?: string }>(row.credentialsEncrypted);
+  const apiKey = secrets.apiKey?.trim();
+  if (!apiKey) return null;
+  return { apiKey, simulate: !!row.simulate };
+}
+
+export async function resolveSolaRecurringClientConfig(
+  tenantId?: string | null,
+  dbClient: AnyDb = db as AnyDb,
+): Promise<SolaRecurringClientConfig> {
   if (tenantId) {
-    const row = await (db as AnyDb).billingSolaConfig.findUnique({ where: { tenantId } });
-    if (row?.isEnabled) {
-      const secrets = decryptJson<{ apiKey: string }>(row.credentialsEncrypted);
-      return {
-        apiKey: secrets.apiKey,
-        simulate: !!row.simulate,
-      };
+    const row = await dbClient.billingSolaConfig.findUnique({ where: { tenantId } });
+    if (row) {
+      if (!row.isEnabled) {
+        const err: Error & { code?: string } = new Error("SOLA_NOT_ENABLED");
+        err.code = "SOLA_NOT_ENABLED";
+        throw err;
+      }
+      const cfg = configFromBillingSolaRow(row);
+      if (cfg) return cfg;
     }
   }
 
-  const apiKey = process.env.SOLA_CARDKNOX_API_KEY;
-  if (!apiKey) {
-    const err: Error & { code?: string } = new Error("SOLA_NOT_CONFIGURED");
-    err.code = "SOLA_NOT_CONFIGURED";
-    throw err;
+  const envKey = process.env.SOLA_CARDKNOX_API_KEY?.trim();
+  if (envKey) {
+    return {
+      apiKey: envKey,
+      simulate: process.env.SOLA_CARDKNOX_SIMULATE === "1",
+    };
   }
-  return {
-    apiKey,
-    simulate: process.env.SOLA_CARDKNOX_SIMULATE === "1",
-  };
+
+  const fallback = await dbClient.billingSolaConfig.findFirst({
+    where: { isEnabled: true },
+    orderBy: [{ mode: "desc" }, { updatedAt: "desc" }],
+  });
+  if (fallback) {
+    const cfg = configFromBillingSolaRow(fallback);
+    if (cfg) return cfg;
+  }
+
+  const err: Error & { code?: string } = new Error("SOLA_NOT_CONFIGURED");
+  err.code = "SOLA_NOT_CONFIGURED";
+  throw err;
 }
 
 export function suggestTenantMatch(

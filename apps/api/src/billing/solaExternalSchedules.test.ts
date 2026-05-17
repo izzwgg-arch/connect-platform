@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import { redactSolaRecurringPayload } from "@connect/integrations";
 import {
   last4FromMaskedCard,
   mapSolaExternalSchedule,
   parseSolaCardExpiry,
   parseSolaScheduleRow,
+  resolveSolaRecurringClientConfig,
   suggestTenantMatch,
   syncSolaExternalSchedules,
   type SolaExternalScheduleDeps,
@@ -187,5 +189,56 @@ test("mapSolaExternalSchedule: sets tenant and status only", async () => {
   if (result.ok) {
     assert.equal((result.link as Record<string, unknown>).tenantId, "t1");
     assert.equal((result.link as Record<string, unknown>).mappingStatus, "MAPPED");
+  }
+});
+
+test("resolveSolaRecurringClientConfig: uses enabled tenant BillingSolaConfig", async (t) => {
+  if (!hasCredentialsMasterKey()) {
+    t.skip("CREDENTIALS_MASTER_KEY required");
+    return;
+  }
+  const prev = process.env.SOLA_CARDKNOX_API_KEY;
+  delete process.env.SOLA_CARDKNOX_API_KEY;
+  try {
+    const cfg = await resolveSolaRecurringClientConfig("t1", {
+      billingSolaConfig: {
+        findUnique: async () => ({
+          isEnabled: true,
+          simulate: false,
+          credentialsEncrypted: encryptJson({ apiKey: "tenant_key" }),
+        }),
+        findFirst: async () => null,
+      },
+    } as never);
+    assert.equal(cfg.apiKey, "tenant_key");
+  } finally {
+    if (prev !== undefined) process.env.SOLA_CARDKNOX_API_KEY = prev;
+    else delete process.env.SOLA_CARDKNOX_API_KEY;
+  }
+});
+
+test("resolveSolaRecurringClientConfig: falls back to newest enabled tenant config", async (t) => {
+  if (!hasCredentialsMasterKey()) {
+    t.skip("CREDENTIALS_MASTER_KEY required");
+    return;
+  }
+  const prev = process.env.SOLA_CARDKNOX_API_KEY;
+  delete process.env.SOLA_CARDKNOX_API_KEY;
+  try {
+    const cfg = await resolveSolaRecurringClientConfig(null, {
+      billingSolaConfig: {
+        findUnique: async () => null,
+        findFirst: async () => ({
+          isEnabled: true,
+          simulate: true,
+          credentialsEncrypted: encryptJson({ apiKey: "fallback_key" }),
+        }),
+      },
+    } as never);
+    assert.equal(cfg.apiKey, "fallback_key");
+    assert.equal(cfg.simulate, true);
+  } finally {
+    if (prev !== undefined) process.env.SOLA_CARDKNOX_API_KEY = prev;
+    else delete process.env.SOLA_CARDKNOX_API_KEY;
   }
 });

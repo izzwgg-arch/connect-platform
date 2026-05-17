@@ -5,6 +5,11 @@
   --sola-chip-conflict: rgba(251, 146, 60, 0.22);
 }
 
+.billing-sola-scope-hint {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+
 .billing-sola-trust {
   display: flex;
   flex-wrap: wrap;

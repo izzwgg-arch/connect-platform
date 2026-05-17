@@ -8,6 +8,7 @@ import { ErrorState } from "../../../../../components/ErrorState";
 import { BillingEmptyState } from "../../../../../components/billing/BillingEmptyState";
 import { BillingTableSkeleton } from "../../../../../components/billing/BillingTableSkeleton";
 import { dollars, formatDate } from "../../../../../lib/billingUi";
+import { useAdminBillingTenant } from "./useAdminBillingTenant";
 import "../sola-imports/billingSolaImports.css";
 
 type ScheduleRow = {
@@ -43,6 +44,7 @@ function statusChipClass(status: string) {
 }
 
 export function SolaImportsWorkspace() {
+  const { effectiveTenantId, displayName } = useAdminBillingTenant();
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_FILTERS)[number]>("UNMAPPED");
   const [activeFilter, setActiveFilter] = useState<"all" | "active" | "inactive">("all");
   const [search, setSearch] = useState("");
@@ -83,11 +85,24 @@ export function SolaImportsWorkspace() {
         <span>This does not disable existing Sola schedules.</span>
         <span>Mapping only links schedules to Connect tenants.</span>
       </div>
+      {effectiveTenantId ? (
+        <p className="muted billing-sola-scope-hint">
+          Sync uses SOLA credentials for <strong>{displayName || "this workspace"}</strong>.
+        </p>
+      ) : (
+        <p className="muted billing-sola-scope-hint">
+          Sync uses the platform SOLA env key, or the newest enabled company SOLA config.
+        </p>
+      )}
       <div className="billing-sola-toolbar">
         <button type="button" className="btn primary" disabled={syncing} onClick={() => void (async () => {
           setSyncing(true);
+          setActionError("");
           try {
-            const r = await apiPost<{ scanned: number; created: number; updated: number }>("/admin/billing/platform/sola-import/sync", {});
+            const r = await apiPost<{ scanned: number; created: number; updated: number }>(
+              "/admin/billing/platform/sola-import/sync",
+              effectiveTenantId ? { tenantId: effectiveTenantId } : {},
+            );
             setSyncResult(`Synced ${r.scanned}: ${r.created} new, ${r.updated} updated.`);
             bumpList();
           } catch (e: unknown) { setActionError(e instanceof Error ? e.message : "Sync failed"); }
