@@ -48,15 +48,15 @@ export function BillingPaymentMethodsSection({ detail }: { detail: TenantDetail 
             ctaLabel="Open invoices"
           />
         ) : (
-          <div className="b3-pm-grid">
+          <div className="billing-p8-pm-grid">
             {methods.map((method: { id: string; brand?: string | null; last4?: string | null; isDefault?: boolean; cardholderName?: string | null; expMonth?: number; expYear?: number }) => (
-              <div key={method.id} className={`b3-pm-card ${method.isDefault ? "b3-pm-default" : ""}`}>
+              <div key={method.id} className={`billing-p8-pm-card${method.isDefault ? " billing-p8-pm-card--default" : ""}`}>
                 <div>
                   <strong>
                     {(method.brand || "Card").toString()} ···{method.last4 || "----"}
                   </strong>
-                  {method.isDefault ? <span className="b3-pm-badge">Default</span> : null}
-                  <div className="b3-pm-meta">
+                  {method.isDefault ? <span className="billing-p8-pm-badge">Default</span> : null}
+                  <div className="billing-p8-pm-meta">
                     {method.cardholderName || "Cardholder not set"}
                     {method.expMonth && method.expYear ? ` · Expires ${method.expMonth}/${method.expYear}` : ""}
                   </div>
@@ -107,10 +107,10 @@ export function BillingActivitySection({ detail }: { detail: TenantDetail }) {
       {recent.length === 0 ? (
         <BillingEmptyState title="No billing activity yet" message="Invoices and payments will appear here once generated." />
       ) : (
-        <div className="billing-inv-table">
+        <div className="billing-inv-table billing-inv-table--sticky">
           {recent.map((invoice) => (
-            <div key={invoice.id}>
-              <div className="billing-inv-row" style={{ gridTemplateColumns: "1fr auto auto" }}>
+            <div key={invoice.id} className={`billing-inv-row-group${openId === invoice.id ? " billing-inv-row-group--open" : ""}`}>
+              <div className={`billing-inv-row${openId === invoice.id ? " billing-inv-row--active" : ""}`} style={{ gridTemplateColumns: "1fr auto auto" }}>
                 <div>
                   <div className="billing-inv-row__num">{invoice.invoiceNumber || "Invoice"}</div>
                   <div className="billing-inv-row__sub">
@@ -125,7 +125,7 @@ export function BillingActivitySection({ detail }: { detail: TenantDetail }) {
                 </button>
               </div>
               {openId === invoice.id ? (
-                <div className="billing-inv-log">
+                <div className="billing-inv-log" style={{ gridColumn: "1 / -1" }}>
                   {loading ? <p className="muted">Loading…</p> : null}
                   {err ? <ErrorState message={err} /> : null}
                   {!loading && !err && events.length === 0 ? <p className="muted">No events on this invoice.</p> : null}

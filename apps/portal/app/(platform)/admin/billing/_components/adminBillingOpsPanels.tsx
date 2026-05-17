@@ -304,7 +304,7 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
               if (!inv || ["PAID", "VOID"].includes(inv.status)) return null;
               const cs = readInvoiceCollections(inv.metadata);
               return (
-                <div style={{ marginTop: 16, padding: "12px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
+                <div className="billing-p8-panel" style={{ marginTop: 16 }}>
                   <div className="row-actions" style={{ marginBottom: 8 }}>
                     <strong style={{ fontSize: 13 }}>Automatic retries</strong>
                     <span className={`billing-status-pill ${cs.status === "DO_NOT_CHARGE" ? "bad" : cs.status === "PAUSED" ? "warn" : "ok"}`} style={{ fontSize: 11 }}>
@@ -1285,18 +1285,18 @@ export function InvoicesTab() {
   return (
     <div data-testid="billing-admin-tab-panel-invoices">
       {toast ? (
-        <div className={`billing-toast billing-toast--${toast.kind}`} style={{ position: "relative", bottom: "auto", right: "auto", maxWidth: "100%" }} role="status">
+        <div className={`billing-p8-toast billing-p8-toast--${toast.kind === "ok" ? "ok" : "err"}`} role="status">
           {toast.text}
         </div>
       ) : null}
 
       <div className="billing-inv-toolbar">
-        <div className="billing-inv-toolbar__filters">
+        <div className="billing-p8-filter-bar billing-inv-toolbar__filters">
           {INV_STATUSES.map((s) => (
             <button
               key={s}
               type="button"
-              className={`btn ${statusFilter === s ? "primary" : "ghost"}`}
+              className={`billing-p8-filter-pill${statusFilter === s ? " active" : ""}`}
               onClick={() => {
                 setStatusFilter(s);
                 setPage(1);
@@ -1325,7 +1325,7 @@ export function InvoicesTab() {
             {statusFilter !== "ALL" ? ` · ${statusFilter}` : ""}
             {search ? ` · “${search}”` : ""}
           </p>
-          <div className="billing-inv-table">
+          <div className="billing-inv-table billing-inv-table--sticky">
             <div className="billing-inv-table__head" aria-hidden>
               <span>Invoice</span>
               <span>Period</span>
@@ -1343,11 +1343,12 @@ export function InvoicesTab() {
               const canAct = inv.status !== "PAID" && inv.status !== "VOID";
               const period = fmtPeriod(inv.periodStart, inv.periodEnd);
               const isLogOpen = logInvoiceId === inv.id;
+              const isRowActive = detailInvoiceId === inv.id || isLogOpen;
               const isBusy = (label: string) => busy === `${label}-${inv.id}`;
 
               return (
-                <div key={inv.id}>
-                  <div className="billing-inv-row">
+                <div key={inv.id} className={`billing-inv-row-group${isLogOpen ? " billing-inv-row-group--open" : ""}`}>
+                  <div className={`billing-inv-row${isRowActive ? " billing-inv-row--active" : ""}`}>
                   <div>
                     <div className="billing-inv-row__num">{inv.invoiceNumber || inv.id.slice(0, 8)}</div>
                     <div className="billing-inv-row__sub">{inv.tenant?.name || inv.tenantId}</div>
@@ -1363,7 +1364,7 @@ export function InvoicesTab() {
                   <div className="billing-inv-row__amount">
                     {dollars(inv.totalCents)}
                     {inv.balanceDueCents > 0 && inv.status !== "PAID" ? (
-                      <div style={{ fontSize: 11, fontWeight: 500, color: "var(--muted)" }}>Due {dollars(inv.balanceDueCents)}</div>
+                      <div className="billing-inv-row__balance">Due {dollars(inv.balanceDueCents)}</div>
                     ) : null}
                   </div>
                   <span className={`billing-status-pill ${invStatusClass(inv.status)}`}>{invoiceStatusLabel(inv.status)}</span>
@@ -1463,11 +1464,12 @@ export function InvoicesTab() {
 
                   {/* Inline event log */}
                   {isLogOpen ? (
-                    <div style={{ width: "100%", marginTop: 8 }}>
-                      {logLoading ? <p className="muted">Loading events…</p> : null}
+                    <div className="billing-inv-log">
+                      {logLoading ? <p className="muted" style={{ margin: 0, fontSize: 12 }}>Loading events…</p> : null}
                       {logError ? <ErrorState message={logError} /> : null}
                       {!logLoading && !logError && logEvents.length === 0 ? (
                         <BillingEmptyState
+                          compact
                           title="No activity for this row"
                           message="Open the invoice drawer for the full ledger. Inline activity loads the same audit trail in compact form."
                         />
@@ -1613,45 +1615,21 @@ export function TransactionsTab() {
 
   const data = useAsyncResource<TxListResult>(() => apiGet<TxListResult>(url), [url]);
 
-  const txColumns = [
-    { key: "date", label: "Date", render: (r: TxRow) => fmtDatetime(r.createdAt) },
-    { key: "tenant", label: "Tenant", render: (r: TxRow) => r.tenant?.name || r.tenantId },
-    { key: "inv", label: "Invoice", render: (r: TxRow) => r.invoice?.invoiceNumber || r.invoiceId || "—" },
-    { key: "amt", label: "Amount", render: (r: TxRow) => dollars(r.amountCents) },
-    {
-      key: "status",
-      label: "Status",
-      render: (r: TxRow) => (
-        <span className={`billing-status-pill ${txStatusClass(r.status)}`}>{transactionStatusLabel(r.status)}</span>
-      ),
-    },
-    { key: "method", label: "Card", render: (r: TxRow) => r.paymentMethod ? `${r.paymentMethod.brand || "Card"} ···${r.paymentMethod.last4 || "----"}` : "—" },
-    { key: "ref", label: "Processor Ref", render: (r: TxRow) => r.processorTransactionId || "—" },
-    { key: "code", label: "Response", render: (r: TxRow) => r.responseCode || "—" },
-    {
-      key: "detail",
-      label: "",
-      render: (r: TxRow) => (
-        <button className="btn ghost" type="button" onClick={() => setDetailTxId(r.id)} style={{ fontSize: 12, padding: "2px 8px" }}>
-          Detail
-        </button>
-      ),
-    },
-  ];
-
   return (
-    <>
-      <div className="row-actions" style={{ marginBottom: 12, flexWrap: "wrap" }}>
-        {TX_STATUSES.map((s) => (
-          <button
-            key={s}
-            type="button"
-            className={`btn ${statusFilter === s ? "primary" : "ghost"}`}
-            onClick={() => { setStatusFilter(s); setPage(1); }}
-          >
-            {s}
-          </button>
-        ))}
+    <div data-testid="billing-admin-tab-panel-payments">
+      <div className="billing-inv-toolbar" style={{ marginBottom: 10 }}>
+        <div className="billing-p8-filter-bar">
+          {TX_STATUSES.map((s) => (
+            <button
+              key={s}
+              type="button"
+              className={`billing-p8-filter-pill${statusFilter === s ? " active" : ""}`}
+              onClick={() => { setStatusFilter(s); setPage(1); }}
+            >
+              {s === "ALL" ? "All" : s}
+            </button>
+          ))}
+        </div>
       </div>
 
       {data.status === "loading" ? <LoadingSkeleton rows={8} /> : null}
@@ -1659,18 +1637,64 @@ export function TransactionsTab() {
 
       {data.status === "success" ? (
         <>
-          <p className="muted" style={{ marginBottom: 8 }}>
+          <p className="billing-inv-meta">
             {data.data.total} transaction{data.data.total !== 1 ? "s" : ""}
-            {statusFilter !== "ALL" ? ` · status: ${statusFilter}` : ""}
+            {statusFilter !== "ALL" ? ` · ${statusFilter}` : ""}
           </p>
           {data.data.transactions.length === 0 ? (
             <BillingEmptyState
               title="No transactions in this view"
-              message="Adjust the status chips above or load a different page. Each row is a processor attempt tied to an invoice when available."
+              message="Adjust the status filter or try another page. Each row is a processor attempt tied to an invoice when available."
             />
           ) : (
-            <div className="billing-ops-table-wrap billing-ops-scroll">
-              <DataTable rows={data.data.transactions} columns={txColumns} />
+            <div className="billing-p8-tx-table billing-inv-table--sticky">
+              <div className="billing-p8-tx-table__head" aria-hidden>
+                <span>Date</span>
+                <span>Invoice</span>
+                <span>Amount</span>
+                <span>Status</span>
+                <span>Method</span>
+                <span style={{ textAlign: "right" }} />
+              </div>
+              {data.data.transactions.map((r) => {
+                const failed = r.status === "DECLINED" || r.status === "ERROR";
+                return (
+                  <div
+                    key={r.id}
+                    className={`billing-p8-tx-row${detailTxId === r.id ? " billing-p8-tx-row--active" : ""}`}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 500 }}>{fmtDatetime(r.createdAt)}</div>
+                      <div className="billing-p8-tx-row__meta">{r.tenant?.name || r.tenantId}</div>
+                    </div>
+                    <div>
+                      <div>{r.invoice?.invoiceNumber || "—"}</div>
+                      {r.processorTransactionId ? (
+                        <div className="billing-p8-tx-row__meta">Ref {r.processorTransactionId}</div>
+                      ) : null}
+                    </div>
+                    <div className="billing-p8-tx-row__amount">{dollars(r.amountCents)}</div>
+                    <span className={`billing-status-pill ${txStatusClass(r.status)}`}>{transactionStatusLabel(r.status)}</span>
+                    <div>
+                      {r.paymentMethod ? (
+                        <span className="billing-p8-tx-method">
+                          {(r.paymentMethod.brand || "Card").toString()} ···{r.paymentMethod.last4 || "----"}
+                        </span>
+                      ) : (
+                        <span className="billing-p8-tx-row__meta">—</span>
+                      )}
+                      {failed && (r.responseMessage || r.responseCode) ? (
+                        <div className="billing-p8-tx-row__fail">{r.responseMessage || r.responseCode}</div>
+                      ) : null}
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <button className="btn ghost" type="button" onClick={() => setDetailTxId(r.id)} style={{ fontSize: 12, padding: "4px 10px", minHeight: 28 }}>
+                        Detail
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
           <Pager page={data.data.page} pages={data.data.pages} onPage={(p) => setPage(p)} />
@@ -1680,7 +1704,7 @@ export function TransactionsTab() {
       {detailTxId ? (
         <TransactionDetailModal txId={detailTxId} onClose={() => setDetailTxId(null)} />
       ) : null}
-    </>
+    </div>
   );
 }
 
@@ -1718,8 +1742,8 @@ type FailedPaymentsResult = { rows: FailedPaymentRow[]; capped: boolean };
 function CappedNotice({ visible }: { visible: boolean }) {
   if (!visible) return null;
   return (
-    <div style={{ padding: "6px 10px", borderRadius: 6, background: "#fef9c3", border: "1px solid #fde68a", fontSize: 12, color: "#713f12", marginBottom: 8 }}>
-      ⚠ Result set is capped — not all records are shown. Use filters or export CSV to retrieve more data.
+    <div className="billing-p8-capped" role="status">
+      Result set is capped — not all records are shown. Use filters or export CSV to retrieve more data.
     </div>
   );
 }
@@ -1806,9 +1830,9 @@ export function ReportsTab() {
 
   return (
     <div className="stack compact-stack" data-testid="billing-admin-tab-panel-reports">
-      <div style={{ background: "var(--surface-alt, #f9fafb)", border: "1px solid var(--border, #e0e0e0)", borderRadius: 8, padding: "16px 20px" }}>
-        <h4 style={{ margin: "0 0 10px" }}>CSV Exports</h4>
-        <p className="muted" style={{ fontSize: 13, marginBottom: 12 }}>
+      <div className="billing-p8-panel">
+        <h4 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 650 }}>CSV Exports</h4>
+        <p className="billing-p8-panel__desc">
           Downloads are generated server-side and include all matching rows (up to the safety cap). Files are named with today&apos;s date.
         </p>
 
@@ -1846,9 +1870,9 @@ export function ReportsTab() {
       </div>
 
       {/* ── Aging Report ────────────────────────────────────────────────── */}
-      <div style={{ background: "var(--surface-alt, #f9fafb)", border: "1px solid var(--border, #e0e0e0)", borderRadius: 8, padding: "16px 20px" }}>
-        <div className="row-actions" style={{ marginBottom: 8 }}>
-          <h4 style={{ margin: 0, flex: 1 }}>Aging Report</h4>
+      <div className="billing-p8-panel">
+        <div className="billing-p8-panel__head">
+          <h4>Aging Report</h4>
           <button
             className="btn ghost"
             type="button"
@@ -1869,7 +1893,7 @@ export function ReportsTab() {
             </a>
           )}
         </div>
-        <p className="muted" style={{ fontSize: 13, marginBottom: 10 }}>
+        <p className="billing-p8-panel__desc">
           All open invoices with outstanding balance, sorted by due date ascending.
         </p>
 
@@ -1899,9 +1923,9 @@ export function ReportsTab() {
       </div>
 
       {/* ── Failed Payments Report ───────────────────────────────────────── */}
-      <div style={{ background: "var(--surface-alt, #f9fafb)", border: "1px solid var(--border, #e0e0e0)", borderRadius: 8, padding: "16px 20px" }}>
-        <div className="row-actions" style={{ marginBottom: 8 }}>
-          <h4 style={{ margin: 0, flex: 1 }}>Failed Payments</h4>
+      <div className="billing-p8-panel">
+        <div className="billing-p8-panel__head">
+          <h4>Failed Payments</h4>
           <button
             className="btn ghost"
             type="button"
@@ -1922,7 +1946,7 @@ export function ReportsTab() {
             </a>
           )}
         </div>
-        <p className="muted" style={{ fontSize: 13, marginBottom: 10 }}>
+        <p className="billing-p8-panel__desc">
           Invoices in FAILED or OVERDUE status with last processor response.
         </p>
 
@@ -2090,14 +2114,14 @@ export function CollectionsTab() {
 
   return (
     <div className="stack compact-stack" data-testid="billing-admin-tab-panel-collections">
-      <p className="b3-muted" style={{ marginBottom: 12, maxWidth: 720 }}>
+      <p className="billing-p8-panel__desc" style={{ marginBottom: 12, maxWidth: 720 }}>
         Track automatic payment retries. Pausing or skipping affects the next scheduled run only — changes are picked up on the regular retry cycle.
       </p>
 
       {/* Overview section */}
-      <div style={{ padding: "14px 16px", background: "var(--surface, #fff)", border: "1px solid var(--border, #e2e8f0)", borderRadius: 10 }}>
-        <div className="row-actions" style={{ marginBottom: 8 }}>
-          <h4 style={{ margin: 0, fontWeight: 700 }}>Collections overview</h4>
+      <div className="billing-p8-panel">
+        <div className="billing-p8-panel__head">
+          <h4>Collections overview</h4>
           <button className="btn ghost" type="button" style={{ fontSize: 12 }} disabled={overviewLoading} onClick={() => {
             if (!overviewLoaded) { void loadOverview(); } else { setOverviewRev((r) => r + 1); }
           }}>
@@ -2109,7 +2133,7 @@ export function CollectionsTab() {
         {overview && !overviewLoading ? (
           <div className="stack compact-stack">
             {/* Count badges */}
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
+            <div className="billing-p8-stat-grid">
               {[
                 { label: "Open / failed", value: overview.counts.failed, style: "bad" },
                 { label: "Ready to retry", value: overview.counts.retryEligible, style: "warn" },
@@ -2117,9 +2141,9 @@ export function CollectionsTab() {
                 { label: "Max retries hit", value: overview.counts.exhausted, style: "bad" },
                 { label: "Auto-charge off", value: overview.counts.doNotCharge, style: "bad" },
               ].map(({ label, value, style }) => (
-                <div key={label} style={{ textAlign: "center" }}>
-                  <div className={`billing-status-pill ${style}`} style={{ fontSize: 18, fontWeight: 700, padding: "4px 14px" }}>{value}</div>
-                  <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>{label}</div>
+                <div key={label} className={`billing-p8-stat ${style}`}>
+                  <strong>{value}</strong>
+                  <span>{label}</span>
                 </div>
               ))}
             </div>
@@ -2127,7 +2151,7 @@ export function CollectionsTab() {
             {/* Retry-eligible */}
             {overview.retryEligible.length > 0 && (
               <>
-                <h5 style={{ margin: "12px 0 4px", fontSize: 13, fontWeight: 600 }}>Ready for next retry</h5>
+                <h5 className="billing-p8-section-label">Ready for next retry</h5>
                 <CollectionsRowTable rows={overview.retryEligible} onOpenInvoice={setOpenInvoiceId} />
               </>
             )}
@@ -2135,7 +2159,7 @@ export function CollectionsTab() {
             {/* Paused */}
             {overview.paused.length > 0 && (
               <>
-                <h5 style={{ margin: "12px 0 4px", fontSize: 13, fontWeight: 600 }}>Paused or auto-charge off</h5>
+                <h5 className="billing-p8-section-label">Paused or auto-charge off</h5>
                 <CollectionsRowTable rows={overview.paused} onOpenInvoice={setOpenInvoiceId} />
               </>
             )}
@@ -2143,7 +2167,7 @@ export function CollectionsTab() {
             {/* Exhausted */}
             {overview.exhausted.length > 0 && (
               <>
-                <h5 style={{ margin: "12px 0 4px", fontSize: 13, fontWeight: 600 }}>Retries exhausted</h5>
+                <h5 className="billing-p8-section-label">Retries exhausted</h5>
                 <CollectionsRowTable rows={overview.exhausted} onOpenInvoice={setOpenInvoiceId} />
               </>
             )}
@@ -2159,9 +2183,9 @@ export function CollectionsTab() {
       </div>
 
       {/* Preview next sweep */}
-      <div style={{ padding: "14px 16px", background: "var(--surface, #fff)", border: "1px solid var(--border, #e2e8f0)", borderRadius: 10 }}>
-        <div className="row-actions" style={{ marginBottom: 8 }}>
-          <h4 style={{ margin: 0, fontWeight: 700 }}>Next automated sweep (preview)</h4>
+      <div className="billing-p8-panel">
+        <div className="billing-p8-panel__head">
+          <h4>Next automated sweep (preview)</h4>
           <button className="btn ghost" type="button" style={{ fontSize: 12 }} disabled={previewLoading} onClick={() => {
             if (!previewLoaded) { void loadPreview(); } else { setPreviewRev((r) => r + 1); }
           }}>
@@ -2172,7 +2196,7 @@ export function CollectionsTab() {
         {previewLoading ? <LoadingSkeleton rows={3} /> : null}
         {preview && !previewLoading ? (
           <div>
-            <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>{preview.note}</div>
+            <p className="billing-p8-panel__desc">{preview.note}</p>
             {preview.rows.length === 0 ? (
               <BillingEmptyState
                 title="No invoices in the next sweep"

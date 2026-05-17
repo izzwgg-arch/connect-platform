@@ -9,36 +9,32 @@ export function BillingEmptyState({
   ctaHref,
   ctaLabel,
   secondary,
+  compact,
 }: {
   title: string;
   message: ReactNode;
   ctaHref?: string;
   ctaLabel?: string;
   secondary?: ReactNode;
+  /** Tighter padding when nested inside a table row group */
+  compact?: boolean;
 }) {
   return (
     <div
-      className="billing-empty-state"
-      style={{
-        padding: "28px 24px",
-        borderRadius: 12,
-        border: "1px dashed color-mix(in srgb, var(--border, #cbd5e1) 75%, transparent)",
-        background: "var(--surface-alt, #fafafa)",
-        textAlign: "center",
-        maxWidth: 480,
-        margin: "12px auto",
-      }}
+      className={`billing-empty-state${compact ? " billing-empty-state--compact" : ""}`}
+      role="status"
     >
-      <p style={{ margin: "0 0 6px", fontWeight: 700, fontSize: 16 }}>{title}</p>
-      <p className="muted" style={{ margin: "0 0 16px", fontSize: 14, lineHeight: 1.55 }}>
-        {message}
-      </p>
+      <div className="billing-empty-state__icon" aria-hidden>
+        ◌
+      </div>
+      <p className="billing-empty-state__title">{title}</p>
+      <p className="billing-empty-state__message">{message}</p>
       {ctaHref && ctaLabel ? (
-        <Link className="btn primary" href={ctaHref} style={{ fontSize: 14 }}>
+        <Link className="btn primary billing-empty-state__cta" href={ctaHref}>
           {ctaLabel}
         </Link>
       ) : null}
-      {secondary ? <div style={{ marginTop: 14 }}>{secondary}</div> : null}
+      {secondary ? <div className="billing-empty-state__secondary">{secondary}</div> : null}
     </div>
   );
 }

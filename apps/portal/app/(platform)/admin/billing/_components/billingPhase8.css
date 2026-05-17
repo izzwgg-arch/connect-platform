@@ -274,6 +274,528 @@
   color: var(--billing-text);
 }
 
+/* ── Compact status chips (tables) ── */
+
+.billing-p8-scope .billing-status-pill {
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.billing-p8-scope .billing-status-pill.ok {
+  color: #39d98a;
+  border-color: rgba(57, 217, 138, 0.38);
+  background: rgba(57, 217, 138, 0.1);
+}
+
+/* ── Filter / toolbar pills ── */
+
+.billing-p8-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.billing-p8-filter-pill {
+  appearance: none;
+  border: 1px solid var(--billing-border);
+  background: color-mix(in srgb, var(--billing-surface-raised) 80%, transparent);
+  color: var(--billing-muted);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 11px;
+  min-height: 30px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: inherit;
+  line-height: 1.2;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.billing-p8-filter-pill:hover {
+  color: var(--billing-text);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--billing-border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--billing-surface));
+}
+
+.billing-p8-filter-pill.active {
+  color: var(--billing-text);
+  font-weight: 600;
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--billing-surface));
+}
+
+/* ── Invoice register: density + selection ── */
+
+.billing-inv-table--sticky {
+  max-height: min(72vh, 820px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.billing-inv-table--sticky .billing-inv-table__head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  backdrop-filter: blur(10px);
+}
+
+.billing-inv-row-group {
+  border-bottom: 1px solid color-mix(in srgb, var(--billing-border) 50%, transparent);
+}
+
+.billing-inv-row-group:last-child {
+  border-bottom: none;
+}
+
+.billing-inv-row {
+  padding: 7px 12px;
+  min-height: 44px;
+  cursor: default;
+}
+
+.billing-inv-row--active,
+.billing-inv-row-group--open > .billing-inv-row {
+  background: color-mix(in srgb, var(--accent) 9%, var(--billing-surface));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.billing-inv-row__num {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.billing-inv-row__amount {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.billing-inv-row__amount .billing-inv-row__balance {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--billing-muted);
+  margin-top: 1px;
+}
+
+.billing-inv-row__actions .btn:focus-visible,
+.billing-p8-filter-pill:focus-visible,
+.billing-inv-search:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
+.billing-inv-log {
+  margin: 0;
+  padding: 10px 12px 12px 18px;
+  border-top: none;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  background: color-mix(in srgb, var(--billing-surface-raised) 45%, transparent);
+  border-radius: 0;
+}
+
+/* ── Payments / transactions SaaS rows ── */
+
+.billing-p8-tx-table {
+  border: 1px solid var(--billing-border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--billing-surface) 94%, transparent);
+}
+
+.billing-p8-tx-table__head,
+.billing-p8-tx-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(100px, 0.9fr) minmax(88px, 0.65fr) minmax(80px, 0.55fr) minmax(100px, 0.75fr) minmax(72px, auto);
+  gap: 8px 10px;
+  align-items: center;
+  padding: 8px 12px;
+}
+
+.billing-p8-tx-table__head {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--billing-muted);
+  background: color-mix(in srgb, var(--billing-surface-raised) 75%, transparent);
+  border-bottom: 1px solid var(--billing-border);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.billing-p8-tx-row {
+  border-bottom: 1px solid color-mix(in srgb, var(--billing-border) 45%, transparent);
+  font-size: 13px;
+  transition: background 0.1s ease;
+}
+
+.billing-p8-tx-row:last-child {
+  border-bottom: none;
+}
+
+.billing-p8-tx-row:hover {
+  background: color-mix(in srgb, var(--accent) 6%, var(--billing-surface));
+}
+
+.billing-p8-tx-row--active {
+  background: color-mix(in srgb, var(--accent) 9%, var(--billing-surface));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.billing-p8-tx-row__amount {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.billing-p8-tx-row__meta {
+  font-size: 11px;
+  color: var(--billing-muted);
+  margin-top: 2px;
+}
+
+.billing-p8-tx-row__fail {
+  color: #ff7a90;
+  font-size: 11px;
+  margin-top: 2px;
+  line-height: 1.35;
+}
+
+.billing-p8-tx-method {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.billing-p8-tx-method::before {
+  content: "◆";
+  font-size: 8px;
+  opacity: 0.45;
+}
+
+/* ── Ops DataTable (reports, collections, drawer) ── */
+
+.billing-p8-scope .billing-ops-table-wrap {
+  border-radius: 10px;
+  border-color: var(--billing-border);
+  background: color-mix(in srgb, var(--billing-surface) 94%, transparent);
+  box-shadow: none;
+}
+
+.billing-p8-scope .billing-ops-table-wrap table th {
+  background: color-mix(in srgb, var(--billing-surface-raised) 78%, transparent);
+  color: var(--billing-muted);
+  padding: 8px 12px !important;
+  font-size: 10px;
+}
+
+.billing-p8-scope .billing-ops-table-wrap table td {
+  padding: 9px 12px !important;
+  font-size: 13px;
+  border-bottom: 1px solid color-mix(in srgb, var(--billing-border) 40%, transparent);
+}
+
+.billing-p8-scope .billing-ops-table-wrap table tbody tr {
+  transition: background 0.1s ease;
+}
+
+.billing-p8-scope .billing-ops-table-wrap table tbody tr:hover td {
+  background: color-mix(in srgb, var(--accent) 6%, var(--billing-surface));
+}
+
+/* ── Report / collections panels ── */
+
+.billing-p8-panel {
+  border: 1px solid var(--billing-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--billing-surface) 92%, transparent);
+  padding: 14px 16px;
+}
+
+.billing-p8-panel__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.billing-p8-panel__head h4 {
+  margin: 0;
+  flex: 1;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.billing-p8-panel__desc {
+  font-size: 12px;
+  color: var(--billing-muted);
+  margin: 0 0 10px;
+  line-height: 1.45;
+}
+
+.billing-p8-stat-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.billing-p8-stat {
+  flex: 1 1 100px;
+  text-align: center;
+  padding: 8px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--billing-border);
+  background: color-mix(in srgb, var(--billing-surface-raised) 70%, transparent);
+}
+
+.billing-p8-stat strong {
+  display: block;
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.billing-p8-stat span {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--billing-muted);
+}
+
+.billing-p8-stat.bad strong {
+  color: #ff7a90;
+}
+
+.billing-p8-stat.warn strong {
+  color: #ffd166;
+}
+
+.billing-p8-capped {
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  margin-bottom: 8px;
+  border: 1px solid color-mix(in srgb, #ffd166 35%, transparent);
+  background: color-mix(in srgb, #ffd166 12%, transparent);
+  color: #ffd166;
+}
+
+.billing-p8-section-label {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--billing-text);
+}
+
+/* ── Payment methods cards ── */
+
+.billing-p8-pm-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.billing-p8-pm-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--billing-border);
+  background: color-mix(in srgb, var(--billing-surface-raised) 75%, transparent);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.billing-p8-pm-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--billing-border));
+}
+
+.billing-p8-pm-card--default {
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--billing-surface));
+}
+
+.billing-p8-pm-card strong {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.billing-p8-pm-meta {
+  font-size: 11px;
+  color: var(--billing-muted);
+  margin-top: 3px;
+}
+
+.billing-p8-pm-badge {
+  font-size: 10px;
+  font-weight: 650;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--billing-text);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* ── Empty + loading states ── */
+
+.billing-empty-state {
+  padding: 32px 24px;
+  border-radius: 12px;
+  border: 1px dashed color-mix(in srgb, var(--billing-border) 90%, transparent);
+  background: color-mix(in srgb, var(--billing-surface-raised) 55%, transparent);
+  text-align: center;
+  max-width: 440px;
+  margin: 16px auto;
+}
+
+.billing-empty-state--compact {
+  padding: 20px 16px;
+  margin: 8px auto;
+  max-width: 100%;
+}
+
+.billing-empty-state__icon {
+  width: 40px;
+  height: 40px;
+  margin: 0 auto 12px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: var(--billing-muted);
+  background: color-mix(in srgb, var(--billing-surface) 80%, transparent);
+  border: 1px solid var(--billing-border);
+}
+
+.billing-empty-state__title {
+  margin: 0 0 6px;
+  font-weight: 650;
+  font-size: 15px;
+  letter-spacing: -0.02em;
+  color: var(--billing-text);
+}
+
+.billing-empty-state__message {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--billing-muted);
+}
+
+.billing-empty-state__cta {
+  font-size: 13px;
+}
+
+.billing-p8-scope .skeleton-wrap {
+  gap: 6px;
+}
+
+.billing-p8-scope .skeleton-row {
+  border-radius: 8px;
+  opacity: 0.65;
+}
+
+/* ── Timeline (activity) ── */
+
+.billing-p8-scope .billing-timeline-v2__item {
+  border-bottom-color: color-mix(in srgb, var(--billing-border) 55%, transparent);
+  padding: 10px 0;
+}
+
+.billing-p8-scope .billing-timeline-v2__icon {
+  background: color-mix(in srgb, var(--billing-surface-raised) 85%, transparent);
+  border-color: var(--billing-border);
+  color: var(--billing-muted);
+  transition: background 0.12s ease;
+}
+
+.billing-p8-scope .billing-timeline-v2__icon.good {
+  background: rgba(57, 217, 138, 0.12);
+  border-color: rgba(57, 217, 138, 0.35);
+  color: #39d98a;
+}
+
+.billing-p8-scope .billing-timeline-v2__icon.bad {
+  background: rgba(255, 122, 144, 0.12);
+  border-color: rgba(255, 122, 144, 0.32);
+  color: #ff7a90;
+}
+
+.billing-p8-scope .billing-timeline-v2__time {
+  color: var(--billing-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Toast in workspace ── */
+
+.billing-p8-toast {
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  border: 1px solid var(--billing-border);
+  animation: billing-p8-toast-in 0.2s ease;
+}
+
+.billing-p8-toast--ok {
+  background: rgba(57, 217, 138, 0.1);
+  border-color: rgba(57, 217, 138, 0.35);
+  color: #39d98a;
+}
+
+.billing-p8-toast--err {
+  background: rgba(255, 122, 144, 0.1);
+  border-color: rgba(255, 122, 144, 0.32);
+  color: #ff7a90;
+}
+
+@keyframes billing-p8-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Dark: phase-5 chips inside workspace */
+.billing-p8-scope .billing-p5-status-chip.good {
+  background: rgba(57, 217, 138, 0.12);
+  border-color: rgba(57, 217, 138, 0.35);
+  color: #39d98a;
+}
+
+.billing-p8-scope .billing-p5-status-chip.warn {
+  background: rgba(255, 209, 102, 0.12);
+  border-color: rgba(255, 209, 102, 0.32);
+  color: #ffd166;
+}
+
+.billing-p8-scope .billing-p5-status-chip.bad {
+  background: rgba(255, 122, 144, 0.12);
+  border-color: rgba(255, 122, 144, 0.32);
+  color: #ff7a90;
+}
+
 @media (max-width: 960px) {
   .billing-inv-table__head {
     display: none;
@@ -290,5 +812,14 @@
   .billing-inv-row__actions {
     grid-area: actions;
     justify-content: flex-start;
+  }
+
+  .billing-p8-tx-table__head {
+    display: none;
+  }
+
+  .billing-p8-tx-row {
+    grid-template-columns: 1fr auto;
+    gap: 6px;
   }
 }
