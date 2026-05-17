@@ -22,13 +22,26 @@ export const crm = {
   /** Forces dark CRM tokens even when portal data-theme=light (campaign routes only). */
   campaignWorkspace:
     "crm-campaign-workspace [color-scheme:dark] [--panel:#141f2b] [--panel-2:#1a2635] [--bg-soft:#101923] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#141f2b] [--crm-surface-2:#1a2635] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",
-  /** Phase 19D.2 — contacts index command bar stays dark when portal data-theme=light */
-  contactsWorkspace:
-    "crm-contacts-workspace [color-scheme:dark] [--panel:#141f2b] [--panel-2:#1a2635] [--bg-soft:#101923] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#141f2b] [--crm-surface-2:#1a2635] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",
+  /** Phase 19D.2+ — contacts index; theme tokens via globals `.crm-contacts-workspace` */
+  contactsWorkspace: "crm-contacts-workspace w-full min-h-0",
+  contactsHeaderPanel: "contacts-header-panel",
+  contactsPanel: "contacts-panel",
+  contactsKpiTile: "contacts-kpi-tile flex min-w-[7.5rem] flex-1 flex-col gap-2 rounded-crm border px-4 py-3 sm:min-w-0",
+  contactsKpiIcon: "contacts-kpi-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-crm",
+  contactsFilterBar: "contacts-filter-bar",
+  contactsBulkBar: "contacts-bulk-bar mb-4 flex flex-wrap items-center gap-3 rounded-crm border px-4 py-3",
+  contactsListShell: "contacts-list-shell overflow-hidden p-0",
+  contactsListSelectBar:
+    "contacts-list-select-bar flex items-center gap-3 border-b px-4 py-2.5",
+  contactsListRow: "contacts-list-row group px-4 py-4 transition-colors sm:px-5",
+  contactsEmpty: "contacts-empty-wrap rounded-crm-lg border border-dashed px-6 py-14 text-center",
+  contactsPagination: "contacts-pagination mt-6 flex flex-col items-stretch gap-3 rounded-crm-lg border px-4 py-3 sm:flex-row sm:items-center sm:justify-between",
+  contactsModalBackdrop: "contacts-modal-backdrop fixed inset-0 z-50 flex items-center justify-center px-4",
+  contactsModalPanel: "contacts-modal-panel w-full max-w-md rounded-crm border p-6",
   /** Phase 19E.3 — detail page vertical stack (no skinny aside rail) */
   campaignDetailStack: "flex w-full min-w-0 flex-col gap-3",
   campaignDetailCommandGrid:
-    "grid w-full min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4",
+    "grid w-full min-w-0 grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4",
   campaignDetailBtnSecondary:
     "inline-flex items-center justify-center gap-1.5 rounded-crm border border-crm-border bg-crm-surface-2 px-3 py-2 text-sm font-medium text-crm-text shadow-none hover:bg-crm-surface hover:border-crm-border/90 disabled:cursor-not-allowed disabled:border-crm-border/70 disabled:bg-crm-surface-2/75 disabled:text-crm-muted/80 disabled:opacity-100",
   campaignDetailBtnTertiary:
@@ -189,17 +202,17 @@ export const crm = {
     "inline-flex items-center gap-1 rounded-full border border-crm-border bg-crm-surface-2 px-2.5 py-0.5 text-xs font-medium text-crm-muted",
   chipActive: "border-crm-accent/40 bg-crm-accent/12 text-crm-accent",
 
-  /** Phase 19D.2 — contacts command bar filter pills (dark surfaces, no white capsules) */
+  /** Phase 19D.2 — contacts command bar filter pills (theme via workspace tokens) */
   filterPill:
-    "rounded-full border border-crm-border bg-crm-surface-2 px-3 py-1.5 text-xs font-medium text-crm-text transition-colors hover:border-crm-border/90 hover:bg-crm-surface [color-scheme:dark]",
+    "contacts-filter-pill rounded-full border border-crm-border bg-crm-surface-2 px-3 py-1.5 text-xs font-medium text-crm-text transition-colors hover:border-crm-border/90 hover:bg-crm-surface",
   filterPillActive:
-    "rounded-full border border-crm-accent/50 bg-crm-accent px-3 py-1.5 text-xs font-medium text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] [color-scheme:dark]",
+    "contacts-filter-pill-active rounded-full border border-crm-accent/50 bg-crm-accent px-3 py-1.5 text-xs font-medium text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]",
   filterPillGroup:
-    "inline-flex flex-wrap items-center gap-1.5 rounded-full border border-crm-border/70 bg-crm-surface-2/50 px-2 py-1 [color-scheme:dark]",
+    "contacts-filter-pill-group inline-flex flex-wrap items-center gap-1.5 rounded-full border px-2 py-1",
   checkbox:
-    "h-4 w-4 shrink-0 cursor-pointer rounded border border-crm-border bg-crm-surface-2 text-crm-accent accent-crm-accent focus:ring-2 focus:ring-crm-accent/30 focus:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50 [color-scheme:dark]",
+    "contacts-checkbox h-4 w-4 shrink-0 cursor-pointer rounded border border-crm-border bg-crm-surface-2 text-crm-accent accent-crm-accent focus:ring-2 focus:ring-crm-accent/30 focus:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50",
   selectCompact:
-    "rounded-crm border border-crm-border !bg-crm-surface-2 px-2 py-1.5 text-sm !text-crm-text shadow-none focus:border-crm-accent/50 focus:!bg-crm-surface focus:outline-none focus:ring-2 focus:ring-crm-accent/30 disabled:cursor-not-allowed disabled:opacity-70 [color-scheme:dark]",
+    "contacts-select-compact rounded-crm border border-crm-border !bg-crm-surface-2 px-2 py-1.5 text-sm !text-crm-text shadow-none focus:border-crm-accent/50 focus:!bg-crm-surface focus:outline-none focus:ring-2 focus:ring-crm-accent/30 disabled:cursor-not-allowed disabled:opacity-70",
 
   /** Phase 19C.1 — queue filter count pills (always dark surface). */
   queueCountPill:
@@ -371,64 +384,67 @@ export const crm = {
   checklistProgressCard:
     "checklist-side-panel rounded-2xl border border-crm-border/30 bg-gradient-to-b from-[#101a2d]/80 to-[#0a101c]/90 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-md",
 
-  /** Phase 19I / 19I.1 — scripts premium playbook command center */
+  /** Phase 19I / 19I.1 / 19I.2 — scripts premium playbook (theme-aware via globals `.crm-scripts-workspace`) */
   pageInnerScripts:
-    "mx-auto w-full max-w-[min(100%,1680px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-3 min-h-0",
-  scriptsWorkspace:
-    "crm-scripts-workspace [color-scheme:dark] [--panel:#141f2b] [--panel-2:#1a2635] [--bg-soft:#0a0e14] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#141f2b] [--crm-surface-2:#1a2635] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",
+    "mx-auto w-full max-w-[min(100%,1680px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
+  scriptsWorkspace: "crm-scripts-workspace w-full min-h-0",
   scriptsHero:
-    "relative overflow-hidden rounded-crm-lg border border-crm-border/60 bg-gradient-to-br from-[#1c2a3a] via-[#141f2b] to-[#0d1218] px-4 py-4 sm:px-5 sm:py-5 shadow-[0_8px_32px_-12px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.05)]",
+    "scripts-command-hero relative overflow-hidden rounded-crm-lg border px-4 py-4 sm:px-5 sm:py-5",
   scriptsHeroGlow:
-    "pointer-events-none absolute -right-12 -top-12 h-40 w-40 rounded-full bg-crm-accent/12 blur-3xl",
+    "scripts-command-hero-glow pointer-events-none absolute -right-12 -top-12 h-40 w-40 rounded-full blur-3xl motion-reduce:hidden",
   scriptsHeroIcon:
-    "flex h-12 w-12 shrink-0 items-center justify-center rounded-crm-lg border border-crm-accent/30 bg-crm-accent/10 text-crm-accent shadow-[0_0_32px_-8px_rgba(56,189,248,0.45)]",
+    "scripts-command-hero-icon flex h-12 w-12 shrink-0 items-center justify-center rounded-crm-lg border",
   scriptsKpiTile:
-    "flex min-w-[5.5rem] flex-col gap-0.5 rounded-crm border border-crm-border/50 bg-[#101923]/70 px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-[2px]",
-  scriptsGrid: "grid gap-3 lg:grid-cols-12 lg:items-stretch",
-  scriptsLibraryCol: "lg:col-span-3 flex flex-col gap-2.5 min-w-0",
-  scriptsWorkspaceCol: "lg:col-span-6 flex flex-col gap-2.5 min-w-0 min-h-[28rem]",
-  scriptsSideCol: "lg:col-span-3 flex flex-col gap-2.5 min-w-0",
+    "scripts-kpi-tile flex min-w-[5.5rem] flex-col gap-0.5 rounded-crm border px-3 py-2.5 backdrop-blur-[2px]",
+  scriptsGrid:
+    "grid gap-3 lg:gap-4 xl:gap-5 lg:items-stretch lg:grid-cols-[minmax(15rem,20rem)_minmax(0,1fr)_minmax(15rem,20rem)] xl:grid-cols-[minmax(17.5rem,22.5rem)_minmax(0,1fr)_minmax(17.5rem,22.5rem)]",
+  scriptsLibraryCol: "flex flex-col gap-2.5 min-w-0",
+  scriptsWorkspaceCol: "flex flex-col gap-2.5 min-w-0 min-h-[30rem]",
+  scriptsSideCol: "flex flex-col gap-2.5 min-w-0",
   scriptsPanelSupport:
-    "rounded-crm-lg border border-crm-border/45 bg-[#121a24]/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] backdrop-blur-[2px]",
+    "scripts-panel-support rounded-crm-lg border backdrop-blur-[2px]",
   scriptsPanelPrimary:
-    "relative overflow-hidden rounded-crm-lg border border-crm-border/70 bg-gradient-to-b from-[#1c2a3a] via-[#141f2b] to-[#0f1720] shadow-[0_12px_40px_-16px_rgba(0,0,0,0.65),inset_0_1px_0_rgba(255,255,255,0.05)]",
+    "scripts-panel-primary relative overflow-hidden rounded-crm-lg border",
   scriptsPanelPrimaryGlow:
-    "pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,rgba(56,189,248,0.1),transparent_55%)]",
-  scriptsSidePanel:
-    "rounded-crm-lg border border-crm-border/45 bg-gradient-to-b from-[#161f2b] to-[#101923] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
+    "scripts-panel-primary-glow pointer-events-none absolute inset-0",
+  scriptsSidePanel: "scripts-side-panel rounded-crm-lg border p-3.5",
   scriptCard:
-    "group relative flex items-stretch rounded-crm border border-crm-border/60 bg-crm-surface-2/40 transition-all duration-200 hover:border-crm-border/90 hover:bg-crm-surface-2/70 hover:shadow-[0_4px_16px_-6px_rgba(0,0,0,0.4)] cursor-pointer",
+    "group relative flex items-stretch rounded-crm border border-crm-border/60 bg-crm-surface-2/40 transition-all duration-200 hover:border-crm-border/90 hover:bg-crm-surface-2/70 cursor-pointer scripts-script-card",
   scriptCardActive:
-    "border-crm-accent/45 bg-crm-accent/10 ring-1 ring-crm-accent/25 shadow-[0_0_20px_-8px_rgba(56,189,248,0.2)]",
+    "border-crm-accent/45 bg-crm-accent/10 ring-1 ring-crm-accent/25 scripts-script-card-active",
   scriptCardArchived: "opacity-50",
   scriptStatusStrip: "w-1 shrink-0 rounded-l-crm",
   scriptTplCard:
-    "script-template-card group relative flex w-full items-center gap-2.5 overflow-hidden rounded-crm-lg border border-crm-border/55 bg-gradient-to-br from-[#1a2635]/90 to-[#101923]/95 p-3 text-left transition-all duration-200 hover:-translate-y-px cursor-pointer",
+    "script-template-card group relative flex w-full items-center gap-2.5 overflow-hidden rounded-crm-lg border p-3 text-left transition-all duration-200 hover:-translate-y-px cursor-pointer",
   scriptTplStrip: "absolute left-0 top-0 bottom-0 w-1 rounded-l-crm-lg",
   scriptTplIcon:
-    "flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border text-base transition-transform duration-200 group-hover:scale-105",
+    "script-tpl-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border text-base transition-transform duration-200 group-hover:scale-105",
   scriptSectionCard:
-    "rounded-crm border border-crm-border/60 bg-[#1a2635]/80 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition-all duration-200",
-  scriptSectionCardOpen:
-    "border-crm-border/80 shadow-[0_4px_20px_-10px_rgba(0,0,0,0.5)]",
+    "scripts-section-card rounded-crm border transition-all duration-200",
+  scriptSectionCardOpen: "scripts-section-card-open",
   scriptCheckStep:
     "flex w-full items-start gap-2.5 rounded-crm border px-3 py-2.5 text-left text-sm transition-all duration-200",
   scriptCheckStepDone:
     "border-crm-success/35 bg-crm-success/8 text-crm-muted",
-  scriptCheckStepPending:
-    "border-crm-border/60 bg-[#101923]/60 text-crm-text hover:border-crm-border hover:bg-[#1a2635]/80",
-  scriptSectionPill:
-    "rounded-crm border border-crm-border/60 bg-[#101923]/60 px-2.5 py-1 text-[11px] font-medium text-crm-muted transition-colors hover:border-crm-border hover:bg-crm-surface-2 hover:text-crm-text",
+  scriptCheckStepPending: "scripts-check-step-pending",
+  scriptSectionPill: "scripts-section-pill",
   scriptSectionPillActive:
     "rounded-crm border border-crm-accent/40 bg-crm-accent/10 px-2.5 py-1 text-[11px] font-medium text-crm-accent",
-  scriptModeTab:
-    "inline-flex items-center gap-1.5 rounded-crm border border-crm-border/70 bg-[#101923]/60 px-3 py-1.5 text-xs font-medium text-crm-muted transition-colors hover:border-crm-border hover:text-crm-text",
-  scriptModeTabActive:
-    "inline-flex items-center gap-1.5 rounded-crm border border-crm-accent/50 bg-crm-accent/12 px-3 py-1.5 text-xs font-medium text-crm-accent shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]",
+  scriptModeTab: "scripts-mode-tab",
+  scriptModeTabActive: "scripts-mode-tab-active",
   scriptsTipsStrip:
-    "flex flex-wrap items-center gap-x-4 gap-y-2 rounded-crm-lg border border-crm-border/45 bg-[#101923]/80 px-4 py-2.5 text-[11px] text-crm-muted shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
+    "scripts-tips-strip flex flex-wrap items-center gap-x-4 gap-y-2 rounded-crm-lg border px-4 py-2.5 text-[11px] text-crm-muted",
   scriptsFeatureCard:
-    "flex flex-col gap-1 rounded-crm border border-crm-border/40 bg-[#101923]/50 px-3 py-2.5 transition-colors hover:border-crm-border/70 hover:bg-[#141f2b]/80",
+    "scripts-feature-card flex flex-col gap-1 rounded-crm border px-3 py-2.5 transition-colors",
   scriptsLiveCta:
-    "flex w-full items-center justify-center gap-2 rounded-crm border border-crm-accent/40 bg-gradient-to-r from-crm-accent/20 to-crm-accent/5 px-4 py-3 text-sm font-semibold text-crm-accent shadow-[0_0_24px_-8px_rgba(56,189,248,0.35)] transition-all hover:border-crm-accent/60 hover:shadow-[0_0_32px_-8px_rgba(56,189,248,0.45)]",
+    "scripts-live-cta flex w-full items-center justify-center gap-2 rounded-crm border px-4 py-3 text-sm font-semibold transition-all",
+  scriptsLibraryHeader:
+    "scripts-library-header flex items-center justify-between border-b px-3 py-2.5",
+  scriptsLibraryCount:
+    "scripts-library-count rounded-full border px-2 py-0.5 text-[10px] font-bold tabular-nums text-crm-muted",
+  scriptsInsetPanel: "scripts-inset-panel rounded-crm-lg border px-4 py-3",
+  scriptsWorkloadRow: "scripts-workload-row flex items-center justify-between gap-2 rounded-crm border px-2.5 py-1.5",
+  scriptsShortcutCard:
+    "scripts-shortcut-card flex flex-col items-center gap-1 rounded-crm border px-2 py-2.5 text-center text-[11px] font-medium transition-colors",
+  scriptsEditModal: "scripts-edit-modal w-full max-w-2xl max-h-[92vh] flex flex-col",
 } as const;

@@ -138,7 +138,7 @@ function WorkloadRow({
   value: number;
 }) {
   return (
-    <li className="flex items-center justify-between gap-2 rounded-crm border border-crm-border/40 bg-[#101923]/50 px-2.5 py-1.5">
+    <li className={crm.scriptsWorkloadRow}>
       <span className="flex items-center gap-2 text-crm-muted">
         {icon}
         {label}
@@ -160,7 +160,7 @@ function QuickAction({
   href?: string;
 }) {
   const className =
-    "flex w-full items-center justify-between gap-2 rounded-crm border border-transparent px-2 py-1.5 text-left text-xs font-medium text-crm-text transition-colors hover:border-crm-border/50 hover:bg-[#101923]/60";
+    "scripts-quick-action flex w-full items-center justify-between gap-2 rounded-crm border border-transparent px-2 py-1.5 text-left text-xs font-medium text-crm-text transition-colors hover:border-crm-border/50";
 
   if (href) {
     return (
@@ -197,7 +197,7 @@ function ShortcutCard({
   return (
     <Link
       href={href}
-      className="flex flex-col items-center gap-1 rounded-crm border border-crm-border/50 bg-[#101923]/60 px-2 py-2.5 text-center text-[11px] font-medium text-crm-muted transition-colors hover:border-crm-border hover:text-crm-text"
+      className={cn(crm.scriptsShortcutCard, "text-crm-muted hover:text-crm-text")}
     >
       {icon}
       {label}

@@ -53,10 +53,10 @@ export function ScriptWorkspaceIdle({
       <div className="relative z-[1] flex flex-1 flex-col items-center justify-center px-6 py-10 text-center">
         <div className="relative mb-6">
           <div
-            className="absolute inset-0 -m-8 rounded-full bg-crm-accent/15 blur-2xl motion-reduce:hidden"
+            className="scripts-idle-orb-glow absolute inset-0 -m-8 rounded-full blur-2xl motion-reduce:hidden"
             aria-hidden
           />
-          <div className="relative flex h-20 w-20 items-center justify-center rounded-2xl border border-crm-accent/35 bg-gradient-to-br from-crm-accent/20 to-transparent shadow-[0_0_40px_-8px_rgba(56,189,248,0.4)]">
+          <div className="scripts-idle-orb relative flex h-20 w-20 items-center justify-center rounded-2xl">
             <FileText className="h-10 w-10 text-crm-accent" aria-hidden />
           </div>
           <Sparkles

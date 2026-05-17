@@ -181,15 +181,17 @@ Campaign routes use **`crm.pageInnerCampaign`** (wide desk, up to ~1680px) and *
 | Sidebar | 3 / 12 | `ScriptOperationalSidebar` — ring metric, workload, shortcuts |
 | Tips | full width | `ScriptQuickTipsStrip` — keyboard + checklist + live-call hints |
 
-**Layout shell:** `crm.pageInnerScripts` (~1680px) + `crm.scriptsWorkspace` (dark token lock). **Grid:** `crm.scriptsGrid` → `scriptsLibraryCol` / `scriptsWorkspaceCol` / `scriptsSideCol`.
+**Layout shell:** `CRMPageShell innerClassName={crm.pageInnerScripts + crm.scriptsWorkspace}` (~1680px). **Grid:** `crm.scriptsGrid` (fixed side rails + flexible center).
 
-**Premium visual language (19I.1):** Layered navy gradients (`scriptsHero`, `scriptsPanelPrimary`), accent glow strips per template (`SCRIPT_TEMPLATE_ACCENT_CLASSES`), glass KPI tiles, hover lift on template cards. Idle center = glowing document visual + feature row (Proven Playbooks, Live Playbook View, Checklist Mode, Win More Calls). **No flat gray slabs.**
+**Theme (19I.2):** `.crm-scripts-workspace` is **theme-aware** — must not force `[color-scheme:dark]` or navy token overrides when `data-theme=light`. Light mode: soft off-white page wash, elevated frosted panels, pale cyan gradients, dark readable text, accent strips preserved. Dark mode: keep 19I.1 premium navy depth/glows via `globals.css` hooks (`scripts-command-hero`, `scripts-panel-primary`, etc.). **No black island** in light portal; **no light leak** in dark mode.
+
+**Premium visual language (19I.1):** Layered gradients on command header + center panel, accent template cards (`SCRIPT_TEMPLATE_ACCENT_CLASSES`), glass KPI tiles, hover lift on template cards. Idle center = glowing document visual + feature row. **No flat gray slabs** in either theme.
 
 **Library:** Template cards use per-type accents (cyan cold call, violet follow-up, amber re-engagement, green callback, blue voicemail, rose closing). Collapsible template rail when scripts exist. **+ New script** primary CTA in library header.
 
 **Workspace:** `ScriptSectionBlock` per `---` section; Playbook vs Checklist mode; copy-per-section; live-call link. **Keyboard:** `N` opens new script (guarded).
 
-**Dark surfaces:** `crm.scriptTplCard`, `scriptsPanelPrimary`, `scriptsSidePanel`, `scriptsTipsStrip`. Ban `bg-white`, `bg-gray-50`, flat gray admin cards.
+**Edit modal:** `crm.scriptsEditModal` follows portal theme (no forced dark vars). Ban raw `bg-white` / `bg-gray-50` utility classes on script routes — use semantic `crm-*` + workspace CSS hooks.
 
 ---
 
@@ -226,7 +228,7 @@ Campaign routes use **`crm.pageInnerCampaign`** (wide desk, up to ~1680px) and *
 - `/crm/dashboard` (Phase 19B: command-center charts + wide layout)
 - `/crm/queue` (Phase 19C: operational workbench layout)
 - `/crm/campaigns`, `/crm/campaigns/[id]` (Phase 19E: operational workspace)
-- `/crm/contacts` (Phase 19D.1 index + 19D.2 dark command controls)
+- `/crm/contacts` (Phase 19D.1 index + 19D.2 command controls + **19D.3 dual theme**)
 - `/crm/contacts/[id]` (Phase 19D: contact relationship workspace)
 - `/crm/live-call` (Phase 19F: live agent workspace)
 - `/crm/tasks` (Phase 19H: task command desk)
@@ -251,17 +253,19 @@ Reports, wallboard: migrate opportunistically.
 
 **Don't:** `max-w-6xl` centered directory; text-only summary strip; light skeletons (`gray-50`); bullet separators between meta fields.
 
-### Contacts command bar — dark controls only (Phase 19D.2)
+### Contacts index — dual theme (Phase 19D.2 / 19D.3)
 
 | Pattern | Rule |
 |---------|------|
-| Theme lock | `crm.pageInnerContacts` + **`crm.contactsWorkspace`** — same CSS-var override as campaigns when portal `data-theme=light` |
-| Filter pills | `crm.filterPill` / `crm.filterPillActive` for stage, list scope (Active/Archived/All), and **Assigned to me** — never white capsules or `bg-crm-surface` idle pills |
-| Inputs | Search = `crm.input`; bulk assign select = `crm.selectCompact`; `[color-scheme:dark]` on native controls |
-| Checkboxes | `crm.checkbox` — dark surface + accent; row column aligned with avatar (`items-center`, fixed width) |
-| Row actions | `crm.btnPrimary` (Open) + `crm.btnSecondary` (Workspace) in a single aligned flex row |
+| Workspace | `crm.pageInnerContacts` + **`crm.contactsWorkspace`** (`.crm-contacts-workspace` in `globals.css`) — **theme-aware** like scripts, **not** a forced-dark island when portal `data-theme=light` |
+| Light mode | Soft off-white page wash, elevated frosted panels, pale cyan gradients, dark readable text — must integrate with the light portal shell (**no black-card island**) |
+| Dark mode | Reaffirm premium navy CRM tokens (19D.1 depth); preserve glows/shadows — **no light surfaces leak** |
+| Filter pills | `crm.filterPill` / `crm.filterPillActive` (`contacts-filter-pill*`) for stage, list scope, **Assigned to me** |
+| Inputs | Search = `crm.input`; bulk assign = `crm.selectCompact`; native controls inherit workspace `color-scheme` |
+| Checkboxes | `crm.checkbox` (`contacts-checkbox`); row column aligned with avatar |
+| Row actions | `crm.btnPrimary` (Open) + `crm.btnSecondary` (Workspace) |
 
-**Don't:** native white checkboxes; transparent/light archive-scope pills; mixed pill styles per control group.
+**Don't:** force `[color-scheme:dark]` or campaign-style navy token overrides on the whole contacts page in light mode; native white checkboxes; mixed pill styles per control group.
 
 ---
 

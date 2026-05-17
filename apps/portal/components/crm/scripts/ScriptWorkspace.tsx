@@ -72,7 +72,7 @@ export function ScriptWorkspace({
     <div className={cn(crm.scriptsPanelPrimary, "flex min-h-[28rem] flex-col")}>
       <div className={crm.scriptsPanelPrimaryGlow} aria-hidden />
       <div className="relative z-[1] flex flex-col gap-2.5 overflow-y-auto p-4 sm:p-5">
-        <div className="rounded-crm-lg border border-crm-border/50 bg-[#101923]/50 px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+        <div className={crm.scriptsInsetPanel}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex min-w-0 items-start gap-3">
               <div className={crm.scriptsHeroIcon}>
@@ -216,7 +216,7 @@ export function ScriptWorkspace({
 
         <div className="flex flex-col gap-2">
           {sections.length === 0 ? (
-            <div className="rounded-crm border border-dashed border-crm-border/60 bg-[#101923]/40 px-4 py-6 text-center">
+            <div className={cn(crm.scriptsInsetPanel, "border-dashed px-4 py-6 text-center")}>
               <p className="text-sm text-crm-muted">
                 This script has no content yet.{" "}
                 <button

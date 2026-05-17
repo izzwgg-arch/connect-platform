@@ -64,12 +64,12 @@ export function ScriptLibraryPanel({
   return (
     <div className={cn(crm.scriptsLibraryCol)}>
       <div className={cn(crm.scriptsPanelSupport, "flex flex-col overflow-hidden")}>
-        <div className="flex items-center justify-between border-b border-crm-border/40 bg-[#101923]/40 px-3 py-2.5">
+        <div className={crm.scriptsLibraryHeader}>
           <div className="flex items-center gap-2">
             <FileText className="h-4 w-4 text-crm-accent" />
             <span className="text-sm font-semibold text-crm-text">Script Library</span>
             {activeScripts.length > 0 ? (
-              <span className="rounded-full border border-crm-border/60 bg-[#101923]/80 px-2 py-0.5 text-[10px] font-bold tabular-nums text-crm-muted">
+              <span className={crm.scriptsLibraryCount}>
                 {activeScripts.length}
               </span>
             ) : null}
@@ -122,7 +122,9 @@ export function ScriptLibraryPanel({
                   <button
                     type="button"
                     onClick={() => setShowArchived((v) => !v)}
-                    className="mt-2 flex w-full items-center gap-1.5 rounded-crm px-2 py-1.5 text-left hover:bg-[#101923]/50"
+                    className={cn(
+                      "scripts-archive-hover mt-2 flex w-full items-center gap-1.5 rounded-crm px-2 py-1.5 text-left",
+                    )}
                   >
                     <Archive className="h-3 w-3 text-crm-muted" />
                     <span className="flex-1 text-[10px] font-bold uppercase tracking-wider text-crm-muted">

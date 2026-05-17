@@ -87,11 +87,7 @@ export function ScriptEditModal({ script, templateBody, onSave, onClose }: Scrip
   return (
     <div className={crm.campaignModalBackdrop} onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div
-        className={cn(
-          crm.card,
-          "w-full max-w-2xl max-h-[92vh] flex flex-col",
-          "[--panel:#141f2b] [--panel-2:#1a2635] [--bg-soft:#101923] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#141f2b] [--crm-surface-2:#1a2635] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a] [color-scheme:dark]",
-        )}
+        className={cn(crm.card, crm.scriptsEditModal)}
       >
         {/* Modal header */}
         <div className="flex items-center justify-between gap-3 border-b border-crm-border px-5 py-4">

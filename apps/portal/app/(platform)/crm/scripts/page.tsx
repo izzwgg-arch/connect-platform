@@ -140,8 +140,8 @@ export default function CrmScriptsPage() {
   const activeCount = scripts.filter((s) => s.isActive).length;
 
   return (
-    <CRMPageShell>
-      <div className={cn(crm.pageInnerScripts, crm.scriptsWorkspace)}>
+    <CRMPageShell innerClassName={cn(crm.pageInnerScripts, crm.scriptsWorkspace)}>
+      <>
         <ScriptCommandHeader totalCount={scripts.length} activeCount={activeCount} />
 
         {loading ? (
@@ -226,7 +226,7 @@ export default function CrmScriptsPage() {
             <ScriptQuickTipsStrip />
           </>
         )}
-      </div>
+      </>
 
       {modalOpen ? (
         <ScriptEditModal
