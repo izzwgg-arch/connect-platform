@@ -114,7 +114,6 @@ export const navItems: NavItem[] = [
   { id: "admin.pbx_events", href: "/admin/pbx/events", label: "PBX Events", icon: "PE", lucide: Zap, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_pbx_events" },
   { id: "admin.permissions", href: "/admin/permissions", label: "Permissions", icon: "PM", lucide: Lock, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_permissions" },
   { id: "admin.billing", href: "/admin/billing", label: "Admin Billing", icon: "AB", lucide: Wallet, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_billing" },
-  { id: "admin.billing_settings", href: "/admin/billing/settings", label: "Company billing setup", icon: "AS", lucide: SlidersHorizontal, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_billing" },
   { id: "admin.cdr_tenant_map", href: "/admin/cdr-tenant-map", label: "CDR Tenant Map", icon: "CM", lucide: Map, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_cdr_tenant_map" },
   { id: "admin.ops_center", href: "/admin/ops-center", label: "Ops Center", icon: "OC", lucide: LayoutGrid, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_ops_center" },
   { id: "admin.incidents", href: "/admin/incidents", label: "Incident Center", icon: "IC", lucide: AlertTriangle, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_incidents" },
@@ -163,6 +162,6 @@ export function isNavItemVisibleForUser(
       backendJwtRole === "SUPER_ADMIN";
     if (!jwtAdmin) return false;
   }
-  if ((item.id === "admin.billing" || item.id === "admin.billing_settings") && backendJwtRole !== "SUPER_ADMIN") return false;
+  if (item.id === "admin.billing" && backendJwtRole !== "SUPER_ADMIN") return false;
   return true;
 }

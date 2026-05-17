@@ -20,7 +20,7 @@ import {
   AdminTenantSolaGatewayForm,
 } from "../_components/tenantBillingConfigForms";
 import { dollars, formatDate, humanizePricingStateMode } from "../../../../../lib/billingUi";
-import { BILLING_SECTION_QUERY, mergeSearchParams, OPS_TAB_QUERY, type BillingSettingsSection } from "../_components/adminBillingLinks";
+import { BILLING_SECTION_QUERY, isBillingSettingsSection, mergeSearchParams, OPS_TAB_QUERY, type BillingSettingsSection } from "../_components/adminBillingLinks";
 
 type TenantRow = { id: string; name: string };
 
@@ -799,6 +799,14 @@ function AdminBillingSettingsBody() {
   }, [effectiveTenantId, loadDetail]);
 
   const billingSectionRaw = searchParams.get(BILLING_SECTION_QUERY);
+  const activeBillingSection: BillingSettingsSection = isBillingSettingsSection(billingSectionRaw)
+    ? billingSectionRaw
+    : "plans-pricing";
+
+  const [advDetailsOpen, setAdvDetailsOpen] = useState(false);
+  useEffect(() => {
+    setAdvDetailsOpen(activeBillingSection === "preview" || activeBillingSection === "pricing-explanation");
+  }, [activeBillingSection]);
 
   useEffect(() => {
     if (!billingSectionRaw || typeof document === "undefined") return;
@@ -818,7 +826,7 @@ function AdminBillingSettingsBody() {
     return () => window.clearTimeout(t);
   }, [billingSectionRaw, detail?.tenant.id]);
 
-  const sectionAnchorStyle: CSSProperties = { scrollMarginTop: 108 };
+  const sectionAnchorStyle: CSSProperties = { scrollMarginTop: 72 };
 
   if (!canPlatformAdminBilling) {
     return (
@@ -839,12 +847,11 @@ function AdminBillingSettingsBody() {
   }
 
   return (
-    <div className="stack compact-stack billing-admin-shell billing-p5-scope">
-      <div style={{ marginBottom: 4 }}>
-        <h2 style={{ margin: "0 0 6px", fontSize: "1.1rem", fontWeight: 700 }}>Company billing setup</h2>
-        <p className="muted" style={{ margin: 0, fontSize: 13, maxWidth: 720 }}>
-          Plans, gateway, collections, branding, and tax details for the company selected above. Operational actions stay under{" "}
-          <strong>Invoices &amp; payments</strong> and <strong>Summary</strong>.
+    <div className="stack compact-stack billing-admin-shell billing-p5-scope billing-p6-scope">
+      <div style={{ marginBottom: 2 }}>
+        <h2 style={{ margin: "0 0 4px", fontSize: "1.05rem", fontWeight: 700 }}>Company billing setup</h2>
+        <p className="muted" style={{ margin: 0, fontSize: 12, maxWidth: 720, lineHeight: 1.45 }}>
+          Pricing overrides, taxes, autopay, gateway, and invoice presentation for the company in the header. Use the workspace menu for registers and overview.
         </p>
         {tenantIdParam && tenants.length > 0 && !tenants.some((t) => t.id === tenantIdParam) ? (
           <p className="muted" style={{ marginTop: 8, marginBottom: 0, fontSize: 13 }}>
@@ -853,18 +860,19 @@ function AdminBillingSettingsBody() {
         ) : null}
       </div>
 
-      <div className="row-actions" style={{ flexWrap: "wrap", gap: 8 }}>
-        <Link className="btn ghost" href={`/admin/billing${qp}`}>
-          ← Billing overview
+      <div className="row-actions" style={{ flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+        <Link className="btn ghost" style={{ fontSize: 12, padding: "5px 10px" }} href={`/admin/billing${qp}`}>
+          ← Overview
         </Link>
         <Link
           className="btn ghost"
+          style={{ fontSize: 12, padding: "5px 10px" }}
           href={`/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: effectiveTenantId, [OPS_TAB_QUERY]: "invoices" })}`}
         >
-          Invoices &amp; payments
+          Invoices
         </Link>
-        <Link className="btn ghost" href="/admin/billing/plans">
-          Billing plans (catalog)
+        <Link className="btn ghost" style={{ fontSize: 12, padding: "5px 10px" }} href="/admin/billing/plans">
+          Plan catalog
         </Link>
       </div>
 
@@ -881,23 +889,36 @@ function AdminBillingSettingsBody() {
       {detail && !detailLoading ? (
         <div className="billing-p5-settings-shell">
           <nav className="billing-p5-settings-nav" aria-label="Billing settings sections">
-            <h3>Billing setup</h3>
-            <Link href={settingsSectionHref("plans-pricing")}>Plans &amp; unit pricing</Link>
-            <h3>Payment collection</h3>
+            <h3>Setup</h3>
+            <Link href={settingsSectionHref("plans-pricing")}>Pricing &amp; plan</Link>
+            <Link href={settingsSectionHref("tax-billing")}>Taxes &amp; invoice fields</Link>
             <Link href={settingsSectionHref("gateway")}>Payment gateway</Link>
-            <Link href={settingsSectionHref("collections")}>Collections automation</Link>
-            <h3>Tax &amp; invoicing</h3>
-            <Link href={settingsSectionHref("tax-billing")}>Branding &amp; tax fields</Link>
-            <h3>Preview &amp; diagnostics</h3>
-            <Link href={settingsSectionHref("preview")}>Schedules &amp; invoice preview</Link>
-            <Link href={settingsSectionHref("pricing-explanation")}>Pricing diagnostics</Link>
+            <Link href={settingsSectionHref("collections")}>Dunning &amp; automation</Link>
+            <h3>Advanced</h3>
+            <Link href={settingsSectionHref("preview")}>Preview schedules &amp; diagnostics</Link>
           </nav>
           <div className="billing-p5-settings-main">
             <div id="billing-section-plans-pricing" className="billing-p5-settings-section" style={sectionAnchorStyle}>
-              <h3 className="billing-p5-settings-section__title">Plans &amp; unit economics</h3>
+              <h3 className="billing-p5-settings-section__title">Pricing &amp; plan</h3>
               <p className="billing-p5-settings-section__summary">
-                Connect catalog plans, reconcile pricing sources, and tune recurring line items before invoices generate.
+                Catalog defaults plus optional overrides for this company. Nothing here charges a card.
               </p>
+              <div className="billing-p6-pricing-split">
+                <div>
+                  <h4>Platform catalog defaults</h4>
+                  <p>
+                    Extension, SMS, virtual extension, and phone-number defaults live on{" "}
+                    <Link href="/admin/billing/plans">billing plans in the catalog</Link>. Tax templates and catalog line items apply across companies until overridden.
+                  </p>
+                </div>
+                <div>
+                  <h4>This company overrides</h4>
+                  <p>
+                    Plan assignment, custom unit rates, and monthly line items below replace or extend catalog pricing for invoices for{" "}
+                    <strong>{detail.tenant.name}</strong> only.
+                  </p>
+                </div>
+              </div>
               <AdminBillingPricingWarningsBanner
                 tenantId={detail.tenant.id}
                 previewMonth={previewMonth}
@@ -947,6 +968,13 @@ function AdminBillingSettingsBody() {
               </section>
             </div>
 
+            <details
+              className="billing-p6-advanced"
+              open={advDetailsOpen}
+              onToggle={(e) => setAdvDetailsOpen((e.currentTarget as HTMLDetailsElement).open)}
+            >
+              <summary>Advanced — preview schedules &amp; pricing diagnostics</summary>
+
             <div id="billing-section-preview" className="billing-p5-settings-section" style={sectionAnchorStyle}>
               <h3 className="billing-p5-settings-section__title">Schedules &amp; invoice preview</h3>
               <p className="billing-p5-settings-section__summary">
@@ -964,6 +992,7 @@ function AdminBillingSettingsBody() {
               </p>
               <AdminPricingDiagnosticsCard tenantId={detail.tenant.id} month={previewMonth} year={previewYear} />
             </div>
+            </details>
           </div>
         </div>
       ) : null}

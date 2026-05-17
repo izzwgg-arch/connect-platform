@@ -61,6 +61,7 @@ export default function AdminBillingPage() {
   const { can, backendJwtRole } = useAppContext();
   const canPlatformAdminBilling = backendJwtRole === "SUPER_ADMIN" && can("can_view_admin_billing");
   const [busy, setBusy] = useState<string | null>(null);
+  const [fleetAck, setFleetAck] = useState(false);
   const [detail, setDetail] = useState<TenantDetail | null>(null);
   const [detailError, setDetailError] = useState("");
   const [detailLoading, setDetailLoading] = useState(false);
@@ -133,17 +134,15 @@ export default function AdminBillingPage() {
   const unpaidCount = detail ? (detail.invoices || []).filter((i: { status?: string }) => !["PAID", "VOID"].includes(String(i.status))).length : 0;
   const failedCount = detail ? (detail.invoices || []).filter((i: { status?: string }) => String(i.status) === "FAILED").length : 0;
   const nextBill = detail?.settings ? nextBillingSummary(detail.settings.billingDayOfMonth, !!detail.settings.autoBillingEnabled) : null;
-  const defaultPm = detail?.paymentMethods?.find((m: { isDefault?: boolean }) => m.isDefault);
-  const defaultLast4 = defaultPm && typeof (defaultPm as { last4?: string }).last4 === "string" ? (defaultPm as { last4: string }).last4 : null;
 
   const primaryCollect =
     !!selectedTenant &&
     (Number(selectedTenant.balanceDueCents || 0) > 0 || payState === "FAILED" || payState === "OVERDUE");
 
   return (
-    <div className="stack compact-stack billing-p5-scope billing-phase3">
-      <p className="b3-muted" style={{ margin: "0 0 12px", maxWidth: 720 }}>
-        Fleet strip is all companies; the workspace rail and actions follow the company in the header cockpit.
+    <div className="stack compact-stack billing-p5-scope billing-p6-scope billing-phase3">
+      <p className="b3-muted" style={{ margin: "0 0 8px", maxWidth: 720, fontSize: 12, lineHeight: 1.45 }}>
+        Fleet metrics cover every company; the rail and header toolbar scope actions to one account.
       </p>
 
       {platformToast ? (
@@ -254,75 +253,18 @@ export default function AdminBillingPage() {
           {detailError ? <ErrorState message={detailError} /> : null}
           {detail ? (
             <>
-              <section className="b3-snapshot">
-                <div className="b3-snapshot-head">
-                  <div>
-                    <p className="b3-section-title" style={{ marginBottom: 6 }}>
-                      Company snapshot
-                    </p>
-                    <h2>{detail.tenant.name}</h2>
-                    <p className="b3-muted" style={{ margin: "6px 0 0", maxWidth: 560 }}>
-                      {adminTenantStandingHeadline(worstNonTerminalInvoiceStatus(detail.invoices))}. Projected monthly total reflects current usage and pricing for the preview period.
-                    </p>
-                  </div>
-                  <span className={`billing-status-pill ${payState === "—" ? "good" : payState === "FAILED" ? "bad" : "warn"}`} style={{ fontSize: 12 }}>
-                    {adminTenantStandingHeadline(payState)}
-                  </span>
-                </div>
-                <div className="b3-snapshot-grid">
-                  <div className="b3-snapshot-cell">
-                    <label>Balance due</label>
-                    <div className="b3-value">{dollars(selectedTenant?.balanceDueCents ?? 0)}</div>
-                  </div>
-                  <div className="b3-snapshot-cell">
-                    <label>Projected monthly</label>
-                    <div className="b3-value">{dollars(projectedMrr)}</div>
-                  </div>
-                  <div className="b3-snapshot-cell">
-                    <label>Autopay</label>
-                    <div className="b3-value">{detail.settings?.autoBillingEnabled ? `On · day ${detail.settings.billingDayOfMonth}` : "Off"}</div>
-                  </div>
-                  <div className="b3-snapshot-cell">
-                    <label>Next billing</label>
-                    <div className="b3-value" style={{ fontSize: 14 }}>
-                      {nextBill || "—"}
-                    </div>
-                  </div>
-                  <div className="b3-snapshot-cell">
-                    <label>Active plan</label>
-                    <div className="b3-value" style={{ fontSize: 14 }}>
-                      {planName}
-                    </div>
-                  </div>
-                  <div className="b3-snapshot-cell">
-                    <label>Pricing mode</label>
-                    <div className="b3-value" style={{ fontSize: 14 }}>
-                      {humanizeStoredPricingMode(pricingMode)}
-                    </div>
-                  </div>
-                  <div className="b3-snapshot-cell">
-                    <label>Payment methods</label>
-                    <div className="b3-value" style={{ fontSize: 14 }}>
-                      {detail.paymentMethods?.length
-                        ? `${detail.paymentMethods.length} saved${defaultLast4 ? ` · default ···${defaultLast4}` : " · default on file"}`
-                        : "None on file"}
-                    </div>
-                  </div>
-                  <div className="b3-snapshot-cell">
-                    <label>Collections</label>
-                    <div className="b3-value" style={{ fontSize: 14 }}>
-                      {colFlags.paused || colFlags.doNotCharge
-                        ? [
-                            colFlags.paused ? `${colFlags.paused} paused` : null,
-                            colFlags.doNotCharge ? `${colFlags.doNotCharge} do not charge` : null,
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")
-                        : "No holds on open invoices"}
-                    </div>
-                  </div>
-                </div>
-              </section>
+              <p className="billing-p6-overview-meta muted" style={{ fontSize: 12, margin: "0 0 10px", lineHeight: 1.5 }}>
+                <strong>{detail.tenant.name}</strong>
+                {" · "}
+                Projected {dollars(projectedMrr)}/mo
+                {" · "}
+                Plan {planName}
+                {" · "}
+                Autopay {detail.settings?.autoBillingEnabled ? `on (day ${detail.settings.billingDayOfMonth ?? "—"})` : "off"}
+                {nextBill ? ` · ${nextBill}` : ""}
+                {" · "}
+                Cards {detail.paymentMethods?.length ? `${detail.paymentMethods.length} saved` : "none"}
+              </p>
 
               <p className="b3-section-title">Quick actions</p>
               <div className="billing-p5-action-bar">
@@ -430,15 +372,15 @@ export default function AdminBillingPage() {
                 </div>
               </div>
 
-              <div id="payment-methods" style={{ scrollMarginTop: 120 }}>
+              <div id="payment-methods" style={{ scrollMarginTop: 72 }}>
                 <PaymentMethodsCard detail={detail} />
               </div>
 
-              <div id="admin-generate-invoice" style={{ scrollMarginTop: 120 }}>
+              <div id="admin-generate-invoice" style={{ scrollMarginTop: 72 }}>
                 <InvoicePreviewCard detail={detail} setBusy={setBusy} busy={busy} onSaved={() => loadDetail(detail.tenant.id)} />
               </div>
 
-              <div id="recent-activity" style={{ scrollMarginTop: 120 }}>
+              <div id="recent-activity" style={{ scrollMarginTop: 72 }}>
                 <RecentActivityCard detail={detail} />
               </div>
             </>
@@ -456,11 +398,15 @@ export default function AdminBillingPage() {
         <p className="b3-muted" style={{ marginTop: 0 }}>
           Runs the monthly job for <strong>every</strong> company. Prefer generating a single invoice above unless you intend a fleet-wide cycle.
         </p>
+        <label className="b3-muted" style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: 10, fontSize: 13, cursor: "pointer", maxWidth: 520 }}>
+          <input type="checkbox" checked={fleetAck} onChange={(e) => setFleetAck(e.target.checked)} style={{ marginTop: 2 }} />
+          <span>I understand this live run affects every company and is not limited to the account in the toolbar.</span>
+        </label>
         <div className="row-actions">
           <button className="btn ghost" type="button" disabled={!!busy} onClick={() => runMonthly(true)}>
             {busy === "dry-run" ? "Running…" : "Dry run (all companies)"}
           </button>
-          <button className="btn primary" type="button" disabled={!!busy} onClick={() => runMonthly(false)}>
+          <button className="btn primary" type="button" disabled={!!busy || !fleetAck} onClick={() => runMonthly(false)}>
             {busy === "monthly" ? "Running…" : "Run monthly billing (all companies)"}
           </button>
         </div>

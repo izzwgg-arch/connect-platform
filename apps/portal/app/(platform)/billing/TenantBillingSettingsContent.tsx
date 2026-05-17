@@ -27,7 +27,7 @@ export function TenantBillingSettingsContent() {
       <div className="stack compact-stack billing-p5-scope">
         <PageHeader
           title="Billing settings"
-          subtitle="How invoices and customer emails look. Add or update saved cards from Payment methods — not on this page."
+          subtitle="How invoices and customer emails look. Saved cards are managed under Payment methods — not on this page."
         />
         <div className="billing-p5-tenant-actions" style={{ marginTop: -8, marginBottom: 8 }}>
           <Link className="btn ghost" href="/billing">
@@ -38,8 +38,7 @@ export function TenantBillingSettingsContent() {
           </Link>
         </div>
         <p className="billing-p5-muted-block">
-          Connecting or changing the payment processor is handled by your platform team in{" "}
-          <strong>Admin Billing</strong> and is not available on this screen.
+          Connecting or changing how cards are processed is handled by your Connect service provider and is not available on this screen.
         </p>
         {tenantBilling.status === "loading" ? <LoadingSkeleton rows={4} /> : null}
         {tenantBilling.status === "error" ? <ErrorState message={tenantBilling.error} /> : null}

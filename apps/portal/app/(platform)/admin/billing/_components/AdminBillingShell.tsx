@@ -14,14 +14,7 @@ import {
   OPS_TAB_QUERY,
   type AdminOpsTab,
 } from "./adminBillingLinks";
-import {
-  adminTenantStandingHeadline,
-  dollars,
-  lastPaidSummary,
-  nextBillingSummary,
-  nextOpenInvoiceDueSummary,
-  worstNonTerminalInvoiceStatus,
-} from "../../../../../lib/billingUi";
+import { adminTenantStandingHeadline, dollars, worstNonTerminalInvoiceStatus } from "../../../../../lib/billingUi";
 
 export type TenantWorkspaceRow = {
   id: string;
@@ -46,6 +39,21 @@ type WorkspaceLinkKey =
   | "gateway"
   | "activity";
 
+/** Values for the compact workspace `<select>` (E2E + deploy verification). */
+export type BillingWorkspaceNavValue =
+  | "overview"
+  | "invoices"
+  | "payments"
+  | "reports"
+  | "collections"
+  | "payment-methods"
+  | "pricing"
+  | "dunning"
+  | "taxes"
+  | "gateway"
+  | "activity"
+  | "advanced";
+
 function pathnameIsCatalog(pathname: string) {
   return pathname === "/admin/billing/plans" || pathname.startsWith("/admin/billing/plans/");
 }
@@ -67,6 +75,7 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
   const [filter, setFilter] = useState("");
   const comboRef = useRef<HTMLDivElement>(null);
   const [sessionStoredId, setSessionStoredId] = useState("");
+  const [locHash, setLocHash] = useState("");
 
   const urlTenantId = String(rawSearchParams.get("tenantId") || "").trim();
 
@@ -77,6 +86,17 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
       setSessionStoredId("");
     }
   }, []);
+
+  useEffect(() => {
+    const sync = () => setLocHash(typeof window !== "undefined" ? window.location.hash : "");
+    sync();
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
+  }, []);
+
+  useEffect(() => {
+    setLocHash(typeof window !== "undefined" ? window.location.hash : "");
+  }, [pathname]);
 
   useEffect(() => {
     function onDoc(e: MouseEvent) {
@@ -161,30 +181,11 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
 
   const selectedRow = tenants.find((t) => t.id === effectiveTenantId);
   const selectedName = selectedRow?.name || "Company";
-  const cockpitWorst = selectedRow ? worstNonTerminalInvoiceStatus(selectedRow.invoices) : "—";
-  const cockpitChipClass =
-    cockpitWorst === "—" ? "good" : cockpitWorst === "FAILED" ? "bad" : cockpitWorst === "OVERDUE" ? "bad" : "warn";
-  const cockpitStanding = adminTenantStandingHeadline(cockpitWorst);
-  const cockpitBalance = dollars(Number(selectedRow?.balanceDueCents ?? 0));
-  const cockpitAutopay =
-    selectedRow?.billingSettings?.autoBillingEnabled
-      ? `On${selectedRow.billingSettings?.billingDayOfMonth ? ` · day ${selectedRow.billingSettings.billingDayOfMonth}` : ""}`
-      : "Off";
-  const cockpitNextBill = selectedRow?.billingSettings
-    ? nextBillingSummary(selectedRow.billingSettings.billingDayOfMonth, !!selectedRow.billingSettings.autoBillingEnabled)
-    : null;
-  const cockpitLastPaid = selectedRow ? lastPaidSummary(selectedRow.invoices) : null;
-  const cockpitNextDue = selectedRow ? nextOpenInvoiceDueSummary(selectedRow.invoices) : null;
-  const cockpitHasPm = (selectedRow?.paymentMethods || []).length > 0;
-  const cockpitPayHealth = (() => {
-    if (!selectedRow) return "";
-    if (cockpitWorst === "FAILED") return "Failed charge needs attention";
-    if (cockpitWorst === "OVERDUE") return "Past due — collect or align terms";
-    if (!cockpitHasPm && !!selectedRow.billingSettings?.autoBillingEnabled) return "Autopay on with no saved card";
-    if (!cockpitHasPm) return "No default card for autopay runs";
-    if (cockpitWorst === "OPEN") return "Open invoices follow your collections rules";
-    return "Ready for scheduled collection";
-  })();
+  const toolbarWorst = selectedRow ? worstNonTerminalInvoiceStatus(selectedRow.invoices) : "—";
+  const toolbarChipClass =
+    toolbarWorst === "—" ? "good" : toolbarWorst === "FAILED" ? "bad" : toolbarWorst === "OVERDUE" ? "bad" : "warn";
+  const toolbarStanding = adminTenantStandingHeadline(toolbarWorst);
+  const toolbarBalance = dollars(Number(selectedRow?.balanceDueCents ?? 0));
 
   const billingSection =
     pathname === "/admin/billing/settings" ? rawSearchParams.get(BILLING_SECTION_QUERY) || "plans-pricing" : "";
@@ -194,18 +195,39 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
       ? (rawSearchParams.get(OPS_TAB_QUERY) as AdminOpsTab | null) || "invoices"
       : null;
 
-  const isInvoicesPage = pathname === "/admin/billing/invoices";
+  const currentNavKey = useMemo((): BillingWorkspaceNavValue => {
+    if (catalogMode) return "overview";
+    if (pathname === "/admin/billing/invoices") {
+      const tab = activeOpsTab || "invoices";
+      if (tab === "transactions") return "payments";
+      if (tab === "reports") return "reports";
+      if (tab === "collections") return "collections";
+      return "invoices";
+    }
+    if (pathname === "/admin/billing/settings") {
+      if (billingSection === "tax-billing") return "taxes";
+      if (billingSection === "gateway") return "gateway";
+      if (billingSection === "collections") return "dunning";
+      if (billingSection === "preview" || billingSection === "pricing-explanation") return "advanced";
+      return "pricing";
+    }
+    if (pathname === "/admin/billing") {
+      if (locHash === "#payment-methods") return "payment-methods";
+      if (locHash === "#recent-activity") return "activity";
+      return "overview";
+    }
+    return "overview";
+  }, [catalogMode, pathname, activeOpsTab, billingSection, locHash]);
 
   const workspaceHref = useMemo(() => {
     function build(tid: string): Record<WorkspaceLinkKey, string> {
-      const base = mergeSearchParams(new URLSearchParams(), { tenantId: tid });
       return {
-        summary: `/admin/billing${base}`,
+        summary: `/admin/billing${mergeSearchParams(new URLSearchParams(), { tenantId: tid })}`,
         invoices: `/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: tid, [OPS_TAB_QUERY]: "invoices" })}`,
         payments: `/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: tid, [OPS_TAB_QUERY]: "transactions" })}`,
         methods: `/admin/billing${mergeSearchParams(new URLSearchParams(), { tenantId: tid })}#payment-methods`,
         plans: `/admin/billing/settings${mergeSearchParams(new URLSearchParams(), { tenantId: tid, [BILLING_SECTION_QUERY]: "plans-pricing" })}`,
-        collections: `/admin/billing/settings${mergeSearchParams(new URLSearchParams(), { tenantId: tid, [BILLING_SECTION_QUERY]: "collections" })}`,
+        collections: `/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: tid, [OPS_TAB_QUERY]: "collections" })}`,
         tax: `/admin/billing/settings${mergeSearchParams(new URLSearchParams(), { tenantId: tid, [BILLING_SECTION_QUERY]: "tax-billing" })}`,
         gateway: `/admin/billing/settings${mergeSearchParams(new URLSearchParams(), { tenantId: tid, [BILLING_SECTION_QUERY]: "gateway" })}`,
         activity: `/admin/billing${mergeSearchParams(new URLSearchParams(), { tenantId: tid })}#recent-activity`,
@@ -214,70 +236,75 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
     return build;
   }, []);
 
-  function tabActive(label: string): boolean {
-    if (catalogMode) return false;
-    switch (label) {
-      case "Summary":
-        return pathname === "/admin/billing";
-      case "Invoices":
-        return isInvoicesPage && activeOpsTab === "invoices";
-      case "Payments":
-        return isInvoicesPage && activeOpsTab === "transactions";
-      case "Payment methods":
-      case "Activity":
-        return false;
-      case "Plans & pricing":
-        return pathname === "/admin/billing/settings" &&
-          ["plans-pricing", "preview", "pricing-explanation"].includes(billingSection);
-      case "Collections":
-        return pathname === "/admin/billing/settings" && billingSection === "collections";
-      case "Tax & billing details":
-        return pathname === "/admin/billing/settings" && billingSection === "tax-billing";
-      case "Payment gateway":
-        return pathname === "/admin/billing/settings" && billingSection === "gateway";
+  function pushWorkspaceNav(key: BillingWorkspaceNavValue) {
+    const tid = effectiveTenantId;
+    if (!tid) return;
+    switch (key) {
+      case "overview":
+        router.push(`/admin/billing${mergeSearchParams(new URLSearchParams(), { tenantId: tid })}`);
+        break;
+      case "invoices":
+        router.push(`/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: tid, [OPS_TAB_QUERY]: "invoices" })}`);
+        break;
+      case "payments":
+        router.push(`/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: tid, [OPS_TAB_QUERY]: "transactions" })}`);
+        break;
+      case "reports":
+        router.push(`/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: tid, [OPS_TAB_QUERY]: "reports" })}`);
+        break;
+      case "collections":
+        router.push(`/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: tid, [OPS_TAB_QUERY]: "collections" })}`);
+        break;
+      case "payment-methods":
+        router.push(`/admin/billing${mergeSearchParams(new URLSearchParams(), { tenantId: tid })}#payment-methods`);
+        break;
+      case "pricing":
+        router.push(`/admin/billing/settings${mergeSearchParams(new URLSearchParams(), { tenantId: tid, [BILLING_SECTION_QUERY]: "plans-pricing" })}`);
+        break;
+      case "dunning":
+        router.push(`/admin/billing/settings${mergeSearchParams(new URLSearchParams(), { tenantId: tid, [BILLING_SECTION_QUERY]: "collections" })}`);
+        break;
+      case "taxes":
+        router.push(`/admin/billing/settings${mergeSearchParams(new URLSearchParams(), { tenantId: tid, [BILLING_SECTION_QUERY]: "tax-billing" })}`);
+        break;
+      case "gateway":
+        router.push(`/admin/billing/settings${mergeSearchParams(new URLSearchParams(), { tenantId: tid, [BILLING_SECTION_QUERY]: "gateway" })}`);
+        break;
+      case "activity":
+        router.push(`/admin/billing${mergeSearchParams(new URLSearchParams(), { tenantId: tid })}#recent-activity`);
+        break;
+      case "advanced":
+        router.push(`/admin/billing/settings${mergeSearchParams(new URLSearchParams(), { tenantId: tid, [BILLING_SECTION_QUERY]: "preview" })}`);
+        break;
       default:
-        return false;
+        break;
     }
   }
-
-  const wsLinks: Array<[string, WorkspaceLinkKey]> = [
-    ["Summary", "summary"],
-    ["Invoices", "invoices"],
-    ["Payments", "payments"],
-    ["Payment methods", "methods"],
-    ["Plans & pricing", "plans"],
-    ["Collections", "collections"],
-    ["Tax & billing details", "tax"],
-    ["Payment gateway", "gateway"],
-    ["Activity", "activity"],
-  ];
 
   if (!canAdmin) {
     return <>{children}</>;
   }
 
   return (
-    <div className="admin-billing-phase2-root stack compact-stack billing-admin-shell billing-p5-scope" style={{ maxWidth: 1320, margin: "0 auto", paddingBottom: 32 }}>
-      <header
-        className="panel admin-billing-shell-header"
-        style={{ position: "sticky", top: 8, zIndex: 40, padding: "16px 20px", borderRadius: 14 }}
-      >
-        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between", gap: 14 }}>
+    <div
+      className="admin-billing-phase2-root stack compact-stack billing-admin-shell billing-p5-scope billing-p6-scope"
+      style={{ maxWidth: 1320, margin: "0 auto", paddingBottom: 24 }}
+    >
+      <header className="panel admin-billing-shell-header billing-p6-shell-header" style={{ position: "sticky", top: 8, zIndex: 40 }}>
+        <div className="billing-p6-header-row">
           <div>
-            <h1 style={{ margin: "0 0 4px", fontSize: "1.35rem", fontWeight: 700, letterSpacing: "-0.02em" }}>
-              {catalogMode ? "Billing plan catalog" : "Billing workspace"}
-            </h1>
-            <p style={{ margin: 0, fontSize: 13, color: "var(--muted, #64748b)", maxWidth: 580 }}>
+            <h1>{catalogMode ? "Billing plan catalog" : "Billing"}</h1>
+            <p>
               {catalogMode ? (
-                <>Edits apply to future invoices across companies. Return to a company to run operational work.</>
+                <>Edits apply to future invoices across companies. Pick a company below to return to operational work.</>
               ) : (
-                <>Operator cockpit for recurring revenue, collections, and payment health — scoped to one company at a time.</>
+                <>One company at a time — use the menu to switch sections without losing context.</>
               )}
             </p>
           </div>
 
-          {!catalogMode && (
-            <div ref={comboRef} style={{ position: "relative", minWidth: 240, flex: "1 1 220px", maxWidth: 380 }}>
+          {!catalogMode ? (
+            <div ref={comboRef} style={{ position: "relative", minWidth: 220, flex: "1 1 200px", maxWidth: 360 }}>
               <label
                 style={{
                   fontSize: 11,
@@ -287,8 +314,9 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
                   color: "var(--muted)",
                 }}
               >
-                Switch company
+                Company
               </label>
+              <input type="hidden" data-testid="billing-admin-tenant-select" name="adminBillingTenantId" value={effectiveTenantId} readOnly tabIndex={-1} aria-hidden />
               <button
                 type="button"
                 className="input"
@@ -296,7 +324,7 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
                 disabled={tenantsLoading || tenants.length === 0}
                 onClick={() => setComboOpen((o) => !o)}
                 style={{
-                  marginTop: 6,
+                  marginTop: 4,
                   width: "100%",
                   textAlign: "left",
                   cursor: tenants.length ? "pointer" : "not-allowed",
@@ -368,103 +396,51 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
                 </div>
               ) : null}
             </div>
-          )}
+          ) : null}
         </div>
 
         {!catalogMode && effectiveTenantId && selectedRow ? (
-          <div className="billing-p5-ws-cockpit" aria-label="Company billing snapshot">
-            <div className="billing-p5-ws-cockpit-main">
-              <p className="billing-p5-ws-kicker">Active company</p>
-              <h2 className="billing-p5-ws-title">{selectedRow.name}</h2>
-              <p className="billing-p5-ws-sub">{cockpitPayHealth}</p>
-              <div className="billing-p5-ws-chip-row">
-                <span className={`billing-p5-status-chip ${cockpitChipClass}`}>{cockpitStanding}</span>
-              </div>
+          <div className="billing-p6-compact-toolbar" aria-label="Company billing workspace">
+            <div className="billing-p6-toolbar-meta">
+              <span className="billing-p6-toolbar-company">{selectedRow.name}</span>
+              <span className="billing-p6-toolbar-balance">Balance due {toolbarBalance}</span>
+              <span className={`billing-p5-status-chip billing-p6-toolbar-chip ${toolbarChipClass}`}>{toolbarStanding}</span>
             </div>
-            <div className="billing-p5-ws-metrics" role="list">
-              <div className="billing-p5-ws-metric" role="listitem">
-                <label>Open balance</label>
-                <span className="billing-p5-ws-metric-value">{cockpitBalance}</span>
-                <span className="billing-p5-ws-metric-note">Across unpaid invoices</span>
-              </div>
-              <div className="billing-p5-ws-metric" role="listitem">
-                <label>Autopay</label>
-                <span className="billing-p5-ws-metric-value">{cockpitAutopay}</span>
-                {cockpitNextBill ? <span className="billing-p5-ws-metric-note">{cockpitNextBill}</span> : <span className="billing-p5-ws-metric-note">Manual billing cycle</span>}
-              </div>
-              <div className="billing-p5-ws-metric" role="listitem">
-                <label>Cards on file</label>
-                <span className="billing-p5-ws-metric-value">{cockpitHasPm ? `${(selectedRow.paymentMethods || []).length} saved` : "None"}</span>
-                <span className="billing-p5-ws-metric-note">{cockpitHasPm ? "Ready for card charges" : "Add from Invoices & payments"}</span>
-              </div>
-              <div className="billing-p5-ws-metric" role="listitem">
-                <label>Last payment</label>
-                <span className="billing-p5-ws-metric-value">{cockpitLastPaid ? "Recorded" : "—"}</span>
-                <span className="billing-p5-ws-metric-note">{cockpitLastPaid || "No settled payments in loaded history"}</span>
-              </div>
-              <div className="billing-p5-ws-metric" role="listitem">
-                <label>Next due</label>
-                <span className="billing-p5-ws-metric-value">{cockpitNextDue ? "Scheduled" : "—"}</span>
-                <span className="billing-p5-ws-metric-note">{cockpitNextDue || "No open invoice with a due date"}</span>
-              </div>
-              <div className="billing-p5-ws-metric" role="listitem">
-                <label>Payment health</label>
-                <span className="billing-p5-ws-metric-value">{cockpitWorst === "—" ? "Stable" : "Review"}</span>
-                <span className="billing-p5-ws-metric-note">{cockpitPayHealth}</span>
-              </div>
+            <select
+              className="input billing-p6-workspace-nav"
+              data-testid="billing-admin-workspace-nav"
+              aria-label="Billing workspace section"
+              value={currentNavKey}
+              onChange={(e) => {
+                pushWorkspaceNav(e.target.value as BillingWorkspaceNavValue);
+              }}
+            >
+              <option value="overview">Overview</option>
+              <option value="invoices">Invoices</option>
+              <option value="payments">Payments</option>
+              <option value="reports">Reports</option>
+              <option value="collections">Collections</option>
+              <option value="payment-methods">Payment methods</option>
+              <option value="pricing">Pricing</option>
+              <option value="dunning">Dunning &amp; automation</option>
+              <option value="taxes">Taxes</option>
+              <option value="gateway">Gateway</option>
+              <option value="activity">Activity</option>
+              <option value="advanced">Preview &amp; diagnostics</option>
+            </select>
+            <div className="billing-p6-toolbar-actions">
+              <Link className="btn ghost" href="/admin/billing/plans">
+                Plan catalog
+              </Link>
+              <Link className="btn ghost" href={workspaceHref(effectiveTenantId).collections}>
+                Invoice holds
+              </Link>
             </div>
           </div>
         ) : null}
 
-        <div className="billing-p5-shell-actions admin-billing-command-row">
-          <span className="billing-p5-shell-actions-label">Shortcuts</span>
-          <Link className="btn ghost" style={{ fontSize: 13 }} href="/admin/billing">
-            Platform overview
-          </Link>
-          <Link className="btn ghost" style={{ fontSize: 13 }} href={effectiveTenantId ? workspaceHref(effectiveTenantId).invoices : "/admin/billing/invoices"}>
-            Invoices & payments
-          </Link>
-          <Link className="btn ghost" style={{ fontSize: 13 }} href={effectiveTenantId ? workspaceHref(effectiveTenantId).plans : "/admin/billing/settings"}>
-            Company settings
-          </Link>
-          <Link className="btn ghost" style={{ fontSize: 13 }} href="/admin/billing/plans">
-            Plan catalog
-          </Link>
-        </div>
-
-        {!catalogMode && effectiveTenantId ? (
-          <nav className="billing-p5-ws-tabs" aria-label="Company billing workspace">
-            {wsLinks.map(([label, key]) => {
-              const active = tabActive(label);
-              return (
-                <Link
-                  key={label}
-                  href={workspaceHref(effectiveTenantId)[key]}
-                  scroll={false}
-                  className={`admin-billing-ws-tab ${active ? "admin-billing-ws-tab-active" : ""}`}
-                  style={{
-                    padding: "6px 14px",
-                    borderRadius: 999,
-                    fontSize: 13,
-                    fontWeight: active ? 600 : 500,
-                    textDecoration: "none",
-                    border: active ? "1px solid var(--accent, #2563eb)" : "1px solid transparent",
-                    background:
-                      active
-                        ? "color-mix(in srgb, var(--accent, #2563eb) 12%, transparent)"
-                        : "var(--surface-alt, #f8fafc)",
-                    color: active ? "var(--accent, #2563eb)" : "var(--text-primary, inherit)",
-                  }}
-                >
-                  {label}
-                </Link>
-              );
-            })}
-          </nav>
-        ) : null}
-
         {catalogMode && (
-          <nav style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border, #e5e7eb)" }}>
+          <nav style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border, #e5e7eb)" }}>
             <Link
               href={effectiveTenantId ? `/admin/billing?tenantId=${encodeURIComponent(effectiveTenantId)}` : "/admin/billing"}
               className="btn ghost"
@@ -476,25 +452,23 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
         )}
 
         {tenantsLoading ? (
-          <div style={{ marginTop: 14 }}>
+          <div style={{ marginTop: 10 }}>
             <LoadingSkeleton rows={1} />
           </div>
         ) : null}
         {tenantsError ? (
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: 10 }}>
             <ErrorState message={tenantsError} />
           </div>
         ) : null}
         {!catalogMode && !tenantsLoading && tenants.length === 0 ? (
-          <p className="muted" style={{ marginTop: 12, marginBottom: 0, fontSize: 13 }}>
+          <p className="muted" style={{ marginTop: 10, marginBottom: 0, fontSize: 13 }}>
             No billable companies found yet.
           </p>
         ) : null}
       </header>
 
-      <section className="admin-billing-shell-content" style={{ marginTop: 12 }}>
-        {children}
-      </section>
+      <section className="admin-billing-shell-content">{children}</section>
     </div>
   );
 }

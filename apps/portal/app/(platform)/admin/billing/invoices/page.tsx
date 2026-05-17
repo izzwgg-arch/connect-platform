@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useAsyncResource } from "../../../../../hooks/useAsyncResource";
 import { apiDelete, apiGet, apiPost, getPortalApiBaseUrl } from "../../../../../services/apiClient";
 import { DataTable } from "../../../../../components/DataTable";
@@ -14,7 +14,7 @@ import { BillingActivityList } from "../../../../../components/billing/BillingAc
 import { BillingEmptyState } from "../../../../../components/billing/BillingEmptyState";
 import { dollars, invoiceStatusLabel, transactionStatusLabel } from "../../../../../lib/billingUi";
 import { useAppContext } from "../../../../../hooks/useAppContext";
-import { mergeSearchParams, OPS_TAB_QUERY, isAdminOpsTab, type AdminOpsTab } from "../_components/adminBillingLinks";
+import { OPS_TAB_QUERY, isAdminOpsTab, type AdminOpsTab } from "../_components/adminBillingLinks";
 
 function openAdminInvoicePdf(invoiceId: string) {
   const token = localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "";
@@ -2206,17 +2206,9 @@ function AdminBillingInvoicesBody() {
   const { can, backendJwtRole } = useAppContext();
   const canAdmin = backendJwtRole === "SUPER_ADMIN" && can("can_view_admin_billing");
   const searchParams = useSearchParams();
-  const router = useRouter();
 
   const rawOps = searchParams.get(OPS_TAB_QUERY);
   const activeTab: AdminOpsTab = isAdminOpsTab(rawOps) ? rawOps : "invoices";
-
-  const navQ = mergeSearchParams(new URLSearchParams(searchParams.toString()), {});
-
-  const setActiveTab = (tab: AdminOpsTab) => {
-    const next = mergeSearchParams(new URLSearchParams(searchParams.toString()), { [OPS_TAB_QUERY]: tab });
-    router.replace(`/admin/billing/invoices${next}`, { scroll: false });
-  };
 
   if (!canAdmin) {
     return (
@@ -2228,39 +2220,11 @@ function AdminBillingInvoicesBody() {
   }
 
   return (
-    <div className="stack compact-stack billing-admin-shell billing-p5-scope">
-      <div className="billing-p5-page-intro" style={{ marginBottom: 4 }}>
-        <h2>Invoices &amp; payments</h2>
-        <p>
-          Cross-tenant invoices, payment ledger, reports, and collections. The company selector above keeps navigation context; bookmark with{" "}
-          <code style={{ fontSize: 12 }}>?tenantId=…</code> when you need a direct link.
-        </p>
-      </div>
-
-      <div className="row-actions" style={{ marginBottom: 4, flexWrap: "wrap", gap: 8 }}>
-        <Link className="btn ghost" href={`/admin/billing${navQ}`}>
-          ← Billing overview
-        </Link>
-        <Link className="btn ghost" href={`/admin/billing/settings${navQ}`}>
-          Company billing setup
-        </Link>
-      </div>
-
-      <div className="billing-p5-ops-tabs" role="tablist" aria-label="Billing operations">
-        {(["invoices", "transactions", "reports", "collections"] as const).map((tab) => (
-          <button
-            key={tab}
-            type="button"
-            role="tab"
-            aria-selected={activeTab === tab}
-            data-active={activeTab === tab ? "true" : "false"}
-            data-testid={`billing-admin-ops-tab-${tab}`}
-            onClick={() => setActiveTab(tab)}
-          >
-            {tab === "invoices" ? "Invoices" : tab === "transactions" ? "Payments" : tab === "reports" ? "Reports" : "Collections"}
-          </button>
-        ))}
-      </div>
+    <div className="stack compact-stack billing-admin-shell billing-p5-scope billing-p6-scope">
+      <p className="muted billing-p6-invoices-hint" style={{ margin: "0 0 8px", fontSize: 12, lineHeight: 1.45 }}>
+        Invoices, ledger, exports, and invoice-level collections for the company selected in the header. Switch views with the{" "}
+        <strong>Billing workspace</strong> menu above.
+      </p>
 
       {activeTab === "invoices" ? <InvoicesTab /> : activeTab === "transactions" ? <TransactionsTab /> : activeTab === "reports" ? <ReportsTab /> : <CollectionsTab />}
     </div>

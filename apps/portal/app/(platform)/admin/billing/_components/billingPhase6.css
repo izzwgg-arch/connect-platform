@@ -1,0 +1,164 @@
+/* Phase 6 — compact admin billing workspace (use with .billing-p6-scope on shell root) */
+
+.billing-p6-scope .admin-billing-shell-content {
+  margin-top: 8px;
+}
+
+.billing-p6-shell-header.panel {
+  padding: 10px 14px 12px;
+  border-radius: 12px;
+}
+
+.billing-p6-header-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px 16px;
+}
+
+.billing-p6-header-row h1 {
+  margin: 0 0 2px;
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.billing-p6-header-row > div:first-child p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted, #64748b);
+  max-width: 520px;
+  line-height: 1.4;
+}
+
+.billing-p6-compact-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border, #e2e8f0) 70%, transparent);
+}
+
+.billing-p6-toolbar-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+  flex: 1 1 200px;
+}
+
+.billing-p6-toolbar-company {
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.billing-p6-toolbar-balance {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary, inherit);
+}
+
+.billing-p6-toolbar-chip.billing-p5-status-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
+.billing-p6-workspace-nav.input,
+select.billing-p6-workspace-nav {
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  min-width: 200px;
+  max-width: min(320px, 100%);
+}
+
+.billing-p6-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.billing-p6-toolbar-actions .btn.ghost {
+  font-size: 12px;
+  padding: 5px 10px;
+}
+
+/* Settings: advanced block */
+.billing-p6-advanced {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--border, #e2e8f0) 85%, transparent);
+  border-radius: var(--p5-radius-sm, 10px);
+  background: var(--p5-surface-soft, #f8fafc);
+}
+
+.billing-p6-advanced > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  list-style-position: outside;
+}
+
+.billing-p6-advanced[open] > summary {
+  margin-bottom: 10px;
+}
+
+/* Tighter cards inside admin billing when both scopes apply */
+.billing-p6-scope.billing-p5-scope .billing-p5-settings-section {
+  margin-bottom: 18px;
+}
+
+.billing-p6-scope.billing-p5-scope .billing-p5-page-intro {
+  margin-bottom: 2px;
+}
+
+.billing-p6-scope.billing-p5-scope .billing-p5-page-intro h2 {
+  font-size: 1.05rem;
+  margin: 0 0 4px;
+}
+
+.billing-p6-scope.billing-p5-scope .billing-p5-page-intro p {
+  font-size: 12px;
+  margin: 0;
+  line-height: 1.45;
+}
+
+.billing-p6-pricing-split {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: var(--p5-radius-sm, 10px);
+  border: 1px solid color-mix(in srgb, var(--border, #e2e8f0) 82%, transparent);
+  background: var(--p5-surface-soft, #f8fafc);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.billing-p6-pricing-split h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted, #64748b);
+}
+
+.billing-p6-pricing-split p {
+  margin: 0;
+}
+
+.billing-p6-overview-meta strong {
+  font-weight: 600;
+  color: var(--text-primary, inherit);
+}
