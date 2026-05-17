@@ -1526,6 +1526,51 @@ When a call is not showing up in the CRM contact timeline:
 
 ---
 
+## Debugging voicemail cross-context spool audio (audio_not_found 503)
+
+**Symptom:** Specific voicemails return HTTP 503 with `error: "audio_not_found"` from
+the API even though the voicemail row exists in the DB and the user sees "Could not play."
+
+**Root cause pattern:** `pbxRecfile` is a raw `/var/spool/asterisk/voicemail/<context>/...`
+path that points to a non-primary PBX voicemail context. The helper defaults to the
+tenant's current context and cannot find the message.
+
+**API diagnostic:**
+```bash
+docker logs app-api-1 --since 5m | grep voicemail
+# Look for:
+#   recfileReason: "spool_path_only"  → pbxRecfile is a spool path; normal
+#   voicemailContext: "..."  helper_audio_fallback: true → fixed path picked up context
+#   voicemailContext: null   helper_audio_fallback: false err: "audio_not_found"
+#     → either the file was deleted from PBX, or voicemailContext could not be parsed
+```
+
+**Manual helper probe:**
+```bash
+# Replace context/ext/msgNum from pbxRecfile
+curl -s -X POST http://209.145.60.79:8757/voicemail/spool/audio \
+  -H "Content-Type: application/json" \
+  -H "x-connect-pbx-helper-secret: <secret>" \
+  -d '{"tenantId":"2","extension":"103","folder":"INBOX","msgNum":"msg0087","voicemailContext":"b_visible-voicemail"}'
+# 200 = file exists, 404 = file missing from disk
+```
+
+**If 404 from helper:** The audio file was physically deleted from the PBX spool (e.g.
+old messages pruned by Asterisk housekeeping). No fix possible; the error is correct.
+
+**If 200 from helper but API returns 503:** The `voicemailContext` was not being parsed
+from `pbxRecfile`. Fixed in commit `5275c55` (2026-05-17). Deploy API to pick up fix.
+
+**DB audit — count cross-context voicemails for a tenant:**
+```sql
+SELECT REGEXP_REPLACE("pbxRecfile", '/var/spool/asterisk/voicemail/([^/]+)/.*', '\1') AS context,
+       COUNT(*) FROM "Voicemail"
+WHERE "tenantId" = '<tenantId>' AND "pbxRecfile" LIKE '/var/spool/%'
+GROUP BY 1 ORDER BY 2 DESC;
+```
+
+---
+
 ## Debugging voicemail audio playback latency
 
 Voicemail playback uses a two-path strategy:

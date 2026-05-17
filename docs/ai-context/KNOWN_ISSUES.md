@@ -1029,6 +1029,35 @@ When you find a new fragile area, add it here.
   The production DB was not affected because the CRM had not yet been deployed at the
   time of the fix.
 
+## API — voicemail cross-context spool playback (fixed 2026-05-17)
+
+- **Root cause:** `tryStreamFromHelperSpool()` in `apps/api/src/server.ts` called
+  `fetchVoicemailSpoolAudioFromHelper` with only `tenantId`, `extension`, `folder`,
+  and `msgNum`. The helper resolves the mailbox path from `tenantId` → current voicemail
+  context (e.g. `a_plus_center-voicemail`). 342 voicemails in the DB have `pbxRecfile`
+  paths pointing to non-primary PBX contexts (`trimpro-voicemail`, `b_visible-voicemail`,
+  `gesheft-voicemail`, etc.) — imported on 2026-05-10 when the VitalPBX REST API returned
+  cross-tenant spool paths for ext 103 voicemail records. All those voicemails returned
+  HTTP 503 `audio_not_found` even though the audio files physically exist on disk.
+
+- **Fix:** Parse the voicemail context directly from `vm.pbxRecfile` when it is a raw
+  `/var/spool/asterisk/voicemail/<context>/...` path and pass it as `voicemailContext`
+  to `fetchVoicemailSpoolAudioFromHelper`. The helper's `/voicemail/spool/audio` endpoint
+  accepts the optional `voicemailContext` field to override the tenant-derived path.
+  No behavior change for voicemails already in the primary context.
+
+- **Scope:** `apps/api/src/server.ts` — `tryStreamFromHelperSpool()` only.
+  No mobile/APK change needed.
+
+- **Diagnostics:** API logs now include:
+  ```
+  recfileReason: "spool_path_only"   storedRecfile: "/var/spool/..."
+  → "voicemail: recfile is spool-path (not URL) — checking VitalPBX for updated recfile, then helper fallback"
+
+  voicemailContext: "b_visible-voicemail"   helper_audio_fallback: true   byteLength: 377004
+  → "voicemail: helper_audio_fallback"
+  ```
+
 ## Mobile — voicemail Play latency (fixed 2026-05-17)
 
 - **Root cause:** The `/voice/voicemail/:id/stream` API route downloaded the full
