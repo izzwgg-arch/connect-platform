@@ -52,6 +52,7 @@ Shell: **`AdminBillingShell`** + CSS scopes **`billing-ws-scope`**, **`billing-p
 | Tenant + platform REST (`registerBillingRoutes`) | `apps/api/src/billing/routes.ts` |
 | JWT role gates for those routes | `apps/api/src/billing/billingAuth.ts` |
 | Invoice preview / create (+ discount line, pricing modes + **preview explanations**) | `apps/api/src/billing/invoiceEngine.ts` |
+| Tenant extensions **flat monthly rate** (metadata; invoice line builder) | `apps/api/src/billing/billingFlatRate.ts` |
 | Pricing preview explanations (derived only; **no totals math**) | `apps/api/src/billing/billingPricingExplanation.ts` |
 | Tenant pricing mode resolver + reset payload helpers | `apps/api/src/billing/billingPricingResolution.ts` |
 | Assembler for **pricing-diagnostics** (warnings + differsFromPlan + reset preview + **`pricingState`**) | `apps/api/src/billing/billingPricingDiagnostics.ts` |
@@ -120,6 +121,31 @@ Uses Node’s **`--experimental-test-module-mocks`** (see `apps/api/package.json
 **API:** **`PUT /admin/billing/tenants/:tenantId/settings`** — optional **`billingPricingMode`** (**`catalog` \| `custom` \| `null`** to clear). When the **resolved** normalized mode (**`legacy`** when key absent)** changes**, logs **`billing.pricing_mode_changed`** with **`operatorId`** (JWT **`sub`**), **`fromMode`**, **`toMode`**, and stored **`metadata.billingPricingMode`**. **`POST /admin/billing/platform/tenants/:tenantId/pricing/reset-to-plan`** — copies four price fields from the tenant's **current** **`billingPlan`** (**scheduled next plan is ignored**), sets mode to **`catalog`**, responds with **`billingSettings`** + **`pricingResetSummary`** (`before`/`after` pricing snapshots), logs **`billing.pricing_reset_to_plan`** (**`metadata.operatorId`**, **`before`**, **`after`**) (**`400`** if no **`billingPlanId`**).
 
 Merge helpers for deterministic tests/admin parity: **`mergeTenantBillingSettingsMetadata`** in **`billingTenantSettingsMetadata.ts`**.
+
+## Tenant extensions flat monthly rate (`TenantBillingSettings.metadata.billingFlatRate`)
+
+Negotiated **one monthly charge for all billable extensions** (e.g. $500/mo for any extension count). **No Prisma migration** — JSON metadata only. **Real invoice math** in preview + create (not UI-only).
+
+| Field | Type | Notes |
+|-------|------|--------|
+| `enabled` | `boolean` | When `true` and `amountCents ≥ 1`, flat rate applies |
+| `amountCents` | `number` | Whole cents; rejected on save if enabled with `< 1` |
+| `label` | `string?` | Optional line description prefix (max 120 chars) |
+| `appliesTo` | `"extensions"` | Only scope implemented today |
+
+**Invoice engine (`buildExtensionInvoiceLine` in `billingFlatRate.ts`, called from `invoiceEngine.ts`):**
+
+- When active and **`usage.extensionCount > 0`**: one **`EXTENSION`** line — **`quantity: 1`**, **`unitPriceCents` = `amountCents`**, **`amountCents` = flat amount** (not × extension count).
+- Description default: **`Extensions flat monthly rate (N active extension(s))`**; line **`metadata`**: `flatRate: true`, `flatRateAmountCents`, `extensionCount`, `extensionIds`.
+- When flat rate off or zero extensions: unchanged per-extension math (`quantity = extensionCount`, `unitPriceCents` from pricing resolution).
+- **E911 / tax:** `extensionCount` for tax provider input still comes from **`calculateTenantBillingUsage`** — flat rate does **not** reduce E911 quantity.
+- **Discount:** flat extension amount is a normal taxable service line; percent discount applies to service subtotal as before.
+
+**API:** **`PUT /admin/billing/tenants/:tenantId/settings`** — optional **`billingFlatRate`** object (same shape as metadata). **`400 invalid_billing_flat_rate`** when enabled without a positive amount. **`reset-to-plan`** does **not** clear flat rate (tenant-specific deal).
+
+**Portal:** Plans & pricing → **Flat monthly rate for extensions** card (toggle, amount, helper copy, live estimate chip **Flat rate**); overrides table row **Extensions / Flat monthly rate / $X/month / Covers N active extensions**. Estimate uses flat cents when enabled (`billingUi.ts`).
+
+**Explicitly unchanged:** SOLA charge execution, payment execution, Cardknox/iFields, worker dunning logic (worker rebuild only if it bundles updated `invoiceEngine`).
 
 **Portal:** **`/admin/billing/settings?billingSection=plans-pricing`** — **`AdminPricingWorkspace`** (2026-05-17, operational redesign): compact **billing profile** strip (plan, pricing mode, account standing, estimated monthly total, autopay); **billing items grid** with per-line quantity + unit price + monthly subtotal; **live monthly estimate** panel; compact **price overrides** table; **Advanced** (`<details>`, collapsed) for diagnostics + reset. **Change plan** via header + embedded **`AdminCurrentBillingPlanAssignCard`**. Sticky **Save pricing** bar when dirty. **Taxes & invoices** tab: **`AdminTenantBillingCycleForm`** + invoice branding.
 

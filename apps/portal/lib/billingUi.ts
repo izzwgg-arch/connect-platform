@@ -279,6 +279,35 @@ export function adminTenantStandingHeadline(status: string): string {
   return "In good standing";
 }
 
+/** Mirrors `TenantBillingSettings.metadata.billingFlatRate` (portal display + estimate). */
+export type BillingFlatRateConfig = {
+  enabled: boolean;
+  amountCents: number;
+  label?: string;
+  appliesTo: "extensions";
+};
+
+export function parseBillingFlatRateFromMetadata(metadata: unknown): BillingFlatRateConfig | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const raw = (metadata as Record<string, unknown>).billingFlatRate;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  const amountCents = Math.round(Number(o.amountCents));
+  const label = typeof o.label === "string" ? o.label.trim().slice(0, 120) : undefined;
+  return {
+    enabled: o.enabled === true,
+    amountCents: Number.isFinite(amountCents) ? Math.max(0, amountCents) : 0,
+    ...(label ? { label } : {}),
+    appliesTo: "extensions",
+  };
+}
+
+export function activeExtensionsFlatRateFromMetadata(metadata: unknown): BillingFlatRateConfig | null {
+  const cfg = parseBillingFlatRateFromMetadata(metadata);
+  if (!cfg?.enabled || cfg.appliesTo !== "extensions" || cfg.amountCents < 1) return null;
+  return cfg;
+}
+
 /** Operational monthly estimate for admin pricing workspace (display only — not invoice math). */
 export type TenantBillingEstimateLine = {
   key: string;
@@ -299,6 +328,8 @@ export function computeTenantMonthlyEstimate(input: {
   extensionPriceCents: number;
   additionalPhoneNumberPriceCents: number;
   smsPriceCents: number;
+  /** When set, extensions bill as one flat monthly line (qty 1). */
+  extensionsFlatRateCents?: number | null;
   creditsCents?: number;
   discountPercent?: number;
   /** When set, scales tax estimate proportionally to service subtotal changes. */
@@ -312,14 +343,16 @@ export function computeTenantMonthlyEstimate(input: {
 } {
   const lines: TenantBillingEstimateLine[] = [];
   if (input.extensionCount > 0) {
-    const sub = input.extensionCount * input.extensionPriceCents;
+    const flat = input.extensionsFlatRateCents != null && input.extensionsFlatRateCents > 0;
+    const sub = flat ? input.extensionsFlatRateCents! : input.extensionCount * input.extensionPriceCents;
     lines.push({
       key: "extensions",
-      label: "Extensions",
-      quantity: input.extensionCount,
-      unitCents: input.extensionPriceCents,
+      label: flat ? "Extensions (flat monthly rate)" : "Extensions",
+      quantity: flat ? 1 : input.extensionCount,
+      unitCents: flat ? input.extensionsFlatRateCents! : input.extensionPriceCents,
       subtotalCents: sub,
       autoQuantity: true,
+      note: flat ? `Covers ${input.extensionCount} active extension${input.extensionCount === 1 ? "" : "s"}` : undefined,
     });
   }
   if (input.additionalPhoneNumberCount > 0) {

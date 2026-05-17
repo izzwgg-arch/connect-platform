@@ -6,6 +6,7 @@ import type { TaxCalculationAuditSnapshot } from "./taxProvider";
 import { resolveTaxProvider } from "./taxProvider";
 import type { BillingPricingResolution } from "./billingPricingResolution";
 import { activeBillingPlanRowForPeriod, parseBillingPricingMode, resolveTenantBillingPricing } from "./billingPricingResolution";
+import { buildExtensionInvoiceLine } from "./billingFlatRate";
 import { buildPricingPreviewExplanation, type PricingPreviewExplanation } from "./billingPricingExplanation";
 
 export type BillingInvoicePreview = {
@@ -128,17 +129,12 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
   const effectiveFirstFree = pricingResolution.firstPhoneNumberFree;
 
   const lineItems: BillingInvoicePreview["lineItems"] = [];
-  if (usage.extensionCount > 0) {
-    lineItems.push({
-      type: "EXTENSION",
-      description: "Billable extensions",
-      quantity: usage.extensionCount,
-      unitPriceCents: extensionPrice,
-      amountCents: usage.extensionCount * extensionPrice,
-      taxable: true,
-      metadata: { extensionIds: usage.extensionIds },
-    });
-  }
+  const extensionLine = buildExtensionInvoiceLine({
+    usage,
+    extensionPriceCents: extensionPrice,
+    metadata: settings.metadata,
+  });
+  if (extensionLine) lineItems.push(extensionLine);
   if (usage.additionalPhoneNumberCount > 0) {
     lineItems.push({
       type: "PHONE_NUMBER",

@@ -4,6 +4,39 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-17 — Billing: tenant extensions flat monthly rate (invoice engine + admin UI)
+
+**Task:** Allow SUPER_ADMIN to set a tenant-specific **flat monthly rate for all extensions** (real billing, not display-only).  
+**Risk:** High (invoice line math; metadata on `TenantBillingSettings`).
+
+### Shipped
+
+- **`billingFlatRate.ts`**: parse/validate/merge metadata; **`buildExtensionInvoiceLine`** — flat line `quantity: 1`, metadata `flatRate` + `extensionCount`.
+- **`invoiceEngine.ts`**: extension lines via flat-rate builder; preview/create persist same shape.
+- **`billingTenantSettingsMetadata.ts` + `routes.ts`**: **`PUT …/settings`** accepts **`billingFlatRate`**; **`400 invalid_billing_flat_rate`** if enabled without positive cents.
+- **Portal `AdminPricingWorkspace`**: flat-rate card, live estimate, overrides row, save payload; **`billingUi.ts`** helpers.
+- **Tests:** `billingFlatRate.test.ts`; flat-rate cases in main **`invoiceEngine.test.ts`** block — **212/212** `test:billing` pass.
+
+### Metadata shape
+
+`TenantBillingSettings.metadata.billingFlatRate`: `{ enabled, amountCents, label?, appliesTo: "extensions" }` — no migration.
+
+### Explicitly NOT changed
+
+- SOLA / Cardknox charge execution, payment execution, Prisma schema, collections worker behavior beyond bundling updated engine.
+
+### Deploy
+
+- **API**, **portal**, and **worker** (worker imports `invoiceEngine` for monthly billing).
+
+### Files (primary)
+
+- `apps/api/src/billing/billingFlatRate.ts`, `invoiceEngine.ts`, `billingTenantSettingsMetadata.ts`, `routes.ts`, `*.test.ts`
+- `apps/portal/.../AdminPricingWorkspace.tsx`, `billingPricing.css`, `lib/billingUi.ts`
+- `docs/ai-context/BILLING.md`, `BILLING_UX_OVERHAUL_PHASE1_IA.md`, `CHANGELOG_AI.md`
+
+---
+
 ## 2026-05-17 — Billing: tenant pricing workspace operational redesign (portal)
 
 **Task:** Redesign admin **Plans & pricing** into a tenant billing control center — quantities, live monthly estimate, inline unit pricing, overrides visibility.  

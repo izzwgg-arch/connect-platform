@@ -13,6 +13,7 @@ import {
   tenantPricingQuadSnapshot,
   validateCatalogBillingPlanForAssignment,
 } from "./billingAssignment";
+import { validateBillingFlatRateInput } from "./billingFlatRate";
 import { mergeTenantBillingSettingsMetadata } from "./billingTenantSettingsMetadata";
 import { getBillingSolaAdapter, storeSolaPaymentMethod } from "./solaGateway";
 import { invoiceReadyEmail } from "./emailTemplates";
@@ -628,6 +629,15 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         serviceAddress: z.any().optional(),
         taxProviderId: z.enum(["tax_profile_v1", "external_telecom_stub"]).optional(),
         billingPricingMode: z.enum(["catalog", "custom"]).nullable().optional(),
+        billingFlatRate: z
+          .object({
+            enabled: z.boolean(),
+            amountCents: z.number().int().nonnegative(),
+            label: z.string().max(120).optional(),
+            appliesTo: z.literal("extensions"),
+          })
+          .nullable()
+          .optional(),
       })
       .merge(invoiceBrandingPutSchema)
       .parse(req.body || {});
@@ -648,12 +658,20 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       invoicePaymentInstructions: _ipi,
       taxProviderId,
       billingPricingMode,
+      billingFlatRate,
       ...pricing
     } = input as any;
     const pricingData = Object.fromEntries(Object.entries(pricing).filter(([, v]) => v !== undefined));
     let mergedMetadata: Record<string, unknown> | undefined;
     let pricingModeChangeFrom: ReturnType<typeof parseBillingPricingMode> | null = null;
-    if (taxProviderId !== undefined || billingPricingMode !== undefined) {
+    let flatRatePatch: ReturnType<typeof validateBillingFlatRateInput> | null = null;
+    if (billingFlatRate !== undefined) {
+      flatRatePatch = validateBillingFlatRateInput(billingFlatRate);
+      if (!flatRatePatch.ok) {
+        return reply.code(400).send({ error: "invalid_billing_flat_rate", message: flatRatePatch.error });
+      }
+    }
+    if (taxProviderId !== undefined || billingPricingMode !== undefined || billingFlatRate !== undefined) {
       const cur = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId } });
       if (billingPricingMode !== undefined) {
         pricingModeChangeFrom = parseBillingPricingMode(cur?.metadata);
@@ -661,6 +679,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       mergedMetadata = mergeTenantBillingSettingsMetadata(cur?.metadata, {
         ...(taxProviderId !== undefined ? { taxProviderId } : {}),
         ...(billingPricingMode !== undefined ? { billingPricingMode } : {}),
+        ...(flatRatePatch?.ok ? { billingFlatRate: flatRatePatch.value } : {}),
       });
     }
     const createUpdate = { ...pricingData, ...brandingPatch, ...(mergedMetadata !== undefined ? { metadata: mergedMetadata } : {}) };

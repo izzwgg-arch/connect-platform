@@ -416,6 +416,44 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   assert.equal(pmCatScheduled.lineItems.find((l) => l.type === "EXTENSION")?.unitPriceCents, 6600);
   assert.ok(pmCatScheduled.scheduledPlanChange);
 
+  db.extension.findMany = async () =>
+    Array.from({ length: 10 }, (_, i) => ({
+      id: `e-flat-${i}`,
+      extNumber: `20${i}`,
+      displayName: "Agent",
+    }));
+  state.settings.taxEnabled = true;
+  state.settings.taxProfile = fakeTaxProfile;
+  state.settings.taxProfileId = "tp1";
+  state.settings.metadata = {
+    billingFlatRate: { enabled: true, amountCents: 50000, appliesTo: "extensions" },
+  };
+  const flatPreview = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
+  const flatExt = flatPreview.lineItems.find((l) => l.type === "EXTENSION");
+  assert.ok(flatExt);
+  assert.equal(flatExt!.quantity, 1);
+  assert.equal(flatExt!.unitPriceCents, 50000);
+  assert.equal(flatExt!.amountCents, 50000);
+  assert.equal(flatExt!.metadata?.flatRate, true);
+  assert.equal(flatExt!.metadata?.extensionCount, 10);
+  const e911Flat = flatPreview.lineItems.find((l) => l.type === "E911_FEE");
+  assert.ok(e911Flat);
+  assert.equal(e911Flat!.quantity, 10);
+
+  await createBillingInvoice({ tenantId: "tenant-z", status: "DRAFT" });
+  const flatPersisted = (state.lastCreateData as { lineItems?: { create: Array<Record<string, unknown>> } })
+    ?.lineItems?.create?.find((l) => l.type === "EXTENSION");
+  assert.equal(flatPersisted?.quantity, 1);
+  assert.equal(flatPersisted?.amountCents, 50000);
+
+  db.extension.findMany = async () => [{ id: "e1", extNumber: "101", displayName: "Sales" }];
+  state.settings.metadata = {};
+  const perExtPreview = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
+  const perExt = perExtPreview.lineItems.find((l) => l.type === "EXTENSION");
+  assert.equal(perExt?.quantity, 1);
+  assert.equal(perExt?.unitPriceCents, 3000);
+  assert.equal(perExt?.amountCents, 3000);
+
   // Reset state
   state.settings.extensionPriceCents = 3000;
   state.settings.billingPlan = null;

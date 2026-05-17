@@ -6,12 +6,14 @@ import { apiGet, apiPost, apiPut } from "../../../../../services/apiClient";
 import { BillingActionToast, billingErrorMessage } from "../../../../../components/BillingActionToast";
 import { BillingActionPanel } from "../../../../../components/billing/BillingActionPanel";
 import {
+  activeExtensionsFlatRateFromMetadata,
   adminTenantStandingHeadline,
   computeTenantMonthlyEstimate,
   dollars,
   formatDateTime,
   humanizePricingStateMode,
   humanizeStoredPricingMode,
+  parseBillingFlatRateFromMetadata,
   previewServiceSubtotalCents,
   worstNonTerminalInvoiceStatus,
 } from "../../../../../lib/billingUi";
@@ -60,6 +62,8 @@ type DraftPricing = {
   smsPriceCents: number;
   firstPhoneNumberFree: boolean;
   smsBillingEnabled: boolean;
+  flatRateEnabled: boolean;
+  flatRateAmountCents: number;
 };
 
 function toDollars(cents: number | undefined | null) {
@@ -80,6 +84,7 @@ function badgeFromFieldBadges(key: string, badges: Record<string, string> | unde
 function draftFromDetail(detail: TenantDetail, catalogLocked: boolean): DraftPricing {
   const settings = detail.settings || {};
   const pr = detail.preview?.pricingResolution as Record<string, unknown> | undefined;
+  const flat = parseBillingFlatRateFromMetadata(settings.metadata);
   return {
     extensionPriceCents: Number(catalogLocked && pr ? pr.extensionPriceCents : settings.extensionPriceCents) || 0,
     additionalPhoneNumberPriceCents:
@@ -87,6 +92,8 @@ function draftFromDetail(detail: TenantDetail, catalogLocked: boolean): DraftPri
     smsPriceCents: Number(catalogLocked && pr ? pr.smsPriceCents : settings.smsPriceCents) || 0,
     firstPhoneNumberFree: catalogLocked && pr ? pr.firstPhoneNumberFree !== false : settings.firstPhoneNumberFree !== false,
     smsBillingEnabled: Boolean(detail.usage?.smsEnabled ?? settings.smsBillingEnabled),
+    flatRateEnabled: flat?.enabled === true,
+    flatRateAmountCents: flat?.amountCents ?? 0,
   };
 }
 
@@ -181,16 +188,23 @@ export function AdminPricingWorkspace({
   const phoneNumberCount = Number(usage.phoneNumberCount || 0);
   const smsQty = draft.smsBillingEnabled ? 1 : 0;
 
+  const extensionsFlatActive =
+    draft.flatRateEnabled && draft.flatRateAmountCents > 0 && extensionCount > 0;
+
   const isDirty = useMemo(() => {
+    const flatDirty =
+      draft.flatRateEnabled !== savedDraft.flatRateEnabled ||
+      draft.flatRateAmountCents !== savedDraft.flatRateAmountCents;
     if (catalogLocked) {
-      return draft.smsBillingEnabled !== savedDraft.smsBillingEnabled;
+      return draft.smsBillingEnabled !== savedDraft.smsBillingEnabled || flatDirty;
     }
     return (
       draft.extensionPriceCents !== savedDraft.extensionPriceCents ||
       draft.additionalPhoneNumberPriceCents !== savedDraft.additionalPhoneNumberPriceCents ||
       draft.smsPriceCents !== savedDraft.smsPriceCents ||
       draft.firstPhoneNumberFree !== savedDraft.firstPhoneNumberFree ||
-      draft.smsBillingEnabled !== savedDraft.smsBillingEnabled
+      draft.smsBillingEnabled !== savedDraft.smsBillingEnabled ||
+      flatDirty
     );
   }, [draft, savedDraft, catalogLocked]);
 
@@ -203,12 +217,13 @@ export function AdminPricingWorkspace({
       extensionPriceCents: draft.extensionPriceCents,
       additionalPhoneNumberPriceCents: draft.additionalPhoneNumberPriceCents,
       smsPriceCents: draft.smsPriceCents,
+      extensionsFlatRateCents: extensionsFlatActive ? draft.flatRateAmountCents : null,
       creditsCents: Number(settings.creditsCents || 0),
       discountPercent: Number(settings.discountPercent || 0),
       previewServiceSubtotalCents: previewServiceSubtotalCents(preview),
       previewTaxCents: Number(preview.taxCents || 0),
     });
-  }, [draft, extensionCount, additionalPhoneCount, phoneNumberCount, settings, preview]);
+  }, [draft, extensionCount, additionalPhoneCount, phoneNumberCount, settings, preview, extensionsFlatActive]);
 
   const loadDiag = useCallback(async () => {
     setDiagLoading(true);
@@ -260,6 +275,19 @@ export function AdminPricingWorkspace({
     });
   }, [diag, extensionCount, additionalPhoneCount, smsQty, draft]);
 
+  const flatRateTableRow = extensionsFlatActive
+    ? {
+        key: "flat_rate_extensions",
+        label: "Extensions",
+        defaultVal: "Per-extension pricing",
+        custom: "Flat monthly rate",
+        quantity: extensionCount,
+        monthlySubtotal: dollars(draft.flatRateAmountCents),
+      }
+    : null;
+
+  const tableRows = flatRateTableRow ? [flatRateTableRow, ...overrideRows] : overrideRows;
+
   async function saveMode(next: PricingModeUi) {
     setModeSaving(true);
     setToast(null);
@@ -283,6 +311,17 @@ export function AdminPricingWorkspace({
     try {
       const payload: Record<string, unknown> = {
         smsBillingEnabled: draft.smsBillingEnabled,
+        billingFlatRate: draft.flatRateEnabled
+          ? {
+              enabled: true,
+              amountCents: draft.flatRateAmountCents,
+              appliesTo: "extensions",
+            }
+          : {
+              enabled: false,
+              amountCents: draft.flatRateAmountCents,
+              appliesTo: "extensions",
+            },
       };
       if (!catalogLocked) {
         payload.extensionPriceCents = draft.extensionPriceCents;
@@ -330,17 +369,21 @@ export function AdminPricingWorkspace({
   const standingLabel = adminTenantStandingHeadline(standing);
   const taxBillingHref = settingsSectionHref("tax-billing");
 
+  const savedFlatActive = activeExtensionsFlatRateFromMetadata(settings.metadata);
+
   const billingItems = [
     {
       key: "extensions",
       icon: "☎",
       title: "Extensions",
-      quantity: extensionCount,
+      quantity: extensionsFlatActive ? 1 : extensionCount,
       quantityAuto: true,
-      quantityNote: `${extensionCount} active · billable`,
-      unitCents: draft.extensionPriceCents,
-      priceKey: "extensionPriceCents" as const,
-      chip: badgeFromFieldBadges("extensionPriceCents", fieldBadges),
+      quantityNote: extensionsFlatActive
+        ? `${extensionCount} active · covered by flat rate`
+        : `${extensionCount} active · billable`,
+      unitCents: extensionsFlatActive ? draft.flatRateAmountCents : draft.extensionPriceCents,
+      priceKey: extensionsFlatActive ? null : ("extensionPriceCents" as const),
+      chip: extensionsFlatActive ? ("flat" as const) : badgeFromFieldBadges("extensionPriceCents", fieldBadges),
     },
     {
       key: "virtual",
@@ -459,6 +502,44 @@ export function AdminPricingWorkspace({
         </div>
       </section>
 
+      <section className="billing-flat-rate-card" data-testid="billing-flat-rate-card">
+        <div className="billing-flat-rate-card__head">
+          <div>
+            <h3>Flat monthly rate for extensions</h3>
+            <p>Charge one monthly rate for all active extensions.</p>
+          </div>
+          <label className="billing-flat-rate-card__toggle">
+            <input
+              type="checkbox"
+              checked={draft.flatRateEnabled}
+              onChange={(e) => setDraft((d) => ({ ...d, flatRateEnabled: e.target.checked }))}
+            />
+            <span>Enabled</span>
+          </label>
+        </div>
+        <div className="billing-flat-rate-card__body">
+          <label className="billing-flat-rate-card__amount">
+            <span>Monthly flat rate</span>
+            <div className="billing-item-card__price-input-wrap">
+              <span className="billing-item-card__currency">$</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                className="billing-item-card__price-input"
+                disabled={!draft.flatRateEnabled}
+                value={toDollars(draft.flatRateAmountCents)}
+                onChange={(e) => setDraft((d) => ({ ...d, flatRateAmountCents: parseDollarsInput(e.target.value) }))}
+              />
+            </div>
+          </label>
+          <p className="billing-flat-rate-card__meta">
+            {extensionCount} active extension{extensionCount === 1 ? "" : "s"}
+            {savedFlatActive ? ` · Saved invoices use ${dollars(savedFlatActive.amountCents)}/mo` : ""}
+          </p>
+          {draft.flatRateEnabled ? <span className="billing-pricing-rate__chip custom">Flat rate</span> : null}
+        </div>
+      </section>
+
       <section className="billing-items-grid" aria-label="Billing items">
         {billingItems.map((item) => {
           const subtotal = item.planned || item.quantity == null ? 0 : item.quantity * item.unitCents;
@@ -526,13 +607,17 @@ export function AdminPricingWorkspace({
               </div>
 
               <span
-                className={`billing-pricing-rate__chip${item.chip === "custom" ? " custom" : ""}${item.planned ? " planned" : ""}`}
+                className={`billing-pricing-rate__chip${
+                  item.chip === "custom" || item.chip === "flat" ? " custom" : ""
+                }${item.planned ? " planned" : ""}`}
               >
                 {item.planned
                   ? "Uses extension rate"
-                  : item.chip === "custom"
-                    ? "Custom pricing"
-                    : "Using plan default"}
+                  : item.chip === "flat"
+                    ? "Flat rate"
+                    : item.chip === "custom"
+                      ? "Custom pricing"
+                      : "Using plan default"}
               </span>
             </article>
           );
@@ -584,10 +669,10 @@ export function AdminPricingWorkspace({
           <span>Qty</span>
           <span>Monthly</span>
         </div>
-        {overrideRows.length === 0 ? (
+        {tableRows.length === 0 ? (
           <div className="billing-pricing-table__empty">This company follows the standard billing profile.</div>
         ) : (
-          overrideRows.map((row) => (
+          tableRows.map((row) => (
             <div key={row.key} className="billing-pricing-table__row">
               <span>{row.label}</span>
               <span className="billing-pricing-table__muted">{row.defaultVal}</span>
