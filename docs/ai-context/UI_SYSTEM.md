@@ -49,9 +49,29 @@ Prefer primitives + `crm.*` classes over one-off `gray-*` / `white` utilities on
 
 ---
 
+## Dashboard visualization (Phase 19B)
+
+The CRM command center (`/crm/dashboard`) uses **operational visuals only** — data from existing CRM APIs, no demo series or fake realtime.
+
+| Pattern | Component | Use |
+|---------|-----------|-----|
+| Distribution | `CRMDonutChart` + `CRMChartLegend` | Pipeline mix, campaign status, growth split |
+| Pressure / volume | `CRMHorizontalBars` | Follow-up backlog, today’s activity |
+| Workload ring | `CRMRingMetric` | Task overdue vs open load |
+| KPI strip | `DashboardKpiTile` | Scannable today metrics (number + label, no paragraphs) |
+| Priority actions | `DashboardActionCard` | Needs-attention queue (count + link) |
+
+**Layout:** `crm.pageInnerWide` (`max-w-[1400px]`) — 8+4 column grid on large screens; charts and lists stay stacked on tablet/mobile.
+
+**Copy rules:** Section titles are short labels; no multi-sentence hints under headings. Empty states are one line + link.
+
+Chart colors live in `components/crm/charts/chartColors.ts` (aligned with `--crm-accent`, danger, warning, success).
+
+---
+
 ## Aligned routes (Phase 19A)
 
-- `/crm/dashboard`
+- `/crm/dashboard` (Phase 19B: command-center charts + wide layout)
 - `/crm/queue`
 - `/crm/campaigns`, `/crm/campaigns/[id]`
 - `/crm/contacts`, `/crm/contacts/[id]`

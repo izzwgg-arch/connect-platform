@@ -3,9 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  Users,
-  UserCheck,
-  UserPlus,
   TrendingUp,
   CheckSquare,
   AlertCircle,
@@ -19,17 +16,36 @@ import {
   Upload,
   BarChart3,
   Stethoscope,
-  ChevronRight,
   BookUser,
   Headset,
   Sparkles,
-  ArrowRight,
   Inbox,
   CalendarDays,
   LayoutDashboard,
+  Radio,
 } from "lucide-react";
-import { PageHeader } from "../../../../components/PageHeader";
-import { CRMCard, CRMPageShell } from "../../../../components/crm";
+import {
+  CRMPageShell,
+  CRMCard,
+  CRMPageHeader,
+  CRMStat,
+  crm,
+  cn,
+  CRMDonutChart,
+  CRMHorizontalBars,
+  CRMChartLegend,
+  CRMRingMetric,
+  DashboardKpiTile,
+  DashboardChartPanel,
+  DashboardActionCard,
+  DashboardListRow,
+  DashboardSectionHeader,
+  buildPipelineSegments,
+  buildGrowthSegments,
+  buildCampaignSegments,
+  buildFollowUpBars,
+  buildTodayActivityBars,
+} from "../../../../components/crm";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
 import { apiGet } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
@@ -93,15 +109,12 @@ type ImportBatchRow = {
   createdAt: string;
   totalRows: number;
   processedRows: number;
-  importSource?: string;
-  campaignId?: string | null;
 };
 
 type CampaignRow = {
   id: string;
   name: string;
   status: string;
-  priority?: string;
   memberCount?: number;
 };
 
@@ -161,207 +174,6 @@ function formatShortDate(iso: string): string {
   }
 }
 
-// ── Subcomponents ─────────────────────────────────────────────────────────────
-
-function KpiTile({
-  label,
-  value,
-  sub,
-  href,
-  icon,
-  loading,
-  emphasize,
-}: {
-  label: string;
-  value: number | string;
-  sub?: string;
-  href?: string;
-  icon: React.ReactNode;
-  loading: boolean;
-  emphasize?: "neutral" | "attention" | "positive";
-}) {
-  const accentBorder =
-    emphasize === "attention"
-      ? "1px solid rgba(220,38,38,0.35)"
-      : emphasize === "positive"
-        ? "1px solid rgba(34,197,94,0.35)"
-        : "1px solid var(--border)";
-
-  const inner = (
-    <div
-      style={{
-        padding: "1rem 1.1rem",
-        display: "flex",
-        flexDirection: "column",
-        gap: "0.35rem",
-        minHeight: "5.5rem",
-        justifyContent: "flex-start",
-        cursor: href ? "pointer" : "default",
-        transition: "background 0.12s ease",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem" }}>
-        <span
-          style={{
-            fontSize: "0.6875rem",
-            fontWeight: 700,
-            letterSpacing: "0.06em",
-            textTransform: "uppercase",
-            color: "var(--text-dim)",
-          }}
-        >
-          {label}
-        </span>
-        <span style={{ color: "var(--accent)", opacity: 0.85, display: "flex" }}>{icon}</span>
-      </div>
-      {loading ? (
-        <div style={{ height: "2rem" }}>
-          <LoadingSkeleton rows={1} />
-        </div>
-      ) : (
-        <span style={{ fontSize: "1.65rem", fontWeight: 750, lineHeight: 1.1, color: "var(--text)" }}>{value}</span>
-      )}
-      {sub ? (
-        <span style={{ fontSize: "0.75rem", color: "var(--text-dim)", lineHeight: 1.35 }}>{sub}</span>
-      ) : null}
-    </div>
-  );
-
-  return (
-    <CRMCard padding="none" style={{ overflow: "hidden", border: accentBorder }}>
-      {href ? (
-        <Link href={href} style={{ textDecoration: "none", color: "inherit" }}>
-          {inner}
-        </Link>
-      ) : (
-        inner
-      )}
-    </CRMCard>
-  );
-}
-
-function SectionTitle({
-  title,
-  hint,
-  action,
-}: {
-  title: string;
-  hint?: string;
-  action?: { label: string; href: string };
-}) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "flex-end",
-        justifyContent: "space-between",
-        gap: "1rem",
-        flexWrap: "wrap",
-        marginBottom: "0.85rem",
-      }}
-    >
-      <div>
-        <h2 style={{ margin: 0, fontSize: "1.0625rem", fontWeight: 700, color: "var(--text)" }}>{title}</h2>
-        {hint ? (
-          <p style={{ margin: "0.25rem 0 0", fontSize: "0.8125rem", color: "var(--text-dim)", maxWidth: "48rem", lineHeight: 1.45 }}>
-            {hint}
-          </p>
-        ) : null}
-      </div>
-      {action ? (
-        <Link
-          href={action.href}
-          style={{
-            fontSize: "0.8125rem",
-            fontWeight: 600,
-            color: "var(--accent)",
-            textDecoration: "none",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "0.25rem",
-          }}
-        >
-          {action.label}
-          <ArrowRight size={14} />
-        </Link>
-      ) : null}
-    </div>
-  );
-}
-
-function MiniListRow({
-  title,
-  meta,
-  href,
-  urgent,
-}: {
-  title: string;
-  meta?: string;
-  href: string;
-  urgent?: boolean;
-}) {
-  return (
-    <Link
-      href={href}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "0.65rem",
-        padding: "0.65rem 0.75rem",
-        borderRadius: "0.5rem",
-        textDecoration: "none",
-        color: "inherit",
-        border: "1px solid var(--border)",
-        background: urgent ? "rgba(254,242,242,0.45)" : "var(--surface-hover)",
-      }}
-    >
-      <span style={{ flex: 1, minWidth: 0 }}>
-        <span style={{ display: "block", fontWeight: 600, fontSize: "0.875rem" }}>{title}</span>
-        {meta ? (
-          <span style={{ display: "block", fontSize: "0.75rem", color: "var(--text-dim)", marginTop: 2 }}>{meta}</span>
-        ) : null}
-      </span>
-      <ChevronRight size={16} style={{ color: "var(--text-dim)", flexShrink: 0 }} />
-    </Link>
-  );
-}
-
-function ActionLinkRow({
-  href,
-  icon,
-  label,
-  hint,
-}: {
-  href: string;
-  icon: React.ReactNode;
-  label: string;
-  hint?: string;
-}) {
-  return (
-    <Link
-      href={href}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "0.65rem",
-        padding: "0.55rem 0.65rem",
-        borderRadius: "0.5rem",
-        textDecoration: "none",
-        color: "inherit",
-        border: "1px solid var(--border)",
-        background: "var(--surface-hover)",
-      }}
-    >
-      <span style={{ color: "var(--accent)", display: "flex" }}>{icon}</span>
-      <span style={{ flex: 1, minWidth: 0 }}>
-        <span style={{ display: "block", fontWeight: 600, fontSize: "0.875rem" }}>{label}</span>
-        {hint ? <span style={{ display: "block", fontSize: "0.75rem", color: "var(--text-dim)", marginTop: 2 }}>{hint}</span> : null}
-      </span>
-      <ChevronRight size={16} style={{ color: "var(--text-dim)", flexShrink: 0 }} />
-    </Link>
-  );
-}
-
 function NotifHint({ data, loading }: { data: FollowUpSummary | null; loading: boolean }) {
   const [perm, setPerm] = useState<NotificationPermission | null>(null);
   useEffect(() => {
@@ -374,33 +186,33 @@ function NotifHint({ data, loading }: { data: FollowUpSummary | null; loading: b
     void Notification.requestPermission().then(setPerm);
   }
 
-  if (loading || !data) return null;
-  const overdueTotal = (data.callbacks?.overdue?.count ?? 0) + (data.tasks?.overdue?.count ?? 0);
-  if (!showBtn && overdueTotal === 0) return null;
+  if (loading || !data || !showBtn) return null;
 
   return (
-    <div style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-      {showBtn ? (
-        <button
-          type="button"
-          onClick={request}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "0.35rem",
-            fontSize: "0.75rem",
-            padding: "0.28rem 0.6rem",
-            borderRadius: "999px",
-            border: "1px solid var(--border)",
-            background: "var(--surface-hover)",
-            cursor: "pointer",
-            color: "var(--text-dim)",
-            fontWeight: 600,
-          }}
+    <button type="button" onClick={request} className={cn(crm.chip, "cursor-pointer hover:bg-crm-surface-2")}>
+      <Bell size={12} /> Reminders
+    </button>
+  );
+}
+
+function ShortcutGrid({
+  items,
+}: {
+  items: { key: string; href: string; icon: React.ReactNode; label: string }[];
+}) {
+  if (items.length === 0) return null;
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {items.map((a) => (
+        <Link
+          key={a.key}
+          href={a.href}
+          className="flex items-center gap-2 rounded-crm border border-crm-border bg-crm-surface-2/50 px-3 py-2 text-sm font-medium text-crm-text no-underline transition-colors hover:bg-crm-surface-2"
         >
-          <Bell size={12} /> Browser reminders
-        </button>
-      ) : null}
+          <span className="text-crm-accent">{a.icon}</span>
+          <span className="truncate">{a.label}</span>
+        </Link>
+      ))}
     </div>
   );
 }
@@ -442,6 +254,24 @@ export default function CrmDashboardPage() {
       apiGet<DailyReport>("/crm/reports/daily"),
     ] as const;
 
+    const finishBase = (baseAll: PromiseSettledResult<PromiseSettledResult<unknown>[]>) => {
+      if (baseAll.status !== "fulfilled") return false;
+      const [sR, cR, tR, dR] = baseAll.value;
+      setCrmSettings(sR.status === "fulfilled" ? (sR.value as CrmSettingsShape) : { enabled: false });
+      setStats(
+        cR.status === "fulfilled"
+          ? (cR.value as CrmStats)
+          : { total: 0, leads: 0, mine: 0, recentlyAdded: 0 },
+      );
+      setTaskStats(
+        tR.status === "fulfilled"
+          ? (tR.value as TaskStats)
+          : { myOpen: 0, dueToday: 0, overdue: 0 },
+      );
+      setDaily(dR.status === "fulfilled" ? (dR.value as DailyReport) : null);
+      return true;
+    };
+
     if (isPlatformAdmin) {
       void Promise.allSettled([
         Promise.allSettled(base),
@@ -457,15 +287,10 @@ export default function CrmDashboardPage() {
           : Promise.resolve(null),
       ]).then(([baseAll, followR, pilotR, importR, campR, queueWrap]) => {
         if (!active) return;
-        if (baseAll.status !== "fulfilled") {
+        if (!finishBase(baseAll)) {
           setLoading(false);
           return;
         }
-        const [sR, cR, tR, dR] = baseAll.value;
-        setCrmSettings(sR.status === "fulfilled" ? sR.value : { enabled: false });
-        setStats(cR.status === "fulfilled" ? cR.value : { total: 0, leads: 0, mine: 0, recentlyAdded: 0 });
-        setTaskStats(tR.status === "fulfilled" ? tR.value : { myOpen: 0, dueToday: 0, overdue: 0 });
-        setDaily(dR.status === "fulfilled" ? dR.value : null);
         setFollowUps(followR.status === "fulfilled" ? followR.value : null);
         if (pilotR.status === "fulfilled") {
           setPilotReadiness(pilotR.value);
@@ -474,31 +299,13 @@ export default function CrmDashboardPage() {
           setPilotReadiness(null);
           setPilotLoadFailed(true);
         }
-        if (
-          importR.status === "fulfilled" &&
-          importR.value &&
-          typeof importR.value === "object" &&
-          "batches" in importR.value
-        ) {
+        if (importR.status === "fulfilled" && importR.value && "batches" in importR.value) {
           setImportBatches(importR.value.batches);
-        } else {
-          setImportBatches(null);
-        }
-        if (
-          campR.status === "fulfilled" &&
-          campR.value &&
-          typeof campR.value === "object" &&
-          "campaigns" in campR.value
-        ) {
+        } else setImportBatches(null);
+        if (campR.status === "fulfilled" && campR.value && "campaigns" in campR.value) {
           setCampaigns(campR.value.campaigns);
-        } else {
-          setCampaigns(null);
-        }
-        if (
-          queueWrap.status === "fulfilled" &&
-          queueWrap.value &&
-          Array.isArray(queueWrap.value)
-        ) {
+        } else setCampaigns(null);
+        if (queueWrap.status === "fulfilled" && queueWrap.value && Array.isArray(queueWrap.value)) {
           const [o, d] = queueWrap.value;
           setQueueOverduePreview(o.status === "fulfilled" ? o.value : null);
           setQueueDuePreview(d.status === "fulfilled" ? d.value : null);
@@ -521,43 +328,20 @@ export default function CrmDashboardPage() {
           : Promise.resolve(null),
       ]).then(([baseAll, importR, campR, queueWrap]) => {
         if (!active) return;
-        if (baseAll.status !== "fulfilled") {
+        if (!finishBase(baseAll)) {
           setLoading(false);
           return;
         }
-        const [sR, cR, tR, dR] = baseAll.value;
-        setCrmSettings(sR.status === "fulfilled" ? sR.value : { enabled: false });
-        setStats(cR.status === "fulfilled" ? cR.value : { total: 0, leads: 0, mine: 0, recentlyAdded: 0 });
-        setTaskStats(tR.status === "fulfilled" ? tR.value : { myOpen: 0, dueToday: 0, overdue: 0 });
-        setDaily(dR.status === "fulfilled" ? dR.value : null);
         setFollowUps(null);
         setPilotReadiness(null);
         setPilotLoadFailed(false);
-        if (
-          importR.status === "fulfilled" &&
-          importR.value &&
-          typeof importR.value === "object" &&
-          "batches" in importR.value
-        ) {
+        if (importR.status === "fulfilled" && importR.value && "batches" in importR.value) {
           setImportBatches(importR.value.batches);
-        } else {
-          setImportBatches(null);
-        }
-        if (
-          campR.status === "fulfilled" &&
-          campR.value &&
-          typeof campR.value === "object" &&
-          "campaigns" in campR.value
-        ) {
+        } else setImportBatches(null);
+        if (campR.status === "fulfilled" && campR.value && "campaigns" in campR.value) {
           setCampaigns(campR.value.campaigns);
-        } else {
-          setCampaigns(null);
-        }
-        if (
-          queueWrap.status === "fulfilled" &&
-          queueWrap.value &&
-          Array.isArray(queueWrap.value)
-        ) {
+        } else setCampaigns(null);
+        if (queueWrap.status === "fulfilled" && queueWrap.value && Array.isArray(queueWrap.value)) {
           const [o, d] = queueWrap.value;
           setQueueOverduePreview(o.status === "fulfilled" ? o.value : null);
           setQueueDuePreview(d.status === "fulfilled" ? d.value : null);
@@ -588,621 +372,396 @@ export default function CrmDashboardPage() {
   const importsToday =
     importBatches && importBatches.length > 0 ? countImportsToday(importBatches, new Date()) : null;
 
-  const pausedCampaigns =
-    campaigns?.filter((c) => c.status === "PAUSED").slice(0, 3) ?? [];
+  const pausedCampaigns = campaigns?.filter((c) => c.status === "PAUSED").slice(0, 3) ?? [];
   const activeCampaignRows = campaigns?.filter((c) => c.status === "ACTIVE").slice(0, 4) ?? [];
-
-  const urgentCount =
-    (alertData?.callbacks?.overdue?.count ?? 0) + (alertData?.tasks?.overdue?.count ?? 0);
-  const dueTodayCount =
-    (alertData?.callbacks?.dueToday?.count ?? 0) + (alertData?.tasks?.dueToday?.count ?? 0);
 
   const taskDueCount = isPlatformAdmin ? (taskStats?.dueToday ?? 0) : (taskStats?.myTasksDueToday ?? 0);
   const taskOverdueCount = isPlatformAdmin ? (taskStats?.overdue ?? 0) : (taskStats?.myTasksOverdue ?? 0);
+  const taskOpenCount = taskStats?.myOpen ?? 0;
+  const taskPressureMax = Math.max(1, taskOpenCount + taskDueCount + taskOverdueCount);
 
-  const adminActions = [
-    can("can_view_crm_settings")
-      ? {
-          key: "settings",
-          href: "/crm/settings",
-          icon: <Settings size={18} />,
-          label: "CRM settings & access",
-          hint: "Defaults, users, and toggles",
-        }
-      : null,
-    can("can_view_crm_import")
-      ? {
-          key: "import",
-          href: "/crm/import",
-          icon: <Upload size={18} />,
-          label: "Import leads",
-          hint: "CSV batches and history",
-        }
-      : null,
-    can("can_view_crm_campaigns")
-      ? {
-          key: "campaign",
-          href: "/crm/campaigns",
-          icon: <Megaphone size={18} />,
-          label: "Campaigns",
-          hint: "Create, assign, and monitor",
-        }
-      : null,
-    can("can_view_crm_reports")
-      ? {
-          key: "wallboard",
-          href: "/crm/wallboard",
-          icon: <BarChart3 size={18} />,
-          label: "Live wallboard",
-          hint: "Team queue snapshot",
-        }
-      : null,
-    isPlatformAdmin
-      ? {
-          key: "diagnostics",
-          href: "/crm/admin/diagnostics",
-          icon: <Stethoscope size={18} />,
-          label: "CRM diagnostics",
-          hint: "Readiness checks",
-        }
-      : null,
-  ].filter(Boolean) as { key: string; href: string; icon: React.ReactNode; label: string; hint: string }[];
-
-  const agentActions = [
-    can("can_view_crm_queue")
-      ? {
-          key: "queue",
-          href: "/crm/queue",
-          icon: <ListOrdered size={18} />,
-          label: "My queue",
-          hint: "Callbacks and next calls",
-        }
-      : null,
-    can("can_view_crm_contacts")
-      ? {
-          key: "contacts",
-          href: "/crm/contacts",
-          icon: <BookUser size={18} />,
-          label: "Contacts",
-          hint: "Search and update records",
-        }
-      : null,
-    can("can_view_crm_live_call")
-      ? {
-          key: "power",
-          href: "/crm/live-call",
-          icon: <Headset size={18} />,
-          label: "Live call workspace",
-          hint: "Power-dial entry",
-        }
-      : null,
-  ].filter(Boolean) as { key: string; href: string; icon: React.ReactNode; label: string; hint: string }[];
+  const contactStats = stats ?? { total: 0, leads: 0, mine: 0, recentlyAdded: 0 };
+  const pipelineSegments = buildPipelineSegments(contactStats);
+  const growthSegments = buildGrowthSegments(contactStats);
+  const campaignSegments = buildCampaignSegments(campaigns ?? []);
+  const followUpBars = alertData ? buildFollowUpBars(alertData) : [];
+  const todayBars = daily ? buildTodayActivityBars(daily) : [];
 
   const recentImports = (importBatches ?? []).slice(0, 4);
 
+  const shortcuts = [
+    can("can_view_crm_queue")
+      ? { key: "queue", href: "/crm/queue", icon: <ListOrdered size={16} />, label: "Queue" }
+      : null,
+    can("can_view_crm_contacts")
+      ? { key: "contacts", href: "/crm/contacts", icon: <BookUser size={16} />, label: "Contacts" }
+      : null,
+    can("can_view_crm_live_call")
+      ? { key: "live", href: "/crm/live-call", icon: <Headset size={16} />, label: "Live call" }
+      : null,
+    can("can_view_crm_campaigns")
+      ? { key: "campaigns", href: "/crm/campaigns", icon: <Megaphone size={16} />, label: "Campaigns" }
+      : null,
+    can("can_view_crm_import")
+      ? { key: "import", href: "/crm/import", icon: <Upload size={16} />, label: "Import" }
+      : null,
+    can("can_view_crm_reports")
+      ? { key: "reports", href: "/crm/reports", icon: <BarChart3 size={16} />, label: "Reports" }
+      : null,
+    can("can_view_crm_settings")
+      ? { key: "settings", href: "/crm/settings", icon: <Settings size={16} />, label: "Settings" }
+      : null,
+    isPlatformAdmin
+      ? { key: "diag", href: "/crm/admin/diagnostics", icon: <Stethoscope size={16} />, label: "Diagnostics" }
+      : null,
+  ].filter(Boolean) as { key: string; href: string; icon: React.ReactNode; label: string }[];
+
+  const todayLine = daily
+    ? `${daily.callsLinkedToday} calls · ${daily.dispositionsToday} outcomes · ${daily.contactsCreatedToday} new contacts`
+    : null;
+
   return (
-    <CRMPageShell innerClassName="stack compact-stack max-w-[1200px]">
-      <PageHeader
+    <CRMPageShell innerClassName={crm.pageInnerWide}>
+      <CRMPageHeader
+        icon={<LayoutDashboard size={22} strokeWidth={1.75} />}
         title="Command center"
-        subtitle="A focused view of what matters today—priorities first, details on demand."
+        subtitle={`${greet}, ${firstName}${todayLine ? ` · Today: ${todayLine}` : ""}`}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={cn(crm.chip, crm.chipActive)}>
+              <Radio size={12} className="animate-pulse" /> Live
+            </span>
+            <NotifHint data={alertData} loading={loading} />
+          </div>
+        }
       />
 
-      {/* A — Hero / command strip */}
-      <CRMCard style={{ padding: "1.25rem 1.35rem" }}>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "1rem", alignItems: "flex-start", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", gap: "0.85rem", alignItems: "flex-start" }}>
-            <div
-              style={{
-                width: 44,
-                height: 44,
-                borderRadius: "0.65rem",
-                background: "color-mix(in srgb, var(--accent) 14%, transparent)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: "var(--accent)",
-                flexShrink: 0,
-              }}
-            >
-              <LayoutDashboard size={22} strokeWidth={1.75} />
-            </div>
-            <div>
-              <div style={{ fontSize: "1.125rem", fontWeight: 750, color: "var(--text)", letterSpacing: "-0.02em" }}>
-                {greet}, {firstName}
-              </div>
-              <p style={{ margin: "0.35rem 0 0", fontSize: "0.875rem", color: "var(--text-dim)", lineHeight: 1.55, maxWidth: "36rem" }}>
-                {loading ? (
-                  <span style={{ display: "inline-block", minWidth: "12rem" }}>
-                    <LoadingSkeleton rows={1} />
-                  </span>
-                ) : (
-                  <>
-                    {isPlatformAdmin
-                      ? "Tenant snapshot: keep callbacks current, queue depth healthy, and campaigns moving."
-                      : "Your next wins: clear overdue work first, then due-today follow-ups."}
-                    {daily ? (
-                      <>
-                        {" "}
-                        <span style={{ color: "var(--text-muted, var(--text-dim))" }}>
-                          Today:{" "}
-                          <Link href="/crm/reports" style={{ color: "var(--accent)", fontWeight: 600, textDecoration: "none" }}>
-                            {daily.callsLinkedToday} calls
-                          </Link>
-                          {" · "}
-                          <Link href="/crm/reports" style={{ color: "var(--accent)", fontWeight: 600, textDecoration: "none" }}>
-                            {daily.dispositionsToday} outcomes
-                          </Link>
-                          {typeof daily.contactsCreatedToday === "number" ? (
-                            <>
-                              {" · "}
-                              {daily.contactsCreatedToday} new contacts
-                            </>
-                          ) : null}
-                        </span>
-                      </>
-                    ) : null}
-                  </>
-                )}
-              </p>
-            </div>
-          </div>
-          <NotifHint data={alertData} loading={loading} />
-        </div>
-
-        {/* Next actions — compact chips, not a banner wall */}
-        {!loading && alertData ? (
-          <div
-            style={{
-              marginTop: "1rem",
-              paddingTop: "1rem",
-              borderTop: "1px solid var(--border)",
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "0.5rem",
-              alignItems: "center",
-            }}
-          >
-            <span style={{ fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase", color: "var(--text-dim)", letterSpacing: "0.05em" }}>
-              Next up
-            </span>
-            {urgentCount === 0 && dueTodayCount === 0 ? (
-              <span style={{ fontSize: "0.8125rem", color: "var(--text-dim)", display: "inline-flex", alignItems: "center", gap: "0.35rem" }}>
-                <CheckCheck size={14} style={{ color: "rgb(22,163,74)" }} /> No overdue callbacks or tasks in view.
-              </span>
-            ) : null}
-            {(alertData.callbacks?.overdue?.count ?? 0) > 0 && can("can_view_crm_queue") ? (
-              <Link
-                href="/crm/queue?filter=overdue"
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "0.35rem",
-                  padding: "0.35rem 0.65rem",
-                  borderRadius: "999px",
-                  background: "rgba(254,242,242,0.75)",
-                  border: "1px solid rgba(252,165,165,0.8)",
-                  color: "#b91c1c",
-                  fontSize: "0.8125rem",
-                  fontWeight: 700,
-                  textDecoration: "none",
-                }}
-              >
-                <AlertCircle size={14} /> {alertData.callbacks!.overdue.count} overdue callback
-                {alertData.callbacks!.overdue.count !== 1 ? "s" : ""}
-              </Link>
-            ) : null}
-            {(alertData.callbacks?.dueToday?.count ?? 0) > 0 && can("can_view_crm_queue") ? (
-              <Link
-                href="/crm/queue?filter=due"
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "0.35rem",
-                  padding: "0.35rem 0.65rem",
-                  borderRadius: "999px",
-                  background: "var(--surface-hover)",
-                  border: "1px solid var(--border)",
-                  color: "var(--text)",
-                  fontSize: "0.8125rem",
-                  fontWeight: 600,
-                  textDecoration: "none",
-                }}
-              >
-                <Clock size={14} /> {alertData.callbacks!.dueToday.count} due today
-              </Link>
-            ) : null}
-            {(alertData.tasks?.overdue?.count ?? 0) > 0 ? (
-              <Link
-                href="/crm/tasks?due=overdue"
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "0.35rem",
-                  padding: "0.35rem 0.65rem",
-                  borderRadius: "999px",
-                  background: "rgba(254,242,242,0.75)",
-                  border: "1px solid rgba(252,165,165,0.8)",
-                  color: "#b91c1c",
-                  fontSize: "0.8125rem",
-                  fontWeight: 700,
-                  textDecoration: "none",
-                }}
-              >
-                <CheckSquare size={14} /> {alertData.tasks!.overdue.count} overdue task{alertData.tasks!.overdue.count !== 1 ? "s" : ""}
-              </Link>
-            ) : null}
-            {(alertData.tasks?.dueToday?.count ?? 0) > 0 ? (
-              <Link
-                href="/crm/tasks?due=today"
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "0.35rem",
-                  padding: "0.35rem 0.65rem",
-                  borderRadius: "999px",
-                  background: "var(--surface-hover)",
-                  border: "1px solid var(--border)",
-                  color: "var(--text)",
-                  fontSize: "0.8125rem",
-                  fontWeight: 600,
-                  textDecoration: "none",
-                }}
-              >
-                <CalendarDays size={14} /> {alertData.tasks!.dueToday.count} task{alertData.tasks!.dueToday.count !== 1 ? "si" : ""} due today
-              </Link>
-            ) : null}
-            {can("can_view_crm_reports") ? (
-              <Link href="/crm/reports" style={{ fontSize: "0.78rem", fontWeight: 600, color: "var(--text-dim)", marginLeft: "auto" }}>
-                Open reports →
-              </Link>
-            ) : null}
-          </div>
-        ) : null}
-
-      </CRMCard>
-
-      {/* Admin: compact workspace health (replaces giant readiness grid) */}
       {isPlatformAdmin ? (
-        <CRMCard style={{ padding: "1rem 1.15rem" }}>
-          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.75rem" }}>
-            <div style={{ fontSize: "0.8125rem", fontWeight: 700, color: "var(--text)" }}>Workspace health</div>
-            <span style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>Live counts · same sources as diagnostics</span>
-          </div>
-          <div
-            style={{
-              marginTop: "0.85rem",
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
-              gap: "0.65rem 1.25rem",
-            }}
-          >
-            <div>
-              <div style={{ fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase", color: "var(--text-dim)" }}>CRM</div>
-              <div style={{ fontSize: "0.9375rem", fontWeight: 700 }}>{crmSettings?.enabled ? "Enabled" : "Off"}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase", color: "var(--text-dim)" }}>Users w/ access</div>
-              <div style={{ fontSize: "0.9375rem", fontWeight: 700 }}>{pilotLoadFailed ? "—" : (pilotReadiness?.usersWithCrmAccess ?? "—")}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase", color: "var(--text-dim)" }}>Active campaigns</div>
-              <div style={{ fontSize: "0.9375rem", fontWeight: 700 }}>{pilotLoadFailed ? "—" : (pilotReadiness?.activeCampaigns ?? "—")}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase", color: "var(--text-dim)" }}>Queue depth</div>
-              <div style={{ fontSize: "0.9375rem", fontWeight: 700 }}>{pilotLoadFailed ? "—" : (pilotReadiness?.queuePendingOrInProgress ?? "—")}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase", color: "var(--text-dim)" }}>Overdue callbacks</div>
-              <div
-                style={{
-                  fontSize: "0.9375rem",
-                  fontWeight: 700,
-                  color: !pilotLoadFailed && (pilotReadiness?.overdueCallbacks ?? 0) > 0 ? "#b91c1c" : "var(--text)",
-                }}
-              >
-                {pilotLoadFailed ? "—" : (pilotReadiness?.overdueCallbacks ?? "—")}
-              </div>
-            </div>
+        <CRMCard className="p-4">
+          <DashboardSectionHeader title="Workspace health" action={{ label: "Diagnostics", href: "/crm/admin/diagnostics" }} />
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
+            <CRMStat label="CRM" value={crmSettings?.enabled ? "On" : "Off"} />
+            <CRMStat label="Users" value={pilotLoadFailed ? "—" : (pilotReadiness?.usersWithCrmAccess ?? "—")} />
+            <CRMStat label="Campaigns" value={pilotLoadFailed ? "—" : (pilotReadiness?.activeCampaigns ?? "—")} />
+            <CRMStat label="Queue depth" value={pilotLoadFailed ? "—" : (pilotReadiness?.queuePendingOrInProgress ?? "—")} />
+            <CRMStat
+              label="Overdue CB"
+              value={pilotLoadFailed ? "—" : (pilotReadiness?.overdueCallbacks ?? "—")}
+              emphasize={!pilotLoadFailed && (pilotReadiness?.overdueCallbacks ?? 0) > 0 ? "danger" : "default"}
+            />
             {!pilotLoadFailed && pilotReadiness?.smsReadinessApplicable ? (
-              <div>
-                <div style={{ fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase", color: "var(--text-dim)" }}>SMS</div>
-                <div style={{ fontSize: "0.9375rem", fontWeight: 700 }}>{pilotReadiness.smsProviderConfigured ? "Ready" : "Configure"}</div>
-              </div>
+              <CRMStat label="SMS" value={pilotReadiness.smsProviderConfigured ? "Ready" : "Setup"} />
             ) : null}
-          </div>
+          </dl>
         </CRMCard>
       ) : null}
 
-      {/* B — KPI row */}
       <section>
-        <SectionTitle title="Signals" hint="Tap a tile to open the underlying list. All numbers are live from CRM APIs." />
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
-            gap: "0.85rem",
-          }}
-        >
-          <KpiTile
+        <p className={cn(crm.label, "mb-3")}>Today</p>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <DashboardKpiTile
             label="Active campaigns"
             value={activeCampaignsCount}
-            sub="Running now"
             href={can("can_view_crm_campaigns") ? "/crm/campaigns?status=ACTIVE" : undefined}
             icon={<Megaphone size={17} />}
             loading={loading}
-            emphasize="neutral"
           />
-          <KpiTile
+          <DashboardKpiTile
             label="Leads"
             value={stats?.leads ?? 0}
-            sub="Stage: lead · needs nurture"
             href="/crm/contacts?stage=LEAD"
             icon={<TrendingUp size={17} />}
             loading={loading}
-            emphasize="neutral"
           />
-          <KpiTile
-            label={isPlatformAdmin ? "Queue workload" : "My queue"}
+          <DashboardKpiTile
+            label={isPlatformAdmin ? "Queue depth" : "My queue"}
             value={isPlatformAdmin ? (queueWorkloadTeam ?? "—") : queueWorkloadMine}
-            sub={isPlatformAdmin ? "Pending + in progress (team)" : "Assigned, non-terminal"}
             href={can("can_view_crm_queue") ? "/crm/queue" : undefined}
             icon={<ListOrdered size={17} />}
             loading={loading}
-            emphasize="neutral"
           />
           {can("can_view_crm_import") ? (
-            <KpiTile
+            <DashboardKpiTile
               label="Imports today"
               value={importsToday ?? "—"}
-              sub={importsToday === null && !loading ? "No recent batch data" : "CSV batches started today"}
               href="/crm/import"
               icon={<Upload size={17} />}
               loading={loading}
-              emphasize="neutral"
             />
           ) : null}
-          <KpiTile
-            label="Outcomes today"
+          <DashboardKpiTile
+            label="Outcomes"
             value={daily?.dispositionsToday ?? "—"}
-            sub="Dispositions logged"
             href={can("can_view_crm_reports") ? "/crm/reports?tab=agents" : undefined}
             icon={<CheckCheck size={17} />}
             loading={loading}
-            emphasize="neutral"
           />
-          <KpiTile
+          <DashboardKpiTile
             label="Calls linked"
             value={daily?.callsLinkedToday ?? taskStats?.callsLinkedToday ?? "—"}
-            sub="CRM call events today"
             href="/crm/contacts"
             icon={<PhoneCall size={17} />}
             loading={loading}
-            emphasize="neutral"
           />
         </div>
       </section>
 
-      {/* C — Actionable work */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))",
-          gap: "1.15rem",
-          alignItems: "start",
-        }}
-      >
-        {can("can_view_crm_queue") ? (
-          <div>
-            <SectionTitle title="Callbacks" hint="Top of your queue by priority." action={{ label: "View queue", href: "/crm/queue" }} />
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
+      <div className="grid gap-5 lg:grid-cols-12">
+        <div className="flex flex-col gap-5 lg:col-span-8">
+          <div className="grid gap-5 md:grid-cols-2">
+            <DashboardChartPanel title="Contact pipeline" action={{ label: "Contacts", href: "/crm/contacts" }}>
+              <CRMDonutChart
+                segments={pipelineSegments}
+                centerValue={contactStats.total}
+                centerLabel="total"
+              />
+              <CRMChartLegend segments={pipelineSegments} />
+            </DashboardChartPanel>
+
+            <DashboardChartPanel
+              title="Follow-up pressure"
+              action={can("can_view_crm_queue") ? { label: "Queue", href: "/crm/queue" } : undefined}
+            >
               {loading ? (
-                <LoadingSkeleton rows={3} />
+                <LoadingSkeleton rows={4} />
+              ) : alertData ? (
+                <CRMHorizontalBars items={followUpBars} />
               ) : (
-                <>
-                  {(queueOverduePreview?.queue ?? []).length === 0 && (queueDuePreview?.queue ?? []).length === 0 ? (
-                    <CRMCard style={{ padding: "0.9rem 1rem" }}>
-                      <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
-                        <Inbox size={18} style={{ color: "var(--text-dim)", flexShrink: 0, marginTop: 2 }} />
-                        <div>
-                          <div style={{ fontWeight: 600, fontSize: "0.875rem" }}>No overdue or due-today callbacks in preview</div>
-                          <p style={{ margin: "0.25rem 0 0", fontSize: "0.8125rem", color: "var(--text-dim)", lineHeight: 1.45 }}>
-                            {(taskStats?.queueRemaining ?? 0) === 0
-                              ? "Nothing assigned yet—ask a manager to add you to a campaign or assign leads."
-                              : "Open the full queue for pending leads and other states."}
-                          </p>
-                          <Link href="/crm/queue" style={{ display: "inline-flex", marginTop: "0.5rem", fontSize: "0.8125rem", fontWeight: 600, color: "var(--accent)", textDecoration: "none" }}>
-                            Go to queue →
-                          </Link>
-                        </div>
-                      </div>
-                    </CRMCard>
-                  ) : null}
-                  {(queueOverduePreview?.queue ?? []).map((m) => (
-                    <MiniListRow
-                      key={`o-${m.id}`}
-                      urgent
-                      title={m.contact?.displayName ?? "Contact"}
-                      meta={`Overdue · ${m.campaign?.name ?? "Campaign"}`}
-                      href="/crm/queue?filter=overdue"
-                    />
-                  ))}
-                  {(queueDuePreview?.queue ?? []).map((m) => (
-                    <MiniListRow
-                      key={`d-${m.id}`}
-                      title={m.contact?.displayName ?? "Contact"}
-                      meta={`Due today · ${m.campaign?.name ?? "Campaign"}`}
-                      href="/crm/queue?filter=due"
-                    />
-                  ))}
-                </>
+                <p className="text-sm text-crm-muted">No follow-up data</p>
               )}
-            </div>
+            </DashboardChartPanel>
+
+            <DashboardChartPanel
+              title="Campaign status"
+              action={can("can_view_crm_campaigns") ? { label: "Campaigns", href: "/crm/campaigns" } : undefined}
+            >
+              <CRMDonutChart
+                segments={campaignSegments}
+                centerValue={(campaigns ?? []).length}
+                centerLabel="campaigns"
+              />
+              <CRMChartLegend segments={campaignSegments} />
+            </DashboardChartPanel>
+
+            <DashboardChartPanel
+              title="Today's activity"
+              action={can("can_view_crm_reports") ? { label: "Reports", href: "/crm/reports" } : undefined}
+            >
+              {loading ? (
+                <LoadingSkeleton rows={4} />
+              ) : daily ? (
+                <CRMHorizontalBars items={todayBars} />
+              ) : (
+                <p className="text-sm text-crm-muted">No activity yet today</p>
+              )}
+            </DashboardChartPanel>
           </div>
+
+          <DashboardChartPanel title="Contact growth" action={{ label: "Mine", href: "/crm/contacts?assignedToMe=true" }}>
+            <CRMDonutChart segments={growthSegments} centerValue={contactStats.recentlyAdded} centerLabel="new 7d" />
+            <div className="flex flex-col gap-2 sm:pl-2">
+              <CRMChartLegend segments={growthSegments} />
+              <dl className="mt-2 grid grid-cols-2 gap-3 border-t border-crm-border/60 pt-3">
+                <CRMStat label="Assigned to me" value={contactStats.mine} />
+                <CRMStat label="Leads" value={contactStats.leads} />
+              </dl>
+            </div>
+          </DashboardChartPanel>
+        </div>
+
+        <aside className="flex flex-col gap-5 lg:col-span-4">
+          <CRMCard className="p-5">
+            <DashboardSectionHeader title="Needs attention" />
+            {loading ? (
+              <LoadingSkeleton rows={3} />
+            ) : alertData ? (
+              <div className="flex flex-col gap-2">
+                {(alertData.callbacks?.overdue?.count ?? 0) === 0 &&
+                (alertData.callbacks?.dueToday?.count ?? 0) === 0 &&
+                (alertData.tasks?.overdue?.count ?? 0) === 0 &&
+                (alertData.tasks?.dueToday?.count ?? 0) === 0 ? (
+                  <p className="flex items-center gap-2 text-sm text-crm-muted">
+                    <CheckCheck size={16} className="text-crm-success" /> All clear
+                  </p>
+                ) : null}
+                {(alertData.callbacks?.overdue?.count ?? 0) > 0 && can("can_view_crm_queue") ? (
+                  <DashboardActionCard
+                    href="/crm/queue?filter=overdue"
+                    icon={<AlertCircle size={16} />}
+                    label="Overdue callbacks"
+                    count={alertData.callbacks!.overdue.count}
+                    tone="danger"
+                  />
+                ) : null}
+                {(alertData.callbacks?.dueToday?.count ?? 0) > 0 && can("can_view_crm_queue") ? (
+                  <DashboardActionCard
+                    href="/crm/queue?filter=due"
+                    icon={<Clock size={16} />}
+                    label="Callbacks due today"
+                    count={alertData.callbacks!.dueToday.count}
+                    tone="warn"
+                  />
+                ) : null}
+                {(alertData.tasks?.overdue?.count ?? 0) > 0 ? (
+                  <DashboardActionCard
+                    href="/crm/tasks?due=overdue"
+                    icon={<CheckSquare size={16} />}
+                    label="Overdue tasks"
+                    count={alertData.tasks!.overdue.count}
+                    tone="danger"
+                  />
+                ) : null}
+                {(alertData.tasks?.dueToday?.count ?? 0) > 0 ? (
+                  <DashboardActionCard
+                    href="/crm/tasks?due=today"
+                    icon={<CalendarDays size={16} />}
+                    label="Tasks due today"
+                    count={alertData.tasks!.dueToday.count}
+                    tone="warn"
+                  />
+                ) : null}
+              </div>
+            ) : null}
+          </CRMCard>
+
+          <CRMCard className="p-5">
+            <DashboardSectionHeader title="Tasks" action={{ label: "Open tasks", href: "/crm/tasks" }} />
+            {loading ? (
+              <LoadingSkeleton rows={2} />
+            ) : (
+              <div className="flex flex-col gap-4">
+                <CRMRingMetric
+                  value={taskOverdueCount}
+                  max={taskPressureMax}
+                  label="Overdue"
+                  sublabel={`${taskOpenCount} open · ${taskDueCount} due today`}
+                  color="var(--crm-danger)"
+                />
+                <div className="grid grid-cols-3 gap-2 border-t border-crm-border/60 pt-3">
+                  <div className="text-center">
+                    <div className="text-lg font-bold tabular-nums text-crm-text">{taskOpenCount}</div>
+                    <div className="text-[10px] font-semibold uppercase text-crm-muted">Open</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-lg font-bold tabular-nums text-crm-warning">{taskDueCount}</div>
+                    <div className="text-[10px] font-semibold uppercase text-crm-muted">Due</div>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-lg font-bold tabular-nums text-crm-danger">{taskOverdueCount}</div>
+                    <div className="text-[10px] font-semibold uppercase text-crm-muted">Late</div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </CRMCard>
+
+          {shortcuts.length > 0 ? (
+            <CRMCard className="p-5">
+              <DashboardSectionHeader title="Shortcuts" />
+              <ShortcutGrid items={shortcuts} />
+            </CRMCard>
+          ) : null}
+        </aside>
+      </div>
+
+      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+        {can("can_view_crm_queue") ? (
+          <CRMCard className="flex flex-col p-5">
+            <DashboardSectionHeader title="Callbacks" action={{ label: "Queue", href: "/crm/queue" }} />
+            {loading ? (
+              <LoadingSkeleton rows={3} />
+            ) : (
+              <div className="flex flex-col gap-2">
+                {(queueOverduePreview?.queue ?? []).length === 0 && (queueDuePreview?.queue ?? []).length === 0 ? (
+                  <div className="rounded-crm border border-dashed border-crm-border px-3 py-4 text-center">
+                    <Inbox size={18} className="mx-auto mb-2 text-crm-muted" />
+                    <p className="text-sm font-medium text-crm-text">Queue clear in preview</p>
+                    <Link href="/crm/queue" className="mt-2 inline-block text-xs font-semibold text-crm-accent">
+                      Open queue →
+                    </Link>
+                  </div>
+                ) : null}
+                {(queueOverduePreview?.queue ?? []).map((m) => (
+                  <DashboardListRow
+                    key={`o-${m.id}`}
+                    urgent
+                    title={m.contact?.displayName ?? "Contact"}
+                    meta={`Overdue · ${m.campaign?.name ?? "Campaign"}`}
+                    href="/crm/queue?filter=overdue"
+                  />
+                ))}
+                {(queueDuePreview?.queue ?? []).map((m) => (
+                  <DashboardListRow
+                    key={`d-${m.id}`}
+                    title={m.contact?.displayName ?? "Contact"}
+                    meta={`Due today · ${m.campaign?.name ?? "Campaign"}`}
+                    href="/crm/queue?filter=due"
+                  />
+                ))}
+              </div>
+            )}
+          </CRMCard>
         ) : null}
 
         {can("can_view_crm_campaigns") ? (
-          <div>
-            <SectionTitle
-              title="Campaigns"
-              hint="Where momentum usually stalls—or accelerates."
-              action={{ label: "All campaigns", href: "/crm/campaigns" }}
-            />
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
-              {loading ? <LoadingSkeleton rows={2} /> : null}
-              {!loading && pausedCampaigns.length > 0 ? (
-                <>
-                  <div style={{ fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase", color: "var(--text-dim)", letterSpacing: "0.04em" }}>Paused</div>
-                  {pausedCampaigns.map((c) => (
-                    <MiniListRow
-                      key={c.id}
-                      title={c.name}
-                      meta={`${c.memberCount ?? 0} members · needs review`}
-                      href={`/crm/campaigns/${encodeURIComponent(c.id)}`}
-                    />
-                  ))}
-                </>
-              ) : null}
-              {!loading && activeCampaignRows.length > 0 ? (
-                <>
-                  <div style={{ fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase", color: "var(--text-dim)", letterSpacing: "0.04em" }}>Active</div>
-                  {activeCampaignRows.map((c) => (
-                    <MiniListRow
-                      key={c.id}
-                      title={c.name}
-                      meta={`${c.memberCount ?? 0} members`}
-                      href={`/crm/campaigns/${encodeURIComponent(c.id)}`}
-                    />
-                  ))}
-                </>
-              ) : null}
-              {!loading && activeCampaignRows.length === 0 && activeCampaignsCount === 0 ? (
-                <CRMCard style={{ padding: "0.9rem 1rem" }}>
-                  <div style={{ display: "flex", gap: "0.6rem" }}>
-                    <Sparkles size={18} style={{ color: "var(--accent)", flexShrink: 0 }} />
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: "0.875rem" }}>Start with one active campaign</div>
-                      <p style={{ margin: "0.3rem 0 0.65rem", fontSize: "0.8125rem", color: "var(--text-dim)", lineHeight: 1.45 }}>
-                        Import a list or enroll contacts, then move status to ACTIVE so queue and reporting light up.
-                      </p>
-                      <Link href="/crm/campaigns" style={{ fontSize: "0.8125rem", fontWeight: 700, color: "var(--accent)", textDecoration: "none" }}>
-                        Open campaigns →
-                      </Link>
-                    </div>
+          <CRMCard className="flex flex-col p-5">
+            <DashboardSectionHeader title="Campaigns" action={{ label: "All", href: "/crm/campaigns" }} />
+            {loading ? (
+              <LoadingSkeleton rows={2} />
+            ) : (
+              <div className="flex flex-col gap-2">
+                {pausedCampaigns.map((c) => (
+                  <DashboardListRow
+                    key={c.id}
+                    title={c.name}
+                    meta={`Paused · ${c.memberCount ?? 0} members`}
+                    href={`/crm/campaigns/${encodeURIComponent(c.id)}`}
+                  />
+                ))}
+                {activeCampaignRows.map((c) => (
+                  <DashboardListRow
+                    key={c.id}
+                    title={c.name}
+                    meta={`Active · ${c.memberCount ?? 0} members`}
+                    href={`/crm/campaigns/${encodeURIComponent(c.id)}`}
+                  />
+                ))}
+                {!loading && activeCampaignRows.length === 0 && activeCampaignsCount === 0 ? (
+                  <div className="rounded-crm border border-dashed border-crm-border px-3 py-4 text-center">
+                    <Sparkles size={18} className="mx-auto mb-2 text-crm-accent" />
+                    <p className="text-sm font-medium text-crm-text">No active campaigns</p>
+                    <Link href="/crm/campaigns" className="mt-2 inline-block text-xs font-semibold text-crm-accent">
+                      Create one →
+                    </Link>
                   </div>
-                </CRMCard>
-              ) : null}
-            </div>
-          </div>
+                ) : null}
+              </div>
+            )}
+          </CRMCard>
         ) : null}
 
         {can("can_view_crm_import") ? (
-          <div>
-            <SectionTitle title="Recent imports" hint="Latest CSV batches—open Import for full history." action={{ label: "Import leads", href: "/crm/import" }} />
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
-              {loading ? <LoadingSkeleton rows={2} /> : null}
-              {!loading && recentImports.length === 0 ? (
-                <CRMCard style={{ padding: "0.9rem 1rem", fontSize: "0.8125rem", color: "var(--text-dim)", lineHeight: 1.45 }}>
-                  No batches yet. Upload a CSV to seed your pipeline; you can tie uploads to a campaign from the campaign screen.
-                </CRMCard>
-              ) : null}
-              {recentImports.map((b) => (
-                <MiniListRow
-                  key={b.id}
-                  title={b.fileName}
-                  meta={`${formatShortDate(b.createdAt)} · ${b.status.toLowerCase()} · ${b.processedRows}/${b.totalRows} rows`}
-                  href={`/crm/import?batch=${encodeURIComponent(b.id)}`}
-                />
-              ))}
-            </div>
-          </div>
+          <CRMCard className="flex flex-col p-5">
+            <DashboardSectionHeader title="Recent imports" action={{ label: "Import", href: "/crm/import" }} />
+            {loading ? (
+              <LoadingSkeleton rows={2} />
+            ) : recentImports.length === 0 ? (
+              <p className="text-sm text-crm-muted">No batches yet</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {recentImports.map((b) => (
+                  <DashboardListRow
+                    key={b.id}
+                    title={b.fileName}
+                    meta={`${formatShortDate(b.createdAt)} · ${b.status.toLowerCase()} · ${b.processedRows}/${b.totalRows}`}
+                    href={`/crm/import?batch=${encodeURIComponent(b.id)}`}
+                  />
+                ))}
+              </div>
+            )}
+          </CRMCard>
         ) : null}
       </div>
-
-      {/* Tasks strip */}
-      <section>
-        <SectionTitle title="Tasks" hint="Stay ahead of due dates." action={{ label: "View tasks", href: "/crm/tasks" }} />
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "0.85rem" }}>
-          <KpiTile
-            label="Open (mine)"
-            value={taskStats?.myOpen ?? 0}
-            sub="Assigned to you"
-            href="/crm/tasks?assignedTo=me"
-            icon={<CheckSquare size={17} />}
-            loading={loading}
-            emphasize="neutral"
-          />
-          <KpiTile
-            label="Due today"
-            value={taskDueCount}
-            sub={isPlatformAdmin ? "Tenant open tasks" : "Your open tasks"}
-            href="/crm/tasks?due=today"
-            icon={<Clock size={17} />}
-            loading={loading}
-            emphasize="neutral"
-          />
-          <KpiTile
-            label="Overdue"
-            value={taskOverdueCount}
-            sub="Still open"
-            href="/crm/tasks?due=overdue"
-            icon={<AlertCircle size={17} />}
-            loading={loading}
-            emphasize={taskOverdueCount > 0 ? "attention" : "neutral"}
-          />
-        </div>
-      </section>
-
-      {/* D — Shortcuts */}
-      {(adminActions.length > 0 || agentActions.length > 0) && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))", gap: "1rem" }}>
-          {adminActions.length > 0 ? (
-            <CRMCard style={{ padding: "1.1rem 1.15rem" }}>
-              <h3 style={{ margin: "0 0 0.65rem", fontSize: "0.9375rem", fontWeight: 700 }}>Admin shortcuts</h3>
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
-                {adminActions.map((a) => (
-                  <ActionLinkRow key={a.key} href={a.href} icon={a.icon} label={a.label} hint={a.hint} />
-                ))}
-              </div>
-            </CRMCard>
-          ) : null}
-          {agentActions.length > 0 ? (
-            <CRMCard style={{ padding: "1.1rem 1.15rem" }}>
-              <h3 style={{ margin: "0 0 0.65rem", fontSize: "0.9375rem", fontWeight: 700 }}>Agent shortcuts</h3>
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.45rem" }}>
-                {agentActions.map((a) => (
-                  <ActionLinkRow key={a.key} href={a.href} icon={a.icon} label={a.label} hint={a.hint} />
-                ))}
-              </div>
-            </CRMCard>
-          ) : null}
-        </div>
-      )}
-
-      {/* Contact pipeline (compact) */}
-      <section>
-        <SectionTitle title="Contact pipeline" hint="Quick census from CRM contacts." action={{ label: "Browse contacts", href: "/crm/contacts" }} />
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "0.85rem" }}>
-          <KpiTile label="Total" value={stats?.total ?? 0} sub="All contacts" href="/crm/contacts" icon={<Users size={17} />} loading={loading} emphasize="neutral" />
-          <KpiTile
-            label="Assigned to me"
-            value={stats?.mine ?? 0}
-            sub="Owned in CRM"
-            href="/crm/contacts?assignedToMe=true"
-            icon={<UserCheck size={17} />}
-            loading={loading}
-            emphasize="neutral"
-          />
-          <KpiTile
-            label="New this week"
-            value={stats?.recentlyAdded ?? 0}
-            sub="Last 7 days"
-            icon={<UserPlus size={17} />}
-            loading={loading}
-            emphasize="neutral"
-          />
-        </div>
-      </section>
     </CRMPageShell>
   );
 }

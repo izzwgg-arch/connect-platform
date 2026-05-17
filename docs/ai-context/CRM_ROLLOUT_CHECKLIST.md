@@ -238,6 +238,22 @@
 | Function | Filters, queue actions, campaign controls, contact mutations, recordings, archive read-only — unchanged. |
 | Typecheck | `pnpm exec tsc -p apps/portal` passes. |
 
+### Phase 19B — CRM dashboard command center (visual smoke)
+
+| Check | Expected |
+|-------|----------|
+| Width | Dashboard uses `crm.pageInnerWide` (~1400px); not cramped `max-w-6xl` column. |
+| Charts | Pipeline donut, follow-up bars, campaign donut, today activity bars, growth donut — all from live API data. |
+| Hierarchy | “Today” KPI strip + “Needs attention” action cards; no hero paragraph or SectionTitle hint blocks. |
+| Dark theme | No light chips (`#b91c1c` on pink); uses `crm-danger` / `crm-warning` tokens. |
+| Responsive | Desktop 8+4 grid; tablet/mobile stacks without horizontal overflow. |
+| Empty tenant | Charts show empty/zero states; no fake numbers. |
+| Active tenant | Non-zero segments and bars match API counts. |
+| Admin | Workspace health strip visible; tenant follow-up bars from `/crm/reports/follow-ups`. |
+| Agent | Personal follow-up pressure from `/crm/tasks/stats`; no pilot-readiness row. |
+| Function | Links to queue, tasks, campaigns, contacts, import unchanged. |
+| Typecheck | `pnpm exec tsc -p apps/portal` passes. |
+
 ---
 
 ## 7. Reports

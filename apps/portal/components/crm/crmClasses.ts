@@ -5,6 +5,8 @@
 export const crm = {
   page: "crm-page-shell",
   pageInner: "mx-auto w-full max-w-6xl px-4 py-6 flex flex-col gap-4",
+  /** Phase 19B — dashboard command center uses full workspace width. */
+  pageInnerWide: "mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6 flex flex-col gap-5",
 
   card: "rounded-crm-lg border border-crm-border bg-crm-surface shadow-crm",
   cardPad: "p-5",
