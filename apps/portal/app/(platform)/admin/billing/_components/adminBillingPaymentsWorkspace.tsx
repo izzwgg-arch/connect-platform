@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useAsyncResource } from "../../../../../hooks/useAsyncResource";
 import { useAdminBillingTenant } from "./useAdminBillingTenant";
@@ -144,6 +145,9 @@ export function PaymentsWorkspace() {
           <p>Charge customers, manage cards on file, and review processor activity for {tenantName || "this company"}.</p>
         </div>
         <div className="billing-pay-actions">
+          <Link href="/admin/billing/sola-imports" className="btn ghost" data-testid="billing-pay-sola-imports">
+            Sola imports
+          </Link>
           <button className="btn primary" type="button" onClick={() => setChargeOpen(true)} data-testid="billing-pay-charge-customer">
             Charge customer
           </button>

@@ -41,6 +41,7 @@ Portal UIs documented in this file use the **`BillingInvoice`** stack unless not
 | `/admin/billing/activity` | Per-invoice activity timelines |
 | `/admin/billing/settings` | Pricing, SOLA, collections config (`billingSection` query) |
 | `/admin/billing/plans` | Catalog BillingPlan CRUD |
+| `/admin/billing/sola-imports` | **Sola recurring schedule import** — read-only sync + operator tenant mapping (Phase B; no charges) |
 
 Shell: **`AdminBillingShell`** + CSS scopes **`billing-ws-scope`**, **`billing-p8-scope`**. Ops tables: **`adminBillingOpsPanels.tsx`** (`InvoicesTab`, `TransactionsTab`, `ReportsTab`, `CollectionsTab`).
 
@@ -63,6 +64,9 @@ Shell: **`AdminBillingShell`** + CSS scopes **`billing-ws-scope`**, **`billing-p
 | Public billing URLs (SOLA webhook) | `apps/api/src/billing/solaPublicUrls.ts` |
 | Token charges, hosted session helper, webhook apply + dedupe | `apps/api/src/billing/solaBillingPayments.ts` |
 | Cardknox client (`gatewayjson`, parse/verify) | `packages/integrations/src/sola-cardknox/index.ts` |
+| Cardknox Recurring API client (read-only list/get) | `packages/integrations/src/sola-cardknox/recurring.ts` |
+| Sola external schedule sync + mapping (Phase B) | `apps/api/src/billing/solaExternalSchedules.ts` |
+| Admin Sola imports UI | `apps/portal/app/(platform)/admin/billing/sola-imports/page.tsx` |
 | Legacy + subscription + `POST /webhooks/sola-cardknox` | `apps/api/src/server.ts` (large file — grep paths) |
 | Invoice email lifecycle (queue, dedupe, URLs) | `apps/api/src/billing/billingEmailLifecycle.ts` |
 | Autopay dunning metadata + retry picker | `apps/api/src/billing/billingDunning.ts` |
@@ -411,6 +415,84 @@ Operators can add a card on behalf of a tenant from the `PaymentMethodsModal` in
 - Step 2 (confirm): message preview (showing exact text, from-number, destination)
 - Step 3 (done): success confirmation; duplicate-submit blocked via `ref`
 - Message format: `{tenantName}: Pay invoice {invNum} ({balance}): {paymentUrl}`
+
+## Sola Vault Schedule Linking (external import)
+
+> **Phase B (2026-05-17):** Read-only sync + operator tenant mapping shipped. **No charges, no token storage, no PaymentMethod creation, no autopay changes.** Phase C will add token linking.
+
+### What this is
+
+Many tenants already have saved cards and recurring schedules inside Sola (Cardknox).
+Connect imports **safe** recurring schedule metadata from the Cardknox Recurring API and lets a **SUPER_ADMIN** map each schedule to a Connect tenant. Mapping only records the link — it does not move billing execution to Connect.
+
+### Hard constraints (Phase B — enforced in code)
+
+- **No raw card / CVV.** Masked card metadata only (`Issuer`, `MaskedCardNumber`, `Exp` MMYY). **`Token` is never persisted** in Phase B (`getPaymentMethodMasked` redacts before any storage).
+- **No charges.** Sync and map/ignore/unmap routes never call `chargeToken`, invoice creation, or worker/dunning.
+- **No Sola schedule disable.** Recurring `/UpdateSchedule` not called.
+- **No Connect autopay activation.** Tenant autopay settings untouched.
+- **No worker / invoice-math / telephony / CRM changes.**
+
+### Double-charge risk (operator-facing)
+
+If both the **old Sola recurring schedule** (still active in Cardknox) **and** Connect autopay run, the customer can be charged twice. The admin UI at **`/admin/billing/sola-imports`** shows a compact cutover note on **mapped + active** rows: disable the Sola schedule and complete cutover before enabling Connect autopay. Phase E will add an explicit “disable Sola schedule” action.
+
+### Implementation (Phase B)
+
+| Piece | Location |
+|-------|----------|
+| Prisma model | `BillingSolaExternalScheduleLink` + enum `SolaScheduleLinkMappingStatus` |
+| Migration | `packages/db/prisma/migrations/20260517120000_billing_sola_external_schedule_link/` |
+| Recurring client | `packages/integrations/src/sola-cardknox/recurring.ts` — `listSchedules`, `getSchedule`, `getPaymentMethodMasked`; `redactSolaRecurringPayload` |
+| Sync + mapping service | `apps/api/src/billing/solaExternalSchedules.ts` |
+| SUPER_ADMIN routes | `POST /admin/billing/platform/sola-import/sync`, `GET .../schedules`, `POST .../schedules/:id/map|ignore|unmap` |
+| Admin UI | `apps/portal/.../admin/billing/sola-imports/` (+ link from Payments workspace) |
+
+**Sync behavior:** Paginates `/ListSchedules`, optionally `/GetSchedule` + masked `/GetPaymentMethod` for card display fields. Upserts by `solaScheduleId`. Preserves **MAPPED** / **IGNORED** on re-sync. Suggests tenant match (billing email, company name, simple fuzzy name). **`rawSafeJson`** stores redacted API payloads only.
+
+**Map behavior:** Sets `tenantId`, `mappingStatus=MAPPED`, `mappedByUserId`, `mappedAt`; logs `billing.sola_external_schedule_mapped`. Does **not** create `PaymentMethod`.
+
+**Credentials:** Platform sync uses `SOLA_CARDKNOX_API_KEY` (env) or tenant `BillingSolaConfig` when scoped. **`SOLA_CARDKNOX_SIMULATE=1`** returns mock schedules for dev/tests.
+
+### Sola Recurring API
+
+| API Base URL | `https://api.cardknox.com/v2` |
+|---|---|
+| Auth | `Authorization: <apiKey>` header (same key as Transaction API) |
+| Software headers | `SoftwareName` / `SoftwareVersion` (see `recurring.ts`) |
+| Method | POST only |
+
+Phase B uses: `/ListSchedules`, `/GetSchedule`, `/GetPaymentMethod` (masked fields only; token redacted before persistence).
+
+### Token reuse (Phase C — not Phase B)
+
+The `Token` from `/GetPaymentMethod` is the same `xToken` used by `chargeToken()`. Phase C will encrypt into `PaymentMethod.tokenEncrypted` after explicit operator approval. **Phase B never stores it.**
+
+### Schema still planned (Phase C+)
+
+`PaymentMethod` may gain `processorCustomerId`, `processorPaymentMethodId`, `isImported`, `importedAt` when token linking ships.
+
+### Webhook/reconciliation limitations
+
+Old Sola recurring schedule webhooks **cannot** be auto-linked to Connect invoices. The webhook handler requires a `CONNECT:` prefixed `xInvoice`. Old schedules have no Connect invoice IDs.
+
+### Phase plan
+
+| Phase | Status |
+|-------|--------|
+| A | Audit complete |
+| B | **Shipped** — schema, recurring client, read-only sync API, admin mapping UI |
+| C | Token fetch + `PaymentMethod` creation + enriched double-charge UI |
+| D | Smoke-test charge with imported token |
+| E | Manual cutover: disable Sola schedule via `/UpdateSchedule` |
+
+### BillingEventLog types
+
+- `billing.sola_external_schedule_mapped` — Phase B (map)
+- `billing.sola_import_sync` — planned (sync summary)
+- `billing.sola_external_method_linked` — Phase C
+
+---
 
 ## SOLA / Cardknox (implementation facts)
 

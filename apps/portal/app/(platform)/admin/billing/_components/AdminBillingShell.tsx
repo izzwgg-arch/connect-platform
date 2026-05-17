@@ -48,6 +48,7 @@ const BILLING_TENANT_PATHS = [
   "/admin/billing/methods",
   "/admin/billing/activity",
   "/admin/billing/plans",
+  "/admin/billing/sola-imports",
 ];
 
 function pathnameIsCatalog(pathname: string) {

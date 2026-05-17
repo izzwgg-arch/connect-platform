@@ -4,6 +4,83 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-17 — Billing: Sola external schedule import Phase B (read-only sync + mapping UI)
+
+**Task:** Implement read-only Sola recurring schedule sync and SUPER_ADMIN mapping UI.  
+**Risk:** High (billing metadata; **no charges**, **no token storage**, **no autopay**).
+
+### Shipped
+
+- **Schema:** `BillingSolaExternalScheduleLink` + `SolaScheduleLinkMappingStatus` (`UNMAPPED` | `MAPPED` | `IGNORED` | `CONFLICT`); migration `20260517120000_billing_sola_external_schedule_link`.
+- **Integrations:** `SolaRecurringClient` in `packages/integrations/src/sola-cardknox/recurring.ts` (`listSchedules`, `getSchedule`, `getPaymentMethodMasked`, payload redaction).
+- **API:** `solaExternalSchedules.ts` — sync upsert, tenant suggestions, map/ignore/unmap; routes under `/admin/billing/platform/sola-import/*` (SUPER_ADMIN only).
+- **Portal:** `/admin/billing/sola-imports` — sync button, filters, table, map/ignore/unmap; trust callout (“does not charge”, “does not disable Sola schedules”); cutover warning on mapped active schedules.
+- **Tests:** `solaExternalSchedules.test.ts` (redaction, parsing, sync upsert, map without PaymentMethod); **205/205** `test:billing` pass.
+
+### Explicitly NOT done (Phase B boundaries)
+
+- No `PaymentMethod` / `tokenEncrypted` creation
+- No charges, invoices, autopay, worker/dunning changes
+- No Sola schedule disable (`/UpdateSchedule`)
+- No telephony / mobile / CRM changes
+
+### Deploy
+
+- **API** (schema + routes) and **portal** (UI) required; **no worker** deploy.
+
+### Files (primary)
+
+- `packages/db/prisma/schema.prisma`, migration `20260517120000_billing_sola_external_schedule_link/`
+- `packages/integrations/src/sola-cardknox/recurring.ts`, `index.ts`
+- `apps/api/src/billing/solaExternalSchedules.ts`, `solaExternalSchedules.test.ts`, `routes.ts`
+- `apps/portal/.../admin/billing/sola-imports/`, `adminBillingSolaImportsWorkspace.tsx`
+- `docs/ai-context/BILLING.md`, `CHANGELOG_AI.md`
+
+### Next: Phase C
+
+Operator-approved token linking into `PaymentMethod`, processor ID fields, enriched cutover UX.
+
+---
+
+## 2026-05-17 — Billing: Sola vault schedule linking audit (Phase A, no code)
+
+**Task:** Audit existing Sola/Cardknox integration to design external vault schedule linking.  
+**Risk:** High (billing; audit-only phase, no code written).
+
+### Audit findings
+
+**Sola Recurring API** (`https://api.cardknox.com/v2`) is fully capable:
+- `/ListCustomers`, `/ListPaymentMethods`, `/ListSchedules`, `/GetSchedule`, `/GetPaymentMethod` — all exist, paginated, POST-only, same API key as Transaction API
+- `/GetPaymentMethod` returns the actual `Token` (xToken) — safe to store encrypted; works directly with existing `chargeToken()` / `chargeBillingInvoice()`
+- `/ListSchedules` returns `Amount`, `IntervalType`, `IntervalCount`, `IsActive`, `NextScheduledRunTime`, masked customer data
+- **None of these endpoints are currently implemented** in the Connect Sola adapter
+
+**Schema gaps identified** (migration not yet written):
+- `PaymentMethod` needs: `processorCustomerId`, `processorPaymentMethodId`, `isImported`, `importedAt`
+- New table needed: `BillingSolaExternalScheduleLink` — tracks Sola schedule metadata + Connect tenant mapping
+
+**xToken reuse confirmed:** Imported Sola tokens work with existing `chargeToken()` / `chargeBillingInvoice()` with zero adapter changes.
+
+**Webhook limitation confirmed:** Old Sola recurring schedule webhooks cannot be auto-reconciled to Connect `BillingInvoice` rows. The current handler requires a `CONNECT:` prefixed `xInvoice` which old schedules do not have.
+
+**Double-charge risk documented:** Admin UI must show both Sola schedule status and Connect autopay status simultaneously. No automatic disabling of old schedules in any early phase.
+
+### What was NOT done (intentional)
+- No code written
+- No migration written
+- No charges
+- No schema changes
+- No deploy
+
+### Files changed
+- `docs/ai-context/BILLING.md` — added "Sola Vault Schedule Linking" section with full architecture, constraints, phase plan, schema gaps, webhook limitations
+- `docs/ai-context/CHANGELOG_AI.md` — this entry
+
+### Next: Phase B (when approved)
+Schema migration + `SolaRecurringClient` in `packages/integrations` + read-only sync API route + admin list UI under `/admin/billing/sola-imports`.
+
+---
+
 ## 2026-05-17 — Admin billing: enforce global tenant data scoping
 
 **Task:** Fix correctness bug — UI followed workspace switcher but list/report APIs returned all tenants.  

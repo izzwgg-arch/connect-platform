@@ -152,6 +152,13 @@ enum BillingRunStatus {
   FAILED
 }
 
+enum SolaScheduleLinkMappingStatus {
+  UNMAPPED
+  MAPPED
+  IGNORED
+  CONFLICT
+}
+
 enum PbxLinkStatus {
   LINKED
   UNLINKED
@@ -353,6 +360,7 @@ model Tenant {
   paymentTransactions             PaymentTransaction[]
   billingRuns                     BillingRun[]
   billingEventLogs                BillingEventLog[]
+  solaExternalScheduleLinks       BillingSolaExternalScheduleLink[]
   customers                       Customer[]
   contacts                        Contact[]
   contactTags                     ContactTag[]
@@ -486,6 +494,7 @@ model User {
   crmChecklistResponses          CrmChecklistResponse[]        @relation("CrmChecklistResponseCompletedBy")
   crmCampaignsCreated            CrmCampaign[]                 @relation("CrmCampaignCreatedBy")
   crmCampaignMembersAssigned     CrmCampaignMember[]           @relation("CrmCampaignMemberAssignedTo")
+  mappedSolaExternalSchedules    BillingSolaExternalScheduleLink[] @relation("SolaScheduleMappedBy")
 }
 
 enum UserRole {
@@ -866,6 +875,49 @@ model BillingEventLog {
   @@index([tenantId, createdAt])
   @@index([invoiceId, createdAt])
   @@index([runId, createdAt])
+}
+
+/// Read-only mirror of Sola/Cardknox recurring schedules for operator mapping (no raw PAN/token).
+model BillingSolaExternalScheduleLink {
+  id                    String                        @id @default(cuid())
+  tenantId              String?
+  suggestedTenantId     String?
+  solaCustomerId        String
+  solaPaymentMethodId   String?
+  solaScheduleId        String                        @unique
+  customerName          String?
+  customerEmail         String?
+  companyName           String?
+  maskedCard            String?
+  brand                 String?
+  last4                 String?
+  expMonth              String?
+  expYear               String?
+  amountCents           Int?
+  intervalType          String?
+  intervalCount         Int?
+  nextRunAt             DateTime?
+  lastRunAt             DateTime?
+  lastTransactionStatus String?
+  isActive              Boolean                       @default(false)
+  mappingStatus         SolaScheduleLinkMappingStatus @default(UNMAPPED)
+  matchConfidence       String?
+  matchReason           String?
+  rawSafeJson           Json?
+  mappedByUserId        String?
+  mappedAt              DateTime?
+  lastSyncedAt          DateTime?
+  createdAt             DateTime                      @default(now())
+  updatedAt             DateTime                      @updatedAt
+  tenant                Tenant?                       @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  mappedByUser          User?                         @relation("SolaScheduleMappedBy", fields: [mappedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([suggestedTenantId])
+  @@index([mappingStatus])
+  @@index([solaCustomerId])
+  @@index([solaPaymentMethodId])
+  @@index([isActive])
 }
 
 model TenDlcSubmission {

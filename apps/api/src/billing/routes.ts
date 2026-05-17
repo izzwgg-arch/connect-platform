@@ -67,6 +67,12 @@ import {
   logBillingCatalogEvent,
   prismaUniqueViolation,
 } from "./billingPlanCatalog";
+import {
+  ignoreSolaExternalSchedule,
+  mapSolaExternalSchedule,
+  syncSolaExternalSchedules,
+  unmapSolaExternalSchedule,
+} from "./solaExternalSchedules";
 
 type BillingUser = {
   sub: string;
@@ -2350,6 +2356,112 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     if (!u) return;
     const { id } = req.params as { id: string };
     return (db as any).billingRun.findUnique({ where: { id }, include: { events: { orderBy: { createdAt: "asc" } } } });
+  });
+
+  app.post("/admin/billing/platform/sola-import/sync", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const body = z.object({ tenantId: z.string().optional() }).parse(req.body || {});
+    try {
+      const result = await syncSolaExternalSchedules({ operatorId: u.sub, tenantId: body.tenantId || null });
+      return result;
+    } catch (e: any) {
+      if (e?.code === "SOLA_NOT_CONFIGURED" || e?.code === "SOLA_RECURRING_NOT_CONFIGURED") {
+        return reply.code(400).send({ error: "sola_not_configured", message: "SOLA API key is not configured for import." });
+      }
+      throw e;
+    }
+  });
+
+  app.get("/admin/billing/platform/sola-import/schedules", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const q = req.query as {
+      status?: string;
+      search?: string;
+      tenantId?: string;
+      active?: string;
+      page?: string;
+      limit?: string;
+    };
+    const page = Math.max(1, Number.parseInt(String(q.page || "1"), 10) || 1);
+    const limit = Math.min(100, Math.max(1, Number.parseInt(String(q.limit || "50"), 10) || 50));
+    const where: Record<string, unknown> = {};
+    if (q.status && ["UNMAPPED", "MAPPED", "IGNORED", "CONFLICT"].includes(q.status.toUpperCase())) {
+      where.mappingStatus = q.status.toUpperCase();
+    }
+    if (q.tenantId) where.tenantId = q.tenantId;
+    if (q.active === "true") where.isActive = true;
+    if (q.active === "false") where.isActive = false;
+    if (q.search?.trim()) {
+      const s = q.search.trim();
+      where.OR = [
+        { customerName: { contains: s, mode: "insensitive" } },
+        { customerEmail: { contains: s, mode: "insensitive" } },
+        { companyName: { contains: s, mode: "insensitive" } },
+        { solaScheduleId: { contains: s, mode: "insensitive" } },
+        { last4: { contains: s } },
+      ];
+    }
+
+    const [total, rows] = await Promise.all([
+      (db as any).billingSolaExternalScheduleLink.count({ where }),
+      (db as any).billingSolaExternalScheduleLink.findMany({
+        where,
+        orderBy: [{ mappingStatus: "asc" }, { nextRunAt: "asc" }, { createdAt: "desc" }],
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+
+    const tenantIds = [
+      ...new Set(
+        rows.flatMap((r: { tenantId: string | null; suggestedTenantId: string | null }) =>
+          [r.tenantId, r.suggestedTenantId].filter(Boolean),
+        ),
+      ),
+    ] as string[];
+    const tenants =
+      tenantIds.length > 0
+        ? await (db as any).tenant.findMany({ where: { id: { in: tenantIds } }, select: { id: true, name: true } })
+        : [];
+    const tenantNameById = new Map(tenants.map((t: { id: string; name: string }) => [t.id, t.name]));
+
+    const schedules = rows.map((r: Record<string, unknown>) => ({
+      ...r,
+      tenantName: r.tenantId ? tenantNameById.get(String(r.tenantId)) || null : null,
+      suggestedTenantName: r.suggestedTenantId ? tenantNameById.get(String(r.suggestedTenantId)) || null : null,
+    }));
+
+    return { schedules, total, page, pages: Math.max(1, Math.ceil(total / limit)), limit };
+  });
+
+  app.post("/admin/billing/platform/sola-import/schedules/:id/map", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const body = z.object({ tenantId: z.string().min(1) }).parse(req.body || {});
+    const result = await mapSolaExternalSchedule({ linkId: id, tenantId: body.tenantId, operatorId: u.sub });
+    if (!result.ok) return reply.code(result.code).send({ error: result.error });
+    return result.link;
+  });
+
+  app.post("/admin/billing/platform/sola-import/schedules/:id/ignore", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const result = await ignoreSolaExternalSchedule({ linkId: id, operatorId: u.sub });
+    if (!result.ok) return reply.code(result.code).send({ error: result.error });
+    return { ok: true };
+  });
+
+  app.post("/admin/billing/platform/sola-import/schedules/:id/unmap", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const result = await unmapSolaExternalSchedule({ linkId: id, operatorId: u.sub });
+    if (!result.ok) return reply.code(result.code).send({ error: result.error });
+    return { ok: true };
   });
 }
 
