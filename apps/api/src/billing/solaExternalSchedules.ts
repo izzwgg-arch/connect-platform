@@ -333,9 +333,12 @@ export function defaultSolaExternalScheduleDeps(): SolaExternalScheduleDeps {
 export async function syncSolaExternalSchedules(input: {
   operatorId: string;
   tenantId?: string | null;
+  /** When true, fetches masked card metadata per schedule (slow for large accounts). */
+  includeCardMetadata?: boolean;
   deps?: SolaExternalScheduleDeps;
 }): Promise<SyncSolaSchedulesResult> {
   const deps = input.deps ?? defaultSolaExternalScheduleDeps();
+  const includeCardMetadata = input.includeCardMetadata === true;
   const client = await deps.getRecurringClient(input.tenantId);
   const tenants = await deps.loadTenants();
   const now = deps.now?.() ?? new Date();
@@ -364,7 +367,7 @@ export async function syncSolaExternalSchedules(input: {
         }
 
         let detail = row;
-        if (!str(row.PaymentMethodId)) {
+        if (!str(row.CustomerId) || !str(row.PaymentMethodId)) {
           try {
             detail = await client.getSchedule(scheduleId);
           } catch {
@@ -373,12 +376,14 @@ export async function syncSolaExternalSchedules(input: {
         }
 
         let maskedPm: SolaRecurringPaymentMethodRow | null = null;
-        const pmId = str(detail.PaymentMethodId);
-        if (pmId) {
-          try {
-            maskedPm = await client.getPaymentMethodMasked(pmId);
-          } catch {
-            /* card metadata optional */
+        if (includeCardMetadata) {
+          const pmId = str(detail.PaymentMethodId);
+          if (pmId) {
+            try {
+              maskedPm = await client.getPaymentMethodMasked(pmId);
+            } catch {
+              /* card metadata optional */
+            }
           }
         }
 

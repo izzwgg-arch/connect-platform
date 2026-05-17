@@ -142,7 +142,7 @@ test("syncSolaExternalSchedules: upserts without creating PaymentMethod", async 
     now: () => new Date("2026-05-17T12:00:00.000Z"),
   };
 
-  const result = await syncSolaExternalSchedules({ operatorId: "op1", deps });
+  const result = await syncSolaExternalSchedules({ operatorId: "op1", includeCardMetadata: true, deps });
   assert.equal(result.scanned, 1);
   assert.equal(result.created, 1);
   assert.equal(pmCreateCalls, 0);
@@ -151,6 +151,40 @@ test("syncSolaExternalSchedules: upserts without creating PaymentMethod", async 
   const raw = (store[0] as Record<string, unknown>).rawSafeJson as Record<string, unknown>;
   const pm = raw.paymentMethod as Record<string, unknown>;
   assert.equal(pm.Token, "[REDACTED]");
+});
+
+test("syncSolaExternalSchedules: default sync skips per-row payment method fetch", async () => {
+  let pmFetchCalls = 0;
+  const deps: SolaExternalScheduleDeps = {
+    db: {
+      billingSolaExternalScheduleLink: {
+        findUnique: async () => null,
+        create: async ({ data }: { data: Record<string, unknown> }) => ({ id: "link1", ...data }),
+        update: async () => ({}),
+        groupBy: async () => [],
+      },
+      tenant: { findFirst: async () => ({ id: "t_probe" }) },
+    } as unknown as SolaExternalScheduleDeps["db"],
+    getRecurringClient: async () => ({
+      listSchedules: async () => ({
+        items: [{ ScheduleId: "c1_s1", CustomerId: "c1", PaymentMethodId: "c1_pm1", Amount: 10, IsActive: true }],
+        nextToken: undefined,
+      }),
+      getSchedule: async () => {
+        throw new Error("getSchedule should not run when list row has ids");
+      },
+      getPaymentMethodMasked: async () => {
+        pmFetchCalls += 1;
+        return { Issuer: "Visa", MaskedCardNumber: "4xxxxxxxxxxx4242", Exp: "1228" };
+      },
+    }) as unknown as import("@connect/integrations").SolaRecurringClient,
+    loadTenants: async () => [],
+    logPlatformEvent: async () => {},
+    logTenantEvent: async () => {},
+  };
+
+  await syncSolaExternalSchedules({ operatorId: "op1", deps });
+  assert.equal(pmFetchCalls, 0);
 });
 
 test("mapSolaExternalSchedule: sets tenant and status only", async () => {

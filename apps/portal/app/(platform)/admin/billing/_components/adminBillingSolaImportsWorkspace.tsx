@@ -102,12 +102,14 @@ export function SolaImportsWorkspace() {
             const r = await apiPost<{ scanned: number; created: number; updated: number }>(
               "/admin/billing/platform/sola-import/sync",
               effectiveTenantId ? { tenantId: effectiveTenantId } : {},
+              undefined,
+              { timeoutMs: 180_000 },
             );
             setSyncResult(`Synced ${r.scanned}: ${r.created} new, ${r.updated} updated.`);
             bumpList();
           } catch (e: unknown) { setActionError(e instanceof Error ? e.message : "Sync failed"); }
           finally { setSyncing(false); }
-        })()}>{syncing ? "Syncing…" : "Sync from Sola"}</button>
+        })()}>{syncing ? "Syncing… (may take up to a minute)" : "Sync from Sola"}</button>
         <input className="input" placeholder="Search…" value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
         <select className="input" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value as typeof statusFilter); setPage(1); }}>
           {STATUS_FILTERS.map((s) => <option key={s} value={s}>{s}</option>)}

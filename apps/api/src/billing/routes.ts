@@ -2361,9 +2361,18 @@ export async function registerBillingRoutes(app: FastifyInstance) {
   app.post("/admin/billing/platform/sola-import/sync", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
-    const body = z.object({ tenantId: z.string().optional() }).parse(req.body || {});
+    const body = z
+      .object({
+        tenantId: z.string().optional(),
+        includeCardMetadata: z.boolean().optional(),
+      })
+      .parse(req.body || {});
     try {
-      const result = await syncSolaExternalSchedules({ operatorId: u.sub, tenantId: body.tenantId || null });
+      const result = await syncSolaExternalSchedules({
+        operatorId: u.sub,
+        tenantId: body.tenantId || null,
+        includeCardMetadata: body.includeCardMetadata,
+      });
       return result;
     } catch (e: any) {
       if (e?.code === "SOLA_NOT_ENABLED") {
