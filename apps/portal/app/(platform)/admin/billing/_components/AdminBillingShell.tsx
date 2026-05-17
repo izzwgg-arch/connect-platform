@@ -91,12 +91,15 @@ function WorkspaceSegButton({
 }
 
 export function AdminBillingShell({ children }: { children: ReactNode }) {
-  // NOTE: we read globalTenantId only as a fallback hint for initial tenant
-  // selection. We intentionally do NOT call setTenantId here: the billing
-  // admin workspace manages its own tenant selection and writing back to the
-  // global context caused an oscillation loop with useAppContext's reset
-  // guard (which resets tenantId when it's not in the switcher list).
-  const { can, backendJwtRole, tenantId: globalTenantId } = useAppContext();
+  // The billing admin workspace manages its own tenant selection entirely via
+  // URL param and sessionStorage. We do NOT read or write the global
+  // AppContext tenantId/adminScope here:
+  //   - Writing back caused an infinite oscillation: useAppContext's reset
+  //     guard resets tenantId when it's not in the super-admin switcher list,
+  //     which re-fired this effect endlessly, hammering /api/voice/pbx/resources/extensions.
+  //   - Reading globalTenantId as a useMemo dep propagated that oscillation
+  //     into effectiveTenantId even after we stopped writing.
+  const { can, backendJwtRole } = useAppContext();
   const pathname = usePathname() || "";
   const rawSearchParams = useSearchParams();
   const router = useRouter();
@@ -143,9 +146,8 @@ export function AdminBillingShell({ children }: { children: ReactNode }) {
   const effectiveTenantId = useMemo(() => {
     if (urlTenantId && tenants.some((t) => t.id === urlTenantId)) return urlTenantId;
     if (sessionStoredId && tenants.some((t) => t.id === sessionStoredId)) return sessionStoredId;
-    if (globalTenantId && tenants.some((t) => t.id === globalTenantId)) return globalTenantId;
     return tenants[0]?.id || "";
-  }, [urlTenantId, tenants, sessionStoredId, globalTenantId]);
+  }, [urlTenantId, tenants, sessionStoredId]);
 
   useEffect(() => {
     if (!canAdmin || catalogMode || !effectiveTenantId) return;
