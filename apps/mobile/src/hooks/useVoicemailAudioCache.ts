@@ -114,10 +114,12 @@ export function useVoicemailAudioCache(
 
     const localUri = `${FileSystem.cacheDirectory ?? ""}vm-audio-${vmId}.raw`;
 
-    // Check if the file is already on disk from a previous session
+    // Check if the file is already on disk from a previous session.
+    // Require at least 512 bytes to guard against stale zero-byte / partial
+    // downloads that would cause cache_play_failed on every play.
     try {
       const info = await FileSystem.getInfoAsync(localUri, { size: true });
-      if (info.exists && (info as any).size > 0) {
+      if (info.exists && ((info as any).size ?? 0) >= 512) {
         cache.set(vmId, {
           localUri,
           sizeBytes:  (info as any).size ?? 0,
@@ -127,6 +129,9 @@ export function useVoicemailAudioCache(
         status.set(vmId, "ready");
         console.log(`[VOICEMAIL_AUDIO] preload_done vmId=${vmId} source=disk sizeBytes=${(info as any).size ?? 0}`);
         return;
+      } else if (info.exists) {
+        // Delete the stale/empty file so a fresh download is attempted
+        await FileSystem.deleteAsync(localUri, { idempotent: true }).catch(() => undefined);
       }
     } catch {
       // getInfoAsync failure is non-fatal
@@ -153,9 +158,21 @@ export function useVoicemailAudioCache(
         return;
       }
 
+      const elapsedMs = Date.now() - startMs;
+
+      // Reject non-2xx responses. The API returns 503 JSON when audio is
+      // unavailable on the PBX. Without this check we'd cache the error body,
+      // try to play it (cache_play_failed), then fall back to remote stream
+      // anyway — adding a pointless round-trip and a spurious error log.
+      if (result.status < 200 || result.status >= 300) {
+        await FileSystem.deleteAsync(result.uri, { idempotent: true }).catch(() => undefined);
+        status.set(vmId, "error");
+        console.warn(`[VOICEMAIL_AUDIO] preload_failed vmId=${vmId} reason=http_${result.status} elapsedMs=${elapsedMs}`);
+        return;
+      }
+
       const info = await FileSystem.getInfoAsync(result.uri, { size: true });
       const sizeBytes = (info as any).size ?? 0;
-      const elapsedMs = Date.now() - startMs;
 
       if (sizeBytes > MAX_FILE_BYTES) {
         // File too large — delete and mark as error so we stream instead
