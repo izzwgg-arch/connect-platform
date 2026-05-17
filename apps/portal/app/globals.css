@@ -2916,7 +2916,8 @@ body {
 }
 
 .console-content:has(> .ch-shell),
-.console-content:has(> .vm-shell) {
+.console-content:has(> .vm-shell),
+.console-content:has(> .billing-ws-shell) {
   height: 100%;
   min-height: 0;
   max-width: none;
