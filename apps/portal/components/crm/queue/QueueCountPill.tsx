@@ -28,6 +28,7 @@ export function QueueCountPill({
       className={cn(
         crm.queueCountPill,
         "relative overflow-hidden",
+        "bg-crm-surface-2",
         active && crm.queueCountPillActive,
         showUrgent && crm.queueCountPillUrgent,
         disabled && "opacity-50",

@@ -1,177 +1,185 @@
 "use client";
 
+import type { ReactNode } from "react";
 import Link from "next/link";
-import { Activity, ListOrdered, TrendingUp } from "lucide-react";
+import { AlertTriangle, ArrowRight, Megaphone, PhoneCall, Sparkles, TrendingUp, Zap } from "lucide-react";
 import { CRMCard } from "../CRMCard";
-import { CRMHorizontalBars } from "../charts/CRMHorizontalBars";
-import { CRM_CHART_COLORS } from "../charts/chartColors";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
 import type { QueueCounts, QueueFilter, QueueOperationalStats } from "./queueTypes";
 
+/** Right-column command context — no duplicate queue snapshot counts (those live in top pills only). */
 export function QueueOverviewPanel({
-  counts,
   filter,
   total,
   stats,
   statsLoading,
+  counts,
   campaignId,
   campaignName,
-  onFilterChange,
 }: {
-  counts: QueueCounts;
   filter: QueueFilter;
   total: number;
   stats: QueueOperationalStats | null;
   statsLoading: boolean;
+  counts: QueueCounts;
   campaignId: string | null;
   campaignName: string | null;
-  onFilterChange: (f: QueueFilter) => void;
 }) {
-  const pressureTotal = Math.max(1, counts.pending + counts.due + counts.overdue + counts.upcoming);
-
-  const pressureItems = [
-    { label: "Pending", value: counts.pending, color: CRM_CHART_COLORS.accent },
-    { label: "Due", value: counts.due, color: CRM_CHART_COLORS.warning },
-    { label: "Overdue", value: counts.overdue, color: CRM_CHART_COLORS.danger },
-    { label: "Upcoming", value: counts.upcoming, color: CRM_CHART_COLORS.muted },
-  ];
-
-  const todayItems = stats
-    ? [
-        { label: "Outcomes", value: stats.dispositionsToday, color: CRM_CHART_COLORS.success },
-        { label: "Calls", value: stats.callsLinkedToday, color: CRM_CHART_COLORS.accent },
-        { label: "Tasks", value: stats.myOpen, color: CRM_CHART_COLORS.warning },
-      ]
-    : [];
+  const next = pickNextAction(filter, total, counts);
 
   return (
-    <CRMCard padding="md" className="flex h-full flex-col gap-4">
-      <div className="flex items-baseline justify-between gap-2">
-        <div>
-          <p className={crm.label}>Overview</p>
-          <p className="mt-0.5 text-2xl font-bold tabular-nums text-crm-text">{total}</p>
-          <p className="text-[11px] text-crm-muted">in this view</p>
-        </div>
-        {campaignName ? (
-          <span className="max-w-[9rem] truncate rounded-crm border border-crm-border/80 bg-crm-surface-2 px-2 py-1 text-[10px] font-medium text-crm-muted">
-            {campaignName}
-          </span>
-        ) : null}
-      </div>
+    <CRMCard padding="md" className={cn(crm.sidebarCard, "flex flex-col")}>
+      <SidebarSection title="In this view">
+        <p className="text-2xl font-bold tabular-nums leading-none text-crm-text">{total}</p>
+        <p className="mt-1 text-[11px] text-crm-muted">
+          {total === 1 ? "lead" : "leads"} · {filterLabel(filter)}
+        </p>
+      </SidebarSection>
 
-      <div>
-        <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-crm-muted">Queue mix</p>
-        <CRMHorizontalBars items={pressureItems} maxValue={pressureTotal} />
-        {counts.overdue > 0 && filter === "pending" ? (
-          <button
-            type="button"
-            onClick={() => onFilterChange("overdue")}
-            className="mt-2 w-full rounded-crm border border-crm-danger/30 bg-crm-danger/10 px-2 py-1.5 text-left text-xs font-semibold text-crm-danger hover:bg-crm-danger/15"
-          >
-            {counts.overdue} overdue → focus
-          </button>
-        ) : null}
-      </div>
+      {next ? (
+        <SidebarSection title="Next best action">
+          <p className="text-xs leading-relaxed text-crm-muted">{next.hint}</p>
+          <Link href={next.href} className={cn(crm.btnSecondary, "mt-2 w-full justify-center gap-2 text-xs")}>
+            {next.icon}
+            {next.cta}
+            <ArrowRight className="ml-auto h-3.5 w-3.5 opacity-70" />
+          </Link>
+        </SidebarSection>
+      ) : null}
 
-      <div className="grid grid-cols-2 gap-2">
-        <CallbackTile label="Due" count={counts.due} active={filter === "due"} tone="warning" onClick={() => onFilterChange("due")} />
-        <CallbackTile
-          label="Overdue"
-          count={counts.overdue}
-          active={filter === "overdue"}
-          tone="danger"
-          onClick={() => onFilterChange("overdue")}
-        />
-      </div>
-
-      <div className="border-t border-crm-border/60 pt-3">
-        <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-crm-muted">Today</p>
+      <SidebarSection title="Your activity today">
         {statsLoading ? (
           <p className={crm.muted}>Loading…</p>
         ) : stats ? (
-          <>
-            <CRMHorizontalBars
-              items={todayItems}
-              maxValue={Math.max(1, stats.dispositionsToday, stats.callsLinkedToday, stats.myOpen)}
-            />
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              <MiniStat icon={<TrendingUp className="h-3 w-3" />} label="Outcomes" value={stats.dispositionsToday} />
-              <MiniStat icon={<ListOrdered className="h-3 w-3" />} label="Remaining" value={stats.queueRemaining} />
-            </div>
-          </>
+          <div className="grid grid-cols-3 gap-2">
+            <MetricTile label="Outcomes" value={stats.dispositionsToday} />
+            <MetricTile label="Calls" value={stats.callsLinkedToday} icon={<PhoneCall className="h-3 w-3" />} />
+            <MetricTile label="Open tasks" value={stats.myOpen} emphasize={stats.myOpen > 0 ? "warn" : "default"} />
+          </div>
         ) : (
           <p className={crm.muted}>Unavailable</p>
         )}
-      </div>
+      </SidebarSection>
 
-      {stats && !statsLoading ? (
-        <div className="mt-auto flex flex-wrap gap-1.5 border-t border-crm-border/60 pt-3">
-          <Link href="/crm/tasks" className={cn(crm.chip, "hover:bg-crm-surface-2")}>
-            <Activity className="h-3 w-3" />
-            Tasks
+      <SidebarSection title="Campaign" className="mt-auto border-t border-crm-border/60 pt-3">
+        {campaignId && campaignName ? (
+          <Link
+            href={`/crm/campaigns/${encodeURIComponent(campaignId)}`}
+            className={cn(crm.btnGhost, "w-full justify-start px-2 text-xs")}
+          >
+            <Megaphone className="h-3.5 w-3.5 shrink-0 text-crm-accent" />
+            <span className="truncate">{campaignName}</span>
           </Link>
-          {campaignId ? (
-            <Link
-              href={`/crm/campaigns/${encodeURIComponent(campaignId)}`}
-              className={cn(crm.chip, "hover:bg-crm-surface-2")}
-            >
-              Campaign
-            </Link>
-          ) : (
-            <Link href="/crm/campaigns?status=ACTIVE" className={cn(crm.chip, "hover:bg-crm-surface-2")}>
-              Campaigns ({stats.activeCampaigns})
-            </Link>
-          )}
-        </div>
-      ) : null}
+        ) : stats && !statsLoading ? (
+          <Link href="/crm/campaigns?status=ACTIVE" className={cn(crm.btnGhost, "w-full justify-start px-2 text-xs")}>
+            <Megaphone className="h-3.5 w-3.5" />
+            {stats.activeCampaigns} active campaigns
+          </Link>
+        ) : (
+          <p className="text-xs text-crm-muted">All campaigns</p>
+        )}
+        <Link href="/crm/dashboard" className={cn(crm.btnGhost, "mt-1 w-full justify-start px-2 text-xs")}>
+          <TrendingUp className="h-3.5 w-3.5" />
+          Command center
+        </Link>
+      </SidebarSection>
     </CRMCard>
   );
 }
 
-function CallbackTile({
-  label,
-  count,
-  active,
-  tone,
-  onClick,
+function SidebarSection({
+  title,
+  children,
+  className,
 }: {
-  label: string;
-  count: number;
-  active: boolean;
-  tone: "warning" | "danger";
-  onClick: () => void;
+  title: string;
+  children: ReactNode;
+  className?: string;
 }) {
-  const activeCls =
-    tone === "danger"
-      ? "border-crm-danger/40 bg-crm-danger/12 ring-1 ring-crm-danger/20"
-      : "border-crm-warning/40 bg-crm-warning/12 ring-1 ring-crm-warning/20";
-  const countCls = tone === "danger" ? "text-crm-danger" : "text-crm-warning";
-
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "rounded-crm border px-3 py-2.5 text-left transition-colors",
-        active ? activeCls : "border-crm-border bg-crm-surface-2/80 hover:bg-crm-surface",
-      )}
-    >
-      <span className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">{label}</span>
-      <p className={cn("text-xl font-bold tabular-nums", countCls)}>{count}</p>
-    </button>
+    <div className={cn(crm.sidebarSection, className)}>
+      <p className={crm.label}>{title}</p>
+      {children}
+    </div>
   );
 }
 
-function MiniStat({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
+function MetricTile({
+  label,
+  value,
+  icon,
+  emphasize,
+}: {
+  label: string;
+  value: number;
+  icon?: ReactNode;
+  emphasize?: "default" | "warn";
+}) {
   return (
-    <div className="rounded-crm border border-crm-border/80 bg-crm-surface-2/60 px-2 py-1.5">
-      <p className="flex items-center gap-1 text-[10px] text-crm-muted">
+    <div className={cn(crm.metricTile, "min-h-[3.5rem]")}>
+      <p className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-crm-muted">
         {icon}
         {label}
       </p>
-      <p className="text-sm font-bold tabular-nums text-crm-text">{value}</p>
+      <p
+        className={cn(
+          "mt-1 text-lg font-bold tabular-nums leading-none",
+          emphasize === "warn" && value > 0 ? "text-crm-warning" : "text-crm-text",
+        )}
+      >
+        {value}
+      </p>
     </div>
   );
+}
+
+function filterLabel(filter: QueueFilter): string {
+  switch (filter) {
+    case "pending":
+      return "pending snapshot";
+    case "due":
+      return "due today";
+    case "overdue":
+      return "overdue";
+    case "upcoming":
+      return "upcoming";
+  }
+}
+
+function pickNextAction(filter: QueueFilter, total: number, counts: QueueCounts) {
+  if (counts.overdue > 0 && filter !== "overdue") {
+    return {
+      hint: "Overdue callbacks should be worked before fresh pending leads.",
+      href: "/crm/queue?filter=overdue",
+      cta: "Focus overdue",
+      icon: <AlertTriangle className="h-3.5 w-3.5 shrink-0" />,
+    };
+  }
+  if (counts.due > 0 && filter !== "due") {
+    return {
+      hint: "Callbacks due today are waiting in the due snapshot.",
+      href: "/crm/queue?filter=due",
+      cta: "View due today",
+      icon: <Sparkles className="h-3.5 w-3.5 shrink-0" />,
+    };
+  }
+  if (total > 0 && filter === "pending") {
+    return {
+      hint: "Power session walks the list with outcomes on this page.",
+      href: "/crm/queue?mode=power",
+      cta: "Start power session",
+      icon: <Zap className="h-3.5 w-3.5 shrink-0" />,
+    };
+  }
+  if (total === 0 && filter !== "pending") {
+    return {
+      hint: "Pending may still have assigned leads.",
+      href: "/crm/queue?filter=pending",
+      cta: "View pending",
+      icon: <Sparkles className="h-3.5 w-3.5 shrink-0" />,
+    };
+  }
+  return null;
 }
 

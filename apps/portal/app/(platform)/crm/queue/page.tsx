@@ -1327,30 +1327,24 @@ function QueuePageInner() {
     : null;
 
   const sidePanels = (
-    <>
-      <div className="col-span-12 xl:col-span-3 2xl:col-span-2">
-        <QueueOverviewPanel
-          counts={counts}
-          filter={filter}
-          total={total}
-          stats={opStats}
-          statsLoading={opStatsLoading}
-          campaignId={campaignId}
-          campaignName={activeCampaignName}
-          onFilterChange={powerModeActive ? (f) => { setWrapUpActive(false); switchPowerFilter(f); } : switchFilter}
-        />
-      </div>
-      <div className="col-span-12 xl:col-span-2">
-        <QueueAttentionPanel
-          counts={counts}
-          stats={opStats}
-          statsLoading={opStatsLoading}
-          campaigns={campaigns}
-          campaignId={campaignId}
-          campaignName={activeCampaignName}
-        />
-      </div>
-    </>
+    <div className="col-span-12 flex flex-col gap-3 xl:col-span-4 2xl:col-span-4">
+      <QueueOverviewPanel
+        filter={filter}
+        total={total}
+        stats={opStats}
+        statsLoading={opStatsLoading}
+        counts={counts}
+        campaignId={campaignId}
+        campaignName={activeCampaignName}
+      />
+      <QueueAttentionPanel
+        stats={opStats}
+        statsLoading={opStatsLoading}
+        campaigns={campaigns}
+        campaignId={campaignId}
+        campaignName={activeCampaignName}
+      />
+    </div>
   );
 
   return (
@@ -1434,7 +1428,7 @@ function QueuePageInner() {
 
       {!powerModeActive ? (
         <CRMActionBar>
-          <div className="grid w-full grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="grid w-full grid-cols-2 items-stretch gap-2 sm:grid-cols-4">
             <QueueCountPill label="Pending" count={counts.pending} active={filter === "pending"} onClick={() => switchFilter("pending")} disabled={loading} />
             <QueueCountPill label="Due" count={counts.due} active={filter === "due"} urgent={counts.due > 0} onClick={() => switchFilter("due")} disabled={loading} />
             <QueueCountPill label="Overdue" count={counts.overdue} active={filter === "overdue"} urgent={counts.overdue > 0} onClick={() => switchFilter("overdue")} disabled={loading} />
@@ -1489,7 +1483,7 @@ function QueuePageInner() {
       ) : null}
 
       <div className="grid grid-cols-12 gap-4 items-start">
-        <div className="col-span-12 flex min-w-0 flex-col gap-3 xl:col-span-7 2xl:col-span-8">
+        <div className="col-span-12 flex min-w-0 flex-col gap-3 xl:col-span-8 2xl:col-span-8">
         {/* Content */}
         {loading ? (
           <div className="py-24 text-center text-crm-muted/80 text-sm">Loading…</div>
@@ -1500,8 +1494,6 @@ function QueuePageInner() {
             filter={filter}
             powerMode={powerModeActive}
             campaignId={campaignId}
-            stats={opStats}
-            statsLoading={opStatsLoading}
             onClearCampaign={() => switchCampaign(null)}
             onSwitchPending={() => switchFilter("pending")}
             onExitPower={() => router.push("/crm/queue")}

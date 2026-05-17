@@ -257,6 +257,19 @@
 | Function | Create, lifecycle, import preview/run, bulk assign, member status/callback, export CSV unchanged |
 | Typecheck | `pnpm exec tsc -p apps/portal` — no errors in `crm/campaigns/**` or `components/crm/campaign/**` |
 
+### Phase 19E.2 — Campaign dark-mode correctness (visual smoke)
+
+| Check | Expected |
+|-------|----------|
+| Theme | `crm.campaignWorkspace` on index + detail — search/select/buttons dark even if portal theme is light |
+| Inputs | No white search bars or filter dropdowns; `crm.input` / `crm.select` everywhere |
+| Buttons | Ghost/secondary/disabled states use `crm-surface-2`, not white/transparent chips |
+| Detail grid | Sidebar readable width (`lg:col-span-5`, min ~18rem); not a 1-column sliver |
+| Metrics | Counts once in live snapshot; performance panel has no duplicate member/converted rings |
+| Layout | Command header 12-col; cards align; empty member state compact `CampaignGuidedEmpty` |
+| Forbidden grep | No `bg-white`, `bg-gray-50`, `bg-blue-50`, `border-gray-200` on campaign paths |
+| Behavior | Queue, power, import, distribute, filters unchanged |
+
 ### Phase 19E.1 — Campaign visual polish (visual smoke)
 
 | Check | Expected |
@@ -368,6 +381,19 @@
 | Grep | `apps/portal/app/(platform)/crm/queue/page.tsx` + `components/crm/queue/*` — no `bg-white`, `bg-gray-50`, `bg-green-50`, `bg-blue-100`, `text-green-700`. |
 | Behavior | Filters, sort, campaign, PATCH actions, power mode, `returnTo` unchanged. |
 | Typecheck | `pnpm exec tsc -p apps/portal --noEmit` passes. |
+
+### Phase 19C.2 — Queue dedupe + dark sidebar (final visual cleanup)
+
+| Check | Expected |
+|-------|----------|
+| No white cards | All queue surfaces use `crm-surface` / `crm-surface-2`; grep queue paths clean. |
+| Count pills | Top row only; equal height (`items-stretch` + `queueCountPill` min-height). |
+| No count dup | Sidebar has no queue mix bars, due/overdue tiles, or attention overdue/due rows with snapshot counts. |
+| Today once | Outcomes / calls / open tasks only under **Your activity today** in command sidebar. |
+| Empty | Single compact card in feed; no second stats column. |
+| Sidebar | One column (`xl:col-span-4`): command + attention stacked with `gap-3`. |
+| Exceptions | Attention: tasks, personal overdue callbacks, campaign — not generic queue backlog counts. |
+| Behavior | Unchanged. |
 
 ---
 

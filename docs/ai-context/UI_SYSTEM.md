@@ -87,7 +87,9 @@ Chart colors live in `components/crm/charts/chartColors.ts` (aligned with `--crm
 
 **Visual priority:** overdue / due callbacks use `crm-danger` / `crm-warning` on rows and side tiles; “next best lead” uses accent ring.
 
-**Empty queue:** `QueueEmptyOperational` — split layout with real today snapshot (`/crm/tasks/stats`) beside a compact caught-up card; not a single dominant dashed empty slab.
+**Empty queue:** `QueueEmptyOperational` — single compact caught-up card; today metrics live only in the command sidebar (`Your activity today`), not duplicated in the feed.
+
+**Information hierarchy (19C.2):** Top `QueueCountPill` row is the **only** place for pending/due/overdue/upcoming counts. Right column is one stack: command context (`QueueOverviewPanel`: in-view total, next action, activity today, campaign) + exceptions (`QueueAttentionPanel`: tasks/callback exceptions only — no repeat queue snapshot counts).
 
 ---
 
@@ -106,7 +108,9 @@ Campaign routes use **`crm.pageInnerCampaign`** (wide desk, up to ~1680px) and *
 
 **Density (19E.1):** No oversized sparse cards, no centered narrow column on wide screens. Index cards are one horizontal operational row, not a tall side-rail layout.
 
-**Dark surfaces (19E.1):** Modals use `crm.campaignModalBackdrop`, `crm.input` on textarea/select, `crm.campaignPriorityPill*` for priority. Ban `bg-white`, `bg-gray-50`, `bg-green-100`, `bg-amber-50`, `text-green-700`, light bulk bars on campaign routes.
+**Dark surfaces (19E.1+):** Wrap campaign pages in `crm.campaignWorkspace` (forces dark tokens under light portal theme). Modals use `crm.campaignModalBackdrop`, `crm.input` / `crm.select`, `crm.campaignPriorityPill*`. Ban `bg-white`, `bg-gray-50`, `bg-green-100`, light native inputs, and duplicate metric panels.
+
+**Layout (19E.2 dark correctness):** Detail uses `crm.campaignDetailGrid` — main `lg:col-span-7 xl:col-span-8`, sidebar `lg:col-span-5` with `min-w-[18rem]`. Command header uses 12-col grid (identity / snapshot / operations). Performance panel = status mix + funnel only (counts in live snapshot).
 
 **Queue continuity:** `/crm/queue?campaignId=…` and `/crm/queue?mode=power&campaignId=…`. No fake realtime or AI analytics.
 
