@@ -47,10 +47,10 @@ export function ScriptWorkspaceIdle({
   onBrowseTemplates: () => void;
 }) {
   return (
-    <div className={cn(crm.scriptsPanelPrimary, "flex min-h-[28rem] flex-col")}>
+    <div className={cn(crm.scriptsPanelPrimary, "flex min-h-[30rem] flex-col")}>
       <div className={crm.scriptsPanelPrimaryGlow} aria-hidden />
 
-      <div className="relative z-[1] flex flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+      <div className="relative z-[1] flex flex-1 flex-col items-center justify-center px-6 py-10 text-center sm:px-8 lg:px-10">
         <div className="relative mb-6">
           <div
             className="absolute inset-0 -m-8 rounded-full bg-crm-accent/15 blur-2xl motion-reduce:hidden"
@@ -68,7 +68,7 @@ export function ScriptWorkspaceIdle({
         <h2 className="text-lg font-semibold text-crm-text sm:text-xl">
           Select a script to get started
         </h2>
-        <p className="mt-2 max-w-md text-sm leading-relaxed text-crm-muted">
+        <p className="mt-2 max-w-xl text-sm leading-relaxed text-crm-muted">
           Choose a script from the library or create a new one to open the live playbook
           workspace.
         </p>
@@ -88,7 +88,7 @@ export function ScriptWorkspaceIdle({
           </button>
         </div>
 
-        <div className="mt-10 grid w-full max-w-2xl grid-cols-1 gap-2 sm:grid-cols-2">
+        <div className="mt-10 grid w-full max-w-4xl grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
           {FEATURES.map((f) => (
             <div key={f.title} className={crm.scriptsFeatureCard}>
               <f.icon className={cn("h-4 w-4 shrink-0", f.accent)} aria-hidden />

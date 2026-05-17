@@ -31,7 +31,7 @@ export function ScriptCommandHeader({
             <h1 className="text-xl font-semibold tracking-tight text-crm-text sm:text-2xl">
               Call Scripts
             </h1>
-            <p className="mt-1 max-w-lg text-sm leading-relaxed text-crm-muted">
+            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-crm-muted">
               Sales playbooks and cold-call scripts for your outbound team.
             </p>
           </div>
