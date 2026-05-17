@@ -62,6 +62,8 @@ export function transactionStatusLabel(status: string | undefined | null): strin
     case "DECLINED": return "Declined";
     case "ERROR": return "Error";
     case "PENDING": return "Pending";
+    case "REFUNDED": return "Refunded";
+    case "VOIDED": return "Voided";
     default: return status || "—";
   }
 }
@@ -70,7 +72,20 @@ export function transactionStatusClass(status: string | undefined | null): strin
   switch (String(status || "").toUpperCase()) {
     case "APPROVED": return "good";
     case "DECLINED": case "ERROR": return "bad";
+    case "REFUNDED": case "VOIDED": return "";
     default: return "warn";
+  }
+}
+
+/** Finance chip tone for payment transaction rows (display only). */
+export function transactionFinanceStatusTone(status: string | undefined | null): "approved" | "pending" | "failed" | "refunded" | "void" | "neutral" {
+  switch (String(status || "").toUpperCase()) {
+    case "APPROVED": return "approved";
+    case "PENDING": return "pending";
+    case "DECLINED": case "ERROR": return "failed";
+    case "REFUNDED": return "refunded";
+    case "VOIDED": return "void";
+    default: return "neutral";
   }
 }
 

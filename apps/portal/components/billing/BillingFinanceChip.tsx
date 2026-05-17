@@ -5,15 +5,19 @@ import { invoiceFinanceStatusTone, invoiceStatusLabel } from "../../lib/billingU
 
 export function BillingFinanceChip({
   status,
+  label: labelOverride,
+  tone: toneOverride,
   className = "",
   style,
 }: {
-  status: string | null | undefined;
+  status?: string | null | undefined;
+  label?: string;
+  tone?: string;
   className?: string;
   style?: CSSProperties;
 }) {
-  const tone = invoiceFinanceStatusTone(status);
-  const label = invoiceStatusLabel(status);
+  const tone = toneOverride || invoiceFinanceStatusTone(status);
+  const label = labelOverride || invoiceStatusLabel(status);
   return (
     <span
       className={`billing-fin-chip billing-fin-chip--${tone}${className ? ` ${className}` : ""}`}

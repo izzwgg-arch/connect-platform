@@ -10,15 +10,19 @@ import { BillingEmptyState } from "../../../../../components/billing/BillingEmpt
 import { BillingTableSkeleton } from "../../../../../components/billing/BillingTableSkeleton";
 import { dollars, formatDate, invoiceStatusLabel } from "../../../../../lib/billingUi";
 import type { TenantDetail } from "./tenantBillingConfigForms";
-import { mergeSearchParams, OPS_TAB_QUERY } from "./adminBillingLinks";
+import { mergeSearchParams } from "./adminBillingLinks";
+import { PaymentMethodsModal } from "./adminBillingOpsPanels";
+import "./billingPayments.css";
+import "./billingPhase8.css";
 
 export function BillingPaymentMethodsSection({ detail }: { detail: TenantDetail }) {
   const methods = detail.paymentMethods || [];
   const autopay = detail.settings?.autoBillingEnabled;
   const billingDay = detail.settings?.billingDayOfMonth;
+  const [methodsOpen, setMethodsOpen] = useState(false);
 
   return (
-    <div className="billing-ws-section billing-p8-scope" data-testid="billing-admin-methods-panel">
+    <div className="billing-ws-section billing-p8-scope billing-pay-scope" data-testid="billing-admin-methods-panel">
       <div className="billing-ov-summary" style={{ marginBottom: 12 }}>
         <div className="billing-ov-summary__card">
           <label>Autopay</label>
@@ -35,33 +39,46 @@ export function BillingPaymentMethodsSection({ detail }: { detail: TenantDetail 
         </div>
       </div>
 
+      <div className="row-actions" style={{ marginBottom: 10 }}>
+        <button className="btn primary" type="button" style={{ fontSize: 13 }} onClick={() => setMethodsOpen(true)}>
+          Manage cards
+        </button>
+        <Link
+          className="btn ghost"
+          style={{ fontSize: 13 }}
+          href={`/admin/billing/payments${mergeSearchParams(new URLSearchParams(), { tenantId: detail.tenant.id })}`}
+        >
+          Open payments
+        </Link>
+      </div>
+
       <DetailCard title="Payment methods">
         {methods.length === 0 ? (
           <BillingEmptyState
             title="No payment method on file"
-            message="Add a card from the invoice register when collecting payment for this company."
-            ctaHref={`/admin/billing/invoices${mergeSearchParams(new URLSearchParams(), { tenantId: detail.tenant.id, [OPS_TAB_QUERY]: "invoices" })}`}
-            ctaLabel="Open invoices"
+            message="Add a card with the secure form. Saved cards can be charged from Payments or Invoices."
           />
         ) : (
-          <div className="billing-p8-pm-grid">
+          <div className="billing-pay-pm-grid">
             {methods.map((method: { id: string; brand?: string | null; last4?: string | null; isDefault?: boolean; cardholderName?: string | null; expMonth?: number; expYear?: number }) => (
-              <div key={method.id} className={`billing-p8-pm-card${method.isDefault ? " billing-p8-pm-card--default" : ""}`}>
-                <div>
-                  <strong>
-                    {(method.brand || "Card").toString()} ···{method.last4 || "----"}
-                  </strong>
-                  {method.isDefault ? <span className="billing-p8-pm-badge">Default</span> : null}
-                  <div className="billing-p8-pm-meta">
+              <article key={method.id} className={`billing-pay-pm-card${method.isDefault ? " billing-pay-pm-card--default" : ""}`}>
+                <div className="billing-pay-pm-card__brand">
+                  {(method.brand || "Card").toString()} ···{method.last4 || "----"}
+                  {method.isDefault ? <span className="billing-p8-pm-badge" style={{ marginLeft: 8 }}>Default · Autopay</span> : null}
+                </div>
+                <div className="billing-pay-pm-card__meta">
                     {method.cardholderName || "Cardholder not set"}
                     {method.expMonth && method.expYear ? ` · Expires ${method.expMonth}/${method.expYear}` : ""}
-                  </div>
                 </div>
-              </div>
+              </article>
             ))}
           </div>
         )}
       </DetailCard>
+
+      {methodsOpen ? (
+        <PaymentMethodsModal tenantId={detail.tenant.id} tenantName={detail.tenant.name} onClose={() => setMethodsOpen(false)} />
+      ) : null}
     </div>
   );
 }

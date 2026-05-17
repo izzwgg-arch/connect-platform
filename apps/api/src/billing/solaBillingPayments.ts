@@ -155,6 +155,194 @@ export async function chargeBillingInvoice(invoice: any, method: any, options?: 
   return transaction;
 }
 
+export type ChargeBillingInvoiceWithSutOptions = ChargeBillingInvoiceOptions & {
+  cardholderName?: string | null;
+  billingZip?: string | null;
+};
+
+/**
+ * Charge an invoice using a one-time iFields SUT without persisting a PaymentMethod row.
+ * Vaults at the processor via cc:save, then cc:sale with the returned token.
+ */
+export async function chargeBillingInvoiceWithSut(
+  invoice: any,
+  input: { xSut: string; cardholderName?: string | null; billingZip?: string | null },
+  options?: ChargeBillingInvoiceWithSutOptions,
+): Promise<any> {
+  const adapter = options?.adapter ?? (await getBillingSolaAdapter(invoice.tenantId));
+  const saveResp = await adapter.saveCardWithSut({
+    sut: input.xSut,
+    cardholderName: input.cardholderName || undefined,
+    zip: input.billingZip || undefined,
+  });
+  if (!saveResp.approved || !saveResp.xToken) {
+    const err: any = new Error("CARD_TOKENIZATION_FAILED");
+    err.code = "CARD_TOKENIZATION_FAILED";
+    err.response = saveResp;
+    throw err;
+  }
+  const ephemeralMethod = {
+    id: `ephemeral:${invoice.id}`,
+    tokenEncrypted: null,
+    brand: saveResp.xCardType || null,
+    last4: (saveResp.xMaskedCardNumber || "").replace(/\D/g, "").slice(-4) || null,
+  };
+  const token = saveResp.xToken;
+  const amountCents = invoice.balanceDueCents ?? invoice.totalCents;
+  const idempotencyKey = `billing:sale:${invoice.id}:${Date.now()}`;
+
+  await logBillingEvent({
+    tenantId: invoice.tenantId,
+    invoiceId: invoice.id,
+    runId: options?.runId ?? null,
+    type: "payment.charge_attempt",
+    message: `One-time card charge for invoice ${invoice.invoiceNumber}`,
+    metadata: { amountCents, ephemeral: true, ...(options?.note ? { operatorNote: options.note } : {}) },
+  });
+
+  const gatewayXInvoice = buildConnectBillingGatewayXInvoice(invoice.tenantId, invoice.id, invoice.invoiceNumber);
+  const response = await adapter.chargeToken({
+    token,
+    amountCents,
+    gatewayXInvoice,
+    idempotencyKey,
+    recurringIndicator: "Single",
+  });
+
+  const processorRef =
+    response.xRefNum !== undefined && response.xRefNum !== null && String(response.xRefNum).trim() !== ""
+      ? String(response.xRefNum)
+      : null;
+
+  const transaction = await (db as any).paymentTransaction.create({
+    data: {
+      tenantId: invoice.tenantId,
+      invoiceId: invoice.id,
+      paymentMethodId: null,
+      amountCents,
+      status: response.approved ? "APPROVED" : response.status === "DECLINED" ? "DECLINED" : "ERROR",
+      processorTransactionId: processorRef,
+      responseCode: response.xResult,
+      responseMessage: response.xError || response.xStatus,
+      rawResponseSafeJson: {
+        ...response.safePayload,
+        cardBrand: ephemeralMethod.brand,
+        cardLast4: ephemeralMethod.last4,
+        ephemeral: true,
+      },
+      idempotencyKey,
+    },
+  });
+
+  if (response.approved) {
+    await markBillingInvoicePaid(invoice.id, amountCents);
+    const billingSettings = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId: invoice.tenantId } });
+    if (billingSettings?.billingEmail && transaction.id) {
+      await queueReceiptEmailOnce({
+        tenantId: invoice.tenantId,
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+        totalCents: invoice.totalCents,
+        transactionId: transaction.id,
+        cardLabel: ephemeralMethod.last4 ? `${ephemeralMethod.brand || "Card"} ending ${ephemeralMethod.last4}` : null,
+        paidViaAutopay: false,
+      });
+    }
+  } else {
+    await (db as any).billingInvoice.update({
+      where: { id: invoice.id },
+      data: { status: "FAILED", failedAt: new Date() },
+    });
+  }
+
+  await logBillingEvent({
+    tenantId: invoice.tenantId,
+    invoiceId: invoice.id,
+    type: response.approved ? "payment_succeeded" : "payment_failed",
+    metadata: { transactionId: transaction.id, ephemeral: true },
+  });
+
+  return transaction;
+}
+
+export type RefundBillingTransactionOptions = {
+  reason?: string | null;
+  adminUserId?: string | null;
+  amountCents?: number;
+};
+
+/**
+ * Processor refund for an APPROVED PaymentTransaction (cc:refund via SOLA).
+ */
+export async function refundBillingTransaction(
+  transactionId: string,
+  options?: RefundBillingTransactionOptions,
+): Promise<any> {
+  const tx = await (db as any).paymentTransaction.findUnique({
+    where: { id: transactionId },
+    include: { invoice: true, tenant: { include: { billingSolaConfig: true } } },
+  });
+  if (!tx) {
+    const err: any = new Error("TRANSACTION_NOT_FOUND");
+    err.code = "TRANSACTION_NOT_FOUND";
+    throw err;
+  }
+  if (tx.status !== "APPROVED") {
+    const err: any = new Error("TRANSACTION_NOT_REFUNDABLE");
+    err.code = "TRANSACTION_NOT_REFUNDABLE";
+    throw err;
+  }
+  if (!tx.processorTransactionId) {
+    const err: any = new Error("PROCESSOR_REF_MISSING");
+    err.code = "PROCESSOR_REF_MISSING";
+    throw err;
+  }
+
+  const refundCents = options?.amountCents ?? tx.amountCents;
+  const adapter = await getBillingSolaAdapter(tx.tenantId);
+  const response = await adapter.refundTransaction({
+    refNum: tx.processorTransactionId,
+    amountCents: refundCents,
+  });
+
+  const nextStatus = response.approved ? "REFUNDED" : tx.status;
+  const updated = await (db as any).paymentTransaction.update({
+    where: { id: transactionId },
+    data: {
+      status: nextStatus,
+      responseMessage: response.xError || response.xStatus || tx.responseMessage,
+      rawResponseSafeJson: {
+        ...(typeof tx.rawResponseSafeJson === "object" && tx.rawResponseSafeJson ? tx.rawResponseSafeJson : {}),
+        refund: response.safePayload,
+      },
+    },
+  });
+
+  if (response.approved) {
+    await logBillingEvent({
+      tenantId: tx.tenantId,
+      invoiceId: tx.invoiceId,
+      type: "payment.refunded",
+      message: options?.reason || "Payment refunded by operator",
+      metadata: {
+        transactionId: tx.id,
+        refundAmountCents: refundCents,
+        adminUserId: options?.adminUserId || null,
+      },
+    });
+  } else {
+    await logBillingEvent({
+      tenantId: tx.tenantId,
+      invoiceId: tx.invoiceId,
+      type: "payment.refund_failed",
+      message: response.xError || "Refund declined at processor",
+      metadata: { transactionId: tx.id, adminUserId: options?.adminUserId || null },
+    });
+  }
+
+  return { transaction: updated, processorResponse: response };
+}
+
 export type HostedSessionForBillingInvoiceInput = {
   invoice: {
     id: string;

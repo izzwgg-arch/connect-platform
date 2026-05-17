@@ -4,6 +4,39 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-17 — Admin billing payments operations workspace
+
+**Task:** Redesign `/admin/billing/payments` into a tenant-scoped payment operations center (charge customer, cards on file, void/refund, dark finance UI).  
+**Risk:** high (payments UX + surgical API; no billing math / IA / worker changes).
+
+### Portal
+
+- **`PaymentsWorkspace`** — `adminBillingPaymentsWorkspace.tsx`, `billingPayments.css`, `adminBillingPaymentDrawers.tsx`
+- Summary chips, **Charge customer** drawer (one-time invoice + card on file / new card / invoice-only), cards grid, transaction table + **PaymentTransactionDrawer** (refund, retry, email payment link)
+- **`/admin/billing/methods`** — Manage cards modal + link to payments
+- Exported **`PaymentMethodsModal`** from `adminBillingOpsPanels.tsx`
+- **`transactionFinanceStatusTone`**, VOIDED/REFUNDED labels in `billingUi.ts`
+
+### API (surgical)
+
+- `POST /admin/billing/platform/tenants/:tenantId/one-time-charges` — `createOneTimeChargeInvoice` (single `MANUAL_ADJUSTMENT` line, no usage/tax math)
+- `POST /admin/billing/transactions/:id/refund` — SOLA `cc:refund` via `refundBillingTransaction`
+- `chargeBillingInvoiceWithSut` — charge without persisting `PaymentMethod` when operator does not save card
+- `GET /admin/billing/transactions/:id` — includes invoice activity events
+
+### Known gap
+
+- Successful **refund** updates `PaymentTransaction.status` only; invoice balance/status is not auto-reversed (documented in `BILLING.md`).
+
+### Verification
+
+| Check | Result |
+|-------|--------|
+| `pnpm run test:billing` (api) | 196 pass |
+| `pnpm --filter @connect/portal typecheck` | pass (after CRM `CRMCard` close fix) |
+
+---
+
 ## 2026-05-17 — portal: deploy blocker — CRM barrel exports (invoice UI not at fault)
 
 **Task:** Unblock portal deploy after invoice UI commit `0c756ae` failed on server `next build`.  

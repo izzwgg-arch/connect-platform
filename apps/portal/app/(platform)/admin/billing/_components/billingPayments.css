@@ -1,0 +1,320 @@
+/* Payments operations workspace — dark-native finance UI */
+
+.billing-pay-scope {
+  --billing-pay-accent: color-mix(in srgb, var(--accent) 88%, #7dd3fc);
+}
+
+.billing-pay-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.billing-pay-head h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.billing-pay-head p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--billing-muted, var(--text-dim));
+  max-width: 52ch;
+}
+
+.billing-pay-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.billing-pay-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+@media (max-width: 1024px) {
+  .billing-pay-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .billing-pay-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
+.billing-pay-chip {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--billing-border, var(--border));
+  background: color-mix(in srgb, var(--billing-surface-raised, var(--panel-2)) 90%, transparent);
+}
+
+.billing-pay-chip label {
+  display: block;
+  font-size: 10px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--billing-muted, var(--text-dim));
+  margin-bottom: 4px;
+}
+
+.billing-pay-chip strong {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.billing-pay-chip small {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--billing-muted, var(--text-dim));
+}
+
+.billing-pay-chip--balance strong {
+  color: color-mix(in srgb, #f87171 85%, var(--billing-text));
+}
+
+.billing-pay-chip--balance.billing-pay-chip--clear strong {
+  color: color-mix(in srgb, #39d98a 90%, var(--billing-text));
+}
+
+.billing-pay-tx-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.1fr) minmax(88px, 0.75fr) minmax(72px, 0.55fr) minmax(88px, 0.7fr) minmax(100px, 0.85fr) auto;
+  gap: 10px 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.billing-pay-tx-row:hover {
+  background: color-mix(in srgb, var(--accent) 6%, var(--billing-surface-raised, var(--panel-2)));
+  border-color: color-mix(in srgb, var(--billing-border) 80%, var(--accent));
+}
+
+.billing-pay-tx-row--active {
+  background: color-mix(in srgb, var(--accent) 10%, var(--billing-surface-raised, var(--panel-2)));
+  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.billing-pay-tx-row__amount {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.billing-pay-tx-row__meta {
+  font-size: 11px;
+  color: var(--billing-muted, var(--text-dim));
+  margin-top: 2px;
+}
+
+.billing-pay-tx-head {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.1fr) minmax(88px, 0.75fr) minmax(72px, 0.55fr) minmax(88px, 0.7fr) minmax(100px, 0.85fr) auto;
+  gap: 10px 12px;
+  padding: 0 12px 6px;
+  font-size: 10px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--billing-muted, var(--text-dim));
+}
+
+.billing-pay-pm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.billing-pay-pm-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--billing-border, var(--border));
+  background: color-mix(in srgb, var(--billing-surface-raised, var(--panel-2)) 88%, transparent);
+}
+
+.billing-pay-pm-card--default {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.billing-pay-pm-card__brand {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.billing-pay-pm-card__meta {
+  font-size: 12px;
+  color: var(--billing-muted, var(--text-dim));
+}
+
+.billing-pay-pm-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.billing-pay-form-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.billing-pay-form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--billing-muted, var(--text-dim));
+}
+
+.billing-pay-form-grid input,
+.billing-pay-form-grid textarea,
+.billing-pay-form-grid select {
+  font-size: 14px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--billing-border, var(--border));
+  background: color-mix(in srgb, var(--billing-surface-raised, var(--panel-2)) 92%, transparent);
+  color: var(--billing-text, var(--text));
+  font-weight: 500;
+}
+
+.billing-pay-charge-modes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.billing-pay-charge-mode {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  border: 1.5px solid var(--billing-border, var(--border));
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.billing-pay-charge-mode:has(input:checked) {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.billing-pay-charge-mode input {
+  margin-top: 3px;
+}
+
+.billing-pay-charge-mode strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.billing-pay-charge-mode span {
+  font-size: 12px;
+  color: var(--billing-muted, var(--text-dim));
+}
+
+.billing-pay-drawer-kv {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+.billing-pay-drawer-kv div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--billing-border) 55%, transparent);
+}
+
+.billing-pay-drawer-kv dt {
+  margin: 0;
+  color: var(--billing-muted, var(--text-dim));
+  font-weight: 500;
+}
+
+.billing-pay-drawer-kv dd {
+  margin: 0;
+  font-weight: 600;
+  text-align: right;
+}
+
+.billing-pay-menu {
+  position: relative;
+}
+
+.billing-pay-menu__btn {
+  min-height: 28px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.billing-fin-chip--approved {
+  color: #39d98a;
+  border-color: rgba(57, 217, 138, 0.38);
+  background: rgba(57, 217, 138, 0.1);
+}
+
+.billing-fin-chip--approved .billing-fin-chip__dot {
+  background: #39d98a;
+}
+
+.billing-fin-chip--refunded {
+  color: #93c5fd;
+  border-color: rgba(147, 197, 253, 0.35);
+  background: rgba(147, 197, 253, 0.08);
+}
+
+.billing-fin-chip--refunded .billing-fin-chip__dot {
+  background: #93c5fd;
+}
+
+@media (max-width: 900px) {
+  .billing-pay-tx-head {
+    display: none;
+  }
+
+  .billing-pay-tx-row {
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto auto;
+  }
+
+  .billing-pay-tx-row > :nth-child(1) {
+    grid-column: 1 / -1;
+  }
+
+  .billing-pay-tx-row > :nth-child(6) {
+    grid-row: 1;
+    grid-column: 2;
+    align-self: start;
+  }
+}

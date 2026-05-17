@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import { SolaCardknoxAdapter, type SolaCardknoxConfig, TwilioSmsProvider, VoipMsSmsProvider, type TwilioCredentials, type VoipMsCredentials } from "@connect/integrations";
-import { buildBillingInvoicePreview, buildBillingInvoicePreviewFromSettings, createBillingInvoice, ensureTenantBillingSettings, logBillingEvent, markBillingInvoicePaid, monthBounds } from "./invoiceEngine";
+import { buildBillingInvoicePreview, buildBillingInvoicePreviewFromSettings, createBillingInvoice, createOneTimeChargeInvoice, ensureTenantBillingSettings, logBillingEvent, markBillingInvoicePaid, monthBounds } from "./invoiceEngine";
 import { calculateTenantBillingUsage } from "./usage";
 import { BILLING_PRICING_MODE_METADATA_KEY, buildTenantSettingsResetToCatalog, parseBillingPricingMode } from "./billingPricingResolution";
 import { buildTenantPricingDiagnosticsFromPreview, rawBillingPricingModeFromMetadata } from "./billingPricingDiagnostics";
@@ -17,7 +17,7 @@ import { mergeTenantBillingSettingsMetadata } from "./billingTenantSettingsMetad
 import { getBillingSolaAdapter, storeSolaPaymentMethod } from "./solaGateway";
 import { invoiceReadyEmail } from "./emailTemplates";
 import { renderBillingInvoicePdf } from "./pdf";
-import { chargeBillingInvoice } from "./solaBillingPayments";
+import { chargeBillingInvoice, chargeBillingInvoiceWithSut, refundBillingTransaction } from "./solaBillingPayments";
 import { maskSolaSecretsForResponse } from "./solaConfigMasking";
 import {
   adminPutPathOverridesSource,
@@ -1640,12 +1640,139 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       where: { id },
       include: {
         tenant: { select: { id: true, name: true } },
-        invoice: { select: { id: true, invoiceNumber: true, status: true, totalCents: true } },
-        paymentMethod: { select: { id: true, brand: true, last4: true, expMonth: true, expYear: true } },
+        invoice: { select: { id: true, invoiceNumber: true, status: true, totalCents: true, balanceDueCents: true } },
+        paymentMethod: { select: { id: true, brand: true, last4: true, expMonth: true, expYear: true, cardholderName: true } },
       },
     });
     if (!tx) return reply.code(404).send({ error: "transaction_not_found" });
-    return tx;
+    const events = tx.invoiceId
+      ? await (db as any).billingEventLog.findMany({
+          where: { invoiceId: tx.invoiceId },
+          orderBy: { createdAt: "desc" },
+          take: 24,
+          select: { id: true, type: true, message: true, createdAt: true },
+        })
+      : [];
+    return { ...tx, events };
+  });
+
+  app.post("/admin/billing/transactions/:id/refund", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const input = z.object({
+      reason: z.string().max(500).optional(),
+      confirmLive: z.boolean().optional(),
+    }).parse(req.body || {});
+    const tx = await (db as any).paymentTransaction.findUnique({
+      where: { id },
+      include: { tenant: { include: { billingSolaConfig: true } } },
+    });
+    if (!tx) return reply.code(404).send({ error: "transaction_not_found" });
+    const sc = tx.tenant?.billingSolaConfig;
+    const isLive = !!(sc?.isEnabled && sc.mode === "PROD" && !sc.simulate);
+    if (isLive && !input.confirmLive) {
+      return reply.code(400).send({ error: "confirm_live_required", message: "Set confirmLive: true to confirm this live refund." });
+    }
+    try {
+      const result = await refundBillingTransaction(id, { reason: input.reason, adminUserId: u.sub });
+      if (!result.processorResponse.approved) {
+        return reply.code(402).send({
+          error: "refund_declined",
+          message: result.processorResponse.xError || result.processorResponse.xStatus || "Refund declined at processor.",
+          transaction: result.transaction,
+        });
+      }
+      return result;
+    } catch (err: any) {
+      const code = err?.code === "TRANSACTION_NOT_REFUNDABLE" ? 400 : err?.code === "PROCESSOR_REF_MISSING" ? 400 : 500;
+      return reply.code(code).send({ error: err?.code || "refund_failed", message: err?.message });
+    }
+  });
+
+  app.post("/admin/billing/platform/tenants/:tenantId/one-time-charges", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const input = z.object({
+      description: z.string().min(1).max(240),
+      amountCents: z.number().int().min(1),
+      operatorNote: z.string().max(500).optional(),
+      invoiceMemo: z.string().max(500).optional(),
+      chargeMode: z.enum(["none", "card_on_file", "new_card"]).default("none"),
+      paymentMethodId: z.string().optional(),
+      xSut: z.string().optional(),
+      cardholderName: z.string().optional(),
+      billingZip: z.string().optional(),
+      saveCard: z.boolean().optional(),
+      makeDefault: z.boolean().optional(),
+      confirmLive: z.boolean().optional(),
+    }).parse(req.body || {});
+
+    const tenant = await (db as any).tenant.findUnique({ where: { id: tenantId }, include: { billingSolaConfig: true } });
+    if (!tenant) return reply.code(404).send({ error: "tenant_not_found" });
+
+    let invoice;
+    try {
+      invoice = await createOneTimeChargeInvoice({
+        tenantId,
+        description: input.description,
+        amountCents: input.amountCents,
+        operatorNote: input.operatorNote,
+        invoiceMemo: input.invoiceMemo,
+        adminUserId: u.sub,
+      });
+    } catch (err: any) {
+      if (err?.code === "INVALID_AMOUNT") return reply.code(400).send({ error: "invalid_amount" });
+      throw err;
+    }
+
+    let transaction = null;
+    if (input.chargeMode === "card_on_file") {
+      if (!input.paymentMethodId) return reply.code(400).send({ error: "payment_method_required" });
+      const sc = tenant.billingSolaConfig;
+      const isLive = !!(sc?.isEnabled && sc.mode === "PROD" && !sc.simulate);
+      if (isLive && !input.confirmLive) {
+        return reply.code(400).send({ error: "confirm_live_required", message: "Set confirmLive: true to confirm this live charge." });
+      }
+      const method = await (db as any).paymentMethod.findFirst({ where: { id: input.paymentMethodId, tenantId, active: true } });
+      if (!method) return reply.code(400).send({ error: "payment_method_not_found" });
+      transaction = await chargeBillingInvoice(invoice, method, { note: input.operatorNote });
+    } else if (input.chargeMode === "new_card") {
+      if (!input.xSut) return reply.code(400).send({ error: "sola_token_required" });
+      const sc = tenant.billingSolaConfig;
+      const isLive = !!(sc?.isEnabled && sc.mode === "PROD" && !sc.simulate);
+      if (isLive && !input.confirmLive) {
+        return reply.code(400).send({ error: "confirm_live_required", message: "Set confirmLive: true to confirm this live charge." });
+      }
+      if (input.saveCard) {
+        const saved = await saveAdminCardWithSut(tenantId, {
+          xSut: input.xSut,
+          cardholderName: input.cardholderName,
+          billingZip: input.billingZip,
+          makeDefault: input.makeDefault ?? false,
+        }, u.sub, {
+          findTenant: (id) => (db as any).tenant.findUnique({ where: { id }, select: { id: true } }),
+          getAdapter: getBillingSolaAdapter,
+          storeMethod: storeSolaPaymentMethod,
+          logEvent: logBillingEvent,
+        });
+        if (!saved.ok) {
+          return reply.code(saved.code).send({ error: saved.error });
+        }
+        const method = await (db as any).paymentMethod.findUnique({ where: { id: saved.id } });
+        transaction = await chargeBillingInvoice(invoice, method, { note: input.operatorNote });
+      } else {
+        transaction = await chargeBillingInvoiceWithSut(invoice, {
+          xSut: input.xSut,
+          cardholderName: input.cardholderName,
+          billingZip: input.billingZip,
+        }, { note: input.operatorNote });
+      }
+    }
+
+    const updatedInvoice = await (db as any).billingInvoice.findUnique({ where: { id: invoice.id } });
+    return { invoice: updatedInvoice, transaction };
   });
 
   app.get("/admin/billing/invoices/:id/events", async (req, reply) => {

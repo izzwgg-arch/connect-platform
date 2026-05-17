@@ -24,6 +24,7 @@ Portal UIs documented in this file use the **`BillingInvoice`** stack unless not
 - **Phase 4 (2026-05):** Guided **`BillingActionPanel`** drawers for collect/retry pay, mark paid, void, remove card, collections “do not auto-charge”, assign plan, reset-to-plan; **`BillingActivityList`** + humanized **`billingEventLabel`** / **`billingEventIcon`** for audit text; operational **`BillingEmptyState`** blocks; **`billingPhase4.css`** table/timeline polish. **No** API, Prisma, worker, or invoice-engine changes in this phase.
 - **Phase 7–8 (2026-05):** Stable **tenant rail + dedicated routes** (`/admin/billing/invoices`, `/payments`, `/methods`, `/collections`, `/reports`, `/activity`); compact segmented workspace nav; SaaS-style invoice/payment row grids; dark-native surfaces (`billingPhase7.css`, `billingPhase8.css`); pill filters; sticky table headers; **`BillingEmptyState`** refresh.
 - **Invoice operations polish (2026-05-17):** **`billingInvoices.css`** + **`BillingFinanceChip`** + **`InvoiceRowMenu`** — finance-grade invoice rows (clickable, tabular amounts, glow hover), compact ⋯ actions, premium drawer sections (`billing-fin-drawer`). Portal display only.
+- **Payments operations workspace (2026-05-17):** `/admin/billing/payments` — tenant-scoped **PaymentsWorkspace** (`adminBillingPaymentsWorkspace.tsx`, `billingPayments.css`, `adminBillingPaymentDrawers.tsx`): summary chips, **Charge customer** one-time flow, card-on-file grid, premium transaction table + side drawer. API: `POST /admin/billing/platform/tenants/:tenantId/one-time-charges`, `POST /admin/billing/transactions/:id/refund`, `createOneTimeChargeInvoice`, `chargeBillingInvoiceWithSut`, `refundBillingTransaction`. SOLA iFields unchanged. **Gap:** full refund does not auto-reopen invoice balance (transaction status only).
 - **Phase 9 (2026-05):** Operational speed + perceived performance (**no IA change**). **`billingPhase9.css`**: sticky filter toolbar (`billing-inv-toolbar--sticky`), horizontal table scroll (`billing-p8-table-scroll`), table-shaped **`BillingTableSkeleton`**, theme-native invoice drawer (`billing-p8-overlay` / `billing-p8-drawer`), search clear + 200ms debounce, empty-search copy, activity timeline day groups (`groupBillingEventsByDay` in `billingUi.ts`), responsive breakpoints (1280 / 1024 / 768). **Escape** closes invoice detail drawer.
 
 ### Admin billing workspace routes (current)
@@ -32,7 +33,7 @@ Portal UIs documented in this file use the **`BillingInvoice`** stack unless not
 |-------|-----------------|
 | `/admin/billing` | Company overview (summary; generation actions) |
 | `/admin/billing/invoices` | Invoice register + row actions + detail drawer |
-| `/admin/billing/payments` | Processor transactions (SaaS row grid) |
+| `/admin/billing/payments` | **Payment operations workspace** — summary chips, charge customer (one-time), cards on file, transaction table + detail drawer (refund/retry/email link) |
 | `/admin/billing/methods` | Saved cards + autopay summary |
 | `/admin/billing/collections` | Retry queue overview + next-sweep preview |
 | `/admin/billing/reports` | CSV exports + aging / failed-payment reports |

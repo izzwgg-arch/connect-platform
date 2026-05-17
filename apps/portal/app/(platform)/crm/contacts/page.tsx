@@ -16,8 +16,20 @@ import {
   Radio,
   ChevronLeft,
   ChevronRight,
+  ListOrdered,
+  Archive,
+  PhoneOff,
+  AtSign,
+  Activity,
 } from "lucide-react";
-import { CRMPageShell } from "../../../../components/crm";
+import {
+  CRMPageShell,
+  CRMPageHeader,
+  CRMEmptyState,
+  CRMCard,
+  crm,
+  cn,
+} from "../../../../components/crm";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 
@@ -131,6 +143,42 @@ function formatShortDate(iso: string | null | undefined): string {
   } catch {
     return "—";
   }
+}
+
+const STAGE_PILL_ACTIVE =
+  "border-crm-accent/50 bg-crm-accent text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]";
+const STAGE_PILL_IDLE =
+  "border-crm-border bg-crm-surface-2/80 text-crm-text hover:border-crm-border/90 hover:bg-crm-surface-2";
+
+function SummaryStatTile({
+  label,
+  value,
+  icon,
+  tone = "default",
+}: {
+  label: string;
+  value: React.ReactNode;
+  icon: React.ReactNode;
+  tone?: "default" | "warn" | "muted";
+}) {
+  const valueClass =
+    tone === "warn"
+      ? "text-xl font-semibold tabular-nums text-crm-warning"
+      : tone === "muted"
+        ? "text-xl font-semibold tabular-nums text-crm-muted"
+        : "text-xl font-semibold tabular-nums text-crm-text";
+
+  return (
+    <div className="flex min-w-[7.5rem] flex-1 flex-col gap-2 rounded-crm border border-crm-border bg-crm-surface-2/60 px-4 py-3 sm:min-w-0">
+      <div className="flex items-center gap-2 text-crm-muted">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-crm bg-crm-surface text-crm-accent">
+          {icon}
+        </span>
+        <span className="text-[11px] font-semibold uppercase tracking-wide">{label}</span>
+      </div>
+      <p className={valueClass}>{value}</p>
+    </div>
+  );
 }
 
 // ── Add Contact Modal ─────────────────────────────────────────────────────────
@@ -503,44 +551,32 @@ export default function CrmContactsPage() {
   };
 
   return (
-    <CRMPageShell>
+    <CRMPageShell innerClassName={crm.pageInnerContacts}>
       {showAdd && <AddContactModal onClose={() => setShowAdd(false)} onCreated={handleContactCreated} />}
-        {/* Command header */}
-        <div className="mb-6 rounded-crm-lg border border-crm-border bg-crm-surface p-6 shadow-crm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="flex min-w-0 gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-crm bg-crm-accent/15 text-crm-accent">
-                <Users className="h-5 w-5" aria-hidden />
-              </div>
-              <div className="min-w-0">
-                <h1 className="text-2xl font-semibold tracking-tight text-crm-text">Contacts</h1>
-                <p className="mt-1 max-w-xl text-sm text-crm-muted">
-                  Find people fast, open records, jump to the live workspace when enabled, and bulk-assign when you are
-                  admin.
-                </p>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setShowAdd(true)}
-                className="inline-flex items-center gap-2 rounded-lg bg-crm-accent px-4 py-2 text-sm font-medium text-white hover:brightness-110"
-              >
-                <Plus className="h-4 w-4" />
-                New contact
-              </button>
-              {canImport && (
-                <Link
-                  href="/crm/import"
-                  className="inline-flex items-center gap-2 rounded-lg border border-crm-border bg-crm-surface px-3 py-2 text-sm font-medium text-crm-text hover:bg-crm-bg"
-                >
-                  <FileUp className="h-4 w-4 text-crm-muted" />
-                  Import leads
-                </Link>
-              )}
-            </div>
-          </div>
-        </div>
+
+      <CRMPageHeader
+        icon={<Users className="h-5 w-5" aria-hidden />}
+        title="Contacts"
+        subtitle="Relationship command center — search, open records, work the live desk, and bulk-assign when you are admin."
+        actions={
+          <>
+            <Link href="/crm/queue" className={crm.btnSecondary}>
+              <ListOrdered className="h-4 w-4 text-crm-muted" />
+              My queue
+            </Link>
+            {canImport && (
+              <Link href="/crm/import" className={crm.btnSecondary}>
+                <FileUp className="h-4 w-4 text-crm-muted" />
+                Import
+              </Link>
+            )}
+            <button type="button" onClick={() => setShowAdd(true)} className={crm.btnPrimary}>
+              <Plus className="h-4 w-4" />
+              New contact
+            </button>
+          </>
+        }
+      />
 
         {/* Compact operational summary — server total + honest page-scoped counts */}
         {!loading && !error && (rows.length > 0 || total > 0) && (
@@ -591,16 +627,16 @@ export default function CrmContactsPage() {
           </div>
         )}
 
-        {/* Search + filters — single control surface */}
-        <div className="mb-4 rounded-crm-lg border border-crm-border bg-crm-surface p-4 shadow-crm">
-          <div className="relative max-w-2xl">
+      <CRMCard className="p-4 sm:p-5">
+          <p className={cn(crm.label, "mb-3")}>Find & filter</p>
+          <div className="relative w-full">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-crm-muted/80" />
             <input
               ref={searchRef}
               value={search}
               onChange={(e) => handleSearchChange(e.target.value)}
               placeholder="Search by name, phone, email, or company…"
-              className="w-full rounded-crm border border-crm-border bg-crm-surface-2/50 py-2.5 pl-10 pr-10 text-sm transition-colors focus:border-crm-accent/40 focus:bg-crm-surface focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
+              className={cn(crm.input, crm.inputWithIcon, "py-3 text-[15px]")}
               aria-label="Search contacts"
             />
             {search && (
@@ -620,8 +656,8 @@ export default function CrmContactsPage() {
             )}
           </div>
 
-          <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center">
-            <div className="flex flex-wrap gap-1.5">
+          <div className="mt-4 flex flex-col gap-4 border-t border-crm-border/60 pt-4 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Stage filter">
               {FILTER_TABS.map((tab) => (
                 <button
                   key={tab}
@@ -632,8 +668,8 @@ export default function CrmContactsPage() {
                   }}
                   className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
                     stage === tab
-                      ? "border-blue-600 bg-crm-accent text-white"
-                      : "border-crm-border bg-crm-surface text-crm-text hover:bg-crm-bg"
+                      ? STAGE_PILL_ACTIVE
+                      : STAGE_PILL_IDLE
                   }`}
                 >
                   {STAGE_LABELS[tab]}
@@ -672,14 +708,13 @@ export default function CrmContactsPage() {
               }}
               className={`rounded-full border px-3 py-1.5 text-xs font-medium lg:ml-auto ${
                 assignedToMe
-                  ? "border-violet-600 bg-violet-600 text-white"
-                  : "border-crm-border bg-crm-surface text-crm-text hover:bg-crm-bg"
+                  ? STAGE_PILL_ACTIVE
+                  : STAGE_PILL_IDLE
               }`}
             >
               Assigned to me
             </button>
           </div>
-        </div>
 
         {/* Bulk bar — compact, not full-width promo */}
         {isAdmin && selectedIds.size > 0 && (
@@ -734,7 +769,7 @@ export default function CrmContactsPage() {
             {[0, 1, 2].map((i) => (
               <div
                 key={i}
-                className="h-24 animate-pulse rounded-crm-lg border border-crm-border bg-gradient-to-r from-gray-100 via-gray-50 to-gray-100"
+                className="h-28 animate-pulse rounded-crm-lg border border-crm-border bg-crm-surface-2/80"
               />
             ))}
           </div>
@@ -898,7 +933,7 @@ export default function CrmContactsPage() {
                               {c.primaryPhone.numberRaw}
                             </span>
                           ) : (
-                            <span className="text-amber-700">No phone</span>
+                            <span className="text-crm-warning">No phone</span>
                           )}
                           {c.primaryEmail ? (
                             <span className="inline-flex min-w-0 items-center gap-1">
@@ -906,7 +941,7 @@ export default function CrmContactsPage() {
                               <span className="truncate">{c.primaryEmail.email}</span>
                             </span>
                           ) : (
-                            <span className="text-amber-700">No email</span>
+                            <span className="text-crm-warning">No email</span>
                           )}
                         </div>
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-crm-muted">
@@ -989,6 +1024,7 @@ export default function CrmContactsPage() {
             </div>
           </nav>
         )}
+      </CRMCard>
     </CRMPageShell>
   );
 }

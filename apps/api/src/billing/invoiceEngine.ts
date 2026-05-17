@@ -369,3 +369,73 @@ async function nextInvoiceNumber(tenantId: string): Promise<string> {
   const count = await (db as any).billingInvoice.count({ where: { tenantId, invoiceNumber: { startsWith: prefix } } });
   return `${prefix}-${String(count + 1).padStart(5, "0")}`;
 }
+
+/**
+ * Operator one-time charge: OPEN invoice with a single MANUAL_ADJUSTMENT line at the
+ * requested amount. Does not run usage preview or tax profile math.
+ */
+export async function createOneTimeChargeInvoice(input: {
+  tenantId: string;
+  description: string;
+  amountCents: number;
+  operatorNote?: string | null;
+  invoiceMemo?: string | null;
+  adminUserId?: string | null;
+}): Promise<any> {
+  if (input.amountCents < 1) {
+    const err: any = new Error("INVALID_AMOUNT");
+    err.code = "INVALID_AMOUNT";
+    throw err;
+  }
+  const settings = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId: input.tenantId } });
+  const termsDays = Number(settings?.paymentTermsDays ?? 15);
+  const now = new Date();
+  const dueDate = new Date(now);
+  dueDate.setUTCDate(dueDate.getUTCDate() + termsDays);
+
+  const metadata: Record<string, unknown> = {
+    source: "one_time_charge",
+    ...(input.invoiceMemo ? { operatorMemo: input.invoiceMemo } : {}),
+    ...(input.operatorNote ? { operatorNote: input.operatorNote } : {}),
+    ...(input.adminUserId ? { createdByAdminUserId: input.adminUserId } : {}),
+  };
+
+  const invoiceNumber = await nextInvoiceNumber(input.tenantId);
+  const invoice = await (db as any).billingInvoice.create({
+    data: {
+      tenantId: input.tenantId,
+      invoiceNumber,
+      status: "OPEN",
+      periodStart: now,
+      periodEnd: now,
+      dueDate,
+      subtotalCents: input.amountCents,
+      taxCents: 0,
+      totalCents: input.amountCents,
+      balanceDueCents: input.amountCents,
+      metadata,
+      lineItems: {
+        create: [{
+          tenantId: input.tenantId,
+          type: "MANUAL_ADJUSTMENT",
+          description: input.description.trim(),
+          quantity: 1,
+          unitPriceCents: input.amountCents,
+          amountCents: input.amountCents,
+          taxable: false,
+        }],
+      },
+    },
+    include: { lineItems: true, tenant: true },
+  });
+
+  await logBillingEvent({
+    tenantId: input.tenantId,
+    invoiceId: invoice.id,
+    type: "invoice.one_time_created",
+    message: input.operatorNote || `One-time charge invoice ${invoiceNumber}`,
+    metadata: { invoiceNumber, amountCents: input.amountCents, description: input.description },
+  });
+
+  return invoice;
+}
