@@ -73,7 +73,7 @@ export function ScriptSectionBlock({
   return (
     <div
       id={`section-${index}`}
-      className={cn(crm.scriptSectionCard, open && crm.scriptSectionCardOpen)}
+      className={cn("group", crm.scriptSectionCard, open && crm.scriptSectionCardOpen)}
     >
       {/* Section header */}
       <div className="flex items-center gap-2 px-4 py-3">

@@ -246,6 +246,7 @@ function TemplateGrid({
   onBlank: () => void;
   templatesFocus?: boolean;
 }) {
+  const templateCount = CHECKLIST_TEMPLATES.length;
 
   return (
     <div className="flex flex-col gap-4 p-4 sm:p-5">

@@ -1,20 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { FileText } from "lucide-react";
-import { CRMPageHeader } from "../../../../components/crm/CRMPageHeader";
+import { useCallback, useEffect, useState } from "react";
 import { CRMPageShell } from "../../../../components/crm/CRMPageShell";
 import { CRMEmptyState } from "../../../../components/crm/CRMEmptyState";
 import { crm } from "../../../../components/crm/crmClasses";
 import { cn } from "../../../../components/crm/cn";
+import { ScriptCommandHeader } from "../../../../components/crm/scripts/ScriptCommandHeader";
 import { ScriptLibraryPanel } from "../../../../components/crm/scripts/ScriptLibraryPanel";
+import { ScriptOperationalSidebar } from "../../../../components/crm/scripts/ScriptOperationalSidebar";
+import { ScriptQuickTipsStrip } from "../../../../components/crm/scripts/ScriptQuickTipsStrip";
 import { ScriptWorkspace } from "../../../../components/crm/scripts/ScriptWorkspace";
+import { ScriptWorkspaceIdle } from "../../../../components/crm/scripts/ScriptWorkspaceIdle";
 import { ScriptEditModal } from "../../../../components/crm/scripts/ScriptEditModal";
 import { SCRIPT_TEMPLATES } from "../../../../components/crm/scripts/ScriptTemplates";
 import { apiGet, apiPost, apiPatch } from "../../../../services/apiClient";
 import type { Script, ScriptSummary } from "../../../../components/crm/scripts/scriptTypes";
-
-// ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function CrmScriptsPage() {
   const [scripts, setScripts] = useState<ScriptSummary[]>([]);
@@ -25,7 +25,6 @@ export default function CrmScriptsPage() {
   const [selectedScript, setSelectedScript] = useState<Script | null>(null);
   const [loadingScript, setLoadingScript] = useState(false);
 
-  // Modal state
   const [modalOpen, setModalOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Script | null>(null);
   const [templateBody, setTemplateBody] = useState<string | undefined>(undefined);
@@ -58,7 +57,7 @@ export default function CrmScriptsPage() {
     }
   }
 
-  function openCreate(templateKey?: string) {
+  const openCreate = useCallback((templateKey?: string) => {
     setEditTarget(null);
     if (templateKey) {
       const tpl = SCRIPT_TEMPLATES.find((t) => t.key === templateKey);
@@ -67,7 +66,23 @@ export default function CrmScriptsPage() {
       setTemplateBody(undefined);
     }
     setModalOpen(true);
-  }
+  }, []);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const tgt = e.target as HTMLElement | null;
+      if (!tgt) return;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(tgt.tagName)) return;
+      if (tgt.getAttribute("contenteditable") === "true") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "n" || e.key === "N") {
+        e.preventDefault();
+        openCreate();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [openCreate]);
 
   function openEdit() {
     if (!selectedScript) return;
@@ -84,7 +99,6 @@ export default function CrmScriptsPage() {
 
   async function handleSave(data: { name: string; body: string }) {
     if (editTarget) {
-      // Edit existing
       const res = await apiPatch<{ script: Script }>(`/crm/scripts/${editTarget.id}`, data);
       setScripts((prev) =>
         prev.map((s) =>
@@ -95,7 +109,6 @@ export default function CrmScriptsPage() {
       );
       setSelectedScript(res.script);
     } else {
-      // Create new
       const res = await apiPost<{ script: Script }>("/crm/scripts", data);
       setScripts((prev) => [res.script, ...prev]);
       setSelectedId(res.script.id);
@@ -120,28 +133,31 @@ export default function CrmScriptsPage() {
     }
   }
 
+  function scrollToTemplates() {
+    document.getElementById("script-templates")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  const activeCount = scripts.filter((s) => s.isActive).length;
+
   return (
     <CRMPageShell>
       <div className={cn(crm.pageInnerScripts, crm.scriptsWorkspace)}>
-        {/* Page header */}
-        <CRMPageHeader
-          icon={<FileText className="h-5 w-5" />}
-          title="Call Scripts"
-          subtitle="Sales playbooks and cold-call scripts for your outbound team."
-          actions={null}
-        />
+        <ScriptCommandHeader totalCount={scripts.length} activeCount={activeCount} />
 
-        {/* Loading */}
         {loading ? (
           <div className={crm.scriptsGrid}>
             <div className={cn(crm.scriptsLibraryCol, "gap-2.5")}>
-              {[1, 2, 3].map((i) => (
-                <div key={i} className={cn(crm.card, "h-12 animate-pulse")} />
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className={cn(crm.scriptsPanelSupport, "h-14 animate-pulse")} />
               ))}
             </div>
-            <div className={cn(crm.scriptsWorkspaceCol, "gap-3")}>
-              <div className={cn(crm.card, crm.cardPad, "h-24 animate-pulse")} />
-              <div className={cn(crm.card, crm.cardPad, "h-40 animate-pulse")} />
+            <div className={cn(crm.scriptsWorkspaceCol)}>
+              <div className={cn(crm.scriptsPanelPrimary, "min-h-[28rem] animate-pulse")} />
+            </div>
+            <div className={cn(crm.scriptsSideCol, "gap-2.5")}>
+              {[1, 2, 3].map((i) => (
+                <div key={i} className={cn(crm.scriptsSidePanel, "h-24 animate-pulse")} />
+              ))}
             </div>
           </div>
         ) : fetchError ? (
@@ -152,62 +168,66 @@ export default function CrmScriptsPage() {
               <button
                 type="button"
                 className={crm.btnSecondary}
-                onClick={() => { setLoading(true); setFetchError(null); void loadList(); }}
+                onClick={() => {
+                  setLoading(true);
+                  setFetchError(null);
+                  void loadList();
+                }}
               >
                 Retry
               </button>
             }
           />
         ) : (
-          <div className={crm.scriptsGrid}>
-            {/* Left: Library panel */}
-            <ScriptLibraryPanel
-              scripts={scripts}
-              selectedId={selectedId}
-              onSelect={loadScript}
-              onCreate={() => openCreate()}
-              onUseTemplate={(key) => openCreate(key)}
-            />
+          <>
+            <div className={crm.scriptsGrid}>
+              <ScriptLibraryPanel
+                scripts={scripts}
+                selectedId={selectedId}
+                onSelect={loadScript}
+                onCreate={() => openCreate()}
+                onUseTemplate={(key) => openCreate(key)}
+              />
 
-            {/* Right: Workspace */}
-            <div className={crm.scriptsWorkspaceCol}>
-              {loadingScript ? (
-                <ScriptWorkspace
-                  script={{ id: "", name: "", body: "", isActive: true, createdAt: "", updatedAt: "" }}
-                  loading
-                  onEdit={() => {}}
-                  onArchive={() => {}}
-                  onRestore={() => {}}
-                />
-              ) : selectedScript ? (
-                <ScriptWorkspace
-                  script={selectedScript}
-                  onEdit={openEdit}
-                  onArchive={(id) => void handleArchive(id)}
-                  onRestore={(id) => void handleRestore(id)}
-                />
-              ) : (
-                /* Nothing selected */
-                <CRMEmptyState
-                  title="Select a script"
-                  description="Choose a script from the library to view it as a live playbook, or create a new one."
-                  action={
-                    <button
-                      type="button"
-                      className={crm.btnPrimary}
-                      onClick={() => openCreate()}
-                    >
-                      New script
-                    </button>
-                  }
-                />
-              )}
+              <div className={crm.scriptsWorkspaceCol}>
+                {loadingScript ? (
+                  <ScriptWorkspace
+                    script={{
+                      id: "",
+                      name: "",
+                      body: "",
+                      isActive: true,
+                      createdAt: "",
+                      updatedAt: "",
+                    }}
+                    loading
+                    onEdit={() => {}}
+                    onArchive={() => {}}
+                    onRestore={() => {}}
+                  />
+                ) : selectedScript ? (
+                  <ScriptWorkspace
+                    script={selectedScript}
+                    onEdit={openEdit}
+                    onArchive={(id) => void handleArchive(id)}
+                    onRestore={(id) => void handleRestore(id)}
+                  />
+                ) : (
+                  <ScriptWorkspaceIdle
+                    onCreate={() => openCreate()}
+                    onBrowseTemplates={scrollToTemplates}
+                  />
+                )}
+              </div>
+
+              <ScriptOperationalSidebar scripts={scripts} onCreate={() => openCreate()} />
             </div>
-          </div>
+
+            <ScriptQuickTipsStrip />
+          </>
         )}
       </div>
 
-      {/* Edit / create modal */}
       {modalOpen ? (
         <ScriptEditModal
           script={editTarget}

@@ -1,17 +1,78 @@
 /** Phase 19I — starter script templates for the scripts playbook workspace. */
 
+export type ScriptTemplateAccent =
+  | "cyan"
+  | "violet"
+  | "amber"
+  | "green"
+  | "blue"
+  | "rose";
+
 export interface ScriptTemplate {
   key: string;
   label: string;
   description: string;
   body: string;
+  accent: ScriptTemplateAccent;
+  icon: string;
 }
+
+/** Tailwind accent bundles per template — paired with crm.scriptTpl* tokens. */
+export const SCRIPT_TEMPLATE_ACCENT_CLASSES: Record<
+  ScriptTemplateAccent,
+  { strip: string; iconBox: string; card: string; meta: string }
+> = {
+  cyan: {
+    strip: "bg-crm-accent",
+    iconBox:
+      "border-crm-accent/35 bg-crm-accent/12 text-crm-accent shadow-[0_0_20px_-4px_rgba(56,189,248,0.35)]",
+    card: "hover:border-crm-accent/45 hover:shadow-[0_0_28px_-8px_rgba(56,189,248,0.22)]",
+    meta: "text-crm-accent",
+  },
+  violet: {
+    strip: "bg-violet-400",
+    iconBox:
+      "border-violet-400/35 bg-violet-400/12 text-violet-300 shadow-[0_0_20px_-4px_rgba(167,139,250,0.28)]",
+    card: "hover:border-violet-400/40 hover:shadow-[0_0_28px_-8px_rgba(167,139,250,0.16)]",
+    meta: "text-violet-300",
+  },
+  amber: {
+    strip: "bg-crm-warning",
+    iconBox:
+      "border-crm-warning/35 bg-crm-warning/12 text-crm-warning shadow-[0_0_20px_-4px_rgba(245,158,11,0.3)]",
+    card: "hover:border-crm-warning/40 hover:shadow-[0_0_28px_-8px_rgba(245,158,11,0.18)]",
+    meta: "text-crm-warning",
+  },
+  green: {
+    strip: "bg-crm-success",
+    iconBox:
+      "border-crm-success/35 bg-crm-success/12 text-crm-success shadow-[0_0_20px_-4px_rgba(52,211,153,0.28)]",
+    card: "hover:border-crm-success/40 hover:shadow-[0_0_28px_-8px_rgba(52,211,153,0.16)]",
+    meta: "text-crm-success",
+  },
+  blue: {
+    strip: "bg-sky-400",
+    iconBox:
+      "border-sky-400/35 bg-sky-400/12 text-sky-300 shadow-[0_0_20px_-4px_rgba(56,189,248,0.28)]",
+    card: "hover:border-sky-400/40 hover:shadow-[0_0_28px_-8px_rgba(56,189,248,0.16)]",
+    meta: "text-sky-300",
+  },
+  rose: {
+    strip: "bg-rose-400",
+    iconBox:
+      "border-rose-400/35 bg-rose-400/12 text-rose-300 shadow-[0_0_20px_-4px_rgba(251,113,133,0.25)]",
+    card: "hover:border-rose-400/40 hover:shadow-[0_0_28px_-8px_rgba(251,113,133,0.14)]",
+    meta: "text-rose-300",
+  },
+};
 
 export const SCRIPT_TEMPLATES: ScriptTemplate[] = [
   {
     key: "cold-call",
     label: "Cold Call",
     description: "First-touch outbound introduction",
+    accent: "cyan",
+    icon: "📞",
     body: `# Introduction
 Hi, this is [Agent Name] calling from [Company]. Am I speaking with [Contact Name]?
 
@@ -56,6 +117,8 @@ What day works better — [Day] or [Day]?`,
     key: "follow-up",
     label: "Follow-Up",
     description: "Re-engage after prior contact",
+    accent: "violet",
+    icon: "✉️",
     body: `# Opening
 Hi [Contact Name], this is [Agent Name] from [Company]. We spoke [timeframe] ago about [topic]. How have things been?
 
@@ -82,6 +145,8 @@ If so, I'd love to get 20 minutes on the calendar to walk you through a quick de
     key: "re-engagement",
     label: "Re-Engagement",
     description: "Wake up a dormant or cold lead",
+    accent: "amber",
+    icon: "🔄",
     body: `# Opening
 Hi [Contact Name], this is [Agent Name] from [Company]. I know it's been a while — I hope things are going well.
 
@@ -106,6 +171,8 @@ I don't want to take too much of your time today. Would it be worth a quick 15-m
     key: "callback",
     label: "Callback",
     description: "Scheduled callback conversation",
+    accent: "green",
+    icon: "📅",
     body: `# Opening
 Hi [Contact Name], this is [Agent Name] from [Company]. We had a callback scheduled for today — is now still a good time?
 
@@ -132,6 +199,8 @@ Let's lock that in. Can I send you a calendar invite for [day/time]?`,
     key: "voicemail",
     label: "Voicemail",
     description: "Short, compelling voicemail drop",
+    accent: "blue",
+    icon: "🎙️",
     body: `# Voicemail Script
 Hi [Contact Name], this is [Agent Name] from [Company].
 
@@ -150,6 +219,8 @@ Hi [Contact Name] — [Agent Name] at [Company], [phone number]. Calling about [
     key: "closing",
     label: "Closing",
     description: "Late-stage commitment and close",
+    accent: "rose",
+    icon: "🎯",
     body: `# Recap
 So just to summarize where we are: you've said [pain point], and you're looking to [goal]. Based on that, I believe [product/service] is a strong fit.
 
