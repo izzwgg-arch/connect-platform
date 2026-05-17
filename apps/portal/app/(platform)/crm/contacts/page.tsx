@@ -1,10 +1,22 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { Phone, Mail, Plus, Search, X, UserRound, UserCheck } from "lucide-react";
-import { PageHeader } from "../../../../components/PageHeader";
-import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
+import Link from "next/link";
+import {
+  Phone,
+  Mail,
+  Plus,
+  Search,
+  X,
+  UserRound,
+  UserCheck,
+  Users,
+  FileUp,
+  ExternalLink,
+  Radio,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 
@@ -13,7 +25,7 @@ import { useAppContext } from "../../../../hooks/useAppContext";
 type CrmStage = "LEAD" | "CONTACTED" | "QUALIFIED" | "CUSTOMER" | "CLOSED_LOST";
 
 type AssignedUser = {
-  id: string;
+  id?: string;
   firstName?: string | null;
   lastName?: string | null;
   displayName?: string | null;
@@ -32,7 +44,8 @@ type CrmContact = {
   assignedTo?: AssignedUser | null;
   doNotCall: boolean;
   createdAt: string;
-  /** Phase 16B — present on list when using includeArchived */
+  updatedAt?: string;
+  lastActivityAt?: string | null;
   active?: boolean;
   archivedAt?: string | null;
 };
@@ -54,7 +67,7 @@ type CrmUser = {
 // ── Stage config ──────────────────────────────────────────────────────────────
 
 const STAGE_LABELS: Record<CrmStage | "all", string> = {
-  all: "All",
+  all: "All stages",
   LEAD: "Lead",
   CONTACTED: "Contacted",
   QUALIFIED: "Qualified",
@@ -62,18 +75,20 @@ const STAGE_LABELS: Record<CrmStage | "all", string> = {
   CLOSED_LOST: "Closed Lost",
 };
 
-const STAGE_COLORS: Record<CrmStage, string> = {
-  LEAD: "#6366f1",
-  CONTACTED: "#f59e0b",
-  QUALIFIED: "#10b981",
-  CUSTOMER: "#3b82f6",
-  CLOSED_LOST: "#6b7280",
+const STAGE_BADGE_CLASS: Record<CrmStage, string> = {
+  LEAD: "bg-indigo-50 text-indigo-800 border-indigo-200",
+  CONTACTED: "bg-amber-50 text-amber-900 border-amber-200",
+  QUALIFIED: "bg-emerald-50 text-emerald-900 border-emerald-200",
+  CUSTOMER: "bg-blue-50 text-blue-800 border-blue-200",
+  CLOSED_LOST: "bg-gray-100 text-gray-700 border-gray-200",
 };
 
 const FILTER_TABS = ["all", "LEAD", "CONTACTED", "QUALIFIED", "CUSTOMER", "CLOSED_LOST"] as const;
 
 /** Phase 16B — admin-only CRM list scope (server-backed; agents always behave as active). */
 type ArchiveListScope = "active" | "archived" | "all";
+
+const CONTACTS_PAGE_LIMIT = 50;
 
 const ARCHIVE_SCOPE_LABELS: Record<ArchiveListScope, string> = {
   active: "Active",
@@ -93,6 +108,7 @@ function initials(name: string): string {
   return name
     .split(" ")
     .map((p) => p[0])
+    .filter(Boolean)
     .join("")
     .slice(0, 2)
     .toUpperCase();
@@ -101,6 +117,19 @@ function initials(name: string): string {
 function assignedLabel(u: AssignedUser | null | undefined): string {
   if (!u) return "—";
   return u.displayName || `${u.firstName || ""} ${u.lastName || ""}`.trim() || u.email;
+}
+
+function formatShortDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  } catch {
+    return "—";
+  }
 }
 
 // ── Add Contact Modal ─────────────────────────────────────────────────────────
@@ -133,11 +162,16 @@ function AddContactModal({
   const [error, setError] = useState<string | null>(null);
   const firstRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { firstRef.current?.focus(); }, []);
+  useEffect(() => {
+    firstRef.current?.focus();
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.displayName.trim()) { setError("Name is required"); return; }
+    if (!form.displayName.trim()) {
+      setError("Name is required");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -152,130 +186,110 @@ function AddContactModal({
       const created = await apiPost<CrmContact>("/crm/contacts", body);
       onCreated(created);
       onClose();
-    } catch (err: any) {
-      setError(err?.message || "Failed to create contact");
+    } catch (err: unknown) {
+      setError((err as Error)?.message || "Failed to create contact");
       setSaving(false);
     }
   };
 
   return (
     <div
-      style={{
-        position: "fixed", inset: 0, zIndex: 999,
-        background: "rgba(0,0,0,0.55)", backdropFilter: "blur(2px)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        padding: "1rem",
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
       }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div
-        style={{
-          background: "var(--surface)",
-          border: "1px solid var(--border)",
-          borderRadius: "0.75rem",
-          padding: "1.5rem",
-          width: "100%",
-          maxWidth: 480,
-          display: "flex",
-          flexDirection: "column",
-          gap: "1.125rem",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <h3 style={{ margin: 0, fontSize: "1rem", fontWeight: 700 }}>Add CRM Contact</h3>
-          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: "0.25rem" }}>
-            <X size={18} />
+      <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-6 shadow-xl">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-base font-semibold text-gray-900">New contact</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-1 text-gray-500 hover:bg-gray-100"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "0.875rem" }}>
+        <form onSubmit={handleSubmit} className="space-y-3">
           <div>
-            <label style={{ display: "block", fontSize: "0.8125rem", fontWeight: 600, marginBottom: "0.3rem" }}>
-              Name *
-            </label>
+            <label className="mb-1 block text-xs font-medium text-gray-700">Name *</label>
             <input
               ref={firstRef}
               value={form.displayName}
               onChange={(e) => setForm((f) => ({ ...f, displayName: e.target.value }))}
               placeholder="Full name"
-              style={inputStyle}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+          <div className="grid grid-cols-2 gap-2">
             <div>
-              <label style={{ display: "block", fontSize: "0.8125rem", fontWeight: 600, marginBottom: "0.3rem" }}>
-                Company
-              </label>
+              <label className="mb-1 block text-xs font-medium text-gray-700">Company</label>
               <input
                 value={form.company}
                 onChange={(e) => setForm((f) => ({ ...f, company: e.target.value }))}
-                placeholder="Company name"
-                style={inputStyle}
+                placeholder="Optional"
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
             <div>
-              <label style={{ display: "block", fontSize: "0.8125rem", fontWeight: 600, marginBottom: "0.3rem" }}>
-                Stage
-              </label>
+              <label className="mb-1 block text-xs font-medium text-gray-700">Stage</label>
               <select
                 value={form.stage}
                 onChange={(e) => setForm((f) => ({ ...f, stage: e.target.value as CrmStage }))}
-                style={inputStyle}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 {(Object.keys(STAGE_LABELS) as Array<CrmStage | "all">)
                   .filter((k) => k !== "all")
                   .map((k) => (
-                    <option key={k} value={k}>{STAGE_LABELS[k]}</option>
+                    <option key={k} value={k}>
+                      {STAGE_LABELS[k]}
+                    </option>
                   ))}
               </select>
             </div>
           </div>
 
           <div>
-            <label style={{ display: "block", fontSize: "0.8125rem", fontWeight: 600, marginBottom: "0.3rem" }}>
-              Phone
-            </label>
+            <label className="mb-1 block text-xs font-medium text-gray-700">Phone</label>
             <input
               type="tel"
               value={form.phone}
               onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
-              placeholder="+1 555 000 0000"
-              style={inputStyle}
+              placeholder="+1 …"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
 
           <div>
-            <label style={{ display: "block", fontSize: "0.8125rem", fontWeight: 600, marginBottom: "0.3rem" }}>
-              Email
-            </label>
+            <label className="mb-1 block text-xs font-medium text-gray-700">Email</label>
             <input
               type="email"
               value={form.email}
               onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
               placeholder="name@company.com"
-              style={inputStyle}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
 
-          {error && (
-            <p style={{ margin: 0, fontSize: "0.8125rem", color: "#ef4444" }}>{error}</p>
-          )}
+          {error && <p className="text-sm text-red-600">{error}</p>}
 
-          <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end", paddingTop: "0.25rem" }}>
+          <div className="flex justify-end gap-2 pt-2">
             <button
               type="button"
               onClick={onClose}
-              style={{ ...btnBase, background: "var(--surface-hover)", color: "var(--text)" }}
+              className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={saving}
-              style={{ ...btnBase, background: "var(--accent)", color: "#fff", opacity: saving ? 0.7 : 1 }}
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
             >
-              {saving ? "Adding…" : "Add Contact"}
+              {saving ? "Creating…" : "Create contact"}
             </button>
           </div>
         </form>
@@ -284,38 +298,17 @@ function AddContactModal({
   );
 }
 
-// ── Shared styles ─────────────────────────────────────────────────────────────
-
-const inputStyle: React.CSSProperties = {
-  width: "100%",
-  padding: "0.4375rem 0.625rem",
-  border: "1px solid var(--border)",
-  borderRadius: "0.375rem",
-  background: "var(--surface-hover)",
-  color: "var(--text)",
-  fontSize: "0.875rem",
-  boxSizing: "border-box",
-};
-
-const btnBase: React.CSSProperties = {
-  padding: "0.4375rem 1rem",
-  border: "none",
-  borderRadius: "0.5rem",
-  fontSize: "0.875rem",
-  fontWeight: 600,
-  cursor: "pointer",
-  transition: "opacity 0.15s",
-};
-
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function CrmContactsPage() {
-  const router = useRouter();
-  const { backendJwtRole } = useAppContext();
+  const { backendJwtRole, can } = useAppContext();
   const isAdmin =
     backendJwtRole === "ADMIN" ||
     backendJwtRole === "TENANT_ADMIN" ||
     backendJwtRole === "SUPER_ADMIN";
+
+  const canImport = can("can_view_crm_import");
+  const canLiveWorkspace = can("can_view_crm_live_call");
 
   const [rows, setRows] = useState<CrmContact[]>([]);
   const [total, setTotal] = useState(0);
@@ -326,9 +319,9 @@ export default function CrmContactsPage() {
   const [stage, setStage] = useState<CrmStage | "all">("all");
   const [assignedToMe, setAssignedToMe] = useState(false);
   const [archiveScope, setArchiveScope] = useState<ArchiveListScope>("active");
+  const [page, setPage] = useState(0);
   const [showAdd, setShowAdd] = useState(false);
 
-  // Bulk selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [crmUsers, setCrmUsers] = useState<CrmUser[]>([]);
   const [bulkAssignUserId, setBulkAssignUserId] = useState<string>("");
@@ -339,7 +332,7 @@ export default function CrmContactsPage() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(
-    async (q: string, s: CrmStage | "all", mine: boolean, scope: ArchiveListScope) => {
+    async (q: string, s: CrmStage | "all", mine: boolean, scope: ArchiveListScope, pageIdx: number) => {
       setLoading(true);
       setError(null);
       try {
@@ -347,7 +340,8 @@ export default function CrmContactsPage() {
         if (q) params.set("q", q);
         if (s !== "all") params.set("stage", s);
         if (mine) params.set("assignedToMe", "true");
-        params.set("limit", "50");
+        params.set("limit", String(CONTACTS_PAGE_LIMIT));
+        params.set("page", String(pageIdx));
         if (isAdmin) {
           if (scope === "all") {
             params.set("includeArchived", "true");
@@ -359,8 +353,8 @@ export default function CrmContactsPage() {
         const res = await apiGet<ContactsResponse>(`/crm/contacts?${params}`);
         setRows(res.rows);
         setTotal(res.total);
-      } catch (err: any) {
-        setError(err?.message || "Failed to load contacts");
+      } catch (err: unknown) {
+        setError((err as Error)?.message || "Failed to load contacts");
       } finally {
         setLoading(false);
       }
@@ -375,8 +369,9 @@ export default function CrmContactsPage() {
   }, [isAdmin, archiveScope]);
 
   useEffect(() => {
-    load(search, stage, assignedToMe, isAdmin ? archiveScope : "active");
-  }, [stage, assignedToMe, archiveScope, load, isAdmin]);
+    void load(search, stage, assignedToMe, isAdmin ? archiveScope : "active", page);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- search is applied via debounced handler; this effect refetches when scope/stage/assignee/page change
+  }, [stage, assignedToMe, archiveScope, page, load, isAdmin]);
 
   useEffect(() => {
     setSelectedIds(new Set());
@@ -387,10 +382,10 @@ export default function CrmContactsPage() {
   const handleSearchChange = (val: string) => {
     setSearch(val);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(
-      () => load(val, stage, assignedToMe, isAdmin ? archiveScope : "active"),
-      320,
-    );
+    debounceRef.current = setTimeout(() => {
+      setPage(0);
+      void load(val, stage, assignedToMe, isAdmin ? archiveScope : "active", 0);
+    }, 320);
   };
 
   const handleContactCreated = (c: CrmContact) => {
@@ -399,12 +394,12 @@ export default function CrmContactsPage() {
   };
 
   const loadCrmUsers = useCallback(async () => {
-    if (crmUsers.length > 0) return; // loaded already
+    if (crmUsers.length > 0) return;
     try {
       const data = await apiGet<{ users: CrmUser[] }>("/crm/users");
       setCrmUsers(data.users ?? []);
     } catch {
-      // Non-fatal — dropdown will just be empty
+      // non-fatal
     }
   }, [crmUsers.length]);
 
@@ -445,7 +440,6 @@ export default function CrmContactsPage() {
         contactIds: Array.from(selectedIds),
         assignedToUserId: assignUserId,
       });
-      // Optimistically update displayed rows
       const assignee = assignUserId ? crmUsers.find((u) => u.userId === assignUserId) ?? null : null;
       setRows((prev) =>
         prev.map((r) =>
@@ -453,15 +447,19 @@ export default function CrmContactsPage() {
             ? {
                 ...r,
                 assignedTo: assignee
-                  ? { id: assignee.userId, displayName: assignee.displayName, email: assignee.email }
+                  ? {
+                      id: assignee.userId,
+                      displayName: assignee.displayName,
+                      email: assignee.email,
+                    }
                   : null,
               }
             : r,
         ),
       );
       clearSelection();
-    } catch (e: any) {
-      setBulkError(e?.message || "Bulk reassign failed");
+    } catch (e: unknown) {
+      setBulkError((e as Error)?.message || "Bulk reassign failed");
     } finally {
       setBulkAssigning(false);
     }
@@ -474,436 +472,525 @@ export default function CrmContactsPage() {
   const hasListFilters =
     !!search || stage !== "all" || assignedToMe || (isAdmin && archiveScope !== "active");
 
+  const summary = useMemo(() => {
+    let missingPhone = 0;
+    let missingEmail = 0;
+    let archivedOnPage = 0;
+    let activeOnPage = 0;
+    for (const r of rows) {
+      if (!r.primaryPhone) missingPhone += 1;
+      if (!r.primaryEmail) missingEmail += 1;
+      if (isContactArchived(r)) archivedOnPage += 1;
+      else activeOnPage += 1;
+    }
+    return { missingPhone, missingEmail, archivedOnPage, activeOnPage };
+  }, [rows]);
+
+  const sliceFrom = total === 0 ? 0 : page * CONTACTS_PAGE_LIMIT + 1;
+  const sliceTo = Math.min((page + 1) * CONTACTS_PAGE_LIMIT, total);
+  const canPrev = page > 0;
+  const canNext = (page + 1) * CONTACTS_PAGE_LIMIT < total;
+
+  const resetFilters = () => {
+    setSearch("");
+    setStage("all");
+    setAssignedToMe(false);
+    if (isAdmin) setArchiveScope("active");
+    setPage(0);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    void load("", "all", false, "active", 0);
+  };
+
   return (
-    <div className="stack compact-stack">
-      <PageHeader
-        title="Contacts"
-        subtitle={`${total} CRM contact${total !== 1 ? "s" : ""}`}
-        actions={
-          <button
-            onClick={() => setShowAdd(true)}
-            style={{ ...btnBase, background: "var(--accent)", color: "#fff", display: "flex", alignItems: "center", gap: "0.375rem" }}
-          >
-            <Plus size={15} />
-            Add Contact
-          </button>
-        }
-      />
+    <div className="min-h-screen bg-gray-50">
+      {showAdd && <AddContactModal onClose={() => setShowAdd(false)} onCreated={handleContactCreated} />}
 
-      {/* ── Toolbar ─────────────────────────────────────────────────────────── */}
-      <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
-        {/* Search */}
-        <div style={{ position: "relative", flex: "1 1 240px", maxWidth: 340 }}>
-          <Search
-            size={14}
-            style={{ position: "absolute", left: "0.625rem", top: "50%", transform: "translateY(-50%)", color: "var(--text-dim)", pointerEvents: "none" }}
-          />
-          <input
-            ref={searchRef}
-            value={search}
-            onChange={(e) => handleSearchChange(e.target.value)}
-            placeholder="Search by name, phone, email…"
-            style={{ ...inputStyle, paddingLeft: "2rem" }}
-          />
-          {search && (
-            <button
-              onClick={() => {
-                setSearch("");
-                load("", stage, assignedToMe, isAdmin ? archiveScope : "active");
-              }}
-              style={{ position: "absolute", right: "0.5rem", top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: 0, display: "flex" }}
-            >
-              <X size={13} />
-            </button>
-          )}
-        </div>
-
-        {/* Stage filter tabs */}
-        <div style={{ display: "flex", gap: "0.25rem", flexWrap: "wrap" }}>
-          {FILTER_TABS.map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setStage(tab)}
-              style={{
-                padding: "0.3125rem 0.75rem",
-                border: "1px solid var(--border)",
-                borderRadius: "2rem",
-                fontSize: "0.8125rem",
-                fontWeight: stage === tab ? 700 : 400,
-                cursor: "pointer",
-                background: stage === tab ? "var(--accent)" : "var(--surface-hover)",
-                color: stage === tab ? "#fff" : "var(--text)",
-                transition: "all 0.12s",
-              }}
-            >
-              {STAGE_LABELS[tab]}
-            </button>
-          ))}
-        </div>
-
-        {/* Phase 16B — admin-only active / archived / all (real API includeArchived / archivedOnly) */}
-        {isAdmin && (
-          <div style={{ display: "flex", alignItems: "center", gap: "0.35rem", flexWrap: "wrap" }}>
-            <span
-              style={{
-                fontSize: "0.6875rem",
-                fontWeight: 700,
-                color: "var(--text-dim)",
-                textTransform: "uppercase",
-                letterSpacing: "0.05em",
-                marginRight: "0.15rem",
-              }}
-            >
-              List
-            </span>
-            {(["active", "archived", "all"] as const).map((key) => (
+      <div className="mx-auto max-w-6xl px-4 py-8">
+        {/* Command header */}
+        <div className="mb-6 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex min-w-0 gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
+                <Users className="h-5 w-5" aria-hidden />
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-2xl font-semibold tracking-tight text-gray-900">Contacts</h1>
+                <p className="mt-1 max-w-xl text-sm text-gray-500">
+                  Find people fast, open records, jump to the live workspace when enabled, and bulk-assign when you are
+                  admin.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
               <button
-                key={key}
                 type="button"
-                onClick={() => setArchiveScope(key)}
-                style={{
-                  padding: "0.3125rem 0.75rem",
-                  border: "1px solid var(--border)",
-                  borderRadius: "2rem",
-                  fontSize: "0.8125rem",
-                  fontWeight: archiveScope === key ? 700 : 400,
-                  cursor: "pointer",
-                  background: archiveScope === key ? "var(--accent)" : "var(--surface-hover)",
-                  color: archiveScope === key ? "#fff" : "var(--text)",
-                  transition: "all 0.12s",
-                  whiteSpace: "nowrap",
-                }}
+                onClick={() => setShowAdd(true)}
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
               >
-                {ARCHIVE_SCOPE_LABELS[key]}
+                <Plus className="h-4 w-4" />
+                New contact
               </button>
+              {canImport && (
+                <Link
+                  href="/crm/import"
+                  className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  <FileUp className="h-4 w-4 text-gray-500" />
+                  Import leads
+                </Link>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Compact operational summary — server total + honest page-scoped counts */}
+        {!loading && !error && (rows.length > 0 || total > 0) && (
+          <div className="mb-4 rounded-2xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
+            <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center lg:justify-between">
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm">
+                <span className="font-semibold tabular-nums text-gray-900">{total}</span>
+                <span className="text-gray-500">matching current filters</span>
+                <span className="hidden sm:inline text-gray-300" aria-hidden>
+                  ·
+                </span>
+                <span className="text-xs text-gray-500">
+                  Showing{" "}
+                  <span className="font-medium tabular-nums text-gray-700">
+                    {sliceFrom}–{sliceTo}
+                  </span>
+                </span>
+              </div>
+              <dl className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-gray-600">
+                <div className="flex items-center gap-1.5">
+                  <dt className="text-gray-400">Active (page)</dt>
+                  <dd className="font-semibold tabular-nums text-gray-900">{summary.activeOnPage}</dd>
+                </div>
+                {isAdmin && (
+                  <div className="flex items-center gap-1.5">
+                    <dt className="text-gray-400">Archived (page)</dt>
+                    <dd className="font-semibold tabular-nums text-gray-900">{summary.archivedOnPage}</dd>
+                  </div>
+                )}
+                <div className="flex items-center gap-1.5">
+                  <dt className="text-gray-400">No phone</dt>
+                  <dd className="font-semibold tabular-nums text-amber-800">{summary.missingPhone}</dd>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <dt className="text-gray-400">No email</dt>
+                  <dd className="font-semibold tabular-nums text-amber-800">{summary.missingEmail}</dd>
+                </div>
+                <div className="flex items-center gap-1.5 border-l border-gray-200 pl-4">
+                  <dt className="text-gray-400">Stage</dt>
+                  <dd className="font-medium text-gray-800">{stage === "all" ? "All stages" : STAGE_LABELS[stage]}</dd>
+                </div>
+              </dl>
+            </div>
+            <p className="mt-2 border-t border-gray-100 pt-2 text-[11px] leading-relaxed text-gray-500">
+              Phone, email, and active/archived splits count only contacts on this page. Totals are never blended with
+              tenant-wide analytics you have not loaded.
+            </p>
+          </div>
+        )}
+
+        {/* Search + filters — single control surface */}
+        <div className="mb-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="relative max-w-2xl">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <input
+              ref={searchRef}
+              value={search}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              placeholder="Search by name, phone, email, or company…"
+              className="w-full rounded-xl border border-gray-200 bg-gray-50/50 py-2.5 pl-10 pr-10 text-sm transition-colors focus:border-blue-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              aria-label="Search contacts"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch("");
+                  setPage(0);
+                  if (debounceRef.current) clearTimeout(debounceRef.current);
+                  void load("", stage, assignedToMe, isAdmin ? archiveScope : "active", 0);
+                }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:bg-gray-100"
+                aria-label="Clear search"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+
+          <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center">
+            <div className="flex flex-wrap gap-1.5">
+              {FILTER_TABS.map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => {
+                    setPage(0);
+                    setStage(tab);
+                  }}
+                  className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
+                    stage === tab
+                      ? "border-blue-600 bg-blue-600 text-white"
+                      : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  {STAGE_LABELS[tab]}
+                </button>
+              ))}
+            </div>
+
+            {isAdmin && (
+              <div className="flex flex-wrap items-center gap-1.5 rounded-full bg-gray-50 px-2 py-1">
+                <span className="pl-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400">List</span>
+                {(["active", "archived", "all"] as const).map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => {
+                      setPage(0);
+                      setArchiveScope(key);
+                    }}
+                    className={`rounded-full border px-3 py-1.5 text-xs font-medium ${
+                      archiveScope === key
+                        ? "border-gray-900 bg-gray-900 text-white"
+                        : "border-transparent bg-white text-gray-700 shadow-sm hover:bg-gray-50"
+                    }`}
+                  >
+                    {ARCHIVE_SCOPE_LABELS[key]}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={() => {
+                setPage(0);
+                setAssignedToMe((v) => !v);
+              }}
+              className={`rounded-full border px-3 py-1.5 text-xs font-medium lg:ml-auto ${
+                assignedToMe
+                  ? "border-violet-600 bg-violet-600 text-white"
+                  : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+              }`}
+            >
+              Assigned to me
+            </button>
+          </div>
+        </div>
+
+        {/* Bulk bar — compact, not full-width promo */}
+        {isAdmin && selectedIds.size > 0 && (
+          <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
+            <span className="text-sm font-medium text-gray-800">{selectedIds.size} selected</span>
+            <select
+              value={bulkAssignUserId}
+              onChange={(e) => {
+                setBulkAssignUserId(e.target.value);
+                void loadCrmUsers();
+              }}
+              className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm"
+            >
+              <option value="">Assign to…</option>
+              {crmUsers.map((u) => (
+                <option key={u.userId} value={u.userId}>
+                  {u.displayName}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => handleBulkReassign(bulkAssignUserId || null)}
+              disabled={bulkAssigning || !bulkAssignUserId}
+              className="inline-flex items-center gap-1 rounded-lg border border-gray-300 bg-gray-50 px-3 py-1.5 text-sm font-medium text-gray-800 hover:bg-gray-100 disabled:opacity-50"
+            >
+              <UserCheck className="h-3.5 w-3.5" />
+              {bulkAssigning ? "Assigning…" : "Assign"}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleBulkReassign(null)}
+              disabled={bulkAssigning}
+              className="text-sm font-medium text-gray-600 hover:text-gray-900 disabled:opacity-50"
+            >
+              Clear assignment
+            </button>
+            {bulkError && <span className="text-xs text-red-600">{bulkError}</span>}
+            <button
+              type="button"
+              onClick={clearSelection}
+              className="ml-auto text-sm text-gray-500 hover:text-gray-800"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* List */}
+        {loading && (
+          <div className="space-y-3 py-6" aria-busy="true" aria-label="Loading contacts">
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                className="h-24 animate-pulse rounded-2xl border border-gray-200 bg-gradient-to-r from-gray-100 via-gray-50 to-gray-100"
+              />
             ))}
           </div>
         )}
 
-        {/* Assigned to me toggle */}
-        <button
-          onClick={() => setAssignedToMe((v) => !v)}
-          style={{
-            padding: "0.3125rem 0.75rem",
-            border: "1px solid var(--border)",
-            borderRadius: "2rem",
-            fontSize: "0.8125rem",
-            fontWeight: assignedToMe ? 700 : 400,
-            cursor: "pointer",
-            background: assignedToMe ? "var(--accent)" : "var(--surface-hover)",
-            color: assignedToMe ? "#fff" : "var(--text)",
-            transition: "all 0.12s",
-            whiteSpace: "nowrap",
-          }}
-        >
-          Assigned to me
-        </button>
-      </div>
-
-      {/* ── Bulk action bar ──────────────────────────────────────────────────── */}
-      {isAdmin && selectedIds.size > 0 && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap",
-          padding: "0.625rem 1rem",
-          background: "var(--accent)", borderRadius: "0.5rem",
-          color: "#fff",
-        }}>
-          <span style={{ fontWeight: 700, fontSize: "0.875rem" }}>
-            {selectedIds.size} selected
-          </span>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flex: 1, flexWrap: "wrap" }}>
-            <select
-              value={bulkAssignUserId}
-              onChange={(e) => setBulkAssignUserId(e.target.value)}
-              style={{
-                padding: "0.3125rem 0.625rem", borderRadius: "0.375rem",
-                border: "1px solid rgba(255,255,255,0.4)", background: "rgba(255,255,255,0.15)",
-                color: "#fff", fontSize: "0.8125rem", minWidth: 160,
-              }}
-            >
-              <option value="">Assign to…</option>
-              {crmUsers.map((u) => (
-                <option key={u.userId} value={u.userId}>{u.displayName}</option>
-              ))}
-            </select>
-            <button
-              onClick={() => handleBulkReassign(bulkAssignUserId || null)}
-              disabled={bulkAssigning || !bulkAssignUserId}
-              style={{
-                padding: "0.3125rem 0.75rem", borderRadius: "0.375rem",
-                border: "1px solid rgba(255,255,255,0.5)", background: "rgba(255,255,255,0.2)",
-                color: "#fff", fontSize: "0.8125rem", fontWeight: 600, cursor: "pointer",
-                display: "flex", alignItems: "center", gap: "0.25rem",
-                opacity: (!bulkAssignUserId || bulkAssigning) ? 0.5 : 1,
-              }}
-            >
-              <UserCheck size={13} /> {bulkAssigning ? "Assigning…" : "Assign"}
-            </button>
-            <button
-              onClick={() => handleBulkReassign(null)}
-              disabled={bulkAssigning}
-              style={{
-                padding: "0.3125rem 0.75rem", borderRadius: "0.375rem",
-                border: "1px solid rgba(255,255,255,0.4)", background: "transparent",
-                color: "#fff", fontSize: "0.8125rem", cursor: "pointer",
-                opacity: bulkAssigning ? 0.5 : 1,
-              }}
-            >
-              Clear assignment
-            </button>
-            {bulkError && (
-              <span style={{ fontSize: "0.8125rem", color: "#fca5a5" }}>{bulkError}</span>
-            )}
-          </div>
-          <button
-            onClick={clearSelection}
-            style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.7)", padding: "0.2rem", lineHeight: 1 }}
-            title="Clear selection"
-          >
-            <X size={15} />
-          </button>
-        </div>
-      )}
-
-      {/* ── Table ────────────────────────────────────────────────────────────── */}
-      <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
-        {loading && (
-          <div style={{ padding: "1rem 1.25rem" }}>
-            <LoadingSkeleton rows={6} />
-          </div>
-        )}
-
-        {!loading && error && (
-          <div style={{ padding: "1.5rem", color: "#ef4444", fontSize: "0.875rem" }}>{error}</div>
-        )}
+        {!loading && error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
         {!loading && !error && rows.length === 0 && (
-          <div style={{ padding: "3rem 1.5rem", textAlign: "center" }}>
-            <UserRound size={32} style={{ color: "var(--text-dim)", margin: "0 auto 0.75rem" }} />
-            <h4 style={{ margin: "0 0 0.375rem", fontWeight: 600, fontSize: "1rem" }}>No contacts found</h4>
-            <p style={{ margin: "0 0 1rem", color: "var(--text-dim)", fontSize: "0.875rem" }}>
-              {hasListFilters
-                ? "Try clearing your filters."
-                : isAdmin && archiveScope === "archived"
-                  ? "No archived contacts."
-                  : "Import leads or add a contact to get started."}
-            </p>
-            {!search && stage === "all" && !assignedToMe && !(isAdmin && archiveScope === "archived") && (
-              <div style={{ display: "flex", gap: "0.5rem", justifyContent: "center", flexWrap: "wrap" }}>
+          <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-6 py-14 text-center">
+            <UserRound className="mx-auto mb-3 h-10 w-10 text-gray-300" aria-hidden />
+            {hasListFilters ? (
+              <>
+                <p className="text-base font-medium text-gray-800">No contacts match these filters</p>
+                <p className="mx-auto mt-2 max-w-md text-sm text-gray-500">
+                  Adjust search, stage, assignment, or list scope — or reset everything to see the default active
+                  directory.
+                </p>
+                <div className="mt-5 flex flex-wrap justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={resetFilters}
+                    className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50"
+                  >
+                    Reset filters
+                  </button>
+                  {search && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearch("");
+                        setPage(0);
+                        if (debounceRef.current) clearTimeout(debounceRef.current);
+                        void load("", stage, assignedToMe, isAdmin ? archiveScope : "active", 0);
+                      }}
+                      className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                    >
+                      Clear search only
+                    </button>
+                  )}
+                </div>
+              </>
+            ) : isAdmin && archiveScope === "archived" ? (
+              <>
+                <p className="text-base font-medium text-gray-800">No archived contacts</p>
+                <p className="mx-auto mt-2 max-w-md text-sm text-gray-500">
+                  Archived contacts are hidden from the active list. When you archive from a contact record, it will
+                  appear here for admins.
+                </p>
                 <button
-                  onClick={() => setShowAdd(true)}
-                  style={{ padding: "0.4375rem 1rem", border: "none", borderRadius: "0.5rem", background: "var(--accent)", color: "#fff", fontSize: "0.875rem", fontWeight: 600, cursor: "pointer" }}
+                  type="button"
+                  onClick={() => {
+                    setArchiveScope("active");
+                    setPage(0);
+                  }}
+                  className="mt-5 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50"
                 >
-                  Add Contact
+                  View active contacts
                 </button>
-                <a
-                  href="/crm/import"
-                  style={{ padding: "0.4375rem 1rem", borderRadius: "0.5rem", background: "transparent", color: "var(--accent, #6366f1)", border: "1px solid var(--accent, #6366f1)", fontSize: "0.875rem", fontWeight: 600, cursor: "pointer", textDecoration: "none" }}
-                >
-                  Import Leads
-                </a>
-              </div>
+              </>
+            ) : (
+              <>
+                <p className="text-base font-medium text-gray-800">No contacts yet</p>
+                <p className="mx-auto mt-2 max-w-md text-sm text-gray-500">
+                  Add a person manually or bring in a file from Import Leads. Records stay in this tenant only.
+                </p>
+                <div className="mt-6 flex flex-wrap justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowAdd(true)}
+                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                  >
+                    <Plus className="h-4 w-4" />
+                    New contact
+                  </button>
+                  {canImport && (
+                    <Link
+                      href="/crm/import"
+                      className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                      <FileUp className="h-4 w-4 text-gray-500" />
+                      Import leads
+                    </Link>
+                  )}
+                </div>
+              </>
             )}
           </div>
         )}
 
         {!loading && !error && rows.length > 0 && (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.875rem" }}>
-              <thead>
-                <tr style={{ background: "var(--surface-hover)" }}>
-                  {isAdmin && (
-                    <th style={{ padding: "0.5rem 0.75rem", width: 32 }}>
-                      <input
-                        type="checkbox"
-                        checked={allSelectableSelected}
-                        onChange={toggleSelectAll}
-                        disabled={selectableRows.length === 0}
-                        style={{ cursor: selectableRows.length === 0 ? "not-allowed" : "pointer" }}
-                        title="Select all active (non-archived) contacts on this page"
-                      />
-                    </th>
-                  )}
-                  {["Contact", "Phone", "Email", "Stage", "Assigned To", ""].map((h) => (
-                    <th
-                      key={h}
-                      style={{
-                        padding: "0.5rem 1rem",
-                        textAlign: "left",
-                        fontWeight: 600,
-                        fontSize: "0.75rem",
-                        color: "var(--text-dim)",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.04em",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((c, idx) => {
-                  const archived = isContactArchived(c);
-                  return (
-                  <tr
-                    key={c.id}
-                    onClick={(e) => {
-                      // Don't navigate if clicking the checkbox cell
-                      if ((e.target as HTMLElement).tagName === "INPUT") return;
-                      router.push(`/crm/contacts/${c.id}`);
-                    }}
-                    style={{
-                      borderTop: idx === 0 ? undefined : "1px solid var(--border)",
-                      cursor: "pointer",
-                      transition: "background 0.1s, opacity 0.1s",
-                      opacity: archived ? 0.88 : 1,
-                      background: selectedIds.has(c.id) ? "var(--accent-muted, #eef2ff)" : archived ? "var(--surface-hover)" : undefined,
-                    }}
-                    onMouseEnter={(e) => {
-                      if (!selectedIds.has(c.id)) {
-                        (e.currentTarget as HTMLElement).style.background = archived ? "var(--border)" : "var(--surface-hover)";
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      (e.currentTarget as HTMLElement).style.background = selectedIds.has(c.id)
-                        ? "var(--accent-muted, #eef2ff)"
-                        : archived
-                          ? "var(--surface-hover)"
-                          : "";
-                    }}
-                  >
-                  {isAdmin && (
-                    <td style={{ padding: "0.625rem 0.75rem", width: 32 }} onClick={(e) => e.stopPropagation()}>
-                      {archived ? (
-                        <span style={{ display: "inline-block", width: 14 }} title="Archived — use detail to restore" />
-                      ) : (
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(c.id)}
-                        onChange={() => {
-                          toggleSelect(c.id);
-                          loadCrmUsers();
-                        }}
-                        style={{ cursor: "pointer" }}
-                      />
-                      )}
-                    </td>
-                  )}
-                    {/* Contact name + avatar */}
-                    <td style={{ padding: "0.625rem 1rem", whiteSpace: "nowrap" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
-                        <div style={{
-                          width: 30,
-                          height: 30,
-                          borderRadius: "50%",
-                          background: "var(--accent)",
-                          color: "#fff",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontSize: "0.6875rem",
-                          fontWeight: 700,
-                          flexShrink: 0,
-                        }}>
-                          {initials(c.displayName)}
-                        </div>
-                        <div>
-                          <div style={{ fontWeight: 600, lineHeight: 1.3 }}>{c.displayName}</div>
-                          {c.company && (
-                            <div style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>{c.company}</div>
-                          )}
-                        </div>
-                        {c.doNotCall && (
-                          <span
-                            title="Do Not Call"
-                            style={{ fontSize: "0.6875rem", padding: "0.1rem 0.375rem", borderRadius: 3, background: "#ef444420", color: "#ef4444", fontWeight: 700 }}
-                          >
-                            DNC
-                          </span>
-                        )}
-                        {archived && (
-                          <span
-                            title="Archived — hidden from active lists"
-                            style={{
-                              fontSize: "0.6875rem",
-                              padding: "0.1rem 0.375rem",
-                              borderRadius: 3,
-                              background: "#e5e7eb",
-                              color: "#374151",
-                              fontWeight: 700,
-                              textTransform: "uppercase",
-                              letterSpacing: "0.03em",
-                            }}
-                          >
-                            Archived
-                          </span>
-                        )}
-                      </div>
-                    </td>
-
-                    {/* Phone */}
-                    <td style={{ padding: "0.625rem 1rem", color: "var(--text-dim)" }}>
-                      {c.primaryPhone ? (
-                        <span style={{ display: "flex", alignItems: "center", gap: "0.375rem" }}>
-                          <Phone size={12} />
-                          {c.primaryPhone.numberRaw}
-                        </span>
-                      ) : "—"}
-                    </td>
-
-                    {/* Email */}
-                    <td style={{ padding: "0.625rem 1rem", color: "var(--text-dim)" }}>
-                      {c.primaryEmail ? (
-                        <span style={{ display: "flex", alignItems: "center", gap: "0.375rem" }}>
-                          <Mail size={12} />
-                          {c.primaryEmail.email}
-                        </span>
-                      ) : "—"}
-                    </td>
-
-                    {/* Stage */}
-                    <td style={{ padding: "0.625rem 1rem" }}>
-                      {c.crmStage ? (
-                        <span style={{
-                          padding: "0.15rem 0.5rem",
-                          borderRadius: 3,
-                          fontSize: "0.75rem",
-                          fontWeight: 700,
-                          background: `${STAGE_COLORS[c.crmStage]}20`,
-                          color: STAGE_COLORS[c.crmStage],
-                        }}>
-                          {STAGE_LABELS[c.crmStage]}
-                        </span>
-                      ) : "—"}
-                    </td>
-
-                    {/* Assigned to */}
-                    <td style={{ padding: "0.625rem 1rem", color: "var(--text-dim)", fontSize: "0.8125rem" }}>
-                      {assignedLabel(c.assignedTo)}
-                    </td>
-
-                    {/* Row action */}
-                    <td style={{ padding: "0.625rem 1rem", textAlign: "right" }}>
-                      <span style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>View →</span>
-                    </td>
-                  </tr>
-                );
-                })}
-              </tbody>
-            </table>
+          <div className="mb-4 flex items-center justify-between gap-2">
+            {isAdmin && (
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-600">
+                <input
+                  type="checkbox"
+                  checked={allSelectableSelected}
+                  onChange={toggleSelectAll}
+                  disabled={selectableRows.length === 0}
+                  className="rounded border-gray-300"
+                />
+                <span>Select active on page</span>
+              </label>
+            )}
           </div>
         )}
-      </div>
 
-      {/* Add contact modal */}
-      {showAdd && (
-        <AddContactModal
-          onClose={() => setShowAdd(false)}
-          onCreated={handleContactCreated}
-        />
-      )}
+        {!loading && !error && rows.length > 0 && (
+          <ul className="space-y-3">
+            {rows.map((c) => {
+              const archived = isContactArchived(c);
+              const hasLastActivity = !!c.lastActivityAt;
+              return (
+                <li
+                  key={c.id}
+                  className={`rounded-2xl border bg-white p-4 shadow-sm transition-colors ${
+                    archived ? "border-gray-200 opacity-80" : "border-gray-200 hover:border-gray-300"
+                  }`}
+                >
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="flex min-w-0 flex-1 gap-3">
+                      {isAdmin && (
+                        <div className="pt-1" onClick={(e) => e.stopPropagation()}>
+                          {archived ? (
+                            <span className="inline-block w-4" title="Archived — open record to restore" />
+                          ) : (
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(c.id)}
+                              onChange={() => {
+                                toggleSelect(c.id);
+                                void loadCrmUsers();
+                              }}
+                              className="rounded border-gray-300"
+                              aria-label={`Select ${c.displayName}`}
+                            />
+                          )}
+                        </div>
+                      )}
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white">
+                        {initials(c.displayName)}
+                      </div>
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h2 className="truncate text-lg font-semibold tracking-tight text-gray-900">{c.displayName}</h2>
+                          {archived && (
+                            <span className="rounded bg-gray-200 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-700">
+                              Archived
+                            </span>
+                          )}
+                          {c.doNotCall && (
+                            <span className="rounded bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-700">
+                              DNC
+                            </span>
+                          )}
+                        </div>
+                        {c.company && <p className="text-sm text-gray-600">{c.company}</p>}
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
+                          {c.primaryPhone ? (
+                            <span className="inline-flex items-center gap-1">
+                              <Phone className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                              {c.primaryPhone.numberRaw}
+                            </span>
+                          ) : (
+                            <span className="text-amber-700">No phone</span>
+                          )}
+                          {c.primaryEmail ? (
+                            <span className="inline-flex min-w-0 items-center gap-1">
+                              <Mail className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                              <span className="truncate">{c.primaryEmail.email}</span>
+                            </span>
+                          ) : (
+                            <span className="text-amber-700">No email</span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500">
+                          {c.crmStage && (
+                            <span
+                              className={`inline-flex rounded border px-2 py-0.5 text-[11px] font-semibold ${STAGE_BADGE_CLASS[c.crmStage]}`}
+                            >
+                              {STAGE_LABELS[c.crmStage]}
+                            </span>
+                          )}
+                          {hasLastActivity && (
+                            <span className="text-gray-600">
+                              Last activity {formatShortDate(c.lastActivityAt)}
+                            </span>
+                          )}
+                          <span className="inline-flex items-center gap-1.5 text-gray-500">
+                            {hasLastActivity && <span className="text-gray-300" aria-hidden>·</span>}
+                            <span className="text-gray-400">Owner</span>
+                            <span>{assignedLabel(c.assignedTo)}</span>
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2 lg:shrink-0 lg:pl-4">
+                      <Link
+                        href={`/crm/contacts/${c.id}`}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50"
+                      >
+                        Open contact
+                        <ExternalLink className="h-3.5 w-3.5 text-gray-400" aria-hidden />
+                      </Link>
+                      {canLiveWorkspace && !archived && (
+                        <Link
+                          href={`/crm/live-call?contactId=${encodeURIComponent(c.id)}`}
+                          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50"
+                        >
+                          Workspace
+                          <Radio className="h-3.5 w-3.5 text-gray-400" aria-hidden />
+                        </Link>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        {!loading && !error && total > 0 && (canPrev || canNext) && (
+          <nav
+            className="mt-6 flex flex-col items-stretch gap-3 rounded-2xl border border-gray-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between"
+            aria-label="Contacts pagination"
+          >
+            <p className="text-center text-sm text-gray-600 sm:text-left">
+              Page{" "}
+              <span className="font-medium tabular-nums text-gray-900">{page + 1}</span> of{" "}
+              <span className="font-medium tabular-nums text-gray-900">
+                {Math.max(1, Math.ceil(total / CONTACTS_PAGE_LIMIT))}
+              </span>
+            </p>
+            <div className="flex justify-center gap-2 sm:justify-end">
+              <button
+                type="button"
+                disabled={!canPrev}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ChevronLeft className="h-4 w-4" aria-hidden />
+                Previous
+              </button>
+              <button
+                type="button"
+                disabled={!canNext}
+                onClick={() => setPage((p) => p + 1)}
+                className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+                <ChevronRight className="h-4 w-4" aria-hidden />
+              </button>
+            </div>
+          </nav>
+        )}
+      </div>
     </div>
   );
 }

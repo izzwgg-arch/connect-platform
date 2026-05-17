@@ -187,6 +187,20 @@
 | Empty states | No campaigns: create/import guidance; filtered-by-search empty: clear search — professional copy, no fake metrics. |
 | Typecheck | `pnpm exec tsc -p apps/portal` passes. |
 
+### Phase 18E — Contacts index SaaS UX (smoke)
+
+| Check | Expected |
+|-------|----------|
+| Route | `/crm/contacts` loads; data from `GET /crm/contacts` only — summary and cards use fields returned by that response (`total`, rows); no engagement scores or invented tenant-wide health. |
+| Command header | Title **Contacts**, short operational subtitle, primary **New contact**; **Import leads** when `can_view_crm_import`; no promotional banners. |
+| Summary | Compact strip: server **matching** total + **showing** range; **Active (page)** / **Archived (page)** (admin) / missing phone & email on page; stage line; footnote stays honest about page scope — not a giant KPI grid. |
+| Pagination | **Previous / Next** uses existing `page` query (0-based) + `limit` 50; changing filters resets to page 0. |
+| Filters | Prominent search (debounced); stage chips; **Assigned to me**; admin-only **Active / Archived / All** toggles map to existing `includeArchived` / `archivedOnly` query params; non-admin never sees archived scope. |
+| List | Card-style rows (not a dense primary table); each row: name, primary phone/email, company, CRM stage, last activity when present; **Open contact**; **Workspace** link only when `can_view_crm_live_call` and contact is not archived; archived rows muted + badge. |
+| Empty states | Zero directory vs filtered vs archived-empty — contextual copy and real actions (new/import, clear search, switch to Active); no fake suggestions. |
+| Bulk assign | Admin-only bulk reassign behavior unchanged if present; archive/restore remains on detail page unless bulk already existed. |
+| Typecheck | `pnpm exec tsc -p apps/portal` passes. |
+
 ---
 
 ## 7. Reports
