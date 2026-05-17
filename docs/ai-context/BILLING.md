@@ -54,6 +54,8 @@ Shell: **`AdminBillingShell`** + CSS scopes **`billing-ws-scope`**, **`billing-p
 | Invoice preview / create (+ discount line, pricing modes + **preview explanations**) | `apps/api/src/billing/invoiceEngine.ts` |
 | Tenant extensions **flat monthly rate** (metadata; invoice line builder) | `apps/api/src/billing/billingFlatRate.ts` |
 | Tenant **billing quantity overrides** (auto vs manual per line) | `apps/api/src/billing/billingQuantityOverrides.ts` |
+| Local vs **toll-free DID** classification (NANP NPA on E.164) | `apps/api/src/billing/billingPhoneNumbers.ts` |
+| Tenant **toll-free DID unit price** (`metadata.billingTollFreeDidPriceCents`) | `apps/api/src/billing/billingTollFreePricing.ts` |
 | Pricing preview explanations (derived only; **no totals math**) | `apps/api/src/billing/billingPricingExplanation.ts` |
 | Tenant pricing mode resolver + reset payload helpers | `apps/api/src/billing/billingPricingResolution.ts` |
 | Assembler for **pricing-diagnostics** (warnings + differsFromPlan + reset preview + **`pricingState`**) | `apps/api/src/billing/billingPricingDiagnostics.ts` |
@@ -156,12 +158,29 @@ Per-line **suggested** (from `calculateTenantBillingUsage`) vs **billing** quant
 |-----|----------------|------------------------------|
 | `extensions` | Active billable extensions | Billable extension count (flat rate still emits qty `1` line; E911/tax use billing extension count) |
 | `virtualExtensions` | `0` (not tracked in system) | Billable virtual extension count — invoice line type **`EXTENSION`** with description **Virtual extensions** and `metadata.lineItemKind: "virtual_extensions"` (no Prisma enum migration) |
-| `phoneNumbers` | Billable DIDs after first-free | Billable phone number count (manual `4` bills 4 even if system suggests `2`) |
+| `phoneNumbers` | Billable **local** DIDs after first-free | Billable local phone number count (manual `4` bills 4 even if system suggests `2`) |
+| `tollFreeNumbers` | All active toll-free DIDs (no first-free) | Billable toll-free count |
 | `smsPackages` | `0` or `1` from SMS flags | Billable SMS package count |
 
 Shape: `{ extensions?: { mode: "auto"|"manual", quantity: number|null }, … }`. **`PUT …/settings`** accepts **`billingQuantityOverrides`**; **`400 invalid_billing_quantity_overrides`** on invalid manual qty. Merge preserves **`billingFlatRate`**, **`billingPricingMode`**, etc.
 
 **Worker / preview / create:** `resolveBillingQuantities` in `invoiceEngine.ts` before line builders — same path for monthly worker (`createBillingInvoice` → preview).
+
+## Local vs toll-free phone numbers (billing)
+
+**Detection:** `PhoneNumber` has no stored toll-free flag. `billingPhoneNumbers.ts` classifies active rows by **NANP toll-free NPA** on E.164 (`+1` then `800|833|844|855|866|877|888`). Purchase APIs use provider `type: "local"|"tollfree"` but do not persist type on the row.
+
+**Usage (`calculateTenantBillingUsage`):** `localPhoneNumberCount`, `tollFreePhoneNumberCount`, billable counts/ids. **`firstPhoneNumberFree`** reduces billable **local** count only (minimum 0); every active toll-free DID is billable.
+
+**Pricing:** Local unit price = `additionalPhoneNumberPriceCents` (plan/settings). Toll-free = `metadata.billingTollFreeDidPriceCents` when set, else local price, else default **1500¢**. Settings PUT: optional **`tollFreeDidPriceCents`**.
+
+**Quantity overrides:** `phoneNumbers` = local billable qty; `tollFreeNumbers` = toll-free billable qty.
+
+**Invoice lines:** Both use `BillingLineItemType.PHONE_NUMBER` with `metadata.lineItemKind`:
+- `local_phone_numbers` — description **Local phone numbers**
+- `toll_free_phone_numbers` — description **Toll-free phone numbers** (omitted when qty 0)
+
+**Portal:** Plans & pricing — separate **Local phone numbers** and **Toll-free phone numbers** cards; monthly estimate and overrides table list both lines.
 
 **Portal:** Plans & pricing cards show **Suggested**, **Auto/Manual**, editable **Billing quantity**, chips **Auto** / **Manual override**; live estimate uses billing quantities.
 
@@ -172,7 +191,8 @@ Shape: `{ extensions?: { mode: "auto"|"manual", quantity: number|null }, … }`.
 | Line item | Suggested (auto) | Operator control |
 |-----------|------------------|------------------|
 | Extensions | `calculateTenantBillingUsage` — active billable extensions | **Auto** or **Manual** billing quantity (`metadata.billingQuantityOverrides`) |
-| Phone numbers | Active DIDs; billable = total minus first-free when enabled | **Auto** or **Manual** billable phone count |
+| Local phone numbers | Active local DIDs; billable = total minus first-free when enabled | **Auto** or **Manual** billable local count (`phoneNumbers` override key) |
+| Toll-free phone numbers | Active toll-free DIDs (all billable) | **Auto** or **Manual** billable toll-free count (`tollFreeNumbers` override key) |
 | SMS package | `0` or `1` from SMS flags / `smsBillingEnabled` | **Auto** or **Manual** package count; SMS enabled toggle still affects auto suggestion |
 | Virtual extensions | `0` (not tracked in system) | **Manual** quantity only — separate invoice line at extension unit price |
 

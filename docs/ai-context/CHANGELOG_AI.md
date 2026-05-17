@@ -4,6 +4,32 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-17 — Billing: local vs toll-free DID pricing (invoice engine + admin UI)
+
+**Task:** Split local and toll-free phone number billing — separate quantities, unit prices, invoice lines, monthly estimate, and admin overrides.  
+**Risk:** Medium (invoice line math; metadata only).
+
+### Shipped
+
+- **`billingPhoneNumbers.ts`**: NANP toll-free NPA detection on E.164 (`800/833/844/855/866/877/888`); splits active DIDs into local vs toll-free. No `PhoneNumber` type column — purchase flow does not persist provider `tollfree` type.
+- **`usage.ts`**: `localPhoneNumberCount`, `tollFreePhoneNumberCount`, billable counts/ids; first-free applies to **local** only.
+- **`billingTollFreePricing.ts`**: `metadata.billingTollFreeDidPriceCents`; resolve unit price (tenant override → local DID price → default).
+- **`billingQuantityOverrides.ts`**: `tollFreeNumbers` override key.
+- **`invoiceEngine.ts`**: separate **Local phone numbers** and **Toll-free phone numbers** lines (`PHONE_NUMBER` type + `metadata.lineItemKind`); toll-free line omitted when qty 0.
+- **`routes.ts`**: `tollFreeDidPriceCents` + `tollFreeNumbers` in settings PUT schema.
+- **Portal `AdminPricingWorkspace`**: two DID cards, toll-free price editable when catalog-locked; estimate + overrides table rows.
+- **Tests:** `billingPhoneNumbers.test.ts`, `billingTollFreePricing.test.ts`, `usage.tollfree.test.ts`, invoice engine mixed local/toll-free — **222/222** `test:billing` pass; API + portal typecheck pass.
+
+### Explicitly NOT changed
+
+- SOLA / payment execution, Prisma schema, `BillingLineItemType` enum.
+
+### Deploy
+
+- **API**, **portal**, **worker** (worker imports `invoiceEngine`).
+
+---
+
 ## 2026-05-17 — Billing: tenant billing quantity overrides (auto vs manual)
 
 **Task:** Let SUPER_ADMIN override billable quantities per tenant (extensions, virtual extensions, phone numbers, SMS) while keeping system counts as suggestions.  

@@ -39,10 +39,16 @@ test("buildExtensionInvoiceLine: flat rate uses qty 1 and flat amount", () => {
     tenantId: "t1",
     extensionCount: 32,
     phoneNumberCount: 0,
+    localPhoneNumberCount: 0,
+    tollFreePhoneNumberCount: 0,
+    localBillablePhoneNumberCount: 0,
+    tollFreeBillablePhoneNumberCount: 0,
     additionalPhoneNumberCount: 0,
     smsEnabled: false,
     extensionIds: ["e1"],
     phoneNumberIds: [],
+    localPhoneNumberIds: [],
+    tollFreePhoneNumberIds: [],
   };
   const line = buildExtensionInvoiceLine({
     usage,
@@ -63,10 +69,16 @@ test("buildExtensionInvoiceLine: per-extension when flat rate off", () => {
     tenantId: "t1",
     extensionCount: 2,
     phoneNumberCount: 0,
+    localPhoneNumberCount: 0,
+    tollFreePhoneNumberCount: 0,
+    localBillablePhoneNumberCount: 0,
+    tollFreeBillablePhoneNumberCount: 0,
     additionalPhoneNumberCount: 0,
     smsEnabled: false,
     extensionIds: ["e1", "e2"],
     phoneNumberIds: [],
+    localPhoneNumberIds: [],
+    tollFreePhoneNumberIds: [],
   };
   const line = buildExtensionInvoiceLine({
     usage,

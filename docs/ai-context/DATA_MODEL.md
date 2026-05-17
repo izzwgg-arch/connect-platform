@@ -89,6 +89,13 @@
   and changes carrier state.
 - **Unique:** `phoneNumber` is **globally** unique (E.164).
 - **Modified by:** `apps/api` (number search/purchase/release).
+- **Billing classification (no DB column):** There is no `numberType` / `isTollFree`
+  field on the row. Purchase search uses provider `type: "local" | "tollfree"` but
+  type is not persisted. Billing splits DIDs in `apps/api/src/billing/billingPhoneNumbers.ts`
+  by **NANP toll-free NPA** on E.164: `800`, `833`, `844`, `855`, `866`, `877`, `888`.
+  **First-number-free** applies to **local** DIDs only; all active toll-free numbers are billable.
+- **Tenant toll-free unit price:** optional `TenantBillingSettings.metadata.billingTollFreeDidPriceCents`
+  (API `tollFreeDidPriceCents` on settings PUT); falls back to local DID price / default.
 
 ## ConnectCdr — *the* call-history model
 - **Schema:** line 1686

@@ -2,7 +2,12 @@ import type { BillingUsageSnapshot } from "./usage";
 
 export const BILLING_QUANTITY_OVERRIDES_METADATA_KEY = "billingQuantityOverrides";
 
-export type BillingQuantityOverrideKey = "extensions" | "virtualExtensions" | "phoneNumbers" | "smsPackages";
+export type BillingQuantityOverrideKey =
+  | "extensions"
+  | "virtualExtensions"
+  | "phoneNumbers"
+  | "tollFreeNumbers"
+  | "smsPackages";
 
 export type BillingQuantityOverrideMode = "auto" | "manual";
 
@@ -20,9 +25,12 @@ export const MAX_BILLING_QUANTITY = 100_000;
 export type BillingSuggestedQuantities = {
   extensions: number;
   virtualExtensions: number;
+  /** Local (non–toll-free) billable after first-number-free. */
   phoneNumbersBillable: number;
   phoneNumbersTotal: number;
   phoneNumbersIncluded: number;
+  tollFreeNumbersBillable: number;
+  tollFreeNumbersTotal: number;
   smsPackages: number;
 };
 
@@ -32,6 +40,7 @@ export type BillingResolvedQuantities = {
     extensions: number;
     virtualExtensions: number;
     phoneNumbers: number;
+    tollFreeNumbers: number;
     smsPackages: number;
   };
   modes: Record<BillingQuantityOverrideKey, BillingQuantityOverrideMode>;
@@ -50,9 +59,11 @@ export function computeSuggestedBillingQuantities(
   return {
     extensions: usage.extensionCount,
     virtualExtensions: 0,
-    phoneNumbersBillable: usage.additionalPhoneNumberCount,
-    phoneNumbersTotal: usage.phoneNumberCount,
+    phoneNumbersBillable: usage.localBillablePhoneNumberCount,
+    phoneNumbersTotal: usage.localPhoneNumberCount,
     phoneNumbersIncluded,
+    tollFreeNumbersBillable: usage.tollFreeBillablePhoneNumberCount,
+    tollFreeNumbersTotal: usage.tollFreePhoneNumberCount,
     smsPackages: usage.smsEnabled ? 1 : 0,
   };
 }
@@ -147,6 +158,7 @@ export function resolveBillingQuantities(input: {
   const ext = resolveItem("extensions", suggested.extensions, overrides);
   const virt = resolveItem("virtualExtensions", suggested.virtualExtensions, overrides);
   const phone = resolveItem("phoneNumbers", suggested.phoneNumbersBillable, overrides);
+  const tollFree = resolveItem("tollFreeNumbers", suggested.tollFreeNumbersBillable, overrides);
   const sms = resolveItem("smsPackages", suggested.smsPackages, overrides);
 
   return {
@@ -155,12 +167,14 @@ export function resolveBillingQuantities(input: {
       extensions: ext.billing,
       virtualExtensions: virt.billing,
       phoneNumbers: phone.billing,
+      tollFreeNumbers: tollFree.billing,
       smsPackages: sms.billing,
     },
     modes: {
       extensions: ext.mode,
       virtualExtensions: virt.mode,
       phoneNumbers: phone.mode,
+      tollFreeNumbers: tollFree.mode,
       smsPackages: sms.mode,
     },
   };

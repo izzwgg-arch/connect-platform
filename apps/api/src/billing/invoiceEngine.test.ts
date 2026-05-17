@@ -34,7 +34,7 @@ function makePreviewDb(overrides: { settings?: Record<string, unknown>; extensio
       upsert: async () => ({ ...settings }),
     },
     extension: { findMany: async () => exts },
-    phoneNumber: { findMany: async () => [] },
+    phoneNumber: { findMany: async () => [] as Array<{ id: string; phoneNumber: string }> },
     tenant: {
       findUnique: async (args: { select?: Record<string, boolean> }) => {
         if (args?.select?.billingSettings) return { name: "T", billingSettings: { billingEmail: null } };
@@ -100,6 +100,7 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   let guardInvoice: Record<string, unknown> = {};
   const guardCapture: { updateData: Record<string, unknown> | null } = { updateData: null };
   let guardUpdateCount = 0;
+  let phoneNumberRows: Array<{ id: string; phoneNumber: string }> = [];
 
   const db = {
     tenantBillingSettings: {
@@ -113,7 +114,7 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
     extension: {
       findMany: async () => [{ id: "e1", extNumber: "101", displayName: "Sales" }],
     },
-    phoneNumber: { findMany: async () => [] },
+    phoneNumber: { findMany: async () => phoneNumberRows },
     tenant: {
       findUnique: async (args: { select?: Record<string, boolean> }) => {
         if (args?.select?.billingSettings) return { name: "Tenant", billingSettings: { billingEmail: null } };
@@ -441,8 +442,9 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   assert.equal(e911Flat!.quantity, 10);
 
   await createBillingInvoice({ tenantId: "tenant-z", status: "DRAFT" });
-  const flatPersisted = (state.lastCreateData as { lineItems?: { create: Array<Record<string, unknown>> } })
-    ?.lineItems?.create?.find((l) => l.type === "EXTENSION");
+  const flatPersisted = (
+    state.lastCreateData as unknown as { lineItems?: { create: Array<Record<string, unknown>> } }
+  )?.lineItems?.create?.find((l) => l.type === "EXTENSION");
   assert.equal(flatPersisted?.quantity, 1);
   assert.equal(flatPersisted?.amountCents, 50000);
 
@@ -454,7 +456,11 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   assert.equal(perExt?.unitPriceCents, 3000);
   assert.equal(perExt?.amountCents, 3000);
 
-  db.phoneNumber.findMany = async () => [{ id: "p1" }, { id: "p2" }, { id: "p3" }];
+  phoneNumberRows = [
+    { id: "p1", phoneNumber: "+12125551212" },
+    { id: "p2", phoneNumber: "+13125551212" },
+    { id: "p3", phoneNumber: "+14155551212" },
+  ];
   state.settings.metadata = {
     billingQuantityOverrides: {
       extensions: { mode: "manual", quantity: 5 },
@@ -473,14 +479,38 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   assert.equal(physExt?.quantity, 5);
   assert.equal(virtExt?.quantity, 2);
   assert.equal(virtExt?.description, "Virtual extensions");
-  const phoneLine = qtyPreview.lineItems.find((l) => l.type === "PHONE_NUMBER");
-  assert.equal(phoneLine?.quantity, 4);
+  const localPhoneLine = qtyPreview.lineItems.find(
+    (l) => l.type === "PHONE_NUMBER" && (l.metadata as Record<string, unknown>)?.lineItemKind === "local_phone_numbers",
+  );
+  assert.equal(localPhoneLine?.quantity, 4);
   const smsLine = qtyPreview.lineItems.find((l) => l.type === "SMS_PACKAGE");
   assert.equal(smsLine?.quantity, 2);
   const e911Manual = qtyPreview.lineItems.find((l) => l.type === "E911_FEE");
   assert.equal(e911Manual?.quantity, 5);
 
-  db.phoneNumber.findMany = async () => [];
+  phoneNumberRows = [
+    { id: "p1", phoneNumber: "+12125551212" },
+    { id: "p2", phoneNumber: "+13125551212" },
+    { id: "p3", phoneNumber: "+18005551212" },
+  ];
+  state.settings.metadata = { billingTollFreeDidPriceCents: 1500 };
+  state.settings.additionalPhoneNumberPriceCents = 1000;
+  const tfPreview = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
+  const phoneLines = tfPreview.lineItems.filter((l) => l.type === "PHONE_NUMBER");
+  assert.equal(phoneLines.length, 2);
+  const tfLine = phoneLines.find(
+    (l) => (l.metadata as Record<string, unknown>)?.lineItemKind === "toll_free_phone_numbers",
+  );
+  const localAuto = phoneLines.find(
+    (l) => (l.metadata as Record<string, unknown>)?.lineItemKind === "local_phone_numbers",
+  );
+  assert.ok(tfLine);
+  assert.equal(tfLine!.quantity, 1);
+  assert.equal(tfLine!.unitPriceCents, 1500);
+  assert.ok(localAuto);
+  assert.equal(localAuto!.quantity, 1);
+
+  phoneNumberRows = [];
 
   // Reset state
   state.settings.extensionPriceCents = 3000;

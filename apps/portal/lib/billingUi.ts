@@ -308,7 +308,12 @@ export function activeExtensionsFlatRateFromMetadata(metadata: unknown): Billing
   return cfg;
 }
 
-export type BillingQuantityOverrideKey = "extensions" | "virtualExtensions" | "phoneNumbers" | "smsPackages";
+export type BillingQuantityOverrideKey =
+  | "extensions"
+  | "virtualExtensions"
+  | "phoneNumbers"
+  | "tollFreeNumbers"
+  | "smsPackages";
 
 export type BillingQuantityOverrideItem = {
   mode: "auto" | "manual";
@@ -321,8 +326,24 @@ const QTY_OVERRIDE_KEYS: BillingQuantityOverrideKey[] = [
   "extensions",
   "virtualExtensions",
   "phoneNumbers",
+  "tollFreeNumbers",
   "smsPackages",
 ];
+
+export function parseTollFreeDidPriceCentsFromMetadata(metadata: unknown): number | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const raw = (metadata as Record<string, unknown>).billingTollFreeDidPriceCents;
+  if (raw === null || raw === undefined) return null;
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
+}
+
+export function resolveTollFreeDidPriceCentsForPortal(metadata: unknown, localDidPriceCents: number): number {
+  const stored = parseTollFreeDidPriceCentsFromMetadata(metadata);
+  if (stored !== null) return stored;
+  return Math.max(0, Number(localDidPriceCents) || 1500);
+}
 
 export function parseBillingQuantityOverridesFromMetadata(metadata: unknown): BillingQuantityOverridesConfig | null {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
@@ -351,6 +372,8 @@ export type PortalBillingSuggestedQuantities = {
   phoneNumbersBillable: number;
   phoneNumbersTotal: number;
   phoneNumbersIncluded: number;
+  tollFreeNumbersBillable: number;
+  tollFreeNumbersTotal: number;
   smsPackages: number;
 };
 
@@ -360,6 +383,7 @@ export type PortalBillingResolvedQuantities = {
     extensions: number;
     virtualExtensions: number;
     phoneNumbers: number;
+    tollFreeNumbers: number;
     smsPackages: number;
   };
   modes: Record<BillingQuantityOverrideKey, "auto" | "manual">;
@@ -367,8 +391,10 @@ export type PortalBillingResolvedQuantities = {
 
 export function resolveBillingQuantitiesForPortal(input: {
   extensionCount: number;
-  phoneNumberCount: number;
-  additionalPhoneNumberCount: number;
+  localPhoneNumberCount: number;
+  localBillablePhoneNumberCount: number;
+  tollFreePhoneNumberCount: number;
+  tollFreeBillablePhoneNumberCount: number;
   smsEnabled: boolean;
   firstPhoneNumberFree: boolean;
   overrides: BillingQuantityOverridesConfig | null;
@@ -377,9 +403,11 @@ export function resolveBillingQuantitiesForPortal(input: {
   const suggested: PortalBillingSuggestedQuantities = {
     extensions: input.extensionCount,
     virtualExtensions: 0,
-    phoneNumbersBillable: input.additionalPhoneNumberCount,
-    phoneNumbersTotal: input.phoneNumberCount,
+    phoneNumbersBillable: input.localBillablePhoneNumberCount,
+    phoneNumbersTotal: input.localPhoneNumberCount,
     phoneNumbersIncluded,
+    tollFreeNumbersBillable: input.tollFreeBillablePhoneNumberCount,
+    tollFreeNumbersTotal: input.tollFreePhoneNumberCount,
     smsPackages: input.smsEnabled ? 1 : 0,
   };
   const resolve = (key: BillingQuantityOverrideKey, autoQty: number): { billing: number; mode: "auto" | "manual" } => {
@@ -392,6 +420,7 @@ export function resolveBillingQuantitiesForPortal(input: {
   const ext = resolve("extensions", suggested.extensions);
   const virt = resolve("virtualExtensions", suggested.virtualExtensions);
   const phone = resolve("phoneNumbers", suggested.phoneNumbersBillable);
+  const tollFree = resolve("tollFreeNumbers", suggested.tollFreeNumbersBillable);
   const sms = resolve("smsPackages", suggested.smsPackages);
   return {
     suggested,
@@ -399,12 +428,14 @@ export function resolveBillingQuantitiesForPortal(input: {
       extensions: ext.billing,
       virtualExtensions: virt.billing,
       phoneNumbers: phone.billing,
+      tollFreeNumbers: tollFree.billing,
       smsPackages: sms.billing,
     },
     modes: {
       extensions: ext.mode,
       virtualExtensions: virt.mode,
       phoneNumbers: phone.mode,
+      tollFreeNumbers: tollFree.mode,
       smsPackages: sms.mode,
     },
   };
@@ -425,7 +456,9 @@ export function defaultQuantityOverrideDraft(
           ? suggested.virtualExtensions
           : key === "phoneNumbers"
             ? suggested.phoneNumbersBillable
-            : suggested.smsPackages;
+            : key === "tollFreeNumbers"
+              ? suggested.tollFreeNumbersBillable
+              : suggested.smsPackages;
     out[key] = {
       mode: item?.mode === "manual" ? "manual" : "auto",
       quantity: item?.mode === "manual" && item.quantity != null ? item.quantity : autoQty,
@@ -471,7 +504,9 @@ export function computeTenantMonthlyEstimate(input: {
   /** Billing quantities (after manual overrides). */
   billingExtensionCount?: number;
   billingVirtualExtensionCount?: number;
-  billingPhoneNumberCount?: number;
+  billingLocalPhoneNumberCount?: number;
+  billingTollFreePhoneNumberCount?: number;
+  tollFreeDidPriceCents?: number;
   billingSmsPackageCount?: number;
   /** When set, extensions bill as one flat monthly line (qty 1). */
   extensionsFlatRateCents?: number | null;
@@ -488,8 +523,10 @@ export function computeTenantMonthlyEstimate(input: {
 } {
   const extQty = input.billingExtensionCount ?? input.extensionCount;
   const virtQty = input.billingVirtualExtensionCount ?? 0;
-  const phoneQty = input.billingPhoneNumberCount ?? input.additionalPhoneNumberCount;
+  const localPhoneQty = input.billingLocalPhoneNumberCount ?? input.additionalPhoneNumberCount;
+  const tollFreeQty = input.billingTollFreePhoneNumberCount ?? 0;
   const smsQty = input.billingSmsPackageCount ?? (input.smsEnabled ? 1 : 0);
+  const tollFreeUnit = input.tollFreeDidPriceCents ?? input.additionalPhoneNumberPriceCents;
 
   const lines: TenantBillingEstimateLine[] = [];
   if (extQty > 0) {
@@ -517,14 +554,23 @@ export function computeTenantMonthlyEstimate(input: {
       autoQuantity: false,
     });
   }
-  if (phoneQty > 0) {
-    const sub = phoneQty * input.additionalPhoneNumberPriceCents;
+  if (localPhoneQty > 0) {
     lines.push({
-      key: "phone_numbers",
-      label: "Phone numbers",
-      quantity: phoneQty,
+      key: "local_phone_numbers",
+      label: "Local phone numbers",
+      quantity: localPhoneQty,
       unitCents: input.additionalPhoneNumberPriceCents,
-      subtotalCents: sub,
+      subtotalCents: localPhoneQty * input.additionalPhoneNumberPriceCents,
+      autoQuantity: false,
+    });
+  }
+  if (tollFreeQty > 0) {
+    lines.push({
+      key: "toll_free_phone_numbers",
+      label: "Toll-free phone numbers",
+      quantity: tollFreeQty,
+      unitCents: tollFreeUnit,
+      subtotalCents: tollFreeQty * tollFreeUnit,
       autoQuantity: false,
     });
   }

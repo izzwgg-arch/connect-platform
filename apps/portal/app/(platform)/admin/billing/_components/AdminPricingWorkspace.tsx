@@ -17,7 +17,9 @@ import {
   humanizeStoredPricingMode,
   parseBillingFlatRateFromMetadata,
   previewServiceSubtotalCents,
+  parseTollFreeDidPriceCentsFromMetadata,
   resolveBillingQuantitiesForPortal,
+  resolveTollFreeDidPriceCentsForPortal,
   worstNonTerminalInvoiceStatus,
   type BillingQuantityOverrideKey,
 } from "../../../../../lib/billingUi";
@@ -69,6 +71,7 @@ type DraftPricing = {
   flatRateEnabled: boolean;
   flatRateAmountCents: number;
   quantityOverrides: Record<BillingQuantityOverrideKey, { mode: "auto" | "manual"; quantity: number }>;
+  tollFreeDidPriceCents: number;
 };
 
 function toDollars(cents: number | undefined | null) {
@@ -94,21 +97,31 @@ function draftFromDetail(detail: TenantDetail, catalogLocked: boolean): DraftPri
   const firstPhoneNumberFree =
     catalogLocked && pr ? pr.firstPhoneNumberFree !== false : settings.firstPhoneNumberFree !== false;
   const smsBillingEnabled = Boolean(usage.smsEnabled ?? settings.smsBillingEnabled);
+  const localPhoneNumberCount = Number(
+    usage.localPhoneNumberCount ?? usage.phoneNumberCount ?? 0,
+  );
+  const tollFreePhoneNumberCount = Number(usage.tollFreePhoneNumberCount ?? 0);
+  const localBillable = Number(
+    usage.localBillablePhoneNumberCount ??
+      Math.max(0, localPhoneNumberCount - (firstPhoneNumberFree ? 1 : 0)),
+  );
+  const tollFreeBillable = Number(usage.tollFreeBillablePhoneNumberCount ?? tollFreePhoneNumberCount);
   const suggested = {
     extensions: Number(usage.extensionCount || 0),
     virtualExtensions: 0,
-    phoneNumbersBillable: Number(
-      usage.additionalPhoneNumberCount ??
-        Math.max(0, Number(usage.phoneNumberCount || 0) - (firstPhoneNumberFree ? 1 : 0)),
-    ),
-    phoneNumbersTotal: Number(usage.phoneNumberCount || 0),
+    phoneNumbersBillable: localBillable,
+    phoneNumbersTotal: localPhoneNumberCount,
     phoneNumbersIncluded: firstPhoneNumberFree ? 1 : 0,
+    tollFreeNumbersBillable: tollFreeBillable,
+    tollFreeNumbersTotal: tollFreePhoneNumberCount,
     smsPackages: smsBillingEnabled ? 1 : 0,
   };
+  const localDidPrice =
+    Number(catalogLocked && pr ? pr.additionalPhoneNumberPriceCents : settings.additionalPhoneNumberPriceCents) || 0;
   return {
     extensionPriceCents: Number(catalogLocked && pr ? pr.extensionPriceCents : settings.extensionPriceCents) || 0,
-    additionalPhoneNumberPriceCents:
-      Number(catalogLocked && pr ? pr.additionalPhoneNumberPriceCents : settings.additionalPhoneNumberPriceCents) || 0,
+    additionalPhoneNumberPriceCents: localDidPrice,
+    tollFreeDidPriceCents: resolveTollFreeDidPriceCentsForPortal(settings.metadata, localDidPrice),
     smsPriceCents: Number(catalogLocked && pr ? pr.smsPriceCents : settings.smsPriceCents) || 0,
     firstPhoneNumberFree,
     smsBillingEnabled,
@@ -264,23 +277,34 @@ export function AdminPricingWorkspace({
   }, [savedDraft]);
 
   const extensionCount = Number(usage.extensionCount || 0);
-  const additionalPhoneCount = Number(usage.additionalPhoneNumberCount || 0);
-  const phoneNumberCount = Number(usage.phoneNumberCount || 0);
+  const localPhoneNumberCount = Number(usage.localPhoneNumberCount ?? usage.phoneNumberCount ?? 0);
+  const tollFreePhoneNumberCount = Number(usage.tollFreePhoneNumberCount ?? 0);
+  const localBillableSuggested = Number(
+    usage.localBillablePhoneNumberCount ??
+      Math.max(0, localPhoneNumberCount - (draft.firstPhoneNumberFree ? 0 : 1)),
+  );
+  const tollFreeBillableSuggested = Number(
+    usage.tollFreeBillablePhoneNumberCount ?? tollFreePhoneNumberCount,
+  );
 
   const resolvedQuantities = useMemo(
     () =>
       resolveBillingQuantitiesForPortal({
         extensionCount,
-        phoneNumberCount,
-        additionalPhoneNumberCount: additionalPhoneCount,
+        localPhoneNumberCount,
+        localBillablePhoneNumberCount: localBillableSuggested,
+        tollFreePhoneNumberCount,
+        tollFreeBillablePhoneNumberCount: tollFreeBillableSuggested,
         smsEnabled: draft.smsBillingEnabled,
         firstPhoneNumberFree: draft.firstPhoneNumberFree,
         overrides: buildBillingQuantityOverridesPayload(draft.quantityOverrides),
       }),
     [
       extensionCount,
-      phoneNumberCount,
-      additionalPhoneCount,
+      localPhoneNumberCount,
+      tollFreePhoneNumberCount,
+      localBillableSuggested,
+      tollFreeBillableSuggested,
       draft.smsBillingEnabled,
       draft.firstPhoneNumberFree,
       draft.quantityOverrides,
@@ -288,7 +312,8 @@ export function AdminPricingWorkspace({
   );
 
   const billingExtensionCount = resolvedQuantities.billing.extensions;
-  const billingPhoneCount = resolvedQuantities.billing.phoneNumbers;
+  const billingLocalPhoneCount = resolvedQuantities.billing.phoneNumbers;
+  const billingTollFreeCount = resolvedQuantities.billing.tollFreeNumbers;
   const billingSmsCount = resolvedQuantities.billing.smsPackages;
   const billingVirtualCount = resolvedQuantities.billing.virtualExtensions;
 
@@ -296,7 +321,7 @@ export function AdminPricingWorkspace({
     draft.flatRateEnabled && draft.flatRateAmountCents > 0 && billingExtensionCount > 0;
 
   const quantityOverridesDirty = useMemo(() => {
-    const keys: BillingQuantityOverrideKey[] = ["extensions", "virtualExtensions", "phoneNumbers", "smsPackages"];
+    const keys: BillingQuantityOverrideKey[] = ["extensions", "virtualExtensions", "phoneNumbers", "tollFreeNumbers", "smsPackages"];
     return keys.some((k) => {
       const a = draft.quantityOverrides[k];
       const b = savedDraft.quantityOverrides[k];
@@ -307,13 +332,15 @@ export function AdminPricingWorkspace({
   const isDirty = useMemo(() => {
     const flatDirty =
       draft.flatRateEnabled !== savedDraft.flatRateEnabled ||
-      draft.flatRateAmountCents !== savedDraft.flatRateAmountCents;
+      draft.flatRateAmountCents !== savedDraft.flatRateAmountCents ||
+      draft.tollFreeDidPriceCents !== savedDraft.tollFreeDidPriceCents;
     if (catalogLocked) {
       return draft.smsBillingEnabled !== savedDraft.smsBillingEnabled || flatDirty || quantityOverridesDirty;
     }
     return (
       draft.extensionPriceCents !== savedDraft.extensionPriceCents ||
       draft.additionalPhoneNumberPriceCents !== savedDraft.additionalPhoneNumberPriceCents ||
+      draft.tollFreeDidPriceCents !== savedDraft.tollFreeDidPriceCents ||
       draft.smsPriceCents !== savedDraft.smsPriceCents ||
       draft.firstPhoneNumberFree !== savedDraft.firstPhoneNumberFree ||
       draft.smsBillingEnabled !== savedDraft.smsBillingEnabled ||
@@ -325,14 +352,16 @@ export function AdminPricingWorkspace({
   const estimate = useMemo(() => {
     return computeTenantMonthlyEstimate({
       extensionCount,
-      additionalPhoneNumberCount: additionalPhoneCount,
+      additionalPhoneNumberCount: localBillableSuggested,
       smsEnabled: draft.smsBillingEnabled,
       extensionPriceCents: draft.extensionPriceCents,
       additionalPhoneNumberPriceCents: draft.additionalPhoneNumberPriceCents,
+      tollFreeDidPriceCents: draft.tollFreeDidPriceCents,
       smsPriceCents: draft.smsPriceCents,
       billingExtensionCount,
       billingVirtualExtensionCount: billingVirtualCount,
-      billingPhoneNumberCount: billingPhoneCount,
+      billingLocalPhoneNumberCount: billingLocalPhoneCount,
+      billingTollFreePhoneNumberCount: billingTollFreeCount,
       billingSmsPackageCount: billingSmsCount,
       extensionsFlatRateCents: extensionsFlatActive ? draft.flatRateAmountCents : null,
       creditsCents: Number(settings.creditsCents || 0),
@@ -343,13 +372,14 @@ export function AdminPricingWorkspace({
   }, [
     draft,
     extensionCount,
-    additionalPhoneCount,
+    localBillableSuggested,
     settings,
     preview,
     extensionsFlatActive,
     billingExtensionCount,
     billingVirtualCount,
-    billingPhoneCount,
+    billingLocalPhoneCount,
+    billingTollFreeCount,
     billingSmsCount,
   ]);
 
@@ -381,7 +411,7 @@ export function AdminPricingWorkspace({
         r.key === "extensionPriceCents"
           ? billingExtensionCount
           : r.key === "additionalPhoneNumberPriceCents"
-            ? billingPhoneCount
+            ? billingLocalPhoneCount
             : r.key === "smsPriceCents"
               ? billingSmsCount
               : 1;
@@ -401,7 +431,7 @@ export function AdminPricingWorkspace({
         defaultVal: r.type === "bool" ? (baseline ? "Yes" : "No") : dollars(Number(baseline ?? 0)),
       };
     });
-  }, [diag, billingExtensionCount, billingPhoneCount, billingSmsCount, draft]);
+  }, [diag, billingExtensionCount, billingLocalPhoneCount, billingSmsCount, draft]);
 
   const manualQtyTableRows = useMemo(() => {
     const rows: Array<{ key: string; label: string; defaultVal: string; custom: string; quantity: string; monthlySubtotal: string }> = [];
@@ -418,10 +448,11 @@ export function AdminPricingWorkspace({
     };
     add("extensions", "Extensions", extensionCount, billingExtensionCount, extensionsFlatActive ? draft.flatRateAmountCents : draft.extensionPriceCents);
     add("virtualExtensions", "Virtual extensions", 0, billingVirtualCount, draft.extensionPriceCents);
-    add("phoneNumbers", "Phone numbers", resolvedQuantities.suggested.phoneNumbersBillable, billingPhoneCount, draft.additionalPhoneNumberPriceCents);
+    add("phoneNumbers", "Local phone numbers", resolvedQuantities.suggested.phoneNumbersBillable, billingLocalPhoneCount, draft.additionalPhoneNumberPriceCents);
+    add("tollFreeNumbers", "Toll-free phone numbers", resolvedQuantities.suggested.tollFreeNumbersBillable, billingTollFreeCount, draft.tollFreeDidPriceCents);
     add("smsPackages", "SMS packages", resolvedQuantities.suggested.smsPackages, billingSmsCount, draft.smsPriceCents);
     return rows;
-  }, [resolvedQuantities, extensionCount, billingExtensionCount, billingVirtualCount, billingPhoneCount, billingSmsCount, draft, extensionsFlatActive]);
+  }, [resolvedQuantities, extensionCount, billingExtensionCount, billingVirtualCount, billingLocalPhoneCount, billingTollFreeCount, billingSmsCount, draft, extensionsFlatActive]);
 
   const flatRateTableRow = extensionsFlatActive
     ? {
@@ -479,8 +510,11 @@ export function AdminPricingWorkspace({
       if (!catalogLocked) {
         payload.extensionPriceCents = draft.extensionPriceCents;
         payload.additionalPhoneNumberPriceCents = draft.additionalPhoneNumberPriceCents;
+        payload.tollFreeDidPriceCents = draft.tollFreeDidPriceCents;
         payload.smsPriceCents = draft.smsPriceCents;
         payload.firstPhoneNumberFree = draft.firstPhoneNumberFree;
+      } else {
+        payload.tollFreeDidPriceCents = draft.tollFreeDidPriceCents;
       }
       await apiPut(`/admin/billing/tenants/${detail.tenant.id}/settings`, payload);
       onSaved();
@@ -552,21 +586,37 @@ export function AdminPricingWorkspace({
       chip: resolvedQuantities.modes.virtualExtensions === "manual" ? ("custom" as const) : ("default" as const),
     },
     {
-      key: "phone_numbers",
+      key: "local_phone_numbers",
       icon: "#",
-      title: "Phone numbers",
-      quantity: billingPhoneCount,
-      billingQty: billingPhoneCount,
+      title: "Local phone numbers",
+      quantity: billingLocalPhoneCount,
+      billingQty: billingLocalPhoneCount,
       qtyOverrideKey: "phoneNumbers" as const,
       suggestedLabel: draft.firstPhoneNumberFree
-        ? `${phoneNumberCount} active · ${resolvedQuantities.suggested.phoneNumbersIncluded} included · ${resolvedQuantities.suggested.phoneNumbersBillable} billable`
-        : `${phoneNumberCount} active · all billable`,
+        ? `${localPhoneNumberCount} active · ${resolvedQuantities.suggested.phoneNumbersIncluded} included · ${resolvedQuantities.suggested.phoneNumbersBillable} billable`
+        : `${localPhoneNumberCount} active · all billable`,
       unitCents: draft.additionalPhoneNumberPriceCents,
       priceKey: "additionalPhoneNumberPriceCents" as const,
       chip:
         badgeFromFieldBadges("additionalPhoneNumberPriceCents", fieldBadges) === "custom" ||
         badgeFromFieldBadges("firstPhoneNumberFree", fieldBadges) === "custom" ||
         resolvedQuantities.modes.phoneNumbers === "manual"
+          ? ("custom" as const)
+          : ("default" as const),
+    },
+    {
+      key: "toll_free_phone_numbers",
+      icon: "☎",
+      title: "Toll-free phone numbers",
+      quantity: billingTollFreeCount,
+      billingQty: billingTollFreeCount,
+      qtyOverrideKey: "tollFreeNumbers" as const,
+      suggestedLabel: `${tollFreePhoneNumberCount} active toll-free · all billable`,
+      unitCents: draft.tollFreeDidPriceCents,
+      priceKey: "tollFreeDidPriceCents" as const,
+      chip:
+        parseTollFreeDidPriceCentsFromMetadata(settings.metadata) != null ||
+        resolvedQuantities.modes.tollFreeNumbers === "manual"
           ? ("custom" as const)
           : ("default" as const),
     },
@@ -740,9 +790,11 @@ export function AdminPricingWorkspace({
                           ? 0
                           : overrideKey === "phoneNumbers"
                             ? resolvedQuantities.suggested.phoneNumbersBillable
-                            : d.smsBillingEnabled
-                              ? 1
-                              : 0;
+                            : overrideKey === "tollFreeNumbers"
+                              ? resolvedQuantities.suggested.tollFreeNumbersBillable
+                              : d.smsBillingEnabled
+                                ? 1
+                                : 0;
                     return {
                       ...d,
                       quantityOverrides: {
@@ -803,7 +855,7 @@ export function AdminPricingWorkspace({
                     type="text"
                     inputMode="decimal"
                     className="billing-item-card__price-input"
-                    readOnly={catalogLocked || !item.priceKey}
+                    readOnly={!item.priceKey || (catalogLocked && item.priceKey !== "tollFreeDidPriceCents")}
                     value={toDollars(item.unitCents)}
                     onChange={(e) => {
                       if (!item.priceKey || catalogLocked) return;

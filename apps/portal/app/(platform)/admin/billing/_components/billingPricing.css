@@ -288,7 +288,7 @@
 /* Billing items grid */
 .billing-items-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }
@@ -691,7 +691,7 @@
 
 .billing-pricing-rates {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }

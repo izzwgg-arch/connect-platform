@@ -8,6 +8,7 @@ import type { BillingPricingResolution } from "./billingPricingResolution";
 import { activeBillingPlanRowForPeriod, parseBillingPricingMode, resolveTenantBillingPricing } from "./billingPricingResolution";
 import { buildExtensionInvoiceLine } from "./billingFlatRate";
 import { resolveBillingQuantities, type BillingResolvedQuantities } from "./billingQuantityOverrides";
+import { resolveTollFreeDidPriceCents } from "./billingTollFreePricing";
 import { buildPricingPreviewExplanation, type PricingPreviewExplanation } from "./billingPricingExplanation";
 
 export type BillingInvoicePreview = {
@@ -133,7 +134,8 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
   });
 
   const extensionPrice = pricingResolution.extensionPriceCents;
-  const numberPrice = pricingResolution.additionalPhoneNumberPriceCents;
+  const localDidPrice = pricingResolution.additionalPhoneNumberPriceCents;
+  const tollFreeDidPrice = resolveTollFreeDidPriceCents(settings.metadata, localDidPrice);
   const smsPrice = pricingResolution.smsPriceCents;
   const effectiveFirstFree = pricingResolution.firstPhoneNumberFree;
 
@@ -165,17 +167,37 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
     const qty = billingQuantities.billing.phoneNumbers;
     lineItems.push({
       type: "PHONE_NUMBER",
-      description: effectiveFirstFree === false ? "Tenant phone numbers" : "Additional phone numbers",
+      description:
+        effectiveFirstFree === false ? "Local phone numbers" : "Local phone numbers (additional)",
       quantity: qty,
-      unitPriceCents: numberPrice,
-      amountCents: qty * numberPrice,
+      unitPriceCents: localDidPrice,
+      amountCents: qty * localDidPrice,
       taxable: true,
       metadata: {
-        phoneNumberIds: usage.phoneNumberIds,
+        lineItemKind: "local_phone_numbers",
+        phoneNumberIds: usage.localPhoneNumberIds,
         firstFree: effectiveFirstFree,
         suggestedBillableCount: billingQuantities.suggested.phoneNumbersBillable,
-        phoneNumbersTotal: billingQuantities.suggested.phoneNumbersTotal,
+        localPhoneNumbersTotal: billingQuantities.suggested.phoneNumbersTotal,
         quantityMode: billingQuantities.modes.phoneNumbers,
+      },
+    });
+  }
+  if (billingQuantities.billing.tollFreeNumbers > 0) {
+    const qty = billingQuantities.billing.tollFreeNumbers;
+    lineItems.push({
+      type: "PHONE_NUMBER",
+      description: "Toll-free phone numbers",
+      quantity: qty,
+      unitPriceCents: tollFreeDidPrice,
+      amountCents: qty * tollFreeDidPrice,
+      taxable: true,
+      metadata: {
+        lineItemKind: "toll_free_phone_numbers",
+        phoneNumberIds: usage.tollFreePhoneNumberIds,
+        suggestedBillableCount: billingQuantities.suggested.tollFreeNumbersBillable,
+        tollFreeNumbersTotal: billingQuantities.suggested.tollFreeNumbersTotal,
+        quantityMode: billingQuantities.modes.tollFreeNumbers,
       },
     });
   }

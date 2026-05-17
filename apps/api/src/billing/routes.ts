@@ -615,6 +615,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       .object({
         extensionPriceCents: z.number().int().nonnegative().optional(),
         additionalPhoneNumberPriceCents: z.number().int().nonnegative().optional(),
+        tollFreeDidPriceCents: z.number().int().nonnegative().nullable().optional(),
         smsPriceCents: z.number().int().nonnegative().optional(),
         firstPhoneNumberFree: z.boolean().optional(),
         smsBillingEnabled: z.boolean().optional(),
@@ -650,6 +651,9 @@ export async function registerBillingRoutes(app: FastifyInstance) {
             phoneNumbers: z
               .object({ mode: z.enum(["auto", "manual"]), quantity: z.number().int().min(0).max(100_000).nullable() })
               .optional(),
+            tollFreeNumbers: z
+              .object({ mode: z.enum(["auto", "manual"]), quantity: z.number().int().min(0).max(100_000).nullable() })
+              .optional(),
             smsPackages: z
               .object({ mode: z.enum(["auto", "manual"]), quantity: z.number().int().min(0).max(100_000).nullable() })
               .optional(),
@@ -678,6 +682,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       billingPricingMode,
       billingFlatRate,
       billingQuantityOverrides,
+      tollFreeDidPriceCents,
       ...pricing
     } = input as any;
     const pricingData = Object.fromEntries(Object.entries(pricing).filter(([, v]) => v !== undefined));
@@ -701,7 +706,8 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       taxProviderId !== undefined ||
       billingPricingMode !== undefined ||
       billingFlatRate !== undefined ||
-      billingQuantityOverrides !== undefined
+      billingQuantityOverrides !== undefined ||
+      tollFreeDidPriceCents !== undefined
     ) {
       const cur = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId } });
       if (billingPricingMode !== undefined) {
@@ -712,6 +718,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         ...(billingPricingMode !== undefined ? { billingPricingMode } : {}),
         ...(flatRatePatch?.ok ? { billingFlatRate: flatRatePatch.value } : {}),
         ...(quantityOverridesPatch?.ok ? { billingQuantityOverrides: quantityOverridesPatch.value } : {}),
+        ...(tollFreeDidPriceCents !== undefined ? { tollFreeDidPriceCents } : {}),
       });
     }
     const createUpdate = { ...pricingData, ...brandingPatch, ...(mergedMetadata !== undefined ? { metadata: mergedMetadata } : {}) };

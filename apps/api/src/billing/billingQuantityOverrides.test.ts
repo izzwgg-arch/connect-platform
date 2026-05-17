@@ -11,10 +11,16 @@ const baseUsage = {
   tenantId: "t1",
   extensionCount: 3,
   phoneNumberCount: 3,
+  localPhoneNumberCount: 3,
+  tollFreePhoneNumberCount: 0,
+  localBillablePhoneNumberCount: 2,
+  tollFreeBillablePhoneNumberCount: 0,
   additionalPhoneNumberCount: 2,
   smsEnabled: true,
   extensionIds: ["e1", "e2", "e3"],
   phoneNumberIds: ["p1", "p2", "p3"],
+  localPhoneNumberIds: ["p1", "p2", "p3"],
+  tollFreePhoneNumberIds: [] as string[],
 };
 
 test("resolveBillingQuantities: auto matches system usage", () => {
