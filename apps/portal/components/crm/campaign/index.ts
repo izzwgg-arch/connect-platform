@@ -9,3 +9,4 @@ export { CampaignImportEventCard } from "./CampaignImportEventCard";
 export { CampaignGuidedEmpty } from "./CampaignGuidedEmpty";
 export type { CampaignGuidedStep } from "./CampaignGuidedEmpty";
 export { CampaignOperationalSidebar } from "./CampaignOperationalSidebar";
+export { CampaignDetailCommandPanel } from "./CampaignDetailCommandPanel";

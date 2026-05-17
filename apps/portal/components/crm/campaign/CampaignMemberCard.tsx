@@ -165,7 +165,7 @@ export function CampaignMemberCard({
           <button
             type="button"
             onClick={() => router.push(`/crm/contacts/${member.contactId}`)}
-            className={cn(crm.btnGhost, "text-xs py-1.5 justify-center")}
+            className={cn(crm.campaignDetailBtnTertiary, "text-xs py-1.5 justify-center")}
           >
             <ExternalLink className="h-3.5 w-3.5" />
             Contact
@@ -254,7 +254,7 @@ function MemberCallbackEditor({
           <button type="button" onClick={save} disabled={saving} className={cn(crm.btnPrimary, "flex-1 text-xs py-1")}>
             Save
           </button>
-          <button type="button" onClick={() => setEditing(false)} className={cn(crm.btnGhost, "px-2 py-1")}>
+          <button type="button" onClick={() => setEditing(false)} className={cn(crm.campaignDetailBtnTertiary, "px-2 py-1")}>
             <X className="h-3.5 w-3.5" />
           </button>
         </div>
@@ -280,7 +280,7 @@ function MemberCallbackEditor({
   }
 
   return (
-    <button type="button" onClick={() => setEditing(true)} className={cn(crm.btnGhost, "text-xs py-1.5 justify-center w-full")}>
+    <button type="button" onClick={() => setEditing(true)} className={cn(crm.campaignDetailBtnTertiary, "text-xs py-1.5 justify-center w-full")}>
       <CalendarClock className="h-3.5 w-3.5" />
       Set callback
     </button>

@@ -16,7 +16,7 @@ import {
   CampaignCommandHeader,
   CampaignPerformancePanel,
   CampaignMemberCard,
-  CampaignOperationalSidebar,
+  CampaignDetailCommandPanel,
   deriveCampaignHealth,
   type CampaignDetail,
   type CampaignMember,
@@ -111,7 +111,7 @@ const CAMPAIGN_IMPORT_STATUS_STYLE: Record<string, string> = {
   PROCESSING: "bg-crm-accent/15 text-crm-accent border-crm-accent/30",
   DONE: "bg-crm-success/10 text-crm-success border-crm-success/30",
   PARTIAL: "bg-crm-warning/10 text-crm-warning border-crm-warning/35",
-  FAILED: "bg-crm-danger/15 text-red-800 border-crm-danger/35",
+  FAILED: "bg-crm-danger/15 text-crm-danger border-crm-danger/35",
 };
 
 function campaignImportStatusLabel(s: string) {
@@ -839,7 +839,7 @@ export default function CampaignDetailPage() {
   const hd = health!;
 
   return (
-    <CRMPageShell innerClassName={crm.pageInnerCampaign}>
+    <CRMPageShell innerClassName={cn(crm.pageInnerCampaign, crm.campaignWorkspace)}>
       {showAddContacts && (
         <AddContactsModal
           campaignId={campaignId}
@@ -1145,7 +1145,7 @@ export default function CampaignDetailPage() {
                     <p className="text-crm-success font-medium">Members added to campaign: {importSummary.addedMembers}</p>
                     <p>Already in campaign (skipped): {importSummary.skippedExistingMembers}</p>
                     {importSummary.errorCount > 0 && (
-                      <p className="text-amber-700">Row errors: {importSummary.errorCount}</p>
+                      <p className="text-crm-warning">Row errors: {importSummary.errorCount}</p>
                     )}
                     {importSummary.errors?.length > 0 && (
                       <ul className="text-xs text-crm-muted max-h-24 overflow-y-auto list-disc pl-4 mt-1">
@@ -1240,10 +1240,34 @@ export default function CampaignDetailPage() {
           onDistribute={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
         />
 
+        <div className={crm.campaignDetailStack}>
         <CampaignPerformancePanel campaign={campaign} health={hd} />
 
-        <div className="grid gap-3 lg:grid-cols-12 lg:items-start">
-          <div className="lg:col-span-8 flex flex-col gap-3 min-w-0">
+        <CampaignDetailCommandPanel
+          campaign={campaign}
+          health={hd}
+          workload={workload}
+          workloadLoading={workloadLoading}
+          importHistory={importHistory}
+          importHistoryLoading={importHistoryLoading}
+          isAdmin={isAdmin}
+          canQueue={canQueue}
+          scripts={scripts}
+          checklists={checklists}
+          onUpdateCampaign={updateCampaign}
+          onDistribute={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
+          onImport={() => {
+            setImportOpen(true);
+            setImportErr("");
+            setImportSummary(null);
+            setImportFile(null);
+            setImportAssigneeId("");
+            setImportPreview(null);
+            setImportPreviewContextKeyState(null);
+            setImportCompareBaseline(null);
+          }}
+          onFilterUnassigned={() => { setAssigneeFilter("UNASSIGNED"); loadMembers("UNASSIGNED"); }}
+        />
 
             <CRMSection
               title={`Members (${membersTotal})`}
@@ -1263,7 +1287,7 @@ export default function CampaignDetailPage() {
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className={cn(crm.input, "w-auto min-w-[9rem]")}
+              className={cn(crm.select, "w-auto min-w-[9rem]")}
             >
               <option value="">All statuses</option>
               {(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => (
@@ -1278,7 +1302,7 @@ export default function CampaignDetailPage() {
                 setAssigneeFilter(v);
                 loadMembers(v);
               }}
-              className={cn(crm.input, "w-auto min-w-[9rem]")}
+              className={cn(crm.select, "w-auto min-w-[9rem]")}
             >
               <option value="">All agents</option>
               <option value="UNASSIGNED">Unassigned</option>
@@ -1297,7 +1321,7 @@ export default function CampaignDetailPage() {
                 <select
                   value={bulkAssignUserId}
                   onChange={(e) => setBulkAssignUserId(e.target.value)}
-                  className="flex-1 border border-crm-accent/40 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30 bg-crm-surface min-w-0"
+                  className={cn(crm.select, "flex-1 min-w-0 border-crm-accent/40")}
                 >
                   <option value="">— Clear assignment —</option>
                   {crmUsers.filter((u) => u.crmEnabled).map((u) => (
@@ -1308,7 +1332,7 @@ export default function CampaignDetailPage() {
               <button
                 onClick={handleBulkAssign}
                 disabled={bulkAssigning}
-                className="px-3 py-1.5 bg-crm-accent text-white rounded-lg text-sm font-medium hover:brightness-110 disabled:opacity-50 shrink-0"
+                className={cn(crm.btnPrimary, "text-sm py-1.5 px-3 shrink-0")}
               >
                 {bulkAssigning ? "Assigning…" : "Apply"}
               </button>
@@ -1365,13 +1389,13 @@ export default function CampaignDetailPage() {
                         setDistributeMsg("");
                         setDistributeUserIds(new Set());
                       }}
-                      className={crm.btnGhost}
+                      className={crm.campaignDetailBtnSecondary}
                     >
                       Distribute
                     </button>
                   )}
                   {canQueue && hd.activeQueueWork > 0 && (
-                    <Link href={`/crm/queue?campaignId=${encodeURIComponent(campaignId)}`} className={crm.btnGhost}>
+                    <Link href={`/crm/queue?campaignId=${encodeURIComponent(campaignId)}`} className={crm.campaignDetailBtnSecondary}>
                       Open queue
                     </Link>
                   )}
@@ -1413,33 +1437,6 @@ export default function CampaignDetailPage() {
             </div>
           )}
             </CRMSection>
-          </div>
-
-          <CampaignOperationalSidebar
-            campaign={campaign}
-            health={hd}
-            workload={workload}
-            workloadLoading={workloadLoading}
-            importHistory={importHistory}
-            importHistoryLoading={importHistoryLoading}
-            isAdmin={isAdmin}
-            canQueue={canQueue}
-            scripts={scripts}
-            checklists={checklists}
-            onUpdateCampaign={updateCampaign}
-            onDistribute={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
-            onImport={() => {
-              setImportOpen(true);
-              setImportErr("");
-              setImportSummary(null);
-              setImportFile(null);
-              setImportAssigneeId("");
-              setImportPreview(null);
-              setImportPreviewContextKeyState(null);
-              setImportCompareBaseline(null);
-            }}
-            onFilterUnassigned={() => { setAssigneeFilter("UNASSIGNED"); loadMembers("UNASSIGNED"); }}
-          />
         </div>
     </CRMPageShell>
   );

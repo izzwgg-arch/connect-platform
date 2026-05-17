@@ -116,13 +116,30 @@ export const CAMPAIGN_PRIORITY_LABELS: Record<CampaignPriority, string> = {
   URGENT: "Urgent",
 };
 
-/** Dark-theme status chips — no light green/yellow slabs. */
+/** Dark-theme status chips — restrained operational accents (19E.3). */
 export const CAMPAIGN_STATUS_CHIP: Record<CampaignStatus, string> = {
-  DRAFT: "bg-crm-surface-2 text-crm-muted border-crm-border",
-  ACTIVE: "bg-crm-success/15 text-crm-success border-crm-success/30",
-  PAUSED: "bg-crm-warning/15 text-crm-warning border-crm-warning/35",
-  COMPLETED: "bg-crm-accent/15 text-crm-accent border-crm-accent/30",
-  ARCHIVED: "bg-crm-surface-2 text-crm-muted/80 border-crm-border",
+  DRAFT: "bg-crm-surface-2/90 text-crm-muted border-crm-border/90",
+  ACTIVE: "bg-crm-accent/12 text-crm-accent border-crm-accent/35",
+  PAUSED: "bg-crm-warning/12 text-crm-warning border-crm-warning/35",
+  COMPLETED: "bg-crm-success/12 text-crm-success border-crm-success/35",
+  ARCHIVED: "bg-crm-surface-2/80 text-crm-muted/75 border-crm-border/70",
+};
+
+/** Index row — dot + thin border, no oversized pill (19E.3). */
+export const CAMPAIGN_STATUS_INDEX_CHIP: Record<CampaignStatus, string> = {
+  DRAFT: "border-crm-border/80 bg-crm-surface-2/60 text-crm-muted",
+  ACTIVE: "border-crm-accent/40 bg-crm-accent/8 text-crm-accent",
+  PAUSED: "border-crm-warning/35 bg-crm-warning/8 text-crm-warning",
+  COMPLETED: "border-crm-success/35 bg-crm-success/8 text-crm-success",
+  ARCHIVED: "border-crm-border/70 bg-crm-surface-2/50 text-crm-muted/80",
+};
+
+export const CAMPAIGN_STATUS_DOT: Record<CampaignStatus, string> = {
+  DRAFT: "bg-crm-muted/60",
+  ACTIVE: "bg-crm-accent shadow-[0_0_6px_rgba(56,189,248,0.55)]",
+  PAUSED: "bg-crm-warning",
+  COMPLETED: "bg-crm-success",
+  ARCHIVED: "bg-crm-muted/50",
 };
 
 export const CAMPAIGN_PRIORITY_CHIP: Record<CampaignPriority, string> = {

@@ -19,6 +19,16 @@ import { crm } from "../../../../components/crm/crmClasses";
 import { apiGet, apiPost, apiPatch } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { cn } from "../../../../components/crm/cn";
+import { CAMPAIGN_STATUS_LABELS } from "../../../../components/crm/campaign/campaignTypes";
+
+const STATUS_FILTER_OPTIONS: { value: string; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "ACTIVE", label: CAMPAIGN_STATUS_LABELS.ACTIVE },
+  { value: "PAUSED", label: CAMPAIGN_STATUS_LABELS.PAUSED },
+  { value: "DRAFT", label: CAMPAIGN_STATUS_LABELS.DRAFT },
+  { value: "COMPLETED", label: CAMPAIGN_STATUS_LABELS.COMPLETED },
+  { value: "ARCHIVED", label: CAMPAIGN_STATUS_LABELS.ARCHIVED },
+];
 
 function CreateCampaignModal({
   onClose,
@@ -214,7 +224,7 @@ export default function CampaignsPage() {
   const listEmptyAfterFilter = !loading && !error && campaigns.length > 0 && filtered.length === 0;
 
   return (
-    <CRMPageShell innerClassName={crm.pageInnerCampaign}>
+    <CRMPageShell innerClassName={cn(crm.pageInnerCampaign, crm.campaignWorkspace)}>
       {showCreate && isAdmin && (
         <CreateCampaignModal
           onClose={() => setShowCreate(false)}
@@ -264,31 +274,32 @@ export default function CampaignsPage() {
         </div>
       )}
 
-      <CRMActionBar>
-        <div className="relative flex-1 min-w-[200px] max-w-sm">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-crm-muted" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className={cn(crm.input, crm.inputWithIcon)}
-            placeholder="Search campaigns…"
-            aria-label="Search campaigns"
-          />
-        </div>
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className={cn(crm.input, "w-auto min-w-[10rem]")}
-          aria-label="Filter by status"
-        >
-          <option value="all">All statuses</option>
-          <option value="DRAFT">Draft</option>
-          <option value="ACTIVE">Active</option>
-          <option value="PAUSED">Paused</option>
-          <option value="COMPLETED">Completed</option>
-          <option value="ARCHIVED">Archived</option>
-        </select>
-      </CRMActionBar>
+      <div className={crm.campaignCommandSticky}>
+        <CRMActionBar className={cn(crm.campaignFilterBar, "gap-3 sm:gap-4")}>
+          <div className="relative min-w-[12rem] flex-1 max-w-lg">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-crm-muted" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className={crm.campaignSearchInput}
+              placeholder="Search campaigns…"
+              aria-label="Search campaigns"
+            />
+          </div>
+          <div className={cn(crm.filterPillGroup, "shrink-0")} role="group" aria-label="Filter by status">
+            {STATUS_FILTER_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setStatusFilter(opt.value)}
+                className={cn(crm.filterPill, statusFilter === opt.value && crm.filterPillActive)}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </CRMActionBar>
+      </div>
 
       {loading ? (
         <p className="py-16 text-center text-sm text-crm-muted">Loading campaigns…</p>
@@ -337,9 +348,9 @@ export default function CampaignsPage() {
           }
         />
       ) : (
-        <ul className="flex flex-col gap-2">
+        <ul className="m-0 flex list-none flex-col gap-3 p-0">
           {filtered.map((campaign) => (
-            <li key={campaign.id}>
+            <li key={campaign.id} className="list-none">
               <CampaignIndexCard
                 campaign={campaign}
                 metrics={reportById.get(campaign.id)}

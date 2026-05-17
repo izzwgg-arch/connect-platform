@@ -114,7 +114,7 @@ Campaign routes use **`crm.pageInnerCampaign`** (wide desk, up to ~1680px) and *
 
 **Dark surfaces (19E.1+):** Wrap campaign pages in `crm.campaignWorkspace` (forces dark tokens under light portal theme). Index filters use `crm.campaignFilterBar` + `crm.input` / `crm.select`. Modals use `crm.campaignModalBackdrop`, `crm.campaignPriorityPill*`. Ban `bg-white`, `bg-gray-50`, `bg-green-100`, light native inputs, and duplicate metric panels.
 
-**Layout (19E.2 detail):** Detail uses `crm.campaignDetailGrid` — main `lg:col-span-7 xl:col-span-8`, sidebar `lg:col-span-5` with `min-w-[18rem]`. Command header uses 12-col grid (identity / snapshot / operations). Performance panel = status mix + funnel only (counts in live snapshot).
+**Layout (19E.3 detail):** No skinny right rail. Vertical `crm.campaignDetailStack`: `CampaignCommandHeader` (12-col at `lg+`: identity / live snapshot / operations) → `CampaignPerformancePanel` (funnel only) → full-width `CampaignDetailCommandPanel` (next actions, workload, imports, settings in responsive grid) → full-width members feed. Counts once in header snapshot; performance panel does not repeat member totals.
 
 **Queue continuity:** `/crm/queue?campaignId=…` and `/crm/queue?mode=power&campaignId=…`. No fake realtime or AI analytics.
 

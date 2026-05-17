@@ -41,6 +41,63 @@
   width: 100%;
 }
 
+/* CRM campaign routes — dark operational surfaces even when portal data-theme=light */
+.crm-campaign-workspace input:not([type="checkbox"]):not([type="radio"]),
+.crm-campaign-workspace textarea,
+.crm-campaign-workspace select {
+  background-color: var(--crm-surface-2) !important;
+  border-color: var(--crm-border) !important;
+  color: var(--crm-text) !important;
+  box-shadow: none !important;
+}
+.crm-campaign-workspace input::placeholder,
+.crm-campaign-workspace textarea::placeholder {
+  color: var(--crm-text-muted) !important;
+}
+.crm-campaign-workspace select option {
+  background: var(--crm-surface) !important;
+  color: var(--crm-text) !important;
+}
+
+/* Phase 19E.3 — subtle live campaign motion (respect reduced-motion) */
+@keyframes crm-campaign-strip-pulse {
+  0%,
+  100% {
+    opacity: 0.88;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes crm-campaign-live-dot {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.crm-campaign-workspace .crm-campaign-status-strip-live {
+  animation: crm-campaign-strip-pulse 2.8s ease-in-out infinite;
+}
+.crm-campaign-workspace .crm-campaign-live-dot {
+  animation: crm-campaign-live-dot 2.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .crm-campaign-workspace .crm-campaign-status-strip-live,
+  .crm-campaign-workspace .crm-campaign-live-dot {
+    animation: none;
+  }
+}
+
+.crm-campaign-workspace button:disabled,
+.crm-campaign-workspace a[aria-disabled="true"] {
+  opacity: 1 !important;
+}
+
 :root[data-theme="light"] {
   --bg-app: #f6f8fb;
   --bg-gradient-start: #f8fafc;

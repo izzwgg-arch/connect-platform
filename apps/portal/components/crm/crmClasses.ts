@@ -25,10 +25,18 @@ export const crm = {
   /** Phase 19D.2 — contacts index command bar stays dark when portal data-theme=light */
   contactsWorkspace:
     "crm-contacts-workspace [color-scheme:dark] [--panel:#141f2b] [--panel-2:#1a2635] [--bg-soft:#101923] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#141f2b] [--crm-surface-2:#1a2635] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",
+  /** Phase 19E.3 — detail page vertical stack (no skinny aside rail) */
+  campaignDetailStack: "flex w-full min-w-0 flex-col gap-3",
+  campaignDetailCommandGrid:
+    "grid w-full min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4",
+  campaignDetailBtnSecondary:
+    "inline-flex items-center justify-center gap-1.5 rounded-crm border border-crm-border bg-crm-surface-2 px-3 py-2 text-sm font-medium text-crm-text shadow-none hover:bg-crm-surface hover:border-crm-border/90 disabled:cursor-not-allowed disabled:border-crm-border/70 disabled:bg-crm-surface-2/75 disabled:text-crm-muted/80 disabled:opacity-100",
+  campaignDetailBtnTertiary:
+    "inline-flex items-center justify-center gap-1 rounded-crm border border-crm-border/65 bg-crm-surface-2/50 px-2.5 py-1.5 text-xs font-medium text-crm-muted shadow-none hover:border-crm-border hover:bg-crm-surface-2 hover:text-crm-text disabled:cursor-not-allowed disabled:border-crm-border/55 disabled:bg-crm-surface-2/40 disabled:text-crm-muted/65 disabled:opacity-100",
+  /** @deprecated 19E.3 — use campaignDetailStack + CampaignDetailCommandPanel */
   campaignDetailGrid: "grid gap-4 lg:grid-cols-12 lg:items-start",
-  campaignMainCol: "lg:col-span-7 xl:col-span-8 flex flex-col gap-3 min-w-0",
-  campaignAsideCol:
-    "lg:col-span-5 xl:col-span-4 flex flex-col gap-3 min-w-0 lg:min-w-[18rem] xl:min-w-[20rem]",
+  campaignMainCol: "lg:col-span-12 flex flex-col gap-3 min-w-0",
+  campaignAsideCol: "hidden",
   /** Phase 19E.1 — dense campaign index / member rows */
   campaignCard:
     "rounded-crm-lg border border-crm-border bg-crm-surface shadow-crm transition-[border-color,box-shadow,transform] duration-200 hover:border-crm-border/90 hover:shadow-[0_6px_24px_-8px_rgba(0,0,0,0.45)] hover:-translate-y-px",
@@ -73,6 +81,19 @@ export const crm = {
   /** Phase 19G — wallboard command center forces dark CRM tokens even when portal data-theme=light */
   wallboardWorkspace:
     "crm-wallboard-workspace [color-scheme:dark] [--panel:#141f2b] [--panel-2:#1a2635] [--bg-soft:#101923] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#141f2b] [--crm-surface-2:#1a2635] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",
+  /** Phase 19K — CRM Intelligence reports workspace (full dark, no light surfaces) */
+  reportsWorkspace:
+    "crm-reports-workspace [color-scheme:dark] [--panel:#141f2b] [--panel-2:#1a2635] [--bg-soft:#101923] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#141f2b] [--crm-surface-2:#1a2635] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",
+  pageInnerReports:
+    "mx-auto w-full max-w-[min(100%,1680px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-4 min-h-0",
+  reportsHeroGrid:
+    "grid grid-cols-2 gap-3 lg:grid-cols-4",
+  reportsGrid:
+    "grid grid-cols-1 gap-4 lg:grid-cols-3 lg:items-start",
+  reportsMainCol:
+    "flex flex-col gap-4 min-w-0 lg:col-span-2",
+  reportsSideCol:
+    "flex flex-col gap-3 min-w-0",
 
   card: "rounded-crm-lg border border-crm-border bg-crm-surface shadow-crm",
   cardPad: "p-5",

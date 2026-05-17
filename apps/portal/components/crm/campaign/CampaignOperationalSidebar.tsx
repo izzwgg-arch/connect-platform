@@ -80,24 +80,13 @@ export function CampaignOperationalSidebar({
       ),
     });
   }
-  if (health.total === 0) {
-    alerts.push({
-      title: "Campaign empty",
-      body: "Import CSV or add existing contacts to start outbound work.",
-      action: (
-        <div className="flex flex-wrap gap-1.5 mt-2">
-          {isAdmin && (
-            <button type="button" onClick={onImport} className={cn(crm.btnPrimary, "text-xs py-1.5 px-2.5")}>
-              <Upload className="h-3.5 w-3.5" /> Import
-            </button>
-          )}
-        </div>
-      ),
-    });
-  }
-
   return (
-    <aside className="flex flex-col gap-3 lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
+    <aside
+      className={cn(
+        crm.campaignAsideCol,
+        "lg:sticky lg:top-4 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto",
+      )}
+    >
       <CRMCard className="p-3 sm:p-4">
         <p className={crm.label}>Next actions</p>
         {alerts.length === 0 ? (
@@ -210,7 +199,7 @@ export function CampaignOperationalSidebar({
             <select
               value={campaign.scriptId ?? ""}
               onChange={(e) => onUpdateCampaign({ scriptId: e.target.value || null })}
-              className={crm.input}
+              className={crm.select}
             >
               <option value="">None</option>
               {scripts.map((s) => (
@@ -225,7 +214,7 @@ export function CampaignOperationalSidebar({
             <select
               value={campaign.checklistId ?? ""}
               onChange={(e) => onUpdateCampaign({ checklistId: e.target.value || null })}
-              className={crm.input}
+              className={crm.select}
             >
               <option value="">None</option>
               {checklists.map((c) => (

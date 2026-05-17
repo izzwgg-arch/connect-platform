@@ -277,7 +277,20 @@
 | Function | Create, lifecycle, import preview/run, bulk assign, member status/callback, export CSV unchanged |
 | Typecheck | `pnpm exec tsc -p apps/portal` — no errors in `crm/campaigns/**` or `components/crm/campaign/**` |
 
-### Phase 19E.3 — Campaign index operational polish (visual smoke)
+### Phase 19E.3 — Campaign index + detail operational polish (visual smoke)
+
+| Check | Expected |
+|-------|----------|
+| Detail layout | No skinny right sidebar; `CampaignDetailCommandPanel` full-width grid above members |
+| Detail buttons | Add contacts, Distribute, Pause, Archive, Export use dark `crm.campaignDetailBtn*` — no white/light chips |
+| Detail grid | Header + performance + command panel + members stack; even card heights |
+| Metrics | Live snapshot in header only; performance = funnel/status mix |
+| Index | (see index rows below) Phase 19E.3 index cards + sticky filter bar |
+| Routes | `/crm/campaigns`, `/crm/campaigns/[id]`, `?mode=power` on queue link — behavior unchanged |
+| Width | ~1024px: command panel 2-col; header 12-col or readable stack |
+| Typecheck | `pnpm exec tsc -p apps/portal` passes |
+
+### Phase 19E.3 index — Campaign index operational polish (visual smoke)
 
 | Check | Expected |
 |-------|----------|
