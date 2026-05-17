@@ -69,14 +69,91 @@ Chart colors live in `components/crm/charts/chartColors.ts` (aligned with `--crm
 
 ---
 
-## Aligned routes (Phase 19A)
+## Queue operational workspace (Phase 19C)
+
+`/crm/queue` is a **full-width outbound workbench**, not a narrow centered list.
+
+| Zone | Width (xl+) | Role |
+|------|-------------|------|
+| Feed | 7 / 12 | Live queue rows, featured next lead, power session card |
+| Overview | 3 / 12 | Queue pressure bars, callback due/overdue, today stats from `/crm/tasks/stats` |
+| Attention | 2 / 12 | Actionable alerts (overdue callbacks, tasks, campaign focus) — links only when counts > 0 |
+
+**Layout shell:** `crm.pageInnerQueue` (`max-w-[1440px]`). **Primitives:** `CRMPageHeader`, `CRMActionBar`, `QueueCountPill`, `QueueOperationalRow`, `QueuePowerSessionBar`, `QueueEmptyOperational`, side panels in `components/crm/queue/*`.
+
+**Power mode:** sticky `QueuePowerSessionBar` (session badge, filter chips, progress bar, pause/end) — not toggle chips floating in empty space.
+
+**Visual priority:** overdue / due callbacks use `crm-danger` / `crm-warning` borders on rows; “next best lead” uses accent ring.
+
+**Empty queue:** `QueueEmptyOperational` shows today snapshot from real task stats — not AI suggestions.
+
+---
+
+## Campaign operational workspace (Phase 19E)
+
+Campaign routes use **`crm.pageInnerCampaign`** (~1400px) and **`components/crm/campaign/*`**.
+
+| Zone | Pattern |
+|------|---------|
+| Index | `CRMPageHeader` + summary strip + `CampaignIndexCard` (metrics from `GET /crm/reports/campaigns` + `GET /crm/campaigns`) |
+| Detail header | `CampaignCommandHeader` — identity / live snapshot / operations (queue, power, import, distribute) |
+| Detail body | 8+4 grid: `CampaignMemberCard` feed + sticky `CampaignOperationalSidebar` |
+| Performance | `CampaignPerformancePanel` — donut, funnel bars, rings from `statusCounts` only |
+| Imports | `CampaignImportEventCard` in sidebar — real `GET /crm/campaigns/:id/imports` rows |
+
+**Queue continuity:** `/crm/queue?campaignId=…` and `/crm/queue?mode=power&campaignId=…`. No fake realtime or AI analytics.
+
+---
+
+## Live call workspace / communication cockpit (Phase 19F)
+
+`/crm/live-call` is the **agent communication desk** — operational even with no contact selected.
+
+| Zone | Width (xl+) | Role |
+|------|-------------|------|
+| Session rail | 3 / 12 | Queue/campaign/contact context, back/next links, library shortcuts |
+| Main | 6 / 12 | Live call status, contact header, note, SMS, outcome, **timeline center** |
+| Helpers | 3 / 12 | Script, checklist, open tasks |
+
+**Layout shell:** `crm.pageInnerLive` (`max-w-[1440px]`). **Primitives:** `LiveWorkspace*` in `components/crm/live/*` + shared `ContactTimeline` / `ContactSmsPanel`.
+
+**Idle state:** `LiveWorkspaceIdle` — ready desk, quick links, optional `/crm/tasks/stats` snapshot — not a dead centered message.
+
+**Live call visual language:** `LiveCallStatusBanner` uses `useTelephony()` when matched; otherwise honest placeholders. No fabricated timers or demo calls.
+
+**Continuity:** Preserve `contactId`, `memberId`, `campaignId`, `returnTo`, `mode=power`, `linkedId`, `from` — screen-pop and queue URLs unchanged.
+
+---
+
+## Aligned routes (Phase 19A+)
 
 - `/crm/dashboard` (Phase 19B: command-center charts + wide layout)
-- `/crm/queue`
-- `/crm/campaigns`, `/crm/campaigns/[id]`
-- `/crm/contacts`, `/crm/contacts/[id]`
+- `/crm/queue` (Phase 19C: operational workbench layout)
+- `/crm/campaigns`, `/crm/campaigns/[id]` (Phase 19E: operational workspace)
+- `/crm/contacts`, `/crm/contacts/[id]` (Phase 19D: contact relationship workspace)
+- `/crm/live-call` (Phase 19F: live agent workspace)
 
-Reports, wallboard, tasks, scripts, checklists, live-call: **not** part of 19A; migrate in a later phase if needed.
+Reports, wallboard, tasks, scripts, checklists: migrate opportunistically; live-call is aligned in 19F.
+
+---
+
+## Contact relationship workspace (Phase 19D)
+
+`/crm/contacts/[id]` is a **communication-centric operational workspace**, not a contact record form.
+
+| Pattern | Component / rule | Use |
+|---------|------------------|-----|
+| Layout width | `crm.pageInnerContact` (~1400px) | Timeline-first main column + sticky operational sidebar |
+| Header | `ContactWorkspaceHeader` | Identity left, operational pulse center, primary actions right |
+| Sticky actions | `ContactStickyActionBar` | Call, workspace, SMS, note, task, return-to-queue while scrolling |
+| Timeline | `ContactTimeline` + `ContactTimelineItem` | Primary feed — calls, SMS, notes, tasks, recordings from `GET …/timeline` |
+| SMS thread | `ContactSmsPanel` | Bubble UI derived from timeline SMS events + `POST …/sms` composer |
+| Sidebar | `ContactRelationshipHealth`, next-step card, tasks, outreach rules | Real metrics only (7d touches, overdue tasks, callback pressure) |
+| Queue continuity | URL `returnTo`, `memberId`, `campaignId` + `GET /crm/queue` match | Back to queue, campaign chip, callback context |
+
+**Do:** timeline-first column order (note → SMS → timeline); dark `crm-*` chips for disposition/SMS; `CRMEmptyState` for zero activity.
+
+**Don't:** `bg-white` / light SMS bubbles; fake lead scores or sentiment; duplicate timeline + sidebar SMS panels; narrow `max-w-6xl` stacked form layout.
 
 ---
 

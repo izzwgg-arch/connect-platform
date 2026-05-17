@@ -1,15 +1,28 @@
 "use client";
 
-import { Suspense, useEffect, useState, useCallback, useRef } from "react";
+import { Suspense, useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ListOrdered, PhoneCall, ExternalLink, SkipForward, Clock, Ban,
-  RefreshCw, CheckCheck, Inbox, CalendarClock, UserCheck, X, Edit2,
-  ChevronRight, AlertCircle, Zap, ZapOff, Pause, Play, ArrowRight,
+  RefreshCw, CheckCheck, CalendarClock, UserCheck, X, Edit2,
+  AlertCircle, Zap, ZapOff, Pause, Play, ArrowRight,
   PhoneMissed, Voicemail, ThumbsUp, ThumbsDown, CheckCircle2,
   Sparkles, Megaphone,
 } from "lucide-react";
-import { CRMPageShell } from "../../../../components/crm";
+import {
+  CRMPageShell,
+  CRMPageHeader,
+  CRMActionBar,
+  crm,
+  cn,
+  QueueOperationalRow,
+  QueueOverviewPanel,
+  QueueAttentionPanel,
+  QueuePowerSessionBar,
+  QueueEmptyOperational,
+  QueueCountPill,
+  type QueueOperationalStats,
+} from "../../../../components/crm";
 import { apiGet, apiPatch, apiPost } from "../../../../services/apiClient";
 import { useSipPhone } from "../../../../hooks/useSipPhone";
 
@@ -41,13 +54,14 @@ type QueueMember = {
   callbackAt: string | null;
   callbackNote: string | null;
   sortOrder: number;
+  createdAt?: string;
 };
 
 type QueueCounts = { pending: number; due: number; overdue: number; upcoming: number };
 
 type QueueFilter = "pending" | "due" | "overdue" | "upcoming";
 
-type CampaignOption = { id: string; name: string };
+type CampaignOption = { id: string; name: string; memberCount?: number };
 
 type CrmSettingsDefaults = { defaultQueueSort: string; defaultQueueFilter: string };
 
@@ -649,6 +663,7 @@ function MemberCard({
   acting,
   sipReady,
   onDial,
+  queueReturnTo,
 }: {
   member: QueueMember;
   isTop: boolean;
@@ -657,6 +672,7 @@ function MemberCard({
   acting: boolean;
   sipReady?: boolean;
   onDial?: () => void;
+  queueReturnTo: string;
 }) {
   const router = useRouter();
   const contact = member.contact;
@@ -666,7 +682,7 @@ function MemberCard({
   const cb = member.callbackAt ? callbackTimeLabel(member.callbackAt) : null;
 
   function openWorkspace() {
-    const params = new URLSearchParams({ contactId: member.contactId });
+    const params = new URLSearchParams({ contactId: member.contactId, returnTo: queueReturnTo });
     if (member.campaign) params.set("campaignId", member.campaign.id);
     params.set("memberId", member.id);
     router.push(`/crm/live-call?${params}`);
@@ -786,99 +802,6 @@ function MemberCard({
         </button>
       </div>
     </div>
-  );
-}
-
-// ── Count pills & compact queue cards ─────────────────────────────────────────
-function CountPill({
-  label,
-  count,
-  active,
-  urgent,
-  onClick,
-  disabled,
-}: {
-  label: string;
-  count: number;
-  active: boolean;
-  urgent?: boolean;
-  onClick: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={`flex flex-col items-start min-w-[4.5rem] px-2.5 py-2 rounded-crm border text-left transition-colors disabled:opacity-50 ${
-        active
-          ? "bg-crm-surface border-crm-accent/40 shadow-crm ring-1 ring-crm-accent/20"
-          : "bg-crm-bg/80 border-crm-border hover:bg-crm-surface hover:border-crm-border"
-      }`}
-    >
-      <span className="text-[10px] font-semibold uppercase tracking-wide text-crm-muted">{label}</span>
-      <span className={`text-lg font-bold tabular-nums ${urgent && count > 0 ? "text-crm-danger" : "text-crm-text"}`}>{count}</span>
-    </button>
-  );
-}
-
-/** Lead row → card (replaces dense table-style list rows) */
-function QueueLeadCard({ member, rank }: { member: QueueMember; rank: number }) {
-  const router = useRouter();
-  const cb = member.callbackAt ? callbackTimeLabel(member.callbackAt) : null;
-  const actionable = isQueueMemberActionable(member);
-  const pr = priorityReason(member);
-
-  return (
-    <button
-      type="button"
-      onClick={() => router.push(`/crm/contacts/${member.contactId}`)}
-      className={`w-full text-left rounded-crm border px-3 py-3 mb-2 transition-colors ${
-        actionable ? "border-crm-border bg-crm-surface hover:border-blue-200 hover:bg-crm-accent/10" : "border-crm-warning/35 bg-crm-warning/10 opacity-90"
-      }`}
-    >
-      <div className="flex items-start gap-3">
-        <span className="text-xs text-crm-muted/80 font-mono w-6 text-right shrink-0 pt-0.5">{rank}</span>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-semibold text-crm-text truncate">{member.contact?.displayName ?? "Unknown"}</span>
-            {!actionable && (
-              <span className="text-[10px] font-bold uppercase tracking-wide text-crm-warning bg-crm-warning/15 px-1.5 py-0.5 rounded">Read-only</span>
-            )}
-            <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium shrink-0 ${MEMBER_STATUS_COLORS[member.status]}`}>
-              {MEMBER_STATUS_LABELS[member.status]}
-            </span>
-          </div>
-          {member.campaign && (
-            <p className="text-xs text-crm-muted mt-0.5 truncate flex items-center gap-1">
-              <Megaphone className="h-3 w-3 shrink-0" />
-              {member.campaign.name}
-            </p>
-          )}
-          <div className="flex flex-wrap gap-1.5 mt-1.5 text-[11px] text-crm-muted">
-            {member.contact?.crmStage && (
-              <span className="bg-crm-accent/12 text-crm-accent px-2 py-0.5 rounded-full">{member.contact.crmStage}</span>
-            )}
-            {pr && (
-              <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">{pr}</span>
-            )}
-            {cb && (
-              <span className={`px-2 py-0.5 rounded-full flex items-center gap-1 ${cb.urgent ? "bg-crm-danger/15 text-crm-danger font-medium" : "bg-crm-warning/15 text-crm-warning"}`}>
-                {cb.urgent && <AlertCircle className="h-3 w-3" />}
-                {cb.label}
-              </span>
-            )}
-            {member.attemptCount > 0 && (
-              <span className="bg-crm-surface-2 text-crm-muted px-2 py-0.5 rounded-full">
-                {member.attemptCount} attempt{member.attemptCount !== 1 ? "s" : ""}
-                {member.lastAttemptAt ? ` · ${relativeTime(member.lastAttemptAt)}` : ""}
-              </span>
-            )}
-          </div>
-        </div>
-        <ChevronRight className="h-4 w-4 text-crm-border shrink-0 mt-1" />
-      </div>
-    </button>
   );
 }
 
@@ -1036,6 +959,9 @@ function QueuePageInner() {
   // Active campaigns for the dropdown filter
   const [campaigns, setCampaigns] = useState<CampaignOption[]>([]);
 
+  const [opStats, setOpStats] = useState<QueueOperationalStats | null>(null);
+  const [opStatsLoading, setOpStatsLoading] = useState(true);
+
   // Campaign filter — driven from URL searchParam, synced to localStorage as soft pref.
   const urlCampaignId = searchParams.get("campaignId") ?? null;
   const [campaignId, setCampaignId] = useState<string | null>(() => {
@@ -1089,6 +1015,15 @@ function QueuePageInner() {
     apiGet<{ campaigns: CampaignOption[] }>("/crm/campaigns?status=ACTIVE", t)
       .then((r) => setCampaigns(r.campaigns ?? []))
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const t = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
+    setOpStatsLoading(true);
+    apiGet<QueueOperationalStats>("/crm/tasks/stats", t)
+      .then((s) => setOpStats(s))
+      .catch(() => setOpStats(null))
+      .finally(() => setOpStatsLoading(false));
   }, []);
 
   // Load tenant defaults once — only apply to sort/filter if URL and localStorage were both empty.
@@ -1314,11 +1249,17 @@ function QueuePageInner() {
     window.dispatchEvent(new CustomEvent("crm:dial", { detail: { target: phoneNumber } }));
   }
 
+  const queueReturnTo = useMemo(() => {
+    const q = searchParams.toString();
+    return q ? `/crm/queue?${q}` : "/crm/queue";
+  }, [searchParams]);
+
   function openWorkspacePowerMode(member: QueueMember) {
     const params = new URLSearchParams({ contactId: member.contactId });
     if (member.campaign) params.set("campaignId", member.campaign.id);
     params.set("memberId", member.id);
     params.set("mode", "power");
+    params.set("returnTo", queueReturnTo);
     router.push(`/crm/live-call?${params}`);
   }
 
@@ -1395,9 +1336,39 @@ function QueuePageInner() {
 
   const next = queue[0] ?? null;
   const rest = queue.slice(1);
+  const activeCampaignName = campaignId
+    ? campaigns.find((c) => c.id === campaignId)?.name ?? null
+    : null;
+
+  const sidePanels = (
+    <>
+      <div className="col-span-12 xl:col-span-3">
+        <QueueOverviewPanel
+          counts={counts}
+          filter={filter}
+          total={total}
+          stats={opStats}
+          statsLoading={opStatsLoading}
+          campaignId={campaignId}
+          campaignName={activeCampaignName}
+          onFilterChange={powerModeActive ? (f) => { setWrapUpActive(false); switchPowerFilter(f); } : switchFilter}
+        />
+      </div>
+      <div className="col-span-12 xl:col-span-2">
+        <QueueAttentionPanel
+          counts={counts}
+          stats={opStats}
+          statsLoading={opStatsLoading}
+          campaigns={campaigns}
+          campaignId={campaignId}
+          campaignName={activeCampaignName}
+        />
+      </div>
+    </>
+  );
 
   return (
-    <CRMPageShell>
+    <CRMPageShell innerClassName={crm.pageInnerQueue}>
       {callbackModalMember && (
         <SetCallbackModal
           member={callbackModalMember}
@@ -1406,315 +1377,149 @@ function QueuePageInner() {
         />
       )}
 
-      {/* Sticky Power Dialer action bar */}
-      {powerModeActive && (
-        <div className="sticky top-0 z-20 -mx-4 border-b border-crm-border bg-crm-surface-2 shadow-crm sm:-mx-0 sm:rounded-crm-lg sm:border">
-          <div className="flex flex-wrap items-center justify-between gap-3 px-1 py-3 sm:px-2">
-            <div className="flex items-center gap-2 min-w-0 flex-wrap">
-              <Zap className="h-4 w-4 shrink-0" />
-              <span className="font-bold text-sm shrink-0">Power Dialer</span>
+      {powerModeActive ? (
+        <QueuePowerSessionBar
+          filter={filter}
+          counts={counts}
+          paused={paused}
+          sortMode={sortMode}
+          loading={loading}
+          acting={acting}
+          sipReady={sipReady}
+          campaignId={campaignId}
+          campaigns={campaigns}
+          total={total}
+          onFilterChange={(f) => {
+            setWrapUpActive(false);
+            switchPowerFilter(f);
+          }}
+          onToggleSort={toggleSortMode}
+          onRefresh={() => load()}
+          onTogglePause={() => {
+            setPaused((p) => !p);
+            setWrapUpActive(false);
+          }}
+          onStop={() => router.push("/crm/queue")}
+        />
+      ) : null}
 
-              {/* Filter toggle — Pending / Due / Overdue */}
-              <div className="flex shrink-0 overflow-hidden rounded-crm border border-crm-border text-xs">
-                {(
-                  [
-                    { f: "pending" as QueueFilter, label: "Pending", count: counts.pending },
-                    { f: "due" as QueueFilter, label: "Due", count: counts.due },
-                    { f: "overdue" as QueueFilter, label: "Overdue", count: counts.overdue },
-                  ] as const
-                ).map(({ f, label, count }) => (
-                  <button
-                    key={f}
-                    onClick={() => { setWrapUpActive(false); switchPowerFilter(f); }}
-                    className={`px-2.5 py-1 font-medium transition-colors flex items-center gap-1 ${
-                      filter === f
-                        ? "bg-crm-surface text-crm-accent"
-                        : "text-crm-muted hover:bg-crm-surface"
-                    }`}
-                  >
-                    {label}
-                    {count > 0 && (
-                      <span className={`rounded-full px-1.5 leading-tight ${
-                        f === "overdue" && count > 0
-                          ? "bg-red-400 text-white"
-                          : filter === f
-                            ? "bg-blue-100 text-crm-accent"
-                            : "bg-crm-accent text-blue-100"
-                      }`}>
-                        {count}
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-
-              {paused && (
-                <span className="bg-amber-400 text-crm-warning text-xs font-bold px-2 py-0.5 rounded shrink-0">
-                  PAUSED
-                </span>
-              )}
-              {/* Smart sort indicator */}
-              {sortMode === "smart" && !paused && (
-                <span className="flex shrink-0 items-center gap-1 text-xs text-crm-muted">
-                  <Sparkles className="h-3 w-3" />
-                  Smart priority on
-                </span>
-              )}
-              {/* Campaign filter indicator */}
-              {campaignId && campaigns.length > 0 && (() => {
-                const c = campaigns.find((c) => c.id === campaignId);
-                if (!c) return null;
-                return (
-                  <span className="flex max-w-[120px] shrink-0 items-center gap-1 truncate text-xs text-crm-muted">
-                    <Megaphone className="h-3 w-3 shrink-0" />
-                    {c.name}
-                  </span>
-                );
-              })()}
-            </div>
-            <div className="flex gap-2 shrink-0">
-              {/* Sort toggle */}
-              <button
-                onClick={toggleSortMode}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  sortMode === "smart"
-                    ? "bg-indigo-500 hover:bg-indigo-400 text-white"
-                    : "bg-crm-surface hover:bg-crm-surface-2 text-crm-muted"
-                }`}
-                title={sortMode === "smart" ? "Switch to original order" : "Switch to smart priority order"}
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                {sortMode === "smart" ? "Smart" : "Original"}
-              </button>
-              <button
-                onClick={() => load()}
-                disabled={loading || acting}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-crm-surface/15 hover:bg-crm-surface/25 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
-                title="Reload queue"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-                Refresh
-              </button>
-              <button
-                onClick={() => { setPaused((p) => !p); setWrapUpActive(false); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-crm-accent hover:bg-crm-accent/150 rounded-lg text-sm font-medium transition-colors"
-              >
-                {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
-                {paused ? "Resume" : "Pause"}
-              </button>
-              <button
-                onClick={() => router.push("/crm/queue")}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-crm-surface/20 hover:bg-crm-surface/30 rounded-lg text-sm font-medium transition-colors"
-              >
-                <ZapOff className="h-3.5 w-3.5" />
-                Stop
-              </button>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-crm-border/60 px-1 pb-2.5 pt-2 text-[11px] text-crm-muted sm:px-2">
-            <span className="inline-flex items-center gap-1">
-              <CalendarClock className="h-3 w-3 opacity-80" />
-              Upcoming <strong className="text-white">{counts.upcoming}</strong>
-            </span>
-            {!sipReady && (
-              <span className="inline-flex items-center gap-1 text-amber-200">
-                <AlertCircle className="h-3 w-3 shrink-0" />
-                SIP not registered — Call disabled
-              </span>
-            )}
-            {!paused && counts.overdue > 0 && filter === "pending" && (
+      {!powerModeActive ? (
+        <CRMPageHeader
+          icon={<ListOrdered className="h-7 w-7" />}
+          title="My Queue"
+          subtitle={
+            loading
+              ? "Loading your assigned work…"
+              : total === 0
+                ? "Operational workbench — switch focus with queue snapshots"
+                : `${total} lead${total !== 1 ? "s" : ""} in this view`
+          }
+          actions={
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={() => switchPowerFilter("overdue")}
-                className="text-amber-200 hover:text-white underline underline-offset-2"
+                onClick={toggleSortMode}
+                disabled={loading}
+                className={cn(
+                  crm.btnSecondary,
+                  sortMode === "smart" && "border-crm-accent/40 bg-crm-accent/12 text-crm-accent",
+                )}
               >
-                {counts.overdue} overdue — switch view
+                <Sparkles className="h-4 w-4" />
+                {sortMode === "smart" ? "Smart sort" : "Original sort"}
               </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      <div className="max-w-3xl mx-auto px-4 py-6 sm:py-8">
-        {powerModeActive && !loading && (
-          <div className="mb-4 rounded-crm border border-crm-border bg-crm-surface/90 px-3 py-2 text-sm text-crm-text flex flex-wrap items-center gap-2">
-            <ListOrdered className="h-4 w-4 text-crm-accent shrink-0" />
-            <span className="font-semibold text-crm-text">My Queue</span>
-            <span className="text-crm-muted/80">·</span>
-            <span className="text-crm-muted">Power session</span>
-            <span className="text-crm-muted/80">·</span>
-            <span className="text-crm-muted">{total} in this view</span>
-          </div>
-        )}
-
-        {powerModeActive && campaigns.length > 0 && (
-          <div className="mb-5 flex flex-wrap items-center gap-2 rounded-crm border border-crm-border bg-crm-surface px-3 py-2">
-            <Megaphone className="h-4 w-4 text-crm-muted/80 shrink-0" />
-            <label htmlFor="crm-queue-campaign-power" className="text-xs font-semibold text-crm-muted uppercase shrink-0">Campaign</label>
-            <select
-              id="crm-queue-campaign-power"
-              value={campaignId ?? ""}
-              onChange={(e) => switchCampaign(e.target.value || null)}
-              className="flex-1 min-w-[10rem] max-w-md border border-crm-border rounded-lg px-2 py-1.5 text-sm bg-crm-bg/80"
-              disabled={loading}
-            >
-              <option value="">All campaigns</option>
-              {campaigns.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-            {campaignId ? (
-              <button type="button" onClick={() => switchCampaign(null)} className="text-xs text-crm-accent font-medium hover:underline">
-                Clear
+              <button
+                type="button"
+                onClick={() => router.push("/crm/queue?mode=power")}
+                disabled={loading || total === 0}
+                className={crm.btnPrimary}
+              >
+                <Zap className="h-4 w-4" />
+                Power session
               </button>
-            ) : null}
-          </div>
-        )}
-
-        {/* Manual mode — work header + counts (replaces separate tabs + banner) */}
-        {!powerModeActive && (
-          <div className="rounded-crm-lg border border-crm-border bg-crm-surface shadow-crm p-4 sm:p-5 mb-5">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <ListOrdered className="h-7 w-7 text-crm-accent shrink-0" />
-                  <h1 className="text-2xl font-bold text-crm-text tracking-tight">My Queue</h1>
-                </div>
-                {!loading && (
-                  <p className="text-sm text-crm-muted mt-1">
-                    {total === 0 ? "Nothing in this view" : `${total} lead${total !== 1 ? "s" : ""} · use counts below to switch focus`}
-                  </p>
-                )}
-                {!loading && (counts.overdue > 0 || counts.due > 0) && (
-                  <p className="text-xs text-crm-muted mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
-                    {counts.overdue > 0 && (
-                      <button type="button" onClick={() => switchFilter("overdue")} className="font-semibold text-crm-danger hover:underline">
-                        {counts.overdue} overdue
-                      </button>
-                    )}
-                    {counts.overdue > 0 && counts.due > 0 && <span className="text-crm-border">·</span>}
-                    {counts.due > 0 && (
-                      <button type="button" onClick={() => switchFilter("due")} className="font-semibold text-crm-warning hover:underline">
-                        {counts.due} due today
-                      </button>
-                    )}
-                    <span className="text-crm-muted/80 hidden sm:inline">— tap or pick a column</span>
-                  </p>
-                )}
-              </div>
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={toggleSortMode}
-                  disabled={loading}
-                  className={`flex items-center gap-1.5 px-3 py-2 border rounded-crm text-sm font-medium transition-colors disabled:opacity-50 ${
-                    sortMode === "smart"
-                      ? "border-indigo-300 bg-crm-accent/12 text-crm-accent hover:bg-indigo-100"
-                      : "border-crm-border text-crm-muted hover:bg-crm-bg"
-                  }`}
-                  title={sortMode === "smart" ? "Smart priority — click for original order" : "Original order — click for smart priority"}
-                >
-                  <Sparkles className="h-4 w-4" />
-                  {sortMode === "smart" ? "Smart sort" : "Original sort"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => router.push("/crm/queue?mode=power")}
-                  disabled={loading || total === 0}
-                  className="flex items-center gap-1.5 px-3 py-2 bg-crm-accent text-white rounded-crm text-sm font-semibold hover:brightness-110 disabled:opacity-50 disabled:cursor-not-allowed shadow-crm"
-                  title={total === 0 ? "No leads in this view" : "Focused power session"}
-                >
-                  <Zap className="h-4 w-4" />
-                  Power mode
-                </button>
-                <button type="button" onClick={() => load()} disabled={loading || acting} className="flex items-center gap-1.5 px-3 py-2 border border-crm-border rounded-crm text-sm text-crm-text hover:bg-crm-bg disabled:opacity-50">
-                  <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-                  Refresh
-                </button>
-              </div>
+              <button type="button" onClick={() => load()} disabled={loading || acting} className={crm.btnSecondary}>
+                <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+                Refresh
+              </button>
             </div>
+          }
+        />
+      ) : null}
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-5">
-              <CountPill label="Pending" count={counts.pending} active={filter === "pending"} onClick={() => switchFilter("pending")} disabled={loading} />
-              <CountPill label="Due" count={counts.due} active={filter === "due"} urgent={counts.due > 0} onClick={() => switchFilter("due")} disabled={loading} />
-              <CountPill label="Overdue" count={counts.overdue} active={filter === "overdue"} urgent={counts.overdue > 0} onClick={() => switchFilter("overdue")} disabled={loading} />
-              <CountPill label="Upcoming" count={counts.upcoming} active={filter === "upcoming"} onClick={() => switchFilter("upcoming")} disabled={loading} />
-            </div>
-
-            {campaigns.length > 0 && (
-              <div className="mt-4 flex flex-wrap items-center gap-2 pt-3 border-t border-crm-border/60">
-                <Megaphone className="h-4 w-4 text-crm-muted/80 shrink-0" />
-                <label htmlFor="crm-queue-campaign" className="text-xs font-semibold text-crm-muted uppercase tracking-wide shrink-0">Campaign</label>
-                <select
-                  id="crm-queue-campaign"
-                  value={campaignId ?? ""}
-                  onChange={(e) => switchCampaign(e.target.value || null)}
-                  className="flex-1 min-w-[12rem] max-w-md border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-crm-bg/80"
-                  disabled={loading}
-                >
-                  <option value="">All campaigns</option>
-                  {campaigns.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
-                {campaignId ? (
-                  <button type="button" onClick={() => switchCampaign(null)} className="text-xs text-crm-accent hover:underline font-medium">
-                    Clear filter
-                  </button>
-                ) : null}
-              </div>
-            )}
+      {!powerModeActive ? (
+        <CRMActionBar>
+          <div className="grid w-full grid-cols-2 gap-2 sm:grid-cols-4">
+            <QueueCountPill label="Pending" count={counts.pending} active={filter === "pending"} onClick={() => switchFilter("pending")} disabled={loading} />
+            <QueueCountPill label="Due" count={counts.due} active={filter === "due"} urgent={counts.due > 0} onClick={() => switchFilter("due")} disabled={loading} />
+            <QueueCountPill label="Overdue" count={counts.overdue} active={filter === "overdue"} urgent={counts.overdue > 0} onClick={() => switchFilter("overdue")} disabled={loading} />
+            <QueueCountPill label="Upcoming" count={counts.upcoming} active={filter === "upcoming"} onClick={() => switchFilter("upcoming")} disabled={loading} />
           </div>
-        )}
+          {campaigns.length > 0 ? (
+            <div className="flex w-full flex-wrap items-center gap-2 border-t border-crm-border/60 pt-3">
+              <Megaphone className="h-4 w-4 shrink-0 text-crm-muted" />
+              <label htmlFor="crm-queue-campaign" className={cn(crm.label, "shrink-0")}>Campaign</label>
+              <select
+                id="crm-queue-campaign"
+                value={campaignId ?? ""}
+                onChange={(e) => switchCampaign(e.target.value || null)}
+                className={cn(crm.input, "max-w-md flex-1 min-w-[12rem] py-1.5")}
+                disabled={loading}
+              >
+                <option value="">All campaigns</option>
+                {campaigns.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+              {campaignId ? (
+                <button type="button" onClick={() => switchCampaign(null)} className="text-xs font-medium text-crm-accent hover:underline">
+                  Clear
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </CRMActionBar>
+      ) : powerModeActive && campaigns.length > 0 ? (
+        <CRMActionBar className="mb-0">
+          <Megaphone className="h-4 w-4 shrink-0 text-crm-muted" />
+          <label htmlFor="crm-queue-campaign-power" className={cn(crm.label, "shrink-0")}>Campaign</label>
+          <select
+            id="crm-queue-campaign-power"
+            value={campaignId ?? ""}
+            onChange={(e) => switchCampaign(e.target.value || null)}
+            className={cn(crm.input, "max-w-md flex-1 min-w-[10rem] py-1.5")}
+            disabled={loading}
+          >
+            <option value="">All campaigns</option>
+            {campaigns.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+          {campaignId ? (
+            <button type="button" onClick={() => switchCampaign(null)} className="text-xs font-medium text-crm-accent hover:underline">
+              Clear
+            </button>
+          ) : null}
+        </CRMActionBar>
+      ) : null}
 
+      <div className="grid grid-cols-12 gap-4 items-start">
+        <div className="col-span-12 xl:col-span-7 flex flex-col gap-3 min-w-0">
         {/* Content */}
         {loading ? (
           <div className="py-24 text-center text-crm-muted/80 text-sm">Loading…</div>
         ) : error ? (
           <div className="py-24 text-center text-red-500 text-sm">{error}</div>
         ) : !next ? (
-          powerModeActive ? (
-            // Power mode — queue exhausted
-            <div className="py-24 text-center">
-              <CheckCheck className="h-14 w-14 text-green-400 mx-auto mb-4" />
-              <p className="text-crm-text font-bold text-2xl mb-1">Queue Complete!</p>
-              <p className="text-crm-muted/80 text-sm mb-6">You&apos;ve worked through all pending leads.</p>
-              <button
-                onClick={() => router.push("/crm/queue")}
-                className="px-5 py-2.5 bg-crm-accent text-white rounded-crm text-sm font-semibold hover:brightness-110 shadow"
-              >
-                Exit Power Dialer
-              </button>
-            </div>
-          ) : (
-            // Manual mode — empty state
-            <div className="py-24 text-center max-w-md mx-auto px-2">
-              <Inbox className="h-12 w-12 text-crm-border mx-auto mb-3" />
-              <p className="text-crm-muted font-medium text-lg">
-                {filter === "pending" ? "You're caught up" :
-                 filter === "due" ? "No due callbacks" :
-                 filter === "overdue" ? "No overdue callbacks" :
-                 "No upcoming callbacks"}
-              </p>
-              <p className="text-crm-muted/80 text-sm mt-1">
-                {campaignId
-                  ? "Nothing in this campaign for this view. Try clearing the campaign filter or another snapshot above."
-                  : filter === "pending"
-                    ? "No pending leads are assigned to you right now."
-                    : "Nothing scheduled in this bucket. Pending leads may still be waiting."}
-              </p>
-              {campaignId && (
-                <button type="button" onClick={() => switchCampaign(null)} className="mt-4 text-sm text-crm-accent hover:underline">
-                  Clear campaign filter
-                </button>
-              )}
-              {!campaignId && filter !== "pending" && (
-                <button type="button" onClick={() => switchFilter("pending")} className="mt-4 text-sm text-crm-accent hover:underline">
-                  Switch to pending
-                </button>
-              )}
-            </div>
-          )
+          <QueueEmptyOperational
+            filter={filter}
+            powerMode={powerModeActive}
+            campaignId={campaignId}
+            stats={opStats}
+            statsLoading={opStatsLoading}
+            onClearCampaign={() => switchCampaign(null)}
+            onSwitchPending={() => switchFilter("pending")}
+            onExitPower={() => router.push("/crm/queue")}
+          />
         ) : powerModeActive ? (
           // ── Power Dialer layout ──────────────────────────────────────────────
           <>
@@ -1759,7 +1564,22 @@ function QueuePageInner() {
                 </h2>
                 <div>
                   {rest.map((m, i) => (
-                    <QueueLeadCard key={m.id} member={m} rank={i + 2} />
+                    <QueueOperationalRow
+                      key={m.id}
+                      member={m}
+                      rank={i + 2}
+                      compact
+                      returnTo={queueReturnTo}
+                      acting={acting}
+                      sipReady={sipReady}
+                      onOpenWorkspace={() => {
+                        const params = new URLSearchParams({ contactId: m.contactId, memberId: m.id, returnTo: queueReturnTo });
+                        if (m.campaign) params.set("campaignId", m.campaign.id);
+                        router.push(`/crm/live-call?${params}`);
+                      }}
+                      onQuickCall={m.contact?.primaryPhone ? () => handlePowerDial(m) : undefined}
+                      onSkip={() => void handleAction(m.id, "skip")}
+                    />
                   ))}
                 </div>
                 {total > queue.length && (
@@ -1779,6 +1599,7 @@ function QueuePageInner() {
               filter={filter}
               acting={acting}
               sipReady={sipReady}
+              queueReturnTo={queueReturnTo}
               onDial={() => handlePowerDial(next)}
               onAction={(action, extra) => handleAction(next.id, action, extra)}
             />
@@ -1793,7 +1614,22 @@ function QueuePageInner() {
                 </h2>
                 <div className="space-y-0">
                   {rest.map((m, i) => (
-                    <QueueLeadCard key={m.id} member={m} rank={i + 2} />
+                    <QueueOperationalRow
+                      key={m.id}
+                      member={m}
+                      rank={i + 2}
+                      compact
+                      returnTo={queueReturnTo}
+                      acting={acting}
+                      sipReady={sipReady}
+                      onOpenWorkspace={() => {
+                        const params = new URLSearchParams({ contactId: m.contactId, memberId: m.id, returnTo: queueReturnTo });
+                        if (m.campaign) params.set("campaignId", m.campaign.id);
+                        router.push(`/crm/live-call?${params}`);
+                      }}
+                      onQuickCall={m.contact?.primaryPhone ? () => handlePowerDial(m) : undefined}
+                      onSkip={() => void handleAction(m.id, "skip")}
+                    />
                   ))}
                 </div>
                 {total > queue.length && (
@@ -1805,6 +1641,9 @@ function QueuePageInner() {
             )}
           </>
         )}
+      
+        </div>
+        {!loading && !error ? sidePanels : null}
       </div>
     </CRMPageShell>
   );

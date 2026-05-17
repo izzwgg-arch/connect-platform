@@ -9,3 +9,23 @@ export { CRMEmptyState } from "./CRMEmptyState";
 export { CRMActionBar } from "./CRMActionBar";
 export * from "./charts";
 export * from "./dashboard";
+export * from "./contact";
+export type {
+  MemberStatus as QueueMemberStatus,
+  QueueMember,
+  QueueCounts,
+  QueueFilter,
+  SortMode as QueueSortMode,
+  CampaignOption,
+  QueueOperationalStats,
+} from "./queue";
+export {
+  QueueOperationalRow,
+  QueueOverviewPanel,
+  QueueAttentionPanel,
+  QueuePowerSessionBar,
+  QueueEmptyOperational,
+  QueueCountPill,
+} from "./queue";
+export * from "./campaign";
+export * from "./live";

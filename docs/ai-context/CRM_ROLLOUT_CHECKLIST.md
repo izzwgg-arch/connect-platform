@@ -238,6 +238,60 @@
 | Function | Filters, queue actions, campaign controls, contact mutations, recordings, archive read-only — unchanged. |
 | Typecheck | `pnpm exec tsc -p apps/portal` passes. |
 
+### Phase 19E — Campaign operational workspace (visual smoke)
+
+| Check | Expected |
+|-------|----------|
+| Index layout | `CRMPageHeader` + summary strip + dense `CampaignIndexCard` rows; active campaigns visually emphasized |
+| Index metrics | Queue work, callbacks, conversion % from `GET /crm/reports/campaigns` when permitted — not invented |
+| Detail header | `CampaignCommandHeader`: identity, live snapshot (queue work, callbacks, agents, last import), operations (start/resume, queue, power, import, distribute) |
+| Performance | Donut / bars / rings from `statusCounts` + member totals only |
+| Layout | 8+4 grid: members feed left, sticky sidebar right (next actions, workload, imports, settings) |
+| Members | `CampaignMemberCard` — overdue callbacks and active queue work obvious; terminal states muted |
+| Imports | Sidebar import events with status, row counts, errors; link to batch details |
+| Queue continuity | Open queue + power session links include `campaignId`; return path to campaign preserved |
+| Empty campaign | Guided empty state: import + add contacts + distribute hints — not a single “No members” line |
+| Dark theme | No `bg-white` / `bg-green-100` status chips on campaign routes |
+| Admin | Distribute, import modal, workload strip, settings in sidebar |
+| Agent | Queue + workspace on members; no admin-only distribute/import |
+| Function | Create, lifecycle, import preview/run, bulk assign, member status/callback, export CSV unchanged |
+| Typecheck | `pnpm exec tsc -p apps/portal` — no errors in `crm/campaigns/**` or `components/crm/campaign/**` |
+
+### Phase 19D — Contact relationship workspace (visual smoke)
+
+| Check | Expected |
+|-------|----------|
+| Layout | `crm.pageInnerContact` wide grid: main = note + SMS + timeline; sidebar = next step + health + tasks + contact info |
+| Header | `ContactWorkspaceHeader` — identity, operational pulse (next action, last touch, callback), primary actions |
+| Sticky bar | Scroll past header → `ContactStickyActionBar` shows call, workspace, SMS, note, task, queue return |
+| Timeline | Rich `ContactTimelineItem` rows — type chips, call disposition, recordings, SMS metadata; not flat log lines |
+| SMS | `ContactSmsPanel` in main column; dark-theme bubbles; composer uses `POST /crm/contacts/:id/sms` |
+| Health | `ContactRelationshipHealth` ring + stats from real timeline/tasks only |
+| Queue context | From queue with `returnTo` / `memberId` / `campaignId` — chips + back link visible |
+| Archived | Read-only note/SMS; archive/restore in header; timeline still visible |
+| Empty contact | `CRMEmptyState` on timeline (“Start first outreach”); task/SMS empty states actionable |
+| Dark theme | No `bg-white`, `bg-gray-50`, or light `#e0f2fe` SMS slabs |
+| Function | Notes, SMS, tasks, merge, archive, edit fields, phones/emails, workspace link, `crm:dial` call unchanged |
+| Typecheck | `pnpm exec tsc -p apps/portal` — no errors in `contacts/[id]` or `components/crm/contact/**` |
+
+### Phase 19F — Live call workspace (visual smoke)
+
+| Check | Expected |
+|-------|----------|
+| Idle `/crm/live-call` | `LiveWorkspaceIdle` — ready desk, quick links (queue, contacts, campaigns, overdue), optional stats from `/crm/tasks/stats`; not centered “no contact” only |
+| Layout | `crm.pageInnerLive` xl: 3-col session + 6-col main + 3-col helpers; stacks on tablet/mobile without dead void |
+| Session rail | Campaign/member/contact chips + return to queue when `memberId` / `returnTo` present |
+| Action bar | Sticky `LiveWorkspaceActionBar` — call, SMS, note, callback, outcome, queue, profile |
+| Live status | `LiveCallStatusBanner` — real telephony when matched; honest “No active call” / “Call context loaded” when not |
+| Main column | Contact header, note, SMS (`ContactSmsPanel` when phones exist), outcome/disposition, `ContactTimeline` (25 events) |
+| Right column | Script + checklist (API-backed) + open tasks |
+| Queue/power | `mode=power` badge; save outcome advances to next lead; keyboard `O` in power mode |
+| Screen pop | `?contactId=…&linkedId=…&from=…` still loads; banner uses telephony when available |
+| Archived / DNC / no SMS | Read-only or blocked composers; badges visible; no light slabs |
+| Dark theme | No `bg-white`, `bg-gray-50`, or inline light `#eff6ff` chips on live-call route |
+| Function | Notes, disposition, follow-up, `POST /crm/calls/originate`, `crm:dial`, checklist respond, queue PATCH unchanged |
+| Typecheck | `pnpm exec tsc -p apps/portal` — no errors in `live-call` or `components/crm/live/**` |
+
 ### Phase 19B — CRM dashboard command center (visual smoke)
 
 | Check | Expected |
@@ -252,6 +306,22 @@
 | Admin | Workspace health strip visible; tenant follow-up bars from `/crm/reports/follow-ups`. |
 | Agent | Personal follow-up pressure from `/crm/tasks/stats`; no pilot-readiness row. |
 | Function | Links to queue, tasks, campaigns, contacts, import unchanged. |
+| Typecheck | `pnpm exec tsc -p apps/portal` passes. |
+
+### Phase 19C — My Queue operational workspace (visual smoke)
+
+| Check | Expected |
+|-------|----------|
+| Width | Page uses `crm.pageInnerQueue`; no narrow `max-w-3xl` column with empty side gutters on desktop. |
+| Layout | xl: 7-col feed + 3-col overview + 2-col attention; stacks cleanly on tablet/mobile. |
+| Feed | `QueueOperationalRow` shows contact, campaign, status, callback, phone/email, last disposition, assigned age; workspace + quick actions. |
+| Overview | Pressure bars from queue `counts`; today block from `/crm/tasks/stats`. |
+| Attention | Items only when real counts (overdue, due, tasks, campaign focus). |
+| Power mode | `QueuePowerSessionBar` sticky; session progress + filter chips + pause/end. |
+| Empty | `QueueEmptyOperational` with today snapshot — not “you’re caught up” only. |
+| Workspace | `returnTo` on live-call; “Return to queue” / “Next in queue” when opened from queue. |
+| Dark theme | No `bg-white` / light status chips on queue route. |
+| Function | Filters, sort, campaign filter, queue PATCH actions, power dial, wrap-up unchanged. |
 | Typecheck | `pnpm exec tsc -p apps/portal` passes. |
 
 ---

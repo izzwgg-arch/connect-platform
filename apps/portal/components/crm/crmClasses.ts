@@ -7,6 +7,18 @@ export const crm = {
   pageInner: "mx-auto w-full max-w-6xl px-4 py-6 flex flex-col gap-4",
   /** Phase 19B — dashboard command center uses full workspace width. */
   pageInnerWide: "mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6 flex flex-col gap-5",
+  /** Phase 19D — contact relationship workspace */
+  pageInnerContact:
+    "mx-auto w-full max-w-[1400px] px-4 py-5 sm:px-6 lg:px-8 flex flex-col gap-4 min-h-0",
+  /** Phase 19C — My Queue operational workbench (12-col, no narrow column). */
+  pageInnerQueue:
+    "mx-auto w-full max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8 flex flex-col gap-4 min-h-0",
+  /** Phase 19E — campaign operational workspace */
+  pageInnerCampaign:
+    "mx-auto w-full max-w-[1400px] px-4 py-5 sm:px-6 flex flex-col gap-4",
+  /** Phase 19F — live call agent workspace */
+  pageInnerLive:
+    "mx-auto w-full max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8 flex flex-col gap-4 min-h-0",
 
   card: "rounded-crm-lg border border-crm-border bg-crm-surface shadow-crm",
   cardPad: "p-5",
