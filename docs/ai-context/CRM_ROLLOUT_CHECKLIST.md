@@ -81,6 +81,21 @@
 | Ready confirmation | Checklist with ≥1 required step and isActive → green "Ready for live call usage" banner |
 | Empty state template grid | No checklist selected → template cards + "Start from blank" CTA (not a dead centered icon) |
 
+### Phase 19J.1 — Checklist workspace visual polish (smoke)
+
+| Check | Expected |
+|-------|----------|
+| Center depth | Middle column uses gradient primary panel — not flat gray `crm.card` slab |
+| Template accents | Each starter template has distinct accent strip + icon glow (cyan, amber, blue, green, violet, rose) |
+| Hero empty state | "Choose a playbook to begin" + operational template count chip |
+| Hover | Template cards lift subtly on hover; `prefers-reduced-motion` disables transform |
+| Side panels | Library + progress quieter than center (`checklistPanelSupport`) |
+| Progress ring | Shows required % in ring center; stat rows for required/optional/total |
+| Live dot | Active checklist with required steps shows subtle green live indicator |
+| Dark grep | No `bg-white`, `bg-gray-50`, `bg-gray-100` on checklist components |
+| Responsive | 1024px: 3-column stacks gracefully; wide desktop: center column is visual focus |
+| Behavior | CRUD, templates, archive, progress math unchanged — visual-only pass |
+
 ---
 
 ## 6. Live Workflow
@@ -2155,17 +2170,56 @@ After Phase 13B cleanup, a tenant may have **no ACTIVE campaigns**. Admin must c
 [ ] 10. TypeScript
         pnpm exec tsc -p apps/portal --noEmit → 0 errors
 
-[ ] 11. Responsive layout
-        - Desktop (xl+): 3+9 col split library/workspace
-        - Laptop (lg): library still left, workspace right (12-col grid adjusts)
-        - Narrow: library stacks above workspace
+[ ] 11. Premium command center (19I.1)
+        - ScriptCommandHeader: gradient hero + KPI tiles (total, active, template count)
+        - 3/6/3 grid: library | workspace | ScriptOperationalSidebar
+        - ScriptWorkspaceIdle: glow document visual, New script + Browse templates CTAs, feature row
+        - Template cards: per-type accent strip + icon + hover glow (not flat gray slabs)
+        - ScriptQuickTipsStrip: N shortcut, checklist, copy, live-call hints
+        - Press N opens new script (when not in input/textarea)
+
+[ ] 12. Responsive layout
+        - Desktop (lg+): 3+6+3 columns; sidebar below workspace on narrow if needed
+        - 1024px: stacked or compressed grid — no horizontal overflow
         - Modal: max-w-2xl, scrollable, dark surface
 
-[ ] 12. No backend changes
+[ ] 13. No backend changes
         - No schema changes, no new API routes
         - Only existing: GET /crm/scripts, GET /crm/scripts/:id, POST /crm/scripts, PATCH /crm/scripts/:id
         - No telephony or PBX changes
 ```
+
+---
+
+## Reports / Intelligence Workspace (Phase 19K)
+
+| Step | How to verify |
+|------|--------------|
+| Navigate to `/crm/reports` | Dark workspace loads — no white/gray-50 surfaces visible |
+| All tabs render | Operations, Campaigns, Agents, Follow-ups, Intelligence all clickable and load data |
+| Operations tab hero row | 4 hero cards visible: Queue Pressure, Callback Health, Today's Activity, Follow-up Pressure |
+| Operations hero tones | Danger tone on overdue callbacks >0; healthy on queue >0; warn on queue exhausted |
+| Operational status messages | Hero cards show language like "Queue volume healthy", "Callback SLA risk" — not raw numbers only |
+| Operations activity bars | `CRMHorizontalBars` show today's activity distribution (if any data) |
+| Operations insight feed | `ReportsInsightFeed` shows derived alerts or "All systems operational" |
+| Campaigns tab dark table | Table header uses `bg-crm-surface-2/60`, no `bg-gray-50` |
+| Campaigns status filter | All / Active / Paused / Completed pills using `crm.filterPill*` (dark surfaces) |
+| Campaigns conversion bar | Dark inline bar (no white canvas) |
+| Agents tab day range | Today / 7d / 30d pills using `crm.filterPill*` |
+| Follow-ups urgent banner | Dark `bg-crm-danger/8 border-crm-danger/30` (no `bg-red-50`) |
+| Follow-ups tables | Dark tables (no `bg-gray-50`, `divide-gray-100`) |
+| Intelligence tab | Loads all 4 data sources; shows insight feed + top campaigns + agent leaderboard |
+| URL deep-link | `?tab=campaigns`, `?tab=agents`, `?tab=follow-ups` all load correct tab |
+| Old `?tab=daily` URL | Maps to Operations tab (backwards compat) |
+| Sticky header | Command header stays visible on scroll |
+| Live pulse indicator | Green pulse dot visible in header |
+| Refresh button | Spins during load; reloads current tab's data |
+| Export button | Downloads CSV for Operations/Campaigns/Agents tabs |
+| 1024px viewport | No horizontal overflow; 2×2 hero grid; single-column sidebar stacks below |
+| Wide desktop (1440px+) | 4×1 hero row; 2+1 column grid; sidebar is right rail |
+| Empty/low-data state | No crashes; empty states use `crm.emptyWrap` (dashed border, no white canvas) |
+| TypeScript | `pnpm exec tsc -p apps/portal --noEmit` passes with no new errors |
+| No light tokens in reports files | `grep -rn 'bg-white\|bg-gray-50\|bg-gray-100\|border-gray-200\|divide-gray-100' apps/portal/app/(platform)/crm/reports/ apps/portal/components/crm/reports/` → 0 matches |
 
 ---
 
@@ -2184,4 +2238,9 @@ grep -rn 'app\.get\|app\.post\|app\.patch\|app\.put\|app\.delete' apps/api/src/c
 
 # Verify CDR hook is non-blocking
 grep -n 'fireCrmCdrHook' apps/api/src/server.ts
+
+# Verify reports page has no light token regressions
+grep -rn 'bg-white\|bg-gray-50\|bg-gray-100\|border-gray-200\|divide-gray-100' \
+  apps/portal/app/"(platform)"/crm/reports/ \
+  apps/portal/components/crm/reports/
 ```

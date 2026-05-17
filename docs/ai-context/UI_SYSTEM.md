@@ -169,26 +169,27 @@ Campaign routes use **`crm.pageInnerCampaign`** (wide desk, up to ~1680px) and *
 
 ---
 
-## Scripts playbook workspace (Phase 19I)
+## Scripts playbook workspace (Phase 19I / 19I.1)
 
-`/crm/scripts` is the **agent playbook library** — a live sales enablement system, not a textarea CRUD page.
+`/crm/scripts` is the **premium outbound sales playbook command center** — live enablement, not a textarea CRUD page.
 
-| Zone | Width (xl+) | Role |
+| Zone | Width (lg+) | Role |
 |------|-------------|------|
-| Library | 3 / 12 | Script cards, filter, archive, template quick-start |
-| Workspace | 9 / 12 | Modular section blocks, checklist mode, sticky actions |
+| Hero | full width | `ScriptCommandHeader` — gradient command bar + KPI tiles |
+| Library | 3 / 12 | `ScriptLibraryPanel` — accent template cards, script list, search |
+| Workspace | 6 / 12 | `ScriptWorkspace` / `ScriptWorkspaceIdle` — live playbook or onboarding |
+| Sidebar | 3 / 12 | `ScriptOperationalSidebar` — ring metric, workload, shortcuts |
+| Tips | full width | `ScriptQuickTipsStrip` — keyboard + checklist + live-call hints |
 
-**Layout shell:** `crm.pageInnerScripts` (up to ~1600px) + `crm.scriptsWorkspace` (dark token lock). **Grid:** `crm.scriptsGrid` (12-col) → `crm.scriptsLibraryCol` / `crm.scriptsWorkspaceCol`.
+**Layout shell:** `crm.pageInnerScripts` (~1680px) + `crm.scriptsWorkspace` (dark token lock). **Grid:** `crm.scriptsGrid` → `scriptsLibraryCol` / `scriptsWorkspaceCol` / `scriptsSideCol`.
 
-**Library panel:** `ScriptLibraryPanel` — script cards with status strip, name, updated-time, archive toggle. Empty state = `SCRIPT_TEMPLATES` guided quick-start cards (6 types). Filter by search, collapsed archive section.
+**Premium visual language (19I.1):** Layered navy gradients (`scriptsHero`, `scriptsPanelPrimary`), accent glow strips per template (`SCRIPT_TEMPLATE_ACCENT_CLASSES`), glass KPI tiles, hover lift on template cards. Idle center = glowing document visual + feature row (Proven Playbooks, Live Playbook View, Checklist Mode, Win More Calls). **No flat gray slabs.**
 
-**Workspace panel:** `ScriptWorkspace` — modular `ScriptSectionBlock` cards per `---`-delimited section. Two modes:
-- **Playbook** (default): collapsible sections with bold headers, bullet points, copy-per-section.
-- **Checklist**: interactive step-through with per-item checkboxes, progress bar, completion banner.
+**Library:** Template cards use per-type accents (cyan cold call, violet follow-up, amber re-engagement, green callback, blue voicemail, rose closing). Collapsible template rail when scripts exist. **+ New script** primary CTA in library header.
 
-**Edit modal:** `ScriptEditModal` — dark-token modal with per-section title + textarea editor. Serializes to `---`-separated `script.body`; backward-compatible with existing scripts.
+**Workspace:** `ScriptSectionBlock` per `---` section; Playbook vs Checklist mode; copy-per-section; live-call link. **Keyboard:** `N` opens new script (guarded).
 
-**Dark surfaces (19I):** `crm.scriptsWorkspace` forces dark tokens. Tokens: `crm.scriptCard`, `crm.scriptSectionCard`, `crm.scriptCheckStep*`, `crm.scriptTemplateCard`, `crm.scriptModeTab*`. Ban `bg-white`, `bg-gray-50`, and raw `var(--input-bg, #fff)` on script routes.
+**Dark surfaces:** `crm.scriptTplCard`, `scriptsPanelPrimary`, `scriptsSidePanel`, `scriptsTipsStrip`. Ban `bg-white`, `bg-gray-50`, flat gray admin cards.
 
 ---
 
@@ -210,7 +211,9 @@ Campaign routes use **`crm.pageInnerCampaign`** (wide desk, up to ~1680px) and *
 
 **Progress panel:** Progress ring shows required-step ratio. Banners surface actionable warnings: no required steps, no steps at all, archived state. "Ready for live call" confirmation when isActive + items.length > 0 + requiredCount > 0.
 
-**Empty state:** `TemplateGrid` — template cards + "Start from blank" CTA. Not a dead centered icon.
+**Empty state (19J.1):** `TemplateGrid` command-center hero — "Choose a playbook to begin", template count chip, accent-colored template cards (`TEMPLATE_ACCENT_CLASSES`: cyan/amber/blue/green/violet/rose), "Start from blank" footer CTA. Not a dead centered icon.
+
+**Visual hierarchy (19J.1):** Center column uses **`crm.checklistPanelPrimary`** (navy gradient + radial glow). Library and progress use **`crm.checklistPanelSupport`** (quieter support surfaces). Template cards: left accent strip, icon glow box, hover lift (`checklist-template-card` in globals.css, `prefers-reduced-motion` safe). Progress panel: richer ring + compact stat rows.
 
 **Dark surfaces:** Ban `bg-white`, `bg-gray-*`, inline `style={{ background: '#fff' }}`, native white inputs. Use `crm.input`, `crm.checkbox`, `crm.btn*` throughout.
 
@@ -305,6 +308,34 @@ Reports, wallboard: migrate opportunistically.
 
 ---
 
+## CRM Intelligence workspace (Phase 19K)
+
+`/crm/reports` is the **operational VoIP CRM intelligence hub** — dark command surface, not a generic admin dashboard.
+
+| Zone | Component | Role |
+|------|-----------|------|
+| Sticky command header | `ReportsCommandHeader` | Tabs (Operations/Campaigns/Agents/Follow-ups/Intelligence), live pulse, refresh, export |
+| Hero row | `ReportsHeroCard` (×4) | Queue Pressure, Callback Health, Today's Activity, Follow-up Pressure — large operational values with tones |
+| Activity bars | `CRMHorizontalBars` | Distribution of today's activity types |
+| Queue ring | `CRMRingMetric` | Work queue pending vs worked |
+| Operational sidebar | `ReportsInsightFeed` | Derived alerts (queue exhaustion, callback SLA, stale campaigns, inactive agents) |
+| Tables | `ReportsOperationalTable` | Dark-themed compact tables for campaigns/agents/follow-ups |
+| Intelligence tab | all of the above | Full intelligence synthesis: top campaigns, needing attention, agent leaderboard, coaching ops |
+
+**Layout shell:** `crm.reportsWorkspace` (forces dark tokens) + `crm.pageInnerReports` (`max-w-[min(100%,1680px)]`). Hero row uses `crm.reportsHeroGrid` (2×2 on mobile, 4×1 on `lg+`). Main content uses `crm.reportsGrid` (1 col on mobile, 3 cols on `lg+` — 2 main + 1 sidebar).
+
+**Tabs:** Five command tabs replacing the old tiny button tabs — Operations (was Daily Summary), Campaigns, Agents, Follow-ups, Intelligence (new). URL `?tab=daily` mapped to `operations` for backwards compat.
+
+**Operational language:** Hero cards carry `statusMessage` with phrasing like "Queue volume healthy", "Callback SLA risk — action needed", "Active session underway". The insight feed derives operational alerts purely from existing API data — no fake metrics.
+
+**Dark surfaces (19K):** Wrap with `crm.reportsWorkspace`. Tables use `bg-crm-surface-2/60` headers, `divide-crm-border/50` rows, `hover:bg-crm-surface-2/40`. Filters use `crm.filterPill` / `crm.filterPillActive`. Hero glow uses inline shadow utilities matching tone (success/warning/danger). **No** `bg-white`, `bg-gray-50`, `bg-red-50`, `divide-gray-100`, `border-gray-200`.
+
+**Data:** Same four endpoints — `/crm/reports/daily`, `/crm/reports/campaigns`, `/crm/reports/agents`, `/crm/reports/follow-ups`. Intelligence tab loads all four in parallel. No new backend routes or schema changes.
+
+**Export:** Client-side CSV for campaigns, agents, and operations tabs. No new API.
+
+---
+
 ## Do / Don't
 
 | Do | Don't |
@@ -314,6 +345,7 @@ Reports, wallboard: migrate opportunistically.
 | Keep spacing `gap-4`, radius `rounded-crm-lg` | Mixed `rounded-2xl` / `rounded-xl` / inline radii |
 | Reuse Workspace density (compact stacks) | Giant tables as primary layout |
 | Use `crm.wallboardWorkspace` on wallboard pages | `bg-gray-50` / `bg-white` on wallboard panels |
+| Use `crm.reportsWorkspace` on reports pages | Light `min-h-screen bg-gray-50` wrapper on reports |
 
 ---
 
