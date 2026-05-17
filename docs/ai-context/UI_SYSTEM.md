@@ -108,7 +108,9 @@ Campaign routes use **`crm.pageInnerCampaign`** (wide desk, up to ~1680px) and *
 
 **Density (19E.1):** No oversized sparse cards, no centered narrow column on wide screens. Index cards are one horizontal operational row, not a tall side-rail layout.
 
-**Index card readability (19E.2):** `CampaignIndexCard` uses a **3-zone** row on `sm+`: identity (name, status, description, updated) · **metric tiles** (`crm.campaignIndexMetric*`: Members, In queue, Callbacks, Converted) · actions (primary **Open campaign**, labeled Queue / Power / lifecycle). Compact `min-h-[5.75rem]` — not sparse, not cramped 10px shorthand. Campaign list is `list-none` (no bullet markers). Status accent strip stays left; active campaigns use slightly wider strip + ring.
+**Index card readability (19E.2):** `CampaignIndexCard` uses a **3-zone** row on `lg+`: identity · metric clusters · actions. Compact `min-h-[6rem]` — not sparse, not cramped shorthand. Campaign list is `list-none` (no bullet markers).
+
+**Operational polish (19E.3):** Index cards group metrics into **Volume** (Members, In queue) and **Outcome** (Callbacks, Converted) clusters (`crm.campaignMetricCluster*`). `getCampaignQueuePressure()` renders one-line interpretation from report counts only (e.g. “Queue healthy”, “High callback pressure · N waiting”) — no fake overdue analytics. **Action tiers:** primary Open campaign · secondary Queue/Power (`crm.campaignBtnSecondaryCompact`) · tertiary Pause/Archive (`crm.campaignBtnTertiary`). Active cards: subtle strip pulse + live dot (`crm-campaign-live-dot`), hover lift, soft glow when `pending > 0`. Status uses restrained index badges (`CampaignStatusBadge variant="index"`). Sticky command bar: `crm.campaignCommandSticky` + `crm.campaignSearchInput` + dark `filterPill*` status filters.
 
 **Dark surfaces (19E.1+):** Wrap campaign pages in `crm.campaignWorkspace` (forces dark tokens under light portal theme). Index filters use `crm.campaignFilterBar` + `crm.input` / `crm.select`. Modals use `crm.campaignModalBackdrop`, `crm.campaignPriorityPill*`. Ban `bg-white`, `bg-gray-50`, `bg-green-100`, light native inputs, and duplicate metric panels.
 

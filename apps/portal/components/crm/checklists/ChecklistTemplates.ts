@@ -1,0 +1,124 @@
+/**
+ * Phase 19J — Checklist starter templates for cold-calling and CRM workflows.
+ * Each template produces a pre-built item list for the create form.
+ */
+
+export type TemplateItem = {
+  label: string;
+  required: boolean;
+};
+
+export type ChecklistTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  items: TemplateItem[];
+};
+
+export const CHECKLIST_TEMPLATES: ChecklistTemplate[] = [
+  {
+    id: "cold-call-qualification",
+    name: "Cold Call Qualification",
+    description: "Qualify a new prospect on an outbound cold call",
+    icon: "📞",
+    items: [
+      { label: "Confirm you have the decision maker", required: true },
+      { label: "Introduce yourself and company", required: true },
+      { label: "State the purpose of the call (30-second pitch)", required: true },
+      { label: "Ask if they have 2 minutes", required: false },
+      { label: "Identify their current solution / provider", required: true },
+      { label: "Uncover a pain point or challenge", required: true },
+      { label: "Qualify budget range (direct or indirect)", required: false },
+      { label: "Confirm timeline / urgency", required: false },
+      { label: "Propose next step (demo / follow-up)", required: true },
+      { label: "Confirm contact details and best time to reach", required: false },
+    ],
+  },
+  {
+    id: "appointment-booking",
+    name: "Appointment Booking",
+    description: "Book a discovery call or demo with a qualified lead",
+    icon: "📅",
+    items: [
+      { label: "Confirm contact name and role", required: true },
+      { label: "Reference previous interaction or lead source", required: false },
+      { label: "State the value of the demo / discovery call", required: true },
+      { label: "Confirm they are involved in the decision", required: true },
+      { label: "Offer two specific time slots", required: true },
+      { label: "Get calendar confirmation / email address", required: true },
+      { label: "Send calendar invite before hanging up", required: false },
+      { label: "Confirm meeting link / dial-in details", required: false },
+      { label: "Summarize what they can expect in the meeting", required: false },
+    ],
+  },
+  {
+    id: "insurance-verification",
+    name: "Insurance Verification",
+    description: "Verify client insurance information on an inbound or outbound call",
+    icon: "🛡️",
+    items: [
+      { label: "Verify caller identity (name, DOB, policy number)", required: true },
+      { label: "Confirm primary insurance carrier", required: true },
+      { label: "Get policy / member ID number", required: true },
+      { label: "Confirm group number (if applicable)", required: false },
+      { label: "Verify coverage effective date", required: true },
+      { label: "Confirm co-pay / deductible amounts", required: false },
+      { label: "Check pre-authorization requirements", required: true },
+      { label: "Confirm secondary insurance (if any)", required: false },
+      { label: "Read back verified information to caller", required: true },
+      { label: "Log verification reference number", required: true },
+    ],
+  },
+  {
+    id: "callback-workflow",
+    name: "Callback Workflow",
+    description: "Follow through on a scheduled callback with context continuity",
+    icon: "🔁",
+    items: [
+      { label: "Review previous call notes before dialing", required: true },
+      { label: "Reference the scheduled callback date/time", required: true },
+      { label: "Confirm the contact remembers the conversation", required: false },
+      { label: "Recap where you left off", required: true },
+      { label: "Address any questions they mentioned previously", required: false },
+      { label: "Present updated offer or information", required: true },
+      { label: "Handle objections with prepared responses", required: false },
+      { label: "Confirm decision status / next step", required: true },
+      { label: "Set follow-up or close the loop", required: true },
+    ],
+  },
+  {
+    id: "objection-handling",
+    name: "Objection Handling",
+    description: "Structured flow for handling common sales objections",
+    icon: "🎯",
+    items: [
+      { label: "Acknowledge the objection without dismissing it", required: true },
+      { label: "Clarify the objection (ask open-ended question)", required: true },
+      { label: "Identify if it is the real objection or a stall", required: true },
+      { label: "Address price objection with ROI framing", required: false },
+      { label: "Address timing objection with urgency trigger", required: false },
+      { label: "Address competition objection with differentiator", required: false },
+      { label: "Confirm the objection is resolved", required: true },
+      { label: "Move to next step without hesitation", required: true },
+    ],
+  },
+  {
+    id: "follow-up-call",
+    name: "Follow-Up Call",
+    description: "Post-demo or post-proposal follow-up to advance the deal",
+    icon: "✅",
+    items: [
+      { label: "Review demo / proposal notes before calling", required: true },
+      { label: "Reference the specific solution discussed", required: true },
+      { label: "Ask for their feedback on the demo/proposal", required: true },
+      { label: "Identify any unresolved questions or concerns", required: true },
+      { label: "Check in with all stakeholders / influencers", required: false },
+      { label: "Reconfirm budget and timeline alignment", required: false },
+      { label: "Present any adjusted terms or incentives", required: false },
+      { label: "Ask for the decision directly", required: true },
+      { label: "Define concrete next step with date", required: true },
+      { label: "Log outcome and update contact stage", required: true },
+    ],
+  },
+];

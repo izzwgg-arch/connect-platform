@@ -277,6 +277,22 @@
 | Function | Create, lifecycle, import preview/run, bulk assign, member status/callback, export CSV unchanged |
 | Typecheck | `pnpm exec tsc -p apps/portal` — no errors in `crm/campaigns/**` or `components/crm/campaign/**` |
 
+### Phase 19E.3 — Campaign index operational polish (visual smoke)
+
+| Check | Expected |
+|-------|----------|
+| Layout | 3-zone cards (identity · Volume/Outcome clusters · tiered actions); `lg` grid avoids cramped wraps |
+| Metrics | Volume: Members + In queue; Outcome: Callbacks + Converted; scannable numbers |
+| Pressure line | One interpretation line from real `pending`/`callbacks` — no fake overdue/analytics |
+| Actions | Primary Open campaign; secondary Queue + Power; tertiary Pause + Archive (text, not icon-only) |
+| Live feel | ACTIVE: subtle strip pulse + live dot; hover lift; glow when queue work > 0 — no flashy motion |
+| Status | Index badges restrained (dot + thin border); Active=cyan accent, Paused=amber, etc. |
+| Command bar | Sticky `crm.campaignCommandSticky`; dark search + status filter pills |
+| List | `list-none` — no bullet artifacts |
+| Dark | `crm.campaignWorkspace`; grep campaign paths clean |
+| Behavior | Search, status filter, lifecycle, queue/power links unchanged |
+| Typecheck | `pnpm exec tsc -p apps/portal` passes |
+
 ### Phase 19E.2 — Campaign card readability + dark surfaces (visual smoke)
 
 | Check | Expected |
