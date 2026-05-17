@@ -257,6 +257,37 @@
 | Function | Create, lifecycle, import preview/run, bulk assign, member status/callback, export CSV unchanged |
 | Typecheck | `pnpm exec tsc -p apps/portal` — no errors in `crm/campaigns/**` or `components/crm/campaign/**` |
 
+### Phase 19E.1 — Campaign visual polish (visual smoke)
+
+| Check | Expected |
+|-------|----------|
+| Width | `crm.pageInnerCampaign` uses wide desk (~1680px); not a narrow centered column on large monitors |
+| Index density | `CampaignIndexCard` compact horizontal row — status accent strip, inline metrics, no tall side-rail ring |
+| Action hierarchy | Primary: Open / Queue / Start·Resume; secondary: Power; tertiary: Pause / Archive icon |
+| New campaign modal | Dark textarea + `crm.campaignPriorityPill*`; no light browser-default fields |
+| Detail rhythm | Command header + compact `CampaignPerformancePanel` + `gap-3` 8+4 grid — less vertical stack feel |
+| Empties | `CampaignGuidedEmpty` on index (no campaigns / no filter match), members, imports — numbered steps |
+| Dark theme | Grep campaign paths: no `bg-white`, `bg-gray-50`, `bg-green-100`, `bg-amber-50`, `text-green-700` |
+| Bulk bar | Member bulk assign uses `crm-accent` tokens — no `border-blue-200` / `text-blue-800` |
+| Behavior | All 19E flows unchanged (create, lifecycle, import preview/run, distribute, bulk assign, queue links) |
+| Typecheck | `pnpm exec tsc -p apps/portal` passes |
+
+### Phase 19D.1 — Contacts index polish (visual smoke)
+
+| Check | Expected |
+|-------|----------|
+| Width | `crm.pageInnerContacts` (~1400px); not cramped centered `max-w-6xl` directory |
+| Header | `CRMPageHeader` — Contacts title, **New contact** primary, queue/import secondary when allowed |
+| Summary | Visual stat tiles: total matching filters, page slice, active/archived/no phone/no email/stage (page-honest) |
+| Command bar | Full-width search; stage pills + admin Active/Archived/All + Assigned to me aligned |
+| Rows | Divided list cards — gradient avatar, stage chip in header row, phone/email hierarchy, owner + last activity |
+| Actions | **Open** = `crm.btnPrimary`; **Workspace** = secondary when live-call permitted and not archived |
+| Selection | Admin checkbox column aligned; select-all bar above list |
+| Empty states | Filtered / archived / no contacts — useful copy + actions (not dead center message only) |
+| Dark theme | No `bg-white`, `bg-gray-50`, `text-gray-*`, or gray loading skeleton |
+| Function | Search, pagination, filters, scopes, open contact, workspace link, bulk assign unchanged |
+| Typecheck | `pnpm exec tsc -p apps/portal` — no errors in `crm/contacts/page.tsx` |
+
 ### Phase 19D — Contact relationship workspace (visual smoke)
 
 | Check | Expected |

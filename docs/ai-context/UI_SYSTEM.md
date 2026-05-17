@@ -91,17 +91,22 @@ Chart colors live in `components/crm/charts/chartColors.ts` (aligned with `--crm
 
 ---
 
-## Campaign operational workspace (Phase 19E)
+## Campaign operational workspace (Phase 19E / 19E.1)
 
-Campaign routes use **`crm.pageInnerCampaign`** (~1400px) and **`components/crm/campaign/*`**.
+Campaign routes use **`crm.pageInnerCampaign`** (wide desk, up to ~1680px) and **`components/crm/campaign/*`**.
 
 | Zone | Pattern |
 |------|---------|
-| Index | `CRMPageHeader` + summary strip + `CampaignIndexCard` (metrics from `GET /crm/reports/campaigns` + `GET /crm/campaigns`) |
-| Detail header | `CampaignCommandHeader` — identity / live snapshot / operations (queue, power, import, distribute) |
-| Detail body | 8+4 grid: `CampaignMemberCard` feed + sticky `CampaignOperationalSidebar` |
-| Performance | `CampaignPerformancePanel` — donut, funnel bars, rings from `statusCounts` only |
-| Imports | `CampaignImportEventCard` in sidebar — real `GET /crm/campaigns/:id/imports` rows |
+| Index | `CRMPageHeader` + compact summary strip + **dense** `CampaignIndexCard` rows (status accent strip, inline metrics, primary Open/Queue) |
+| Detail header | `CampaignCommandHeader` — identity / live snapshot / operations (queue primary when active, power secondary) |
+| Detail body | 8+4 grid (`gap-3`): `CampaignMemberCard` feed + sticky `CampaignOperationalSidebar` |
+| Performance | `CampaignPerformancePanel` — single compact card: donut + funnel + rings from `statusCounts` only |
+| Imports | `CampaignImportEventCard` in sidebar; empty imports use `CampaignGuidedEmpty` |
+| Empties | `CampaignGuidedEmpty` — numbered steps + actions (import / add / distribute / queue when meaningful) |
+
+**Density (19E.1):** No oversized sparse cards, no centered narrow column on wide screens. Index cards are one horizontal operational row, not a tall side-rail layout.
+
+**Dark surfaces (19E.1):** Modals use `crm.campaignModalBackdrop`, `crm.input` on textarea/select, `crm.campaignPriorityPill*` for priority. Ban `bg-white`, `bg-gray-50`, `bg-green-100`, `bg-amber-50`, `text-green-700`, light bulk bars on campaign routes.
 
 **Queue continuity:** `/crm/queue?campaignId=…` and `/crm/queue?mode=power&campaignId=…`. No fake realtime or AI analytics.
 
@@ -132,10 +137,27 @@ Campaign routes use **`crm.pageInnerCampaign`** (~1400px) and **`components/crm/
 - `/crm/dashboard` (Phase 19B: command-center charts + wide layout)
 - `/crm/queue` (Phase 19C: operational workbench layout)
 - `/crm/campaigns`, `/crm/campaigns/[id]` (Phase 19E: operational workspace)
-- `/crm/contacts`, `/crm/contacts/[id]` (Phase 19D: contact relationship workspace)
+- `/crm/contacts` (Phase 19D.1: contacts index relationship command center)
+- `/crm/contacts/[id]` (Phase 19D: contact relationship workspace)
 - `/crm/live-call` (Phase 19F: live agent workspace)
 
 Reports, wallboard, tasks, scripts, checklists: migrate opportunistically; live-call is aligned in 19F.
+
+---
+
+## Contacts index — relationship command center (Phase 19D.1)
+
+`/crm/contacts` is the **tenant relationship directory**, not a narrow database table.
+
+| Pattern | Rule |
+|---------|------|
+| Layout width | `crm.pageInnerContacts` (~1400px) — use horizontal space on desktop |
+| Header | `CRMPageHeader` + primary **New contact**; optional **My queue** / **Import** when permitted |
+| Summary | `SummaryStatTile` grid — total from API + honest page-scoped active/archived/missing phone/email/stage |
+| Command bar | Full-width search (`crm.input`) + stage pills + admin archive scope + assigned-to-me |
+| Rows | Divided list inside `CRMCard` — avatar, stage chip, contact channels, owner/activity, **Open** (primary) + **Workspace** |
+
+**Don't:** `max-w-6xl` centered directory; text-only summary strip; light skeletons (`gray-50`); bullet separators between meta fields.
 
 ---
 

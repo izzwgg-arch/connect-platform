@@ -16,9 +16,24 @@ export const crm = {
   /** Phase 19C / 19C.1 — My Queue operational workbench (wide desk, 12-col). */
   pageInnerQueue:
     "mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
-  /** Phase 19E — campaign operational workspace */
+  /** Phase 19E / 19E.1 — campaign command center (wide desk, compact rhythm) */
   pageInnerCampaign:
-    "mx-auto w-full max-w-[1400px] px-4 py-5 sm:px-6 flex flex-col gap-4",
+    "mx-auto w-full max-w-[min(100%,1680px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-3 min-h-0",
+  /** Phase 19E.1 — dense campaign index / member rows */
+  campaignCard:
+    "rounded-crm-lg border border-crm-border bg-crm-surface shadow-crm transition-colors hover:border-crm-border/90",
+  campaignCardActive: "border-crm-accent/40 ring-1 ring-crm-accent/20",
+  campaignCardPaused: "border-crm-warning/30",
+  campaignCardDraft: "border-crm-border/80 border-dashed",
+  campaignStatusStrip: "w-1 shrink-0 rounded-l-crm-lg",
+  campaignPriorityPill:
+    "px-2.5 py-1 text-xs font-medium rounded-crm border border-crm-border bg-crm-surface-2 text-crm-muted hover:bg-crm-surface transition-colors",
+  campaignPriorityPillActive: "border-crm-accent/45 bg-crm-accent/12 text-crm-accent",
+  campaignPriorityPillUrgent: "border-crm-danger/40 bg-crm-danger/12 text-crm-danger",
+  campaignPriorityPillHigh: "border-crm-warning/40 bg-crm-warning/12 text-crm-warning",
+  campaignModalBackdrop: "fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px]",
+  campaignGuidedEmpty:
+    "rounded-crm border border-dashed border-crm-border/80 bg-crm-surface-2/40 px-4 py-5 sm:px-5",
   /** Phase 19F — live call agent workspace */
   pageInnerLive:
     "mx-auto w-full max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8 flex flex-col gap-4 min-h-0",
