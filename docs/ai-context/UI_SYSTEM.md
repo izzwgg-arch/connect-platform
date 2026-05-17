@@ -69,23 +69,25 @@ Chart colors live in `components/crm/charts/chartColors.ts` (aligned with `--crm
 
 ---
 
-## Queue operational workspace (Phase 19C)
+## Queue operational workspace (Phase 19C / 19C.1)
 
 `/crm/queue` is a **full-width outbound workbench**, not a narrow centered list.
 
-| Zone | Width (xl+) | Role |
-|------|-------------|------|
-| Feed | 7 / 12 | Live queue rows, featured next lead, power session card |
-| Overview | 3 / 12 | Queue pressure bars, callback due/overdue, today stats from `/crm/tasks/stats` |
-| Attention | 2 / 12 | Actionable alerts (overdue callbacks, tasks, campaign focus) — links only when counts > 0 |
+| Zone | Width (xl / 2xl) | Role |
+|------|------------------|------|
+| Feed | 7 / 8 cols | Live queue rows, featured next lead, power session card |
+| Overview | 3 / 2 cols | Queue mix bars, due/overdue tiles, today stats from `/crm/tasks/stats` |
+| Attention | 2 cols | Compact alert links (overdue, tasks, campaign) — only when counts > 0 |
 
-**Layout shell:** `crm.pageInnerQueue` (`max-w-[1440px]`). **Primitives:** `CRMPageHeader`, `CRMActionBar`, `QueueCountPill`, `QueueOperationalRow`, `QueuePowerSessionBar`, `QueueEmptyOperational`, side panels in `components/crm/queue/*`.
+**Layout shell:** `crm.pageInnerQueue` (`max-w-[min(100%,1680px)]`, tighter horizontal padding on large screens). **Primitives:** `CRMPageHeader`, `CRMActionBar`, `QueueCountPill`, `QueueOperationalRow`, `QueuePowerSessionBar`, `QueueEmptyOperational`, side panels in `components/crm/queue/*`.
 
-**Power mode:** sticky `QueuePowerSessionBar` (session badge, filter chips, progress bar, pause/end) — not toggle chips floating in empty space.
+**Dark surfaces (19C.1):** count pills use `crm.queueCountPill*`; banners use `crm.bannerSuccess|Warning|Danger`; power call CTA uses `crm.btnCallSuccess`. **No** `bg-white`, `bg-gray-50`, `bg-green-50`, or Tailwind `*-100` status chips on queue routes.
 
-**Visual priority:** overdue / due callbacks use `crm-danger` / `crm-warning` borders on rows; “next best lead” uses accent ring.
+**Power mode:** sticky `QueuePowerSessionBar` (gradient session bar, filter chips, progress, pause/end) — not toggle chips in empty space.
 
-**Empty queue:** `QueueEmptyOperational` shows today snapshot from real task stats — not AI suggestions.
+**Visual priority:** overdue / due callbacks use `crm-danger` / `crm-warning` on rows and side tiles; “next best lead” uses accent ring.
+
+**Empty queue:** `QueueEmptyOperational` — split layout with real today snapshot (`/crm/tasks/stats`) beside a compact caught-up card; not a single dominant dashed empty slab.
 
 ---
 

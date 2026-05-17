@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { Activity, ListOrdered, TrendingUp } from "lucide-react";
 import { CRMCard } from "../CRMCard";
-import { CRMSection } from "../CRMSection";
 import { CRMHorizontalBars } from "../charts/CRMHorizontalBars";
 import { CRM_CHART_COLORS } from "../charts/chartColors";
 import { cn } from "../cn";
@@ -29,119 +28,86 @@ export function QueueOverviewPanel({
   campaignName: string | null;
   onFilterChange: (f: QueueFilter) => void;
 }) {
-  const queuePressure = counts.pending + counts.overdue;
-  const callbackLoad = counts.due + counts.overdue;
+  const pressureTotal = Math.max(1, counts.pending + counts.due + counts.overdue + counts.upcoming);
 
   const pressureItems = [
     { label: "Pending", value: counts.pending, color: CRM_CHART_COLORS.accent },
-    { label: "Due today", value: counts.due, color: CRM_CHART_COLORS.warning },
+    { label: "Due", value: counts.due, color: CRM_CHART_COLORS.warning },
     { label: "Overdue", value: counts.overdue, color: CRM_CHART_COLORS.danger },
     { label: "Upcoming", value: counts.upcoming, color: CRM_CHART_COLORS.muted },
   ];
 
   const todayItems = stats
     ? [
-        { label: "Dispositions", value: stats.dispositionsToday, color: CRM_CHART_COLORS.success },
-        { label: "Calls linked", value: stats.callsLinkedToday, color: CRM_CHART_COLORS.accent },
-        {
-          label: "Open tasks",
-          value: stats.myOpen,
-          color: CRM_CHART_COLORS.warning,
-        },
+        { label: "Outcomes", value: stats.dispositionsToday, color: CRM_CHART_COLORS.success },
+        { label: "Calls", value: stats.callsLinkedToday, color: CRM_CHART_COLORS.accent },
+        { label: "Tasks", value: stats.myOpen, color: CRM_CHART_COLORS.warning },
       ]
     : [];
 
   return (
-    <CRMCard padding="md" className="flex flex-col gap-4 h-full">
-      <div>
-        <p className={crm.label}>Operational overview</p>
-        <p className="mt-1 text-sm font-semibold text-crm-text tabular-nums">
-          {total} in view
-          {campaignName ? (
-            <span className="font-normal text-crm-muted"> · {campaignName}</span>
-          ) : null}
-        </p>
+    <CRMCard padding="md" className="flex h-full flex-col gap-4">
+      <div className="flex items-baseline justify-between gap-2">
+        <div>
+          <p className={crm.label}>Overview</p>
+          <p className="mt-0.5 text-2xl font-bold tabular-nums text-crm-text">{total}</p>
+          <p className="text-[11px] text-crm-muted">in this view</p>
+        </div>
+        {campaignName ? (
+          <span className="max-w-[9rem] truncate rounded-crm border border-crm-border/80 bg-crm-surface-2 px-2 py-1 text-[10px] font-medium text-crm-muted">
+            {campaignName}
+          </span>
+        ) : null}
       </div>
 
-      <CRMSection title="Queue pressure">
-        <CRMHorizontalBars items={pressureItems} />
-        {queuePressure > 0 && filter === "pending" && counts.overdue > 0 ? (
+      <div>
+        <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-crm-muted">Queue mix</p>
+        <CRMHorizontalBars items={pressureItems} maxValue={pressureTotal} />
+        {counts.overdue > 0 && filter === "pending" ? (
           <button
             type="button"
             onClick={() => onFilterChange("overdue")}
-            className="mt-2 text-xs font-semibold text-crm-danger hover:underline"
+            className="mt-2 w-full rounded-crm border border-crm-danger/30 bg-crm-danger/10 px-2 py-1.5 text-left text-xs font-semibold text-crm-danger hover:bg-crm-danger/15"
           >
-            {counts.overdue} overdue — focus overdue
+            {counts.overdue} overdue → focus
           </button>
         ) : null}
-      </CRMSection>
+      </div>
 
-      <CRMSection title="Callback load">
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            onClick={() => onFilterChange("due")}
-            className={cn(
-              "rounded-crm border px-3 py-2 text-left transition-colors",
-              filter === "due"
-                ? "border-crm-warning/40 bg-crm-warning/10"
-                : "border-crm-border bg-crm-bg/60 hover:bg-crm-surface-2",
-            )}
-          >
-            <span className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Due</span>
-            <p className="text-xl font-bold tabular-nums text-crm-warning">{counts.due}</p>
-          </button>
-          <button
-            type="button"
-            onClick={() => onFilterChange("overdue")}
-            className={cn(
-              "rounded-crm border px-3 py-2 text-left transition-colors",
-              filter === "overdue"
-                ? "border-crm-danger/40 bg-crm-danger/10"
-                : "border-crm-border bg-crm-bg/60 hover:bg-crm-surface-2",
-            )}
-          >
-            <span className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Overdue</span>
-            <p className="text-xl font-bold tabular-nums text-crm-danger">{counts.overdue}</p>
-          </button>
-        </div>
-        <p className={crm.footnote}>{callbackLoad} callbacks need attention today</p>
-      </CRMSection>
+      <div className="grid grid-cols-2 gap-2">
+        <CallbackTile label="Due" count={counts.due} active={filter === "due"} tone="warning" onClick={() => onFilterChange("due")} />
+        <CallbackTile
+          label="Overdue"
+          count={counts.overdue}
+          active={filter === "overdue"}
+          tone="danger"
+          onClick={() => onFilterChange("overdue")}
+        />
+      </div>
 
-      <CRMSection title="Today">
+      <div className="border-t border-crm-border/60 pt-3">
+        <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-crm-muted">Today</p>
         {statsLoading ? (
-          <p className={crm.muted}>Loading activity…</p>
+          <p className={crm.muted}>Loading…</p>
         ) : stats ? (
           <>
-            <CRMHorizontalBars items={todayItems} maxValue={Math.max(1, stats.dispositionsToday, stats.callsLinkedToday, stats.myOpen)} />
-            <dl className="mt-2 grid grid-cols-2 gap-2 text-xs">
-              <div className="rounded-crm border border-crm-border/80 bg-crm-bg/50 px-2 py-1.5">
-                <dt className="text-crm-muted flex items-center gap-1">
-                  <TrendingUp className="h-3 w-3" />
-                  Outcomes
-                </dt>
-                <dd className="font-bold tabular-nums text-crm-text">{stats.dispositionsToday}</dd>
-              </div>
-              <div className="rounded-crm border border-crm-border/80 bg-crm-bg/50 px-2 py-1.5">
-                <dt className="text-crm-muted flex items-center gap-1">
-                  <ListOrdered className="h-3 w-3" />
-                  Remaining
-                </dt>
-                <dd className="font-bold tabular-nums text-crm-text">{stats.queueRemaining}</dd>
-              </div>
-            </dl>
+            <CRMHorizontalBars
+              items={todayItems}
+              maxValue={Math.max(1, stats.dispositionsToday, stats.callsLinkedToday, stats.myOpen)}
+            />
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <MiniStat icon={<TrendingUp className="h-3 w-3" />} label="Outcomes" value={stats.dispositionsToday} />
+              <MiniStat icon={<ListOrdered className="h-3 w-3" />} label="Remaining" value={stats.queueRemaining} />
+            </div>
           </>
         ) : (
-          <p className={crm.muted}>Activity unavailable</p>
+          <p className={crm.muted}>Unavailable</p>
         )}
-      </CRMSection>
+      </div>
 
       {stats && !statsLoading ? (
-        <div className="flex flex-wrap gap-2 pt-1 border-t border-crm-border/60">
-          <Link
-            href="/crm/tasks"
-            className={cn(crm.chip, "hover:bg-crm-surface-2")}
-          >
+        <div className="mt-auto flex flex-wrap gap-1.5 border-t border-crm-border/60 pt-3">
+          <Link href="/crm/tasks" className={cn(crm.chip, "hover:bg-crm-surface-2")}>
             <Activity className="h-3 w-3" />
             Tasks
           </Link>
@@ -150,11 +116,11 @@ export function QueueOverviewPanel({
               href={`/crm/campaigns/${encodeURIComponent(campaignId)}`}
               className={cn(crm.chip, "hover:bg-crm-surface-2")}
             >
-              Campaign detail
+              Campaign
             </Link>
           ) : (
             <Link href="/crm/campaigns?status=ACTIVE" className={cn(crm.chip, "hover:bg-crm-surface-2")}>
-              Active campaigns ({stats.activeCampaigns})
+              Campaigns ({stats.activeCampaigns})
             </Link>
           )}
         </div>
@@ -162,3 +128,50 @@ export function QueueOverviewPanel({
     </CRMCard>
   );
 }
+
+function CallbackTile({
+  label,
+  count,
+  active,
+  tone,
+  onClick,
+}: {
+  label: string;
+  count: number;
+  active: boolean;
+  tone: "warning" | "danger";
+  onClick: () => void;
+}) {
+  const activeCls =
+    tone === "danger"
+      ? "border-crm-danger/40 bg-crm-danger/12 ring-1 ring-crm-danger/20"
+      : "border-crm-warning/40 bg-crm-warning/12 ring-1 ring-crm-warning/20";
+  const countCls = tone === "danger" ? "text-crm-danger" : "text-crm-warning";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rounded-crm border px-3 py-2.5 text-left transition-colors",
+        active ? activeCls : "border-crm-border bg-crm-surface-2/80 hover:bg-crm-surface",
+      )}
+    >
+      <span className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">{label}</span>
+      <p className={cn("text-xl font-bold tabular-nums", countCls)}>{count}</p>
+    </button>
+  );
+}
+
+function MiniStat({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
+  return (
+    <div className="rounded-crm border border-crm-border/80 bg-crm-surface-2/60 px-2 py-1.5">
+      <p className="flex items-center gap-1 text-[10px] text-crm-muted">
+        {icon}
+        {label}
+      </p>
+      <p className="text-sm font-bold tabular-nums text-crm-text">{value}</p>
+    </div>
+  );
+}
+

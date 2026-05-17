@@ -1,6 +1,7 @@
 "use client";
 
 import { cn } from "../cn";
+import { crm } from "../crmClasses";
 
 export function QueueCountPill({
   label,
@@ -17,20 +18,33 @@ export function QueueCountPill({
   onClick: () => void;
   disabled?: boolean;
 }) {
+  const showUrgent = urgent && count > 0 && !active;
+
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        "flex min-w-[4.5rem] flex-col items-start rounded-crm border px-2.5 py-2 text-left transition-colors disabled:opacity-50",
-        active
-          ? "border-crm-accent/40 bg-crm-surface shadow-crm ring-1 ring-crm-accent/20"
-          : "border-crm-border bg-crm-bg/80 hover:border-crm-border hover:bg-crm-surface",
+        crm.queueCountPill,
+        "relative overflow-hidden",
+        active && crm.queueCountPillActive,
+        showUrgent && crm.queueCountPillUrgent,
+        disabled && "opacity-50",
       )}
     >
+      {active ? (
+        <span className="absolute inset-y-0 left-0 w-0.5 bg-crm-accent" aria-hidden />
+      ) : showUrgent ? (
+        <span className="absolute inset-y-0 left-0 w-0.5 bg-crm-danger" aria-hidden />
+      ) : null}
       <span className="text-[10px] font-semibold uppercase tracking-wide text-crm-muted">{label}</span>
-      <span className={cn("text-lg font-bold tabular-nums", urgent && count > 0 ? "text-crm-danger" : "text-crm-text")}>
+      <span
+        className={cn(
+          "text-xl font-bold tabular-nums leading-tight",
+          showUrgent ? "text-crm-danger" : active ? "text-crm-accent" : "text-crm-text",
+        )}
+      >
         {count}
       </span>
     </button>

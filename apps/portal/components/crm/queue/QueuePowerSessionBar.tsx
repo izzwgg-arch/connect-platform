@@ -55,15 +55,15 @@ export function QueuePowerSessionBar({
   return (
     <div
       className={cn(
-        "sticky top-0 z-30 -mx-4 sm:-mx-6 lg:-mx-8 rounded-none sm:rounded-crm-lg border-b sm:border border-crm-accent/30",
-        "bg-gradient-to-r from-crm-accent/20 via-crm-surface-2 to-crm-surface-2 shadow-[0_4px_24px_rgba(0,0,0,0.35)]",
+        "sticky top-0 z-30 -mx-3 sm:-mx-5 lg:-mx-7 2xl:-mx-8 rounded-none sm:rounded-crm-lg border-b sm:border border-crm-accent/35",
+        "bg-gradient-to-r from-crm-accent/25 via-crm-surface-2 to-crm-bg/80 shadow-[0_8px_32px_rgba(0,0,0,0.45)] backdrop-blur-sm",
         paused && "from-crm-warning/15 border-crm-warning/30",
       )}
     >
       <div className="flex flex-col gap-3 px-4 py-3 sm:px-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 flex-wrap items-center gap-3">
-            <span className="inline-flex items-center gap-2 rounded-full border border-crm-accent/40 bg-crm-accent/25 px-3 py-1 text-xs font-bold uppercase tracking-wider text-crm-accent">
+            <span className="inline-flex items-center gap-2 rounded-full border border-crm-accent/50 bg-crm-accent/30 px-3 py-1 text-xs font-bold uppercase tracking-wider text-crm-accent shadow-[0_0_12px_rgba(99,102,241,0.25)]">
               <Zap className="h-4 w-4" />
               Power session
             </span>
@@ -122,7 +122,7 @@ export function QueuePowerSessionBar({
         </div>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <div className="flex shrink-0 overflow-hidden rounded-crm border border-crm-border text-xs">
+          <div className="flex shrink-0 overflow-hidden rounded-crm border border-crm-border bg-crm-surface-2/80 text-xs shadow-crm">
             {(
               [
                 { f: "pending" as QueueFilter, label: "Pending", count: counts.pending },

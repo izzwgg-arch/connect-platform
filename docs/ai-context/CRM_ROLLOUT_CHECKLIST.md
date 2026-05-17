@@ -324,6 +324,20 @@
 | Function | Filters, sort, campaign filter, queue PATCH actions, power dial, wrap-up unchanged. |
 | Typecheck | `pnpm exec tsc -p apps/portal` passes. |
 
+### Phase 19C.1 — Queue visual polish (post-19C)
+
+| Check | Expected |
+|-------|----------|
+| Width | `pageInnerQueue` uses up to ~1680px; feed `2xl:col-span-8`; no cramped center column. |
+| Count pills | `QueueCountPill` dark surfaces (`crm.queueCountPill*`); no white/light pill backgrounds. |
+| Empty | Split caught-up + today stats panel; useful links (power, pending, overdue, command center). |
+| Overview | Compact “Overview” header, queue mix bars, due/overdue tiles; minimal footnote copy. |
+| Attention | Icon + count rows; short labels; “All clear” when no signals. |
+| Power | No `bg-green-50` / `bg-amber-50` on PowerCard, outcomes, wrap-up, or session bar. |
+| Grep | `apps/portal/app/(platform)/crm/queue/page.tsx` + `components/crm/queue/*` — no `bg-white`, `bg-gray-50`, `bg-green-50`, `bg-blue-100`, `text-green-700`. |
+| Behavior | Filters, sort, campaign, PATCH actions, power mode, `returnTo` unchanged. |
+| Typecheck | `pnpm exec tsc -p apps/portal --noEmit` passes. |
+
 ---
 
 ## 7. Reports

@@ -23,6 +23,7 @@ import {
   QueueCountPill,
   type QueueOperationalStats,
 } from "../../../../components/crm";
+import { MEMBER_STATUS_COLORS, MEMBER_STATUS_LABELS } from "../../../../components/crm/queue/queueUtils";
 import { apiGet, apiPatch, apiPost } from "../../../../services/apiClient";
 import { useSipPhone } from "../../../../hooks/useSipPhone";
 
@@ -128,21 +129,6 @@ function priorityReason(member: QueueMember): string | null {
   return null;
 }
 
-const MEMBER_STATUS_COLORS: Record<MemberStatus, string> = {
-  PENDING: "bg-crm-surface-2 text-crm-muted",
-  IN_PROGRESS: "bg-blue-100 text-crm-accent",
-  CONTACTED: "bg-purple-100 text-purple-700",
-  CALLBACK: "bg-yellow-100 text-crm-warning",
-  CONVERTED: "bg-green-100 text-green-700",
-  SKIPPED: "bg-crm-surface-2 text-crm-muted",
-  DO_NOT_CALL: "bg-red-100 text-crm-danger",
-};
-
-const MEMBER_STATUS_LABELS: Record<MemberStatus, string> = {
-  PENDING: "Pending", IN_PROGRESS: "In Progress", CONTACTED: "Contacted",
-  CALLBACK: "Callback", CONVERTED: "Converted", SKIPPED: "Skipped", DO_NOT_CALL: "DNC",
-};
-
 // ── Set Callback Modal ─────────────────────────────────────────────────────────
 
 function SetCallbackModal({ member, onClose, onSaved }: {
@@ -184,7 +170,7 @@ function SetCallbackModal({ member, onClose, onSaved }: {
       <div className="bg-crm-surface rounded-crm border border-crm-border shadow-xl p-6 w-full max-w-sm">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-semibold text-crm-text flex items-center gap-2">
-            <CalendarClock className="h-5 w-5 text-yellow-500" />
+            <CalendarClock className="h-5 w-5 text-crm-warning" />
             Schedule Callback
           </h2>
           <button onClick={onClose} className="p-1 hover:bg-crm-surface-2 rounded"><X className="h-4 w-4" /></button>
@@ -215,7 +201,7 @@ function SetCallbackModal({ member, onClose, onSaved }: {
         {error && <p className="text-xs text-crm-danger mt-2">{error}</p>}
         <div className="flex gap-2 justify-end mt-4">
           <button onClick={onClose} className="px-3 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-bg">Cancel</button>
-          <button onClick={handleSave} disabled={saving || !datetime} className="px-4 py-2 text-sm bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 disabled:opacity-50 font-medium">
+          <button onClick={handleSave} disabled={saving || !datetime} className={cn(crm.btnPrimary, "px-4 py-2 text-sm")}>
             {saving ? "Saving…" : "Schedule"}
           </button>
         </div>
@@ -238,12 +224,12 @@ type OutcomeDef = {
 };
 
 const OUTCOME_DEFS: OutcomeDef[] = [
-  { label: "No Answer",      icon: PhoneMissed,    colorClass: "border-crm-border text-crm-text hover:bg-crm-bg" },
-  { label: "Voicemail",      icon: Voicemail,      colorClass: "border-crm-border text-crm-text hover:bg-crm-bg" },
-  { label: "Interested",     icon: ThumbsUp,       colorClass: "border-green-300 text-green-700 hover:bg-green-50" },
-  { label: "Not Interested", icon: ThumbsDown,     colorClass: "border-orange-300 text-orange-700 hover:bg-orange-50" },
-  { label: "Callback",       icon: CalendarClock,  colorClass: "border-crm-warning/40 text-crm-warning hover:bg-crm-warning/10" },
-  { label: "Converted",      icon: CheckCircle2,   colorClass: "border-emerald-400 text-emerald-700 hover:bg-crm-success/10" },
+  { label: "No Answer", icon: PhoneMissed, colorClass: "border-crm-border bg-crm-surface-2/60 text-crm-text hover:bg-crm-surface" },
+  { label: "Voicemail", icon: Voicemail, colorClass: "border-crm-border bg-crm-surface-2/60 text-crm-text hover:bg-crm-surface" },
+  { label: "Interested", icon: ThumbsUp, colorClass: "border-crm-success/40 bg-crm-success/10 text-crm-success hover:bg-crm-success/15" },
+  { label: "Not Interested", icon: ThumbsDown, colorClass: "border-crm-warning/40 bg-crm-warning/10 text-crm-warning hover:bg-crm-warning/15" },
+  { label: "Callback", icon: CalendarClock, colorClass: "border-crm-warning/40 bg-crm-warning/10 text-crm-warning hover:bg-crm-warning/15" },
+  { label: "Converted", icon: CheckCircle2, colorClass: "border-crm-success/40 bg-crm-success/10 text-crm-success hover:bg-crm-success/15" },
 ];
 
 function PowerCard({
@@ -340,7 +326,7 @@ function PowerCard({
   if (!actionable) {
     return (
       <div className="bg-crm-surface-2 rounded-crm-lg p-6 border-2 border-crm-border shadow-lg mb-4 opacity-90">
-        <div className="flex items-center gap-2 mb-3 text-crm-warning bg-amber-50 border border-crm-warning/35 rounded-lg px-3 py-2 text-sm">
+        <div className={cn("mb-3 flex items-center gap-2 rounded-lg px-3 py-2 text-sm", crm.bannerWarning)}>
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span>This lead is archived or inactive and is not live queue work. Refresh the queue or contact an admin.</span>
         </div>
@@ -370,9 +356,9 @@ function PowerCard({
                 title="Why this lead?"
                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold shrink-0 cursor-default ${
                   isUrgent
-                    ? "bg-red-100 text-crm-danger"
+                    ? "bg-crm-danger/15 text-crm-danger border border-crm-danger/30"
                     : isHigh
-                      ? "bg-orange-100 text-orange-700"
+                      ? "bg-crm-warning/15 text-crm-warning border border-crm-warning/30"
                       : "bg-crm-accent/12 text-crm-accent"
                 }`}
               >
@@ -432,7 +418,7 @@ function PowerCard({
 
       {/* Callback banner */}
       {cb && (
-        <div className={`flex items-center gap-2 text-sm px-3 py-2 rounded-lg mb-4 border ${cb.urgent ? "bg-crm-danger/15 text-crm-danger border-crm-danger/35" : "bg-crm-warning/15 text-crm-warning border-yellow-200"}`}>
+        <div className={`flex items-center gap-2 text-sm px-3 py-2 rounded-lg mb-4 border ${cb.urgent ? "bg-crm-danger/15 text-crm-danger border-crm-danger/35" : "bg-crm-warning/15 text-crm-warning border-crm-warning/35"}`}>
           {cb.urgent && <AlertCircle className="h-4 w-4 shrink-0" />}
           <CalendarClock className="h-4 w-4 shrink-0" />
           <span>{cb.label}</span>
@@ -444,7 +430,7 @@ function PowerCard({
 
       {/* SIP warning */}
       {!sipReady && (
-        <div className="flex items-center gap-2 text-amber-700 bg-amber-50 text-sm px-3 py-2 rounded-lg mb-4 border border-crm-warning/35">
+        <div className={cn("mb-4 flex items-center gap-2 rounded-lg px-3 py-2 text-sm", crm.bannerWarning)}>
           <AlertCircle className="h-4 w-4 shrink-0" />
           SIP phone not registered — connect your softphone before calling.
         </div>
@@ -460,7 +446,7 @@ function PowerCard({
 
       {/* Brief action feedback (skip/defer/DNC from parent) */}
       {feedback && (
-        <div className="flex items-center gap-2 text-green-700 bg-green-50 text-sm px-3 py-2 rounded-lg mb-4 border border-green-200 font-semibold">
+        <div className={cn("mb-4 flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold", crm.bannerSuccess)}>
           <CheckCheck className="h-4 w-4 shrink-0" />
           {feedback} — loading next lead…
         </div>
@@ -470,7 +456,7 @@ function PowerCard({
       <button
         onClick={onCall}
         disabled={!phone || !sipReady || anyBusy || paused}
-        className="w-full flex items-center justify-center gap-3 py-4 px-6 rounded-crm font-bold text-white text-lg mb-5 bg-green-500 hover:bg-green-600 active:bg-green-700 disabled:bg-crm-surface-2 disabled:text-crm-muted/80 disabled:cursor-not-allowed shadow-md disabled:shadow-none transition-all"
+        className={cn("mb-5 w-full gap-3 py-4 px-6 text-lg", crm.btnCallSuccess)}
       >
         <PhoneCall className="h-6 w-6" />
         {phone ? `Call ${phone}` : "No phone number"}
@@ -535,7 +521,7 @@ function PowerCard({
 
         {/* Inline callback time picker */}
         {callbackPickerOpen && (
-          <div className="mt-2 p-3 bg-yellow-50 border border-yellow-200 rounded-crm">
+          <div className="mt-2 rounded-crm border border-crm-warning/35 bg-crm-warning/10 p-3">
             <p className="text-sm font-semibold text-yellow-900 mb-2 flex items-center gap-1.5">
               <CalendarClock className="h-4 w-4" />Schedule Callback
             </p>
@@ -571,7 +557,7 @@ function PowerCard({
               <button
                 onClick={() => void handleCallbackSave()}
                 disabled={!callbackDatetime || outcomeSaving}
-                className="px-3 py-1.5 text-xs bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 disabled:opacity-50 font-semibold"
+                className={cn(crm.btnPrimary, "px-3 py-1.5 text-xs")}
               >
                 {outcomeSaving ? "Saving…" : "Save Callback →"}
               </button>
@@ -828,10 +814,10 @@ function WrapUpOverlay({
   const contact = nextLead?.contact ?? null;
 
   return (
-    <div className="bg-crm-surface rounded-crm-lg border border-crm-border p-6 border-2 border-green-400 shadow-lg mb-4">
+    <div className="mb-4 rounded-crm-lg border-2 border-crm-success/40 bg-crm-surface p-6 shadow-lg">
       {/* Countdown header */}
       <div className="text-center mb-5">
-        <div className="inline-flex items-center gap-2 text-green-600 font-semibold text-base mb-3">
+        <div className="mb-3 inline-flex items-center gap-2 text-base font-semibold text-crm-success">
           <CheckCircle2 className="h-5 w-5" />
           Outcome saved
         </div>
@@ -841,7 +827,7 @@ function WrapUpOverlay({
             <p className="text-crm-muted/80 text-sm">Next lead ready in {countdown}… press <kbd className="bg-crm-surface-2 px-1 rounded text-xs">G</kbd> to go now</p>
           </>
         ) : (
-          <p className="text-amber-700 text-sm font-medium">Queue paused — resume to continue</p>
+          <p className="text-sm font-medium text-crm-warning">Queue paused — resume to continue</p>
         )}
       </div>
 
@@ -871,7 +857,7 @@ function WrapUpOverlay({
             {nextLead.callbackAt && (
               <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                 callbackTimeLabel(nextLead.callbackAt).urgent
-                  ? "bg-red-100 text-crm-danger"
+                  ? "bg-crm-danger/15 text-crm-danger border border-crm-danger/30"
                   : "bg-crm-warning/15 text-crm-warning"
               }`}>
                 {callbackTimeLabel(nextLead.callbackAt).label}
@@ -889,14 +875,14 @@ function WrapUpOverlay({
       <div className="flex gap-3">
         <button
           onClick={onGoNow}
-          className="flex-1 flex items-center justify-center gap-2 py-3 bg-crm-accent text-white rounded-crm font-bold text-base hover:brightness-110 active:bg-blue-800 transition-colors shadow-crm"
+          className={cn(crm.btnPrimary, "flex-1 py-3 text-base font-bold")}
         >
           <ArrowRight className="h-5 w-5" />
           Go Now
         </button>
         <button
           onClick={onPause}
-          className="flex items-center gap-1.5 px-4 py-3 bg-crm-warning/15 text-crm-warning rounded-crm font-medium text-sm hover:bg-amber-200 transition-colors"
+          className={cn(crm.btnSecondary, "border-crm-warning/40 bg-crm-warning/10 text-crm-warning hover:bg-crm-warning/15")}
         >
           <Pause className="h-4 w-4" />
           Pause
@@ -1342,7 +1328,7 @@ function QueuePageInner() {
 
   const sidePanels = (
     <>
-      <div className="col-span-12 xl:col-span-3">
+      <div className="col-span-12 xl:col-span-3 2xl:col-span-2">
         <QueueOverviewPanel
           counts={counts}
           filter={filter}
@@ -1503,7 +1489,7 @@ function QueuePageInner() {
       ) : null}
 
       <div className="grid grid-cols-12 gap-4 items-start">
-        <div className="col-span-12 xl:col-span-7 flex flex-col gap-3 min-w-0">
+        <div className="col-span-12 flex min-w-0 flex-col gap-3 xl:col-span-7 2xl:col-span-8">
         {/* Content */}
         {loading ? (
           <div className="py-24 text-center text-crm-muted/80 text-sm">Loading…</div>
@@ -1658,3 +1644,6 @@ export default function QueuePage() {
     </Suspense>
   );
 }
+
+
+
