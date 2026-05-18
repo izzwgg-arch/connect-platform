@@ -332,17 +332,14 @@ export function AdminTenantPricingSourceCard({
   );
 }
 
-/** Tax profile, billing cycle, and autopay — lives under Taxes & invoices, not Pricing. */
+/** Billing cycle, credits, and autopay — taxes live in AdminTaxesFeesWorkspace. */
 export function AdminTenantBillingCycleForm({ detail, onSaved }: { detail: TenantDetail; onSaved: () => void }) {
   const [saving, setSaving] = useState(false);
   const settings = detail.settings || {};
-  const meta = settings.metadata && typeof settings.metadata === "object" && !Array.isArray(settings.metadata) ? settings.metadata : {};
-  const taxProviderId = String((meta as Record<string, unknown>).taxProviderId || "tax_profile_v1");
-
   return (
-    <DetailCard title="Taxes & billing cycle" dataTestId="billing-admin-billing-cycle-card">
+    <DetailCard title="Billing cycle & credits" dataTestId="billing-admin-billing-cycle-card">
       <p className="muted" style={{ marginBottom: 12, fontSize: 13, lineHeight: 1.45 }}>
-        Prices exclude taxes and regulatory fees. Confirm rates with your tax advisor before production billing.
+        Invoice timing, payment terms, and credits. Configure taxes under <strong>Taxes &amp; fees</strong>.
       </p>
       <form
         className="billing-form"
@@ -352,9 +349,6 @@ export function AdminTenantBillingCycleForm({ detail, onSaved }: { detail: Tenan
           try {
             const form = new FormData(event.currentTarget);
             await apiPut(`/admin/billing/tenants/${detail.tenant.id}/settings`, {
-              taxEnabled: form.get("taxEnabled") === "on",
-              taxProfileId: String(form.get("taxProfileId") || "") || null,
-              taxProviderId: String(form.get("taxProviderId") || "tax_profile_v1"),
               autoBillingEnabled: form.get("autoBillingEnabled") === "on",
               billingDayOfMonth: Number(form.get("billingDayOfMonth") || 1),
               paymentTermsDays: Number(form.get("paymentTermsDays") || 15),
@@ -379,34 +373,13 @@ export function AdminTenantBillingCycleForm({ detail, onSaved }: { detail: Tenan
         <label>
           Credits this month <input name="credits" defaultValue={toDollars(settings.creditsCents)} />
         </label>
-        <label>
-          Tax profile
-          <select name="taxProfileId" defaultValue={settings.taxProfileId || ""}>
-            <option value="">No tax profile</option>
-            {detail.taxProfiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profile.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Tax calculation provider
-          <select name="taxProviderId" defaultValue={taxProviderId}>
-            <option value="tax_profile_v1">Tax profile (configurable rates in Connect)</option>
-            <option value="external_telecom_stub">External telecom stub (no tax lines — placeholder)</option>
-          </select>
-        </label>
         <div className="billing-check-grid">
-          <label>
-            <input name="taxEnabled" type="checkbox" defaultChecked={!!settings.taxEnabled} /> Apply taxes and fees
-          </label>
           <label>
             <input name="autoBillingEnabled" type="checkbox" defaultChecked={!!settings.autoBillingEnabled} /> Auto-charge monthly
           </label>
         </div>
         <button className="btn primary" type="submit" disabled={saving}>
-          {saving ? "Saving…" : "Save billing settings"}
+          {saving ? "Saving…" : "Save billing cycle"}
         </button>
       </form>
     </DetailCard>

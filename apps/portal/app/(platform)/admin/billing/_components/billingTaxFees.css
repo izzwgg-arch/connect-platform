@@ -1,0 +1,262 @@
+/* Taxes & fees workspace — dark-native finance UI */
+
+.billing-tax-fees-page {
+  max-width: 1080px;
+}
+
+.billing-tax-fees-page__head {
+  margin-bottom: 18px;
+}
+
+.billing-tax-fees-page__head h2 {
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+}
+
+.billing-tax-fees-page__head p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--billing-muted, var(--text-dim));
+  line-height: 1.45;
+  max-width: 560px;
+}
+
+.billing-tax-fees-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.billing-tax-fees-chip {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--billing-border, var(--border));
+  background: color-mix(in srgb, var(--billing-surface-raised, var(--panel-2)) 80%, transparent);
+  color: var(--billing-muted, var(--text-dim));
+}
+
+.billing-tax-fees-chip--accent {
+  color: var(--billing-text, var(--text));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--billing-border, var(--border)));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.billing-tax-fees-section {
+  margin-bottom: 20px;
+}
+
+.billing-tax-fees-section h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--billing-muted, var(--text-dim));
+}
+
+.billing-tax-fee-grid {
+  display: grid;
+  gap: 10px;
+}
+
+@media (min-width: 720px) {
+  .billing-tax-fee-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.billing-tax-fee-card {
+  border: 1px solid var(--billing-border, var(--border));
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: var(--billing-surface, var(--panel));
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.billing-tax-fee-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--billing-border, var(--border)));
+}
+
+.billing-tax-fee-card--disabled {
+  opacity: 0.72;
+}
+
+.billing-tax-fee-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.billing-tax-fee-card__title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.billing-tax-fee-card__desc {
+  font-size: 12px;
+  color: var(--billing-muted, var(--text-dim));
+  margin: 4px 0 0;
+  line-height: 1.4;
+}
+
+.billing-tax-fee-card__toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  margin: 10px 0;
+  font-size: 12px;
+}
+
+.billing-tax-fee-card__fields {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.billing-tax-fee-card__fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--billing-muted, var(--text-dim));
+}
+
+.billing-tax-fee-card__fields input,
+.billing-tax-fee-card__fields select {
+  font-size: 13px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--billing-border, var(--border));
+  background: var(--billing-surface-raised, var(--panel-2));
+  color: var(--billing-text, var(--text));
+}
+
+.billing-tax-fees-estimate {
+  border: 1px solid var(--billing-border, var(--border));
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: color-mix(in srgb, var(--billing-surface-raised, var(--panel-2)) 55%, transparent);
+}
+
+.billing-tax-fees-estimate__title {
+  font-size: 14px;
+  font-weight: 650;
+  margin: 0 0 4px;
+}
+
+.billing-tax-fees-estimate__hint {
+  font-size: 11px;
+  color: var(--billing-muted, var(--text-dim));
+  margin: 0 0 12px;
+}
+
+.billing-tax-fees-estimate__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.billing-tax-fees-estimate__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.billing-tax-fees-estimate__row span:last-child {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.billing-tax-fees-estimate__total {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--billing-border, var(--border));
+  display: flex;
+  justify-content: space-between;
+  font-weight: 650;
+  font-size: 14px;
+}
+
+.billing-tax-fees-visibility {
+  border: 1px dashed var(--billing-border, var(--border));
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 12px;
+}
+
+.billing-tax-fees-visibility ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--billing-muted, var(--text-dim));
+}
+
+.billing-tax-fees-advanced {
+  margin-top: 16px;
+  border: 1px solid var(--billing-border, var(--border));
+  border-radius: 10px;
+  padding: 0 12px;
+  background: var(--billing-surface, var(--panel));
+}
+
+.billing-tax-fees-advanced summary {
+  cursor: pointer;
+  padding: 12px 0;
+  font-size: 13px;
+  font-weight: 600;
+  list-style: none;
+}
+
+.billing-tax-fees-advanced summary::-webkit-details-marker {
+  display: none;
+}
+
+.billing-tax-fees-advanced__body {
+  padding-bottom: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.billing-tax-fees-sticky {
+  position: sticky;
+  bottom: 0;
+  z-index: 4;
+  margin-top: 16px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--billing-border, var(--border));
+  background: color-mix(in srgb, var(--billing-surface, var(--panel)) 92%, transparent);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.billing-tax-fees-sticky__hint {
+  font-size: 12px;
+  color: var(--billing-muted, var(--text-dim));
+}
+
+.billing-tax-fee-tag {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--billing-muted, var(--text-dim));
+}
+
+.billing-tax-fee-tag--suggested {
+  color: color-mix(in srgb, var(--accent) 80%, var(--text));
+}

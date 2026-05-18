@@ -8,6 +8,7 @@ import "./_components/billingPhase7.css";
 import "./_components/billingPhase8.css";
 import "./_components/billingPhase9.css";
 import "./_components/billingPricing.css";
+import "./_components/billingTaxFees.css";
 import "./_components/billingInvoices.css";
 import { Suspense, type ReactNode } from "react";
 import { AdminBillingShell } from "./_components/AdminBillingShell";

@@ -15,6 +15,7 @@ import {
 } from "./billingAssignment";
 import { validateBillingFlatRateInput } from "./billingFlatRate";
 import { validateBillingQuantityOverridesInput } from "./billingQuantityOverrides";
+import { taxProfilePatchFromTelecomFees, validateBillingTelecomFeesInput } from "./billingTelecomFees";
 import { mergeTenantBillingSettingsMetadata } from "./billingTenantSettingsMetadata";
 import { getBillingSolaAdapter, storeSolaPaymentMethod } from "./solaGateway";
 import { invoiceReadyEmail } from "./emailTemplates";
@@ -660,6 +661,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
           })
           .nullable()
           .optional(),
+        billingTelecomFees: billingTelecomFeesPutSchema().nullable().optional(),
       })
       .merge(invoiceBrandingPutSchema)
       .parse(req.body || {});
@@ -683,6 +685,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       billingFlatRate,
       billingQuantityOverrides,
       tollFreeDidPriceCents,
+      billingTelecomFees,
       ...pricing
     } = input as any;
     const pricingData = Object.fromEntries(Object.entries(pricing).filter(([, v]) => v !== undefined));
@@ -690,6 +693,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     let pricingModeChangeFrom: ReturnType<typeof parseBillingPricingMode> | null = null;
     let flatRatePatch: ReturnType<typeof validateBillingFlatRateInput> | null = null;
     let quantityOverridesPatch: ReturnType<typeof validateBillingQuantityOverridesInput> | null = null;
+    let telecomFeesPatch: ReturnType<typeof validateBillingTelecomFeesInput> | null = null;
     if (billingFlatRate !== undefined) {
       flatRatePatch = validateBillingFlatRateInput(billingFlatRate);
       if (!flatRatePatch.ok) {
@@ -702,12 +706,19 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: "invalid_billing_quantity_overrides", message: quantityOverridesPatch.error });
       }
     }
+    if (billingTelecomFees !== undefined) {
+      telecomFeesPatch = validateBillingTelecomFeesInput(billingTelecomFees);
+      if (!telecomFeesPatch.ok) {
+        return reply.code(400).send({ error: "invalid_billing_telecom_fees", message: telecomFeesPatch.error });
+      }
+    }
     if (
       taxProviderId !== undefined ||
       billingPricingMode !== undefined ||
       billingFlatRate !== undefined ||
       billingQuantityOverrides !== undefined ||
-      tollFreeDidPriceCents !== undefined
+      tollFreeDidPriceCents !== undefined ||
+      billingTelecomFees !== undefined
     ) {
       const cur = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId } });
       if (billingPricingMode !== undefined) {
@@ -719,6 +730,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         ...(flatRatePatch?.ok ? { billingFlatRate: flatRatePatch.value } : {}),
         ...(quantityOverridesPatch?.ok ? { billingQuantityOverrides: quantityOverridesPatch.value } : {}),
         ...(tollFreeDidPriceCents !== undefined ? { tollFreeDidPriceCents } : {}),
+        ...(telecomFeesPatch?.ok ? { billingTelecomFees: telecomFeesPatch.value } : {}),
       });
     }
     const createUpdate = { ...pricingData, ...brandingPatch, ...(mergedMetadata !== undefined ? { metadata: mergedMetadata } : {}) };
@@ -743,6 +755,13 @@ export async function registerBillingRoutes(app: FastifyInstance) {
           },
         }).catch(() => undefined);
       }
+    }
+    if (telecomFeesPatch?.ok && telecomFeesPatch.value && saved.taxProfileId) {
+      const profilePatch = taxProfilePatchFromTelecomFees(telecomFeesPatch.value);
+      await (db as any).taxProfile.update({
+        where: { id: saved.taxProfileId },
+        data: profilePatch,
+      });
     }
     return saved;
   });
@@ -2540,6 +2559,39 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const result = await unmapSolaExternalSchedule({ linkId: id, operatorId: u.sub });
     if (!result.ok) return reply.code(result.code).send({ error: result.error });
     return { ok: true };
+  });
+}
+
+function billingTelecomFeeItemPutSchema() {
+  return z.object({
+    enabled: z.boolean(),
+    customerVisible: z.boolean(),
+    label: z.string().min(1).max(120),
+    description: z.string().max(280).optional(),
+    suggested: z.boolean().optional(),
+    mode: z.enum(["ratePercent", "amountCents"]),
+    ratePercent: z.number().min(0).max(1).nullable().optional(),
+    amountCents: z.number().int().min(0).nullable().optional(),
+    basis: z.enum([
+      "invoice_subtotal",
+      "per_extension",
+      "per_did",
+      "per_toll_free_did",
+      "per_line",
+      "flat_monthly",
+    ]),
+  });
+}
+
+function billingTelecomFeesPutSchema() {
+  const item = billingTelecomFeeItemPutSchema();
+  return z.object({
+    salesTax: item.optional(),
+    e911: item.optional(),
+    regulatory: item.optional(),
+    telecomSurcharge: item.optional(),
+    usfRecovery: item.optional(),
+    customFee: item.optional(),
   });
 }
 

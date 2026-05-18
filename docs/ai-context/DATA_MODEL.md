@@ -98,6 +98,7 @@
   (API `tollFreeDidPriceCents` on settings PUT); falls back to local DID price / default.
 - **Quantity overrides:** `metadata.billingQuantityOverrides.tollFreeNumbers` — `{ mode: "auto"|"manual", quantity }`;
   must be parsed/validated with the same key list as other billing lines (`BILLING_QUANTITY_OVERRIDE_KEYS`).
+- **Telecom fees (admin UI):** `metadata.billingTelecomFees` — per-tenant fee card config (`salesTax`, `e911`, `regulatory`, `telecomSurcharge`, `usfRecovery`, `customFee`). Invoice lines still driven by `TaxProfile` for the three core types until Phase B.
 
 ## ConnectCdr — *the* call-history model
 - **Schema:** line 1686

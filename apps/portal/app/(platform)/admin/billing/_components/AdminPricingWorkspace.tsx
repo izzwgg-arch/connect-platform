@@ -248,7 +248,7 @@ export function AdminPricingWorkspace({
   previewMonth: number;
   previewYear: number;
   settingsSectionHref: (section: BillingSettingsSection) => string;
-  activeSection: "plans-pricing" | "tax-billing" | "gateway";
+  activeSection: "plans-pricing" | "tax-billing" | "invoice-billing" | "gateway";
 }) {
   const [diag, setDiag] = useState<TenantPricingDiagnostics | null>(null);
   const [diagLoading, setDiagLoading] = useState(true);
@@ -668,10 +668,13 @@ export function AdminPricingWorkspace({
           Plans &amp; Pricing
         </Link>
         <Link href={settingsSectionHref("tax-billing")} className={activeSection === "tax-billing" ? "active" : ""}>
-          Invoice Branding
+          Taxes &amp; fees
+        </Link>
+        <Link href={settingsSectionHref("invoice-billing")} className={activeSection === "invoice-billing" ? "active" : ""}>
+          Invoice &amp; billing
         </Link>
         <Link href={settingsSectionHref("gateway")} className={activeSection === "gateway" ? "active" : ""}>
-          Payment Gateway
+          Payment gateway
         </Link>
       </nav>
 
@@ -920,7 +923,7 @@ export function AdminPricingWorkspace({
         </div>
         <p className="billing-pricing-footnote">
           Suggested quantities come from active resources; billing quantities follow Auto or Manual overrides saved on this company.{" "}
-          <Link href={taxBillingHref}>Taxes &amp; invoice settings</Link> control tax profiles and presentation.
+          <Link href={taxBillingHref}>Taxes &amp; fees</Link> control tax profiles, E911, and regulatory fees.
         </p>
       </section>
 

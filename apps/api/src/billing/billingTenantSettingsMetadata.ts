@@ -3,6 +3,8 @@ import { mergeBillingFlatRateIntoMetadata } from "./billingFlatRate";
 import type { BillingQuantityOverridesConfig } from "./billingQuantityOverrides";
 import { mergeBillingQuantityOverridesIntoMetadata } from "./billingQuantityOverrides";
 import { mergeTollFreeDidPriceIntoMetadata } from "./billingTollFreePricing";
+import type { BillingTelecomFeesConfig } from "./billingTelecomFees";
+import { mergeBillingTelecomFeesIntoMetadata } from "./billingTelecomFees";
 import { BILLING_PRICING_MODE_METADATA_KEY } from "./billingPricingResolution";
 
 export type TenantBillingMetaPatchInput = {
@@ -15,6 +17,8 @@ export type TenantBillingMetaPatchInput = {
   billingQuantityOverrides?: BillingQuantityOverridesConfig | null;
   /** Omit = leave toll-free DID unit price untouched; null = remove from metadata */
   tollFreeDidPriceCents?: number | null;
+  /** Omit = leave telecom fee config untouched; null = remove */
+  billingTelecomFees?: BillingTelecomFeesConfig | null;
 };
 /** Same merge semantics as `PUT /admin/billing/tenants/:tenantId/settings` for audit tests. */
 export function mergeTenantBillingSettingsMetadata(prev: unknown, input: TenantBillingMetaPatchInput): Record<string, unknown> {
@@ -39,6 +43,9 @@ export function mergeTenantBillingSettingsMetadata(prev: unknown, input: TenantB
   }
   if (input.tollFreeDidPriceCents !== undefined) {
     merged = mergeTollFreeDidPriceIntoMetadata(merged, input.tollFreeDidPriceCents);
+  }
+  if (input.billingTelecomFees !== undefined) {
+    merged = mergeBillingTelecomFeesIntoMetadata(merged, input.billingTelecomFees);
   }
   return merged;
 }

@@ -17,6 +17,7 @@ import {
   AdminTenantSolaGatewayForm,
 } from "../_components/tenantBillingConfigForms";
 import { AdminPricingWorkspace } from "../_components/AdminPricingWorkspace";
+import { AdminTaxesFeesWorkspace } from "../_components/AdminTaxesFeesWorkspace";
 import { dollars, formatDate, humanizePricingStateMode } from "../../../../../lib/billingUi";
 import { BILLING_SECTION_QUERY, isBillingSettingsSection, mergeSearchParams, OPS_TAB_QUERY, type BillingSettingsSection } from "../_components/adminBillingLinks";
 import { useAdminBillingTenant } from "../_components/useAdminBillingTenant";
@@ -803,9 +804,11 @@ function AdminBillingSettingsBody() {
   const settingsView =
     activeBillingSection === "tax-billing"
       ? "tax-billing"
-      : activeBillingSection === "gateway"
-        ? "gateway"
-        : "plans-pricing";
+      : activeBillingSection === "invoice-billing"
+        ? "invoice-billing"
+        : activeBillingSection === "gateway"
+          ? "gateway"
+          : "plans-pricing";
 
   if (!canPlatformAdminBilling) {
     return (
@@ -850,21 +853,32 @@ function AdminBillingSettingsBody() {
           ) : null}
 
           {settingsView === "tax-billing" ? (
+            <AdminTaxesFeesWorkspace
+              detail={detail}
+              onSaved={() => void loadDetail(detail.tenant.id)}
+              settingsSectionHref={settingsSectionHref}
+              activeSection={settingsView}
+            />
+          ) : null}
+
+          {settingsView === "invoice-billing" ? (
             <div className="billing-p5-settings-section billing-p8-scope billing-pricing-page">
               <header className="billing-pricing-page__head">
                 <div>
-                  <h2>Taxes &amp; invoices</h2>
+                  <h2>Invoice &amp; billing</h2>
                   <p className="billing-p5-settings-section__summary" style={{ margin: 0 }}>
-                    Tax profiles, billing cycle, and customer-facing invoice presentation for <strong>{detail.tenant.name}</strong>.
+                    Billing cycle, credits, and customer-facing invoice presentation for{" "}
+                    <strong>{detail.tenant.name}</strong>.
                   </p>
                 </div>
               </header>
               <nav className="billing-pricing-tabs" aria-label="Billing settings sections">
-                <Link href={settingsSectionHref("plans-pricing")}>Plans &amp; Pricing</Link>
-                <Link href={settingsSectionHref("tax-billing")} className="active">
-                  Invoice Branding
+                <Link href={settingsSectionHref("plans-pricing")}>Plans &amp; pricing</Link>
+                <Link href={settingsSectionHref("tax-billing")}>Taxes &amp; fees</Link>
+                <Link href={settingsSectionHref("invoice-billing")} className="active">
+                  Invoice &amp; billing
                 </Link>
-                <Link href={settingsSectionHref("gateway")}>Payment Gateway</Link>
+                <Link href={settingsSectionHref("gateway")}>Payment gateway</Link>
               </nav>
               <section className="billing-setup-grid">
                 <AdminTenantBillingCycleForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
@@ -885,7 +899,8 @@ function AdminBillingSettingsBody() {
               </header>
               <nav className="billing-pricing-tabs" aria-label="Billing settings sections">
                 <Link href={settingsSectionHref("plans-pricing")}>Plans &amp; Pricing</Link>
-                <Link href={settingsSectionHref("tax-billing")}>Invoice Branding</Link>
+                <Link href={settingsSectionHref("tax-billing")}>Taxes &amp; fees</Link>
+                <Link href={settingsSectionHref("invoice-billing")}>Invoice &amp; billing</Link>
                 <Link href={settingsSectionHref("gateway")} className="active">
                   Payment Gateway
                 </Link>

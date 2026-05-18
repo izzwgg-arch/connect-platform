@@ -198,6 +198,20 @@ Shape: `{ extensions?: { mode: "auto"|"manual", quantity: number|null }, … }`.
 
 Monthly estimate uses **`computeTenantMonthlyEstimate`** with **billing** quantities (aligned with invoice engine when overrides saved).
 
+## Admin Taxes & fees workspace (Phase A — 2026-05-17)
+
+**Route:** `/admin/billing/settings?billingSection=tax-billing` — **`AdminTaxesFeesWorkspace`**.
+
+**Scope:** Taxes, telecom fees, E911, regulatory charges, customer-visible preview, estimated taxes/fees panel. **Not** billing cycle, branding, payment terms, or gateway (moved to **`invoice-billing`** tab).
+
+**Metadata:** `TenantBillingSettings.metadata.billingTelecomFees` — per-fee `enabled`, `customerVisible`, `label`, `mode` (`ratePercent` | `amountCents`), `basis`, rates/amounts. Validated on **`PUT …/settings`** (`invalid_billing_telecom_fees`). Code: `apps/api/src/billing/billingTelecomFees.ts`.
+
+**Invoice engine today:** `calculateTaxLines` / `TaxProfile` emit **SALES_TAX**, **E911_FEE**, **REGULATORY_FEE** when `taxEnabled` + profile assigned. Saving the workspace syncs those three fields onto the linked **shared** `TaxProfile` row. **Surcharge / USF / custom** are estimate-only until Phase B. **customerVisible** is honored in the admin preview panel only (not invoice PDF filtering yet).
+
+**E911:** UI default suggestion **$3.00** per local DID (NY/Orange suggested chip). Invoice math uses `e911FeePerExtension × extensionCount` via TaxProfile until Phase B basis expansion.
+
+**Disclaimer copy:** Suggested rates are not legal advice; confirm with a tax advisor.
+
 ## Customer billing portal — page inventory
 
 Customer-facing pages under `apps/portal/app/(platform)/billing/`. All use tenant routes (`/billing/…`) only.

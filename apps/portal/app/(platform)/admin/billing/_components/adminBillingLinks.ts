@@ -10,6 +10,7 @@ export type BillingSettingsSection =
   | "plans-pricing"
   | "collections"
   | "tax-billing"
+  | "invoice-billing"
   | "gateway"
   | "preview"
   | "pricing-explanation";
@@ -26,6 +27,7 @@ export function isBillingSettingsSection(v: string | null): v is BillingSettings
     v === "plans-pricing" ||
     v === "collections" ||
     v === "tax-billing" ||
+    v === "invoice-billing" ||
     v === "gateway" ||
     v === "preview" ||
     v === "pricing-explanation"

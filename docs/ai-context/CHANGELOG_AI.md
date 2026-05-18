@@ -4,6 +4,33 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-17 — Billing: Taxes & fees workspace (Phase A)
+
+**Task:** Redesign Admin Billing → Taxes into a telecom tax/fee management UI; move cycle/branding elsewhere.  
+**Risk:** High (tax configuration UX + metadata; TaxProfile sync on save).
+
+### Shipped (Phase A)
+
+- **`AdminTaxesFeesWorkspace`**: fee cards (sales tax, E911, regulatory, surcharge, USF, custom) with enabled / customer-visible / rate or amount / basis; jurisdiction chip; estimate panel; customer-visible preview; advanced provider settings.
+- **`metadata.billingTelecomFees`**: per-tenant fee config via `billingTelecomFees.ts` (API validate/merge + PUT settings).
+- **TaxProfile sync** on save for sales tax, E911, regulatory (shared profile warning in UI).
+- **Settings tabs**: Taxes & fees | Invoice & billing (cycle + branding) | Payment gateway — top-level billing nav unchanged.
+- **Tests:** `billingTelecomFees.test.ts` — **235/235** `test:billing` pass.
+
+### Phase B (not in this change)
+
+- Invoice engine filtering by `customerVisible`; telecom surcharge/USF/custom invoice lines; E911 basis per-DID on invoices (estimate UI supports per-DID; engine still uses `e911FeePerExtension` × extension count).
+
+### Explicitly NOT changed
+
+- SOLA / payment execution, Prisma schema.
+
+### Deploy
+
+- **API** + **portal**.
+
+---
+
 ## 2026-05-17 — Billing: fix toll-free manual quantity override persistence
 
 **Task:** Manual `billingQuantityOverrides.tollFreeNumbers` did not survive save/reload.  
