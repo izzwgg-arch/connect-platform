@@ -1707,3 +1707,37 @@ JS side (Metro/logcat):
   (`proxy_read_timeout 86400s`).
 - `scripts/ops/_inspect-live-broadcasts.sh` â€” UNKNOWN exact behavior; verify before
   running.
+
+## Mobile — debugging ring group prefix in Recent Calls
+
+**Symptom:** Recent Calls shows "New Tires:New Tires:" as both the call name and
+the number. Call Back button fails to dial.
+
+**Root cause:** Local call history (AsyncStorage) was storing the SIP From: display name
+("New Tires:New Tires:") as romNumber instead of the actual caller phone number. This
+happened because jssip.ts getSessionFrom() preferred display_name over uri.user.
+
+**Diagnosis steps:**
+
+1. In Metro/logcat, on an incoming ring group call, look for:
+   `
+   [SIP] Incoming SIP INVITE — {"from":"8453050021","callerName":"New Tires:CNAM","to":"103",...}
+   `
+   - rom should be a phone number (7+ digits), not a ring group name string.
+   - callerName carries the ring group prefix.
+
+2. After the call ends, check AsyncStorage in React Native Debugger or:
+   `
+   adb shell run-as com.connectcomunications.mobile cat /data/user/0/com.connectcomunications.mobile/databases/RNCAsyncStorage*
+   `
+   Key cc_mobile_call_history_v2 — confirm romNumber is a real phone number and
+   romName is the ring group display string.
+
+3. For CDR-based call records (remote from API /voice/me/calls): romNumber was never
+   affected. CDR uses Asterisk AMI callerIDNum (real phone number) correctly.
+
+**Files involved:**
+- pps/mobile/src/sip/jssip.ts — getSessionFrom() priority fix
+- pps/mobile/src/sip/types.ts — onIncomingCall type
+- pps/mobile/src/context/SipContext.tsx — emotePartyName, call record romName
+- pps/mobile/src/screens/tabs/RecentTab.tsx — ormatRingGroupDisplayName() helper

@@ -160,9 +160,37 @@ function callDisplayNumber(call: CallRecord): string {
   return isInboundCall(call) ? call.fromNumber : call.toNumber;
 }
 
+/**
+ * Format the ring group prefix part of a caller display name.
+ *
+ * VitalPBX ring groups prepend a prefix to CallerIDName in the SIP INVITE's
+ * display name field, e.g. "New Tires:John Smith" or "New Tires:New Tires:"
+ * (when no CNAM is available, the ring group name is used as the caller name,
+ * causing the prefix to appear twice).
+ *
+ * Rules:
+ *  - No colon in name → return name as-is (e.g. "A PLUS CENTER MONROE NY").
+ *  - "Prefix:CallerPart" where CallerPart equals Prefix (duplicate) or is
+ *    empty → return "Prefix: {phoneNumber}" so the actual number is visible.
+ *  - "Prefix:CallerPart" where CallerPart differs → return "Prefix: CallerPart".
+ */
+function formatRingGroupDisplayName(fromName: string, phoneNumber: string): string {
+  const colonIdx = fromName.indexOf(':');
+  if (colonIdx <= 0) return fromName;
+  const prefix = fromName.slice(0, colonIdx).trim();
+  const rest = fromName.slice(colonIdx + 1).replace(/:$/, '').trim();
+  if (!rest || rest === prefix) {
+    return phoneNumber ? `${prefix}: ${phoneNumber}` : prefix;
+  }
+  return `${prefix}: ${rest}`;
+}
+
 function callDisplayName(call: CallRecord): string {
   const number = callDisplayNumber(call);
-  return call.fromName && call.fromName !== call.fromNumber ? call.fromName : number || 'Unknown';
+  if (!call.fromName || call.fromName === call.fromNumber) {
+    return number || 'Unknown';
+  }
+  return formatRingGroupDisplayName(call.fromName, number);
 }
 
 function isUnknownCaller(call: CallRecord): boolean {

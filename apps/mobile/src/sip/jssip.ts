@@ -304,11 +304,12 @@ export class JsSipClient implements SipClient {
       if (e.originator === "remote") {
         this.callDirection = "inbound";
         const callerNumber = this.getSessionFrom(e.session);
+        const callerName = this.getSessionFromDisplayName(e.session) || null;
         const toUser = this.getSessionTo(e.session);
         const inviteArrivedAt = Date.now();
         (e.session as any)._inviteArrivedAt = inviteArrivedAt;
         console.log('[SIP] Incoming SIP INVITE —', JSON.stringify({
-          from: callerNumber, to: toUser,
+          from: callerNumber, callerName, to: toUser,
           incomingSessionsBefore: this.incomingSessions.length,
           sessionsById: this.sessionsById.size,
           ts: inviteArrivedAt,
@@ -318,7 +319,7 @@ export class JsSipClient implements SipClient {
         // No manual call needed — the PBX will see 180 Ringing within milliseconds.
 
         this.setSessionState(e.session, "ringing");
-        this.events.onIncomingCall?.(callerNumber);
+        this.events.onIncomingCall?.(callerNumber, callerName);
         this.events.onCallState?.("ringing");
         this.emitSessionAdded(e.session);
         // Android inbound ringing is owned by the native incoming-call service.
@@ -1203,11 +1204,15 @@ export class JsSipClient implements SipClient {
   }
 
   private getSessionFrom(session: any): string {
-    return String(
-      session?.remote_identity?.display_name ||
-      session?.remote_identity?.uri?.user ||
-      ""
-    );
+    const user = String(session?.remote_identity?.uri?.user || "");
+    const displayName = String(session?.remote_identity?.display_name || "");
+    // Prefer the SIP URI user (actual phone number or extension) over the
+    // display name. VitalPBX ring groups set display_name to a prefix string
+    // like "New Tires:CallerName" which should become fromName, not overwrite
+    // the actual caller's phone number in fromNumber.
+    const userDigits = user.replace(/^\+/, "").replace(/\D/g, "");
+    if (userDigits.length >= 7 || /^\d{2,6}$/.test(user)) return user;
+    return displayName || user || "";
   }
 
   private getSessionFromUser(session: any): string {

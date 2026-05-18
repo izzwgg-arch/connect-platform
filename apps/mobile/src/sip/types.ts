@@ -37,8 +37,13 @@ export type SipEvents = {
    */
   onSocketConnected?: () => void;
   onSocketDisconnected?: (reason: string) => void;
-  /** Fires when an incoming call arrives. `callerNumber` is the remote party. */
-  onIncomingCall?: (callerNumber: string) => void;
+  /**
+   * Fires when an incoming call arrives.
+   * `callerNumber` is the SIP URI user (actual phone number or extension).
+   * `callerName` is the SIP display name, which for ring group calls contains
+   * the ring group prefix (e.g. "New Tires:Caller Name"). Null when absent.
+   */
+  onIncomingCall?: (callerNumber: string, callerName?: string | null) => void;
   /**
    * Single-call "active pointer" state — kept intact for legacy screens.
    * Multi-call consumers should subscribe to `onSessionStateChanged` and

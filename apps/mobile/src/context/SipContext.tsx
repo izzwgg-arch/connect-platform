@@ -120,6 +120,10 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     answered: false,
     startMs: null as number | null,
     remoteParty: null as string | null,
+    // SIP display name for inbound calls — ring group prefix / CNAM from the
+    // From: header, e.g. "New Tires:Caller Name". Stored separately so
+    // fromNumber in call history stays the actual phone number.
+    remotePartyName: null as string | null,
   });
 
   // Ref tracking registration state for use inside AppState event callbacks
@@ -176,6 +180,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           id: `local_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
           direction: info.direction === "inbound" ? "inbound" : "outbound",
           fromNumber: info.direction === "inbound" ? (info.remoteParty ?? "") : "",
+          fromName: info.direction === "inbound" ? (info.remotePartyName ?? null) : null,
           toNumber: info.direction === "outbound" ? (info.remoteParty ?? "") : "",
           startedAt: new Date(info.startMs).toISOString(),
           durationSec,
@@ -188,6 +193,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           answered: false,
           startMs: null,
           remoteParty: null,
+          remotePartyName: null,
         };
       }
 
@@ -449,7 +455,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         }
         setCallState(state);
       },
-      onIncomingCall: (callerNumber: string) => {
+      onIncomingCall: (callerNumber: string, callerName?: string | null) => {
         const party = callerNumber || "Unknown";
         setCallDirection("inbound");
         setRemoteParty(party);
@@ -458,6 +464,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           answered: false,
           startMs: Date.now(),
           remoteParty: party,
+          remotePartyName: callerName ?? null,
         };
         setCallState("ringing");
       },
@@ -1133,6 +1140,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           answered: false,
           startMs: Date.now(),
           remoteParty: displayTarget,
+          remotePartyName: null,
         };
         // Initial UI hint — the audio route manager (called from JsSipClient)
         // will overwrite this with the real route (Bluetooth if available)

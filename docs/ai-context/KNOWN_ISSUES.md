@@ -1118,6 +1118,39 @@ When you find a new fragile area, add it here.
   [CONNECT_CALL_UI] remote_hangup_cleanup or local_hangup_cleanup — callState=ended fired
   ```
 
+## Mobile — ring group caller ID duplicated in Recent Calls (fixed 2026-05-18)
+
+- **Root cause:** `jssip.ts` `getSessionFrom()` returned `display_name || uri.user` from the SIP
+  INVITE's `From:` header — **preferring the SIP display name over the actual phone number URI**.
+  VitalPBX ring groups set the `From:` display name to `"RingGroup:CallerName"` (e.g.,
+  `"New Tires:New Tires:"`). This value was stored as `fromNumber` in the local call history
+  (`SipContext.tsx` → `AsyncStorage`), with `fromName = null`. The `RecentTab` display then
+  showed `"New Tires:New Tires:"` for BOTH the title and subtitle, and the "Call Back" button
+  tried to dial the display string instead of a real phone number.
+
+- **CDR-based records were unaffected:** The CDR pipeline (`CallStateStore.ts`) uses
+  `callerIDNum` from the Asterisk AMI as `from` (the real phone number) and `callerIDName`
+  separately as `fromName`. Only the local SIP-session call record path had the bug.
+
+- **Fix (mobile only, no API/PBX change):**
+  1. `apps/mobile/src/sip/jssip.ts` — `getSessionFrom()` now prefers `uri.user` when it
+     contains a real phone number (7+ digits) or a short extension (2–6 digits), falling back
+     to `display_name` only for anonymous/non-numeric SIP identities. The ring group prefix
+     string is passed separately as `callerName` (second arg) to `onIncomingCall`.
+  2. `apps/mobile/src/sip/types.ts` — `onIncomingCall` accepts an optional `callerName`
+     parameter.
+  3. `apps/mobile/src/context/SipContext.tsx` — `callInfoRef` gains `remotePartyName`; call
+     record creation populates `fromName` from the SIP display name.
+  4. `apps/mobile/src/screens/tabs/RecentTab.tsx` — new `formatRingGroupDisplayName()` helper
+     deduplicates colon-format ring group prefixes (e.g., `"New Tires:New Tires:"` → `"New
+     Tires: 845XXXXXXX"`) in the `callDisplayName()` function.
+
+- **Result after fix:**
+  - Recent list title: `"New Tires: 8453050021"` (prefix once + actual number)
+  - Detail modal subtitle: `"8453050021"` (actual phone number)
+  - Call Back button dials real phone number ✓
+  - No change to CDR-based call records, outbound calls, or internal extension calls
+
 ## Build / repo hygiene
 
 - **Many leftover `_check-*` / `_diag-*` / `pbx-*.txt` files at repo root.** They
