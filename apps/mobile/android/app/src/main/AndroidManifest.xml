@@ -77,6 +77,13 @@
     -->
     <service android:name="com.connectcommunications.mobile.SipKeepAliveService" android:exported="false" android:foregroundServiceType="phoneCall|dataSync|microphone" android:process=":keepalive"/>
     <receiver android:name="com.connectcommunications.mobile.KeepAliveRestartReceiver" android:enabled="true" android:exported="false" android:process=":keepalive"/>
+    <!--
+      InCallNotificationReceiver runs in the MAIN process (no android:process attribute).
+      It receives NOTIF_ACTION_HANGUP_RELAY from SipKeepAliveService (:keepalive process)
+      and forwards it to JS via IncomingCallUiModule.emitInCallAction so JsSIP can send
+      the SIP BYE. Not exported — only the app itself can send to it.
+    -->
+    <receiver android:name="com.connectcommunications.mobile.InCallNotificationReceiver" android:enabled="true" android:exported="false"/>
     <receiver android:name="com.connectcommunications.mobile.BootReceiver" android:enabled="true" android:exported="true">
       <intent-filter>
         <action android:name="android.intent.action.BOOT_COMPLETED"/>

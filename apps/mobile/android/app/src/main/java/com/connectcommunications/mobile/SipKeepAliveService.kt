@@ -1,18 +1,21 @@
 package com.connectcommunications.mobile
 
+import android.app.ActivityManager
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.app.AlarmManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
@@ -96,11 +99,31 @@ class SipKeepAliveService : Service() {
     private const val EXTRA_MUTED = "muted"
 
     // ── Notification action intents ──────────────────────────────────────────
-    // The user tapping "End" or "Speaker" in the in-call notification fires a
-    // broadcast that we (1) re-emit to JS via DeviceEventEmitter so SipContext
-    // can act on it, and (2) for Speaker, also flip our local mirror so the
-    // notification updates the toggle visual immediately without waiting for
-    // the JS round-trip.
+    //
+    // ARCHITECTURE NOTE — why the Hang Up button uses a service intent, not a broadcast:
+    //
+    // SipKeepAliveService runs in the :keepalive process. DeviceEventEmitter
+    // (IncomingCallUiModule.emitInCallAction) only works in the MAIN process where
+    // the React bridge lives. A broadcast received in :keepalive has no React context.
+    //
+    // Fix: the "Hang Up" PendingIntent is a getService() call delivered directly to
+    // SipKeepAliveService with ACTION_NOTIF_HANGUP_SVC. The service:
+    //   1. Clears inCall + stopForeground(REMOVE) + cancel 4242 IMMEDIATELY (no round-trip).
+    //   2. Sends NOTIF_ACTION_HANGUP_RELAY broadcast (received by InCallNotificationReceiver
+    //      in the MAIN process, which can reach DeviceEventEmitter and tell JS to send BYE).
+    //
+    // Speaker / Mute toggles still use dynamic broadcast receivers (also in :keepalive) so
+    // the notification icon flips instantly. JS roundtrip is not needed for the icon update.
+    // NOTE: the speaker/mute cross-process JS call will silently fail if the app is fully
+    // backgrounded — actual audio routing changes only take effect when the app is active.
+
+    // Service-action version of the Hang Up button — delivered to onStartCommand in :keepalive.
+    private const val ACTION_NOTIF_HANGUP_SVC = "com.connectcommunications.mobile.SipKeepAlive.NOTIF_HANGUP_SVC"
+
+    // Relay broadcast — picked up by InCallNotificationReceiver in the MAIN process so it
+    // can call IncomingCallUiModule.emitInCallAction("hangup") to reach JS.
+    const val NOTIF_ACTION_HANGUP_RELAY = "com.connectcommunications.mobile.SipKeepAlive.NOTIF_HANGUP_RELAY"
+
     const val NOTIF_ACTION_HANGUP = "com.connectcommunications.mobile.SipKeepAlive.NOTIF_HANGUP"
     const val NOTIF_ACTION_TOGGLE_SPEAKER = "com.connectcommunications.mobile.SipKeepAlive.NOTIF_TOGGLE_SPEAKER"
     const val NOTIF_ACTION_TOGGLE_MUTE = "com.connectcommunications.mobile.SipKeepAlive.NOTIF_TOGGLE_MUTE"
@@ -307,6 +330,28 @@ class SipKeepAliveService : Service() {
         )
         Log.i(TAG, "[CONNECT_CALL_UI] active_call_notification_posted callerName=${inCall?.callerName ?: ""}")
       }
+
+      // ── Hang Up notification button ───────────────────────────────────────
+      // Uses getService() so the intent is delivered here in :keepalive instead
+      // of via a broadcast that can't reach the React DeviceEventEmitter.
+      // We clear the notification FIRST (immediate user feedback), then relay
+      // to the main process so JS can send the SIP BYE.
+      ACTION_NOTIF_HANGUP_SVC -> {
+        Log.i(TAG, "ACTION_NOTIF_HANGUP_SVC — clearing in-call notification immediately")
+        inCall = null
+        clearInCallForeground()
+        Log.i(TAG, "[CONNECT_CALL_UI] active_call_notification_cleared startId=$startId (hangup_button)")
+        // Relay to main process: InCallNotificationReceiver → emitInCallAction("hangup") → JS BYE
+        try {
+          sendBroadcast(Intent(NOTIF_ACTION_HANGUP_RELAY).setPackage(packageName))
+          Log.i(TAG, "NOTIF_HANGUP_RELAY broadcast sent to main process")
+        } catch (t: Throwable) {
+          Log.w(TAG, "NOTIF_HANGUP_RELAY broadcast failed: ${t.message}")
+        }
+      }
+
+      // ── JS-triggered call end (all terminal paths: local hangup, remote BYE,
+      //    session failed, call declined) ────────────────────────────────────
       ACTION_EXIT_CALL -> {
         inCall = null
         // stopForeground(REMOVE) atomically cancels notification 4242 and releases
@@ -317,14 +362,10 @@ class SipKeepAliveService : Service() {
         // is not handled atomically by all Android ROMs.
         // startForegroundSafely() immediately re-enters FGS with the idle
         // notification, so there is no foreground gap.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-          stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-          @Suppress("DEPRECATION")
-          stopForeground(true)
-        }
+        clearInCallForeground()
         Log.i(TAG, "[CONNECT_CALL_UI] active_call_notification_cleared startId=$startId")
       }
+
       ACTION_UPDATE_CALL -> {
         inCall = inCall?.copy(
           speakerOn = intent.getBooleanExtra(EXTRA_SPEAKER_ON, inCall?.speakerOn ?: false),
@@ -374,16 +415,80 @@ class SipKeepAliveService : Service() {
     // service is foreground. Schedule a one-shot restart alarm so wake pushes
     // still have a resident process instead of waiting for ActivityManager's
     // delayed crash-restart backoff.
+    val wasInCall = inCall != null
     if (isKeepAliveEnabled(applicationContext)) {
       scheduleSelfRestart("onTaskRemoved")
     }
-    Log.i(TAG, "onTaskRemoved — recents swipe detected")
+    Log.i(TAG, "onTaskRemoved — recents swipe detected wasInCall=$wasInCall")
+
+    if (wasInCall) {
+      // The call lives in the JS thread (JsSIP) of the MAIN process. The FGS
+      // MICROPHONE|PHONE_CALL type should keep the main process alive on most
+      // devices, so the call continues and the notification Hang Up button still
+      // works (via the cross-process relay path added in this PR).
+      //
+      // Safety watchdog: on aggressive OEMs (Samsung One UI, MIUI) the main
+      // process can be killed within seconds of task removal despite the FGS.
+      // If that happens, JS can never send ACTION_EXIT_CALL, so the in-call
+      // notification would linger indefinitely.
+      //
+      // We check after 10 seconds whether the main process is still alive.
+      // If it's gone, the call is dead — clear the notification immediately.
+      Handler(Looper.getMainLooper()).postDelayed({
+        if (inCall == null) return@postDelayed  // already cleared by JS path — happy path
+        try {
+          val am = getSystemService(ACTIVITY_SERVICE) as? ActivityManager
+          val mainProcessAlive = am?.runningAppProcesses?.any { proc ->
+            // Main process has the bare package name; :keepalive has "<pkg>:keepalive"
+            proc.processName == packageName
+          } == true
+          if (!mainProcessAlive) {
+            Log.i(TAG, "[CONNECT_CALL_UI] active_call_notification_cleared — main process gone after task removal")
+            inCall = null
+            clearInCallForeground()
+            startForegroundSafely()
+          } else {
+            Log.i(TAG, "onTaskRemoved watchdog — main process alive, call assumed ongoing")
+          }
+        } catch (t: Throwable) {
+          Log.w(TAG, "onTaskRemoved watchdog failed: ${t.message}")
+        }
+      }, 10_000L)
+    }
     super.onTaskRemoved(rootIntent)
   }
 
   override fun onBind(intent: Intent?): IBinder? = null
 
   // ── Internals ───────────────────────────────────────────────────────────
+
+  /**
+   * Idempotent helper: stop the foreground PHONE_CALL association and cancel
+   * notification 4242 from both the FGS layer and the NotificationManager.
+   *
+   * Two-step approach:
+   *   1. stopForeground(REMOVE) — atomically releases the PHONE_CALL foreground
+   *      type and cancels the FGS-bound notification. Required to clear the
+   *      CallStyle lock-screen chip on OxygenOS/OnePlus.
+   *   2. NotificationManager.cancel(4242) — belt-and-suspenders for OEMs that
+   *      do not immediately clear the chip via stopForeground alone, or for any
+   *      edge case where the notification was re-posted outside the FGS path.
+   *
+   * Safe to call even if the service is not currently in foreground state.
+   */
+  private fun clearInCallForeground() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+      stopForeground(STOP_FOREGROUND_REMOVE)
+    } else {
+      @Suppress("DEPRECATION")
+      stopForeground(true)
+    }
+    try {
+      (getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)
+        ?.cancel(NOTIFICATION_ID)
+    } catch (_: Throwable) {}
+  }
+
 
   /**
    * Attempt startForeground with progressively safer foregroundServiceType
@@ -576,20 +681,18 @@ class SipKeepAliveService : Service() {
    */
   private fun registerNotifReceiver() {
     if (notifReceiver != null) return
+    // NOTIF_ACTION_HANGUP is no longer in this filter — the hangup PendingIntent
+    // now uses getService() to deliver ACTION_NOTIF_HANGUP_SVC directly to
+    // onStartCommand, avoiding the cross-process emit failure. Speaker/Mute
+    // still use broadcast receivers so the notification icon flips immediately
+    // within the :keepalive process without a JS round-trip.
     val filter = IntentFilter().apply {
-      addAction(NOTIF_ACTION_HANGUP)
       addAction(NOTIF_ACTION_TOGGLE_SPEAKER)
       addAction(NOTIF_ACTION_TOGGLE_MUTE)
     }
     val receiver = object : BroadcastReceiver() {
       override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
-          NOTIF_ACTION_HANGUP -> {
-            Log.i(TAG, "in-call notification: HANGUP tapped")
-            // Best-effort emit to JS; the in-call notification is removed by
-            // the subsequent ACTION_EXIT_CALL that JS sends on session.ended.
-            try { IncomingCallUiModule.emitInCallAction("hangup") } catch (_: Throwable) {}
-          }
           NOTIF_ACTION_TOGGLE_SPEAKER -> {
             val cur = inCall ?: return
             val next = !cur.speakerOn
@@ -690,9 +793,16 @@ class SipKeepAliveService : Service() {
     }
     val openPi = PendingIntent.getActivity(this, 1, openIntent, pendingFlags)
 
-    val hangupPi = PendingIntent.getBroadcast(
+    // Use getService() so the intent is delivered directly to this service's
+    // onStartCommand in the :keepalive process. A broadcast PendingIntent would
+    // only reach the dynamically registered receiver in :keepalive, which cannot
+    // call IncomingCallUiModule.emitInCallAction (React context lives in main process).
+    // See ACTION_NOTIF_HANGUP_SVC handling in onStartCommand for the full flow.
+    val hangupPi = PendingIntent.getService(
       this, 2,
-      Intent(NOTIF_ACTION_HANGUP).setPackage(packageName),
+      Intent(this, SipKeepAliveService::class.java).apply {
+        action = ACTION_NOTIF_HANGUP_SVC
+      },
       pendingFlags,
     )
     val speakerPi = PendingIntent.getBroadcast(
