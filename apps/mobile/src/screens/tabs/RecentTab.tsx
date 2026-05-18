@@ -161,36 +161,58 @@ function callDisplayNumber(call: CallRecord): string {
 }
 
 /**
- * Format the ring group prefix part of a caller display name.
+ * Format a ring-group-prefixed display name into "Prefix: CallerInfo".
  *
- * VitalPBX ring groups prepend a prefix to CallerIDName in the SIP INVITE's
- * display name field, e.g. "New Tires:John Smith" or "New Tires:New Tires:"
- * (when no CNAM is available, the ring group name is used as the caller name,
- * causing the prefix to appear twice).
+ * VitalPBX ring groups write "Prefix:CallerInfo" into CallerIDName, which
+ * ends up in the SIP From: display_name.  Several forms are seen in practice:
  *
- * Rules:
- *  - No colon in name → return name as-is (e.g. "A PLUS CENTER MONROE NY").
- *  - "Prefix:CallerPart" where CallerPart equals Prefix (duplicate) or is
- *    empty → return "Prefix: {phoneNumber}" so the actual number is visible.
- *  - "Prefix:CallerPart" where CallerPart differs → return "Prefix: CallerPart".
+ *   "New Tires:8453050021"   — no CNAM; PBX put the caller's number after ":"
+ *   "New Tires:John Smith"   — CNAM available
+ *   "New Tires:New Tires:"   — no CNAM; PBX used the ring-group name as
+ *                              the caller name (prefix appears twice)
+ *   "A PLUS CENTER MONROE NY"— space-separated prefix format (no colon)
+ *
+ * Rules applied in order:
+ *   1. No colon → return as-is  ("A PLUS CENTER MONROE NY" unchanged).
+ *   2. "Prefix:PhoneNumber"     → "Prefix: PhoneNumber"  (number stays).
+ *   3. "Prefix:DuplicatePrefix" or "Prefix:" (empty after colon)
+ *      → "Prefix: phoneNumber" when a real number is available,
+ *      → "Prefix"              when no number is available (avoids dup).
+ *   4. "Prefix:CallerName"      → "Prefix: CallerName".
  */
-function formatRingGroupDisplayName(fromName: string, phoneNumber: string): string {
-  const colonIdx = fromName.indexOf(':');
-  if (colonIdx <= 0) return fromName;
-  const prefix = fromName.slice(0, colonIdx).trim();
-  const rest = fromName.slice(colonIdx + 1).replace(/:$/, '').trim();
+function formatRingGroupDisplayName(rawName: string, phoneNumber: string): string {
+  const colonIdx = rawName.indexOf(':');
+  if (colonIdx <= 0) return rawName;
+  const prefix = rawName.slice(0, colonIdx).trim();
+  const rest   = rawName.slice(colonIdx + 1).replace(/:$/, '').trim();
+
   if (!rest || rest === prefix) {
-    return phoneNumber ? `${prefix}: ${phoneNumber}` : prefix;
+    // Duplicate prefix or empty caller part — show real phone number if present.
+    if (phoneNumber && !phoneNumber.includes(':')) return `${prefix}: ${phoneNumber}`;
+    return prefix;
   }
+  // CallerInfo (name or number) after the prefix.
   return `${prefix}: ${rest}`;
 }
 
 function callDisplayName(call: CallRecord): string {
   const number = callDisplayNumber(call);
-  if (!call.fromName || call.fromName === call.fromNumber) {
-    return number || 'Unknown';
+
+  // Case 1: fromName was captured (new local records or CDR records).
+  // It may equal fromNumber when the fallback path stored the display_name
+  // as both fields, so test content not just identity.
+  if (call.fromName && call.fromName !== call.fromNumber) {
+    return formatRingGroupDisplayName(call.fromName, number);
   }
-  return formatRingGroupDisplayName(call.fromName, number);
+
+  // Case 2: old local history records where fromNumber is the raw SIP
+  // display_name ("New Tires:New Tires:" stored before this fix).
+  // Parse it so at least the ring group prefix shows without duplication.
+  if (number && number.includes(':')) {
+    return formatRingGroupDisplayName(number, '');
+  }
+
+  return number || 'Unknown';
 }
 
 function isUnknownCaller(call: CallRecord): boolean {

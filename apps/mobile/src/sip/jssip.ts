@@ -308,8 +308,12 @@ export class JsSipClient implements SipClient {
         const toUser = this.getSessionTo(e.session);
         const inviteArrivedAt = Date.now();
         (e.session as any)._inviteArrivedAt = inviteArrivedAt;
+        const rawUser = this.getSessionFromUser(e.session);
+        const rawDisplayName = this.getSessionFromDisplayName(e.session);
         console.log('[SIP] Incoming SIP INVITE —', JSON.stringify({
-          from: callerNumber, callerName, to: toUser,
+          from: callerNumber, callerName,
+          rawUser, rawDisplayName,
+          to: toUser,
           incomingSessionsBefore: this.incomingSessions.length,
           sessionsById: this.sessionsById.size,
           ts: inviteArrivedAt,
@@ -1206,12 +1210,39 @@ export class JsSipClient implements SipClient {
   private getSessionFrom(session: any): string {
     const user = String(session?.remote_identity?.uri?.user || "");
     const displayName = String(session?.remote_identity?.display_name || "");
-    // Prefer the SIP URI user (actual phone number or extension) over the
-    // display name. VitalPBX ring groups set display_name to a prefix string
-    // like "New Tires:CallerName" which should become fromName, not overwrite
-    // the actual caller's phone number in fromNumber.
+
+    // VitalPBX ring groups apply a prefix to CallerIDName and put the result in
+    // the SIP From: display name, e.g. "New Tires:8453050021" (when no CNAM is
+    // available the caller's PSTN number appears after the colon) or
+    // "New Tires:John Smith" (when CNAM is available).
+    //
+    // Strategy:
+    //   1. If display_name has colon format "Prefix:CallerInfo" and the part
+    //      after the colon IS a phone number (7+ digits), use that number as
+    //      the caller number — it is the most authoritative source.
+    //   2. If the caller-info part is a name (not a number), fall through and
+    //      use uri.user when it is a PSTN number (7+ digits).
+    //   3. Otherwise fall back to display_name so the ring group prefix is at
+    //      least preserved in call history (old behaviour for unknown formats).
+    const colonIdx = displayName.indexOf(":");
+    if (colonIdx > 0) {
+      const afterColon = displayName.slice(colonIdx + 1).replace(/:$/, "").trim();
+      const afterColonDigits = afterColon.replace(/\D/g, "");
+      if (afterColonDigits.length >= 7) {
+        // "New Tires:8453050021" — the caller number is in the display name.
+        return afterColon;
+      }
+    }
+
+    // For non-ring-group calls OR ring-group calls where the caller has a text
+    // CNAM: use uri.user when it looks like a real PSTN number (7+ digits).
+    // Avoid short extensions (2–6 digits) — those are often the dialled
+    // extension, not the external caller's number.
     const userDigits = user.replace(/^\+/, "").replace(/\D/g, "");
-    if (userDigits.length >= 7 || /^\d{2,6}$/.test(user)) return user;
+    if (userDigits.length >= 7) return user;
+
+    // Last resort: fall back to display_name (preserves ring group prefix for
+    // old-format display names like "New Tires:New Tires:").
     return displayName || user || "";
   }
 

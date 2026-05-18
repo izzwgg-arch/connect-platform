@@ -180,7 +180,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           id: `local_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
           direction: info.direction === "inbound" ? "inbound" : "outbound",
           fromNumber: info.direction === "inbound" ? (info.remoteParty ?? "") : "",
-          fromName: info.direction === "inbound" ? (info.remotePartyName ?? null) : null,
+          fromName: info.direction === "inbound" ? (info.remotePartyName || null) : null,
           toNumber: info.direction === "outbound" ? (info.remoteParty ?? "") : "",
           startedAt: new Date(info.startMs).toISOString(),
           durationSec,
@@ -464,7 +464,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           answered: false,
           startMs: Date.now(),
           remoteParty: party,
-          remotePartyName: callerName ?? null,
+          remotePartyName: callerName || null,
         };
         setCallState("ringing");
       },
