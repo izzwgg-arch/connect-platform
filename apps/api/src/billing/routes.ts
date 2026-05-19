@@ -2195,7 +2195,6 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       create: { id: "default", ifieldsKey, updatedBy: u.sub },
       update: { ifieldsKey, updatedBy: u.sub },
     });
-    await logBillingEvent({ tenantId: null as any, type: "platform.sola_global_config.updated", message: `Platform iFields key ${ifieldsKey ? "set" : "cleared"}`, metadata: { updatedBy: u.sub } });
     return { ok: true, ifieldsKeySet: !!record.ifieldsKey?.trim() };
   });
 
