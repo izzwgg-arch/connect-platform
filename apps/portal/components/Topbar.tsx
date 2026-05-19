@@ -1,6 +1,7 @@
 "use client";
 
 import { Menu } from "lucide-react";
+import { ConnectLogo } from "./ConnectLogo";
 import { FloatingDialer } from "./FloatingDialer";
 import { GlobalSearch } from "./GlobalSearch";
 import { NotificationPanel } from "./NotificationPanel";
@@ -25,12 +26,7 @@ export function Topbar({ onToggleNav }: TopbarProps) {
           <Menu size={18} />
         </button>
         <div className="brand-logo">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/connect-logo-dark.png"
-            alt="Connect Communications"
-            className="brand-logo-img"
-          />
+          <ConnectLogo className="brand-logo-svg" />
           <span className="brand-name">Connect</span>
         </div>
       </div>

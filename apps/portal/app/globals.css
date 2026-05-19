@@ -4052,22 +4052,23 @@ body {
   min-width: 80px;         /* reserves space for a future image logo */
 }
 
-.brand-logo-img {
+.brand-logo-svg {
   height: 44px;
   width: auto;
   display: block;
+  flex-shrink: 0;
 }
 
-/* Dark mode: show logo image, hide text */
-:root[data-theme="dark"] .brand-logo-img {
+/* Dark mode: show SVG logo, hide text */
+:root[data-theme="dark"] .brand-logo-svg {
   display: block;
 }
 :root[data-theme="dark"] .brand-name {
   display: none;
 }
 
-/* Light mode: hide logo image (white on transparent, invisible on light bg), show text */
-:root[data-theme="light"] .brand-logo-img {
+/* Light mode: hide SVG logo (white text invisible on light bg), show text */
+:root[data-theme="light"] .brand-logo-svg {
   display: none;
 }
 
