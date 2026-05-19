@@ -66,6 +66,8 @@ export async function queueInvoiceSentOnFinalize(invoice: {
   totalCents: number;
   balanceDueCents?: number;
   dueDate: Date;
+  periodStart?: Date | null;
+  periodEnd?: Date | null;
 }): Promise<{ queued: boolean; reason?: string }> {
   if (await hasBillingEmailJob({ tenantId: invoice.tenantId, invoiceId: invoice.id, type: "BILLING_INVOICE_SENT" })) {
     return { queued: false, reason: "already_sent" };
@@ -83,6 +85,13 @@ export async function queueInvoiceSentOnFinalize(invoice: {
   const brand = resolveInvoiceEmailBranding(settings || {}, tenant?.name);
   const portalUrl = billingInvoicePortalUrl(invoice.id);
   const pdfUrl = billingInvoicePdfApiUrl(invoice.id);
+  let servicePeriod: string | null = null;
+  if (invoice.periodStart && invoice.periodEnd) {
+    const fmtOpt: Intl.DateTimeFormatOptions = { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" };
+    const s = new Date(invoice.periodStart).toLocaleDateString("en-US", fmtOpt);
+    const e = new Date(invoice.periodEnd).toLocaleDateString("en-US", fmtOpt);
+    servicePeriod = `${s} – ${e}`;
+  }
   const tpl = invoiceSentEmail({
     invoiceNumber: invoice.invoiceNumber,
     totalCents: invoice.totalCents,
@@ -90,6 +99,7 @@ export async function queueInvoiceSentOnFinalize(invoice: {
     portalInvoiceUrl: portalUrl,
     pdfUrl,
     balanceDueCents: invoice.balanceDueCents ?? invoice.totalCents,
+    servicePeriod,
     brand,
   });
   await (db as any).emailJob.create({
@@ -171,12 +181,14 @@ export async function queueReceiptEmailOnce(params: {
     return false;
   }
   const brand = resolveInvoiceEmailBranding(settings || {}, tenant?.name);
+  const portalInvoiceUrl = billingInvoicePortalUrl(params.invoiceId);
   const tpl = paymentReceiptEmail({
     invoiceNumber: params.invoiceNumber,
     totalCents: params.totalCents,
     paidAt: new Date(),
     cardLabel: params.cardLabel ?? null,
-    portalInvoiceUrl: billingInvoicePortalUrl(params.invoiceId),
+    portalInvoiceUrl,
+    pdfUrl: billingInvoicePdfApiUrl(params.invoiceId),
     paidViaAutopay: params.paidViaAutopay,
     brand,
   });

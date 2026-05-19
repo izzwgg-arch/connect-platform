@@ -4,6 +4,57 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-19 — Billing: Customer-facing invoice + payment receipt email redesign
+
+**Task:** Redesign customer-facing invoice PDF and HTML email templates to be white/light themed, professional, and production-ready.
+**Risk:** High (billing presentation — no payment execution changes).
+
+### Shipped
+
+**`apps/api/src/billing/emailTemplates.ts`** — full redesign:
+- All 5 billing email templates (`invoiceSentEmail`, `invoiceReadyEmail`, `paymentLinkEmail`, `paymentReceiptEmail`, `paymentFailedEmail`) converted from dark mode (`#0b1220`) to white/light theme with Connect blue (`#0284c7`) accent header.
+- `paymentReceiptEmail`: added optional `pdfUrl` field — "Download invoice PDF" link included in receipt. Structured summary box, payment confirmation badge, autopay note block.
+- `invoiceSentEmail`: added optional `servicePeriod` field shown in summary box.
+- `invoiceReadyEmail`/`paymentLinkEmail`/`paymentFailedEmail`: same white shell, improved body copy.
+- `fmtDate()` helper: `"May 19, 2026"` format (was ISO date string).
+- Fallback Connect logo via `{PUBLIC_PORTAL_URL}/connect-logo.png` — every email renders branded `<img>` tag.
+
+**`apps/api/src/billing/pdf.ts`** — PDF redesign:
+- Blue header band; bundled Connect logo embedded from `apps/api/src/billing/assets/connect-logo.png` (no remote fetch).
+- Status chip below header (color-coded: PAID green, OVERDUE orange, FAILED red).
+- **"Bill from"** section: company display name, support email/phone.
+- **"Bill to"** section: tenant name, billing email, billing/service address.
+- Four-column invoice details row: invoice #, issue date, due date, service period. "Paid on" date for PAID invoices.
+- Cleaner totals: optional discount line, accent "Balance due" row.
+- Legal footer: "Taxes and regulatory fees are applied according to your configured billing profile."
+- PAID watermark (green, semi-transparent diagonal).
+
+**`apps/api/src/billing/billingEmailLifecycle.ts`**:
+- `queueInvoiceSentOnFinalize`: accepts `periodStart`/`periodEnd`; computes human-readable `servicePeriod` string passed to `invoiceSentEmail`.
+- `queueReceiptEmailOnce`: passes `pdfUrl` (`billingInvoicePdfApiUrl`) to `paymentReceiptEmail`.
+
+**`apps/api/src/billing/invoiceEngine.ts`**: passes `periodStart`/`periodEnd` to `queueInvoiceSentOnFinalize`.
+
+**`apps/api/src/billing/billingEmailTemplates.test.ts`**: 24 tests covering all templates, white theme check, no raw card data, fallback/custom logo, PDF link, service period, autopay, masked card.
+
+**`apps/portal/public/connect-logo.png`**: Connect Communications logo for HTML email fallback.
+**`apps/api/src/billing/assets/connect-logo.png`**: Same logo bundled with API for PDF embedding.
+
+### Not changed
+- No billing math, invoice engine totals, tax calculation.
+- No payment execution (SOLA/Cardknox, worker dunning, autopay).
+- No schema migrations.
+- No telephony, CRM, or mobile changes.
+- No `EmailJob` schema change — PDF attachments are a planned future improvement (requires migration).
+
+### Gaps documented
+- Provider legal address: not in schema.
+- Provider tax ID: not in schema.
+- PDF attachment in emails: requires `EmailJob.attachments` column migration.
+- All documented in `KNOWN_ISSUES.md`.
+
+---
+
 ## 2026-05-18 — Billing: Sola recurring schedule cutover to Connect autopay (Phases A–D)
 
 **Task:** Build safe cutover flow so Connect can take over billing from existing Sola/Cardknox recurring schedules without re-entering cards and without double charging.  

@@ -395,6 +395,8 @@ export async function createBillingInvoice(input: {
     totalCents: invoice.totalCents,
     balanceDueCents: invoice.balanceDueCents,
     dueDate: invoice.dueDate,
+    periodStart: invoice.periodStart ?? null,
+    periodEnd: invoice.periodEnd ?? null,
   }).catch(() => null);
   return invoice;
 }

@@ -23,6 +23,9 @@ When you find a new fragile area, add it here.
 - **Limitation — imported Sola schedules are display-only.** `SolaLinkedSchedulesSection` shows mapped external schedule metadata. Connect **cannot charge** an imported Sola schedule unless the recurring token is linked as a `PaymentMethod` (Phase C token linking — not yet implemented).
 - **Limitation — past-due billing panel pre-fills the one-time charge drawer.** `PastDueBillingPanel` uses `POST /admin/billing/platform/tenants/:tenantId/one-time-charges`. The `chargeMode: "none"` path creates an invoice without charging; the other modes charge the card immediately once confirmed. No "send payment link" email integration yet from this panel — use the invoice email-payment-link action separately.
 - **Dual billing surfaces.** New `BillingInvoice` routes in `billing/routes.ts` plus legacy `/billing/*` handlers in `server.ts` — easy to fix one path and miss the other. See `docs/ai-context/BILLING.md`.
+- **Invoice PDF email attachment not yet supported.** `EmailJob` schema has no `attachments` column. Receipt and invoice emails include download links only. Adding PDF attachments requires a `EmailJob` schema migration (HIGH risk) — track as a future improvement.
+- **Provider legal address not in schema.** `TenantBillingSettings` has no `invoiceProviderAddress` or `invoiceTaxId` field. Invoice PDF "Bill from" section shows company display name and support email/phone only. Add these as nullable schema columns when legally required per jurisdiction.
+- **Provider tax ID not in schema.** Same as above — no field for seller tax ID / EIN on invoices. Document this gap to operators before using invoices for tax-regulated billing jurisdictions.
 
 ---
 

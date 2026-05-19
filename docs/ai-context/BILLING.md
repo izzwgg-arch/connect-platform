@@ -1,4 +1,4 @@
-# Billing — quick reference
+﻿# Billing — quick reference
 
 > Read `CURSOR_START_HERE.md` first. High-risk: payments and invoices.
 
@@ -679,15 +679,43 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 | Field | Use |
 |-------|-----|
 | `invoiceCompanyName` | Header on PDF + email masthead (falls back to `Tenant.name`, then “Connect Communications”). |
-| `invoiceLogoUrl` | **HTTPS only**, sanitized — embedded as `<img>` in **HTML emails only** (PDF does not fetch remote images). |
-| `invoiceSupportEmail` / `invoiceSupportPhone` | Shown in email shell + PDF footer area. |
+| `invoiceLogoUrl` | **HTTPS only**, sanitized — embedded as `<img>` in **HTML emails only**. PDF uses bundled local logo (`apps/api/src/billing/assets/connect-logo.png`) — no remote fetch. Custom `invoiceLogoUrl` overrides email fallback only. |
+| `invoiceSupportEmail` / `invoiceSupportPhone` | Shown in email shell + PDF "Bill from" section and footer. |
 | `invoiceFooterNote` / `invoicePaymentInstructions` | Plain text, length-capped — PDF footer + email body blocks. |
-| `paymentTermsDays` | Existing field — “Net N days” copy in invoice emails and PDF header. |
+| `paymentTermsDays` | "Net N days" copy in invoice emails and PDF detail row. |
 
 **API:** `PUT /billing/settings/branding` (tenant JWT billing roles) and optional keys on `PUT /admin/billing/tenants/:tenantId/settings`. **Portal:** **`/billing/settings`** and **`/settings/billing`** (shared `TenantBillingSettingsContent`), and Company billing setup (**`/admin/billing/settings`**) branding card.
 
 **Code:** `apps/api/src/billing/invoiceBranding.ts` (sanitize + resolve), `emailTemplates.ts` (shared HTML shell), `pdf.ts` (`renderBillingInvoicePdf`), `billingEmailLifecycle.ts` (passes resolved brand into templates).
 
+### Invoice & email redesign (2026-05-19)
+
+**Email templates (white/light theme):** All five billing email templates now use a white card layout with Connect blue (`#0284c7`) accent header. Previously dark-themed (`#0b1220`). Customer-friendly and mobile-responsive.
+
+**Receipt email:** Added `pdfUrl` field — "Download invoice PDF" link included. Structured summary box (amount paid, invoice #, payment date, card). Confirmation badge. Autopay note block.
+
+**Invoice sent email:** Added optional `servicePeriod` field in the summary box. Computed from `invoice.periodStart`/`periodEnd` in `billingEmailLifecycle.ts`.
+
+**PDF (`renderBillingInvoicePdf`):**
+- Blue header band with bundled Connect logo (local PNG — no remote fetch).
+- Status chip (color-coded: PAID green, OVERDUE orange, FAILED red, VOID/DRAFT gray).
+- **"Bill from"** column: company display name, support email/phone.
+- **"Bill to"** column: tenant name, billing email, billing/service address.
+- Four-column invoice details row: invoice #, issue date, due date, service period. "Paid on" row for PAID invoices.
+- Discount line shown when a DISCOUNT line item exists.
+- Accent-colored "Balance due" row.
+- Legal footer: "Taxes and regulatory fees are applied according to your configured billing profile."
+- PAID watermark (green semi-transparent diagonal stamp).
+
+**Fallback logo for HTML emails:** `{PUBLIC_PORTAL_URL}/connect-logo.png` from `apps/portal/public/connect-logo.png`.
+
+**No PDF attachments in emails:** `EmailJob` schema has no `attachments` column — schema migration required, out of scope this pass. Receipt email provides download link instead. See `KNOWN_ISSUES.md`.
+
+**Legal/commercial gaps (display only — no billing math affected):**
+- Provider legal address: not in schema.
+- Provider tax ID: not in schema.
+
+**No billing math changes. No schema migrations. No payment execution changes. No telephony/CRM/mobile changes.**
 ## Telecom tax compliance (process, not product law)
 
 Connect stores **your** configured rates and an **immutable calculation snapshot** on each invoice. It does **not** assert compliance with FCC, state, county, or city telecom tax law. Before automated production billing of regulated telecom taxes, plan for an **external provider integration** (adapter slot: `external_telecom_stub` → future real provider).
