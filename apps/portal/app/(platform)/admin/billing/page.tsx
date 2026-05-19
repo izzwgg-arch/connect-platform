@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
-import { apiDelete, apiGet } from "../../../../services/apiClient";
+import { apiDelete, apiGet, apiPut } from "../../../../services/apiClient";
 import { billingErrorMessage } from "../../../../components/BillingActionToast";
 import { BillingActionPanel } from "../../../../components/billing/BillingActionPanel";
 import { ErrorState } from "../../../../components/ErrorState";
@@ -38,6 +38,7 @@ export default function AdminBillingPage() {
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; invoiceNumber?: string | null; totalCents: number; balanceDueCents: number; status: string } | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState("");
+  const [autopayBusy, setAutopayBusy] = useState(false);
   const tenants = useAsyncResource<TenantRow[]>(() => apiGet<TenantRow[]>("/admin/billing/platform/tenants"), []);
   const tenantRows = tenants.status === "success" ? tenants.data : [];
   const tenantIds = useMemo(() => tenantRows.map((t) => t.id), [tenantRows]);
@@ -86,6 +87,18 @@ export default function AdminBillingPage() {
     : null;
   const unpaid = detail ? (detail.invoices || []).filter((i) => !["PAID", "VOID"].includes(String(i.status))).length : 0;
   const failed = detail ? (detail.invoices || []).filter((i) => String(i.status) === "FAILED").length : 0;
+  // Balance due computed live from loaded invoices (stays fresh after pricing/tax saves)
+  const livBalanceDue = detail
+    ? (detail.invoices || [])
+        .filter((i: any) => !["PAID", "VOID"].includes(String(i.status)))
+        .reduce((sum: number, i: any) => sum + (i.balanceDueCents ?? 0), 0)
+    : null;
+  // Next billing date label
+  const nextPaymentDate = detail?.settings?.nextPaymentDate
+    ? formatDate(detail.settings.nextPaymentDate)
+    : null;
+  const billingDay = detail?.settings?.billingDayOfMonth;
+  const autopayOn = !!detail?.settings?.autoBillingEnabled;
   const recent = detail
     ? [...(detail.invoices || [])].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5)
     : [];
@@ -106,8 +119,8 @@ export default function AdminBillingPage() {
           <div className="billing-ov-summary">
             <div className="billing-ov-summary__card">
               <label>Balance due</label>
-              <strong>{dollars(selectedTenantId ? tenantRows.find((t) => t.id === selectedTenantId)?.balanceDueCents ?? 0 : 0)}</strong>
-              <small>Outstanding on open invoices</small>
+              <strong>{livBalanceDue !== null ? dollars(livBalanceDue) : "—"}</strong>
+              <small>{unpaid > 0 ? `${unpaid} open invoice${unpaid !== 1 ? "s" : ""}${failed > 0 ? ` · ${failed} failed` : ""}` : "No outstanding balance"}</small>
             </div>
             <div className="billing-ov-summary__card">
               <label>Account standing</label>
@@ -119,14 +132,39 @@ export default function AdminBillingPage() {
               <small>{unpaid} open · {failed} failed</small>
             </div>
             <div className="billing-ov-summary__card">
-              <label>Next billing</label>
-              <strong>{nextBill ? "Scheduled" : "—"}</strong>
-              <small>{nextBill || "Set billing day and autopay under Payment methods."}</small>
+              <label>Next billing date</label>
+              <strong>{nextPaymentDate || (billingDay ? `Day ${billingDay}` : "—")}</strong>
+              <small>{nextBill || (billingDay ? `Billing day ${billingDay} of each month` : "No billing day set")}</small>
             </div>
             <div className="billing-ov-summary__card">
-              <label>Payment methods</label>
-              <strong>{detail.paymentMethods?.length || 0}</strong>
-              <small>{detail.settings?.autoBillingEnabled ? "Autopay enabled" : "Autopay off"}</small>
+              <label>Autopay</label>
+              <strong style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ color: autopayOn ? "var(--green-600, #16a34a)" : "var(--text-dim, #6b7280)" }}>
+                  {autopayOn ? "On" : "Off"}
+                </span>
+                <button
+                  type="button"
+                  className={`btn ${autopayOn ? "ghost" : "primary"}`}
+                  style={{ fontSize: 11, padding: "2px 10px", lineHeight: 1.4 }}
+                  disabled={autopayBusy || !detail.paymentMethods?.length}
+                  title={!detail.paymentMethods?.length ? "Add a payment method first" : undefined}
+                  onClick={async () => {
+                    if (!detail?.tenant?.id) return;
+                    setAutopayBusy(true);
+                    try {
+                      await apiPut(`/admin/billing/tenants/${detail.tenant.id}/settings`, { autoBillingEnabled: !autopayOn });
+                      await loadDetail(detail.tenant.id);
+                    } catch (err: unknown) {
+                      alert(billingErrorMessage(err, "Failed to update autopay."));
+                    } finally {
+                      setAutopayBusy(false);
+                    }
+                  }}
+                >
+                  {autopayBusy ? "…" : autopayOn ? "Turn off" : "Turn on"}
+                </button>
+              </strong>
+              <small>{detail.paymentMethods?.length ? `${detail.paymentMethods.length} saved card${detail.paymentMethods.length !== 1 ? "s" : ""}` : "No payment method on file"}</small>
             </div>
           </div>
 
