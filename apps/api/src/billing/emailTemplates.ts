@@ -130,12 +130,17 @@ function ctaButton(href: string, label: string, color = "#0284c7"): string {
 // ---------------------------------------------------------------------------
 
 /** Scheduled / automated invoice delivery (tenant BillingInvoice). */
+/** Hidden marker parsed when attaching invoice PDFs to outbound email jobs. */
+export function billingInvoiceEmailMarker(invoiceId: string): string {
+  return `<!-- connect-billing-invoice:${invoiceId} -->`;
+}
+
 export function invoiceSentEmail(input: {
   invoiceNumber: string;
   totalCents: number;
   dueDate: Date;
   portalInvoiceUrl: string;
-  pdfUrl: string;
+  billingInvoiceId: string;
   balanceDueCents?: number;
   servicePeriod?: string | null;
   brand?: InvoiceEmailBranding | null;
@@ -167,20 +172,21 @@ export function invoiceSentEmail(input: {
     ${terms}
     <p style="margin:0 0 16px;">${ctaButton(input.portalInvoiceUrl, "View & pay invoice")}</p>
     ${payInstr}
-    <p style="margin:16px 0 0;font-size:13px;color:#94a3b8;">PDF copy: <a href="${escapeHtml(input.pdfUrl)}" style="color:#0284c7;word-break:break-all;">${escapeHtml(input.pdfUrl)}</a></p>
+    <p style="margin:16px 0 0;font-size:13px;color:#64748b;">Your invoice PDF is attached to this email.</p>
+    ${billingInvoiceEmailMarker(input.billingInvoiceId)}
   `;
 
-  const text = `${subject}\nDue: ${fmtDate(input.dueDate)}\nPortal: ${input.portalInvoiceUrl}\nPDF: ${input.pdfUrl}`;
+  const text = `${subject}\nDue: ${fmtDate(input.dueDate)}\nPay: ${input.portalInvoiceUrl}\n\nYour invoice PDF is attached to this email.`;
   return { subject, html: emailShell("Invoice ready", body, brand), text };
 }
 
-/** Admin / manual resend — pass `pdfUrl` when known (JWT PDF route). */
+/** Admin / manual resend — PDF is attached when the email job is sent. */
 export function invoiceReadyEmail(input: {
   invoiceNumber: string;
   totalCents: number;
   dueDate: Date;
   invoiceUrl: string;
-  pdfUrl?: string;
+  billingInvoiceId: string;
   servicePeriod?: string | null;
   brand?: InvoiceEmailBranding | null;
 }): { subject: string; html: string; text: string } {
@@ -189,7 +195,7 @@ export function invoiceReadyEmail(input: {
     totalCents: input.totalCents,
     dueDate: input.dueDate,
     portalInvoiceUrl: input.invoiceUrl,
-    pdfUrl: input.pdfUrl || input.invoiceUrl,
+    billingInvoiceId: input.billingInvoiceId,
     servicePeriod: input.servicePeriod,
     brand: input.brand ?? null,
   });
@@ -229,9 +235,9 @@ export function paymentReceiptEmail(input: {
   invoiceNumber: string;
   totalCents: number;
   paidAt: Date;
+  billingInvoiceId: string;
   cardLabel?: string | null;
   portalInvoiceUrl?: string | null;
-  pdfUrl?: string | null;
   paidViaAutopay?: boolean;
   brand?: InvoiceEmailBranding | null;
 }): { subject: string; html: string; text: string } {
@@ -257,11 +263,7 @@ export function paymentReceiptEmail(input: {
     ? `<p style="margin:0 0 12px;">${ctaButton(input.portalInvoiceUrl, "View invoice")}</p>`
     : "";
 
-  const pdfNote = input.pdfUrl
-    ? `<p style="margin:12px 0 0;font-size:13px;color:#64748b;">PDF copy: <a href="${escapeHtml(input.pdfUrl)}" style="color:#0284c7;">Download invoice PDF</a></p>`
-    : input.portalInvoiceUrl
-    ? `<p style="margin:12px 0 0;font-size:13px;color:#64748b;">A PDF copy of your invoice is available from the invoice portal link above.</p>`
-    : "";
+  const pdfNote = `<p style="margin:12px 0 0;font-size:13px;color:#64748b;">Your invoice PDF is attached to this email.</p>`;
 
   const h1 = input.paidViaAutopay ? "Autopay successful" : "Payment received";
 
@@ -274,6 +276,7 @@ export function paymentReceiptEmail(input: {
     ${infoBox(rows.join(""))}
     ${viewBtn}
     ${pdfNote}
+    ${billingInvoiceEmailMarker(input.billingInvoiceId)}
   `;
 
   return {

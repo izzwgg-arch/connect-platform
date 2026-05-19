@@ -687,7 +687,7 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 
 **EmailJob `type` (billing):** `BILLING_INVOICE_SENT`, `BILLING_INVOICE_READY` (admin resend), `BILLING_PAYMENT_LINK`, `BILLING_RECEIPT`, `BILLING_PAYMENT_FAILED`.
 
-**Env:** `BILLING_DUNNING_MAX_ATTEMPTS` (default 3, max 10), `BILLING_DUNNING_RETRY_DELAY_HOURS` (default 72). **`PUBLIC_API_BASE_URL`** / **`PUBLIC_API_URL`** for PDF links in emails; **`PUBLIC_PORTAL_URL`** for portal links.
+**Env:** `BILLING_DUNNING_MAX_ATTEMPTS` (default 3, max 10), `BILLING_DUNNING_RETRY_DELAY_HOURS` (default 72). **`PUBLIC_PORTAL_URL`** for portal and public pay links in emails.
 
 ## Invoice PDF & email presentation (`TenantBillingSettings`)
 
@@ -707,9 +707,9 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 
 **Email templates (white/light theme):** All five billing email templates now use a white card layout with Connect blue (`#0284c7`) accent header. Previously dark-themed (`#0b1220`). Customer-friendly and mobile-responsive.
 
-**Receipt email:** Added `pdfUrl` field — "Download invoice PDF" link included. Structured summary box (amount paid, invoice #, payment date, card). Confirmation badge. Autopay note block.
+**Receipt email:** Structured summary box (amount paid, invoice #, payment date, card). Confirmation badge. Autopay note block. Copy states the invoice PDF is **attached** (not a download link).
 
-**Invoice sent email:** Added optional `servicePeriod` field in the summary box. Computed from `invoice.periodStart`/`periodEnd` in `billingEmailLifecycle.ts`.
+**Invoice sent email:** Added optional `servicePeriod` field in the summary box. Computed from `invoice.periodStart`/`periodEnd` in `billingEmailLifecycle.ts`. Copy states the invoice PDF is **attached**.
 
 **PDF (`renderBillingInvoicePdf`):**
 - Blue header band with bundled Connect logo (local PNG — no remote fetch).
@@ -724,7 +724,18 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 
 **Fallback logo for HTML emails:** `{PUBLIC_PORTAL_URL}/connect-logo.png` from `apps/portal/public/connect-logo.png`.
 
-**No PDF attachments in emails:** `EmailJob` schema has no `attachments` column — schema migration required, out of scope this pass. Receipt email provides download link instead. See `KNOWN_ISSUES.md`.
+### Invoice PDF attachments + portal PDF routes (2026-05-19)
+
+**Email PDF attachments (no schema migration):** When `processEmailJobsBatch` in `apps/api/src/server.ts` sends billing jobs (`BILLING_INVOICE_SENT`, `BILLING_INVOICE_READY`, `BILLING_RECEIPT`), it generates the invoice PDF at send time via `billingEmailAttachments.ts` and attaches it for **SendGrid** and **SMTP**. Templates embed a hidden HTML marker `<!-- connect-billing-invoice:{id} -->` so the processor can resolve the `BillingInvoice` without a JWT-protected API link. Invoice/receipt emails no longer link to `GET /billing/platform/invoices/:id/pdf` (that route requires login).
+
+**PDF download in Connect:**
+- **Tenant users:** `GET /billing/platform/invoices/:id/pdf` (JWT + `?token=` for new-tab download).
+- **Platform admin:** `GET /admin/billing/invoices/:id/pdf` — admin billing **Download PDF** uses this route (`adminBillingOpsPanels.tsx`).
+- **SUPER_ADMIN** may open any tenant’s invoice on the tenant PDF route (cross-tenant lookup in `billingInvoicePdfAccess.ts`).
+
+**Code:** `billingInvoicePdfAccess.ts`, `billingEmailAttachments.ts`, `emailTemplates.ts` (`billingInvoiceEmailMarker`), `server.ts` (`sendEmailJobNow` attachments).
+
+**No billing math changes. No payment execution changes. No charges run from this pass.**
 
 **Legal/commercial gaps (display only — no billing math affected):**
 - Provider legal address: not in schema.
@@ -749,7 +760,7 @@ Connect stores **your** configured rates and an **immutable calculation snapshot
 | **Migrations** | Platform billing schema: e.g. `20260427183000_platform_billing_sola`. Invoice branding columns: **`20260512120000_tenant_invoice_branding`**. Confirm `_prisma_migrations` after **`api`** deploy. |
 | **Core env** | `DATABASE_URL`, `JWT_SECRET`, `CREDENTIALS_MASTER_KEY` (SOLA secrets at rest). |
 | **SOLA / Cardknox** | Per-tenant **`BillingSolaConfig`** when used; else **`SOLA_CARDKNOX_*`** env fallback (`solaGateway.ts`). Webhook PIN/secret must match gateway for **`ck-signature`**. |
-| **Email + links** | Global email processor in **`apps/api/src/server.ts`** (`processEmailJobsBatch`). Set **`PUBLIC_PORTAL_URL`** and **`PUBLIC_API_BASE_URL`** / **`PUBLIC_API_URL`** so invoice/PDF links in emails resolve. |
+| **Email + PDF** | Global email processor in **`apps/api/src/server.ts`** (`processEmailJobsBatch` / `sendEmailJobNow`). Billing invoice/receipt jobs attach a generated PDF at send time. Set **`PUBLIC_PORTAL_URL`** for portal/pay links in email bodies. |
 | **Dunning (optional)** | `BILLING_DUNNING_MAX_ATTEMPTS` (1–10, default 3), `BILLING_DUNNING_RETRY_DELAY_HOURS` (default 72). |
 | **Tax (optional)** | `BILLING_TAX_PROVIDER` only if overriding tenant **`metadata.taxProviderId`**. Default **`tax_profile_v1`** uses **`TaxProfile`** rates — not verified telecom compliance. |
 
@@ -768,7 +779,7 @@ Use a **non-production** tenant, **sandbox** gateway mode, and test cards only.
 1. **Permissions:** Log in as tenant billing role → **`/billing`** loads; as non–super-admin → **`/admin/billing`** hidden or 403.
 2. **Settings:** Set **`billingEmail`**, pricing, optional **`TaxProfile`**, branding (HTTPS logo for email only).
 3. **Card:** Add tokenized card (tenant **`/billing/payments`**).
-4. **Invoice:** Admin **Generate Invoice** or tenant flow that creates **`BillingInvoice`** → line items + totals; open **PDF** (`GET /billing/platform/invoices/:id/pdf`).
+4. **Invoice:** Admin **Generate Invoice** or tenant flow that creates **`BillingInvoice`** → line items + totals; open **PDF** (tenant: `GET /billing/platform/invoices/:id/pdf`; admin: `GET /admin/billing/invoices/:id/pdf`).
 5. **Audit:** Confirm **`metadata.taxCalculationAudit`** on that invoice row.
 6. **Email:** **Send invoice** / wait for **`BILLING_INVOICE_SENT`** queue path; confirm **`EmailJob`** row and delivery (or provider logs).
 7. **Payment link:** **`POST .../email-payment-link`** → recipient receives link; pay flow completes or declines **without** double-charge on retry (watch **`PaymentTransaction`** + **`BillingEventLog`**).

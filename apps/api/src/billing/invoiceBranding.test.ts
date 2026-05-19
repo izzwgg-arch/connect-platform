@@ -35,7 +35,7 @@ test("invoiceSentEmail embeds company display name in shell", () => {
     totalCents: 1200,
     dueDate: new Date("2026-07-01"),
     portalInvoiceUrl: "https://example.com/i",
-    pdfUrl: "https://example.com/pdf",
+    billingInvoiceId: "inv_brand_test",
     brand,
   });
   assert.match(t.html, /Northwind/);

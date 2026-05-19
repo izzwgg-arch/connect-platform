@@ -23,7 +23,7 @@ import { useAdminBillingTenant } from "./useAdminBillingTenant";
 function openAdminInvoicePdf(invoiceId: string) {
   const token = localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "";
   const qs = token ? `?token=${encodeURIComponent(token)}` : "";
-  window.open(`${getPortalApiBaseUrl()}/billing/platform/invoices/${encodeURIComponent(invoiceId)}/pdf${qs}`, "_blank", "noopener,noreferrer");
+  window.open(`${getPortalApiBaseUrl()}/admin/billing/invoices/${encodeURIComponent(invoiceId)}/pdf${qs}`, "_blank", "noopener,noreferrer");
 }
 
 // ── types ─────────────────────────────────────────────────────────────────────

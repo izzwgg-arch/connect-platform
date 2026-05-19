@@ -4,6 +4,31 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-19 — Billing: attach invoice PDFs to customer emails
+
+**Task:** Invoice and payment receipt emails must include the invoice PDF as an attachment (not a JWT-protected API link). Fix PDF download in Connect for platform admins and SUPER_ADMIN cross-tenant access.
+**Risk:** Medium (billing email presentation + PDF routes — no payment execution).
+
+### Shipped
+
+- **`billingEmailAttachments.ts`** — at send time, resolves `BillingInvoice` from hidden HTML marker `connect-billing-invoice:{id}` and attaches PDF for SendGrid + SMTP (`sendEmailJobNow` in `server.ts`).
+- **`billingInvoicePdfAccess.ts`** — shared PDF load/send; SUPER_ADMIN cross-tenant on tenant route; **`GET /admin/billing/invoices/:id/pdf`** for admin Download PDF.
+- **`emailTemplates.ts`** — invoice/receipt copy: “Your invoice PDF is attached”; removed JWT PDF API links from bodies.
+- **Portal:** `adminBillingOpsPanels.tsx` — Download PDF → `/admin/billing/invoices/:id/pdf`.
+- **Tests:** `billingEmailAttachments.test.ts` + updated template tests (274+ billing tests pass).
+
+### Not changed
+
+- No billing math, tax, or charge paths.
+- No `EmailJob` schema migration (PDF generated at send time, not stored on the job row).
+- Worker not required — email processor runs in **api** (`processEmailJobsBatch`).
+
+### Deploy
+
+- **api** + **portal** (not worker for this change).
+
+---
+
 ## 2026-05-19 — Billing: Cardknox iFields foundation + public invoice pay portal
 
 **Task:** PCI-safe admin + customer card entry via Cardknox iFields; public self-pay for `BillingInvoice`; autopay skip when already paid.

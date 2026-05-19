@@ -111,6 +111,7 @@ import { registerConnectChatRoutes } from "./connectChatRoutes";
 import { registerCrmRoutes } from "./crm/routes";
 import { fireCrmCdrHook } from "./crm/cdrHook";
 import { registerBillingRoutes } from "./billing/routes";
+import { loadBillingInvoicePdfAttachmentForEmailJob } from "./billing/billingEmailAttachments";
 import { applySolaWebhookToBillingInvoice, resolvePlatformBillingInvoiceForWebhookRef } from "./billing/solaBillingPayments";
 import { getBillingSolaAdapter } from "./billing/solaGateway";
 import { maskSolaSecretsForResponse } from "./billing/solaConfigMasking";
@@ -777,7 +778,8 @@ async function sendEmailJobNow(job: any): Promise<void> {
     }
     const fromEmail = provider.fromEmail || "billing@connectcomunications.com";
     const fromName = provider.fromName || "Connect Communications";
-    const payload = {
+    const pdfAttachment = await loadBillingInvoicePdfAttachmentForEmailJob(job).catch(() => null);
+    const payload: Record<string, unknown> = {
       personalizations: [{ to: [{ email: job.toEmail }] }],
       from: { email: fromEmail, name: fromName },
       subject: job.subject,
@@ -786,6 +788,14 @@ async function sendEmailJobNow(job: any): Promise<void> {
         { type: "text/html", value: job.htmlBody }
       ]
     };
+    if (pdfAttachment) {
+      payload.attachments = [{
+        content: pdfAttachment.content.toString("base64"),
+        type: pdfAttachment.contentType,
+        filename: pdfAttachment.filename,
+        disposition: "attachment",
+      }];
+    }
     const resp = await fetch("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",
       headers: { "content-type": "application/json", Authorization: `Bearer ${key}` },
@@ -827,6 +837,7 @@ async function sendEmailJobNow(job: any): Promise<void> {
   });
 
   try {
+    const pdfAttachment = await loadBillingInvoicePdfAttachmentForEmailJob(job).catch(() => null);
     await transporter.sendMail({
       from: fromName ? `"${fromName}" <${fromEmail}>` : fromEmail,
       to: job.toEmail,
@@ -834,6 +845,9 @@ async function sendEmailJobNow(job: any): Promise<void> {
       subject: job.subject,
       text: job.textBody,
       html: job.htmlBody,
+      attachments: pdfAttachment
+        ? [{ filename: pdfAttachment.filename, content: pdfAttachment.content, contentType: pdfAttachment.contentType }]
+        : undefined,
     });
   } catch (e: any) {
     const err: any = new Error(e?.message || "SMTP_SEND_FAILED");
