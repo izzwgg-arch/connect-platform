@@ -8,17 +8,19 @@ import { resolveInvoiceEmailBranding } from "./invoiceBranding";
 // invoiceSentEmail
 // ---------------------------------------------------------------------------
 
-test("invoiceSentEmail includes portal and PDF links", () => {
+test("invoiceSentEmail includes pay link and attached-PDF note", () => {
   const t = invoiceSentEmail({
     invoiceNumber: "INV-1",
     totalCents: 5000,
     dueDate: new Date("2026-06-01"),
-    portalInvoiceUrl: "https://example.com/billing/invoices/x",
-    pdfUrl: "https://example.com/api/billing/platform/invoices/x/pdf",
+    portalInvoiceUrl: "https://example.com/pay/invoice/token123",
+    billingInvoiceId: "inv_x",
   });
   assert.match(t.html, /View &amp; pay invoice/);
-  assert.match(t.text, /https:\/\/example\.com\/billing\/invoices\/x/);
-  assert.match(t.html, /https:\/\/example\.com\/api\/billing\/platform\/invoices\/x\/pdf/);
+  assert.match(t.text, /https:\/\/example\.com\/pay\/invoice\/token123/);
+  assert.match(t.html, /attached to this email/i);
+  assert.match(t.html, /connect-billing-invoice:inv_x/);
+  assert.doesNotMatch(t.html, /\/api\/billing\/platform\/invoices\//);
 });
 
 test("invoiceSentEmail shows invoice number and amount", () => {
@@ -27,7 +29,7 @@ test("invoiceSentEmail shows invoice number and amount", () => {
     totalCents: 9900,
     dueDate: new Date("2026-07-01"),
     portalInvoiceUrl: "https://example.com/i",
-    pdfUrl: "https://example.com/pdf",
+    billingInvoiceId: "inv_test",
   });
   assert.match(t.html, /INV-42/);
   assert.match(t.html, /\$99\.00/);
@@ -41,7 +43,7 @@ test("invoiceSentEmail renders service period when provided", () => {
     totalCents: 1000,
     dueDate: new Date("2026-06-01"),
     portalInvoiceUrl: "https://example.com/i",
-    pdfUrl: "https://example.com/pdf",
+    billingInvoiceId: "inv_test",
     servicePeriod: "May 1 – May 31, 2026",
   });
   assert.match(t.html, /May 1/);
@@ -54,7 +56,7 @@ test("invoiceSentEmail omits service period row when not provided", () => {
     totalCents: 1000,
     dueDate: new Date("2026-06-01"),
     portalInvoiceUrl: "https://example.com/i",
-    pdfUrl: "https://example.com/pdf",
+    billingInvoiceId: "inv_test",
   });
   assert.doesNotMatch(t.html, /Service period/);
 });
@@ -66,7 +68,7 @@ test("invoiceSentEmail embeds branded company display name", () => {
     totalCents: 1200,
     dueDate: new Date("2026-07-01"),
     portalInvoiceUrl: "https://example.com/i",
-    pdfUrl: "https://example.com/pdf",
+    billingInvoiceId: "inv_test",
     brand,
   });
   assert.match(t.html, /Northwind Telecom/);
@@ -79,7 +81,7 @@ test("invoiceSentEmail uses white/light background (not dark)", () => {
     totalCents: 100,
     dueDate: new Date("2026-07-01"),
     portalInvoiceUrl: "https://example.com/i",
-    pdfUrl: "https://example.com/pdf",
+    billingInvoiceId: "inv_test",
   });
   // Light outer background
   assert.match(t.html, /#f1f5f9/);
@@ -114,6 +116,7 @@ test("paymentReceiptEmail includes invoice number and amount", () => {
     invoiceNumber: "INV-5",
     totalCents: 7500,
     paidAt: new Date("2026-05-19"),
+    billingInvoiceId: "inv_5",
     portalInvoiceUrl: "https://example.com/i",
   });
   assert.match(t.html, /INV-5/);
@@ -126,6 +129,7 @@ test("paymentReceiptEmail shows payment confirmation badge", () => {
     invoiceNumber: "INV-6",
     totalCents: 1000,
     paidAt: new Date("2026-05-19"),
+    billingInvoiceId: "inv_test_6",
   });
   assert.match(t.html, /Payment confirmed/);
   assert.match(t.html, /Thank you/);
@@ -136,6 +140,7 @@ test("paymentReceiptEmail includes masked card label when provided", () => {
     invoiceNumber: "INV-7",
     totalCents: 2000,
     paidAt: new Date("2026-05-01"),
+    billingInvoiceId: "inv_7",
     cardLabel: "Visa •••• 4242",
   });
   assert.match(t.html, /Visa/);
@@ -144,25 +149,17 @@ test("paymentReceiptEmail includes masked card label when provided", () => {
   assert.doesNotMatch(t.html, /\b\d{16}\b/);
 });
 
-test("paymentReceiptEmail includes PDF link when pdfUrl provided", () => {
+test("paymentReceiptEmail notes PDF attachment and embeds invoice marker", () => {
   const t = paymentReceiptEmail({
     invoiceNumber: "INV-8",
     totalCents: 3000,
     paidAt: new Date("2026-05-19"),
-    pdfUrl: "https://example.com/api/billing/platform/invoices/abc/pdf",
+    billingInvoiceId: "inv_abc",
     portalInvoiceUrl: "https://example.com/i",
   });
-  assert.match(t.html, /Download invoice PDF/);
-  assert.match(t.html, /https:\/\/example\.com\/api\/billing\/platform\/invoices\/abc\/pdf/);
-});
-
-test("paymentReceiptEmail omits PDF note when pdfUrl not provided", () => {
-  const t = paymentReceiptEmail({
-    invoiceNumber: "INV-8b",
-    totalCents: 1000,
-    paidAt: new Date("2026-05-19"),
-  });
-  assert.doesNotMatch(t.html, /Download invoice PDF/);
+  assert.match(t.html, /attached to this email/i);
+  assert.match(t.html, /connect-billing-invoice:inv_abc/);
+  assert.doesNotMatch(t.html, /\/api\/billing\/platform\/invoices\//);
 });
 
 test("paymentReceiptEmail shows autopay note when paidViaAutopay", () => {
@@ -170,6 +167,7 @@ test("paymentReceiptEmail shows autopay note when paidViaAutopay", () => {
     invoiceNumber: "INV-9",
     totalCents: 5000,
     paidAt: new Date("2026-05-01"),
+    billingInvoiceId: "inv_9",
     paidViaAutopay: true,
   });
   assert.match(t.html, /saved payment method/);
@@ -181,6 +179,7 @@ test("paymentReceiptEmail does not include raw card details", () => {
     invoiceNumber: "INV-10",
     totalCents: 1000,
     paidAt: new Date("2026-05-19"),
+    billingInvoiceId: "inv_10",
     cardLabel: "Visa •••• 4242",
   });
   // No raw token / CVV / full card number
@@ -194,6 +193,7 @@ test("paymentReceiptEmail uses white/light background", () => {
     invoiceNumber: "INV-11",
     totalCents: 100,
     paidAt: new Date("2026-05-19"),
+    billingInvoiceId: "inv_11",
   });
   assert.match(t.html, /#f1f5f9/);
   assert.doesNotMatch(t.html, /#0b1220/);
@@ -226,7 +226,7 @@ test("emailShell renders img tag even without logoUrl (uses fallback)", () => {
     totalCents: 100,
     dueDate: new Date("2026-06-01"),
     portalInvoiceUrl: "https://example.com/i",
-    pdfUrl: "https://example.com/pdf",
+    billingInvoiceId: "inv_test",
     brand,
   });
   // Should contain an img tag pointing to connect-logo.png
@@ -244,7 +244,7 @@ test("emailShell renders custom logoUrl when configured", () => {
     totalCents: 100,
     dueDate: new Date("2026-06-01"),
     portalInvoiceUrl: "https://example.com/i",
-    pdfUrl: "https://example.com/pdf",
+    billingInvoiceId: "inv_test",
     brand,
   });
   assert.match(t.html, /mybrand-logo\.png/);

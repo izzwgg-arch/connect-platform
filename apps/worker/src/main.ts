@@ -1978,6 +1978,22 @@ async function runMonthlyBillingAutomation(): Promise<void> {
           continue;
         }
 
+        const balanceDue = Math.max(0, invoice.balanceDueCents ?? invoice.totalCents ?? 0);
+        if (invoice.status === "PAID" || balanceDue <= 0) {
+          await (db as any).billingEventLog.create({
+            data: {
+              tenantId: setting.tenantId,
+              invoiceId: invoice.id,
+              runId: run.id,
+              type: "billing.autopay_skipped_already_paid",
+              message: "Connect autopay skipped — invoice already paid or has no balance due.",
+              metadata: { status: invoice.status, balanceDueCents: balanceDue },
+            },
+          }).catch(() => null);
+          results.push({ tenantId: setting.tenantId, invoiceId: invoice.id, transactionId: null, skipped: "already_paid" });
+          continue;
+        }
+
         let transaction = null;
         if (setting.defaultPaymentMethod) {
           transaction = await chargeWorkerInvoice(invoice, setting.defaultPaymentMethod, run.id);
@@ -2022,6 +2038,20 @@ async function chargeWorkerInvoice(
   attemptNumber = 1,
   dunningOverrides?: { effectiveMaxAttempts?: number; effectiveDelayMs?: number },
 ): Promise<any> {
+  const balanceDue = Math.max(0, invoice.balanceDueCents ?? invoice.totalCents ?? 0);
+  if (invoice.status === "PAID" || balanceDue <= 0) {
+    await (db as any).billingEventLog.create({
+      data: {
+        tenantId: invoice.tenantId,
+        invoiceId: invoice.id,
+        runId: runId || null,
+        type: "billing.autopay_skipped_already_paid",
+        message: "Autopay charge skipped at execution — invoice already paid or zero balance.",
+        metadata: { status: invoice.status, balanceDueCents: balanceDue, attemptNumber },
+      },
+    }).catch(() => null);
+    return null;
+  }
   await (db as any).billingEventLog.create({
     data: {
       tenantId: invoice.tenantId,

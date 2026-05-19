@@ -56,9 +56,15 @@ export type ChargeBillingInvoiceOptions = {
  * Records PaymentTransaction, updates invoice on decline, receipt email on success.
  */
 export async function chargeBillingInvoice(invoice: any, method: any, options?: ChargeBillingInvoiceOptions): Promise<any> {
+  const balanceDueCents = Math.max(0, invoice.balanceDueCents ?? invoice.totalCents ?? 0);
+  if (invoice.status === "PAID" || balanceDueCents <= 0) {
+    const err: any = new Error("INVOICE_ALREADY_PAID");
+    err.code = "INVOICE_ALREADY_PAID";
+    throw err;
+  }
   const adapter = options?.adapter ?? (await getBillingSolaAdapter(invoice.tenantId));
   const token = decryptPaymentToken(method);
-  const amountCents = invoice.balanceDueCents ?? invoice.totalCents;
+  const amountCents = balanceDueCents;
   const idempotencyKey = `billing:sale:${invoice.id}:${Date.now()}`;
 
   await logBillingEvent({
@@ -169,6 +175,12 @@ export async function chargeBillingInvoiceWithSut(
   input: { xSut: string; cardholderName?: string | null; billingZip?: string | null },
   options?: ChargeBillingInvoiceWithSutOptions,
 ): Promise<any> {
+  const balanceDueCents = Math.max(0, invoice.balanceDueCents ?? invoice.totalCents ?? 0);
+  if (invoice.status === "PAID" || balanceDueCents <= 0) {
+    const err: any = new Error("INVOICE_ALREADY_PAID");
+    err.code = "INVOICE_ALREADY_PAID";
+    throw err;
+  }
   const adapter = options?.adapter ?? (await getBillingSolaAdapter(invoice.tenantId));
   const saveResp = await adapter.saveCardWithSut({
     sut: input.xSut,

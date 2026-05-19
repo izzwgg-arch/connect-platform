@@ -22,7 +22,7 @@ import {
 } from "./billingTenantSettingsMetadata";
 import { getBillingSolaAdapter, getBillingSolaAdapterForTokenizing, storeSolaPaymentMethod } from "./solaGateway";
 import { invoiceReadyEmail } from "./emailTemplates";
-import { renderBillingInvoicePdf } from "./pdf";
+import { findBillingInvoiceForPdf, sendBillingInvoicePdf } from "./billingInvoicePdfAccess";
 import { chargeBillingInvoice, chargeBillingInvoiceWithSut, refundBillingTransaction } from "./solaBillingPayments";
 import { maskSolaSecretsForResponse } from "./solaConfigMasking";
 import {
@@ -32,10 +32,11 @@ import {
   solaWebhookPinMissingForProd,
 } from "./solaConfigPolicy";
 import { billingSolaCardknoxWebhookUrl } from "./solaPublicUrls";
-import { billingInvoicePdfApiUrl, queuePaymentLinkEmail } from "./billingEmailLifecycle";
+import { queuePaymentLinkEmail } from "./billingEmailLifecycle";
 import { buildBillingEmailJobCreateData, canAccessPlatformAdminBillingRoutes, canAccessTenantBillingRoutes } from "./billingAuth";
 import { invoiceBrandingPutSchema, normalizeBrandingPayload, resolveInvoiceEmailBranding } from "./invoiceBranding";
 import { saveAdminCardWithSut } from "./adminCardSave";
+import { registerBillingPublicPayRoutes } from "./publicPayRoutes";
 import {
   agingToCsv,
   csvMeta,
@@ -292,6 +293,8 @@ async function queueBillingEmail(input: { tenantId: string; to: string; type: st
 }
 
 export async function registerBillingRoutes(app: FastifyInstance) {
+  registerBillingPublicPayRoutes(app);
+
   // Tenant: preview next invoice (read-only, no DB write, no invoice created).
   app.get("/billing/invoice-preview", async (req, reply) => {
     const u = await requireTenantBilling(req, reply);
@@ -350,15 +353,9 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const u = await requireTenantBilling(req, reply);
     if (!u) return;
     const { id } = req.params as { id: string };
-    const invoice = await (db as any).billingInvoice.findFirst({
-      where: { id, tenantId: u.tenantId },
-      include: { lineItems: true, tenant: { include: { billingSettings: true } } },
-    });
+    const invoice = await findBillingInvoiceForPdf(id, u);
     if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
-    const pdf = await renderBillingInvoicePdf(invoice);
-    reply.header("content-type", "application/pdf");
-    reply.header("content-disposition", `inline; filename="${invoice.invoiceNumber}.pdf"`);
-    return reply.send(pdf);
+    return sendBillingInvoicePdf(reply, invoice);
   });
 
   app.post("/billing/platform/invoices/:id/email-payment-link", async (req, reply) => {
@@ -402,7 +399,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       totalCents: invoice.totalCents,
       dueDate: invoice.dueDate,
       invoiceUrl: `${publicPortalBase()}/billing/invoices/${invoice.id}`,
-      pdfUrl: billingInvoicePdfApiUrl(invoice.id),
+      billingInvoiceId: invoice.id,
       brand: resolveInvoiceEmailBranding(invoice.tenant.billingSettings || {}, invoice.tenant.name),
     });
     await queueBillingEmail({ tenantId: invoice.tenantId, invoiceId: invoice.id, to, type: "BILLING_INVOICE_READY", subject: template.subject, html: template.html, text: template.text });
@@ -1675,6 +1672,15 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     return { invoices, total, page, pages: Math.ceil(total / limit), limit };
   });
 
+  app.get("/admin/billing/invoices/:id/pdf", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const invoice = await findBillingInvoiceForPdf(id, u);
+    if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
+    return sendBillingInvoicePdf(reply, invoice);
+  });
+
   app.get("/admin/billing/invoices/:id", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
@@ -2119,7 +2125,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       totalCents: invoice.totalCents,
       dueDate: invoice.dueDate,
       invoiceUrl: `${publicPortalBase()}/billing/invoices/${invoice.id}`,
-      pdfUrl: billingInvoicePdfApiUrl(invoice.id),
+      billingInvoiceId: invoice.id,
       brand: resolveInvoiceEmailBranding(invoice.tenant.billingSettings || {}, invoice.tenant.name),
     });
     await queueBillingEmail({ tenantId: invoice.tenantId, invoiceId: invoice.id, to, type: "BILLING_INVOICE_READY", subject: template.subject, html: template.html, text: template.text });

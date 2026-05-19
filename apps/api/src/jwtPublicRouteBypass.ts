@@ -39,6 +39,8 @@ export function shouldSkipJwtVerification(path: string): boolean {
   if (
     path.includes("/webhooks/pbx")
     || path.startsWith("/billing/invoices/pay/")
+    || path.startsWith("/billing/platform/invoices/pay/")
+    || path.includes("/billing/platform/invoices/pay/")
     || isDevObserveTokenPath
     || isInternalCdrIngestPath
     || isInternalMobileRingPath

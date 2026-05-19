@@ -3,6 +3,7 @@ import { buildBillingEmailJobCreateData } from "./billingAuth";
 import { invoiceSentEmail, paymentFailedEmail, paymentLinkEmail, paymentReceiptEmail } from "./emailTemplates";
 import { clearDunningSlice } from "./billingDunning";
 import { resolveInvoiceEmailBranding } from "./invoiceBranding";
+import { createBillingInvoicePayToken } from "./billingPayToken";
 
 export function publicPortalBaseUrl(): string {
   return (process.env.PUBLIC_PORTAL_URL || "https://app.connectcomunications.com").replace(/\/$/, "");
@@ -19,6 +20,12 @@ export function billingInvoicePortalUrl(invoiceId: string): string {
   return `${publicPortalBaseUrl()}/billing/invoices/${encodeURIComponent(invoiceId)}`;
 }
 
+/** Signed public pay URL (no login). PCI-safe Cardknox iFields on portal /pay/invoice/[token]. */
+export function billingInvoicePublicPayUrl(invoiceId: string, tenantId: string): string {
+  const token = createBillingInvoicePayToken(invoiceId, tenantId);
+  return `${publicPortalBaseUrl()}/pay/invoice/${encodeURIComponent(token)}`;
+}
+
 export function billingInvoicePdfApiUrl(invoiceId: string): string {
   return `${publicBillingApiBaseUrl()}/billing/platform/invoices/${encodeURIComponent(invoiceId)}/pdf`;
 }
@@ -30,12 +37,13 @@ async function logLifecycle(type: string, tenantId: string, invoiceId: string | 
 }
 
 async function hasBillingEmailJob(params: { tenantId: string; invoiceId: string; type: string }): Promise<boolean> {
+  const marker = `connect-billing-invoice:${params.invoiceId}`;
   const j = await (db as any).emailJob.findFirst({
     where: {
       tenantId: params.tenantId,
-      invoiceId: params.invoiceId,
       type: params.type,
       status: { in: ["QUEUED", "RUNNING", "SENT"] },
+      htmlBody: { contains: marker },
     },
   });
   return !!j;
@@ -83,8 +91,7 @@ export async function queueInvoiceSentOnFinalize(invoice: {
     return { queued: false, reason: "no_billing_email" };
   }
   const brand = resolveInvoiceEmailBranding(settings || {}, tenant?.name);
-  const portalUrl = billingInvoicePortalUrl(invoice.id);
-  const pdfUrl = billingInvoicePdfApiUrl(invoice.id);
+  const payUrl = billingInvoicePublicPayUrl(invoice.id, invoice.tenantId);
   let servicePeriod: string | null = null;
   if (invoice.periodStart && invoice.periodEnd) {
     const fmtOpt: Intl.DateTimeFormatOptions = { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" };
@@ -96,8 +103,8 @@ export async function queueInvoiceSentOnFinalize(invoice: {
     invoiceNumber: invoice.invoiceNumber,
     totalCents: invoice.totalCents,
     dueDate: invoice.dueDate,
-    portalInvoiceUrl: portalUrl,
-    pdfUrl,
+    portalInvoiceUrl: payUrl,
+    billingInvoiceId: invoice.id,
     balanceDueCents: invoice.balanceDueCents ?? invoice.totalCents,
     servicePeriod,
     brand,
@@ -137,7 +144,7 @@ export async function queuePaymentLinkEmail(params: {
     select: { name: true, billingSettings: true },
   });
   const brand = resolveInvoiceEmailBranding(tenant?.billingSettings || {}, tenant?.name);
-  const payUrl = billingInvoicePortalUrl(params.invoiceId);
+  const payUrl = billingInvoicePublicPayUrl(params.invoiceId, params.tenantId);
   const tpl = paymentLinkEmail({
     invoiceNumber: params.invoiceNumber,
     totalCents: params.totalCents,
@@ -186,9 +193,9 @@ export async function queueReceiptEmailOnce(params: {
     invoiceNumber: params.invoiceNumber,
     totalCents: params.totalCents,
     paidAt: new Date(),
+    billingInvoiceId: params.invoiceId,
     cardLabel: params.cardLabel ?? null,
     portalInvoiceUrl,
-    pdfUrl: billingInvoicePdfApiUrl(params.invoiceId),
     paidViaAutopay: params.paidViaAutopay,
     brand,
   });

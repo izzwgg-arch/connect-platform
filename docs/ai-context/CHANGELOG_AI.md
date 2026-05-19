@@ -4,6 +4,24 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-19 — Billing: Cardknox iFields foundation + public invoice pay portal
+
+**Task:** PCI-safe admin + customer card entry via Cardknox iFields; public self-pay for `BillingInvoice`; autopay skip when already paid.
+**Risk:** High (payments — no live charges in tests).
+
+### Shipped
+
+- **`CardknoxIFieldsForm`** (`apps/portal/components/billing/CardknoxIFieldsForm.tsx`) — reusable `@cardknox/react-ifields` form (admin dark / customer light), billing address fields, optional save/autopay checkboxes.
+- **Public pay:** `billingPayToken.ts`, `publicPayRoutes.ts`, portal `/pay/invoice/[token]`, email links via `billingInvoicePublicPayUrl()`.
+- **Autopay guard:** Worker + charge helpers skip invoices already paid / zero balance.
+- **Tests:** `billingPayToken.test.ts` (4 cases); billing suite 274 pass.
+
+### Deploy
+
+- Enqueue **api**, **portal**, **worker** after commit.
+
+---
+
 ## 2026-05-19 — Billing: Customer-facing invoice + payment receipt email redesign
 
 **Task:** Redesign customer-facing invoice PDF and HTML email templates to be white/light themed, professional, and production-ready.

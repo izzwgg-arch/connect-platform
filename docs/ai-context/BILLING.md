@@ -449,7 +449,7 @@ Operators can add a card on behalf of a tenant from the `PaymentMethodsModal` in
 
 **PCI boundary** — raw PAN and CVV never hit Connect API:
 - The modal fetches `GET .../sola/public-config` which returns only the **public** `ifieldsKey` (safe to expose client-side; no API secret is included).
-- Card number and CVV are entered into Cardknox-hosted `<iframe>` fields (`ifield.htm`). The `getTokens()` call returns a single-use token (SUT) in a hidden `<input name="xCardNum">`. Raw card data never leaves the browser for Cardknox-hosted iframes.
+- Card number and CVV use **`@cardknox/react-ifields`** (`IField` components) in `PaymentMethodsModal` — PCI-safe hosted fields; only the card SUT is sent to Connect (`POST .../payment-methods/sola/save`). Legacy CDN `ifield.htm` iframes remain in `OneTimeChargeDrawer` until migrated to `CardknoxIFieldsForm`.
 - Only the SUT is sent to Connect API (`POST .../payment-methods/sola/save` body: `{ xSut, cardholderName?, billingZip?, makeDefault? }`).
 - `xSut` is **not logged** in `BillingEventLog` metadata; only `paymentMethodId`, masked `brand`/`last4`, and `adminUserId` are recorded.
 
@@ -478,6 +478,21 @@ Operators can add a card on behalf of a tenant from the `PaymentMethodsModal` in
 4. Declined response → `402 card_save_failed`, `storeMethod` never called
 5. Approved response → `storeMethod` + `logEvent` called, returns masked card info; `xSut` absent from log
 6. `canAccessPlatformAdminBillingRoutes` only passes `SUPER_ADMIN`
+
+### Customer public pay (BillingInvoice, no login)
+
+Signed pay links for **`BillingInvoice`** (platform stack) — distinct from legacy **`Invoice.payToken`** in `server.ts`.
+
+| Piece | Location |
+|-------|----------|
+| Token | `createBillingInvoicePayToken` / `verifyBillingInvoicePayToken` in `billingPayToken.ts` (HMAC, 30-day TTL, bound to `invoiceId` + `tenantId`) |
+| Public API (JWT bypass) | `GET /billing/platform/invoices/pay/:token`, `GET …/public-config`, `POST …/pay` in `publicPayRoutes.ts` |
+| Portal page | `/pay/invoice/[token]` — light checkout UI + `CardknoxIFieldsForm` |
+| Email URLs | `billingInvoicePublicPayUrl()` in `billingEmailLifecycle.ts` — invoice sent + payment-link emails use public pay URL (not login-gated `/billing/invoices/:id`) |
+
+**PCI:** Server never receives PAN/CVV; amount due is computed server-side from `balanceDueCents`. Optional **save card** + **enable autopay** on public pay (default off): vault then charge saved token.
+
+**Autopay double-charge guard:** Worker monthly run + `chargeWorkerInvoice` skip when `status === PAID` or `balanceDueCents <= 0` (`billing.autopay_skipped_already_paid`). `chargeBillingInvoice` / `chargeBillingInvoiceWithSut` throw `INVOICE_ALREADY_PAID` if paid before charge.
 
 ### Admin SMS payment links
 
