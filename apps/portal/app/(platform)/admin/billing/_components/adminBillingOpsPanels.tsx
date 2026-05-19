@@ -771,9 +771,10 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
 
   // iFields add-card state
   const [solaConfig, setSolaConfig] = useState<AdminSolaPublicConfig | null>(null);
+  const [ifieldsScriptReady, setIfieldsScriptReady] = useState(false);
   const [ifieldsReady, setIfieldsReady] = useState(false);
   const [ifieldsLoadCount, setIfieldsLoadCount] = useState(0);
-  const [ifieldsOpenNonce, setIfieldsOpenNonce] = useState(0);
+  const [ifieldsMountKey, setIfieldsMountKey] = useState(0);
   const [showAddCard, setShowAddCard] = useState(false);
   const [addCardBusy, setAddCardBusy] = useState(false);
   const [addCardMsg, setAddCardMsg] = useState("");
@@ -799,62 +800,65 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
     return () => { active = false; };
   }, [tenantId]);
 
-  // Load iFields script and configure account key.
+  // Load iFields script. The account is configured after visible iframes load.
   useEffect(() => {
     if (!solaConfig?.configured || !solaConfig?.ifieldsKey?.trim()) return;
-    const key = solaConfig.ifieldsKey.trim();
     const version = "3.4.2602.2001";
     const scriptId = `cardknox-ifields-${version}`;
-    const configure = () => {
-      if (window.setAccount) {
-        window.setAccount(key, "ConnectComms", "1.0.0");
-        setIfieldsReady(true);
+    const existing = document.getElementById(scriptId) as HTMLScriptElement | null;
+    if (existing) {
+      if ((window as typeof window & { setAccount?: unknown }).setAccount) {
+        setIfieldsScriptReady(true);
+        return;
       }
-    };
-    const existing = document.getElementById(scriptId);
-    if (existing) { configure(); return; }
+      const markReady = () => setIfieldsScriptReady(true);
+      existing.addEventListener("load", markReady, { once: true });
+      return () => existing.removeEventListener("load", markReady);
+    }
     const script = document.createElement("script");
     script.id = scriptId;
     script.src = `https://cdn.cardknox.com/ifields/${version}/ifields.min.js`;
     script.async = true;
-    script.onload = configure;
+    script.onload = () => setIfieldsScriptReady(true);
     script.onerror = () => setAddCardMsg("Unable to load the secure card form. Check network access to cdn.cardknox.com.");
     document.body.appendChild(script);
   }, [solaConfig?.configured, solaConfig?.ifieldsKey]);
 
-  // Re-assert setAccount when opening the add-card section so iFields binds reliably.
-  // Also retry briefly because the secure iframes can finish loading after the first call.
+  // Mount fresh visible iFrames each time Add card opens. iFields can fail when initialized inside display:none.
   useEffect(() => {
     if (!showAddCard) return;
-    const key = solaConfig?.ifieldsKey?.trim();
-    if (!key) return;
     setIfieldsReady(false);
     setIfieldsLoadCount(0);
-    const tryBind = () => {
-      if (!window.setAccount) return false;
-      window.setAccount(key, "ConnectComms", "1.0.0");
-      return true;
-    };
-    tryBind();
-    const timer = window.setInterval(() => {
-      const ok = tryBind();
-      if (ok && ifieldsLoadCount >= 2) {
-        setIfieldsReady(true);
-        window.clearInterval(timer);
-      }
-    }, 300);
-    const stop = window.setTimeout(() => window.clearInterval(timer), 5000);
-    return () => {
-      window.clearInterval(timer);
-      window.clearTimeout(stop);
-    };
-  }, [showAddCard, solaConfig?.ifieldsKey]);
+    setIfieldsMountKey((k) => k + 1);
+  }, [showAddCard]);
 
+  // Configure Cardknox/Sola after the hosted iframes are mounted and loaded.
   useEffect(() => {
-    if (showAddCard && ifieldsLoadCount >= 2) {
-      setIfieldsReady(true);
-    }
-  }, [showAddCard, ifieldsLoadCount]);
+    if (!showAddCard || !ifieldsScriptReady || ifieldsLoadCount < 2) return;
+    const key = solaConfig?.ifieldsKey?.trim();
+    if (!key) return;
+    const w = window as typeof window & {
+      setAccount?: (key: string, softwareName: string, softwareVersion: string) => void;
+      setIfieldStyle?: (ifieldName: string, style: Record<string, string>) => void;
+      enableAutoFormatting?: (separator?: string) => void;
+      enableBlockNonNumericInput?: () => void;
+    };
+    if (!w.setAccount) return;
+    const fieldStyle = {
+      border: "0",
+      "font-size": "14px",
+      padding: "10px 12px",
+      width: "100%",
+      color: "#111827",
+      background: "#ffffff",
+    };
+    w.setIfieldStyle?.("card-number", fieldStyle);
+    w.setIfieldStyle?.("cvv", fieldStyle);
+    w.setAccount(key, "ConnectComms", "1.0.0");
+    w.enableBlockNonNumericInput?.();
+    w.enableAutoFormatting?.();
+    setIfieldsReady(true);
+  }, [showAddCard, ifieldsScriptReady, ifieldsLoadCount, solaConfig?.ifieldsKey]);
 
   async function setDefault(methodId: string) {
     setBusy(`default-${methodId}`);
@@ -948,8 +952,7 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
               className="btn ghost"
               type="button"
               onClick={() => {
-                // Force fresh iframe mount every time Add card opens.
-                setIfieldsOpenNonce((n) => n + 1);
+                setAddCardMsg("");
                 setShowAddCard(true);
               }}
               disabled={solaConfig === null}
@@ -978,11 +981,10 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
             </div>
           )}
 
-          {/* iFields form — mount only when visible to avoid hidden-iframe init races. */}
+          {/* iFields must be mounted visible. Hidden iframe initialization can create non-interactive fields. */}
           {canAddCard && showAddCard ? (
             <form
               className="billing-form"
-              key={`ifields-${tenantId}-${ifieldsOpenNonce}`}
               onSubmit={(event) => {
                 event.preventDefault();
                 if (submittedRef.current || addCardBusy) return;
@@ -1032,22 +1034,24 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
               <label>
                 Card number
                 <iframe
+                  key={`card-${ifieldsMountKey}`}
                   className="sola-ifield-frame"
                   title="Secure card number"
                   data-ifields-id="card-number"
                   data-ifields-placeholder="Card Number"
-                  src={`https://cdn.cardknox.com/ifields/${ifieldsVersion}/ifield.htm`}
+                  src={`https://cdn.cardknox.com/ifields/${ifieldsVersion}/ifield.html`}
                   onLoad={() => setIfieldsLoadCount((c) => c + 1)}
                 />
               </label>
               <label>
                 CVV
                 <iframe
+                  key={`cvv-${ifieldsMountKey}`}
                   className="sola-ifield-frame"
                   title="Secure CVV"
                   data-ifields-id="cvv"
                   data-ifields-placeholder="CVV"
-                  src={`https://cdn.cardknox.com/ifields/${ifieldsVersion}/ifield.htm`}
+                  src={`https://cdn.cardknox.com/ifields/${ifieldsVersion}/ifield.html`}
                   onLoad={() => setIfieldsLoadCount((c) => c + 1)}
                 />
               </label>
