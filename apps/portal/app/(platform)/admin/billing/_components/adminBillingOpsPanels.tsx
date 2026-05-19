@@ -771,10 +771,12 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
   // iFields add-card state
   const [solaConfig, setSolaConfig] = useState<AdminSolaPublicConfig | null>(null);
   const [ifieldsReady, setIfieldsReady] = useState(false);
+  const [ifieldsTimeout, setIfieldsTimeout] = useState(false);
   const [showAddCard, setShowAddCard] = useState(false);
   const [addCardBusy, setAddCardBusy] = useState(false);
   const [addCardMsg, setAddCardMsg] = useState("");
   const submittedRef = useRef(false);
+  const ifieldsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const data = useAsyncResource<{ methods: AdminPaymentMethod[]; isLiveCharge: boolean }>(
     () => apiGet(`/admin/billing/platform/tenants/${tenantId}/payment-methods`),
@@ -798,13 +800,19 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
 
   // Load iFields script when public config is ready (only needs configured + ifieldsKey, not enabled)
   useEffect(() => {
-    if (!solaConfig?.configured || !solaConfig?.ifieldsKey) return;
+    if (!solaConfig?.configured || !solaConfig?.ifieldsKey?.trim()) return;
+    const key = solaConfig.ifieldsKey.trim();
     const version = "3.4.2602.2001";
     const scriptId = `cardknox-ifields-${version}`;
     const configure = () => {
       if (window.setAccount) {
-        window.setAccount(solaConfig.ifieldsKey!, "ConnectComms", "1.0.0");
+        window.setAccount(key, "ConnectComms", "1.0.0");
         setIfieldsReady(true);
+        setIfieldsTimeout(false);
+        if (ifieldsTimeoutRef.current) clearTimeout(ifieldsTimeoutRef.current);
+      } else {
+        // setAccount not available — script loaded but wrong API shape
+        setAddCardMsg("Card form script loaded but could not initialize. The iFields key may be invalid.");
       }
     };
     const existing = document.getElementById(scriptId) as HTMLScriptElement | null;
@@ -814,9 +822,21 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
     script.src = `https://cdn.cardknox.com/ifields/${version}/ifields.min.js`;
     script.async = true;
     script.onload = configure;
-    script.onerror = () => setAddCardMsg("Unable to load the secure card form. Contact support.");
+    script.onerror = () => setAddCardMsg("Unable to load the secure card form. Check network access to cdn.cardknox.com.");
     document.body.appendChild(script);
   }, [solaConfig]);
+
+  // Start a timeout when the form is shown — if ifields never ready, surface an error
+  useEffect(() => {
+    if (!showAddCard || ifieldsReady) return;
+    if (ifieldsTimeoutRef.current) clearTimeout(ifieldsTimeoutRef.current);
+    ifieldsTimeoutRef.current = setTimeout(() => {
+      if (!ifieldsReady) setIfieldsTimeout(true);
+    }, 9000);
+    return () => {
+      if (ifieldsTimeoutRef.current) clearTimeout(ifieldsTimeoutRef.current);
+    };
+  }, [showAddCard, ifieldsReady]);
 
   async function setDefault(methodId: string) {
     setBusy(`default-${methodId}`);
@@ -931,8 +951,32 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
               {!canAddCard ? (
                 <div style={{ fontSize: 13, color: "#6b7280", padding: "10px 0" }}>
                   {ifieldsKeyMissing
-                    ? "Payment gateway is enabled but the iFields hosted card capture key is not set. Add the iFields public key in Admin Billing → Company billing setup → Payment gateway to enable card entry."
-                    : "Payment gateway is not configured for this company. Set up the gateway in Admin Billing → Company billing setup → Payment gateway before adding cards."}
+                    ? "The iFields public key is not set for this company. Add it in Admin Billing → Pricing → Payment Gateway."
+                    : "Payment gateway is not configured for this company. Set up the gateway in Admin Billing → Pricing → Payment Gateway."}
+                </div>
+              ) : ifieldsTimeout ? (
+                <div style={{ fontSize: 13, padding: "10px 0" }}>
+                  <div style={{ background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 7, padding: "10px 12px", marginBottom: 10, color: "#78350f" }}>
+                    <strong>Card form did not load.</strong> This usually means the iFields public key is invalid for this Cardknox account.
+                    Go to <strong>Pricing → Payment Gateway</strong> and verify the iFields public key, then come back and retry.
+                  </div>
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    style={{ fontSize: 12 }}
+                    onClick={() => {
+                      setIfieldsTimeout(false);
+                      setIfieldsReady(false);
+                      setAddCardMsg("");
+                      // Re-trigger setAccount
+                      if (solaConfig?.ifieldsKey?.trim() && window.setAccount) {
+                        window.setAccount(solaConfig.ifieldsKey.trim(), "ConnectComms", "1.0.0");
+                        setIfieldsReady(true);
+                      }
+                    }}
+                  >
+                    Retry
+                  </button>
                 </div>
               ) : (
                 <form
@@ -1011,8 +1055,9 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
                     type="submit"
                     disabled={addCardBusy || !ifieldsReady}
                     style={{ fontSize: 13 }}
+                    title={!ifieldsReady ? "Waiting for the secure card form to initialize…" : undefined}
                   >
-                    {addCardBusy ? "Securing…" : ifieldsReady ? "Save card" : "Loading secure form…"}
+                    {addCardBusy ? "Securing…" : ifieldsReady ? "Save card" : "Initializing secure form…"}
                   </button>
                 </form>
               )}

@@ -2186,7 +2186,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       // canSaveCard is true whenever configured (isEnabled not required — saving a card never charges)
       canSaveCard: true,
       mode: record.mode === "PROD" ? "prod" : "sandbox",
-      ifieldsKey: secrets.ifieldsKey || null,
+      ifieldsKey: secrets.ifieldsKey?.trim() || null,
     };
   });
 

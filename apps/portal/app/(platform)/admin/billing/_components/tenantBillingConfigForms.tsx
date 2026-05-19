@@ -661,7 +661,13 @@ export function AdminTenantSolaGatewayForm({ detail, onSaved }: { detail: Tenant
           SOLA API Key (xKey) <input name="apiKey" autoComplete="off" placeholder={config?.masked?.apiKey || "From SOLA/Cardknox dashboard"} />
         </label>
         <label>
-          iFields public key (optional) <input name="ifieldsKey" placeholder={config?.masked?.ifieldsKey || "For tenant Billing → Payments"} />
+          iFields public key
+          <input name="ifieldsKey" placeholder={config?.masked?.ifieldsKey || "Required for card capture — from Cardknox dashboard"} />
+          {!config?.masked?.ifieldsKey ? (
+            <span style={{ fontSize: 11, color: "#b45309", marginTop: 3 }}>
+              Not set — card entry will not work until this key is saved.
+            </span>
+          ) : null}
         </label>
         <label>
           Webhook Verification PIN{" "}
