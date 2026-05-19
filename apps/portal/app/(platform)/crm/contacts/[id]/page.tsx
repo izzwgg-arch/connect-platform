@@ -556,6 +556,79 @@ function CrmContactDetailInner() {
     }
   };
 
+  // ── Memos (must come before all early returns — Rules of Hooks) ───────────
+
+  const nextStep = useMemo((): {
+    title: string;
+    detail: string;
+    actionLabel?: string;
+    action: "none" | "add_phone" | "scroll_tasks" | "scroll_notes";
+  } => {
+    if (!contact) return { title: "Loading…", detail: "", action: "none" };
+    const archived = !!(contact.archivedAt != null || contact.active === false);
+    if (archived) {
+      return {
+        title: "Archived — read-only",
+        detail:
+          "This record is out of active CRM rotation. Review the timeline below; restore from the banner when you need to edit or message again.",
+        action: "none",
+      };
+    }
+    if (contact.phones.length === 0) {
+      return {
+        title: "Add a phone number",
+        detail: "Voice and SMS both need a number on file. Add one under Contact info.",
+        actionLabel: "Add phone",
+        action: "add_phone",
+      };
+    }
+    const open = tasks.filter((t) => t.status !== "DONE" && t.status !== "CANCELED");
+    const sorted = [...open].sort((a, b) => {
+      const ta = a.dueAt ? new Date(a.dueAt).getTime() : Infinity;
+      const tb = b.dueAt ? new Date(b.dueAt).getTime() : Infinity;
+      return ta - tb;
+    });
+    const dueSoon = sorted.find((t) => t.dueAt);
+    const overdue = sorted.find((t) => t.dueAt && new Date(t.dueAt) < new Date());
+    if (overdue || dueSoon) {
+      const t = overdue ?? dueSoon;
+      if (t) {
+        const late = t.dueAt && new Date(t.dueAt) < new Date();
+        return {
+          title: late ? "Overdue follow-up" : "Open task",
+          detail: `${t.title}${t.dueAt ? ` · Due ${formatDate(t.dueAt)}` : ""}`,
+          actionLabel: "View tasks",
+          action: "scroll_tasks",
+        };
+      }
+    }
+    if (contact.doNotSms) {
+      return {
+        title: "SMS opted out",
+        detail: "This contact cannot receive SMS. Use voice or email, and log updates in the timeline.",
+        actionLabel: "Add note",
+        action: "scroll_notes",
+      };
+    }
+    return {
+      title: "Keep the record current",
+      detail: "Review recent activity, add a note, or schedule a follow-up so the next touch is intentional.",
+      actionLabel: "Add note",
+      action: "scroll_notes",
+    };
+  }, [contact, tasks]);
+
+  const workspaceHref = useMemo(() => {
+    if (!contact) return "/crm/live-call";
+    const params = new URLSearchParams({ contactId: contact.id });
+    const cId = queueMember?.campaign?.id ?? urlCampaignId;
+    const mId = queueMember?.id ?? urlMemberId;
+    if (cId) params.set("campaignId", cId);
+    if (mId) params.set("memberId", mId);
+    if (returnTo) params.set("returnTo", returnTo);
+    return `/crm/live-call?${params}`;
+  }, [contact, queueMember, urlCampaignId, urlMemberId, returnTo]);
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   if (loading) {
@@ -607,74 +680,6 @@ function CrmContactDetailInner() {
   const scrollToSms = () => {
     smsPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   };
-
-  const nextStep = useMemo((): {
-    title: string;
-    detail: string;
-    actionLabel?: string;
-    action: "none" | "add_phone" | "scroll_tasks" | "scroll_notes";
-  } => {
-    if (isArchived) {
-      return {
-        title: "Archived — read-only",
-        detail:
-          "This record is out of active CRM rotation. Review the timeline below; restore from the banner when you need to edit or message again.",
-        action: "none",
-      };
-    }
-    if (contact.phones.length === 0) {
-      return {
-        title: "Add a phone number",
-        detail: "Voice and SMS both need a number on file. Add one under Contact info.",
-        actionLabel: "Add phone",
-        action: "add_phone",
-      };
-    }
-    const open = tasks.filter((t) => t.status !== "DONE" && t.status !== "CANCELED");
-    const sorted = [...open].sort((a, b) => {
-      const ta = a.dueAt ? new Date(a.dueAt).getTime() : Infinity;
-      const tb = b.dueAt ? new Date(b.dueAt).getTime() : Infinity;
-      return ta - tb;
-    });
-    const dueSoon = sorted.find((t) => t.dueAt);
-    const overdue = sorted.find((t) => t.dueAt && new Date(t.dueAt) < new Date());
-    if (overdue || dueSoon) {
-      const t = overdue ?? dueSoon;
-      if (t) {
-        const late = t.dueAt && new Date(t.dueAt) < new Date();
-        return {
-          title: late ? "Overdue follow-up" : "Open task",
-          detail: `${t.title}${t.dueAt ? ` · Due ${formatDate(t.dueAt)}` : ""}`,
-          actionLabel: "View tasks",
-          action: "scroll_tasks",
-        };
-      }
-    }
-    if (contact.doNotSms) {
-      return {
-        title: "SMS opted out",
-        detail: "This contact cannot receive SMS. Use voice or email, and log updates in the timeline.",
-        actionLabel: "Add note",
-        action: "scroll_notes",
-      };
-    }
-    return {
-      title: "Keep the record current",
-      detail: "Review recent activity, add a note, or schedule a follow-up so the next touch is intentional.",
-      actionLabel: "Add note",
-      action: "scroll_notes",
-    };
-  }, [contact.phones.length, contact.doNotSms, isArchived, tasks]);
-
-  const workspaceHref = useMemo(() => {
-    const params = new URLSearchParams({ contactId: contact.id });
-    const cId = queueMember?.campaign?.id ?? urlCampaignId;
-    const mId = queueMember?.id ?? urlMemberId;
-    if (cId) params.set("campaignId", cId);
-    if (mId) params.set("memberId", mId);
-    if (returnTo) params.set("returnTo", returnTo);
-    return `/crm/live-call?${params}`;
-  }, [contact.id, queueMember, urlCampaignId, urlMemberId, returnTo]);
 
   const handleCall = () => {
     const num = primaryPhoneRow?.numberRaw;
