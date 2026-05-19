@@ -267,15 +267,9 @@ export class SolaRecurringClient {
         CustomerId: customerId,
         BillFirstName: "Sim",
         BillLastName: "Customer",
-        PaymentMethods: [
-          {
-            PaymentMethodId: `${customerId}_pm001`,
-            TokenType: "cc",
-            Issuer: "Visa",
-            MaskedCardNumber: "4xxxxxxxxxxx4242",
-            Exp: "1228",
-          },
-        ],
+        DefaultPaymentMethodId: `${customerId}_pm001`,
+        Result: "S",
+        Error: "",
       };
     }
 

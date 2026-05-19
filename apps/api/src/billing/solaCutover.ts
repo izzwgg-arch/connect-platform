@@ -125,13 +125,18 @@ export async function linkSolaTokenToPaymentMethod(input: {
     }
   }
   if (!pmId && link.solaCustomerId) {
-    // GetCustomer: when schedules carry no PaymentMethodId, the token lives on
-    // the customer record under PaymentMethods[].PaymentMethodId
+    // GetCustomer: Cardknox returns DefaultPaymentMethodId on the customer record.
+    // (The PaymentMethods array is absent — DefaultPaymentMethodId is the canonical field.)
     try {
       const customerRow = await client.getCustomer(link.solaCustomerId);
-      const methods = Array.isArray(customerRow.PaymentMethods) ? customerRow.PaymentMethods as Array<Record<string, unknown>> : [];
-      const firstPm = methods[0];
-      const fetched = firstPm?.PaymentMethodId ?? firstPm?.paymentMethodId;
+      // Cardknox recurring v2 returns DefaultPaymentMethodId at the top level
+      const fetched =
+        customerRow.DefaultPaymentMethodId ??
+        customerRow.defaultPaymentMethodId ??
+        // Fallback: first item if the account ever returns an array
+        (Array.isArray(customerRow.PaymentMethods)
+          ? (customerRow.PaymentMethods as Array<Record<string, unknown>>)[0]?.PaymentMethodId
+          : undefined);
       if (fetched && typeof fetched === "string" && fetched.trim()) {
         pmId = fetched.trim();
         await (deps.db as AnyDb).billingSolaExternalScheduleLink.update({
