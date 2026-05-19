@@ -745,6 +745,98 @@ function AdminInvoicePreviewCard({
   );
 }
 
+function PlatformSolaConfigCard({ onSaved }: { onSaved?: () => void }) {
+  const [data, setData] = useState<{ ifieldsKey: string | null; ifieldsKeySet: boolean; updatedAt: string | null; updatedBy: string | null } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [key, setKey] = useState("");
+  const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await apiGet<typeof data>("/admin/billing/platform/sola-global-config");
+      setData(r);
+    } catch { /* ignore */ }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  async function save() {
+    setSaving(true);
+    setMsg(null);
+    try {
+      await apiPut("/admin/billing/platform/sola-global-config", { ifieldsKey: key.trim() || null });
+      setMsg({ kind: "ok", text: "Platform iFields key saved. All tenants without a per-tenant key will now use this." });
+      setKey("");
+      await load();
+      onSaved?.();
+    } catch (err: unknown) {
+      setMsg({ kind: "err", text: err instanceof Error ? err.message : "Save failed." });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <DetailCard title="Platform payment gateway defaults">
+      <p style={{ fontSize: 13, color: "var(--text-dim, #6b7280)", marginBottom: 12 }}>
+        Set the <strong>iFields public key</strong> once here and it will apply to all companies that don't have their own key configured. This is the Cardknox hosted card-capture key from your Cardknox dashboard.
+      </p>
+      {loading ? <div style={{ fontSize: 13, color: "var(--muted)" }}>Loading…</div> : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ fontSize: 13 }}>
+            <strong>Current iFields key: </strong>
+            {data?.ifieldsKeySet
+              ? <span style={{ color: "#166534", fontFamily: "monospace" }}>{data.ifieldsKey} ✓</span>
+              : <span style={{ color: "#b45309" }}>Not set — card capture is broken for all tenants without a per-tenant key</span>}
+          </div>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
+            {data?.ifieldsKeySet ? "Replace iFields key" : "Set iFields key"}
+            <input
+              type="text"
+              value={key}
+              onChange={(e) => setKey(e.target.value)}
+              placeholder="Paste your Cardknox iFields public key here"
+              style={{ fontFamily: "monospace", fontSize: 12, padding: "6px 10px", borderRadius: 6, border: "1px solid var(--border, #d1d5db)" }}
+            />
+            <span style={{ fontSize: 11, color: "#6b7280" }}>Found in Cardknox dashboard under Settings → iFields. Different from the xKey API key.</span>
+          </label>
+          {data?.ifieldsKeySet ? (
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+              <button type="button" className="btn ghost" style={{ fontSize: 12, color: "#dc2626", borderColor: "#dc2626" }}
+                disabled={saving}
+                onClick={async () => {
+                  setSaving(true);
+                  setMsg(null);
+                  try {
+                    await apiPut("/admin/billing/platform/sola-global-config", { ifieldsKey: null });
+                    setMsg({ kind: "ok", text: "Platform iFields key cleared." });
+                    await load();
+                  } catch (err: unknown) {
+                    setMsg({ kind: "err", text: err instanceof Error ? err.message : "Clear failed." });
+                  } finally { setSaving(false); }
+                }}
+              >Clear key</button>
+            </label>
+          ) : null}
+          {msg ? (
+            <div style={{ fontSize: 13, padding: "6px 10px", borderRadius: 6, background: msg.kind === "ok" ? "#f0fdf4" : "#fef2f2", border: `1px solid ${msg.kind === "ok" ? "#86efac" : "#fca5a5"}`, color: msg.kind === "ok" ? "#166534" : "#991b1b" }}>
+              {msg.text}
+            </div>
+          ) : null}
+          <div>
+            <button type="button" className="btn primary" disabled={saving || !key.trim()} onClick={() => void save()} style={{ fontSize: 13 }}>
+              {saving ? "Saving…" : "Save platform key"}
+            </button>
+          </div>
+        </div>
+      )}
+    </DetailCard>
+  );
+}
+
 function AdminBillingSettingsBody() {
   const { can, backendJwtRole } = useAppContext();
   const canPlatformAdminBilling = backendJwtRole === "SUPER_ADMIN" && can("can_view_admin_billing");
@@ -906,6 +998,7 @@ function AdminBillingSettingsBody() {
                 </Link>
               </nav>
               <section className="billing-setup-grid">
+                <PlatformSolaConfigCard />
                 <AdminTenantSolaGatewayForm detail={detail} onSaved={() => void loadDetail(detail.tenant.id)} />
               </section>
             </div>

@@ -501,8 +501,10 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const u = await requireTenantBilling(req, reply);
     if (!u) return;
     if (!ensureCredentialCrypto(reply)) return;
+    const globalConfig = await (db as any).globalSolaConfig.findUnique({ where: { id: "default" } });
+    const platformIfieldsKey = process.env.SOLA_CARDKNOX_IFIELDS_KEY?.trim() || globalConfig?.ifieldsKey?.trim() || null;
     const record = await (db as any).billingSolaConfig.findUnique({ where: { tenantId: u.tenantId } });
-    if (!record) return { configured: false, enabled: false, ifieldsKey: null, ifieldsVersion: "3.4.2602.2001" };
+    if (!record) return { configured: false, enabled: false, ifieldsKey: platformIfieldsKey, ifieldsVersion: "3.4.2602.2001" };
     let secrets: SolaCredentialPayload;
     try {
       secrets = decryptJson<SolaCredentialPayload>(record.credentialsEncrypted);
@@ -513,7 +515,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       configured: true,
       enabled: !!record.isEnabled,
       mode: record.mode === "PROD" ? "prod" : "sandbox",
-      ifieldsKey: secrets.ifieldsKey || null,
+      ifieldsKey: secrets.ifieldsKey?.trim() || platformIfieldsKey,
       ifieldsVersion: "3.4.2602.2001",
     };
   });
@@ -2167,26 +2169,60 @@ export async function registerBillingRoutes(app: FastifyInstance) {
 
   // ── Admin tenant payment-method management ──────────────────────────────────
 
+  // ── Platform-wide Sola defaults (iFields key) ──────────────────────────────
+
+  app.get("/admin/billing/platform/sola-global-config", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const record = await (db as any).globalSolaConfig.findUnique({ where: { id: "default" } });
+    return {
+      ifieldsKey: record?.ifieldsKey ? `${record.ifieldsKey.slice(0, 6)}${"*".repeat(Math.max(0, record.ifieldsKey.length - 9))}${record.ifieldsKey.slice(-3)}` : null,
+      ifieldsKeySet: !!(record?.ifieldsKey?.trim()),
+      updatedAt: record?.updatedAt || null,
+      updatedBy: record?.updatedBy || null,
+    };
+  });
+
+  app.put("/admin/billing/platform/sola-global-config", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const input = z.object({
+      ifieldsKey: z.string().max(200).nullable().optional(),
+    }).parse(req.body || {});
+    const ifieldsKey = input.ifieldsKey?.trim() || null;
+    const record = await (db as any).globalSolaConfig.upsert({
+      where: { id: "default" },
+      create: { id: "default", ifieldsKey, updatedBy: u.sub },
+      update: { ifieldsKey, updatedBy: u.sub },
+    });
+    await logBillingEvent({ tenantId: null as any, type: "platform.sola_global_config.updated", message: `Platform iFields key ${ifieldsKey ? "set" : "cleared"}`, metadata: { updatedBy: u.sub } });
+    return { ok: true, ifieldsKeySet: !!record.ifieldsKey?.trim() };
+  });
+
   app.get("/admin/billing/platform/tenants/:tenantId/sola/public-config", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
     if (!ensureCredentialCrypto(reply)) return;
     const { tenantId } = req.params as { tenantId: string };
+    // Platform-level iFields key fallback: env var → GlobalSolaConfig
+    const globalConfig = await (db as any).globalSolaConfig.findUnique({ where: { id: "default" } });
+    const platformIfieldsKey = process.env.SOLA_CARDKNOX_IFIELDS_KEY?.trim() || globalConfig?.ifieldsKey?.trim() || null;
     const record = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
-    if (!record) return { configured: false, enabled: false, ifieldsKey: null, mode: null };
+    if (!record) return { configured: false, enabled: false, canSaveCard: false, ifieldsKey: platformIfieldsKey, mode: null };
     let secrets: SolaCredentialPayload;
     try {
       secrets = decryptJson<SolaCredentialPayload>(record.credentialsEncrypted);
     } catch {
       return reply.code(400).send({ error: "sola_decrypt_failed" });
     }
+    const resolvedIfieldsKey = secrets.ifieldsKey?.trim() || platformIfieldsKey;
     return {
       configured: true,
       enabled: !!record.isEnabled,
       // canSaveCard is true whenever configured (isEnabled not required — saving a card never charges)
       canSaveCard: true,
       mode: record.mode === "PROD" ? "prod" : "sandbox",
-      ifieldsKey: secrets.ifieldsKey?.trim() || null,
+      ifieldsKey: resolvedIfieldsKey,
     };
   });
 

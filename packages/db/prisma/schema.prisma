@@ -2864,6 +2864,16 @@ enum ConnectChatParticipantRole {
 }
 
 /// Singleton-style row (id = "default") for platform VoIP.ms API credentials.
+/// Platform-wide Cardknox/SOLA gateway defaults (iFields public key, etc).
+/// Set once; applies to all tenants that have no per-tenant override.
+model GlobalSolaConfig {
+  id           String   @id @default("default")
+  /// Cardknox iFields public key — used by the hosted card-capture form on all tenant billing pages.
+  ifieldsKey   String?
+  updatedAt    DateTime @updatedAt
+  updatedBy    String?
+}
+
 model GlobalVoipMsConfig {
   id                     String    @id @default("default")
   credentialsEncrypted   String?
