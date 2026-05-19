@@ -772,6 +772,8 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
   // iFields add-card state
   const [solaConfig, setSolaConfig] = useState<AdminSolaPublicConfig | null>(null);
   const [ifieldsReady, setIfieldsReady] = useState(false);
+  const [ifieldsLoadCount, setIfieldsLoadCount] = useState(0);
+  const [ifieldsOpenNonce, setIfieldsOpenNonce] = useState(0);
   const [showAddCard, setShowAddCard] = useState(false);
   const [addCardBusy, setAddCardBusy] = useState(false);
   const [addCardMsg, setAddCardMsg] = useState("");
@@ -821,13 +823,38 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
   }, [solaConfig?.configured, solaConfig?.ifieldsKey]);
 
   // Re-assert setAccount when opening the add-card section so iFields binds reliably.
+  // Also retry briefly because the secure iframes can finish loading after the first call.
   useEffect(() => {
     if (!showAddCard) return;
     const key = solaConfig?.ifieldsKey?.trim();
-    if (!key || !window.setAccount) return;
-    window.setAccount(key, "ConnectComms", "1.0.0");
-    setIfieldsReady(true);
+    if (!key) return;
+    setIfieldsReady(false);
+    setIfieldsLoadCount(0);
+    const tryBind = () => {
+      if (!window.setAccount) return false;
+      window.setAccount(key, "ConnectComms", "1.0.0");
+      return true;
+    };
+    tryBind();
+    const timer = window.setInterval(() => {
+      const ok = tryBind();
+      if (ok && ifieldsLoadCount >= 2) {
+        setIfieldsReady(true);
+        window.clearInterval(timer);
+      }
+    }, 300);
+    const stop = window.setTimeout(() => window.clearInterval(timer), 5000);
+    return () => {
+      window.clearInterval(timer);
+      window.clearTimeout(stop);
+    };
   }, [showAddCard, solaConfig?.ifieldsKey]);
+
+  useEffect(() => {
+    if (showAddCard && ifieldsLoadCount >= 2) {
+      setIfieldsReady(true);
+    }
+  }, [showAddCard, ifieldsLoadCount]);
 
   async function setDefault(methodId: string) {
     setBusy(`default-${methodId}`);
@@ -920,7 +947,11 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
             <button
               className="btn ghost"
               type="button"
-              onClick={() => setShowAddCard(true)}
+              onClick={() => {
+                // Force fresh iframe mount every time Add card opens.
+                setIfieldsOpenNonce((n) => n + 1);
+                setShowAddCard(true);
+              }}
               disabled={solaConfig === null}
               style={{ fontSize: 13 }}
             >
@@ -947,12 +978,11 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
             </div>
           )}
 
-          {/* iFields form — always in the DOM so iframes load on mount and are ready before user opens form.
-              Iframes inside display:none containers still load in modern browsers. */}
-          {canAddCard ? (
+          {/* iFields form — mount only when visible to avoid hidden-iframe init races. */}
+          {canAddCard && showAddCard ? (
             <form
               className="billing-form"
-              style={{ display: showAddCard ? "block" : "none" }}
+              key={`ifields-${tenantId}-${ifieldsOpenNonce}`}
               onSubmit={(event) => {
                 event.preventDefault();
                 if (submittedRef.current || addCardBusy) return;
@@ -1007,6 +1037,7 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
                   data-ifields-id="card-number"
                   data-ifields-placeholder="Card Number"
                   src={`https://cdn.cardknox.com/ifields/${ifieldsVersion}/ifield.htm`}
+                  onLoad={() => setIfieldsLoadCount((c) => c + 1)}
                 />
               </label>
               <label>
@@ -1017,6 +1048,7 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
                   data-ifields-id="cvv"
                   data-ifields-placeholder="CVV"
                   src={`https://cdn.cardknox.com/ifields/${ifieldsVersion}/ifield.htm`}
+                  onLoad={() => setIfieldsLoadCount((c) => c + 1)}
                 />
               </label>
               <input name="xCardNum" data-ifields-id="card-number-token" type="hidden" />
