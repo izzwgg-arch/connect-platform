@@ -93,9 +93,19 @@ export default function AdminBillingPage() {
         .filter((i: any) => !["PAID", "VOID"].includes(String(i.status)))
         .reduce((sum: number, i: any) => sum + (i.balanceDueCents ?? 0), 0)
     : null;
-  // Next billing date label
-  const nextPaymentDate = detail?.settings?.nextPaymentDate
-    ? formatDate(detail.settings.nextPaymentDate)
+  // Next billing date: read from billingScheduleOverride inside settings.metadata
+  const scheduleOverride = (() => {
+    try {
+      const meta = detail?.settings?.metadata;
+      if (meta && typeof meta === "object" && !Array.isArray(meta)) {
+        const raw = (meta as Record<string, unknown>).billingScheduleOverride;
+        if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as Record<string, unknown>;
+      }
+    } catch { /* ignore */ }
+    return null;
+  })();
+  const nextPaymentDate = scheduleOverride?.nextPaymentDate
+    ? formatDate(String(scheduleOverride.nextPaymentDate))
     : null;
   const billingDay = detail?.settings?.billingDayOfMonth;
   const autopayOn = !!detail?.settings?.autoBillingEnabled;
