@@ -4,6 +4,36 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-18 — Billing: Jurisdiction tax auto-suggestions (NY / Orange County)
+
+**Task:** Taxes page auto-fills sensible suggested defaults instead of showing 0.000 everywhere.  
+**Risk:** Medium (portal only, no API/schema changes).
+
+### Shipped
+
+- **`apps/portal/lib/billingTaxSuggestions.ts`** (new): `NY_ORANGE_COUNTY_TAX_TEMPLATE` with sales tax 8.125%, E911 $3.00 flat monthly, regulatory 1.000%, USF off, surcharge off. `detectJurisdictionFromTenant` checks assigned TaxProfile → serviceAddress → billingAddress → known Orange County cities (Middletown, Newburgh, etc.). `applyJurisdictionTemplate` merges template over current fees without mutating input. `JURISDICTION_TEMPLATES` list for future expansion.
+- **`apps/portal/lib/billingTelecomFees.ts`**: Fixed `defaultFeesFromTaxProfile` E911 basis from `per_did` → `flat_monthly` to match the $3.00 flat-monthly spec.
+- **`AdminTaxesFeesWorkspace.tsx`**: Jurisdiction quick-start panel — auto-detects label, template selector dropdown, "Apply suggested" button, "Last applied from: …" chip, summary of suggested values, disclaimer copy.
+- **`billingTaxFees.css`**: `billing-tax-suggestion-panel` styles.
+- **`apps/portal/lib/billingTaxSuggestions.test.ts`** (new): 18 tests covering template values, detection from all address sources, city-based detection, `applyJurisdictionTemplate` mutation guard.
+- **`apps/portal/package.json`**: Added new test file to `test` script.
+
+### Disclaimer copy used
+> "Suggested starting rates only. Confirm with your tax advisor before billing customers."
+
+### Tests
+- Portal test suite: **24 pass, 0 fail** (18 new + 6 existing desktop-poll).
+- Portal typecheck: pass.
+
+### Explicitly NOT changed
+- API, worker, invoice engine, Prisma schema.
+- No charges run. No Sola schedules touched.
+
+### Deploy
+- **Portal only**.
+
+---
+
 ## 2026-05-18 — Billing: Production readiness — taxes, cards, schedules, past-due
 
 **Task:** Five production-readiness fixes to make billing usable for real cutover.  

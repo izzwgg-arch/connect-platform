@@ -23,6 +23,13 @@ import {
   resolveBillingQuantitiesForPortal,
   resolveTollFreeDidPriceCentsForPortal,
 } from "../../../../../lib/billingUi";
+import {
+  applyJurisdictionTemplate,
+  detectJurisdictionFromTenant,
+  getJurisdictionTemplate,
+  JURISDICTION_TEMPLATES,
+  type JurisdictionKey,
+} from "../../../../../lib/billingTaxSuggestions";
 import type { TenantDetail } from "./tenantBillingConfigForms";
 import "./billingTaxFees.css";
 
@@ -64,6 +71,23 @@ export function AdminTaxesFeesWorkspace({ detail, onSaved, settingsSectionHref, 
   const [providerId, setProviderId] = useState(taxProviderId);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
+  // Jurisdiction suggestion state
+  const detectedJurisdiction = useMemo(
+    () => detectJurisdictionFromTenant(settings, assignedProfile),
+    [settings, assignedProfile],
+  );
+  const defaultTemplateKey: JurisdictionKey = detectedJurisdiction ?? JURISDICTION_TEMPLATES[0]!.key;
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState<JurisdictionKey>(defaultTemplateKey);
+  const [lastAppliedTemplate, setLastAppliedTemplate] = useState<JurisdictionKey | null>(null);
+
+  const applyTemplate = useCallback(() => {
+    const template = getJurisdictionTemplate(selectedTemplateKey);
+    if (!template) return;
+    setFees((prev) => applyJurisdictionTemplate(template, prev));
+    setTaxEnabled(true);
+    setLastAppliedTemplate(selectedTemplateKey);
+  }, [selectedTemplateKey]);
 
   const jurisdiction = formatJurisdiction(assignedProfile, settings.serviceAddress);
 
@@ -280,9 +304,56 @@ export function AdminTaxesFeesWorkspace({ detail, onSaved, settingsSectionHref, 
         <Link href={settingsSectionHref("gateway")}>Payment gateway</Link>
       </nav>
 
+      {/* Jurisdiction quick-start suggestion panel */}
+      <div className="billing-tax-suggestion-panel" data-testid="billing-tax-suggestion-panel">
+        <div className="billing-tax-suggestion-panel__head">
+          <div>
+            <strong className="billing-tax-suggestion-panel__title">
+              {detectedJurisdiction
+                ? `Detected jurisdiction: ${getJurisdictionTemplate(detectedJurisdiction)?.label ?? detectedJurisdiction}`
+                : "Apply suggested tax rates"}
+            </strong>
+            {lastAppliedTemplate ? (
+              <span className="billing-tax-fees-chip billing-tax-fees-chip--accent" style={{ marginLeft: 10, fontSize: 10 }}>
+                Last applied: {getJurisdictionTemplate(lastAppliedTemplate)?.label}
+              </span>
+            ) : null}
+          </div>
+          <p className="billing-tax-suggestion-panel__hint">
+            Suggested starting rates only. Confirm with your tax advisor before billing customers.
+          </p>
+        </div>
+        <div className="billing-tax-suggestion-panel__body">
+          <label className="billing-tax-suggestion-panel__label">
+            Jurisdiction template
+            <select
+              value={selectedTemplateKey}
+              onChange={(e) => setSelectedTemplateKey(e.target.value as JurisdictionKey)}
+              className="billing-tax-suggestion-panel__select"
+            >
+              {JURISDICTION_TEMPLATES.map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            className="btn primary billing-tax-suggestion-panel__btn"
+            onClick={applyTemplate}
+            data-testid="billing-tax-apply-suggestion"
+          >
+            Apply suggested {getJurisdictionTemplate(selectedTemplateKey)?.label ?? "rates"}
+          </button>
+        </div>
+        <p className="billing-tax-suggestion-panel__summary">
+          Sales tax: 8.125% · E911: $3.00 flat monthly · Regulatory: 1.000% · Federal USF: off · Surcharge: off
+        </p>
+      </div>
+
       <p className="billing-tax-fees-estimate__hint" style={{ marginBottom: 14 }}>
-        Suggested rates are starting points only — confirm with your tax advisor. Saving updates tenant metadata and syncs
-        sales tax, E911, and regulatory fields on the assigned shared TaxProfile when one is selected.
+        Saving updates tenant metadata and syncs sales tax, E911, and regulatory fields on the assigned shared TaxProfile when one is selected.
       </p>
 
       <section className="billing-tax-fees-section">

@@ -137,7 +137,7 @@ export function defaultFeesFromTaxProfile(profile: {
       suggested: nyOrange || !profile,
       mode: "amountCents",
       amountCents: e911 > 0 ? e911 : 300,
-      basis: "per_did",
+      basis: "flat_monthly",
     },
     regulatory: {
       enabled: profile?.regulatoryFeeEnabled !== false,
