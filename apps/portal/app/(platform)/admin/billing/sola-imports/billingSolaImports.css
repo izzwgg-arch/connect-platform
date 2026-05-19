@@ -120,3 +120,47 @@
   flex-wrap: wrap;
   gap: 6px;
 }
+
+/* Token linked chip */
+.billing-sola-chip--token-linked {
+  background: rgba(99, 102, 241, 0.18);
+  color: #a5b4fc;
+}
+
+/* Active schedule warning inline badge */
+.billing-sola-active-warn {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(250, 204, 21, 0.2);
+  color: #fbbf24;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* Cutover confirmation drawer */
+.billing-sola-cutover-drawer {
+  max-width: 480px;
+}
+
+.billing-sola-cutover-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 8px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  margin: 12px 0;
+}
+
+.billing-sola-cutover-warn-item {
+  font-size: 13px;
+  color: var(--text, #e2e8f0);
+  margin: 0;
+  line-height: 1.5;
+}

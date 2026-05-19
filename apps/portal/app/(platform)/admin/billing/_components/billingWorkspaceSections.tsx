@@ -28,6 +28,8 @@ type SolaScheduleRow = {
   nextRunAt: string | null;
   isActive: boolean;
   mappingStatus: string;
+  cutoverStatus: string | null;
+  linkedPaymentMethodId: string | null;
 };
 
 /** Compact section showing mapped Sola recurring schedules for the tenant. */
@@ -140,12 +142,22 @@ export function SolaLinkedSchedulesSection({ tenantId, compact }: { tenantId: st
                 <span>Frequency: {freq}</span>
                 <span>Next Sola run: {nextRun}</span>
               </div>
-              {s.isActive ? (
+              {s.cutoverStatus === "CUTOVER_COMPLETE" ? (
+                <p style={{ margin: "6px 0 0", fontSize: 12, color: "#166534" }}>
+                  ✓ Cutover complete — Connect owns billing. Old Sola schedule disabled.
+                </p>
+              ) : s.isActive ? (
                 <p style={{ margin: "6px 0 0", fontSize: 12, color: "#92400e" }}>
-                  Disable this Sola schedule before enabling Connect autopay to avoid double-charging.{" "}
-                  <Link href="/admin/billing/sola-imports" style={{ fontSize: 12 }}>Manage Sola imports →</Link>
+                  ⚠ Old schedule still active. Disable it and complete cutover before enabling Connect autopay.{" "}
+                  <Link href="/admin/billing/sola-imports" style={{ fontSize: 12 }}>Manage in Sola imports →</Link>
                 </p>
               ) : null}
+              {s.cutoverStatus && s.cutoverStatus !== "CUTOVER_COMPLETE" && (
+                <p style={{ margin: "4px 0 0", fontSize: 11, color: "#6b7280" }}>
+                  Cutover status: <strong>{s.cutoverStatus}</strong>
+                  {!s.linkedPaymentMethodId && " · Card token not yet linked"}
+                </p>
+              )}
             </div>
           );
         })}

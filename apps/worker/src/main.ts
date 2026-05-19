@@ -1807,6 +1807,103 @@ async function getWorkerSolaAdapterForTenant(tenantId: string): Promise<SolaCard
   return getSolaAdapter();
 }
 
+/**
+ * Phase D Worker Guard — returns the first active Sola schedule link that is NOT yet cut over
+ * for the given tenant, or null if safe to charge.
+ *
+ * "Not yet cut over" means: mappingStatus=MAPPED, isActive=true,
+ * and cutoverStatus is NOT 'CUTOVER_COMPLETE'.
+ */
+async function checkActiveSolaScheduleBlock(
+  tenantId: string,
+): Promise<{ linkId: string; solaScheduleId: string } | null> {
+  const block = await (db as any).billingSolaExternalScheduleLink.findFirst({
+    where: {
+      tenantId,
+      mappingStatus: "MAPPED",
+      isActive: true,
+      NOT: { cutoverStatus: "CUTOVER_COMPLETE" },
+    },
+    select: { id: true, solaScheduleId: true },
+  });
+  if (!block) return null;
+  return { linkId: block.id, solaScheduleId: block.solaScheduleId };
+}
+
+/**
+ * Check billingScheduleOverride from TenantBillingSettings.metadata.
+ * Returns:
+ *   "skipped"      — skipNextPayment was true (flag consumed, event logged)
+ *   "future_date"  — nextPaymentDate is in the future (no consume, event logged)
+ *   "charge"       — safe to proceed
+ */
+async function getAndConsumeBillingScheduleOverride(
+  tenantId: string,
+  invoiceId: string,
+  runId: string,
+): Promise<"skipped" | "future_date" | "charge"> {
+  const row = await (db as any).tenantBillingSettings.findUnique({
+    where: { tenantId },
+    select: { metadata: true },
+  });
+  const meta = row?.metadata as Record<string, unknown> | null;
+  const override = meta?.billingScheduleOverride as
+    | { nextPaymentDate?: string | null; skipNextPayment?: boolean; skipReason?: string | null }
+    | null
+    | undefined;
+  if (!override) return "charge";
+
+  // skipNextPayment: consume once, clear flag
+  if (override.skipNextPayment === true) {
+    // Consume the flag
+    const newOverride = { ...override, skipNextPayment: false, skipReason: null };
+    const newMeta = { ...(meta || {}), billingScheduleOverride: newOverride };
+    await (db as any).tenantBillingSettings.update({
+      where: { tenantId },
+      data: { metadata: newMeta },
+    });
+    await (db as any).billingEventLog.create({
+      data: {
+        tenantId,
+        invoiceId,
+        runId,
+        type: "billing.autopay_skipped_schedule_override",
+        message: "Connect autopay skipped this month — skipNextPayment override consumed.",
+        metadata: {
+          reason: override.skipReason || "operator_override",
+          skipNextPaymentConsumed: true,
+        },
+      },
+    }).catch(() => null);
+    return "skipped";
+  }
+
+  // nextPaymentDate: skip if today is before that date
+  if (override.nextPaymentDate) {
+    const nextDate = new Date(override.nextPaymentDate + "T00:00:00Z");
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    if (today < nextDate) {
+      await (db as any).billingEventLog.create({
+        data: {
+          tenantId,
+          invoiceId,
+          runId,
+          type: "billing.autopay_skipped_future_payment_date",
+          message: `Connect autopay skipped — next payment date override is ${override.nextPaymentDate}, not yet reached.`,
+          metadata: {
+            nextPaymentDate: override.nextPaymentDate,
+            today: today.toISOString(),
+          },
+        },
+      }).catch(() => null);
+      return "future_date";
+    }
+  }
+
+  return "charge";
+}
+
 async function runMonthlyBillingAutomation(): Promise<void> {
   if (_billingAutomationRunning) return;
   _billingAutomationRunning = true;
@@ -1849,6 +1946,38 @@ async function runMonthlyBillingAutomation(): Promise<void> {
             })
             .catch(() => null);
         }
+        // ── Phase D Worker Guard: skip autopay if tenant has active Sola schedule not yet cut over ──
+        const activeSolaBlock = await checkActiveSolaScheduleBlock(setting.tenantId);
+        if (activeSolaBlock) {
+          await (db as any).billingEventLog.create({
+            data: {
+              tenantId: setting.tenantId,
+              invoiceId: invoice.id,
+              runId: run.id,
+              type: "billing.autopay_skipped_active_sola_schedule",
+              message: `Connect autopay skipped — tenant has active Sola recurring schedule not yet cut over. Schedule link ID: ${activeSolaBlock.linkId}. Disable old schedule and complete cutover before Connect charges.`,
+              metadata: {
+                solaScheduleLinkId: activeSolaBlock.linkId,
+                solaScheduleId: activeSolaBlock.solaScheduleId,
+                reason: "active_sola_schedule_not_cutover",
+              },
+            },
+          }).catch(() => null);
+          results.push({ tenantId: setting.tenantId, invoiceId: invoice.id, transactionId: null, skipped: "active_sola_schedule" });
+          continue;
+        }
+
+        // ── billingScheduleOverride: skipNextPayment ───────────────────────────
+        const scheduleOverride = await getAndConsumeBillingScheduleOverride(setting.tenantId, invoice.id, run.id);
+        if (scheduleOverride === "skipped") {
+          results.push({ tenantId: setting.tenantId, invoiceId: invoice.id, transactionId: null, skipped: "schedule_override_skip" });
+          continue;
+        }
+        if (scheduleOverride === "future_date") {
+          results.push({ tenantId: setting.tenantId, invoiceId: invoice.id, transactionId: null, skipped: "schedule_override_future_date" });
+          continue;
+        }
+
         let transaction = null;
         if (setting.defaultPaymentMethod) {
           transaction = await chargeWorkerInvoice(invoice, setting.defaultPaymentMethod, run.id);

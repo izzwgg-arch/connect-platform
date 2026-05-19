@@ -4,6 +4,66 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-18 — Billing: Sola recurring schedule cutover to Connect autopay (Phases A–D)
+
+**Task:** Build safe cutover flow so Connect can take over billing from existing Sola/Cardknox recurring schedules without re-entering cards and without double charging.  
+**Risk:** High (money, autopay, schema migration, worker).
+
+### Shipped
+
+**Schema migration (`20260518100000_billing_sola_cutover`):**
+- `PaymentMethod`: +`isImported`, `importedAt`, `processorCustomerId`, `processorPaymentMethodId`, `metadata`
+- `BillingSolaExternalScheduleLink`: +`cutoverStatus`, `linkedPaymentMethodId`, `tokenLinkedAt`, `cutoverAt`, `cutoverByUserId`, `disabledSolaAt`, `disableAttemptedAt`, `disableError`, `connectAutopayEnabledAt`
+
+**`packages/integrations/src/sola-cardknox/recurring.ts`:**
+- `getPaymentMethodWithToken()` — fetches raw vault Token for server-side encryption only (never logged/returned to browser)
+- `updateSchedule(scheduleId, { isActive })` — Phase C: disable old Sola recurring schedule
+
+**`apps/api/src/billing/solaCutover.ts`** (new):
+- `linkSolaTokenToPaymentMethod()` — Phase A: encrypt token → PaymentMethod (isImported=true), mark TOKEN_LINKED
+- `getBillingCutoverReadiness()` — Phase B: readiness checklist including doubleChargeRisk
+- `takeOverBillingFromSola()` — Phase C: atomic disable Sola → set default PM → enable Connect autopay → CUTOVER_COMPLETE. Abort if Sola disable fails.
+
+**`apps/api/src/billing/routes.ts`:**
+- `POST /admin/billing/platform/sola-import/schedules/:id/link-token`
+- `GET /admin/billing/platform/tenants/:tenantId/billing-cutover/readiness`
+- `POST /admin/billing/platform/tenants/:tenantId/billing-cutover/take-over`
+
+**`apps/worker/src/main.ts`:**
+- `checkActiveSolaScheduleBlock()` — Phase D guard: returns active non-cutover Sola link if found
+- `getAndConsumeBillingScheduleOverride()` — consumes `skipNextPayment` once; respects `nextPaymentDate`
+- Both called in `runMonthlyBillingAutomation` before `chargeWorkerInvoice`
+- Events: `billing.autopay_skipped_active_sola_schedule`, `billing.autopay_skipped_schedule_override`, `billing.autopay_skipped_future_payment_date`
+
+**`apps/api/src/billing/solaCutover.test.ts`** (new): 12 test cases covering all safety rules
+
+**Portal:**
+- `adminBillingSolaImportsWorkspace.tsx`: new cutover-status column, Link card token button, Take over billing button with 2-step confirmation drawer
+- `billingWorkspaceSections.tsx` `SolaLinkedSchedulesSection`: shows cutover status, enriched warnings
+- `billingSolaImports.css`: new styles for token-linked chip, active-warn badge, cutover drawer
+
+**Docs:**
+- `BILLING.md`: updated Sola schedule import section with full cutover architecture
+- `DATA_MODEL.md`: new PaymentMethod and BillingSolaExternalScheduleLink fields documented
+- `CHANGELOG_AI.md`: this entry
+
+### Safety guarantees enforced in code
+
+1. Worker never charges if active non-cutover Sola schedule → `billing.autopay_skipped_active_sola_schedule`
+2. Cutover aborts if Sola disable API fails → CUTOVER_FAILED, Connect autopay NOT enabled
+3. Take-over route never creates invoice or charges card immediately
+4. No raw token ever logged, returned to browser, or stored unencrypted
+
+### Explicitly NOT changed
+
+- No charges were run during implementation
+- Telephony, PBX, CRM, mobile code untouched
+- Sola webhook handler unchanged
+- Dunning/collections logic unchanged
+- billingScheduleOverride was already stored — now CONSUMED by worker (first real consumer)
+
+---
+
 ## 2026-05-18 — Billing: Jurisdiction tax auto-suggestions (NY / Orange County)
 
 **Task:** Taxes page auto-fills sensible suggested defaults instead of showing 0.000 everywhere.  

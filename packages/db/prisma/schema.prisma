@@ -803,6 +803,11 @@ model PaymentMethod {
   billingZip                String?
   isDefault                 Boolean                       @default(false)
   active                    Boolean                       @default(true)
+  isImported                Boolean                       @default(false)
+  importedAt                DateTime?
+  processorCustomerId       String?
+  processorPaymentMethodId  String?
+  metadata                  Json?
   lastUsedAt                DateTime?
   createdAt                 DateTime                      @default(now())
   updatedAt                 DateTime                      @updatedAt
@@ -810,9 +815,11 @@ model PaymentMethod {
   defaultForBillingSettings TenantBillingSettings[]       @relation("DefaultTenantBillingPaymentMethod")
   invoices                  BillingInvoice[]
   transactions              PaymentTransaction[]
+  solaScheduleLinks         BillingSolaExternalScheduleLink[] @relation("LinkedPaymentMethod")
 
   @@index([tenantId, active])
   @@index([tenantId, isDefault])
+  @@index([tenantId, isImported])
 }
 
 model PaymentTransaction {
@@ -907,10 +914,20 @@ model BillingSolaExternalScheduleLink {
   mappedByUserId        String?
   mappedAt              DateTime?
   lastSyncedAt          DateTime?
+  cutoverStatus         String?
+  linkedPaymentMethodId String?
+  tokenLinkedAt         DateTime?
+  cutoverAt             DateTime?
+  cutoverByUserId       String?
+  disabledSolaAt        DateTime?
+  disableAttemptedAt    DateTime?
+  disableError          String?
+  connectAutopayEnabledAt DateTime?
   createdAt             DateTime                      @default(now())
   updatedAt             DateTime                      @updatedAt
   tenant                Tenant?                       @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   mappedByUser          User?                         @relation("SolaScheduleMappedBy", fields: [mappedByUserId], references: [id], onDelete: SetNull)
+  linkedPaymentMethod   PaymentMethod?                @relation("LinkedPaymentMethod", fields: [linkedPaymentMethodId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
   @@index([suggestedTenantId])
@@ -918,6 +935,8 @@ model BillingSolaExternalScheduleLink {
   @@index([solaCustomerId])
   @@index([solaPaymentMethodId])
   @@index([isActive])
+  @@index([cutoverStatus])
+  @@index([linkedPaymentMethodId])
 }
 
 model TenDlcSubmission {

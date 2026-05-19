@@ -13,6 +13,7 @@ import "../sola-imports/billingSolaImports.css";
 
 type ScheduleRow = {
   id: string;
+  tenantId: string | null;
   customerName: string | null;
   customerEmail: string | null;
   companyName: string | null;
@@ -28,6 +29,8 @@ type ScheduleRow = {
   tenantName: string | null;
   suggestedTenantId: string | null;
   suggestedTenantName: string | null;
+  cutoverStatus: string | null;
+  linkedPaymentMethodId: string | null;
 };
 
 type ListResult = { schedules: ScheduleRow[]; total: number; page: number; pages: number };
@@ -43,6 +46,27 @@ function statusChipClass(status: string) {
   return "billing-sola-chip--unmapped";
 }
 
+type CutoverConfirmState = {
+  row: ScheduleRow;
+  step: "warning" | "confirming";
+};
+
+function cutoverStatusLabel(status: string | null): string {
+  if (!status) return "Mapped";
+  if (status === "TOKEN_LINKED") return "Token linked";
+  if (status === "READY_FOR_CUTOVER") return "Ready for cutover";
+  if (status === "CUTOVER_COMPLETE") return "Cutover complete";
+  if (status === "CUTOVER_FAILED") return "Cutover failed";
+  return status;
+}
+
+function cutoverStatusClass(status: string | null): string {
+  if (status === "CUTOVER_COMPLETE") return "billing-sola-chip--mapped";
+  if (status === "TOKEN_LINKED") return "billing-sola-chip--token-linked";
+  if (status === "CUTOVER_FAILED") return "billing-sola-chip--conflict";
+  return "billing-sola-chip--unmapped";
+}
+
 export function SolaImportsWorkspace() {
   const { effectiveTenantId, displayName } = useAdminBillingTenant();
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_FILTERS)[number]>("UNMAPPED");
@@ -54,6 +78,9 @@ export function SolaImportsWorkspace() {
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
   const [mapTarget, setMapTarget] = useState<{ row: ScheduleRow; tenantId: string } | null>(null);
+  const [linkingToken, setLinkingToken] = useState<string | null>(null);
+  const [cutoverTarget, setCutoverTarget] = useState<CutoverConfirmState | null>(null);
+  const [cutoverWorking, setCutoverWorking] = useState(false);
 
   const tenantsRes = useAsyncResource<TenantOption[]>(() => apiGet("/admin/billing/platform/tenants"), []);
   const listUrl = useMemo(() => {
@@ -125,22 +152,101 @@ export function SolaImportsWorkspace() {
       {listRes.status === "success" && listRes.data.schedules.length > 0 && (
         <div className="billing-sola-table-scroll">
           <table className="billing-sola-table">
-            <thead><tr><th>Customer</th><th>Card</th><th>Amount</th><th>Next</th><th>Status</th><th>Suggested</th><th /></tr></thead>
+            <thead>
+              <tr>
+                <th>Customer</th><th>Card</th><th>Amount</th><th>Next run</th>
+                <th>Map status</th><th>Cutover</th><th>Tenant</th><th />
+              </tr>
+            </thead>
             <tbody>
               {listRes.data.schedules.map((row) => (
                 <tr key={row.id}>
-                  <td>{row.customerName || row.companyName || "—"}<br /><span className="muted">{row.customerEmail}</span></td>
+                  <td>
+                    {row.customerName || row.companyName || "—"}
+                    <br /><span className="muted">{row.customerEmail}</span>
+                  </td>
                   <td>{row.brand || "Card"} ···{row.last4 || "----"}</td>
                   <td>{row.amountCents != null ? dollars(row.amountCents) : "—"}</td>
-                  <td>{row.nextRunAt ? formatDate(row.nextRunAt) : "—"}</td>
-                  <td><span className={`billing-sola-chip ${statusChipClass(row.mappingStatus)}`}>{row.mappingStatus}</span></td>
-                  <td>{row.suggestedTenantName || row.tenantName || "—"}</td>
                   <td>
-                    {row.mappingStatus !== "MAPPED" && row.mappingStatus !== "IGNORED" && (
-                      <button type="button" className="btn ghost" onClick={() => setMapTarget({ row, tenantId: row.suggestedTenantId || tenants[0]?.id || "" })}>Map</button>
+                    {row.nextRunAt ? formatDate(row.nextRunAt) : "—"}
+                    {row.isActive && row.mappingStatus === "MAPPED" && row.cutoverStatus !== "CUTOVER_COMPLETE" && (
+                      <span className="billing-sola-active-warn" title="Old Sola schedule still active">⚠ Active</span>
                     )}
-                    {row.mappingStatus === "MAPPED" && <button type="button" className="btn ghost" onClick={() => void apiPost(`/admin/billing/platform/sola-import/schedules/${row.id}/unmap`, {}).then(bumpList)}>Unmap</button>}
-                    {row.mappingStatus !== "IGNORED" && <button type="button" className="btn ghost" onClick={() => void apiPost(`/admin/billing/platform/sola-import/schedules/${row.id}/ignore`, {}).then(bumpList)}>Ignore</button>}
+                  </td>
+                  <td><span className={`billing-sola-chip ${statusChipClass(row.mappingStatus)}`}>{row.mappingStatus}</span></td>
+                  <td>
+                    {row.mappingStatus === "MAPPED" && (
+                      <span className={`billing-sola-chip ${cutoverStatusClass(row.cutoverStatus)}`}>
+                        {cutoverStatusLabel(row.cutoverStatus)}
+                      </span>
+                    )}
+                  </td>
+                  <td>{row.tenantName || row.suggestedTenantName || "—"}</td>
+                  <td>
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                      {row.mappingStatus !== "MAPPED" && row.mappingStatus !== "IGNORED" && (
+                        <button type="button" className="btn ghost" onClick={() => setMapTarget({ row, tenantId: row.suggestedTenantId || tenants[0]?.id || "" })}>Map</button>
+                      )}
+                      {row.mappingStatus === "MAPPED" && row.cutoverStatus !== "CUTOVER_COMPLETE" && !row.linkedPaymentMethodId && (
+                        <button
+                          type="button"
+                          className="btn ghost"
+                          disabled={linkingToken === row.id}
+                          title="Store vault token in Connect. Does not charge or disable old schedule."
+                          onClick={() => void (async () => {
+                            setLinkingToken(row.id);
+                            setActionError("");
+                            try {
+                              await apiPost(`/admin/billing/platform/sola-import/schedules/${row.id}/link-token`, {});
+                              bumpList();
+                            } catch (e: unknown) {
+                              setActionError(e instanceof Error ? e.message : "Token link failed");
+                            } finally {
+                              setLinkingToken(null);
+                            }
+                          })()}
+                        >
+                          {linkingToken === row.id ? "Linking…" : "Link card token"}
+                        </button>
+                      )}
+                      {row.mappingStatus === "MAPPED" && row.linkedPaymentMethodId && row.cutoverStatus !== "CUTOVER_COMPLETE" && (
+                        <button
+                          type="button"
+                          className="btn primary"
+                          title="Disable old Sola schedule and enable Connect autopay."
+                          onClick={() => setCutoverTarget({ row, step: "warning" })}
+                        >
+                          Take over billing
+                        </button>
+                      )}
+                      {row.mappingStatus === "MAPPED" && row.cutoverStatus === "CUTOVER_FAILED" && (
+                        <button
+                          type="button"
+                          className="btn ghost"
+                          disabled={linkingToken === row.id}
+                          onClick={() => void (async () => {
+                            setLinkingToken(row.id);
+                            setActionError("");
+                            try {
+                              await apiPost(`/admin/billing/platform/sola-import/schedules/${row.id}/link-token`, {});
+                              bumpList();
+                            } catch (e: unknown) {
+                              setActionError(e instanceof Error ? e.message : "Retry failed");
+                            } finally {
+                              setLinkingToken(null);
+                            }
+                          })()}
+                        >
+                          Retry token link
+                        </button>
+                      )}
+                      {row.mappingStatus === "MAPPED" && row.cutoverStatus !== "CUTOVER_COMPLETE" && (
+                        <button type="button" className="btn ghost" onClick={() => void apiPost(`/admin/billing/platform/sola-import/schedules/${row.id}/unmap`, {}).then(bumpList)}>Unmap</button>
+                      )}
+                      {row.mappingStatus !== "IGNORED" && row.cutoverStatus !== "CUTOVER_COMPLETE" && (
+                        <button type="button" className="btn ghost" onClick={() => void apiPost(`/admin/billing/platform/sola-import/schedules/${row.id}/ignore`, {}).then(bumpList)}>Ignore</button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -148,6 +254,8 @@ export function SolaImportsWorkspace() {
           </table>
         </div>
       )}
+
+      {/* Map to tenant drawer */}
       {mapTarget && (
         <div className="billing-p8-overlay" onClick={() => setMapTarget(null)}>
           <div className="billing-p8-drawer" onClick={(e) => e.stopPropagation()}>
@@ -156,6 +264,74 @@ export function SolaImportsWorkspace() {
               {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
             <button type="button" className="btn primary" onClick={() => void apiPost(`/admin/billing/platform/sola-import/schedules/${mapTarget.row.id}/map`, { tenantId: mapTarget.tenantId }).then(() => { setMapTarget(null); bumpList(); })}>Confirm</button>
+          </div>
+        </div>
+      )}
+
+      {/* Take Over Billing confirmation drawer */}
+      {cutoverTarget && (
+        <div className="billing-p8-overlay" onClick={() => !cutoverWorking && setCutoverTarget(null)}>
+          <div className="billing-p8-drawer billing-sola-cutover-drawer" onClick={(e) => e.stopPropagation()}>
+            {cutoverTarget.step === "warning" && (
+              <>
+                <h3>Take over billing in Connect</h3>
+                <div className="billing-sola-cutover-warnings">
+                  <p className="billing-sola-cutover-warn-item">⚠ The old Sola recurring schedule will be <strong>permanently disabled</strong>.</p>
+                  <p className="billing-sola-cutover-warn-item">⚠ Connect autopay will be <strong>enabled</strong> for this tenant.</p>
+                  <p className="billing-sola-cutover-warn-item">✓ <strong>No charge will happen now.</strong> The next charge runs on the tenant&apos;s next billing day.</p>
+                  <p className="billing-sola-cutover-warn-item">⚠ Never run both old Sola schedule and Connect autopay at the same time.</p>
+                </div>
+                <p style={{ fontSize: 13, color: "#6b7280", marginTop: 8 }}>
+                  Customer: <strong>{cutoverTarget.row.customerName || cutoverTarget.row.companyName || "—"}</strong>
+                  {" · "}Card: {cutoverTarget.row.brand} ···{cutoverTarget.row.last4}
+                </p>
+                <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                  <button type="button" className="btn primary" onClick={() => setCutoverTarget({ ...cutoverTarget, step: "confirming" })}>
+                    I understand — proceed
+                  </button>
+                  <button type="button" className="btn ghost" onClick={() => setCutoverTarget(null)}>Cancel</button>
+                </div>
+              </>
+            )}
+            {cutoverTarget.step === "confirming" && (
+              <>
+                <h3>Final confirmation</h3>
+                <p style={{ fontSize: 14 }}>This action is <strong>irreversible</strong>. The Sola schedule will be disabled immediately.</p>
+                <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                  <button
+                    type="button"
+                    className="btn primary"
+                    disabled={cutoverWorking}
+                    onClick={() => void (async () => {
+                      setCutoverWorking(true);
+                      setActionError("");
+                      try {
+                        await apiPost(
+                          `/admin/billing/platform/tenants/${cutoverTarget.row.tenantId}/billing-cutover/take-over`,
+                          {
+                            solaScheduleLinkId: cutoverTarget.row.id,
+                            linkedPaymentMethodId: cutoverTarget.row.linkedPaymentMethodId,
+                            confirmDisableSolaSchedule: true,
+                            confirmEnableConnectAutopay: true,
+                            confirmNoImmediateCharge: true,
+                          },
+                        );
+                        setCutoverTarget(null);
+                        bumpList();
+                      } catch (e: unknown) {
+                        setActionError(e instanceof Error ? e.message : "Cutover failed");
+                      } finally {
+                        setCutoverWorking(false);
+                      }
+                    })()}
+                  >
+                    {cutoverWorking ? "Taking over…" : "Confirm — disable Sola and enable Connect billing"}
+                  </button>
+                  <button type="button" className="btn ghost" disabled={cutoverWorking} onClick={() => setCutoverTarget(null)}>Cancel</button>
+                </div>
+                {actionError && <ErrorState message={actionError} />}
+              </>
+            )}
           </div>
         </div>
       )}

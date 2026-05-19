@@ -570,21 +570,69 @@ The `Token` from `/GetPaymentMethod` is the same `xToken` used by `chargeToken()
 
 Old Sola recurring schedule webhooks **cannot** be auto-linked to Connect invoices. The webhook handler requires a `CONNECT:` prefixed `xInvoice`. Old schedules have no Connect invoice IDs.
 
-### Phase plan
+### Phase plan (updated 2026-05-18)
 
 | Phase | Status |
 |-------|--------|
 | A | Audit complete |
 | B | **Shipped** — schema, recurring client, read-only sync API, admin mapping UI |
-| C | Token fetch + `PaymentMethod` creation + enriched double-charge UI |
-| D | Smoke-test charge with imported token |
-| E | Manual cutover: disable Sola schedule via `/UpdateSchedule` |
+| C (cutover) | **Shipped (2026-05-18)** — token linking (Phase A), readiness check (Phase B), manual take-over (Phase C), worker guard (Phase D) |
 
-### BillingEventLog types
+### Cutover architecture (2026-05-18)
+
+After cutover: **Connect owns billing schedule, invoices, retries, taxes, and autopay timing. Sola/Cardknox is vault/payment processor only.**
+
+| Piece | Location |
+|-------|----------|
+| Service functions (token link, readiness, take-over) | `apps/api/src/billing/solaCutover.ts` |
+| Recurring client additions (getPaymentMethodWithToken, updateSchedule) | `packages/integrations/src/sola-cardknox/recurring.ts` |
+| API routes (link-token, readiness, take-over) | `apps/api/src/billing/routes.ts` (end of `registerBillingRoutes`) |
+| Worker guard + schedule override consumption | `apps/worker/src/main.ts` (`checkActiveSolaScheduleBlock`, `getAndConsumeBillingScheduleOverride`) |
+| Sola imports UI (new states + actions) | `apps/portal/.../adminBillingSolaImportsWorkspace.tsx` |
+| Migration | `packages/db/prisma/migrations/20260518100000_billing_sola_cutover/` |
+
+### Cutover safety rules (enforced in code)
+
+1. **Worker guard (Phase D):** Before charging any tenant, `checkActiveSolaScheduleBlock` checks for active Sola schedule links with `mappingStatus=MAPPED`, `isActive=true`, and `cutoverStatus != CUTOVER_COMPLETE`. If found → skip Connect autopay charge and log `billing.autopay_skipped_active_sola_schedule`.
+2. **Take-over sequence:** disable Sola `/UpdateSchedule IsActive=false` MUST succeed before `autoBillingEnabled` is set to true. If Sola disable fails → `CUTOVER_FAILED`, Connect autopay NOT enabled.
+3. **No immediate charge:** the take-over route never creates an invoice or calls chargeToken. Future charges happen via the normal worker billing day.
+4. **Double-charge detection:** `getBillingCutoverReadiness` returns `doubleChargeRisk=true` if Connect autopay is enabled AND an active non-cutover Sola schedule exists for the tenant.
+
+### New API routes
+
+| Method | Route | Purpose |
+|--------|-------|---------|
+| `POST` | `/admin/billing/platform/sola-import/schedules/:id/link-token` | Fetch Sola vault token, encrypt, create PaymentMethod (isImported=true). No charge, no autopay. |
+| `GET` | `/admin/billing/platform/tenants/:tenantId/billing-cutover/readiness` | Readiness checklist: pricing, token, schedule status, double-charge risk. |
+| `POST` | `/admin/billing/platform/tenants/:tenantId/billing-cutover/take-over` | Full cutover: disable Sola schedule → set default PM → enable Connect autopay → CUTOVER_COMPLETE. |
+
+### New worker events
+
+| Event type | When |
+|-----------|------|
+| `billing.autopay_skipped_active_sola_schedule` | Worker guard blocked Connect autopay charge |
+| `billing.autopay_skipped_schedule_override` | `skipNextPayment` override consumed and charge skipped |
+| `billing.autopay_skipped_future_payment_date` | `nextPaymentDate` override in future, charge skipped |
+
+### New BillingEventLog types
 
 - `billing.sola_external_schedule_mapped` — Phase B (map)
-- `billing.sola_import_sync` — planned (sync summary)
-- `billing.sola_external_method_linked` — Phase C
+- `billing.sola_import_sync` — sync summary
+- `billing.sola_external_token_linked` — Phase A: token linked to Connect PaymentMethod
+- `billing.sola_cutover_started` — Phase C: operator initiated cutover
+- `billing.sola_schedule_disabled` — Phase C: old Sola schedule disabled
+- `billing.sola_schedule_disable_failed` — Phase C: disable failed (cutover aborted)
+- `billing.connect_autopay_enabled` — Phase C: Connect autopay enabled
+- `billing.sola_cutover_completed` — Phase C: cutover complete
+
+### `BillingSolaExternalScheduleLink` cutover status values (string, no enum migration)
+
+| Value | Meaning |
+|-------|---------|
+| `TOKEN_LINKED` | Vault token retrieved and stored as encrypted PaymentMethod |
+| `READY_FOR_CUTOVER` | (reserved; used by readiness logic) |
+| `CUTOVER_COMPLETE` | Old Sola schedule disabled, Connect autopay enabled |
+| `CUTOVER_FAILED` | Sola disable API failed; Connect autopay NOT enabled |
 
 ---
 

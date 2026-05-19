@@ -671,3 +671,29 @@ To keep this file short and useful, the following lower-traffic models are
 
 When in doubt, **grep `schema.prisma` for the model name before
 touching it.**
+
+## PaymentMethod — new fields (migration 20260518100000_billing_sola_cutover)
+
+Added for Sola vault token import and cutover:
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `isImported` | `Boolean @default(false)` | True for cards imported from Sola recurring schedules |
+| `importedAt` | `DateTime?` | When the token was imported |
+| `processorCustomerId` | `String?` | Sola CustomerId (for imported cards) |
+| `processorPaymentMethodId` | `String?` | Sola PaymentMethodId (for imported cards) |
+| `metadata` | `Json?` | `{ solaScheduleLinkId, solaCustomerId, solaPaymentMethodId, source: "sola_recurring_import" }` |
+
+## BillingSolaExternalScheduleLink — new fields (migration 20260518100000_billing_sola_cutover)
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `cutoverStatus` | `String?` | `TOKEN_LINKED \| CUTOVER_COMPLETE \| CUTOVER_FAILED` |
+| `linkedPaymentMethodId` | `String?` | FK → `PaymentMethod.id` (SetNull on delete) |
+| `tokenLinkedAt` | `DateTime?` | When token was linked |
+| `cutoverAt` | `DateTime?` | When cutover completed |
+| `cutoverByUserId` | `String?` | Operator who triggered cutover |
+| `disabledSolaAt` | `DateTime?` | When old Sola schedule was disabled |
+| `disableAttemptedAt` | `DateTime?` | When disable was last attempted |
+| `disableError` | `String?` | Error message if disable failed |
+| `connectAutopayEnabledAt` | `DateTime?` | When Connect autopay was enabled |

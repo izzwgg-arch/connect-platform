@@ -205,4 +205,82 @@ export class SolaRecurringClient {
     });
     return payload as SolaRecurringPaymentMethodRow;
   }
+
+  /**
+   * Retrieve the reusable vault Token for server-side token linking (Phase A cutover).
+   * NEVER log or return the token to the browser. Caller must encrypt immediately.
+   * Returns { token: string, issuer, maskedCardNumber, exp } — raw Token is included.
+   */
+  async getPaymentMethodWithToken(paymentMethodId: string): Promise<{
+    token: string;
+    issuer: string | null;
+    maskedCardNumber: string | null;
+    exp: string | null;
+    rawRow: SolaRecurringPaymentMethodRow;
+  }> {
+    if (this.config.simulate) {
+      return {
+        token: "sim_reusable_token_abc123",
+        issuer: "Visa",
+        maskedCardNumber: "4xxxxxxxxxxx4242",
+        exp: "1228",
+        rawRow: {
+          PaymentMethodId: paymentMethodId,
+          TokenType: "cc",
+          Issuer: "Visa",
+          MaskedCardNumber: "4xxxxxxxxxxx4242",
+          Exp: "1228",
+          Token: "sim_reusable_token_abc123",
+        },
+      };
+    }
+
+    const payload = await postRecurringJson<Record<string, unknown>>(this.config, "/GetPaymentMethod", {
+      PaymentMethodId: paymentMethodId,
+      ShowDeleted: false,
+    });
+
+    const token = String(payload.Token || "").trim();
+    if (!token) {
+      const err: Error & { code?: string } = new Error("SOLA_RECURRING_TOKEN_MISSING");
+      err.code = "SOLA_RECURRING_TOKEN_MISSING";
+      throw err;
+    }
+
+    return {
+      token,
+      issuer: payload.Issuer ? String(payload.Issuer) : null,
+      maskedCardNumber: payload.MaskedCardNumber ? String(payload.MaskedCardNumber) : null,
+      exp: payload.Exp ? String(payload.Exp) : null,
+      rawRow: payload as SolaRecurringPaymentMethodRow,
+    };
+  }
+
+  /**
+   * Disable or re-enable a recurring schedule (Phase C cutover).
+   * Pass isActive: false to disable the old schedule before enabling Connect autopay.
+   */
+  async updateSchedule(scheduleId: string, update: { isActive: boolean }): Promise<{ ok: boolean; refNum?: string }> {
+    if (this.config.simulate) {
+      return { ok: true, refNum: `sim_upd_${Date.now()}` };
+    }
+
+    const payload = await postRecurringJson<Record<string, unknown>>(this.config, "/UpdateSchedule", {
+      ScheduleId: scheduleId,
+      IsActive: update.isActive,
+    });
+
+    const result = String((payload as Record<string, unknown>).Result || "").toUpperCase();
+    if (result === "E") {
+      const err: Error & { code?: string; solaError?: string } = new Error("SOLA_RECURRING_UPDATE_FAILED");
+      err.code = "SOLA_RECURRING_UPDATE_FAILED";
+      err.solaError = String((payload as Record<string, unknown>).Error || "update_failed");
+      throw err;
+    }
+
+    return {
+      ok: result === "S" || result === "A" || result === "",
+      refNum: payload.RefNum ? String(payload.RefNum) : undefined,
+    };
+  }
 }

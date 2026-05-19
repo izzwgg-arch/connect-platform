@@ -80,6 +80,11 @@ import {
   syncSolaExternalSchedules,
   unmapSolaExternalSchedule,
 } from "./solaExternalSchedules";
+import {
+  linkSolaTokenToPaymentMethod,
+  getBillingCutoverReadiness,
+  takeOverBillingFromSola,
+} from "./solaCutover";
 
 type BillingUser = {
   sub: string;
@@ -2615,6 +2620,73 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const result = await unmapSolaExternalSchedule({ linkId: id, operatorId: u.sub });
     if (!result.ok) return reply.code(result.code).send({ error: result.error });
     return { ok: true };
+  });
+
+  // ─── Phase A: Token Linking ────────────────────────────────────────────────
+  // POST /admin/billing/platform/sola-import/schedules/:id/link-token
+  // Fetches Sola vault token, encrypts it, creates PaymentMethod (isImported=true).
+  // Does NOT enable Connect autopay or disable old Sola schedule.
+  app.post("/admin/billing/platform/sola-import/schedules/:id/link-token", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const result = await linkSolaTokenToPaymentMethod({ linkId: id, operatorId: u.sub });
+    if (!result.ok) return reply.code(result.code).send({ error: result.error });
+    // Return masked card info only — token never returned to browser
+    return {
+      ok: true,
+      paymentMethodId: result.paymentMethodId,
+      brand: result.brand,
+      last4: result.last4,
+      expMonth: result.expMonth,
+      expYear: result.expYear,
+    };
+  });
+
+  // ─── Phase B: Readiness Check ─────────────────────────────────────────────
+  // GET /admin/billing/platform/tenants/:tenantId/billing-cutover/readiness
+  app.get("/admin/billing/platform/tenants/:tenantId/billing-cutover/readiness", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const readiness = await getBillingCutoverReadiness({ tenantId });
+    return readiness;
+  });
+
+  // ─── Phase C: Take Over Billing ───────────────────────────────────────────
+  // POST /admin/billing/platform/tenants/:tenantId/billing-cutover/take-over
+  // Sequence: disable Sola schedule → set default PM → enable Connect autopay → mark CUTOVER_COMPLETE.
+  // Requires three explicit confirmation fields. No immediate charge.
+  app.post("/admin/billing/platform/tenants/:tenantId/billing-cutover/take-over", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const body = req.body as {
+      solaScheduleLinkId?: string;
+      linkedPaymentMethodId?: string;
+      confirmDisableSolaSchedule?: boolean;
+      confirmEnableConnectAutopay?: boolean;
+      confirmNoImmediateCharge?: boolean;
+    };
+
+    if (!body.solaScheduleLinkId) return reply.code(400).send({ error: "solaScheduleLinkId_required" });
+    if (!body.linkedPaymentMethodId) return reply.code(400).send({ error: "linkedPaymentMethodId_required" });
+    if (!body.confirmDisableSolaSchedule) return reply.code(400).send({ error: "must_confirm_disable_sola_schedule" });
+    if (!body.confirmEnableConnectAutopay) return reply.code(400).send({ error: "must_confirm_enable_connect_autopay" });
+    if (!body.confirmNoImmediateCharge) return reply.code(400).send({ error: "must_confirm_no_immediate_charge" });
+
+    const result = await takeOverBillingFromSola({
+      tenantId,
+      solaScheduleLinkId: body.solaScheduleLinkId,
+      linkedPaymentMethodId: body.linkedPaymentMethodId,
+      confirmDisableSolaSchedule: true,
+      confirmEnableConnectAutopay: true,
+      confirmNoImmediateCharge: true,
+      operatorId: u.sub,
+    });
+
+    if (!result.ok) return reply.code(result.code).send({ error: result.error, disableError: result.disableError });
+    return { ok: true, cutoverAt: result.cutoverAt, paymentMethodId: result.paymentMethodId };
   });
 }
 
