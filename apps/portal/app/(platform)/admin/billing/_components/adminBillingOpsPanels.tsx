@@ -115,6 +115,7 @@ type TxDetail = TxRow & {
 type SmsCapability = {
   capable: boolean;
   fromNumber: string | null;
+  fromNumbers: { number: string; label: string }[];
   provider: string | null;
   reason: string | null;
 };
@@ -1199,6 +1200,7 @@ function TransactionDetailModal({ txId, onClose }: { txId: string; onClose: () =
 function SmsPaymentLinkModal({ invoice, onClose, onSuccess }: { invoice: InvoiceRow; onClose: () => void; onSuccess: () => void }) {
   const [step, setStep] = useState<"form" | "confirm" | "done">("form");
   const [phone, setPhone] = useState("");
+  const [fromPhone, setFromPhone] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -1211,8 +1213,16 @@ function SmsPaymentLinkModal({ invoice, onClose, onSuccess }: { invoice: Invoice
   );
   const cap = capability.status === "success" ? capability.data : null;
 
+  // Pre-select the default from number once capability loads
+  useEffect(() => {
+    if (cap?.fromNumber && !fromPhone) {
+      setFromPhone(cap.fromNumber);
+    }
+  }, [cap, fromPhone]);
+
   const payUrl = `${typeof window !== "undefined" ? window.location.origin.replace(/:3000$/, ":3001") : ""}`
     + `/billing/invoices/${invoice.id}`;
+  const effectiveFrom = fromPhone || cap?.fromNumber || "";
   const msgPreview = `${invoice.tenant?.name || "Connect"}: Pay invoice ${invoice.invoiceNumber || invoice.id.slice(0, 8)} (${dollars(invoice.balanceDueCents)}): ${payUrl}`;
 
   async function send() {
@@ -1223,7 +1233,7 @@ function SmsPaymentLinkModal({ invoice, onClose, onSuccess }: { invoice: Invoice
     try {
       const res = await apiPost<{ ok: boolean; toPhone: string; fromPhone: string; providerMessageId?: string }>(
         `/admin/billing/invoices/${invoice.id}/sms-payment-link`,
-        { phone, note: note.trim() || undefined },
+        { phone, fromPhone: effectiveFrom || undefined, note: note.trim() || undefined },
       );
       setSentTo(res.toPhone);
       setStep("done");
@@ -1236,13 +1246,13 @@ function SmsPaymentLinkModal({ invoice, onClose, onSuccess }: { invoice: Invoice
     }
   }
 
+  const inputStyle: React.CSSProperties = { width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid var(--border, #e0e0e0)", fontSize: 13, boxSizing: "border-box", fontFamily: "inherit", background: "var(--input-bg, #fff)", color: "inherit" };
+
   return (
     <div className="billing-p8-overlay billing-p8-overlay--center" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="billing-p8-modal billing-p8-modal--sm" onClick={(e) => e.stopPropagation()}>
         <div className="row-actions" style={{ marginBottom: 16 }}>
-          <h3 style={{ margin: 0, flex: 1 }}>
-            Send Payment Link via SMS
-          </h3>
+          <h3 style={{ margin: 0, flex: 1 }}>Send Payment Link via SMS</h3>
           <button className="btn ghost" type="button" onClick={onClose}>✕</button>
         </div>
 
@@ -1264,26 +1274,28 @@ function SmsPaymentLinkModal({ invoice, onClose, onSuccess }: { invoice: Invoice
 
         {cap?.capable ? (
           <>
-            <div style={{ background: "var(--surface-alt, #f9fafb)", borderRadius: 6, padding: "8px 12px", fontSize: 12, marginBottom: 14, color: "#6b7280" }}>
-              From: <strong>{cap.fromNumber}</strong> · Provider: {cap.provider}
-            </div>
-
             {step === "done" ? (
-              <>
-                <div style={{ color: "green", marginBottom: 16, fontSize: 14 }}>
-                  ✓ Payment link sent to {sentTo}.
+              <div style={{ textAlign: "center", padding: "16px 0" }}>
+                <div style={{ fontSize: 32, marginBottom: 8 }}>✓</div>
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Payment link sent!</div>
+                <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 16 }}>
+                  Sent to <strong>{sentTo}</strong>
+                  {effectiveFrom ? <> from <strong>{effectiveFrom}</strong></> : null}
                 </div>
-                <button className="btn primary" type="button" onClick={onClose}>Close</button>
-              </>
+                <button className="btn primary" type="button" onClick={onClose}>Done</button>
+              </div>
             ) : step === "confirm" ? (
               <>
                 <div style={{ background: "var(--surface-alt, #f9fafb)", borderRadius: 8, padding: "12px 14px", marginBottom: 14, fontSize: 13 }}>
-                  <p style={{ margin: "0 0 6px" }}>
-                    Sending to: <strong>{phone}</strong>
-                  </p>
-                  <p style={{ margin: "0 0 6px", color: "#6b7280", fontSize: 12 }}>
-                    Message preview (approximate):
-                  </p>
+                  <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 10px", marginBottom: 8 }}>
+                    <span style={{ color: "#6b7280", fontSize: 12 }}>To:</span>
+                    <strong>{phone}</strong>
+                    <span style={{ color: "#6b7280", fontSize: 12 }}>From:</span>
+                    <strong>{effectiveFrom || cap.fromNumber}</strong>
+                    <span style={{ color: "#6b7280", fontSize: 12 }}>Provider:</span>
+                    <span>{cap.provider}</span>
+                  </div>
+                  <p style={{ margin: "0 0 4px", color: "#6b7280", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>Message preview</p>
                   <div style={{ fontFamily: "monospace", fontSize: 11, background: "#fff", borderRadius: 4, padding: "8px 10px", border: "1px solid var(--border, #e0e0e0)", wordBreak: "break-all" }}>
                     {msgPreview}
                   </div>
@@ -1301,9 +1313,32 @@ function SmsPaymentLinkModal({ invoice, onClose, onSuccess }: { invoice: Invoice
               </>
             ) : (
               <>
+                {/* From number picker */}
                 <div style={{ marginBottom: 14 }}>
                   <label style={{ fontSize: 13, fontWeight: 500, display: "block", marginBottom: 4 }}>
-                    Destination phone number: <span style={{ color: "#dc2626" }}>*</span>
+                    Send from number:
+                  </label>
+                  {cap.fromNumbers && cap.fromNumbers.length > 1 ? (
+                    <select
+                      value={fromPhone}
+                      onChange={(e) => setFromPhone(e.target.value)}
+                      style={inputStyle}
+                    >
+                      {cap.fromNumbers.map((n) => (
+                        <option key={n.number} value={n.number}>{n.label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div style={{ padding: "7px 10px", borderRadius: 6, border: "1px solid var(--border, #e0e0e0)", fontSize: 13, background: "var(--surface-alt, #f9fafb)", color: "#374151" }}>
+                      {cap.fromNumber || "—"} <span style={{ color: "#9ca3af", fontSize: 11 }}>· {cap.provider}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Destination */}
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ fontSize: 13, fontWeight: 500, display: "block", marginBottom: 4 }}>
+                    Send to (customer phone): <span style={{ color: "#dc2626" }}>*</span>
                   </label>
                   <input
                     type="tel"
@@ -1311,16 +1346,18 @@ function SmsPaymentLinkModal({ invoice, onClose, onSuccess }: { invoice: Invoice
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                     placeholder="+1 (555) 555-5555"
-                    style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid var(--border, #e0e0e0)", fontSize: 13, boxSizing: "border-box" }}
+                    style={inputStyle}
+                    autoFocus
                   />
                   <p style={{ margin: "4px 0 0", fontSize: 11, color: "#6b7280" }}>
-                    US numbers: enter 10 digits or +1 format. International: include + and country code.
+                    US: 10 digits or +1 format · International: include + and country code
                   </p>
                 </div>
 
+                {/* Note */}
                 <div style={{ marginBottom: 16 }}>
                   <label style={{ fontSize: 13, fontWeight: 500, display: "block", marginBottom: 4 }}>
-                    Operator note (optional — logged to activity):
+                    Operator note <span style={{ fontWeight: 400, color: "#9ca3af" }}>(optional, logged to activity)</span>:
                   </label>
                   <input
                     type="text"
@@ -1328,7 +1365,7 @@ function SmsPaymentLinkModal({ invoice, onClose, onSuccess }: { invoice: Invoice
                     value={note}
                     onChange={(e) => setNote(e.target.value)}
                     placeholder="e.g. Customer requested resend"
-                    style={{ width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid var(--border, #e0e0e0)", fontSize: 13, boxSizing: "border-box" }}
+                    style={inputStyle}
                   />
                 </div>
 
@@ -1598,7 +1635,7 @@ export function InvoicesTab() {
                     onPdf={() => openAdminInvoicePdf(inv.id)}
                     onActivity={() => void toggleLog(inv.id)}
                     onSend={canAct ? () => void act(inv.id, "Send", `/admin/billing/invoices/${inv.id}/send`) : undefined}
-                    onEmailLink={canAct ? () => void act(inv.id, "Email link", `/billing/platform/invoices/${inv.id}/email-payment-link`) : undefined}
+                    onEmailLink={canAct ? () => void act(inv.id, "Payment link", `/admin/billing/invoices/${inv.id}/email-payment-link`) : undefined}
                     onRetry={canAct ? () => setPayInvoice(inv) : undefined}
                     onMarkPaid={canAct ? () => setMarkPaidTarget(inv) : undefined}
                     onVoid={canAct ? () => setVoidTarget(inv) : undefined}

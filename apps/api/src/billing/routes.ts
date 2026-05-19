@@ -2113,7 +2113,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const invoice = await (db as any).billingInvoice.findUnique({ where: { id }, include: { tenant: { include: { billingSettings: true } } } });
     if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
     const to = invoice.tenant.billingSettings?.billingEmail || u.email;
-    if (!to) return reply.code(400).send({ error: "billing_email_required" });
+    if (!to) return reply.code(400).send({ error: "billing_email_required", message: "No billing email configured for this tenant. Set one in the tenant billing settings." });
     const template = invoiceReadyEmail({
       invoiceNumber: invoice.invoiceNumber,
       totalCents: invoice.totalCents,
@@ -2125,7 +2125,35 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     await queueBillingEmail({ tenantId: invoice.tenantId, invoiceId: invoice.id, to, type: "BILLING_INVOICE_READY", subject: template.subject, html: template.html, text: template.text });
     await (db as any).billingInvoice.update({ where: { id }, data: { lastEmailStatus: "QUEUED", lastEmailedAt: new Date(), status: invoice.status === "DRAFT" ? "OPEN" : invoice.status } });
     await logBillingEvent({ tenantId: invoice.tenantId, invoiceId: id, type: "invoice_emailed", metadata: { to, channel: "admin_resend", emailType: "BILLING_INVOICE_READY" } });
-    return { ok: true };
+    return { ok: true, sentTo: to };
+  });
+
+  // Admin email payment link (platform-billing auth, used from admin invoice menu)
+  app.post("/admin/billing/invoices/:id/email-payment-link", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const invoice = await (db as any).billingInvoice.findUnique({
+      where: { id },
+      include: { tenant: { include: { billingSettings: true } } },
+    });
+    if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
+    if (invoice.status === "PAID") return reply.code(400).send({ error: "invoice_already_paid" });
+    if (invoice.status === "VOID") return reply.code(400).send({ error: "invoice_voided" });
+    const to = String(invoice.tenant?.billingSettings?.billingEmail || "").trim();
+    if (!to) return reply.code(400).send({ error: "billing_email_required", message: "No billing email configured for this tenant. Set one in the tenant billing settings." });
+    const result = await queuePaymentLinkEmail({
+      tenantId: invoice.tenantId,
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
+      totalCents: invoice.balanceDueCents ?? invoice.totalCents,
+      dueDate: invoice.dueDate,
+      to,
+    });
+    if (!result.ok) return reply.code(400).send(result);
+    await (db as any).billingInvoice.update({ where: { id }, data: { lastEmailStatus: "QUEUED", lastEmailedAt: new Date() } });
+    await logBillingEvent({ tenantId: invoice.tenantId, invoiceId: id, type: "invoice_emailed", metadata: { to, channel: "admin_payment_link", emailType: "BILLING_PAYMENT_LINK", adminUserId: u.sub } });
+    return { ok: true, sentTo: to };
   });
 
   app.post("/admin/billing/invoices/:id/void", async (req, reply) => {
@@ -2309,9 +2337,23 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const { tenantId } = req.params as { tenantId: string };
     const result = await resolveTenantSmsProvider(tenantId);
     if (!result) {
-      return { capable: false, fromNumber: null, provider: null, reason: "No enabled SMS provider credentials found for this tenant." };
+      return { capable: false, fromNumber: null, fromNumbers: [], provider: null, reason: "No enabled SMS provider credentials found for this tenant." };
     }
-    return { capable: true, fromNumber: result.fromNumber, provider: result.providerName, reason: null };
+    // Return all active phone numbers for this tenant (to populate from-number picker)
+    const allNums = await (db as any).phoneNumber.findMany({
+      where: { tenantId, status: "ACTIVE" },
+      select: { phoneNumber: true, friendlyName: true, provider: true },
+      orderBy: { purchasedAt: "asc" },
+    });
+    const fromNumbers: { number: string; label: string }[] = allNums.map((n: any) => ({
+      number: n.phoneNumber,
+      label: n.friendlyName ? `${n.friendlyName} (${n.phoneNumber})` : n.phoneNumber,
+    }));
+    // Ensure the auto-resolved from number is always in the list
+    if (result.fromNumber && !fromNumbers.some((n) => n.number === result.fromNumber)) {
+      fromNumbers.unshift({ number: result.fromNumber, label: result.fromNumber });
+    }
+    return { capable: true, fromNumber: result.fromNumber, fromNumbers, provider: result.providerName, reason: null };
   });
 
   app.post("/admin/billing/invoices/:id/sms-payment-link", async (req, reply) => {
@@ -2320,6 +2362,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const input = z.object({
       phone: z.string().min(7).max(20).optional(),
+      fromPhone: z.string().max(20).optional(),
       note: z.string().max(300).optional(),
     }).parse(req.body || {});
 
@@ -2344,6 +2387,19 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "invalid_phone", message: "Phone number appears too short — check the number and try again." });
     }
 
+    // Optional from-number override — must be an active number owned by this tenant
+    let resolvedFromNumber = smsCtx.fromNumber;
+    if (input.fromPhone && input.fromPhone.trim()) {
+      const owned = await (db as any).phoneNumber.findFirst({
+        where: { phoneNumber: input.fromPhone.trim(), tenantId: invoice.tenantId, status: "ACTIVE" },
+        select: { phoneNumber: true },
+      });
+      if (!owned) {
+        return reply.code(400).send({ error: "invalid_from_number", message: "The selected from-number is not an active number for this tenant." });
+      }
+      resolvedFromNumber = owned.phoneNumber;
+    }
+
     // Duplicate send protection: no same phone for this invoice in the last 2 minutes
     const recentEvents = await (db as any).billingEventLog.findMany({
       where: { invoiceId: id, type: "billing.sms_payment_link_sent", createdAt: { gte: new Date(Date.now() - 2 * 60_000) } },
@@ -2364,7 +2420,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       const result = await smsCtx.provider.sendMessage({
         tenantId: invoice.tenantId,
         to: normalizedPhone,
-        from: smsCtx.fromNumber,
+        from: resolvedFromNumber,
         body: msgBody,
       });
       providerMessageId = result.providerMessageId;
@@ -2374,7 +2430,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         invoiceId: id,
         type: "billing.sms_payment_link_failed",
         message: `SMS payment link send failed: ${err?.message || "unknown error"}`,
-        metadata: { toPhone: normalizedPhone, fromPhone: smsCtx.fromNumber, adminUserId: u.sub },
+        metadata: { toPhone: normalizedPhone, fromPhone: resolvedFromNumber, adminUserId: u.sub },
       });
       return reply.code(502).send({ error: "sms_send_failed", message: err?.message || "SMS provider returned an error. Check the phone number and try again." });
     }
@@ -2384,10 +2440,10 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       invoiceId: id,
       type: "billing.sms_payment_link_sent",
       message: `Payment link sent via SMS to ${normalizedPhone}${input.note ? ` — ${input.note}` : ""}`,
-      metadata: { toPhone: normalizedPhone, fromPhone: smsCtx.fromNumber, providerMessageId, adminUserId: u.sub },
+      metadata: { toPhone: normalizedPhone, fromPhone: resolvedFromNumber, providerMessageId, adminUserId: u.sub },
     });
 
-    return { ok: true, toPhone: normalizedPhone, fromPhone: smsCtx.fromNumber, providerMessageId };
+    return { ok: true, toPhone: normalizedPhone, fromPhone: resolvedFromNumber, providerMessageId };
   });
 
   // ── Admin explicit charge with saved card ────────────────────────────────────
