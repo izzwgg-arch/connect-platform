@@ -1,4 +1,4 @@
-# UI system — Portal, Workspace, and CRM
+﻿# UI system — Portal, Workspace, and CRM
 
 > **Scope:** `apps/portal` visual language. Telephony/PBX/mobile are out of scope here.
 
@@ -49,24 +49,47 @@ Prefer primitives + `crm.*` classes over one-off `gray-*` / `white` utilities on
 
 ---
 
-## Dashboard visualization (Phase 19B)
+## Dashboard visualization (Phase 19B / 19B.2)
 
-The CRM command center (`/crm/dashboard`) uses **operational visuals only** — data from existing CRM APIs, no demo series or fake realtime.
+The CRM command center (`/crm/dashboard`) is a **live operational cockpit**, not a widget dump. Data from existing CRM APIs only — no demo series or fake realtime.
+
+### Layout (19B.2 — current)
+
+`crm.pageInnerWide` (`max-w-[1400px]`) — 8+4 column grid on large screens; stacked on tablet/mobile.
+
+| Zone | Width (lg) | Role |
+|------|------------|------|
+| KPI row | full | Five headline metrics — one primary home per metric |
+| Live CRM Operations | 8 cols | `LiveCrmOperationsPanel` — metric grid + campaigns + queue feed |
+| Pipeline Snapshot | 4 of 8 (sub-grid) | `CRMCard` with 4 stat tiles (total, leads, mine, new today) |
+| Campaign Health | 4 of 8 (sub-grid) | `CRMCard` with campaign list |
+| Action Required | 4 cols | `DashboardActionCard` list — callbacks + tasks merged |
+| Shortcuts | 4 cols | Compact `ShortcutGrid` |
+| Recent imports | 4 cols | Optional, only if `can_view_crm_import` and has data |
+
+### Patterns
 
 | Pattern | Component | Use |
 |---------|-----------|-----|
-| Distribution | `CRMDonutChart` + `CRMChartLegend` | Pipeline mix, campaign status, growth split |
-| Pressure / volume | `CRMHorizontalBars` | Follow-up backlog, today’s activity |
-| Workload ring | `CRMRingMetric` | Task overdue vs open load |
-| KPI strip | `DashboardKpiTile` | Scannable today metrics (number + label, no paragraphs) |
-| Priority actions | `DashboardActionCard` | Needs-attention queue (count + link) |
+| KPI strip | `DashboardKpiTile` | 5 tiles, one metric per tile, no duplicates |
+| Centerpiece | `LiveCrmOperationsPanel` | Queue pressure + campaign status + today metrics + queue feed |
+| Stat snapshot | `PipelineStat` (inline) | Clean number tiles; replaces donut for 2-segment data |
+| Campaign list | `DashboardListRow` | Active/paused with member count |
+| Priority actions | `DashboardActionCard` | Callbacks + tasks merged into one list |
+| Admin status | inline banner | CRM on/off + user count + SMS — not a full-card widget |
 
-**Layout:** `crm.pageInnerWide` (`max-w-[1400px]`) — 8+4 column grid on large screens; charts and lists stay stacked on tablet/mobile.
+### Anti-duplication rules (Phase 19B.2)
 
-**Copy rules:** Section titles are short labels; no multi-sentence hints under headings. Empty states are one line + link.
+- **One metric, one primary home.** Queue depth lives in the KPI row and the Live CRM Ops panel only. It must not also appear in a Workspace Health card, a Follow-up Pressure chart, and an Overdue Callbacks card.
+- **No donut chart for 2-segment data.** `CRMDonutChart` is appropriate only for 3+ meaningful segments. A leads/other split does not warrant a donut — use stat tiles.
+- **No bar chart that repeats the KPI row.** `CRMHorizontalBars` for "Today's Activity" duplicates the KPI row. Use the Live Ops panel for operational context instead.
+- **Merge related follow-up cards.** A Tasks ring + a Needs Attention list + a Follow-up Pressure chart all show overdue/due counts. Merged into a single "Action Required" card.
+- **Page must have a focal point.** No flat 10-card equal-weight grids. Current focal point: `LiveCrmOperationsPanel`.
+- **Empty states must be purposeful.** One short line + actionable link. Not a large dead-centered icon with placeholder text.
+
+**Copy rules:** Section titles are short labels; no multi-sentence hints under headings.
 
 Chart colors live in `components/crm/charts/chartColors.ts` (aligned with `--crm-accent`, danger, warning, success).
-
 ---
 
 ## Queue operational workspace (Phase 19C / 19C.1)

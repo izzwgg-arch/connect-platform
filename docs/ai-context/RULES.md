@@ -690,6 +690,26 @@
 
 ---
 
+## CRM dashboard layout
+
+91. **Each CRM dashboard metric must have exactly one primary display location.**
+    - Queue depth: KPI row (primary) + `LiveCrmOperationsPanel` (context). Nowhere else.
+    - Overdue callbacks: KPI row (primary) + Action Required card (actionable). Nowhere else.
+    - Campaign count: KPI row (primary) + Campaign Health list. Nowhere else.
+    - Calls/outcomes today: KPI row (primary) + `LiveCrmOperationsPanel` (context). Nowhere else.
+    - Do not add a new card or chart that repeats a value already in the KPI row.
+
+92. **`CRMDonutChart` is only appropriate for 3+ meaningful segments.**
+    Two-segment splits (leads/other, new/established) must use stat tile grids, not donut charts.
+
+93. **The CRM dashboard must have a clear visual focal point.**
+    `LiveCrmOperationsPanel` is the centerpiece. Do not introduce competing full-width panels at equal visual weight.
+
+94. **Dashboard empty states must be purposeful.** One sentence + one actionable link.
+    Do not use large centered icons with generic placeholder copy ("No data yet").
+
+---
+
 ## Documentation
 
 39. **Update `docs/ai-context/KNOWN_ISSUES.md` whenever you discover or fix a fragile
