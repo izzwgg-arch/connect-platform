@@ -763,6 +763,8 @@ function ManualPayModal({ invoice, onClose, onSuccess }: { invoice: InvoiceRow; 
 
 type AdminSolaPublicConfig = { configured: boolean; enabled: boolean; canSaveCard?: boolean; ifieldsKey: string | null; mode: string | null };
 
+const ADMIN_BILLING_IFIELDS_INIT = "connectBillingAdminIfieldsInit";
+
 export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantId: string; tenantName: string; onClose: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
@@ -834,7 +836,7 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
 
   // Configure Cardknox/Sola after the hosted iframes are mounted and loaded.
   useEffect(() => {
-    if (!showAddCard || !ifieldsScriptReady || ifieldsLoadCount < 2) return;
+    if (!showAddCard || !ifieldsScriptReady) return;
     const key = solaConfig?.ifieldsKey?.trim();
     if (!key) return;
     const w = window as typeof window & {
@@ -842,8 +844,9 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
       setIfieldStyle?: (ifieldName: string, style: Record<string, string>) => void;
       enableAutoFormatting?: (separator?: string) => void;
       enableBlockNonNumericInput?: () => void;
+      focusIfield?: (ifieldName: string) => void;
+      [ADMIN_BILLING_IFIELDS_INIT]?: () => void;
     };
-    if (!w.setAccount) return;
     const fieldStyle = {
       border: "0",
       "font-size": "14px",
@@ -852,12 +855,27 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
       color: "#111827",
       background: "#ffffff",
     };
-    w.setIfieldStyle?.("card-number", fieldStyle);
-    w.setIfieldStyle?.("cvv", fieldStyle);
-    w.setAccount(key, "ConnectComms", "1.0.0");
-    w.enableBlockNonNumericInput?.();
-    w.enableAutoFormatting?.();
-    setIfieldsReady(true);
+    const configure = () => {
+      if (!w.setAccount) return;
+      w.setIfieldStyle?.("card-number", fieldStyle);
+      w.setIfieldStyle?.("cvv", fieldStyle);
+      w.setAccount(key, "ConnectComms", "1.0.0");
+      w.enableBlockNonNumericInput?.();
+      w.enableAutoFormatting?.();
+      setIfieldsReady(true);
+    };
+    w[ADMIN_BILLING_IFIELDS_INIT] = configure;
+    if (ifieldsLoadCount >= 2) {
+      configure();
+      const retry = window.setTimeout(configure, 250);
+      return () => {
+        window.clearTimeout(retry);
+        delete w[ADMIN_BILLING_IFIELDS_INIT];
+      };
+    }
+    return () => {
+      delete w[ADMIN_BILLING_IFIELDS_INIT];
+    };
   }, [showAddCard, ifieldsScriptReady, ifieldsLoadCount, solaConfig?.ifieldsKey]);
 
   async function setDefault(methodId: string) {
@@ -1039,6 +1057,7 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
                   title="Secure card number"
                   data-ifields-id="card-number"
                   data-ifields-placeholder="Card Number"
+                  data-ifields-oninit={ADMIN_BILLING_IFIELDS_INIT}
                   src={`https://cdn.cardknox.com/ifields/${ifieldsVersion}/ifield.html`}
                   onLoad={() => setIfieldsLoadCount((c) => c + 1)}
                 />
@@ -1051,6 +1070,7 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
                   title="Secure CVV"
                   data-ifields-id="cvv"
                   data-ifields-placeholder="CVV"
+                  data-ifields-oninit={ADMIN_BILLING_IFIELDS_INIT}
                   src={`https://cdn.cardknox.com/ifields/${ifieldsVersion}/ifield.html`}
                   onLoad={() => setIfieldsLoadCount((c) => c + 1)}
                 />
