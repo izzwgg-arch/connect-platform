@@ -33,21 +33,7 @@ function normalizeSolaPathOverrides(input: unknown): BillingSolaPathOverrides {
   };
 }
 
-export async function getBillingSolaAdapter(tenantId: string): Promise<SolaCardknoxAdapter> {
-  const row = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
-  if (!row || !row.isEnabled) {
-    if (process.env.SOLA_CARDKNOX_API_BASE_URL && process.env.SOLA_CARDKNOX_API_KEY) {
-      return new SolaCardknoxAdapter({
-        baseUrl: process.env.SOLA_CARDKNOX_API_BASE_URL,
-        apiKey: process.env.SOLA_CARDKNOX_API_KEY,
-        apiSecret: process.env.SOLA_CARDKNOX_API_SECRET,
-        webhookSecret: process.env.SOLA_CARDKNOX_WEBHOOK_SECRET,
-        transactionPath: process.env.SOLA_CARDKNOX_TRANSACTION_PATH || "/gatewayjson",
-        simulate: process.env.SOLA_CARDKNOX_SIMULATE === "1",
-      });
-    }
-    throw new Error(row ? "SOLA_NOT_ENABLED" : "SOLA_NOT_CONFIGURED");
-  }
+function buildAdapterFromRow(row: any): SolaCardknoxAdapter {
   const secrets = decryptJson<BillingSolaCredentialPayload>(row.credentialsEncrypted);
   const paths = normalizeSolaPathOverrides(row.pathOverrides);
   const config: SolaCardknoxConfig = {
@@ -67,6 +53,45 @@ export async function getBillingSolaAdapter(tenantId: string): Promise<SolaCardk
     cancelPath: paths.cancelPath,
   };
   return new SolaCardknoxAdapter(config);
+}
+
+function buildEnvFallbackAdapter(): SolaCardknoxAdapter | null {
+  if (process.env.SOLA_CARDKNOX_API_BASE_URL && process.env.SOLA_CARDKNOX_API_KEY) {
+    return new SolaCardknoxAdapter({
+      baseUrl: process.env.SOLA_CARDKNOX_API_BASE_URL,
+      apiKey: process.env.SOLA_CARDKNOX_API_KEY,
+      apiSecret: process.env.SOLA_CARDKNOX_API_SECRET,
+      webhookSecret: process.env.SOLA_CARDKNOX_WEBHOOK_SECRET,
+      transactionPath: process.env.SOLA_CARDKNOX_TRANSACTION_PATH || "/gatewayjson",
+      simulate: process.env.SOLA_CARDKNOX_SIMULATE === "1",
+    });
+  }
+  return null;
+}
+
+/** For billing/charging — requires isEnabled=true on the tenant config. */
+export async function getBillingSolaAdapter(tenantId: string): Promise<SolaCardknoxAdapter> {
+  const row = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
+  if (!row || !row.isEnabled) {
+    const fallback = buildEnvFallbackAdapter();
+    if (fallback) return fallback;
+    throw new Error(row ? "SOLA_NOT_ENABLED" : "SOLA_NOT_CONFIGURED");
+  }
+  return buildAdapterFromRow(row);
+}
+
+/**
+ * For card tokenizing only (saving a card, no charge).
+ * Works even when isEnabled=false so admins can vault cards before enabling autopay.
+ */
+export async function getBillingSolaAdapterForTokenizing(tenantId: string): Promise<SolaCardknoxAdapter> {
+  const row = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
+  if (!row) {
+    const fallback = buildEnvFallbackAdapter();
+    if (fallback) return fallback;
+    throw new Error("SOLA_NOT_CONFIGURED");
+  }
+  return buildAdapterFromRow(row);
 }
 
 export async function storeSolaPaymentMethod(input: {

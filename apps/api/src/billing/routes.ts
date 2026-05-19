@@ -20,7 +20,7 @@ import {
   mergeTenantBillingSettingsMetadata,
   validateBillingScheduleOverrideInput,
 } from "./billingTenantSettingsMetadata";
-import { getBillingSolaAdapter, storeSolaPaymentMethod } from "./solaGateway";
+import { getBillingSolaAdapter, getBillingSolaAdapterForTokenizing, storeSolaPaymentMethod } from "./solaGateway";
 import { invoiceReadyEmail } from "./emailTemplates";
 import { renderBillingInvoicePdf } from "./pdf";
 import { chargeBillingInvoice, chargeBillingInvoiceWithSut, refundBillingTransaction } from "./solaBillingPayments";
@@ -2183,6 +2183,8 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     return {
       configured: true,
       enabled: !!record.isEnabled,
+      // canSaveCard is true whenever configured (isEnabled not required — saving a card never charges)
+      canSaveCard: true,
       mode: record.mode === "PROD" ? "prod" : "sandbox",
       ifieldsKey: secrets.ifieldsKey || null,
     };
@@ -2224,7 +2226,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     }).parse(req.body || {});
     const result = await saveAdminCardWithSut(tenantId, input, u.sub, {
       findTenant: (id) => (db as any).tenant.findUnique({ where: { id }, select: { id: true } }),
-      getAdapter: getBillingSolaAdapter,
+      getAdapter: getBillingSolaAdapterForTokenizing,
       storeMethod: storeSolaPaymentMethod,
       logEvent: logBillingEvent,
     });

@@ -760,7 +760,7 @@ function ManualPayModal({ invoice, onClose, onSuccess }: { invoice: InvoiceRow; 
 
 // ── PaymentMethodsModal ────────────────────────────────────────────────────────
 
-type AdminSolaPublicConfig = { configured: boolean; enabled: boolean; ifieldsKey: string | null; mode: string | null };
+type AdminSolaPublicConfig = { configured: boolean; enabled: boolean; canSaveCard?: boolean; ifieldsKey: string | null; mode: string | null };
 
 export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantId: string; tenantName: string; onClose: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
@@ -796,9 +796,9 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
     return () => { active = false; };
   }, [tenantId]);
 
-  // Load iFields script when public config is ready
+  // Load iFields script when public config is ready (only needs configured + ifieldsKey, not enabled)
   useEffect(() => {
-    if (!solaConfig?.enabled || !solaConfig?.ifieldsKey) return;
+    if (!solaConfig?.configured || !solaConfig?.ifieldsKey) return;
     const version = "3.4.2602.2001";
     const scriptId = `cardknox-ifields-${version}`;
     const configure = () => {
@@ -846,9 +846,10 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
   }
 
   const ifieldsVersion = "3.4.2602.2001";
-  const gatewayConfigured = !!solaConfig?.configured && !!solaConfig?.enabled;
-  const ifieldsKeyMissing = gatewayConfigured && !solaConfig?.ifieldsKey;
-  const canAddCard = gatewayConfigured && !!solaConfig?.ifieldsKey;
+  // canSaveCard: configured (with any isEnabled value) — saving a card is tokenizing only, no charge
+  const gatewayConfigured = !!solaConfig?.configured && (solaConfig.canSaveCard ?? !!solaConfig?.enabled);
+  const ifieldsKeyMissing = !!solaConfig?.configured && !solaConfig?.ifieldsKey;
+  const canAddCard = !!solaConfig?.configured && !!solaConfig?.ifieldsKey;
   const isSandboxMode = solaConfig?.mode === "sandbox";
 
   return (
