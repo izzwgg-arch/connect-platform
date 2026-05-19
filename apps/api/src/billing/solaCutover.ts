@@ -109,19 +109,38 @@ export async function linkSolaTokenToPaymentMethod(input: {
     }
   }
   if (!pmId) {
+    // Try GetSchedule — some Cardknox accounts omit PaymentMethodId from the list view
     try {
       const scheduleRow = await client.getSchedule(link.solaScheduleId);
       const fetched = scheduleRow.PaymentMethodId ?? scheduleRow.paymentMethodId;
       if (fetched && typeof fetched === "string" && fetched.trim()) {
         pmId = fetched.trim();
-        // Persist so future calls skip this round-trip
         await (deps.db as AnyDb).billingSolaExternalScheduleLink.update({
           where: { id: link.id },
           data: { solaPaymentMethodId: pmId },
         });
       }
     } catch {
-      // Ignore fetch error — will fall through to the error below
+      // Fall through to GetCustomer
+    }
+  }
+  if (!pmId && link.solaCustomerId) {
+    // GetCustomer: when schedules carry no PaymentMethodId, the token lives on
+    // the customer record under PaymentMethods[].PaymentMethodId
+    try {
+      const customerRow = await client.getCustomer(link.solaCustomerId);
+      const methods = Array.isArray(customerRow.PaymentMethods) ? customerRow.PaymentMethods as Array<Record<string, unknown>> : [];
+      const firstPm = methods[0];
+      const fetched = firstPm?.PaymentMethodId ?? firstPm?.paymentMethodId;
+      if (fetched && typeof fetched === "string" && fetched.trim()) {
+        pmId = fetched.trim();
+        await (deps.db as AnyDb).billingSolaExternalScheduleLink.update({
+          where: { id: link.id },
+          data: { solaPaymentMethodId: pmId },
+        });
+      }
+    } catch {
+      // Fall through to final error
     }
   }
   if (!pmId) return { ok: false, code: 400, error: "schedule_has_no_payment_method_id" };

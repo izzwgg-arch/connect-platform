@@ -257,6 +257,35 @@ export class SolaRecurringClient {
   }
 
   /**
+   * Retrieve a customer record. The response includes a PaymentMethods array
+   * which is the authoritative source for the vault token when schedules do not
+   * carry a PaymentMethodId directly (common in Cardknox recurring v2).
+   */
+  async getCustomer(customerId: string): Promise<Record<string, unknown>> {
+    if (this.config.simulate) {
+      return {
+        CustomerId: customerId,
+        BillFirstName: "Sim",
+        BillLastName: "Customer",
+        PaymentMethods: [
+          {
+            PaymentMethodId: `${customerId}_pm001`,
+            TokenType: "cc",
+            Issuer: "Visa",
+            MaskedCardNumber: "4xxxxxxxxxxx4242",
+            Exp: "1228",
+          },
+        ],
+      };
+    }
+
+    const payload = await postRecurringJson<Record<string, unknown>>(this.config, "/GetCustomer", {
+      CustomerId: customerId,
+    });
+    return payload as Record<string, unknown>;
+  }
+
+  /**
    * Disable or re-enable a recurring schedule (Phase C cutover).
    * Pass isActive: false to disable the old schedule before enabling Connect autopay.
    */
