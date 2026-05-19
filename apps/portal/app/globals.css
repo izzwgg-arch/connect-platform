@@ -4052,6 +4052,25 @@ body {
   min-width: 80px;         /* reserves space for a future image logo */
 }
 
+.brand-logo-img {
+  height: 28px;
+  width: auto;
+  display: block;
+}
+
+/* Dark mode: show logo image, hide text */
+:root[data-theme="dark"] .brand-logo-img {
+  display: block;
+}
+:root[data-theme="dark"] .brand-name {
+  display: none;
+}
+
+/* Light mode: hide logo image (white on transparent, invisible on light bg), show text */
+:root[data-theme="light"] .brand-logo-img {
+  display: none;
+}
+
 .brand-name {
   font-size: 16px;
   font-weight: 700;
