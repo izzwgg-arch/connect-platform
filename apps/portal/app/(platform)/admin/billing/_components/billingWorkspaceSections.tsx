@@ -74,9 +74,10 @@ export function SolaLinkedSchedulesSection({ tenantId, compact }: { tenantId: st
   if (error) return <ErrorState message={error} />;
 
   if (loaded && schedules.length === 0) {
-    return compact ? null : (
-      <div style={{ fontSize: 13, color: "var(--text-dim, #6b7280)", padding: "10px 0" }}>
-        No mapped Sola schedules for this company. <Link href="/admin/billing/sola-imports" style={{ fontSize: 12 }}>Manage Sola imports →</Link>
+    return (
+      <div style={{ fontSize: 12, color: "var(--text-dim, #6b7280)", padding: compact ? "6px 0" : "10px 0" }}>
+        No mapped Sola schedules for this company.{" "}
+        <Link href="/admin/billing/sola-imports" style={{ fontSize: 12 }}>Manage Sola imports →</Link>
       </div>
     );
   }
