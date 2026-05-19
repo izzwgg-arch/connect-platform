@@ -33,6 +33,7 @@ function wrapPreview(opts: {
     usage: {} as BillingInvoicePreview["usage"],
     lineItems: [],
     subtotalCents: 0,
+    taxableSubtotalCents: 0,
     taxCents: 0,
     totalCents: 0,
     taxCalculationAudit: {} as BillingInvoicePreview["taxCalculationAudit"],

@@ -4,6 +4,48 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-18 — Billing: Production readiness — taxes, cards, schedules, past-due
+
+**Task:** Five production-readiness fixes to make billing usable for real cutover.  
+**Risk:** High (invoice engine, payment flows, metadata schema).
+
+### Shipped
+
+**A — Tax estimate fix:**
+- `apps/api/src/billing/invoiceEngine.ts`: `BillingInvoicePreview` now includes `taxableSubtotalCents` (sum of taxable service lines before taxes). Exposed in API preview response.
+- `apps/portal/…/AdminTaxesFeesWorkspace.tsx`: estimate prefers `taxableSubtotalCents` from API; fallback includes flat-rate + toll-free + phone quantities for tenants without live extensions.
+- `apps/api/src/billing/billingPricingDiagnostics.test.ts` + `billingPricingState.test.ts`: added `taxableSubtotalCents` to stub objects.
+
+**B — Add-card iFields error message fix:**
+- `adminBillingOpsPanels.tsx` + `adminBillingPaymentDrawers.tsx`: distinguish "gateway enabled but iFields key missing" (guides to iFields public key field) from "gateway not configured at all".
+
+**C — Sola schedule visibility:**
+- `billingWorkspaceSections.tsx`: new `SolaLinkedSchedulesSection` shows mapped external schedules (status, masked card, amount, frequency, next run) — read-only, no charge implied.
+- Integrated into Methods page (`BillingPaymentMethodsSection`) and Payments workspace (`adminBillingPaymentsWorkspace.tsx`).
+
+**D — Billing schedule override (store + display, no worker change):**
+- `billingTenantSettingsMetadata.ts`: `BillingScheduleOverride` type + `validateBillingScheduleOverrideInput` + `mergeBillingScheduleOverrideIntoMetadata`. Added to `TenantBillingMetaPatchInput`.
+- `apps/api/src/billing/routes.ts`: `PUT /admin/billing/tenants/:tenantId/settings` accepts `billingScheduleOverride` in Zod schema; validates and merges into metadata with operator `updatedBy`/`updatedAt`.
+- `adminBillingPaymentsWorkspace.tsx`: `BillingScheduleOverrideCard` — set next payment date, skip next billing run, clear override. Worker behavior unchanged.
+
+**E — Past-due billing workflow:**
+- `adminBillingPaymentsWorkspace.tsx`: `PastDueBillingPanel` — guided prior-period or custom invoice creation with collection method selector (invoice only / card on file / new card). No automatic charges; confirms before any charge.
+- `adminBillingPaymentDrawers.tsx`: `OneTimeChargeDrawer` gains `initialDescription`, `initialAmountCents`, `initialChargeMode` props for pre-filling from the past-due panel.
+
+### Tests
+- `pnpm --filter @connect/api test:billing`: 240 pass, 2 skipped (credential-gated), 0 fail.
+- `pnpm --filter @connect/api typecheck`: pass.
+- `pnpm --filter @connect/portal typecheck`: pass.
+
+### Explicitly NOT changed
+- Telephony, mobile, CRM, worker billing logic, Prisma schema.
+- No charges run during implementation. No Sola schedules disabled.
+
+### Deploy
+- **API** (invoice engine + settings route) + **portal** (all UI).
+
+---
+
 ## 2026-05-17 — Billing: Taxes & fees workspace (Phase A)
 
 **Task:** Redesign Admin Billing → Taxes into a telecom tax/fee management UI; move cycle/branding elsewhere.  

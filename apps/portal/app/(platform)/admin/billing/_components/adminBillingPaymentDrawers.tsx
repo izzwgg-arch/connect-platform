@@ -62,6 +62,9 @@ export function OneTimeChargeDrawer({
   tenantName,
   isLiveCharge,
   initialPaymentMethodId,
+  initialDescription,
+  initialAmountCents,
+  initialChargeMode,
   onClose,
   onSuccess,
 }: {
@@ -69,15 +72,18 @@ export function OneTimeChargeDrawer({
   tenantName: string;
   isLiveCharge: boolean;
   initialPaymentMethodId?: string | null;
+  initialDescription?: string;
+  initialAmountCents?: number;
+  initialChargeMode?: "none" | "card_on_file" | "new_card";
   onClose: () => void;
   onSuccess: () => void;
 }) {
   const [step, setStep] = useState<"form" | "confirm" | "done">("form");
-  const [description, setDescription] = useState("");
-  const [amount, setAmount] = useState("");
+  const [description, setDescription] = useState(initialDescription ?? "");
+  const [amount, setAmount] = useState(initialAmountCents ? (initialAmountCents / 100).toFixed(2) : "");
   const [operatorNote, setOperatorNote] = useState("");
   const [invoiceMemo, setInvoiceMemo] = useState("");
-  const [chargeMode, setChargeMode] = useState<"none" | "card_on_file" | "new_card">("card_on_file");
+  const [chargeMode, setChargeMode] = useState<"none" | "card_on_file" | "new_card">(initialChargeMode ?? "card_on_file");
   const [paymentMethodId, setPaymentMethodId] = useState("");
   const [saveCard, setSaveCard] = useState(true);
   const [makeDefault, setMakeDefault] = useState(false);
@@ -181,7 +187,9 @@ export function OneTimeChargeDrawer({
   }
 
   const ifieldsVersion = "3.4.2602.2001";
-  const canAddCard = !!solaConfig?.enabled && !!solaConfig?.ifieldsKey;
+  const gatewayConfigured = !!solaConfig?.configured && !!solaConfig?.enabled;
+  const ifieldsKeyMissing = gatewayConfigured && !solaConfig?.ifieldsKey;
+  const canAddCard = gatewayConfigured && !!solaConfig?.ifieldsKey;
 
   return (
     <BillingActionPanel
@@ -342,7 +350,11 @@ export function OneTimeChargeDrawer({
                 ) : null}
               </form>
             ) : (
-              <p className="muted" style={{ fontSize: 13, margin: 0 }}>Secure card capture is not configured for this company.</p>
+              <p className="muted" style={{ fontSize: 13, margin: 0 }}>
+                {ifieldsKeyMissing
+                  ? "Payment gateway is enabled but the iFields hosted card capture key is not set. Add the iFields public key in Admin Billing → Company billing setup → Payment gateway."
+                  : "Payment gateway is not configured for this company."}
+              </p>
             )
           ) : null}
 

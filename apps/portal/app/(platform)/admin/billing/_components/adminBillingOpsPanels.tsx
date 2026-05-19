@@ -846,7 +846,9 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
   }
 
   const ifieldsVersion = "3.4.2602.2001";
-  const canAddCard = !!solaConfig?.enabled && !!solaConfig?.ifieldsKey;
+  const gatewayConfigured = !!solaConfig?.configured && !!solaConfig?.enabled;
+  const ifieldsKeyMissing = gatewayConfigured && !solaConfig?.ifieldsKey;
+  const canAddCard = gatewayConfigured && !!solaConfig?.ifieldsKey;
   const isSandboxMode = solaConfig?.mode === "sandbox";
 
   return (
@@ -910,7 +912,7 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
               disabled={solaConfig === null}
               style={{ fontSize: 13 }}
             >
-              {solaConfig === null ? "Loading…" : canAddCard ? "+ Add card" : "+ Add card (gateway not configured)"}
+              {solaConfig === null ? "Loading…" : canAddCard ? "+ Add card" : ifieldsKeyMissing ? "+ Add card (iFields key missing)" : "+ Add card (gateway not configured)"}
             </button>
           ) : (
             <div>
@@ -927,7 +929,9 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
 
               {!canAddCard ? (
                 <div style={{ fontSize: 13, color: "#6b7280", padding: "10px 0" }}>
-                  Hosted card capture is not configured for this company yet. Configure the payment gateway in Admin Billing → Company billing setup before adding cards.
+                  {ifieldsKeyMissing
+                    ? "Payment gateway is enabled but the iFields hosted card capture key is not set. Add the iFields public key in Admin Billing → Company billing setup → Payment gateway to enable card entry."
+                    : "Payment gateway is not configured for this company. Set up the gateway in Admin Billing → Company billing setup → Payment gateway before adding cards."}
                 </div>
               ) : (
                 <form

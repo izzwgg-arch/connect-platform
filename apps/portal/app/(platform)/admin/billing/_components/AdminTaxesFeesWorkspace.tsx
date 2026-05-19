@@ -17,9 +17,11 @@ import {
   type TelecomFeeKey,
 } from "../../../../../lib/billingTelecomFees";
 import {
+  activeExtensionsFlatRateFromMetadata,
   parseBillingQuantityOverridesFromMetadata,
   previewServiceSubtotalCents,
   resolveBillingQuantitiesForPortal,
+  resolveTollFreeDidPriceCentsForPortal,
 } from "../../../../../lib/billingUi";
 import type { TenantDetail } from "./tenantBillingConfigForms";
 import "./billingTaxFees.css";
@@ -85,16 +87,26 @@ export function AdminTaxesFeesWorkspace({ detail, onSaved, settingsSectionHref, 
   }, [settings, usage]);
 
   const taxableSubtotalCents = useMemo(() => {
+    // Prefer API-computed taxable subtotal (most accurate — accounts for flat rate, overrides, etc.)
+    const fromApiPreview = Number((detail.preview as any)?.taxableSubtotalCents || 0);
+    if (fromApiPreview > 0) return fromApiPreview;
+    // Secondary: sum service line items from preview (older API without taxableSubtotalCents)
     const fromPreview = previewServiceSubtotalCents(detail.preview);
     if (fromPreview > 0) return fromPreview;
-    const ext = quantities.billing.extensions;
+    // Fallback: compute from billing quantities + configured prices
+    // Include flat rate when enabled (estimate even without live extensions for migrating tenants)
+    const flatRate = activeExtensionsFlatRateFromMetadata(settings.metadata);
+    const extCents =
+      flatRate?.enabled && flatRate.amountCents > 0
+        ? flatRate.amountCents
+        : quantities.billing.extensions * Number(settings.extensionPriceCents || 0);
     const local = quantities.billing.phoneNumbers;
     const tf = quantities.billing.tollFreeNumbers;
-    return (
-      ext * Number(settings.extensionPriceCents || 0) +
-      local * Number(settings.additionalPhoneNumberPriceCents || 0) +
-      tf * Number(settings.additionalPhoneNumberPriceCents || 0)
+    const tfPrice = resolveTollFreeDidPriceCentsForPortal(
+      settings.metadata,
+      Number(settings.additionalPhoneNumberPriceCents || 0),
     );
+    return extCents + local * Number(settings.additionalPhoneNumberPriceCents || 0) + tf * tfPrice;
   }, [detail.preview, quantities, settings]);
 
   const estimate = useMemo(

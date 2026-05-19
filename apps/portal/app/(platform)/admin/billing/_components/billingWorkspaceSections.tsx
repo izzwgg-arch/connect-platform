@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { apiGet } from "../../../../../services/apiClient";
 import { DetailCard } from "../../../../../components/DetailCard";
 import { ErrorState } from "../../../../../components/ErrorState";
@@ -14,6 +14,145 @@ import { mergeSearchParams } from "./adminBillingLinks";
 import { PaymentMethodsModal } from "./adminBillingOpsPanels";
 import "./billingPayments.css";
 import "./billingPhase8.css";
+
+type SolaScheduleRow = {
+  id: string;
+  customerName: string | null;
+  customerEmail: string | null;
+  companyName: string | null;
+  brand: string | null;
+  last4: string | null;
+  amountCents: number | null;
+  intervalType: string | null;
+  intervalCount: number | null;
+  nextRunAt: string | null;
+  isActive: boolean;
+  mappingStatus: string;
+};
+
+/** Compact section showing mapped Sola recurring schedules for the tenant. */
+export function SolaLinkedSchedulesSection({ tenantId, compact }: { tenantId: string; compact?: boolean }) {
+  const [schedules, setSchedules] = useState<SolaScheduleRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const result = await apiGet<{ schedules: SolaScheduleRow[] }>(
+        `/admin/billing/platform/sola-import/schedules?status=MAPPED&tenantId=${encodeURIComponent(tenantId)}&limit=10`,
+      );
+      setSchedules(result.schedules || []);
+      setLoaded(true);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Unable to load Sola schedules.");
+    } finally {
+      setLoading(false);
+    }
+  }, [tenantId]);
+
+  // Auto-load for non-compact mode; lazy for compact
+  useEffect(() => {
+    if (!compact) void load();
+  }, [compact, load]);
+
+  if (!loaded && !loading && compact) {
+    return (
+      <div style={{ marginTop: 12 }}>
+        <button className="btn ghost" type="button" style={{ fontSize: 12 }} onClick={() => void load()}>
+          Check linked Sola schedules
+        </button>
+      </div>
+    );
+  }
+
+  if (loading) return <BillingTableSkeleton variant="invoice" rows={2} />;
+  if (error) return <ErrorState message={error} />;
+
+  if (loaded && schedules.length === 0) {
+    return compact ? null : (
+      <div style={{ fontSize: 13, color: "var(--text-dim, #6b7280)", padding: "10px 0" }}>
+        No mapped Sola schedules for this company. <Link href="/admin/billing/sola-imports" style={{ fontSize: 12 }}>Manage Sola imports →</Link>
+      </div>
+    );
+  }
+
+  return (
+    <div data-testid="sola-linked-schedules" style={{ marginTop: compact ? 14 : 0 }}>
+      {compact ? (
+        <p className="billing-inv-meta" style={{ marginBottom: 8 }}>
+          Linked Sola schedules{" "}
+          <span style={{ fontSize: 11, background: "#fef9c3", color: "#713f12", borderRadius: 4, padding: "1px 5px", fontWeight: 600 }}>
+            Old schedule may still charge
+          </span>
+        </p>
+      ) : (
+        <p className="billing-inv-meta" style={{ marginBottom: 8 }}>
+          Linked Sola recurring schedules
+          <span style={{ marginLeft: 8, fontSize: 11, background: "#fef9c3", color: "#713f12", borderRadius: 4, padding: "1px 5px", fontWeight: 600 }}>
+            ⚠ Old schedule still active in Sola until disabled
+          </span>
+        </p>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {schedules.map((s) => {
+          const card = s.last4 ? `${s.brand || "Card"} ···${s.last4}` : "Card not shown";
+          const freq = s.intervalCount && s.intervalType
+            ? `Every ${s.intervalCount} ${s.intervalType}${s.intervalCount > 1 ? "s" : ""}`
+            : "—";
+          const nextRun = s.nextRunAt ? formatDate(s.nextRunAt) : "Unknown";
+          return (
+            <div
+              key={s.id}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 8,
+                border: `1px solid ${s.isActive ? "#fde68a" : "var(--border, #e0e0e0)"}`,
+                background: s.isActive ? "#fffbeb" : "transparent",
+                fontSize: 13,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ flex: 1 }}>
+                  <strong>{s.customerName || s.companyName || "Customer"}</strong>
+                  {s.customerEmail ? <span style={{ marginLeft: 6, fontSize: 11, color: "#6b7280" }}>{s.customerEmail}</span> : null}
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      borderRadius: 4,
+                      padding: "1px 6px",
+                      background: s.isActive ? "#dcfce7" : "#f3f4f6",
+                      color: s.isActive ? "#166534" : "#6b7280",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {s.isActive ? "Active in Sola" : "Inactive"}
+                  </span>
+                </div>
+              </div>
+              <div style={{ marginTop: 6, display: "flex", gap: 16, flexWrap: "wrap", color: "#6b7280", fontSize: 12 }}>
+                <span>Card: {card}</span>
+                <span>Amount: {s.amountCents != null ? dollars(s.amountCents) : "—"}</span>
+                <span>Frequency: {freq}</span>
+                <span>Next Sola run: {nextRun}</span>
+              </div>
+              {s.isActive ? (
+                <p style={{ margin: "6px 0 0", fontSize: 12, color: "#92400e" }}>
+                  Disable this Sola schedule before enabling Connect autopay to avoid double-charging.{" "}
+                  <Link href="/admin/billing/sola-imports" style={{ fontSize: 12 }}>Manage Sola imports →</Link>
+                </p>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 export function BillingPaymentMethodsSection({ detail }: { detail: TenantDetail }) {
   const methods = detail.paymentMethods || [];
@@ -75,6 +214,12 @@ export function BillingPaymentMethodsSection({ detail }: { detail: TenantDetail 
           </div>
         )}
       </DetailCard>
+
+      <div style={{ marginTop: 12 }}>
+        <DetailCard title="Linked Sola schedules" dataTestId="billing-sola-schedules-card">
+          <SolaLinkedSchedulesSection tenantId={detail.tenant.id} />
+        </DetailCard>
+      </div>
 
       {methodsOpen ? (
         <PaymentMethodsModal tenantId={detail.tenant.id} tenantName={detail.tenant.name} onClose={() => setMethodsOpen(false)} />

@@ -16,7 +16,10 @@ import {
 import { validateBillingFlatRateInput } from "./billingFlatRate";
 import { validateBillingQuantityOverridesInput } from "./billingQuantityOverrides";
 import { taxProfilePatchFromTelecomFees, validateBillingTelecomFeesInput } from "./billingTelecomFees";
-import { mergeTenantBillingSettingsMetadata } from "./billingTenantSettingsMetadata";
+import {
+  mergeTenantBillingSettingsMetadata,
+  validateBillingScheduleOverrideInput,
+} from "./billingTenantSettingsMetadata";
 import { getBillingSolaAdapter, storeSolaPaymentMethod } from "./solaGateway";
 import { invoiceReadyEmail } from "./emailTemplates";
 import { renderBillingInvoicePdf } from "./pdf";
@@ -663,6 +666,16 @@ export async function registerBillingRoutes(app: FastifyInstance) {
           .nullable()
           .optional(),
         billingTelecomFees: billingTelecomFeesPutSchema().nullable().optional(),
+        billingScheduleOverride: z
+          .object({
+            nextPaymentDate: z.string().nullable().optional(),
+            skipNextPayment: z.boolean().optional(),
+            skipReason: z.string().max(500).nullable().optional(),
+            updatedBy: z.string().max(200).optional(),
+            updatedAt: z.string().optional(),
+          })
+          .nullable()
+          .optional(),
       })
       .merge(invoiceBrandingPutSchema)
       .parse(req.body || {});
@@ -687,6 +700,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       billingQuantityOverrides,
       tollFreeDidPriceCents,
       billingTelecomFees,
+      billingScheduleOverride,
       ...pricing
     } = input as any;
     const pricingData = Object.fromEntries(Object.entries(pricing).filter(([, v]) => v !== undefined));
@@ -695,6 +709,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     let flatRatePatch: ReturnType<typeof validateBillingFlatRateInput> | null = null;
     let quantityOverridesPatch: ReturnType<typeof validateBillingQuantityOverridesInput> | null = null;
     let telecomFeesPatch: ReturnType<typeof validateBillingTelecomFeesInput> | null = null;
+    let scheduleOverridePatch: ReturnType<typeof validateBillingScheduleOverrideInput> | null = null;
     if (billingFlatRate !== undefined) {
       flatRatePatch = validateBillingFlatRateInput(billingFlatRate);
       if (!flatRatePatch.ok) {
@@ -713,13 +728,25 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: "invalid_billing_telecom_fees", message: telecomFeesPatch.error });
       }
     }
+    if (billingScheduleOverride !== undefined) {
+      // Inject operatorId as updatedBy if not supplied
+      const withOperator =
+        billingScheduleOverride !== null
+          ? { updatedBy: u.sub, updatedAt: new Date().toISOString(), ...billingScheduleOverride }
+          : null;
+      scheduleOverridePatch = validateBillingScheduleOverrideInput(withOperator);
+      if (!scheduleOverridePatch.ok) {
+        return reply.code(400).send({ error: "invalid_billing_schedule_override", message: scheduleOverridePatch.error });
+      }
+    }
     if (
       taxProviderId !== undefined ||
       billingPricingMode !== undefined ||
       billingFlatRate !== undefined ||
       billingQuantityOverrides !== undefined ||
       tollFreeDidPriceCents !== undefined ||
-      billingTelecomFees !== undefined
+      billingTelecomFees !== undefined ||
+      billingScheduleOverride !== undefined
     ) {
       const cur = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId } });
       if (billingPricingMode !== undefined) {
@@ -732,6 +759,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         ...(quantityOverridesPatch?.ok ? { billingQuantityOverrides: quantityOverridesPatch.value } : {}),
         ...(tollFreeDidPriceCents !== undefined ? { tollFreeDidPriceCents } : {}),
         ...(telecomFeesPatch?.ok ? { billingTelecomFees: telecomFeesPatch.value } : {}),
+        ...(scheduleOverridePatch?.ok ? { billingScheduleOverride: scheduleOverridePatch.value } : {}),
       });
     }
     const createUpdate = { ...pricingData, ...brandingPatch, ...(mergedMetadata !== undefined ? { metadata: mergedMetadata } : {}) };

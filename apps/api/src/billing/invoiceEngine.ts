@@ -30,6 +30,8 @@ export type BillingInvoicePreview = {
     metadata?: Record<string, unknown>;
   }>;
   subtotalCents: number;
+  /** Sum of taxable-flagged service line items (before taxes). Used by portal tax estimate. */
+  taxableSubtotalCents: number;
   taxCents: number;
   totalCents: number;
   /** Persisted on invoice `metadata.taxCalculationAudit` at creation. */
@@ -304,6 +306,7 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
     billingQuantities,
     lineItems,
     subtotalCents,
+    taxableSubtotalCents,
     taxCents,
     totalCents,
     taxCalculationAudit: taxResult.audit,
