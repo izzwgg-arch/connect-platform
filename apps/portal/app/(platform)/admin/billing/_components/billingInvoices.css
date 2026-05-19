@@ -272,7 +272,7 @@
 }
 
 .billing-fin-menu__trigger {
-  list-style: none;
+  appearance: none;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -283,14 +283,11 @@
   border: 1px solid var(--billing-border, var(--border));
   background: color-mix(in srgb, var(--billing-surface-raised, var(--panel-2)) 80%, transparent);
   transition: background 0.12s ease, border-color 0.12s ease;
-}
-
-.billing-fin-menu__trigger::-webkit-details-marker {
-  display: none;
+  font-family: inherit;
 }
 
 .billing-fin-menu__trigger:hover,
-.billing-fin-menu[open] .billing-fin-menu__trigger {
+.billing-fin-menu--open .billing-fin-menu__trigger {
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
@@ -303,10 +300,8 @@
 }
 
 .billing-fin-menu__panel {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 4px);
-  z-index: 20;
+  position: fixed;
+  z-index: 9999;
   min-width: 188px;
   padding: 4px;
   border-radius: 10px;
