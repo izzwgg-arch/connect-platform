@@ -21,6 +21,9 @@ export type QueueBillingEmailInput = {
   subject: string;
   html: string;
   text: string;
+  /** NOTE: EmailJob.invoiceId has a FK to the legacy `Invoice` table, NOT `BillingInvoice`.
+   *  Passing a BillingInvoice ID here will violate the FK constraint (P2003).
+   *  Always omit or pass null for billing-system emails. */
   invoiceId?: string | null;
 };
 
@@ -28,7 +31,9 @@ export type QueueBillingEmailInput = {
 export function buildBillingEmailJobCreateData(input: QueueBillingEmailInput) {
   return {
     tenantId: input.tenantId,
-    invoiceId: input.invoiceId ?? null,
+    // EmailJob.invoiceId FK references the legacy Invoice table, not BillingInvoice.
+    // Billing engine uses its own BillingInvoice table — do NOT pass a BillingInvoice ID here.
+    invoiceId: null,
     type: input.type,
     toEmail: input.to,
     subject: input.subject,

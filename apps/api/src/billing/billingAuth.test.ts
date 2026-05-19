@@ -31,7 +31,9 @@ test("platform admin billing matches SUPER_ADMIN-only API gate", () => {
   assert.equal(canAccessPlatformAdminBillingRoutes(undefined), false);
 });
 
-test("queued billing email payload stores invoiceId when provided", () => {
+test("queued billing email payload always sets invoiceId=null (EmailJob.invoiceId FK references legacy Invoice table, not BillingInvoice)", () => {
+  // EmailJob.invoiceId has a DB FK to the old Invoice table; passing a BillingInvoice ID
+  // violates it. The function intentionally forces null to prevent P2003 errors.
   const data = buildBillingEmailJobCreateData({
     tenantId: "t1",
     to: "a@b.com",
@@ -39,9 +41,9 @@ test("queued billing email payload stores invoiceId when provided", () => {
     subject: "s",
     html: "h",
     text: "x",
-    invoiceId: "inv_99",
+    invoiceId: "inv_99", // caller passes it but it must not be forwarded to DB
   });
-  assert.equal(data.invoiceId, "inv_99");
+  assert.equal(data.invoiceId, null);
   assert.equal(data.tenantId, "t1");
   assert.equal(data.toEmail, "a@b.com");
 });
