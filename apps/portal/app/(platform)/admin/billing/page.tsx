@@ -104,11 +104,22 @@ export default function AdminBillingPage() {
     } catch { /* ignore */ }
     return null;
   })();
-  const nextPaymentDate = scheduleOverride?.nextPaymentDate
-    ? formatDate(String(scheduleOverride.nextPaymentDate))
+  const rawNextPaymentDate: string | null = scheduleOverride?.nextPaymentDate
+    ? String(scheduleOverride.nextPaymentDate)
     : null;
+  const nextPaymentDate = rawNextPaymentDate ? formatDate(rawNextPaymentDate) : null;
   const billingDay = detail?.settings?.billingDayOfMonth;
   const autopayOn = !!detail?.settings?.autoBillingEnabled;
+
+  // Detect if billing date has already passed with no invoice generated
+  const nextPaymentDatePassed = (() => {
+    if (!rawNextPaymentDate) return false;
+    const d = new Date(rawNextPaymentDate + "T00:00:00");
+    return d < new Date();
+  })();
+  const previewTotal: number = detail?.preview?.totalCents ?? 0;
+  // If no open invoices but billing date already passed, show preview amount as pending
+  const showPreviewBalance = livBalanceDue === 0 && nextPaymentDatePassed && previewTotal > 0;
   const recent = detail
     ? [...(detail.invoices || [])].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5)
     : [];
@@ -129,8 +140,16 @@ export default function AdminBillingPage() {
           <div className="billing-ov-summary">
             <div className="billing-ov-summary__card">
               <label>Balance due</label>
-              <strong>{livBalanceDue !== null ? dollars(livBalanceDue) : "—"}</strong>
-              <small>{unpaid > 0 ? `${unpaid} open invoice${unpaid !== 1 ? "s" : ""}${failed > 0 ? ` · ${failed} failed` : ""}` : "No outstanding balance"}</small>
+              <strong style={{ color: showPreviewBalance ? "var(--warn-600, #d97706)" : undefined }}>
+                {showPreviewBalance ? dollars(previewTotal) : livBalanceDue !== null ? dollars(livBalanceDue) : "—"}
+              </strong>
+              <small>
+                {showPreviewBalance
+                  ? `Invoice not yet generated · due ${nextPaymentDate}`
+                  : unpaid > 0
+                  ? `${unpaid} open invoice${unpaid !== 1 ? "s" : ""}${failed > 0 ? ` · ${failed} failed` : ""}`
+                  : "No outstanding balance"}
+              </small>
             </div>
             <div className="billing-ov-summary__card">
               <label>Account standing</label>
@@ -143,7 +162,11 @@ export default function AdminBillingPage() {
             </div>
             <div className="billing-ov-summary__card">
               <label>Next billing date</label>
-              <strong>{nextPaymentDate || (billingDay ? `Day ${billingDay}` : "—")}</strong>
+              <strong style={{ color: nextPaymentDatePassed ? "var(--warn-600, #d97706)" : undefined }}>
+                {nextPaymentDate
+                  ? `${nextPaymentDate}${nextPaymentDatePassed ? " (past due)" : ""}`
+                  : billingDay ? `Day ${billingDay}` : "—"}
+              </strong>
               <small>{nextBill || (billingDay ? `Billing day ${billingDay} of each month` : "No billing day set")}</small>
             </div>
             <div className="billing-ov-summary__card">
