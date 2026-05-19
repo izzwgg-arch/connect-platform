@@ -258,6 +258,9 @@ importers:
 
   apps/portal:
     dependencies:
+      '@cardknox/react-ifields':
+        specifier: ^2.2.86
+        version: 2.2.86
       '@connect/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -1363,6 +1366,9 @@ packages:
   '@babel/types@7.29.0':
     resolution: {integrity: sha512-LwdZHpScM4Qz8Xw2iKSzS+cfglZzJGvofQICy7W7v4caru4EaAmyUuO6BGrbyQ2mYV11W0U8j5mBhd14dd3B0A==}
     engines: {node: '>=6.9.0'}
+
+  '@cardknox/react-ifields@2.2.86':
+    resolution: {integrity: sha512-t0hyHbtLvho0iml78Tvej2qc3LeKGo+9NRG4PuK2hhKKpmKaOn/BAFRYLF70HvghzGE9PDth16AvMkpHyef2nA==}
 
   '@develar/schema-utils@2.6.5':
     resolution: {integrity: sha512-0cp4PsWQ/9avqTVMCtZ+GirikIA36ikvjtHweU4/j8yLtgObI0+JUPhYFScgwlteveGB1rt3Cm8UhN04XayDig==}
@@ -8583,6 +8589,11 @@ snapshots:
     dependencies:
       '@babel/helper-string-parser': 7.27.1
       '@babel/helper-validator-identifier': 7.28.5
+
+  '@cardknox/react-ifields@2.2.86':
+    dependencies:
+      prop-types: 15.8.1
+      react: 18.3.1
 
   '@develar/schema-utils@2.6.5':
     dependencies:

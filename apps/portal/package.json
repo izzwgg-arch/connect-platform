@@ -11,6 +11,7 @@
     "test": "tsx --test lib/desktopNotificationPoll.test.ts lib/billingTaxSuggestions.test.ts"
   },
   "dependencies": {
+    "@cardknox/react-ifields": "^2.2.86",
     "@connect/shared": "workspace:*",
     "jssip": "^3.10.1",
     "lucide-react": "^0.577.0",
