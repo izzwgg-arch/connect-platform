@@ -14,7 +14,7 @@ import { BillingEmptyState } from "../../../../../components/billing/BillingEmpt
 import { BillingTableSkeleton } from "../../../../../components/billing/BillingTableSkeleton";
 import { BillingFinanceChip } from "../../../../../components/billing/BillingFinanceChip";
 import { InvoiceRowMenu } from "../../../../../components/billing/InvoiceRowMenu";
-import { dollars, invoiceFilterStatusLabel, invoiceStatusLabel, transactionStatusLabel } from "../../../../../lib/billingUi";
+import { dollars, invoiceCanDelete, invoiceFilterStatusLabel, invoiceStatusLabel, transactionStatusLabel } from "../../../../../lib/billingUi";
 import { useAppContext } from "../../../../../hooks/useAppContext";
 import { adminBillingTenantQuery, type AdminOpsTab } from "./adminBillingLinks";
 import { useAdminBillingTenant } from "./useAdminBillingTenant";
@@ -206,6 +206,8 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
   const [collectionsMsg, setCollectionsMsg] = useState<{ type: "ok" | "err"; text: string } | null>(null);
   const [collectionsBusy, setCollectionsBusy] = useState(false);
   const [collectionsDncConfirm, setCollectionsDncConfirm] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   useEscapeClose(true, onClose);
 
@@ -445,6 +447,17 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
             })()}
 
             <div className="row-actions" style={{ marginTop: 16 }}>
+              {inv && invoiceCanDelete(inv) ? (
+                <button
+                  className="btn ghost"
+                  type="button"
+                  style={{ color: "var(--danger, #dc2626)", borderColor: "var(--danger, #dc2626)" }}
+                  disabled={deleteBusy}
+                  onClick={() => setDeleteConfirm(true)}
+                >
+                  Delete invoice
+                </button>
+              ) : null}
               <button className="btn primary" type="button" onClick={() => { onAction(); onClose(); }}>Refresh list</button>
               <button className="btn ghost" type="button" onClick={onClose}>Close</button>
             </div>
@@ -453,6 +466,53 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
         </div>
       </div>
     </div>
+
+    {deleteConfirm && inv ? (
+      <BillingActionPanel
+        layout="center"
+        centerWidth="min(520px, 96vw)"
+        variant="danger"
+        onClose={() => { if (!deleteBusy) setDeleteConfirm(false); }}
+        eyebrow={inv.tenant?.name || "Company"}
+        title="Delete this invoice permanently?"
+        subtitle="This removes the invoice and its line items from billing. Use void if you need an audit trail without removing the record."
+        summary={(
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            <li><strong>Invoice</strong> {inv.invoiceNumber || invoiceId.slice(0, 8)}</li>
+            <li><strong>Total</strong> {dollars(inv.totalCents)}</li>
+            <li><strong>Balance due</strong> {dollars(inv.balanceDueCents)}</li>
+            <li><strong>Status</strong> {invoiceStatusLabel(inv.status)}</li>
+          </ul>
+        )}
+        warning="This cannot be undone. Payment history rows stay in the ledger but will no longer link to this invoice."
+        footer={(
+          <>
+            <button className="btn ghost" type="button" disabled={deleteBusy} onClick={() => setDeleteConfirm(false)}>Cancel</button>
+            <button
+              className="btn danger"
+              type="button"
+              disabled={deleteBusy}
+              onClick={async () => {
+                setDeleteBusy(true);
+                try {
+                  await apiDelete(`/admin/billing/invoices/${invoiceId}`);
+                  setDeleteConfirm(false);
+                  onAction();
+                  onClose();
+                } catch (err: unknown) {
+                  setCollectionsMsg({ type: "err", text: billingErrorMessage(err, "Delete failed.") });
+                  setDeleteConfirm(false);
+                } finally {
+                  setDeleteBusy(false);
+                }
+              }}
+            >
+              {deleteBusy ? "Deleting…" : "Delete permanently"}
+            </button>
+          </>
+        )}
+      />
+    ) : null}
 
     {collectionsDncConfirm && inv && !["PAID", "VOID"].includes(inv.status) ? (() => {
       const cs = readInvoiceCollections(inv.metadata);
@@ -1277,6 +1337,7 @@ export function InvoicesTab() {
   const [listRev, setListRev] = useState(0);
   const [markPaidTarget, setMarkPaidTarget] = useState<InvoiceRow | null>(null);
   const [voidTarget, setVoidTarget] = useState<InvoiceRow | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<InvoiceRow | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const searchPending = searchInput.trim() !== search.trim();
 
@@ -1317,6 +1378,21 @@ export function InvoicesTab() {
       return true;
     } catch (err) {
       showToast("err", billingErrorMessage(err, `${label} failed.`));
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function actDelete(invoiceId: string): Promise<boolean> {
+    setBusy(`Delete-${invoiceId}`);
+    try {
+      await apiDelete(`/admin/billing/invoices/${invoiceId}`);
+      showToast("ok", "Invoice deleted.");
+      setListRev((r) => r + 1);
+      return true;
+    } catch (err) {
+      showToast("err", billingErrorMessage(err, "Delete failed."));
       return false;
     } finally {
       setBusy(null);
@@ -1476,6 +1552,7 @@ export function InvoicesTab() {
                     onRetry={canAct ? () => setPayInvoice(inv) : undefined}
                     onMarkPaid={canAct ? () => setMarkPaidTarget(inv) : undefined}
                     onVoid={canAct ? () => setVoidTarget(inv) : undefined}
+                    onDelete={invoiceCanDelete(inv) ? () => setDeleteTarget(inv) : undefined}
                     onSms={canAct ? () => setSmsInvoice(inv) : undefined}
                   />
                   </div>
@@ -1608,6 +1685,43 @@ export function InvoicesTab() {
                 }}
               >
                 {busy === `Void-${voidTarget.id}` ? "Voiding…" : "Void invoice"}
+              </button>
+            </>
+          )}
+        />
+      ) : null}
+
+      {deleteTarget ? (
+        <BillingActionPanel
+          layout="drawer"
+          drawerWidth="min(440px, 100vw)"
+          variant="danger"
+          onClose={() => { if (!busy) setDeleteTarget(null); }}
+          eyebrow={deleteTarget.tenant?.name || "Company"}
+          title="Delete this invoice permanently?"
+          subtitle="Removes the invoice and line items. Prefer void if you need a record that the bill existed."
+          summary={(
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              <li><strong>Invoice</strong> {deleteTarget.invoiceNumber || deleteTarget.id.slice(0, 8)}</li>
+              <li><strong>Total</strong> {dollars(deleteTarget.totalCents)}</li>
+              <li><strong>Balance due</strong> {dollars(deleteTarget.balanceDueCents)}</li>
+              <li><strong>Status</strong> {invoiceStatusLabel(deleteTarget.status)}</li>
+            </ul>
+          )}
+          warning="This cannot be undone. Paid invoices and invoices with approved card charges cannot be deleted."
+          footer={(
+            <>
+              <button className="btn ghost" type="button" disabled={!!busy} onClick={() => setDeleteTarget(null)}>Cancel</button>
+              <button
+                className="btn danger"
+                type="button"
+                disabled={!!busy}
+                onClick={async () => {
+                  const ok = await actDelete(deleteTarget.id);
+                  if (ok) setDeleteTarget(null);
+                }}
+              >
+                {busy === `Delete-${deleteTarget.id}` ? "Deleting…" : "Delete permanently"}
               </button>
             </>
           )}

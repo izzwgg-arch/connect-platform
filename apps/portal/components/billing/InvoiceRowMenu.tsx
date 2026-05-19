@@ -15,6 +15,7 @@ export type InvoiceRowMenuProps = {
   onRetry?: () => void;
   onMarkPaid?: () => void;
   onVoid?: () => void;
+  onDelete?: () => void;
   onSms?: () => void;
 };
 
@@ -35,6 +36,7 @@ export function InvoiceRowMenu({
   onRetry,
   onMarkPaid,
   onVoid,
+  onDelete,
   onSms,
 }: InvoiceRowMenuProps) {
   return (
@@ -91,6 +93,11 @@ export function InvoiceRowMenu({
           {canAct && onVoid ? (
             <button type="button" role="menuitem" className="billing-fin-menu__danger" disabled={disabled} onClick={(e) => { closeMenu(e); onVoid(); }}>
               Void invoice
+            </button>
+          ) : null}
+          {onDelete ? (
+            <button type="button" role="menuitem" className="billing-fin-menu__danger" disabled={disabled} onClick={(e) => { closeMenu(e); onDelete(); }}>
+              Delete permanently
             </button>
           ) : null}
           <div className="billing-fin-menu__divider" role="separator" />

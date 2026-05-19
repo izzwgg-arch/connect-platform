@@ -56,6 +56,13 @@ export function invoiceFilterStatusLabel(status: string): string {
   return invoiceStatusLabel(status);
 }
 
+/** Whether platform admin may permanently delete this invoice (API enforces the same rules). */
+export function invoiceCanDelete(inv: { status: string; transactions?: { status: string }[] | null }): boolean {
+  if (String(inv.status || "").toUpperCase() === "PAID") return false;
+  if ((inv.transactions || []).some((t) => String(t.status || "").toUpperCase() === "APPROVED")) return false;
+  return true;
+}
+
 export function transactionStatusLabel(status: string | undefined | null): string {
   switch (String(status || "").toUpperCase()) {
     case "APPROVED": return "Approved";

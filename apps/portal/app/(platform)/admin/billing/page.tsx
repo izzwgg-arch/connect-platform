@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
-import { apiGet } from "../../../../services/apiClient";
+import { apiDelete, apiGet } from "../../../../services/apiClient";
+import { billingErrorMessage } from "../../../../components/BillingActionToast";
+import { BillingActionPanel } from "../../../../components/billing/BillingActionPanel";
 import { ErrorState } from "../../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
 import { useAppContext } from "../../../../hooks/useAppContext";
@@ -11,6 +13,7 @@ import {
   adminTenantStandingHeadline,
   dollars,
   formatDate,
+  invoiceCanDelete,
   invoiceStatusLabel,
   nextBillingSummary,
   worstNonTerminalInvoiceStatus,
@@ -32,6 +35,9 @@ export default function AdminBillingPage() {
   const [detail, setDetail] = useState<TenantDetail | null>(null);
   const [detailError, setDetailError] = useState("");
   const [detailLoading, setDetailLoading] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; invoiceNumber?: string | null; totalCents: number; balanceDueCents: number; status: string } | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const tenants = useAsyncResource<TenantRow[]>(() => apiGet<TenantRow[]>("/admin/billing/platform/tenants"), []);
   const tenantRows = tenants.status === "success" ? tenants.data : [];
   const tenantIds = useMemo(() => tenantRows.map((t) => t.id), [tenantRows]);
@@ -154,7 +160,11 @@ export default function AdminBillingPage() {
             ) : (
               <div className="billing-inv-table">
                 {recent.map((inv) => (
-                  <div key={inv.id} className="billing-inv-row" style={{ gridTemplateColumns: "1fr auto auto" }}>
+                  <div
+                    key={inv.id}
+                    className="billing-inv-row"
+                    style={{ gridTemplateColumns: invoiceCanDelete(inv) ? "1fr auto auto auto" : "1fr auto auto" }}
+                  >
                     <div>
                       <div className="billing-inv-row__num">{inv.invoiceNumber || "Invoice"}</div>
                       <div className="billing-inv-row__sub">
@@ -167,6 +177,25 @@ export default function AdminBillingPage() {
                     <Link className="btn ghost" style={{ fontSize: 12 }} href={`/admin/billing/invoices${qp({ [OPS_TAB_QUERY]: "invoices" })}`}>
                       Open
                     </Link>
+                    {invoiceCanDelete(inv) ? (
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        style={{ fontSize: 12, color: "var(--danger, #dc2626)", borderColor: "var(--danger, #dc2626)" }}
+                        onClick={() => {
+                          setDeleteError("");
+                          setDeleteTarget({
+                            id: inv.id,
+                            invoiceNumber: inv.invoiceNumber,
+                            totalCents: inv.totalCents,
+                            balanceDueCents: inv.balanceDueCents,
+                            status: inv.status,
+                          });
+                        }}
+                      >
+                        Delete
+                      </button>
+                    ) : null}
                   </div>
                 ))}
               </div>
@@ -242,6 +271,52 @@ export default function AdminBillingPage() {
         </>
       ) : !detailLoading && !selectedTenantId ? (
         <p className="muted">Select a workspace from the header switcher to view billing for that company.</p>
+      ) : null}
+
+      {deleteTarget && selectedTenantId ? (
+        <BillingActionPanel
+          layout="center"
+          centerWidth="min(520px, 96vw)"
+          variant="danger"
+          onClose={() => { if (!deleteBusy) setDeleteTarget(null); }}
+          eyebrow={detail?.tenant.name || "Company"}
+          title="Delete this invoice permanently?"
+          subtitle="Removes the invoice and line items. This cannot be undone."
+          summary={(
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              <li><strong>Invoice</strong> {deleteTarget.invoiceNumber || deleteTarget.id.slice(0, 8)}</li>
+              <li><strong>Total</strong> {dollars(deleteTarget.totalCents)}</li>
+              <li><strong>Balance due</strong> {dollars(deleteTarget.balanceDueCents)}</li>
+              <li><strong>Status</strong> {invoiceStatusLabel(deleteTarget.status)}</li>
+            </ul>
+          )}
+          notice={deleteError ? deleteError : undefined}
+          footer={(
+            <>
+              <button className="btn ghost" type="button" disabled={deleteBusy} onClick={() => setDeleteTarget(null)}>Cancel</button>
+              <button
+                className="btn danger"
+                type="button"
+                disabled={deleteBusy}
+                onClick={async () => {
+                  setDeleteBusy(true);
+                  setDeleteError("");
+                  try {
+                    await apiDelete(`/admin/billing/invoices/${deleteTarget.id}`);
+                    setDeleteTarget(null);
+                    await loadDetail(selectedTenantId);
+                  } catch (err: unknown) {
+                    setDeleteError(billingErrorMessage(err, "Delete failed."));
+                  } finally {
+                    setDeleteBusy(false);
+                  }
+                }}
+              >
+                {deleteBusy ? "Deleting…" : "Delete permanently"}
+              </button>
+            </>
+          )}
+        />
       ) : null}
     </div>
   );

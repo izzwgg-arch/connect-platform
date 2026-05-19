@@ -45,6 +45,7 @@ import {
   todayDateSuffix,
   transactionExportToCsv,
 } from "./billingReports";
+import { assertBillingInvoiceDeletable } from "./deleteBillingInvoice";
 import {
   markDoNotCharge,
   pauseInvoiceCollections,
@@ -2102,6 +2103,33 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const updated = await (db as any).billingInvoice.update({ where: { id }, data: { status: "VOID", voidedAt: new Date(), balanceDueCents: 0 } });
     await logBillingEvent({ tenantId: invoice.tenantId, invoiceId: id, type: "invoice.voided" });
     return updated;
+  });
+
+  app.delete("/admin/billing/invoices/:id", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const invoice = await (db as any).billingInvoice.findUnique({
+      where: { id },
+      include: { transactions: { select: { status: true } } },
+    });
+    if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
+    const guard = assertBillingInvoiceDeletable(invoice);
+    if (!guard.ok) return reply.code(400).send({ error: guard.error, message: guard.message });
+    await logBillingEvent({
+      tenantId: invoice.tenantId,
+      invoiceId: id,
+      type: "invoice.deleted",
+      message: `Invoice ${invoice.invoiceNumber || id} permanently deleted.`,
+      metadata: {
+        invoiceNumber: invoice.invoiceNumber,
+        status: invoice.status,
+        totalCents: invoice.totalCents,
+        deletedBy: u.sub,
+      },
+    });
+    await (db as any).billingInvoice.delete({ where: { id } });
+    return { ok: true, deletedId: id };
   });
 
   // ── Admin tenant payment-method management ──────────────────────────────────
