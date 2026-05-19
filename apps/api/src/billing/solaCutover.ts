@@ -90,8 +90,6 @@ export async function linkSolaTokenToPaymentMethod(input: {
   if (!link.tenantId) return { ok: false, code: 400, error: "schedule_has_no_tenant" };
 
   const tenantId = link.tenantId;
-  const pmId = link.solaPaymentMethodId;
-  if (!pmId) return { ok: false, code: 400, error: "schedule_has_no_payment_method_id" };
 
   // 2. Verify tenant exists
   const tenant = await (deps.db as AnyDb).tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
@@ -99,6 +97,36 @@ export async function linkSolaTokenToPaymentMethod(input: {
 
   // 3. Fetch token from Cardknox (server-side only)
   const client = await deps.getRecurringClient(tenantId);
+
+  // Resolve solaPaymentMethodId — may be missing on older imports.
+  // Try rawSafeJson first (free), then call GetSchedule to retrieve it.
+  let pmId = link.solaPaymentMethodId as string | null | undefined;
+  if (!pmId) {
+    const raw = link.rawSafeJson as Record<string, unknown> | null | undefined;
+    const fromJson = raw?.PaymentMethodId ?? raw?.paymentMethodId;
+    if (fromJson && typeof fromJson === "string" && fromJson.trim()) {
+      pmId = fromJson.trim();
+    }
+  }
+  if (!pmId) {
+    try {
+      const scheduleRow = await client.getSchedule(link.solaScheduleId);
+      const fetched = scheduleRow.PaymentMethodId ?? scheduleRow.paymentMethodId;
+      if (fetched && typeof fetched === "string" && fetched.trim()) {
+        pmId = fetched.trim();
+        // Persist so future calls skip this round-trip
+        await (deps.db as AnyDb).billingSolaExternalScheduleLink.update({
+          where: { id: link.id },
+          data: { solaPaymentMethodId: pmId },
+        });
+      }
+    } catch {
+      // Ignore fetch error — will fall through to the error below
+    }
+  }
+  if (!pmId) return { ok: false, code: 400, error: "schedule_has_no_payment_method_id" };
+
+  // 4. Fetch vault token (server-side only — never log or return raw)
   let tokenData: { token: string; issuer: string | null; maskedCardNumber: string | null; exp: string | null };
   try {
     tokenData = await client.getPaymentMethodWithToken(pmId);
