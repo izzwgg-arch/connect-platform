@@ -771,6 +771,7 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
 
   // iFields add-card state
   const [solaConfig, setSolaConfig] = useState<AdminSolaPublicConfig | null>(null);
+  const [ifieldsScriptLoaded, setIfieldsScriptLoaded] = useState(false);
   const [ifieldsReady, setIfieldsReady] = useState(false);
   const [ifieldsTimeout, setIfieldsTimeout] = useState(false);
   const [showAddCard, setShowAddCard] = useState(false);
@@ -799,41 +800,88 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
     return () => { active = false; };
   }, [tenantId]);
 
-  // Load iFields script when public config is ready (only needs configured + ifieldsKey, not enabled)
+  // Step 1: Pre-load the iFields script as soon as the key is available (no setAccount yet)
   useEffect(() => {
     if (!solaConfig?.configured || !solaConfig?.ifieldsKey?.trim()) return;
-    const key = solaConfig.ifieldsKey.trim();
     const version = "3.4.2602.2001";
     const scriptId = `cardknox-ifields-${version}`;
-    const configure = () => {
+    if (document.getElementById(scriptId)) { setIfieldsScriptLoaded(true); return; }
+    const script = document.createElement("script");
+    script.id = scriptId;
+    script.src = `https://cdn.cardknox.com/ifields/${version}/ifields.min.js`;
+    script.async = true;
+    script.onload = () => setIfieldsScriptLoaded(true);
+    script.onerror = () => setAddCardMsg("Unable to load the secure card form. Check network access to cdn.cardknox.com.");
+    document.body.appendChild(script);
+  }, [solaConfig?.configured, solaConfig?.ifieldsKey]);
+
+  // Step 2: When form opens + script is ready, wait for iframe load events then call setAccount
+  useEffect(() => {
+    if (!showAddCard || !ifieldsScriptLoaded || !solaConfig?.ifieldsKey?.trim()) return;
+    setIfieldsReady(false);
+    const key = solaConfig.ifieldsKey.trim();
+    let cancelled = false;
+
+    const callSetAccount = () => {
+      if (cancelled) return;
       if (window.setAccount) {
         window.setAccount(key, "ConnectComms", "1.0.0");
         setIfieldsReady(true);
         setIfieldsTimeout(false);
         if (ifieldsTimeoutRef.current) clearTimeout(ifieldsTimeoutRef.current);
       } else {
-        // setAccount not available — script loaded but wrong API shape
-        setAddCardMsg("Card form script loaded but could not initialize. The iFields key may be invalid.");
+        setAddCardMsg("Card form script loaded but could not initialize.");
       }
     };
-    const existing = document.getElementById(scriptId) as HTMLScriptElement | null;
-    if (existing) { configure(); return; }
-    const script = document.createElement("script");
-    script.id = scriptId;
-    script.src = `https://cdn.cardknox.com/ifields/${version}/ifields.min.js`;
-    script.async = true;
-    script.onload = configure;
-    script.onerror = () => setAddCardMsg("Unable to load the secure card form. Check network access to cdn.cardknox.com.");
-    document.body.appendChild(script);
-  }, [solaConfig]);
 
-  // Start a timeout when the form is shown — if ifields never ready, surface an error
+    // Wait for both iframes to have loaded their ifield.htm content
+    const iframes = Array.from(
+      document.querySelectorAll<HTMLIFrameElement>('iframe[data-ifields-id="card-number"], iframe[data-ifields-id="cvv"]')
+    );
+    if (iframes.length === 0) {
+      // Iframes not yet in DOM — React renders synchronously before effects but timing can vary
+      const t = setTimeout(callSetAccount, 300);
+      return () => { cancelled = true; clearTimeout(t); };
+    }
+
+    let loadedCount = 0;
+    const onLoad = () => { loadedCount++; if (loadedCount >= iframes.length) callSetAccount(); };
+    const alreadyLoaded: HTMLIFrameElement[] = [];
+    iframes.forEach((fr) => {
+      if ((fr.contentDocument?.readyState ?? "") === "complete") {
+        alreadyLoaded.push(fr);
+      } else {
+        fr.addEventListener("load", onLoad, { once: true });
+      }
+    });
+    if (alreadyLoaded.length === iframes.length) {
+      callSetAccount();
+    } else {
+      loadedCount += alreadyLoaded.length;
+      if (loadedCount >= iframes.length) callSetAccount();
+    }
+
+    return () => {
+      cancelled = true;
+      iframes.forEach((fr) => fr.removeEventListener("load", onLoad));
+    };
+  }, [showAddCard, ifieldsScriptLoaded, solaConfig?.ifieldsKey]);
+
+  // Reset ready state when form closes
+  useEffect(() => {
+    if (!showAddCard) {
+      setIfieldsReady(false);
+      setIfieldsTimeout(false);
+    }
+  }, [showAddCard]);
+
+  // Timeout guard — if iframes never fire load event within 12s, surface an error
   useEffect(() => {
     if (!showAddCard || ifieldsReady) return;
     if (ifieldsTimeoutRef.current) clearTimeout(ifieldsTimeoutRef.current);
     ifieldsTimeoutRef.current = setTimeout(() => {
       if (!ifieldsReady) setIfieldsTimeout(true);
-    }, 9000);
+    }, 12000);
     return () => {
       if (ifieldsTimeoutRef.current) clearTimeout(ifieldsTimeoutRef.current);
     };
