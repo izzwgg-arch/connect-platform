@@ -834,9 +834,9 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
     setIfieldsMountKey((k) => k + 1);
   }, [showAddCard]);
 
-  // Configure Cardknox/Sola after the hosted iframes are mounted and loaded.
+  // Register the iFields init callback before iframes mount. The hosted iframe
+  // calls data-ifields-oninit during its own lifecycle, so this must exist early.
   useEffect(() => {
-    if (!showAddCard || !ifieldsScriptReady) return;
     const key = solaConfig?.ifieldsKey?.trim();
     if (!key) return;
     const w = window as typeof window & {
@@ -865,17 +865,26 @@ export function PaymentMethodsModal({ tenantId, tenantName, onClose }: { tenantI
       setIfieldsReady(true);
     };
     w[ADMIN_BILLING_IFIELDS_INIT] = configure;
-    if (ifieldsLoadCount >= 2) {
+    return () => {
+      delete w[ADMIN_BILLING_IFIELDS_INIT];
+    };
+  }, [solaConfig?.ifieldsKey]);
+
+  // Configure again after the hosted iframes are mounted and loaded. This covers
+  // browsers where the oninit callback does not fire or fires before the script is ready.
+  useEffect(() => {
+    if (!showAddCard || !ifieldsScriptReady || ifieldsLoadCount < 2) return;
+    const w = window as typeof window & {
+      [ADMIN_BILLING_IFIELDS_INIT]?: () => void;
+    };
+    const configure = w[ADMIN_BILLING_IFIELDS_INIT];
+    if (configure) {
       configure();
       const retry = window.setTimeout(configure, 250);
       return () => {
         window.clearTimeout(retry);
-        delete w[ADMIN_BILLING_IFIELDS_INIT];
       };
     }
-    return () => {
-      delete w[ADMIN_BILLING_IFIELDS_INIT];
-    };
   }, [showAddCard, ifieldsScriptReady, ifieldsLoadCount, solaConfig?.ifieldsKey]);
 
   async function setDefault(methodId: string) {
