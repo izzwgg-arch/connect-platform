@@ -188,7 +188,7 @@ const DEFAULT_HOURLY_LIMIT = 100;
 const DEFAULT_PER_SECOND = 5;
 const DEFAULT_MAX_CAMPAIGN = 2000;
 
-const app = Fastify({ logger: true });
+const app = Fastify({ logger: true, maxParamLength: 512 });
 const fallbackNumberProvider = new FakeNumberProvider();
 
 app.register(rateLimit, { max: 200, timeWindow: "1 minute" });
