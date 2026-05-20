@@ -64,6 +64,7 @@ export function billingLiveChargesDisabledError(): Error & { code: "BILLING_LIVE
 }
 
 function assertBillingLiveChargesEnabled() {
+  // Emergency stop: this must run before adapter resolution or gateway calls.
   if (billingLiveChargesDisabled()) throw billingLiveChargesDisabledError();
 }
 
