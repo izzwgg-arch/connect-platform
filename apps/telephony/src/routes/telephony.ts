@@ -65,6 +65,7 @@ export function registerTelephonyRoutes(
       linkedId: c.linkedId,
       state: c.state,
       tenantId: c.tenantId,
+      tenantSlug: c.tenantSlug,
       tenantName: c.tenantName,
       direction: c.direction,
       from: c.from,

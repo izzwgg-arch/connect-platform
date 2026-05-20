@@ -55,6 +55,7 @@ export function normalizeCallForClient(call: NormalizedCall): NormalizedCall {
     id: call.id,
     linkedId: call.linkedId,
     tenantId: call.tenantId,
+    tenantSlug: call.tenantSlug ?? null,
     tenantName: call.tenantName ?? null,
     direction: call.direction,
     state: call.state,

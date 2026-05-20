@@ -35,6 +35,7 @@ export type TenantResolution = {
   tenantId: string | null;
   pbxVitalTenantId: string | null;
   pbxTenantCode: string | null;
+  tenantSlug: string | null;
   /** Human-readable Connect tenant name; populated only when resolved via DID cache. */
   tenantName: string | null;
 };
@@ -92,6 +93,7 @@ export class TenantResolver {
             tenantId: hit.tenantId,
             pbxVitalTenantId: hints.vitalTenantId ?? hints.dialplanT ?? null,
             pbxTenantCode: hints.tenantCode ?? (hints.dialplanT ? `T${hints.dialplanT}` : null),
+            tenantSlug: this.mapCache.getTenantSlug(hit.tenantId),
             tenantName: hit.tenantName,
           };
         }
@@ -101,9 +103,21 @@ export class TenantResolver {
     // 1. DID lookup — the only reliable way to map an inbound call to a Connect tenant.
     if (this.mapCache) {
       const byTo = this.mapCache.resolveInboundDidTenant(params.toNumber);
-      if (byTo && (byTo.tenantId || byTo.pbxVitalTenantId)) return { ...byTo, tenantName: byTo.tenantName ?? null };
+      if (byTo && (byTo.tenantId || byTo.pbxVitalTenantId)) {
+        return {
+          ...byTo,
+          tenantSlug: byTo.tenantId ? this.mapCache.getTenantSlug(byTo.tenantId) : null,
+          tenantName: byTo.tenantName ?? null,
+        };
+      }
       const byFrom = this.mapCache.resolveInboundDidTenant(params.fromNumber);
-      if (byFrom && (byFrom.tenantId || byFrom.pbxVitalTenantId)) return { ...byFrom, tenantName: byFrom.tenantName ?? null };
+      if (byFrom && (byFrom.tenantId || byFrom.pbxVitalTenantId)) {
+        return {
+          ...byFrom,
+          tenantSlug: byFrom.tenantId ? this.mapCache.getTenantSlug(byFrom.tenantId) : null,
+          tenantName: byFrom.tenantName ?? null,
+        };
+      }
     }
 
     // 2. VitalPBX T-number lookup — structured data from dialplan (e.g. T2 → PBX tenant 2).
@@ -119,6 +133,7 @@ export class TenantResolver {
           tenantId: connectId,
           pbxVitalTenantId: hints.vitalTenantId ?? hints.dialplanT ?? null,
           pbxTenantCode: hints.tenantCode ?? (hints.dialplanT ? `T${hints.dialplanT}` : null),
+          tenantSlug: this.mapCache.getTenantSlug(connectId) ?? hints.slug ?? null,
           tenantName: this.mapCache.getTenantName(connectId),
         };
       }
@@ -134,6 +149,7 @@ export class TenantResolver {
             tenantId: slugId,
             pbxVitalTenantId: hints.vitalTenantId ?? null,
             pbxTenantCode: hints.tenantCode ?? null,
+            tenantSlug: hints.slug ?? this.mapCache.getTenantSlug(slugId),
             tenantName: this.mapCache.getTenantName(slugId),
           };
         }
@@ -145,7 +161,7 @@ export class TenantResolver {
       const ctx = params.context.toLowerCase();
       for (const [prefix, tenantId] of this.contextMap) {
         if (ctx.startsWith(prefix.toLowerCase())) {
-          return { tenantId, pbxVitalTenantId: null, pbxTenantCode: null, tenantName: null };
+          return { tenantId, pbxVitalTenantId: null, pbxTenantCode: null, tenantSlug: null, tenantName: null };
         }
       }
     }
@@ -155,7 +171,7 @@ export class TenantResolver {
     if (ext) {
       for (const [prefix, tenantId] of this.prefixMap) {
         if (ext.startsWith(prefix)) {
-          return { tenantId, pbxVitalTenantId: null, pbxTenantCode: null, tenantName: null };
+          return { tenantId, pbxVitalTenantId: null, pbxTenantCode: null, tenantSlug: null, tenantName: null };
         }
       }
     }
@@ -167,11 +183,12 @@ export class TenantResolver {
         tenantId: null,
         pbxVitalTenantId: hints.vitalTenantId ?? hints.dialplanT ?? null,
         pbxTenantCode: code,
+        tenantSlug: hints.slug ?? null,
         tenantName: null,
       };
     }
 
-    return { tenantId: null, pbxVitalTenantId: null, pbxTenantCode: null, tenantName: null };
+    return { tenantId: null, pbxVitalTenantId: null, pbxTenantCode: null, tenantSlug: null, tenantName: null };
   }
 
   resolve(params: Parameters<TenantResolver["resolveDetails"]>[0]): string | null {

@@ -34,6 +34,8 @@ export class PbxTenantMapCache {
   private didsByConnectId = new Map<string, string[]>();
   /** Slug → Connect tenant UUID (e.g. "gesheft" → "cmnlgnumu0001p9g6xyl1pbdd"). */
   private slugToConnectId = new Map<string, string>();
+  /** Connect tenant UUID → slug for safe UI labels/fallbacks. */
+  private connectIdToSlug = new Map<string, string>();
   /** Extension number → { connectTenantId, tenantName }. Unambiguous extensions only
    *  (numbers that appear under more than one tenant are intentionally omitted to
    *  prevent cross-tenant leaks). */
@@ -121,6 +123,11 @@ export class PbxTenantMapCache {
           if (uuid) slugMap.set(e.tenantSlug.toLowerCase(), uuid);
         }
         this.slugToConnectId = slugMap;
+        const reverseSlugMap = new Map<string, string>();
+        for (const [slug, connectId] of slugMap) {
+          if (!reverseSlugMap.has(connectId)) reverseSlugMap.set(connectId, slug);
+        }
+        this.connectIdToSlug = reverseSlugMap;
         log.debug({ slugCount: slugMap.size }, "pbx-tenant-map slug index built");
       } else {
         this.didByE164 = new Map();
@@ -209,6 +216,11 @@ export class PbxTenantMapCache {
     if (!dids) return null;
     const first = this.didByE164.get(dids[0]!);
     return first?.tenantName ?? null;
+  }
+
+  /** Returns the canonical tenant slug for a Connect tenant UUID when known. */
+  getTenantSlug(connectTenantId: string): string | null {
+    return this.connectIdToSlug.get(connectTenantId) ?? null;
   }
 
   /** Extension number → Connect tenant lookup. Returns null when the extension

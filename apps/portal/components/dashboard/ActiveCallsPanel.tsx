@@ -7,6 +7,7 @@ import type { LiveCall } from "../../types/liveCall";
 type Props = {
   calls: LiveCall[];
   isLive: boolean;
+  showTenantBadge?: boolean;
 };
 
 function callStateLabel(state: string): string {
@@ -61,7 +62,14 @@ function handlerLabel(call: LiveCall): string {
   return "—";
 }
 
-export function ActiveCallsPanel({ calls, isLive }: Props) {
+function tenantBadgeLabel(call: LiveCall): string {
+  if (call.tenantName && call.tenantName.trim()) return call.tenantName.trim();
+  if (call.tenantSlug && call.tenantSlug.trim()) return call.tenantSlug.trim();
+  if (call.tenantId && call.tenantId.trim()) return call.tenantId.trim();
+  return "Unknown tenant";
+}
+
+export function ActiveCallsPanel({ calls, isLive, showTenantBadge = false }: Props) {
   // 1-second tick to update live durations
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -111,6 +119,7 @@ export function ActiveCallsPanel({ calls, isLive }: Props) {
             {sorted.map((call) => {
               const dur = liveDurationSec(call);
               const state = (call.state || "unknown").toLowerCase();
+              const tenantLabel = tenantBadgeLabel(call);
               return (
                 <li key={call.id} className={`dash-v2-active-row state-${state} dir-${dirClass(call.direction)}`}>
                   <div className="dash-v2-active-row-dir" aria-label={dirLabel(call.direction)}>
@@ -120,6 +129,11 @@ export function ActiveCallsPanel({ calls, isLive }: Props) {
                     <span className="dash-v2-active-row-name">{counterpartyLabel(call)}</span>
                     <span className="dash-v2-active-row-meta">
                       <span className={`dash-v2-active-pill dir-${dirClass(call.direction)}`}>{dirLabel(call.direction)}</span>
+                      {showTenantBadge ? (
+                        <span className="dash-v2-active-pill tenant" title={tenantLabel}>
+                          {tenantLabel}
+                        </span>
+                      ) : null}
                       <span className="dash-v2-active-row-handler">{handlerLabel(call)}</span>
                     </span>
                   </div>

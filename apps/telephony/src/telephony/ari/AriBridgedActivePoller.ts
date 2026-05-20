@@ -109,6 +109,7 @@ function bridgeRowsToNormalizedCalls(
       id: b.sourceKind === "bridge" ? `bridge:${b.bridgeId}` : b.bridgeId,
       linkedId: b.bridgeId,
       tenantId: tres?.tenantId ?? null,
+      tenantSlug: tres?.tenantSlug ?? null,
       tenantName: tres?.tenantName ?? null,
       direction,
       state: "up" as const,

@@ -156,6 +156,36 @@
 
 ---
 
+## Dashboard active-call tenant badge (admin/global)
+
+- **What changed:** The portal dashboard `Active Calls` rows now show a compact tenant badge when the
+  view can include multiple tenants (always in GLOBAL/admin scope; hidden in normal tenant-only scope unless mixed rows appear).
+- **Fallback label order:** `tenantName` (display/company) -> `tenantSlug` -> `tenantId` -> `Unknown tenant`.
+- **Why:** Global support/admin users must identify tenant ownership per live call at a glance without opening call details.
+- **Safe metadata only:** Live call payload now includes `tenantSlug` in addition to existing `tenantId` + `tenantName`;
+  no credentials, billing, or sensitive tenant data are exposed.
+
+- **Files touched (implementation):**
+  `apps/telephony/src/telephony/types.ts`,
+  `apps/telephony/src/telephony/state/TenantResolver.ts`,
+  `apps/telephony/src/telephony/state/PbxTenantMapCache.ts`,
+  `apps/telephony/src/telephony/state/CallStateStore.ts`,
+  `apps/telephony/src/telephony/normalizers/normalizeCallEvent.ts`,
+  `apps/telephony/src/telephony/ari/AriBridgedActivePoller.ts`,
+  `apps/portal/types/liveCall.ts`,
+  `apps/portal/app/(platform)/dashboard/page.tsx`,
+  `apps/portal/components/dashboard/ActiveCallsPanel.tsx`,
+  `apps/portal/app/globals.css`.
+
+- **How to verify:**
+  1. Sign in as a GLOBAL/admin user and open `Dashboard`.
+  2. Ensure at least two active calls from different tenants are present.
+  3. Confirm each row shows a subtle tenant pill and labels follow fallback order.
+  4. Switch to a normal tenant user and confirm tenant pills are hidden in tenant-only lists.
+  5. Confirm live row updates (state/duration/direction/extensions) continue to tick in real-time.
+
+---
+
 ## Active call counting (the "live calls" fight)
 
 - Single source of truth: `apps/telephony/src/telephony/state/CallStateStore.ts::getActive()`.

@@ -7,6 +7,8 @@ export interface NormalizedCall {
   id: string;
   linkedId: string;
   tenantId: string | null;
+  /** Stable tenant slug for UI fallback labels when tenantName is unavailable. */
+  tenantSlug: string | null;
   /** Human-readable Connect tenant name; populated when resolved via Ombutel DID cache. */
   tenantName: string | null;
   direction: CallDirection;

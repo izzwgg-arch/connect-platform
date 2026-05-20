@@ -56,6 +56,7 @@ function makeCall(overrides: Partial<NormalizedCall> & { linkedId: string }): No
   return {
     id: overrides.linkedId,
     tenantId: null,
+    tenantSlug: null,
     tenantName: null,
     direction: "inbound" as CallDirection,
     state: "up" as CallState,

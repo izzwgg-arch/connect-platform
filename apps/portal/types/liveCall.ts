@@ -10,6 +10,8 @@ export interface LiveCall {
   id: string;
   linkedId: string;
   tenantId: string | null;
+  /** Tenant slug fallback for global/admin badge labels. */
+  tenantSlug: string | null;
   /** Human-readable tenant name resolved in the backend; non-null when the DID cache matched. */
   tenantName: string | null;
   direction: CallDirection;

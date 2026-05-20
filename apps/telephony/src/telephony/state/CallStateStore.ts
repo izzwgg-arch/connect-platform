@@ -409,6 +409,7 @@ export class CallStateStore extends EventEmitter {
     context: string;
     exten: string;
     tenantId: string | null;
+    tenantSlug: string | null;
     tenantName: string | null;
     direction: CallDirection;
     pbxVitalTenantId?: string | null;
@@ -419,9 +420,10 @@ export class CallStateStore extends EventEmitter {
 
     let call = this.calls.get(params.linkedId);
     if (!call) {
-      call = this.createEmpty(params.linkedId, params.tenantId, params.direction);
+      call = this.createEmpty(params.linkedId, params.tenantId, params.tenantSlug, params.direction);
       call.from = params.callerIDNum || null;
       call.to = params.exten || null;
+      call.tenantSlug = params.tenantSlug;
       call.tenantName = params.tenantName;
       if (params.pbxVitalTenantId) call.metadata["pbxVitalTenantId"] = params.pbxVitalTenantId;
       if (params.pbxTenantCode) call.metadata["pbxTenantCode"] = params.pbxTenantCode;
@@ -455,7 +457,10 @@ export class CallStateStore extends EventEmitter {
     // Upgrade tenantId/tenantName when newly resolved (e.g. trunk Newchannel fires after internal leg)
     if (!call.tenantId && params.tenantId) {
       call.tenantId = params.tenantId;
+      call.tenantSlug = params.tenantSlug;
       call.tenantName = params.tenantName;
+    } else if (!call.tenantSlug && params.tenantSlug) {
+      call.tenantSlug = params.tenantSlug;
     }
 
     // Upgrade `to` from short extension to real DID when a longer number becomes available.
@@ -926,8 +931,12 @@ export class CallStateStore extends EventEmitter {
           const slug = resolved.slice(5);
           const canonical = this.slugToConnectIdResolver(slug);
           call.tenantId = canonical ?? resolved;
+          if (!call.tenantSlug) call.tenantSlug = slug;
         } else {
           call.tenantId = resolved;
+          if (!call.tenantSlug && resolved.startsWith("vpbx:")) {
+            call.tenantSlug = resolved.slice(5);
+          }
         }
       }
     }
@@ -1165,12 +1174,14 @@ export class CallStateStore extends EventEmitter {
   private createEmpty(
     linkedId: string,
     tenantId: string | null,
+    tenantSlug: string | null,
     direction: CallDirection,
   ): NormalizedCall {
     return {
       id: linkedId,
       linkedId,
       tenantId,
+      tenantSlug,
       tenantName: null,
       fromName: null,
       direction,

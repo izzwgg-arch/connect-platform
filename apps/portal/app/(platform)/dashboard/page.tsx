@@ -153,6 +153,13 @@ export default function DashboardPage() {
     () => callsForTenant(telephony.activeCalls, isGlobal ? null : contextTenantId, extensionRows, tenant?.name),
     [contextTenantId, extensionRows, isGlobal, telephony.activeCalls, tenant?.name],
   );
+  const showTenantBadge = useMemo(() => {
+    if (isGlobal) return true;
+    const tenantKeys = new Set(
+      liveCalls.map((call) => call.tenantId || call.tenantSlug || call.tenantName || "__unknown__"),
+    );
+    return tenantKeys.size > 1;
+  }, [isGlobal, liveCalls]);
 
   const greetingName = firstName(user.name, user.email);
 
@@ -178,7 +185,7 @@ export default function DashboardPage() {
         />
 
         {/* 3. Active calls — live, below metrics */}
-        <ActiveCallsPanel calls={liveCalls} isLive={telephony.isLive} />
+        <ActiveCallsPanel calls={liveCalls} isLive={telephony.isLive} showTenantBadge={showTenantBadge} />
 
         {/* 4. Communications — voicemail + messages */}
         <CommunicationsRow data={commData} loading={commLoading} />
