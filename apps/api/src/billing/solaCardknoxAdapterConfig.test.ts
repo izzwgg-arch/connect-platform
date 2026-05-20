@@ -36,6 +36,35 @@ test("testConnection sends cc:auth with 0.00 amount (no monetary capture)", asyn
   assert.equal(body.xCommand, "cc:auth");
   assert.equal(body.xAmount, "0.00");
   assert.equal(String(body.xKey || ""), "test_xkey");
+  assert.equal(body.xVersion, "4.5.9");
+  assert.equal(body.xSoftwareName, "ConnectComms");
+});
+
+test("saveCardWithSut includes required xVersion on gatewayjson body", async () => {
+  let parsedBody: Record<string, unknown> | null = null;
+  globalThis.fetch = (async (_url, init) => {
+    parsedBody = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+    return new Response(
+      JSON.stringify({
+        xResult: "A",
+        xStatus: "Approved",
+        xRefNum: "999",
+        xToken: "vault_tok_abc",
+        xMaskedCardNumber: "xxxx4242",
+        xCardType: "Visa",
+        xExp: "1228",
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+
+  const adapter = new SolaCardknoxAdapter({ apiKey: "test_xkey", simulate: false });
+  const out = await adapter.saveCardWithSut({ sut: "sut_test_token_12345678", cardholderName: "Jane", zip: "10950" });
+  assert.equal(out.approved, true);
+  const body = parsedBody as Record<string, unknown>;
+  assert.equal(body.xCommand, "cc:save");
+  assert.equal(body.xVersion, "4.5.9");
+  assert.equal(body.xSUT, "sut_test_token_12345678");
 });
 
 // ---------------------------------------------------------------------------

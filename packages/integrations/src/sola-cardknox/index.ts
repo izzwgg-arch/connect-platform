@@ -2,6 +2,9 @@ import { createHash, createHmac, timingSafeEqual } from "crypto";
 
 export type SolaCardknoxAuthMode = "xkey_body" | "authorization_header";
 
+/** Cardknox gatewayjson API version — required on every transaction request (see Sola Transaction API). */
+export const DEFAULT_CARDKNOX_GATEWAY_VERSION = "4.5.9";
+
 export type SolaCardknoxConfig = {
   baseUrl?: string;
   apiKey?: string;
@@ -19,6 +22,10 @@ export type SolaCardknoxConfig = {
   cancelPath?: string;
   webhookSignatureHeader?: string;
   webhookTimestampHeader?: string;
+  /** Sent as xVersion on gatewayjson (required by Cardknox). */
+  gatewayVersion?: string;
+  softwareName?: string;
+  softwareVersion?: string;
 };
 
 export type HostedCheckoutInput = {
@@ -318,7 +325,13 @@ async function postGatewayJson(config: SolaCardknoxConfig, body: Record<string, 
   const path = config.transactionPath || "/gatewayjson";
   ensureConfigured(config);
 
-  const reqBody: Record<string, any> = { ...body, xKey: config.apiKey };
+  const reqBody: Record<string, any> = {
+    ...body,
+    xKey: config.apiKey,
+    xVersion: config.gatewayVersion ?? DEFAULT_CARDKNOX_GATEWAY_VERSION,
+    xSoftwareName: config.softwareName ?? "ConnectComms",
+    xSoftwareVersion: config.softwareVersion ?? "1.0.0",
+  };
   if (config.apiSecret) reqBody.xSecret = config.apiSecret;
 
   const res = await fetch(`${gatewayBaseUrl(config)}${path.startsWith("/") ? path : `/${path}`}`, {
