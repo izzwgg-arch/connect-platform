@@ -19,7 +19,7 @@ async function loadInvoiceForPayToken(token: string) {
   const invoice = await (db as any).billingInvoice.findFirst({
     where: { id: parsed.invoiceId, tenantId: parsed.tenantId },
     include: {
-      lineItems: { orderBy: { sortOrder: "asc" } },
+      lineItems: { orderBy: { createdAt: "asc" } },
       tenant: { select: { name: true, billingSettings: true } },
     },
   });
