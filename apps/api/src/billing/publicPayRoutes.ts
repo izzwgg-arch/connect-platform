@@ -191,6 +191,12 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
         invoiceStatus: transaction?.status === "APPROVED" ? "PAID" : invoice.status,
       };
     } catch (e: any) {
+      if (e?.code === "CHARGE_IN_PROGRESS") {
+        return reply.code(409).send({
+          error: "charge_in_progress",
+          existingTransactionId: e?.existingTransaction?.id || null,
+        });
+      }
       if (e?.code === "CARD_TOKENIZATION_FAILED") {
         return reply.code(402).send({ error: "card_tokenization_failed" });
       }

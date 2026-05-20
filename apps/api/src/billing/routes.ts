@@ -429,8 +429,18 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       : await (db as any).paymentMethod.findFirst({ where: { tenantId: u.tenantId, active: true, isDefault: true } });
     if (!method) return reply.code(400).send({ error: "payment_method_required" });
 
-    const transaction = await chargeBillingInvoice(invoice, method);
-    return { invoice: await (db as any).billingInvoice.findUnique({ where: { id } }), transaction };
+    try {
+      const transaction = await chargeBillingInvoice(invoice, method);
+      return { invoice: await (db as any).billingInvoice.findUnique({ where: { id } }), transaction };
+    } catch (err: any) {
+      if (err?.code === "CHARGE_IN_PROGRESS") {
+        return reply.code(409).send({
+          error: "charge_in_progress",
+          existingTransactionId: err?.existingTransaction?.id || null,
+        });
+      }
+      throw err;
+    }
   });
 
   app.get("/billing/payment-methods", async (req, reply) => {
@@ -1827,6 +1837,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       saveCard: z.boolean().optional(),
       makeDefault: z.boolean().optional(),
       confirmLive: z.boolean().optional(),
+      operationId: z.string().min(8).max(120).optional(),
     }).parse(req.body || {});
 
     const tenant = await (db as any).tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
@@ -1866,7 +1877,21 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       }
       const method = await (db as any).paymentMethod.findFirst({ where: { id: input.paymentMethodId, tenantId, active: true } });
       if (!method) return reply.code(400).send({ error: "payment_method_not_found" });
-      transaction = await chargeBillingInvoice(invoice, method, { note: input.operatorNote });
+      try {
+        transaction = await chargeBillingInvoice(invoice, method, {
+          note: input.operatorNote,
+          operationKey: input.operationId ? `one_time_charge:${tenantId}:${input.operationId}` : undefined,
+        });
+      } catch (err: any) {
+        if (err?.code === "CHARGE_IN_PROGRESS") {
+          return reply.code(409).send({
+            error: "charge_in_progress",
+            existingTransactionId: err?.existingTransaction?.id || null,
+            invoice,
+          });
+        }
+        throw err;
+      }
     } else if (input.chargeMode === "new_card") {
       if (!input.xSut) return reply.code(400).send({ error: "sola_token_required" });
       const isLive = !!(gateway.enabled && gateway.mode === "prod" && !gateway.simulate);
@@ -1889,9 +1914,17 @@ export async function registerBillingRoutes(app: FastifyInstance) {
             note: input.operatorNote,
             persistPaymentMethod: !!input.saveCard,
             makeDefault: input.makeDefault ?? false,
+            operationKey: input.operationId ? `one_time_charge:${tenantId}:${input.operationId}` : undefined,
           },
         );
       } catch (err: any) {
+        if (err?.code === "CHARGE_IN_PROGRESS") {
+          return reply.code(409).send({
+            error: "charge_in_progress",
+            existingTransactionId: err?.existingTransaction?.id || null,
+            invoice,
+          });
+        }
         if (err?.code === "CARD_TOKENIZATION_FAILED") {
           return reply.code(402).send({
             error: "card_save_failed",
@@ -2481,9 +2514,19 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     if (input.note) {
       await logBillingEvent({ tenantId: invoice.tenantId, invoiceId: id, type: "payment.admin_charge_note", message: input.note, metadata: { adminUserId: u.sub } });
     }
-    const transaction = await chargeBillingInvoice(invoice, method, { note: input.note });
-    const updatedInvoice = await (db as any).billingInvoice.findUnique({ where: { id } });
-    return { transaction, invoice: updatedInvoice };
+    try {
+      const transaction = await chargeBillingInvoice(invoice, method, { note: input.note });
+      const updatedInvoice = await (db as any).billingInvoice.findUnique({ where: { id } });
+      return { transaction, invoice: updatedInvoice };
+    } catch (err: any) {
+      if (err?.code === "CHARGE_IN_PROGRESS") {
+        return reply.code(409).send({
+          error: "charge_in_progress",
+          existingTransactionId: err?.existingTransaction?.id || null,
+        });
+      }
+      throw err;
+    }
   });
 
   // ── Mark paid (optional partial amount + note) ───────────────────────────────
@@ -2512,7 +2555,17 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const methodId = invoice.paymentMethodId || invoice.tenant.billingSettings?.defaultPaymentMethodId;
     const method = methodId ? await (db as any).paymentMethod.findUnique({ where: { id: methodId } }) : null;
     if (!method) return reply.code(400).send({ error: "payment_method_required" });
-    return chargeBillingInvoice(invoice, method);
+    try {
+      return await chargeBillingInvoice(invoice, method, { operationKey: `admin_retry:${invoice.id}` });
+    } catch (err: any) {
+      if (err?.code === "CHARGE_IN_PROGRESS") {
+        return reply.code(409).send({
+          error: "charge_in_progress",
+          existingTransactionId: err?.existingTransaction?.id || null,
+        });
+      }
+      throw err;
+    }
   });
 
   app.get("/admin/billing/tax-profiles", async (req, reply) => {

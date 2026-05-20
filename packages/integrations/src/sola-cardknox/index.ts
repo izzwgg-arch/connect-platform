@@ -537,9 +537,17 @@ export class SolaCardknoxAdapter {
  * Unique `xInvoice` per `gatewayjson` `cc:sale` (Sola duplicate detection — see Sola docs).
  * Webhook echoes `xInvoice`; use {@link parseConnectBillingGatewayXInvoice} to resolve `BillingInvoice`.
  */
-export function buildConnectBillingGatewayXInvoice(tenantId: string, invoiceId: string, invoiceNumber: string): string {
+export function buildConnectBillingGatewayXInvoice(
+  tenantId: string,
+  invoiceId: string,
+  invoiceNumber: string,
+  operationRef?: string,
+): string {
   const safe = String(invoiceNumber || "").replace(/[^a-zA-Z0-9-_.]/g, "_").slice(0, 64);
-  return `CONNECT:${tenantId}:${invoiceId}:${Date.now()}:${safe}`;
+  const opSegment = operationRef
+    ? createHash("sha256").update(String(operationRef)).digest("hex").slice(0, 16)
+    : String(Date.now());
+  return `CONNECT:${tenantId}:${invoiceId}:${opSegment}:${safe}`;
 }
 
 export function parseConnectBillingGatewayXInvoice(xInvoice: string): { tenantId: string; invoiceId: string; invoiceNumberHint?: string } | null {

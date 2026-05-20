@@ -92,6 +92,7 @@ export function CardknoxIFieldsForm({
   const cardFieldRef = useRef<{ getToken?: () => void } | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
   const pendingRef = useRef<CardknoxBillingFields | null>(null);
+  const tokenConsumedRef = useRef(false);
 
   useEffect(() => {
     onReadyChange?.(ifieldsReady);
@@ -137,6 +138,8 @@ export function CardknoxIFieldsForm({
 
   async function handleCardToken(data: TokenData) {
     if (data.xTokenType !== CARD_TYPE || !data.xToken) return;
+    if (tokenConsumedRef.current) return;
+    tokenConsumedRef.current = true;
     const billing = pendingRef.current || EMPTY_BILLING;
     pendingRef.current = null;
     try {
@@ -153,6 +156,7 @@ export function CardknoxIFieldsForm({
 
   function handleCardError(data: ErrorData) {
     pendingRef.current = null;
+    tokenConsumedRef.current = false;
     setBusy(false);
     const errText = (data as unknown as { xError?: string })?.xError;
     const msg = typeof errText === "string" && errText.trim()
@@ -164,6 +168,7 @@ export function CardknoxIFieldsForm({
   function beginTokenize(form: HTMLFormElement) {
     if (busy || disabled || !ifieldsReady) return;
     pendingRef.current = readBilling(form);
+    tokenConsumedRef.current = false;
     setBusy(true);
     cardFieldRef.current?.getToken?.();
   }

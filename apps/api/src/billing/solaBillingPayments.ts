@@ -3,6 +3,7 @@ import { buildConnectBillingGatewayXInvoice, parseConnectBillingGatewayXInvoice 
 import { db } from "@connect/db";
 import { getBillingSolaAdapter, decryptPaymentToken, storeSolaPaymentMethod } from "./solaGateway";
 import { logBillingEvent, markBillingInvoicePaid } from "./invoiceEngine";
+import { createHash } from "node:crypto";
 import {
   queuePaymentFailedEmailOnce,
   queueReceiptEmailOnce,
@@ -47,9 +48,108 @@ export async function resolvePlatformBillingInvoiceForWebhookRef(ref: string) {
 export type ChargeBillingInvoiceOptions = {
   runId?: string | null;
   note?: string;
+  operationKey?: string;
   /** Injected adapter for tests — omit to use tenant/env resolution via getBillingSolaAdapter */
   adapter?: SolaCardknoxAdapter;
 };
+
+function isUniqueViolation(err: unknown, fieldName: string): boolean {
+  const e = err as { code?: string; meta?: { target?: string[] | string } };
+  if (e?.code !== "P2002") return false;
+  const target = e.meta?.target;
+  if (Array.isArray(target)) return target.includes(fieldName);
+  return String(target || "").includes(fieldName);
+}
+
+function toSutHash(sut: string): string {
+  return createHash("sha256").update(String(sut || "")).digest("hex").slice(0, 20);
+}
+
+function buildSavedCardChargeBaseKey(input: {
+  tenantId: string;
+  invoiceId: string;
+  amountCents: number;
+  paymentMethodId: string;
+  operationKey?: string;
+}): string {
+  if (input.operationKey) return `billing:sale:op:${input.operationKey}`;
+  return [
+    "billing:sale",
+    `tenant:${input.tenantId}`,
+    `invoice:${input.invoiceId}`,
+    `amount:${input.amountCents}`,
+    `method:${input.paymentMethodId}`,
+  ].join(":");
+}
+
+function buildSutChargeBaseKey(input: {
+  tenantId: string;
+  invoiceId: string;
+  amountCents: number;
+  sut: string;
+  operationKey?: string;
+}): string {
+  if (input.operationKey) return `billing:sale:op:${input.operationKey}`;
+  return [
+    "billing:sale",
+    `tenant:${input.tenantId}`,
+    `invoice:${input.invoiceId}`,
+    `amount:${input.amountCents}`,
+    `sut:${toSutHash(input.sut)}`,
+  ].join(":");
+}
+
+async function reserveChargeAttempt(input: {
+  tenantId: string;
+  invoiceId: string;
+  amountCents: number;
+  paymentMethodId: string | null;
+  baseKey: string;
+}) {
+  const prefix = `${input.baseKey}:attempt:`;
+  const prior = await (db as any).paymentTransaction.findMany({
+    where: {
+      tenantId: input.tenantId,
+      invoiceId: input.invoiceId,
+      idempotencyKey: { startsWith: prefix },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  const approved = prior.find((tx: any) => tx.status === "APPROVED");
+  if (approved) return { kind: "replay" as const, transaction: approved };
+  const inProgress = prior.find((tx: any) => tx.status === "PENDING");
+  if (inProgress) {
+    const err: any = new Error("CHARGE_IN_PROGRESS");
+    err.code = "CHARGE_IN_PROGRESS";
+    err.existingTransaction = inProgress;
+    throw err;
+  }
+  const idempotencyKey = `${prefix}${prior.length + 1}`;
+  try {
+    const pending = await (db as any).paymentTransaction.create({
+      data: {
+        tenantId: input.tenantId,
+        invoiceId: input.invoiceId,
+        paymentMethodId: input.paymentMethodId,
+        amountCents: input.amountCents,
+        status: "PENDING",
+        idempotencyKey,
+      },
+    });
+    return { kind: "new" as const, transaction: pending, idempotencyKey };
+  } catch (err) {
+    if (!isUniqueViolation(err, "idempotencyKey")) throw err;
+    const existing = await (db as any).paymentTransaction.findUnique({ where: { idempotencyKey } });
+    if (existing?.status === "PENDING") {
+      const inFlight: any = new Error("CHARGE_IN_PROGRESS");
+      inFlight.code = "CHARGE_IN_PROGRESS";
+      inFlight.existingTransaction = existing;
+      throw inFlight;
+    }
+    if (existing) return { kind: "replay" as const, transaction: existing };
+    throw err;
+  }
+}
 
 /**
  * Token charge against a BillingInvoice (tenant pay button, admin retry, worker autopay).
@@ -65,7 +165,22 @@ export async function chargeBillingInvoice(invoice: any, method: any, options?: 
   const adapter = options?.adapter ?? (await getBillingSolaAdapter(invoice.tenantId));
   const token = decryptPaymentToken(method);
   const amountCents = balanceDueCents;
-  const idempotencyKey = `billing:sale:${invoice.id}:${Date.now()}`;
+  const baseKey = buildSavedCardChargeBaseKey({
+    tenantId: invoice.tenantId,
+    invoiceId: invoice.id,
+    amountCents,
+    paymentMethodId: method.id,
+    operationKey: options?.operationKey,
+  });
+  const reserved = await reserveChargeAttempt({
+    tenantId: invoice.tenantId,
+    invoiceId: invoice.id,
+    amountCents,
+    paymentMethodId: method.id,
+    baseKey,
+  });
+  if (reserved.kind === "replay") return reserved.transaction;
+  const idempotencyKey = reserved.idempotencyKey;
 
   await logBillingEvent({
     tenantId: invoice.tenantId,
@@ -76,31 +191,43 @@ export async function chargeBillingInvoice(invoice: any, method: any, options?: 
     metadata: { paymentMethodId: method.id, amountCents, ...(options?.note ? { operatorNote: options.note } : {}) },
   });
 
-  const gatewayXInvoice = buildConnectBillingGatewayXInvoice(invoice.tenantId, invoice.id, invoice.invoiceNumber);
-  const response = await adapter.chargeToken({
-    token,
-    amountCents,
-    gatewayXInvoice,
-    idempotencyKey,
-  });
+  const gatewayXInvoice = buildConnectBillingGatewayXInvoice(invoice.tenantId, invoice.id, invoice.invoiceNumber, idempotencyKey);
+  let response;
+  try {
+    response = await adapter.chargeToken({
+      token,
+      amountCents,
+      gatewayXInvoice,
+      idempotencyKey,
+    });
+  } catch (err: any) {
+    await (db as any).paymentTransaction.update({
+      where: { id: reserved.transaction.id },
+      data: {
+        status: "ERROR",
+        responseMessage: err?.message || "gateway_charge_failed",
+        rawResponseSafeJson: {
+          error: err?.code || "gateway_charge_failed",
+          message: err?.message || "gateway_charge_failed",
+        },
+      },
+    }).catch(() => null);
+    throw err;
+  }
 
   const processorRef =
     response.xRefNum !== undefined && response.xRefNum !== null && String(response.xRefNum).trim() !== ""
       ? String(response.xRefNum)
       : null;
 
-  const transaction = await (db as any).paymentTransaction.create({
+  const transaction = await (db as any).paymentTransaction.update({
+    where: { id: reserved.transaction.id },
     data: {
-      tenantId: invoice.tenantId,
-      invoiceId: invoice.id,
-      paymentMethodId: method.id,
-      amountCents,
       status: response.approved ? "APPROVED" : response.status === "DECLINED" ? "DECLINED" : "ERROR",
       processorTransactionId: processorRef,
       responseCode: response.xResult,
       responseMessage: response.xError || response.xStatus,
       rawResponseSafeJson: response.safePayload,
-      idempotencyKey,
     },
   });
 
@@ -199,6 +326,23 @@ export async function chargeBillingInvoiceWithSut(
     throw err;
   }
   const adapter = options?.adapter ?? (await getBillingSolaAdapter(invoice.tenantId));
+  const baseKey = buildSutChargeBaseKey({
+    tenantId: invoice.tenantId,
+    invoiceId: invoice.id,
+    amountCents: balanceDueCents,
+    sut: input.xSut,
+    operationKey: options?.operationKey,
+  });
+  const reserved = await reserveChargeAttempt({
+    tenantId: invoice.tenantId,
+    invoiceId: invoice.id,
+    amountCents: balanceDueCents,
+    paymentMethodId: null,
+    baseKey,
+  });
+  if (reserved.kind === "replay") return reserved.transaction;
+  const idempotencyKey = reserved.idempotencyKey;
+
   const saveResp = await adapter.saveCardWithSut({
     sut: input.xSut,
     exp: input.xExp || undefined,
@@ -206,6 +350,14 @@ export async function chargeBillingInvoiceWithSut(
     zip: input.billingZip || undefined,
   });
   if (!saveResp.approved || !saveResp.xToken) {
+    await (db as any).paymentTransaction.update({
+      where: { id: reserved.transaction.id },
+      data: {
+        status: "ERROR",
+        responseMessage: saveResp.xError || saveResp.xStatus || "card_tokenization_failed",
+        rawResponseSafeJson: saveResp.safePayload,
+      },
+    }).catch(() => null);
     const err: any = new Error("CARD_TOKENIZATION_FAILED");
     err.code = "CARD_TOKENIZATION_FAILED";
     err.response = saveResp;
@@ -220,7 +372,6 @@ export async function chargeBillingInvoiceWithSut(
   };
   const token = saveResp.xToken;
   const amountCents = invoice.balanceDueCents ?? invoice.totalCents;
-  const idempotencyKey = `billing:sale:${invoice.id}:${Date.now()}`;
 
   await logBillingEvent({
     tenantId: invoice.tenantId,
@@ -231,26 +382,43 @@ export async function chargeBillingInvoiceWithSut(
     metadata: { amountCents, ephemeral: true, ...(options?.note ? { operatorNote: options.note } : {}) },
   });
 
-  const gatewayXInvoice = buildConnectBillingGatewayXInvoice(invoice.tenantId, invoice.id, invoice.invoiceNumber);
-  const response = await adapter.chargeToken({
-    token,
-    amountCents,
-    gatewayXInvoice,
-    idempotencyKey,
-    recurringIndicator: "Single",
-  });
+  const gatewayXInvoice = buildConnectBillingGatewayXInvoice(invoice.tenantId, invoice.id, invoice.invoiceNumber, idempotencyKey);
+  let response;
+  try {
+    response = await adapter.chargeToken({
+      token,
+      amountCents,
+      gatewayXInvoice,
+      idempotencyKey,
+      recurringIndicator: "Single",
+    });
+  } catch (err: any) {
+    await (db as any).paymentTransaction.update({
+      where: { id: reserved.transaction.id },
+      data: {
+        status: "ERROR",
+        responseMessage: err?.message || "gateway_charge_failed",
+        rawResponseSafeJson: {
+          error: err?.code || "gateway_charge_failed",
+          message: err?.message || "gateway_charge_failed",
+          cardBrand: ephemeralMethod.brand,
+          cardLast4: ephemeralMethod.last4,
+          ephemeral: true,
+        },
+      },
+    }).catch(() => null);
+    throw err;
+  }
 
   const processorRef =
     response.xRefNum !== undefined && response.xRefNum !== null && String(response.xRefNum).trim() !== ""
       ? String(response.xRefNum)
       : null;
 
-  const transaction = await (db as any).paymentTransaction.create({
+  const transaction = await (db as any).paymentTransaction.update({
+    where: { id: reserved.transaction.id },
     data: {
-      tenantId: invoice.tenantId,
-      invoiceId: invoice.id,
       paymentMethodId: null,
-      amountCents,
       status: response.approved ? "APPROVED" : response.status === "DECLINED" ? "DECLINED" : "ERROR",
       processorTransactionId: processorRef,
       responseCode: response.xResult,
@@ -261,7 +429,6 @@ export async function chargeBillingInvoiceWithSut(
         cardLast4: ephemeralMethod.last4,
         ephemeral: true,
       },
-      idempotencyKey,
     },
   });
 

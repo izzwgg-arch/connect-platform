@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CardknoxIFieldsForm, type CardknoxBillingFields } from "../../../../components/billing/CardknoxIFieldsForm";
 import "./pay-invoice.css";
 
@@ -57,6 +57,7 @@ export default function PublicBillingInvoicePayPage() {
   const [paid, setPaid] = useState(false);
   const [saveCard, setSaveCard] = useState(false);
   const [enableAutopay, setEnableAutopay] = useState(false);
+  const submitInFlightRef = useRef(false);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -91,38 +92,46 @@ export default function PublicBillingInvoicePayPage() {
     enableAutopay: boolean;
   }) {
     if (!token) return;
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     setPayError("");
-    const xExp = billingXExp(payload.billing);
-    if (!xExp) {
-      setPayError("Enter a valid expiration month and year.");
-      return;
+    try {
+      const xExp = billingXExp(payload.billing);
+      if (!xExp) {
+        setPayError("Enter a valid expiration month and year.");
+        return;
+      }
+      const res = await fetch(`${apiBase}/billing/platform/invoices/pay/${encodeURIComponent(token)}/pay`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          xSut: payload.cardToken,
+          xExp,
+          cardholderName: payload.billing.cardholderName,
+          billingZip: payload.billing.billingZip,
+          billingEmail: payload.billing.billingEmail,
+          saveCard: payload.saveCard,
+          enableAutopay: payload.enableAutopay,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json?.approved) {
+        const err = String(json?.error || "payment_failed");
+        setPayError(
+          err === "invoice_already_paid"
+            ? "This invoice has already been paid."
+            : err === "charge_in_progress"
+              ? "A payment is already processing for this invoice. Please wait a moment."
+              : err === "card_tokenization_failed" || err === "card_save_failed"
+                ? "We could not verify this card. Check the number and try again."
+                : "Payment could not be completed. Please try again or contact support.",
+        );
+        return;
+      }
+      setPaid(true);
+    } finally {
+      submitInFlightRef.current = false;
     }
-    const res = await fetch(`${apiBase}/billing/platform/invoices/pay/${encodeURIComponent(token)}/pay`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        xSut: payload.cardToken,
-        xExp,
-        cardholderName: payload.billing.cardholderName,
-        billingZip: payload.billing.billingZip,
-        billingEmail: payload.billing.billingEmail,
-        saveCard: payload.saveCard,
-        enableAutopay: payload.enableAutopay,
-      }),
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok || !json?.approved) {
-      const err = String(json?.error || "payment_failed");
-      setPayError(
-        err === "invoice_already_paid"
-          ? "This invoice has already been paid."
-          : err === "card_tokenization_failed" || err === "card_save_failed"
-            ? "We could not verify this card. Check the number and try again."
-            : "Payment could not be completed. Please try again or contact support.",
-      );
-      return;
-    }
-    setPaid(true);
   }
 
   const result = search.get("result");

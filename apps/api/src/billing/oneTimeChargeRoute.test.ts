@@ -17,6 +17,7 @@ const oneTimeChargeBodySchema = z.object({
   saveCard: z.boolean().optional(),
   makeDefault: z.boolean().optional(),
   confirmLive: z.boolean().optional(),
+  operationId: z.string().min(8).max(120).optional(),
 });
 
 test("one-time charge body accepts xSut token fields only for new_card", () => {

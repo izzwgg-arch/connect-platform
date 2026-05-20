@@ -68,6 +68,11 @@ type AdminSolaPublicConfig = { configured: boolean; enabled: boolean; ifieldsKey
 
 type NewCardPayload = { cardToken: string; billing: CardknoxBillingFields };
 
+function newOneTimeChargeOperationId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `otc_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function billingXExp(billing: CardknoxBillingFields): string | null {
   const month = billing.expMonth.replace(/\D/g, "").padStart(2, "0").slice(-2);
   const yearDigits = billing.expYear.replace(/\D/g, "");
@@ -231,6 +236,8 @@ export function OneTimeChargeDrawer({
   const tokenizeRef = useRef<(() => void) | null>(null);
 
   const chargePendingRef = useRef(false);
+  const submitInFlightRef = useRef(false);
+  const chargeOperationIdRef = useRef<string>(newOneTimeChargeOperationId());
 
 
 
@@ -317,6 +324,7 @@ export function OneTimeChargeDrawer({
         invoiceMemo: invoiceMemo.trim() || undefined,
         chargeMode,
         confirmLive: isLiveCharge ? true : undefined,
+        operationId: chargeOperationIdRef.current,
       };
       if (chargeMode === "card_on_file") body.paymentMethodId = paymentMethodId;
       if (chargeMode === "new_card") {
@@ -359,17 +367,23 @@ export function OneTimeChargeDrawer({
     } finally {
       setBusy(false);
       setTokenizing(false);
+      submitInFlightRef.current = false;
+      chargeOperationIdRef.current = newOneTimeChargeOperationId();
     }
   }
 
   function submitCharge() {
+    if (submitInFlightRef.current || busy || tokenizing) return;
+    submitInFlightRef.current = true;
     if (chargeMode === "new_card") {
       if (!canUseNewCard) {
         setError("Payment gateway is not configured for this company.");
+        submitInFlightRef.current = false;
         return;
       }
       if (!ifieldsReady) {
         setError("Secure card form is still loading. Wait a moment and try again.");
+        submitInFlightRef.current = false;
         return;
       }
       setError("");
@@ -431,6 +445,7 @@ export function OneTimeChargeDrawer({
       if (chargePendingRef.current) setError(msg);
       else setCardFormError(msg);
       chargePendingRef.current = false;
+      submitInFlightRef.current = false;
       return;
     }
     if (chargePendingRef.current) {
@@ -438,6 +453,7 @@ export function OneTimeChargeDrawer({
       void postCharge({ cardToken: payload.cardToken, billing: payload.billing });
       return;
     }
+    submitInFlightRef.current = false;
     setCardFormError("Unexpected card tokenization. Try again.");
   }
 
@@ -468,6 +484,7 @@ export function OneTimeChargeDrawer({
         errorMessage={step === "form" ? cardFormError : null}
         onTokenizeError={(msg) => {
           setTokenizing(false);
+          submitInFlightRef.current = false;
           const wasCharge = chargePendingRef.current;
           chargePendingRef.current = false;
           if (wasCharge) setError(msg);

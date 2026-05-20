@@ -12,19 +12,16 @@ import {
   VoipMsSmsProvider,
   SolaCardknoxAdapter,
   WirePbxClient,
-  buildConnectBillingGatewayXInvoice,
 } from "@connect/integrations";
 import {
   runDunningSweepEligibility,
   consumeSkipNextRetryFlag,
   applyDunningAfterAutopayFailure,
 } from "../../api/src/billing/billingDunning";
-import { getBillingSolaAdapter } from "../../api/src/billing/solaGateway";
+import { chargeBillingInvoice } from "../../api/src/billing/solaBillingPayments";
 import {
   clearInvoiceDunningMetadata,
   queueInvoiceSentOnFinalize,
-  queuePaymentFailedEmailOnce,
-  queueReceiptEmailOnce,
 } from "../../api/src/billing/billingEmailLifecycle";
 import { createBillingInvoice } from "../../api/src/billing/invoiceEngine";
 import { consumeScheduledPlanChange } from "../../api/src/billing/billingScheduledPlanConsume";
@@ -2042,56 +2039,19 @@ async function chargeWorkerInvoice(
       metadata: { source: runId ? "monthly_run" : "dunning_retry", attemptNumber },
     },
   });
-  const token = decryptJson<string>(method.tokenEncrypted);
-  const adapter = await getBillingSolaAdapter(invoice.tenantId);
-  // Deterministic key: restart-safe — same attempt cannot produce a second charge.
-  const idempotencyKey = `worker:billing:sale:${invoice.id}:a${attemptNumber}`;
-  const gatewayXInvoice = buildConnectBillingGatewayXInvoice(invoice.tenantId, invoice.id, invoice.invoiceNumber);
-  const response = await adapter.chargeToken({
-    token,
-    amountCents: invoice.balanceDueCents || invoice.totalCents,
-    gatewayXInvoice,
-    idempotencyKey,
-  });
-  const processorRef =
-    response.xRefNum !== undefined && response.xRefNum !== null && String(response.xRefNum).trim() !== ""
-      ? String(response.xRefNum)
-      : null;
-  const transaction = await (db as any).paymentTransaction.create({
-    data: {
-      tenantId: invoice.tenantId,
-      invoiceId: invoice.id,
-      paymentMethodId: method.id,
-      amountCents: invoice.balanceDueCents || invoice.totalCents,
-      status: response.approved ? "APPROVED" : response.status === "DECLINED" ? "DECLINED" : "ERROR",
-      processorTransactionId: processorRef,
-      responseCode: response.xResult,
-      responseMessage: response.xError || response.xStatus,
-      rawResponseSafeJson: response.safePayload,
-      idempotencyKey,
-    },
-  });
-  await (db as any).billingInvoice.update({ where: { id: invoice.id }, data: response.approved ? { status: "PAID", amountPaidCents: invoice.totalCents, balanceDueCents: 0, paidAt: new Date(), paymentMethodId: method.id } : { status: "FAILED", failedAt: new Date(), paymentMethodId: method.id } });
-  if (response.approved) {
+  let transaction: any;
+  try {
+    transaction = await chargeBillingInvoice(invoice, method, {
+      runId: runId || undefined,
+      note: runId ? "worker_monthly" : "worker_dunning_retry",
+    });
+  } catch (err: any) {
+    if (err?.code === "CHARGE_IN_PROGRESS" || err?.code === "INVOICE_ALREADY_PAID") return null;
+    throw err;
+  }
+  if (transaction?.status === "APPROVED") {
     await clearInvoiceDunningMetadata(invoice.id);
-    await queueReceiptEmailOnce({
-      tenantId: invoice.tenantId,
-      invoiceId: invoice.id,
-      invoiceNumber: invoice.invoiceNumber,
-      totalCents: invoice.totalCents,
-      transactionId: transaction.id,
-      cardLabel: method.last4 ? `${method.brand || "Card"} ending ${method.last4}` : null,
-      paidViaAutopay: true,
-    });
-  } else {
-    await queuePaymentFailedEmailOnce({
-      tenantId: invoice.tenantId,
-      invoiceId: invoice.id,
-      invoiceNumber: invoice.invoiceNumber,
-      totalCents: invoice.totalCents,
-      transactionId: transaction.id,
-      reason: response.xError,
-    });
+  } else if (transaction?.status === "DECLINED" || transaction?.status === "ERROR") {
     await applyDunningAfterAutopayFailure({
       invoiceId: invoice.id,
       tenantId: invoice.tenantId,
@@ -2100,18 +2060,6 @@ async function chargeWorkerInvoice(
         ? { maxAttempts: dunningOverrides.effectiveMaxAttempts, retryDelayMs: dunningOverrides.effectiveDelayMs }
         : undefined,
     });
-  }
-  await (db as any).billingEventLog.create({
-    data: {
-      tenantId: invoice.tenantId,
-      invoiceId: invoice.id,
-      runId,
-      type: response.approved ? "payment_succeeded" : "payment_failed",
-      metadata: { transactionId: transaction.id },
-    },
-  });
-  if (!response.approved) {
-    await (db as any).alert.create({ data: { tenantId: invoice.tenantId, severity: "HIGH", category: "BILLING", message: `Payment failed for invoice ${invoice.invoiceNumber}`, metadata: { invoiceId: invoice.id, transactionId: transaction.id } } }).catch(() => null);
   }
   return transaction;
 }
