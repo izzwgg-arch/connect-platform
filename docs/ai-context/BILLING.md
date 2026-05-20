@@ -71,7 +71,7 @@ Shell: **`AdminBillingShell`** + CSS scopes **`billing-ws-scope`**, **`billing-p
 | Settings **metadata merge** (`taxProviderId` + `billingPricingMode`) | `apps/api/src/billing/billingTenantSettingsMetadata.ts` |
 | Tax profiles (sales / E911 / regulatory math) | `apps/api/src/billing/taxes.ts` |
 | Tax provider abstraction + audit snapshot shape | `apps/api/src/billing/taxProvider.ts` |
-| SOLA adapter selection (per-tenant vs env) | `apps/api/src/billing/solaGateway.ts` |
+| SOLA adapter selection (resolved effective config) | `apps/api/src/billing/solaGateway.ts` |
 | Public billing URLs (SOLA webhook) | `apps/api/src/billing/solaPublicUrls.ts` |
 | Token charges, hosted session helper, webhook apply + dedupe | `apps/api/src/billing/solaBillingPayments.ts` |
 | Cardknox client (`gatewayjson`, parse/verify) | `packages/integrations/src/sola-cardknox/index.ts` |
@@ -90,6 +90,14 @@ Shell: **`AdminBillingShell`** + CSS scopes **`billing-ws-scope`**, **`billing-p
 | Nav visibility for Admin Billing | `apps/portal/navigation/navConfig.ts` → `isNavItemVisibleForUser` |
 | Tenant billing settings UI (shared) | `apps/portal/app/(platform)/billing/TenantBillingSettingsContent.tsx` |
 | Admin per-tenant config forms (pricing, branding, SOLA) | `apps/portal/app/(platform)/admin/billing/_components/tenantBillingConfigForms.tsx` |
+
+### Billing gateway resolution order (Cardknox/SOLA)
+
+- Source of truth is `resolveBillingGatewayConfig(tenantId)` in `apps/api/src/billing/solaGateway.ts`.
+- Resolution order: valid tenant override (when tenant overrides are enabled) -> enabled platform/main-tenant `BillingSolaConfig` -> env/global fallback credentials -> missing.
+- A tenant-local row that is disabled, stale, or has invalid credentials does not block inheritance; resolution falls through to main-tenant or env/global.
+- Live-charge confirmation checks in billing routes use the resolved effective config (mode/simulate/source), not `tenant.billingSolaConfig` directly.
+- Worker autopay reuses the same resolver path via `getBillingSolaAdapter` imported from the API billing gateway module.
 
 ## Auth rules (JWT `UserRole`, not only portal permissions)
 

@@ -16,6 +16,10 @@
   - `registerUserExtensionProvisioningRoutes(app, …)` → `apps/api/src/userExtensionProvisioning.ts` (line ~30200)
   - `registerConnectChatRoutes(app, …)` → `apps/api/src/connectChatRoutes.ts` (line ~30265)
 
+Billing note: `apps/api/src/billing/routes.ts` uses `resolveBillingGatewayConfig()` from
+`apps/api/src/billing/solaGateway.ts` for effective Cardknox/SOLA status and live-charge guards
+with source precedence (tenant override -> main tenant -> env/global -> missing).
+
 ### Request profiling (CPU / hot routes)
 
 - **Prometheus:** histogram **`connect_api_request_duration_seconds`** (`method`, `route`, `status`) — see **`GET /metrics`** in `server.ts`.

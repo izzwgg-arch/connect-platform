@@ -19,6 +19,7 @@ import {
   consumeSkipNextRetryFlag,
   applyDunningAfterAutopayFailure,
 } from "../../api/src/billing/billingDunning";
+import { getBillingSolaAdapter } from "../../api/src/billing/solaGateway";
 import {
   clearInvoiceDunningMetadata,
   queueInvoiceSentOnFinalize,
@@ -1787,26 +1788,6 @@ function billingMonthBounds(anchor = new Date()): { periodStart: Date; periodEnd
   };
 }
 
-async function getWorkerSolaAdapterForTenant(tenantId: string): Promise<SolaCardknoxAdapter> {
-  const row = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
-  if (row?.isEnabled) {
-    const secrets = decryptJson<{ apiKey: string; apiSecret?: string | null; webhookSecret?: string | null }>(row.credentialsEncrypted);
-    const paths = (row.pathOverrides && typeof row.pathOverrides === "object" ? row.pathOverrides : {}) as any;
-    return new SolaCardknoxAdapter({
-      baseUrl: row.apiBaseUrl,
-      apiKey: secrets.apiKey,
-      apiSecret: secrets.apiSecret || undefined,
-      webhookSecret: secrets.webhookSecret || undefined,
-      mode: row.mode === "PROD" ? "prod" : "sandbox",
-      simulate: !!row.simulate,
-      authMode: row.authMode === "AUTHORIZATION_HEADER" ? "authorization_header" : "xkey_body",
-      authHeaderName: row.authHeaderName || undefined,
-      transactionPath: paths.transactionPath || "/gatewayjson",
-    });
-  }
-  return getSolaAdapter();
-}
-
 /**
  * Phase D Worker Guard — returns the first active Sola schedule link that is NOT yet cut over
  * for the given tenant, or null if safe to charge.
@@ -2062,7 +2043,7 @@ async function chargeWorkerInvoice(
     },
   });
   const token = decryptJson<string>(method.tokenEncrypted);
-  const adapter = await getWorkerSolaAdapterForTenant(invoice.tenantId);
+  const adapter = await getBillingSolaAdapter(invoice.tenantId);
   // Deterministic key: restart-safe — same attempt cannot produce a second charge.
   const idempotencyKey = `worker:billing:sale:${invoice.id}:a${attemptNumber}`;
   const gatewayXInvoice = buildConnectBillingGatewayXInvoice(invoice.tenantId, invoice.id, invoice.invoiceNumber);

@@ -91,7 +91,7 @@ Your job is to be **narrow, surgical, and conservative**. The platform is in pro
 | AstDB / IVR / MOH publish | `ASTDB_KEYS.md` first, then `docs/pbx/option-a-runtime-keys.md` |
 | Worker / cron / SMS / billing | `SERVICES.md` (worker), `ARCHITECTURE.md` |
 | Database / schema | `DATA_MODEL.md` first (cheat sheet), then `ARCHITECTURE.md` (data flow), then `packages/db/prisma/schema.prisma` |
-| Deployment / Docker / CI | `DEPLOYMENT.md`, `AGENTS.md`, `docs/safe-deploy-queue.md` |
+| Deployment / Docker / CI | `DEPLOYMENT.md`, `AGENTS.md`, `docs/safe-deploy-queue.md` (for slow deploys, use structured `[phase]` timings + `queue_wait` + `build_diag` before changing scripts) |
 | WebSockets / realtime | `ARCHITECTURE.md`, `TELEPHONY.md` (broadcast section) |
 | Test coverage questions | `TEST_INVENTORY.md` |
 | Repo navigation / why-is-this-file-so-big | `TOKEN_COST_HOTSPOTS.md`, `REPO_HYGIENE.md` |
@@ -137,6 +137,9 @@ stop and ask the user to scope.
 - If you cannot reproduce a bug from logs, **stop and ask for a snapshot**.
 - If a change might cross more than one of `auth / tenant / telephony / billing /
   mobile call state / deploy`, **ask the user to confirm scope first**.
+- For Cardknox/SOLA billing changes, use the shared resolver (`resolveBillingGatewayConfig`)
+  and preserve effective-source precedence (`tenant override -> main tenant -> env/global -> missing`);
+  do not add a second resolver in worker or route handlers.
 - Prefer `dryRun: true` for any deploy enqueue.
 - Prefer reading 5 small files over 1 huge one. `apps/api/src/server.ts` is ~30k LOC —
   use `Grep` with the exact route, do not read it whole.

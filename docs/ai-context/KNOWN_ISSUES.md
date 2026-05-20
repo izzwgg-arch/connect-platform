@@ -22,6 +22,7 @@ When you find a new fragile area, add it here.
 - **Fixed 2026-05-19 — Cardknox `Required: xversion` on one-time charge.** `gatewayjson` requests omitted mandatory `xVersion` (and software identity fields). **Fix:** `postGatewayJson` in `@connect/integrations` always sends `xVersion: 4.5.9`, `xSoftwareName`, `xSoftwareVersion`.
 - **Fixed 2026-05-19 — One-time charge `invoiceNumber` unique constraint.** `nextInvoiceNumber` used per-tenant `count` while `BillingInvoice.invoiceNumber` is **globally** unique — different tenants could collide on the same `CC-YYYYMM-#####`. **Fix:** allocate from global max suffix for the month prefix + retry on `P2002`.
 - **Fixed 2026-05-19 — OneTimeChargeDrawer legacy iFields iframes.** Admin **Charge customer** “new card” used CDN `ifield.htm` + `window.getTokens`, which could render blank and failed on confirm (form unmounted). **Fix:** shared `CardknoxIFieldsForm` + tokenize on Review before confirm. Tenant **`/billing/payments`** may still use legacy iframes until migrated.
+- **Fixed 2026-05-20 — Tenants falsely showed Cardknox "not configured" despite platform config.** Gateway resolution previously read tenant-local `billingSolaConfig` directly in multiple paths. **Fix:** centralized `resolveBillingGatewayConfig(tenantId)` with precedence `tenant override -> enabled main/platform tenant row -> env/global fallback -> missing`; disabled/stale/invalid tenant rows now fall through; live-charge confirmations and worker autopay use the effective resolved source.
 - **Limitation — billing schedule override (nextPaymentDate / skipNextPayment)** is stored in `TenantBillingSettings.metadata.billingScheduleOverride` and displayed in the Payments workspace. The monthly billing **worker does not yet read these fields** — storing/displaying only. Do not tell customers billing will skip on a specific date unless the worker is updated to honour the override.
 - **Limitation — imported Sola schedules are display-only.** `SolaLinkedSchedulesSection` shows mapped external schedule metadata. Connect **cannot charge** an imported Sola schedule unless the recurring token is linked as a `PaymentMethod` (Phase C token linking — not yet implemented).
 - **Limitation — past-due billing panel pre-fills the one-time charge drawer.** `PastDueBillingPanel` uses `POST /admin/billing/platform/tenants/:tenantId/one-time-charges`. The `chargeMode: "none"` path creates an invoice without charging; the other modes charge the card immediately once confirmed. No "send payment link" email integration yet from this panel — use the invoice email-payment-link action separately.
@@ -936,9 +937,23 @@ When you find a new fragile area, add it here.
   Manual deploys are explicitly forbidden.
 - **`api` is the ONLY service that runs migrations.** A migration file checked in
   but not deployed via `api` will silently miss production.
-- **`docker-compose.app.yml` `command:` line for `api` runs Prisma generate +
-  migrate every container start.** UNKNOWN whether this assumption holds across all
-  deploy scripts — verify in `scripts/deploy-api.sh`.
+- **Deploy slowness diagnosis used to be low-signal (partially fixed 2026-05-20).**
+  Root causes were broad `total` timing only, no queue wait visibility, and repeated
+  heavy steps (duplicate branch sync and duplicate API/portal candidate+stable compose
+  build invocations). Deploy logs now emit structured `[phase]` records with
+  `startedAt`/`finishedAt`/`durationMs`/`skipped`/`skipReason`, plus explicit
+  `queue_wait`; API/portal build now runs in one compose call for both services.
+  Remaining expected slow phases are image build time and readiness/health wait loops.
+- **Build phase bottleneck (mitigated 2026-05-20, still workload-dependent).**
+  Core causes were cache-unfriendly Dockerfiles (`COPY . .` before install), oversized/
+  volatile build context, and uneven BuildKit cache use across services. Current mitigations:
+  manifest-first dependency layers for api/worker/telephony/realtime, BuildKit cache mounts
+  for pnpm store (and Next cache for portal), expanded `.dockerignore`, and build diagnostics
+  (`build_diag`) that report service(s), BuildKit env, context transfer clue, cache-hit clue,
+  and duration. Remaining variance depends on true source changes, base image churn, and cache
+  persistence on the deploy host.
+- **`docker-compose.app.yml` `command:` line for `api` does NOT run migrate on boot.**
+  Migrations run from `scripts/deploy-api.sh` when Prisma schema/migrations changed.
 - **Volumes `moh-assets`, `ivr-prompts`, `chat-attachments`** must persist. Renaming
   drops customer media.
 - **`/opt/connectcomms/downloads` mounted read-only into the api container** for

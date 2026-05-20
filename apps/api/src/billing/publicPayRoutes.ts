@@ -1,27 +1,17 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
-import { decryptJson, hasCredentialsMasterKey } from "@connect/security";
-import { getBillingSolaAdapter, getBillingSolaAdapterForTokenizing, storeSolaPaymentMethod } from "./solaGateway";
+import { hasCredentialsMasterKey } from "@connect/security";
+import {
+  getBillingSolaAdapter,
+  getBillingSolaAdapterForTokenizing,
+  resolveBillingGatewayConfig,
+  storeSolaPaymentMethod,
+} from "./solaGateway";
 import { chargeBillingInvoice, chargeBillingInvoiceWithSut } from "./solaBillingPayments";
 import { verifyBillingInvoicePayToken } from "./billingPayToken";
 import { logBillingEvent } from "./invoiceEngine";
 import { resolveInvoiceEmailBranding } from "./invoiceBranding";
-type SolaSecrets = { ifieldsKey?: string | null };
-
-async function resolvePublicIfieldsKey(tenantId: string): Promise<string | null> {
-  const globalConfig = await (db as any).globalSolaConfig.findUnique({ where: { id: "default" } });
-  const platformIfieldsKey =
-    process.env.SOLA_CARDKNOX_IFIELDS_KEY?.trim() || globalConfig?.ifieldsKey?.trim() || null;
-  const record = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
-  if (!record) return platformIfieldsKey;
-  try {
-    const secrets = decryptJson<SolaSecrets>(record.credentialsEncrypted);
-    return secrets.ifieldsKey?.trim() || platformIfieldsKey;
-  } catch {
-    return platformIfieldsKey;
-  }
-}
 
 async function loadInvoiceForPayToken(token: string) {
   const parsed = verifyBillingInvoicePayToken(token);
@@ -80,20 +70,19 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
       const status = loaded.error === "invoice_not_found" ? 404 : 410;
       return reply.code(status).send({ error: loaded.error });
     }
-    const ifieldsKey = await resolvePublicIfieldsKey(loaded.invoice.tenantId);
-    if (!ifieldsKey) {
+    const gateway = await resolveBillingGatewayConfig(loaded.invoice.tenantId, { forTokenizing: true });
+    if (!gateway.ifieldsKey) {
       return reply.code(503).send({ error: "payment_gateway_not_configured" });
     }
-    const record = await (db as any).billingSolaConfig.findUnique({
-      where: { tenantId: loaded.invoice.tenantId },
-      select: { isEnabled: true, mode: true },
-    });
     return {
-      ifieldsKey,
+      ifieldsKey: gateway.ifieldsKey,
       ifieldsVersion: "3.4.2602.2001",
-      mode: record?.mode === "PROD" ? "prod" : "sandbox",
+      mode: gateway.mode || "sandbox",
       canPay: !["PAID", "VOID"].includes(loaded.invoice.status)
         && (loaded.invoice.balanceDueCents ?? loaded.invoice.totalCents ?? 0) > 0,
+      gatewayConfigured: gateway.configured,
+      gatewayConfigSource: gateway.source,
+      tenantOverridePresent: gateway.tenantOverridePresent,
     };
   });
 

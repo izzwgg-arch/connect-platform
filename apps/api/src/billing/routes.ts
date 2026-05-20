@@ -20,7 +20,7 @@ import {
   mergeTenantBillingSettingsMetadata,
   validateBillingScheduleOverrideInput,
 } from "./billingTenantSettingsMetadata";
-import { getBillingSolaAdapter, getBillingSolaAdapterForTokenizing, storeSolaPaymentMethod } from "./solaGateway";
+import { getBillingSolaAdapter, getBillingSolaAdapterForTokenizing, resolveBillingGatewayConfig, storeSolaPaymentMethod } from "./solaGateway";
 import { invoiceReadyEmail } from "./emailTemplates";
 import { findBillingInvoiceForPdf, sendBillingInvoicePdf } from "./billingInvoicePdfAccess";
 import { chargeBillingInvoice, chargeBillingInvoiceWithSut, refundBillingTransaction } from "./solaBillingPayments";
@@ -499,22 +499,16 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const u = await requireTenantBilling(req, reply);
     if (!u) return;
     if (!ensureCredentialCrypto(reply)) return;
-    const globalConfig = await (db as any).globalSolaConfig.findUnique({ where: { id: "default" } });
-    const platformIfieldsKey = process.env.SOLA_CARDKNOX_IFIELDS_KEY?.trim() || globalConfig?.ifieldsKey?.trim() || null;
-    const record = await (db as any).billingSolaConfig.findUnique({ where: { tenantId: u.tenantId } });
-    if (!record) return { configured: false, enabled: false, ifieldsKey: platformIfieldsKey, ifieldsVersion: "3.4.2602.2001" };
-    let secrets: SolaCredentialPayload;
-    try {
-      secrets = decryptJson<SolaCredentialPayload>(record.credentialsEncrypted);
-    } catch {
-      return reply.code(400).send({ error: "sola_decrypt_failed" });
-    }
+    const resolved = await resolveBillingGatewayConfig(u.tenantId, { forTokenizing: true });
     return {
-      configured: true,
-      enabled: !!record.isEnabled,
-      mode: record.mode === "PROD" ? "prod" : "sandbox",
-      ifieldsKey: secrets.ifieldsKey?.trim() || platformIfieldsKey,
+      configured: resolved.configured,
+      enabled: resolved.enabled,
+      mode: resolved.mode,
+      ifieldsKey: resolved.ifieldsKey,
       ifieldsVersion: "3.4.2602.2001",
+      gatewayConfigured: resolved.configured,
+      gatewayConfigSource: resolved.source,
+      tenantOverridePresent: resolved.tenantOverridePresent,
     };
   });
 
@@ -1705,15 +1699,14 @@ export async function registerBillingRoutes(app: FastifyInstance) {
             id: true,
             name: true,
             billingSettings: { select: { billingEmail: true, defaultPaymentMethodId: true } },
-            billingSolaConfig: { select: { isEnabled: true, mode: true, simulate: true } },
           },
         },
       },
     });
     if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
-    const sc = (invoice as any).tenant?.billingSolaConfig;
-    const isLiveCharge = !!(sc?.isEnabled && sc.mode === "PROD" && !sc.simulate);
-    return { ...invoice, isLiveCharge };
+    const gateway = await resolveBillingGatewayConfig(invoice.tenantId);
+    const isLiveCharge = !!(gateway.enabled && gateway.mode === "prod" && !gateway.simulate);
+    return { ...invoice, isLiveCharge, gatewayConfigSource: gateway.source };
   });
 
   app.get("/admin/billing/transactions", async (req, reply) => {
@@ -1790,15 +1783,15 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       reason: z.string().max(500).optional(),
       confirmLive: z.boolean().optional(),
     }).parse(req.body || {});
-    const tx = await (db as any).paymentTransaction.findUnique({
-      where: { id },
-      include: { tenant: { include: { billingSolaConfig: true } } },
-    });
+    const tx = await (db as any).paymentTransaction.findUnique({ where: { id } });
     if (!tx) return reply.code(404).send({ error: "transaction_not_found" });
-    const sc = tx.tenant?.billingSolaConfig;
-    const isLive = !!(sc?.isEnabled && sc.mode === "PROD" && !sc.simulate);
+    const gateway = await resolveBillingGatewayConfig(tx.tenantId);
+    const isLive = !!(gateway.enabled && gateway.mode === "prod" && !gateway.simulate);
     if (isLive && !input.confirmLive) {
-      return reply.code(400).send({ error: "confirm_live_required", message: "Set confirmLive: true to confirm this live refund." });
+      return reply.code(400).send({
+        error: "confirm_live_required",
+        message: `Set confirmLive: true to confirm this live refund (gateway source: ${gateway.source}).`,
+      });
     }
     try {
       const result = await refundBillingTransaction(id, { reason: input.reason, adminUserId: u.sub });
@@ -1836,8 +1829,9 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       confirmLive: z.boolean().optional(),
     }).parse(req.body || {});
 
-    const tenant = await (db as any).tenant.findUnique({ where: { id: tenantId }, include: { billingSolaConfig: true } });
+    const tenant = await (db as any).tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
     if (!tenant) return reply.code(404).send({ error: "tenant_not_found" });
+    const gateway = await resolveBillingGatewayConfig(tenantId);
 
     let invoice;
     try {
@@ -1863,20 +1857,24 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     let transaction = null;
     if (input.chargeMode === "card_on_file") {
       if (!input.paymentMethodId) return reply.code(400).send({ error: "payment_method_required" });
-      const sc = tenant.billingSolaConfig;
-      const isLive = !!(sc?.isEnabled && sc.mode === "PROD" && !sc.simulate);
+      const isLive = !!(gateway.enabled && gateway.mode === "prod" && !gateway.simulate);
       if (isLive && !input.confirmLive) {
-        return reply.code(400).send({ error: "confirm_live_required", message: "Set confirmLive: true to confirm this live charge." });
+        return reply.code(400).send({
+          error: "confirm_live_required",
+          message: `Set confirmLive: true to confirm this live charge (gateway source: ${gateway.source}).`,
+        });
       }
       const method = await (db as any).paymentMethod.findFirst({ where: { id: input.paymentMethodId, tenantId, active: true } });
       if (!method) return reply.code(400).send({ error: "payment_method_not_found" });
       transaction = await chargeBillingInvoice(invoice, method, { note: input.operatorNote });
     } else if (input.chargeMode === "new_card") {
       if (!input.xSut) return reply.code(400).send({ error: "sola_token_required" });
-      const sc = tenant.billingSolaConfig;
-      const isLive = !!(sc?.isEnabled && sc.mode === "PROD" && !sc.simulate);
+      const isLive = !!(gateway.enabled && gateway.mode === "prod" && !gateway.simulate);
       if (isLive && !input.confirmLive) {
-        return reply.code(400).send({ error: "confirm_live_required", message: "Set confirmLive: true to confirm this live charge." });
+        return reply.code(400).send({
+          error: "confirm_live_required",
+          message: `Set confirmLive: true to confirm this live charge (gateway source: ${gateway.source}).`,
+        });
       }
       try {
         transaction = await chargeBillingInvoiceWithSut(
@@ -2245,25 +2243,16 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     if (!u) return;
     if (!ensureCredentialCrypto(reply)) return;
     const { tenantId } = req.params as { tenantId: string };
-    // Platform-level iFields key fallback: env var → GlobalSolaConfig
-    const globalConfig = await (db as any).globalSolaConfig.findUnique({ where: { id: "default" } });
-    const platformIfieldsKey = process.env.SOLA_CARDKNOX_IFIELDS_KEY?.trim() || globalConfig?.ifieldsKey?.trim() || null;
-    const record = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
-    if (!record) return { configured: false, enabled: false, canSaveCard: false, ifieldsKey: platformIfieldsKey, mode: null };
-    let secrets: SolaCredentialPayload;
-    try {
-      secrets = decryptJson<SolaCredentialPayload>(record.credentialsEncrypted);
-    } catch {
-      return reply.code(400).send({ error: "sola_decrypt_failed" });
-    }
-    const resolvedIfieldsKey = secrets.ifieldsKey?.trim() || platformIfieldsKey;
+    const resolved = await resolveBillingGatewayConfig(tenantId, { forTokenizing: true });
     return {
-      configured: true,
-      enabled: !!record.isEnabled,
-      // canSaveCard is true whenever configured (isEnabled not required — saving a card never charges)
-      canSaveCard: true,
-      mode: record.mode === "PROD" ? "prod" : "sandbox",
-      ifieldsKey: resolvedIfieldsKey,
+      configured: resolved.configured,
+      enabled: resolved.enabled,
+      canSaveCard: resolved.configured,
+      mode: resolved.mode,
+      ifieldsKey: resolved.ifieldsKey,
+      gatewayConfigured: resolved.configured,
+      gatewayConfigSource: resolved.source,
+      tenantOverridePresent: resolved.tenantOverridePresent,
     };
   });
 
@@ -2286,9 +2275,9 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         return { ...m, lastSuccessfulCharge: lastSuccess };
       }),
     );
-    const sc = await (db as any).billingSolaConfig.findUnique({ where: { tenantId }, select: { isEnabled: true, mode: true, simulate: true } });
-    const isLiveCharge = !!(sc?.isEnabled && sc.mode === "PROD" && !sc.simulate);
-    return { methods: methodsWithCharge, isLiveCharge };
+    const gateway = await resolveBillingGatewayConfig(tenantId);
+    const isLiveCharge = !!(gateway.enabled && gateway.mode === "prod" && !gateway.simulate);
+    return { methods: methodsWithCharge, isLiveCharge, gatewayConfigSource: gateway.source };
   });
 
   app.post("/admin/billing/platform/tenants/:tenantId/payment-methods/sola/save", async (req, reply) => {
@@ -2475,17 +2464,17 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       note: z.string().max(500).optional(),
       confirmLive: z.boolean().optional(),
     }).parse(req.body || {});
-    const invoice = await (db as any).billingInvoice.findUnique({
-      where: { id },
-      include: { tenant: { include: { billingSolaConfig: true } } },
-    });
+    const invoice = await (db as any).billingInvoice.findUnique({ where: { id } });
     if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
     if (invoice.status === "PAID") return reply.code(400).send({ error: "invoice_already_paid" });
     if (invoice.status === "VOID") return reply.code(400).send({ error: "invoice_voided" });
-    const sc = invoice.tenant?.billingSolaConfig;
-    const isLive = !!(sc?.isEnabled && sc.mode === "PROD" && !sc.simulate);
+    const gateway = await resolveBillingGatewayConfig(invoice.tenantId);
+    const isLive = !!(gateway.enabled && gateway.mode === "prod" && !gateway.simulate);
     if (isLive && !input.confirmLive) {
-      return reply.code(400).send({ error: "confirm_live_required", message: "Set confirmLive: true to confirm this intentional live charge." });
+      return reply.code(400).send({
+        error: "confirm_live_required",
+        message: `Set confirmLive: true to confirm this intentional live charge (gateway source: ${gateway.source}).`,
+      });
     }
     const method = await (db as any).paymentMethod.findFirst({ where: { id: input.paymentMethodId, tenantId: invoice.tenantId, active: true } });
     if (!method) return reply.code(400).send({ error: "payment_method_not_found" });

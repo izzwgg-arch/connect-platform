@@ -6,6 +6,7 @@ type BillingSolaCredentialPayload = {
   apiKey: string;
   apiSecret?: string | null;
   webhookSecret?: string | null;
+  ifieldsKey?: string | null;
 };
 
 type BillingSolaPathOverrides = {
@@ -33,8 +34,7 @@ function normalizeSolaPathOverrides(input: unknown): BillingSolaPathOverrides {
   };
 }
 
-function buildAdapterFromRow(row: any): SolaCardknoxAdapter {
-  const secrets = decryptJson<BillingSolaCredentialPayload>(row.credentialsEncrypted);
+function buildAdapterFromSecrets(row: any, secrets: BillingSolaCredentialPayload): SolaCardknoxAdapter {
   const paths = normalizeSolaPathOverrides(row.pathOverrides);
   const config: SolaCardknoxConfig = {
     baseUrl: row.apiBaseUrl,
@@ -69,15 +69,147 @@ function buildEnvFallbackAdapter(): SolaCardknoxAdapter | null {
   return null;
 }
 
+function cleanString(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (trimmed.toLowerCase() === "undefined" || trimmed.toLowerCase() === "null") return "";
+  return trimmed;
+}
+
+export type BillingGatewayConfigSource = "tenant" | "main_tenant" | "global" | "missing";
+
+type ResolveGatewayOptions = {
+  forTokenizing?: boolean;
+  dbClient?: any;
+  decodeSecrets?: (encrypted: string) => BillingSolaCredentialPayload;
+};
+
+export type ResolvedBillingGatewayConfig = {
+  configured: boolean;
+  enabled: boolean;
+  source: BillingGatewayConfigSource;
+  tenantOverridePresent: boolean;
+  ifieldsKey: string | null;
+  mode: "prod" | "sandbox" | null;
+  simulate: boolean;
+  adapter: SolaCardknoxAdapter | null;
+};
+
+const TENANT_GATEWAY_OVERRIDE_ENABLED = process.env.BILLING_GATEWAY_ALLOW_TENANT_OVERRIDE !== "0";
+
+function parseRowConfig(
+  row: any,
+  decodeSecrets: (encrypted: string) => BillingSolaCredentialPayload,
+): { adapter: SolaCardknoxAdapter; ifieldsKey: string | null } | null {
+  if (!row?.credentialsEncrypted) return null;
+  try {
+    const secrets = decodeSecrets(row.credentialsEncrypted);
+    const apiKey = String(secrets?.apiKey || "").trim();
+    if (!apiKey) return null;
+    return {
+      adapter: buildAdapterFromSecrets(row, { ...secrets, apiKey }),
+      ifieldsKey: String(secrets?.ifieldsKey || "").trim() || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function findMainTenantGatewayRow(dbClient: any): Promise<any | null> {
+  const explicitMainTenantId = cleanString(process.env.BILLING_MAIN_TENANT_ID) || cleanString(process.env.PLATFORM_TENANT_ID);
+  if (explicitMainTenantId) {
+    const byExplicit = await dbClient.billingSolaConfig.findUnique({ where: { tenantId: explicitMainTenantId } });
+    if (byExplicit?.isEnabled) return byExplicit;
+  }
+  const bySuperAdminTenant = await dbClient.billingSolaConfig.findFirst({
+    where: { isEnabled: true, tenant: { users: { some: { role: "SUPER_ADMIN" } } } },
+    orderBy: { updatedAt: "desc" },
+  });
+  if (bySuperAdminTenant) return bySuperAdminTenant;
+  return dbClient.billingSolaConfig.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+}
+
+export async function resolveBillingGatewayConfig(
+  tenantId: string,
+  options: ResolveGatewayOptions = {},
+): Promise<ResolvedBillingGatewayConfig> {
+  const dbClient = options.dbClient ?? (db as any);
+  const decodeSecrets = options.decodeSecrets ?? ((encrypted: string) => decryptJson<BillingSolaCredentialPayload>(encrypted));
+  const forTokenizing = !!options.forTokenizing;
+
+  const globalConfig = await dbClient.globalSolaConfig.findUnique({ where: { id: "default" } });
+  const platformIfieldsKey = cleanString(process.env.SOLA_CARDKNOX_IFIELDS_KEY) || cleanString(globalConfig?.ifieldsKey) || null;
+
+  const tenantRow = await dbClient.billingSolaConfig.findUnique({ where: { tenantId } });
+  const tenantOverridePresent = !!tenantRow;
+  if (TENANT_GATEWAY_OVERRIDE_ENABLED && tenantRow) {
+    const parsed = parseRowConfig(tenantRow, decodeSecrets);
+    const enabledForPurpose = !!tenantRow.isEnabled || forTokenizing;
+    if (parsed && enabledForPurpose) {
+      return {
+        configured: true,
+        enabled: !!tenantRow.isEnabled,
+        source: "tenant",
+        tenantOverridePresent,
+        ifieldsKey: parsed.ifieldsKey || platformIfieldsKey,
+        mode: tenantRow.mode === "PROD" ? "prod" : "sandbox",
+        simulate: !!tenantRow.simulate,
+        adapter: parsed.adapter,
+      };
+    }
+  }
+
+  const mainRow = await findMainTenantGatewayRow(dbClient);
+  if (mainRow) {
+    const parsed = parseRowConfig(mainRow, decodeSecrets);
+    if (parsed) {
+      return {
+        configured: true,
+        enabled: true,
+        source: "main_tenant",
+        tenantOverridePresent,
+        ifieldsKey: parsed.ifieldsKey || platformIfieldsKey,
+        mode: mainRow.mode === "PROD" ? "prod" : "sandbox",
+        simulate: !!mainRow.simulate,
+        adapter: parsed.adapter,
+      };
+    }
+  }
+
+  const envAdapter = buildEnvFallbackAdapter();
+  if (envAdapter) {
+    return {
+      configured: true,
+      enabled: true,
+      source: "global",
+      tenantOverridePresent,
+      ifieldsKey: platformIfieldsKey,
+      mode: "sandbox",
+      simulate: process.env.SOLA_CARDKNOX_SIMULATE === "1",
+      adapter: envAdapter,
+    };
+  }
+
+  return {
+    configured: false,
+    enabled: false,
+    source: "missing",
+    tenantOverridePresent,
+    ifieldsKey: platformIfieldsKey,
+    mode: null,
+    simulate: false,
+    adapter: null,
+  };
+}
+
 /** For billing/charging — requires isEnabled=true on the tenant config. */
 export async function getBillingSolaAdapter(tenantId: string): Promise<SolaCardknoxAdapter> {
-  const row = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
-  if (!row || !row.isEnabled) {
-    const fallback = buildEnvFallbackAdapter();
-    if (fallback) return fallback;
-    throw new Error(row ? "SOLA_NOT_ENABLED" : "SOLA_NOT_CONFIGURED");
-  }
-  return buildAdapterFromRow(row);
+  const resolved = await resolveBillingGatewayConfig(tenantId, { forTokenizing: false });
+  console.info("[billing.gateway.resolve]", { tenantId, source: resolved.source, purpose: "charge" });
+  if (!resolved.configured || !resolved.adapter) throw new Error("SOLA_NOT_CONFIGURED");
+  if (!resolved.enabled) throw new Error("SOLA_NOT_ENABLED");
+  return resolved.adapter;
 }
 
 /**
@@ -85,13 +217,10 @@ export async function getBillingSolaAdapter(tenantId: string): Promise<SolaCardk
  * Works even when isEnabled=false so admins can vault cards before enabling autopay.
  */
 export async function getBillingSolaAdapterForTokenizing(tenantId: string): Promise<SolaCardknoxAdapter> {
-  const row = await (db as any).billingSolaConfig.findUnique({ where: { tenantId } });
-  if (!row) {
-    const fallback = buildEnvFallbackAdapter();
-    if (fallback) return fallback;
-    throw new Error("SOLA_NOT_CONFIGURED");
-  }
-  return buildAdapterFromRow(row);
+  const resolved = await resolveBillingGatewayConfig(tenantId, { forTokenizing: true });
+  console.info("[billing.gateway.resolve]", { tenantId, source: resolved.source, purpose: "tokenize" });
+  if (!resolved.configured || !resolved.adapter) throw new Error("SOLA_NOT_CONFIGURED");
+  return resolved.adapter;
 }
 
 export async function storeSolaPaymentMethod(input: {
