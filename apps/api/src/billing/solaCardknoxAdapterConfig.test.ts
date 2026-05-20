@@ -37,7 +37,9 @@ test("testConnection sends cc:auth with 0.00 amount (no monetary capture)", asyn
   assert.equal(body.xAmount, "0.00");
   assert.equal(String(body.xKey || ""), "test_xkey");
   assert.equal(body.xVersion, "4.5.9");
+  assert.equal(body.xversion, "4.5.9");
   assert.equal(body.xSoftwareName, "ConnectComms");
+  assert.equal(body.xsoftwarename, "ConnectComms");
 });
 
 test("saveCardWithSut includes required xVersion on gatewayjson body", async () => {
@@ -61,9 +63,11 @@ test("saveCardWithSut includes required xVersion on gatewayjson body", async () 
   const adapter = new SolaCardknoxAdapter({ apiKey: "test_xkey", simulate: false });
   const out = await adapter.saveCardWithSut({ sut: "sut_test_token_12345678", cardholderName: "Jane", zip: "10950" });
   assert.equal(out.approved, true);
+  assert.ok(parsedBody && typeof parsedBody === "object");
   const body = parsedBody as Record<string, unknown>;
   assert.equal(body.xCommand, "cc:save");
   assert.equal(body.xVersion, "4.5.9");
+  assert.equal(body.xversion, "4.5.9");
   assert.equal(body.xSUT, "sut_test_token_12345678");
 });
 

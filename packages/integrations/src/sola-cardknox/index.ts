@@ -325,12 +325,19 @@ async function postGatewayJson(config: SolaCardknoxConfig, body: Record<string, 
   const path = config.transactionPath || "/gatewayjson";
   ensureConfigured(config);
 
+  const gatewayVersion = config.gatewayVersion ?? DEFAULT_CARDKNOX_GATEWAY_VERSION;
+  const softwareName = config.softwareName ?? "ConnectComms";
+  const softwareVersion = config.softwareVersion ?? "1.0.0";
   const reqBody: Record<string, any> = {
     ...body,
     xKey: config.apiKey,
-    xVersion: config.gatewayVersion ?? DEFAULT_CARDKNOX_GATEWAY_VERSION,
-    xSoftwareName: config.softwareName ?? "ConnectComms",
-    xSoftwareVersion: config.softwareVersion ?? "1.0.0",
+    // gatewayjson is inconsistent about case in JSON mode; send both aliases.
+    xVersion: gatewayVersion,
+    xversion: gatewayVersion,
+    xSoftwareName: softwareName,
+    xsoftwarename: softwareName,
+    xSoftwareVersion: softwareVersion,
+    xsoftwareversion: softwareVersion,
   };
   if (config.apiSecret) reqBody.xSecret = config.apiSecret;
 
