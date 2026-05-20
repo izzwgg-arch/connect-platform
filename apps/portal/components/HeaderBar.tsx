@@ -4,7 +4,6 @@ import { GlobalSearch } from "./GlobalSearch";
 import { NotificationPanel } from "./NotificationPanel";
 import { ProfileMenu } from "./ProfileMenu";
 import { TenantSwitcher } from "./TenantSwitcher";
-import { TopQuickActions } from "./TopQuickActions";
 
 export function HeaderBar({ title }: { title: string }) {
   return (
@@ -15,7 +14,6 @@ export function HeaderBar({ title }: { title: string }) {
       </div>
       <GlobalSearch />
       <div className="header-right">
-        <TopQuickActions />
         <NotificationPanel />
         <ProfileMenu />
       </div>

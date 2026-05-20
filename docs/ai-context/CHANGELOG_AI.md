@@ -4,6 +4,38 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-20 — portal: remove topbar call/message quick actions
+
+**Task:** dashboard/header UI cleanup
+**Risk:** low
+
+### What was removed
+
+- Removed the two topbar icon buttons that linked to call history (`/calls`) and messaging history (`/sms`) from the dashboard header action area.
+- Kept the QR button in place as the leading action in the topbar-right group.
+- Removed the now-unused quick-actions wrapper styling so no empty visual slot remains.
+
+### Files touched
+
+- `apps/portal/components/Topbar.tsx`
+  - Removed `TopQuickActions` import and render from the topbar action cluster next to QR.
+- `apps/portal/components/HeaderBar.tsx`
+  - Removed `TopQuickActions` import/render to avoid dangling references to removed quick-action UI.
+- `apps/portal/app/globals.css`
+  - Removed the orphan `.quick-actions` style block.
+- `apps/portal/components/TopQuickActions.tsx`
+  - Deleted (component only contained the two removed buttons).
+
+### Verification steps
+
+1. Open dashboard and confirm only the QR action remains in the action area where call/message icons previously appeared.
+2. Verify there is no empty spacing block left between the remaining topbar controls.
+3. Check QR button opens and functions normally.
+4. Resize to desktop and mobile widths to confirm header alignment remains intact.
+5. Run portal lint/type checks to confirm no unused imports or TypeScript warnings from removed code.
+
+---
+
 ## 2026-05-19 — Billing: OneTimeChargeDrawer → CardknoxIFieldsForm
 
 **Task:** Migrate admin one-time charge “new card” flow off legacy CDN `ifield.htm` iframes to shared `CardknoxIFieldsForm` (`@cardknox/react-ifields`).

@@ -6,7 +6,6 @@ import { FloatingDialer } from "./FloatingDialer";
 import { GlobalSearch } from "./GlobalSearch";
 import { NotificationPanel } from "./NotificationPanel";
 import { ProfileMenu } from "./ProfileMenu";
-import { TopQuickActions } from "./TopQuickActions";
 import { QRPairingModal } from "./QRPairingModal";
 
 type TopbarProps = {
@@ -34,7 +33,6 @@ export function Topbar({ onToggleNav }: TopbarProps) {
       </div>
 
       <div className="topbar-right">
-        <TopQuickActions />
         <QRPairingModal />
         <FloatingDialer />
         <NotificationPanel />
