@@ -1849,6 +1849,12 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       });
     } catch (err: any) {
       if (err?.code === "INVALID_AMOUNT") return reply.code(400).send({ error: "invalid_amount" });
+      if (err?.code === "INVOICE_NUMBER_CONFLICT" || err?.code === "INVOICE_NUMBER_EXHAUSTED") {
+        return reply.code(409).send({
+          error: "invoice_number_conflict",
+          message: "Could not allocate a unique invoice number. Wait a moment and try again.",
+        });
+      }
       throw err;
     }
 

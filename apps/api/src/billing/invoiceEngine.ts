@@ -353,35 +353,37 @@ export async function createBillingInvoice(input: {
   invoiceCreatedEventMetadata?: Record<string, unknown>;
 }): Promise<any> {
   const preview = await buildBillingInvoicePreview(input);
-  const invoiceNumber = await nextInvoiceNumber(input.tenantId);
-  const invoice = await (db as any).billingInvoice.create({
-    data: {
-      tenantId: input.tenantId,
-      invoiceNumber,
-      status: input.status || "OPEN",
-      periodStart: preview.periodStart,
-      periodEnd: preview.periodEnd,
-      dueDate: preview.dueDate,
-      subtotalCents: preview.subtotalCents,
-      taxCents: preview.taxCents,
-      totalCents: preview.totalCents,
-      balanceDueCents: preview.totalCents,
-      metadata: { taxCalculationAudit: preview.taxCalculationAudit },
-      lineItems: {
-        create: preview.lineItems.map((item) => ({
-          tenantId: input.tenantId,
-          type: item.type,
-          description: item.description,
-          quantity: item.quantity,
-          unitPriceCents: item.unitPriceCents,
-          amountCents: item.amountCents,
-          taxable: item.taxable,
-          metadata: item.metadata,
-        })),
+  const invoice = await createBillingInvoiceRowWithUniqueNumber(input.tenantId, async (invoiceNumber) =>
+    (db as any).billingInvoice.create({
+      data: {
+        tenantId: input.tenantId,
+        invoiceNumber,
+        status: input.status || "OPEN",
+        periodStart: preview.periodStart,
+        periodEnd: preview.periodEnd,
+        dueDate: preview.dueDate,
+        subtotalCents: preview.subtotalCents,
+        taxCents: preview.taxCents,
+        totalCents: preview.totalCents,
+        balanceDueCents: preview.totalCents,
+        metadata: { taxCalculationAudit: preview.taxCalculationAudit },
+        lineItems: {
+          create: preview.lineItems.map((item) => ({
+            tenantId: input.tenantId,
+            type: item.type,
+            description: item.description,
+            quantity: item.quantity,
+            unitPriceCents: item.unitPriceCents,
+            amountCents: item.amountCents,
+            taxable: item.taxable,
+            metadata: item.metadata,
+          })),
+        },
       },
-    },
-    include: { lineItems: true, tenant: true },
-  });
+      include: { lineItems: true, tenant: true },
+    }),
+  );
+  const invoiceNumber = invoice.invoiceNumber;
   await logBillingEvent({
     tenantId: input.tenantId,
     invoiceId: invoice.id,
@@ -426,10 +428,61 @@ export async function markBillingInvoicePaid(invoiceId: string, amountCents?: nu
   return updated;
 }
 
-async function nextInvoiceNumber(tenantId: string): Promise<string> {
-  const prefix = `CC-${new Date().getUTCFullYear()}${String(new Date().getUTCMonth() + 1).padStart(2, "0")}`;
-  const count = await (db as any).billingInvoice.count({ where: { tenantId, invoiceNumber: { startsWith: prefix } } });
-  return `${prefix}-${String(count + 1).padStart(5, "0")}`;
+/** `BillingInvoice.invoiceNumber` is globally unique — sequence per month prefix across all tenants. */
+export function billingInvoiceNumberPrefix(at = new Date()): string {
+  return `CC-${at.getUTCFullYear()}${String(at.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/** Next 5-digit sequence after the latest invoice for this prefix (fixed-width → lex order = numeric). */
+export function nextInvoiceSequenceAfter(latestInvoiceNumber: string | null | undefined, prefix: string): number {
+  if (!latestInvoiceNumber?.startsWith(`${prefix}-`)) return 1;
+  const tail = latestInvoiceNumber.slice(prefix.length + 1);
+  if (!/^\d{5}$/.test(tail)) return 1;
+  const n = Number.parseInt(tail, 10);
+  return Number.isFinite(n) && n >= 0 ? n + 1 : 1;
+}
+
+async function nextInvoiceNumber(_tenantId: string): Promise<string> {
+  const prefix = billingInvoiceNumberPrefix();
+  const latest = await (db as any).billingInvoice.findFirst({
+    where: { invoiceNumber: { startsWith: `${prefix}-` } },
+    orderBy: { invoiceNumber: "desc" },
+    select: { invoiceNumber: true },
+  });
+  const seq = nextInvoiceSequenceAfter(latest?.invoiceNumber, prefix);
+  return `${prefix}-${String(seq).padStart(5, "0")}`;
+}
+
+function isInvoiceNumberUniqueViolation(err: unknown): boolean {
+  const e = err as { code?: string; meta?: { target?: string[] | string } };
+  if (e?.code !== "P2002") return false;
+  const target = e.meta?.target;
+  if (Array.isArray(target)) return target.includes("invoiceNumber");
+  return String(target || "").includes("invoiceNumber");
+}
+
+async function createBillingInvoiceRowWithUniqueNumber<T extends { invoiceNumber: string }>(
+  tenantId: string,
+  createRow: (invoiceNumber: string) => Promise<T>,
+): Promise<T> {
+  const maxAttempts = 6;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const invoiceNumber = await nextInvoiceNumber(tenantId);
+    try {
+      return await createRow(invoiceNumber);
+    } catch (err) {
+      if (isInvoiceNumberUniqueViolation(err) && attempt < maxAttempts - 1) continue;
+      if (isInvoiceNumberUniqueViolation(err)) {
+        const conflict: any = new Error("INVOICE_NUMBER_CONFLICT");
+        conflict.code = "INVOICE_NUMBER_CONFLICT";
+        throw conflict;
+      }
+      throw err;
+    }
+  }
+  const exhausted: any = new Error("INVOICE_NUMBER_EXHAUSTED");
+  exhausted.code = "INVOICE_NUMBER_EXHAUSTED";
+  throw exhausted;
 }
 
 /**
@@ -462,34 +515,36 @@ export async function createOneTimeChargeInvoice(input: {
     ...(input.adminUserId ? { createdByAdminUserId: input.adminUserId } : {}),
   };
 
-  const invoiceNumber = await nextInvoiceNumber(input.tenantId);
-  const invoice = await (db as any).billingInvoice.create({
-    data: {
-      tenantId: input.tenantId,
-      invoiceNumber,
-      status: "OPEN",
-      periodStart: now,
-      periodEnd: now,
-      dueDate,
-      subtotalCents: input.amountCents,
-      taxCents: 0,
-      totalCents: input.amountCents,
-      balanceDueCents: input.amountCents,
-      metadata,
-      lineItems: {
-        create: [{
-          tenantId: input.tenantId,
-          type: "MANUAL_ADJUSTMENT",
-          description: input.description.trim(),
-          quantity: 1,
-          unitPriceCents: input.amountCents,
-          amountCents: input.amountCents,
-          taxable: false,
-        }],
+  const invoice = await createBillingInvoiceRowWithUniqueNumber(input.tenantId, async (invoiceNumber) =>
+    (db as any).billingInvoice.create({
+      data: {
+        tenantId: input.tenantId,
+        invoiceNumber,
+        status: "OPEN",
+        periodStart: now,
+        periodEnd: now,
+        dueDate,
+        subtotalCents: input.amountCents,
+        taxCents: 0,
+        totalCents: input.amountCents,
+        balanceDueCents: input.amountCents,
+        metadata,
+        lineItems: {
+          create: [{
+            tenantId: input.tenantId,
+            type: "MANUAL_ADJUSTMENT",
+            description: input.description.trim(),
+            quantity: 1,
+            unitPriceCents: input.amountCents,
+            amountCents: input.amountCents,
+            taxable: false,
+          }],
+        },
       },
-    },
-    include: { lineItems: true, tenant: true },
-  });
+      include: { lineItems: true, tenant: true },
+    }),
+  );
+  const invoiceNumber = invoice.invoiceNumber;
 
   await logBillingEvent({
     tenantId: input.tenantId,
