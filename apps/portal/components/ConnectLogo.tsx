@@ -4,8 +4,8 @@ export function ConnectLogo({ className }: { className?: string }) {
       src="/connect-logo.svg"
       alt="Connect Communications"
       className={className}
-      width={245}
-      height={56}
+      width={228}
+      height={52}
       decoding="async"
     />
   );

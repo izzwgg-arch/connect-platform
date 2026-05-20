@@ -4045,19 +4045,15 @@ body {
 
 /* ── Topbar: dark premium header ──────────────────────────────────────────── */
 
-/* Logo-ready container: swap in an <img> or keep the text */
-.brand-logo {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 80px;         /* reserves space for a future image logo */
-}
-
 .brand-logo-svg {
-  height: 56px;
+  height: 52px;
   width: auto;
   display: block;
   flex-shrink: 0;
+  margin: 0;
+  padding: 0;
+  object-fit: contain;
+  object-position: left center;
 }
 
 /* Dark mode: show SVG logo, hide text */
@@ -4084,8 +4080,18 @@ body {
 .topbar-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 2px;
   flex-shrink: 0;
+  padding-top: 4px; /* sit high, but clear top clip on the mark */
+  margin-left: -4px;
+}
+
+.topbar-brand .nav-toggle {
+  flex-shrink: 0;
+}
+
+.topbar-brand .brand-name {
+  margin-left: 6px;
 }
 
 .topbar {
@@ -4097,11 +4103,17 @@ body {
   display: grid;
   grid-template-columns: auto 1fr auto;
   gap: 12px;
-  align-items: center;
+  align-items: stretch;
   border-bottom: 1px solid var(--console-border);
   background: var(--console-bg);
   z-index: 200;
-  padding: 0 20px;
+  padding: 0 16px 0 12px;
+  overflow: visible;
+}
+
+.topbar > .topbar-center,
+.topbar > .topbar-right {
+  align-self: center;
 }
 
 .topbar-left,
