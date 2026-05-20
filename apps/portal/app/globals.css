@@ -3196,6 +3196,7 @@ select option {
 /* Console redesign — 2026 SaaS dashboard */
 :root,
 :root[data-theme="dark"] {
+  --topbar-height: 60px;
   --console-bg: #0b1016;
   --console-bg-soft: #0e141d;
   --console-panel: #131b26;
@@ -3265,8 +3266,8 @@ body {
 .console-body {
   display: flex;
   align-items: stretch;
-  height: calc(100vh - 52px);   /* full viewport minus header */
-  margin-top: 52px;              /* push below fixed header */
+  height: calc(100vh - var(--topbar-height));   /* full viewport minus header */
+  margin-top: var(--topbar-height);              /* push below fixed header */
   overflow: hidden;
   position: relative;
 }
@@ -4053,7 +4054,7 @@ body {
 }
 
 .brand-logo-svg {
-  height: 44px;
+  height: 56px;
   width: auto;
   display: block;
   flex-shrink: 0;
@@ -4092,7 +4093,7 @@ body {
   top: 0;
   left: 0;
   right: 0;
-  min-height: 52px;
+  min-height: var(--topbar-height);
   display: grid;
   grid-template-columns: auto 1fr auto;
   gap: 12px;
@@ -5019,16 +5020,16 @@ table tr:hover {
 @media (max-width: 1080px) {
   /* Mobile: switch to fixed overlay (drawer overlays content below header) */
   .console-body {
-    height: calc(100vh - 52px);
+    height: calc(100vh - var(--topbar-height));
     overflow: hidden;
   }
 
   .console-nav {
     position: fixed;
-    top: 52px;                       /* start below fixed header */
+    top: var(--topbar-height);                       /* start below fixed header */
     left: -300px;
     width: 280px;
-    height: calc(100vh - 52px);
+    height: calc(100vh - var(--topbar-height));
     z-index: 120;
     border-right-width: 1px;
     transition: left 0.22s cubic-bezier(0.4, 0, 0.2, 1);
@@ -5045,7 +5046,7 @@ table tr:hover {
   .nav-backdrop {
     display: block;
     position: fixed;
-    top: 52px;                       /* start below fixed header */
+    top: var(--topbar-height);                       /* start below fixed header */
     left: 0;
     right: 0;
     bottom: 0;
@@ -7291,7 +7292,7 @@ table tr:hover {
 }
 .td-detail-panel {
   position: fixed;
-  top: 52px;
+  top: var(--topbar-height);
   right: 0;
   bottom: 0;
   z-index: 100;
