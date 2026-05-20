@@ -9163,6 +9163,18 @@ table tr:hover {
   overflow: hidden !important;
 }
 
+.billing-ifields-offscreen {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .billing-form .row-actions,
 .billing-form .billing-check-grid,
 .billing-form .billing-checkbox,

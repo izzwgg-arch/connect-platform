@@ -1,7 +1,7 @@
 import type { SolaCardknoxAdapter, SolaWebhookEvent } from "@connect/integrations";
 import { buildConnectBillingGatewayXInvoice, parseConnectBillingGatewayXInvoice } from "@connect/integrations";
 import { db } from "@connect/db";
-import { getBillingSolaAdapter, decryptPaymentToken } from "./solaGateway";
+import { getBillingSolaAdapter, decryptPaymentToken, storeSolaPaymentMethod } from "./solaGateway";
 import { logBillingEvent, markBillingInvoicePaid } from "./invoiceEngine";
 import {
   queuePaymentFailedEmailOnce,
@@ -164,7 +164,24 @@ export async function chargeBillingInvoice(invoice: any, method: any, options?: 
 export type ChargeBillingInvoiceWithSutOptions = ChargeBillingInvoiceOptions & {
   cardholderName?: string | null;
   billingZip?: string | null;
+  /** Vault card in Connect after a successful cc:save + cc:sale (one SUT — no double-save). */
+  persistPaymentMethod?: boolean;
+  makeDefault?: boolean;
 };
+
+export function solaProcessorUserMessage(response?: {
+  xError?: string | null;
+  xStatus?: string | null;
+  xResult?: string | null;
+}): string {
+  const err = response?.xError?.trim();
+  if (err) return err;
+  const status = response?.xStatus?.trim();
+  if (status) return status;
+  const code = response?.xResult?.trim();
+  if (code) return `Processor declined this card (code ${code}).`;
+  return "Payment processor declined this card.";
+}
 
 /**
  * Charge an invoice using a one-time iFields SUT without persisting a PaymentMethod row.
@@ -191,6 +208,7 @@ export async function chargeBillingInvoiceWithSut(
     const err: any = new Error("CARD_TOKENIZATION_FAILED");
     err.code = "CARD_TOKENIZATION_FAILED";
     err.response = saveResp;
+    err.processorMessage = solaProcessorUserMessage(saveResp);
     throw err;
   }
   const ephemeralMethod = {
@@ -271,8 +289,28 @@ export async function chargeBillingInvoiceWithSut(
     tenantId: invoice.tenantId,
     invoiceId: invoice.id,
     type: response.approved ? "payment_succeeded" : "payment_failed",
-    metadata: { transactionId: transaction.id, ephemeral: true },
+    metadata: { transactionId: transaction.id, ephemeral: !options?.persistPaymentMethod },
   });
+
+  if (options?.persistPaymentMethod && response.approved && saveResp.xToken) {
+    const method = await storeSolaPaymentMethod({
+      tenantId: invoice.tenantId,
+      response: saveResp,
+      cardholderName: input.cardholderName || undefined,
+      billingZip: input.billingZip || undefined,
+      makeDefault: options.makeDefault ?? false,
+    });
+    await (db as any).paymentTransaction.update({
+      where: { id: transaction.id },
+      data: { paymentMethodId: method.id, rawResponseSafeJson: { ...(transaction.rawResponseSafeJson || {}), savedPaymentMethodId: method.id } },
+    });
+    await logBillingEvent({
+      tenantId: invoice.tenantId,
+      type: "payment_method.saved",
+      message: "Card saved after one-time charge",
+      metadata: { paymentMethodId: method.id, brand: method.brand, last4: method.last4, invoiceId: invoice.id },
+    });
+  }
 
   return transaction;
 }

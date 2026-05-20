@@ -8,6 +8,7 @@
  */
 
 import type { CardknoxTransactionResponse } from "@connect/integrations";
+import { solaProcessorUserMessage } from "./solaBillingPayments";
 
 export type AdminCardSaveDeps = {
   findTenant(tenantId: string): Promise<{ id: string } | null>;
@@ -35,7 +36,7 @@ export type AdminCardSaveResult =
   | { ok: true; id: string; brand: string | null; last4: string | null; expMonth: string | null; expYear: string | null; isDefault: boolean }
   | { ok: false; code: 400; error: "sola_token_too_short" }
   | { ok: false; code: 404; error: "tenant_not_found" }
-  | { ok: false; code: 402; error: "card_save_failed"; response: CardknoxTransactionResponse };
+  | { ok: false; code: 402; error: "card_save_failed"; response: CardknoxTransactionResponse; message: string };
 
 export async function saveAdminCardWithSut(
   tenantId: string,
@@ -58,7 +59,13 @@ export async function saveAdminCardWithSut(
   });
 
   if (!response.approved) {
-    return { ok: false, code: 402, error: "card_save_failed", response };
+    return {
+      ok: false,
+      code: 402,
+      error: "card_save_failed",
+      response,
+      message: solaProcessorUserMessage(response),
+    };
   }
 
   const method = await deps.storeMethod({

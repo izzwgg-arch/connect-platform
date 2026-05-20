@@ -1876,29 +1876,28 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       if (isLive && !input.confirmLive) {
         return reply.code(400).send({ error: "confirm_live_required", message: "Set confirmLive: true to confirm this live charge." });
       }
-      if (input.saveCard) {
-        const saved = await saveAdminCardWithSut(tenantId, {
-          xSut: input.xSut,
-          cardholderName: input.cardholderName,
-          billingZip: input.billingZip,
-          makeDefault: input.makeDefault ?? false,
-        }, u.sub, {
-          findTenant: (id) => (db as any).tenant.findUnique({ where: { id }, select: { id: true } }),
-          getAdapter: getBillingSolaAdapter,
-          storeMethod: storeSolaPaymentMethod,
-          logEvent: logBillingEvent,
-        });
-        if (!saved.ok) {
-          return reply.code(saved.code).send({ error: saved.error });
+      try {
+        transaction = await chargeBillingInvoiceWithSut(
+          invoice,
+          {
+            xSut: input.xSut,
+            cardholderName: input.cardholderName,
+            billingZip: input.billingZip,
+          },
+          {
+            note: input.operatorNote,
+            persistPaymentMethod: !!input.saveCard,
+            makeDefault: input.makeDefault ?? false,
+          },
+        );
+      } catch (err: any) {
+        if (err?.code === "CARD_TOKENIZATION_FAILED") {
+          return reply.code(402).send({
+            error: "card_save_failed",
+            message: err.processorMessage || "Card could not be verified with the processor.",
+          });
         }
-        const method = await (db as any).paymentMethod.findUnique({ where: { id: saved.id } });
-        transaction = await chargeBillingInvoice(invoice, method, { note: input.operatorNote });
-      } else {
-        transaction = await chargeBillingInvoiceWithSut(invoice, {
-          xSut: input.xSut,
-          cardholderName: input.cardholderName,
-          billingZip: input.billingZip,
-        }, { note: input.operatorNote });
+        throw err;
       }
     }
 
@@ -2307,7 +2306,10 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     });
     if (!result.ok) {
       if (result.code === 404) return reply.code(404).send({ error: result.error });
-      return reply.code(result.code).send({ error: result.error, ...(result.code === 402 ? { response: (result as any).response } : {}) });
+      return reply.code(result.code).send({
+        error: result.error,
+        ...(result.code === 402 ? { message: result.message, response: result.response } : {}),
+      });
     }
     return { id: result.id, brand: result.brand, last4: result.last4, expMonth: result.expMonth, expYear: result.expYear, isDefault: result.isDefault };
   });

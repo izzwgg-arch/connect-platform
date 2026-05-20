@@ -214,17 +214,15 @@ export function OneTimeChargeDrawer({
 
   const [resultSummary, setResultSummary] = useState("");
 
-  const [newCardPayload, setNewCardPayload] = useState<NewCardPayload | null>(null);
+  const [billingPreview, setBillingPreview] = useState<CardknoxBillingFields | null>(null);
 
   const [ifieldsReady, setIfieldsReady] = useState(false);
-
-
 
   const [solaConfig, setSolaConfig] = useState<AdminSolaPublicConfig | null>(null);
 
   const tokenizeRef = useRef<(() => void) | null>(null);
 
-  const reviewPendingRef = useRef(false);
+  const chargePendingRef = useRef(false);
 
 
 
@@ -279,13 +277,9 @@ export function OneTimeChargeDrawer({
   useEffect(() => {
 
     if (chargeMode !== "new_card") {
-
-      setNewCardPayload(null);
-
+      setBillingPreview(null);
       setCardFormError("");
-
     }
-
   }, [chargeMode]);
 
 
@@ -304,187 +298,199 @@ export function OneTimeChargeDrawer({
 
 
 
-  async function submitCharge() {
-
+  async function postCharge(payload: NewCardPayload | null) {
     setBusy(true);
-
     setError("");
-
     try {
-
       const body: Record<string, unknown> = {
-
         description: description.trim(),
-
         amountCents,
-
         operatorNote: operatorNote.trim() || undefined,
-
         invoiceMemo: invoiceMemo.trim() || undefined,
-
         chargeMode,
-
         confirmLive: isLiveCharge ? true : undefined,
-
       };
-
       if (chargeMode === "card_on_file") body.paymentMethodId = paymentMethodId;
-
       if (chargeMode === "new_card") {
-
-        if (!newCardPayload?.cardToken) {
-
-          setError("Card details were not secured. Go back and enter the card again.");
-
+        if (!payload?.cardToken) {
+          setError("Enter the card in the form, then try again.");
           return;
-
         }
-
-        body.xSut = newCardPayload.cardToken;
-
-        body.cardholderName = newCardPayload.billing.cardholderName.trim() || undefined;
-
-        body.billingZip = newCardPayload.billing.billingZip.trim() || undefined;
-
+        body.xSut = payload.cardToken;
+        body.cardholderName = payload.billing.cardholderName.trim() || undefined;
+        body.billingZip = payload.billing.billingZip.trim() || undefined;
         body.saveCard = saveCard;
-
         body.makeDefault = makeDefault;
-
       }
-
       const res = await apiPost<{ invoice: { invoiceNumber: string; status: string }; transaction: { status: string } | null }>(
-
         `/admin/billing/platform/tenants/${tenantId}/one-time-charges`,
-
         body,
-
       );
-
       const invNum = res.invoice?.invoiceNumber || "Invoice";
-
       const txStatus = res.transaction?.status;
-
+      if (chargeMode === "new_card" && txStatus && txStatus !== "APPROVED") {
+        setError(`Charge declined (${transactionStatusLabel(txStatus)}). The invoice may still be open — check Invoices.`);
+        setStep("confirm");
+        return;
+      }
       setResultSummary(
-
         txStatus
-
           ? `${invNum} · ${transactionStatusLabel(txStatus)}`
-
           : `${invNum} created — collect payment later from the invoice register.`,
-
       );
-
       setStep("done");
-
       onSuccess();
-
     } catch (err) {
-
       setError(billingErrorMessage(err, "Unable to complete this charge."));
-
     } finally {
-
       setBusy(false);
-
+      setTokenizing(false);
     }
-
   }
 
-
+  function submitCharge() {
+    if (chargeMode === "new_card") {
+      if (!canUseNewCard) {
+        setError("Payment gateway is not configured for this company.");
+        return;
+      }
+      if (!ifieldsReady) {
+        setError("Secure card form is still loading. Wait a moment and try again.");
+        return;
+      }
+      setError("");
+      chargePendingRef.current = true;
+      setTokenizing(true);
+      tokenizeRef.current?.();
+      return;
+    }
+    void postCharge(null);
+  }
 
   function handleReview() {
-
     setError("");
-
     setCardFormError("");
-
-    if (chargeMode !== "new_card") {
-
-      setStep("confirm");
-
-      return;
-
+    if (chargeMode === "new_card") {
+      if (!canUseNewCard) {
+        setError(ifieldsKeyMissing
+          ? "Payment gateway is enabled but the secure card key is missing. Add the iFields key in Company billing setup."
+          : "Payment gateway is not configured for this company.");
+        return;
+      }
+      if (!ifieldsReady) {
+        setError("Secure card form is still loading. Wait a moment and try again.");
+        return;
+      }
+      const form = document.getElementById("billing-one-time-ifields-form") as HTMLFormElement | null;
+      if (!form) {
+        setError("Secure card form is not ready.");
+        return;
+      }
+      const fd = new FormData(form);
+      const name = String(fd.get("cardholderName") || "").trim();
+      if (!name) {
+        setCardFormError("Cardholder name is required.");
+        return;
+      }
+      setBillingPreview({
+        cardholderName: name,
+        billingEmail: String(fd.get("billingEmail") || ""),
+        billingPhone: String(fd.get("billingPhone") || ""),
+        billingAddress1: String(fd.get("billingAddress1") || ""),
+        billingAddress2: String(fd.get("billingAddress2") || ""),
+        billingCity: String(fd.get("billingCity") || ""),
+        billingState: String(fd.get("billingState") || ""),
+        billingZip: String(fd.get("billingZip") || ""),
+        billingCountry: String(fd.get("billingCountry") || "US"),
+      });
     }
-
-    if (!canUseNewCard) {
-
-      setError(ifieldsKeyMissing
-
-        ? "Payment gateway is enabled but the secure card key is missing. Add the iFields key in Company billing setup."
-
-        : "Payment gateway is not configured for this company.");
-
-      return;
-
-    }
-
-    if (!ifieldsReady) {
-
-      setError("Secure card form is still loading. Wait a moment and try again.");
-
-      return;
-
-    }
-
-    reviewPendingRef.current = true;
-
-    setTokenizing(true);
-
-    tokenizeRef.current?.();
-
+    setStep("confirm");
   }
-
-
 
   function handleCardTokenized(payload: { cardToken: string; billing: CardknoxBillingFields }) {
-
     setTokenizing(false);
-
     setCardFormError("");
-
     if (!payload.cardToken || payload.cardToken.length < 8) {
-
       const msg = "Could not secure the card. Check the number and try again.";
-
-      if (reviewPendingRef.current) setError(msg);
-
+      if (chargePendingRef.current) setError(msg);
       else setCardFormError(msg);
-
-      reviewPendingRef.current = false;
-
+      chargePendingRef.current = false;
       return;
-
     }
-
-    setNewCardPayload({ cardToken: payload.cardToken, billing: payload.billing });
-
-    if (reviewPendingRef.current) {
-
-      reviewPendingRef.current = false;
-
-      setStep("confirm");
-
+    if (chargePendingRef.current) {
+      chargePendingRef.current = false;
+      void postCharge({ cardToken: payload.cardToken, billing: payload.billing });
+      return;
     }
-
+    setCardFormError("Unexpected card tokenization. Try again.");
   }
 
-
-
   const confirmPaymentLabel = chargeMode === "none"
-
     ? "Invoice only"
-
     : chargeMode === "card_on_file"
-
       ? cardLabel(methods.find((m) => m.id === paymentMethodId) || { brand: "Card", last4: null })
-
-      : newCardPayload
-
-        ? `${newCardPayload.billing.cardholderName || "New card"} · secured`
-
+      : billingPreview
+        ? `${billingPreview.cardholderName} · new card`
         : "New card";
 
-
+  const oneTimeCardForm = chargeMode === "new_card" && canUseNewCard && solaConfig?.ifieldsKey ? (
+    <div style={{ marginTop: 12 }}>
+      {solaConfig.mode === "sandbox" ? (
+        <p className="muted" style={{ fontSize: 12, margin: "0 0 10px" }}>Sandbox gateway — use test cards only.</p>
+      ) : null}
+      <CardknoxIFieldsForm
+        formId="billing-one-time-ifields-form"
+        ifieldsKey={solaConfig.ifieldsKey}
+        variant="admin"
+        hideSubmit
+        tokenizeRef={tokenizeRef}
+        onReadyChange={setIfieldsReady}
+        disabled={tokenizing || busy}
+        showBillingAddress
+        showEmail
+        showPhone={false}
+        errorMessage={step === "form" ? cardFormError : null}
+        onTokenizeError={(msg) => {
+          setTokenizing(false);
+          const wasCharge = chargePendingRef.current;
+          chargePendingRef.current = false;
+          if (wasCharge) setError(msg);
+          else setCardFormError(msg);
+        }}
+        secureNote={(
+          <p className="billing-pay-secure-note" style={{ margin: "0 0 12px", fontSize: 12 }}>
+            Card number and CVV are entered in PCI-compliant fields hosted by our payment processor. Connect never sees or stores the full card number or CVV.
+          </p>
+        )}
+        onSubmitCardToken={async (payload) => {
+          handleCardTokenized({ cardToken: payload.cardToken, billing: payload.billing });
+        }}
+        childrenAfterCard={(
+          <div className="billing-pay-checks" style={{ marginTop: 4 }}>
+            <label className="billing-checkbox" style={{ flexDirection: "row", alignItems: "center", gap: 8, fontWeight: 500 }}>
+              <input type="checkbox" checked={saveCard} onChange={(e) => setSaveCard(e.target.checked)} disabled={tokenizing || busy} />
+              Save card on file after charge
+            </label>
+            {saveCard ? (
+              <label className="billing-checkbox" style={{ flexDirection: "row", alignItems: "center", gap: 8, fontWeight: 500 }}>
+                <input type="checkbox" checked={makeDefault} onChange={(e) => setMakeDefault(e.target.checked)} disabled={tokenizing || busy} />
+                Set as default payment method
+              </label>
+            ) : null}
+          </div>
+        )}
+      />
+      {!ifieldsReady && step === "form" ? (
+        <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>Initializing secure card fields…</p>
+      ) : null}
+    </div>
+  ) : chargeMode === "new_card" ? (
+    <p className="muted" style={{ fontSize: 13, margin: "8px 0 0" }}>
+      {ifieldsKeyMissing
+        ? "Payment gateway is enabled but the secure card capture key is not set. Add the iFields public key in Admin Billing → Company billing setup → Payment gateway."
+        : "Payment gateway is not configured for this company."}
+    </p>
+  ) : null;
 
   return (
 
@@ -530,13 +536,13 @@ export function OneTimeChargeDrawer({
 
               type="button"
 
-              disabled={busy}
+              disabled={busy || tokenizing}
 
-              onClick={() => void submitCharge()}
+              onClick={() => submitCharge()}
 
             >
 
-              {busy ? "Processing…" : isLiveCharge ? "Charge now (live)" : "Charge now"}
+              {tokenizing ? "Securing card…" : busy ? "Processing…" : isLiveCharge ? "Charge now (live)" : "Charge now"}
 
             </button>
 
@@ -560,7 +566,7 @@ export function OneTimeChargeDrawer({
 
             >
 
-              {tokenizing ? "Securing card…" : "Review charge →"}
+              Review charge →
 
             </button>
 
@@ -728,119 +734,6 @@ export function OneTimeChargeDrawer({
 
 
 
-            {chargeMode === "new_card" ? (
-
-              canUseNewCard && solaConfig?.ifieldsKey ? (
-
-                <div style={{ marginTop: 12 }}>
-
-                  <PaySectionTitle>Billing details &amp; card</PaySectionTitle>
-
-                  {solaConfig.mode === "sandbox" ? (
-
-                    <p className="muted" style={{ fontSize: 12, margin: "0 0 10px" }}>Sandbox gateway — use test cards only.</p>
-
-                  ) : null}
-
-                  <CardknoxIFieldsForm
-
-                    ifieldsKey={solaConfig.ifieldsKey}
-
-                    variant="admin"
-
-                    hideSubmit
-
-                    tokenizeRef={tokenizeRef}
-
-                    onReadyChange={setIfieldsReady}
-
-                    disabled={tokenizing || busy}
-
-                    showBillingAddress
-
-                    showEmail
-
-                    showPhone={false}
-
-                    errorMessage={cardFormError}
-
-                    onTokenizeError={(msg) => {
-                      setTokenizing(false);
-                      const wasReview = reviewPendingRef.current;
-                      reviewPendingRef.current = false;
-                      if (wasReview) setError(msg);
-                      else setCardFormError(msg);
-                    }}
-
-                    secureNote={(
-
-                      <p className="billing-pay-secure-note" style={{ margin: "0 0 12px", fontSize: 12 }}>
-
-                        Card number and CVV are entered in PCI-compliant fields hosted by our payment processor. Connect never sees or stores the full card number or CVV.
-
-                      </p>
-
-                    )}
-
-                    onSubmitCardToken={async (payload) => {
-
-                      handleCardTokenized({ cardToken: payload.cardToken, billing: payload.billing });
-
-                    }}
-
-                    childrenAfterCard={(
-
-                      <div className="billing-pay-checks" style={{ marginTop: 4 }}>
-
-                        <label className="billing-checkbox" style={{ flexDirection: "row", alignItems: "center", gap: 8, fontWeight: 500 }}>
-
-                          <input type="checkbox" checked={saveCard} onChange={(e) => setSaveCard(e.target.checked)} disabled={tokenizing || busy} />
-
-                          Save card on file after charge
-
-                        </label>
-
-                        {saveCard ? (
-
-                          <label className="billing-checkbox" style={{ flexDirection: "row", alignItems: "center", gap: 8, fontWeight: 500 }}>
-
-                            <input type="checkbox" checked={makeDefault} onChange={(e) => setMakeDefault(e.target.checked)} disabled={tokenizing || busy} />
-
-                            Set as default payment method
-
-                          </label>
-
-                        ) : null}
-
-                      </div>
-
-                    )}
-
-                  />
-
-                  {!ifieldsReady ? (
-
-                    <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>Initializing secure card fields…</p>
-
-                  ) : null}
-
-                </div>
-
-              ) : (
-
-                <p className="muted" style={{ fontSize: 13, margin: "8px 0 0" }}>
-
-                  {ifieldsKeyMissing
-
-                    ? "Payment gateway is enabled but the secure card capture key is not set. Add the iFields public key in Admin Billing → Company billing setup → Payment gateway."
-
-                    : "Payment gateway is not configured for this company."}
-
-                </p>
-
-              )
-
-            ) : null}
 
           </section>
 
@@ -851,6 +744,13 @@ export function OneTimeChargeDrawer({
         </div>
 
       )}
+
+      {step !== "done" && chargeMode === "new_card" ? (
+        <section className={step === "confirm" ? "billing-ifields-offscreen" : undefined} aria-hidden={step === "confirm" ? true : undefined}>
+          {step === "form" ? <PaySectionTitle>Billing details &amp; card</PaySectionTitle> : null}
+          {oneTimeCardForm}
+        </section>
+      ) : null}
 
     </BillingActionPanel>
 
