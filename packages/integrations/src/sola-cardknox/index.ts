@@ -308,7 +308,7 @@ async function postJson(config: SolaCardknoxConfig, path: string, body: Record<s
 
 async function postGatewayJson(config: SolaCardknoxConfig, body: Record<string, any>): Promise<CardknoxTransactionResponse> {
   if (config.simulate) {
-    const token = body.xToken || body.xTokenInput || body.xSUT || `sim_token_${Date.now()}`;
+    const token = body.xToken || body.xTokenInput || body.xSUT || body.xCardNum || `sim_token_${Date.now()}`;
     return normalizeCardknoxResponse({
       xResult: "A",
       xStatus: "Approved",
@@ -444,7 +444,8 @@ export class SolaCardknoxAdapter {
     if (!input.sut) throw new Error("SOLA_SUT_REQUIRED");
     return postGatewayJson(this.config, {
       xCommand: "cc:save",
-      xSUT: input.sut,
+      // React iFields returns TokenData.xToken; gatewayjson expects it in xCardNum.
+      xCardNum: input.sut,
       xName: input.cardholderName,
       xZip: input.zip,
       xCustomerId: input.customerId,

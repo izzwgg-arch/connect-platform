@@ -68,7 +68,8 @@ test("saveCardWithSut includes required xVersion on gatewayjson body", async () 
   assert.equal(body.xCommand, "cc:save");
   assert.equal(body.xVersion, "4.5.9");
   assert.equal(body.xversion, "4.5.9");
-  assert.equal(body.xSUT, "sut_test_token_12345678");
+  assert.equal(body.xCardNum, "sut_test_token_12345678");
+  assert.equal(body.xSUT, undefined);
 });
 
 // ---------------------------------------------------------------------------
