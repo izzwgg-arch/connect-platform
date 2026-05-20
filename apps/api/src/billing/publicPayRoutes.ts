@@ -115,6 +115,7 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
 
     const input = z.object({
       xSut: z.string().min(8),
+      xExp: z.string().min(4).max(4).optional(),
       cardholderName: z.string().max(120).optional(),
       billingZip: z.string().max(20).optional(),
       billingEmail: z.string().email().max(200).optional(),
@@ -138,6 +139,7 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
         const tokenizing = await getBillingSolaAdapterForTokenizing(invoice.tenantId);
         const saveResp = await tokenizing.saveCardWithSut({
           sut: input.xSut,
+          exp: input.xExp,
           cardholderName: input.cardholderName,
           zip: input.billingZip,
         });
@@ -166,6 +168,7 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
           invoice,
           {
             xSut: input.xSut,
+            xExp: input.xExp,
             cardholderName: input.cardholderName,
             billingZip: input.billingZip,
           },

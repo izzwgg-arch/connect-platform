@@ -13,7 +13,7 @@ import { solaProcessorUserMessage } from "./solaBillingPayments";
 export type AdminCardSaveDeps = {
   findTenant(tenantId: string): Promise<{ id: string } | null>;
   getAdapter(tenantId: string): Promise<{
-    saveCardWithSut(input: { sut: string; cardholderName?: string; zip?: string }): Promise<CardknoxTransactionResponse>;
+    saveCardWithSut(input: { sut: string; exp?: string; cardholderName?: string; zip?: string }): Promise<CardknoxTransactionResponse>;
   }>;
   storeMethod(opts: {
     tenantId: string;
@@ -29,6 +29,7 @@ export type AdminCardSaveInput = {
   xSut: string;
   cardholderName?: string;
   billingZip?: string;
+  xExp?: string;
   makeDefault?: boolean;
 };
 
@@ -54,6 +55,7 @@ export async function saveAdminCardWithSut(
   const adapter = await deps.getAdapter(tenantId);
   const response = await adapter.saveCardWithSut({
     sut: input.xSut,
+    exp: input.xExp,
     cardholderName: input.cardholderName,
     zip: input.billingZip,
   });

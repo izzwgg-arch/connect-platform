@@ -30,6 +30,14 @@ function dollars(cents: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format((cents || 0) / 100);
 }
 
+function billingXExp(billing: CardknoxBillingFields): string | null {
+  const month = billing.expMonth.replace(/\D/g, "").padStart(2, "0").slice(-2);
+  const yearDigits = billing.expYear.replace(/\D/g, "");
+  const year = yearDigits.length >= 4 ? yearDigits.slice(-2) : yearDigits.padStart(2, "0");
+  if (!/^(0[1-9]|1[0-2])$/.test(month) || !/^\d{2}$/.test(year)) return null;
+  return `${month}${year}`;
+}
+
 function fmtDate(iso: string) {
   try {
     return new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
@@ -84,11 +92,17 @@ export default function PublicBillingInvoicePayPage() {
   }) {
     if (!token) return;
     setPayError("");
+    const xExp = billingXExp(payload.billing);
+    if (!xExp) {
+      setPayError("Enter a valid expiration month and year.");
+      return;
+    }
     const res = await fetch(`${apiBase}/billing/platform/invoices/pay/${encodeURIComponent(token)}/pay`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         xSut: payload.cardToken,
+        xExp,
         cardholderName: payload.billing.cardholderName,
         billingZip: payload.billing.billingZip,
         billingEmail: payload.billing.billingEmail,

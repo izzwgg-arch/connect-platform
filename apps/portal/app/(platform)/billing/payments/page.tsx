@@ -126,8 +126,10 @@ export default function BillingPaymentsPage() {
                       return;
                     }
                     try {
+                      const xExp = `${String(formData.get("expMonth") || "").replace(/\D/g, "").padStart(2, "0").slice(-2)}${String(formData.get("expYear") || "").replace(/\D/g, "").slice(-2)}`;
                       await apiPost("/billing/payment-methods/sola/save", {
                         xSut,
+                        xExp,
                         cardholderName: String(formData.get("cardholderName") || ""),
                         billingZip: String(formData.get("billingZip") || ""),
                         makeDefault: rows.length === 0,
@@ -147,6 +149,10 @@ export default function BillingPaymentsPage() {
                 }}
               >
                 <label>Cardholder name <input name="cardholderName" autoComplete="cc-name" placeholder="Jane Smith" /></label>
+                <div className="billing-pay-row">
+                  <label>Exp. month <input name="expMonth" inputMode="numeric" autoComplete="cc-exp-month" placeholder="MM" minLength={2} maxLength={2} required /></label>
+                  <label>Exp. year <input name="expYear" inputMode="numeric" autoComplete="cc-exp-year" placeholder="YY" minLength={2} maxLength={4} required /></label>
+                </div>
                 <label>Billing ZIP <input name="billingZip" autoComplete="postal-code" placeholder="10950" /></label>
                 <label>
                   Card number

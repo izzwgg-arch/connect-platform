@@ -61,7 +61,7 @@ test("saveCardWithSut includes required xVersion on gatewayjson body", async () 
   }) as typeof fetch;
 
   const adapter = new SolaCardknoxAdapter({ apiKey: "test_xkey", simulate: false });
-  const out = await adapter.saveCardWithSut({ sut: "sut_test_token_12345678", cardholderName: "Jane", zip: "10950" });
+  const out = await adapter.saveCardWithSut({ sut: "sut_test_token_12345678", exp: "1228", cardholderName: "Jane", zip: "10950" });
   assert.equal(out.approved, true);
   assert.ok(parsedBody && typeof parsedBody === "object");
   const body = parsedBody as Record<string, unknown>;
@@ -69,6 +69,7 @@ test("saveCardWithSut includes required xVersion on gatewayjson body", async () 
   assert.equal(body.xVersion, "4.5.9");
   assert.equal(body.xversion, "4.5.9");
   assert.equal(body.xCardNum, "sut_test_token_12345678");
+  assert.equal(body.xExp, "1228");
   assert.equal(body.xSUT, undefined);
 });
 

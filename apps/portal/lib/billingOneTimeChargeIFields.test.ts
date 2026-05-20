@@ -19,6 +19,7 @@ test("OneTimeChargeDrawer uses CardknoxIFieldsForm, not legacy CDN iframes", () 
 test("OneTimeChargeDrawer posts xSut only (no raw card fields in client body)", () => {
   const src = readFileSync(drawerPath, "utf8");
   assert.match(src, /body\.xSut/);
+  assert.match(src, /body\.xExp/);
   assert.doesNotMatch(src, /xCardNum/);
   assert.doesNotMatch(src, /name="cardNumber"/i);
   assert.doesNotMatch(src, /name="cvv"/i);

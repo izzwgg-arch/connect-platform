@@ -70,6 +70,7 @@ export type CardknoxTransactionResponse = {
 export type SaveCardInput = {
   tokenInput?: string;
   sut?: string;
+  exp?: string;
   cardholderName?: string;
   zip?: string;
   customerId?: string;
@@ -446,6 +447,7 @@ export class SolaCardknoxAdapter {
       xCommand: "cc:save",
       // React iFields returns TokenData.xToken; gatewayjson expects it in xCardNum.
       xCardNum: input.sut,
+      xExp: input.exp,
       xName: input.cardholderName,
       xZip: input.zip,
       xCustomerId: input.customerId,
@@ -458,6 +460,7 @@ export class SolaCardknoxAdapter {
     return postGatewayJson(this.config, {
       xCommand: "cc:save",
       xTokenInput: input.tokenInput,
+      xExp: input.exp,
       xName: input.cardholderName,
       xZip: input.zip,
       xCustomerId: input.customerId,

@@ -189,7 +189,7 @@ export function solaProcessorUserMessage(response?: {
  */
 export async function chargeBillingInvoiceWithSut(
   invoice: any,
-  input: { xSut: string; cardholderName?: string | null; billingZip?: string | null },
+  input: { xSut: string; xExp?: string | null; cardholderName?: string | null; billingZip?: string | null },
   options?: ChargeBillingInvoiceWithSutOptions,
 ): Promise<any> {
   const balanceDueCents = Math.max(0, invoice.balanceDueCents ?? invoice.totalCents ?? 0);
@@ -201,6 +201,7 @@ export async function chargeBillingInvoiceWithSut(
   const adapter = options?.adapter ?? (await getBillingSolaAdapter(invoice.tenantId));
   const saveResp = await adapter.saveCardWithSut({
     sut: input.xSut,
+    exp: input.xExp || undefined,
     cardholderName: input.cardholderName || undefined,
     zip: input.billingZip || undefined,
   });

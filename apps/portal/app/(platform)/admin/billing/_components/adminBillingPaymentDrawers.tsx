@@ -68,6 +68,14 @@ type AdminSolaPublicConfig = { configured: boolean; enabled: boolean; ifieldsKey
 
 type NewCardPayload = { cardToken: string; billing: CardknoxBillingFields };
 
+function billingXExp(billing: CardknoxBillingFields): string | null {
+  const month = billing.expMonth.replace(/\D/g, "").padStart(2, "0").slice(-2);
+  const yearDigits = billing.expYear.replace(/\D/g, "");
+  const year = yearDigits.length >= 4 ? yearDigits.slice(-2) : yearDigits.padStart(2, "0");
+  if (!/^(0[1-9]|1[0-2])$/.test(month) || !/^\d{2}$/.test(year)) return null;
+  return `${month}${year}`;
+}
+
 
 
 type TxDetail = {
@@ -316,7 +324,13 @@ export function OneTimeChargeDrawer({
           setError("Enter the card in the form, then try again.");
           return;
         }
+        const xExp = billingXExp(payload.billing);
+        if (!xExp) {
+          setError("Enter a valid expiration month and year.");
+          return;
+        }
         body.xSut = payload.cardToken;
+        body.xExp = xExp;
         body.cardholderName = payload.billing.cardholderName.trim() || undefined;
         body.billingZip = payload.billing.billingZip.trim() || undefined;
         body.saveCard = saveCard;
@@ -394,6 +408,8 @@ export function OneTimeChargeDrawer({
       }
       setBillingPreview({
         cardholderName: name,
+        expMonth: String(fd.get("expMonth") || ""),
+        expYear: String(fd.get("expYear") || ""),
         billingEmail: String(fd.get("billingEmail") || ""),
         billingPhone: String(fd.get("billingPhone") || ""),
         billingAddress1: String(fd.get("billingAddress1") || ""),

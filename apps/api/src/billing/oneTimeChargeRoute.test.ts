@@ -11,6 +11,7 @@ const oneTimeChargeBodySchema = z.object({
   chargeMode: z.enum(["none", "card_on_file", "new_card"]).default("none"),
   paymentMethodId: z.string().optional(),
   xSut: z.string().optional(),
+  xExp: z.string().min(4).max(4).optional(),
   cardholderName: z.string().optional(),
   billingZip: z.string().optional(),
   saveCard: z.boolean().optional(),
@@ -24,12 +25,14 @@ test("one-time charge body accepts xSut token fields only for new_card", () => {
     amountCents: 5000,
     chargeMode: "new_card",
     xSut: "sut_token_from_ifields_only",
+    xExp: "1228",
     cardholderName: "Jane Smith",
     billingZip: "10950",
     saveCard: true,
     makeDefault: false,
   });
   assert.equal(parsed.xSut, "sut_token_from_ifields_only");
+  assert.equal(parsed.xExp, "1228");
   assert.equal((parsed as Record<string, unknown>).cardNumber, undefined);
   assert.equal((parsed as Record<string, unknown>).cvv, undefined);
 });

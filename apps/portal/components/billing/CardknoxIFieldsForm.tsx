@@ -5,6 +5,8 @@ import IField, { CARD_TYPE, CVV_TYPE, type ErrorData, type TokenData } from "@ca
 
 export type CardknoxBillingFields = {
   cardholderName: string;
+  expMonth: string;
+  expYear: string;
   billingEmail: string;
   billingPhone: string;
   billingAddress1: string;
@@ -49,6 +51,8 @@ export type CardknoxIFieldsFormProps = {
 
 const EMPTY_BILLING: CardknoxBillingFields = {
   cardholderName: "",
+  expMonth: "",
+  expYear: "",
   billingEmail: "",
   billingPhone: "",
   billingAddress1: "",
@@ -118,6 +122,8 @@ export function CardknoxIFieldsForm({
     const fd = new FormData(form);
     return {
       cardholderName: String(fd.get("cardholderName") || ""),
+      expMonth: String(fd.get("expMonth") || ""),
+      expYear: String(fd.get("expYear") || ""),
       billingEmail: String(fd.get("billingEmail") || ""),
       billingPhone: String(fd.get("billingPhone") || ""),
       billingAddress1: String(fd.get("billingAddress1") || ""),
@@ -196,6 +202,16 @@ export function CardknoxIFieldsForm({
         Cardholder name
         <input name="cardholderName" autoComplete="cc-name" placeholder="Jane Smith" required disabled={disabled || busy} />
       </label>
+      <div className="billing-pay-row">
+        <label>
+          Exp. month
+          <input name="expMonth" inputMode="numeric" autoComplete="cc-exp-month" placeholder="MM" minLength={2} maxLength={2} required disabled={disabled || busy} />
+        </label>
+        <label>
+          Exp. year
+          <input name="expYear" inputMode="numeric" autoComplete="cc-exp-year" placeholder="YY" minLength={2} maxLength={4} required disabled={disabled || busy} />
+        </label>
+      </div>
       {showEmail ? (
         <label>
           Billing email

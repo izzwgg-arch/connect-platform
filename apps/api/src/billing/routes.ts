@@ -449,6 +449,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const input = z.object({
       xSut: z.string().min(8).optional(),
       xTokenInput: z.string().min(8).optional(),
+      xExp: z.string().min(4).max(4).optional(),
       cardholderName: z.string().optional(),
       billingZip: z.string().optional(),
       makeDefault: z.boolean().default(true),
@@ -456,8 +457,8 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     if (!input.xSut && !input.xTokenInput) return reply.code(400).send({ error: "sola_token_required" });
     const adapter = await getBillingSolaAdapter(u.tenantId);
     const response = input.xSut
-      ? await adapter.saveCardWithSut({ sut: input.xSut, cardholderName: input.cardholderName, zip: input.billingZip })
-      : await adapter.saveCardWithTokenInput({ tokenInput: input.xTokenInput, cardholderName: input.cardholderName, zip: input.billingZip });
+      ? await adapter.saveCardWithSut({ sut: input.xSut, exp: input.xExp, cardholderName: input.cardholderName, zip: input.billingZip })
+      : await adapter.saveCardWithTokenInput({ tokenInput: input.xTokenInput, exp: input.xExp, cardholderName: input.cardholderName, zip: input.billingZip });
     if (!response.approved) return reply.code(402).send({ error: "card_save_failed", response });
     const method = await storeSolaPaymentMethod({
       tenantId: u.tenantId,
@@ -1827,6 +1828,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       chargeMode: z.enum(["none", "card_on_file", "new_card"]).default("none"),
       paymentMethodId: z.string().optional(),
       xSut: z.string().optional(),
+      xExp: z.string().min(4).max(4).optional(),
       cardholderName: z.string().optional(),
       billingZip: z.string().optional(),
       saveCard: z.boolean().optional(),
@@ -1881,6 +1883,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
           invoice,
           {
             xSut: input.xSut,
+            xExp: input.xExp,
             cardholderName: input.cardholderName,
             billingZip: input.billingZip,
           },
@@ -2294,6 +2297,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const { tenantId } = req.params as { tenantId: string };
     const input = z.object({
       xSut: z.string().min(1),
+      xExp: z.string().min(4).max(4).optional(),
       cardholderName: z.string().optional(),
       billingZip: z.string().optional(),
       makeDefault: z.boolean().default(false),
