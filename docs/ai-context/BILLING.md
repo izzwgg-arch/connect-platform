@@ -94,8 +94,10 @@ Shell: **`AdminBillingShell`** + CSS scopes **`billing-ws-scope`**, **`billing-p
 ### Billing gateway resolution order (Cardknox/SOLA)
 
 - Source of truth is `resolveBillingGatewayConfig(tenantId)` in `apps/api/src/billing/solaGateway.ts`.
-- Resolution order: valid tenant override (when tenant overrides are enabled) -> enabled platform/main-tenant `BillingSolaConfig` -> env/global fallback credentials -> missing.
-- A tenant-local row that is disabled, stale, or has invalid credentials does not block inheritance; resolution falls through to main-tenant or env/global.
+- Resolution order: valid tenant override (when tenant overrides are enabled) -> enabled platform/main-tenant `BillingSolaConfig` -> explicit env fallback -> missing.
+- When `BILLING_MAIN_TENANT_ID` (or `PLATFORM_TENANT_ID`) is set, only that tenant may provide the `main_tenant` source. The resolver must not borrow from a SUPER_ADMIN/latest-enabled customer tenant. If the configured main tenant has no enabled, decryptable config, resolution returns `missing` unless the requesting tenant has a valid tenant override.
+- Env fallback is intentionally off by default. It is only used when there is no explicit main tenant id and `BILLING_GATEWAY_ALLOW_ENV_FALLBACK=1` is set.
+- A tenant-local row that is disabled, stale, or has invalid credentials does not block inheritance; resolution falls through to the configured main tenant, then to explicit env fallback only when allowed.
 - Live-charge confirmation checks in billing routes use the resolved effective config (mode/simulate/source), not `tenant.billingSolaConfig` directly.
 - Worker autopay reuses the same resolver path via `getBillingSolaAdapter` imported from the API billing gateway module.
 

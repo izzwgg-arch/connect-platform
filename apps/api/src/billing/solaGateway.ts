@@ -116,11 +116,16 @@ function parseRowConfig(
   }
 }
 
+function envFallbackAllowed(explicitMainTenantId: string): boolean {
+  if (explicitMainTenantId) return false;
+  return cleanString(process.env.BILLING_GATEWAY_ALLOW_ENV_FALLBACK) === "1";
+}
+
 async function findMainTenantGatewayRow(dbClient: any): Promise<any | null> {
   const explicitMainTenantId = cleanString(process.env.BILLING_MAIN_TENANT_ID) || cleanString(process.env.PLATFORM_TENANT_ID);
   if (explicitMainTenantId) {
     const byExplicit = await dbClient.billingSolaConfig.findUnique({ where: { tenantId: explicitMainTenantId } });
-    if (byExplicit?.isEnabled) return byExplicit;
+    return byExplicit?.isEnabled ? byExplicit : null;
   }
   const bySuperAdminTenant = await dbClient.billingSolaConfig.findFirst({
     where: { isEnabled: true, tenant: { users: { some: { role: "SUPER_ADMIN" } } } },
@@ -140,6 +145,7 @@ export async function resolveBillingGatewayConfig(
 
   const globalConfig = await dbClient.globalSolaConfig.findUnique({ where: { id: "default" } });
   const platformIfieldsKey = cleanString(process.env.SOLA_CARDKNOX_IFIELDS_KEY) || cleanString(globalConfig?.ifieldsKey) || null;
+  const explicitMainTenantId = cleanString(process.env.BILLING_MAIN_TENANT_ID) || cleanString(process.env.PLATFORM_TENANT_ID);
 
   const tenantRow = await dbClient.billingSolaConfig.findUnique({ where: { tenantId } });
   const tenantOverridePresent = !!tenantRow;
@@ -177,7 +183,7 @@ export async function resolveBillingGatewayConfig(
     }
   }
 
-  const envAdapter = buildEnvFallbackAdapter();
+  const envAdapter = envFallbackAllowed(explicitMainTenantId) ? buildEnvFallbackAdapter() : null;
   if (envAdapter) {
     return {
       configured: true,

@@ -137,9 +137,11 @@ test("falls back to env/global when tenant and main are unavailable", async () =
   const oldBase = process.env.SOLA_CARDKNOX_API_BASE_URL;
   const oldKey = process.env.SOLA_CARDKNOX_API_KEY;
   const oldIfields = process.env.SOLA_CARDKNOX_IFIELDS_KEY;
+  const oldAllowEnvFallback = process.env.BILLING_GATEWAY_ALLOW_ENV_FALLBACK;
   process.env.SOLA_CARDKNOX_API_BASE_URL = "https://env.example";
   process.env.SOLA_CARDKNOX_API_KEY = "env-key";
   process.env.SOLA_CARDKNOX_IFIELDS_KEY = "env-ifields";
+  process.env.BILLING_GATEWAY_ALLOW_ENV_FALLBACK = "1";
   try {
     const resolved = await resolveBillingGatewayConfig("tenant-a", { dbClient: fakeDb([]), decodeSecrets });
     assert.equal(resolved.source, "global");
@@ -149,14 +151,57 @@ test("falls back to env/global when tenant and main are unavailable", async () =
     process.env.SOLA_CARDKNOX_API_BASE_URL = oldBase;
     process.env.SOLA_CARDKNOX_API_KEY = oldKey;
     process.env.SOLA_CARDKNOX_IFIELDS_KEY = oldIfields;
+    process.env.BILLING_GATEWAY_ALLOW_ENV_FALLBACK = oldAllowEnvFallback;
+  }
+});
+
+test("does not use customer tenant configs as main fallback when BILLING_MAIN_TENANT_ID is set", async () => {
+  const oldMainTenantId = process.env.BILLING_MAIN_TENANT_ID;
+  const oldPlatformTenantId = process.env.PLATFORM_TENANT_ID;
+  const oldAllowEnvFallback = process.env.BILLING_GATEWAY_ALLOW_ENV_FALLBACK;
+  process.env.BILLING_MAIN_TENANT_ID = "platform-main";
+  delete process.env.PLATFORM_TENANT_ID;
+  process.env.BILLING_GATEWAY_ALLOW_ENV_FALLBACK = "1";
+  try {
+    const dbClient = fakeDb([
+      {
+        tenantId: "customer-a",
+        isEnabled: true,
+        mode: "PROD",
+        simulate: false,
+        apiBaseUrl: "https://customer-a.example",
+        credentialsEncrypted: "valid:customer-a",
+        tenantHasSuperAdmin: true,
+        updatedAt: new Date("2026-05-20T10:00:00.000Z"),
+      },
+      {
+        tenantId: "customer-b",
+        isEnabled: true,
+        mode: "PROD",
+        simulate: false,
+        apiBaseUrl: "https://customer-b.example",
+        credentialsEncrypted: "valid:customer-b",
+        updatedAt: new Date("2026-05-21T10:00:00.000Z"),
+      },
+    ]);
+    const resolved = await resolveBillingGatewayConfig("tenant-without-local-config", { dbClient, decodeSecrets });
+    assert.equal(resolved.source, "missing");
+    assert.equal(resolved.configured, false);
+    assert.equal(resolved.adapter, null);
+  } finally {
+    process.env.BILLING_MAIN_TENANT_ID = oldMainTenantId;
+    process.env.PLATFORM_TENANT_ID = oldPlatformTenantId;
+    process.env.BILLING_GATEWAY_ALLOW_ENV_FALLBACK = oldAllowEnvFallback;
   }
 });
 
 test("returns missing when no tenant, main, or env config exists", async () => {
   const oldBase = process.env.SOLA_CARDKNOX_API_BASE_URL;
   const oldKey = process.env.SOLA_CARDKNOX_API_KEY;
+  const oldAllowEnvFallback = process.env.BILLING_GATEWAY_ALLOW_ENV_FALLBACK;
   delete process.env.SOLA_CARDKNOX_API_BASE_URL;
   delete process.env.SOLA_CARDKNOX_API_KEY;
+  delete process.env.BILLING_GATEWAY_ALLOW_ENV_FALLBACK;
   try {
     const resolved = await resolveBillingGatewayConfig("tenant-a", { dbClient: fakeDb([], "global-ifields"), decodeSecrets });
     assert.equal(resolved.source, "missing");
@@ -165,5 +210,6 @@ test("returns missing when no tenant, main, or env config exists", async () => {
   } finally {
     process.env.SOLA_CARDKNOX_API_BASE_URL = oldBase;
     process.env.SOLA_CARDKNOX_API_KEY = oldKey;
+    process.env.BILLING_GATEWAY_ALLOW_ENV_FALLBACK = oldAllowEnvFallback;
   }
 });
