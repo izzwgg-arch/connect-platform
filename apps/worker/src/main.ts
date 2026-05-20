@@ -2046,7 +2046,7 @@ async function chargeWorkerInvoice(
       note: runId ? "worker_monthly" : "worker_dunning_retry",
     });
   } catch (err: any) {
-    if (err?.code === "CHARGE_IN_PROGRESS" || err?.code === "INVOICE_ALREADY_PAID") return null;
+    if (err?.code === "BILLING_LIVE_CHARGES_DISABLED" || err?.code === "CHARGE_IN_PROGRESS" || err?.code === "INVOICE_ALREADY_PAID") return null;
     throw err;
   }
   if (transaction?.status === "APPROVED") {

@@ -53,6 +53,20 @@ export type ChargeBillingInvoiceOptions = {
   adapter?: SolaCardknoxAdapter;
 };
 
+export function billingLiveChargesDisabled(): boolean {
+  return process.env.BILLING_LIVE_CHARGES_DISABLED === "1";
+}
+
+export function billingLiveChargesDisabledError(): Error & { code: "BILLING_LIVE_CHARGES_DISABLED" } {
+  const err = new Error("BILLING_LIVE_CHARGES_DISABLED") as Error & { code: "BILLING_LIVE_CHARGES_DISABLED" };
+  err.code = "BILLING_LIVE_CHARGES_DISABLED";
+  return err;
+}
+
+function assertBillingLiveChargesEnabled() {
+  if (billingLiveChargesDisabled()) throw billingLiveChargesDisabledError();
+}
+
 function isUniqueViolation(err: unknown, fieldName: string): boolean {
   const e = err as { code?: string; meta?: { target?: string[] | string } };
   if (e?.code !== "P2002") return false;
@@ -156,6 +170,7 @@ async function reserveChargeAttempt(input: {
  * Records PaymentTransaction, updates invoice on decline, receipt email on success.
  */
 export async function chargeBillingInvoice(invoice: any, method: any, options?: ChargeBillingInvoiceOptions): Promise<any> {
+  assertBillingLiveChargesEnabled();
   const balanceDueCents = Math.max(0, invoice.balanceDueCents ?? invoice.totalCents ?? 0);
   if (invoice.status === "PAID" || balanceDueCents <= 0) {
     const err: any = new Error("INVOICE_ALREADY_PAID");
@@ -319,6 +334,7 @@ export async function chargeBillingInvoiceWithSut(
   input: { xSut: string; xExp?: string | null; cardholderName?: string | null; billingZip?: string | null },
   options?: ChargeBillingInvoiceWithSutOptions,
 ): Promise<any> {
+  assertBillingLiveChargesEnabled();
   const balanceDueCents = Math.max(0, invoice.balanceDueCents ?? invoice.totalCents ?? 0);
   if (invoice.status === "PAID" || balanceDueCents <= 0) {
     const err: any = new Error("INVOICE_ALREADY_PAID");

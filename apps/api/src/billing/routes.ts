@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
@@ -23,7 +23,12 @@ import {
 import { getBillingSolaAdapter, getBillingSolaAdapterForTokenizing, resolveBillingGatewayConfig, storeSolaPaymentMethod } from "./solaGateway";
 import { invoiceReadyEmail } from "./emailTemplates";
 import { findBillingInvoiceForPdf, sendBillingInvoicePdf } from "./billingInvoicePdfAccess";
-import { chargeBillingInvoice, chargeBillingInvoiceWithSut, refundBillingTransaction } from "./solaBillingPayments";
+import {
+  billingLiveChargesDisabled,
+  chargeBillingInvoice,
+  chargeBillingInvoiceWithSut,
+  refundBillingTransaction,
+} from "./solaBillingPayments";
 import { maskSolaSecretsForResponse } from "./solaConfigMasking";
 import {
   adminPutPathOverridesSource,
@@ -294,6 +299,8 @@ async function queueBillingEmail(input: { tenantId: string; to: string; type: st
 
 export async function registerBillingRoutes(app: FastifyInstance) {
   registerBillingPublicPayRoutes(app);
+  const sendLiveChargesDisabled = (reply: FastifyReply) =>
+    reply.code(503).send({ error: "billing_live_charges_disabled" });
 
   // Tenant: preview next invoice (read-only, no DB write, no invoice created).
   app.get("/billing/invoice-preview", async (req, reply) => {
@@ -423,6 +430,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const invoice = await (db as any).billingInvoice.findFirst({ where: { id, tenantId: u.tenantId } });
     if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
     if (invoice.status === "PAID") return reply.code(400).send({ error: "invoice_already_paid" });
+    if (billingLiveChargesDisabled()) return sendLiveChargesDisabled(reply);
     const settings = await ensureTenantBillingSettings(u.tenantId);
     const method = settings.defaultPaymentMethodId
       ? await (db as any).paymentMethod.findFirst({ where: { id: settings.defaultPaymentMethodId, tenantId: u.tenantId, active: true } })
@@ -433,6 +441,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       const transaction = await chargeBillingInvoice(invoice, method);
       return { invoice: await (db as any).billingInvoice.findUnique({ where: { id } }), transaction };
     } catch (err: any) {
+      if (err?.code === "BILLING_LIVE_CHARGES_DISABLED") return sendLiveChargesDisabled(reply);
       if (err?.code === "CHARGE_IN_PROGRESS") {
         return reply.code(409).send({
           error: "charge_in_progress",
@@ -1839,6 +1848,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       confirmLive: z.boolean().optional(),
       operationId: z.string().min(8).max(120).optional(),
     }).parse(req.body || {});
+    if (input.chargeMode !== "none" && billingLiveChargesDisabled()) return sendLiveChargesDisabled(reply);
 
     const tenant = await (db as any).tenant.findUnique({ where: { id: tenantId }, select: { id: true } });
     if (!tenant) return reply.code(404).send({ error: "tenant_not_found" });
@@ -1883,6 +1893,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
           operationKey: input.operationId ? `one_time_charge:${tenantId}:${input.operationId}` : undefined,
         });
       } catch (err: any) {
+        if (err?.code === "BILLING_LIVE_CHARGES_DISABLED") return sendLiveChargesDisabled(reply);
         if (err?.code === "CHARGE_IN_PROGRESS") {
           return reply.code(409).send({
             error: "charge_in_progress",
@@ -1918,6 +1929,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
           },
         );
       } catch (err: any) {
+        if (err?.code === "BILLING_LIVE_CHARGES_DISABLED") return sendLiveChargesDisabled(reply);
         if (err?.code === "CHARGE_IN_PROGRESS") {
           return reply.code(409).send({
             error: "charge_in_progress",
@@ -2501,6 +2513,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
     if (invoice.status === "PAID") return reply.code(400).send({ error: "invoice_already_paid" });
     if (invoice.status === "VOID") return reply.code(400).send({ error: "invoice_voided" });
+    if (billingLiveChargesDisabled()) return sendLiveChargesDisabled(reply);
     const gateway = await resolveBillingGatewayConfig(invoice.tenantId);
     const isLive = !!(gateway.enabled && gateway.mode === "prod" && !gateway.simulate);
     if (isLive && !input.confirmLive) {
@@ -2519,6 +2532,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       const updatedInvoice = await (db as any).billingInvoice.findUnique({ where: { id } });
       return { transaction, invoice: updatedInvoice };
     } catch (err: any) {
+      if (err?.code === "BILLING_LIVE_CHARGES_DISABLED") return sendLiveChargesDisabled(reply);
       if (err?.code === "CHARGE_IN_PROGRESS") {
         return reply.code(409).send({
           error: "charge_in_progress",
@@ -2552,12 +2566,14 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const invoice = await (db as any).billingInvoice.findUnique({ where: { id }, include: { tenant: { include: { billingSettings: true } } } });
     if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
+    if (billingLiveChargesDisabled()) return sendLiveChargesDisabled(reply);
     const methodId = invoice.paymentMethodId || invoice.tenant.billingSettings?.defaultPaymentMethodId;
     const method = methodId ? await (db as any).paymentMethod.findUnique({ where: { id: methodId } }) : null;
     if (!method) return reply.code(400).send({ error: "payment_method_required" });
     try {
       return await chargeBillingInvoice(invoice, method, { operationKey: `admin_retry:${invoice.id}` });
     } catch (err: any) {
+      if (err?.code === "BILLING_LIVE_CHARGES_DISABLED") return sendLiveChargesDisabled(reply);
       if (err?.code === "CHARGE_IN_PROGRESS") {
         return reply.code(409).send({
           error: "charge_in_progress",
@@ -2610,7 +2626,13 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       let transaction = null;
       if (tenant.billingSettings?.autoBillingEnabled && tenant.billingSettings.defaultPaymentMethodId) {
         const method = await (db as any).paymentMethod.findUnique({ where: { id: tenant.billingSettings.defaultPaymentMethodId } });
-        if (method) transaction = await chargeBillingInvoice(invoice, method, { runId: run.id });
+        if (method) {
+          try {
+            transaction = await chargeBillingInvoice(invoice, method, { runId: run.id });
+          } catch (err: any) {
+            if (err?.code !== "BILLING_LIVE_CHARGES_DISABLED") throw err;
+          }
+        }
       }
       results.push({ tenantId: tenant.id, invoiceId: invoice.id, totalCents: invoice.totalCents, transaction });
     }

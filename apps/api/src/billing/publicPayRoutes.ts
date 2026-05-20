@@ -8,7 +8,7 @@ import {
   resolveBillingGatewayConfig,
   storeSolaPaymentMethod,
 } from "./solaGateway";
-import { chargeBillingInvoice, chargeBillingInvoiceWithSut } from "./solaBillingPayments";
+import { billingLiveChargesDisabled, chargeBillingInvoice, chargeBillingInvoiceWithSut } from "./solaBillingPayments";
 import { verifyBillingInvoicePayToken } from "./billingPayToken";
 import { logBillingEvent } from "./invoiceEngine";
 import { resolveInvoiceEmailBranding } from "./invoiceBranding";
@@ -101,6 +101,9 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
     if (invoice.status === "VOID") {
       return reply.code(400).send({ error: "invoice_voided" });
     }
+    if (billingLiveChargesDisabled()) {
+      return reply.code(503).send({ error: "billing_live_charges_disabled" });
+    }
 
     const input = z.object({
       xSut: z.string().min(8),
@@ -191,6 +194,9 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
         invoiceStatus: transaction?.status === "APPROVED" ? "PAID" : invoice.status,
       };
     } catch (e: any) {
+      if (e?.code === "BILLING_LIVE_CHARGES_DISABLED") {
+        return reply.code(503).send({ error: "billing_live_charges_disabled" });
+      }
       if (e?.code === "CHARGE_IN_PROGRESS") {
         return reply.code(409).send({
           error: "charge_in_progress",
