@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import IField, { CARD_TYPE, CVV_TYPE, type ErrorData, type TokenData } from "@cardknox/react-ifields";
 
 export type CardknoxBillingFields = {
@@ -31,6 +31,14 @@ export type CardknoxIFieldsFormProps = {
   busyLabel?: string;
   secureNote?: ReactNode;
   errorMessage?: string | null;
+  /** When true, omit the built-in submit button (parent triggers tokenization via `tokenizeRef`). */
+  hideSubmit?: boolean;
+  formId?: string;
+  onReadyChange?: (ready: boolean) => void;
+  /** Parent calls `tokenizeRef.current?.()` to tokenize (e.g. admin drawer review step). */
+  tokenizeRef?: React.MutableRefObject<(() => void) | null>;
+  onTokenizeError?: (message: string) => void;
+  childrenAfterCard?: ReactNode;
   onSubmitCardToken: (payload: {
     cardToken: string;
     billing: CardknoxBillingFields;
@@ -67,12 +75,23 @@ export function CardknoxIFieldsForm({
   busyLabel = "Securing…",
   secureNote,
   errorMessage,
+  hideSubmit = false,
+  formId,
+  onReadyChange,
+  tokenizeRef,
+  onTokenizeError,
+  childrenAfterCard,
   onSubmitCardToken,
 }: CardknoxIFieldsFormProps) {
   const [ifieldsReady, setIfieldsReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const cardFieldRef = useRef<{ getToken?: () => void } | null>(null);
+  const formRef = useRef<HTMLFormElement | null>(null);
   const pendingRef = useRef<CardknoxBillingFields | null>(null);
+
+  useEffect(() => {
+    onReadyChange?.(ifieldsReady);
+  }, [ifieldsReady, onReadyChange]);
 
   const account = useMemo(
     () => ({ xKey: ifieldsKey.trim(), xSoftwareName: "ConnectComms", xSoftwareVersion: "1.0.0" }),
@@ -129,21 +148,45 @@ export function CardknoxIFieldsForm({
   function handleCardError(data: ErrorData) {
     pendingRef.current = null;
     setBusy(false);
-    void data;
+    const errText = (data as unknown as { xError?: string })?.xError;
+    const msg = typeof errText === "string" && errText.trim()
+      ? errText.trim()
+      : "Could not read the card. Check the number and try again.";
+    onTokenizeError?.(msg);
   }
 
-  function onSubmit(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
+  function beginTokenize(form: HTMLFormElement) {
     if (busy || disabled || !ifieldsReady) return;
-    pendingRef.current = readBilling(e.currentTarget);
+    pendingRef.current = readBilling(form);
     setBusy(true);
     cardFieldRef.current?.getToken?.();
   }
 
-  const formClass = variant === "admin" ? "billing-form" : "billing-form billing-pay-form billing-pay-form--light";
+  useEffect(() => {
+    if (!tokenizeRef) return;
+    tokenizeRef.current = () => {
+      if (!formRef.current) {
+        onTokenizeError?.("Secure card form is not ready.");
+        return;
+      }
+      beginTokenize(formRef.current);
+    };
+    return () => {
+      tokenizeRef.current = null;
+    };
+  });
+
+  function onSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    beginTokenize(e.currentTarget);
+  }
+
+  const formClass = variant === "admin"
+    ? "billing-form billing-ifields-form billing-ifields-form--admin"
+    : "billing-form billing-pay-form billing-pay-form--light billing-ifields-form";
 
   return (
-    <form className={formClass} onSubmit={onSubmit}>
+    <form ref={formRef} id={formId} className={formClass} onSubmit={onSubmit}>
       {secureNote ?? (
         <p className="billing-pay-secure-note">
           Card details are entered in a PCI-compliant secure field hosted by our payment processor. Connect never sees or stores your full card number or CVV.
@@ -196,29 +239,34 @@ export function CardknoxIFieldsForm({
           <input name="billingZip" autoComplete="postal-code" placeholder="10001" required disabled={disabled || busy} />
         </label>
       )}
-      <label>
+      <label className="billing-ifields-card">
         Card number
-        <IField
-          ref={cardFieldRef as any}
-          account={account}
-          type={CARD_TYPE}
-          options={{ ...ifieldOptions, placeholder: "Card number" }}
-          onLoad={() => setIfieldsReady(true)}
-          onToken={handleCardToken}
-          onError={handleCardError}
-        />
+        <span className="billing-ifields-host">
+          <IField
+            ref={cardFieldRef as any}
+            account={account}
+            type={CARD_TYPE}
+            options={{ ...ifieldOptions, placeholder: "Card number" }}
+            onLoad={() => setIfieldsReady(true)}
+            onToken={handleCardToken}
+            onError={handleCardError}
+          />
+        </span>
       </label>
-      <label>
+      <label className="billing-ifields-cvv">
         CVV
-        <IField
-          account={account}
-          type={CVV_TYPE}
-          options={{ ...ifieldOptions, placeholder: "CVV" }}
-          onLoad={() => undefined}
-          onToken={() => undefined}
-          onError={() => undefined}
-        />
+        <span className="billing-ifields-host">
+          <IField
+            account={account}
+            type={CVV_TYPE}
+            options={{ ...ifieldOptions, placeholder: "CVV" }}
+            onLoad={() => undefined}
+            onToken={() => undefined}
+            onError={() => undefined}
+          />
+        </span>
       </label>
+      {childrenAfterCard}
       {showSaveOptions ? (
         <div className="billing-pay-checks">
           <label className="billing-checkbox">
@@ -242,6 +290,7 @@ export function CardknoxIFieldsForm({
         </div>
       ) : null}
       {errorMessage ? <div className="billing-status-pill bad">{errorMessage}</div> : null}
+      {!hideSubmit ? (
       <button
         className="btn primary"
         type="submit"
@@ -250,6 +299,7 @@ export function CardknoxIFieldsForm({
       >
         {busy ? busyLabel : ifieldsReady ? submitLabel : "Initializing secure form…"}
       </button>
+      ) : null}
     </form>
   );
 }

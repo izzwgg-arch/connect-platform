@@ -449,7 +449,7 @@ Operators can add a card on behalf of a tenant from the `PaymentMethodsModal` in
 
 **PCI boundary** — raw PAN and CVV never hit Connect API:
 - The modal fetches `GET .../sola/public-config` which returns only the **public** `ifieldsKey` (safe to expose client-side; no API secret is included).
-- Card number and CVV use **`@cardknox/react-ifields`** (`IField` components) in `PaymentMethodsModal` — PCI-safe hosted fields; only the card SUT is sent to Connect (`POST .../payment-methods/sola/save`). Legacy CDN `ifield.htm` iframes remain in `OneTimeChargeDrawer` until migrated to `CardknoxIFieldsForm`.
+- Card number and CVV use **`@cardknox/react-ifields`** (`IField` components) in `PaymentMethodsModal` and **`OneTimeChargeDrawer`** (via shared **`CardknoxIFieldsForm`**) — PCI-safe hosted fields; only the card SUT is sent to Connect (`POST .../payment-methods/sola/save`, `POST .../one-time-charges` with `xSut`). Legacy CDN `ifield.htm` iframes remain on tenant **`/billing/payments`** only.
 - Only the SUT is sent to Connect API (`POST .../payment-methods/sola/save` body: `{ xSut, cardholderName?, billingZip?, makeDefault? }`).
 - `xSut` is **not logged** in `BillingEventLog` metadata; only `paymentMethodId`, masked `brand`/`last4`, and `adminUserId` are recorded.
 

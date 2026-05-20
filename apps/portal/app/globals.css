@@ -3196,7 +3196,7 @@ select option {
 /* Console redesign — 2026 SaaS dashboard */
 :root,
 :root[data-theme="dark"] {
-  --topbar-height: 60px;
+  --topbar-height: 56px;
   --console-bg: #0b1016;
   --console-bg-soft: #0e141d;
   --console-panel: #131b26;
@@ -3304,7 +3304,7 @@ body {
 
 /* ── Drawer: profile block ─────────────────────────────────────────────────── */
 .drawer-profile {
-  padding: 16px 14px 12px;
+  padding: 18px 14px 14px;
   border-bottom: 1px solid var(--console-border);
   flex-shrink: 0;
   background: color-mix(in srgb, var(--console-panel) 80%, var(--console-bg));
@@ -3314,7 +3314,7 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .drawer-user-avatar {
@@ -4046,14 +4046,16 @@ body {
 /* ── Topbar: dark premium header ──────────────────────────────────────────── */
 
 .brand-logo-svg {
-  height: 52px;
+  height: 42px;
   width: auto;
+  max-width: min(168px, 40vw);
   display: block;
   flex-shrink: 0;
   margin: 0;
   padding: 0;
   object-fit: contain;
   object-position: left center;
+  filter: saturate(0.88);
 }
 
 /* Dark mode: show SVG logo, hide text */
@@ -4070,7 +4072,7 @@ body {
 }
 
 .brand-name {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--console-text);
   letter-spacing: 0.02em;
@@ -4080,10 +4082,16 @@ body {
 .topbar-brand {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 8px;
   flex-shrink: 0;
-  padding-top: 4px; /* sit high, but clear top clip on the mark */
-  margin-left: -4px;
+  padding: 4px 10px 4px 4px;
+  margin: 0;
+  border-radius: 10px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--console-panel-soft) 50%, transparent) 0%,
+    transparent 72%
+  );
 }
 
 .topbar-brand .nav-toggle {
@@ -4091,7 +4099,7 @@ body {
 }
 
 .topbar-brand .brand-name {
-  margin-left: 6px;
+  margin-left: 2px;
 }
 
 .topbar {
@@ -4103,17 +4111,16 @@ body {
   display: grid;
   grid-template-columns: auto 1fr auto;
   gap: 12px;
-  align-items: stretch;
+  align-items: center;
   border-bottom: 1px solid var(--console-border);
-  background: var(--console-bg);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--console-bg-soft) 100%, var(--console-accent) 2%) 0%,
+    var(--console-bg) 100%
+  );
   z-index: 200;
   padding: 0 16px 0 12px;
   overflow: visible;
-}
-
-.topbar > .topbar-center,
-.topbar > .topbar-right {
-  align-self: center;
 }
 
 .topbar-left,
@@ -8605,6 +8612,18 @@ table tr:hover {
   backdrop-filter: blur(18px);
 }
 
+:root[data-theme="light"] .topbar-brand {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface-2) 85%, transparent) 0%,
+    transparent 72%
+  );
+}
+
+:root[data-theme="light"] .brand-logo-svg {
+  filter: none;
+}
+
 :root[data-theme="light"] .topbar-center .global-search .input,
 :root[data-theme="light"] .input,
 :root[data-theme="light"] .select,
@@ -9117,6 +9136,31 @@ table tr:hover {
   display: block;
   padding: 0;
   height: 46px;
+}
+
+/* Cardknox React iFields (@cardknox/react-ifields) — avoid iframe scrollbars in admin drawers */
+.billing-ifields-form .billing-ifields-host {
+  display: block;
+  width: 100%;
+  min-height: 42px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--background) 72%, transparent);
+}
+
+.billing-ifields-form--admin .billing-ifields-host {
+  background: #1f2937;
+  border-color: color-mix(in srgb, var(--border) 70%, #374151);
+}
+
+.billing-ifields-form .billing-ifields-host iframe {
+  display: block;
+  width: 100% !important;
+  min-height: 42px !important;
+  max-height: 46px !important;
+  border: 0 !important;
+  overflow: hidden !important;
 }
 
 .billing-form .row-actions,

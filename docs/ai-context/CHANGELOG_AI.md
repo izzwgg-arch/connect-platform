@@ -4,6 +4,24 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-19 — Billing: OneTimeChargeDrawer → CardknoxIFieldsForm
+
+**Task:** Migrate admin one-time charge “new card” flow off legacy CDN `ifield.htm` iframes to shared `CardknoxIFieldsForm` (`@cardknox/react-ifields`).
+**Risk:** High (payments UI — no live charges or customer emails in tests).
+
+### Shipped
+
+- **`adminBillingPaymentDrawers.tsx`** — `OneTimeChargeDrawer` uses `CardknoxIFieldsForm` (admin dark mode, full billing address, tokenize on Review, charge on confirm). Removed `cdn.cardknox.com` script/iframes/`window.getTokens`.
+- **`CardknoxIFieldsForm`** — `hideSubmit`, `tokenizeRef`, `onReadyChange`, `onTokenizeError`, `childrenAfterCard` for drawer integration.
+- **Tests:** `apps/portal/lib/billingOneTimeChargeIFields.test.ts`; `apps/api/src/billing/oneTimeChargeRoute.test.ts`.
+- **CSS:** `.billing-ifields-host` — clip iframe overflow in admin drawers.
+
+### Deploy
+
+- **portal** only (no API route changes).
+
+---
+
 ## 2026-05-19 — Billing: attach invoice PDFs to customer emails
 
 **Task:** Invoice and payment receipt emails must include the invoice PDF as an attachment (not a JWT-protected API link). Fix PDF download in Connect for platform admins and SUPER_ADMIN cross-tenant access.
