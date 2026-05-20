@@ -4,7 +4,7 @@ WORKDIR /app
 ENV CI=true \
     PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH
-RUN corepack enable && pnpm config set store-dir /pnpm/store
+RUN corepack enable && corepack prepare pnpm@10.30.2 --activate && pnpm config set store-dir /pnpm/store
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY apps/realtime/package.json ./apps/realtime/package.json
 COPY packages/shared/package.json ./packages/shared/package.json
