@@ -737,7 +737,7 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 |-------|-----|
 | `invoiceCompanyName` | Header on PDF + email masthead (falls back to `Tenant.name`, then “Connect Communications”). |
 | `invoiceLogoUrl` | **HTTPS only**, sanitized — embedded as `<img>` in **HTML emails only**. PDF uses bundled local logo (`apps/api/src/billing/assets/connect-logo.png`) — no remote fetch. Custom `invoiceLogoUrl` overrides email fallback only. |
-| `invoiceSupportEmail` / `invoiceSupportPhone` | Shown in email shell + PDF "Bill from" section and footer. |
+| `invoiceSupportEmail` / `invoiceSupportPhone` | Shown in email shell. The API PDF uses fixed Connect contact details for a consistent legal/billing presentation. |
 | `invoiceFooterNote` / `invoicePaymentInstructions` | Plain text, length-capped — PDF footer + email body blocks. |
 | `paymentTermsDays` | "Net N days" copy in invoice emails and PDF detail row. |
 
@@ -757,14 +757,14 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 - Modern light SaaS invoice layout inspired by Stripe/Linear/Ramp billing: thin Connect-blue top accent, white header, soft gray borders, generous whitespace, and compact card sections.
 - Bundled local Connect logo PNG only (`apps/api/src/billing/assets/connect-logo.png`) — no remote image fetch. Keep this asset high-resolution (currently 960x264) because PDFKit rasterizes it into the PDF.
 - Header row: logo left, invoice title/number right, modern rounded status pill. PAID uses soft green; unpaid/overdue states use soft orange/red; draft/void use muted gray.
-- **Bill from** is fixed for the PDF: `Connect Communications, LLC` and `support@connectcommunications.com`.
+- **Bill from** is fixed for the PDF: `Connect Communications, LLC`, `support@connectcomunications.com`, `845-723-1213`, and `connectcomunications.com`. The PDF intentionally omits the Connect physical address.
 - **Bill to** uses tenant name, billing email, and billing/service address.
 - Light balance card replaces the old dark/heavy panel. It shows large blue balance due, due date, and a clean blue **Pay Now Securely** button only when the invoice is not paid and has a positive balance. Paid invoices hide the button. The PDF does **not** display raw payment URLs.
 - Metadata row: issue date, due date, and service period. Terms are intentionally omitted from the visible PDF metadata to keep the header area lighter.
 - Line items use an inset, balanced table with inward-aligned QTY / UNIT PRICE / AMOUNT columns, subtle separators, generous row height, and safe wrapping for long descriptions.
 - Totals render as a compact summary card with subtotal, credits, fees, taxes, amount paid, and blue emphasized balance due.
-- Regulatory notices render as concise icon cards only. The PDF intentionally avoids a heavy regulatory heading, "Telecom billing disclosures" title, or long legal paragraph.
-- Footer renders four compact muted support columns: Billing Support, Customer Portal, Secure Payments, and Thank You.
+- Regulatory notices render as concise icon cards only with professional PDFKit-drawn icons and subtle light blue/cyan highlight backgrounds. The PDF intentionally avoids a heavy regulatory heading, "Telecom billing disclosures" title, or long legal paragraph.
+- Footer renders four compact muted support columns with matching drawn icons: Billing Support, Customer Portal, Secure Payments, and Thank You.
 
 **Fallback logo for HTML emails:** `{PUBLIC_PORTAL_URL}/connect-logo.png` from `apps/portal/public/connect-logo.png`.
 
@@ -795,12 +795,13 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 - Keep invoice copy readable in grayscale: do not rely on color alone for status, totals, or fee categories.
 - The API PDF route uses `apps/api/src/billing/pdf.ts` and is the source for both authenticated PDF downloads and outbound billing email attachments.
 - The PDFKit renderer now mirrors the modern invoice structure with a neutral header, light balance card, billing parties, three-column metadata row, inward-aligned line-item table, compact billing summary, simplified regulatory notice cards, and professional footer.
-- PDFKit uses built-in PDF-safe fonts in production; spacing, weights, uppercase labels, and hierarchy are tuned to approximate modern Inter-style SaaS typography without adding a runtime font dependency.
+- PDFKit uses built-in PDF-safe Helvetica fonts in production because no Inter/font asset is bundled with billing. Spacing, slightly larger body sizes, bold amounts, semibold headings, uppercase labels, and hierarchy are tuned to approximate modern Inter-style SaaS typography without adding a runtime font dependency.
 - Pagination safeguards call `ensureSpace` before tall sections and line item rows. Long descriptions wrap inside the description column and should not overlap amount columns or totals. If invoices have many rows, notices/footer may continue to page 2; do not force all content onto page 1.
 
 **Verification:**
-- `pnpm typecheck` in `apps/portal`.
-- Manual: unpaid invoice, paid invoice, long line item description, multiple service/tax/fee rows, payment CTA, fallback URL, browser print preview, desktop width, light/dark shell.
+- `pnpm typecheck` in `apps/api` for renderer type safety.
+- Smoke-render unpaid invoice, paid invoice, long line item description, and multiple service/tax/fee rows.
+- Check fixed contact details, absence of physical address, clean unpaid-only payment CTA, no raw payment URL, no Terms block, no legal paragraph under notice cards, table columns inside the page, and one-page behavior for normal invoices.
 
 ### Invoice PDF attachments + portal PDF routes (2026-05-19)
 
