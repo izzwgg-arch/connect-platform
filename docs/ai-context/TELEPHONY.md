@@ -943,14 +943,146 @@ three diagnostic scripts under [scripts/pbx/](scripts/pbx/).
 ## Tenant filtering
 
 - `PbxTenantMapCache` (`apps/telephony/src/telephony/state/PbxTenantMapCache.ts`):
-  pulls tenant↔pbx map from api over HTTP, caches 60 s, exposes `resolveBySlug`,
-  `tenantAliasesEqual`.
+  pulls tenant↔pbx map from api over HTTP, exposes `resolveBySlug`,
+  `tenantAliasesEqual`, `getStats()`, and `forceRefreshWithCooldown()`.
 - Slug resolver attached to `CallStateStore` so `vpbx:<slug>` tenant ids are
   rewritten to canonical Connect CUIDs at ingest.
 - Tenant alias matcher used by snapshot/broadcast filters so a JWT carrying a Connect
   CUID still sees calls/extensions tagged with `vpbx:<slug>` (and vice versa).
 - This is the root cause guard for "regular users see no Team Directory / Presence /
   Live Calls" — do not regress it.
+
+---
+
+## PBX Tenant Sync Architecture
+
+### Overview (two-layer pipeline)
+
+```
+VitalPBX  →  (API warm cycle)  →  PbxTenantDirectory (DB)
+                                          ↓
+                             GET /internal/telephony/pbx-tenant-map
+                                          ↓
+                          PbxTenantMapCache (telephony in-memory)
+                                          ↓
+                           TenantResolver  →  call/CDR tenant tagging
+```
+
+### Layer 1 — DB (`PbxTenantDirectory`)
+
+`PbxTenantDirectory` is the authoritative local cache of VitalPBX tenants.
+Populated by `syncPbxTenantDirectory` / `syncPbxTenantDirectoryFromRows`
+(`apps/api/src/pbxTenantDirectorySync.ts`).
+
+| Trigger | When | Notes |
+|---|---|---|
+| API startup | 3 s after ready | Via `startPbxTenantListWarm` |
+| Warm cycle interval | configurable, default **5 min** | Via `PBX_TENANT_SYNC_INTERVAL_MS` env var |
+| `GET /admin/pbx/tenants` | on demand (admin UI) | Also triggers background DID sync |
+| `POST /admin/pbx/instances/:id/sync-tenant-dids` | on demand (SUPER_ADMIN) | Full sync including DIDs |
+| **`POST /admin/pbx/refresh-tenants`** | on demand (SUPER_ADMIN) | Simple endpoint, no instance ID required; rate-limited 1/30 s |
+| CDR ingest bootstrap | once, if DB empty | Safety fallback only |
+
+Sync is **idempotent**: upsert by `(pbxInstanceId, vitalTenantId)`. The result now
+returns `{ upserted, created, updated }` so logs distinguish new vs changed tenants.
+
+### Layer 2 — In-memory cache (`PbxTenantMapCache`, telephony service)
+
+Polls `GET /internal/telephony/pbx-tenant-map` (the API reads only from DB — no PBX
+call). Default interval **60 s**, configurable via `TELEPHONY_PBX_MAP_POLL_MS`.
+
+The API endpoint returns:
+- `entries` — `PbxTenantDirectory` rows with `connectTenantId` joined from `TenantPbxLink`
+- `didEntries` — active `PbxTenantInboundDid` rows
+- `extensionEntries` — active `Extension` rows
+
+### End-to-end lag (new PBX tenant → visible in Connect)
+
+`PBX_TENANT_SYNC_INTERVAL_MS` (default 5 min) + `TELEPHONY_PBX_MAP_POLL_MS` (default 60 s)
+= up to ~6 min before a newly created PBX tenant appears in call routing.
+
+Reduce either env var for faster discovery. Do not go below `PBX_TENANT_SYNC_INTERVAL_MS=60000`
+(1 min) or `TELEPHONY_PBX_MAP_POLL_MS=30000` (30 s) to avoid hammering the DB/PBX.
+
+### Env vars
+
+| Variable | Service | Default | Description |
+|---|---|---|---|
+| `PBX_TENANT_SYNC_INTERVAL_MS` | API | `300000` (5 min) | DB warm-cycle interval (min 60 s, max 30 min) |
+| `TELEPHONY_PBX_MAP_POLL_MS` | telephony | `60000` (60 s) | How often telephony polls `/internal/telephony/pbx-tenant-map` (min 30 s, max 600 s) |
+
+### Manual refresh (admin/support)
+
+```bash
+# Force immediate sync from VitalPBX → DB (no instance ID needed):
+curl -s -X POST https://app.connectcomunications.com/api/admin/pbx/refresh-tenants \
+  -H "Authorization: Bearer <SUPER_ADMIN_JWT>" \
+  -H "Content-Type: application/json"
+```
+
+Response includes `{ ok, pbxTenantCount, directoryCreated, directoryUpdated, durationMs }`.
+Rate limited: returns `429` if called within 30 s of a previous refresh.
+After this returns, telephony will pick up new tenants within `TELEPHONY_PBX_MAP_POLL_MS`.
+
+### Cache-miss backoff
+
+`PbxTenantMapCache.forceRefreshWithCooldown(cooldownMs)` schedules a one-shot immediate
+DB re-read when telephony encounters an unknown PBX tenant on a live call. The cooldown
+(default **30 s**) prevents repeated fetches during burst unknown-tenant events.
+Log event: `pbx_tenant_map_force_refresh`.
+
+### Observability / structured log events
+
+| Event | Service | Meaning |
+|---|---|---|
+| `pbx_tenant_sync_warm_init` | API | Warm cycle started, shows `intervalMs` |
+| `pbx_tenant_sync_warm_start` | API | About to refresh one PBX instance |
+| `pbx_tenant_sync_warm_complete` | API | Refresh succeeded; shows `pbxTenantCount`, `directoryUpserted`, `durationMs` |
+| `pbx_tenant_sync_warm_failed` | API | Refresh failed; shows `err` |
+| `pbx_tenant_directory_new_tenants` | API | One or more new PBX tenants created; shows `created`, `updated` |
+| `pbx_tenant_directory_manual_sync` | API | Manual sync via `sync-tenant-dids` endpoint |
+| `pbx_tenant_manual_refresh_start` | API | Manual refresh via `refresh-tenants` endpoint |
+| `pbx_tenant_manual_refresh_complete` | API | Manual refresh succeeded |
+| `pbx_tenant_manual_refresh_failed` | API | Manual refresh failed |
+| `pbx_tenant_map_refresh_start` | telephony | PbxTenantMapCache starting a poll |
+| `pbx_tenant_map_refresh_success` | telephony | Poll succeeded; shows `entryCount`, `didCount`, `extensionMapSize`, `slugMapSize`, `durationMs`, `refreshCount` |
+| `pbx_tenant_map_refresh_failed` | telephony | Poll failed; shows `err` or HTTP `status` |
+| `pbx_tenant_map_force_refresh` | telephony | Cache-miss forced refresh scheduled |
+| `pbx_tenant_map_cooldown_skip` | telephony | Force refresh skipped (within cooldown window) |
+
+### Production verification
+
+```bash
+# Check telephony cache stats (includes lastRefreshedAt, entryCount, lastError):
+GET /telephony/diag  →  response.pbxTenantMapStats
+
+# Check DB last sync time:
+ssh connect "docker exec app-api-1 node -e \"
+  const { PrismaClient } = require('@prisma/client');
+  const db = new PrismaClient();
+  db.pbxTenantDirectory.findMany({ orderBy: { syncedAt: 'desc' }, take: 3 })
+    .then(r => { console.log(r); db.\$disconnect(); });
+\""
+
+# Check API warm-cycle logs:
+ssh connect "docker logs app-api-1 --since 30m 2>&1 | grep pbx_tenant_sync"
+```
+
+### Failure behavior (safe fallback)
+
+- If the API warm cycle fails, `PbxTenantDirectory` stays at its last synced state.
+- If `GET /internal/telephony/pbx-tenant-map` fails, `PbxTenantMapCache` keeps its
+  previous in-memory entries (not wiped). Live call routing continues with stale data.
+- `lastError` in `PbxTenantMapCache.getStats()` shows the last failure reason.
+
+### Files touched (tenant sync implementation)
+
+- `apps/api/src/pbxTenantDirectorySync.ts` — sync utility, returns `created`/`updated`
+- `apps/api/src/server.ts` — warm cycle, logging, `POST /admin/pbx/refresh-tenants`
+- `apps/telephony/src/config/env.ts` — `TELEPHONY_PBX_MAP_POLL_MS` env var
+- `apps/telephony/src/telephony/index.ts` — wires env var to cache
+- `apps/telephony/src/telephony/state/PbxTenantMapCache.ts` — stats, structured logs, `getStats()`, `forceRefreshWithCooldown()`
+- `apps/telephony/src/routes/telephony.ts` — exposes `pbxTenantMapStats` in `/telephony/diag`
 
 ---
 

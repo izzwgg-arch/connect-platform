@@ -13169,7 +13169,15 @@ async function vitalDeleteByResource(client: VitalPbxClient, resource: VitalReso
   throw new Error("resource_not_supported");
 }
 
-const PBX_TENANT_LIST_CACHE_TTL_MS = 5 * 60_000;
+// PBX_TENANT_SYNC_INTERVAL_MS: how often the warm cycle re-fetches tenants from VitalPBX and
+// upserts PbxTenantDirectory. Default 5 min; minimum 60 s; maximum 30 min.
+// Increase on high-latency PBX hosts; decrease (to ≥60 s) for faster new-tenant discovery.
+const _pbxTenantSyncIntervalMs = (() => {
+  const raw = parseInt(process.env.PBX_TENANT_SYNC_INTERVAL_MS ?? "", 10);
+  if (!Number.isFinite(raw) || raw <= 0) return 5 * 60_000;
+  return Math.min(30 * 60_000, Math.max(60_000, raw));
+})();
+const PBX_TENANT_LIST_CACHE_TTL_MS = _pbxTenantSyncIntervalMs;
 const PBX_TENANT_LIST_STALE_MS = 30_000;
 const PBX_TENANT_LIST_CACHE = new Map<string, {
   at: number;
@@ -13202,17 +13210,38 @@ function startPbxTenantListRefresh(instance: any, auth: { token: string; secret?
     const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret, timeoutMs: 8_000 });
     const tenants = await client.listTenants();
     let directoryUpserted = 0;
+    let directoryCreated = 0;
+    let directoryUpdated = 0;
     try {
       const d = await syncPbxTenantDirectoryFromRows(db, instance.id, tenants);
       directoryUpserted = d.upserted;
+      directoryCreated = d.created;
+      directoryUpdated = d.updated;
+      if (d.created > 0) {
+        app.log.info(
+          {
+            event: "pbx_tenant_directory_new_tenants",
+            pbxInstanceId: instance.id,
+            created: d.created,
+            updated: d.updated,
+            upserted: d.upserted,
+          },
+          "pbx_tenant_directory_new_tenants",
+        );
+      }
     } catch (e: any) {
-      app.log.warn({ err: e?.message }, "admin/pbx/tenants: directory sync failed");
+      app.log.warn(
+        { event: "pbx_tenant_directory_sync_failed", pbxInstanceId: instance.id, err: e?.message },
+        "pbx_tenant_directory_sync_failed",
+      );
     }
 
     const payload = {
       instanceId: instance.id,
       tenants,
       directoryUpserted,
+      directoryCreated,
+      directoryUpdated,
       inboundDidSync: { tenantsProcessed: 0, numbersUpserted: 0, errors: [] as string[] },
     };
     PBX_TENANT_LIST_CACHE.set(cacheKey, { at: Date.now(), payload });
@@ -13281,7 +13310,12 @@ let _pbxTenantListWarmStarted = false;
 function startPbxTenantListWarm() {
   if (_pbxTenantListWarmStarted) return;
   _pbxTenantListWarmStarted = true;
+  app.log.info(
+    { intervalMs: PBX_TENANT_LIST_CACHE_TTL_MS },
+    "pbx_tenant_sync_warm_init",
+  );
   const warm = async () => {
+    const warmStartedAt = Date.now();
     try {
       const instances = await db.pbxInstance.findMany({ where: { isEnabled: true }, take: 5 });
       for (const instance of instances) {
@@ -13289,10 +13323,40 @@ function startPbxTenantListWarm() {
         const cacheKey = instance.id;
         const cached = PBX_TENANT_LIST_CACHE.get(cacheKey);
         if (cached && Date.now() - cached.at < PBX_TENANT_LIST_STALE_MS) continue;
-        void startPbxTenantListRefresh(instance, auth, cacheKey).catch(() => undefined);
-    }
-  } catch (e: any) {
-      app.log.warn({ err: e?.message || String(e) }, "pbx_tenant_list_warm_failed");
+        app.log.info(
+          { event: "pbx_tenant_sync_warm_start", pbxInstanceId: instance.id },
+          "pbx_tenant_sync_warm_start",
+        );
+        void startPbxTenantListRefresh(instance, auth, cacheKey)
+          .then((payload) => {
+            app.log.info(
+              {
+                event: "pbx_tenant_sync_warm_complete",
+                pbxInstanceId: instance.id,
+                pbxTenantCount: payload.tenants.length,
+                directoryUpserted: payload.directoryUpserted,
+                durationMs: Date.now() - warmStartedAt,
+              },
+              "pbx_tenant_sync_warm_complete",
+            );
+          })
+          .catch((e: any) => {
+            app.log.warn(
+              {
+                event: "pbx_tenant_sync_warm_failed",
+                pbxInstanceId: instance.id,
+                err: e?.message || String(e),
+                durationMs: Date.now() - warmStartedAt,
+              },
+              "pbx_tenant_sync_warm_failed",
+            );
+          });
+      }
+    } catch (e: any) {
+      app.log.warn(
+        { event: "pbx_tenant_sync_warm_failed", err: e?.message || String(e) },
+        "pbx_tenant_sync_warm_failed",
+      );
     }
   };
   registerShutdownTimer(setTimeout(warm, 3_000));
@@ -13308,10 +13372,102 @@ app.post("/admin/pbx/instances/:id/sync-tenant-dids", async (req, reply) => {
   if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
   const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
   const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
+  const startedAt = Date.now();
   const tenants = await client.listTenants();
-  const { upserted: directoryUpserted } = await syncPbxTenantDirectoryFromRows(db, instance.id, tenants);
+  const syncResult = await syncPbxTenantDirectoryFromRows(db, instance.id, tenants);
   const inboundDidSync = await syncPbxTenantInboundDids(db, instance.id);
-  return { ok: true, instanceId: instance.id, directoryUpserted, inboundDidSync };
+  app.log.info(
+    {
+      event: "pbx_tenant_directory_manual_sync",
+      pbxInstanceId: instance.id,
+      pbxTenantCount: tenants.length,
+      upserted: syncResult.upserted,
+      created: syncResult.created,
+      updated: syncResult.updated,
+      durationMs: Date.now() - startedAt,
+      requestedBy: (admin as any).id ?? "unknown",
+    },
+    "pbx_tenant_directory_manual_sync",
+  );
+  return {
+    ok: true,
+    instanceId: instance.id,
+    directoryUpserted: syncResult.upserted,
+    directoryCreated: syncResult.created,
+    directoryUpdated: syncResult.updated,
+    inboundDidSync,
+  };
+});
+
+/**
+ * Simple manual PBX tenant sync — uses the default enabled PBX instance.
+ * Refreshes PbxTenantDirectory immediately without requiring a known instance ID.
+ * Protected to SUPER_ADMIN only. Safe to call repeatedly; rate limited to 1 call per 30 s.
+ *
+ * After this returns, the telephony service's PbxTenantMapCache will pick up new tenants
+ * within its configured poll interval (default 60 s, configurable via TELEPHONY_PBX_MAP_POLL_MS).
+ */
+app.post("/admin/pbx/refresh-tenants", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
+  if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
+  const cacheKey = instance.id;
+  const cached = PBX_TENANT_LIST_CACHE.get(cacheKey);
+  const cacheAgeMs = cached ? Date.now() - cached.at : null;
+  // Rate limit: at most one sync per 30 s (admins can still call GET /admin/pbx/tenants for cached data).
+  if (cached && cacheAgeMs !== null && cacheAgeMs < 30_000) {
+    return reply.status(429).send({
+      error: "pbx_tenant_refresh_rate_limited",
+      message: "Tenant directory was refreshed less than 30 seconds ago. Please wait before retrying.",
+      cacheAgeMs,
+      retryAfterMs: 30_000 - cacheAgeMs,
+    });
+  }
+  const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+  const startedAt = Date.now();
+  app.log.info(
+    { event: "pbx_tenant_manual_refresh_start", pbxInstanceId: instance.id, requestedBy: (admin as any).id ?? "unknown" },
+    "pbx_tenant_manual_refresh_start",
+  );
+  let tenants: any[] = [];
+  let syncResult = { upserted: 0, created: 0, updated: 0 };
+  try {
+    const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret, timeoutMs: 8_000 });
+    tenants = await client.listTenants();
+    syncResult = await syncPbxTenantDirectoryFromRows(db, instance.id, tenants);
+    // Invalidate in-memory cache so the next GET /admin/pbx/tenants serves fresh data.
+    PBX_TENANT_LIST_CACHE.delete(cacheKey);
+  } catch (e: any) {
+    app.log.warn(
+      { event: "pbx_tenant_manual_refresh_failed", pbxInstanceId: instance.id, err: e?.message },
+      "pbx_tenant_manual_refresh_failed",
+    );
+    return reply.status(502).send({ error: "PBX_TENANT_REFRESH_FAILED", message: String(e?.message || "PBX unavailable") });
+  }
+  const durationMs = Date.now() - startedAt;
+  app.log.info(
+    {
+      event: "pbx_tenant_manual_refresh_complete",
+      pbxInstanceId: instance.id,
+      pbxTenantCount: tenants.length,
+      upserted: syncResult.upserted,
+      created: syncResult.created,
+      updated: syncResult.updated,
+      durationMs,
+    },
+    "pbx_tenant_manual_refresh_complete",
+  );
+  return {
+    ok: true,
+    instanceId: instance.id,
+    pbxTenantCount: tenants.length,
+    directoryUpserted: syncResult.upserted,
+    directoryCreated: syncResult.created,
+    directoryUpdated: syncResult.updated,
+    durationMs,
+    note: "PbxTenantDirectory updated. Telephony PbxTenantMapCache will pick up changes within its poll interval (default 60 s).",
+  };
 });
 
 /**

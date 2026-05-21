@@ -3,6 +3,25 @@ import { normalizeInboundDidDigits } from "../pbx/inboundDidDigits";
 
 const log = childLogger("PbxTenantMapCache");
 
+export interface PbxTenantMapCacheStats {
+  /** ISO timestamp of last successful refresh, or null if never refreshed. */
+  lastRefreshedAt: string | null;
+  /** Number of successful refresh cycles completed. */
+  refreshCount: number;
+  /** Number of PBX tenant directory entries (not counting DID or extension entries). */
+  entryCount: number;
+  /** Number of active inbound DID → tenant mappings. */
+  didCount: number;
+  /** Number of unambiguous extension → tenant mappings. */
+  extensionMapSize: number;
+  /** Number of slug → Connect UUID mappings resolved. */
+  slugMapSize: number;
+  /** Last error message, if any. Cleared on next successful refresh. */
+  lastError: string | null;
+  /** Configured poll interval in ms. */
+  pollMs: number;
+}
+
 export type PbxTenantMapEntry = {
   vitalTenantId: string;
   tenantCode: string;
@@ -26,6 +45,10 @@ export type PbxExtensionMapEntry = {
 
 /**
  * Fetches /internal/telephony/pbx-tenant-map from the API (same secret as CDR ingest).
+ *
+ * Polling interval is controlled by `pollMs` (from env `TELEPHONY_PBX_MAP_POLL_MS`, default 60 s).
+ * Call `forceRefreshWithCooldown()` to schedule an out-of-band refresh after a cache miss;
+ * the cooldown prevents repeated PBX/DB hammering.
  */
 export class PbxTenantMapCache {
   private entries: PbxTenantMapEntry[] = [];
@@ -43,6 +66,13 @@ export class PbxTenantMapCache {
   private timer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
 
+  // ── Observability fields ──────────────────────────────────────────────────
+  private lastRefreshedAt: Date | null = null;
+  private refreshCount = 0;
+  private lastError: string | null = null;
+  /** Timestamp of last `forceRefreshWithCooldown` call (to enforce cooldown). */
+  private lastForcedRefreshAt = 0;
+
   constructor(
     private readonly mapUrl: string | undefined,
     private readonly secret: string | undefined,
@@ -58,6 +88,7 @@ export class PbxTenantMapCache {
       log.info("PBX tenant map URL not configured — live tenant resolution uses AMI hints only");
       return;
     }
+    this.stopped = false;
     void this.refresh();
     this.timer = setInterval(() => void this.refresh(), this.pollMs);
     if (this.timer.unref) this.timer.unref();
@@ -71,12 +102,19 @@ export class PbxTenantMapCache {
 
   private async refresh(): Promise<void> {
     if (this.stopped || !this.mapUrl) return;
+    const startedAt = Date.now();
+    log.debug({ event: "pbx_tenant_map_refresh_start" }, "pbx_tenant_map_refresh_start");
     try {
       const headers: Record<string, string> = { accept: "application/json" };
       if (this.secret) headers["x-cdr-secret"] = this.secret;
       const res = await fetch(this.mapUrl, { headers });
       if (!res.ok) {
-        log.warn({ status: res.status }, "pbx-tenant-map fetch failed");
+        const msg = `HTTP ${res.status}`;
+        this.lastError = msg;
+        log.warn(
+          { event: "pbx_tenant_map_refresh_failed", status: res.status, durationMs: Date.now() - startedAt },
+          "pbx_tenant_map_refresh_failed",
+        );
         return;
       }
       const body = (await res.json()) as {
@@ -86,7 +124,6 @@ export class PbxTenantMapCache {
       };
       if (Array.isArray(body.entries)) {
         this.entries = body.entries;
-        log.debug({ count: this.entries.length }, "pbx-tenant-map refreshed");
       }
       const nextDid = new Map<string, PbxDidMapEntry>();
       if (Array.isArray(body.didEntries)) {
@@ -104,7 +141,6 @@ export class PbxTenantMapCache {
           rev.set(entry.connectTenantId, list);
         }
         this.didsByConnectId = rev;
-        log.debug({ didCount: nextDid.size }, "pbx-tenant-map DID entries refreshed");
 
         // Build slug → UUID map from directory entries (using DID fallback for UUID lookup).
         const slugMap = new Map<string, string>();
@@ -128,7 +164,6 @@ export class PbxTenantMapCache {
           if (!reverseSlugMap.has(connectId)) reverseSlugMap.set(connectId, slug);
         }
         this.connectIdToSlug = reverseSlugMap;
-        log.debug({ slugCount: slugMap.size }, "pbx-tenant-map slug index built");
       } else {
         this.didByE164 = new Map();
       }
@@ -150,13 +185,76 @@ export class PbxTenantMapCache {
           if (connectTenantId) next.set(ext, { connectTenantId, tenantName: tenantName ?? null });
         }
         this.extToTenant = next;
-        log.debug({ extCount: next.size }, "pbx-tenant-map extension entries refreshed");
       } else {
         this.extToTenant = new Map();
       }
+
+      this.lastRefreshedAt = new Date();
+      this.refreshCount++;
+      this.lastError = null;
+      log.info(
+        {
+          event: "pbx_tenant_map_refresh_success",
+          entryCount: this.entries.length,
+          didCount: nextDid.size,
+          extensionMapSize: this.extToTenant.size,
+          slugMapSize: this.slugToConnectId.size,
+          durationMs: Date.now() - startedAt,
+          refreshCount: this.refreshCount,
+        },
+        "pbx_tenant_map_refresh_success",
+      );
     } catch (err: any) {
-      log.warn({ err: err?.message }, "pbx-tenant-map refresh error");
+      const msg = String(err?.message ?? err ?? "unknown");
+      this.lastError = msg;
+      log.warn(
+        { event: "pbx_tenant_map_refresh_failed", err: msg, durationMs: Date.now() - startedAt },
+        "pbx_tenant_map_refresh_failed",
+      );
     }
+  }
+
+  /**
+   * Returns a snapshot of cache statistics for diagnostics.
+   * Safe to call at any time; never triggers a PBX or DB request.
+   */
+  getStats(): PbxTenantMapCacheStats {
+    return {
+      lastRefreshedAt: this.lastRefreshedAt?.toISOString() ?? null,
+      refreshCount: this.refreshCount,
+      entryCount: this.entries.length,
+      didCount: this.didByE164.size,
+      extensionMapSize: this.extToTenant.size,
+      slugMapSize: this.slugToConnectId.size,
+      lastError: this.lastError,
+      pollMs: this.pollMs,
+    };
+  }
+
+  /**
+   * Schedule a one-shot immediate refresh if the last forced refresh was more than
+   * `cooldownMs` ago. Designed for cache-miss handling — when telephony encounters an
+   * unknown PBX tenant on a live call, call this to schedule a DB re-read without
+   * hammering the API on every unresolved call.
+   *
+   * Safe to call from hot paths (AMI event handlers). Does not block.
+   */
+  forceRefreshWithCooldown(cooldownMs = 30_000): void {
+    if (this.stopped || !this.mapUrl) return;
+    const now = Date.now();
+    if (now - this.lastForcedRefreshAt < cooldownMs) {
+      log.debug(
+        { event: "pbx_tenant_map_cooldown_skip", cooldownMs, msAgo: now - this.lastForcedRefreshAt },
+        "pbx_tenant_map_cooldown_skip",
+      );
+      return;
+    }
+    this.lastForcedRefreshAt = now;
+    log.info(
+      { event: "pbx_tenant_map_force_refresh", cooldownMs },
+      "pbx_tenant_map_force_refresh",
+    );
+    void this.refresh();
   }
 
   /** Prefer Connect tenant UUID when directory + link provide it. */

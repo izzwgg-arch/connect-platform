@@ -64,6 +64,13 @@ const schema = z.object({
   CDR_INGEST_URL: z.string().url().optional().or(z.literal("").transform(() => undefined)),
   CDR_INGEST_SECRET: z.string().optional().or(z.literal("").transform(() => undefined)),
   TELEPHONY_PBX_MAP_URL: z.string().url().optional().or(z.literal("").transform(() => undefined)),
+
+  /**
+   * How often (ms) PbxTenantMapCache polls /internal/telephony/pbx-tenant-map.
+   * Default 60 s. Minimum 30 s. Maximum 600 s.
+   * Lower values = faster discovery of new PBX tenants; higher values = fewer DB queries.
+   */
+  TELEPHONY_PBX_MAP_POLL_MS: z.coerce.number().int().min(30_000).max(600_000).default(60_000),
 });
 
 function loadEnv() {
@@ -92,5 +99,6 @@ type BaseEnv = z.infer<typeof schema>;
 export type Env = Omit<BaseEnv, never> & {
   ARI_BRIDGED_ACTIVE_POLL_MS: number;
   TELEPHONY_ARI_SNAPSHOT_STALE_MS: number;
+  // TELEPHONY_PBX_MAP_POLL_MS is included in BaseEnv via schema inference.
 };
 export const env: Env = loadEnv();

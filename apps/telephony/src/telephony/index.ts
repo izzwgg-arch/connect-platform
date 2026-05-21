@@ -50,7 +50,7 @@ export function createTelephonyModule(server: http.Server) {
   const mapUrl =
     env.TELEPHONY_PBX_MAP_URL ||
     (env.CDR_INGEST_URL ? derivePbxTenantMapUrl(env.CDR_INGEST_URL) : undefined);
-  const pbxMapCache = new PbxTenantMapCache(mapUrl, env.CDR_INGEST_SECRET, 60_000);
+  const pbxMapCache = new PbxTenantMapCache(mapUrl, env.CDR_INGEST_SECRET, env.TELEPHONY_PBX_MAP_POLL_MS);
   pbxMapCache.start();
 
   // Prefer canonical Connect CUIDs at CDR ingest so tenant-scoped WS filters

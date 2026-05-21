@@ -59,6 +59,7 @@ export function registerTelephonyRoutes(
     const allExtensions = telephony.extStore.getAll();
     const diag = telephony.callStore.getDiagnostics();
     const pbxMap = telephony.pbxTenantMapCache?.getEntries?.() ?? [];
+    const pbxTenantMapStats = telephony.pbxTenantMapCache?.getStats?.() ?? null;
 
     const callDetail = allCalls.map((c) => ({
       id: c.id,
@@ -95,6 +96,7 @@ export function registerTelephonyRoutes(
         rawChannelCount: diag.rawChannelCount,
         hungupRetainedCount: diag.hungupRetainedCount,
       },
+      pbxTenantMapStats,
       calls: callDetail,
       blf: allExtensions.map((ext) => {
         const callsForExt = activeCalls.filter((call) => call.extensions.includes(ext.extension));
