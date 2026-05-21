@@ -118,35 +118,38 @@ function resolveDisplayName(t: VitalTenantRaw): string {
 
 export async function loadTenantOptions(): Promise<Tenant[]> {
   try {
-    // Use Connect's platform tenant table first. This is DB-backed and fast on
-    // app boot; the PBX tenant directory is warmed server-side in the
-    // background and should not block every page load.
-    const platformRows = await apiGet<PlatformTenantRow[]>("/admin/tenants?light=1").catch(() => null);
+    // Keep Connect tenants first, then append PBX-only tenants that have not
+    // been linked to a Connect tenant yet. /admin/pbx/tenants is DB-backed by
+    // PbxTenantDirectory on normal page boot and refreshes from PBX in the background.
+    const [platformRows, pbxResult] = await Promise.all([
+      apiGet<PlatformTenantRow[]>("/admin/tenants?light=1").catch(() => null),
+      apiGet<{ instanceId: string; tenants: VitalTenantRaw[] }>("/admin/pbx/tenants").catch(() => null),
+    ]);
+
+    const platformPbxTenantIds = new Set<string>();
+    const tenantOptions: Tenant[] = [];
+
     if (Array.isArray(platformRows)) {
-      const platformTenants = platformRows
-        .filter((row) => row.name)
-        .filter((row) => row.isApproved !== false)
-        .filter((row) => !matchesSmokeNamePattern(row.name || ""))
-        .map((row) => ({
-          id: String(row.id || ""),
-          name: row.name || "Tenant",
-          plan: "Business" as const,
-          status: (row.isApproved === false ? "SUSPENDED" : "ACTIVE") as "ACTIVE" | "SUSPENDED",
-        }))
-        .filter((t) => t.id)
-        .sort((a, b) => a.name.localeCompare(b.name));
-      if (platformTenants.length > 0) return platformTenants;
+      tenantOptions.push(
+        ...platformRows
+          .filter((row) => row.name)
+          .filter((row) => row.isApproved !== false)
+          .filter((row) => !matchesSmokeNamePattern(row.name || ""))
+          .map((row) => {
+            const pbxTenantId = String(row.pbxTenantId || "").trim();
+            if (pbxTenantId) platformPbxTenantIds.add(pbxTenantId);
+            return {
+              id: String(row.id || ""),
+              name: row.name || "Tenant",
+              plan: "Business" as const,
+              status: (row.isApproved === false ? "SUSPENDED" : "ACTIVE") as "ACTIVE" | "SUSPENDED",
+            };
+          })
+          .filter((t) => t.id),
+      );
     }
 
-    // Fallback only: VitalPBX tenants can still populate the switcher if the
-    // platform table is empty/unavailable, but normal page boot should never
-    // wait on PBX.
-    const pbxResult = await apiGet<{ instanceId: string; tenants: VitalTenantRaw[] }>(
-      "/admin/pbx/tenants"
-    ).catch(() => null);
-
     if (pbxResult?.tenants && Array.isArray(pbxResult.tenants) && pbxResult.tenants.length > 0) {
-      const tenants: Tenant[] = [];
       for (const t of pbxResult.tenants) {
         if (t.enabled === false || t.enabled === "no") continue;
 
@@ -154,25 +157,22 @@ export async function loadTenantOptions(): Promise<Tenant[]> {
         const tid = String(t.tenant_id ?? t.id ?? "").trim();
         const description = String(t.description || "").trim();
         if (isExcludedPbxTenant(slug, description)) continue;
+        if (tid && platformPbxTenantIds.has(tid)) continue;
 
         const displayName = resolveDisplayName(t);
         const id = slug ? `vpbx:${slug}` : tid ? `vpbx:${tid}` : "";
         if (!id) continue;
 
-        tenants.push({
+        tenantOptions.push({
           id,
           name: displayName,
           plan: "Business" as const,
           status: "ACTIVE" as "ACTIVE" | "SUSPENDED",
         });
       }
-      if (tenants.length > 0) {
-        // Sort alphabetically by display name
-        return tenants.sort((a, b) => a.name.localeCompare(b.name));
-      }
     }
 
-    return [];
+    return tenantOptions.sort((a, b) => a.name.localeCompare(b.name));
   } catch {
     return [];
   }
