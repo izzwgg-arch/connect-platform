@@ -18,6 +18,21 @@ test("mergeDunningAfterFailure increments from empty metadata", () => {
   assert.ok((r.metadata as any).dunning);
 });
 
+test("mergeDunningAfterFailure defaults declined-card retry to 12 hours", () => {
+  const previous = process.env.BILLING_DUNNING_RETRY_DELAY_HOURS;
+  delete process.env.BILLING_DUNNING_RETRY_DELAY_HOURS;
+  try {
+    const r = mergeDunningAfterFailure({});
+    assert.ok(r.nextRetryAt instanceof Date);
+    const diffMs = r.nextRetryAt!.getTime() - Date.now();
+    const twelveHoursMs = 12 * 3600_000;
+    assert.ok(diffMs > twelveHoursMs - 10_000 && diffMs <= twelveHoursMs + 10_000, `expected ~12h delay, got ${diffMs}ms`);
+  } finally {
+    if (previous === undefined) delete process.env.BILLING_DUNNING_RETRY_DELAY_HOURS;
+    else process.env.BILLING_DUNNING_RETRY_DELAY_HOURS = previous;
+  }
+});
+
 test("clearDunningSlice removes dunning", () => {
   const cleared = clearDunningSlice({ dunning: { attempts: 2 }, other: 1 });
   assert.equal((cleared as any).dunning, undefined);

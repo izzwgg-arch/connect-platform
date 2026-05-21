@@ -7,10 +7,12 @@ export function billingDunningMaxAttempts(): number {
   return Math.min(10, Math.max(1, Math.floor(n)));
 }
 
-/** Hours until next autopay retry after a failure; default 72. */
+const DEFAULT_BILLING_DUNNING_RETRY_DELAY_HOURS = 12;
+
+/** Hours until next autopay retry after a failure; default 12. */
 export function billingDunningRetryDelayMs(): number {
-  const h = Number(process.env.BILLING_DUNNING_RETRY_DELAY_HOURS || 72);
-  if (!Number.isFinite(h) || h < 1) return 72 * 3600000;
+  const h = Number(process.env.BILLING_DUNNING_RETRY_DELAY_HOURS || DEFAULT_BILLING_DUNNING_RETRY_DELAY_HOURS);
+  if (!Number.isFinite(h) || h < 1) return DEFAULT_BILLING_DUNNING_RETRY_DELAY_HOURS * 3600000;
   return Math.min(24 * 14, Math.max(1, h)) * 3600000;
 }
 

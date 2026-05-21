@@ -21,7 +21,7 @@ export type TenantCollectionsConfig = {
   dunningEnabled: boolean | null;
   /** null = use global env BILLING_DUNNING_MAX_ATTEMPTS (default 3) */
   maxAttempts: number | null;
-  /** null = use global env BILLING_DUNNING_RETRY_DELAY_HOURS (default 72) */
+  /** null = use global env BILLING_DUNNING_RETRY_DELAY_HOURS (default 12) */
   retryDelayHours: number | null;
 };
 
