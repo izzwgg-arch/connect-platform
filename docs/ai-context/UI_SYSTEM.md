@@ -32,6 +32,31 @@ Tailwind utilities: `bg-crm-surface`, `text-crm-muted`, `rounded-crm-lg`, `shado
 
 ---
 
+## Workspace shell brand (topbar + sidebar column)
+
+The Connect wordmark is **not** inside `SidebarNav`. It renders in the fixed **`Topbar`** (`apps/portal/components/Topbar.tsx` + `ConnectLogo.tsx`) above the left column; the sidebar starts with **`drawer-profile`** (user avatar + `TenantSwitcher`).
+
+| Token / class | Role |
+|---------------|------|
+| `--topbar-height` | Fixed header height (currently **56px**); drives `console-body` offset and mobile nav `top` |
+| `.topbar-brand` | Hamburger + logo cluster — **8px** gap, soft gradient pill, do not crush gap below 6px |
+| `.brand-logo-svg` | `/connect-logo.svg` at **42px** height (~19% below prior 52px); `filter: saturate(0.88)` in dark to tame the Wi‑Fi mark (asset is not stroke-editable) |
+| `.brand-name` | Light-theme text fallback when SVG is hidden |
+| `.drawer-profile` | Padding below the topbar; keep comfortable space before tenant switcher |
+
+**Rules learned (2026-05-20):**
+
+- Prefer **CSS size/position/filter** on the PNG/SVG asset; do not fork the logo file for minor balance tweaks unless marketing supplies a new export.
+- Hamburger (`.nav-toggle`, 32px) and logo should **center-align** in `.topbar-brand`; logo height should stay **well under** `--topbar-height`.
+- Collapsed rail (`console-nav.nav-rail`) does not change the topbar logo — only verify tenant rail layout still aligns.
+- Light mode hides `.brand-logo-svg`; tune `.brand-name` instead.
+
+**Verify:** expanded + collapsed sidebar, desktop width, `data-theme` dark/light, topbar not clipping logo, tenant switcher not crowded.
+
+**Files:** `apps/portal/app/globals.css`, `apps/portal/components/ConnectLogo.tsx`, `apps/portal/components/Topbar.tsx` (structure only if needed).
+
+---
+
 ## CRM primitives (`apps/portal/components/crm/`)
 
 | Component | Role |

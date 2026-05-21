@@ -10802,6 +10802,17 @@ table tr:hover {
 .dash-v2-active-pill.dir-incoming { background: color-mix(in srgb, var(--dash-incoming) 18%, var(--dash-card)); color: var(--dash-incoming); }
 .dash-v2-active-pill.dir-outgoing { background: color-mix(in srgb, var(--dash-outgoing) 18%, var(--dash-card)); color: var(--dash-outgoing); }
 .dash-v2-active-pill.dir-internal { background: color-mix(in srgb, var(--dash-internal) 18%, var(--dash-card)); color: var(--dash-internal); }
+.dash-v2-active-pill.tenant {
+  max-width: min(24vw, 220px);
+  border: 1px solid color-mix(in srgb, var(--dash-card-border) 65%, transparent);
+  background: color-mix(in srgb, var(--dash-card) 82%, var(--console-bg) 18%);
+  color: var(--console-text);
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .dash-v2-active-row-state {
   display: inline-flex;
