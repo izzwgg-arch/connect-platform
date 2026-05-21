@@ -13,6 +13,7 @@ import {
   queuePaymentFailedEmailOnce,
   queueReceiptEmailOnce,
 } from "./billingEmailLifecycle";
+import { billingPeriodAlreadyPaidError, findPaidBillingPeriodCoverage } from "./billingPeriodGuards";
 
 /** Keys used to detect duplicate webhook deliveries (same processor ref and/or same event id). */
 export function buildBillingWebhookDedupeOrClause(params: { processorRef: string; eventId: string }) {
@@ -155,6 +156,14 @@ export async function chargeBillingInvoice(invoice: any, method: any, options?: 
     err.code = "INVOICE_ALREADY_PAID";
     throw err;
   }
+  const paidCoverage = await findPaidBillingPeriodCoverage({
+    tenantId: invoice.tenantId,
+    periodStart: invoice.periodStart,
+    periodEnd: invoice.periodEnd,
+    excludeInvoiceId: invoice.id,
+  });
+  if (paidCoverage) throw billingPeriodAlreadyPaidError(paidCoverage);
+
   const adapter = options?.adapter ?? (await getBillingSolaAdapter(invoice.tenantId));
   const token = decryptPaymentToken(method);
   const amountCents = balanceDueCents;
@@ -341,6 +350,14 @@ export async function chargeBillingInvoiceWithSut(
     err.code = "INVOICE_ALREADY_PAID";
     throw err;
   }
+  const paidCoverage = await findPaidBillingPeriodCoverage({
+    tenantId: invoice.tenantId,
+    periodStart: invoice.periodStart,
+    periodEnd: invoice.periodEnd,
+    excludeInvoiceId: invoice.id,
+  });
+  if (paidCoverage) throw billingPeriodAlreadyPaidError(paidCoverage);
+
   const adapter = options?.adapter ?? (await getBillingSolaAdapter(invoice.tenantId));
   const amountCentsForLock = balanceDueCents;
   const customerKey = options?.customerIdentity || `tenant:${invoice.tenantId}`;

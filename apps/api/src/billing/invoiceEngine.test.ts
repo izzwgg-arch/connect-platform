@@ -44,6 +44,7 @@ function makePreviewDb(overrides: { settings?: Record<string, unknown>; extensio
     billingInvoice: {
       count: async () => 0,
       findFirst: async () => null,
+      findMany: async () => [],
       create: async ({ data }: { data: Record<string, unknown> }) => ({ id: "inv-x", lineItems: [], ...data }),
       findUnique: async () => null,
       update: async ({ data }: { data: Record<string, unknown> }) => data,
@@ -125,6 +126,7 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
     billingInvoice: {
       count: async () => 0,
       findFirst: async () => null,
+      findMany: async () => [],
       create: async ({ data }: { data: Record<string, unknown> }) => {
         state.lastCreateData = data;
         return { id: "inv-1", tenant: { name: "Tenant" }, lineItems: [], ...data };

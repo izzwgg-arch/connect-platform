@@ -17,6 +17,7 @@ import {
   runDunningSweepEligibility,
   consumeSkipNextRetryFlag,
   applyDunningAfterAutopayFailure,
+  readDunningSlice,
 } from "../../api/src/billing/billingDunning";
 import { chargeBillingInvoice } from "../../api/src/billing/solaBillingPayments";
 import { billingLiveChargesDisabled } from "../../api/src/billing/solaBillingPayments";
@@ -25,6 +26,7 @@ import {
   queueInvoiceSentOnFinalize,
 } from "../../api/src/billing/billingEmailLifecycle";
 import { createBillingInvoice } from "../../api/src/billing/invoiceEngine";
+import { findPaidBillingPeriodCoverage } from "../../api/src/billing/billingPeriodGuards";
 import { consumeScheduledPlanChange } from "../../api/src/billing/billingScheduledPlanConsume";
 import { processConnectChatSmsJob } from "./connectChatSmsJob";
 import { runVoicemailSyncCycle } from "./voicemailSyncCycle";
@@ -1937,6 +1939,32 @@ async function runMonthlyBillingAutomation(): Promise<void> {
           },
           orderBy: { createdAt: "desc" },
         });
+        const paidCoverage = await findPaidBillingPeriodCoverage({
+          tenantId: setting.tenantId,
+          periodStart,
+          periodEnd,
+        });
+        if (paidCoverage) {
+          await (db as any).billingEventLog.create({
+            data: {
+              tenantId: setting.tenantId,
+              invoiceId: paidCoverage.invoiceId,
+              runId: run.id,
+              type: "billing.autopay_skipped_period_already_paid",
+              message: "Connect autopay skipped — this billing period is already covered by a paid invoice.",
+              metadata: {
+                reason: paidCoverage.reason,
+                paidInvoiceId: paidCoverage.invoiceId,
+                paidInvoiceNumber: paidCoverage.invoiceNumber,
+                periodStart: periodStart.toISOString(),
+                periodEnd: periodEnd.toISOString(),
+              },
+            },
+          }).catch(() => null);
+          results.push({ tenantId: setting.tenantId, invoiceId: paidCoverage.invoiceId, transactionId: null, skipped: "period_already_paid" });
+          continue;
+        }
+
         const invoice = existing || await createWorkerBillingInvoice(setting, schedule);
         try {
           await consumeScheduledPlanChange({
@@ -2007,6 +2035,27 @@ async function runMonthlyBillingAutomation(): Promise<void> {
             },
           }).catch(() => null);
           results.push({ tenantId: setting.tenantId, invoiceId: invoice.id, transactionId: null, skipped: "already_paid" });
+          continue;
+        }
+
+        const dunning = readDunningSlice(invoice.metadata);
+        if (existing && (invoice.status === "FAILED" || dunning.attempts > 0)) {
+          await (db as any).billingEventLog.create({
+            data: {
+              tenantId: setting.tenantId,
+              invoiceId: invoice.id,
+              runId: run.id,
+              type: "billing.autopay_skipped_awaiting_dunning",
+              message: "Connect monthly autopay skipped — existing failed invoice is waiting for the dunning retry schedule.",
+              metadata: {
+                status: invoice.status,
+                attempts: dunning.attempts,
+                maxAttempts: dunning.maxAttempts,
+                nextRetryAt: dunning.nextRetryAt,
+              },
+            },
+          }).catch(() => null);
+          results.push({ tenantId: setting.tenantId, invoiceId: invoice.id, transactionId: null, skipped: "awaiting_dunning" });
           continue;
         }
 
@@ -2193,6 +2242,24 @@ async function chargeWorkerInvoice(
           type: "billing.autopay_skipped_already_paid",
           message: "Autopay charge skipped at execution — invoice was already paid.",
           metadata: { reason: "already_paid", attemptNumber },
+        },
+      }).catch(() => null);
+      return null;
+    }
+    if (err?.code === "BILLING_PERIOD_ALREADY_PAID") {
+      await (db as any).billingEventLog.create({
+        data: {
+          tenantId: invoice.tenantId,
+          invoiceId: invoice.id,
+          runId: runId || null,
+          type: "billing.autopay_skipped_period_already_paid",
+          message: "Autopay charge skipped at execution — this billing period is already covered by a paid invoice.",
+          metadata: {
+            reason: err.reason || "paid_period_coverage",
+            paidInvoiceId: err.paidInvoiceId || null,
+            paidInvoiceNumber: err.paidInvoiceNumber || null,
+            attemptNumber,
+          },
         },
       }).catch(() => null);
       return null;

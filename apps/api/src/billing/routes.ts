@@ -1726,8 +1726,20 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     } catch (err: any) {
       return reply.code(400).send({ error: err?.code || "invalid_billing_period" });
     }
-    const invoice = await createBillingInvoice({ tenantId, status: "OPEN", ...periodInput });
-    return invoice;
+    try {
+      const invoice = await createBillingInvoice({ tenantId, status: "OPEN", ...periodInput });
+      return invoice;
+    } catch (err: any) {
+      if (err?.code === "BILLING_PERIOD_ALREADY_PAID") {
+        return reply.code(409).send({
+          error: "billing_period_already_paid",
+          paidInvoiceId: err.paidInvoiceId,
+          paidInvoiceNumber: err.paidInvoiceNumber,
+          reason: err.reason,
+        });
+      }
+      throw err;
+    }
   });
 
   app.get("/admin/billing/invoices", async (req, reply) => {
@@ -2816,7 +2828,22 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         results.push({ tenantId: tenant.id, totalCents: preview.totalCents, dryRun: true });
         continue;
       }
-      const invoice = await createBillingInvoice({ tenantId: tenant.id, periodStart: tenantPeriod.periodStart, periodEnd: tenantPeriod.periodEnd, status: "OPEN" });
+      let invoice;
+      try {
+        invoice = await createBillingInvoice({ tenantId: tenant.id, periodStart: tenantPeriod.periodStart, periodEnd: tenantPeriod.periodEnd, status: "OPEN" });
+      } catch (err: any) {
+        if (err?.code === "BILLING_PERIOD_ALREADY_PAID") {
+          results.push({
+            tenantId: tenant.id,
+            invoiceId: err.paidInvoiceId,
+            skipped: "period_already_paid",
+            paidInvoiceNumber: err.paidInvoiceNumber,
+            reason: err.reason,
+          });
+          continue;
+        }
+        throw err;
+      }
       let transaction = null;
       if (tenant.billingSettings?.autoBillingEnabled && tenant.billingSettings.defaultPaymentMethodId) {
         const method = await (db as any).paymentMethod.findUnique({ where: { id: tenant.billingSettings.defaultPaymentMethodId } });

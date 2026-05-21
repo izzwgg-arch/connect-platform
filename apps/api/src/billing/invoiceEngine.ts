@@ -13,6 +13,7 @@ import { buildPricingPreviewExplanation, type PricingPreviewExplanation } from "
 import { addBillingDays, billingMonthBounds, billingYearMonth } from "./billingTime";
 import { buildBillingTelecomFeeLines, parseBillingTelecomFees } from "./billingTelecomFees";
 import { buildBillingSchedule } from "./billingSchedule";
+import { billingPeriodAlreadyPaidError, findPaidBillingPeriodCoverage } from "./billingPeriodGuards";
 
 const BILLING_TELECOM_FEES_PROVIDER_ID = "billing_telecom_fees_v1";
 const BILLING_TELECOM_FEES_PROVIDER_VERSION = "1.0.0";
@@ -545,6 +546,13 @@ export async function createBillingInvoice(input: {
   invoiceCreatedEventMetadata?: Record<string, unknown>;
 }): Promise<any> {
   const preview = await buildBillingInvoicePreview(input);
+  const paidCoverage = await findPaidBillingPeriodCoverage({
+    tenantId: input.tenantId,
+    periodStart: preview.periodStart,
+    periodEnd: preview.periodEnd,
+  });
+  if (paidCoverage) throw billingPeriodAlreadyPaidError(paidCoverage);
+
   const invoice = await createBillingInvoiceRowWithUniqueNumber(input.tenantId, async (invoiceNumber) =>
     (db as any).billingInvoice.create({
       data: {
