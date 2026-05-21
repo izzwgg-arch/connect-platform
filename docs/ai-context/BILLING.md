@@ -759,12 +759,12 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 - Header row: logo left, invoice title/number right, modern rounded status pill. PAID uses soft green; unpaid/overdue states use soft orange/red; draft/void use muted gray.
 - **Bill from** is fixed for the PDF: `Connect Communications, LLC` and `support@connectcommunications.com`.
 - **Bill to** uses tenant name, billing email, and billing/service address.
-- Light balance card replaces the old dark/heavy panel. It shows large blue balance due, due date, terms, and a blue **Pay Now Securely** button only when the invoice is not paid and has a positive balance. Paid invoices hide the button.
-- Metadata row: issue date, due date, service period, and terms.
-- Line items use a very light table header, subtle separators, generous row height, and safe wrapping for long descriptions.
+- Light balance card replaces the old dark/heavy panel. It shows large blue balance due, due date, and a clean blue **Pay Now Securely** button only when the invoice is not paid and has a positive balance. Paid invoices hide the button. The PDF does **not** display raw payment URLs.
+- Metadata row: issue date, due date, and service period. Terms are intentionally omitted from the visible PDF metadata to keep the header area lighter.
+- Line items use an inset, balanced table with inward-aligned QTY / UNIT PRICE / AMOUNT columns, subtle separators, generous row height, and safe wrapping for long descriptions.
 - Totals render as a compact summary card with subtotal, credits, fees, taxes, amount paid, and blue emphasized balance due.
-- Regulatory notices render in a professional two-column/card section with an icon/title rail and muted numbered disclosure text.
-- Footer renders four muted support columns: Billing Support, Customer Portal, Secure Payments, and Thank You.
+- Regulatory notices render as concise icon cards only. The PDF intentionally avoids a heavy regulatory heading, "Telecom billing disclosures" title, or long legal paragraph.
+- Footer renders four compact muted support columns: Billing Support, Customer Portal, Secure Payments, and Thank You.
 
 **Fallback logo for HTML emails:** `{PUBLIC_PORTAL_URL}/connect-logo.png` from `apps/portal/public/connect-logo.png`.
 
@@ -794,9 +794,9 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 - Print hides topbar/sidebar/action controls/history, flattens shadows/backgrounds, keeps letter margins, and marks major invoice sections as `break-inside: avoid`.
 - Keep invoice copy readable in grayscale: do not rely on color alone for status, totals, or fee categories.
 - The API PDF route uses `apps/api/src/billing/pdf.ts` and is the source for both authenticated PDF downloads and outbound billing email attachments.
-- The PDFKit renderer now mirrors the modern invoice structure with a neutral header, light balance card, billing parties, metadata row, categorized line items, compact billing summary, regulatory notices, and professional footer.
+- The PDFKit renderer now mirrors the modern invoice structure with a neutral header, light balance card, billing parties, three-column metadata row, inward-aligned line-item table, compact billing summary, simplified regulatory notice cards, and professional footer.
 - PDFKit uses built-in PDF-safe fonts in production; spacing, weights, uppercase labels, and hierarchy are tuned to approximate modern Inter-style SaaS typography without adding a runtime font dependency.
-- Pagination safeguards call `ensureSpace` before tall sections and line item rows. Long descriptions wrap inside the description column and should not overlap amount columns or totals.
+- Pagination safeguards call `ensureSpace` before tall sections and line item rows. Long descriptions wrap inside the description column and should not overlap amount columns or totals. If invoices have many rows, notices/footer may continue to page 2; do not force all content onto page 1.
 
 **Verification:**
 - `pnpm typecheck` in `apps/portal`.
