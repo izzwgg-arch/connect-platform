@@ -63,6 +63,48 @@ async function hasFailureEmailForTransaction(transactionId: string): Promise<boo
   return !!e;
 }
 
+function invoiceMetadataEmail(metadata: unknown): string {
+  const meta = (metadata || {}) as Record<string, unknown>;
+  const candidates = [
+    meta.billingEmail,
+    meta.invoiceBillingEmail,
+    meta.customerBillingEmail,
+    meta.customerEmail,
+    meta.billingContactEmail,
+  ];
+  for (const candidate of candidates) {
+    const email = String(candidate || "").trim();
+    if (email) return email;
+  }
+  return "";
+}
+
+async function resolveBillingEmailRecipient(params: {
+  tenantId: string;
+  invoiceId?: string | null;
+}): Promise<{ to: string; source: string; tenantName?: string | null; settings?: any }> {
+  const [tenant, invoice] = await Promise.all([
+    (db as any).tenant.findUnique({
+      where: { id: params.tenantId },
+      select: { name: true, billingSettings: true },
+    }),
+    params.invoiceId
+      ? (db as any).billingInvoice.findUnique({
+        where: { id: params.invoiceId },
+        select: { metadata: true },
+      }).catch(() => null)
+      : Promise.resolve(null),
+  ]);
+  const settings = tenant?.billingSettings;
+  const tenantEmail = String(settings?.billingEmail || "").trim();
+  if (tenantEmail) return { to: tenantEmail, source: "tenant_billing_email", tenantName: tenant?.name, settings };
+
+  const invoiceEmail = invoiceMetadataEmail(invoice?.metadata);
+  if (invoiceEmail) return { to: invoiceEmail, source: "invoice_metadata", tenantName: tenant?.name, settings };
+
+  return { to: "", source: "missing", tenantName: tenant?.name, settings };
+}
+
 /**
  * When a BillingInvoice is created/finalized (OPEN): queue one invoice email with invoiceId.
  * Skips if no billingEmail or if BILLING_INVOICE_SENT already queued/sent.
@@ -80,17 +122,13 @@ export async function queueInvoiceSentOnFinalize(invoice: {
   if (await hasBillingEmailJob({ tenantId: invoice.tenantId, invoiceId: invoice.id, type: "BILLING_INVOICE_SENT" })) {
     return { queued: false, reason: "already_sent" };
   }
-  const tenant = await (db as any).tenant.findUnique({
-    where: { id: invoice.tenantId },
-    select: { name: true, billingSettings: true },
-  });
-  const settings = tenant?.billingSettings;
-  const to = String(settings?.billingEmail || "").trim();
+  const recipient = await resolveBillingEmailRecipient({ tenantId: invoice.tenantId, invoiceId: invoice.id });
+  const to = recipient.to;
   if (!to) {
-    await logLifecycle("invoice_email_skipped", invoice.tenantId, invoice.id, "No tenant billingEmail configured");
+    await logLifecycle("invoice_email_skipped", invoice.tenantId, invoice.id, "No billing email configured");
     return { queued: false, reason: "no_billing_email" };
   }
-  const brand = resolveInvoiceEmailBranding(settings || {}, tenant?.name);
+  const brand = resolveInvoiceEmailBranding(recipient.settings || {}, recipient.tenantName);
   const payUrl = billingInvoicePublicPayUrl(invoice.id, invoice.tenantId);
   let servicePeriod: string | null = null;
   if (invoice.periodStart && invoice.periodEnd) {
@@ -124,7 +162,7 @@ export async function queueInvoiceSentOnFinalize(invoice: {
     where: { id: invoice.id },
     data: { lastEmailStatus: "QUEUED", lastEmailedAt: new Date() },
   });
-  await logLifecycle("invoice_emailed", invoice.tenantId, invoice.id, null, { emailType: "BILLING_INVOICE_SENT", to });
+  await logLifecycle("invoice_emailed", invoice.tenantId, invoice.id, null, { emailType: "BILLING_INVOICE_SENT", to, recipientSource: recipient.source });
   return { queued: true };
 }
 
@@ -177,17 +215,13 @@ export async function queueReceiptEmailOnce(params: {
   paidViaAutopay?: boolean;
 }): Promise<boolean> {
   if (await hasReceiptEmailForTransaction(params.transactionId)) return false;
-  const tenant = await (db as any).tenant.findUnique({
-    where: { id: params.tenantId },
-    select: { name: true, billingSettings: true },
-  });
-  const settings = tenant?.billingSettings;
-  const to = String(settings?.billingEmail || "").trim();
+  const recipient = await resolveBillingEmailRecipient({ tenantId: params.tenantId, invoiceId: params.invoiceId });
+  const to = recipient.to;
   if (!to) {
     await logLifecycle("receipt_email_skipped", params.tenantId, params.invoiceId, "No billingEmail", { transactionId: params.transactionId });
     return false;
   }
-  const brand = resolveInvoiceEmailBranding(settings || {}, tenant?.name);
+  const brand = resolveInvoiceEmailBranding(recipient.settings || {}, recipient.tenantName);
   const portalInvoiceUrl = billingInvoicePortalUrl(params.invoiceId);
   const tpl = paymentReceiptEmail({
     invoiceNumber: params.invoiceNumber,
@@ -216,7 +250,7 @@ export async function queueReceiptEmailOnce(params: {
       invoiceId: params.invoiceId,
       type: "receipt_emailed",
       message: params.transactionId,
-      metadata: { emailType: "BILLING_RECEIPT", to },
+      metadata: { emailType: "BILLING_RECEIPT", to, recipientSource: recipient.source },
     },
   });
   return true;
@@ -231,17 +265,13 @@ export async function queuePaymentFailedEmailOnce(params: {
   reason?: string | null;
 }): Promise<boolean> {
   if (await hasFailureEmailForTransaction(params.transactionId)) return false;
-  const tenant = await (db as any).tenant.findUnique({
-    where: { id: params.tenantId },
-    select: { name: true, billingSettings: true },
-  });
-  const settings = tenant?.billingSettings;
-  const to = String(settings?.billingEmail || "").trim();
+  const recipient = await resolveBillingEmailRecipient({ tenantId: params.tenantId, invoiceId: params.invoiceId });
+  const to = recipient.to;
   if (!to) {
     await logLifecycle("payment_failed_email_skipped", params.tenantId, params.invoiceId, "No billingEmail", { transactionId: params.transactionId });
     return false;
   }
-  const brand = resolveInvoiceEmailBranding(settings || {}, tenant?.name);
+  const brand = resolveInvoiceEmailBranding(recipient.settings || {}, recipient.tenantName);
   const tpl = paymentFailedEmail({
     invoiceNumber: params.invoiceNumber,
     totalCents: params.totalCents,
@@ -267,7 +297,7 @@ export async function queuePaymentFailedEmailOnce(params: {
       invoiceId: params.invoiceId,
       type: "payment_failed_emailed",
       message: params.transactionId,
-      metadata: { emailType: "BILLING_PAYMENT_FAILED", to },
+      metadata: { emailType: "BILLING_PAYMENT_FAILED", to, recipientSource: recipient.source },
     },
   });
   return true;

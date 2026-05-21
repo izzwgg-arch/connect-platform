@@ -509,7 +509,7 @@ Signed pay links for **`BillingInvoice`** (platform stack) — distinct from leg
 
 **PCI:** Server never receives PAN/CVV; amount due is computed server-side from `balanceDueCents`. Optional **save card** + **enable autopay** on public pay (default off): vault then charge saved token.
 
-**Autopay double-charge guard:** Worker monthly run + `chargeWorkerInvoice` skip when `status === PAID` or `balanceDueCents <= 0` (`billing.autopay_skipped_already_paid`). `chargeBillingInvoice` / `chargeBillingInvoiceWithSut` throw `INVOICE_ALREADY_PAID` if paid before charge.
+**Autopay scheduling + double-charge guard:** Worker monthly run computes an explicit `scheduledChargeAt` for each tenant billing cycle. Billing periods are anchored to the payment date in the configured billing timezone (`TenantBillingSettings.metadata.billingTimeZone` / `billingTimezone`, default `America/New_York`), not calendar-month UTC bounds. Example: `billingDayOfMonth=21` means service period **May 21 00:00 local → June 20 23:59:59.999 local**, with card charge eligibility starting at **May 21 00:00 local**. Worker startup catch-up may only charge when `now >= scheduledChargeAt`; "invoice exists" or UTC day matching is not sufficient. Worker monthly run + `chargeWorkerInvoice` also skip when `status === PAID` or `balanceDueCents <= 0` (`billing.autopay_skipped_already_paid`). `chargeBillingInvoice` / `chargeBillingInvoiceWithSut` throw `INVOICE_ALREADY_PAID` if paid before charge.
 
 ### Admin SMS payment links
 
@@ -637,6 +637,7 @@ Example: tenant `Nexus Realty` may have separate recurring obligations for servi
 | Recurring client additions (getPaymentMethodWithToken, updateSchedule) | `packages/integrations/src/sola-cardknox/recurring.ts` |
 | API routes (link-token, readiness, take-over) | `apps/api/src/billing/routes.ts` (end of `registerBillingRoutes`) |
 | Worker guard + schedule override consumption | `apps/worker/src/main.ts` (`checkActiveSolaScheduleBlock`, `getAndConsumeBillingScheduleOverride`) |
+| Worker payment-date schedule math | `apps/worker/src/billingSchedule.ts` (`buildBillingSchedule`, `scheduledChargeAt`) |
 | Sola imports UI (new states + actions) | `apps/portal/.../adminBillingSolaImportsWorkspace.tsx` |
 | Migration | `packages/db/prisma/migrations/20260518100000_billing_sola_cutover/` |
 
@@ -644,8 +645,9 @@ Example: tenant `Nexus Realty` may have separate recurring obligations for servi
 
 1. **Worker guard (Phase D):** Before charging any tenant, `checkActiveSolaScheduleBlock` checks for active Sola schedule links with `mappingStatus=MAPPED`, `isActive=true`, and `cutoverStatus != CUTOVER_COMPLETE`. If found → skip Connect autopay charge and log `billing.autopay_skipped_active_sola_schedule`.
 2. **Take-over sequence:** disable Sola `/UpdateSchedule IsActive=false` MUST succeed before `autoBillingEnabled` is set to true. If Sola disable fails → `CUTOVER_FAILED`, Connect autopay NOT enabled.
-3. **No immediate charge:** the take-over route never creates an invoice or calls chargeToken. Future charges happen via the normal worker billing day.
+3. **No immediate charge:** the take-over route never creates an invoice or calls chargeToken. Future charges happen via the normal worker billing day, and only after that tenant's local `scheduledChargeAt`.
 4. **Double-charge detection:** `getBillingCutoverReadiness` returns `doubleChargeRisk=true` if Connect autopay is enabled AND an active non-cutover Sola schedule exists for the tenant.
+5. **Payment-date billing periods:** worker-created invoices use payment-date → next-payment-date periods. Do not use UTC calendar-month bounds as charge eligibility.
 
 ### Known recurring-model gaps
 
@@ -668,6 +670,11 @@ Example: tenant `Nexus Realty` may have separate recurring obligations for servi
 | Event type | When |
 |-----------|------|
 | `billing.autopay_skipped_active_sola_schedule` | Worker guard blocked Connect autopay charge |
+| `billing.autopay_skipped_not_due_yet` | Worker saw enabled autopay, but `now < scheduledChargeAt` in billing timezone |
+| `billing.autopay_skipped_missing_default_payment_method` | Worker skipped because no active default payment method was available |
+| `billing.autopay_skipped_live_charges_disabled` | Worker skipped because `BILLING_LIVE_CHARGES_DISABLED=1` |
+| `billing.autopay_skipped_pending_operation_exists` | Worker skipped because an approved/pending `BillingChargeOperation` already exists |
+| `billing.autopay_skipped_already_paid` | Worker skipped because the invoice is already paid or has no balance due |
 | `billing.autopay_skipped_schedule_override` | `skipNextPayment` override consumed and charge skipped |
 | `billing.autopay_skipped_future_payment_date` | `nextPaymentDate` override in future, charge skipped |
 

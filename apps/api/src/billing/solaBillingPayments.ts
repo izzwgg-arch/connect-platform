@@ -253,8 +253,7 @@ export async function chargeBillingInvoice(invoice: any, method: any, options?: 
   if (response.approved) {
     await markBillingInvoicePaid(invoice.id, amountCents);
     await (db as any).billingInvoice.update({ where: { id: invoice.id }, data: { paymentMethodId: method.id } });
-    const billingSettings = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId: invoice.tenantId } });
-    if (billingSettings?.billingEmail && transaction.id) {
+    if (transaction.id) {
       await queueReceiptEmailOnce({
         tenantId: invoice.tenantId,
         invoiceId: invoice.id,
@@ -281,8 +280,7 @@ export async function chargeBillingInvoice(invoice: any, method: any, options?: 
         },
       })
       .catch(() => null);
-    const billingSettings = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId: invoice.tenantId } });
-    if (billingSettings?.billingEmail && transaction.id) {
+    if (transaction.id) {
       await queuePaymentFailedEmailOnce({
         tenantId: invoice.tenantId,
         invoiceId: invoice.id,
@@ -484,8 +482,7 @@ export async function chargeBillingInvoiceWithSut(
 
   if (response.approved) {
     await markBillingInvoicePaid(invoice.id, amountCents);
-    const billingSettings = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId: invoice.tenantId } });
-    if (billingSettings?.billingEmail && transaction.id) {
+    if (transaction.id) {
       await queueReceiptEmailOnce({
         tenantId: invoice.tenantId,
         invoiceId: invoice.id,

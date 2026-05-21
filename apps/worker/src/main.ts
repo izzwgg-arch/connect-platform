@@ -19,6 +19,7 @@ import {
   applyDunningAfterAutopayFailure,
 } from "../../api/src/billing/billingDunning";
 import { chargeBillingInvoice } from "../../api/src/billing/solaBillingPayments";
+import { billingLiveChargesDisabled } from "../../api/src/billing/solaBillingPayments";
 import {
   clearInvoiceDunningMetadata,
   queueInvoiceSentOnFinalize,
@@ -29,6 +30,7 @@ import { processConnectChatSmsJob } from "./connectChatSmsJob";
 import { runVoicemailSyncCycle } from "./voicemailSyncCycle";
 import { startVoicemailSpoolReconcileLoop } from "./voicemailSpoolReconcileCycle";
 import { runVoipMsInboundSyncCycle, SmsPushInput } from "./voipMsInboundSyncJob";
+import { buildBillingSchedule, type BillingSchedule } from "./billingSchedule";
 import {
   isConnectMohRuntimeClass,
   isNativeMohRuntimeClass,
@@ -1778,13 +1780,6 @@ runMohScheduleCycle().catch((err) => console.error("initial moh reconcile cycle 
 
 let _billingAutomationRunning = false;
 
-function billingMonthBounds(anchor = new Date()): { periodStart: Date; periodEnd: Date } {
-  return {
-    periodStart: new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth(), 1, 0, 0, 0, 0)),
-    periodEnd: new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() + 1, 0, 23, 59, 59, 999)),
-  };
-}
-
 /**
  * Phase D Worker Guard — returns the first active Sola schedule link that is NOT yet cut over
  * for the given tenant, or null if safe to charge.
@@ -1886,20 +1881,63 @@ async function runMonthlyBillingAutomation(): Promise<void> {
   if (_billingAutomationRunning) return;
   _billingAutomationRunning = true;
   try {
-    const today = new Date().getUTCDate();
-    const { periodStart, periodEnd } = billingMonthBounds();
+    const now = new Date();
     const settings = await (db as any).tenantBillingSettings.findMany({
-      where: { autoBillingEnabled: true, billingDayOfMonth: today },
+      where: { autoBillingEnabled: true },
       include: { tenant: true, defaultPaymentMethod: true, taxProfile: true },
     });
     if (settings.length === 0) return;
 
-    const run = await (db as any).billingRun.create({ data: { periodStart, periodEnd, status: "RUNNING", dryRun: false } });
+    const dueSchedules = settings.map((setting: any) => ({
+      setting,
+      schedule: buildBillingSchedule({
+        now,
+        billingDayOfMonth: setting.billingDayOfMonth,
+        metadata: setting.metadata,
+      }),
+    }));
+    const runPeriodStart = new Date(Math.min(...dueSchedules.map(({ schedule }: any) => schedule.periodStart.getTime())));
+    const runPeriodEnd = new Date(Math.max(...dueSchedules.map(({ schedule }: any) => schedule.periodEnd.getTime())));
+    const run = await (db as any).billingRun.create({ data: { periodStart: runPeriodStart, periodEnd: runPeriodEnd, status: "RUNNING", dryRun: false } });
     const results: any[] = [];
-    for (const setting of settings) {
+    for (const { setting, schedule } of dueSchedules) {
       try {
-        const existing = await (db as any).billingInvoice.findFirst({ where: { tenantId: setting.tenantId, periodStart, periodEnd, status: { not: "VOID" } } });
-        const invoice = existing || await createWorkerBillingInvoice(setting, periodStart, periodEnd);
+        if (!schedule.due) {
+          await (db as any).billingEventLog.create({
+            data: {
+              tenantId: setting.tenantId,
+              runId: run.id,
+              type: "billing.autopay_skipped_not_due_yet",
+              message: "Connect autopay skipped — scheduled charge time has not arrived.",
+              metadata: {
+                reason: "not_due_yet",
+                scheduledChargeAt: schedule.scheduledChargeAt.toISOString(),
+                now: now.toISOString(),
+                paymentDate: schedule.paymentDate,
+                timeZone: schedule.timeZone,
+              },
+            },
+          }).catch(() => null);
+          results.push({ tenantId: setting.tenantId, invoiceId: null, transactionId: null, skipped: "not_due_yet", scheduledChargeAt: schedule.scheduledChargeAt.toISOString() });
+          continue;
+        }
+
+        const { periodStart, periodEnd } = schedule;
+        const existing = await (db as any).billingInvoice.findFirst({
+          where: {
+            tenantId: setting.tenantId,
+            status: { not: "VOID" },
+            OR: [
+              { periodStart, periodEnd },
+              {
+                periodStart: { lte: schedule.scheduledChargeAt },
+                periodEnd: { gte: schedule.scheduledChargeAt },
+              },
+            ],
+          },
+          orderBy: { createdAt: "desc" },
+        });
+        const invoice = existing || await createWorkerBillingInvoice(setting, schedule);
         try {
           await consumeScheduledPlanChange({
             tenantId: setting.tenantId,
@@ -1972,11 +2010,63 @@ async function runMonthlyBillingAutomation(): Promise<void> {
           continue;
         }
 
+        const existingOperation = await (db as any).billingChargeOperation.findFirst({
+          where: { tenantId: setting.tenantId, invoiceId: invoice.id, status: { in: ["PENDING", "APPROVED"] } },
+          orderBy: { createdAt: "desc" },
+          select: { id: true, status: true, paymentTransactionId: true },
+        });
+        if (existingOperation) {
+          await (db as any).billingEventLog.create({
+            data: {
+              tenantId: setting.tenantId,
+              invoiceId: invoice.id,
+              runId: run.id,
+              type: "billing.autopay_skipped_pending_operation_exists",
+              message: "Connect autopay skipped — an approved or pending billing charge operation already exists.",
+              metadata: {
+                reason: "pending_operation_exists",
+                operationId: existingOperation.id,
+                operationStatus: existingOperation.status,
+                transactionId: existingOperation.paymentTransactionId || null,
+              },
+            },
+          }).catch(() => null);
+          results.push({ tenantId: setting.tenantId, invoiceId: invoice.id, transactionId: null, skipped: "pending_operation_exists" });
+          continue;
+        }
+
+        if (billingLiveChargesDisabled()) {
+          await (db as any).billingEventLog.create({
+            data: {
+              tenantId: setting.tenantId,
+              invoiceId: invoice.id,
+              runId: run.id,
+              type: "billing.autopay_skipped_live_charges_disabled",
+              message: "Connect autopay skipped — live billing charges are disabled.",
+              metadata: { reason: "live_charges_disabled" },
+            },
+          }).catch(() => null);
+          results.push({ tenantId: setting.tenantId, invoiceId: invoice.id, transactionId: null, skipped: "live_charges_disabled" });
+          continue;
+        }
+
         let transaction = null;
-        if (setting.defaultPaymentMethod) {
+        if (setting.defaultPaymentMethod?.active && setting.defaultPaymentMethod.tenantId === setting.tenantId) {
           transaction = await chargeWorkerInvoice(invoice, setting.defaultPaymentMethod, run.id);
         } else {
-          await (db as any).billingEventLog.create({ data: { tenantId: setting.tenantId, invoiceId: invoice.id, runId: run.id, type: "payment_method.missing", message: "Auto billing skipped because no default payment method is set." } });
+          await (db as any).billingEventLog.create({
+            data: {
+              tenantId: setting.tenantId,
+              invoiceId: invoice.id,
+              runId: run.id,
+              type: "billing.autopay_skipped_missing_default_payment_method",
+              message: "Connect autopay skipped — no active default payment method is set.",
+              metadata: {
+                reason: "missing_default_payment_method",
+                defaultPaymentMethodId: setting.defaultPaymentMethodId || null,
+              },
+            },
+          }).catch(() => null);
         }
         results.push({ tenantId: setting.tenantId, invoiceId: invoice.id, transactionId: transaction?.id || null });
       } catch (err: any) {
@@ -1992,13 +2082,35 @@ async function runMonthlyBillingAutomation(): Promise<void> {
   }
 }
 
-async function createWorkerBillingInvoice(setting: any, periodStart: Date, periodEnd: Date): Promise<any> {
-  return createBillingInvoice({
+async function createWorkerBillingInvoice(setting: any, schedule: BillingSchedule): Promise<any> {
+  const invoice = await createBillingInvoice({
     tenantId: setting.tenantId,
-    periodStart,
-    periodEnd,
+    periodStart: schedule.periodStart,
+    periodEnd: schedule.periodEnd,
     status: "OPEN",
-    invoiceCreatedEventMetadata: { source: "worker_monthly" },
+    invoiceCreatedEventMetadata: {
+      source: "worker_monthly",
+      scheduledChargeAt: schedule.scheduledChargeAt.toISOString(),
+      paymentDate: schedule.paymentDate,
+      nextPaymentDate: schedule.nextPaymentDate,
+      billingTimeZone: schedule.timeZone,
+    },
+  });
+  const metadata = invoice.metadata && typeof invoice.metadata === "object" && !Array.isArray(invoice.metadata)
+    ? { ...(invoice.metadata as Record<string, unknown>) }
+    : {};
+  return (db as any).billingInvoice.update({
+    where: { id: invoice.id },
+    data: {
+      metadata: {
+        ...metadata,
+        scheduledChargeAt: schedule.scheduledChargeAt.toISOString(),
+        paymentDate: schedule.paymentDate,
+        nextPaymentDate: schedule.nextPaymentDate,
+        billingTimeZone: schedule.timeZone,
+      },
+    },
+    include: { lineItems: true, tenant: true },
   });
 }
 
@@ -2046,7 +2158,45 @@ async function chargeWorkerInvoice(
       note: runId ? "worker_monthly" : "worker_dunning_retry",
     });
   } catch (err: any) {
-    if (err?.code === "BILLING_LIVE_CHARGES_DISABLED" || err?.code === "CHARGE_IN_PROGRESS" || err?.code === "INVOICE_ALREADY_PAID") return null;
+    if (err?.code === "BILLING_LIVE_CHARGES_DISABLED") {
+      await (db as any).billingEventLog.create({
+        data: {
+          tenantId: invoice.tenantId,
+          invoiceId: invoice.id,
+          runId: runId || null,
+          type: "billing.autopay_skipped_live_charges_disabled",
+          message: "Autopay charge skipped at execution — live billing charges are disabled.",
+          metadata: { reason: "live_charges_disabled", attemptNumber },
+        },
+      }).catch(() => null);
+      return null;
+    }
+    if (err?.code === "CHARGE_IN_PROGRESS") {
+      await (db as any).billingEventLog.create({
+        data: {
+          tenantId: invoice.tenantId,
+          invoiceId: invoice.id,
+          runId: runId || null,
+          type: "billing.autopay_skipped_pending_operation_exists",
+          message: "Autopay charge skipped at execution — another charge operation is in progress.",
+          metadata: { reason: "pending_operation_exists", attemptNumber, existingTransactionId: err?.existingTransaction?.id || null },
+        },
+      }).catch(() => null);
+      return null;
+    }
+    if (err?.code === "INVOICE_ALREADY_PAID") {
+      await (db as any).billingEventLog.create({
+        data: {
+          tenantId: invoice.tenantId,
+          invoiceId: invoice.id,
+          runId: runId || null,
+          type: "billing.autopay_skipped_already_paid",
+          message: "Autopay charge skipped at execution — invoice was already paid.",
+          metadata: { reason: "already_paid", attemptNumber },
+        },
+      }).catch(() => null);
+      return null;
+    }
     throw err;
   }
   if (transaction?.status === "APPROVED") {

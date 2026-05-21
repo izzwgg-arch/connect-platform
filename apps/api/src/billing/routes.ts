@@ -43,7 +43,7 @@ import {
   solaWebhookPinMissingForProd,
 } from "./solaConfigPolicy";
 import { billingSolaCardknoxWebhookUrl } from "./solaPublicUrls";
-import { queuePaymentLinkEmail } from "./billingEmailLifecycle";
+import { billingInvoicePublicPayUrl, queuePaymentLinkEmail } from "./billingEmailLifecycle";
 import { buildBillingEmailJobCreateData, canAccessPlatformAdminBillingRoutes, canAccessTenantBillingRoutes } from "./billingAuth";
 import { invoiceBrandingPutSchema, normalizeBrandingPayload, resolveInvoiceEmailBranding } from "./invoiceBranding";
 import { saveAdminCardWithSut } from "./adminCardSave";
@@ -356,7 +356,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       include: { lineItems: true, transactions: { orderBy: { createdAt: "desc" } }, events: { orderBy: { createdAt: "asc" } }, tenant: true },
     });
     if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
-    return invoice;
+    return { ...invoice, publicPayUrl: billingInvoicePublicPayUrl(invoice.id, invoice.tenantId) };
   });
 
   app.get("/billing/platform/invoices/:id/pdf", async (req, reply) => {
@@ -408,7 +408,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       invoiceNumber: invoice.invoiceNumber,
       totalCents: invoice.totalCents,
       dueDate: invoice.dueDate,
-      invoiceUrl: `${publicPortalBase()}/billing/invoices/${invoice.id}`,
+      invoiceUrl: billingInvoicePublicPayUrl(invoice.id, invoice.tenantId),
       billingInvoiceId: invoice.id,
       brand: resolveInvoiceEmailBranding(invoice.tenant.billingSettings || {}, invoice.tenant.name),
     });
@@ -1682,7 +1682,16 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       }),
     ]);
 
-    return { invoices, total, page, pages: Math.ceil(total / limit), limit };
+    return {
+      invoices: invoices.map((invoice: any) => ({
+        ...invoice,
+        publicPayUrl: billingInvoicePublicPayUrl(invoice.id, invoice.tenantId),
+      })),
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+      limit,
+    };
   });
 
   app.get("/admin/billing/invoices/:id/pdf", async (req, reply) => {
@@ -1724,7 +1733,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
     const gateway = await resolveBillingGatewayConfig(invoice.tenantId);
     const isLiveCharge = !!(gateway.enabled && gateway.mode === "prod" && !gateway.simulate);
-    return { ...invoice, isLiveCharge, gatewayConfigSource: gateway.source };
+    return { ...invoice, isLiveCharge, gatewayConfigSource: gateway.source, publicPayUrl: billingInvoicePublicPayUrl(invoice.id, invoice.tenantId) };
   });
 
   app.get("/admin/billing/transactions", async (req, reply) => {
@@ -2238,7 +2247,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       invoiceNumber: invoice.invoiceNumber,
       totalCents: invoice.totalCents,
       dueDate: invoice.dueDate,
-      invoiceUrl: `${publicPortalBase()}/billing/invoices/${invoice.id}`,
+      invoiceUrl: billingInvoicePublicPayUrl(invoice.id, invoice.tenantId),
       billingInvoiceId: invoice.id,
       brand: resolveInvoiceEmailBranding(invoice.tenant.billingSettings || {}, invoice.tenant.name),
     });
@@ -2525,7 +2534,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       return reply.code(429).send({ error: "duplicate_sms_send", message: "A payment link was already sent to this number in the last 2 minutes. Please wait before resending." });
     }
 
-    const payUrl = `${publicPortalBase()}/billing/invoices/${encodeURIComponent(invoice.id)}`;
+    const payUrl = billingInvoicePublicPayUrl(invoice.id, invoice.tenantId);
     const invLabel = invoice.invoiceNumber || invoice.id.slice(0, 8);
     const balanceStr = centsToDollarsStr(invoice.balanceDueCents ?? invoice.totalCents);
     const msgBody = `${invoice.tenant?.name || "Connect"}: Pay invoice ${invLabel} (${balanceStr}): ${payUrl}`;

@@ -45,6 +45,7 @@ type InvoiceRow = {
   lastEmailStatus: string | null;
   lastEmailedAt: string | null;
   createdAt: string;
+  publicPayUrl?: string | null;
   tenant: { id: string; name: string; billingSettings?: { billingEmail?: string | null; defaultPaymentMethodId?: string | null } | null };
   paymentMethod?: { id: string; brand: string | null; last4: string | null } | null;
   transactions: { id: string; status: string; processorTransactionId: string | null; responseCode: string | null; amountCents: number; createdAt: string }[];
@@ -1204,7 +1205,8 @@ function SmsPaymentLinkModal({ invoice, onClose, onSuccess }: { invoice: Invoice
     }
   }, [cap, fromPhone]);
 
-  const payUrl = `${typeof window !== "undefined" ? window.location.origin.replace(/:3000$/, ":3001") : ""}`
+  const payUrl = String(invoice.publicPayUrl || "").trim()
+    || `${typeof window !== "undefined" ? window.location.origin.replace(/:3000$/, ":3001") : ""}`
     + `/billing/invoices/${invoice.id}`;
   const effectiveFrom = fromPhone || cap?.fromNumber || "";
   const msgPreview = `${invoice.tenant?.name || "Connect"}: Pay invoice ${invoice.invoiceNumber || invoice.id.slice(0, 8)} (${dollars(invoice.balanceDueCents)}): ${payUrl}`;

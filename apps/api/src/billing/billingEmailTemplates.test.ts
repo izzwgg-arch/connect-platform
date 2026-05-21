@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { invoiceSentEmail, paymentLinkEmail, paymentReceiptEmail, paymentFailedEmail } from "./emailTemplates";
-import { billingInvoicePdfApiUrl, billingInvoicePortalUrl } from "./billingEmailLifecycle";
+import { billingInvoicePdfApiUrl, billingInvoicePortalUrl, billingInvoicePublicPayUrl } from "./billingEmailLifecycle";
+import { verifyBillingInvoicePayToken } from "./billingPayToken";
 import { resolveInvoiceEmailBranding } from "./invoiceBranding";
 
 // ---------------------------------------------------------------------------
@@ -255,6 +256,11 @@ test("emailShell renders custom logoUrl when configured", () => {
 // ---------------------------------------------------------------------------
 
 test("billing URL helpers are stable strings", () => {
+  process.env.BILLING_PAY_TOKEN_SECRET = "test-secret";
   assert.match(billingInvoicePortalUrl("abc123"), /\/billing\/invoices\/abc123$/);
+  const publicUrl = billingInvoicePublicPayUrl("abc123", "tenant123");
+  assert.match(publicUrl, /\/pay\/invoice\//);
+  const token = decodeURIComponent(publicUrl.split("/pay/invoice/")[1]);
+  assert.deepEqual(verifyBillingInvoicePayToken(token)?.invoiceId, "abc123");
   assert.match(billingInvoicePdfApiUrl("abc123"), /\/pdf$/);
 });

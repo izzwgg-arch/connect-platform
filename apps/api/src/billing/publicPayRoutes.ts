@@ -123,6 +123,13 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
       throw e;
     }
 
+    if (input.billingEmail?.trim()) {
+      await (db as any).tenantBillingSettings.update({
+        where: { tenantId: invoice.tenantId },
+        data: { billingEmail: input.billingEmail.trim() },
+      }).catch(() => null);
+    }
+
     try {
       let transaction: any;
       if (input.saveCard) {
@@ -160,13 +167,6 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
           },
           { adapter, note: "public_pay_link", customerIdentity: `tenant:${invoice.tenantId}` },
         );
-      }
-
-      if (input.billingEmail?.trim()) {
-        await (db as any).tenantBillingSettings.update({
-          where: { tenantId: invoice.tenantId },
-          data: { billingEmail: input.billingEmail.trim() },
-        }).catch(() => null);
       }
 
       await logBillingEvent({

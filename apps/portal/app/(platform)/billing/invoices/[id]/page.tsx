@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import "../../../admin/billing/_components/billingPhase3.css";
 import "../../../admin/billing/_components/billingPhase4.css";
 import "../../../admin/billing/_components/billingPhase5.css";
@@ -44,6 +44,12 @@ type TotalsRow = {
 function invoicePortalUrl(id: string) {
   const base = typeof window !== "undefined" ? window.location.origin : "https://app.connectcomunications.com";
   return `${base}/billing/invoices/${encodeURIComponent(id)}`;
+}
+
+function publicPayUrl(row: any) {
+  const url = String(row?.publicPayUrl || "").trim();
+  if (url) return url;
+  return invoicePortalUrl(row.id);
 }
 
 function openPdf(id: string) {
@@ -129,20 +135,11 @@ function regulatoryNotices(settings: any, row: any): string[] {
   return [...notices, ...splitPlainText(settings?.invoiceFooterNote)];
 }
 
-function paymentCardLabel(settings: any) {
-  const methods = Array.isArray(settings?.paymentMethods) ? settings.paymentMethods : [];
-  const method = methods.find((pm: any) => pm.isDefault) || methods[0];
-  if (!method?.last4) return "Default payment method";
-  return `${method.brand || "Card"} ending ${method.last4}`;
-}
-
 export default function BillingInvoiceDetailPage() {
   const params = useParams<{ id: string }>();
   const [refreshKey, setRefreshKey] = useState(0);
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [pending, setPending] = useState<string | null>(null);
-  const [confirmPay, setConfirmPay] = useState(false);
-  const submittedRef = useRef(false);
 
   const invoice = useAsyncResource(() => apiGet<any>(`/billing/platform/invoices/${params.id}`), [params.id, refreshKey]);
   const settings = useAsyncResource(() => apiGet<any>("/billing/settings"), [refreshKey]);
@@ -154,12 +151,10 @@ export default function BillingInvoiceDetailPage() {
 
   const bump = useCallback(() => {
     setRefreshKey((k) => k + 1);
-    setConfirmPay(false);
   }, []);
 
   const row = invoice.status === "success" ? invoice.data : null;
   const settingsData = settings.status === "success" ? settings.data : null;
-  const hasDefaultPm = !!settingsData?.defaultPaymentMethodId;
   const billingEmailSet = !!String(settingsData?.billingEmail || "").trim();
   const canPay = row && row.status !== "PAID" && row.status !== "VOID" && Number(row.balanceDueCents ?? row.totalCents ?? 0) > 0;
   const transactions: any[] = row?.transactions || [];
@@ -172,7 +167,7 @@ export default function BillingInvoiceDetailPage() {
     row?.periodStart && row?.periodEnd
       ? `${formatDate(row.periodStart)} - ${formatDate(row.periodEnd)}`
       : null;
-  const payUrl = row ? invoicePortalUrl(row.id) : "";
+  const payUrl = row ? publicPayUrl(row) : "";
   const totalRows = useMemo(() => (row ? buildTotalsRows(row, lineItems, transactions) : []), [row, lineItems, transactions]);
 
   async function runAction(key: string, fn: () => Promise<void>) {
@@ -180,26 +175,6 @@ export default function BillingInvoiceDetailPage() {
     try { await fn(); }
     catch (err) { showToast("err", billingErrorMessage(err, "Request failed")); }
     finally { setPending(null); }
-  }
-
-  async function handlePay() {
-    if (submittedRef.current) return;
-    submittedRef.current = true;
-    setPending("pay");
-    try {
-      const result = await apiPost<any>(`/billing/platform/invoices/${row.id}/pay`, {});
-      const tx = result?.transaction;
-      if (tx?.status === "APPROVED") showToast("ok", `Payment approved - ${dollars(tx.amountCents)}.`);
-      else if (tx?.status === "DECLINED") showToast("err", `Declined: ${tx.responseMessage || tx.responseCode || "card declined"}.`);
-      else showToast("ok", "Charge submitted. Refreshing status...");
-      bump();
-    } catch (err) {
-      showToast("err", billingErrorMessage(err, "Charge failed"));
-      setConfirmPay(false);
-    } finally {
-      setPending(null);
-      submittedRef.current = false;
-    }
   }
 
   return (
@@ -267,27 +242,9 @@ export default function BillingInvoiceDetailPage() {
                   <strong>{dollars(row.balanceDueCents ?? row.totalCents)}</strong>
                   <p>Due {formatDate(row.dueDate)} Â· Terms Net {settingsData?.paymentTermsDays ?? 15}</p>
                   {canPay ? (
-                    hasDefaultPm ? (
-                      <>
-                        {!confirmPay ? (
-                          <button className="invoice-pay-button no-print" type="button" onClick={() => setConfirmPay(true)}>
-                            Pay Invoice Securely
-                          </button>
-                        ) : (
-                          <div className="invoice-confirm-pay no-print">
-                            <p>Charge {paymentCardLabel(settingsData)} for {dollars(row.balanceDueCents || row.totalCents)}.</p>
-                            <div className="invoice-confirm-actions">
-                              <button type="button" className="btn ghost" disabled={pending === "pay"} onClick={() => setConfirmPay(false)}>Cancel</button>
-                              <button type="button" className="btn primary" disabled={pending === "pay"} onClick={handlePay}>
-                                {pending === "pay" ? "Charging..." : "Confirm payment"}
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <a className="invoice-pay-button no-print" href="/billing/payments">Add payment method</a>
-                    )
+                    <a className="invoice-pay-button no-print" href={payUrl}>
+                      Pay Invoice Securely
+                    </a>
                   ) : (
                     <span className="invoice-paid-note">{row.status === "PAID" ? `Paid ${row.paidAt ? formatDate(row.paidAt) : ""}` : "No payment due"}</span>
                   )}

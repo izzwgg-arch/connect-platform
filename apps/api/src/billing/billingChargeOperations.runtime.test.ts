@@ -15,11 +15,15 @@ const state: {
   operations: Row[];
   transactions: Row[];
   invoices: Row[];
+  receipts: Row[];
+  failedEmails: Row[];
   now: number;
 } = {
   operations: [],
   transactions: [],
   invoices: [],
+  receipts: [],
+  failedEmails: [],
   now: 1,
 };
 
@@ -38,6 +42,8 @@ function resetState() {
   state.operations = [];
   state.transactions = [];
   state.invoices = [];
+  state.receipts = [];
+  state.failedEmails = [];
   state.now = 1;
   process.env.BILLING_LIVE_CHARGES_DISABLED = "0";
 }
@@ -131,8 +137,14 @@ mock.module("./invoiceEngine", {
 });
 mock.module("./billingEmailLifecycle", {
   namedExports: {
-    queuePaymentFailedEmailOnce: async () => undefined,
-    queueReceiptEmailOnce: async () => undefined,
+    queuePaymentFailedEmailOnce: async (params: Row) => {
+      state.failedEmails.push(params);
+      return true;
+    },
+    queueReceiptEmailOnce: async (params: Row) => {
+      state.receipts.push(params);
+      return true;
+    },
   },
 });
 
@@ -296,6 +308,7 @@ test("approved replay and declined retry behavior are explicit", async () => {
   const replay = await payments.chargeBillingInvoice({ ...inv, status: "OPEN", balanceDueCents: 1000 }, method, { adapter: adapter as any });
   assert.equal(replay.id, approved.id);
   assert.equal(adapter.chargeCalls, 1);
+  assert.equal(state.receipts.length, 1);
 
   resetState();
   const declineAdapter = {
@@ -317,9 +330,31 @@ test("approved replay and declined retry behavior are explicit", async () => {
   const accidentalReplay = await payments.chargeBillingInvoice({ ...declinedInvoice, status: "OPEN" }, method, { adapter: declineAdapter as any });
   assert.equal(accidentalReplay.id, declined.id);
   assert.equal(declineAdapter.chargeCalls, 1);
+  assert.equal(state.receipts.length, 0);
+  assert.equal(state.failedEmails.length, 1);
 
   await payments.chargeBillingInvoice({ ...declinedInvoice, status: "OPEN" }, method, { adapter: declineAdapter as any, allowRetry: true });
   assert.equal(declineAdapter.chargeCalls, 2);
+});
+
+test("approved autopay queues one receipt and idempotent replay does not duplicate it", async () => {
+  const { payments } = await loadBillingModules();
+  resetState();
+  const adapter = approvedAdapter();
+  const inv = invoice("autopay_receipt");
+  const method = savedMethod();
+
+  const approved = await payments.chargeBillingInvoice(inv, method, { adapter: adapter as any, runId: "worker_run_1" });
+  const replay = await payments.chargeBillingInvoice({ ...inv, status: "OPEN", balanceDueCents: 1000 }, method, {
+    adapter: adapter as any,
+    runId: "worker_run_1",
+  });
+
+  assert.equal(replay.id, approved.id);
+  assert.equal(adapter.chargeCalls, 1);
+  assert.equal(state.receipts.length, 1);
+  assert.equal(state.receipts[0].transactionId, approved.id);
+  assert.equal(state.receipts[0].paidViaAutopay, true);
 });
 
 test("worker/API saved-card overlap shares one server operation", async () => {
