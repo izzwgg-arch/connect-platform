@@ -464,6 +464,22 @@ export function OneTimeChargeDrawer({
       : billingPreview
         ? `${billingPreview.cardholderName} · new card`
         : "New card";
+  const isInvoiceOnly = chargeMode === "none";
+  const panelTitle = step === "done"
+    ? (isInvoiceOnly ? "Invoice created" : "Charge complete")
+    : (isInvoiceOnly ? "Create invoice" : "Charge customer");
+  const panelSubtitle = step === "done"
+    ? (isInvoiceOnly ? "The one-time invoice was created." : "The one-time charge was processed.")
+    : "Create a one-time invoice and optionally collect payment now.";
+  const confirmButtonLabel = isInvoiceOnly
+    ? "Create invoice"
+    : tokenizing
+      ? "Securing card..."
+      : busy
+        ? "Processing..."
+        : isLiveCharge
+          ? "Charge now (live)"
+          : "Charge now";
 
   const oneTimeCardForm = chargeMode === "new_card" && canUseNewCard && solaConfig?.ifieldsKey ? (
     <div style={{ marginTop: 12 }}>
@@ -533,23 +549,15 @@ export function OneTimeChargeDrawer({
 
       drawerWidth="min(560px, 100vw)"
 
-      variant={step === "confirm" && isLiveCharge ? "danger" : "default"}
+      variant={step === "confirm" && isLiveCharge && !isInvoiceOnly ? "danger" : "default"}
 
       onClose={() => { if (!busy && !tokenizing) onClose(); }}
 
       eyebrow={tenantName}
 
-      title={step === "done" ? "Charge complete" : "Charge customer"}
+      title={panelTitle}
 
-      subtitle={
-
-        step === "done"
-
-          ? "The one-time charge was processed."
-
-          : "Create a one-time invoice and optionally collect payment now."
-
-      }
+      subtitle={panelSubtitle}
 
       footer={
 
@@ -575,7 +583,7 @@ export function OneTimeChargeDrawer({
 
             >
 
-              {tokenizing ? "Securing card…" : busy ? "Processing…" : isLiveCharge ? "Charge now (live)" : "Charge now"}
+              {confirmButtonLabel}
 
             </button>
 
@@ -639,13 +647,17 @@ export function OneTimeChargeDrawer({
 
           </dl>
 
-          {isLiveCharge ? (
+          {isLiveCharge && !isInvoiceOnly ? (
 
             <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#f87171" }}>
 
               This is a live charge — funds will move on the customer&apos;s card.
 
             </p>
+
+          ) : isInvoiceOnly ? (
+
+            <p className="muted" style={{ margin: 0, fontSize: 13 }}>No card charge will run. This only creates the invoice.</p>
 
           ) : (
 

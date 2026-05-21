@@ -21,6 +21,7 @@ import {
 import type { TenantDetail } from "./_components/tenantBillingConfigForms";
 import { BILLING_SECTION_QUERY, mergeSearchParams, OPS_TAB_QUERY } from "./_components/adminBillingLinks";
 import { useAdminBillingTenant } from "./_components/useAdminBillingTenant";
+import { OneTimeChargeDrawer } from "./_components/adminBillingPaymentDrawers";
 
 type TenantRow = {
   id: string;
@@ -39,6 +40,7 @@ export default function AdminBillingPage() {
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [autopayBusy, setAutopayBusy] = useState(false);
+  const [generateChargeMode, setGenerateChargeMode] = useState<"none" | "card_on_file" | null>(null);
   const tenants = useAsyncResource<TenantRow[]>(() => apiGet<TenantRow[]>("/admin/billing/platform/tenants"), []);
   const tenantRows = tenants.status === "success" ? tenants.data : [];
   const tenantIds = useMemo(() => tenantRows.map((t) => t.id), [tenantRows]);
@@ -118,6 +120,16 @@ export default function AdminBillingPage() {
     return d < new Date();
   })();
   const previewTotal: number = detail?.preview?.totalCents ?? 0;
+  const previewPeriod =
+    detail?.preview?.periodStart && detail?.preview?.periodEnd
+      ? `${formatDate(detail.preview.periodStart)} - ${formatDate(detail.preview.periodEnd)}`
+      : null;
+  const previewInvoiceDescription = previewPeriod
+    ? `Monthly service balance (${previewPeriod})`
+    : "Monthly service balance";
+  const defaultPaymentMethodId = detail?.paymentMethods?.find((m: any) => m.isDefault)?.id
+    || detail?.paymentMethods?.[0]?.id
+    || null;
   // If no open invoices but billing date already passed, show preview amount as pending
   const showPreviewBalance = livBalanceDue === 0 && nextPaymentDatePassed && previewTotal > 0;
   const recent = detail
@@ -202,6 +214,26 @@ export default function AdminBillingPage() {
           </div>
 
           <div className="billing-ov-links">
+            {showPreviewBalance ? (
+              <>
+                <button
+                  className="btn primary"
+                  type="button"
+                  onClick={() => setGenerateChargeMode("none")}
+                >
+                  Generate invoice
+                </button>
+                <button
+                  className="btn ghost"
+                  type="button"
+                  disabled={!defaultPaymentMethodId}
+                  title={!defaultPaymentMethodId ? "Add a payment method first" : undefined}
+                  onClick={() => setGenerateChargeMode("card_on_file")}
+                >
+                  Generate + charge card
+                </button>
+              </>
+            ) : null}
             <Link className="btn ghost" href={`/admin/billing/invoices${qp({ [OPS_TAB_QUERY]: "invoices" })}`}>
               Invoices
             </Link>
@@ -224,6 +256,33 @@ export default function AdminBillingPage() {
 
           <div className="billing-ov-panel">
             <h3>Recent activity</h3>
+            {showPreviewBalance ? (
+              <div style={{ marginBottom: 12, padding: "10px 12px", border: "1px solid var(--warn-300, #facc15)", borderRadius: 10, background: "color-mix(in srgb, #facc15 10%, var(--surface))" }}>
+                <strong style={{ display: "block", marginBottom: 4 }}>Invoice not generated yet</strong>
+                <p className="muted" style={{ margin: "0 0 10px", fontSize: 13 }}>
+                  The next billing date has passed and the current preview is {dollars(previewTotal)}. Generate the invoice now, or generate it and collect by card from the admin side.
+                </p>
+                <div className="row-actions" style={{ justifyContent: "flex-start" }}>
+                  <button className="btn primary" type="button" onClick={() => setGenerateChargeMode("none")}>
+                    Generate invoice only
+                  </button>
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    disabled={!defaultPaymentMethodId}
+                    title={!defaultPaymentMethodId ? "Add a payment method first" : undefined}
+                    onClick={() => setGenerateChargeMode("card_on_file")}
+                  >
+                    Generate invoice + charge card
+                  </button>
+                  {!defaultPaymentMethodId ? (
+                    <Link className="btn ghost" href={`/admin/billing/methods${qp({})}`}>
+                      Add payment method
+                    </Link>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
             {recent.length === 0 ? (
               <p className="muted" style={{ margin: 0, fontSize: 13 }}>
                 No invoices yet for this company.
@@ -387,6 +446,23 @@ export default function AdminBillingPage() {
               </button>
             </>
           )}
+        />
+      ) : null}
+
+      {generateChargeMode && detail && selectedTenantId ? (
+        <OneTimeChargeDrawer
+          tenantId={selectedTenantId}
+          tenantName={detail.tenant.name}
+          isLiveCharge={true}
+          initialPaymentMethodId={generateChargeMode === "card_on_file" ? defaultPaymentMethodId : null}
+          initialDescription={previewInvoiceDescription}
+          initialAmountCents={previewTotal}
+          initialChargeMode={generateChargeMode}
+          onClose={() => setGenerateChargeMode(null)}
+          onSuccess={async () => {
+            setGenerateChargeMode(null);
+            await loadDetail(selectedTenantId);
+          }}
         />
       ) : null}
     </div>
