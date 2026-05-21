@@ -747,15 +747,17 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 **Invoice sent email:** Added optional `servicePeriod` field in the summary box. Computed from `invoice.periodStart`/`periodEnd` in `billingEmailLifecycle.ts`. Copy states the invoice PDF is **attached**.
 
 **PDF (`renderBillingInvoicePdf`):**
-- Blue header band with bundled Connect logo (local PNG — no remote fetch).
-- Status chip (color-coded: PAID green, OVERDUE orange, FAILED red, VOID/DRAFT gray).
-- **"Bill from"** column: company display name, support email/phone.
-- **"Bill to"** column: tenant name, billing email, billing/service address.
-- Four-column invoice details row: invoice #, issue date, due date, service period. "Paid on" row for PAID invoices.
-- Discount line shown when a DISCOUNT line item exists.
-- Accent-colored "Balance due" row.
-- Legal footer: "Taxes and regulatory fees are applied according to your configured billing profile."
-- PAID watermark (green semi-transparent diagonal stamp).
+- Modern light SaaS invoice layout inspired by Stripe/Linear/Ramp billing: thin Connect-blue top accent, white header, soft gray borders, generous whitespace, and compact card sections.
+- Bundled local Connect logo PNG only (`apps/api/src/billing/assets/connect-logo.png`) — no remote image fetch. Keep this asset high-resolution (currently 960x264) because PDFKit rasterizes it into the PDF.
+- Header row: logo left, invoice title/number right, modern rounded status pill. PAID uses soft green; unpaid/overdue states use soft orange/red; draft/void use muted gray.
+- **Bill from** is fixed for the PDF: `Connect Communications, LLC` and `support@connectcommunications.com`.
+- **Bill to** uses tenant name, billing email, and billing/service address.
+- Light balance card replaces the old dark/heavy panel. It shows large blue balance due, due date, terms, and a blue **Pay Now Securely** button only when the invoice is not paid and has a positive balance. Paid invoices hide the button.
+- Metadata row: issue date, due date, service period, and terms.
+- Line items use a very light table header, subtle separators, generous row height, and safe wrapping for long descriptions.
+- Totals render as a compact summary card with subtotal, credits, fees, taxes, amount paid, and blue emphasized balance due.
+- Regulatory notices render in a professional two-column/card section with an icon/title rail and muted numbered disclosure text.
+- Footer renders four muted support columns: Billing Support, Customer Portal, Secure Payments, and Thank You.
 
 **Fallback logo for HTML emails:** `{PUBLIC_PORTAL_URL}/connect-logo.png` from `apps/portal/public/connect-logo.png`.
 
@@ -785,7 +787,9 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 - Print hides topbar/sidebar/action controls/history, flattens shadows/backgrounds, keeps letter margins, and marks major invoice sections as `break-inside: avoid`.
 - Keep invoice copy readable in grayscale: do not rely on color alone for status, totals, or fee categories.
 - The API PDF route uses `apps/api/src/billing/pdf.ts` and is the source for both authenticated PDF downloads and outbound billing email attachments.
-- The PDFKit renderer now mirrors the modern invoice structure with a neutral header, payment panel, billing parties, categorized line items, billing summary, payment instructions, and regulatory notices.
+- The PDFKit renderer now mirrors the modern invoice structure with a neutral header, light balance card, billing parties, metadata row, categorized line items, compact billing summary, regulatory notices, and professional footer.
+- PDFKit uses built-in PDF-safe fonts in production; spacing, weights, uppercase labels, and hierarchy are tuned to approximate modern Inter-style SaaS typography without adding a runtime font dependency.
+- Pagination safeguards call `ensureSpace` before tall sections and line item rows. Long descriptions wrap inside the description column and should not overlap amount columns or totals.
 
 **Verification:**
 - `pnpm typecheck` in `apps/portal`.

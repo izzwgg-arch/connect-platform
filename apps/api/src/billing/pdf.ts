@@ -18,8 +18,11 @@ type InvoiceLineItem = {
 type TotalRow = {
   label: string;
   valueCents: number;
-  tone?: "default" | "credit" | "paid" | "due";
+  tone?: "default" | "credit" | "paid" | "due" | "muted";
 };
+
+const CONNECT_LEGAL_NAME = "Connect Communications, LLC";
+const CONNECT_SUPPORT_EMAIL = "support@connectcommunications.com";
 
 function logoBuffer(): Buffer | null {
   try {
@@ -50,15 +53,16 @@ function formatDateShort(d: Date | string | null | undefined): string {
 }
 
 function statusLabel(status: string): string {
+  const normalized = String(status || "").toUpperCase();
   const map: Record<string, string> = {
     PAID: "PAID",
-    OPEN: "PENDING",
+    OPEN: "UNPAID",
     DRAFT: "DRAFT",
-    FAILED: "PAYMENT FAILED",
+    FAILED: "UNPAID",
     OVERDUE: "OVERDUE",
     VOID: "VOID",
   };
-  return map[String(status || "").toUpperCase()] ?? String(status || "OPEN").toUpperCase();
+  return map[normalized] ?? "UNPAID";
 }
 
 function normalizeText(value: unknown): string {
@@ -101,9 +105,9 @@ function buildTotalsRows(invoice: any, lineItems: InvoiceLineItem[]): TotalRow[]
     .filter((item) => classifyLineItem(item).tone === "tax")
     .reduce((sum, item) => sum + Math.max(0, Number(item.amountCents || 0)), 0);
 
-  const rows: TotalRow[] = [{ label: "Service subtotal", valueCents: subtotal }];
-  if (discount > 0) rows.push({ label: "Discounts / credits", valueCents: -discount, tone: "credit" });
-  if (fees > 0) rows.push({ label: "Telecom fees & surcharges", valueCents: fees });
+  const rows: TotalRow[] = [{ label: "Subtotal", valueCents: subtotal }];
+  if (discount > 0) rows.push({ label: "Credits", valueCents: -discount, tone: "credit" });
+  if (fees > 0) rows.push({ label: "Fees", valueCents: fees });
   if (taxes > 0) rows.push({ label: "Taxes", valueCents: taxes });
   if (paid > 0) rows.push({ label: "Amount paid", valueCents: -paid, tone: "paid" });
   rows.push({ label: "Balance due", valueCents: balance, tone: "due" });
@@ -111,28 +115,24 @@ function buildTotalsRows(invoice: any, lineItems: InvoiceLineItem[]): TotalRow[]
 }
 
 function regulatoryNotices(brand: ReturnType<typeof resolveInvoiceEmailBranding>, invoice: any): string[] {
-  const support = [brand.supportEmail, brand.supportPhone].filter(Boolean).join(" or ");
   const invoiceRef = invoice.invoiceNumber || invoice.id;
   const notices = [
-    "Taxes, telecom fees, and regulatory surcharges are itemized when applicable to your service, service address, jurisdiction, and configured billing profile.",
-    "E911 charges, if shown, support emergency calling obligations and may vary by location, number count, or service configuration.",
-    "Regulatory recovery, Federal Universal Service Fund (USF/FUSF), and Telecommunications Relay Service (TRS) related charges are displayed when applicable; they are not represented here as taxes unless labeled as taxes.",
-    `Payment terms are Net ${brand.paymentTermsDays} days unless a different written agreement applies. Past-due balances may be subject to collection handling or late-fee policies configured by your provider.`,
-    support
-      ? `For billing questions, disputes, or remittance support, contact ${support}. Include invoice ${invoiceRef} with your request.`
-      : `For billing questions, disputes, or remittance support, contact your Connect billing administrator and include invoice ${invoiceRef}.`,
+    "Taxes and regulatory surcharges are calculated from your billing profile, service address, and applicable invoice line items.",
+    "E911, USF/FUSF, TRS, and regulatory recovery charges may appear when applicable to your service configuration.",
+    `Payment terms are Net ${brand.paymentTermsDays} days unless a separate written agreement applies.`,
+    `For billing questions or disputes, contact ${CONNECT_SUPPORT_EMAIL} and include invoice ${invoiceRef}.`,
   ];
   return [...notices, ...splitPlainText(brand.footerNote)];
 }
 
-function roundedPanel(doc: PDFKit.PDFDocument, x: number, y: number, w: number, h: number, fill: string, stroke = "#e2e8f0") {
+function roundedPanel(doc: PDFKit.PDFDocument, x: number, y: number, w: number, h: number, fill: string, stroke = "#e5e7eb", radius = 12) {
   doc.save();
-  doc.roundedRect(x, y, w, h, 14).fillAndStroke(fill, stroke);
+  doc.roundedRect(x, y, w, h, radius).fillAndStroke(fill, stroke);
   doc.restore();
 }
 
-function label(doc: PDFKit.PDFDocument, text: string, x: number, y: number, w: number, color = "#64748b") {
-  doc.fillColor(color).font("Helvetica-Bold").fontSize(7.5).text(text.toUpperCase(), x, y, {
+function label(doc: PDFKit.PDFDocument, text: string, x: number, y: number, w: number, color = "#6b7280") {
+  doc.fillColor(color).font("Helvetica-Bold").fontSize(7).text(text.toUpperCase(), x, y, {
     width: w,
     characterSpacing: 0.6,
   });
@@ -141,7 +141,28 @@ function label(doc: PDFKit.PDFDocument, text: string, x: number, y: number, w: n
 function ensureSpace(doc: PDFKit.PDFDocument, y: number, needed: number, top = 48): number {
   if (y + needed <= doc.page.height - 54) return y;
   doc.addPage();
+  doc.rect(0, 0, doc.page.width, 5).fill("#2563eb");
   return top;
+}
+
+function textHeight(doc: PDFKit.PDFDocument, text: string, width: number, size: number, font = "Helvetica", lineGap = 1) {
+  return doc.font(font).fontSize(size).heightOfString(text, { width, lineGap });
+}
+
+function drawStatusPill(doc: PDFKit.PDFDocument, statusText: string, x: number, y: number) {
+  const paid = statusText === "PAID";
+  const voided = statusText === "VOID" || statusText === "DRAFT";
+  const bg = paid ? "#ecfdf3" : voided ? "#f3f4f6" : "#fff7ed";
+  const fg = paid ? "#067647" : voided ? "#4b5563" : "#c2410c";
+  const border = paid ? "#bbf7d0" : voided ? "#e5e7eb" : "#fed7aa";
+  const width = Math.max(58, doc.font("Helvetica-Bold").fontSize(7.5).widthOfString(statusText) + 22);
+  doc.roundedRect(x - width, y, width, 20, 10).fillAndStroke(bg, border);
+  doc.fillColor(fg).font("Helvetica-Bold").fontSize(7.5).text(statusText, x - width, y + 6, { width, align: "center" });
+}
+
+function drawMiniIcon(doc: PDFKit.PDFDocument, icon: string, x: number, y: number, bg = "#eff6ff", fg = "#2563eb") {
+  doc.roundedRect(x, y, 22, 22, 7).fill(bg);
+  doc.fillColor(fg).font("Helvetica-Bold").fontSize(9).text(icon, x, y + 6, { width: 22, align: "center" });
 }
 
 export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
@@ -155,14 +176,19 @@ export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
   const payUrl = `${process.env.PUBLIC_PORTAL_URL || "https://app.connectcomunications.com"}/billing/invoices/${encodeURIComponent(invoice.id)}`;
   const logo = logoBuffer();
   const lineItems: InvoiceLineItem[] = invoice.lineItems || [];
+  const statusText = statusLabel(invoice.status || "OPEN");
+  const isPaid = statusText === "PAID";
+  const balanceDue = Number(invoice.balanceDueCents ?? invoice.totalCents ?? 0);
+  const showPayButton = !isPaid && balanceDue > 0;
 
   const ink = "#0f172a";
   const muted = "#64748b";
-  const slate = "#111827";
-  const cyan = "#0891b2";
-  const cyanSoft = "#ecfeff";
+  const subtle = "#94a3b8";
+  const blue = "#2563eb";
+  const blueSoft = "#eff6ff";
   const panel = "#f8fafc";
-  const line = "#e2e8f0";
+  const line = "#e5e7eb";
+  const lightLine = "#eef2f7";
 
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({
@@ -181,132 +207,115 @@ export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
     const mr = pageW - 48;
     const contentW = mr - ml;
 
-    // Subtle brand rail instead of a bright blue header block.
-    doc.rect(0, 0, pageW, 7).fill(cyan);
-    doc.rect(0, 7, pageW, 92).fill("#ffffff");
-    doc.moveTo(ml, 99).lineTo(mr, 99).strokeColor(line).lineWidth(1).stroke();
+    doc.rect(0, 0, pageW, 5).fill(blue);
+    doc.rect(0, 5, pageW, 100).fill("#ffffff");
 
     if (logo) {
       try {
-        doc.image(logo, ml, 32, { fit: [160, 44] });
+        doc.image(logo, ml, 31, { fit: [150, 42] });
       } catch {
-        doc.fillColor(ink).font("Helvetica-Bold").fontSize(15).text(brand.displayName, ml, 40, { width: 190 });
+        doc.fillColor(ink).font("Helvetica-Bold").fontSize(14).text(CONNECT_LEGAL_NAME, ml, 38, { width: 210 });
       }
     } else {
-      doc.fillColor(ink).font("Helvetica-Bold").fontSize(15).text(brand.displayName, ml, 40, { width: 190 });
+      doc.fillColor(ink).font("Helvetica-Bold").fontSize(14).text(CONNECT_LEGAL_NAME, ml, 38, { width: 210 });
     }
 
-    doc.fillColor(muted).font("Helvetica-Bold").fontSize(7.5).text("ENTERPRISE VOIP BILLING", ml, 78, {
-      width: 210,
-      characterSpacing: 0.7,
-    });
+    doc.fillColor(subtle).font("Helvetica-Bold").fontSize(7.2).text("BUSINESS VOICE & COMMUNICATIONS", ml, 78, { width: 220, characterSpacing: 0.8 });
+    drawStatusPill(doc, statusText, mr, 29);
+    doc.fillColor(ink).font("Helvetica-Bold").fontSize(24).text("Invoice", ml + 300, 52, { width: contentW - 300, align: "right" });
+    doc.fillColor(muted).font("Helvetica").fontSize(9.5).text(invoice.invoiceNumber || invoice.id, ml + 300, 80, { width: contentW - 300, align: "right" });
+    doc.moveTo(ml, 106).lineTo(mr, 106).strokeColor(line).lineWidth(1).stroke();
 
-    const statusText = statusLabel(invoice.status || "OPEN");
-    const chipColors: Record<string, [string, string]> = {
-      PAID: ["#ecfdf5", "#166534"],
-      "PAYMENT FAILED": ["#fef2f2", "#991b1b"],
-      OVERDUE: ["#fff7ed", "#9a3412"],
-      VOID: ["#f1f5f9", "#475569"],
-      DRAFT: ["#f1f5f9", "#475569"],
-      PENDING: ["#fffbeb", "#92400e"],
-    };
-    const [chipBg, chipFg] = chipColors[statusText] ?? ["#fffbeb", "#92400e"];
-    const chipW = Math.max(66, doc.font("Helvetica-Bold").fontSize(8).widthOfString(statusText) + 22);
-    doc.roundedRect(mr - chipW, 28, chipW, 20, 10).fill(chipBg);
-    doc.fillColor(chipFg).font("Helvetica-Bold").fontSize(8).text(statusText, mr - chipW, 34, { width: chipW, align: "center" });
-    doc.fillColor(ink).font("Helvetica-Bold").fontSize(25).text(invoice.invoiceNumber || invoice.id, ml + 260, 53, { width: contentW - 260, align: "right" });
-    doc.fillColor(muted).font("Helvetica").fontSize(9).text(`Issued ${formatDateShort(invoice.createdAt || invoice.issueDate)}`, ml + 260, 82, { width: contentW - 260, align: "right" });
+    let y = 130;
+    const gap = 16;
+    const leftW = 328;
+    const rightW = contentW - leftW - gap;
+    const partyCardH = 142;
+    roundedPanel(doc, ml, y, leftW, partyCardH, "#ffffff", line, 14);
 
-    let y = 122;
-    const gap = 14;
-    const partyW = (contentW - gap * 2) / 3;
-    const payW = partyW;
-    const partyH = 118;
-    roundedPanel(doc, ml, y, partyW, partyH, "#ffffff");
-    roundedPanel(doc, ml + partyW + gap, y, partyW, partyH, "#ffffff");
-    roundedPanel(doc, ml + (partyW + gap) * 2, y, payW, partyH, slate, "#1f2937");
+    const colGap = 18;
+    const colW = (leftW - 44 - colGap) / 2;
+    label(doc, "Bill from", ml + 18, y + 18, colW);
+    doc.fillColor(ink).font("Helvetica-Bold").fontSize(10.5).text(CONNECT_LEGAL_NAME, ml + 18, y + 36, { width: colW, lineGap: 1 });
+    doc.fillColor(muted).font("Helvetica").fontSize(8.4).text(CONNECT_SUPPORT_EMAIL, ml + 18, doc.y + 6, { width: colW });
 
-    label(doc, "Bill from", ml + 16, y + 16, partyW - 32);
-    doc.fillColor(ink).font("Helvetica-Bold").fontSize(12).text(brand.displayName, ml + 16, y + 33, { width: partyW - 32 });
-    let partyY = doc.y + 5;
-    if (brand.supportEmail) {
-      doc.fillColor(muted).font("Helvetica").fontSize(8.5).text(brand.supportEmail, ml + 16, partyY, { width: partyW - 32 });
-      partyY = doc.y + 3;
-    }
-    if (brand.supportPhone) doc.fillColor(muted).font("Helvetica").fontSize(8.5).text(brand.supportPhone, ml + 16, partyY, { width: partyW - 32 });
-
-    const billX = ml + partyW + gap;
-    label(doc, "Bill to", billX + 16, y + 16, partyW - 32);
-    doc.fillColor(ink).font("Helvetica-Bold").fontSize(12).text(tenantName, billX + 16, y + 33, { width: partyW - 32 });
-    let billY = doc.y + 5;
+    const billX = ml + 18 + colW + colGap;
+    label(doc, "Bill to", billX, y + 18, colW);
+    doc.fillColor(ink).font("Helvetica-Bold").fontSize(10.5).text(tenantName, billX, y + 36, { width: colW, lineGap: 1 });
+    let billY = doc.y + 6;
     if (billingEmail) {
-      doc.fillColor(muted).font("Helvetica").fontSize(8.5).text(billingEmail, billX + 16, billY, { width: partyW - 32 });
-      billY = doc.y + 3;
+      doc.fillColor(muted).font("Helvetica").fontSize(8.4).text(billingEmail, billX, billY, { width: colW });
+      billY = doc.y + 4;
     }
     if (billTo && billTo !== tenantName) {
-      doc.fillColor(muted).font("Helvetica").fontSize(8.5).text(billTo, billX + 16, billY, { width: partyW - 32, lineGap: 1 });
+      doc.fillColor(muted).font("Helvetica").fontSize(8.2).text(billTo, billX, billY, { width: colW, lineGap: 1 });
     }
 
-    const payX = ml + (partyW + gap) * 2;
-    label(doc, "Balance due", payX + 16, y + 16, payW - 32, "#67e8f9");
-    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(24).text(money(invoice.balanceDueCents ?? invoice.totalCents), payX + 16, y + 32, { width: payW - 32 });
-    doc.fillColor("#cbd5e1").font("Helvetica").fontSize(8.5).text(`Due ${formatDateShort(invoice.dueDate)}  |  Net ${brand.paymentTermsDays}`, payX + 16, y + 62, { width: payW - 32 });
-    doc.roundedRect(payX + 16, y + 84, payW - 32, 22, 9).fill(cyan);
-    doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(9).text("Pay Invoice Securely", payX + 16, y + 91, { width: payW - 32, align: "center" });
-    doc.link(payX + 16, y + 84, payW - 32, 22, payUrl);
+    const balanceX = ml + leftW + gap;
+    roundedPanel(doc, balanceX, y, rightW, partyCardH, "#ffffff", "#dbeafe", 16);
+    doc.roundedRect(balanceX + 1, y + 1, rightW - 2, partyCardH - 2, 15).strokeColor("#eff6ff").stroke();
+    label(doc, "Balance due", balanceX + 18, y + 18, rightW - 36, blue);
+    doc.fillColor(blue).font("Helvetica-Bold").fontSize(26).text(money(balanceDue), balanceX + 18, y + 38, { width: rightW - 36 });
+    doc.fillColor(muted).font("Helvetica").fontSize(8.7).text(`Due ${formatDateShort(invoice.dueDate)} | Net ${brand.paymentTermsDays}`, balanceX + 18, y + 70, { width: rightW - 36 });
+    if (showPayButton) {
+      doc.roundedRect(balanceX + 18, y + 93, rightW - 36, 26, 9).fill(blue);
+      doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(9).text("Pay Now Securely", balanceX + 18, y + 101, { width: rightW - 36, align: "center" });
+      doc.link(balanceX + 18, y + 93, rightW - 36, 26, payUrl);
+      doc.fillColor(subtle).font("Helvetica").fontSize(6.8).text(payUrl, balanceX + 18, y + 124, { width: rightW - 36, ellipsis: true });
+    } else {
+      doc.fillColor("#067647").font("Helvetica-Bold").fontSize(9).text("No payment due", balanceX + 18, y + 99, { width: rightW - 36 });
+    }
 
-    y += partyH + 20;
+    y += partyCardH + 20;
 
-    // Metadata strip.
     const meta = [
-      ["Invoice date", formatDateShort(invoice.createdAt || invoice.issueDate)],
+      ["Issue date", formatDateShort(invoice.createdAt || invoice.issueDate)],
       ["Due date", formatDateShort(invoice.dueDate)],
       ["Service period", `${formatDateShort(invoice.periodStart)} - ${formatDateShort(invoice.periodEnd)}`],
-      ["Total", money(invoice.totalCents)],
+      ["Terms", `Net ${brand.paymentTermsDays}`],
     ];
     const metaW = contentW / meta.length;
-    doc.roundedRect(ml, y, contentW, 54, 12).fillAndStroke("#ffffff", line);
+    doc.roundedRect(ml, y, contentW, 56, 13).fillAndStroke(panel, line);
     meta.forEach(([k, v], idx) => {
       const x = ml + idx * metaW;
-      if (idx > 0) doc.moveTo(x, y).lineTo(x, y + 54).strokeColor(line).lineWidth(0.5).stroke();
-      label(doc, k, x + 13, y + 13, metaW - 26);
-      doc.fillColor(ink).font("Helvetica-Bold").fontSize(9.5).text(v, x + 13, y + 29, { width: metaW - 26 });
+      if (idx > 0) doc.moveTo(x, y + 12).lineTo(x, y + 44).strokeColor(line).lineWidth(0.5).stroke();
+      label(doc, k, x + 14, y + 13, metaW - 28);
+      doc.fillColor(ink).font("Helvetica-Bold").fontSize(9).text(v, x + 14, y + 31, { width: metaW - 28 });
     });
     y += 78;
 
-    label(doc, "Services & usage", ml, y, 180);
-    doc.fillColor(ink).font("Helvetica-Bold").fontSize(17).text("Line items", ml, y + 14);
-    doc.fillColor(muted).font("Helvetica").fontSize(8.5).text("Voice platform services, usage, credits, taxes, and telecom surcharges itemized for review.", ml + 260, y + 17, { width: contentW - 260, align: "right" });
-    y += 48;
+    label(doc, "Invoice details", ml, y, 180);
+    doc.fillColor(ink).font("Helvetica-Bold").fontSize(16).text("Line items", ml, y + 14);
+    y += 42;
 
-    const descW = 276;
+    const descW = 288;
     const qtyX = ml + 330;
     const rateX = ml + 388;
     const amtX = ml + 474;
-    doc.roundedRect(ml, y, contentW, 28, 10).fill(panel);
-    doc.fillColor(muted).font("Helvetica-Bold").fontSize(7.5);
+    doc.roundedRect(ml, y, contentW, 30, 10).fill(panel);
+    doc.fillColor(muted).font("Helvetica-Bold").fontSize(7.2);
     doc.text("DESCRIPTION", ml + 14, y + 10, { width: descW });
     doc.text("QTY", qtyX, y + 10, { width: 42, align: "right" });
     doc.text("RATE", rateX, y + 10, { width: 72, align: "right" });
     doc.text("AMOUNT", amtX, y + 10, { width: 70, align: "right" });
-    y += 36;
+    y += 40;
 
     for (const item of lineItems) {
-      y = ensureSpace(doc, y, 50);
+      y = ensureSpace(doc, y, 54);
       const classification = classifyLineItem(item);
       const description = String(item.description || "Billing item");
-      const descriptionH = doc.font("Helvetica-Bold").fontSize(9.5).heightOfString(description, { width: descW });
-      const rowH = Math.max(42, descriptionH + 24);
-      doc.moveTo(ml, y - 5).lineTo(mr, y - 5).strokeColor("#edf2f7").lineWidth(0.5).stroke();
-      doc.roundedRect(ml + 14, y, Math.max(34, doc.font("Helvetica-Bold").fontSize(6.8).widthOfString(classification.label) + 14), 14, 7).fill(classification.tone === "credit" ? "#ecfdf5" : classification.tone === "service" ? cyanSoft : "#f1f5f9");
+      const descriptionH = textHeight(doc, description, descW, 9, "Helvetica-Bold", 1);
+      const rowH = Math.max(48, descriptionH + 26);
+      doc.moveTo(ml, y - 6).lineTo(mr, y - 6).strokeColor(lightLine).lineWidth(0.6).stroke();
+      doc.roundedRect(ml + 14, y + 2, Math.max(36, doc.font("Helvetica-Bold").fontSize(6.5).widthOfString(classification.label) + 14), 14, 7).fill(classification.tone === "credit" ? "#ecfdf3" : classification.tone === "service" ? blueSoft : "#f3f4f6");
       doc.fillColor(classification.tone === "credit" ? "#047857" : classification.tone === "service" ? "#0e7490" : "#475569")
         .font("Helvetica-Bold")
-        .fontSize(6.8)
-        .text(classification.label.toUpperCase(), ml + 21, y + 4);
-      doc.fillColor(ink).font("Helvetica-Bold").fontSize(9.5).text(description, ml + 14, y + 19, { width: descW, lineGap: 1 });
-      doc.fillColor(muted).font("Helvetica").fontSize(9).text(String(item.quantity ?? 1), qtyX, y + 20, { width: 42, align: "right" });
-      doc.text(money(item.unitPriceCents ?? 0), rateX, y + 20, { width: 72, align: "right" });
-      doc.fillColor(ink).font("Helvetica-Bold").text(money(item.amountCents ?? 0), amtX, y + 20, { width: 70, align: "right" });
+        .fontSize(6.5)
+        .text(classification.label.toUpperCase(), ml + 21, y + 6);
+      doc.fillColor(ink).font("Helvetica-Bold").fontSize(9).text(description, ml + 14, y + 22, { width: descW, lineGap: 1 });
+      doc.fillColor(muted).font("Helvetica").fontSize(8.8).text(String(item.quantity ?? 1), qtyX, y + 23, { width: 42, align: "right" });
+      doc.text(money(item.unitPriceCents ?? 0), rateX, y + 23, { width: 72, align: "right" });
+      doc.fillColor(ink).font("Helvetica-Bold").fontSize(8.9).text(money(item.amountCents ?? 0), amtX, y + 23, { width: 70, align: "right" });
       y += rowH;
     }
 
@@ -315,52 +324,74 @@ export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
       y += 28;
     }
 
-    y += 14;
-    y = ensureSpace(doc, y, 170);
+    y += 12;
+    y = ensureSpace(doc, y, 132);
 
-    const notesW = contentW - 220;
-    const summaryW = 200;
+    const notesW = contentW - 232;
+    const summaryW = 212;
     const summaryX = mr - summaryW;
     const bottomY = y;
-    const noteLines = splitPlainText(brand.paymentInstructions);
-    const noteText = noteLines.length
-      ? noteLines.join("\n")
-      : "Pay securely online from this invoice page. For ACH, wire, check, or remittance instructions, contact billing support before sending payment.";
-    const notesH = Math.max(116, doc.font("Helvetica").fontSize(8.5).heightOfString(noteText, { width: notesW - 32, lineGap: 2 }) + 54);
     const summaryRows = buildTotalsRows(invoice, lineItems);
-    const summaryH = Math.max(notesH, 42 + summaryRows.length * 19 + 22);
+    const notesH = 112;
+    const summaryH = Math.max(notesH, 42 + summaryRows.length * 18 + 24);
 
-    roundedPanel(doc, ml, bottomY, notesW, summaryH, "#ffffff");
-    label(doc, "Payment instructions", ml + 16, bottomY + 18, notesW - 32);
-    doc.fillColor("#475569").font("Helvetica").fontSize(8.5).text(noteText, ml + 16, bottomY + 38, { width: notesW - 32, lineGap: 2 });
-    doc.fillColor(muted).fontSize(7.5).text(`Manual payment URL: ${payUrl}`, ml + 16, bottomY + summaryH - 24, { width: notesW - 32 });
+    roundedPanel(doc, ml, bottomY, notesW, summaryH, "#ffffff", line, 14);
+    label(doc, "Notes", ml + 16, bottomY + 18, notesW - 32);
+    doc.fillColor(ink).font("Helvetica-Bold").fontSize(10.5).text("Thank you for choosing Connect.", ml + 16, bottomY + 38, { width: notesW - 32 });
+    doc.fillColor(muted).font("Helvetica").fontSize(8.3).text(`Questions about this invoice? Contact ${CONNECT_SUPPORT_EMAIL}.`, ml + 16, bottomY + 58, { width: notesW - 32, lineGap: 2 });
+    if (showPayButton) {
+      doc.roundedRect(ml + 16, bottomY + 84, 116, 24, 8).fill(blue);
+      doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(8.5).text("Pay Now", ml + 16, bottomY + 92, { width: 116, align: "center" });
+      doc.link(ml + 16, bottomY + 84, 116, 24, payUrl);
+      doc.fillColor(subtle).font("Helvetica").fontSize(6.8).text(payUrl, ml + 144, bottomY + 91, { width: notesW - 160, ellipsis: true });
+    }
 
-    roundedPanel(doc, summaryX, bottomY, summaryW, summaryH, "#ffffff");
+    roundedPanel(doc, summaryX, bottomY, summaryW, summaryH, "#ffffff", line, 14);
     label(doc, "Billing summary", summaryX + 16, bottomY + 18, summaryW - 32);
     let sy = bottomY + 42;
     summaryRows.forEach((row) => {
       const isDue = row.tone === "due";
-      doc.fillColor(row.tone === "credit" || row.tone === "paid" ? "#047857" : isDue ? ink : "#475569")
+      doc.fillColor(row.tone === "credit" || row.tone === "paid" ? "#047857" : isDue ? blue : "#475569")
         .font(isDue ? "Helvetica-Bold" : "Helvetica")
-        .fontSize(isDue ? 10.5 : 8.5);
+        .fontSize(isDue ? 11 : 8.5);
       doc.text(row.label, summaryX + 16, sy, { width: 98 });
-      doc.font("Helvetica-Bold").text(money(row.valueCents), summaryX + 116, sy, { width: 68, align: "right" });
-      sy += isDue ? 24 : 18;
-      if (!isDue) doc.moveTo(summaryX + 16, sy - 5).lineTo(summaryX + summaryW - 16, sy - 5).strokeColor("#eef2f7").lineWidth(0.4).stroke();
+      doc.font("Helvetica-Bold").text(money(row.valueCents), summaryX + 116, sy, { width: 80, align: "right" });
+      sy += isDue ? 23 : 18;
+      if (!isDue) doc.moveTo(summaryX + 16, sy - 5).lineTo(summaryX + summaryW - 16, sy - 5).strokeColor(lightLine).lineWidth(0.4).stroke();
     });
 
-    y = bottomY + summaryH + 24;
-    y = ensureSpace(doc, y, 150);
+    y = bottomY + summaryH + 22;
+    y = ensureSpace(doc, y, 166);
 
-    label(doc, "Regulatory & billing notices", ml, y, 230);
-    doc.fillColor(ink).font("Helvetica-Bold").fontSize(15).text("Telecom billing disclosures", ml, y + 14, { width: contentW });
-    y += 40;
-    regulatoryNotices(brand, invoice).forEach((notice) => {
-      y = ensureSpace(doc, y, 34);
-      const h = doc.font("Helvetica").fontSize(7.7).heightOfString(notice, { width: contentW - 18, lineGap: 1 });
-      doc.fillColor(cyan).font("Helvetica-Bold").fontSize(8).text("-", ml, y);
-      doc.fillColor("#475569").font("Helvetica").fontSize(7.7).text(notice, ml + 14, y, { width: contentW - 18, lineGap: 1 });
-      y += h + 7;
+    roundedPanel(doc, ml, y, contentW, 150, "#ffffff", line, 14);
+    drawMiniIcon(doc, "i", ml + 16, y + 18);
+    label(doc, "Regulatory & billing notices", ml + 50, y + 18, 260);
+    doc.fillColor(ink).font("Helvetica-Bold").fontSize(12.5).text("Telecom billing disclosures", ml + 50, y + 36, { width: 260 });
+    const noticeX = ml + 300;
+    let noticeY = y + 18;
+    regulatoryNotices(brand, invoice).slice(0, 5).forEach((notice, idx) => {
+      const h = textHeight(doc, notice, mr - noticeX - 16, 7.4, "Helvetica", 1);
+      doc.fillColor(blue).font("Helvetica-Bold").fontSize(7.2).text(String(idx + 1).padStart(2, "0"), noticeX, noticeY, { width: 16 });
+      doc.fillColor("#475569").font("Helvetica").fontSize(7.4).text(notice, noticeX + 24, noticeY, { width: mr - noticeX - 24, lineGap: 1 });
+      noticeY += h + 7;
+    });
+    y += 174;
+
+    y = ensureSpace(doc, y, 58);
+    doc.moveTo(ml, y).lineTo(mr, y).strokeColor(line).lineWidth(0.8).stroke();
+    y += 18;
+    const footerItems = [
+      ["?", "Billing Support", CONNECT_SUPPORT_EMAIL],
+      [">", "Customer Portal", "app.connectcomunications.com"],
+      ["$", "Secure Payments", "Encrypted card processing"],
+      ["OK", "Thank You", "We appreciate your business"],
+    ];
+    const footerW = contentW / footerItems.length;
+    footerItems.forEach(([icon, title, text], idx) => {
+      const x = ml + idx * footerW;
+      drawMiniIcon(doc, icon, x, y, idx === 0 ? "#eff6ff" : "#f8fafc", idx === 0 ? blue : "#64748b");
+      doc.fillColor(ink).font("Helvetica-Bold").fontSize(8.2).text(title, x + 28, y + 1, { width: footerW - 32 });
+      doc.fillColor(muted).font("Helvetica").fontSize(7.2).text(text, x + 28, y + 13, { width: footerW - 32 });
     });
 
     if (invoice.status === "PAID") {
