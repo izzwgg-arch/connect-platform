@@ -29,6 +29,12 @@ import {
   chargeBillingInvoiceWithSut,
   refundBillingTransaction,
 } from "./solaBillingPayments";
+import {
+  attachBillingChargeOperationInvoice,
+  buildOneTimeChargeBusinessKey,
+  markBillingChargeOperationError,
+  reserveBillingChargeOperation,
+} from "./billingChargeOperations";
 import { maskSolaSecretsForResponse } from "./solaConfigMasking";
 import {
   adminPutPathOverridesSource,
@@ -1854,6 +1860,79 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     if (!tenant) return reply.code(404).send({ error: "tenant_not_found" });
     const gateway = await resolveBillingGatewayConfig(tenantId);
 
+    let method: any = null;
+    let operation: any = null;
+    if (input.chargeMode === "card_on_file") {
+      if (!input.paymentMethodId) return reply.code(400).send({ error: "payment_method_required" });
+      const isLive = !!(gateway.enabled && gateway.mode === "prod" && !gateway.simulate);
+      if (isLive && !input.confirmLive) {
+        return reply.code(400).send({
+          error: "confirm_live_required",
+          message: `Set confirmLive: true to confirm this live charge (gateway source: ${gateway.source}).`,
+        });
+      }
+      method = await (db as any).paymentMethod.findFirst({ where: { id: input.paymentMethodId, tenantId, active: true } });
+      if (!method) return reply.code(400).send({ error: "payment_method_not_found" });
+    } else if (input.chargeMode === "new_card") {
+      if (!input.xSut) return reply.code(400).send({ error: "sola_token_required" });
+      const isLive = !!(gateway.enabled && gateway.mode === "prod" && !gateway.simulate);
+      if (isLive && !input.confirmLive) {
+        return reply.code(400).send({
+          error: "confirm_live_required",
+          message: `Set confirmLive: true to confirm this live charge (gateway source: ${gateway.source}).`,
+        });
+      }
+    }
+
+    if (input.chargeMode !== "none") {
+      const customerKey = `tenant:${tenantId}`;
+      const businessKey = buildOneTimeChargeBusinessKey({
+        tenantId,
+        customerKey,
+        amountCents: input.amountCents,
+        description: input.description,
+        invoiceMemo: input.invoiceMemo,
+        chargeMode: input.chargeMode,
+        paymentMethodId: method?.id ?? null,
+      });
+      try {
+        operation = await reserveBillingChargeOperation({
+          tenantId,
+          businessKey,
+          operationType: "ONE_TIME_CHARGE",
+          chargeType: input.chargeMode,
+          amountCents: input.amountCents,
+          paymentMethodId: method?.id ?? null,
+          customerKey,
+          clientOperationId: input.operationId ?? null,
+          metadata: {
+            description: input.description,
+            invoiceMemo: input.invoiceMemo || null,
+            chargeMode: input.chargeMode,
+            saveCard: !!input.saveCard,
+          },
+        });
+        if (operation.kind === "replay") {
+          const existingInvoice = operation.operation.invoiceId
+            ? await (db as any).billingInvoice.findUnique({ where: { id: operation.operation.invoiceId } })
+            : null;
+          return { invoice: existingInvoice, transaction: operation.transaction };
+        }
+      } catch (err: any) {
+        if (err?.code === "CHARGE_IN_PROGRESS") {
+          const existingInvoice = err?.existingOperation?.invoiceId
+            ? await (db as any).billingInvoice.findUnique({ where: { id: err.existingOperation.invoiceId } })
+            : null;
+          return reply.code(409).send({
+            error: "charge_in_progress",
+            existingTransactionId: err?.existingTransaction?.id || null,
+            invoice: existingInvoice,
+          });
+        }
+        throw err;
+      }
+    }
+
     let invoice;
     try {
       invoice = await createOneTimeChargeInvoice({
@@ -1864,7 +1943,11 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         invoiceMemo: input.invoiceMemo,
         adminUserId: u.sub,
       });
+      if (operation?.operation?.id) {
+        await attachBillingChargeOperationInvoice(operation.operation.id, invoice.id);
+      }
     } catch (err: any) {
+      if (operation?.operation?.id) await markBillingChargeOperationError(operation.operation.id, err?.message || "invoice_creation_failed");
       if (err?.code === "INVALID_AMOUNT") return reply.code(400).send({ error: "invalid_amount" });
       if (err?.code === "INVOICE_NUMBER_CONFLICT" || err?.code === "INVOICE_NUMBER_EXHAUSTED") {
         return reply.code(409).send({
@@ -1877,20 +1960,12 @@ export async function registerBillingRoutes(app: FastifyInstance) {
 
     let transaction = null;
     if (input.chargeMode === "card_on_file") {
-      if (!input.paymentMethodId) return reply.code(400).send({ error: "payment_method_required" });
-      const isLive = !!(gateway.enabled && gateway.mode === "prod" && !gateway.simulate);
-      if (isLive && !input.confirmLive) {
-        return reply.code(400).send({
-          error: "confirm_live_required",
-          message: `Set confirmLive: true to confirm this live charge (gateway source: ${gateway.source}).`,
-        });
-      }
-      const method = await (db as any).paymentMethod.findFirst({ where: { id: input.paymentMethodId, tenantId, active: true } });
-      if (!method) return reply.code(400).send({ error: "payment_method_not_found" });
       try {
         transaction = await chargeBillingInvoice(invoice, method, {
           note: input.operatorNote,
-          operationKey: input.operationId ? `one_time_charge:${tenantId}:${input.operationId}` : undefined,
+          serverOperationKey: operation?.businessKey,
+          serverOperationId: operation?.operation?.id,
+          clientOperationId: input.operationId ?? null,
         });
       } catch (err: any) {
         if (err?.code === "BILLING_LIVE_CHARGES_DISABLED") return sendLiveChargesDisabled(reply);
@@ -1904,19 +1979,11 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         throw err;
       }
     } else if (input.chargeMode === "new_card") {
-      if (!input.xSut) return reply.code(400).send({ error: "sola_token_required" });
-      const isLive = !!(gateway.enabled && gateway.mode === "prod" && !gateway.simulate);
-      if (isLive && !input.confirmLive) {
-        return reply.code(400).send({
-          error: "confirm_live_required",
-          message: `Set confirmLive: true to confirm this live charge (gateway source: ${gateway.source}).`,
-        });
-      }
       try {
         transaction = await chargeBillingInvoiceWithSut(
           invoice,
           {
-            xSut: input.xSut,
+            xSut: input.xSut!,
             xExp: input.xExp,
             cardholderName: input.cardholderName,
             billingZip: input.billingZip,
@@ -1925,7 +1992,10 @@ export async function registerBillingRoutes(app: FastifyInstance) {
             note: input.operatorNote,
             persistPaymentMethod: !!input.saveCard,
             makeDefault: input.makeDefault ?? false,
-            operationKey: input.operationId ? `one_time_charge:${tenantId}:${input.operationId}` : undefined,
+            serverOperationKey: operation?.businessKey,
+            serverOperationId: operation?.operation?.id,
+            clientOperationId: input.operationId ?? null,
+            customerIdentity: `tenant:${tenantId}`,
           },
         );
       } catch (err: any) {
@@ -2571,7 +2641,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const method = methodId ? await (db as any).paymentMethod.findUnique({ where: { id: methodId } }) : null;
     if (!method) return reply.code(400).send({ error: "payment_method_required" });
     try {
-      return await chargeBillingInvoice(invoice, method, { operationKey: `admin_retry:${invoice.id}` });
+      return await chargeBillingInvoice(invoice, method, { allowRetry: true, note: "admin_retry" });
     } catch (err: any) {
       if (err?.code === "BILLING_LIVE_CHARGES_DISABLED") return sendLiveChargesDisabled(reply);
       if (err?.code === "CHARGE_IN_PROGRESS") {

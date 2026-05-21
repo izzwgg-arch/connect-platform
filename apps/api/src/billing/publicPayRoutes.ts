@@ -4,11 +4,9 @@ import { db } from "@connect/db";
 import { hasCredentialsMasterKey } from "@connect/security";
 import {
   getBillingSolaAdapter,
-  getBillingSolaAdapterForTokenizing,
   resolveBillingGatewayConfig,
-  storeSolaPaymentMethod,
 } from "./solaGateway";
-import { billingLiveChargesDisabled, chargeBillingInvoice, chargeBillingInvoiceWithSut } from "./solaBillingPayments";
+import { billingLiveChargesDisabled, chargeBillingInvoiceWithSut } from "./solaBillingPayments";
 import { verifyBillingInvoicePayToken } from "./billingPayToken";
 import { logBillingEvent } from "./invoiceEngine";
 import { resolveInvoiceEmailBranding } from "./invoiceBranding";
@@ -128,33 +126,29 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
     try {
       let transaction: any;
       if (input.saveCard) {
-        const tokenizing = await getBillingSolaAdapterForTokenizing(invoice.tenantId);
-        const saveResp = await tokenizing.saveCardWithSut({
-          sut: input.xSut,
-          exp: input.xExp,
-          cardholderName: input.cardholderName,
-          zip: input.billingZip,
-        });
-        if (!saveResp.approved || !saveResp.xToken) {
-          return reply.code(402).send({ error: "card_save_failed" });
-        }
-        const method = await storeSolaPaymentMethod({
-          tenantId: invoice.tenantId,
-          response: saveResp,
-          cardholderName: input.cardholderName,
-          billingZip: input.billingZip,
-          makeDefault: input.enableAutopay || false,
-        });
+        transaction = await chargeBillingInvoiceWithSut(
+          invoice,
+          {
+            xSut: input.xSut,
+            xExp: input.xExp,
+            cardholderName: input.cardholderName,
+            billingZip: input.billingZip,
+          },
+          {
+            adapter,
+            note: "public_pay_link_saved_card",
+            persistPaymentMethod: true,
+            makeDefault: input.enableAutopay || false,
+            customerIdentity: `tenant:${invoice.tenantId}`,
+          },
+        );
+        const savedPaymentMethodId = (transaction?.rawResponseSafeJson as any)?.savedPaymentMethodId;
         if (input.enableAutopay) {
           await (db as any).tenantBillingSettings.update({
             where: { tenantId: invoice.tenantId },
-            data: { autoBillingEnabled: true, defaultPaymentMethodId: method.id },
+            data: { autoBillingEnabled: true, ...(savedPaymentMethodId ? { defaultPaymentMethodId: savedPaymentMethodId } : {}) },
           }).catch(() => null);
         }
-        transaction = await chargeBillingInvoice(invoice, method, {
-          adapter,
-          note: "public_pay_link_saved_card",
-        });
       } else {
         transaction = await chargeBillingInvoiceWithSut(
           invoice,
@@ -164,7 +158,7 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
             cardholderName: input.cardholderName,
             billingZip: input.billingZip,
           },
-          { adapter, note: "public_pay_link" },
+          { adapter, note: "public_pay_link", customerIdentity: `tenant:${invoice.tenantId}` },
         );
       }
 

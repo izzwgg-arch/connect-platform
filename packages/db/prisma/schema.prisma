@@ -146,6 +146,13 @@ enum BillingPaymentTransactionStatus {
   REFUNDED
 }
 
+enum BillingChargeOperationStatus {
+  PENDING
+  APPROVED
+  DECLINED
+  ERROR
+}
+
 enum BillingRunStatus {
   RUNNING
   COMPLETED
@@ -283,62 +290,62 @@ enum CallInviteStatus {
 }
 
 model Tenant {
-  id                              String                        @id @default(cuid())
+  id                              String                            @id @default(cuid())
   name                            String
   /// Customer-facing business tenant vs. internal/test workspaces. Admin dropdowns default to CUSTOMER.
-  kind                            TenantKind                    @default(CUSTOMER)
-  isApproved                      Boolean                       @default(false)
-  dailySmsCap                     Int                           @default(100)
-  perSecondRate                   Float                         @default(1.0)
-  firstCampaignRequiresApproval   Boolean                       @default(true)
-  smsSendMode                     SmsSendMode                   @default(TEST)
+  kind                            TenantKind                        @default(CUSTOMER)
+  isApproved                      Boolean                           @default(false)
+  dailySmsCap                     Int                               @default(100)
+  perSecondRate                   Float                             @default(1.0)
+  firstCampaignRequiresApproval   Boolean                           @default(true)
+  smsSendMode                     SmsSendMode                       @default(TEST)
   smsLiveEnabledAt                DateTime?
   smsLiveEnabledByUserId          String?
-  dailySmsLimit                   Int                           @default(500)
-  hourlySmsLimit                  Int                           @default(100)
-  perSecondRateLimit              Int                           @default(5)
-  maxCampaignSize                 Int                           @default(2000)
-  smsSuspended                    Boolean                       @default(false)
+  dailySmsLimit                   Int                               @default(500)
+  hourlySmsLimit                  Int                               @default(100)
+  perSecondRateLimit              Int                               @default(5)
+  maxCampaignSize                 Int                               @default(2000)
+  smsSuspended                    Boolean                           @default(false)
   smsSuspendedReason              String?
   smsSuspendedAt                  DateTime?
-  smsRoutingMode                  SmsProviderRoutingMode        @default(FAILOVER)
-  smsPrimaryProvider              IntegrationProvider           @default(TWILIO)
-  smsSecondaryProvider            IntegrationProvider?          @default(VOIPMS)
+  smsRoutingMode                  SmsProviderRoutingMode            @default(FAILOVER)
+  smsPrimaryProvider              IntegrationProvider               @default(TWILIO)
+  smsSecondaryProvider            IntegrationProvider?              @default(VOIPMS)
   smsProviderLock                 IntegrationProvider?
   smsProviderLockReason           String?
   smsProviderLockedAt             DateTime?
   smsProviderLockedByUserId       String?
   defaultSmsFromNumberId          String?
   defaultVoiceFromNumberId        String?
-  numberPurchaseEnabled           Boolean                       @default(true)
-  smsSubscriptionRequired         Boolean                       @default(true)
-  smsBillingEnforced              Boolean                       @default(true)
-  webrtcEnabled                   Boolean                       @default(false)
-  webrtcRouteViaSbc               Boolean                       @default(false)
+  numberPurchaseEnabled           Boolean                           @default(true)
+  smsSubscriptionRequired         Boolean                           @default(true)
+  smsBillingEnforced              Boolean                           @default(true)
+  webrtcEnabled                   Boolean                           @default(false)
+  webrtcRouteViaSbc               Boolean                           @default(false)
   sipWsUrl                        String?
   sipDomain                       String?
   iceServers                      Json?
   outboundProxy                   String?
-  dtmfMode                        DtmfMode                      @default(RFC2833)
-  turnRequiredForMobile           Boolean                       @default(false)
-  turnValidationStatus            TurnValidationStatus          @default(UNKNOWN)
+  dtmfMode                        DtmfMode                          @default(RFC2833)
+  turnRequiredForMobile           Boolean                           @default(false)
+  turnValidationStatus            TurnValidationStatus              @default(UNKNOWN)
   turnValidatedAt                 DateTime?
   turnLastErrorCode               String?
   turnLastErrorAt                 DateTime?
-  mediaReliabilityGateEnabled     Boolean                       @default(false)
-  mediaTestStatus                 MediaTestStatus               @default(UNKNOWN)
+  mediaReliabilityGateEnabled     Boolean                           @default(false)
+  mediaTestStatus                 MediaTestStatus                   @default(UNKNOWN)
   mediaTestedAt                   DateTime?
   mediaLastErrorCode              String?
   mediaLastErrorAt                DateTime?
-  mediaPolicy                     MediaPolicy                   @default(TURN_ONLY)
-  sbcUdpExposureConfirmed         Boolean                       @default(false)
+  mediaPolicy                     MediaPolicy                       @default(TURN_ONLY)
+  sbcUdpExposureConfirmed         Boolean                           @default(false)
   sbcUdpExposureConfirmedAt       DateTime?
   sbcUdpExposureConfirmedByUserId String?
-  createdAt                       DateTime                      @default(now())
+  createdAt                       DateTime                          @default(now())
   users                           User[]
   tenDlcSubs                      TenDlcSubmission[]
   campaigns                       SmsCampaign[]
-  numbers                         PhoneNumber[]                 @relation("TenantOwnedNumbers")
+  numbers                         PhoneNumber[]                     @relation("TenantOwnedNumbers")
   audits                          AuditLog[]
   providerCredentials             ProviderCredential[]
   billingSolaConfig               BillingSolaConfig?
@@ -405,9 +412,9 @@ model Tenant {
   mohAssets                       MohAsset[]
   pbxMohClasses                   PbxMohClass[]
   pbxCallEvents                   PbxCallEvent[]
-  smsLiveEnabledByUser            User?                         @relation("TenantSmsLiveEnabledBy", fields: [smsLiveEnabledByUserId], references: [id], onDelete: SetNull)
-  smsProviderLockedByUser         User?                         @relation("TenantSmsProviderLockedBy", fields: [smsProviderLockedByUserId], references: [id], onDelete: SetNull)
-  defaultSmsFromNumber            PhoneNumber?                  @relation("TenantDefaultSmsFromNumber", fields: [defaultSmsFromNumberId], references: [id], onDelete: SetNull)
+  smsLiveEnabledByUser            User?                             @relation("TenantSmsLiveEnabledBy", fields: [smsLiveEnabledByUserId], references: [id], onDelete: SetNull)
+  smsProviderLockedByUser         User?                             @relation("TenantSmsProviderLockedBy", fields: [smsProviderLockedByUserId], references: [id], onDelete: SetNull)
+  defaultSmsFromNumber            PhoneNumber?                      @relation("TenantDefaultSmsFromNumber", fields: [defaultSmsFromNumberId], references: [id], onDelete: SetNull)
   tenantSmsNumbers                TenantSmsNumber[]
   connectChatThreads              ConnectChatThread[]
   smsRoutingLogs                  SmsRoutingLog[]
@@ -424,13 +431,13 @@ model Tenant {
   crmChecklistResponses           CrmChecklistResponse[]
   crmCampaigns                    CrmCampaign[]
   crmCampaignMembers              CrmCampaignMember[]
-  crmCallerIdPool                 CrmCallerIdPool[]             @relation("TenantCrmCallerIdPool")
+  crmCallerIdPool                 CrmCallerIdPool[]                 @relation("TenantCrmCallerIdPool")
 }
 
 model User {
-  id                             String                        @id @default(cuid())
+  id                             String                            @id @default(cuid())
   tenantId                       String
-  email                          String                        @unique
+  email                          String                            @unique
   firstName                      String?
   lastName                       String?
   displayName                    String?
@@ -441,59 +448,59 @@ model User {
   department                     String?
   notes                          String?
   passwordHash                   String
-  role                           UserRole                      @default(USER)
-  status                         UserStatus                    @default(ACTIVE)
+  role                           UserRole                          @default(USER)
+  status                         UserStatus                        @default(ACTIVE)
   emailVerifiedAt                DateTime?
   lastLoginAt                    DateTime?
-  forcePasswordReset             Boolean                       @default(false)
-  updatedAt                      DateTime                      @updatedAt
-  createdAt                      DateTime                      @default(now())
-  tenant                         Tenant                        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  auditEvents                    AuditLog[]                    @relation("AuditActor")
-  passwordTokens                 UserPasswordToken[]           @relation("UserPasswordTokens")
-  createdPasswordTokens          UserPasswordToken[]           @relation("UserPasswordTokenCreator")
-  createdProviderCredentials     ProviderCredential[]          @relation("ProviderCredentialCreatedBy")
-  updatedProviderCredentials     ProviderCredential[]          @relation("ProviderCredentialUpdatedBy")
-  createdBillingSolaConfigs      BillingSolaConfig[]           @relation("BillingSolaConfigCreatedBy")
-  updatedBillingSolaConfigs      BillingSolaConfig[]           @relation("BillingSolaConfigUpdatedBy")
-  createdWhatsAppProviderConfigs WhatsAppProviderConfig[]      @relation("WhatsAppProviderConfigCreatedBy")
-  updatedWhatsAppProviderConfigs WhatsAppProviderConfig[]      @relation("WhatsAppProviderConfigUpdatedBy")
-  createdEmailProviderConfigs    EmailProviderConfig[]         @relation("EmailProviderConfigCreatedBy")
-  updatedEmailProviderConfigs    EmailProviderConfig[]         @relation("EmailProviderConfigUpdatedBy")
-  smsLiveEnabledTenants          Tenant[]                      @relation("TenantSmsLiveEnabledBy")
-  smsProviderLockedTenants       Tenant[]                      @relation("TenantSmsProviderLockedBy")
-  ownedExtensions                Extension[]                   @relation("ExtensionOwner")
+  forcePasswordReset             Boolean                           @default(false)
+  updatedAt                      DateTime                          @updatedAt
+  createdAt                      DateTime                          @default(now())
+  tenant                         Tenant                            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  auditEvents                    AuditLog[]                        @relation("AuditActor")
+  passwordTokens                 UserPasswordToken[]               @relation("UserPasswordTokens")
+  createdPasswordTokens          UserPasswordToken[]               @relation("UserPasswordTokenCreator")
+  createdProviderCredentials     ProviderCredential[]              @relation("ProviderCredentialCreatedBy")
+  updatedProviderCredentials     ProviderCredential[]              @relation("ProviderCredentialUpdatedBy")
+  createdBillingSolaConfigs      BillingSolaConfig[]               @relation("BillingSolaConfigCreatedBy")
+  updatedBillingSolaConfigs      BillingSolaConfig[]               @relation("BillingSolaConfigUpdatedBy")
+  createdWhatsAppProviderConfigs WhatsAppProviderConfig[]          @relation("WhatsAppProviderConfigCreatedBy")
+  updatedWhatsAppProviderConfigs WhatsAppProviderConfig[]          @relation("WhatsAppProviderConfigUpdatedBy")
+  createdEmailProviderConfigs    EmailProviderConfig[]             @relation("EmailProviderConfigCreatedBy")
+  updatedEmailProviderConfigs    EmailProviderConfig[]             @relation("EmailProviderConfigUpdatedBy")
+  smsLiveEnabledTenants          Tenant[]                          @relation("TenantSmsLiveEnabledBy")
+  smsProviderLockedTenants       Tenant[]                          @relation("TenantSmsProviderLockedBy")
+  ownedExtensions                Extension[]                       @relation("ExtensionOwner")
   mobileDevices                  MobileDevice[]
   callInvites                    CallInvite[]
   callWakeEvents                 CallWakeEvent[]
   voiceClientSessions            VoiceClientSession[]
   voiceDiagEvents                VoiceDiagEvent[]
-  requestedTurnValidationJobs    TurnValidationJob[]           @relation("TurnValidationRequestedBy")
-  requestedMediaTestRuns         MediaTestRun[]                @relation("MediaTestRequestedBy")
+  requestedTurnValidationJobs    TurnValidationJob[]               @relation("TurnValidationRequestedBy")
+  requestedMediaTestRuns         MediaTestRun[]                    @relation("MediaTestRequestedBy")
   mobileProvisioningTokens       MobileProvisioningToken[]
-  updatedSbcConfigs              SbcConfig[]                   @relation("SbcConfigUpdatedBy")
+  updatedSbcConfigs              SbcConfig[]                       @relation("SbcConfigUpdatedBy")
   customerNotes                  CustomerNote[]
-  createdContacts                Contact[]                     @relation("ContactCreatedBy")
-  createdCustomerTasks           CustomerTask[]                @relation("CustomerTaskCreatedBy")
-  completedCustomerTasks         CustomerTask[]                @relation("CustomerTaskCompletedBy")
-  createdAutomationRules         AutomationRule[]              @relation("AutomationRuleCreatedBy")
-  tenantSmsNumbersAssigned       TenantSmsNumber[]             @relation("TenantSmsNumberAssignUser")
-  outboundRoutePermissions       UserOutboundRoutePermission[] @relation("UserOutboundRoutePermissionUser")
+  createdContacts                Contact[]                         @relation("ContactCreatedBy")
+  createdCustomerTasks           CustomerTask[]                    @relation("CustomerTaskCreatedBy")
+  completedCustomerTasks         CustomerTask[]                    @relation("CustomerTaskCompletedBy")
+  createdAutomationRules         AutomationRule[]                  @relation("AutomationRuleCreatedBy")
+  tenantSmsNumbersAssigned       TenantSmsNumber[]                 @relation("TenantSmsNumberAssignUser")
+  outboundRoutePermissions       UserOutboundRoutePermission[]     @relation("UserOutboundRoutePermissionUser")
   connectChatParticipants        ConnectChatParticipant[]
-  connectChatMessages            ConnectChatMessage[]          @relation("ConnectChatMessageSenderUser")
+  connectChatMessages            ConnectChatMessage[]              @relation("ConnectChatMessageSenderUser")
   crmAccess                      CrmUserAccess[]
-  crmContactsAssigned            CrmContactMeta[]              @relation("CrmContactAssignedTo")
-  crmTimelineEventsCreated       CrmTimelineEvent[]            @relation("CrmTimelineEventCreatedBy")
-  crmContactNotesCreated         CrmContactNote[]              @relation("CrmContactNoteCreatedBy")
-  crmTasksAssigned               CrmContactTask[]              @relation("CrmTaskAssignedTo")
-  crmTasksCompleted              CrmContactTask[]              @relation("CrmTaskCompletedBy")
-  crmTasksCreated                CrmContactTask[]              @relation("CrmTaskCreatedBy")
+  crmContactsAssigned            CrmContactMeta[]                  @relation("CrmContactAssignedTo")
+  crmTimelineEventsCreated       CrmTimelineEvent[]                @relation("CrmTimelineEventCreatedBy")
+  crmContactNotesCreated         CrmContactNote[]                  @relation("CrmContactNoteCreatedBy")
+  crmTasksAssigned               CrmContactTask[]                  @relation("CrmTaskAssignedTo")
+  crmTasksCompleted              CrmContactTask[]                  @relation("CrmTaskCompletedBy")
+  crmTasksCreated                CrmContactTask[]                  @relation("CrmTaskCreatedBy")
   crmImportBatches               CrmImportBatch[]
-  crmScriptsCreated              CrmScript[]                   @relation("CrmScriptCreatedBy")
-  crmChecklistsCreated           CrmChecklist[]                @relation("CrmChecklistCreatedBy")
-  crmChecklistResponses          CrmChecklistResponse[]        @relation("CrmChecklistResponseCompletedBy")
-  crmCampaignsCreated            CrmCampaign[]                 @relation("CrmCampaignCreatedBy")
-  crmCampaignMembersAssigned     CrmCampaignMember[]           @relation("CrmCampaignMemberAssignedTo")
+  crmScriptsCreated              CrmScript[]                       @relation("CrmScriptCreatedBy")
+  crmChecklistsCreated           CrmChecklist[]                    @relation("CrmChecklistCreatedBy")
+  crmChecklistResponses          CrmChecklistResponse[]            @relation("CrmChecklistResponseCompletedBy")
+  crmCampaignsCreated            CrmCampaign[]                     @relation("CrmCampaignCreatedBy")
+  crmCampaignMembersAssigned     CrmCampaignMember[]               @relation("CrmCampaignMemberAssignedTo")
   mappedSolaExternalSchedules    BillingSolaExternalScheduleLink[] @relation("SolaScheduleMappedBy")
 }
 
@@ -708,18 +715,18 @@ model TenantBillingSettings {
   discountPercent                 Decimal        @default(0) @db.Decimal(7, 6)
   metadata                        Json?
   /// Display name on invoices/emails (falls back to tenant name).
-  invoiceCompanyName            String?
+  invoiceCompanyName              String?
   /// HTTPS URL for logo in HTML emails only (PDF uses text header — no remote image fetch).
-  invoiceLogoUrl                String?
+  invoiceLogoUrl                  String?
   invoiceSupportEmail             String?
   invoiceSupportPhone             String?
   /// Plain text, length-capped in API (invoice PDF + email footers).
-  invoiceFooterNote             String?
-  invoicePaymentInstructions    String?
+  invoiceFooterNote               String?
+  invoicePaymentInstructions      String?
   /// Scheduled plan change: new plan to apply at the start of the next billing period.
-  nextBillingPlanId             String?
+  nextBillingPlanId               String?
   /// UTC midnight on the first day of the billing period when nextBillingPlanId becomes effective.
-  nextBillingPlanEffectiveAt    DateTime?
+  nextBillingPlanEffectiveAt      DateTime?
   createdAt                       DateTime       @default(now())
   updatedAt                       DateTime       @updatedAt
   tenant                          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -790,29 +797,29 @@ model BillingInvoiceLineItem {
 }
 
 model PaymentMethod {
-  id                        String                        @id @default(cuid())
+  id                        String                            @id @default(cuid())
   tenantId                  String
-  processor                 BillingPaymentMethodProcessor @default(SOLA)
+  processor                 BillingPaymentMethodProcessor     @default(SOLA)
   tokenEncrypted            String
-  tokenKeyId                String                        @default("v1")
+  tokenKeyId                String                            @default("v1")
   brand                     String?
   last4                     String?
   expMonth                  String?
   expYear                   String?
   cardholderName            String?
   billingZip                String?
-  isDefault                 Boolean                       @default(false)
-  active                    Boolean                       @default(true)
-  isImported                Boolean                       @default(false)
+  isDefault                 Boolean                           @default(false)
+  active                    Boolean                           @default(true)
+  isImported                Boolean                           @default(false)
   importedAt                DateTime?
   processorCustomerId       String?
   processorPaymentMethodId  String?
   metadata                  Json?
   lastUsedAt                DateTime?
-  createdAt                 DateTime                      @default(now())
-  updatedAt                 DateTime                      @updatedAt
-  tenant                    Tenant                        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  defaultForBillingSettings TenantBillingSettings[]       @relation("DefaultTenantBillingPaymentMethod")
+  createdAt                 DateTime                          @default(now())
+  updatedAt                 DateTime                          @updatedAt
+  tenant                    Tenant                            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  defaultForBillingSettings TenantBillingSettings[]           @relation("DefaultTenantBillingPaymentMethod")
   invoices                  BillingInvoice[]
   transactions              PaymentTransaction[]
   solaScheduleLinks         BillingSolaExternalScheduleLink[] @relation("LinkedPaymentMethod")
@@ -823,28 +830,56 @@ model PaymentMethod {
 }
 
 model PaymentTransaction {
-  id                     String                          @id @default(cuid())
-  tenantId               String
-  invoiceId              String?
-  paymentMethodId        String?
-  amountCents            Int
-  currency               String                          @default("USD")
-  status                 BillingPaymentTransactionStatus @default(PENDING)
-  processor              BillingPaymentMethodProcessor   @default(SOLA)
-  processorTransactionId String?
-  responseCode           String?
-  responseMessage        String?
-  rawResponseSafeJson    Json?
-  idempotencyKey         String?                         @unique
-  createdAt              DateTime                        @default(now())
-  updatedAt              DateTime                        @updatedAt
-  tenant                 Tenant                          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  invoice                BillingInvoice?                 @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
-  paymentMethod          PaymentMethod?                  @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  id                       String                          @id @default(cuid())
+  tenantId                 String
+  invoiceId                String?
+  paymentMethodId          String?
+  billingChargeOperationId String?
+  amountCents              Int
+  currency                 String                          @default("USD")
+  status                   BillingPaymentTransactionStatus @default(PENDING)
+  processor                BillingPaymentMethodProcessor   @default(SOLA)
+  processorTransactionId   String?
+  responseCode             String?
+  responseMessage          String?
+  rawResponseSafeJson      Json?
+  idempotencyKey           String?                         @unique
+  createdAt                DateTime                        @default(now())
+  updatedAt                DateTime                        @updatedAt
+  tenant                   Tenant                          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice                  BillingInvoice?                 @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  paymentMethod            PaymentMethod?                  @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  billingChargeOperation   BillingChargeOperation?         @relation(fields: [billingChargeOperationId], references: [id], onDelete: SetNull)
 
+  @@unique([processor, processorTransactionId])
   @@index([tenantId, createdAt])
   @@index([invoiceId, createdAt])
+  @@index([billingChargeOperationId])
   @@index([processor, processorTransactionId])
+}
+
+model BillingChargeOperation {
+  id                   String                       @id @default(cuid())
+  tenantId             String
+  businessKey          String                       @unique
+  operationType        String
+  chargeType           String
+  amountCents          Int
+  currency             String                       @default("USD")
+  status               BillingChargeOperationStatus @default(PENDING)
+  invoiceId            String?
+  paymentMethodId      String?
+  paymentTransactionId String?                      @unique
+  customerKey          String?
+  clientOperationId    String?
+  metadata             Json?
+  createdAt            DateTime                     @default(now())
+  updatedAt            DateTime                     @updatedAt
+  paymentTransactions  PaymentTransaction[]
+
+  @@index([tenantId, createdAt])
+  @@index([invoiceId])
+  @@index([status, updatedAt])
 }
 
 model BillingRun {
@@ -886,48 +921,48 @@ model BillingEventLog {
 
 /// Read-only mirror of Sola/Cardknox recurring schedules for operator mapping (no raw PAN/token).
 model BillingSolaExternalScheduleLink {
-  id                    String                        @id @default(cuid())
-  tenantId              String?
-  suggestedTenantId     String?
-  solaCustomerId        String
-  solaPaymentMethodId   String?
-  solaScheduleId        String                        @unique
-  customerName          String?
-  customerEmail         String?
-  companyName           String?
-  maskedCard            String?
-  brand                 String?
-  last4                 String?
-  expMonth              String?
-  expYear               String?
-  amountCents           Int?
-  intervalType          String?
-  intervalCount         Int?
-  nextRunAt             DateTime?
-  lastRunAt             DateTime?
-  lastTransactionStatus String?
-  isActive              Boolean                       @default(false)
-  mappingStatus         SolaScheduleLinkMappingStatus @default(UNMAPPED)
-  matchConfidence       String?
-  matchReason           String?
-  rawSafeJson           Json?
-  mappedByUserId        String?
-  mappedAt              DateTime?
-  lastSyncedAt          DateTime?
-  cutoverStatus         String?
-  linkedPaymentMethodId String?
-  tokenLinkedAt         DateTime?
-  cutoverAt             DateTime?
-  cutoverByUserId       String?
-  disabledSolaAt        DateTime?
-  disableAttemptedAt    DateTime?
-  disableError          String?
+  id                      String                        @id @default(cuid())
+  tenantId                String?
+  suggestedTenantId       String?
+  solaCustomerId          String
+  solaPaymentMethodId     String?
+  solaScheduleId          String                        @unique
+  customerName            String?
+  customerEmail           String?
+  companyName             String?
+  maskedCard              String?
+  brand                   String?
+  last4                   String?
+  expMonth                String?
+  expYear                 String?
+  amountCents             Int?
+  intervalType            String?
+  intervalCount           Int?
+  nextRunAt               DateTime?
+  lastRunAt               DateTime?
+  lastTransactionStatus   String?
+  isActive                Boolean                       @default(false)
+  mappingStatus           SolaScheduleLinkMappingStatus @default(UNMAPPED)
+  matchConfidence         String?
+  matchReason             String?
+  rawSafeJson             Json?
+  mappedByUserId          String?
+  mappedAt                DateTime?
+  lastSyncedAt            DateTime?
+  cutoverStatus           String?
+  linkedPaymentMethodId   String?
+  tokenLinkedAt           DateTime?
+  cutoverAt               DateTime?
+  cutoverByUserId         String?
+  disabledSolaAt          DateTime?
+  disableAttemptedAt      DateTime?
+  disableError            String?
   connectAutopayEnabledAt DateTime?
-  createdAt             DateTime                      @default(now())
-  updatedAt             DateTime                      @updatedAt
-  tenant                Tenant?                       @relation(fields: [tenantId], references: [id], onDelete: SetNull)
-  mappedByUser          User?                         @relation("SolaScheduleMappedBy", fields: [mappedByUserId], references: [id], onDelete: SetNull)
-  linkedPaymentMethod   PaymentMethod?                @relation("LinkedPaymentMethod", fields: [linkedPaymentMethodId], references: [id], onDelete: SetNull)
+  createdAt               DateTime                      @default(now())
+  updatedAt               DateTime                      @updatedAt
+  tenant                  Tenant?                       @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  mappedByUser            User?                         @relation("SolaScheduleMappedBy", fields: [mappedByUserId], references: [id], onDelete: SetNull)
+  linkedPaymentMethod     PaymentMethod?                @relation("LinkedPaymentMethod", fields: [linkedPaymentMethodId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
   @@index([suggestedTenantId])
@@ -1070,11 +1105,11 @@ model PhoneNumber {
   releasedAt        DateTime?
   createdAt         DateTime            @default(now())
   updatedAt         DateTime            @updatedAt
-  tenant              Tenant              @relation("TenantOwnedNumbers", fields: [tenantId], references: [id], onDelete: Cascade)
-  defaultForTenants   Tenant[]            @relation("TenantDefaultSmsFromNumber")
-  smsMessages         SmsMessage[]        @relation("SmsMessageFromNumber")
-  pbxDidLinks         PbxDidLink[]
-  crmCallerIdPool     CrmCallerIdPool[]   @relation("PhoneNumberCrmCallerIdPool")
+  tenant            Tenant              @relation("TenantOwnedNumbers", fields: [tenantId], references: [id], onDelete: Cascade)
+  defaultForTenants Tenant[]            @relation("TenantDefaultSmsFromNumber")
+  smsMessages       SmsMessage[]        @relation("SmsMessageFromNumber")
+  pbxDidLinks       PbxDidLink[]
+  crmCallerIdPool   CrmCallerIdPool[]   @relation("PhoneNumberCrmCallerIdPool")
 
   @@index([tenantId, status])
   @@index([provider, status])
@@ -1276,38 +1311,38 @@ model Customer {
 }
 
 model Contact {
-  id          String                 @id @default(cuid())
-  tenantId    String
-  type        ContactType            @default(EXTERNAL)
-  extensionId String?
-  firstName   String?
-  lastName    String?
-  displayName String
-  company     String?
-  title       String?
-  avatarUrl   String?
-  storageKey  String?
-  notes       String?
-  source      ContactSource          @default(MANUAL)
-  favorite    Boolean                @default(false)
-  active      Boolean                @default(true)
-  archivedAt  DateTime?
-  createdBy   String?
-  createdAt   DateTime               @default(now())
-  updatedAt   DateTime               @updatedAt
-  tenant      Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  extension   Extension?             @relation(fields: [extensionId], references: [id], onDelete: SetNull)
-  creator     User?                  @relation("ContactCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
-  phones              ContactPhone[]
-  emails              ContactEmail[]
-  addresses           ContactAddress[]
-  tagLinks            ContactTagAssignment[]
-  crmMeta                  CrmContactMeta?
-  crmTimelineEvents        CrmTimelineEvent[]
-  crmNotes                 CrmContactNote[]
-  crmTasks                 CrmContactTask[]
-  crmChecklistResponses    CrmChecklistResponse[]
-  crmCampaignMembers       CrmCampaignMember[]
+  id                    String                 @id @default(cuid())
+  tenantId              String
+  type                  ContactType            @default(EXTERNAL)
+  extensionId           String?
+  firstName             String?
+  lastName              String?
+  displayName           String
+  company               String?
+  title                 String?
+  avatarUrl             String?
+  storageKey            String?
+  notes                 String?
+  source                ContactSource          @default(MANUAL)
+  favorite              Boolean                @default(false)
+  active                Boolean                @default(true)
+  archivedAt            DateTime?
+  createdBy             String?
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  tenant                Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  extension             Extension?             @relation(fields: [extensionId], references: [id], onDelete: SetNull)
+  creator               User?                  @relation("ContactCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  phones                ContactPhone[]
+  emails                ContactEmail[]
+  addresses             ContactAddress[]
+  tagLinks              ContactTagAssignment[]
+  crmMeta               CrmContactMeta?
+  crmTimelineEvents     CrmTimelineEvent[]
+  crmNotes              CrmContactNote[]
+  crmTasks              CrmContactTask[]
+  crmChecklistResponses CrmChecklistResponse[]
+  crmCampaignMembers    CrmCampaignMember[]
 
   @@unique([tenantId, extensionId])
   @@index([tenantId, type, active])
@@ -2867,11 +2902,11 @@ enum ConnectChatParticipantRole {
 /// Platform-wide Cardknox/SOLA gateway defaults (iFields public key, etc).
 /// Set once; applies to all tenants that have no per-tenant override.
 model GlobalSolaConfig {
-  id           String   @id @default("default")
+  id         String   @id @default("default")
   /// Cardknox iFields public key — used by the hosted card-capture form on all tenant billing pages.
-  ifieldsKey   String?
-  updatedAt    DateTime @updatedAt
-  updatedBy    String?
+  ifieldsKey String?
+  updatedAt  DateTime @updatedAt
+  updatedBy  String?
 }
 
 model GlobalVoipMsConfig {
@@ -3124,18 +3159,18 @@ enum CrmContactStage {
 /// Deleting the Contact cascades and removes the CRM meta.
 /// No contact data is duplicated — all phones/emails/names live on Contact.
 model CrmContactMeta {
-  id                 String          @id @default(cuid())
-  contactId          String          @unique
-  tenantId           String
-  stage              CrmContactStage @default(LEAD)
-  assignedToUserId   String?
-  doNotCall          Boolean         @default(false)
-  doNotSms           Boolean         @default(false)
-  lastActivityAt     DateTime?
-  lastDisposition    String?
-  lastDispositionAt  DateTime?
-  createdAt          DateTime        @default(now())
-  updatedAt          DateTime        @updatedAt
+  id                String          @id @default(cuid())
+  contactId         String          @unique
+  tenantId          String
+  stage             CrmContactStage @default(LEAD)
+  assignedToUserId  String?
+  doNotCall         Boolean         @default(false)
+  doNotSms          Boolean         @default(false)
+  lastActivityAt    DateTime?
+  lastDisposition   String?
+  lastDispositionAt DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
 
   contact    Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
   tenant     Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -3198,7 +3233,7 @@ enum CrmTimelineEventType {
 /// linkedId references an external row (e.g. CrmContactNote.id, ConnectCdr.id).
 /// Do NOT delete timeline events; they are an append-only log.
 model CrmTimelineEvent {
-  id              String                 @id @default(cuid())
+  id              String               @id @default(cuid())
   tenantId        String
   contactId       String
   type            CrmTimelineEventType
@@ -3207,7 +3242,7 @@ model CrmTimelineEvent {
   metadata        Json?
   linkedId        String?
   createdByUserId String?
-  createdAt       DateTime               @default(now())
+  createdAt       DateTime             @default(now())
 
   tenant        Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   contact       Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
@@ -3300,21 +3335,21 @@ enum CrmImportBatchStatus {
 /// errors Json stores per-row error details: [{ row: number, reason: string }]
 /// mapping Json stores the auto-detected column mapping: { csvHeader: fieldKey }
 model CrmImportBatch {
-  id             String               @id @default(cuid())
-  tenantId       String
-  fileName       String
-  status         CrmImportBatchStatus @default(PENDING)
-  totalRows      Int                  @default(0)
-  processedRows  Int                  @default(0)
-  createdCount   Int                  @default(0)
-  updatedCount   Int                  @default(0)
-  skippedCount   Int                  @default(0)
-  errorCount     Int                  @default(0)
-  errors         Json                 @default("[]")
-  mapping        Json?
+  id              String               @id @default(cuid())
+  tenantId        String
+  fileName        String
+  status          CrmImportBatchStatus @default(PENDING)
+  totalRows       Int                  @default(0)
+  processedRows   Int                  @default(0)
+  createdCount    Int                  @default(0)
+  updatedCount    Int                  @default(0)
+  skippedCount    Int                  @default(0)
+  errorCount      Int                  @default(0)
+  errors          Json                 @default("[]")
+  mapping         Json?
   createdByUserId String
-  createdAt      DateTime             @default(now())
-  completedAt    DateTime?
+  createdAt       DateTime             @default(now())
+  completedAt     DateTime?
 
   tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdBy User   @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
@@ -3334,8 +3369,8 @@ model CrmScript {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  tenant    Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy User           @relation("CrmScriptCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User          @relation("CrmScriptCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
   campaigns CrmCampaign[]
 
   @@index([tenantId, isActive, createdAt])
@@ -3353,7 +3388,7 @@ model CrmChecklist {
   updatedAt       DateTime @updatedAt
 
   tenant    Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy User                  @relation("CrmChecklistCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  createdBy User                   @relation("CrmChecklistCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
   items     CrmChecklistItem[]
   responses CrmChecklistResponse[]
   campaigns CrmCampaign[]
@@ -3363,11 +3398,11 @@ model CrmChecklist {
 
 /// Individual item inside a CrmChecklist template.
 model CrmChecklistItem {
-  id          String       @id @default(cuid())
+  id          String  @id @default(cuid())
   checklistId String
   label       String
-  required    Boolean      @default(false)
-  sortOrder   Int          @default(0)
+  required    Boolean @default(false)
+  sortOrder   Int     @default(0)
 
   checklist CrmChecklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
 
@@ -3382,9 +3417,9 @@ model CrmChecklistResponse {
   tenantId          String
   checklistId       String
   contactId         String
-  linkedId          String?  // CDR linkedId if call is known; null if saved offline
+  linkedId          String? // CDR linkedId if call is known; null if saved offline
   completedByUserId String
-  answers           Json     // { [itemId]: boolean }
+  answers           Json // { [itemId]: boolean }
   createdAt         DateTime @default(now())
 
   tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -3401,22 +3436,22 @@ model CrmChecklistResponse {
 /// A named outbound calling campaign. Members are contacts enrolled in the campaign.
 /// Optionally linked to a CrmScript and/or CrmChecklist for agent use.
 model CrmCampaign {
-  id              String                  @id @default(cuid())
+  id              String              @id @default(cuid())
   tenantId        String
   name            String
   description     String?
-  status          CrmCampaignStatus       @default(DRAFT)
-  priority        CrmCampaignPriority     @default(NORMAL)
+  status          CrmCampaignStatus   @default(DRAFT)
+  priority        CrmCampaignPriority @default(NORMAL)
   scriptId        String?
   checklistId     String?
   createdByUserId String
-  createdAt       DateTime                @default(now())
-  updatedAt       DateTime                @updatedAt
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
 
-  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy User         @relation("CrmCampaignCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
-  script    CrmScript?   @relation(fields: [scriptId], references: [id], onDelete: SetNull)
-  checklist CrmChecklist? @relation(fields: [checklistId], references: [id], onDelete: SetNull)
+  tenant    Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User                @relation("CrmCampaignCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  script    CrmScript?          @relation(fields: [scriptId], references: [id], onDelete: SetNull)
+  checklist CrmChecklist?       @relation(fields: [checklistId], references: [id], onDelete: SetNull)
   members   CrmCampaignMember[]
 
   @@index([tenantId, status, createdAt])
@@ -3426,17 +3461,17 @@ model CrmCampaign {
 /// One contact can appear in multiple campaigns, but only once per campaign (@@unique).
 /// attemptCount tracks how many call outcomes have been saved for this member.
 model CrmCampaignMember {
-  id                String                    @id @default(cuid())
-  tenantId          String
-  campaignId        String
-  contactId         String
-  assignedToUserId  String?
-  status            CrmCampaignMemberStatus   @default(PENDING)
-  attemptCount      Int                       @default(0)
-  lastAttemptAt     DateTime?
-  sortOrder         Int                       @default(0)
-  createdAt         DateTime                  @default(now())
-  updatedAt         DateTime                  @updatedAt
+  id               String                  @id @default(cuid())
+  tenantId         String
+  campaignId       String
+  contactId        String
+  assignedToUserId String?
+  status           CrmCampaignMemberStatus @default(PENDING)
+  attemptCount     Int                     @default(0)
+  lastAttemptAt    DateTime?
+  sortOrder        Int                     @default(0)
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
 
   tenant     Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   campaign   CrmCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
@@ -3465,8 +3500,8 @@ model CrmCallerIdPool {
   id            String   @id @default(cuid())
   tenantId      String
   phoneNumberId String
-  areaCode3     String   @db.VarChar(3)   /// 3-digit US area code, e.g. "512"
-  label         String?                   /// Optional human label for the pool entry
+  areaCode3     String   @db.VarChar(3) /// 3-digit US area code, e.g. "512"
+  label         String? /// Optional human label for the pool entry
   isActive      Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
