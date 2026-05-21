@@ -734,6 +734,51 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 
 **Fallback logo for HTML emails:** `{PUBLIC_PORTAL_URL}/connect-logo.png` from `apps/portal/public/connect-logo.png`.
 
+### Invoice redesign (2026-05-20, VoIP SaaS style)
+
+`renderBillingInvoicePdf` in `apps/api/src/billing/pdf.ts` was restructured from a legacy "blue band + table dump" into a neutral, print-safe enterprise layout:
+
+- **Header architecture:** slim cyan top rule, white card header, logo left, invoice number/status right (no large competing blue block).
+- **Payment architecture:** dedicated **Online Payment** card with a primary CTA button (`Pay Invoice Securely`) plus a fallback URL line for manual entry / print scenarios.
+- **Totals architecture:** right-aligned summary card with subtotal, discount, taxes/fees, optional regulatory line-item aggregation, amount paid, and emphasized balance due.
+- **Line item architecture:** reusable section pattern with soft header row, lighter separators, and row-height handling for long descriptions.
+- **Regulatory architecture:** dedicated **Regulatory & Billing Notices** section driven by config-ready notice keys from `TenantBillingSettings.metadata.billingNotices` with safe defaults.
+
+#### Telecom regulatory notice handling
+
+`pdf.ts` now supports configurable notice keys (all optional) under `TenantBillingSettings.metadata.billingNotices`:
+
+- `e911`
+- `regulatoryRecovery`
+- `telecomTaxes`
+- `usf`
+- `trs`
+- `disputeNotice`
+- `lateFeePolicy`
+- `remittanceNotice`
+
+Each key can also be toggled via `<key>Enabled: false`. If absent, conservative defaults are rendered ("may apply", "when applicable", no fabricated legal claims). This keeps the document FCC truth-in-billing style compatible without asserting jurisdiction-specific legal advice.
+
+#### Files touched
+
+- `apps/api/src/billing/pdf.ts` (layout + CTA + notices + extensibility helpers)
+
+#### Print/PDF considerations
+
+- Letter page, fixed margins, continuation header on overflow pages.
+- Section-level `ensureSpace()` before cards/tables to reduce broken splits.
+- CTA remains readable in grayscale (dark slate button + fallback plaintext URL).
+- Notices and footers remain compact in print-safe 8pt typography.
+
+#### Future extensibility notes
+
+The new structure is designed to absorb additional billing constructs with minimal churn:
+
+- new totals rows (`DID`, `E911`, international usage, credits)
+- additional line-item groupings (usage blocks)
+- expanded compliance/dispute policy text by metadata
+- payment/autopay policy variants without changing core rendering flow
+
 ### Invoice PDF attachments + portal PDF routes (2026-05-19)
 
 **Email PDF attachments (no schema migration):** When `processEmailJobsBatch` in `apps/api/src/server.ts` sends billing jobs (`BILLING_INVOICE_SENT`, `BILLING_INVOICE_READY`, `BILLING_RECEIPT`), it generates the invoice PDF at send time via `billingEmailAttachments.ts` and attaches it for **SendGrid** and **SMTP**. Templates embed a hidden HTML marker `<!-- connect-billing-invoice:{id} -->` so the processor can resolve the `BillingInvoice` without a JWT-protected API link. Invoice/receipt emails no longer link to `GET /billing/platform/invoices/:id/pdf` (that route requires login).
