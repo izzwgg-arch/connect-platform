@@ -35,6 +35,18 @@ type InvoicePreview = {
   totalCents: number;
 };
 
+function invoiceDetailHref(id: string) {
+  return `/billing/invoices/${encodeURIComponent(id)}`;
+}
+
+function invoicePayHref(invoice: any) {
+  const status = String(invoice.status || "");
+  const hasBalance = Number(invoice.balanceDueCents || 0) > 0;
+  const publicPayUrl = String(invoice.publicPayUrl || "").trim();
+  if (hasBalance && status !== "PAID" && status !== "VOID" && publicPayUrl) return publicPayUrl;
+  return invoiceDetailHref(invoice.id);
+}
+
 function InvoicePreviewSection() {
   const [open, setOpen] = useState(false);
   const [preview, setPreview] = useState<InvoicePreview | null>(null);
@@ -123,7 +135,7 @@ function FailedPaymentBanner({ invoice }: { invoice: any }) {
             : "Pay now to avoid interruption."}
         </p>
         <div className="billing-alert-actions">
-          <Link className="btn primary" href={`/billing/invoices/${invoice.id}`}>
+          <Link className="btn primary" href={invoicePayHref(invoice)}>
             Pay now
           </Link>
           <Link className="btn ghost" href="/billing/payments">
@@ -223,7 +235,7 @@ export default function BillingOverviewPage() {
                   {invoiceStatusLabel(inv.status)}
                 </span>
                 <div className="row-actions">
-                  <Link className="btn primary" style={{ fontSize: 12, padding: "5px 12px" }} href={`/billing/invoices/${inv.id}`}>
+                  <Link className="btn primary" style={{ fontSize: 12, padding: "5px 12px" }} href={invoicePayHref(inv)}>
                     {inv.status === "FAILED" ? "Pay now" : dollars(inv.balanceDueCents)}
                   </Link>
                 </div>

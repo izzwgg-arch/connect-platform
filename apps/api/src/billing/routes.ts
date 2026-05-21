@@ -340,11 +340,15 @@ export async function registerBillingRoutes(app: FastifyInstance) {
   app.get("/billing/platform/invoices", async (req, reply) => {
     const u = await requireTenantBilling(req, reply);
     if (!u) return;
-    return (db as any).billingInvoice.findMany({
+    const invoices = await (db as any).billingInvoice.findMany({
       where: { tenantId: u.tenantId },
       include: { lineItems: true, transactions: { orderBy: { createdAt: "desc" }, take: 5 } },
       orderBy: { createdAt: "desc" },
     });
+    return invoices.map((invoice: any) => ({
+      ...invoice,
+      publicPayUrl: billingInvoicePublicPayUrl(invoice.id, invoice.tenantId),
+    }));
   });
 
   app.get("/billing/platform/invoices/:id", async (req, reply) => {

@@ -22,6 +22,18 @@ function openPdf(id: string) {
 
 const STATUS_SORT: Record<string, number> = { FAILED: 5, OVERDUE: 4, OPEN: 3, DRAFT: 2, PAID: 1, VOID: 0 };
 
+function invoiceDetailHref(id: string) {
+  return `/billing/invoices/${encodeURIComponent(id)}`;
+}
+
+function invoicePayHref(invoice: any) {
+  const status = String(invoice.status || "");
+  const hasBalance = Number(invoice.balanceDueCents || 0) > 0;
+  const publicPayUrl = String(invoice.publicPayUrl || "").trim();
+  if (hasBalance && status !== "PAID" && status !== "VOID" && publicPayUrl) return publicPayUrl;
+  return invoiceDetailHref(invoice.id);
+}
+
 export default function BillingInvoicesPage() {
   const invoices = useAsyncResource(() => apiGet<any[]>("/billing/platform/invoices"), []);
   const rows = invoices.status === "success"
@@ -66,7 +78,7 @@ export default function BillingInvoicesPage() {
                       {invoiceStatusLabel(status)}
                     </span>
                     <div className="row-actions">
-                      <Link className="btn ghost" href={`/billing/invoices/${invoice.id}`}>
+                      <Link className="btn ghost" href={invoicePayHref(invoice)}>
                         {status === "FAILED" || status === "OVERDUE" ? "Pay now" : "Open"}
                       </Link>
                       <button className="btn ghost" type="button" onClick={() => openPdf(invoice.id)}>
