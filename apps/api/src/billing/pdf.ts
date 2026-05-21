@@ -12,6 +12,7 @@ const FONT_SEMIBOLD = "ConnectSans-Semibold";
 const FONT_BOLD = "ConnectSans-Bold";
 
 const CONNECT_LEGAL_NAME = "Connect Communications, LLC";
+const CONNECT_FOOTER_NAME = "Connect Communications LLC";
 const CONNECT_SUPPORT_EMAIL = "support@connectcomunications.com";
 const CONNECT_PHONE = "845-723-1213";
 const CONNECT_WEBSITE = "connectcomunications.com";
@@ -116,7 +117,7 @@ function splitPlainText(value: unknown): string[] {
 }
 
 function displayLineItemDescription(value: unknown): string {
-  return String(value || "Billing item").replace(/\bbillable\s+extensions\b/gi, "extensions");
+  return String(value || "Billing item").replace(/\bbillable\s+extensions\b/gi, "Extensions");
 }
 
 function buildTotalsRows(invoice: any, lineItems: InvoiceLineItem[]): TotalRow[] {
@@ -464,7 +465,7 @@ export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
     roundedPanel(doc, ml, y, contentW, regH, "#ffffff", line, 6);
     const noticeCols = [
       ["emergency", "E911 Service", "E911 fees and surcharges may apply and are used to support emergency calling systems in your area."],
-      ["document", "Regulatory Recovery", "Regulatory recovery fees may apply to recover costs associated with compliance and regulatory obligations."],
+      ["document", "Regulatory Recovery", "Regulatory recovery fees help offset compliance and telecom regulatory costs."],
       ["tax", "Taxes & Surcharges", "Applicable federal, state, local taxes and telecom surcharges may apply."],
       ["info", "More Information", "For a complete list of applicable terms and disclosures, please visit our billing portal."],
     ] as const;
@@ -483,7 +484,7 @@ export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
     const footerH = 50;
     const footerW = contentW / 4;
     const footers = [
-      ["support", "Billing Support", `Mon - Fri, 8am - 6pm PT\n${CONNECT_PHONE}\n${CONNECT_SUPPORT_EMAIL}`],
+      ["support", "Billing Support", `Mon - Fri, 8am - 6pm EST\n${CONNECT_PHONE}\n${CONNECT_SUPPORT_EMAIL}`],
       ["portal", "Customer Portal", "View invoices, make payments,\nand manage your account."],
       ["lock", "Secure Payments", "Your payments are\nencrypted and secure."],
       ["heart", "Thank You", "We appreciate your\nbusiness!"],
@@ -493,11 +494,18 @@ export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
       if (idx > 0) doc.moveTo(x, y + 2).lineTo(x, y + footerH - 6).strokeColor(lightLine).lineWidth(0.7).stroke();
       drawIconBadge(doc, icon, x + 8, y + 2, 20);
       doc.fillColor(ink).font(FONT_SEMIBOLD).fontSize(8.1).text(title, x + 34, y + 3, { width: footerW - 42 });
-      doc.fillColor(muted).font(FONT_REGULAR).fontSize(7.2).text(body, x + 34, y + 16, { width: footerW - 42, lineGap: 0.6 });
+      if (icon === "support") {
+        const [hours, phone, email] = body.split("\n");
+        doc.fillColor(muted).font(FONT_REGULAR).fontSize(7.2).text(hours, x + 34, y + 16, { width: footerW - 42, lineGap: 0.6 });
+        doc.text(phone, x + 34, y + 25, { width: footerW - 42, lineGap: 0.6 });
+        doc.fontSize(5.95).text(email, x + 34, y + 34, { width: footerW - 42, lineBreak: false });
+      } else {
+        doc.fillColor(muted).font(FONT_REGULAR).fontSize(7.2).text(body, x + 34, y + 16, { width: footerW - 42, lineGap: 0.6 });
+      }
     });
     y += footerH + 2;
-    doc.fillColor(muted).font(FONT_REGULAR).fontSize(6.9).text(
-      `${CONNECT_LEGAL_NAME}   *   ${CONNECT_WEBSITE}`,
+    doc.fillColor(muted).font(FONT_BOLD).fontSize(6.9).text(
+      `${CONNECT_FOOTER_NAME}   *   ${CONNECT_WEBSITE}`,
       ml,
       y,
       { width: contentW, align: "center" },
