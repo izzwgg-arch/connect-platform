@@ -62,6 +62,7 @@ import {
 } from "./billingReports";
 import { billingLocalDateTimeToUtc, billingMonthBoundsForYearMonth } from "./billingTime";
 import { assertBillingInvoiceDeletable } from "./deleteBillingInvoice";
+import { findPaidBillingPeriodCoverage } from "./billingPeriodGuards";
 import {
   markDoNotCharge,
   pauseInvoiceCollections,
@@ -705,7 +706,12 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         _sum: { balanceDueCents: true },
       }),
     ]);
-    const payload = { tenant, settings, usage, preview, invoices, paymentMethods, taxProfiles, sola, balanceDueCents: Number(balanceAgg._sum?.balanceDueCents || 0) };
+    const paidBillingPeriodCoverage = await findPaidBillingPeriodCoverage({
+      tenantId,
+      periodStart: preview.periodStart,
+      periodEnd: preview.periodEnd,
+    });
+    const payload = { tenant, settings, usage, preview, invoices, paymentMethods, taxProfiles, sola, balanceDueCents: Number(balanceAgg._sum?.balanceDueCents || 0), paidBillingPeriodCoverage };
     return JSON.parse(
       JSON.stringify(payload, (_k, v) => (typeof v === "bigint" ? v.toString() : v)),
     ) as typeof payload;

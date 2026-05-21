@@ -127,7 +127,8 @@ export default function AdminBillingPage() {
     || detail?.paymentMethods?.[0]?.id
     || null;
   // If no open invoices but billing date already passed, show preview amount as pending
-  const showPreviewBalance = livBalanceDue === 0 && nextPaymentDatePassed && previewTotal > 0;
+  const paidBillingPeriodCoverage = detail ? (detail as TenantDetail & { paidBillingPeriodCoverage?: unknown }).paidBillingPeriodCoverage : null;
+  const showPreviewBalance = !paidBillingPeriodCoverage && livBalanceDue === 0 && nextPaymentDatePassed && previewTotal > 0;
   const recent = detail
     ? [...(detail.invoices || [])].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5)
     : [];
