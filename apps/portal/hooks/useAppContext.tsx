@@ -32,7 +32,8 @@ const FALLBACK_TENANT: Tenant = { id: "local", name: "My Workspace", plan: "Busi
 const AppContext = createContext<AppContextType | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<ThemeMode>("dark");
+  const [theme, setThemeState] = useState<ThemeMode>("light");
+  const [themeHydrated, setThemeHydrated] = useState(false);
   /** Proven only from JWT `role` or GET `/me` — never assume SUPER_ADMIN without either. */
   const [role, setRole] = useState<Role>("END_USER");
   const [backendJwtRole, setBackendJwtRole] = useState<string | undefined>(undefined);
@@ -46,6 +47,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const stored = typeof window !== "undefined" ? localStorage.getItem("cc-theme") : null;
     if (stored === "dark" || stored === "light") setThemeState(stored);
+    setThemeHydrated(true);
 
     const jwt = readJwtPayload();
 
@@ -130,8 +132,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem("cc-theme", theme);
-  }, [theme]);
+    if (themeHydrated) localStorage.setItem("cc-theme", theme);
+  }, [theme, themeHydrated]);
 
   useEffect(() => {
     localStorage.setItem("cc-tenant-id", tenantId);

@@ -20,6 +20,7 @@ export type CardknoxBillingFields = {
 export type CardknoxIFieldsFormProps = {
   ifieldsKey: string;
   variant?: "admin" | "customer";
+  fieldTheme?: "light" | "dark";
   disabled?: boolean;
   showBillingAddress?: boolean;
   showEmail?: boolean;
@@ -66,6 +67,7 @@ const EMPTY_BILLING: CardknoxBillingFields = {
 export function CardknoxIFieldsForm({
   ifieldsKey,
   variant = "customer",
+  fieldTheme,
   disabled = false,
   showBillingAddress = true,
   showEmail = true,
@@ -102,6 +104,7 @@ export function CardknoxIFieldsForm({
     () => ({ xKey: ifieldsKey.trim(), xSoftwareName: "ConnectComms", xSoftwareVersion: "1.0.0" }),
     [ifieldsKey],
   );
+  const resolvedFieldTheme = fieldTheme ?? (variant === "admin" ? "dark" : "light");
 
   const ifieldOptions = useMemo(
     () => ({
@@ -109,14 +112,26 @@ export function CardknoxIFieldsForm({
       blockNonNumericInput: true,
       iFieldstyle: {
         border: "0",
+        outline: "0",
+        boxShadow: "none",
+        appearance: "none",
+        WebkitAppearance: "none",
+        MozAppearance: "textfield",
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif",
         fontSize: "14px",
-        padding: "10px 12px",
+        fontWeight: "500",
+        lineHeight: "20px",
+        padding: "0",
+        margin: "0",
         width: "100%",
-        color: variant === "admin" ? "#f3f4f6" : "#111827",
-        background: variant === "admin" ? "#1f2937" : "#ffffff",
+        height: "20px",
+        overflow: "hidden",
+        resize: "none",
+        color: resolvedFieldTheme === "dark" ? "#e5eefb" : "#0f172a",
+        background: "transparent",
       },
     }),
-    [variant],
+    [resolvedFieldTheme],
   );
 
   function readBilling(form: HTMLFormElement): CardknoxBillingFields {
@@ -192,6 +207,11 @@ export function CardknoxIFieldsForm({
     beginTokenize(e.currentTarget);
   }
 
+  const years = useMemo(() => {
+    const current = new Date().getFullYear();
+    return Array.from({ length: 12 }, (_, idx) => String(current + idx));
+  }, []);
+
   const formClass = variant === "admin"
     ? "billing-form billing-ifields-form billing-ifields-form--admin"
     : "billing-form billing-pay-form billing-pay-form--light billing-ifields-form";
@@ -203,43 +223,52 @@ export function CardknoxIFieldsForm({
           Card details are entered in a PCI-compliant secure field hosted by our payment processor. Connect never sees or stores your full card number or CVV.
         </p>
       )}
-      <label>
+      <label className="billing-field-cardholder">
         Cardholder name
         <input name="cardholderName" autoComplete="cc-name" placeholder="Jane Smith" required disabled={disabled || busy} />
       </label>
-      <div className="billing-pay-row">
+      <div className="billing-pay-row billing-pay-row--expiration">
         <label>
-          Exp. month
-          <input name="expMonth" inputMode="numeric" autoComplete="cc-exp-month" placeholder="MM" minLength={2} maxLength={2} required disabled={disabled || busy} />
+          Month
+          <select name="expMonth" autoComplete="cc-exp-month" required disabled={disabled || busy} defaultValue="">
+            <option value="" disabled>Month</option>
+            {Array.from({ length: 12 }, (_, idx) => {
+              const month = String(idx + 1).padStart(2, "0");
+              return <option key={month} value={month}>{month}</option>;
+            })}
+          </select>
         </label>
         <label>
           Exp. year
-          <input name="expYear" inputMode="numeric" autoComplete="cc-exp-year" placeholder="YY" minLength={2} maxLength={4} required disabled={disabled || busy} />
+          <select name="expYear" autoComplete="cc-exp-year" required disabled={disabled || busy} defaultValue="">
+            <option value="" disabled>Year</option>
+            {years.map((year) => <option key={year} value={year}>{year}</option>)}
+          </select>
         </label>
       </div>
       {showEmail ? (
-        <label>
+        <label className="billing-field-email">
           Billing email
           <input name="billingEmail" type="email" autoComplete="email" placeholder="billing@company.com" required disabled={disabled || busy} />
         </label>
       ) : null}
       {showPhone ? (
-        <label>
+        <label className="billing-field-phone">
           Phone <span className="muted">(optional)</span>
           <input name="billingPhone" type="tel" autoComplete="tel" placeholder="(555) 555-0100" disabled={disabled || busy} />
         </label>
       ) : null}
       {showBillingAddress ? (
         <>
-          <label>
+          <label className="billing-field-address1">
             Address line 1
             <input name="billingAddress1" autoComplete="billing address-line1" placeholder="123 Main St" required disabled={disabled || busy} />
           </label>
-          <label>
+          <label className="billing-field-address2">
             Address line 2 <span className="muted">(optional)</span>
             <input name="billingAddress2" autoComplete="billing address-line2" placeholder="Suite 100" disabled={disabled || busy} />
           </label>
-          <div className="billing-pay-row">
+          <div className="billing-pay-row billing-pay-row--address">
             <label>
               City
               <input name="billingCity" autoComplete="billing address-level2" placeholder="New York" required disabled={disabled || busy} />
@@ -255,7 +284,7 @@ export function CardknoxIFieldsForm({
           </div>
         </>
       ) : (
-        <label>
+        <label className="billing-field-zip-only">
           Billing ZIP
           <input name="billingZip" autoComplete="postal-code" placeholder="10001" required disabled={disabled || busy} />
         </label>
@@ -297,7 +326,7 @@ export function CardknoxIFieldsForm({
               onChange={(e) => onSaveCardChange?.(e.target.checked)}
               disabled={disabled || busy}
             />
-            Save this card for future payments
+            <span>Save this card for future payments</span>
           </label>
           <label className="billing-checkbox">
             <input
@@ -306,7 +335,10 @@ export function CardknoxIFieldsForm({
               onChange={(e) => onEnableAutopayChange?.(e.target.checked)}
               disabled={disabled || busy || !saveCard}
             />
-            Enable autopay on this card
+            <span>
+              Enable autopay on this card
+              <small>We will charge this card automatically on your payment date each month.</small>
+            </span>
           </label>
         </div>
       ) : null}
