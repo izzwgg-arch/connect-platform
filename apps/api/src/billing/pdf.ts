@@ -2,6 +2,7 @@ import path from "node:path";
 import fs from "node:fs";
 import PDFDocument from "pdfkit";
 import { money } from "./emailTemplates";
+import { billingInvoicePublicPayUrl } from "./billingEmailLifecycle";
 import { resolveInvoiceEmailBranding, sanitizePlainText } from "./invoiceBranding";
 
 const BUNDLED_LOGO_PATH = path.join(__dirname, "assets", "connect-logo.png");
@@ -278,7 +279,7 @@ export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
   const billToAddress = formatBillingAddress(settings.billingAddress);
   const serviceAddress = formatBillingAddress(settings.serviceAddress);
   const billToLines = (billToAddress.length ? billToAddress : serviceAddress).slice(0, 4);
-  const payUrl = `${process.env.PUBLIC_PORTAL_URL || "https://app.connectcomunications.com"}/billing/invoices/${encodeURIComponent(invoice.id)}`;
+  const payUrl = billingInvoicePublicPayUrl(invoice.id, invoice.tenantId);
   const logo = logoBuffer();
   const lineItems: InvoiceLineItem[] = invoice.lineItems || [];
   const statusText = statusLabel(invoice.status || "OPEN");
