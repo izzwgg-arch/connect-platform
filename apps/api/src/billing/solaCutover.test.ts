@@ -438,6 +438,7 @@ test("C-1: take-over disables Sola schedule before enabling Connect autopay", as
 test("C-2: take-over failure does NOT enable Connect autopay, sets CUTOVER_FAILED", async () => {
   let autopayEnabled = false;
   let cutoverStatus = "";
+  let disableError = "";
 
   const result = await takeOverBillingFromSola(
     {
@@ -457,6 +458,7 @@ test("C-2: take-over failure does NOT enable Connect autopay, sets CUTOVER_FAILE
           update: async (a) => {
             const data = a.data as Record<string, unknown>;
             if (data.cutoverStatus) cutoverStatus = String(data.cutoverStatus);
+            if (data.disableError) disableError = String(data.disableError);
             return { ...makeLink(), ...data };
           },
           create: async (a) => a.data,
@@ -480,7 +482,11 @@ test("C-2: take-over failure does NOT enable Connect autopay, sets CUTOVER_FAILE
       },
       client: {
         getPaymentMethodWithToken: async () => ({ token: "raw", issuer: null, maskedCardNumber: null, exp: null, rawRow: {} }),
-        updateSchedule: async () => { throw new Error("SOLA_API_UNAVAILABLE"); },
+        updateSchedule: async () => {
+          const err = new Error("SOLA_RECURRING_REQUEST_FAILED") as Error & { solaError?: string };
+          err.solaError = "Schedule revision does not match";
+          throw err;
+        },
       },
     }),
   );
@@ -488,6 +494,7 @@ test("C-2: take-over failure does NOT enable Connect autopay, sets CUTOVER_FAILE
   assert.equal(result.ok, false);
   assert.ok(!autopayEnabled, "Connect autopay must NOT be enabled when Sola disable fails");
   assert.equal(cutoverStatus, CUTOVER_STATUS.CUTOVER_FAILED, "cutoverStatus must be CUTOVER_FAILED");
+  assert.equal(disableError, "Schedule revision does not match");
 });
 
 test("C-3: take-over blocks if Connect autopay already enabled", async () => {

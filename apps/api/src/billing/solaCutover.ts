@@ -58,6 +58,17 @@ export function defaultSolaCutoverDeps(): SolaCutoverDeps {
   };
 }
 
+function externalErrorMessage(error: unknown, fallback = "disable_failed"): string {
+  if (error && typeof error === "object") {
+    const maybeSolaError = (error as { solaError?: unknown }).solaError;
+    if (typeof maybeSolaError === "string" && maybeSolaError.trim()) return maybeSolaError;
+    const maybeCode = (error as { code?: unknown }).code;
+    if (typeof maybeCode === "string" && maybeCode.trim()) return maybeCode;
+  }
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
+
 // ─── Phase A: Token Linking ────────────────────────────────────────────────────
 
 export type LinkTokenResult =
@@ -481,7 +492,7 @@ export async function takeOverBillingFromSola(
   try {
     await client.updateSchedule(link.solaScheduleId, { isActive: false });
   } catch (e: unknown) {
-    const errMsg = e instanceof Error ? e.message : "disable_failed";
+    const errMsg = externalErrorMessage(e);
     // Mark as failed — do NOT enable Connect autopay
     await (d.db as AnyDb).billingSolaExternalScheduleLink.update({
       where: { id: link.id },

@@ -281,16 +281,16 @@ export class SolaRecurringClient {
 
   /**
    * Disable or re-enable a recurring schedule (Phase C cutover).
-   * Pass isActive: false to disable the old schedule before enabling Connect autopay.
+   * Sola exposes dedicated endpoints for this; /UpdateSchedule requires a
+   * Revision and does not own active-state transitions.
    */
   async updateSchedule(scheduleId: string, update: { isActive: boolean }): Promise<{ ok: boolean; refNum?: string }> {
     if (this.config.simulate) {
       return { ok: true, refNum: `sim_upd_${Date.now()}` };
     }
 
-    const payload = await postRecurringJson<Record<string, unknown>>(this.config, "/UpdateSchedule", {
+    const payload = await postRecurringJson<Record<string, unknown>>(this.config, update.isActive ? "/EnableSchedule" : "/DisableSchedule", {
       ScheduleId: scheduleId,
-      IsActive: update.isActive,
     });
 
     const result = String((payload as Record<string, unknown>).Result || "").toUpperCase();
