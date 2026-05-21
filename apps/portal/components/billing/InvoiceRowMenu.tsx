@@ -134,7 +134,7 @@ export function InvoiceRowMenu({
           </button>
           {canAct && onSms ? (
             <button type="button" role="menuitem" disabled={disabled} onClick={act(onSms)}>
-              SMS payment link
+              SMS invoice link
             </button>
           ) : null}
           {canAct && onVoid ? (

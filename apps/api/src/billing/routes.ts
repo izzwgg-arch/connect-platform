@@ -2561,8 +2561,10 @@ export async function registerBillingRoutes(app: FastifyInstance) {
 
     const payUrl = billingInvoicePublicPayUrl(invoice.id, invoice.tenantId);
     const invLabel = invoice.invoiceNumber || invoice.id.slice(0, 8);
-    const balanceStr = centsToDollarsStr(invoice.balanceDueCents ?? invoice.totalCents);
-    const msgBody = `${invoice.tenant?.name || "Connect"}: Pay invoice ${invLabel} (${balanceStr}): ${payUrl}`;
+    const invoiceIsPaid = invoice.status === "PAID";
+    const smsAmountCents = invoiceIsPaid ? invoice.totalCents : (invoice.balanceDueCents ?? invoice.totalCents);
+    const balanceStr = centsToDollarsStr(smsAmountCents);
+    const msgBody = `${invoice.tenant?.name || "Connect"}: ${invoiceIsPaid ? "View paid invoice" : "Pay invoice"} ${invLabel} (${balanceStr}): ${payUrl}`;
 
     let providerMessageId: string | undefined;
     try {
@@ -2590,6 +2592,10 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       type: "billing.sms_payment_link_sent",
       message: `Payment link sent via SMS to ${normalizedPhone}${input.note ? ` — ${input.note}` : ""}`,
       metadata: { toPhone: normalizedPhone, fromPhone: resolvedFromNumber, providerMessageId, adminUserId: u.sub },
+    });
+    await (db as any).billingInvoice.update({
+      where: { id },
+      data: { lastEmailStatus: "SMS_SENT", lastEmailedAt: new Date() },
     });
 
     return { ok: true, toPhone: normalizedPhone, fromPhone: resolvedFromNumber, providerMessageId };

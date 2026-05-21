@@ -111,7 +111,7 @@ import { registerConnectChatRoutes } from "./connectChatRoutes";
 import { registerCrmRoutes } from "./crm/routes";
 import { fireCrmCdrHook } from "./crm/cdrHook";
 import { registerBillingRoutes } from "./billing/routes";
-import { loadBillingInvoicePdfAttachmentForEmailJob } from "./billing/billingEmailAttachments";
+import { extractBillingInvoiceIdFromEmailJob, loadBillingInvoicePdfAttachmentForEmailJob } from "./billing/billingEmailAttachments";
 import { applySolaWebhookToBillingInvoice, resolvePlatformBillingInvoiceForWebhookRef } from "./billing/solaBillingPayments";
 import { getBillingSolaAdapter } from "./billing/solaGateway";
 import { maskSolaSecretsForResponse } from "./billing/solaConfigMasking";
@@ -873,7 +873,15 @@ async function processEmailJobsBatch() {
       try {
         await db.emailJob.update({ where: { id: job.id }, data: { status: "RUNNING", attempts: job.attempts + 1 } });
         await sendEmailJobNow(job);
-        await db.emailJob.update({ where: { id: job.id }, data: { status: "SENT", sentAt: new Date(), lastErrorCode: null, lastErrorMessage: null } });
+        const sentAt = new Date();
+        await db.emailJob.update({ where: { id: job.id }, data: { status: "SENT", sentAt, lastErrorCode: null, lastErrorMessage: null } });
+        const billingInvoiceId = extractBillingInvoiceIdFromEmailJob(job);
+        if (billingInvoiceId) {
+          await (db as any).billingInvoice.updateMany({
+            where: { id: billingInvoiceId, tenantId: job.tenantId },
+            data: { lastEmailStatus: "SENT", lastEmailedAt: sentAt },
+          });
+        }
       } catch (e: any) {
         const attempts = job.attempts + 1;
         const delayMin = Math.min(60, 2 ** attempts);
@@ -886,6 +894,13 @@ async function processEmailJobsBatch() {
             nextRunAt: new Date(Date.now() + delayMin * 60 * 1000)
           }
         });
+        const billingInvoiceId = extractBillingInvoiceIdFromEmailJob(job);
+        if (billingInvoiceId) {
+          await (db as any).billingInvoice.updateMany({
+            where: { id: billingInvoiceId, tenantId: job.tenantId },
+            data: { lastEmailStatus: "FAILED", lastEmailedAt: new Date() },
+          });
+        }
       }
     }
   } finally {

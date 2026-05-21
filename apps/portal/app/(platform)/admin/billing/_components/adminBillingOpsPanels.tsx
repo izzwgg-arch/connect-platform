@@ -142,6 +142,18 @@ function txStatusClass(status: string) {
   return "warn";
 }
 
+function deliveryStatusMeta(status: string | null | undefined, at: string | null | undefined) {
+  const normalized = String(status || "").toUpperCase();
+  if (!normalized) return null;
+  const when = at ? ` ${fmtDate(at)}` : "";
+  if (normalized === "OPENED") return { label: `Opened${when}`, tone: "good" };
+  if (normalized === "SENT") return { label: `Sent${when}`, tone: "good" };
+  if (normalized === "SMS_SENT") return { label: `SMS sent${when}`, tone: "good" };
+  if (normalized === "QUEUED" || normalized === "RUNNING") return { label: `Queued${when}`, tone: "warn" };
+  if (normalized === "FAILED") return { label: "Send failed", tone: "bad" };
+  return { label: normalized.replace(/_/g, " ").toLowerCase(), tone: "warn" };
+}
+
 function fmtDate(d: string | null | undefined) {
   if (!d) return "—";
   return new Date(d).toLocaleDateString();
@@ -1209,7 +1221,10 @@ function SmsPaymentLinkModal({ invoice, onClose, onSuccess }: { invoice: Invoice
     || `${typeof window !== "undefined" ? window.location.origin.replace(/:3000$/, ":3001") : ""}`
     + `/billing/invoices/${invoice.id}`;
   const effectiveFrom = fromPhone || cap?.fromNumber || "";
-  const msgPreview = `${invoice.tenant?.name || "Connect"}: Pay invoice ${invoice.invoiceNumber || invoice.id.slice(0, 8)} (${dollars(invoice.balanceDueCents)}): ${payUrl}`;
+  const invoiceIsPaid = String(invoice.status || "").toUpperCase() === "PAID";
+  const smsAmount = invoiceIsPaid ? invoice.totalCents : invoice.balanceDueCents;
+  const smsVerb = invoiceIsPaid ? "View paid invoice" : "Pay invoice";
+  const msgPreview = `${invoice.tenant?.name || "Connect"}: ${smsVerb} ${invoice.invoiceNumber || invoice.id.slice(0, 8)} (${dollars(smsAmount)}): ${payUrl}`;
 
   async function send() {
     if (submitted.current || busy) return;
@@ -1238,12 +1253,12 @@ function SmsPaymentLinkModal({ invoice, onClose, onSuccess }: { invoice: Invoice
     <div className="billing-p8-overlay billing-p8-overlay--center" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="billing-p8-modal billing-p8-modal--sm" onClick={(e) => e.stopPropagation()}>
         <div className="row-actions" style={{ marginBottom: 16 }}>
-          <h3 style={{ margin: 0, flex: 1 }}>Send Payment Link via SMS</h3>
+          <h3 style={{ margin: 0, flex: 1 }}>{invoiceIsPaid ? "Send Invoice via SMS" : "Send Payment Link via SMS"}</h3>
           <button className="btn ghost" type="button" onClick={onClose}>✕</button>
         </div>
 
         <p style={{ fontSize: 13, margin: "0 0 14px" }}>
-          <strong>{invoice.tenant?.name}</strong> · Invoice {invoice.invoiceNumber || invoice.id.slice(0, 8)} · Balance: <strong>{dollars(invoice.balanceDueCents)}</strong>
+          <strong>{invoice.tenant?.name}</strong> · Invoice {invoice.invoiceNumber || invoice.id.slice(0, 8)} · {invoiceIsPaid ? "Paid total" : "Balance"}: <strong>{dollars(smsAmount)}</strong>
         </p>
 
         {/* Provider capability check */}
@@ -1263,7 +1278,7 @@ function SmsPaymentLinkModal({ invoice, onClose, onSuccess }: { invoice: Invoice
             {step === "done" ? (
               <div style={{ textAlign: "center", padding: "16px 0" }}>
                 <div style={{ fontSize: 32, marginBottom: 8 }}>✓</div>
-                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Payment link sent!</div>
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>{invoiceIsPaid ? "Invoice link sent!" : "Payment link sent!"}</div>
                 <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 16 }}>
                   Sent to <strong>{sentTo}</strong>
                   {effectiveFrom ? <> from <strong>{effectiveFrom}</strong></> : null}
@@ -1569,11 +1584,13 @@ export function InvoicesTab() {
               />
             ) : null}
             {rows.map((inv) => {
-              const canAct = inv.status !== "PAID" && inv.status !== "VOID";
+              const canSendInvoice = inv.status !== "VOID";
+              const canCollect = inv.status !== "PAID" && inv.status !== "VOID";
               const period = fmtPeriod(inv.periodStart, inv.periodEnd);
               const isLogOpen = logInvoiceId === inv.id;
               const isRowActive = detailInvoiceId === inv.id || isLogOpen;
               const isBusy = (label: string) => busy === `${label}-${inv.id}`;
+              const delivery = deliveryStatusMeta(inv.lastEmailStatus, inv.lastEmailedAt);
 
               return (
                 <div key={inv.id} className={`billing-inv-row-group${isLogOpen ? " billing-inv-row-group--open" : ""}`}>
@@ -1610,23 +1627,30 @@ export function InvoicesTab() {
                       </div>
                     ) : null}
                   </div>
-                  <BillingFinanceChip status={inv.status} />
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
+                    <BillingFinanceChip status={inv.status} />
+                    {delivery ? (
+                      <span className={`billing-status-pill ${delivery.tone}`} style={{ fontSize: 10, padding: "2px 6px" }}>
+                        {delivery.label}
+                      </span>
+                    ) : null}
+                  </div>
 
                   <InvoiceRowMenu
                     disabled={!!busy}
-                    canAct={canAct}
+                    canAct={canSendInvoice}
                     isBusy={isBusy}
                     activityOpen={isLogOpen}
                     onOpen={() => setDetailInvoiceId(inv.id)}
                     onPdf={() => openAdminInvoicePdf(inv.id)}
                     onActivity={() => void toggleLog(inv.id)}
-                    onSend={canAct ? () => void act(inv.id, "Send", `/admin/billing/invoices/${inv.id}/send`) : undefined}
-                    onEmailLink={canAct ? () => void act(inv.id, "Payment link", `/admin/billing/invoices/${inv.id}/email-payment-link`) : undefined}
-                    onRetry={canAct ? () => setPayInvoice(inv) : undefined}
-                    onMarkPaid={canAct ? () => setMarkPaidTarget(inv) : undefined}
-                    onVoid={canAct ? () => setVoidTarget(inv) : undefined}
+                    onSend={canSendInvoice ? () => void act(inv.id, "Send", `/admin/billing/invoices/${inv.id}/send`) : undefined}
+                    onEmailLink={canCollect ? () => void act(inv.id, "Payment link", `/admin/billing/invoices/${inv.id}/email-payment-link`) : undefined}
+                    onRetry={canCollect ? () => setPayInvoice(inv) : undefined}
+                    onMarkPaid={canCollect ? () => setMarkPaidTarget(inv) : undefined}
+                    onVoid={canCollect ? () => setVoidTarget(inv) : undefined}
                     onDelete={invoiceCanDelete(inv) ? () => setDeleteTarget(inv) : undefined}
-                    onSms={canAct ? () => setSmsInvoice(inv) : undefined}
+                    onSms={canSendInvoice ? () => setSmsInvoice(inv) : undefined}
                   />
                   </div>
 

@@ -180,6 +180,7 @@ export function billingEventLabel(type: string | undefined | null): string {
     case "payment_succeeded": return "Payment succeeded";
     case "payment_failed": return "Payment failed";
     case "payment_link_emailed": return "Payment link emailed";
+    case "invoice_link_opened": return "Invoice link opened";
     case "invoice_marked_paid": return "Marked as paid";
     case "invoice_voided": return "Invoice voided";
     case "webhook.received": return "Webhook received";

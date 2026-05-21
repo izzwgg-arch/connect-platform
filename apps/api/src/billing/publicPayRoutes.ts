@@ -35,6 +35,18 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
       return reply.code(status).send({ error: loaded.error });
     }
     const { invoice } = loaded;
+    if (["QUEUED", "SENT", "SMS_SENT"].includes(String(invoice.lastEmailStatus || "").toUpperCase())) {
+      await (db as any).billingInvoice.update({
+        where: { id: invoice.id },
+        data: { lastEmailStatus: "OPENED", lastEmailedAt: new Date() },
+      });
+      await logBillingEvent({
+        tenantId: invoice.tenantId,
+        invoiceId: invoice.id,
+        type: "invoice_link_opened",
+        metadata: { source: "public_pay_page" },
+      });
+    }
     const balanceDueCents = Math.max(0, invoice.balanceDueCents ?? invoice.totalCents ?? 0);
     const canPay = balanceDueCents > 0 && !["PAID", "VOID"].includes(invoice.status);
     const brand = resolveInvoiceEmailBranding(invoice.tenant?.billingSettings || {}, invoice.tenant?.name);
