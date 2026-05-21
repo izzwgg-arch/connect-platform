@@ -4003,18 +4003,26 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   padding: 10px 12px;
   border-radius: 10px;
   font-size: 13px;
   font-weight: 500;
   color: var(--console-text);
+  font-family: inherit;
+  cursor: pointer;
   text-decoration: none;
   border: 1px dashed color-mix(in srgb, var(--console-border) 90%, var(--console-accent) 15%);
   background: color-mix(in srgb, var(--console-panel-soft) 70%, transparent);
   transition: background 0.16s ease-in-out, border-color 0.16s ease-in-out;
 }
 
-.ws-switcher-action:hover {
+.ws-switcher-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.ws-switcher-action:not(:disabled):hover {
   background: color-mix(in srgb, var(--console-accent) 8%, var(--console-panel-soft));
   border-color: color-mix(in srgb, var(--console-accent) 28%, var(--console-border));
 }

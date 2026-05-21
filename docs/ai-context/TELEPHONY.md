@@ -1020,6 +1020,9 @@ curl -s -X POST https://app.connectcomunications.com/api/admin/pbx/refresh-tenan
   -H "Content-Type: application/json"
 ```
 
+Portal UI: open the workspace switcher and click **Refresh PBX tenants**. It calls the same
+rate-limited endpoint, then reloads the tenant switcher from the DB-backed tenant directory.
+
 Response includes `{ ok, pbxTenantCount, directoryCreated, directoryUpdated, durationMs }`.
 Rate limited: returns `429` if called within 30 s of a previous refresh.
 After this returns, telephony will pick up new tenants within `TELEPHONY_PBX_MAP_POLL_MS`.

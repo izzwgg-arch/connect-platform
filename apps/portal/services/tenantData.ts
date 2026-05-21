@@ -1,7 +1,9 @@
 /**
  * Tenant scope model:
- * - For SUPER_ADMIN, the switcher lists all enabled VitalPBX tenants from /admin/pbx/tenants.
- * - Each row uses ID "vpbx:{slug}" where slug is VitalPBX `name` (may be numeric); fallback "vpbx:{tenant_id}".
+ * - For SUPER_ADMIN, the switcher lists Connect tenants plus PBX-only tenants
+ *   from /admin/pbx/tenants that are not already represented by a Connect row.
+ * - PBX-only rows use ID "vpbx:{slug}" where slug is VitalPBX `name`
+ *   (may be numeric); fallback "vpbx:{tenant_id}".
  * - apiClient sends x-tenant-context: vpbx:a_plus_center — backend detects this prefix and
  *   scopes PBX API calls directly to that VitalPBX tenant (bypassing tenantPbxLink lookup).
  * - Falls back to platform tenant list when VitalPBX is unreachable.
@@ -80,6 +82,14 @@ function matchesSmokeNamePattern(value: string): boolean {
   return SMOKE_NAME_PATTERNS.some((re) => re.test(v));
 }
 
+function normalizeTenantKey(value: string): string {
+  return (value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
 /** Drop a row when the slug AND description both look like system/lab junk,
  *  OR when either the slug or the description matches the smoke-tenant
  *  pattern blocklist. Empty-slug rows are always hidden. */
@@ -127,6 +137,7 @@ export async function loadTenantOptions(): Promise<Tenant[]> {
     ]);
 
     const platformPbxTenantIds = new Set<string>();
+    const platformNameKeys = new Set<string>();
     const tenantOptions: Tenant[] = [];
 
     if (Array.isArray(platformRows)) {
@@ -138,6 +149,7 @@ export async function loadTenantOptions(): Promise<Tenant[]> {
           .map((row) => {
             const pbxTenantId = String(row.pbxTenantId || "").trim();
             if (pbxTenantId) platformPbxTenantIds.add(pbxTenantId);
+            platformNameKeys.add(normalizeTenantKey(row.name || ""));
             return {
               id: String(row.id || ""),
               name: row.name || "Tenant",
@@ -160,6 +172,7 @@ export async function loadTenantOptions(): Promise<Tenant[]> {
         if (tid && platformPbxTenantIds.has(tid)) continue;
 
         const displayName = resolveDisplayName(t);
+        if (platformNameKeys.has(normalizeTenantKey(displayName))) continue;
         const id = slug ? `vpbx:${slug}` : tid ? `vpbx:${tid}` : "";
         if (!id) continue;
 

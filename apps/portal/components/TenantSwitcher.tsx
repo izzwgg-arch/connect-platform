@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Check, ChevronDown, Plus, Search, UserPlus } from "lucide-react";
+import { Check, ChevronDown, Plus, RefreshCw, Search, UserPlus } from "lucide-react";
 import { useAppContext } from "../hooks/useAppContext";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 
@@ -11,10 +11,21 @@ type TenantSwitcherProps = {
 };
 
 export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
-  const { tenants, tenantId, tenant, setTenantId, adminScope, setAdminScope, can } = useAppContext();
+  const {
+    tenants,
+    tenantId,
+    tenant,
+    setTenantId,
+    adminScope,
+    setAdminScope,
+    can,
+    refreshPbxTenants,
+    tenantRefreshPending,
+  } = useAppContext();
   const canSwitch = can("can_switch_tenants");
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
   const debouncedSearch = useDebouncedValue(search, 200);
   const [highlight, setHighlight] = useState(0);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -75,6 +86,12 @@ export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
     },
     [setAdminScope, setTenantId]
   );
+
+  const refreshTenants = useCallback(async () => {
+    setRefreshMessage(null);
+    const result = await refreshPbxTenants();
+    setRefreshMessage(result.message);
+  }, [refreshPbxTenants]);
 
   const applyKbSelection = useCallback(() => {
     const row = rowsForKb[highlight];
@@ -223,6 +240,16 @@ export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
               <div className="ws-switcher-divider" />
 
               <div className="ws-switcher-actions">
+                <button
+                  type="button"
+                  className="ws-switcher-action"
+                  disabled={tenantRefreshPending}
+                  onClick={refreshTenants}
+                  title="Refresh tenant list from PBX (rate-limited)"
+                >
+                  <RefreshCw size={16} strokeWidth={2} className={tenantRefreshPending ? "animate-spin" : ""} />
+                  {tenantRefreshPending ? "Refreshing..." : "Refresh PBX tenants"}
+                </button>
                 <Link href="/admin/tenants" className="ws-switcher-action" onClick={() => setOpen(false)}>
                   <Plus size={16} strokeWidth={2} />
                   Create tenant
@@ -231,6 +258,7 @@ export function TenantSwitcher({ railMode = false }: TenantSwitcherProps) {
                   <UserPlus size={16} strokeWidth={2} />
                   Join tenant
                 </Link>
+                {refreshMessage ? <div className="ws-switcher-empty">{refreshMessage}</div> : null}
               </div>
             </div>
           </div>

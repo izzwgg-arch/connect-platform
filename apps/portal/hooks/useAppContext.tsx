@@ -1,9 +1,9 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { hasPermission } from "../permissions/permissionMap";
 import { mapBackendRole, readJwtPayload } from "../services/session";
-import { apiGet } from "../services/apiClient";
+import { ApiError, apiGet, apiPost } from "../services/apiClient";
 import { loadTenantOptions } from "../services/tenantData";
 import type { AdminScope, Permission, Role, Tenant, User } from "../types/app";
 
@@ -25,6 +25,8 @@ type AppContextType = {
   setRole: (role: Role) => void;
   setAdminScope: (scope: AdminScope) => void;
   setUserAvatarUrl: (url: string | null) => void;
+  refreshPbxTenants: () => Promise<{ ok: true; message: string } | { ok: false; message: string }>;
+  tenantRefreshPending: boolean;
 };
 
 const FALLBACK_TENANT: Tenant = { id: "local", name: "My Workspace", plan: "Business", status: "ACTIVE" };
@@ -41,6 +43,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [adminScope, setAdminScopeState] = useState<AdminScope>("TENANT");
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(null);
+  const [tenantRefreshPending, setTenantRefreshPending] = useState(false);
   /** When set, `can()` uses this list from the API instead of the bundled role map (platform permission overrides). */
   const [portalPermissionOverride, setPortalPermissionOverride] = useState<Permission[] | null | undefined>(undefined);
 
@@ -130,6 +133,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [portalPermissionOverride, role],
   );
 
+  const reloadTenantOptions = useCallback(async () => {
+    if (!canPermission("can_switch_tenants")) {
+      setTenants([]);
+      return;
+    }
+    const rows = await loadTenantOptions();
+    setTenants(rows);
+  }, [canPermission]);
+
+  const refreshPbxTenants = useCallback(async () => {
+    if (tenantRefreshPending) return { ok: false as const, message: "Refresh already running." };
+    setTenantRefreshPending(true);
+    try {
+      const result = await apiPost<{
+        ok?: boolean;
+        pbxTenantCount?: number;
+        directoryCreated?: number;
+        directoryUpdated?: number;
+        retryAfterMs?: number;
+      }>("/admin/pbx/refresh-tenants", undefined, undefined, { timeoutMs: 30_000 });
+      await reloadTenantOptions();
+      const changed = Number(result.directoryCreated || 0) + Number(result.directoryUpdated || 0);
+      return {
+        ok: true as const,
+        message: `PBX tenants refreshed (${result.pbxTenantCount ?? "unknown"} seen, ${changed} changed).`,
+      };
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 429) {
+        const retryAfterMs = Number((err.body as { retryAfterMs?: unknown } | null)?.retryAfterMs || 0);
+        const waitSec = retryAfterMs > 0 ? Math.ceil(retryAfterMs / 1000) : 30;
+        return { ok: false as const, message: `PBX refresh is cooling down. Try again in about ${waitSec}s.` };
+      }
+      return { ok: false as const, message: err instanceof Error ? err.message : "PBX refresh failed." };
+    } finally {
+      setTenantRefreshPending(false);
+    }
+  }, [reloadTenantOptions, tenantRefreshPending]);
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     if (themeHydrated) localStorage.setItem("cc-theme", theme);
@@ -152,10 +193,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setTenants([]);
       return;
     }
-    loadTenantOptions()
-      .then((rows) => {
+    reloadTenantOptions()
+      .then(() => {
         if (!active) return;
-        setTenants(rows);
       })
       .catch(() => {
         if (!active) return;
@@ -164,7 +204,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false;
     };
-  }, [canPermission, role]);
+  }, [reloadTenantOptions, role]);
 
   useEffect(() => {
     if (tenants.length === 0) return;
@@ -227,8 +267,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setAdminScopeState(scope);
       },
       setUserAvatarUrl,
+      refreshPbxTenants,
+      tenantRefreshPending,
     }),
-    [adminScope, backendJwtRole, canPermission, meTenant, role, tenant, tenantId, tenants, theme, user, setUserAvatarUrl]
+    [
+      adminScope,
+      backendJwtRole,
+      canPermission,
+      meTenant,
+      refreshPbxTenants,
+      role,
+      tenant,
+      tenantId,
+      tenantRefreshPending,
+      tenants,
+      theme,
+      user,
+      setUserAvatarUrl,
+    ]
   );
 
   return <AppContext.Provider value={ctx}>{children}</AppContext.Provider>;

@@ -6513,15 +6513,24 @@ app.get("/admin/tenants", async (req, reply) => {
   const query = z.object({ light: z.coerce.boolean().optional().default(false) }).parse(req.query || {});
   const tenants = await db.tenant.findMany({ orderBy: { createdAt: "desc" } });
   if (query.light) {
+    const customerTenants = tenants.filter((t) => (t as any).kind === "CUSTOMER" && t.isApproved === true);
+    const pbxLinks = await db.tenantPbxLink.findMany({
+      where: { tenantId: { in: customerTenants.map((t) => t.id) } },
+      select: { tenantId: true, pbxTenantId: true, pbxInstanceId: true },
+    });
+    const pbxByTenantId = new Map(pbxLinks.map((link) => [link.tenantId, link]));
     return tenants
       .filter((t) => (t as any).kind === "CUSTOMER" && t.isApproved === true)
-      .map((t) => ({
-        id: t.id,
-        name: t.name,
-        pbxTenantId: null,
-        pbxInstanceId: null,
-        isApproved: t.isApproved,
-      }));
+      .map((t) => {
+        const pbxLink = pbxByTenantId.get(t.id);
+        return {
+          id: t.id,
+          name: t.name,
+          pbxTenantId: pbxLink?.pbxTenantId ?? null,
+          pbxInstanceId: pbxLink?.pbxInstanceId ?? null,
+          isApproved: t.isApproved,
+        };
+      });
   }
   const rows = await Promise.all(tenants.map(async (t) => {
     const [userCount, campaignCount, pbxLink] = await Promise.all([
