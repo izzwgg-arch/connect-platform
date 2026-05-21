@@ -1,28 +1,50 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import "../../../admin/billing/_components/billingPhase3.css";
 import "../../../admin/billing/_components/billingPhase4.css";
 import "../../../admin/billing/_components/billingPhase5.css";
+import "./invoicePrint.css";
 import { useAsyncResource } from "../../../../../hooks/useAsyncResource";
 import { apiGet, apiPost, getPortalApiBaseUrl } from "../../../../../services/apiClient";
-import { DataTable } from "../../../../../components/DataTable";
 import { ErrorState } from "../../../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
-import { PageHeader } from "../../../../../components/PageHeader";
 import { PermissionGate } from "../../../../../components/PermissionGate";
-import { DetailCard } from "../../../../../components/DetailCard";
 import { BillingPageChrome, billingErrorMessage } from "../../../../../components/BillingActionToast";
-import { BillingActionPanel } from "../../../../../components/billing/BillingActionPanel";
-import { BillingEmptyState } from "../../../../../components/billing/BillingEmptyState";
 import {
-  dollars, formatDate, formatDateTime,
-  invoiceStatusLabel, invoiceStatusClass,
-  transactionStatusLabel, transactionStatusClass,
-  billingEventLabel, billingEventIcon,
+  billingEventIcon,
+  billingEventLabel,
+  dollars,
+  formatDate,
+  formatDateTime,
+  invoiceStatusClass,
+  invoiceStatusLabel,
+  transactionStatusClass,
+  transactionStatusLabel,
 } from "../../../../../lib/billingUi";
+
+type InvoiceLineItem = {
+  id?: string;
+  type?: string | null;
+  description?: string | null;
+  quantity?: number | string | null;
+  unitPriceCents?: number | null;
+  amountCents?: number | null;
+};
+
+type TotalsRow = {
+  id: string;
+  label: string;
+  valueCents: number;
+  tone?: "default" | "credit" | "tax" | "paid" | "due";
+};
+
+function invoicePortalUrl(id: string) {
+  const base = typeof window !== "undefined" ? window.location.origin : "https://app.connectcomunications.com";
+  return `${base}/billing/invoices/${encodeURIComponent(id)}`;
+}
 
 function openPdf(id: string) {
   const token = localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "";
@@ -30,9 +52,89 @@ function openPdf(id: string) {
   window.open(`${getPortalApiBaseUrl()}/billing/platform/invoices/${encodeURIComponent(id)}/pdf${qs}`, "_blank", "noopener,noreferrer");
 }
 
-type InvoiceLineRow = {
-  id: string; description: string; quantity: string; unit: string; amount: string;
-};
+function normalizeText(value: unknown) {
+  return String(value || "").toLowerCase();
+}
+
+function classifyLineItem(item: InvoiceLineItem): { label: string; tone: "service" | "tax" | "fee" | "credit" } {
+  const raw = `${item.type || ""} ${item.description || ""}`;
+  const text = normalizeText(raw);
+  if (text.includes("discount") || text.includes("credit")) return { label: "Credit", tone: "credit" };
+  if (text.includes("e911") || text.includes("911")) return { label: "E911", tone: "fee" };
+  if (text.includes("usf") || text.includes("fusf") || text.includes("universal service")) return { label: "USF", tone: "fee" };
+  if (text.includes("trs") || text.includes("relay")) return { label: "TRS", tone: "fee" };
+  if (text.includes("regulatory") || text.includes("recovery") || text.includes("surcharge")) return { label: "Regulatory", tone: "fee" };
+  if (text.includes("tax")) return { label: "Tax", tone: "tax" };
+  return { label: "Service", tone: "service" };
+}
+
+function sumApprovedPayments(transactions: any[]) {
+  return transactions
+    .filter((tx) => String(tx.status || "").toUpperCase() === "APPROVED")
+    .reduce((sum, tx) => sum + Number(tx.amountCents || 0), 0);
+}
+
+function buildTotalsRows(row: any, lineItems: InvoiceLineItem[], transactions: any[]): TotalsRow[] {
+  const subtotal = Number(row.subtotalCents ?? 0);
+  const total = Number(row.totalCents ?? 0);
+  const taxFromInvoice = Number(row.taxCents ?? 0);
+  const paid = Math.max(0, total - Number(row.balanceDueCents ?? total), sumApprovedPayments(transactions));
+  const discount = Math.abs(
+    lineItems
+      .filter((item) => classifyLineItem(item).tone === "credit")
+      .reduce((sum, item) => sum + Math.min(0, Number(item.amountCents || 0)), 0),
+  );
+  const feeTotal = lineItems
+    .filter((item) => classifyLineItem(item).tone === "fee")
+    .reduce((sum, item) => sum + Math.max(0, Number(item.amountCents || 0)), 0);
+  const taxTotal = taxFromInvoice || lineItems
+    .filter((item) => classifyLineItem(item).tone === "tax")
+    .reduce((sum, item) => sum + Math.max(0, Number(item.amountCents || 0)), 0);
+
+  const rows: TotalsRow[] = [
+    { id: "subtotal", label: "Service subtotal", valueCents: subtotal },
+  ];
+  if (discount > 0) rows.push({ id: "discount", label: "Discounts / credits", valueCents: -discount, tone: "credit" });
+  if (feeTotal > 0) rows.push({ id: "fees", label: "Telecom fees & surcharges", valueCents: feeTotal, tone: "tax" });
+  if (taxTotal > 0) rows.push({ id: "tax", label: "Taxes", valueCents: taxTotal, tone: "tax" });
+  rows.push({ id: "paid", label: "Amount paid", valueCents: -paid, tone: "paid" });
+  rows.push({ id: "due", label: "Balance due", valueCents: Number(row.balanceDueCents ?? total), tone: "due" });
+  return rows;
+}
+
+function splitPlainText(value: unknown): string[] {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function regulatoryNotices(settings: any, row: any): string[] {
+  const supportEmail = String(settings?.invoiceSupportEmail || settings?.billingEmail || "").trim();
+  const supportPhone = String(settings?.invoiceSupportPhone || "").trim();
+  const terms = Number(settings?.paymentTermsDays ?? 15);
+  const notices = [
+    "Taxes, telecom fees, and regulatory surcharges are itemized when applicable to your service, service address, jurisdiction, and configured billing profile.",
+    "E911 charges, if shown, support emergency calling obligations and may vary by location, number count, or service configuration.",
+    "Regulatory recovery, Federal Universal Service Fund (USF/FUSF), and Telecommunications Relay Service (TRS) related charges are displayed when applicable; they are not represented here as taxes unless labeled as taxes.",
+    `Payment terms are Net ${terms} days unless a different written agreement applies. Past-due balances may be subject to collection handling or late-fee policies configured by your provider.`,
+  ];
+
+  if (supportEmail || supportPhone) {
+    notices.push(`For billing questions, disputes, or remittance support, contact ${[supportEmail, supportPhone].filter(Boolean).join(" or ")}. Include invoice ${row.invoiceNumber || row.id} with your request.`);
+  } else {
+    notices.push(`For billing questions, disputes, or remittance support, contact your Connect billing administrator and include invoice ${row.invoiceNumber || row.id}.`);
+  }
+
+  return [...notices, ...splitPlainText(settings?.invoiceFooterNote)];
+}
+
+function paymentCardLabel(settings: any) {
+  const methods = Array.isArray(settings?.paymentMethods) ? settings.paymentMethods : [];
+  const method = methods.find((pm: any) => pm.isDefault) || methods[0];
+  if (!method?.last4) return "Default payment method";
+  return `${method.brand || "Card"} ending ${method.last4}`;
+}
 
 export default function BillingInvoiceDetailPage() {
   const params = useParams<{ id: string }>();
@@ -56,22 +158,22 @@ export default function BillingInvoiceDetailPage() {
   }, []);
 
   const row = invoice.status === "success" ? invoice.data : null;
-  const hasDefaultPm = settings.status === "success" && !!settings.data.defaultPaymentMethodId;
-  const billingEmailSet = settings.status === "success" && !!String(settings.data.billingEmail || "").trim();
-  const canPay = row && row.status !== "PAID" && row.status !== "VOID";
-
-  const lineItems: InvoiceLineRow[] = row?.lineItems?.map((item: any) => ({
-    id: item.id,
-    description: item.description,
-    quantity: String(item.quantity),
-    unit: dollars(item.unitPriceCents),
-    amount: dollars(item.amountCents),
-  })) || [];
-
+  const settingsData = settings.status === "success" ? settings.data : null;
+  const hasDefaultPm = !!settingsData?.defaultPaymentMethodId;
+  const billingEmailSet = !!String(settingsData?.billingEmail || "").trim();
+  const canPay = row && row.status !== "PAID" && row.status !== "VOID" && Number(row.balanceDueCents ?? row.totalCents ?? 0) > 0;
   const transactions: any[] = row?.transactions || [];
   const events: any[] = (row?.events || [])
     .slice()
     .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  const lineItems: InvoiceLineItem[] = row?.lineItems || [];
+  const period =
+    row?.periodStart && row?.periodEnd
+      ? `${formatDate(row.periodStart)} - ${formatDate(row.periodEnd)}`
+      : null;
+  const payUrl = row ? invoicePortalUrl(row.id) : "";
+  const totalRows = useMemo(() => (row ? buildTotalsRows(row, lineItems, transactions) : []), [row, lineItems, transactions]);
 
   async function runAction(key: string, fn: () => Promise<void>) {
     setPending(key);
@@ -87,13 +189,9 @@ export default function BillingInvoiceDetailPage() {
     try {
       const result = await apiPost<any>(`/billing/platform/invoices/${row.id}/pay`, {});
       const tx = result?.transaction;
-      if (tx?.status === "APPROVED") {
-        showToast("ok", `Payment approved — ${dollars(tx.amountCents)}.`);
-      } else if (tx?.status === "DECLINED") {
-        showToast("err", `Declined: ${tx.responseMessage || tx.responseCode || "card declined"}.`);
-      } else {
-        showToast("ok", "Charge submitted. Refreshing status…");
-      }
+      if (tx?.status === "APPROVED") showToast("ok", `Payment approved - ${dollars(tx.amountCents)}.`);
+      else if (tx?.status === "DECLINED") showToast("err", `Declined: ${tx.responseMessage || tx.responseCode || "card declined"}.`);
+      else showToast("ok", "Charge submitted. Refreshing status...");
       bump();
     } catch (err) {
       showToast("err", billingErrorMessage(err, "Charge failed"));
@@ -104,328 +202,218 @@ export default function BillingInvoiceDetailPage() {
     }
   }
 
-  const period =
-    row?.periodStart && row?.periodEnd
-      ? `${formatDate(row.periodStart)} – ${formatDate(row.periodEnd)}`
-      : null;
-
   return (
     <PermissionGate permission="can_view_billing_invoices" fallback={<div className="state-box">You do not have invoice access.</div>}>
       <BillingPageChrome toast={toast}>
-        <div className="stack compact-stack billing-p5-scope billing-phase3-tenant">
-          <div className="row-actions" style={{ marginBottom: -4 }}>
-            <Link className="btn ghost" style={{ fontSize: 12, padding: "4px 10px" }} href="/billing/invoices">
-              ← Invoices
-            </Link>
+        <div className="billing-html-page billing-p5-scope">
+          <div className="invoice-screen-actions no-print">
+            <Link className="btn ghost" href="/billing/invoices">Back to invoices</Link>
+            <button className="btn ghost" type="button" onClick={() => window.print()}>Print / save PDF</button>
+            {row ? <button className="btn ghost" type="button" onClick={() => openPdf(row.id)}>Legacy PDF</button> : null}
+            {billingEmailSet && row ? (
+              <button
+                className="btn ghost"
+                type="button"
+                disabled={!!pending}
+                onClick={() =>
+                  runAction("email-inv", async () => {
+                    await apiPost(`/billing/platform/invoices/${row.id}/email-invoice`, {});
+                    showToast("ok", "Invoice emailed.");
+                    bump();
+                  })
+                }
+              >
+                {pending === "email-inv" ? "Sending..." : "Email invoice"}
+              </button>
+            ) : null}
           </div>
-
-          <PageHeader
-            title={row?.invoiceNumber || "Invoice"}
-            subtitle={period ? `Billing period: ${period}` : "Invoice details, payment, and activity."}
-          />
 
           {invoice.status === "loading" && !invoice.refreshing ? <LoadingSkeleton rows={6} /> : null}
           {invoice.status === "error" ? <ErrorState message={invoice.error} /> : null}
           {settings.status === "error" ? <ErrorState message={settings.error} /> : null}
 
           {row ? (
-            <>
-              {/* Invoice header card */}
-              <div className="billing-p5-calm-panel billing-invoice-header">
-                <div className="billing-invoice-header-top">
+            <article className="invoice-document" aria-label={`Invoice ${row.invoiceNumber || row.id}`}>
+              <header className="invoice-hero">
+                <div className="invoice-brand-lockup">
+                  <img src="/connect-logo.png" alt="Connect Communications" className="invoice-logo" />
                   <div>
-                    <h2>{row.invoiceNumber}</h2>
-                    <span className={`billing-status-pill ${invoiceStatusClass(row.status)}`}>
-                      {invoiceStatusLabel(row.status)}
-                    </span>
+                    <p className="invoice-eyebrow">Enterprise VoIP billing</p>
+                    <h1>Invoice</h1>
                   </div>
-                  <button className="btn ghost" type="button" onClick={() => openPdf(row.id)}>
-                    Download PDF
-                  </button>
                 </div>
-                <div className="billing-invoice-meta">
-                  <div className="billing-invoice-meta-item">
-                    <span className="meta-label">Total</span>
-                    <span className="meta-value">{dollars(row.totalCents)}</span>
-                  </div>
-                  {row.balanceDueCents > 0 ? (
-                    <div className="billing-invoice-meta-item">
-                      <span className="meta-label">Balance due</span>
-                      <span className="meta-value" style={{ color: "var(--danger, #e53e3e)" }}>
-                        {dollars(row.balanceDueCents)}
-                      </span>
-                    </div>
-                  ) : null}
-                  <div className="billing-invoice-meta-item">
-                    <span className="meta-label">Due date</span>
-                    <span className="meta-value">{formatDate(row.dueDate)}</span>
-                  </div>
-                  {period ? (
-                    <div className="billing-invoice-meta-item">
-                      <span className="meta-label">Period</span>
-                      <span className="meta-value">{period}</span>
-                    </div>
-                  ) : null}
+                <div className="invoice-identity">
+                  <span className={`invoice-status ${invoiceStatusClass(row.status)}`}>{invoiceStatusLabel(row.status)}</span>
+                  <strong>{row.invoiceNumber || row.id}</strong>
+                  <span>Issued {formatDate(row.createdAt || row.issueDate)}</span>
                 </div>
-              </div>
+              </header>
 
-              {/* Payment actions */}
-              {canPay ? (
-                <DetailCard title="Pay this invoice">
-                  {hasDefaultPm ? (
-                    confirmPay ? (
-                      <div>
-                        <p className="muted" style={{ marginBottom: 12, fontSize: 14 }}>
-                          Confirm the amount and your default card in the secure panel. You can cancel anytime.
-                        </p>
-                        <div className="row-actions" style={{ flexWrap: "wrap" }}>
-                          <button className="btn ghost" type="button" disabled={pending === "pay"} onClick={() => setConfirmPay(false)}>
-                            Cancel payment
+              <section className="invoice-command-grid">
+                <div className="invoice-party-card">
+                  <span className="invoice-section-kicker">Bill from</span>
+                  <h2>{settingsData?.invoiceCompanyName || "Connect Communications"}</h2>
+                  {settingsData?.invoiceSupportEmail ? <p>{settingsData.invoiceSupportEmail}</p> : null}
+                  {settingsData?.invoiceSupportPhone ? <p>{settingsData.invoiceSupportPhone}</p> : null}
+                </div>
+                <div className="invoice-party-card">
+                  <span className="invoice-section-kicker">Bill to</span>
+                  <h2>{row.tenant?.name || "Customer"}</h2>
+                  {settingsData?.billingEmail ? <p>{settingsData.billingEmail}</p> : null}
+                  <p>{period || "Service period on invoice"}</p>
+                </div>
+                <div className="invoice-payment-card">
+                  <span className="invoice-section-kicker">Balance due</span>
+                  <strong>{dollars(row.balanceDueCents ?? row.totalCents)}</strong>
+                  <p>Due {formatDate(row.dueDate)} Â· Terms Net {settingsData?.paymentTermsDays ?? 15}</p>
+                  {canPay ? (
+                    hasDefaultPm ? (
+                      <>
+                        {!confirmPay ? (
+                          <button className="invoice-pay-button no-print" type="button" onClick={() => setConfirmPay(true)}>
+                            Pay Invoice Securely
                           </button>
-                          {billingEmailSet ? (
-                            <>
-                              <button
-                                className="btn ghost"
-                                type="button"
-                                disabled={!!pending}
-                                onClick={() =>
-                                  runAction("email-inv", async () => {
-                                    await apiPost(`/billing/platform/invoices/${row.id}/email-invoice`, {});
-                                    showToast("ok", "Invoice emailed.");
-                                    bump();
-                                  })
-                                }
-                              >
-                                {pending === "email-inv" ? "Sending…" : "Email invoice"}
+                        ) : (
+                          <div className="invoice-confirm-pay no-print">
+                            <p>Charge {paymentCardLabel(settingsData)} for {dollars(row.balanceDueCents || row.totalCents)}.</p>
+                            <div className="invoice-confirm-actions">
+                              <button type="button" className="btn ghost" disabled={pending === "pay"} onClick={() => setConfirmPay(false)}>Cancel</button>
+                              <button type="button" className="btn primary" disabled={pending === "pay"} onClick={handlePay}>
+                                {pending === "pay" ? "Charging..." : "Confirm payment"}
                               </button>
-                              <button
-                                className="btn ghost"
-                                type="button"
-                                disabled={!!pending}
-                                onClick={() =>
-                                  runAction("email-pay", async () => {
-                                    await apiPost(`/billing/platform/invoices/${row.id}/email-payment-link`, {});
-                                    showToast("ok", "Payment link emailed.");
-                                    bump();
-                                  })
-                                }
-                              >
-                                {pending === "email-pay" ? "Sending…" : "Email payment link"}
-                              </button>
-                            </>
-                          ) : null}
-                        </div>
-                      </div>
+                            </div>
+                          </div>
+                        )}
+                      </>
                     ) : (
-                      <div className="row-actions" style={{ flexWrap: "wrap" }}>
-                        <button
-                          className="btn primary"
-                          type="button"
-                          onClick={() => setConfirmPay(true)}
-                        >
-                          Pay {dollars(row.balanceDueCents || row.totalCents)}
-                        </button>
-                        {billingEmailSet ? (
-                          <>
-                            <button
-                              className="btn ghost"
-                              type="button"
-                              disabled={!!pending}
-                              onClick={() =>
-                                runAction("email-inv", async () => {
-                                  await apiPost(`/billing/platform/invoices/${row.id}/email-invoice`, {});
-                                  showToast("ok", "Invoice emailed.");
-                                  bump();
-                                })
-                              }
-                            >
-                              {pending === "email-inv" ? "Sending…" : "Email invoice"}
-                            </button>
-                            <button
-                              className="btn ghost"
-                              type="button"
-                              disabled={!!pending}
-                              onClick={() =>
-                                runAction("email-pay", async () => {
-                                  await apiPost(`/billing/platform/invoices/${row.id}/email-payment-link`, {});
-                                  showToast("ok", "Payment link emailed.");
-                                  bump();
-                                })
-                              }
-                            >
-                              {pending === "email-pay" ? "Sending…" : "Email payment link"}
-                            </button>
-                          </>
-                        ) : null}
-                      </div>
+                      <a className="invoice-pay-button no-print" href="/billing/payments">Add payment method</a>
                     )
                   ) : (
-                    <div>
-                      <p className="muted" style={{ marginBottom: 10 }}>
-                        No default payment method on file. Add a card to pay this invoice.
-                      </p>
-                      <a className="btn primary" href="/billing/payments">
-                        Add payment method
-                      </a>
-                      {billingEmailSet ? (
-                        <div className="row-actions" style={{ marginTop: 10 }}>
-                          <button
-                            className="btn ghost"
-                            type="button"
-                            disabled={!!pending}
-                            onClick={() =>
-                              runAction("email-pay", async () => {
-                                await apiPost(`/billing/platform/invoices/${row.id}/email-payment-link`, {});
-                                showToast("ok", "Payment link emailed.");
-                                bump();
-                              })
-                            }
-                          >
-                            {pending === "email-pay" ? "Sending…" : "Email payment link"}
-                          </button>
+                    <span className="invoice-paid-note">{row.status === "PAID" ? `Paid ${row.paidAt ? formatDate(row.paidAt) : ""}` : "No payment due"}</span>
+                  )}
+                  <small>Manual payment URL: <span>{payUrl}</span></small>
+                </div>
+              </section>
+
+              <section className="invoice-metadata-strip">
+                <div><span>Invoice date</span><strong>{formatDate(row.createdAt || row.issueDate)}</strong></div>
+                <div><span>Due date</span><strong>{formatDate(row.dueDate)}</strong></div>
+                <div><span>Service period</span><strong>{period || "â€”"}</strong></div>
+                <div><span>Total</span><strong>{dollars(row.totalCents)}</strong></div>
+              </section>
+
+              <section className="invoice-section invoice-lines-section">
+                <div className="invoice-section-heading">
+                  <div>
+                    <span className="invoice-section-kicker">Services & usage</span>
+                    <h2>Line items</h2>
+                  </div>
+                  <p>Voice platform services, usage, credits, taxes, and telecom surcharges itemized for review.</p>
+                </div>
+
+                <div className="invoice-lines-table">
+                  <div className="invoice-lines-head">
+                    <span>Description</span>
+                    <span>Qty</span>
+                    <span>Rate</span>
+                    <span>Amount</span>
+                  </div>
+                  {lineItems.length > 0 ? lineItems.map((item, index) => {
+                    const cls = classifyLineItem(item);
+                    return (
+                      <div className="invoice-line-row" key={item.id || `${item.description}-${index}`}>
+                        <div>
+                          <span className={`invoice-line-type ${cls.tone}`}>{cls.label}</span>
+                          <strong>{item.description || "Billing item"}</strong>
                         </div>
-                      ) : null}
+                        <span>{String(item.quantity ?? 1)}</span>
+                        <span>{dollars(item.unitPriceCents)}</span>
+                        <strong>{dollars(item.amountCents)}</strong>
+                      </div>
+                    );
+                  }) : (
+                    <div className="invoice-line-empty">No line items are attached to this invoice.</div>
+                  )}
+                </div>
+              </section>
+
+              <section className="invoice-bottom-grid">
+                <div className="invoice-section invoice-notes-card">
+                  <span className="invoice-section-kicker">Payment instructions</span>
+                  {splitPlainText(settingsData?.invoicePaymentInstructions).length > 0 ? (
+                    splitPlainText(settingsData?.invoicePaymentInstructions).map((line) => <p key={line}>{line}</p>)
+                  ) : (
+                    <p>Pay securely online from this invoice page. For ACH, wire, check, or remittance instructions, contact billing support before sending payment.</p>
+                  )}
+                </div>
+
+                <div className="invoice-summary-card">
+                  <span className="invoice-section-kicker">Billing summary</span>
+                  {totalRows.map((item) => (
+                    <div className={`invoice-total-row ${item.tone || "default"}`} key={item.id}>
+                      <span>{item.label}</span>
+                      <strong>{dollars(item.valueCents)}</strong>
                     </div>
-                  )}
-                  {!billingEmailSet && canPay ? (
-                    <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>
-                      Set a billing email in{" "}
-                      <a href="/billing/settings" style={{ textDecoration: "underline" }}>
-                        Billing Settings
-                      </a>{" "}
-                      to enable invoice and payment link emails.
-                    </p>
-                  ) : null}
-                </DetailCard>
-              ) : null}
+                  ))}
+                </div>
+              </section>
 
-              {canPay && hasDefaultPm && confirmPay ? (
-                <BillingActionPanel
-                  layout="center"
-                  centerWidth="min(460px, 94vw)"
-                  onClose={() => { if (pending !== "pay") setConfirmPay(false); }}
-                  eyebrow="Balance due"
-                  title={row.invoiceNumber || "Pay invoice"}
-                  subtitle="Your default card on file is charged once for the open balance. Match this amount to your purchase approval before continuing."
-                  summary={<p style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em" }}>{dollars(row.balanceDueCents || row.totalCents)}</p>}
-                  notice={`Due ${formatDate(row.dueDate)}. You will see Approved or Declined as soon as the processor responds.`}
-                  footer={(
-                    <>
-                      <button className="btn ghost" type="button" disabled={pending === "pay"} onClick={() => setConfirmPay(false)}>
-                        Cancel
-                      </button>
-                      <button className="btn primary" type="button" disabled={pending === "pay"} onClick={handlePay}>
-                        {pending === "pay" ? "Charging…" : `Pay ${dollars(row.balanceDueCents || row.totalCents)}`}
-                      </button>
-                    </>
-                  )}
-                />
-              ) : null}
-
-              {/* Paid banner */}
-              {row.status === "PAID" ? (
-                <div className="state-box" style={{ textAlign: "center" }}>
-                  <p style={{ fontWeight: 600, margin: 0 }}>✓ Paid {row.paidAt ? formatDate(row.paidAt) : ""}</p>
-                  <div className="row-actions" style={{ justifyContent: "center", marginTop: 8 }}>
-                    <button className="btn ghost" type="button" onClick={() => openPdf(row.id)}>Download PDF</button>
-                    {billingEmailSet ? (
-                      <button
-                        className="btn ghost"
-                        type="button"
-                        disabled={!!pending}
-                        onClick={() =>
-                          runAction("email-inv", async () => {
-                            await apiPost(`/billing/platform/invoices/${row.id}/email-invoice`, {});
-                            showToast("ok", "Invoice emailed.");
-                          })
-                        }
-                      >
-                        {pending === "email-inv" ? "Sending…" : "Email receipt"}
-                      </button>
-                    ) : null}
+              <section className="invoice-section invoice-regulatory-card">
+                <div className="invoice-section-heading">
+                  <div>
+                    <span className="invoice-section-kicker">Regulatory & billing notices</span>
+                    <h2>Telecom billing disclosures</h2>
                   </div>
                 </div>
-              ) : null}
+                <ul>
+                  {regulatoryNotices(settingsData, row).map((notice) => <li key={notice}>{notice}</li>)}
+                </ul>
+              </section>
 
-              {/* Line items */}
-              <DetailCard title="Line items">
-                {lineItems.length === 0 ? (
-                  <BillingEmptyState
-                    title="No line items"
-                    message="Line items appear when the invoice includes billable usage or fees. Contact your administrator if this looks wrong."
-                  />
-                ) : (
-                  <DataTable
-                    rows={lineItems}
-                    columns={[
-                      { key: "description", label: "Description", render: (r) => r.description },
-                      { key: "quantity", label: "Qty", render: (r) => r.quantity },
-                      { key: "unit", label: "Unit price", render: (r) => r.unit },
-                      { key: "amount", label: "Amount", render: (r) => r.amount },
-                    ]}
-                  />
-                )}
-              </DetailCard>
-
-              {/* Payment history */}
               {transactions.length > 0 ? (
-                <DetailCard title="Payment history">
-                  <div className="billing-tx-list">
+                <section className="invoice-section invoice-history-section no-print">
+                  <div className="invoice-section-heading">
+                    <div>
+                      <span className="invoice-section-kicker">Payments</span>
+                      <h2>Payment history</h2>
+                    </div>
+                  </div>
+                  <div className="invoice-history-list">
                     {transactions.map((tx) => (
-                      <div className="billing-tx-row" key={tx.id}>
-                        <span>
-                          <span className="tx-amount">{dollars(tx.amountCents)}</span>
-                          <span className="tx-meta tx-date"> · {formatDateTime(tx.createdAt)}</span>
-                          {tx.paymentMethod?.last4 ? (
-                            <span className="tx-meta">
-                              {" "}· {tx.paymentMethod.brand || "Card"} ••••{tx.paymentMethod.last4}
-                            </span>
-                          ) : null}
-                        </span>
-                        <span className={`billing-status-pill ${transactionStatusClass(tx.status)}`}>
-                          {transactionStatusLabel(tx.status)}
-                        </span>
-                        {tx.responseMessage || tx.responseCode ? (
-                          <span className="tx-meta tx-ref" style={{ fontSize: 12, color: "var(--muted)" }}>
-                            {tx.responseMessage || tx.responseCode}
-                          </span>
-                        ) : null}
-                        <span className="tx-ref" />
+                      <div className="invoice-history-row" key={tx.id}>
+                        <span>{dollars(tx.amountCents)} Â· {formatDateTime(tx.createdAt)}</span>
+                        <span className={`billing-status-pill ${transactionStatusClass(tx.status)}`}>{transactionStatusLabel(tx.status)}</span>
                       </div>
                     ))}
                   </div>
-                </DetailCard>
+                </section>
               ) : null}
 
-              {/* Activity timeline */}
-              <DetailCard title="Activity">
-                {events.length === 0 ? (
-                  <BillingEmptyState
-                    title="No activity yet"
-                    message="Payments, emails, and status changes will appear here. Open this page again after paying to see the full trail."
-                  />
-                ) : (
-                  <div className="billing-timeline-v2">
-                    {events.map((e) => {
-                      const isGood = e.type === "payment_succeeded" || e.type === "invoice_marked_paid" || e.type === "receipt_emailed";
-                      const isBad = e.type === "payment_failed" || String(e.type || "").includes("failed");
-                      return (
-                        <div className="billing-timeline-v2__item" key={e.id}>
-                          <div className={`billing-timeline-v2__icon ${isGood ? "good" : isBad ? "bad" : ""}`} aria-hidden>
-                            {billingEventIcon(e.type)}
-                          </div>
-                          <div>
-                            <div style={{ fontWeight: 600, fontSize: 14 }}>{billingEventLabel(e.type)}</div>
-                            <div className="billing-timeline-v2__time">{formatDateTime(e.createdAt)}</div>
-                            {e.message ? <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>{e.message}</div> : null}
-                          </div>
-                        </div>
-                      );
-                    })}
+              <section className="invoice-section invoice-history-section no-print">
+                <div className="invoice-section-heading">
+                  <div>
+                    <span className="invoice-section-kicker">Audit trail</span>
+                    <h2>Activity</h2>
                   </div>
+                </div>
+                {events.length > 0 ? (
+                  <div className="invoice-timeline">
+                    {events.map((e) => (
+                      <div className="invoice-timeline-row" key={e.id}>
+                        <span aria-hidden>{billingEventIcon(e.type)}</span>
+                        <div>
+                          <strong>{billingEventLabel(e.type)}</strong>
+                          <small>{formatDateTime(e.createdAt)}</small>
+                          {e.message ? <p>{e.message}</p> : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="invoice-muted">Payments, emails, and status changes will appear here.</p>
                 )}
-              </DetailCard>
-            </>
+              </section>
+            </article>
           ) : null}
         </div>
       </BillingPageChrome>

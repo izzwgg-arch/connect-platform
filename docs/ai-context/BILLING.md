@@ -734,50 +734,35 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 
 **Fallback logo for HTML emails:** `{PUBLIC_PORTAL_URL}/connect-logo.png` from `apps/portal/public/connect-logo.png`.
 
-### Invoice redesign (2026-05-20, VoIP SaaS style)
+### HTML invoice redesign (2026-05-20)
 
-`renderBillingInvoicePdf` in `apps/api/src/billing/pdf.ts` was restructured from a legacy "blue band + table dump" into a neutral, print-safe enterprise layout:
+**Scope:** Tenant invoice detail page only: `apps/portal/app/(platform)/billing/invoices/[id]/page.tsx` plus scoped stylesheet `apps/portal/app/(platform)/billing/invoices/[id]/invoicePrint.css`. The server PDFKit generator remains available through **Legacy PDF** / `GET /billing/platform/invoices/:id/pdf`; this pass does **not** change billing math, schema, payment execution, email templates, or admin invoice pages.
 
-- **Header architecture:** slim cyan top rule, white card header, logo left, invoice number/status right (no large competing blue block).
-- **Payment architecture:** dedicated **Online Payment** card with a primary CTA button (`Pay Invoice Securely`) plus a fallback URL line for manual entry / print scenarios.
-- **Totals architecture:** right-aligned summary card with subtotal, discount, taxes/fees, optional regulatory line-item aggregation, amount paid, and emphasized balance due.
-- **Line item architecture:** reusable section pattern with soft header row, lighter separators, and row-height handling for long descriptions.
-- **Regulatory architecture:** dedicated **Regulatory & Billing Notices** section driven by config-ready notice keys from `TenantBillingSettings.metadata.billingNotices` with safe defaults.
+**Architecture:**
+- The tenant invoice detail page now renders a dedicated **HTML invoice document** instead of generic `DetailCard` + `DataTable` blocks.
+- Existing data sources are preserved: `GET /billing/platform/invoices/:id` for invoice/line items/transactions/events and `GET /billing/settings` for presentation/support/payment settings.
+- The document layout is: premium neutral header + Connect logo, billing parties grid, payment CTA panel, invoice metadata strip, line-item table, payment instructions, billing summary, regulatory notices, then non-print payment history/activity.
+- `Print / save PDF` calls `window.print()` and relies on `invoicePrint.css`; **Legacy PDF** remains for the API-generated PDF attachment/download path.
 
-#### Telecom regulatory notice handling
+**Telecom regulatory notice handling:**
+- Bottom section title: **Regulatory & Billing Notices**.
+- Notices are display-ready and conservative; they use “if applicable” language for E911, regulatory recovery, USF/FUSF, TRS/relay, taxes, surcharges, payment terms, disputes, and remittance support.
+- Tenant-configurable text is appended from `TenantBillingSettings.invoiceFooterNote`; payment/remittance instructions come from `invoicePaymentInstructions`.
+- Support contact wording uses `invoiceSupportEmail`, `invoiceSupportPhone`, or `billingEmail` when present. No fake legal claims, provider registrations, tax IDs, FCC claims, or jurisdiction-specific assertions are hardcoded.
 
-`pdf.ts` now supports configurable notice keys (all optional) under `TenantBillingSettings.metadata.billingNotices`:
+**Line items / future extensibility:**
+- The HTML invoice classifies displayed rows by existing `lineItem.type` and description text only: service, credit, tax, E911, regulatory, USF/FUSF, TRS/relay, and generic surcharge rows.
+- Classification is presentation-only; totals use server-provided `subtotalCents`, `taxCents`, `totalCents`, `balanceDueCents`, and approved transactions.
+- Future DID charges, usage, international minutes, credits, telecom taxes, and regulatory rows can be added as line items without changing the layout.
 
-- `e911`
-- `regulatoryRecovery`
-- `telecomTaxes`
-- `usf`
-- `trs`
-- `disputeNotice`
-- `lateFeePolicy`
-- `remittanceNotice`
+**Print/PDF considerations:**
+- `invoicePrint.css` scopes styles to `.billing-html-page` / `.invoice-document` and includes `@media print`.
+- Print hides topbar/sidebar/action controls/history, flattens shadows/backgrounds, keeps letter margins, and marks major invoice sections as `break-inside: avoid`.
+- Keep invoice copy readable in grayscale: do not rely on color alone for status, totals, or fee categories.
 
-Each key can also be toggled via `<key>Enabled: false`. If absent, conservative defaults are rendered ("may apply", "when applicable", no fabricated legal claims). This keeps the document FCC truth-in-billing style compatible without asserting jurisdiction-specific legal advice.
-
-#### Files touched
-
-- `apps/api/src/billing/pdf.ts` (layout + CTA + notices + extensibility helpers)
-
-#### Print/PDF considerations
-
-- Letter page, fixed margins, continuation header on overflow pages.
-- Section-level `ensureSpace()` before cards/tables to reduce broken splits.
-- CTA remains readable in grayscale (dark slate button + fallback plaintext URL).
-- Notices and footers remain compact in print-safe 8pt typography.
-
-#### Future extensibility notes
-
-The new structure is designed to absorb additional billing constructs with minimal churn:
-
-- new totals rows (`DID`, `E911`, international usage, credits)
-- additional line-item groupings (usage blocks)
-- expanded compliance/dispute policy text by metadata
-- payment/autopay policy variants without changing core rendering flow
+**Verification:**
+- `pnpm typecheck` in `apps/portal`.
+- Manual: unpaid invoice, paid invoice, long line item description, multiple service/tax/fee rows, payment CTA, fallback URL, browser print preview, desktop width, light/dark shell.
 
 ### Invoice PDF attachments + portal PDF routes (2026-05-19)
 
