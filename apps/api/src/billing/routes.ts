@@ -60,6 +60,7 @@ import {
   todayDateSuffix,
   transactionExportToCsv,
 } from "./billingReports";
+import { billingMonthBoundsForYearMonth } from "./billingTime";
 import { assertBillingInvoiceDeletable } from "./deleteBillingInvoice";
 import {
   markDoNotCharge,
@@ -139,11 +140,7 @@ function parseBillingPeriodBounds(q: { periodMonth?: string; periodYear?: string
   const rawMonth = Number.parseInt(String(q.periodMonth || ""), 10);
   const rawYear = Number.parseInt(String(q.periodYear || ""), 10);
   if (Number.isFinite(rawMonth) && rawMonth >= 1 && rawMonth <= 12 && Number.isFinite(rawYear) && rawYear >= 2020 && rawYear <= 2099) {
-    const m = rawMonth - 1;
-    return {
-      periodStart: new Date(Date.UTC(rawYear, m, 1, 0, 0, 0, 0)),
-      periodEnd: new Date(Date.UTC(rawYear, m + 1, 0, 23, 59, 59, 999)),
-    };
+    return billingMonthBoundsForYearMonth(rawYear, rawMonth);
   }
   return undefined;
 }
@@ -1066,9 +1063,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     let periodStart: Date | undefined;
     let periodEnd: Date | undefined;
     if (Number.isFinite(rawMonth) && rawMonth >= 1 && rawMonth <= 12 && Number.isFinite(rawYear) && rawYear >= 2020 && rawYear <= 2099) {
-      const m = rawMonth - 1;
-      periodStart = new Date(Date.UTC(rawYear, m, 1, 0, 0, 0, 0));
-      periodEnd = new Date(Date.UTC(rawYear, m + 1, 0, 23, 59, 59, 999));
+      ({ periodStart, periodEnd } = billingMonthBoundsForYearMonth(rawYear, rawMonth));
     }
     return buildBillingInvoicePreview({ tenantId, periodStart, periodEnd });
   });
@@ -1083,9 +1078,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     let periodStart: Date | undefined;
     let periodEnd: Date | undefined;
     if (Number.isFinite(rawMonth) && rawMonth >= 1 && rawMonth <= 12 && Number.isFinite(rawYear) && rawYear >= 2020 && rawYear <= 2099) {
-      const m = rawMonth - 1;
-      periodStart = new Date(Date.UTC(rawYear, m, 1, 0, 0, 0, 0));
-      periodEnd = new Date(Date.UTC(rawYear, m + 1, 0, 23, 59, 59, 999));
+      ({ periodStart, periodEnd } = billingMonthBoundsForYearMonth(rawYear, rawMonth));
     }
     const preview = await buildBillingInvoicePreview({ tenantId, periodStart, periodEnd });
     const settingsRow = await ensureTenantBillingSettings(tenantId);

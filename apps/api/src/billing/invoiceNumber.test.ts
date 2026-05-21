@@ -16,6 +16,11 @@ test("nextInvoiceSequenceAfter ignores non-matching or malformed numbers", () =>
   assert.equal(nextInvoiceSequenceAfter("CC-202605-ABC12", prefix), 1);
 });
 
+test("billing invoice number prefix uses New York billing month", () => {
+  assert.equal(billingInvoiceNumberPrefix(new Date("2026-06-01T03:30:00Z")), "CC-202605");
+  assert.equal(billingInvoiceNumberPrefix(new Date("2026-06-01T04:30:00Z")), "CC-202606");
+});
+
 test("billing invoice numbers from two tenants do not reuse the same global sequence", () => {
   const prefix = "CC-202605";
   const afterTenantA = nextInvoiceSequenceAfter("CC-202605-00011", prefix);

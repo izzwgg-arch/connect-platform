@@ -1,4 +1,5 @@
 import { DEFAULT_INVOICE_DISPLAY_NAME, escapeHtml, type InvoiceEmailBranding, resolveInvoiceEmailBranding } from "./invoiceBranding";
+import { formatBillingDate } from "./billingTime";
 
 export function money(cents: number): string {
   return `$${(Number(cents || 0) / 100).toFixed(2)}`;
@@ -6,8 +7,7 @@ export function money(cents: number): string {
 
 /** Human-readable date: "May 19, 2026" */
 function fmtDate(d: Date | string): string {
-  const dt = typeof d === "string" ? new Date(d) : d;
-  return dt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
+  return formatBillingDate(d);
 }
 
 /** Get fallback Connect logo URL from PUBLIC_PORTAL_URL env. */

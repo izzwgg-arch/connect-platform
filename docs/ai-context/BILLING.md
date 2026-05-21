@@ -9,6 +9,13 @@
 
 **Operator smoke, capture list for incidents, caps, dangerous actions:** see **`docs/ai-context/BILLING_OPERATOR_RUNBOOK.md`**.
 
+## Billing timezone
+
+- **Connect billing timezone:** `America/New_York`. Production servers may physically run outside the US (for example, Germany), so billing code must not infer billing dates from the host locale or system clock timezone.
+- **Runtime default:** production `api` and `worker` containers run with `TZ=America/New_York` for operational consistency, but billing calculations still use explicit helpers in `apps/api/src/billing/billingTime.ts`.
+- **Database timestamps:** remain UTC instants. Prisma/Postgres `DateTime` values such as `createdAt`, `updatedAt`, payment attempts, webhook events, and audit timestamps should continue to be stored as UTC.
+- **Billing dates:** invoice periods, due dates, invoice-number month prefixes, billing CSV date suffixes, and customer-facing invoice email dates are interpreted in New York time.
+
 ## Two billing HTTP stacks (do not mix accidentally)
 
 | Stack | Location | Typical paths |

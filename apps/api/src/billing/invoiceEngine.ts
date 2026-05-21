@@ -10,6 +10,7 @@ import { buildExtensionInvoiceLine } from "./billingFlatRate";
 import { resolveBillingQuantities, type BillingResolvedQuantities } from "./billingQuantityOverrides";
 import { resolveTollFreeDidPriceCents } from "./billingTollFreePricing";
 import { buildPricingPreviewExplanation, type PricingPreviewExplanation } from "./billingPricingExplanation";
+import { addBillingDays, billingMonthBounds, billingYearMonth } from "./billingTime";
 
 export type BillingInvoicePreview = {
   tenantId: string;
@@ -53,15 +54,11 @@ export type BillingInvoicePreview = {
 };
 
 export function monthBounds(anchor = new Date()): { periodStart: Date; periodEnd: Date } {
-  const periodStart = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth(), 1, 0, 0, 0, 0));
-  const periodEnd = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() + 1, 0, 23, 59, 59, 999));
-  return { periodStart, periodEnd };
+  return billingMonthBounds(anchor);
 }
 
 export function addDays(date: Date, days: number): Date {
-  const copy = new Date(date);
-  copy.setUTCDate(copy.getUTCDate() + days);
-  return copy;
+  return addBillingDays(date, days);
 }
 
 export async function ensureTenantBillingSettings(tenantId: string) {
@@ -430,7 +427,8 @@ export async function markBillingInvoicePaid(invoiceId: string, amountCents?: nu
 
 /** `BillingInvoice.invoiceNumber` is globally unique — sequence per month prefix across all tenants. */
 export function billingInvoiceNumberPrefix(at = new Date()): string {
-  return `CC-${at.getUTCFullYear()}${String(at.getUTCMonth() + 1).padStart(2, "0")}`;
+  const { year, month } = billingYearMonth(at);
+  return `CC-${year}${String(month).padStart(2, "0")}`;
 }
 
 /** Next 5-digit sequence after the latest invoice for this prefix (fixed-width → lex order = numeric). */
@@ -505,8 +503,7 @@ export async function createOneTimeChargeInvoice(input: {
   const settings = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId: input.tenantId } });
   const termsDays = Number(settings?.paymentTermsDays ?? 15);
   const now = new Date();
-  const dueDate = new Date(now);
-  dueDate.setUTCDate(dueDate.getUTCDate() + termsDays);
+  const dueDate = addBillingDays(now, termsDays);
 
   const metadata: Record<string, unknown> = {
     source: "one_time_charge",

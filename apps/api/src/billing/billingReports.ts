@@ -12,6 +12,8 @@
  *    headers so nothing here touches HTTP concerns.
  */
 
+import { formatBillingDateIso } from "./billingTime";
+
 // ── Row-cap constants ─────────────────────────────────────────────────────────
 
 export const AGING_ROW_CAP = 2_000;
@@ -127,7 +129,9 @@ export function csvRow(cells: unknown[]): string {
 
 export function fmtIso(d: Date | null | undefined): string {
   if (!d) return "";
-  return d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10);
+  if (d instanceof Date) return formatBillingDateIso(d);
+  const raw = String(d);
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : formatBillingDateIso(raw);
 }
 
 export function fmtDatetime(d: Date | null | undefined): string {
@@ -154,7 +158,7 @@ export function csvMeta(reportName: string, generatedBy: string): string {
 // ── Today's date for filename suffix ─────────────────────────────────────────
 
 export function todayDateSuffix(): string {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  return formatBillingDateIso(new Date()); // YYYY-MM-DD in Connect billing time.
 }
 
 // ── Aging report ─────────────────────────────────────────────────────────────
