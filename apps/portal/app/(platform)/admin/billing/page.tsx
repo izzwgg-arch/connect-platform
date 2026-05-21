@@ -26,7 +26,7 @@ type TenantRow = {
   id: string;
   name: string;
   balanceDueCents: number;
-  invoices?: { status?: string }[];
+  invoices?: { status?: string; balanceDueCents?: number }[];
 };
 
 export default function AdminBillingPage() {
@@ -85,13 +85,13 @@ export default function AdminBillingPage() {
   const nextBill = detail?.settings
     ? nextBillingSummary(detail.settings.billingDayOfMonth, !!detail.settings.autoBillingEnabled)
     : null;
-  const unpaid = detail ? (detail.invoices || []).filter((i) => !["PAID", "VOID"].includes(String(i.status))).length : 0;
-  const failed = detail ? (detail.invoices || []).filter((i) => String(i.status) === "FAILED").length : 0;
+  const unpaid = detail ? (detail.invoices || []).filter((i: any) => !["PAID", "VOID"].includes(String(i.status)) && Number(i.balanceDueCents || 0) > 0).length : 0;
+  const failed = detail ? (detail.invoices || []).filter((i: any) => String(i.status) === "FAILED" && Number(i.balanceDueCents || 0) > 0).length : 0;
   // Balance due computed live from loaded invoices (stays fresh after pricing/tax saves)
   const livBalanceDue = detail
-    ? (detail.invoices || [])
-        .filter((i: any) => !["PAID", "VOID"].includes(String(i.status)))
-        .reduce((sum: number, i: any) => sum + (i.balanceDueCents ?? 0), 0)
+    ? Number((detail as TenantDetail & { balanceDueCents?: number }).balanceDueCents ?? (detail.invoices || [])
+        .filter((i: any) => !["PAID", "VOID"].includes(String(i.status)) && Number(i.balanceDueCents ?? 0) > 0)
+        .reduce((sum: number, i: any) => sum + (i.balanceDueCents ?? 0), 0))
     : null;
   // Next billing date: read from billingScheduleOverride inside settings.metadata
   const scheduleOverride = (() => {

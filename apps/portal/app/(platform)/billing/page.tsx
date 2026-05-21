@@ -152,9 +152,11 @@ export default function BillingOverviewPage() {
   const invoices = useAsyncResource(() => apiGet<any[]>("/billing/platform/invoices"), []);
 
   const allInvoices = invoices.status === "success" ? invoices.data : [];
-  const openBalance = allInvoices.reduce((sum, inv) => sum + Number(inv.balanceDueCents || 0), 0);
+  const openBalance = allInvoices
+    .filter((inv) => !["PAID", "VOID"].includes(String(inv.status)) && Number(inv.balanceDueCents || 0) > 0)
+    .reduce((sum, inv) => sum + Number(inv.balanceDueCents || 0), 0);
   const worst = worstOpenInvoice(allInvoices);
-  const unpaid = allInvoices.filter((inv) => ["OPEN", "FAILED", "OVERDUE", "DRAFT"].includes(String(inv.status)));
+  const unpaid = allInvoices.filter((inv) => ["OPEN", "FAILED", "OVERDUE", "DRAFT"].includes(String(inv.status)) && Number(inv.balanceDueCents || 0) > 0);
   const recentPaid = allInvoices
     .filter((inv) => inv.status === "PAID" && inv.paidAt)
     .sort((a, b) => new Date(b.paidAt).getTime() - new Date(a.paidAt).getTime())

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import { SolaCardknoxAdapter, type SolaCardknoxConfig, TwilioSmsProvider, VoipMsSmsProvider, type TwilioCredentials, type VoipMsCredentials } from "@connect/integrations";
-import { buildBillingInvoicePreview, buildBillingInvoicePreviewFromSettings, createBillingInvoice, createOneTimeChargeInvoice, ensureTenantBillingSettings, logBillingEvent, markBillingInvoicePaid, monthBounds } from "./invoiceEngine";
+import { buildBillingInvoicePreview, buildBillingInvoicePreviewFromSettings, createBillingInvoice, createOneTimeChargeInvoice, ensureTenantBillingSettings, logBillingEvent, markBillingInvoicePaid, tenantBillingPeriodBounds } from "./invoiceEngine";
 import { calculateTenantBillingUsage } from "./usage";
 import { BILLING_PRICING_MODE_METADATA_KEY, buildTenantSettingsResetToCatalog, parseBillingPricingMode } from "./billingPricingResolution";
 import { buildTenantPricingDiagnosticsFromPreview, rawBillingPricingModeFromMetadata } from "./billingPricingDiagnostics";
@@ -586,17 +586,34 @@ export async function registerBillingRoutes(app: FastifyInstance) {
   app.get("/admin/billing/platform/tenants", async (req, reply) => {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
-    const tenants = await (db as any).tenant.findMany({
-      include: { billingSettings: true, paymentMethods: { where: { active: true }, select: { id: true, brand: true, last4: true, isDefault: true } }, billingInvoices: { orderBy: { createdAt: "desc" }, take: 3 } },
-      orderBy: { name: "asc" },
-    });
+    const [tenants, balances] = await Promise.all([
+      (db as any).tenant.findMany({
+        include: {
+          billingSettings: true,
+          paymentMethods: { where: { active: true }, select: { id: true, brand: true, last4: true, isDefault: true } },
+          billingInvoices: {
+            where: { status: { in: ["OPEN", "FAILED", "OVERDUE", "DRAFT"] }, balanceDueCents: { gt: 0 } },
+            orderBy: { createdAt: "desc" },
+          },
+        },
+        orderBy: { name: "asc" },
+      }),
+      (db as any).billingInvoice.groupBy({
+        by: ["tenantId"],
+        where: { status: { in: ["OPEN", "FAILED", "OVERDUE", "DRAFT"] }, balanceDueCents: { gt: 0 } },
+        _sum: { balanceDueCents: true },
+      }),
+    ]);
+    const balanceByTenant = new Map<string, number>(
+      balances.map((row: any) => [row.tenantId, Number(row._sum?.balanceDueCents || 0)]),
+    );
     return tenants.map((tenant: any) => ({
       id: tenant.id,
       name: tenant.name,
       billingSettings: tenant.billingSettings,
       paymentMethods: tenant.paymentMethods,
       invoices: tenant.billingInvoices,
-      balanceDueCents: tenant.billingInvoices.reduce((sum: number, invoice: any) => sum + (invoice.balanceDueCents || 0), 0),
+      balanceDueCents: balanceByTenant.get(tenant.id) || 0,
     }));
   });
 
@@ -607,7 +624,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const tenant = await (db as any).tenant.findUnique({ where: { id: tenantId }, select: { id: true, name: true, createdAt: true } });
     if (!tenant) return reply.code(404).send({ error: "tenant_not_found" });
     const settings = await ensureTenantBillingSettings(tenantId);
-    const [usage, preview, invoices, paymentMethods, taxProfiles, sola] = await Promise.all([
+    const [usage, preview, invoices, paymentMethods, taxProfiles, sola, balanceAgg] = await Promise.all([
       calculateTenantBillingUsage(tenantId, settings),
       buildBillingInvoicePreview({ tenantId }),
       (db as any).billingInvoice.findMany({
@@ -623,8 +640,12 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       }),
       (db as any).taxProfile.findMany({ where: { enabled: true }, orderBy: [{ state: "asc" }, { county: "asc" }] }),
       getMaskedSolaConfigForTenant(tenantId),
+      (db as any).billingInvoice.aggregate({
+        where: { tenantId, status: { in: ["OPEN", "FAILED", "OVERDUE", "DRAFT"] }, balanceDueCents: { gt: 0 } },
+        _sum: { balanceDueCents: true },
+      }),
     ]);
-    const payload = { tenant, settings, usage, preview, invoices, paymentMethods, taxProfiles, sola };
+    const payload = { tenant, settings, usage, preview, invoices, paymentMethods, taxProfiles, sola, balanceDueCents: Number(balanceAgg._sum?.balanceDueCents || 0) };
     return JSON.parse(
       JSON.stringify(payload, (_k, v) => (typeof v === "bigint" ? v.toString() : v)),
     ) as typeof payload;
@@ -2685,20 +2706,23 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
     const input = z.object({ dryRun: z.boolean().default(true), tenantId: z.string().optional() }).parse(req.body || {});
-    const { periodStart, periodEnd } = monthBounds();
-    const run = await (db as any).billingRun.create({ data: { tenantId: input.tenantId || null, periodStart, periodEnd, dryRun: input.dryRun } });
     const tenants = await (db as any).tenant.findMany({
       where: input.tenantId ? { id: input.tenantId } : { billingSettings: { autoBillingEnabled: true } },
       include: { billingSettings: true },
     });
+    const periods = tenants.map((tenant: any) => tenantBillingPeriodBounds(tenant.billingSettings || {}));
+    const periodStart = periods.reduce((min: Date, p: { periodStart: Date }) => p.periodStart < min ? p.periodStart : min, periods[0]?.periodStart || new Date());
+    const periodEnd = periods.reduce((max: Date, p: { periodEnd: Date }) => p.periodEnd > max ? p.periodEnd : max, periods[0]?.periodEnd || periodStart);
+    const run = await (db as any).billingRun.create({ data: { tenantId: input.tenantId || null, periodStart, periodEnd, dryRun: input.dryRun } });
     const results = [];
-    for (const tenant of tenants) {
-      const preview = await buildBillingInvoicePreview({ tenantId: tenant.id, periodStart, periodEnd });
+    for (const [idx, tenant] of tenants.entries()) {
+      const tenantPeriod = periods[idx] || { periodStart, periodEnd };
+      const preview = await buildBillingInvoicePreview({ tenantId: tenant.id, periodStart: tenantPeriod.periodStart, periodEnd: tenantPeriod.periodEnd });
       if (input.dryRun) {
         results.push({ tenantId: tenant.id, totalCents: preview.totalCents, dryRun: true });
         continue;
       }
-      const invoice = await createBillingInvoice({ tenantId: tenant.id, periodStart, periodEnd, status: "OPEN" });
+      const invoice = await createBillingInvoice({ tenantId: tenant.id, periodStart: tenantPeriod.periodStart, periodEnd: tenantPeriod.periodEnd, status: "OPEN" });
       let transaction = null;
       if (tenant.billingSettings?.autoBillingEnabled && tenant.billingSettings.defaultPaymentMethodId) {
         const method = await (db as any).paymentMethod.findUnique({ where: { id: tenant.billingSettings.defaultPaymentMethodId } });

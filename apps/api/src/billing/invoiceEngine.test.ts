@@ -541,6 +541,63 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
 
   phoneNumberRows = [];
 
+  state.settings.taxEnabled = true;
+  state.settings.taxProfile = fakeTaxProfile;
+  state.settings.taxProfileId = "tp1";
+  state.settings.metadata = {
+    billingTelecomFees: {
+      salesTax: {
+        enabled: true,
+        customerVisible: true,
+        label: "Tenant sales tax",
+        mode: "ratePercent",
+        ratePercent: 0.1,
+        basis: "invoice_subtotal",
+      },
+      e911: {
+        enabled: true,
+        customerVisible: true,
+        label: "Tenant E911",
+        mode: "amountCents",
+        amountCents: 200,
+        basis: "per_extension",
+      },
+      regulatory: {
+        enabled: true,
+        customerVisible: true,
+        label: "Tenant regulatory recovery",
+        mode: "ratePercent",
+        ratePercent: 0.01,
+        basis: "invoice_subtotal",
+      },
+      usfRecovery: {
+        enabled: true,
+        customerVisible: true,
+        label: "Tenant USF recovery",
+        mode: "ratePercent",
+        ratePercent: 0.02,
+        basis: "invoice_subtotal",
+      },
+      customFee: {
+        enabled: true,
+        customerVisible: true,
+        label: "Tenant custom fee",
+        mode: "amountCents",
+        amountCents: 500,
+        basis: "flat_monthly",
+      },
+    },
+  };
+  const feePreview = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
+  assert.equal(feePreview.taxCalculationAudit.providerId, "billing_telecom_fees_v1");
+  assert.equal(feePreview.lineItems.find((l) => l.description === "Tenant sales tax")?.amountCents, 300);
+  assert.equal(feePreview.lineItems.find((l) => l.description === "Tenant E911")?.amountCents, 200);
+  assert.equal(feePreview.lineItems.find((l) => l.description === "Tenant regulatory recovery")?.amountCents, 30);
+  assert.equal(feePreview.lineItems.find((l) => l.description === "Tenant USF recovery")?.amountCents, 60);
+  assert.equal(feePreview.lineItems.find((l) => l.description === "Tenant custom fee")?.amountCents, 500);
+  assert.equal(feePreview.taxCents, 1090);
+  assert.equal(feePreview.totalCents, 4090);
+
   // Reset state
   state.settings.extensionPriceCents = 3000;
   state.settings.billingPlan = null;
@@ -575,6 +632,17 @@ test("invoiceEngine: buildBillingInvoicePreview with periodMonth/periodYear retu
   assert.equal(preview.periodStart.getUTCDate(), 1, "periodStart must be the 1st");
   assert.equal(preview.periodEnd.getUTCMonth(), 2, "periodEnd must still be in March");
   assert.equal(preview.periodEnd.getUTCDate(), 31, "March has 31 days");
+});
+
+test("invoiceEngine: tenantBillingPeriodBounds uses payday-to-payday periods", async () => {
+  const { tenantBillingPeriodBounds } = await import("./invoiceEngine");
+  const bounds = tenantBillingPeriodBounds(
+    { billingDayOfMonth: 21, metadata: { billingTimeZone: "America/New_York" } },
+    new Date("2026-05-22T12:00:00.000Z"),
+  );
+
+  assert.equal(bounds.periodStart.toISOString(), "2026-05-21T04:00:00.000Z");
+  assert.equal(bounds.periodEnd.toISOString(), "2026-06-21T03:59:59.999Z");
 });
 
 test("invoiceEngine: buildBillingInvoicePreview does not write to DB (no billingInvoice.create call)", async () => {

@@ -243,7 +243,7 @@ export function lastPaidSummary(invoices: any[] | undefined | null): string | nu
 
 export function worstOpenInvoice(invoices: any[] | undefined | null): any | null {
   if (!invoices?.length) return null;
-  const openish = invoices.filter((i) => ["OPEN", "FAILED", "OVERDUE", "DRAFT"].includes(String(i.status)));
+  const openish = invoices.filter((i) => ["OPEN", "FAILED", "OVERDUE", "DRAFT"].includes(String(i.status)) && Number(i.balanceDueCents || 0) > 0);
   if (!openish.length) return null;
   const rank: Record<string, number> = { FAILED: 4, OVERDUE: 3, OPEN: 2, DRAFT: 1 };
   openish.sort((a, b) => (rank[String(b.status)] || 0) - (rank[String(a.status)] || 0));
@@ -269,7 +269,7 @@ export function dunningHintFromInvoice(inv: any | null): string | null {
 /** Worst status among invoices that are not settled (admin / cockpit summaries). */
 export function worstNonTerminalInvoiceStatus(invoices: any[] | undefined | null): string {
   const list = invoices || [];
-  const active = list.filter((i) => !["PAID", "VOID"].includes(String(i.status)));
+  const active = list.filter((i) => !["PAID", "VOID"].includes(String(i.status)) && Number(i.balanceDueCents || 0) > 0);
   if (!active.length) return "—";
   if (active.some((i) => i.status === "FAILED")) return "FAILED";
   if (active.some((i) => i.status === "OVERDUE")) return "OVERDUE";

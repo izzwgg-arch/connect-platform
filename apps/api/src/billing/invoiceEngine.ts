@@ -11,6 +11,11 @@ import { resolveBillingQuantities, type BillingResolvedQuantities } from "./bill
 import { resolveTollFreeDidPriceCents } from "./billingTollFreePricing";
 import { buildPricingPreviewExplanation, type PricingPreviewExplanation } from "./billingPricingExplanation";
 import { addBillingDays, billingMonthBounds, billingYearMonth } from "./billingTime";
+import { buildBillingTelecomFeeLines, parseBillingTelecomFees } from "./billingTelecomFees";
+import { buildBillingSchedule } from "./billingSchedule";
+
+const BILLING_TELECOM_FEES_PROVIDER_ID = "billing_telecom_fees_v1";
+const BILLING_TELECOM_FEES_PROVIDER_VERSION = "1.0.0";
 
 export type BillingInvoicePreview = {
   tenantId: string;
@@ -57,6 +62,15 @@ export function monthBounds(anchor = new Date()): { periodStart: Date; periodEnd
   return billingMonthBounds(anchor);
 }
 
+export function tenantBillingPeriodBounds(settings: { billingDayOfMonth?: number | null; metadata?: unknown }, now = new Date()): { periodStart: Date; periodEnd: Date } {
+  const schedule = buildBillingSchedule({
+    now,
+    billingDayOfMonth: Number(settings.billingDayOfMonth || 1),
+    metadata: settings.metadata,
+  });
+  return { periodStart: schedule.periodStart, periodEnd: schedule.periodEnd };
+}
+
 export function addDays(date: Date, days: number): Date {
   return addBillingDays(date, days);
 }
@@ -100,7 +114,7 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
   dueDate?: Date;
 }): Promise<BillingInvoicePreview> {
   const { tenantId, settings } = input;
-  const bounds = input.periodStart && input.periodEnd ? { periodStart: input.periodStart, periodEnd: input.periodEnd } : monthBounds();
+  const bounds = input.periodStart && input.periodEnd ? { periodStart: input.periodStart, periodEnd: input.periodEnd } : tenantBillingPeriodBounds(settings);
   const dueDate = input.dueDate || addDays(new Date(), Number(settings.paymentTermsDays || 15));
 
   const hasScheduledChange =
@@ -248,15 +262,59 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
 
   const subtotalCents = lineItems.reduce((sum, item) => sum + item.amountCents, 0);
   const taxableSubtotalCents = lineItems.filter((item) => item.taxable).reduce((sum, item) => sum + item.amountCents, 0);
-  const taxProvider = resolveTaxProvider(settings);
-  const taxResult = taxProvider.calculateTaxes({
-    tenantId,
-    taxEnabled: !!settings.taxEnabled,
-    taxProfile: settings.taxProfile || null,
-    taxProfileId: settings.taxProfileId || null,
-    taxableSubtotalCents,
-    extensionCount: billingQuantities.billing.extensions,
-  });
+  const telecomFees = parseBillingTelecomFees(settings.metadata);
+  const taxResult = telecomFees
+    ? (() => {
+        const feeLines = !!settings.taxEnabled
+          ? buildBillingTelecomFeeLines({
+              fees: telecomFees,
+              taxableSubtotalCents,
+              extensionCount: billingQuantities.billing.extensions,
+              phoneNumberCount: billingQuantities.billing.phoneNumbers,
+              tollFreeNumberCount: billingQuantities.billing.tollFreeNumbers,
+              lineCount:
+                billingQuantities.billing.extensions
+                + billingQuantities.billing.virtualExtensions
+                + billingQuantities.billing.phoneNumbers
+                + billingQuantities.billing.tollFreeNumbers
+                + billingQuantities.billing.smsPackages,
+              taxProviderId: BILLING_TELECOM_FEES_PROVIDER_ID,
+            })
+          : [];
+        const taxProfile = settings.taxProfile as any;
+        return {
+          lines: feeLines,
+          audit: {
+            providerId: BILLING_TELECOM_FEES_PROVIDER_ID,
+            providerVersion: BILLING_TELECOM_FEES_PROVIDER_VERSION,
+            computedAt: new Date().toISOString(),
+            taxEnabled: !!settings.taxEnabled,
+            taxProfileId: settings.taxProfileId || null,
+            jurisdiction:
+              taxProfile && (taxProfile.state || taxProfile.county != null || taxProfile.name)
+                ? { state: taxProfile.state ?? null, county: taxProfile.county ?? null, profileName: taxProfile.name ?? null }
+                : null,
+            inputs: { taxableSubtotalCents, extensionCount: billingQuantities.billing.extensions },
+            lines: feeLines.map((line) => ({
+              type: line.type,
+              description: line.description,
+              amountCents: line.amountCents,
+              quantity: line.quantity,
+            })),
+            notes: settings.taxEnabled
+              ? ["tenant_billing_telecom_fees_metadata"]
+              : ["tax_disabled", "tenant_billing_telecom_fees_metadata_present"],
+          } satisfies TaxCalculationAuditSnapshot,
+        };
+      })()
+    : resolveTaxProvider(settings).calculateTaxes({
+        tenantId,
+        taxEnabled: !!settings.taxEnabled,
+        taxProfile: settings.taxProfile || null,
+        taxProfileId: settings.taxProfileId || null,
+        taxableSubtotalCents,
+        extensionCount: billingQuantities.billing.extensions,
+      });
   for (const line of taxResult.lines) {
     lineItems.push({
       type: line.type,

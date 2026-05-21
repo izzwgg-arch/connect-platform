@@ -1,7 +1,7 @@
 /**
  * Per-tenant telecom tax/fee configuration (metadata.billingTelecomFees).
- * Invoice engine still uses TaxProfile for SALES_TAX / E911 / REGULATORY until Phase B
- * reads this config for line generation and customer visibility.
+ * When present, invoice generation treats this tenant profile as authoritative;
+ * TaxProfile remains the fallback for tenants that have not opted into this metadata shape.
  */
 
 export const BILLING_TELECOM_FEES_METADATA_KEY = "billingTelecomFees";
@@ -46,6 +46,16 @@ export type TelecomFeeItemConfig = {
 };
 
 export type BillingTelecomFeesConfig = Partial<Record<TelecomFeeKey, TelecomFeeItemConfig>>;
+
+export type BillingTelecomFeeLine = {
+  type: "SALES_TAX" | "E911_FEE" | "REGULATORY_FEE";
+  description: string;
+  quantity: number;
+  unitPriceCents: number;
+  amountCents: number;
+  taxable: boolean;
+  metadata: Record<string, unknown>;
+};
 
 export type TaxProfileFeeSource = {
   salesTaxRate?: number | string | null;
@@ -265,6 +275,80 @@ export function mergeTelecomFeesWithDefaults(
     if (stored[key]) out[key] = { ...base[key], ...stored[key] };
   }
   return out;
+}
+
+function feeLineType(key: TelecomFeeKey): BillingTelecomFeeLine["type"] {
+  if (key === "salesTax") return "SALES_TAX";
+  if (key === "e911") return "E911_FEE";
+  return "REGULATORY_FEE";
+}
+
+function basisQuantity(input: {
+  basis: TelecomFeeBasis;
+  extensionCount: number;
+  phoneNumberCount: number;
+  tollFreeNumberCount: number;
+  lineCount: number;
+}): number {
+  switch (input.basis) {
+    case "per_extension":
+      return input.extensionCount;
+    case "per_did":
+      return input.phoneNumberCount + input.tollFreeNumberCount;
+    case "per_toll_free_did":
+      return input.tollFreeNumberCount;
+    case "per_line":
+      return input.lineCount;
+    case "flat_monthly":
+    case "invoice_subtotal":
+    default:
+      return 1;
+  }
+}
+
+export function buildBillingTelecomFeeLines(input: {
+  fees: BillingTelecomFeesConfig;
+  taxableSubtotalCents: number;
+  extensionCount: number;
+  phoneNumberCount: number;
+  tollFreeNumberCount: number;
+  lineCount: number;
+  taxProviderId: string;
+}): BillingTelecomFeeLine[] {
+  const lines: BillingTelecomFeeLine[] = [];
+  for (const key of TELECOM_FEE_KEYS) {
+    const fee = input.fees[key];
+    if (!fee?.enabled) continue;
+    const quantity = basisQuantity({ basis: fee.basis, ...input });
+    if (quantity <= 0) continue;
+    let unitPriceCents = 0;
+    let amountCents = 0;
+    if (fee.mode === "ratePercent") {
+      amountCents = Math.round(input.taxableSubtotalCents * clampPercent(Number(fee.ratePercent || 0)));
+      unitPriceCents = amountCents;
+    } else {
+      unitPriceCents = clampCents(Number(fee.amountCents || 0));
+      amountCents = unitPriceCents * quantity;
+    }
+    if (amountCents <= 0) continue;
+    lines.push({
+      type: feeLineType(key),
+      description: fee.label || key,
+      quantity,
+      unitPriceCents,
+      amountCents,
+      taxable: false,
+      metadata: {
+        taxProviderId: input.taxProviderId,
+        taxLineType: feeLineType(key),
+        telecomFeeKey: key,
+        telecomFeeBasis: fee.basis,
+        telecomFeeMode: fee.mode,
+        customerVisible: fee.customerVisible !== false,
+      },
+    });
+  }
+  return lines;
 }
 
 /** Map tenant fee config → TaxProfile row fields (shared profiles — operator discretion). */
