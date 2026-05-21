@@ -742,11 +742,11 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 
 | Field | Use |
 |-------|-----|
-| `invoiceCompanyName` | Header on PDF + email masthead (falls back to `Tenant.name`, then “Connect Communications”). |
-| `invoiceLogoUrl` | **HTTPS only**, sanitized — embedded as `<img>` in **HTML emails only**. PDF uses bundled local logo (`apps/api/src/billing/assets/connect-logo.png`) — no remote fetch. Custom `invoiceLogoUrl` overrides email fallback only. |
-| `invoiceSupportEmail` / `invoiceSupportPhone` | Shown in email shell. The API PDF uses fixed Connect contact details for a consistent legal/billing presentation. |
-| `invoiceFooterNote` / `invoicePaymentInstructions` | Plain text, length-capped — PDF footer + email body blocks. |
-| `paymentTermsDays` | "Net N days" copy in invoice emails and PDF detail row. |
+| `invoiceCompanyName` | PDF header / bill-from branding. In HTML invoice emails it may appear only as **Billed company** context, never as the sender. |
+| `invoiceLogoUrl` | **HTTPS only**, sanitized. PDF uses bundled local logo (`apps/api/src/billing/assets/connect-logo.png`) — no remote fetch. HTML invoice emails currently use the Connect logo for consistent sender identity. |
+| `invoiceSupportEmail` / `invoiceSupportPhone` | PDF branding fields. HTML invoice emails use fixed Connect billing support details for sender clarity. |
+| `invoiceFooterNote` / `invoicePaymentInstructions` | Plain text, length-capped. HTML invoice emails omit tenant footer notes to keep the Connect sender footer unambiguous; payment instructions may still appear as a concise body block. |
+| `paymentTermsDays` | PDF detail row. Visible HTML invoice email copy intentionally stays short and omits terms clutter. |
 
 **API:** `PUT /billing/settings/branding` (tenant JWT billing roles) and optional keys on `PUT /admin/billing/tenants/:tenantId/settings`. **Portal:** **`/billing/settings`** and **`/settings/billing`** (shared `TenantBillingSettingsContent`), and Company billing setup (**`/admin/billing/settings`**) branding card.
 
@@ -774,6 +774,22 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 - Footer renders four compact muted support columns with matching drawn icons: Billing Support, Customer Portal, Secure Payments, and Thank You.
 
 **Fallback logo for HTML emails:** `{PUBLIC_PORTAL_URL}/connect-logo.png` from `apps/portal/public/connect-logo.png`.
+
+### Invoice email responsive refresh (2026-05-21)
+
+**Files touched:** `apps/api/src/billing/emailTemplates.ts`, `apps/api/src/billing/billingEmailTemplates.test.ts`, `apps/api/src/billing/invoiceBranding.test.ts`, and this doc. No invoice PDF generation, billing math, payment execution, queueing, or email infrastructure changed.
+
+**Structure:** Billing HTML emails use a single responsive, Outlook-safe shell: light page background, centered 600px white table card, small Connect-blue top accent, Connect logo, “Connect Communications billing” heading, clean body copy, readable light summary card, optional CTA table button, attachment note, support block, and footer.
+
+**Sender wording rule:** The footer must always be exactly `Sent by Connect Communications billing.` Never render `Sent by [tenant] via Connect Communications billing.` Tenant/customer names may appear only as billed company/customer context, such as the `Billed company` summary row.
+
+**Support info:** HTML billing emails show fixed Connect support details: `Connect Communications, LLC`, `support@connectcomunications.com`, `connectcomunications.com`, and `845-723-1213`.
+
+**Responsive / Outlook notes:** Core layout is table-based with inline styles, a max-width 600px card, mobile media query for full-width CTA and safer padding, and a VML conditional-comment fallback for the primary CTA in Outlook. Do not add JavaScript device/client detection to emails. Do not expose raw payment URLs as visible main HTML content; URLs belong in CTA `href` attributes and clean plain-text bodies.
+
+**CTA behavior:** `invoiceSentEmail` / `invoiceReadyEmail` show **Pay Invoice** only when a payment URL exists. `paymentLinkEmail` shows **Pay Invoice** only when `payUrl` exists. Paid receipt emails do not show a Pay Invoice CTA; they may keep a non-payment “View invoice” link.
+
+**Verification:** Run `pnpm --filter @connect/api typecheck` and the billing email template tests. Manually inspect generated unpaid invoice, paid receipt, mobile-width, desktop-width, and Outlook-safe HTML when preview tooling is available. Confirm the footer sender wording, Connect support info, no physical address, no visible raw payment URL, and that the PDF attachment marker remains present for invoice/receipt jobs.
 
 ### HTML invoice redesign (2026-05-20)
 

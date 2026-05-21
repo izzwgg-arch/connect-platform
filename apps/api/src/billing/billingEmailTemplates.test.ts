@@ -9,7 +9,7 @@ import { resolveInvoiceEmailBranding } from "./invoiceBranding";
 // invoiceSentEmail
 // ---------------------------------------------------------------------------
 
-test("invoiceSentEmail includes pay link and attached-PDF note", () => {
+test("invoiceSentEmail includes Pay Invoice CTA and attached-PDF note", () => {
   const t = invoiceSentEmail({
     invoiceNumber: "INV-1",
     totalCents: 5000,
@@ -17,9 +17,9 @@ test("invoiceSentEmail includes pay link and attached-PDF note", () => {
     portalInvoiceUrl: "https://example.com/pay/invoice/token123",
     billingInvoiceId: "inv_x",
   });
-  assert.match(t.html, /View &amp; pay invoice/);
+  assert.match(t.html, /Pay Invoice/);
   assert.match(t.text, /https:\/\/example\.com\/pay\/invoice\/token123/);
-  assert.match(t.html, /attached to this email/i);
+  assert.match(t.html, /invoice PDF is attached/i);
   assert.match(t.html, /connect-billing-invoice:inv_x/);
   assert.doesNotMatch(t.html, /\/api\/billing\/platform\/invoices\//);
 });
@@ -62,7 +62,7 @@ test("invoiceSentEmail omits service period row when not provided", () => {
   assert.doesNotMatch(t.html, /Service period/);
 });
 
-test("invoiceSentEmail embeds branded company display name", () => {
+test("invoiceSentEmail shows tenant or branded name only as billed company context", () => {
   const brand = resolveInvoiceEmailBranding({ invoiceCompanyName: "Northwind Telecom" }, "T");
   const t = invoiceSentEmail({
     invoiceNumber: "INV-9",
@@ -72,8 +72,29 @@ test("invoiceSentEmail embeds branded company display name", () => {
     billingInvoiceId: "inv_test",
     brand,
   });
+  assert.match(t.html, /Billed company/);
   assert.match(t.html, /Northwind Telecom/);
-  assert.match(t.subject, /Northwind Telecom/);
+  assert.doesNotMatch(t.subject, /Northwind Telecom/);
+  assert.doesNotMatch(t.html, /Sent by <strong[^>]*>Northwind Telecom<\/strong> via Connect Communications billing/);
+});
+
+test("invoiceSentEmail footer always uses Connect sender wording and support info", () => {
+  const brand = resolveInvoiceEmailBranding({ invoiceFooterNote: "Tenant legal footer" }, "Landau Home");
+  const t = invoiceSentEmail({
+    invoiceNumber: "INV-SENDER",
+    totalCents: 1200,
+    dueDate: new Date("2026-07-01"),
+    portalInvoiceUrl: "https://example.com/i",
+    billingInvoiceId: "inv_sender_test",
+    brand,
+  });
+  assert.match(t.html, /Sent by Connect Communications billing\./);
+  assert.doesNotMatch(t.html, /Sent by Landau Home via Connect Communications billing/);
+  assert.match(t.html, /Connect Communications, LLC/);
+  assert.match(t.html, /support@connectcomunications\.com/);
+  assert.match(t.html, /connectcomunications\.com/);
+  assert.match(t.html, /845-723-1213/);
+  assert.doesNotMatch(t.html, /Tenant legal footer/);
 });
 
 test("invoiceSentEmail uses white/light background (not dark)", () => {
@@ -85,7 +106,7 @@ test("invoiceSentEmail uses white/light background (not dark)", () => {
     billingInvoiceId: "inv_test",
   });
   // Light outer background
-  assert.match(t.html, /#f1f5f9/);
+  assert.match(t.html, /#f3f6fa/);
   // White card
   assert.match(t.html, /#ffffff/);
   // Must NOT have the old dark background
@@ -103,9 +124,27 @@ test("paymentLinkEmail includes pay URL", () => {
     dueDate: new Date("2026-01-02"),
     payUrl: "https://example.com/billing/invoices/y",
   });
-  assert.match(t.html, /Open invoice/);
+  assert.match(t.html, /Pay Invoice/);
   assert.match(t.html, /https:\/\/example\.com\/billing\/invoices\/y/);
   assert.match(t.text, /INV-2/);
+});
+
+test("invoice and payment link HTML do not expose raw payment URL as visible content", () => {
+  const invoice = invoiceSentEmail({
+    invoiceNumber: "INV-RAW",
+    totalCents: 100,
+    dueDate: new Date("2026-01-02"),
+    portalInvoiceUrl: "https://example.com/pay/invoice/raw-token",
+    billingInvoiceId: "inv_raw",
+  });
+  const link = paymentLinkEmail({
+    invoiceNumber: "INV-RAW2",
+    totalCents: 100,
+    dueDate: new Date("2026-01-02"),
+    payUrl: "https://example.com/pay/invoice/raw-token-2",
+  });
+  assert.doesNotMatch(invoice.html, />\s*https:\/\/example\.com\/pay\/invoice\/raw-token\s*</);
+  assert.doesNotMatch(link.html, />\s*https:\/\/example\.com\/pay\/invoice\/raw-token-2\s*</);
 });
 
 // ---------------------------------------------------------------------------
@@ -158,9 +197,21 @@ test("paymentReceiptEmail notes PDF attachment and embeds invoice marker", () =>
     billingInvoiceId: "inv_abc",
     portalInvoiceUrl: "https://example.com/i",
   });
-  assert.match(t.html, /attached to this email/i);
+  assert.match(t.html, /invoice PDF is attached/i);
   assert.match(t.html, /connect-billing-invoice:inv_abc/);
   assert.doesNotMatch(t.html, /\/api\/billing\/platform\/invoices\//);
+});
+
+test("paymentReceiptEmail does not include Pay Invoice CTA", () => {
+  const t = paymentReceiptEmail({
+    invoiceNumber: "INV-PAID",
+    totalCents: 3000,
+    paidAt: new Date("2026-05-19"),
+    billingInvoiceId: "inv_paid",
+    portalInvoiceUrl: "https://example.com/i",
+  });
+  assert.doesNotMatch(t.html, /Pay Invoice/);
+  assert.doesNotMatch(t.text, /Pay invoice:/);
 });
 
 test("paymentReceiptEmail shows autopay note when paidViaAutopay", () => {
@@ -196,7 +247,7 @@ test("paymentReceiptEmail uses white/light background", () => {
     paidAt: new Date("2026-05-19"),
     billingInvoiceId: "inv_11",
   });
-  assert.match(t.html, /#f1f5f9/);
+  assert.match(t.html, /#f3f6fa/);
   assert.doesNotMatch(t.html, /#0b1220/);
 });
 
@@ -235,7 +286,7 @@ test("emailShell renders img tag even without logoUrl (uses fallback)", () => {
   assert.match(t.html, /<img/);
 });
 
-test("emailShell renders custom logoUrl when configured", () => {
+test("emailShell keeps Connect logo even when custom logoUrl is configured", () => {
   const brand = resolveInvoiceEmailBranding(
     { invoiceLogoUrl: "https://cdn.example.com/mybrand-logo.png" },
     "My Brand",
@@ -248,7 +299,8 @@ test("emailShell renders custom logoUrl when configured", () => {
     billingInvoiceId: "inv_test",
     brand,
   });
-  assert.match(t.html, /mybrand-logo\.png/);
+  assert.match(t.html, /connect-logo\.png/);
+  assert.doesNotMatch(t.html, /mybrand-logo\.png/);
 });
 
 // ---------------------------------------------------------------------------

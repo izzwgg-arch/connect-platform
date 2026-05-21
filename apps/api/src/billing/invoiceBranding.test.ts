@@ -28,7 +28,7 @@ test("normalizeBrandingPayload clears invalid support email", () => {
   assert.equal(out.invoiceSupportEmail, null);
 });
 
-test("invoiceSentEmail embeds company display name in shell", () => {
+test("invoiceSentEmail embeds company display name as billed company context", () => {
   const brand = resolveInvoiceEmailBranding({ invoiceCompanyName: "Northwind" }, "T");
   const t = invoiceSentEmail({
     invoiceNumber: "INV-9",
@@ -38,5 +38,7 @@ test("invoiceSentEmail embeds company display name in shell", () => {
     billingInvoiceId: "inv_brand_test",
     brand,
   });
+  assert.match(t.html, /Billed company/);
   assert.match(t.html, /Northwind/);
+  assert.doesNotMatch(t.html, /Sent by Northwind via Connect Communications billing/);
 });
