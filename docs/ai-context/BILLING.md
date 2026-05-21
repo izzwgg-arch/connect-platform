@@ -537,16 +537,18 @@ Signed pay links for **`BillingInvoice`** (platform stack) — distinct from leg
 
 ## Sola Vault Schedule Linking (external import)
 
-> **Phase B (2026-05-17):** Read-only sync + operator tenant mapping shipped. **No charges, no token storage, no PaymentMethod creation, no autopay changes.** Phase C will add token linking.
+> **Shipped:** read-only sync + operator tenant mapping, token linking, readiness, manual schedule take-over, and worker guard. Sync/map/link still do **not** charge cards or disable Sola schedules.
 
 ### What this is
 
 Many tenants already have saved cards and recurring schedules inside Sola (Cardknox).
 Connect imports **safe** recurring schedule metadata from the Cardknox Recurring API and lets a **SUPER_ADMIN** map each schedule to a Connect tenant. Mapping only records the link — it does not move billing execution to Connect.
 
-### Hard constraints (Phase B — enforced in code)
+Important ownership rule: **tenant != recurring obligation**. A single Connect tenant may legitimately have multiple independent Sola recurring schedules, each representing a separate service/subscription/billing obligation and potentially a different amount or card. Do not merge, ignore, or suppress schedules solely because they map to the same tenant name.
 
-- **No raw card / CVV.** Masked card metadata only (`Issuer`, `MaskedCardNumber`, `Exp` MMYY). **`Token` is never persisted** in Phase B (`getPaymentMethodMasked` redacts before any storage).
+### Hard constraints (sync/map/link — enforced in code)
+
+- **No raw card / CVV.** Masked card metadata only (`Issuer`, `MaskedCardNumber`, `Exp` MMYY) during sync. Token linking fetches the reusable Sola token server-side and immediately stores it encrypted as `PaymentMethod.tokenEncrypted`; raw tokens are never returned to the browser or logged.
 - **No charges.** Sync and map/ignore/unmap routes never call `chargeToken`, invoice creation, or worker/dunning.
 - **No Sola schedule disable.** Recurring `/UpdateSchedule` not called.
 - **No Connect autopay activation.** Tenant autopay settings untouched.
@@ -581,15 +583,15 @@ If both the **old Sola recurring schedule** (still active in Cardknox) **and** C
 | Software headers | `SoftwareName` / `SoftwareVersion` (see `recurring.ts`) |
 | Method | POST only |
 
-Phase B uses: `/ListSchedules`, `/GetSchedule`, `/GetPaymentMethod` (masked fields only; token redacted before persistence).
+Sync uses: `/ListSchedules`, `/GetSchedule`, `/GetPaymentMethod` (masked fields only; token redacted before persistence). Token linking uses `/GetPaymentMethod` to fetch the vault token server-side, then encrypts it into `PaymentMethod`.
 
-### Token reuse (Phase C — not Phase B)
+### Token reuse
 
-The `Token` from `/GetPaymentMethod` is the same `xToken` used by `chargeToken()`. Phase C will encrypt into `PaymentMethod.tokenEncrypted` after explicit operator approval. **Phase B never stores it.**
+The `Token` from `/GetPaymentMethod` is the same `xToken` used by `chargeToken()`. `POST /admin/billing/platform/sola-import/schedules/:id/link-token` encrypts it into `PaymentMethod.tokenEncrypted` after explicit operator action. Sync/map alone never stores it.
 
-### Schema still planned (Phase C+)
+### Schema
 
-`PaymentMethod` may gain `processorCustomerId`, `processorPaymentMethodId`, `isImported`, `importedAt` when token linking ships.
+Imported cards are tracked with `PaymentMethod.processorCustomerId`, `processorPaymentMethodId`, `isImported`, and `importedAt`.
 
 ### Webhook/reconciliation limitations
 
@@ -607,6 +609,21 @@ Old Sola recurring schedule webhooks **cannot** be auto-linked to Connect invoic
 
 After cutover: **Connect owns billing schedule, invoices, retries, taxes, and autopay timing. Sola/Cardknox is vault/payment processor only.**
 
+Current Connect-native autopay is still tenant-settings based: one `TenantBillingSettings.autoBillingEnabled`, one `billingDayOfMonth`, and one `defaultPaymentMethodId` per tenant. That is sufficient for the current single monthly tenant invoice path, but it is **not** a recurring-obligation model. Until an explicit recurring obligation/subscription/service model exists, imported Sola schedules remain the source of truth for multiple independent recurring obligations during migration.
+
+### Recurring ownership model
+
+Connect must treat each recurring schedule/profile as its own business obligation:
+
+- Multiple `BillingSolaExternalScheduleLink` rows may map to the same `tenantId`.
+- Multiple imported `PaymentMethod` rows may exist for the same tenant and Sola customer.
+- A same-tenant schedule with a different Sola customer/profile, amount, payment method, or service is **not** a duplicate by tenant name alone.
+- Duplicate detection and idempotency must happen at the exact business operation level: invoice/subscription/service/obligation + amount + payment instrument + charge type.
+- Cutover must not disable a Sola schedule until that specific obligation has a linked token/default choice and a Connect-side owner.
+- If one tenant has multiple Sola schedules, cutover/readiness must be evaluated per schedule/obligation. The current tenant-level autopay switch should not be used as proof that all obligations for that tenant are migrated.
+
+Example: tenant `Nexus Realty` may have separate recurring obligations for service `101`, service `102`, and service `103`, each with its own Sola schedule, amount, and card. Mapping all three to the same tenant is valid; auto-merging them would be wrong.
+
 | Piece | Location |
 |-------|----------|
 | Service functions (token link, readiness, take-over) | `apps/api/src/billing/solaCutover.ts` |
@@ -622,6 +639,14 @@ After cutover: **Connect owns billing schedule, invoices, retries, taxes, and au
 2. **Take-over sequence:** disable Sola `/UpdateSchedule IsActive=false` MUST succeed before `autoBillingEnabled` is set to true. If Sola disable fails → `CUTOVER_FAILED`, Connect autopay NOT enabled.
 3. **No immediate charge:** the take-over route never creates an invoice or calls chargeToken. Future charges happen via the normal worker billing day.
 4. **Double-charge detection:** `getBillingCutoverReadiness` returns `doubleChargeRisk=true` if Connect autopay is enabled AND an active non-cutover Sola schedule exists for the tenant.
+
+### Known recurring-model gaps
+
+- `TenantBillingSettings.defaultPaymentMethodId` is tenant-level. It cannot express a different default card per recurring obligation.
+- `runMonthlyBillingAutomation` creates/charges one tenant invoice for the billing period. It is not yet a per-obligation scheduler.
+- `takeOverBillingFromSola` disables one Sola schedule, then sets the tenant default PM and enables tenant-level autopay. With multiple schedules under one tenant, use it only when the operator has verified how the specific obligation maps to Connect.
+- `getBillingCutoverReadiness` returns a representative `scheduleLink`; use the schedule import table for full per-schedule review when a tenant has more than one active Sola schedule.
+- `POST /admin/billing/runs/monthly` should be treated carefully during migration because the worker has the active-Sola-schedule guard; any admin-run parity should be verified before use in cutover operations.
 
 ### New API routes
 
@@ -736,13 +761,13 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 
 ### HTML invoice redesign (2026-05-20)
 
-**Scope:** Tenant invoice detail page only: `apps/portal/app/(platform)/billing/invoices/[id]/page.tsx` plus scoped stylesheet `apps/portal/app/(platform)/billing/invoices/[id]/invoicePrint.css`. The server PDFKit generator remains available through **Legacy PDF** / `GET /billing/platform/invoices/:id/pdf`; this pass does **not** change billing math, schema, payment execution, email templates, or admin invoice pages.
+**Scope:** Tenant invoice detail page: `apps/portal/app/(platform)/billing/invoices/[id]/page.tsx` plus scoped stylesheet `apps/portal/app/(platform)/billing/invoices/[id]/invoicePrint.css`. The API PDF route is still `GET /billing/platform/invoices/:id/pdf`; billing math, schema, payment execution, email templates, and admin invoice pages are unchanged.
 
 **Architecture:**
 - The tenant invoice detail page now renders a dedicated **HTML invoice document** instead of generic `DetailCard` + `DataTable` blocks.
 - Existing data sources are preserved: `GET /billing/platform/invoices/:id` for invoice/line items/transactions/events and `GET /billing/settings` for presentation/support/payment settings.
 - The document layout is: premium neutral header + Connect logo, billing parties grid, payment CTA panel, invoice metadata strip, line-item table, payment instructions, billing summary, regulatory notices, then non-print payment history/activity.
-- `Print / save PDF` calls `window.print()` and relies on `invoicePrint.css`; **Legacy PDF** remains for the API-generated PDF attachment/download path.
+- `Print / save PDF` calls `window.print()` and relies on `invoicePrint.css`; `Download PDF` uses the API-generated PDF attachment/download path.
 
 **Telecom regulatory notice handling:**
 - Bottom section title: **Regulatory & Billing Notices**.
@@ -759,6 +784,8 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 - `invoicePrint.css` scopes styles to `.billing-html-page` / `.invoice-document` and includes `@media print`.
 - Print hides topbar/sidebar/action controls/history, flattens shadows/backgrounds, keeps letter margins, and marks major invoice sections as `break-inside: avoid`.
 - Keep invoice copy readable in grayscale: do not rely on color alone for status, totals, or fee categories.
+- The API PDF route uses `apps/api/src/billing/pdf.ts` and is the source for both authenticated PDF downloads and outbound billing email attachments.
+- The PDFKit renderer now mirrors the modern invoice structure with a neutral header, payment panel, billing parties, categorized line items, billing summary, payment instructions, and regulatory notices.
 
 **Verification:**
 - `pnpm typecheck` in `apps/portal`.

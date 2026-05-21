@@ -209,7 +209,7 @@ export default function BillingInvoiceDetailPage() {
           <div className="invoice-screen-actions no-print">
             <Link className="btn ghost" href="/billing/invoices">Back to invoices</Link>
             <button className="btn ghost" type="button" onClick={() => window.print()}>Print / save PDF</button>
-            {row ? <button className="btn ghost" type="button" onClick={() => openPdf(row.id)}>Legacy PDF</button> : null}
+            {row ? <button className="btn ghost" type="button" onClick={() => openPdf(row.id)}>Download PDF</button> : null}
             {billingEmailSet && row ? (
               <button
                 className="btn ghost"
