@@ -26,6 +26,7 @@ export type CardknoxIFieldsFormProps = {
   showEmail?: boolean;
   showPhone?: boolean;
   showSaveOptions?: boolean;
+  autoEnableAutopayWhenSaving?: boolean;
   saveCard?: boolean;
   enableAutopay?: boolean;
   onSaveCardChange?: (v: boolean) => void;
@@ -73,6 +74,7 @@ export function CardknoxIFieldsForm({
   showEmail = true,
   showPhone = false,
   showSaveOptions = false,
+  autoEnableAutopayWhenSaving = false,
   saveCard = false,
   enableAutopay = false,
   onSaveCardChange,
@@ -162,7 +164,7 @@ export function CardknoxIFieldsForm({
         cardToken: data.xToken,
         billing,
         saveCard,
-        enableAutopay,
+        enableAutopay: autoEnableAutopayWhenSaving ? saveCard : enableAutopay,
       });
     } finally {
       setBusy(false);
@@ -326,20 +328,27 @@ export function CardknoxIFieldsForm({
               onChange={(e) => onSaveCardChange?.(e.target.checked)}
               disabled={disabled || busy}
             />
-            <span>Save this card for future payments</span>
-          </label>
-          <label className="billing-checkbox">
-            <input
-              type="checkbox"
-              checked={enableAutopay}
-              onChange={(e) => onEnableAutopayChange?.(e.target.checked)}
-              disabled={disabled || busy || !saveCard}
-            />
             <span>
-              Enable autopay on this card
-              <small>We will charge this card automatically on your payment date each month.</small>
+              {autoEnableAutopayWhenSaving ? "Save this card for future automatic payments" : "Save this card for future payments"}
+              {autoEnableAutopayWhenSaving ? (
+                <small>Saving this card also turns on autopay for future invoices.</small>
+              ) : null}
             </span>
           </label>
+          {!autoEnableAutopayWhenSaving ? (
+            <label className="billing-checkbox">
+              <input
+                type="checkbox"
+                checked={enableAutopay}
+                onChange={(e) => onEnableAutopayChange?.(e.target.checked)}
+                disabled={disabled || busy || !saveCard}
+              />
+              <span>
+                Enable autopay on this card
+                <small>We will charge this card automatically on your payment date each month.</small>
+              </span>
+            </label>
+          ) : null}
         </div>
       ) : null}
       {errorMessage ? <div className="billing-status-pill bad">{errorMessage}</div> : null}

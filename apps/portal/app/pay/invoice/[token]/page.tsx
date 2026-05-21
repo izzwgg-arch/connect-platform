@@ -3,9 +3,10 @@
 import Image from "next/image";
 import { useParams, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bell, CheckCircle2, ChevronDown, CreditCard, Lock, Moon, ShieldCheck } from "lucide-react";
+import { CheckCircle2, Lock, ShieldCheck } from "lucide-react";
 import { CardknoxIFieldsForm, type CardknoxBillingFields } from "../../../../components/billing/CardknoxIFieldsForm";
 import { useAppContext } from "../../../../hooks/useAppContext";
+import { readAuthToken } from "../../../../services/session";
 import "./pay-invoice.css";
 
 const apiBase = (process.env.NEXT_PUBLIC_API_URL || "https://app.connectcomunications.com/api").replace(/\/$/, "");
@@ -60,9 +61,10 @@ export default function PublicBillingInvoicePayPage() {
   const [loadError, setLoadError] = useState("");
   const [payError, setPayError] = useState("");
   const [paid, setPaid] = useState(false);
+  const [paymentCompleted, setPaymentCompleted] = useState(false);
   const [saveCard, setSaveCard] = useState(false);
-  const [enableAutopay, setEnableAutopay] = useState(false);
   const submitInFlightRef = useRef(false);
+  const result = search.get("result");
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -90,6 +92,34 @@ export default function PublicBillingInvoicePayPage() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    const root = document.documentElement;
+    const body = document.body;
+    const previousRootOverflow = root.style.overflow;
+    const previousRootHeight = root.style.height;
+    const previousBodyOverflow = body.style.overflow;
+    const previousBodyHeight = body.style.height;
+    root.style.overflow = "auto";
+    root.style.height = "auto";
+    body.style.overflow = "auto";
+    body.style.height = "auto";
+    return () => {
+      root.style.overflow = previousRootOverflow;
+      root.style.height = previousRootHeight;
+      body.style.overflow = previousBodyOverflow;
+      body.style.height = previousBodyHeight;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!paymentCompleted && result !== "success") return;
+    const target = readAuthToken() ? "/dashboard" : "/login";
+    const timeout = window.setTimeout(() => {
+      window.location.assign(target);
+    }, 3000);
+    return () => window.clearTimeout(timeout);
+  }, [paymentCompleted, result]);
+
   async function submitPayment(payload: {
     cardToken: string;
     billing: CardknoxBillingFields;
@@ -116,7 +146,7 @@ export default function PublicBillingInvoicePayPage() {
           billingZip: payload.billing.billingZip,
           billingEmail: payload.billing.billingEmail,
           saveCard: payload.saveCard,
-          enableAutopay: payload.enableAutopay,
+          enableAutopay: payload.saveCard,
         }),
       });
       const json = await res.json().catch(() => ({}));
@@ -134,36 +164,21 @@ export default function PublicBillingInvoicePayPage() {
         return;
       }
       setPaid(true);
+      setPaymentCompleted(true);
     } finally {
       submitInFlightRef.current = false;
     }
   }
 
-  const result = search.get("result");
   const amountDue = dollars(invoice?.balanceDueCents || 0);
 
   return (
     <main className="billing-pay-page" data-pay-theme={payTheme}>
       <div className="billing-pay-bg" aria-hidden="true" />
       <div className="billing-pay-shell">
-        <header className="billing-pay-topbar" aria-label="Connect payment navigation">
-          <div className="billing-pay-brand">
-            <Image src="/connect-logo.png" alt="Connect Communications" width={150} height={42} priority />
-          </div>
-          <nav className="billing-pay-nav" aria-label="Main navigation">
-            <span>Dashboard</span>
-            <span>Services</span>
-            <span className="active">Billing</span>
-            <span>Support</span>
-          </nav>
-          <div className="billing-pay-actions" aria-label="Account controls">
-            <button type="button" aria-label="Theme" title="Theme"><Moon size={16} /></button>
-            <button type="button" aria-label="Notifications" title="Notifications"><Bell size={16} /></button>
-            <span className="billing-pay-avatar">JS</span>
-            <span className="billing-pay-user">Jane Smith</span>
-            <ChevronDown size={16} />
-          </div>
-        </header>
+        <div className="billing-pay-logo" aria-label="Connect Communications">
+          <Image src="/connect-logo.png" alt="Connect Communications" width={150} height={42} priority />
+        </div>
 
         <section className="billing-pay-card" aria-label="Secure invoice payment">
           <header className="billing-pay-header">
@@ -185,7 +200,9 @@ export default function PublicBillingInvoicePayPage() {
                 <p>
                   Thank you. {invoice ? <>Invoice <strong>{invoice.invoiceNumber}</strong> is marked paid.</> : "Your payment was successful."}
                 </p>
-                <p className="muted">A receipt will be emailed if billing email is on file for this account.</p>
+                <p className="muted">
+                  A receipt will be emailed if billing email is on file. You will be redirected shortly.
+                </p>
               </div>
             </section>
           ) : loadError ? (
@@ -224,10 +241,9 @@ export default function PublicBillingInvoicePayPage() {
                 showBillingAddress
                 showEmail
                 showSaveOptions
+                autoEnableAutopayWhenSaving
                 saveCard={saveCard}
-                enableAutopay={enableAutopay}
                 onSaveCardChange={setSaveCard}
-                onEnableAutopayChange={setEnableAutopay}
                 submitLabel={`Pay ${amountDue}`}
                 busyLabel="Processing…"
                 errorMessage={payError}
@@ -237,7 +253,6 @@ export default function PublicBillingInvoicePayPage() {
                     <p>Your card details are entered directly and securely with our payment processor. We never store your full card number or CVV.</p>
                   </div>
                 )}
-                childrenAfterCard={<CardFieldHint />}
                 onSubmitCardToken={submitPayment}
               />
               <p className="billing-pay-microcopy">
@@ -272,14 +287,5 @@ export default function PublicBillingInvoicePayPage() {
         </section>
       </div>
     </main>
-  );
-}
-
-function CardFieldHint() {
-  return (
-    <p className="billing-card-field-hint">
-      <CreditCard size={14} />
-      Card number and CVV stay inside PCI-hosted secure fields.
-    </p>
   );
 }
