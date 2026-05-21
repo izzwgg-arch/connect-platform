@@ -17,6 +17,8 @@ type PlatformTenantRow = {
   name: string;
   pbxTenantId: string | null;
   pbxInstanceId: string | null;
+  pbxTenantName?: string | null;
+  pbxTenantMissing?: boolean | null;
   isApproved: boolean | null;
 };
 
@@ -145,14 +147,16 @@ export async function loadTenantOptions(): Promise<Tenant[]> {
         ...platformRows
           .filter((row) => row.name)
           .filter((row) => row.isApproved !== false)
-          .filter((row) => !matchesSmokeNamePattern(row.name || ""))
+          .filter((row) => !row.pbxTenantMissing)
+          .filter((row) => !matchesSmokeNamePattern(row.pbxTenantName || row.name || ""))
           .map((row) => {
             const pbxTenantId = String(row.pbxTenantId || "").trim();
             if (pbxTenantId) platformPbxTenantIds.add(pbxTenantId);
-            platformNameKeys.add(normalizeTenantKey(row.name || ""));
+            const displayName = row.pbxTenantName || row.name || "Tenant";
+            platformNameKeys.add(normalizeTenantKey(displayName));
             return {
               id: String(row.id || ""),
-              name: row.name || "Tenant",
+              name: displayName,
               plan: "Business" as const,
               status: (row.isApproved === false ? "SUSPENDED" : "ACTIVE") as "ACTIVE" | "SUSPENDED",
             };

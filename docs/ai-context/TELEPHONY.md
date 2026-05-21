@@ -983,8 +983,12 @@ Populated by `syncPbxTenantDirectory` / `syncPbxTenantDirectoryFromRows`
 | **`POST /admin/pbx/refresh-tenants`** | on demand (SUPER_ADMIN) | Simple endpoint, no instance ID required; rate-limited 1/30 s |
 | CDR ingest bootstrap | once, if DB empty | Safety fallback only |
 
-Sync is **idempotent**: upsert by `(pbxInstanceId, vitalTenantId)`. The result now
-returns `{ upserted, created, updated }` so logs distinguish new vs changed tenants.
+Sync is **reconciling and idempotent**: upsert by `(pbxInstanceId, vitalTenantId)`,
+then delete local `PbxTenantDirectory` rows for that instance that VitalPBX no longer
+returns. Name/slug changes overwrite the cached PBX display fields; Connect-owned tenant
+records are not hard-deleted, but PBX-linked rows whose PBX tenant is gone are hidden from
+the switcher. The result returns `{ upserted, created, updated, deleted }` so logs distinguish
+new, changed, and removed PBX tenants.
 
 ### Layer 2 — In-memory cache (`PbxTenantMapCache`, telephony service)
 
@@ -1023,9 +1027,10 @@ curl -s -X POST https://app.connectcomunications.com/api/admin/pbx/refresh-tenan
 Portal UI: open the workspace switcher and click **Refresh PBX tenants**. It calls the same
 rate-limited endpoint, then reloads the tenant switcher from the DB-backed tenant directory.
 
-Response includes `{ ok, pbxTenantCount, directoryCreated, directoryUpdated, durationMs }`.
+Response includes `{ ok, pbxTenantCount, directoryCreated, directoryUpdated, directoryDeleted, durationMs }`.
 Rate limited: returns `429` if called within 30 s of a previous refresh.
-After this returns, telephony will pick up new tenants within `TELEPHONY_PBX_MAP_POLL_MS`.
+After this returns, the portal reload uses the DB-backed directory immediately; telephony will
+pick up created/updated/deleted tenant directory rows within `TELEPHONY_PBX_MAP_POLL_MS`.
 
 ### Cache-miss backoff
 
@@ -1040,9 +1045,9 @@ Log event: `pbx_tenant_map_force_refresh`.
 |---|---|---|
 | `pbx_tenant_sync_warm_init` | API | Warm cycle started, shows `intervalMs` |
 | `pbx_tenant_sync_warm_start` | API | About to refresh one PBX instance |
-| `pbx_tenant_sync_warm_complete` | API | Refresh succeeded; shows `pbxTenantCount`, `directoryUpserted`, `durationMs` |
+| `pbx_tenant_sync_warm_complete` | API | Refresh succeeded; shows `pbxTenantCount`, `directoryUpserted`, `directoryCreated`, `directoryUpdated`, `directoryDeleted`, `durationMs` |
 | `pbx_tenant_sync_warm_failed` | API | Refresh failed; shows `err` |
-| `pbx_tenant_directory_new_tenants` | API | One or more new PBX tenants created; shows `created`, `updated` |
+| `pbx_tenant_directory_new_tenants` | API | One or more PBX tenants created or deleted; shows `created`, `updated`, `deleted` |
 | `pbx_tenant_directory_manual_sync` | API | Manual sync via `sync-tenant-dids` endpoint |
 | `pbx_tenant_manual_refresh_start` | API | Manual refresh via `refresh-tenants` endpoint |
 | `pbx_tenant_manual_refresh_complete` | API | Manual refresh succeeded |

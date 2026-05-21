@@ -6518,16 +6518,31 @@ app.get("/admin/tenants", async (req, reply) => {
       where: { tenantId: { in: customerTenants.map((t) => t.id) } },
       select: { tenantId: true, pbxTenantId: true, pbxInstanceId: true },
     });
+    const pbxDirectoryPredicates = pbxLinks
+      .filter((link) => link.pbxInstanceId && link.pbxTenantId)
+      .map((link) => ({ pbxInstanceId: String(link.pbxInstanceId), vitalTenantId: String(link.pbxTenantId) }));
+    const pbxDirectories = await db.pbxTenantDirectory.findMany({
+      where: pbxDirectoryPredicates.length > 0 ? { OR: pbxDirectoryPredicates } : { id: { in: [] } },
+      select: { pbxInstanceId: true, vitalTenantId: true, tenantSlug: true, displayName: true },
+    });
     const pbxByTenantId = new Map(pbxLinks.map((link) => [link.tenantId, link]));
+    const pbxDirectoryByLink = new Map(
+      pbxDirectories.map((row) => [`${row.pbxInstanceId}:${row.vitalTenantId}`, row]),
+    );
     return tenants
       .filter((t) => (t as any).kind === "CUSTOMER" && t.isApproved === true)
       .map((t) => {
         const pbxLink = pbxByTenantId.get(t.id);
+        const pbxDirectory = pbxLink?.pbxInstanceId && pbxLink?.pbxTenantId
+          ? pbxDirectoryByLink.get(`${pbxLink.pbxInstanceId}:${pbxLink.pbxTenantId}`)
+          : null;
         return {
           id: t.id,
           name: t.name,
           pbxTenantId: pbxLink?.pbxTenantId ?? null,
           pbxInstanceId: pbxLink?.pbxInstanceId ?? null,
+          pbxTenantName: pbxDirectory?.displayName || pbxDirectory?.tenantSlug || null,
+          pbxTenantMissing: Boolean(pbxLink?.pbxTenantId && !pbxDirectory),
           isApproved: t.isApproved,
         };
       });
@@ -13188,11 +13203,20 @@ const _pbxTenantSyncIntervalMs = (() => {
 })();
 const PBX_TENANT_LIST_CACHE_TTL_MS = _pbxTenantSyncIntervalMs;
 const PBX_TENANT_LIST_STALE_MS = 30_000;
+type PbxTenantListPayload = {
+  instanceId: string;
+  tenants: any[];
+  directoryUpserted: number;
+  directoryCreated: number;
+  directoryUpdated: number;
+  directoryDeleted: number;
+  inboundDidSync: { tenantsProcessed: number; numbersUpserted: number; errors: string[] };
+};
 const PBX_TENANT_LIST_CACHE = new Map<string, {
   at: number;
-  payload: { instanceId: string; tenants: any[]; directoryUpserted: number; inboundDidSync: { tenantsProcessed: number; numbersUpserted: number; errors: string[] } };
+  payload: PbxTenantListPayload;
 }>();
-const PBX_TENANT_LIST_INFLIGHT = new Map<string, Promise<{ instanceId: string; tenants: any[]; directoryUpserted: number; inboundDidSync: { tenantsProcessed: number; numbersUpserted: number; errors: string[] } }>>();
+const PBX_TENANT_LIST_INFLIGHT = new Map<string, Promise<PbxTenantListPayload>>();
 
 async function listPbxTenantsFromDirectory(instanceId: string): Promise<any[]> {
   const rows = await db.pbxTenantDirectory.findMany({
@@ -13221,18 +13245,21 @@ function startPbxTenantListRefresh(instance: any, auth: { token: string; secret?
     let directoryUpserted = 0;
     let directoryCreated = 0;
     let directoryUpdated = 0;
+    let directoryDeleted = 0;
     try {
       const d = await syncPbxTenantDirectoryFromRows(db, instance.id, tenants);
       directoryUpserted = d.upserted;
       directoryCreated = d.created;
       directoryUpdated = d.updated;
-      if (d.created > 0) {
+      directoryDeleted = d.deleted;
+      if (d.created > 0 || d.deleted > 0) {
         app.log.info(
           {
             event: "pbx_tenant_directory_new_tenants",
             pbxInstanceId: instance.id,
             created: d.created,
             updated: d.updated,
+            deleted: d.deleted,
             upserted: d.upserted,
           },
           "pbx_tenant_directory_new_tenants",
@@ -13251,6 +13278,7 @@ function startPbxTenantListRefresh(instance: any, auth: { token: string; secret?
       directoryUpserted,
       directoryCreated,
       directoryUpdated,
+      directoryDeleted,
       inboundDidSync: { tenantsProcessed: 0, numbersUpserted: 0, errors: [] as string[] },
     };
     PBX_TENANT_LIST_CACHE.set(cacheKey, { at: Date.now(), payload });
@@ -13300,6 +13328,9 @@ app.get("/admin/pbx/tenants", async (req, reply) => {
       instanceId: instance.id,
       tenants: directoryTenants,
       directoryUpserted: 0,
+      directoryCreated: 0,
+      directoryUpdated: 0,
+      directoryDeleted: 0,
       inboundDidSync: { tenantsProcessed: 0, numbersUpserted: 0, errors: [] as string[] },
     };
     PBX_TENANT_LIST_CACHE.set(cacheKey, { at: Date.now(), payload });
@@ -13344,6 +13375,9 @@ function startPbxTenantListWarm() {
                 pbxInstanceId: instance.id,
                 pbxTenantCount: payload.tenants.length,
                 directoryUpserted: payload.directoryUpserted,
+                directoryCreated: payload.directoryCreated,
+                directoryUpdated: payload.directoryUpdated,
+                directoryDeleted: payload.directoryDeleted,
                 durationMs: Date.now() - warmStartedAt,
               },
               "pbx_tenant_sync_warm_complete",
@@ -13393,6 +13427,7 @@ app.post("/admin/pbx/instances/:id/sync-tenant-dids", async (req, reply) => {
       upserted: syncResult.upserted,
       created: syncResult.created,
       updated: syncResult.updated,
+      deleted: syncResult.deleted,
       durationMs: Date.now() - startedAt,
       requestedBy: (admin as any).id ?? "unknown",
     },
@@ -13404,6 +13439,7 @@ app.post("/admin/pbx/instances/:id/sync-tenant-dids", async (req, reply) => {
     directoryUpserted: syncResult.upserted,
     directoryCreated: syncResult.created,
     directoryUpdated: syncResult.updated,
+    directoryDeleted: syncResult.deleted,
     inboundDidSync,
   };
 });
@@ -13440,7 +13476,7 @@ app.post("/admin/pbx/refresh-tenants", async (req, reply) => {
     "pbx_tenant_manual_refresh_start",
   );
   let tenants: any[] = [];
-  let syncResult = { upserted: 0, created: 0, updated: 0 };
+  let syncResult = { upserted: 0, created: 0, updated: 0, deleted: 0 };
   try {
     const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret, timeoutMs: 8_000 });
     tenants = await client.listTenants();
@@ -13463,6 +13499,7 @@ app.post("/admin/pbx/refresh-tenants", async (req, reply) => {
       upserted: syncResult.upserted,
       created: syncResult.created,
       updated: syncResult.updated,
+      deleted: syncResult.deleted,
       durationMs,
     },
     "pbx_tenant_manual_refresh_complete",
@@ -13474,6 +13511,7 @@ app.post("/admin/pbx/refresh-tenants", async (req, reply) => {
     directoryUpserted: syncResult.upserted,
     directoryCreated: syncResult.created,
     directoryUpdated: syncResult.updated,
+    directoryDeleted: syncResult.deleted,
     durationMs,
     note: "PbxTenantDirectory updated. Telephony PbxTenantMapCache will pick up changes within its poll interval (default 60 s).",
   };

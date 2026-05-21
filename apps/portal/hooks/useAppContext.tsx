@@ -151,13 +151,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         pbxTenantCount?: number;
         directoryCreated?: number;
         directoryUpdated?: number;
+        directoryDeleted?: number;
         retryAfterMs?: number;
       }>("/admin/pbx/refresh-tenants", undefined, undefined, { timeoutMs: 30_000 });
       await reloadTenantOptions();
       const changed = Number(result.directoryCreated || 0) + Number(result.directoryUpdated || 0);
       return {
         ok: true as const,
-        message: `PBX tenants refreshed (${result.pbxTenantCount ?? "unknown"} seen, ${changed} changed).`,
+        message: `PBX tenants refreshed (${result.pbxTenantCount ?? "unknown"} seen, ${changed} changed, ${result.directoryDeleted || 0} deleted).`,
       };
     } catch (err) {
       if (err instanceof ApiError && err.status === 429) {

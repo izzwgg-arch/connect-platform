@@ -16,6 +16,8 @@ export interface PbxTenantDirectorySyncResult {
   created: number;
   /** Rows that already existed and were updated. */
   updated: number;
+  /** Local directory rows removed because VitalPBX no longer returns them. */
+  deleted: number;
 }
 
 export async function syncPbxTenantDirectoryFromRows(
@@ -26,16 +28,18 @@ export async function syncPbxTenantDirectoryFromRows(
   let upserted = 0;
   let created = 0;
   let updated = 0;
+  const seenVitalTenantIds = new Set<string>();
   for (const t of tenants) {
     const vitalTenantId = String((t as { tenant_id?: unknown }).tenant_id ?? (t as { id?: unknown }).id ?? "").trim();
     const tenantSlug = String((t as { name?: unknown }).name ?? "").trim();
     if (!vitalTenantId || !tenantSlug) continue;
+    seenVitalTenantIds.add(vitalTenantId);
     const tenantCode = deriveTenantCode(vitalTenantId, tenantSlug);
     const desc = String((t as { description?: unknown }).description ?? "").trim();
     const displayName = desc || null;
     const existing = await db.pbxTenantDirectory.findUnique({
       where: { pbxInstanceId_vitalTenantId: { pbxInstanceId, vitalTenantId } },
-      select: { id: true },
+      select: { id: true, tenantSlug: true, tenantCode: true, displayName: true },
     });
     await db.pbxTenantDirectory.upsert({
       where: {
@@ -57,12 +61,34 @@ export async function syncPbxTenantDirectoryFromRows(
     });
     upserted++;
     if (existing) {
-      updated++;
+      if (
+        existing.tenantSlug !== tenantSlug ||
+        existing.tenantCode !== tenantCode ||
+        (existing.displayName ?? null) !== displayName
+      ) {
+        updated++;
+      }
     } else {
       created++;
     }
   }
-  return { upserted, created, updated };
+
+  // Mirror VitalPBX exactly for this instance: if a tenant disappeared from PBX,
+  // remove it from the local directory so switchers, routing hints, and diagnostics
+  // do not keep showing a stale PBX tenant. Guard against malformed/empty payloads
+  // so a bad PBX response cannot wipe the whole directory.
+  let deleted = 0;
+  if (seenVitalTenantIds.size > 0) {
+    const result = await db.pbxTenantDirectory.deleteMany({
+      where: {
+        pbxInstanceId,
+        vitalTenantId: { notIn: Array.from(seenVitalTenantIds) },
+      },
+    });
+    deleted = result.count;
+  }
+
+  return { upserted, created, updated, deleted };
 }
 
 export async function syncPbxTenantDirectory(
