@@ -32,6 +32,7 @@ type InvoiceLineItem = {
   quantity?: number | string | null;
   unitPriceCents?: number | null;
   amountCents?: number | null;
+  metadata?: Record<string, unknown> | null;
 };
 
 type TotalsRow = {
@@ -81,9 +82,15 @@ function sumApprovedPayments(transactions: any[]) {
 }
 
 function buildTotalsRows(row: any, lineItems: InvoiceLineItem[], transactions: any[]): TotalsRow[] {
-  const subtotal = Number(row.subtotalCents ?? 0);
-  const total = Number(row.totalCents ?? 0);
-  const taxFromInvoice = Number(row.taxCents ?? 0);
+  const subtotal = lineItems
+    .filter((item) => {
+      const tone = classifyLineItem(item).tone;
+      return tone === "service" || tone === "credit";
+    })
+    .reduce((sum, item) => sum + Number(item.amountCents || 0), 0);
+  const total = lineItems.length
+    ? lineItems.reduce((sum, item) => sum + Number(item.amountCents || 0), 0)
+    : Number(row.totalCents ?? 0);
   const paid = Math.max(0, total - Number(row.balanceDueCents ?? total), sumApprovedPayments(transactions));
   const discount = Math.abs(
     lineItems
@@ -93,7 +100,7 @@ function buildTotalsRows(row: any, lineItems: InvoiceLineItem[], transactions: a
   const feeTotal = lineItems
     .filter((item) => classifyLineItem(item).tone === "fee")
     .reduce((sum, item) => sum + Math.max(0, Number(item.amountCents || 0)), 0);
-  const taxTotal = taxFromInvoice || lineItems
+  const taxTotal = lineItems
     .filter((item) => classifyLineItem(item).tone === "tax")
     .reduce((sum, item) => sum + Math.max(0, Number(item.amountCents || 0)), 0);
 
@@ -106,6 +113,14 @@ function buildTotalsRows(row: any, lineItems: InvoiceLineItem[], transactions: a
   rows.push({ id: "paid", label: "Amount paid", valueCents: -paid, tone: "paid" });
   rows.push({ id: "due", label: "Balance due", valueCents: Number(row.balanceDueCents ?? total), tone: "due" });
   return rows;
+}
+
+function lineServicePeriod(metadata: InvoiceLineItem["metadata"]) {
+  if (!metadata || typeof metadata !== "object") return null;
+  const start = typeof metadata.servicePeriodStart === "string" ? metadata.servicePeriodStart : null;
+  const end = typeof metadata.servicePeriodEnd === "string" ? metadata.servicePeriodEnd : null;
+  if (!start || !end) return null;
+  return `${new Date(start).toLocaleDateString()} - ${new Date(end).toLocaleDateString()}`;
 }
 
 function splitPlainText(value: unknown): string[] {
@@ -282,6 +297,9 @@ export default function BillingInvoiceDetailPage() {
                         <div>
                           <span className={`invoice-line-type ${cls.tone}`}>{cls.label}</span>
                           <strong>{item.description || "Billing item"}</strong>
+                          {lineServicePeriod(item.metadata) ? (
+                            <small>{lineServicePeriod(item.metadata)}</small>
+                          ) : null}
                         </div>
                         <span>{String(item.quantity ?? 1)}</span>
                         <span>{dollars(item.unitPriceCents)}</span>

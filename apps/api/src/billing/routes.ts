@@ -60,7 +60,7 @@ import {
   todayDateSuffix,
   transactionExportToCsv,
 } from "./billingReports";
-import { billingMonthBoundsForYearMonth } from "./billingTime";
+import { billingLocalDateTimeToUtc, billingMonthBoundsForYearMonth } from "./billingTime";
 import { assertBillingInvoiceDeletable } from "./deleteBillingInvoice";
 import {
   markDoNotCharge,
@@ -143,6 +143,66 @@ function parseBillingPeriodBounds(q: { periodMonth?: string; periodYear?: string
     return billingMonthBoundsForYearMonth(rawYear, rawMonth);
   }
   return undefined;
+}
+
+const billingInvoicePeriodInputSchema = z.object({
+  serviceStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  serviceEndDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  billingMonthCount: z.number().min(0.01).max(36).optional(),
+  prorate: z.boolean().optional(),
+});
+
+function parseBillingLocalDate(value: string, endOfDay = false): Date {
+  const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
+  return billingLocalDateTimeToUtc({
+    year,
+    month,
+    day,
+    hour: endOfDay ? 23 : 0,
+    minute: endOfDay ? 59 : 0,
+    second: endOfDay ? 59 : 0,
+    millisecond: endOfDay ? 999 : 0,
+  });
+}
+
+function addCalendarMonthsToLocalDate(value: string, months: number): string {
+  const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
+  const d = new Date(Date.UTC(year, month - 1 + months, day, 0, 0, 0, 0));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+
+function billingPeriodInput(body: unknown): { periodStart?: Date; periodEnd?: Date; billingMonthCount?: number; prorate?: boolean } {
+  const parsed = billingInvoicePeriodInputSchema.parse(body || {});
+  if (!parsed.serviceStartDate && !parsed.serviceEndDate && !parsed.billingMonthCount && !parsed.prorate) return {};
+  if (!parsed.serviceStartDate && parsed.serviceEndDate) {
+    const err: any = new Error("service_start_date_required");
+    err.code = "service_start_date_required";
+    throw err;
+  }
+  if (!parsed.serviceStartDate && parsed.billingMonthCount) {
+    const err: any = new Error("service_start_date_required");
+    err.code = "service_start_date_required";
+    throw err;
+  }
+  const startDate = parsed.serviceStartDate;
+  let endDate = parsed.serviceEndDate;
+  if (startDate && !endDate && parsed.billingMonthCount && Number.isInteger(parsed.billingMonthCount)) {
+    endDate = addCalendarMonthsToLocalDate(startDate, parsed.billingMonthCount);
+    const end = parseBillingLocalDate(endDate);
+    end.setTime(end.getTime() - 1);
+    return { periodStart: parseBillingLocalDate(startDate), periodEnd: end, billingMonthCount: parsed.billingMonthCount, prorate: !!parsed.prorate };
+  }
+  if (startDate && !endDate) {
+    const err: any = new Error("service_end_date_required");
+    err.code = "service_end_date_required";
+    throw err;
+  }
+  return {
+    ...(startDate ? { periodStart: parseBillingLocalDate(startDate) } : {}),
+    ...(endDate ? { periodEnd: parseBillingLocalDate(endDate, true) } : {}),
+    ...(parsed.billingMonthCount ? { billingMonthCount: parsed.billingMonthCount } : {}),
+    ...(parsed.prorate ? { prorate: true } : {}),
+  };
 }
 
 function parseBoolQuery(v: unknown): boolean {
@@ -1082,15 +1142,32 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
     const { tenantId } = req.params as { tenantId: string };
-    const q = req.query as { periodMonth?: string; periodYear?: string };
+    const q = req.query as { periodMonth?: string; periodYear?: string; serviceStartDate?: string; serviceEndDate?: string; billingMonthCount?: string; prorate?: string };
     const rawMonth = Number.parseInt(String(q.periodMonth || ""), 10);
     const rawYear = Number.parseInt(String(q.periodYear || ""), 10);
     let periodStart: Date | undefined;
     let periodEnd: Date | undefined;
+    let billingMonthCount: number | undefined;
+    let prorate: boolean | undefined;
     if (Number.isFinite(rawMonth) && rawMonth >= 1 && rawMonth <= 12 && Number.isFinite(rawYear) && rawYear >= 2020 && rawYear <= 2099) {
       ({ periodStart, periodEnd } = billingMonthBoundsForYearMonth(rawYear, rawMonth));
+    } else if (q.serviceStartDate || q.serviceEndDate || q.billingMonthCount || q.prorate) {
+      try {
+        const parsed = billingPeriodInput({
+          serviceStartDate: q.serviceStartDate,
+          serviceEndDate: q.serviceEndDate,
+          billingMonthCount: q.billingMonthCount ? Number(q.billingMonthCount) : undefined,
+          prorate: parseBoolQuery(q.prorate),
+        });
+        periodStart = parsed.periodStart;
+        periodEnd = parsed.periodEnd;
+        billingMonthCount = parsed.billingMonthCount;
+        prorate = parsed.prorate;
+      } catch (err: any) {
+        return reply.code(400).send({ error: err?.code || "invalid_billing_period" });
+      }
     }
-    return buildBillingInvoicePreview({ tenantId, periodStart, periodEnd });
+    return buildBillingInvoicePreview({ tenantId, periodStart, periodEnd, billingMonthCount, prorate });
   });
 
   app.get("/admin/billing/platform/tenants/:tenantId/pricing-diagnostics", async (req, reply) => {
@@ -1643,7 +1720,13 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const u = await requirePlatformBilling(req, reply);
     if (!u) return;
     const { tenantId } = req.params as { tenantId: string };
-    const invoice = await createBillingInvoice({ tenantId, status: "OPEN" });
+    let periodInput: ReturnType<typeof billingPeriodInput>;
+    try {
+      periodInput = billingPeriodInput(req.body);
+    } catch (err: any) {
+      return reply.code(400).send({ error: err?.code || "invalid_billing_period" });
+    }
+    const invoice = await createBillingInvoice({ tenantId, status: "OPEN", ...periodInput });
     return invoice;
   });
 
@@ -1880,6 +1963,8 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       makeDefault: z.boolean().optional(),
       confirmLive: z.boolean().optional(),
       operationId: z.string().min(8).max(120).optional(),
+      serviceStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      serviceEndDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     }).parse(req.body || {});
     if (input.chargeMode !== "none" && billingLiveChargesDisabled()) return sendLiveChargesDisabled(reply);
 
@@ -1962,6 +2047,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
 
     let invoice;
     try {
+      const periodInput = billingPeriodInput(req.body);
       invoice = await createOneTimeChargeInvoice({
         tenantId,
         description: input.description,
@@ -1969,6 +2055,8 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         operatorNote: input.operatorNote,
         invoiceMemo: input.invoiceMemo,
         adminUserId: u.sub,
+        periodStart: periodInput.periodStart,
+        periodEnd: periodInput.periodEnd,
       });
       if (operation?.operation?.id) {
         await attachBillingChargeOperationInvoice(operation.operation.id, invoice.id);

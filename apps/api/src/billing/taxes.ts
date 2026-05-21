@@ -49,12 +49,13 @@ export function calculateTaxLines(input: {
 
   const e911 = Math.max(0, input.extensionCount * e911Unit);
   if (e911 > 0) {
+    const e911Quantity = Math.max(1, Math.round(input.extensionCount));
     lines.push({
       type: "E911_FEE",
       description: "E911 fee",
-      quantity: input.extensionCount,
-      unitPriceCents: e911Unit,
-      amountCents: e911,
+      quantity: e911Quantity,
+      unitPriceCents: Math.round(e911 / e911Quantity),
+      amountCents: Math.round(e911),
       taxable: false,
     });
   }

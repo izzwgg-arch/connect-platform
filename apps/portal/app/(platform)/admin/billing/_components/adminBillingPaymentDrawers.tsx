@@ -209,6 +209,10 @@ export function OneTimeChargeDrawer({
 
   const [invoiceMemo, setInvoiceMemo] = useState("");
 
+  const [serviceStartDate, setServiceStartDate] = useState("");
+
+  const [serviceEndDate, setServiceEndDate] = useState("");
+
   const [chargeMode, setChargeMode] = useState<"none" | "card_on_file" | "new_card">(initialChargeMode ?? "card_on_file");
 
   const [paymentMethodId, setPaymentMethodId] = useState("");
@@ -322,6 +326,8 @@ export function OneTimeChargeDrawer({
         amountCents,
         operatorNote: operatorNote.trim() || undefined,
         invoiceMemo: invoiceMemo.trim() || undefined,
+        serviceStartDate: serviceStartDate || undefined,
+        serviceEndDate: serviceEndDate || undefined,
         chargeMode,
         confirmLive: isLiveCharge ? true : undefined,
         operationId: chargeOperationIdRef.current,
@@ -637,6 +643,10 @@ export function OneTimeChargeDrawer({
 
             <div><dt>Amount</dt><dd>{dollars(amountCents)}</dd></div>
 
+            {(serviceStartDate || serviceEndDate) ? (
+              <div><dt>Service period</dt><dd>{serviceStartDate || "—"} – {serviceEndDate || "—"}</dd></div>
+            ) : null}
+
             <div><dt>Payment</dt><dd>{confirmPaymentLabel}</dd></div>
 
             {chargeMode === "new_card" && saveCard ? (
@@ -686,6 +696,17 @@ export function OneTimeChargeDrawer({
               <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="e.g. Rush install fee" maxLength={240} />
 
             </label>
+
+            <div className="billing-pay-form-grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <label>
+                Service start <span className="muted">(optional)</span>
+                <input type="date" value={serviceStartDate} onChange={(e) => setServiceStartDate(e.target.value)} />
+              </label>
+              <label>
+                Service end <span className="muted">(optional)</span>
+                <input type="date" value={serviceEndDate} onChange={(e) => setServiceEndDate(e.target.value)} />
+              </label>
+            </div>
 
             <label>
 

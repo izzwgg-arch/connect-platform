@@ -334,6 +334,7 @@
 ## TenantBillingSettings (invoice presentation)
 
 - **Schema:** `TenantBillingSettings` in `packages/db/prisma/schema.prisma` — core pricing/autopay plus optional **`invoiceCompanyName`**, **`invoiceLogoUrl`** (https, used in HTML emails only), **`invoiceSupportEmail`**, **`invoiceSupportPhone`**, **`invoiceFooterNote`**, **`invoicePaymentInstructions`** (migration `20260512120000_tenant_invoice_branding`).
+- **Autopay scope:** tenant-level. `autoBillingEnabled`, `billingDayOfMonth`, `defaultPaymentMethodId`, and `metadata.billingScheduleOverride` describe the current Connect-native tenant invoice path, not an individual recurring obligation. Do not use this row to infer that a tenant can only have one Sola/Cardknox recurring profile.
 - **Purpose:** Resolved in **`invoiceBranding.ts`** for **`renderBillingInvoicePdf`** (`pdf.ts`) and billing emails (`emailTemplates.ts`, `billingEmailLifecycle.ts`). **`paymentTermsDays`** remains the due offset / “Net N days” source.
 - **`metadata` JSON:** optional. **`taxProviderId`** (`tax_profile_v1` \| `external_telecom_stub`) selects the tax engine for invoice preview/create (`taxProvider.ts`). **`billingPricingMode`** (`catalog` \| `custom`, or absent/`null`): see **`BILLING.md`** § Tenant pricing mode. **`billingFlatRate`** — tenant extensions flat monthly rate (`enabled`, `amountCents`, `appliesTo: "extensions"`). **`billingQuantityOverrides`** — per-line **auto** vs **manual** billing quantities (`extensions`, `virtualExtensions`, `phoneNumbers`, `smsPackages`; each `{ mode, quantity }`; manual requires non-negative integer). **`PUT /admin/billing/tenants/:id/settings`** merges keys without wiping unrelated metadata (`null` on a patch object removes that slice).
 - **Scheduled plan change fields (migration `20260530000000_billing_scheduled_plan_change`):**
@@ -347,7 +348,8 @@
 - **Schema:** lines 683 / 721 / 790 / 809
 - **Purpose:** Connect-owned invoicing pipeline (driven by `apps/worker`
   `runMonthlyBillingAutomation` + `runBillingDunningRetries`, and admin/API actions).
-- **`BillingInvoice.metadata`:** optional JSON. **`dunning`** holds `{ attempts, maxAttempts, nextRetryAt }` for autopay retry backoff (see `billingDunning.ts`). **`taxCalculationAudit`** (set at invoice creation in `invoiceEngine.ts`) stores the tax provider snapshot: provider id/version, inputs, line summaries, notes — see `taxProvider.ts`. Dunning merges preserve existing keys (root object spread).
+- **`BillingInvoice.metadata`:** optional JSON. **`dunning`** holds `{ attempts, maxAttempts, nextRetryAt }` for autopay retry backoff (see `billingDunning.ts`). **`taxCalculationAudit`** (set at invoice creation in `invoiceEngine.ts`) stores the tax provider snapshot: provider id/version, inputs, line summaries, notes — see `taxProvider.ts`. **`billingPeriodFactor`** stores the recurring billing month count/proration factor used when scaling service lines. Dunning merges preserve existing keys (root object spread).
+- **`BillingInvoiceLineItem.metadata`:** used for itemized telecom rendering without a migration. Recurring invoice lines may store `lineItemKind`, `servicePeriodStart`, `servicePeriodEnd`, `billingMonthCount`, `prorated`, `baseQuantity`, `baseUnitPriceCents`, and `baseAmountCents`. Totals must derive from `BillingInvoiceLineItem.amountCents`; do not add hidden fee math in UI or payment paths.
 - **`BillingEventLog.type` (examples):** `invoice_created`, `invoice_emailed`, `payment_link_emailed`, `autopay_attempted`, `payment_succeeded`, `payment_failed`, `dunning_scheduled`, `dunning_exhausted`, `receipt_emailed` / `payment_failed_emailed` (also used as dedupe markers with `message` = `PaymentTransaction.id`). **Pricing operators:** **`billing_plan.current_assigned`** (**`operatorUserId`**, **`before`/`after`** **`billingPlanId`**, stored **`billingPricingMode`**, four unit-price fields), **`billing.pricing_reset_to_plan`** (`metadata.before` / **`metadata.after`** pricing snapshots plus **`operatorId`**), **`billing.pricing_mode_changed`** (`operatorId`, **`fromMode`**, **`toMode`**, stored mode key snapshot).
 - **Tenant-scoped?** Yes.
 - **High-risk?** **Extreme** — money.
@@ -684,7 +686,11 @@ Added for Sola vault token import and cutover:
 | `processorPaymentMethodId` | `String?` | Sola PaymentMethodId (for imported cards) |
 | `metadata` | `Json?` | `{ solaScheduleLinkId, solaCustomerId, solaPaymentMethodId, source: "sola_recurring_import" }` |
 
+Multiple active/imported payment methods per tenant are supported. `PaymentMethod.isDefault` and `TenantBillingSettings.defaultPaymentMethodId` are tenant-level defaults for the current Connect autopay path; they are not proof that every recurring obligation for that tenant should use the same card.
+
 ## BillingSolaExternalScheduleLink — new fields (migration 20260518100000_billing_sola_cutover)
+
+One row mirrors one external Sola/Cardknox recurring schedule. `tenantId` is intentionally **not unique**: a single Connect tenant may have multiple independent recurring schedules/profiles with different amounts, cards, or service obligations. Duplicate detection must use the schedule/profile/obligation identity, not tenant name alone.
 
 | Field | Type | Purpose |
 |-------|------|---------|

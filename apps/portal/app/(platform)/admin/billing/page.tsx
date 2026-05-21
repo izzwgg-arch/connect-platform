@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
-import { apiDelete, apiGet, apiPut } from "../../../../services/apiClient";
+import { apiDelete, apiGet, apiPost, apiPut } from "../../../../services/apiClient";
 import { billingErrorMessage } from "../../../../components/BillingActionToast";
 import { BillingActionPanel } from "../../../../components/billing/BillingActionPanel";
 import { ErrorState } from "../../../../components/ErrorState";
@@ -21,7 +21,6 @@ import {
 import type { TenantDetail } from "./_components/tenantBillingConfigForms";
 import { BILLING_SECTION_QUERY, mergeSearchParams, OPS_TAB_QUERY } from "./_components/adminBillingLinks";
 import { useAdminBillingTenant } from "./_components/useAdminBillingTenant";
-import { OneTimeChargeDrawer } from "./_components/adminBillingPaymentDrawers";
 
 type TenantRow = {
   id: string;
@@ -40,7 +39,7 @@ export default function AdminBillingPage() {
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [autopayBusy, setAutopayBusy] = useState(false);
-  const [generateChargeMode, setGenerateChargeMode] = useState<"none" | "card_on_file" | null>(null);
+  const [generateBusy, setGenerateBusy] = useState(false);
   const tenants = useAsyncResource<TenantRow[]>(() => apiGet<TenantRow[]>("/admin/billing/platform/tenants"), []);
   const tenantRows = tenants.status === "success" ? tenants.data : [];
   const tenantIds = useMemo(() => tenantRows.map((t) => t.id), [tenantRows]);
@@ -124,9 +123,6 @@ export default function AdminBillingPage() {
     detail?.preview?.periodStart && detail?.preview?.periodEnd
       ? `${formatDate(detail.preview.periodStart)} - ${formatDate(detail.preview.periodEnd)}`
       : null;
-  const previewInvoiceDescription = previewPeriod
-    ? `Monthly service balance (${previewPeriod})`
-    : "Monthly service balance";
   const defaultPaymentMethodId = detail?.paymentMethods?.find((m: any) => m.isDefault)?.id
     || detail?.paymentMethods?.[0]?.id
     || null;
@@ -138,6 +134,20 @@ export default function AdminBillingPage() {
   const tid = detail?.tenant.id || selectedTenantId;
   const qp = (extra: Record<string, string>) =>
     mergeSearchParams(new URLSearchParams(tid ? { tenantId: tid } : {}), extra);
+
+  async function generateItemizedInvoice() {
+    if (!selectedTenantId) return;
+    setGenerateBusy(true);
+    setDetailError("");
+    try {
+      await apiPost(`/admin/billing/tenants/${selectedTenantId}/invoices`, {});
+      await loadDetail(selectedTenantId);
+    } catch (err: unknown) {
+      setDetailError(billingErrorMessage(err, "Could not generate the itemized invoice."));
+    } finally {
+      setGenerateBusy(false);
+    }
+  }
 
   const globalTotalDue = tenantRows.reduce((sum, t) => sum + (t.balanceDueCents ?? 0), 0);
   const globalNeedsAttention = tenantRows.filter((t) => worstNonTerminalInvoiceStatus(t.invoices) !== "—").length;
@@ -219,18 +229,19 @@ export default function AdminBillingPage() {
                 <button
                   className="btn primary"
                   type="button"
-                  onClick={() => setGenerateChargeMode("none")}
+                  disabled={generateBusy}
+                  onClick={generateItemizedInvoice}
                 >
-                  Generate invoice
+                  {generateBusy ? "Generating..." : "Generate itemized invoice"}
                 </button>
                 <button
                   className="btn ghost"
                   type="button"
-                  disabled={!defaultPaymentMethodId}
+                  disabled={generateBusy}
                   title={!defaultPaymentMethodId ? "Add a payment method first" : undefined}
-                  onClick={() => setGenerateChargeMode("card_on_file")}
+                  onClick={generateItemizedInvoice}
                 >
-                  Generate + charge card
+                  Generate itemized invoice first
                 </button>
               </>
             ) : null}
@@ -260,20 +271,20 @@ export default function AdminBillingPage() {
               <div style={{ marginBottom: 12, padding: "10px 12px", border: "1px solid var(--warn-300, #facc15)", borderRadius: 10, background: "color-mix(in srgb, #facc15 10%, var(--surface))" }}>
                 <strong style={{ display: "block", marginBottom: 4 }}>Invoice not generated yet</strong>
                 <p className="muted" style={{ margin: "0 0 10px", fontSize: 13 }}>
-                  The next billing date has passed and the current preview is {dollars(previewTotal)}. Generate the invoice now, or generate it and collect by card from the admin side.
+                  The next billing date has passed and the current preview is {dollars(previewTotal)}. Generate the itemized invoice first so extensions, DIDs, E911, taxes, discounts, and fees reconcile from line items.
                 </p>
                 <div className="row-actions" style={{ justifyContent: "flex-start" }}>
-                  <button className="btn primary" type="button" onClick={() => setGenerateChargeMode("none")}>
-                    Generate invoice only
+                  <button className="btn primary" type="button" disabled={generateBusy} onClick={generateItemizedInvoice}>
+                    {generateBusy ? "Generating..." : "Generate itemized invoice"}
                   </button>
                   <button
                     className="btn ghost"
                     type="button"
-                    disabled={!defaultPaymentMethodId}
+                    disabled={generateBusy}
                     title={!defaultPaymentMethodId ? "Add a payment method first" : undefined}
-                    onClick={() => setGenerateChargeMode("card_on_file")}
+                    onClick={generateItemizedInvoice}
                   >
-                    Generate invoice + charge card
+                    Generate itemized invoice first
                   </button>
                   {!defaultPaymentMethodId ? (
                     <Link className="btn ghost" href={`/admin/billing/methods${qp({})}`}>
@@ -449,22 +460,6 @@ export default function AdminBillingPage() {
         />
       ) : null}
 
-      {generateChargeMode && detail && selectedTenantId ? (
-        <OneTimeChargeDrawer
-          tenantId={selectedTenantId}
-          tenantName={detail.tenant.name}
-          isLiveCharge={true}
-          initialPaymentMethodId={generateChargeMode === "card_on_file" ? defaultPaymentMethodId : null}
-          initialDescription={previewInvoiceDescription}
-          initialAmountCents={previewTotal}
-          initialChargeMode={generateChargeMode}
-          onClose={() => setGenerateChargeMode(null)}
-          onSuccess={async () => {
-            setGenerateChargeMode(null);
-            await loadDetail(selectedTenantId);
-          }}
-        />
-      ) : null}
     </div>
   );
 }

@@ -319,8 +319,9 @@ export function buildBillingTelecomFeeLines(input: {
   for (const key of TELECOM_FEE_KEYS) {
     const fee = input.fees[key];
     if (!fee?.enabled) continue;
-    const quantity = basisQuantity({ basis: fee.basis, ...input });
-    if (quantity <= 0) continue;
+    const rawQuantity = basisQuantity({ basis: fee.basis, ...input });
+    if (rawQuantity <= 0) continue;
+    const quantity = Math.max(1, Math.round(rawQuantity));
     let unitPriceCents = 0;
     let amountCents = 0;
     if (fee.mode === "ratePercent") {
@@ -328,7 +329,7 @@ export function buildBillingTelecomFeeLines(input: {
       unitPriceCents = amountCents;
     } else {
       unitPriceCents = clampCents(Number(fee.amountCents || 0));
-      amountCents = unitPriceCents * quantity;
+      amountCents = Math.round(unitPriceCents * rawQuantity);
     }
     if (amountCents <= 0) continue;
     lines.push({

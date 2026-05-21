@@ -53,7 +53,16 @@ type InvoiceRow = {
 
 type InvoiceListResult = { invoices: InvoiceRow[]; total: number; page: number; pages: number; limit: number };
 
-type InvoiceLineItem = { id: string; description: string | null; quantity: number | null; unitAmountCents: number | null; totalCents: number; taxCents?: number | null };
+type InvoiceLineItem = {
+  id: string;
+  type?: string | null;
+  description: string | null;
+  quantity: number | null;
+  unitPriceCents: number | null;
+  amountCents: number;
+  taxable?: boolean | null;
+  metadata?: Record<string, unknown> | null;
+};
 
 type InvoiceTxRow = {
   id: string;
@@ -167,6 +176,17 @@ function fmtDatetime(d: string | null | undefined) {
 function fmtPeriod(start: string | null, end: string | null) {
   if (!start || !end) return null;
   return `${new Date(start).toLocaleDateString()} – ${new Date(end).toLocaleDateString()}`;
+}
+
+function lineTypeLabel(type: string | null | undefined) {
+  return String(type || "ITEM").replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function lineServicePeriod(metadata: InvoiceLineItem["metadata"]) {
+  if (!metadata || typeof metadata !== "object") return null;
+  const start = typeof metadata.servicePeriodStart === "string" ? metadata.servicePeriodStart : null;
+  const end = typeof metadata.servicePeriodEnd === "string" ? metadata.servicePeriodEnd : null;
+  return fmtPeriod(start, end);
 }
 
 function cardLabel(m: { brand: string | null; last4: string | null; expMonth?: number | null; expYear?: number | null; cardholderName?: string | null }) {
@@ -295,11 +315,23 @@ function InvoiceDetailModal({ invoiceId, onClose, onAction }: { invoiceId: strin
                 <DataTable
                   rows={inv.lineItems.map((li) => ({ ...li, id: li.id }))}
                   columns={[
-                    { key: "desc", label: "Description", render: (r: InvoiceLineItem) => r.description || "—" },
+                    {
+                      key: "desc",
+                      label: "Item",
+                      render: (r: InvoiceLineItem) => (
+                        <div>
+                          <strong>{r.description || "—"}</strong>
+                          <div className="muted" style={{ fontSize: 11 }}>
+                            {lineTypeLabel(r.type)}
+                            {lineServicePeriod(r.metadata) ? ` · ${lineServicePeriod(r.metadata)}` : ""}
+                          </div>
+                        </div>
+                      ),
+                    },
                     { key: "qty", label: "Qty", render: (r: InvoiceLineItem) => r.quantity ?? "—" },
-                    { key: "unit", label: "Unit", render: (r: InvoiceLineItem) => r.unitAmountCents != null ? dollars(r.unitAmountCents) : "—" },
-                    { key: "tax", label: "Tax", render: (r: InvoiceLineItem) => r.taxCents ? dollars(r.taxCents) : "—" },
-                    { key: "total", label: "Total", render: (r: InvoiceLineItem) => dollars(r.totalCents) },
+                    { key: "unit", label: "Unit", render: (r: InvoiceLineItem) => r.unitPriceCents != null ? dollars(r.unitPriceCents) : "—" },
+                    { key: "taxable", label: "Taxable", render: (r: InvoiceLineItem) => r.taxable ? "Yes" : "No" },
+                    { key: "total", label: "Total", render: (r: InvoiceLineItem) => dollars(r.amountCents) },
                   ]}
                 />
               </>

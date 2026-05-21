@@ -23,6 +23,11 @@ export type BillingInvoicePreview = {
   periodStart: Date;
   periodEnd: Date;
   dueDate: Date;
+  /** Billing month/factor applied to recurring service and fee rows. */
+  billingPeriodFactor?: {
+    monthCount: number;
+    prorated: boolean;
+  };
   usage: BillingUsageSnapshot;
   /** Suggested vs billing quantities (manual overrides from metadata). */
   billingQuantities?: BillingResolvedQuantities;
@@ -75,6 +80,98 @@ export function addDays(date: Date, days: number): Date {
   return addBillingDays(date, days);
 }
 
+function roundCents(value: number): number {
+  return Number.isFinite(value) ? Math.round(value) : 0;
+}
+
+function roundFactor(value: number): number {
+  return Math.round(value * 10000) / 10000;
+}
+
+function resolveBillingPeriodFactor(input: {
+  periodStart: Date;
+  periodEnd: Date;
+  billingMonthCount?: number;
+  prorate?: boolean;
+}): { monthCount: number; prorated: boolean } {
+  const explicitMonthCount = Number(input.billingMonthCount || 0);
+  if (Number.isFinite(explicitMonthCount) && explicitMonthCount > 0) {
+    return { monthCount: roundFactor(explicitMonthCount), prorated: explicitMonthCount % 1 !== 0 || !!input.prorate };
+  }
+
+  const durationMs = Math.max(1, input.periodEnd.getTime() - input.periodStart.getTime() + 1);
+  if (input.prorate) {
+    const monthlyMs = 30.4375 * 24 * 60 * 60 * 1000;
+    return { monthCount: Math.max(0.0001, roundFactor(durationMs / monthlyMs)), prorated: true };
+  }
+
+  const approxMonths = Math.max(1, Math.round(durationMs / (30.4375 * 24 * 60 * 60 * 1000)));
+  return { monthCount: approxMonths, prorated: false };
+}
+
+function scaledBillingQuantity(quantity: number, monthCount: number): number {
+  return roundFactor(Math.max(0, Number(quantity || 0)) * Math.max(0, Number(monthCount || 0)));
+}
+
+function lineMetadata(item: { metadata?: Record<string, unknown> }): Record<string, unknown> {
+  return item.metadata && typeof item.metadata === "object" && !Array.isArray(item.metadata)
+    ? item.metadata
+    : {};
+}
+
+function applyBillingPeriodToRecurringLines(
+  lineItems: BillingInvoicePreview["lineItems"],
+  period: { periodStart: Date; periodEnd: Date; monthCount: number; prorated: boolean },
+) {
+  const factor = Number(period.monthCount || 1);
+  if (!Number.isFinite(factor) || factor <= 0 || factor === 1) {
+    for (const item of lineItems) {
+      item.metadata = {
+        ...lineMetadata(item),
+        servicePeriodStart: period.periodStart.toISOString(),
+        servicePeriodEnd: period.periodEnd.toISOString(),
+        billingMonthCount: 1,
+        prorated: false,
+      };
+    }
+    return;
+  }
+
+  const factorIsInteger = Math.abs(factor - Math.round(factor)) < 0.0001;
+  for (const item of lineItems) {
+    const baseQuantity = Number(item.quantity || 1);
+    const baseUnitPriceCents = Number(item.unitPriceCents || 0);
+    const baseAmountCents = Number(item.amountCents || 0);
+    const nextAmountCents = roundCents(baseAmountCents * factor);
+    const nextQuantity = factorIsInteger ? Math.max(1, Math.round(baseQuantity * factor)) : Math.max(1, Math.round(baseQuantity));
+    item.quantity = nextQuantity;
+    item.unitPriceCents = nextQuantity > 0 ? roundCents(nextAmountCents / nextQuantity) : nextAmountCents;
+    item.amountCents = nextAmountCents;
+    item.description = factorIsInteger
+      ? `${item.description} (${Math.round(factor)} months)`
+      : `${item.description} (prorated ${factor.toFixed(2)} months)`;
+    item.metadata = {
+      ...lineMetadata(item),
+      servicePeriodStart: period.periodStart.toISOString(),
+      servicePeriodEnd: period.periodEnd.toISOString(),
+      billingMonthCount: factor,
+      prorated: period.prorated || !factorIsInteger,
+      baseQuantity,
+      baseUnitPriceCents,
+      baseAmountCents,
+    };
+  }
+}
+
+function billingPeriodMetadata(period: { periodStart: Date; periodEnd: Date; monthCount: number; prorated: boolean }): Record<string, unknown> {
+  return {
+    servicePeriodStart: period.periodStart.toISOString(),
+    servicePeriodEnd: period.periodEnd.toISOString(),
+    billingMonthCount: period.monthCount,
+    prorated: period.prorated,
+  };
+}
+
 export async function ensureTenantBillingSettings(tenantId: string) {
   return (db as any).tenantBillingSettings.upsert({
     where: { tenantId },
@@ -112,10 +209,18 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
   periodStart?: Date;
   periodEnd?: Date;
   dueDate?: Date;
+  billingMonthCount?: number;
+  prorate?: boolean;
 }): Promise<BillingInvoicePreview> {
   const { tenantId, settings } = input;
   const bounds = input.periodStart && input.periodEnd ? { periodStart: input.periodStart, periodEnd: input.periodEnd } : tenantBillingPeriodBounds(settings);
   const dueDate = input.dueDate || addDays(new Date(), Number(settings.paymentTermsDays || 15));
+  const periodFactor = resolveBillingPeriodFactor({
+    periodStart: bounds.periodStart,
+    periodEnd: bounds.periodEnd,
+    billingMonthCount: input.billingMonthCount,
+    prorate: !!input.prorate,
+  });
 
   const hasScheduledChange =
     settings.nextBillingPlanId &&
@@ -229,6 +334,12 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
       },
     });
   }
+  applyBillingPeriodToRecurringLines(lineItems, {
+    periodStart: bounds.periodStart,
+    periodEnd: bounds.periodEnd,
+    monthCount: periodFactor.monthCount,
+    prorated: periodFactor.prorated,
+  });
   if (Number(settings.creditsCents || 0) > 0) {
     const credit = -Math.abs(Number(settings.creditsCents));
     lineItems.push({
@@ -256,6 +367,12 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
         unitPriceCents: discountCents,
         amountCents: discountCents,
         taxable: true,
+        metadata: billingPeriodMetadata({
+          periodStart: bounds.periodStart,
+          periodEnd: bounds.periodEnd,
+          monthCount: periodFactor.monthCount,
+          prorated: periodFactor.prorated,
+        }),
       });
     }
   }
@@ -269,15 +386,18 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
           ? buildBillingTelecomFeeLines({
               fees: telecomFees,
               taxableSubtotalCents,
-              extensionCount: billingQuantities.billing.extensions,
-              phoneNumberCount: billingQuantities.billing.phoneNumbers,
-              tollFreeNumberCount: billingQuantities.billing.tollFreeNumbers,
+              extensionCount: scaledBillingQuantity(billingQuantities.billing.extensions, periodFactor.monthCount),
+              phoneNumberCount: scaledBillingQuantity(billingQuantities.billing.phoneNumbers, periodFactor.monthCount),
+              tollFreeNumberCount: scaledBillingQuantity(billingQuantities.billing.tollFreeNumbers, periodFactor.monthCount),
               lineCount:
-                billingQuantities.billing.extensions
-                + billingQuantities.billing.virtualExtensions
-                + billingQuantities.billing.phoneNumbers
-                + billingQuantities.billing.tollFreeNumbers
-                + billingQuantities.billing.smsPackages,
+                scaledBillingQuantity(
+                  billingQuantities.billing.extensions
+                  + billingQuantities.billing.virtualExtensions
+                  + billingQuantities.billing.phoneNumbers
+                  + billingQuantities.billing.tollFreeNumbers
+                  + billingQuantities.billing.smsPackages,
+                  periodFactor.monthCount,
+                ),
               taxProviderId: BILLING_TELECOM_FEES_PROVIDER_ID,
             })
           : [];
@@ -294,7 +414,7 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
               taxProfile && (taxProfile.state || taxProfile.county != null || taxProfile.name)
                 ? { state: taxProfile.state ?? null, county: taxProfile.county ?? null, profileName: taxProfile.name ?? null }
                 : null,
-            inputs: { taxableSubtotalCents, extensionCount: billingQuantities.billing.extensions },
+            inputs: { taxableSubtotalCents, extensionCount: scaledBillingQuantity(billingQuantities.billing.extensions, periodFactor.monthCount) },
             lines: feeLines.map((line) => ({
               type: line.type,
               description: line.description,
@@ -313,7 +433,7 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
         taxProfile: settings.taxProfile || null,
         taxProfileId: settings.taxProfileId || null,
         taxableSubtotalCents,
-        extensionCount: billingQuantities.billing.extensions,
+        extensionCount: scaledBillingQuantity(billingQuantities.billing.extensions, periodFactor.monthCount),
       });
   for (const line of taxResult.lines) {
     lineItems.push({
@@ -323,7 +443,15 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
       unitPriceCents: line.unitPriceCents,
       amountCents: line.amountCents,
       taxable: line.taxable,
-      metadata: line.metadata,
+      metadata: {
+        ...(line.metadata || {}),
+        ...billingPeriodMetadata({
+          periodStart: bounds.periodStart,
+          periodEnd: bounds.periodEnd,
+          monthCount: periodFactor.monthCount,
+          prorated: periodFactor.prorated,
+        }),
+      },
     });
   }
   const taxCents = taxResult.lines.reduce((sum, item) => sum + item.amountCents, 0);
@@ -357,6 +485,7 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
     periodStart: bounds.periodStart,
     periodEnd: bounds.periodEnd,
     dueDate,
+    billingPeriodFactor: periodFactor,
     usage,
     billingQuantities,
     lineItems,
@@ -376,6 +505,8 @@ export async function buildBillingInvoicePreview(input: {
   periodStart?: Date;
   periodEnd?: Date;
   dueDate?: Date;
+  billingMonthCount?: number;
+  prorate?: boolean;
 }): Promise<BillingInvoicePreview> {
   const settings = await ensureTenantBillingSettings(input.tenantId);
   return buildBillingInvoicePreviewWithLoadedSettings({
@@ -384,6 +515,8 @@ export async function buildBillingInvoicePreview(input: {
     periodStart: input.periodStart,
     periodEnd: input.periodEnd,
     dueDate: input.dueDate,
+    billingMonthCount: input.billingMonthCount,
+    prorate: input.prorate,
   });
 }
 
@@ -394,6 +527,8 @@ export async function buildBillingInvoicePreviewFromSettings(input: {
   periodStart?: Date;
   periodEnd?: Date;
   dueDate?: Date;
+  billingMonthCount?: number;
+  prorate?: boolean;
 }): Promise<BillingInvoicePreview> {
   return buildBillingInvoicePreviewWithLoadedSettings(input);
 }
@@ -403,6 +538,8 @@ export async function createBillingInvoice(input: {
   periodStart?: Date;
   periodEnd?: Date;
   dueDate?: Date;
+  billingMonthCount?: number;
+  prorate?: boolean;
   status?: "DRAFT" | "OPEN";
   /** Merged into `BillingEventLog` row for `invoice_created` (e.g. `{ source: "worker_monthly" }`). */
   invoiceCreatedEventMetadata?: Record<string, unknown>;
@@ -421,7 +558,10 @@ export async function createBillingInvoice(input: {
         taxCents: preview.taxCents,
         totalCents: preview.totalCents,
         balanceDueCents: preview.totalCents,
-        metadata: { taxCalculationAudit: preview.taxCalculationAudit },
+        metadata: {
+          taxCalculationAudit: preview.taxCalculationAudit,
+          billingPeriodFactor: preview.billingPeriodFactor,
+        },
         lineItems: {
           create: preview.lineItems.map((item) => ({
             tenantId: input.tenantId,
@@ -552,6 +692,8 @@ export async function createOneTimeChargeInvoice(input: {
   operatorNote?: string | null;
   invoiceMemo?: string | null;
   adminUserId?: string | null;
+  periodStart?: Date | null;
+  periodEnd?: Date | null;
 }): Promise<any> {
   if (input.amountCents < 1) {
     const err: any = new Error("INVALID_AMOUNT");
@@ -562,6 +704,8 @@ export async function createOneTimeChargeInvoice(input: {
   const termsDays = Number(settings?.paymentTermsDays ?? 15);
   const now = new Date();
   const dueDate = addBillingDays(now, termsDays);
+  const periodStart = input.periodStart || now;
+  const periodEnd = input.periodEnd || periodStart;
 
   const metadata: Record<string, unknown> = {
     source: "one_time_charge",
@@ -576,8 +720,8 @@ export async function createOneTimeChargeInvoice(input: {
         tenantId: input.tenantId,
         invoiceNumber,
         status: "OPEN",
-        periodStart: now,
-        periodEnd: now,
+        periodStart,
+        periodEnd,
         dueDate,
         subtotalCents: input.amountCents,
         taxCents: 0,
@@ -593,6 +737,11 @@ export async function createOneTimeChargeInvoice(input: {
             unitPriceCents: input.amountCents,
             amountCents: input.amountCents,
             taxable: false,
+            metadata: {
+              source: "manual_adjustment",
+              servicePeriodStart: periodStart.toISOString(),
+              servicePeriodEnd: periodEnd.toISOString(),
+            },
           }],
         },
       },

@@ -236,6 +236,14 @@ Monthly estimate uses **`computeTenantMonthlyEstimate`** with **billing** quanti
 
 **Disclaimer copy:** Suggested rates are not legal advice; confirm with a tax advisor.
 
+## Itemized telecom invoices (2026-05-21)
+
+- Connect invoices must explain every dollar charged. Avoid opaque catch-all descriptions such as "monthly service balance" for recurring service. Monthly invoices should be created through `createBillingInvoice` / `buildBillingInvoicePreview`, which persist normal `BillingInvoiceLineItem` rows for extensions, local DIDs, toll-free DIDs, SMS packages, discounts/credits, E911, sales tax, regulatory recovery, USF/surcharge/custom telecom fees, and manual adjustments where appropriate.
+- Totals must reconcile from line items: `subtotalCents`, `taxCents`, and `totalCents` are derived from `lineItems[].amountCents` in `invoiceEngine.ts`. PDF/admin/customer rendering should display line item type, quantity, unit price, service period metadata, taxes/fees, and grand total instead of recomputing hidden amounts in the UI.
+- Editable service periods are represented by `BillingInvoice.periodStart` / `periodEnd` plus line item metadata: `servicePeriodStart`, `servicePeriodEnd`, `billingMonthCount`, `prorated`, and base monthly quantity/price fields when a recurring line is scaled.
+- Admin monthly invoice creation accepts an optional billing period payload on `POST /admin/billing/tenants/:tenantId/invoices`: `serviceStartDate`, `serviceEndDate`, `billingMonthCount`, and `prorate`. If omitted, the tenant's configured billing schedule is used.
+- Multi-month invoices scale recurring extension/DID/SMS service lines before tax/fee calculation. Integer month counts multiply quantities (for example, 2 extensions x 3 months = quantity 6 at the monthly unit price). Prorated periods keep integer quantities and prorate amounts/unit display, with the exact factor stored in metadata.
+
 ## Customer billing portal — page inventory
 
 Customer-facing pages under `apps/portal/app/(platform)/billing/`. All use tenant routes (`/billing/…`) only.

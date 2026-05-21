@@ -62,10 +62,12 @@ export function registerBillingPublicPayRoutes(app: FastifyInstance) {
       dueDate: invoice.dueDate,
       issueDate: invoice.issueDate,
       lineItems: (invoice.lineItems || []).map((li: any) => ({
+        type: li.type,
         description: li.description,
         quantity: li.quantity,
-        unitAmountCents: li.unitAmountCents,
+        unitPriceCents: li.unitPriceCents,
         amountCents: li.amountCents,
+        metadata: li.metadata || null,
       })),
     };
   });

@@ -25,6 +25,7 @@ type InvoiceLineItem = {
   quantity?: number | string | null;
   unitPriceCents?: number | null;
   amountCents?: number | null;
+  metadata?: Record<string, unknown> | null;
 };
 
 type TotalRow = {
@@ -121,16 +122,34 @@ function displayLineItemDescription(value: unknown): string {
   return String(value || "Billing item").replace(/\bbillable\s+extensions\b/gi, "Extensions");
 }
 
+function displayLineType(value: unknown): string {
+  return String(value || "ITEM").replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function displayServicePeriod(metadata: InvoiceLineItem["metadata"]): string | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const start = metadata.servicePeriodStart;
+  const end = metadata.servicePeriodEnd;
+  if (!start || !end) return null;
+  return `${formatDateShort(String(start))} - ${formatDateShort(String(end))}`;
+}
+
 function buildTotalsRows(invoice: any, lineItems: InvoiceLineItem[]): TotalRow[] {
-  const subtotal = Number(invoice.subtotalCents ?? 0);
-  const total = Number(invoice.totalCents ?? 0);
+  const subtotal = lineItems
+    .filter((item) => {
+      const kind = classifyLineItem(item);
+      return kind === "default" || kind === "credit";
+    })
+    .reduce((sum, item) => sum + Number(item.amountCents || 0), 0);
+  const total = lineItems.length
+    ? lineItems.reduce((sum, item) => sum + Number(item.amountCents || 0), 0)
+    : Number(invoice.totalCents ?? 0);
   const balance = Number(invoice.balanceDueCents ?? total);
-  const taxFromInvoice = Number(invoice.taxCents ?? 0);
   const paid = Math.max(0, Number(invoice.amountPaidCents ?? 0), total - balance);
   const fees = lineItems
     .filter((item) => classifyLineItem(item) === "fee")
     .reduce((sum, item) => sum + Math.max(0, Number(item.amountCents || 0)), 0);
-  const taxes = taxFromInvoice || lineItems
+  const taxes = lineItems
     .filter((item) => classifyLineItem(item) === "tax")
     .reduce((sum, item) => sum + Math.max(0, Number(item.amountCents || 0)), 0);
 
@@ -406,7 +425,7 @@ export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
     const descW = qtyX - descX - 18;
     doc.roundedRect(tableX, y, tableW, 27, 6).fillAndStroke(panel, line);
     doc.fillColor(muted).font(FONT_SEMIBOLD).fontSize(7.5);
-    doc.text("DESCRIPTION", descX, y + 10, { width: descW });
+    doc.text("ITEM / SERVICE PERIOD", descX, y + 10, { width: descW });
     doc.text("QTY", qtyX, y + 10, { width: qtyW, align: "right" });
     doc.text("UNIT PRICE", rateX, y + 10, { width: rateW, align: "right" });
     doc.text("AMOUNT", amtX, y + 10, { width: amtW, align: "right" });
@@ -415,10 +434,12 @@ export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
     for (const item of lineItems) {
       y = ensureSpace(doc, y, 34);
       const description = displayLineItemDescription(item.description);
-      const descriptionH = textHeight(doc, description, descW, 8.6, FONT_SEMIBOLD, 1);
-      const rowH = Math.max(28, descriptionH + 14);
+      const metaLine = [displayLineType(item.type), displayServicePeriod(item.metadata)].filter(Boolean).join(" · ");
+      const descriptionH = textHeight(doc, description, descW, 8.6, FONT_SEMIBOLD, 1) + (metaLine ? 10 : 0);
+      const rowH = Math.max(32, descriptionH + 14);
       doc.moveTo(tableX, y).lineTo(tableRight, y).strokeColor(lightLine).lineWidth(0.7).stroke();
       doc.fillColor(ink).font(FONT_SEMIBOLD).fontSize(8.6).text(description, descX, y + 10, { width: descW, lineGap: 1 });
+      if (metaLine) doc.fillColor(muted).font(FONT_REGULAR).fontSize(7.1).text(metaLine, descX, doc.y + 2, { width: descW, lineGap: 0.7 });
       doc.fillColor(ink).font(FONT_REGULAR).fontSize(8.3).text(String(item.quantity ?? 1), qtyX, y + 10, { width: qtyW, align: "right" });
       doc.text(money(item.unitPriceCents ?? 0), rateX, y + 10, { width: rateW, align: "right" });
       doc.fillColor(ink).font(FONT_SEMIBOLD).fontSize(8.3).text(money(item.amountCents ?? 0), amtX, y + 10, { width: amtW, align: "right" });

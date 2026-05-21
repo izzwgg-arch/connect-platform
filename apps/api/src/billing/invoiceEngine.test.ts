@@ -598,6 +598,55 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   assert.equal(feePreview.taxCents, 1090);
   assert.equal(feePreview.totalCents, 4090);
 
+  // ── Itemized multi-month and prorated service periods ─────────────────────
+  db.extension.findMany = async () => [
+    { id: "e1", extNumber: "101", displayName: "Sales" },
+    { id: "e2", extNumber: "102", displayName: "Support" },
+  ];
+  phoneNumberRows = [];
+  state.settings.taxEnabled = false;
+  state.settings.taxProfile = null;
+  state.settings.taxProfileId = null;
+  state.settings.discountPercent = 0;
+  state.settings.metadata = {};
+  state.settings.extensionPriceCents = 3000;
+
+  const singleMonth = await buildBillingInvoicePreview({
+    tenantId: "tenant-z",
+    periodStart: new Date("2028-01-01T05:00:00.000Z"),
+    periodEnd: new Date("2028-02-01T04:59:59.999Z"),
+    billingMonthCount: 1,
+  });
+  assert.equal(singleMonth.lineItems.find((l) => l.type === "EXTENSION")?.amountCents, 6000);
+  assert.equal(singleMonth.totalCents, singleMonth.lineItems.reduce((sum, l) => sum + l.amountCents, 0));
+
+  const multiMonth = await buildBillingInvoicePreview({
+    tenantId: "tenant-z",
+    periodStart: new Date("2028-01-01T05:00:00.000Z"),
+    periodEnd: new Date("2028-04-01T03:59:59.999Z"),
+    billingMonthCount: 3,
+  });
+  const multiExt = multiMonth.lineItems.find((l) => l.type === "EXTENSION");
+  assert.equal(multiExt?.quantity, 6, "2 extensions × 3 months must be transparent in line quantity");
+  assert.equal(multiExt?.unitPriceCents, 3000);
+  assert.equal(multiExt?.amountCents, 18000);
+  assert.equal(multiExt?.metadata?.billingMonthCount, 3);
+  assert.equal(multiExt?.metadata?.servicePeriodStart, "2028-01-01T05:00:00.000Z");
+  assert.equal(multiMonth.totalCents, multiMonth.lineItems.reduce((sum, l) => sum + l.amountCents, 0));
+
+  const prorated = await buildBillingInvoicePreview({
+    tenantId: "tenant-z",
+    periodStart: new Date("2028-01-15T05:00:00.000Z"),
+    periodEnd: new Date("2028-02-01T04:59:59.999Z"),
+    billingMonthCount: 0.5,
+    prorate: true,
+  });
+  const proratedExt = prorated.lineItems.find((l) => l.type === "EXTENSION");
+  assert.equal(proratedExt?.quantity, 2);
+  assert.equal(proratedExt?.amountCents, 3000, "2 extensions × $30 × 0.5 month");
+  assert.equal(proratedExt?.metadata?.prorated, true);
+  assert.equal(prorated.totalCents, prorated.lineItems.reduce((sum, l) => sum + l.amountCents, 0));
+
   // Reset state
   state.settings.extensionPriceCents = 3000;
   state.settings.billingPlan = null;

@@ -20,6 +20,12 @@ Billing note: `apps/api/src/billing/routes.ts` uses `resolveBillingGatewayConfig
 `apps/api/src/billing/solaGateway.ts` for effective Cardknox/SOLA status and live-charge guards
 with source precedence (tenant override -> main tenant -> env/global -> missing).
 
+Itemized invoice note: `POST /admin/billing/tenants/:tenantId/invoices` creates Connect-native
+`BillingInvoice` rows through `invoiceEngine.ts` and may accept optional JSON
+`serviceStartDate`, `serviceEndDate`, `billingMonthCount`, and `prorate`. Recurring totals must
+derive from persisted `BillingInvoiceLineItem.amountCents`; avoid creating opaque recurring
+manual-adjustment invoices for monthly service balances.
+
 ### Request profiling (CPU / hot routes)
 
 - **Prometheus:** histogram **`connect_api_request_duration_seconds`** (`method`, `route`, `status`) — see **`GET /metrics`** in `server.ts`.
