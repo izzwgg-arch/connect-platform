@@ -795,7 +795,7 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 - Keep invoice copy readable in grayscale: do not rely on color alone for status, totals, or fee categories.
 - The API PDF route uses `apps/api/src/billing/pdf.ts` and is the source for both authenticated PDF downloads and outbound billing email attachments.
 - The PDFKit renderer now mirrors the modern invoice structure with a neutral header, light balance card, billing parties, three-column metadata row, inward-aligned line-item table, compact billing summary, simplified regulatory notice cards, and professional footer.
-- PDFKit uses built-in PDF-safe Helvetica fonts in production because no Inter/font asset is bundled with billing. Spacing, slightly larger body sizes, bold amounts, semibold headings, uppercase labels, and hierarchy are tuned to approximate modern Inter-style SaaS typography without adding a runtime font dependency.
+- PDFKit registers the bundled Inter variable font from `apps/api/src/billing/assets/InterVariable.ttf` as the invoice sans face, with Helvetica as the emergency fallback. Spacing, larger body sizes, bold amounts, semibold headings, uppercase labels, and hierarchy are tuned for a modern SaaS invoice look.
 - Pagination safeguards call `ensureSpace` before tall sections and line item rows. Long descriptions wrap inside the description column and should not overlap amount columns or totals. If invoices have many rows, notices/footer may continue to page 2; do not force all content onto page 1.
 
 **Verification:**
