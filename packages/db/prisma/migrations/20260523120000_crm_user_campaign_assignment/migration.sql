@@ -1,4 +1,4 @@
-﻿-- CreateTable
+-- CreateTable
 CREATE TABLE "CrmUserCampaignAssignment" (
     "id" TEXT NOT NULL,
     "tenantId" TEXT NOT NULL,
