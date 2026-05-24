@@ -1044,6 +1044,50 @@
   }
 }
 
+/* Phase 19G — live wallboard: theme-aware (light integrates with portal; dark keeps TV command center) */
+:root[data-theme="dark"] .crm-wallboard-workspace,
+:root:not([data-theme="light"]) .crm-wallboard-workspace {
+  color-scheme: dark;
+  --crm-bg: #101923;
+  --crm-surface: #141f2b;
+  --crm-surface-2: #1a2635;
+  --crm-border: #26374a;
+  --crm-text: #e1e9f1;
+  --crm-text-muted: #8ea0b2;
+  --crm-accent: #22a8ff;
+  --crm-success: #34c27b;
+  --crm-warning: #f0b655;
+  --crm-danger: #ea6068;
+  --crm-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
+:root[data-theme="light"] .crm-wallboard-workspace {
+  color-scheme: light;
+  --crm-bg: #f4f7fb;
+  --crm-surface: #ffffff;
+  --crm-surface-2: #f8fafc;
+  --crm-border: rgba(15, 23, 42, 0.1);
+  --crm-text: #0f172a;
+  --crm-text-muted: #64748b;
+  --crm-accent: #0284c7;
+  --crm-success: #16a34a;
+  --crm-warning: #d97706;
+  --crm-danger: #dc2626;
+  --crm-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 8px 24px -8px rgba(15, 23, 42, 0.08);
+  background:
+    radial-gradient(ellipse 100% 70% at 50% -15%, rgba(56, 189, 248, 0.07), transparent 52%),
+    radial-gradient(ellipse 60% 50% at 100% 0%, rgba(99, 102, 241, 0.04), transparent 45%),
+    linear-gradient(180deg, #f6f8fb 0%, #eef2f7 100%);
+}
+
+:root[data-theme="light"] .crm-wallboard-workspace .shadow-crm {
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 10px 28px -10px rgba(15, 23, 42, 0.08);
+}
+
 /* Phase 19D.3 — contacts index: theme-aware (light integrates with portal; dark keeps 19D.1/19D.2 premium) */
 :root[data-theme="dark"] .crm-contacts-workspace,
 :root:not([data-theme="light"]) .crm-contacts-workspace {

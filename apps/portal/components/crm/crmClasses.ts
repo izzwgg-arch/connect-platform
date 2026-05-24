@@ -151,9 +151,8 @@ export const crm = {
   /** Phase 19F — live call agent workspace */
   pageInnerLive:
     "mx-auto w-full max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8 flex flex-col gap-4 min-h-0",
-  /** Phase 19G — wallboard command center forces dark CRM tokens even when portal data-theme=light */
-  wallboardWorkspace:
-    "crm-wallboard-workspace [color-scheme:dark] [--panel:#141f2b] [--panel-2:#1a2635] [--bg-soft:#101923] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#141f2b] [--crm-surface-2:#1a2635] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",
+  /** Phase 19G — live wallboard; theme tokens via globals `.crm-wallboard-workspace` */
+  wallboardWorkspace: "crm-wallboard-workspace w-full min-h-0",
   /** Phase 19K — CRM Intelligence reports workspace (full dark, no light surfaces) */
   reportsWorkspace:
     "crm-reports-workspace [color-scheme:dark] [--panel:#141f2b] [--panel-2:#1a2635] [--bg-soft:#101923] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#141f2b] [--crm-surface-2:#1a2635] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",

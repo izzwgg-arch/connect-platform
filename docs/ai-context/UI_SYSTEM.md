@@ -366,16 +366,16 @@ Reports, wallboard: migrate opportunistically.
 
 | Zone | Pattern |
 |------|---------|
-| Shell | `crm.wallboardWorkspace` + inline `background: var(--crm-bg, var(--bg-soft, #101923))` — forces dark tokens even when portal `data-theme=light` |
+| Shell | `crm.wallboardWorkspace` + `background: var(--crm-bg)` — theme-aware via `globals.css` (light frosted panels; dark TV command center) |
 | Header | Sticky `bg-crm-surface/95 backdrop-blur-sm border-b border-crm-border`; icon box + title + live WS chip + urgent chip; right: countdown, last-updated, Refresh (`crm.btnGhost`), TV Mode (`crm.btnSecondary`) |
 | KPI strip | 8-column responsive grid of `WallboardKpiTile` — `text-3xl` normal / `text-5xl` TV; `tone="danger|warn|positive|neutral"` tinted border; no blue gradient banner |
 | Panels | `WallboardPanel` — `border-crm-border bg-crm-surface shadow-crm`; panel headers `bg-crm-surface-2/30 border-b border-crm-border` |
 | Agent leaderboard | Visual bar rows — disposition bar (`bg-crm-accent`), callbacks-due bar (`bg-crm-warning`), queue bar (`bg-crm-muted/30`); normalized against team max. No spreadsheet table. |
 | Campaign progress | Segmented bar: contacted/callbacks/converted/DNC with CSS `transition-[width] duration-300`; dark `bg-crm-surface-2` track |
 | Follow-up urgency | `CRMRingMetric` pair (callback + task pressure) when urgent; "All caught up" `bg-crm-success/8` banner when zero; 4-tile count grid + actionable rows |
-| TV mode | `fixed inset-0 z-50` overlay per Rule 77 — large center clock, same KPI/panel layout, `crm.wallboardWorkspace` dark tokens throughout |
+| TV mode | `fixed inset-0 z-50` overlay per Rule 77 — large center clock, same KPI/panel layout, respects active portal theme |
 
-**Token:** `crm.wallboardWorkspace` added to `crmClasses.ts` — same override pattern as `crm.campaignWorkspace`.
+**Token:** `crm.wallboardWorkspace` in `crmClasses.ts` — scoped theme tokens in `globals.css` (same pattern as `crm.contactsWorkspace`).
 
 **No light surfaces:** never `bg-white`, `bg-gray-50`, `bg-gray-100`, or ad-hoc `gray-800/900`. All panels use `--crm-surface` / `--crm-border`.
 

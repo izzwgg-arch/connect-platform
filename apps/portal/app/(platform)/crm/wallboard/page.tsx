@@ -293,7 +293,7 @@ function AgentBadge({ flag, tv }: { flag: AgentStatusFlag; tv?: boolean }) {
   }
   if (flag === "no-outcomes") {
     return (
-      <span className={`inline-flex items-center gap-1 rounded-full font-semibold border bg-amber-500/12 text-amber-400 border-amber-500/25 ${sz}`}>
+      <span className={`inline-flex items-center gap-1 rounded-full font-semibold border bg-crm-warning/12 text-crm-warning border-crm-warning/25 ${sz}`}>
         <Clock className="h-3 w-3 shrink-0" /> No outcomes today
       </span>
     );
@@ -562,16 +562,16 @@ function CampaignProgressPanel({ campaigns, tv }: { campaigns: CampaignRow[]; tv
                 {/* Segmented progress bar */}
                 <div className={`w-full ${tv ? "h-2.5" : "h-2"} bg-crm-surface-2 rounded-full overflow-hidden mb-2.5`}>
                   <div className="flex h-full">
-                    <div style={{ width: `${c.total > 0 ? (c.contacted / c.total) * 100 : 0}%` }} className="bg-purple-500 transition-[width] duration-300" />
-                    <div style={{ width: `${c.total > 0 ? (c.callbacks / c.total) * 100 : 0}%` }} className="bg-amber-400 transition-[width] duration-300" />
+                    <div style={{ width: `${c.total > 0 ? (c.contacted / c.total) * 100 : 0}%` }} className="bg-crm-accent/70 transition-[width] duration-300" />
+                    <div style={{ width: `${c.total > 0 ? (c.callbacks / c.total) * 100 : 0}%` }} className="bg-crm-warning transition-[width] duration-300" />
                     <div style={{ width: `${c.total > 0 ? (c.converted / c.total) * 100 : 0}%` }} className="bg-crm-success transition-[width] duration-300" />
                     <div style={{ width: `${c.total > 0 ? (c.dnc / c.total) * 100 : 0}%` }} className="bg-crm-border/60 transition-[width] duration-300" />
                   </div>
                 </div>
                 <div className={`flex flex-wrap gap-3 ${tv ? "text-sm" : "text-xs"} text-crm-muted`}>
                   <span><span className="font-semibold text-crm-text">{c.pending}</span> pending</span>
-                  <span><span className="font-semibold text-purple-400">{c.contacted}</span> contacted</span>
-                  <span><span className="font-semibold text-amber-400">{c.callbacks}</span> callbacks</span>
+                  <span><span className="font-semibold text-crm-accent">{c.contacted}</span> contacted</span>
+                  <span><span className="font-semibold text-crm-warning">{c.callbacks}</span> callbacks</span>
                   <span><span className="font-semibold text-crm-success">{c.converted}</span> converted</span>
                   {c.dnc > 0 && <span><span className="font-semibold text-crm-muted">{c.dnc}</span> DNC</span>}
                   <span className="text-crm-muted/50">· {c.total} total</span>
@@ -707,7 +707,7 @@ function FollowUpUrgencyPanel({ data, tv }: { data: FollowUpsReport; tv?: boolea
               href={item.href}
               className={`flex items-center gap-3 px-5 ${tv ? "py-3.5" : "py-2.5"} hover:bg-crm-surface-2/20 group transition-colors`}
             >
-              <span className={`rounded-full shrink-0 ${item.isOverdue ? "bg-crm-danger" : "bg-amber-400"} ${tv ? "w-2.5 h-2.5" : "w-2 h-2"}`} />
+              <span className={`rounded-full shrink-0 ${item.isOverdue ? "bg-crm-danger" : "bg-crm-warning"} ${tv ? "w-2.5 h-2.5" : "w-2 h-2"}`} />
               <div className="flex-1 min-w-0">
                 <div className={`font-semibold text-crm-text group-hover:text-crm-accent truncate transition-colors ${tv ? "text-base" : "text-sm"}`}>
                   {item.label}
@@ -846,7 +846,7 @@ export default function WallboardPage() {
     return (
       <div
         className={`${crm.wallboardWorkspace} min-h-screen flex items-center justify-center ${tvMode ? "fixed inset-0 z-50" : ""}`}
-        style={{ background: "var(--crm-bg, var(--bg-soft, #101923))" }}
+        style={{ background: "var(--crm-bg)" }}
       >
         <div className="text-center text-crm-muted">
           <LayoutGrid className="h-12 w-12 mx-auto mb-3 text-crm-border animate-pulse" />
@@ -862,7 +862,7 @@ export default function WallboardPage() {
     return (
       <div
         className={`${crm.wallboardWorkspace} min-h-screen flex items-center justify-center ${tvMode ? "fixed inset-0 z-50" : ""}`}
-        style={{ background: "var(--crm-bg, var(--bg-soft, #101923))" }}
+        style={{ background: "var(--crm-bg)" }}
       >
         <div className="text-center max-w-sm px-4">
           <AlertCircle className="h-10 w-10 mx-auto mb-3 text-crm-danger" />
@@ -938,7 +938,7 @@ export default function WallboardPage() {
     return (
       <div
         className={`fixed inset-0 z-50 overflow-auto ${crm.wallboardWorkspace}`}
-        style={{ background: "var(--crm-bg, var(--bg-soft, #101923))" }}
+        style={{ background: "var(--crm-bg)" }}
       >
         {/* TV Header */}
         <div className="border-b border-crm-border bg-crm-surface">
@@ -1012,7 +1012,7 @@ export default function WallboardPage() {
   return (
     <div
       className={`min-h-screen ${crm.wallboardWorkspace}`}
-      style={{ background: "var(--crm-bg, var(--bg-soft, #101923))" }}
+      style={{ background: "var(--crm-bg)" }}
     >
       {/* Sticky header */}
       <div className="sticky top-0 z-10 border-b border-crm-border bg-crm-surface/95 backdrop-blur-sm">

@@ -554,9 +554,10 @@
     - This is read-only. Do not add any telephony control action to the on-call row.
     - The extension lookup is a single `findMany` scoped to `{ tenantId, ownerUserId: { in: userIds }, status: "ACTIVE" }` — bounded, no N+1.
 
-93. **Wallboard surfaces must always use dark CRM tokens — no light-mode cards or ad-hoc `gray-*` surfaces. (Phase 19G)**
-    - The wallboard page must apply `crm.wallboardWorkspace` on its root element so dark CSS vars
-      override the portal light theme. Never use `bg-white`, `bg-gray-50`, `bg-gray-100`, or ad-hoc
+93. **Wallboard surfaces must use CRM theme tokens — no ad-hoc `gray-*` surfaces. (Phase 19G)**
+    - The wallboard page must apply `crm.wallboardWorkspace` on its root element so CRM CSS vars
+      follow portal `data-theme` (light = frosted panels; dark = TV command center). Never use
+      `bg-white`, `bg-gray-50`, `bg-gray-100`, or ad-hoc
       `bg-gray-800/bg-gray-900` Tailwind classes on wallboard panels or the page background.
     - All wallboard panels use `WallboardPanel` (or equivalent `border-crm-border bg-crm-surface`
       surface). Page background is `var(--crm-bg, var(--bg-soft, #101923))`.
