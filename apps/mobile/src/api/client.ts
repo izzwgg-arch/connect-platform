@@ -381,8 +381,18 @@ export async function getChatThreads(token: string): Promise<ChatThread[]> {
   return Array.isArray(json?.threads) ? (json.threads as ChatThread[]) : [];
 }
 
-export async function getMessages(token: string, threadId: string): Promise<ChatMessage[]> {
-  const res = await fetch(`${API_BASE}/chat/threads/${encodeURIComponent(threadId)}/messages`, {
+export async function getMessages(
+  token: string,
+  threadId: string,
+  opts: { before?: string; after?: string; since?: string; limit?: number } = {},
+): Promise<ChatMessage[]> {
+  const params = new URLSearchParams();
+  if (opts.before) params.set("before", opts.before);
+  if (opts.after) params.set("after", opts.after);
+  if (!opts.after && opts.since) params.set("since", opts.since);
+  if (opts.limit) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  const res = await fetch(`${API_BASE}/chat/threads/${encodeURIComponent(threadId)}/messages${qs ? `?${qs}` : ""}` , {
     headers: { Authorization: `Bearer ${token}` },
   });
   const json = await parseJson(res);

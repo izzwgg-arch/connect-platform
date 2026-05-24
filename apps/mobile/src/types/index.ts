@@ -164,7 +164,7 @@ export type ContactsResponse = {
   stats: { total: number; internalExtensions: number; external: number; companies: number; favorites: number };
 };
 
-export type ChatThreadType = "SMS" | "DM" | "GROUP" | "TENANT_GROUP";
+export type ChatThreadType = "SMS" | "DM" | "GROUP" | "TENANT_GROUP" | "WHATSAPP";
 export type ChatMessageType = "TEXT" | "IMAGE" | "VIDEO" | "AUDIO" | "VOICE_NOTE" | "FILE" | "LOCATION" | "SYSTEM";
 
 export type ChatThread = {

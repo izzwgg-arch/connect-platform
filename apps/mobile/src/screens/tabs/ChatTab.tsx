@@ -305,6 +305,7 @@ export function ChatTab() {
   const [recording, setRecording] = useState(false);
   const [toast, setToast] = useState('');
   const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
+  const [mediaLinkError, setMediaLinkError] = useState(false);
 
   const threadsQuery = useQuery({
     queryKey: mobileQueryKeys.chatThreads,
@@ -576,9 +577,17 @@ export function ChatTab() {
       await queryClient.invalidateQueries({ queryKey: mobileQueryKeys.chatMessages(activeThread.id) });
       await queryClient.invalidateQueries({ queryKey: mobileQueryKeys.chatThreads });
       if (sent.deliveryStatus === 'queued') showToast('Message queued.');
+      setMediaLinkError(false);
     } catch (err: any) {
-      setLocalMessages((current) => current.map((m) => m.id === localId ? { ...m, clientStatus: 'failed', deliveryError: err?.message || 'Send failed' } : m));
-      showToast(err?.message || 'Message failed. Tap retry.');
+      const msg = String(err?.message || '');
+      if (msg === 'MEDIA_LINK_BASE_UNAVAILABLE') {
+        setMediaLinkError(true);
+        setLocalMessages((current) => current.filter((m) => m.id !== localId));
+        showToast('Cannot send media over SMS.');
+      } else {
+        setLocalMessages((current) => current.map((m) => m.id === localId ? { ...m, clientStatus: 'failed', deliveryError: msg || 'Send failed' } : m));
+        showToast(msg || 'Message failed. Tap retry.');
+      }
     }
   }, [activeThread, draft, pendingAttachments, queryClient, replyingTo, showToast, token]);
 
@@ -906,6 +915,8 @@ export function ChatTab() {
               alwaysBounceVertical={false}
               overScrollMode="never"
               contentContainerStyle={styles.messageList}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
               onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
               initialNumToRender={18}
               maxToRenderPerBatch={12}
@@ -929,6 +940,12 @@ export function ChatTab() {
               }}
             />
           )}
+          {mediaLinkError && activeThread?.type === 'SMS' ? (
+            <View style={[styles.inThreadSearch, { backgroundColor: colors.dangerMuted, borderColor: colors.danger }]}> 
+              <Ionicons name="alert-circle" size={16} color={colors.danger} />
+              <Text style={[styles.searchInput, { color: colors.dangerText }]} numberOfLines={2}>Cannot send media over SMS. Ask admin to set PUBLIC_API_BASE_URL.</Text>
+            </View>
+          ) : null}
           <Composer
             draft={draft}
             onDraft={handleDraftChange}

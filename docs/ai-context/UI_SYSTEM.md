@@ -453,6 +453,21 @@ pnpm exec tsc -p apps/portal --noEmit
 
 ---
 
+## Mobile — Chat UI patterns (addendum)
+
+Scope: mobile chat tab (`apps/mobile/src/screens/tabs/ChatTab.tsx`). Not a redesign — operational polish.
+
+- Composer
+  - Voice-note mic uses slide-to-cancel; shows recording bar with timer. Keep max 3 attachments queued.
+  - Retry affordance re-uploads from local URIs; when original files are gone, the app prompts to pick again.
+  - SMS media fallback: if the API returns `MEDIA_LINK_BASE_UNAVAILABLE`, show a small inline danger banner above the composer with guidance (admin must set `PUBLIC_API_BASE_URL`). Do not spam toasts.
+- Message list
+  - Keyboard behavior: `keyboardShouldPersistTaps="handled"`, `keyboardDismissMode='interactive'|'on-drag'` to avoid focus flicker with long lists.
+  - Keep chronological render; initial scroll-to-end after load; group consecutive bubbles from same sender.
+- Unread/thread list
+  - Use server-provided `unread` counts; avoid per-thread recompute on the client.
+
+
 ## Customer billing workspace (Premium SaaS light-first)
 
 Scope: pages under `apps/portal/app/(platform)/billing/*` that are customer-facing (not Admin Billing). These pages intentionally adopt a premium finance-dashboard look and are light-mode by default.

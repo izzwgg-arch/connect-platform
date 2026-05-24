@@ -9,6 +9,20 @@
 ### Chat (tenant-scoped view)
 
 - `GET /chat/threads` and `GET /chat/threads/:threadId/messages` allow tenant-wide read-only viewing when the user holds `can_view_tenant_chats`. Without it, users only see threads they participate in. Sending/moderation permissions are unchanged.
+
+Chat route notes (2026-05-24):
+
+- `GET /chat/threads`
+  - Cheap self-heal ensures the tenant default group exists and the current user is a member. No per-request full-tenant upsert.
+  - Unread counts are aggregated in one query per list, not per-thread (avoids N+1 counting on mobile/thread list).
+- `GET /chat/threads/:threadId/messages` supports pagination and deltas without changing the default behavior:
+  - Default: oldest-first, up to 200 rows (unchanged).
+  - Query params:
+    - `?before=<ISO>`: fetch older messages strictly before timestamp; returns newest-first internally, normalized to oldest-first in the response (client receives chronological order).
+    - `?after=<ISO>`: fetch messages strictly after timestamp; oldest-first.
+    - `?since=<ISO>`: alias for `after` when `after` is not supplied (useful for delta polling).
+    - `?limit=<1..200>`: max rows (cap 200).
+  - Soft-deleted-for-user rows are filtered out server-side.
 # API Route Inventory — `apps/api/src/server.ts`
 
 > **Purpose:** Let agents jump to the right ~50-line slice of `server.ts`
