@@ -90,6 +90,7 @@ const updateSettingsSchema = z.object({
 const updateUserAccessSchema = z.object({
   enabled: z.boolean().optional(),
   role: z.enum(["AGENT", "MANAGER", "ADMIN"]).optional(),
+  campaignIds: z.array(z.string().min(1)).max(100).optional(),
 });
 
 // ── Route registrar ───────────────────────────────────────────────────────────
@@ -202,6 +203,61 @@ export async function registerCrmRoutes(app: FastifyInstance) {
     };
   });
 
+  // ── GET /crm/users/:userId ─────────────────────────────────────────────────
+  // Returns CRM access + campaign assignments for one tenant user. Admin-only.
+  app.get("/crm/users/:userId", async (req, reply) => {
+    const user = await requireAdmin(req, reply);
+    if (!user) return;
+
+    const tenantId = user.tenantId;
+    if (!tenantId) return reply.status(400).send({ error: "no_tenant" });
+
+    const { userId } = req.params as { userId: string };
+
+    const targetUser = await db.user.findFirst({
+      where: { id: userId, tenantId },
+      select: { id: true, email: true, firstName: true, lastName: true, displayName: true, role: true },
+    });
+    if (!targetUser) {
+      return reply.status(404).send({ error: "user_not_found" });
+    }
+
+    const [access, assignments, campaigns] = await Promise.all([
+      db.crmUserAccess.findUnique({
+        where: { tenantId_userId: { tenantId, userId } },
+        select: { enabled: true, role: true },
+      }),
+      db.crmUserCampaignAssignment.findMany({
+        where: { tenantId, userId },
+        select: { campaignId: true },
+      }),
+      db.crmCampaign.findMany({
+        where: { tenantId, status: { not: "ARCHIVED" } },
+        orderBy: { name: "asc" },
+        select: { id: true, name: true, status: true },
+      }),
+    ]);
+
+    const assignedIds = new Set(assignments.map((a) => a.campaignId));
+
+    return {
+      userId: targetUser.id,
+      email: targetUser.email,
+      displayName: targetUser.displayName || targetUser.firstName || targetUser.email,
+      systemRole: targetUser.role,
+      crmEnabled: access?.enabled ?? false,
+      crmRole: access?.role ?? null,
+      hasAccess: !!access,
+      assignedCampaignIds: [...assignedIds],
+      campaigns: campaigns.map((c) => ({
+        id: c.id,
+        name: c.name,
+        status: c.status,
+        assigned: assignedIds.has(c.id),
+      })),
+    };
+  });
+
   // ── PUT /crm/users/:userId ─────────────────────────────────────────────────
   // Upserts CRM access for a specific user. Admin-only.
   // Use enabled:false to revoke access without deleting the row.
@@ -229,24 +285,64 @@ export async function registerCrmRoutes(app: FastifyInstance) {
     }
 
     const data = parsed.data;
-    const access = await db.crmUserAccess.upsert({
-      where: { tenantId_userId: { tenantId, userId } },
-      create: {
-        tenantId,
-        userId,
-        enabled: data.enabled ?? true,
-        role: data.role ?? "AGENT",
-      },
-      update: {
-        ...(data.enabled !== undefined && { enabled: data.enabled }),
-        ...(data.role !== undefined && { role: data.role }),
-      },
+    const campaignIds = Array.from(new Set(data.campaignIds ?? []));
+
+    if (campaignIds.length) {
+      const valid = await db.crmCampaign.findMany({
+        where: { id: { in: campaignIds }, tenantId },
+        select: { id: true },
+      });
+      const validIds = new Set(valid.map((c) => c.id));
+      const invalidIds = campaignIds.filter((cid) => !validIds.has(cid));
+      if (invalidIds.length) {
+        return reply.status(400).send({
+          error: "invalid_campaign",
+          detail: "One or more campaigns do not belong to this tenant.",
+          campaignIds: invalidIds,
+        });
+      }
+    }
+
+    const access = await db.$transaction(async (tx) => {
+      const row = await tx.crmUserAccess.upsert({
+        where: { tenantId_userId: { tenantId, userId } },
+        create: {
+          tenantId,
+          userId,
+          enabled: data.enabled ?? true,
+          role: data.role ?? "AGENT",
+        },
+        update: {
+          ...(data.enabled !== undefined && { enabled: data.enabled }),
+          ...(data.role !== undefined && { role: data.role }),
+        },
+      });
+
+      if (data.campaignIds !== undefined) {
+        await tx.crmUserCampaignAssignment.deleteMany({ where: { tenantId, userId } });
+        const enabled = data.enabled !== undefined ? data.enabled : row.enabled;
+        if (enabled && campaignIds.length) {
+          await tx.crmUserCampaignAssignment.createMany({
+            data: campaignIds.map((campaignId) => ({ tenantId, userId, campaignId })),
+          });
+        }
+      } else if (data.enabled === false) {
+        await tx.crmUserCampaignAssignment.deleteMany({ where: { tenantId, userId } });
+      }
+
+      return row;
+    });
+
+    const assignments = await db.crmUserCampaignAssignment.findMany({
+      where: { tenantId, userId },
+      select: { campaignId: true },
     });
 
     return {
       userId: access.userId,
       enabled: access.enabled,
       role: access.role,
+      assignedCampaignIds: assignments.map((a) => a.campaignId),
     };
   });
 

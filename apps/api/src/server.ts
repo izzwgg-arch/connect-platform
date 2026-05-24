@@ -110,6 +110,7 @@ import * as fs from "node:fs";
 import { registerConnectChatRoutes } from "./connectChatRoutes";
 import { registerCrmRoutes } from "./crm/routes";
 import { fireCrmCdrHook } from "./crm/cdrHook";
+import { registerAdminUserCrmAccessRoutes } from "./admin/userCrmAccessRoutes";
 import { registerBillingRoutes } from "./billing/routes";
 import { extractBillingInvoiceIdFromEmailJob, loadBillingInvoicePdfAttachmentForEmailJob } from "./billing/billingEmailAttachments";
 import { applySolaWebhookToBillingInvoice, resolvePlatformBillingInvoiceForWebhookRef } from "./billing/solaBillingPayments";
@@ -5365,6 +5366,13 @@ app.put("/admin/users/:id/outbound-routes", async (req, reply) => {
     metadata: { routeIds, defaultRouteId },
   });
   return { ok: true, userId: target.id, tenantId: target.tenantId, routeIds, defaultRouteId };
+});
+
+registerAdminUserCrmAccessRoutes(app, {
+  requirePermission,
+  canManageUsers,
+  resolveAdminTargetUser,
+  audit,
 });
 
 app.patch("/admin/users/:id", async (req, reply) => {

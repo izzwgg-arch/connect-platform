@@ -144,6 +144,7 @@ export default function AdminUsersPage() {
   const [data, setData] = useState<UsersResponse | null>(null);
   const [selected, setSelected] = useState<AdminUser | null>(null);
   const [routeUser, setRouteUser] = useState<AdminUser | null>(null);
+  const [crmUser, setCrmUser] = useState<AdminUser | null>(null);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<AdminUser | null>(null);
   const [message, setMessage] = useState("");
@@ -309,6 +310,13 @@ export default function AdminUsersPage() {
                             </button>
                             <button
                               className="btn ghost"
+                              onClick={() => setCrmUser(u)}
+                              title="Assign CRM access and campaigns"
+                            >
+                              CRM
+                            </button>
+                            <button
+                              className="btn ghost"
                               disabled={syncingIds.has(u.id)}
                               onClick={() => syncUser(u.id)}
                               title="Sync SIP/WebRTC credentials from VitalPBX"
@@ -316,7 +324,15 @@ export default function AdminUsersPage() {
                               {syncingIds.has(u.id) ? "Syncing…" : "Sync SIP"}
                             </button>
                           </>
-                        ) : null}
+                        ) : (
+                          <button
+                            className="btn ghost"
+                            onClick={() => setCrmUser(u)}
+                            title="Assign CRM access and campaigns"
+                          >
+                            CRM
+                          </button>
+                        )}
                         {syncResults[u.id] ? (
                           <span className={`chip ${syncResults[u.id].startsWith("✓") ? "success" : "danger"}`} style={{ fontSize: 11 }}>
                             {syncResults[u.id]}
@@ -334,6 +350,7 @@ export default function AdminUsersPage() {
 
         {selected ? <UserPanel user={selected} onClose={() => setSelected(null)} onEdit={() => { setEditing(selected); setSelected(null); }} /> : null}
         {routeUser ? <OutboundRoutesModal user={routeUser} onClose={() => setRouteUser(null)} /> : null}
+        {crmUser ? <CrmAccessModal user={crmUser} onClose={() => setCrmUser(null)} /> : null}
         {creating ? <UserModal mode="create" defaultTenantId={effectiveTenantId === "ALL" ? "" : effectiveTenantId} onClose={() => setCreating(false)} onSaved={(createdTenantId?: string) => { setCreating(false); load(); }} /> : null}
         {editing ? <UserModal mode="edit" user={editing} defaultTenantId={editing.tenantId} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} /> : null}
       </div>
@@ -370,6 +387,200 @@ function UserPanel({ user, onClose, onEdit }: { user: AdminUser; onClose: () => 
             <PhoneProvisioningPanel userId={user.id} />
             <OutboundRoutePrefixesPanel user={user} />
           </>
+        ) : null}
+      </aside>
+    </div>
+  );
+}
+
+type CrmAccessCampaign = { id: string; name: string; status: string; assigned: boolean };
+type CrmAccessResponse = {
+  tenantId: string;
+  tenantName: string | null;
+  userId: string;
+  email: string;
+  displayName: string;
+  crmTenantEnabled: boolean;
+  crmEnabled: boolean;
+  crmRole: "AGENT" | "MANAGER" | "ADMIN" | null;
+  assignedCampaignIds: string[];
+  campaigns: CrmAccessCampaign[];
+};
+
+const CRM_ROLE_LABELS: Record<string, string> = {
+  AGENT: "Agent",
+  MANAGER: "Manager",
+  ADMIN: "CRM Admin",
+};
+
+function CrmAccessModal({ user, onClose }: { user: AdminUser; onClose: () => void }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [data, setData] = useState<CrmAccessResponse | null>(null);
+  const [crmEnabled, setCrmEnabled] = useState(false);
+  const [crmRole, setCrmRole] = useState<"AGENT" | "MANAGER" | "ADMIN">("AGENT");
+  const [selectedCampaignIds, setSelectedCampaignIds] = useState<Set<string>>(new Set());
+  const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setToast(null);
+    try {
+      const res = await apiGet<CrmAccessResponse>(`/admin/users/${user.id}/crm-access`);
+      setData(res);
+      setCrmEnabled(res.crmEnabled);
+      setCrmRole((res.crmRole as "AGENT" | "MANAGER" | "ADMIN") || "AGENT");
+      setSelectedCampaignIds(new Set(res.assignedCampaignIds || []));
+    } catch (e: any) {
+      setToast({ kind: "err", text: e?.message || "Failed to load CRM access" });
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [user.id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  function toggleCampaign(campaignId: string, checked: boolean) {
+    setSelectedCampaignIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(campaignId);
+      else next.delete(campaignId);
+      return next;
+    });
+  }
+
+  async function save() {
+    if (!data) return;
+    setSaving(true);
+    setToast(null);
+    try {
+      await apiPut(`/admin/users/${user.id}/crm-access`, {
+        enabled: crmEnabled,
+        role: crmRole,
+        campaignIds: crmEnabled ? [...selectedCampaignIds] : [],
+      });
+      setToast({ kind: "ok", text: crmEnabled ? "CRM access saved" : "CRM access removed" });
+      await load();
+    } catch (e: any) {
+      setToast({ kind: "err", text: e?.message || "Failed to save CRM access" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <aside
+        className="modal"
+        style={{ marginLeft: "auto", width: "min(560px, 96vw)", height: "100vh", borderRadius: "22px 0 0 22px", overflow: "auto" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button className="btn ghost" style={{ float: "right" }} onClick={onClose}>Close</button>
+        <div style={{ width: 56, height: 56, borderRadius: 20, background: "linear-gradient(135deg,#7c3aed,#2563eb)", color: "#fff", display: "grid", placeItems: "center", fontWeight: 900, fontSize: 22 }}>
+          {user.displayName.slice(0, 1).toUpperCase()}
+        </div>
+        <h2>CRM Access</h2>
+        <p className="muted" style={{ marginTop: -4 }}>
+          {user.displayName} · {user.email}
+        </p>
+        {data ? <p className="muted" style={{ marginTop: 4 }}>Tenant: {data.tenantName || user.tenantName || user.tenantId}</p> : null}
+
+        {loading ? (
+          <div className="state-box" style={{ marginTop: 16 }}>Loading CRM access…</div>
+        ) : data ? (
+          <div className="stack" style={{ gap: 14, marginTop: 18 }}>
+            {!data.crmTenantEnabled ? (
+              <div className="state-box">CRM is not enabled for this tenant. Enable it in CRM Settings before granting user access.</div>
+            ) : null}
+
+            <section className="panel" style={{ padding: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                <div>
+                  <strong>CRM access</strong>
+                  <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+                    {crmEnabled ? "User can access CRM for this tenant" : "User cannot access CRM"}
+                  </div>
+                </div>
+                <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={crmEnabled}
+                    disabled={saving || !data.crmTenantEnabled}
+                    onChange={(e) => setCrmEnabled(e.target.checked)}
+                  />
+                  <span>{crmEnabled ? "Enabled" : "Disabled"}</span>
+                </label>
+              </div>
+              {crmEnabled ? (
+                <div style={{ marginTop: 12 }}>
+                  <span className="muted" style={{ fontSize: 12 }}>CRM role</span>
+                  <select
+                    className="input"
+                    style={{ marginTop: 6, width: "100%" }}
+                    value={crmRole}
+                    disabled={saving}
+                    onChange={(e) => setCrmRole(e.target.value as "AGENT" | "MANAGER" | "ADMIN")}
+                  >
+                    {Object.entries(CRM_ROLE_LABELS).map(([val, label]) => (
+                      <option key={val} value={val}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+            </section>
+
+            {crmEnabled && data.campaigns.length > 0 ? (
+              <section className="panel" style={{ padding: 14 }}>
+                <strong>Campaign assignments</strong>
+                <p className="muted" style={{ fontSize: 13, margin: "4px 0 12px" }}>
+                  Optional. Leave all unchecked to allow every tenant campaign. Select campaigns to restrict this user.
+                </p>
+                <div className="stack" style={{ gap: 8 }}>
+                  {data.campaigns.map((c) => (
+                    <label
+                      key={c.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "10px 12px",
+                        border: "1px solid var(--border)",
+                        borderRadius: 12,
+                        cursor: saving ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedCampaignIds.has(c.id)}
+                        disabled={saving}
+                        onChange={(e) => toggleCampaign(c.id, e.target.checked)}
+                      />
+                      <span style={{ flex: 1 }}>
+                        <strong>{c.name}</strong>
+                        <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>{c.status.toLowerCase()}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </section>
+            ) : crmEnabled ? (
+              <p className="muted">No campaigns in this tenant yet.</p>
+            ) : null}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button className="btn ghost" onClick={onClose} disabled={saving}>Cancel</button>
+              <button className="btn" onClick={save} disabled={saving || !data.crmTenantEnabled}>
+                {saving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {toast ? (
+          <div className={`chip ${toast.kind === "err" ? "danger" : "success"}`} style={{ marginTop: 12 }}>
+            {toast.text}
+          </div>
         ) : null}
       </aside>
     </div>

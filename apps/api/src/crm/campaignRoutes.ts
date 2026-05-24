@@ -2,6 +2,11 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
 import { requireCrmAccess, requireCrmAdmin, isCrmQueuePatchOwnershipForbidden, isAdminRole } from "./guard";
+import {
+  assertCrmCampaignAllowed,
+  crmCampaignScopeForUser,
+  getCrmUserCampaignRestriction,
+} from "./userCampaignAccess";
 import { todayBounds, startOfTomorrowFromDayStart } from "./crmAggregateBounds";
 import {
   crmCallbackDueLteDayEndWhere,
@@ -152,12 +157,15 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
   app.get("/crm/campaigns", async (req, reply) => {
     const user = await requireCrmAccess(req, reply);
     if (!user) return;
-    const { tenantId } = user;
+    const { tenantId, sub: userId, role } = user;
     const q = req.query as Record<string, string>;
+
+    const campaignScope = await crmCampaignScopeForUser(tenantId, userId, role);
 
     const campaigns = await db.crmCampaign.findMany({
       where: {
         tenantId,
+        ...campaignScope,
         ...(q.status ? { status: q.status as any } : { status: { not: "ARCHIVED" } }),
       },
       orderBy: { createdAt: "desc" },
@@ -207,6 +215,8 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     const { tenantId } = user;
     const { id } = req.params as { id: string };
 
+    if (!(await assertCrmCampaignAllowed(user, id, reply))) return;
+
     const campaign = await db.crmCampaign.findFirst({
       where: { id, tenantId },
       include: {
@@ -237,8 +247,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     const { tenantId } = user;
     const { id: campaignId } = req.params as { id: string };
 
-    const campaign = await db.crmCampaign.findFirst({ where: { id: campaignId, tenantId }, select: { id: true } });
-    if (!campaign) return reply.code(404).send({ error: "not_found" });
+    if (!(await assertCrmCampaignAllowed(user, campaignId, reply))) return;
 
     const q = req.query as Record<string, string>;
     const limit = Math.min(50, Math.max(1, parseInt(q.limit ?? "20", 10)));
@@ -288,8 +297,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     const { tenantId } = user;
     const { id } = req.params as { id: string };
 
-    const existing = await db.crmCampaign.findFirst({ where: { id, tenantId }, select: { id: true } });
-    if (!existing) return reply.code(404).send({ error: "not_found" });
+    if (!(await assertCrmCampaignAllowed(user, id, reply))) return;
 
     const parsed = patchCampaignSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues });
@@ -317,11 +325,9 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
   app.delete("/crm/campaigns/:id", async (req, reply) => {
     const user = await requireCrmAdmin(req, reply);
     if (!user) return;
-    const { tenantId } = user;
     const { id } = req.params as { id: string };
 
-    const existing = await db.crmCampaign.findFirst({ where: { id, tenantId }, select: { id: true } });
-    if (!existing) return reply.code(404).send({ error: "not_found" });
+    if (!(await assertCrmCampaignAllowed(user, id, reply))) return;
 
     await db.crmCampaign.update({ where: { id }, data: { status: "ARCHIVED" } });
     return { ok: true };
@@ -335,8 +341,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     const { tenantId } = user;
     const { id: campaignId } = req.params as { id: string };
 
-    const campaign = await db.crmCampaign.findFirst({ where: { id: campaignId, tenantId }, select: { id: true } });
-    if (!campaign) return reply.code(404).send({ error: "campaign_not_found" });
+    if (!(await assertCrmCampaignAllowed(user, campaignId, reply))) return;
 
     const parsed = addMembersSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues });
@@ -392,8 +397,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     const { tenantId, sub: userId } = user;
     const { id: campaignId } = req.params as { id: string };
 
-    const campaign = await db.crmCampaign.findFirst({ where: { id: campaignId, tenantId }, select: { id: true } });
-    if (!campaign) return reply.code(404).send({ error: "campaign_not_found" });
+    if (!(await assertCrmCampaignAllowed(user, campaignId, reply))) return;
 
     if (!(req as any).isMultipart?.()) {
       return reply.status(400).send({ error: "multipart_required" });
@@ -482,8 +486,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     const { tenantId, sub: userId } = user;
     const { id: campaignId } = req.params as { id: string };
 
-    const campaign = await db.crmCampaign.findFirst({ where: { id: campaignId, tenantId }, select: { id: true } });
-    if (!campaign) return reply.code(404).send({ error: "campaign_not_found" });
+    if (!(await assertCrmCampaignAllowed(user, campaignId, reply))) return;
 
     if (!(req as any).isMultipart?.()) {
       return reply.status(400).send({ error: "multipart_required" });
@@ -686,8 +689,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     const { id: campaignId } = req.params as { id: string };
     const q = req.query as Record<string, string>;
 
-    const campaign = await db.crmCampaign.findFirst({ where: { id: campaignId, tenantId }, select: { id: true } });
-    if (!campaign) return reply.code(404).send({ error: "not_found" });
+    if (!(await assertCrmCampaignAllowed(user, campaignId, reply))) return;
 
     const page = Math.max(1, parseInt(q.page ?? "1"));
     const limit = Math.min(200, Math.max(1, parseInt(q.limit ?? "50")));
@@ -741,6 +743,8 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     if (!user) return;
     const { tenantId } = user;
     const { id: campaignId, memberId } = req.params as { id: string; memberId: string };
+
+    if (!(await assertCrmCampaignAllowed(user, campaignId, reply))) return;
 
     const existing = await db.crmCampaignMember.findFirst({
       where: { id: memberId, campaignId, tenantId },
@@ -799,8 +803,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     const { id: campaignId } = req.params as { id: string };
     const q = req.query as Record<string, string>;
 
-    const campaign = await db.crmCampaign.findFirst({ where: { id: campaignId, tenantId }, select: { id: true } });
-    if (!campaign) return reply.code(404).send({ error: "not_found" });
+    if (!(await assertCrmCampaignAllowed(user, campaignId, reply))) return;
 
     const search = (q.q ?? "").trim();
     const limit = Math.min(50, Math.max(1, parseInt(q.limit ?? "20")));
@@ -870,6 +873,8 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     const { tenantId } = user;
     const { id: campaignId } = req.params as { id: string };
 
+    if (!(await assertCrmCampaignAllowed(user, campaignId, reply))) return;
+
     const bulkAssignSchema = z.object({
       memberIds: z.array(z.string().min(1)).min(1).max(500),
       assignedToUserId: z.string().nullable(), // null to clear assignment
@@ -901,8 +906,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     const { tenantId } = user;
     const { id: campaignId } = req.params as { id: string };
 
-    const campaign = await db.crmCampaign.findFirst({ where: { id: campaignId, tenantId }, select: { id: true } });
-    if (!campaign) return reply.code(404).send({ error: "not_found" });
+    if (!(await assertCrmCampaignAllowed(user, campaignId, reply))) return;
 
     // Aggregate member counts per (assignedToUserId, status)
     const rows = await db.crmCampaignMember.groupBy({
@@ -977,8 +981,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     const parsed = distributeSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues });
 
-    const campaign = await db.crmCampaign.findFirst({ where: { id: campaignId, tenantId }, select: { id: true } });
-    if (!campaign) return reply.code(404).send({ error: "not_found" });
+    if (!(await assertCrmCampaignAllowed(user, campaignId, reply))) return;
 
     const { userIds } = parsed.data;
 
@@ -1039,6 +1042,8 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     if (!user) return;
     const { tenantId } = user;
     const { id: campaignId } = req.params as { id: string };
+
+    if (!(await assertCrmCampaignAllowed(user, campaignId, reply))) return;
 
     const campaign = await db.crmCampaign.findFirst({
       where: { id: campaignId, tenantId },
@@ -1114,12 +1119,16 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
   app.get("/crm/queue", async (req, reply) => {
     const user = await requireCrmAccess(req, reply);
     if (!user) return;
-    const { tenantId, sub: userId } = user;
+    const { tenantId, sub: userId, role } = user;
     const q = req.query as Record<string, string>;
 
     const limit = Math.min(200, Math.max(1, parseInt(q.limit ?? "50")));
     const filter = q.filter ?? "pending";
     const sortMode = q.sort === "smart" ? "smart" : "original";
+
+  const userCampaignRestriction = isAdminRole(role)
+      ? null
+      : await getCrmUserCampaignRestriction(tenantId, userId);
 
     // ── Campaign filter ────────────────────────────────────────────────────────
     // If ?campaignId= is supplied, validate it belongs to this tenant.
@@ -1132,7 +1141,12 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
         select: { id: true },
       });
       if (!exists) return reply.code(404).send({ error: "campaign_not_found" });
+      if (userCampaignRestriction && !userCampaignRestriction.includes(campaignIdParam)) {
+        return reply.code(403).send({ error: "forbidden", detail: "Campaign not assigned to this user." });
+      }
       campaignFilter = { id: campaignIdParam, status: "ACTIVE" };
+    } else if (userCampaignRestriction) {
+      campaignFilter = { id: { in: userCampaignRestriction }, status: "ACTIVE" };
     }
 
     const { now, start: startOfToday, end: endOfToday } = todayBounds();
@@ -1370,7 +1384,9 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
   app.post("/crm/queue/next", async (req, reply) => {
     const user = await requireCrmAccess(req, reply);
     if (!user) return;
-    const { tenantId, sub: userId } = user;
+    const { tenantId, sub: userId, role } = user;
+
+    const campaignScope = await crmCampaignScopeForUser(tenantId, userId, role);
 
     const next = await db.crmCampaignMember.findFirst({
       where: {
@@ -1378,7 +1394,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
         assignedToUserId: userId,
         status: "PENDING",
         ...crmCampaignMemberQueueLiveContactWhere,
-        campaign: { status: "ACTIVE" },
+        campaign: { status: "ACTIVE", ...campaignScope },
       },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       include: {
@@ -1429,6 +1445,8 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       },
     });
     if (!existing) return reply.code(404).send({ error: "not_found" });
+
+    if (!(await assertCrmCampaignAllowed(user, existing.campaignId, reply))) return;
 
     const queueActionSchema = z.object({
       action: z.enum(["skip", "defer", "dnc", "outcome", "assign-to-me", "set-callback", "clear-callback"]).optional(),

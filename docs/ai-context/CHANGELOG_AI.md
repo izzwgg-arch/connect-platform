@@ -4,6 +4,53 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-05-23 — Admin Users: Assign CRM access + campaigns
+
+**Task:** CRM / UI / API — Admin → Users row action for CRM assignment  
+**Risk:** medium
+
+### Root cause / gap
+
+- `CrmUserAccess` existed but was only manageable from **CRM Settings** (`PUT /crm/users/:userId`), not from **Admin → Users**.
+- Documented `GET /crm/users/:userId` was missing.
+- No persisted user-level campaign allow-list (only per-member `CrmCampaignMember.assignedToUserId`).
+
+### What changed
+
+- Added **CRM** row action + drawer on Admin → Users (beside Sync SIP when extension present; always visible on every row).
+- Added `CrmUserCampaignAssignment` join table (optional campaign restrictions per user).
+- Added tenant-scoped admin API `GET/PUT /admin/users/:id/crm-access` (mirrors outbound-routes pattern).
+- Implemented `GET /crm/users/:userId`; extended `PUT /crm/users/:userId` with optional `campaignIds`.
+- Non-admin CRM users with explicit campaign rows see only those campaigns in `GET /crm/campaigns` and `GET /crm/queue`.
+
+### Permission rules
+
+- Assign: `canManageUsers` (tenant admin / super admin). End users → 403.
+- Tenant admin cannot assign across tenants (`403 forbidden`).
+- Campaign ids validated against target user's `tenantId` (`400 invalid_campaign`).
+
+### Files touched
+
+- `packages/db/prisma/schema.prisma` + migration `20260523120000_crm_user_campaign_assignment`
+- `apps/api/src/admin/userCrmAccessRoutes.ts` (new)
+- `apps/api/src/crm/userCampaignAccess.ts` (new)
+- `apps/api/src/crm/routes.ts`, `apps/api/src/crm/campaignRoutes.ts`, `apps/api/src/server.ts`
+- `apps/portal/app/(platform)/admin/users/page.tsx`
+- `docs/ai-context/DATA_MODEL.md`, `API_ROUTES.md`, `RULES.md`
+
+### Verification steps
+
+1. **Super admin:** Admin → Users → pick user in tenant A → CRM → enable access, assign campaigns → save → reload drawer (state persists).
+2. **Tenant admin:** same for user in own tenant; attempt on another tenant's user → 403.
+3. **End user:** `PUT /admin/users/:id/crm-access` → 403.
+4. **Cross-tenant campaign:** PUT with campaign id from another tenant → 400 `invalid_campaign`.
+5. **CRM nav:** grant access to end user → re-login/hard reload → CRM section visible; revoke → hidden after refresh.
+6. **Campaign scope:** assign one campaign only → agent sees that campaign in list/queue; admin still sees all.
+7. **Sync SIP** unchanged on users with extensions.
+8. `pnpm exec tsc --noEmit` in `apps/api` and `apps/portal`; `pnpm exec tsx --test src/crm/userCampaignAccess.test.ts` in `apps/api`.
+
+---
+
 ## 2026-05-20 — portal: remove topbar call/message quick actions
 
 **Task:** dashboard/header UI cleanup

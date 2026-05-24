@@ -479,10 +479,19 @@ Key fields: `enabled`, `localPresenceEnabled` (Phase 2), `transcriptionEnabled` 
 - **Purpose:** Per-user CRM access grant: role (AGENT / MANAGER / ADMIN) + enabled flag.
 - **Tenant-scoped?** Yes — `@@unique([tenantId, userId])`.
 - **High-risk?** No.
-- **Modified by:** `apps/api` via `PUT /crm/users/:userId` (admin-only).
+- **Modified by:** `apps/api` via `PUT /crm/users/:userId` (CRM admin) or `PUT /admin/users/:id/crm-access` (user admin).
 - **Absence of a row = no CRM access for that user**, even if `CrmTenantSettings.enabled=true`.
 
 Key fields: `enabled`, `role` (`CrmUserRole` enum: `AGENT | MANAGER | ADMIN`).
+
+### `CrmUserCampaignAssignment`
+- **Schema:** `packages/db/prisma/schema.prisma` (CRM section)
+- **Purpose:** Optional per-user campaign allow-list. When rows exist for a user, non-admin CRM users only see those campaigns in `GET /crm/campaigns` and `GET /crm/queue` (and cannot open other campaigns by id).
+- **Tenant-scoped?** Yes — `@@unique([tenantId, userId, campaignId])`.
+- **Absence of rows = unrestricted** (all non-archived tenant campaigns allowed).
+- **Modified by:** `PUT /admin/users/:id/crm-access` or `PUT /crm/users/:userId` with `campaignIds`.
+
+Key fields: `tenantId`, `userId`, `campaignId`.
 
 ### `CrmContactMeta`
 - **Schema:** end of `packages/db/prisma/schema.prisma`

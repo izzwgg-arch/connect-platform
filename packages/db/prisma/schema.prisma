@@ -421,6 +421,7 @@ model Tenant {
   voicemailIngestIncidents        VoicemailIngestIncident[]
   crmSettings                     CrmTenantSettings?
   crmUserAccess                   CrmUserAccess[]
+  crmUserCampaignAssignments      CrmUserCampaignAssignment[]
   crmContactMeta                  CrmContactMeta[]
   crmTimelineEvents               CrmTimelineEvent[]
   crmContactNotes                 CrmContactNote[]
@@ -489,6 +490,7 @@ model User {
   connectChatParticipants        ConnectChatParticipant[]
   connectChatMessages            ConnectChatMessage[]              @relation("ConnectChatMessageSenderUser")
   crmAccess                      CrmUserAccess[]
+  crmCampaignAssignments         CrmUserCampaignAssignment[]
   crmContactsAssigned            CrmContactMeta[]                  @relation("CrmContactAssignedTo")
   crmTimelineEventsCreated       CrmTimelineEvent[]                @relation("CrmTimelineEventCreatedBy")
   crmContactNotesCreated         CrmContactNote[]                  @relation("CrmContactNoteCreatedBy")
@@ -3144,6 +3146,25 @@ model CrmUserAccess {
   @@index([tenantId, enabled])
 }
 
+/// Per-user CRM campaign access. When rows exist for a user, non-admin CRM users
+/// only see/work campaigns in this set. Absence of rows = unrestricted (all tenant campaigns).
+model CrmUserCampaignAssignment {
+  id         String   @id @default(cuid())
+  tenantId   String
+  userId     String
+  campaignId String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user     User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  campaign CrmCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId, campaignId])
+  @@index([tenantId, userId])
+  @@index([tenantId, campaignId])
+}
+
 // ─── CRM Contacts ─────────────────────────────────────────────────────────────
 
 enum CrmContactStage {
@@ -3452,7 +3473,8 @@ model CrmCampaign {
   createdBy User                @relation("CrmCampaignCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
   script    CrmScript?          @relation(fields: [scriptId], references: [id], onDelete: SetNull)
   checklist CrmChecklist?       @relation(fields: [checklistId], references: [id], onDelete: SetNull)
-  members   CrmCampaignMember[]
+  members      CrmCampaignMember[]
+  userAccess   CrmUserCampaignAssignment[]
 
   @@index([tenantId, status, createdAt])
 }

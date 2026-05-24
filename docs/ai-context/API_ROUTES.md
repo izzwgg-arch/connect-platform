@@ -154,6 +154,7 @@ Plus four delegated registrars at lines ~30198–30265 (see top of file).
 - `POST /admin/users/:id/resend-invite` (5308)
 - `POST /admin/users/:id/disable` (5323), `/enable` (5335)
 - `GET /admin/users/:id/outbound-routes` (5170), `PUT /admin/users/:id/outbound-routes` (5193)
+- `GET /admin/users/:id/crm-access`, `PUT /admin/users/:id/crm-access` (`apps/api/src/admin/userCrmAccessRoutes.ts`)
 
 ---
 
@@ -418,8 +419,16 @@ All routes registered via `registerCrmRoutes(app)` in `server.ts`.
 |--------|------|-------|-------|
 | GET | `/crm/settings` | any CRM user | Returns `CrmTenantSettings` including `defaultQueueSort` and `defaultQueueFilter` (Phase 12C) |
 | PUT | `/crm/settings` | admin | Update CRM settings. Body fields: `enabled`, `localPresenceEnabled`, `transcriptionEnabled`, `defaultQueueSort: SMART\|ORIGINAL`, `defaultQueueFilter: PENDING\|DUE\|OVERDUE\|UPCOMING` |
-| GET | `/crm/users/:userId` | admin | User's CRM access record |
-| PUT | `/crm/users/:userId` | admin | Enable/set role (AGENT/MANAGER/ADMIN) |
+| GET | `/crm/users` | admin | List all tenant users with CRM access status |
+| GET | `/crm/users/:userId` | admin | One user's CRM access + campaign assignments (`assignedCampaignIds`, `campaigns[]`) |
+| PUT | `/crm/users/:userId` | admin | Enable/set role; optional `campaignIds[]` (tenant-validated). Disabling clears campaign assignments. |
+
+**Admin Users page (tenant-scoped user management):**
+
+| Method | Path | Guard | Notes |
+|--------|------|-------|-------|
+| GET | `/admin/users/:id/crm-access` | `canManageUsers` | Read CRM access + tenant campaigns for target user. Tenant admin: same tenant only (`403` cross-tenant). Super admin: any customer user. |
+| PUT | `/admin/users/:id/crm-access` | `canManageUsers` | Body: `{ enabled, role?, campaignIds? }`. Upserts `CrmUserAccess`; replaces `CrmUserCampaignAssignment` when enabled. `400 invalid_campaign` for cross-tenant campaign ids. Audits `USER_CRM_ACCESS_UPDATED`. |
 
 ### Contacts (Phase 1B)
 | Method | Path | Notes |
