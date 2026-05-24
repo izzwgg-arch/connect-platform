@@ -5,3 +5,6 @@ export { CRMHorizontalBars } from "./CRMHorizontalBars";
 export type { BarItem } from "./CRMHorizontalBars";
 export { CRMChartLegend } from "./CRMChartLegend";
 export { CRMRingMetric } from "./CRMRingMetric";
+export { Sparkline } from "./Sparkline";
+export { MiniBarChart } from "./MiniBarChart";
+export { QueuePressureGauge } from "./QueuePressureGauge";

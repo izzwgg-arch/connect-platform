@@ -117,6 +117,15 @@ The CRM command center (`/crm/dashboard`) is a **live operational cockpit**, not
 Chart colors live in `components/crm/charts/chartColors.ts` (aligned with `--crm-accent`, danger, warning, success).
 ---
 
+### Dashboard 19B.3 updates — guardrails
+
+- One metric has one primary home on the dashboard. Do not repeat the same stat in multiple widgets unless the second use adds different action context.
+- The Queue Pressure gauge is the preferred visual centerpiece of Live CRM Operations.
+- Micro charts (sparklines/mini bars) are allowed only when backed by real history or rendered as clearly neutral current‑load placeholders derived from the current value. They must be labeled/obvious as non-historical when placeholders are used.
+- Donut charts are only for real segmented data (3+ meaningful segments). Do not use donuts for simple splits.
+- Empty states must be honest and useful — brief message + relevant link.
+- All charts and cards must remain theme‑aware for both dark (navy glass) and light (white/slate) modes.
+
 ## Queue operational workspace (Phase 19C / 19C.1)
 
 `/crm/queue` is a **full-width outbound workbench**, not a narrow centered list.

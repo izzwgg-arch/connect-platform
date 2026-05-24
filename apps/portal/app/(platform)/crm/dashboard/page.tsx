@@ -35,6 +35,7 @@ import {
   DashboardListRow,
   DashboardSectionHeader,
   LiveCrmOperationsPanel,
+  RecentActivityPanel,
 } from "../../../../components/crm";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
 import { apiGet } from "../../../../services/apiClient";
@@ -478,6 +479,8 @@ export default function CrmDashboardPage() {
             href={can("can_view_crm_campaigns") ? "/crm/campaigns?status=ACTIVE" : undefined}
             icon={<Megaphone size={17} />}
             loading={loading}
+            series={Array.from({ length: 12 }, () => Number(activeCampaignsCount) || 0)}
+            trendText="current"
           />
           <DashboardKpiTile
             label={isPlatformAdmin ? "Queue depth" : "My queue"}
@@ -485,6 +488,8 @@ export default function CrmDashboardPage() {
             href={can("can_view_crm_queue") ? "/crm/queue" : undefined}
             icon={<ListOrdered size={17} />}
             loading={loading}
+            series={Array.from({ length: 12 }, () => (Number.isFinite(Number(queueDepth)) ? Number(queueDepth) : 0))}
+            trendText="current"
           />
           <DashboardKpiTile
             label="Overdue callbacks"
@@ -493,6 +498,8 @@ export default function CrmDashboardPage() {
             icon={<AlertCircle size={17} />}
             tone={overdueCallbacksCount > 0 ? "danger" : "neutral"}
             loading={loading}
+            series={Array.from({ length: 12 }, () => Number(overdueCallbacksCount) || 0)}
+            trendText="current"
           />
           <DashboardKpiTile
             label="Calls today"
@@ -500,6 +507,8 @@ export default function CrmDashboardPage() {
             href={can("can_view_crm_reports") ? "/crm/reports?tab=operations" : undefined}
             icon={<PhoneCall size={17} />}
             loading={loading}
+            series={Array.from({ length: 12 }, () => (Number.isFinite(Number(callsTodayCount)) ? Number(callsTodayCount) : 0))}
+            trendText="current"
           />
           <DashboardKpiTile
             label="Contacts today"
@@ -508,6 +517,8 @@ export default function CrmDashboardPage() {
             icon={<UserPlus size={17} />}
             tone={contactsTodayCount > 0 ? "positive" : "neutral"}
             loading={loading}
+            series={Array.from({ length: 12 }, () => Number(contactsTodayCount) || 0)}
+            trendText="current"
           />
         </div>
       </section>
@@ -615,6 +626,9 @@ export default function CrmDashboardPage() {
 
         {/* Right — action column */}
         <aside className="flex flex-col gap-5 lg:col-span-4">
+
+          {/* Recent Activity — timeline or honest empty */}
+          <RecentActivityPanel items={[]} />
 
           {/* Action Required — merges Needs Attention + Tasks (no ring chart) */}
           <CRMCard className="p-5">

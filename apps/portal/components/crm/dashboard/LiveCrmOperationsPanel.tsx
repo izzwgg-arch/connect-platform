@@ -5,6 +5,7 @@ import { AlertCircle, Clock, Radio } from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
 import { LoadingSkeleton } from "../../LoadingSkeleton";
+import { QueuePressureGauge, Sparkline } from "../charts";
 
 // ── Prop types (mirrors page-level computed shapes) ───────────────────────────
 
@@ -105,6 +106,8 @@ export function LiveCrmOperationsPanel({
   canViewCampaigns,
 }: LiveCrmOpsPanelProps) {
   const hasQueueItems = queueOverdueItems.length > 0 || queueDueItems.length > 0;
+  const qNum = typeof queueDepth === "number" ? queueDepth : Number.isFinite(Number(queueDepth)) ? Number(queueDepth) : 0;
+  const sixHourSeries = Array.from({ length: 18 }, () => qNum);
 
   return (
     <div className="relative overflow-hidden rounded-crm-lg border border-crm-border/80 bg-crm-surface shadow-[0_8px_40px_-12px_rgba(0,0,0,0.55)]">
@@ -130,19 +133,29 @@ export function LiveCrmOperationsPanel({
           <LoadingSkeleton rows={4} />
         ) : (
           <>
+            {/* Centerpiece header: gauge + mini line (placeholder series from current value) */}
+            <div className="mb-4 grid gap-4 sm:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
+              <QueuePressureGauge value={qNum} className="justify-self-start" />
+              <div className="flex min-w-0 flex-col justify-center rounded-crm border border-crm-border/60 bg-crm-surface-2/30 px-3 py-2.5">
+                <div className="mb-1 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-crm-muted">
+                  <span>Queue depth (last 6 hours)</span>
+                  <span>6 Hours</span>
+                </div>
+                <Sparkline
+                  series={sixHourSeries}
+                  width={520}
+                  height={44}
+                  stroke={1.6}
+                  color="var(--crm-accent)"
+                  fill="transparent"
+                  ariaLabel="Queue depth visual — current-load placeholder"
+                />
+              </div>
+            </div>
+
             {/* Metric grid */}
             <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-              <OpsMetric
-                label="Queue depth"
-                value={queueDepth}
-                href={canViewQueue ? "/crm/queue" : undefined}
-              />
-              <OpsMetric
-                label="Overdue CBs"
-                value={overdueCallbacks}
-                tone={overdueCallbacks > 0 ? "danger" : "neutral"}
-                href={canViewQueue && overdueCallbacks > 0 ? "/crm/queue?filter=overdue" : undefined}
-              />
+              
               <OpsMetric
                 label="Due today"
                 value={dueTodayCallbacks}
@@ -155,11 +168,6 @@ export function LiveCrmOperationsPanel({
                 tone={typeof callsToday === "number" && callsToday > 0 ? "positive" : "neutral"}
               />
               <OpsMetric label="Outcomes" value={outcomesToday} />
-              <OpsMetric
-                label="New contacts"
-                value={contactsToday}
-                tone={typeof contactsToday === "number" && contactsToday > 0 ? "positive" : "neutral"}
-              />
             </div>
 
             {/* Divider */}
