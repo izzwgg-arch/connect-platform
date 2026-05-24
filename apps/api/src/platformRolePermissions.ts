@@ -62,7 +62,23 @@ function rolesPayload(raw: unknown): { version: number; roles: SnapshotRoles } {
 function normalizeStoredRoleList(rawRoles: SnapshotRoles, version: number, bucket: PortalRoleBucket): PortalPermissionKey[] {
   if (Object.prototype.hasOwnProperty.call(rawRoles, bucket)) {
     const normalized = normalizePermissionList(rawRoles[bucket]);
-    return normalizeRolePermissionSet(version >= SNAPSHOT_VERSION ? normalized : expandLegacyPortalPermissions(normalized), bucket);
+    const base = version >= SNAPSHOT_VERSION ? normalized : expandLegacyPortalPermissions(normalized);
+    // For TENANT_ADMIN v2+ snapshots: merge any missing can_view_admin_* page keys from
+    // the current DEFAULT whose section gatekeeper is already granted. These keys are
+    // absent because they were added to the can_view_admin expansion AFTER the snapshot
+    // was last written — the admin could not have intentionally removed them.
+    if (version >= SNAPSHOT_VERSION && bucket === "TENANT_ADMIN") {
+      const set = new Set(base);
+      if (set.has("can_view_section_admin" as PortalPermissionKey)) {
+        for (const key of DEFAULT_ROLE_PERMISSIONS.TENANT_ADMIN) {
+          if (!set.has(key) && (key as string).startsWith("can_view_admin_")) {
+            set.add(key);
+          }
+        }
+      }
+      return normalizeRolePermissionSet([...set], bucket);
+    }
+    return normalizeRolePermissionSet(base, bucket);
   }
   return normalizeRolePermissionSet(DEFAULT_ROLE_PERMISSIONS[bucket], bucket);
 }
@@ -70,7 +86,11 @@ function normalizeStoredRoleList(rawRoles: SnapshotRoles, version: number, bucke
 function normalizeRolePermissionSet(input: unknown, bucket: PortalRoleBucket): PortalPermissionKey[] {
   const set = new Set(normalizePermissionList(input));
   if (bucket === "SUPER_ADMIN") {
-    for (const key of PROTECTED_PLATFORM_ADMIN_PERMISSIONS) set.add(key);
+    // Super admin always holds every currently-defined key regardless of snapshot age.
+    // DEFAULT_ROLE_PERMISSIONS.SUPER_ADMIN = [...PORTAL_PERMISSION_KEYS], so the resolver
+    // must match that intent. This also means newly-added keys never require a manual
+    // snapshot update for super admins.
+    for (const key of PORTAL_PERMISSION_KEYS) set.add(key);
   }
   return [...set];
 }
