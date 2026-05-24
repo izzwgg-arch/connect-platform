@@ -3,7 +3,6 @@ import type { PortalSidebarSectionKey } from "@connect/shared";
 import {
   Activity,
   AlertTriangle,
-  Banknote,
   BarChart3,
   Building,
   Building2,
@@ -12,7 +11,6 @@ import {
   CreditCard,
   Disc,
   Download,
-  FileCheck,
   FileText,
   GitBranch,
   Grid3X3,
@@ -44,7 +42,6 @@ import {
   Server,
   Settings2,
   Shield,
-  SlidersHorizontal,
   Stethoscope,
   UserCog,
   Users,
@@ -123,10 +120,6 @@ export const navItems: NavItem[] = [
   { id: "admin.deploy_center", href: "/admin/deploy-center", label: "Deploy Center", icon: "DC", lucide: Rocket, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_deploy_center" },
 
   { id: "billing.overview", href: "/billing", label: "Billing Overview", icon: "BL", lucide: Receipt, section: "billing", sectionPermission: "can_view_section_billing", permission: "can_view_billing_overview" },
-  { id: "billing.settings", href: "/billing/settings", label: "Billing Settings", icon: "BS", lucide: SlidersHorizontal, section: "billing", sectionPermission: "can_view_section_billing", permission: "can_view_settings_billing" },
-  { id: "billing.invoices", href: "/billing/invoices", label: "Invoices", icon: "IN", lucide: FileText, section: "billing", sectionPermission: "can_view_section_billing", permission: "can_view_billing_invoices" },
-  { id: "billing.payments", href: "/billing/payments", label: "Payments", icon: "PM", lucide: Banknote, section: "billing", sectionPermission: "can_view_section_billing", permission: "can_view_billing_payments" },
-  { id: "billing.receipts", href: "/billing/receipts", label: "Receipts", icon: "RC", lucide: FileCheck, section: "billing", sectionPermission: "can_view_section_billing", permission: "can_view_billing_receipts" },
 
   { id: "apps.home", href: "/apps", label: "Apps", icon: "AP", lucide: Grid3X3, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_home" },
   { id: "apps.sms_campaigns", href: "/apps/sms-campaigns", label: "SMS Campaigns", icon: "SC", lucide: Megaphone, section: "apps", sectionPermission: "can_view_section_apps", permission: "can_view_apps_sms_campaigns" },

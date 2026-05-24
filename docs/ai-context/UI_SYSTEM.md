@@ -53,6 +53,20 @@ The Connect wordmark is **not** inside `SidebarNav`. It renders in the fixed **`
 
 **Verify:** expanded + collapsed sidebar, desktop width, `data-theme` dark/light, topbar not clipping logo, tenant switcher not crowded.
 
+### Billing sidebar (2026-05-23)
+
+The **Billing** collapsible section in the main sidebar shows **only Billing Overview** (`/billing`). Settings, Invoices, Payments, and Receipts were removed from sidebar rendering because Billing Overview is the primary workspace entry point.
+
+| Still in sidebar | Removed from Billing section only |
+|------------------|-----------------------------------|
+| Billing Overview → `/billing` | Billing Settings, Invoices, Payments, Receipts |
+
+**Unchanged:** page routes under `/billing/*`, permission keys in `packages/shared/src/portalPermissions.ts` (`SIDEBAR_ITEMS`), and **Settings → Billing Settings** (`/billing/settings` via the Settings section).
+
+**Files:** `apps/portal/navigation/navConfig.ts` (`navItems` billing entries).
+
+**Verify:** expanded + collapsed sidebar (Billing shows one link); direct URLs still load: `/billing/settings`, `/billing/invoices`, `/billing/payments`, `/billing/receipts`; Admin → Permissions still lists billing page toggles.
+
 **Files:** `apps/portal/app/globals.css`, `apps/portal/components/ConnectLogo.tsx`, `apps/portal/components/Topbar.tsx` (structure only if needed).
 
 ---

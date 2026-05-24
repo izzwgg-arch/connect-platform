@@ -31,7 +31,7 @@
 | `/settings/billing` | Tenant | Same permission via settings section | **Same component** as `/billing/settings` — duplicate entry point |
 
 **Sidebar (`navConfig.ts`)**  
-- **Billing section:** Overview, Settings, Invoices, Payments, Receipts.  
+- **Billing section (2026-05-23):** **Billing Overview only** — Settings / Invoices / Payments / Receipts removed from sidebar nav; routes and permissions unchanged.  
 - **Admin section:** Admin Billing, Admin Billing Settings (SUPER_ADMIN only).  
 - **Settings section:** “Billing Settings” → `/billing/settings` (duplicate of billing → settings).
 
