@@ -42,7 +42,7 @@ function KpiTile({
         ? "border-crm-success/35 bg-crm-success/8"
         : tone === "warning"
           ? "border-crm-warning/35 bg-crm-warning/8"
-          : "border-crm-border/35 bg-[#0a101c]/60";
+          : "border-crm-border/35";
 
   return (
     <div

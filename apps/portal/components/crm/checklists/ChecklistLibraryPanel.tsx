@@ -50,7 +50,7 @@ export function ChecklistLibraryPanel({
 
   return (
     <div className={cn(crm.checklistPanelSupport, "flex flex-col overflow-hidden")}>
-      <div className="border-b border-crm-border/25 bg-gradient-to-r from-[#13203a]/40 to-transparent px-3 py-3">
+      <div className="checklist-library-header border-b border-crm-border/25 px-3 py-3">
         <span className={crm.label}>Checklist library</span>
         <button
           type="button"
@@ -68,7 +68,7 @@ export function ChecklistLibraryPanel({
 
       <div className="flex flex-col gap-0.5 overflow-y-auto p-2 flex-1 max-h-[min(70vh,42rem)]">
         {active.length === 0 && !isCreating && (
-          <div className="rounded-crm border border-dashed border-crm-border/50 bg-[#101923]/30 px-2 py-4 text-center">
+          <div className={cn(crm.checklistInsetSurface, "rounded-crm border border-dashed border-crm-border/50 px-2 py-4 text-center")}>
             <ClipboardList
               size={20}
               className="mx-auto mb-1.5 text-crm-muted/50"
@@ -178,7 +178,7 @@ export function ChecklistLibraryPanel({
             type="button"
             onClick={() => setTemplatesOpen((v) => !v)}
             className={cn(
-              "flex w-full items-center gap-1.5 rounded-crm px-2 py-1.5 text-left transition-colors hover:bg-[#182746]/80",
+              "flex w-full items-center gap-1.5 rounded-crm px-2 py-1.5 text-left transition-colors hover:bg-crm-surface-2/80",
               templatesExpanded && "bg-crm-accent/8 ring-1 ring-crm-accent/20"
             )}
           >
@@ -203,7 +203,7 @@ export function ChecklistLibraryPanel({
                     type="button"
                     onClick={() => onNewFromTemplate(t.id)}
                     className={cn(
-                      "group relative flex w-full items-center gap-2 overflow-hidden rounded-crm border border-crm-border/40 px-2 py-1.5 text-left transition-all duration-200 hover:-translate-y-px hover:border-crm-border/60 hover:bg-[#182746]/90",
+                      "group relative flex w-full items-center gap-2 overflow-hidden rounded-crm border border-crm-border/40 px-2 py-1.5 text-left transition-all duration-200 hover:-translate-y-px hover:border-crm-border/60 hover:bg-crm-surface-2/90",
                       accent.card
                     )}
                   >

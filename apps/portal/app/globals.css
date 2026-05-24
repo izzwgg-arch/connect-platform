@@ -868,13 +868,375 @@
   }
 }
 
-/* Phase 19J — checklist cinematic workspace */
-.crm-checklist-workspace {
+/* Phase 19J — checklist cinematic workspace: theme-aware (light integrates with portal; dark unchanged) */
+:root[data-theme="dark"] .crm-checklist-workspace,
+:root:not([data-theme="light"]) .crm-checklist-workspace {
+  color-scheme: dark;
+  --bg-soft: #040810;
+  --panel: #101a2d;
+  --panel-2: #13203a;
+  --text: #e1e9f1;
+  --text-dim: #8ea0b2;
+  --border: #26374a;
+  --crm-bg: #040810;
+  --crm-surface: #101a2d;
+  --crm-surface-2: #13203a;
+  --crm-border: #26374a;
+  --crm-text: #e1e9f1;
+  --crm-text-muted: #8ea0b2;
+  --crm-accent: #22a8ff;
+  --crm-success: #34c27b;
+  --crm-warning: #f0b655;
+  --crm-danger: #ea6068;
+  --crm-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
   background:
     radial-gradient(ellipse 100% 60% at 50% -20%, rgba(56, 189, 248, 0.09), transparent 55%),
     radial-gradient(ellipse 70% 50% at 100% 40%, rgba(99, 102, 241, 0.05), transparent 50%),
     radial-gradient(ellipse 50% 40% at 0% 70%, rgba(56, 189, 248, 0.04), transparent 45%),
     #040810;
+}
+
+:root[data-theme="light"] .crm-checklist-workspace {
+  color-scheme: light;
+  --bg-soft: #f4f7fb;
+  --panel: #ffffff;
+  --panel-2: #f8fafc;
+  --text: #0f172a;
+  --text-dim: #64748b;
+  --border: rgba(15, 23, 42, 0.1);
+  --crm-bg: #f4f7fb;
+  --crm-surface: #ffffff;
+  --crm-surface-2: #f8fafc;
+  --crm-border: rgba(15, 23, 42, 0.1);
+  --crm-text: #0f172a;
+  --crm-text-muted: #64748b;
+  --crm-accent: #0284c7;
+  --crm-success: #16a34a;
+  --crm-warning: #d97706;
+  --crm-danger: #dc2626;
+  --crm-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 8px 24px -8px rgba(15, 23, 42, 0.08);
+  background:
+    radial-gradient(ellipse 100% 70% at 50% -15%, rgba(56, 189, 248, 0.07), transparent 52%),
+    radial-gradient(ellipse 60% 50% at 100% 0%, rgba(99, 102, 241, 0.04), transparent 45%),
+    linear-gradient(180deg, #f6f8fb 0%, #eef2f7 100%);
+}
+
+:root[data-theme="light"] .crm-checklist-workspace .shadow-crm {
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 10px 28px -10px rgba(15, 23, 42, 0.08);
+}
+
+.crm-checklist-workspace .checklist-command-header {
+  background: linear-gradient(135deg, rgba(21, 34, 56, 0.95) 0%, rgba(14, 22, 40, 0.98) 48%, rgba(6, 11, 20, 1) 100%);
+  box-shadow:
+    0 16px 48px -20px rgba(0, 0, 0, 0.85),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 0 1px rgba(56, 189, 248, 0.06);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-command-header {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.98) 0%,
+    rgba(248, 250, 252, 0.96) 45%,
+    rgba(241, 245, 249, 0.94) 100%
+  );
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 12px 32px -12px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.crm-checklist-workspace .checklist-command-header-glow {
+  background:
+    radial-gradient(ellipse 80% 70% at 8% -30%, rgba(56, 189, 248, 0.16), transparent 52%),
+    radial-gradient(ellipse 55% 50% at 95% 110%, rgba(99, 102, 241, 0.08), transparent 50%);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-command-header-glow {
+  background:
+    radial-gradient(ellipse 80% 70% at 8% -30%, rgba(2, 132, 199, 0.1), transparent 52%),
+    radial-gradient(ellipse 55% 50% at 95% 110%, rgba(99, 102, 241, 0.05), transparent 50%);
+}
+
+.crm-checklist-workspace .checklist-command-icon {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--crm-accent) 20%, transparent), color-mix(in srgb, var(--crm-accent) 5%, transparent));
+  box-shadow:
+    0 0 32px -4px rgba(56, 189, 248, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-command-icon {
+  box-shadow:
+    0 0 24px -8px rgba(2, 132, 199, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+.crm-checklist-workspace .checklist-kpi-tile {
+  border-color: color-mix(in srgb, var(--crm-border) 50%, transparent);
+  background: color-mix(in srgb, #0a101c 60%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.crm-checklist-workspace .checklist-kpi-tile:hover {
+  box-shadow: 0 8px 24px -12px rgba(0, 0, 0, 0.5);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-kpi-tile {
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-kpi-tile:hover {
+  box-shadow:
+    0 8px 24px -12px rgba(15, 23, 42, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+.crm-checklist-workspace .checklist-tab:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--crm-text);
+}
+.crm-checklist-workspace .checklist-tab-active {
+  border: 1px solid color-mix(in srgb, var(--crm-accent) 50%, transparent);
+  background: color-mix(in srgb, var(--crm-accent) 14%, transparent);
+  box-shadow:
+    0 0 20px -8px rgba(56, 189, 248, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-tab:hover {
+  background: rgba(15, 23, 42, 0.04);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-tab-active {
+  box-shadow:
+    0 0 16px -8px rgba(2, 132, 199, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.crm-checklist-workspace .checklist-tips-strip {
+  background: linear-gradient(90deg, rgba(12, 20, 36, 0.95) 0%, rgba(8, 14, 24, 0.98) 50%, rgba(12, 20, 36, 0.95) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 8px 32px -16px rgba(0, 0, 0, 0.6);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-tips-strip {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.96) 0%,
+    rgba(248, 250, 252, 0.94) 50%,
+    rgba(255, 255, 255, 0.96) 100%
+  );
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 8px 24px -12px rgba(15, 23, 42, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+.crm-checklist-workspace .checklist-panel-support {
+  background: color-mix(in srgb, #0a101c 75%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-panel-support {
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 8px 24px -12px rgba(15, 23, 42, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+.crm-checklist-workspace .checklist-panel-primary {
+  background: linear-gradient(180deg, rgba(26, 42, 66, 0.95) 0%, rgba(18, 28, 46, 1) 52%, rgba(10, 16, 28, 1) 100%);
+  box-shadow:
+    0 0 0 1px rgba(56, 189, 248, 0.08),
+    0 0 80px -24px rgba(56, 189, 248, 0.18),
+    0 28px 72px -28px rgba(0, 0, 0, 0.9),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-panel-primary {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.98) 0%,
+    rgba(248, 250, 252, 0.97) 55%,
+    rgba(241, 245, 249, 0.95) 100%
+  );
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 12px 40px -16px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+.crm-checklist-workspace .checklist-panel-primary-glow {
+  background:
+    radial-gradient(ellipse 100% 60% at 50% -15%, rgba(56, 189, 248, 0.14), transparent 58%),
+    radial-gradient(ellipse 50% 40% at 100% 100%, rgba(99, 102, 241, 0.06), transparent 50%);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-panel-primary-glow {
+  background:
+    radial-gradient(ellipse 100% 60% at 50% -15%, rgba(2, 132, 199, 0.08), transparent 58%),
+    radial-gradient(ellipse 50% 40% at 100% 100%, rgba(99, 102, 241, 0.04), transparent 50%);
+}
+
+.crm-checklist-workspace .checklist-progress-card {
+  background: linear-gradient(180deg, color-mix(in srgb, #101a2d 80%, transparent), color-mix(in srgb, #0a101c 90%, transparent));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-progress-card {
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+.crm-checklist-workspace .checklist-hero-band {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--crm-surface-2) 80%, transparent), #141f2b 50%, #101923 100%);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-hero-band {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.96) 0%,
+    rgba(248, 250, 252, 0.94) 50%,
+    rgba(241, 245, 249, 0.92) 100%
+  );
+}
+
+.crm-checklist-workspace .checklist-feature-card {
+  background: linear-gradient(135deg, rgba(18, 30, 48, 0.9) 0%, rgba(10, 16, 28, 0.95) 100%);
+}
+.crm-checklist-workspace .checklist-feature-card:hover {
+  border-color: color-mix(in srgb, var(--crm-accent) 25%, transparent);
+  box-shadow: 0 12px 32px -16px rgba(56, 189, 248, 0.2);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-feature-card {
+  background: rgba(255, 255, 255, 0.9);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-feature-card:hover {
+  box-shadow: 0 12px 32px -16px rgba(2, 132, 199, 0.12);
+}
+
+.crm-checklist-workspace .checklist-onboarding-orb {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--crm-accent) 25%, transparent), color-mix(in srgb, var(--crm-accent) 10%, transparent), #0a1525);
+  box-shadow:
+    0 0 64px -8px rgba(56, 189, 248, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-onboarding-orb {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--crm-accent) 18%, transparent),
+    color-mix(in srgb, var(--crm-accent) 8%, transparent),
+    rgba(255, 255, 255, 0.95)
+  );
+  box-shadow:
+    0 0 48px -8px rgba(2, 132, 199, 0.25),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+.crm-checklist-workspace .checklist-cinematic-hero-vignette {
+  background: radial-gradient(ellipse 90% 70% at 50% 40%, transparent 35%, rgba(4, 8, 16, 0.75) 100%);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-cinematic-hero-vignette {
+  background: radial-gradient(ellipse 90% 70% at 50% 40%, transparent 35%, rgba(241, 245, 249, 0.55) 100%);
+}
+
+.crm-checklist-workspace .checklist-cinematic-hero-grid {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.5) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.5) 1px, transparent 1px);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-cinematic-hero-grid {
+  background-image:
+    linear-gradient(rgba(15, 23, 42, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 23, 42, 0.08) 1px, transparent 1px);
+}
+
+.crm-checklist-workspace .checklist-step-pending {
+  background: color-mix(in srgb, #1a2635 80%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+}
+.crm-checklist-workspace .checklist-step-pending:hover {
+  background: color-mix(in srgb, #1e2d3d 90%, transparent);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-step-pending {
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-step-pending:hover {
+  background: rgba(248, 250, 252, 0.98);
+}
+
+.crm-checklist-workspace .checklist-step-num {
+  background: #101923;
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-step-num {
+  background: var(--crm-surface-2);
+}
+
+.crm-checklist-workspace .checklist-metric-chip {
+  border-color: rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.2);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-metric-chip {
+  border-color: rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.crm-checklist-workspace .checklist-template-card-surface {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--crm-surface-2) 95%, transparent), var(--crm-surface) 50%, var(--crm-bg) 100%);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-template-card-surface {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.98) 0%,
+    rgba(248, 250, 252, 0.96) 50%,
+    rgba(241, 245, 249, 0.94) 100%
+  );
+}
+
+.crm-checklist-workspace .checklist-template-icon {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-template-icon {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+.crm-checklist-workspace .checklist-inset-surface {
+  background: color-mix(in srgb, var(--crm-surface-2) 50%, transparent);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-inset-surface {
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.crm-checklist-workspace .checklist-library-header {
+  background: linear-gradient(90deg, color-mix(in srgb, #13203a 40%, transparent), transparent);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-library-header {
+  background: linear-gradient(90deg, rgba(248, 250, 252, 0.9), transparent);
+}
+
+.crm-checklist-workspace .checklist-card:hover {
+  box-shadow: 0 4px 16px -6px rgba(0, 0, 0, 0.4);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-card:hover {
+  box-shadow: 0 4px 16px -6px rgba(15, 23, 42, 0.1);
+}
+
+.crm-checklist-workspace .checklist-tip-icon {
+  border-color: color-mix(in srgb, var(--crm-border) 40%, transparent);
+  background: color-mix(in srgb, #060b14 90%, transparent);
+  box-shadow: 0 0 16px -6px rgba(56, 189, 248, 0.15);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-tip-icon {
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 16px -6px rgba(2, 132, 199, 0.1);
+}
+
+:root[data-theme="light"] .crm-checklist-workspace .text-sky-300 {
+  color: #0284c7;
+}
+:root[data-theme="light"] .crm-checklist-workspace .text-violet-300 {
+  color: #7c3aed;
+}
+:root[data-theme="light"] .crm-checklist-workspace .text-teal-300 {
+  color: #0d9488;
 }
 
 .crm-checklist-workspace .checklist-ambient-orb {
@@ -969,6 +1331,14 @@
 .crm-checklist-workspace .checklist-cinematic-hero {
   background:
     linear-gradient(165deg, rgba(26, 42, 66, 0.95) 0%, rgba(14, 22, 40, 0.98) 42%, rgba(6, 10, 20, 1) 100%);
+}
+:root[data-theme="light"] .crm-checklist-workspace .checklist-cinematic-hero {
+  background: linear-gradient(
+    165deg,
+    rgba(255, 255, 255, 0.98) 0%,
+    rgba(248, 250, 252, 0.96) 42%,
+    rgba(241, 245, 249, 0.94) 100%
+  );
 }
 
 .crm-checklist-workspace .checklist-panel-cinematic::after {

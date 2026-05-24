@@ -47,7 +47,7 @@ export const TEMPLATE_ACCENT_CLASSES: Record<
     iconRing:
       "shadow-[0_0_28px_-6px_rgba(56,189,248,0.5)] ring-1 ring-crm-accent/30",
     cardBase:
-      "border-crm-border/40 bg-gradient-to-br from-[#152535]/95 via-[#101a2d] to-[#0a101c]",
+      "border-crm-border/40 checklist-template-card-surface",
     cardGlow:
       "bg-[radial-gradient(ellipse_at_top_left,rgba(56,189,248,0.12),transparent_55%)]",
     card: "hover:border-crm-accent/50 hover:shadow-[0_16px_40px_-12px_rgba(56,189,248,0.28),0_0_0_1px_rgba(56,189,248,0.15)]",
@@ -60,8 +60,7 @@ export const TEMPLATE_ACCENT_CLASSES: Record<
       "border-crm-warning/40 bg-gradient-to-br from-crm-warning/25 to-crm-warning/5 text-crm-warning",
     iconRing:
       "shadow-[0_0_28px_-6px_rgba(245,158,11,0.4)] ring-1 ring-crm-warning/30",
-    cardBase:
-      "border-crm-border/40 bg-gradient-to-br from-[#1f1a14]/95 via-[#141210] to-[#0a101c]",
+    cardBase: "border-crm-border/40 checklist-template-card-surface",
     cardGlow:
       "bg-[radial-gradient(ellipse_at_top_left,rgba(245,158,11,0.1),transparent_55%)]",
     card: "hover:border-crm-warning/45 hover:shadow-[0_16px_40px_-12px_rgba(245,158,11,0.22)]",
@@ -73,8 +72,7 @@ export const TEMPLATE_ACCENT_CLASSES: Record<
     iconBox:
       "border-sky-400/40 bg-gradient-to-br from-sky-400/25 to-sky-400/5 text-sky-300",
     iconRing: "shadow-[0_0_28px_-6px_rgba(56,189,248,0.38)] ring-1 ring-sky-400/30",
-    cardBase:
-      "border-crm-border/40 bg-gradient-to-br from-[#14202e]/95 via-[#101a28] to-[#0a101c]",
+    cardBase: "border-crm-border/40 checklist-template-card-surface",
     cardGlow:
       "bg-[radial-gradient(ellipse_at_top_left,rgba(56,189,248,0.1),transparent_55%)]",
     card: "hover:border-sky-400/45 hover:shadow-[0_16px_40px_-12px_rgba(56,189,248,0.2)]",
@@ -87,8 +85,7 @@ export const TEMPLATE_ACCENT_CLASSES: Record<
       "border-crm-success/40 bg-gradient-to-br from-crm-success/25 to-crm-success/5 text-crm-success",
     iconRing:
       "shadow-[0_0_28px_-6px_rgba(52,211,153,0.38)] ring-1 ring-crm-success/30",
-    cardBase:
-      "border-crm-border/40 bg-gradient-to-br from-[#122018]/95 via-[#101a14] to-[#0a101c]",
+    cardBase: "border-crm-border/40 checklist-template-card-surface",
     cardGlow:
       "bg-[radial-gradient(ellipse_at_top_left,rgba(52,211,153,0.1),transparent_55%)]",
     card: "hover:border-crm-success/45 hover:shadow-[0_16px_40px_-12px_rgba(52,211,153,0.2)]",
@@ -101,8 +98,7 @@ export const TEMPLATE_ACCENT_CLASSES: Record<
       "border-violet-400/40 bg-gradient-to-br from-violet-400/25 to-violet-400/5 text-violet-300",
     iconRing:
       "shadow-[0_0_28px_-6px_rgba(167,139,250,0.38)] ring-1 ring-violet-400/30",
-    cardBase:
-      "border-crm-border/40 bg-gradient-to-br from-[#1a1428]/95 via-[#12101c] to-[#0a101c]",
+    cardBase: "border-crm-border/40 checklist-template-card-surface",
     cardGlow:
       "bg-[radial-gradient(ellipse_at_top_left,rgba(167,139,250,0.1),transparent_55%)]",
     card: "hover:border-violet-400/45 hover:shadow-[0_16px_40px_-12px_rgba(167,139,250,0.2)]",
@@ -114,8 +110,7 @@ export const TEMPLATE_ACCENT_CLASSES: Record<
     iconBox:
       "border-teal-400/40 bg-gradient-to-br from-teal-400/25 to-teal-400/5 text-teal-300",
     iconRing: "shadow-[0_0_28px_-6px_rgba(45,212,191,0.38)] ring-1 ring-teal-400/30",
-    cardBase:
-      "border-crm-border/40 bg-gradient-to-br from-[#102220]/95 via-[#101a18] to-[#0a101c]",
+    cardBase: "border-crm-border/40 checklist-template-card-surface",
     cardGlow:
       "bg-[radial-gradient(ellipse_at_top_left,rgba(45,212,191,0.1),transparent_55%)]",
     card: "hover:border-teal-400/45 hover:shadow-[0_16px_40px_-12px_rgba(45,212,191,0.2)]",

@@ -76,7 +76,7 @@ export function ChecklistCinematicHero({
           <button
             type="button"
             onClick={onBlank}
-            className={cn(crm.btnSecondary, "border-crm-border/60 bg-[#0a1220]/80 backdrop-blur-sm")}
+            className={cn(crm.btnSecondary, "border-crm-border/60 bg-crm-surface-2/80 backdrop-blur-sm")}
           >
             <Plus size={15} />
             Start from blank

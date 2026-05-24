@@ -208,7 +208,7 @@ function TemplateCard({
             </p>
           </div>
         </div>
-        <div className="flex items-center justify-between gap-2 border-t border-white/[0.06] pt-2.5">
+        <div className="flex items-center justify-between gap-2 border-t border-crm-border/40 pt-2.5">
           <div className="flex flex-wrap gap-1.5">
             <span className={crm.checklistMetricChip}>
               {template.items.length} steps
@@ -366,7 +366,7 @@ function ItemListEditor({
         <div
           className={cn(
             crm.emptyWrap,
-            "border-crm-border/40 bg-[#101923]/50 py-5"
+            cn(crm.checklistInsetSurface, "border-crm-border/40 py-5")
           )}
         >
           <p className={crm.emptyBody}>No steps yet. Add your first step below.</p>
@@ -390,7 +390,7 @@ function ItemListEditor({
         onClick={addItem}
         className={cn(
           "flex items-center gap-2 rounded-crm border border-dashed border-crm-border/60",
-          "bg-[#101923]/40 px-3 py-2.5 text-xs text-crm-muted",
+          cn(crm.checklistInsetSurface, "px-3 py-2.5 text-xs text-crm-muted"),
           "transition-colors hover:border-crm-accent/35 hover:bg-crm-accent/5 hover:text-crm-text"
         )}
       >
@@ -625,7 +625,7 @@ export function ChecklistWorkspace({
           <div
             className={cn(
               crm.emptyWrap,
-              "border-crm-border/40 bg-[#101923]/40 py-6"
+              cn(crm.checklistInsetSurface, "border-crm-border/40 py-6")
             )}
           >
             <AlertCircle size={20} className="mx-auto mb-2 text-crm-muted/60" />

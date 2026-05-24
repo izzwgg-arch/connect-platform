@@ -44,7 +44,7 @@ export function ChecklistQuickTipsStrip() {
             <>
               <span
                 className={cn(
-                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-crm-border/40 bg-[#060b14]/90 shadow-[0_0_16px_-6px_rgba(56,189,248,0.15)]",
+                  "checklist-tip-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-crm-border/40",
                   tip.tone
                 )}
               >

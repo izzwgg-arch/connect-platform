@@ -280,49 +280,48 @@ export const crm = {
   /** Phase 19J — checklist operational workspace */
   pageInnerChecklist:
     "relative mx-auto w-full max-w-[min(100%,1600px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-3 min-h-0 z-[1]",
-  /** Forces dark CRM tokens on checklist routes when portal data-theme=light */
-  checklistWorkspace:
-    "crm-checklist-workspace relative min-h-full [color-scheme:dark] [--panel:#101a2d] [--panel-2:#13203a] [--bg-soft:#040810] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#101a2d] [--crm-surface-2:#13203a] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",
+  /** Phase 19J — checklist operational workspace; theme tokens via globals `.crm-checklist-workspace` */
+  checklistWorkspace: "crm-checklist-workspace relative min-h-full w-full min-h-0",
   checklistAmbientLayer:
     "pointer-events-none absolute inset-0 z-0 overflow-hidden",
   checklistCommandHeader:
-    "relative z-[1] overflow-hidden rounded-2xl border border-crm-border/50 bg-gradient-to-br from-[#152238]/95 via-[#0e1628]/98 to-[#060b14] shadow-[0_16px_48px_-20px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.06),0_0_0_1px_rgba(56,189,248,0.06)]",
+    "checklist-command-header relative z-[1] overflow-hidden rounded-2xl border border-crm-border/50",
   checklistCommandHeaderGlow:
-    "pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_70%_at_8%_-30%,rgba(56,189,248,0.16),transparent_52%),radial-gradient(ellipse_55%_50%_at_95%_110%,rgba(99,102,241,0.08),transparent_50%)]",
+    "checklist-command-header-glow pointer-events-none absolute inset-0",
   checklistCommandIcon:
-    "flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-crm-accent/40 bg-gradient-to-br from-crm-accent/20 to-crm-accent/5 text-crm-accent shadow-[0_0_32px_-4px_rgba(56,189,248,0.55),inset_0_1px_0_rgba(255,255,255,0.12)]",
+    "checklist-command-icon flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-crm-accent/40 text-crm-accent",
   checklistKpiTile:
-    "rounded-xl border px-3 py-2.5 backdrop-blur-sm transition-all duration-300 hover:-translate-y-px hover:shadow-[0_8px_24px_-12px_rgba(0,0,0,0.5)]",
+    "checklist-kpi-tile rounded-xl border px-3 py-2.5 backdrop-blur-sm transition-all duration-300 hover:-translate-y-px",
   checklistTab:
-    "rounded-lg px-3.5 py-1.5 text-xs font-medium text-crm-muted transition-all hover:bg-white/[0.04] hover:text-crm-text",
+    "checklist-tab rounded-lg px-3.5 py-1.5 text-xs font-medium text-crm-muted transition-all",
   checklistTabActive:
-    "rounded-lg border border-crm-accent/50 bg-crm-accent/14 px-3.5 py-1.5 text-xs font-semibold text-crm-accent shadow-[0_0_20px_-8px_rgba(56,189,248,0.35),inset_0_1px_0_rgba(255,255,255,0.08)]",
+    "checklist-tab checklist-tab-active rounded-lg px-3.5 py-1.5 text-xs font-semibold text-crm-accent",
   checklistTipsStrip:
-    "relative z-[1] overflow-hidden rounded-2xl border border-crm-border/35 bg-gradient-to-r from-[#0c1424]/95 via-[#080e18]/98 to-[#0c1424]/95 px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_8px_32px_-16px_rgba(0,0,0,0.6)]",
+    "checklist-tips-strip relative z-[1] overflow-hidden rounded-2xl border border-crm-border/35 px-3 py-2.5",
   checklistTipSegment:
     "flex min-w-0 flex-1 items-center gap-2.5 rounded-xl border border-transparent px-2.5 py-2 transition-all hover:border-crm-accent/20 hover:bg-crm-accent/[0.06]",
   checklistCinematicHero:
     "checklist-cinematic-hero relative isolate min-h-[min(26rem,48vh)] overflow-hidden rounded-2xl border border-crm-accent/15",
   checklistCinematicHeroVignette:
-    "pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_90%_70%_at_50%_40%,transparent_35%,rgba(4,8,16,0.75)_100%)]",
+    "checklist-cinematic-hero-vignette pointer-events-none absolute inset-0",
   checklistCinematicHeroGlowTop:
     "pointer-events-none absolute -left-1/4 -top-1/3 h-[70%] w-[150%] bg-[radial-gradient(ellipse_at_center,rgba(56,189,248,0.22),transparent_62%)]",
   checklistCinematicHeroGlowFloor:
     "pointer-events-none absolute -bottom-1/4 left-1/2 h-1/2 w-[120%] -translate-x-1/2 bg-[radial-gradient(ellipse_at_center,rgba(56,189,248,0.08),transparent_65%)]",
   checklistCinematicHeroGrid:
-    "pointer-events-none absolute inset-0 opacity-[0.04] [background-image:linear-gradient(rgba(255,255,255,0.5)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.5)_1px,transparent_1px)] [background-size:28px_28px]",
+    "checklist-cinematic-hero-grid pointer-events-none absolute inset-0 opacity-[0.04] [background-size:28px_28px]",
   checklistOrbRingOuter:
     "pointer-events-none absolute -inset-8 rounded-full border border-crm-accent/10 bg-crm-accent/[0.03] checklist-orb-ring",
   checklistOrbRingMid:
     "pointer-events-none absolute -inset-4 rounded-full border border-crm-accent/20 bg-gradient-to-br from-crm-accent/10 to-transparent",
   checklistOnboardingOrb:
-    "relative z-[1] flex h-28 w-28 items-center justify-center rounded-full border border-crm-accent/35 bg-gradient-to-br from-crm-accent/25 via-crm-accent/10 to-[#0a1525] shadow-[0_0_64px_-8px_rgba(56,189,248,0.55),inset_0_1px_0_rgba(255,255,255,0.15)]",
+    "checklist-onboarding-orb relative z-[1] flex h-28 w-28 items-center justify-center rounded-full border border-crm-accent/35",
   checklistOnboardingOrbPulse:
     "pointer-events-none absolute inset-[-12px] rounded-full bg-crm-accent/12 checklist-orb-pulse",
   checklistCtaGlow:
     "shadow-[0_0_28px_-6px_rgba(56,189,248,0.45)] hover:shadow-[0_0_36px_-4px_rgba(56,189,248,0.55)]",
   checklistFeatureCard:
-    "checklist-feature-card group relative flex flex-col gap-1.5 overflow-hidden rounded-xl border border-crm-border/40 bg-gradient-to-br from-[#121e30]/90 to-[#0a101c]/95 px-3.5 py-3 transition-all duration-300 hover:border-crm-accent/25 hover:shadow-[0_12px_32px_-16px_rgba(56,189,248,0.2)]",
+    "checklist-feature-card group relative flex flex-col gap-1.5 overflow-hidden rounded-xl border border-crm-border/40 px-3.5 py-3 transition-all duration-300",
   checklistGrid: "relative z-[1] grid gap-3 lg:grid-cols-12 lg:items-stretch",
   checklistLibraryCol:
     "lg:col-span-3 xl:col-span-3 flex flex-col min-w-0 opacity-[0.92] lg:pt-1",
@@ -332,21 +331,21 @@ export const crm = {
     "lg:col-span-3 xl:col-span-3 flex flex-col min-w-0 opacity-[0.92] lg:pt-1",
   /** Quieter support column (library + progress) */
   checklistPanelSupport:
-    "checklist-side-panel rounded-2xl border border-crm-border/30 bg-[#0a101c]/75 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] backdrop-blur-md",
+    "checklist-side-panel checklist-panel-support rounded-2xl border border-crm-border/30 backdrop-blur-md",
   /** Primary center workspace — cinematic hero elevation */
   checklistPanelPrimary:
-    "checklist-panel-cinematic relative overflow-hidden rounded-2xl border border-crm-accent/20 bg-gradient-to-b from-[#1a2a42]/95 via-[#121c2e] to-[#0a101c] shadow-[0_0_0_1px_rgba(56,189,248,0.08),0_0_80px_-24px_rgba(56,189,248,0.18),0_28px_72px_-28px_rgba(0,0,0,0.9),inset_0_1px_0_rgba(255,255,255,0.07)]",
+    "checklist-panel-cinematic checklist-panel-primary relative overflow-hidden rounded-2xl border border-crm-accent/20",
   checklistPanelPrimaryGlow:
-    "pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_100%_60%_at_50%_-15%,rgba(56,189,248,0.14),transparent_58%),radial-gradient(ellipse_50%_40%_at_100%_100%,rgba(99,102,241,0.06),transparent_50%)]",
+    "checklist-panel-primary-glow pointer-events-none absolute inset-0",
   checklistWorkspaceHeader:
     "border-b border-crm-border/50 bg-gradient-to-r from-crm-surface-2/40 via-transparent to-transparent px-4 py-3",
   checklistHeroBand:
-    "relative overflow-hidden rounded-crm-lg border border-crm-border/50 bg-gradient-to-br from-crm-surface-2/80 via-[#141f2b] to-[#101923] px-4 py-4 sm:px-5",
+    "checklist-hero-band relative overflow-hidden rounded-crm-lg border border-crm-border/50 px-4 py-4 sm:px-5",
   checklistHeroGlow:
     "pointer-events-none absolute -right-8 -top-8 h-32 w-32 rounded-full bg-crm-accent/10 blur-2xl",
   /** Checklist card in library */
   checklistCard:
-    "group relative flex items-stretch rounded-crm border border-crm-border/60 bg-crm-surface-2/40 transition-all duration-200 hover:border-crm-border/90 hover:bg-crm-surface-2/70 hover:shadow-[0_4px_16px_-6px_rgba(0,0,0,0.4)] cursor-pointer",
+    "group relative flex items-stretch rounded-crm border border-crm-border/60 bg-crm-surface-2/40 transition-all duration-200 hover:border-crm-border/90 hover:bg-crm-surface-2/70 cursor-pointer checklist-card",
   checklistCardActive:
     "border-crm-accent/45 bg-crm-accent/10 ring-1 ring-crm-accent/25 shadow-[0_0_20px_-8px_rgba(56,189,248,0.2)]",
   checklistCardArchived: "opacity-50",
@@ -355,11 +354,11 @@ export const crm = {
   checklistStepCard:
     "flex w-full items-start gap-3 rounded-crm border px-3 py-2.5 text-left text-sm transition-all duration-200",
   checklistStepPending:
-    "border-crm-border/60 bg-[#1a2635]/80 text-crm-text shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] hover:border-crm-border hover:bg-[#1e2d3d]/90",
+    "checklist-step-pending border-crm-border/60 text-crm-text",
   checklistStepRequired:
     "border-crm-warning/40 bg-gradient-to-r from-crm-warning/8 to-transparent text-crm-text shadow-[inset_0_1px_0_rgba(255,255,255,0.03),0_0_16px_-8px_rgba(245,158,11,0.15)]",
   checklistStepNum:
-    "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-crm-border/70 bg-[#101923] text-[11px] font-bold tabular-nums text-crm-muted",
+    "checklist-step-num flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-crm-border/70 text-[11px] font-bold tabular-nums text-crm-muted",
   checklistStepNumRequired:
     "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-crm-warning/50 bg-crm-warning/15 text-[11px] font-bold tabular-nums text-crm-warning shadow-[0_0_10px_-4px_rgba(245,158,11,0.35)]",
   /** Template card base (accent via TEMPLATE_ACCENT_CLASSES) */
@@ -374,13 +373,15 @@ export const crm = {
   checklistTemplateIconWrap:
     "relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl transition-transform duration-300 group-hover:scale-105",
   checklistTemplateIcon:
-    "relative z-[1] flex h-10 w-10 items-center justify-center rounded-lg border text-lg shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]",
+    "checklist-template-icon relative z-[1] flex h-10 w-10 items-center justify-center rounded-lg border text-lg",
   checklistTemplateBadge:
     "shrink-0 rounded-md border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider",
   checklistMetricChip:
-    "inline-flex items-center gap-1 rounded-md border border-white/[0.06] bg-black/20 px-2 py-0.5 text-[10px] font-medium tabular-nums backdrop-blur-sm",
+    "checklist-metric-chip inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-medium tabular-nums backdrop-blur-sm",
   checklistProgressCard:
-    "checklist-side-panel rounded-2xl border border-crm-border/30 bg-gradient-to-b from-[#101a2d]/80 to-[#0a101c]/90 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-md",
+    "checklist-side-panel checklist-progress-card rounded-2xl border border-crm-border/30 p-4 backdrop-blur-md",
+  checklistInsetSurface:
+    "checklist-inset-surface rounded-crm border border-crm-border/40",
 
   /** Phase 19I / 19I.1 / 19I.2 — scripts premium playbook (theme-aware via globals `.crm-scripts-workspace`) */
   pageInnerScripts:

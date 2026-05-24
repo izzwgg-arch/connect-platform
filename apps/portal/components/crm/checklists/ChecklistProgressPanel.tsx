@@ -131,7 +131,7 @@ function StatRow({
   valueClass?: string;
 }) {
   return (
-    <div className="flex items-center justify-between gap-2 rounded-crm border border-crm-border/40 bg-[#101923]/50 px-2.5 py-1.5">
+    <div className={cn(crm.checklistInsetSurface, "flex items-center justify-between gap-2 rounded-crm border border-crm-border/40 px-2.5 py-1.5")}>
       <div className="flex items-center gap-2 min-w-0">
         <span className={cn("h-2 w-2 shrink-0 rounded-full", dotClass)} />
         <span className="text-[11px] text-crm-muted">{label}</span>
@@ -156,7 +156,7 @@ export function ChecklistProgressPanel({ checklist }: Props) {
         <div
           className={cn(
             crm.emptyWrap,
-            "mt-3 border-crm-border/40 bg-[#13203a]/40 py-8"
+            cn(crm.checklistInsetSurface, "mt-3 border-crm-border/40 py-8")
           )}
         >
           <ClipboardCheck
@@ -242,7 +242,7 @@ export function ChecklistProgressPanel({ checklist }: Props) {
             status.tone === "warning" &&
               "border-crm-warning/35 bg-gradient-to-r from-crm-warning/12 to-transparent",
             status.tone === "muted" &&
-              "border-crm-border/50 bg-[#13203a]/60"
+              cn(crm.checklistInsetSurface, "border-crm-border/50")
           )}
         >
           <div className="flex items-center gap-2">
