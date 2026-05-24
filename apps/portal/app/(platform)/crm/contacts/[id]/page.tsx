@@ -40,6 +40,7 @@ import {
   cn,
 } from "../../../../../components/crm";
 import { DISPOSITION_OPTIONS, type LiveContact } from "../../../../../components/crm/live";
+import { CrmEmailComposeDrawer } from "../../../../../components/crm/email/CrmEmailComposeDrawer";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { apiGet, apiPatch, apiPost, apiDelete } from "../../../../../services/apiClient";
 import { useAppContext } from "../../../../../hooks/useAppContext";
@@ -120,6 +121,9 @@ function CrmContactDetailInner() {
   const [contact, setContact] = useState<CrmContactDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Compose email state
+  const [composeOpen, setComposeOpen] = useState(false);
 
   // Edit state
   const [editing, setEditing] = useState(false);
@@ -894,6 +898,15 @@ function CrmContactDetailInner() {
             <div className="flex justify-end gap-2">
               {!isArchived ? (
                 <>
+                  <button
+                    type="button"
+                    className={crm.btnPrimary}
+                    onClick={() => setComposeOpen(true)}
+                    title={primaryEmailRow ? "Send email" : "Add an email address to send"}
+                  >
+                    <Mail className="h-4 w-4" />
+                    Send Email
+                  </button>
                   <button type="button" className={crm.btnSecondary} onClick={() => setEditing(true)}>
                     Edit contact
                   </button>
@@ -1576,6 +1589,23 @@ function CrmContactDetailInner() {
       isPowerMode={false}
       onSave={() => void saveOutcomeRef.current()}
     />
+    {contact ? (
+      <CrmEmailComposeDrawer
+        open={composeOpen}
+        onClose={() => setComposeOpen(false)}
+        contactId={contact.id}
+        contactName={contact.displayName}
+        contactEmail={(contact.emails.find((e) => e.isPrimary) ?? contact.emails[0])?.email ?? null}
+        mergeFields={{
+          firstName: contact.firstName ?? null,
+          lastName: contact.lastName ?? null,
+          displayName: contact.displayName,
+          company: contact.company ?? null,
+          email: (contact.emails.find((e) => e.isPrimary) ?? contact.emails[0])?.email ?? null,
+        }}
+        onSent={() => { void loadTimeline(); }}
+      />
+    ) : null}
     </>
   );
 }

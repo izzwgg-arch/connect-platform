@@ -1223,10 +1223,11 @@ worker.on("failed", (job, err) => console.error(`sms job failed: ${job?.id} -> $
 
 console.log("SMS worker started");
 
-// CRM Email Phase 1 — send-only worker (feature-flagged)
-const _crmEmailPhase1 = (process.env.CRM_EMAIL_PHASE1_ENABLED || "false").toLowerCase() === "true";
+// CRM Email Phase 1 — send-only worker. Phase 1 is launching, so default ON
+// unless explicitly disabled via CRM_EMAIL_PHASE1_ENABLED=false.
+const _crmEmailPhase1Off = String(process.env.CRM_EMAIL_PHASE1_ENABLED || "true").toLowerCase() === "false";
 let crmEmailWorker: Worker | null = null;
-if (_crmEmailPhase1) {
+if (!_crmEmailPhase1Off) {
   crmEmailWorker = new Worker(
     "crm-email-send",
     async (job) => {

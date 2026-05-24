@@ -7,6 +7,7 @@ import {
   Clock,
   GitCommitHorizontal,
   GitMerge,
+  Mail,
   MessageSquare,
   MessageSquareDot,
   Pencil,
@@ -50,12 +51,17 @@ function TimelineIcon({ type }: { type: string }) {
     return <MessageSquareDot className={cn(wrap, "text-cyan-400")} size={sz} />;
   if (type === "SMS_RECEIVED")
     return <MessageSquareDot className={cn(wrap, "text-violet-400")} size={sz} />;
+  if (type === "EMAIL_SENT")
+    return <Mail className={cn(wrap, "text-emerald-400")} size={sz} />;
+  if (type === "EMAIL_RECEIVED" || type === "EMAIL_REPLY")
+    return <Mail className={cn(wrap, "text-sky-400")} size={sz} />;
   return <Clock className={cn(wrap, "text-crm-muted")} size={sz} />;
 }
 
 function eventTypeChip(type: string): string | null {
   if (type.startsWith("CDR_")) return "Call";
   if (type.startsWith("SMS_")) return "SMS";
+  if (type.startsWith("EMAIL_")) return "Email";
   if (type.startsWith("NOTE_")) return "Note";
   if (type.startsWith("TASK_")) return "Task";
   if (type === "STAGE_CHANGED") return "Pipeline";
@@ -237,6 +243,18 @@ function EventMeta({ event }: { event: TimelineEvent }) {
         {to ? <span className="font-mono text-xs text-crm-text">→ {to}</span> : null}
         {from ? <span className="text-xs text-crm-muted">from {from}</span> : null}
         {provider ? <span className={crm.chip}>{provider.toLowerCase()}</span> : null}
+      </MetaRow>
+    );
+  }
+  if (event.type === "EMAIL_SENT" && event.metadata) {
+    const m = event.metadata as Record<string, unknown>;
+    const to = typeof m.to === "string" ? m.to : null;
+    return (
+      <MetaRow>
+        {to ? <span className="font-mono text-xs text-crm-text">→ {to}</span> : null}
+        <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[0.6875rem] font-semibold text-emerald-300">
+          sent
+        </span>
       </MetaRow>
     );
   }

@@ -33,8 +33,9 @@ const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { m
 const emailQueue = new Queue("crm-email-send", { connection: redis });
 
 export async function registerCrmEmailRoutes(app: FastifyInstance) {
-  const featureOn = (process.env.CRM_EMAIL_PHASE1_ENABLED || "false").toLowerCase() === "true";
-  if (!featureOn) {
+  // CRM Email Phase 1 is launching — routes always register unless explicitly disabled.
+  const featureOff = String(process.env.CRM_EMAIL_PHASE1_ENABLED || "true").toLowerCase() === "false";
+  if (featureOff) {
     app.log.info({ feature: "crm-email-phase1" }, "CRM Email Phase 1 disabled — routes not registered");
     return;
   }
@@ -268,10 +269,27 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     const body = (req.body as any) || {};
     const contactId = body?.contactId ? String(body.contactId) : null;
     const toEmail = String(body?.toEmail || "").trim();
-    const subject = String(body?.subject || "");
-    const bodyText = String(body?.bodyText || "");
+    let subject = String(body?.subject || "");
+    let bodyText = String(body?.bodyText || "");
+    const templateId = body?.templateId ? String(body.templateId) : null;
+
+    if (templateId) {
+      const tpl = await db.crmEmailTemplate.findFirst({
+        where: {
+          id: templateId,
+          tenantId: user.tenantId,
+          isArchived: false,
+          OR: [{ visibility: "SHARED" }, { visibility: "PRIVATE", createdByUserId: user.sub }],
+        },
+      });
+      if (!tpl) return reply.status(404).send({ error: "template_not_found" });
+      if (!subject) subject = tpl.subject;
+      if (!bodyText) bodyText = tpl.bodyText;
+    }
 
     if (!contactId && !toEmail) return reply.status(400).send({ error: "invalid_payload", detail: "contactId or toEmail required" });
+    if (subject.length > 500) return reply.status(400).send({ error: "invalid_payload", detail: "subject too long" });
+    if (bodyText.length > 50000) return reply.status(400).send({ error: "invalid_payload", detail: "body too long" });
 
     // Resolve and validate contact belongs to tenant; derive toEmail if needed
     let resolvedTo = toEmail;
@@ -294,5 +312,110 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     await emailQueue.add("send", { tenantId: user.tenantId, userId: user.sub, to: resolvedTo, subject, bodyText, contactId }, { removeOnComplete: 100, removeOnFail: 100 });
     await db.auditLog.create({ data: { tenantId: user.tenantId, action: "CRM_EMAIL_SEND_QUEUED", entityType: "Contact", entityId: contactId || "", actorUserId: user.sub } }).catch(() => undefined);
     return { ok: true };
+  });
+
+  // GET /crm/email/templates — list templates available to this user (shared + own private)
+  app.get("/crm/email/templates", async (req, reply) => {
+    const user = await requireAuth(req, reply); if (!user) return;
+    const includeArchived = String((req.query as any)?.includeArchived || "") === "true";
+    const rows = await db.crmEmailTemplate.findMany({
+      where: {
+        tenantId: user.tenantId,
+        ...(includeArchived ? {} : { isArchived: false }),
+        OR: [
+          { visibility: "SHARED" },
+          { visibility: "PRIVATE", createdByUserId: user.sub },
+        ],
+      },
+      orderBy: [{ updatedAt: "desc" }],
+      select: { id: true, name: true, subject: true, bodyText: true, visibility: true, isArchived: true, createdByUserId: true, createdAt: true, updatedAt: true },
+    });
+    return { templates: rows };
+  });
+
+  // GET /crm/email/templates/:id
+  app.get("/crm/email/templates/:id", async (req, reply) => {
+    const user = await requireAuth(req, reply); if (!user) return;
+    const { id } = req.params as { id: string };
+    const row = await db.crmEmailTemplate.findFirst({
+      where: {
+        id,
+        tenantId: user.tenantId,
+        OR: [
+          { visibility: "SHARED" },
+          { visibility: "PRIVATE", createdByUserId: user.sub },
+        ],
+      },
+    });
+    if (!row) return reply.code(404).send({ error: "template_not_found" });
+    return row;
+  });
+
+  // POST /crm/email/templates — create
+  app.post("/crm/email/templates", async (req, reply) => {
+    const user = await requireAuth(req, reply); if (!user) return;
+    const body = (req.body as any) || {};
+    const name = String(body?.name || "").trim();
+    const subject = String(body?.subject || "").trim();
+    const bodyText = String(body?.bodyText || "");
+    const visibility = String(body?.visibility || "SHARED") === "PRIVATE" ? "PRIVATE" : "SHARED";
+    if (!name) return reply.code(400).send({ error: "invalid_payload", detail: "name required" });
+    if (!subject) return reply.code(400).send({ error: "invalid_payload", detail: "subject required" });
+    if (name.length > 200) return reply.code(400).send({ error: "invalid_payload", detail: "name too long" });
+    if (subject.length > 500) return reply.code(400).send({ error: "invalid_payload", detail: "subject too long" });
+    if (bodyText.length > 50000) return reply.code(400).send({ error: "invalid_payload", detail: "body too long" });
+    const row = await db.crmEmailTemplate.create({
+      data: { tenantId: user.tenantId, createdByUserId: user.sub, name, subject, bodyText, visibility },
+    });
+    await db.auditLog.create({ data: { tenantId: user.tenantId, action: "CRM_EMAIL_TEMPLATE_CREATED", entityType: "CrmEmailTemplate", entityId: row.id, actorUserId: user.sub } }).catch(() => undefined);
+    return row;
+  });
+
+  // PUT /crm/email/templates/:id — update (creator or admin only)
+  app.put("/crm/email/templates/:id", async (req, reply) => {
+    const user = await requireAuth(req, reply); if (!user) return;
+    const { id } = req.params as { id: string };
+    const existing = await db.crmEmailTemplate.findFirst({ where: { id, tenantId: user.tenantId } });
+    if (!existing) return reply.code(404).send({ error: "template_not_found" });
+    const isAdmin = user.role === "ADMIN" || user.role === "TENANT_ADMIN" || user.role === "SUPER_ADMIN";
+    if (!isAdmin && existing.createdByUserId !== user.sub) return reply.code(403).send({ error: "forbidden" });
+    const body = (req.body as any) || {};
+    const data: any = {};
+    if (typeof body?.name === "string") data.name = String(body.name).trim().slice(0, 200);
+    if (typeof body?.subject === "string") data.subject = String(body.subject).trim().slice(0, 500);
+    if (typeof body?.bodyText === "string") data.bodyText = String(body.bodyText).slice(0, 50000);
+    if (typeof body?.visibility === "string") data.visibility = body.visibility === "PRIVATE" ? "PRIVATE" : "SHARED";
+    if (typeof body?.isArchived === "boolean") data.isArchived = body.isArchived;
+    if (data.name === "") return reply.code(400).send({ error: "invalid_payload", detail: "name required" });
+    if (data.subject === "") return reply.code(400).send({ error: "invalid_payload", detail: "subject required" });
+    const row = await db.crmEmailTemplate.update({ where: { id }, data });
+    await db.auditLog.create({ data: { tenantId: user.tenantId, action: "CRM_EMAIL_TEMPLATE_UPDATED", entityType: "CrmEmailTemplate", entityId: row.id, actorUserId: user.sub } }).catch(() => undefined);
+    return row;
+  });
+
+  // DELETE /crm/email/templates/:id — archive (soft)
+  app.delete("/crm/email/templates/:id", async (req, reply) => {
+    const user = await requireAuth(req, reply); if (!user) return;
+    const { id } = req.params as { id: string };
+    const existing = await db.crmEmailTemplate.findFirst({ where: { id, tenantId: user.tenantId } });
+    if (!existing) return reply.code(404).send({ error: "template_not_found" });
+    const isAdmin = user.role === "ADMIN" || user.role === "TENANT_ADMIN" || user.role === "SUPER_ADMIN";
+    if (!isAdmin && existing.createdByUserId !== user.sub) return reply.code(403).send({ error: "forbidden" });
+    await db.crmEmailTemplate.update({ where: { id }, data: { isArchived: true } });
+    await db.auditLog.create({ data: { tenantId: user.tenantId, action: "CRM_EMAIL_TEMPLATE_ARCHIVED", entityType: "CrmEmailTemplate", entityId: id, actorUserId: user.sub } }).catch(() => undefined);
+    return { ok: true };
+  });
+
+  // GET /crm/email/recent — recent sent log (for dashboard)
+  app.get("/crm/email/recent", async (req, reply) => {
+    const user = await requireAuth(req, reply); if (!user) return;
+    const limit = Math.min(50, Math.max(1, Number((req.query as any)?.limit ?? 20)));
+    const rows = await db.crmEmailSendLog.findMany({
+      where: { tenantId: user.tenantId, userId: user.sub },
+      orderBy: [{ sentAt: "desc" }],
+      take: limit,
+      select: { id: true, toEmail: true, subject: true, status: true, errorMessage: true, sentAt: true, contactId: true, gmailMessageId: true },
+    });
+    return { sent: rows };
   });
 }

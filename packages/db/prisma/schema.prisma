@@ -111,6 +111,28 @@ model CrmEmailSendLog {
   @@index([tenantId, gmailMessageId])
 }
 
+/// CRM Email Template — Phase 1. Tenant-scoped, optionally user-scoped (private).
+/// Body is plain text; merge fields use {{contact.firstName}} style tokens.
+model CrmEmailTemplate {
+  id          String   @id @default(cuid())
+  tenantId    String
+  createdByUserId String?
+  name        String
+  subject     String
+  bodyText    String
+  /// SHARED across tenant or PRIVATE to creator.
+  visibility  String   @default("SHARED")
+  isArchived  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy   User?  @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, isArchived, updatedAt])
+  @@index([tenantId, createdByUserId])
+}
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -553,6 +575,7 @@ model Tenant {
   crmEmailThreads                 CrmEmailThread[]
   crmEmailMessages                CrmEmailMessage[]
   crmEmailSendLogs                CrmEmailSendLog[]
+  crmEmailTemplates               CrmEmailTemplate[]
 }
 
 model User {
@@ -629,6 +652,7 @@ model User {
   crmEmailMessages               CrmEmailMessage[]
   crmEmailThreads                CrmEmailThread[]
   crmEmailSendLogs               CrmEmailSendLog[]
+  crmEmailTemplates              CrmEmailTemplate[]
 }
 
 enum UserRole {

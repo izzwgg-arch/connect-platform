@@ -23,7 +23,8 @@ export default function CrmEmailSettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const featureEnabled = useMemo(() => (process.env.NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED || "false").toLowerCase() === "true", []);
+  // Phase 1 is launching — default ON unless explicitly disabled at build time.
+  const featureEnabled = useMemo(() => String(process.env.NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED || "true").toLowerCase() !== "false", []);
   const justConnected = useMemo(() => {
     if (typeof window === "undefined") return false;
     return new URLSearchParams(window.location.search).get("connected") === "1";
