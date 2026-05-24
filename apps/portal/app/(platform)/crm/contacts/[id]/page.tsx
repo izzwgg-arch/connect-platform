@@ -201,6 +201,44 @@ function CrmContactDetailInner() {
   const [smsError, setSmsError] = useState<string | null>(null);
   const [smsSuccess, setSmsSuccess] = useState(false);
 
+  // Caller-ID workflow (must be declared before any early return — Rules of Hooks)
+  const [callerIdSelected, setCallerIdSelected] = useState<string | null>(null);
+  const [callerIdChecked, setCallerIdChecked] = useState(false);
+  const [callerIdLoading, setCallerIdLoading] = useState(false);
+
+  // Outcome save ref + keyboard shortcuts — hoisted before any early return
+  // so React sees a consistent hook order on every render.
+  useEffect(() => {
+    saveOutcomeRef.current = saveOutcome;
+  });
+
+  useEffect(() => {
+    function onAnyKey(e: KeyboardEvent) {
+      const tgt = e.target as HTMLElement;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(tgt.tagName)) return;
+      if (tgt.getAttribute("contenteditable") === "true") return;
+      if (!savingOutcome && !disabledOutcome()) {
+        if (e.key >= "1" && e.key <= "6") {
+          const idx = parseInt(e.key, 10) - 1;
+          const d = (DISPOSITION_OPTIONS as readonly string[])[idx];
+          if (d) {
+            e.preventDefault();
+            setDisposition(d);
+            return;
+          }
+        }
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        if (!savingOutcome && disposition) {
+          e.preventDefault();
+          void saveOutcomeRef.current();
+        }
+      }
+    }
+    window.addEventListener("keydown", onAnyKey);
+    return () => window.removeEventListener("keydown", onAnyKey);
+  }, [disposition, savingOutcome]);
+
   // ── Loaders ────────────────────────────────────────────────────────────────
 
   const loadContact = useCallback(async () => {
@@ -715,9 +753,6 @@ function CrmContactDetailInner() {
     smsPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   };
 
-  const [callerIdSelected, setCallerIdSelected] = useState<string | null>(null);
-  const [callerIdChecked, setCallerIdChecked] = useState(false);
-  const [callerIdLoading, setCallerIdLoading] = useState(false);
   const primaryPhone = primaryPhoneRow?.numberRaw ?? null;
   const sipNotice = sipReady || !primaryPhone
     ? null
@@ -802,38 +837,6 @@ function CrmContactDetailInner() {
       setSavingOutcome(false);
     }
   }
-
-  useEffect(() => {
-    saveOutcomeRef.current = saveOutcome;
-  });
-
-  // Keyboard shortcuts: 1–6 set disposition, Enter to save (ignored in inputs)
-  useEffect(() => {
-    function onAnyKey(e: KeyboardEvent) {
-      const tgt = e.target as HTMLElement;
-      if (["INPUT", "TEXTAREA", "SELECT"].includes(tgt.tagName)) return;
-      if (tgt.getAttribute("contenteditable") === "true") return;
-      if (!savingOutcome && !disabledOutcome()) {
-        if (e.key >= "1" && e.key <= "6") {
-          const idx = parseInt(e.key, 10) - 1;
-          const d = (DISPOSITION_OPTIONS as readonly string[])[idx];
-          if (d) {
-            e.preventDefault();
-            setDisposition(d);
-            return;
-          }
-        }
-      }
-      if (e.key === "Enter" && !e.shiftKey) {
-        if (!savingOutcome && disposition) {
-          e.preventDefault();
-          void saveOutcomeRef.current();
-        }
-      }
-    }
-    window.addEventListener("keydown", onAnyKey);
-    return () => window.removeEventListener("keydown", onAnyKey);
-  }, [disposition, savingOutcome]);
 
   const lastTimelineEvent = timeline[0] ?? null;
   const lastInteractionLabel =
