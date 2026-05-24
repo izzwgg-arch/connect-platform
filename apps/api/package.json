@@ -16,7 +16,7 @@
     "build": "tsc -p tsconfig.json",
     "lint": "echo lint-api",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/*.test.ts",
+    "test": "node --experimental-test-module-mocks --import tsx --test \"src/*.test.ts\"",
     "test:billing": "node --experimental-test-module-mocks --import tsx --test \"src/billing/*.test.ts\""
   },
   "dependencies": {

@@ -10,6 +10,7 @@ import type { Queue } from "bullmq";
 import { z } from "zod";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
+import { hasEffectivePortalPermission } from "./platformRolePermissions";
 import { buildVoipMsSmsWebhookCallbackUrl, canonicalSmsPhone } from "@connect/shared";
 import {
   buildChatAttachmentIdSignedDownloadUrl,
@@ -532,45 +533,51 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
 
     await ensureDefaultTenantGroup(tenantId, tenant.name);
 
-    const parts = await db.connectChatParticipant.findMany({
-      where: {
-        userId: user.sub,
-        leftAt: null,
-        thread: { tenantId, active: true },
-      },
-      include: {
-        thread: {
-          include: {
-            messages: {
-              where: { deletedForEveryoneAt: null },
-              orderBy: { createdAt: "desc" },
-              take: 1,
-              select: { id: true, body: true, createdAt: true, type: true, senderUserId: true, deliveryStatus: true, deliveryError: true },
-            },
-            participants: {
-              where: { leftAt: null },
-              include: {
-                user: { select: { id: true, email: true } },
-                extension: { select: { id: true, extNumber: true, displayName: true } },
-              },
-            },
-          },
-        },
-      },
-      orderBy: { thread: { lastMessageAt: "desc" } },
-    });
+    const canViewTenant = await hasEffectivePortalPermission(user, "can_view_tenant_chats" as any).catch(() => false);
 
-    const threads = await Promise.all(parts.map(async (p) => {
-      const t = p.thread;
-      const last = t.messages[0];
-      const unread = await db.connectChatMessage.count({
-        where: {
-          threadId: t.id,
-          deletedForEveryoneAt: null,
-          senderUserId: { not: user.sub },
-          createdAt: p.lastReadAt ? { gt: p.lastReadAt } : undefined,
+    const baseThreadInclude = {
+      messages: {
+        where: { deletedForEveryoneAt: null },
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: { id: true, body: true, createdAt: true, type: true, senderUserId: true, deliveryStatus: true, deliveryError: true },
+      },
+      participants: {
+        where: { leftAt: null },
+        include: {
+          user: { select: { id: true, email: true } },
+          extension: { select: { id: true, extNumber: true, displayName: true } },
         },
-      });
+      },
+    } as const;
+
+    const threadsRaw = canViewTenant
+      ? await db.connectChatThread.findMany({
+          where: { tenantId, active: true },
+          include: baseThreadInclude,
+          orderBy: { lastMessageAt: "desc" },
+          take: 200,
+        })
+      : (await db.connectChatParticipant.findMany({
+          where: { userId: user.sub, leftAt: null, thread: { tenantId, active: true } },
+          include: { thread: { include: baseThreadInclude } },
+          orderBy: { thread: { lastMessageAt: "desc" } },
+        })).map((p) => p.thread);
+
+    const threads = await Promise.all(threadsRaw.map(async (t: any) => {
+      const last = t.messages[0];
+      let unread = 0;
+      if (!canViewTenant) {
+        const part = await db.connectChatParticipant.findFirst({ where: { threadId: t.id, userId: user.sub, leftAt: null } });
+        unread = await db.connectChatMessage.count({
+          where: {
+            threadId: t.id,
+            deletedForEveryoneAt: null,
+            senderUserId: { not: user.sub },
+            createdAt: part?.lastReadAt ? { gt: part.lastReadAt } : undefined,
+          },
+        });
+      }
       let participantName = t.title || "Chat";
       let participantExtension = "";
       if (t.type === "SMS") {
@@ -579,7 +586,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       } else if (t.type === "TENANT_GROUP") {
         participantName = t.title || "Tenant Group";
       } else if (t.type === "DM") {
-        const peer = t.participants.find((row) => row.userId && row.userId !== user.sub);
+        const peer = t.participants.find((row: any) => row.userId && row.userId !== user.sub);
         if (peer?.user) participantName = displayUserName(peer.user);
         if (peer?.extension) participantExtension = peer.extension.extNumber;
       } else if (t.type === "GROUP") {
@@ -869,10 +876,16 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     const user = req.user as JwtUser;
     const { threadId } = req.params as { threadId: string };
     const tenantId = effectiveChatTenantId(req, user);
-    const part = await db.connectChatParticipant.findFirst({
+    let part = await db.connectChatParticipant.findFirst({
       where: { threadId, userId: user.sub, leftAt: null, thread: { tenantId } },
     });
-    if (!part) return reply.status(404).send({ error: "THREAD_NOT_FOUND" });
+    if (!part) {
+      const canViewTenant = await hasEffectivePortalPermission(user, "can_view_tenant_chats" as any).catch(() => false);
+      if (!canViewTenant) return reply.status(404).send({ error: "THREAD_NOT_FOUND" });
+      const thread = await db.connectChatThread.findFirst({ where: { id: threadId, tenantId }, select: { id: true } });
+      if (!thread) return reply.status(404).send({ error: "THREAD_NOT_FOUND" });
+      // allow read without participant, keep part=null so unread calc below skips
+    }
     const [rowsRaw, threadRow] = await Promise.all([
       db.connectChatMessage.findMany({
         where: { threadId },

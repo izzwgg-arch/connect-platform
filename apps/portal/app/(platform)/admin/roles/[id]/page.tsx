@@ -45,6 +45,14 @@ const DANGEROUS_PERMISSIONS: Set<string> = new Set([
   "can_sync_voip_ms_numbers",
 ]);
 
+// Tenant-wide communications permission keys and labels
+const TENANT_COMM_PERMS: Array<{ key: PortalPermissionKey | string; label: string }> = [
+  { key: "can_view_tenant_call_history",    label: "View all tenant call history" },
+  { key: "can_view_tenant_voicemails",      label: "View all tenant voicemails" },
+  { key: "can_view_tenant_chats",           label: "View all tenant chats" },
+  { key: "can_view_tenant_call_recordings", label: "View all tenant call recordings" },
+];
+
 function PermissionToggle({
   checked,
   disabled,
@@ -358,7 +366,7 @@ export default function RoleEditPage() {
               </div>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <tbody>
-                  {ACTION_PERMISSION_KEYS.map((key, idx) => {
+                  {ACTION_PERMISSION_KEYS.filter((k) => !TENANT_COMM_PERMS.some((t) => t.key === k)).map((key, idx) => {
                     const isGrantable = grantable.has(key);
                     const checked = selectedPerms.has(key);
                     const isDangerous = DANGEROUS_PERMISSIONS.has(key);
@@ -385,6 +393,49 @@ export default function RoleEditPage() {
                                   <span className="chip warning" style={{ fontSize: 10, marginLeft: 6 }}>Elevated</span>
                                 )}
                               </div>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Tenant Communications Access */}
+            <div className="panel" style={{ overflow: "hidden" }}>
+              <div style={{ padding: "12px 16px", background: "var(--panel-2)", borderBottom: "1px solid var(--border)" }}>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>Tenant Communications Access</div>
+                <div className="muted" style={{ fontSize: 11 }}>
+                  Allows this role to view communications for all users in the same tenant only.
+                </div>
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <tbody>
+                  {TENANT_COMM_PERMS.map((p, idx) => {
+                    const key = p.key as string;
+                    const isGrantable = grantable.has(key);
+                    const checked = selectedPerms.has(key);
+                    return (
+                      <tr
+                        key={key}
+                        style={{
+                          borderBottom: idx < TENANT_COMM_PERMS.length - 1 ? "1px solid var(--border)" : undefined,
+                          background: idx % 2 === 0 ? undefined : "rgba(255,255,255,0.01)",
+                        }}
+                      >
+                        <td style={{ padding: "9px 16px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <PermissionToggle
+                              checked={checked}
+                              disabled={!isGrantable}
+                              title={!isGrantable ? "You cannot grant this permission" : p.label}
+                              onChange={(v) => togglePerm(key, v)}
+                            />
+                            <div>
+                              <div style={{ fontSize: 12, fontWeight: 600 }}>{p.label}</div>
+                              <div className="muted" style={{ fontSize: 10 }}>{key}</div>
                             </div>
                           </div>
                         </td>

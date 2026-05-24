@@ -54,6 +54,8 @@ import {
   buildExpoPushV2Item,
   EXPO_PUSH_USER_ALERT_TYPES,
 } from "@connect/shared";
+import { registerOnboardingProvisioningRoutes } from "./onboarding/provisioningRoutes";
+import { registerOnboardingPublicRoutes } from "./onboarding/publicRoutes";
 import {
   FakeNumberProvider,
   NumberProvider,
@@ -14469,6 +14471,21 @@ function isExtensionScopedCallViewer(user: JwtUser): boolean {
   return !isTenantWideCallViewer(user);
 }
 
+/**
+ * New tenant-wide call-history scope based on custom-role permission.
+ * SUPER_ADMIN is never extension-scoped.
+ */
+async function isExtensionScopedCallViewerForUser(user: JwtUser): Promise<boolean> {
+  if (isSuperAdminUser(user)) return false;
+  try {
+    const ok = await hasEffectivePortalPermission(user, "can_view_tenant_call_history" as any);
+    return !ok;
+  } catch {
+    // Fallback to legacy role-based behavior on resolver error
+    return isExtensionScopedCallViewer(user);
+  }
+}
+
 async function getUserExtensionNumbers(user: JwtUser): Promise<string[]> {
   if (!user?.tenantId || !user?.sub) return [];
   const rows = await db.extension.findMany({
@@ -14549,8 +14566,11 @@ app.get("/voice/voicemail", async (req, reply) => {
   let scopedMailboxesForLog: string[] | undefined;
   /** Defense-in-depth: strip any row not matching unified scope (should never happen if Prisma where is correct). */
   let postFetchOwnedScope: VoicemailOwnedScope | null = null;
+  /** Whether tenant-wide vm scope (same-tenant only) was used */
+  let usedTenantWide = false;
 
-  let where: Record<string, any>;
+  // Initialize with safe defaults so TS sees it as always assigned; specific branches will overwrite.
+  let where: Record<string, any> = { deletedAt: null, folder: q.folder } as any;
 
   if (isSuperAdmin) {
     where = { deletedAt: null, folder: q.folder };
@@ -14577,20 +14597,39 @@ app.get("/voice/voicemail", async (req, reply) => {
     const extQ = (q.extension || "").trim();
     if (extQ) where.extension = extQ;
   } else {
-    const ownedScope = await resolveVoicemailOwnedScopeForJwtUser(user);
-    if (!ownedScope.ok) {
-      applyVoicemailScopeResponseHeaders(reply, "contained-owned", []);
-      return reply.send({
-        voicemails: [],
-        total: 0,
-        page: q.page,
-        voicemailScopeVersion: "contained-owned",
-        scopedMailboxesForUser: [],
-      });
+    // Prefer tenant-wide vm list if user holds the custom role permission; else fall back to owned scope
+    try {
+      const hasTenantVm = await hasEffectivePortalPermission(user, "can_view_tenant_voicemails" as any);
+      if (hasTenantVm && user.tenantId) {
+        const tenantIdFilter = await resolveTenantIdFilterSet(user.tenantId);
+        where = { deletedAt: null, folder: q.folder } as any;
+        if (tenantIdFilter && tenantIdFilter.length > 0) {
+          (where as any).tenantId = tenantIdFilter.length === 1 ? tenantIdFilter[0] : { in: tenantIdFilter };
+        }
+        const extQ = (q.extension || "").trim();
+        if (extQ) (where as any).extension = extQ;
+        usedTenantWide = true;
+        applyVoicemailScopeResponseHeaders(reply, "tenant", null);
+      }
+    } catch {
+      // ignore and fall back to owned scope
     }
-    postFetchOwnedScope = { tenantIds: ownedScope.tenantIds, extensions: ownedScope.extensions };
-    scopedMailboxesForLog = ownedScope.extensions;
-    where = buildVoicemailListWhere(q.folder, postFetchOwnedScope);
+    if (!usedTenantWide) {
+      const ownedScope = await resolveVoicemailOwnedScopeForJwtUser(user);
+      if (!ownedScope.ok) {
+        applyVoicemailScopeResponseHeaders(reply, "contained-owned", []);
+        return reply.send({
+          voicemails: [],
+          total: 0,
+          page: q.page,
+          voicemailScopeVersion: "contained-owned",
+          scopedMailboxesForUser: [],
+        });
+      }
+      postFetchOwnedScope = { tenantIds: ownedScope.tenantIds, extensions: ownedScope.extensions };
+      scopedMailboxesForLog = ownedScope.extensions;
+      where = buildVoicemailListWhere(q.folder, postFetchOwnedScope);
+    }
   }
 
   const take = 100;
@@ -14628,12 +14667,12 @@ app.get("/voice/voicemail", async (req, reply) => {
     return d.length <= 4 ? "****" : `…${d.slice(-4)}`;
   });
 
-  const listScopeVersion = isSuperAdmin ? "super-admin" : "contained-owned";
+  const listScopeVersion = isSuperAdmin ? "super-admin" : (usedTenantWide ? "tenant" : "contained-owned");
   const listScopedMailboxes: string[] | null = isSuperAdmin
     ? (q.extension || "").trim()
       ? [(q.extension || "").trim()]
       : null
-    : scopedMailboxesForLog ?? [];
+    : (usedTenantWide ? null : (scopedMailboxesForLog ?? []));
 
   app.log.info(
     {
@@ -14728,6 +14767,19 @@ async function canAccessVoicemail(
   if (isSuperAdmin) {
     applyVoicemailScopeResponseHeaders(reply, "super-admin", null);
     return true;
+  }
+  // Tenant-wide voicemail permission: allow any mailbox within same tenant set
+  try {
+    const hasTenant = await hasEffectivePortalPermission(user, "can_view_tenant_voicemails" as any);
+    if (hasTenant) {
+      const tenantIds = user.tenantId ? (await resolveTenantIdFilterSet(user.tenantId)) ?? [] : [];
+      const ok = vm.tenantId != null && tenantIds.includes(vm.tenantId);
+      applyVoicemailScopeResponseHeaders(reply, "tenant", null);
+      if (!ok) reply.code(403).send({ error: "forbidden" });
+      return ok;
+    }
+  } catch {
+    // fall through
   }
 
   const scope = await resolveVoicemailOwnedScopeForJwtUser(user);
@@ -15798,8 +15850,22 @@ async function streamCallRecording(
     if (rec.tenantId && user.tenantId !== rec.tenantId) {
       reply.code(403).send({ error: "forbidden" }); return;
     }
-    if (user.extension && rec.extension && user.extension !== rec.extension) {
-      reply.code(403).send({ error: "forbidden" }); return;
+    let allowTenantWide = false;
+    try {
+      allowTenantWide = await hasEffectivePortalPermission({
+        role: user.role,
+        sub: (user as any)?.sub || String((user as any)?.id || ""),
+        tenantId: user.tenantId,
+      } as any, "can_view_tenant_call_recordings" as any);
+    } catch { /* noop */ }
+    if (!allowTenantWide) {
+      let owned: string[] = [];
+      try {
+        owned = await getUserExtensionNumbers(user as any);
+      } catch { owned = []; }
+      if (rec.extension && owned.length > 0 && !owned.includes(rec.extension)) {
+        reply.code(403).send({ error: "forbidden" }); return;
+      }
     }
   }
 
@@ -22095,7 +22161,7 @@ app.get("/calls/history", async (req, reply) => {
 
   const isSuperAdmin = isSuperAdminUser(user);
   const requestedTenantId = query.tenantId && query.tenantId !== "global" ? query.tenantId : null;
-  const extensionScoped = isExtensionScopedCallViewer(user);
+  const extensionScoped = await isExtensionScopedCallViewerForUser(user);
   const userExtensions = extensionScoped ? await getUserExtensionNumbers(user) : [];
 
   // Build the set of tenantId values to filter by.
@@ -27065,7 +27131,7 @@ app.get("/dashboard/call-kpis", async (req, reply) => {
   const customFrom = query.range === "custom" && query.from ? new Date(query.from) : null;
   const customTo = query.range === "custom" && query.to ? new Date(query.to) : null;
 
-  const extensionScoped = isExtensionScopedCallViewer(user);
+  const extensionScoped = await isExtensionScopedCallViewerForUser(user);
   const userExtensions = extensionScoped ? await getUserExtensionNumbers(user) : [];
   const wantPbxAggregate = query.source === "pbx" && !extensionScoped;
 
@@ -27671,7 +27737,7 @@ app.get("/dashboard/call-traffic", async (req, reply) => {
   const customTo = query.range === "custom" && query.to ? new Date(query.to) : null;
 
   const isSuperAdmin = isSuperAdminUser(user);
-  const extensionScoped = isExtensionScopedCallViewer(user);
+  const extensionScoped = await isExtensionScopedCallViewerForUser(user);
   const userExtensions = extensionScoped ? await getUserExtensionNumbers(user) : [];
   const scope = query.scope === "GLOBAL" && isSuperAdmin ? "GLOBAL" : "TENANT";
 
@@ -31447,6 +31513,8 @@ const port = Number(process.env.PORT || 3001);
   await registerBillingRoutes(app);
   await registerPlatformRolePermissionRoutes(app);
   await registerCustomRoleRoutes(app);
+  await registerOnboardingPublicRoutes(app);
+  await registerOnboardingProvisioningRoutes(app);
   registerUserExtensionProvisioningRoutes(app, {
     getUser: getUser as any,
     requirePermission: requirePermission as any,

@@ -137,6 +137,11 @@ export const ACTION_PERMISSION_KEYS = [
   "can_view_crm_reports",
   "can_view_crm_campaigns",
   "can_view_crm_queue",
+  // Tenant-wide communications access (custom role grantable)
+  "can_view_tenant_call_history",
+  "can_view_tenant_voicemails",
+  "can_view_tenant_chats",
+  "can_view_tenant_call_recordings",
 ] as const;
 
 export type SidebarSectionPermissionKey = (typeof SIDEBAR_SECTIONS)[number]["permission"];
@@ -320,6 +325,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<PortalRoleBucket, PortalPermission
 export const PROTECTED_PLATFORM_ADMIN_PERMISSIONS: PortalPermissionKey[] = [
   "can_view_section_admin",
   "can_view_admin_permissions",
+  "can_view_admin_roles",
   "can_manage_global_settings",
 ];
 

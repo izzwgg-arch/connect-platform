@@ -1,3 +1,14 @@
+### Calls — Call History (tenant-scoped)
+
+- `GET /calls/history` supports tenant-wide scope for users holding the custom-role permission `can_view_tenant_call_history`. Without it, non–super-admin users are restricted to their own extension activity. Tenant isolation is always enforced.
+
+### Call Recordings (tenant-scoped)
+
+- `GET /voice/recording/:linkedId/(stream|download)` enforces the same scope as call history. Users with `can_view_tenant_call_recordings` may access recordings for any call in their tenant; others are limited to calls involving their owned extension. SUPER_ADMIN behavior unchanged.
+
+### Chat (tenant-scoped view)
+
+- `GET /chat/threads` and `GET /chat/threads/:threadId/messages` allow tenant-wide read-only viewing when the user holds `can_view_tenant_chats`. Without it, users only see threads they participate in. Sending/moderation permissions are unchanged.
 # API Route Inventory — `apps/api/src/server.ts`
 
 > **Purpose:** Let agents jump to the right ~50-line slice of `server.ts`
@@ -376,6 +387,7 @@ will keep playing `mohN`.
 **Purpose:** mailbox listing, greeting upload/download, voicemail playback. Distinct from `/voice/voicemail/*` admin endpoints.
 **Auth requirements:** JWT.
 **Risk:** **HIGH** — touches recordings and audio assets per-tenant.
+**Tenant-wide permission:** Users with `can_view_tenant_voicemails` may list and access voicemails for all mailboxes within their own tenant. Others remain limited to their owned mailbox extensions. SUPER_ADMIN unchanged.
 **Playback:** `GET /voice/voicemail/:id/stream` and `GET /voice/voicemail/:id/download` (`apps/api/src/server.ts`,
 `streamVoicemailAudio`) — VitalPBX **`pbxRecfile`** / REST first; **Phase 2** may call on-PBX **`POST /voicemail/spool/audio`**
 and log **`helper_audio_fallback: true`** (`TELEPHONY.md`).
@@ -683,3 +695,47 @@ These are registered near the **end** of `server.ts` (lines 30198–30265):
 4. If the prefix is missing from the table, grep first:
    `Select-String -Path "apps\api\src\server.ts" -Pattern '"/<prefix>/'`
 5. Any change to a row marked **EXTREME** requires reading `RULES.md` and the relevant subsystem doc (`TELEPHONY.md`, `ASTDB_KEYS.md`, or the billing equivalent) **before** editing.
+
+---
+
+## Onboarding (public wizard + admin)
+
+Public wizard routes are registered via `registerOnboardingPublicRoutes(app)` in `apps/api/src/onboarding/publicRoutes.ts`.
+Admin provisioning workspace routes are registered via `registerOnboardingProvisioningRoutes(app)` in `apps/api/src/onboarding/provisioningRoutes.ts`.
+
+Auth:
+- Public token routes under `/onboarding/*` are JWT-bypassed via `jwtPublicRouteBypass.ts` but strictly token-scoped and expiry-gated.
+- Admin routes under `/admin/onboarding/*` require `SUPER_ADMIN`.
+
+Endpoints:
+
+Public:
+- `GET /onboarding/:token/validate` — Validate token; lazily creates an `OnboardingSubmission` on first access. Returns `{ invite, submission }`.
+- `GET /onboarding/:token/public-config` — Returns `{ ifieldsKey, mode, canTokenize, ifieldsVersion }` for card tokenization UI. Today `canTokenize=false` and `ifieldsKey=null` (card on file is optional).
+- `PUT /onboarding/:token/save` — Autosave wizard state. Body: `{ currentStep?, answers? }` is preserved under a wizard envelope (JSON) for resume.
+- `POST /onboarding/:token/upload-bill` — Multipart upload (field `file`) for optional latest bill. Stored via shared storage driver and linked as `OnboardingUploadedFile`.
+- `POST /onboarding/:token/card` — Temporarily returns `{ error: "card_disabled" }` with 503. No raw PAN/CVV is ever stored.
+- `POST /onboarding/:token/submit` — Finalize: validates required fields, rejects duplicate/non-numeric extensions, persists requested extensions, sets `smsMonthlyPriceCents` to 1000 when enabled, marks `status=SUBMITTED`, sets `submittedAt`, appends an onboarding event. Does not auto-create a tenant or touch PBX.
+
+Admin:
+- `GET /admin/onboarding/submissions` — List recent submissions (summary rows for admin table).
+- `GET /admin/onboarding/submissions/:id/vitalpbx.csv` — Download VitalPBX extension CSV (validated, CSV-escaped).
+- `GET /admin/onboarding/submissions/:id/files/:fileId/download` — Download stored onboarding artifact (e.g., uploaded bill). SUPER_ADMIN only; enforces submission/file match.
+
+DB models: `OnboardingSubmission`, `OnboardingRequestedExtension`, `OnboardingUploadedFile`, `OnboardingEvent`.
+
+Security notes:
+- Tokens are high-entropy (48 hex chars). Expired/canceled/submitted tokens reject save/submit.
+- Public routes never expose tenant/admin state; all writes are submission-scoped.
+
+### Onboarding — Provisioning workspace (Phase 2)
+
+Registered via `registerOnboardingProvisioningRoutes(app)` (end of `server.ts`). SUPER_ADMIN only.
+
+- `GET /admin/onboarding/submissions/:id` — load a submission with requested extensions, files, and recent events.
+- `GET /admin/onboarding/submissions` — list recent submissions (summary fields: counts, csvAvailable, hasCardOnFile).
+- `POST /admin/onboarding/submissions/:id/status` — `{ status }` guarded by allowed transitions; appends a `STATUS_CHANGED` event.
+- `POST /admin/onboarding/submissions/:id/checklist` — `{ checklist: Record<string, boolean> }`; persists JSON and appends `CHECKLIST_UPDATED`.
+- `POST /admin/onboarding/submissions/:id/notes` — `{ notes }`; updates internal notes and appends `NOTE_ADDED`.
+- `GET /admin/onboarding/submissions/:id/vitalpbx.csv` — CSV export using latest requested extensions; safe CSV escaping; deterministic filename.
+- `GET /admin/onboarding/submissions/:id/files/:fileId/download` — admin-only file download; does not expose public URLs.
