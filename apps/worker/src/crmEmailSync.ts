@@ -31,7 +31,7 @@ async function refreshAccessToken(refreshToken: string): Promise<{ accessToken: 
   return { accessToken, expiresAt: expiresInSec ? new Date(Date.now() + expiresInSec * 1000) : null, scope, tokenType };
 }
 
-export async function processCrmEmailSyncJob(job: { tenantId: string; connectionId: string }) {
+export async function processCrmEmailSyncJob(job: { tenantId: string; connectionId: string; diag?: boolean }) {
   const { tenantId, connectionId } = job;
   const conn = await db.crmEmailConnection.findFirst({ where: { id: connectionId, tenantId, status: "CONNECTED", replyTrackingEnabled: true } });
   if (!conn) return { ok: true, skipped: true };
@@ -64,6 +64,9 @@ export async function processCrmEmailSyncJob(job: { tenantId: string; connection
   const threads = await db.crmEmailThread.findMany({ where: { tenantId, senderConnectionId: conn.id }, select: { id: true, gmailThreadId: true, contactId: true, userId: true } });
   let fetched = 0;
   let inserted = 0;
+  let skippedNotInbound = 0;
+  let skippedDuplicates = 0;
+  let errorCount = 0;
 
   for (const t of threads) {
     const url = new URL(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(t.gmailThreadId)}`);
@@ -76,9 +79,18 @@ export async function processCrmEmailSyncJob(job: { tenantId: string; connection
     url.searchParams.append("metadataHeaders", "Message-Id");
     url.searchParams.append("metadataHeaders", "In-Reply-To");
     url.searchParams.append("metadataHeaders", "References");
-    const res = await fetch(url.toString(), { headers: { authorization: `Bearer ${accessToken}` } });
-    const json: any = await res.json().catch(() => ({}));
-    if (!res.ok) continue;
+    let json: any = null;
+    try {
+      const res = await fetch(url.toString(), { headers: { authorization: `Bearer ${accessToken}` } });
+      json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        errorCount += 1;
+        continue;
+      }
+    } catch {
+      errorCount += 1;
+      continue;
+    }
     const msgs: any[] = Array.isArray(json?.messages) ? json.messages : [];
     fetched += msgs.length;
 
@@ -96,8 +108,13 @@ export async function processCrmEmailSyncJob(job: { tenantId: string; connection
       const snippet = typeof m?.snippet === "string" ? m.snippet.slice(0, 300) : null;
 
       // Inbound: message in INBOX and not from our own sender address.
-      const inbound = labels.includes("INBOX") && (!!fromEmail && fromEmail.toLowerCase() !== String(conn.emailAddress || "").toLowerCase());
-      if (!inbound) continue;
+      const isOwnSender = !!fromEmail && fromEmail.toLowerCase() === String(conn.emailAddress || "").toLowerCase();
+      const inInbox = labels.includes("INBOX");
+      const inbound = inInbox && !isOwnSender;
+      if (!inbound) {
+        skippedNotInbound += 1;
+        continue;
+      }
 
       try {
         await db.crmEmailMessage.create({
@@ -133,9 +150,33 @@ export async function processCrmEmailSyncJob(job: { tenantId: string; connection
         }
       } catch {
         // Unique conflict or validation error — skip silently (metadata only)
+        skippedDuplicates += 1;
       }
     }
   }
 
-  return { ok: true, fetched, inserted };
+  // Update lastSyncAt regardless of outcome (indicates we attempted)
+  await db.crmEmailConnection.update({ where: { id: conn.id }, data: { lastSyncAt: new Date(), lastError: errorCount ? `errors:${errorCount}` : null } }).catch(() => undefined);
+
+  // Write a compact audit breadcrumb with counts only (no message bodies)
+  try {
+    await db.auditLog.create({
+      data: {
+        tenantId,
+        action: "CRM_EMAIL_SYNC_RESULT",
+        entityType: "CrmEmailConnection",
+        entityId: conn.id,
+        metadata: {
+          threadsChecked: threads.length,
+          fetched,
+          inserted,
+          skippedNotInbound,
+          skippedDuplicates,
+          errors: errorCount,
+        },
+      },
+    });
+  } catch {}
+
+  return { ok: true, threadsChecked: threads.length, fetched, inserted, skippedNotInbound, skippedDuplicates, errors: errorCount };
 }

@@ -36,7 +36,7 @@ type Sender = {
   lastError?: string | null;
 };
 
-type ConnectionsResp = { senders: Sender[]; canManageTenantSenders: boolean };
+type ConnectionsResp = { senders: Sender[]; canManageTenantSenders: boolean; autoSyncEnabled?: boolean; autoSyncIntervalMs?: number };
 
 function isConnected(s: Sender): boolean {
   return s.status === "CONNECTED";
@@ -76,6 +76,8 @@ export default function CrmEmailSettingsPage() {
   const userSender = data?.senders.find((s) => s.scope === "USER" && s.isMine) ?? null;
   const tenantSenders = data?.senders.filter((s) => s.scope === "TENANT") ?? [];
   const canManageTenant = Boolean(data?.canManageTenantSenders);
+  const autoSyncEnabled = Boolean(data?.autoSyncEnabled);
+  const autoSyncIntervalMs = Math.max(60000, Number(data?.autoSyncIntervalMs || 0));
 
   const startOAuth = async (
     scope: "USER" | "TENANT",
@@ -212,6 +214,18 @@ export default function CrmEmailSettingsPage() {
         title="CRM Email Settings"
         subtitle="Send CRM emails from your personal Google account or a tenant-shared mailbox. Metadata-first — Connect never archives inboxes."
       />
+
+      <div className="flex items-center gap-2 rounded-crm border border-crm-border/70 bg-crm-surface-2/40 px-3 py-2 text-xs text-crm-muted">
+        <span className="font-semibold text-crm-text">Auto-sync:</span>
+        {autoSyncEnabled ? (
+          <>
+            <span className="text-crm-success">Enabled</span>
+            {autoSyncIntervalMs ? <span>· every {Math.round(autoSyncIntervalMs / 60000)} min</span> : null}
+          </>
+        ) : (
+          <span className="text-crm-warning">Disabled</span>
+        )}
+      </div>
 
       {justConnected && (
         <div className="flex items-center gap-2 rounded-crm border border-crm-success/40 bg-crm-success/10 px-3 py-2 text-sm text-crm-success">
@@ -424,6 +438,12 @@ function SenderRow({
                 <span className="text-crm-success">Enabled</span>
               ) : (
                 <span className="text-crm-warning">Disabled</span>
+              )}
+              {sender.lastSyncAt && (
+                <>
+                  {" · Last synced "}
+                  <span className="text-crm-text">{new Date(sender.lastSyncAt).toLocaleString()}</span>
+                </>
               )}
             </p>
           )}

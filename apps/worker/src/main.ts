@@ -46,6 +46,7 @@ import { processCrmEmailSyncJob } from "./crmEmailSync";
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
 const smsQueue = new Queue("sms-send", { connection: redis });
+const emailSyncQueue = new Queue("crm-email-sync", { connection: redis });
 
 const providerCache = new Map<string, { provider: SmsProvider; expiresAt: number }>();
 const providerCacheTtlMs = 60_000;
@@ -1253,6 +1254,53 @@ if (!_crmEmailPhase1Off) {
   crmEmailSyncWorker.on("completed", (job) => console.log(`crm-email-sync completed: ${job.id}`));
   crmEmailSyncWorker.on("failed", (job, err) => console.error(`crm-email-sync failed: ${job?.id} -> ${err?.message}`));
   console.log("CRM Email sync worker started");
+
+  // ─── CRM Email auto-sync scheduler (metadata-only, threads-only) ───────────
+  const autoSyncEnabled = (process.env.CRM_EMAIL_AUTO_SYNC_ENABLED || "false").toLowerCase() === "true";
+  const autoSyncIntervalMs = Math.max(60_000, Number(process.env.CRM_EMAIL_AUTO_SYNC_INTERVAL_MS || 300_000));
+  const autoSyncBatchSize = Math.max(1, Math.min(100, Number(process.env.CRM_EMAIL_AUTO_SYNC_BATCH_SIZE || 20)));
+
+  async function runCrmEmailAutoSyncTick() {
+    try {
+      // Single-run lock across all worker replicas
+      const ttl = Math.max(30_000, Math.floor(autoSyncIntervalMs * 0.9));
+      const ok = await (redis as any).set("crm:email:auto_sync:lock", "1", "PX", ttl, "NX");
+      if (ok !== "OK") return; // another worker holds the tick lock
+
+      const rows = await db.crmEmailConnection.findMany({
+        where: { replyTrackingEnabled: true, status: "CONNECTED" },
+        orderBy: [{ lastSyncAt: "asc" }],
+        select: { id: true, tenantId: true },
+        take: autoSyncBatchSize,
+      });
+
+      let enqueued = 0;
+      for (const r of rows) {
+        try {
+          await emailSyncQueue.add(
+            "sync",
+            { tenantId: r.tenantId, connectionId: r.id },
+            { jobId: `autosync:${r.id}`, removeOnComplete: 100, removeOnFail: 100 }
+          );
+          enqueued += 1;
+        } catch {
+          // duplicate jobId or transient add error — skip safely
+        }
+      }
+
+      console.log(`CRM Email auto-sync tick: checked=${rows.length} enqueued=${enqueued}`);
+    } catch (e: any) {
+      console.error("CRM Email auto-sync tick error:", e?.message || e);
+    }
+  }
+
+  if (autoSyncEnabled) {
+    setTimeout(runCrmEmailAutoSyncTick, 5_000);
+    setInterval(runCrmEmailAutoSyncTick, autoSyncIntervalMs);
+    console.log(`CRM Email auto-sync enabled (intervalMs=${autoSyncIntervalMs}, batchSize=${autoSyncBatchSize})`);
+  } else {
+    console.log("CRM Email auto-sync disabled (set CRM_EMAIL_AUTO_SYNC_ENABLED=true to enable)");
+  }
 }
 
 // Voicemail sync: `runVoicemailSyncCycle` in `./voicemailSyncCycle.ts` (fair helper scheduling).

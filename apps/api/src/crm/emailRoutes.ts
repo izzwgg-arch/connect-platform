@@ -176,7 +176,9 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       lastSyncAt: r.lastSyncAt,
       lastError: r.lastError,
     }));
-    return { senders, canManageTenantSenders: isAdmin };
+    const autoSyncEnabled = (process.env.CRM_EMAIL_AUTO_SYNC_ENABLED || "false").toLowerCase() === "true";
+    const autoSyncIntervalMs = Math.max(60_000, Number(process.env.CRM_EMAIL_AUTO_SYNC_INTERVAL_MS || 300_000));
+    return { senders, canManageTenantSenders: isAdmin, autoSyncEnabled, autoSyncIntervalMs };
   });
 
   // POST /crm/email/oauth/start — returns Google OAuth URL (send-only scope in Phase 1)
@@ -618,6 +620,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     const user = await requireAuth(req, reply); if (!user) return;
     const body = (req.body as any) || {};
     const explicitId = body?.connectionId ? String(body.connectionId) : null;
+    const diag = body?.diag === true;
     let targets: { id: string; scope: "USER" | "TENANT"; userId: string | null }[] = [];
     if (explicitId) {
       const r = await db.crmEmailConnection.findFirst({ where: { id: explicitId, tenantId: user.tenantId }, select: { id: true, scope: true, userId: true, replyTrackingEnabled: true, status: true } });
@@ -643,9 +646,27 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       targets = rows as any;
     }
     for (const t of targets) {
-      await emailSyncQueue.add("sync", { tenantId: user.tenantId, connectionId: t.id }, { removeOnComplete: 100, removeOnFail: 100 });
+      await emailSyncQueue.add("sync", { tenantId: user.tenantId, connectionId: t.id, diag }, { removeOnComplete: 100, removeOnFail: 100 });
     }
     return { ok: true, queued: targets.length };
+  });
+
+  // GET /crm/email/sync-last — last sync diagnostics for a connection (admin or owner)
+  app.get("/crm/email/sync-last", async (req, reply) => {
+    const user = await requireAuth(req, reply); if (!user) return;
+    const { connectionId } = req.query as any;
+    const id = String(connectionId || "");
+    if (!id) return reply.code(400).send({ error: "invalid_query" });
+    const row = await db.crmEmailConnection.findFirst({ where: { id, tenantId: user.tenantId }, select: { id: true, scope: true, userId: true } });
+    if (!row) return reply.code(404).send({ error: "connection_not_found" });
+    const allowed = (row.scope === "USER" && row.userId === user.sub) || (row.scope === "TENANT" && canManageTenantSender(user));
+    if (!allowed) return reply.code(403).send({ error: "forbidden" });
+    const audit = await db.auditLog.findFirst({
+      where: { tenantId: user.tenantId, entityType: "CrmEmailConnection", entityId: id, action: "CRM_EMAIL_SYNC_RESULT" },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true, metadata: true },
+    });
+    return { last: audit || null };
   });
 
   // GET /crm/email/replies/recent — metadata-only recent inbound messages
