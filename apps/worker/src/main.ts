@@ -42,6 +42,7 @@ import {
   buildExpoPushV2Item,
 } from "@connect/shared";
 import { processCrmEmailSendJob } from "./crmEmailSend";
+import { processCrmEmailSyncJob } from "./crmEmailSync";
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
 const smsQueue = new Queue("sms-send", { connection: redis });
@@ -1227,6 +1228,7 @@ console.log("SMS worker started");
 // unless explicitly disabled via CRM_EMAIL_PHASE1_ENABLED=false.
 const _crmEmailPhase1Off = String(process.env.CRM_EMAIL_PHASE1_ENABLED || "true").toLowerCase() === "false";
 let crmEmailWorker: Worker | null = null;
+let crmEmailSyncWorker: Worker | null = null;
 if (!_crmEmailPhase1Off) {
   crmEmailWorker = new Worker(
     "crm-email-send",
@@ -1239,6 +1241,18 @@ if (!_crmEmailPhase1Off) {
   crmEmailWorker.on("completed", (job) => console.log(`crm-email job completed: ${job.id}`));
   crmEmailWorker.on("failed", (job, err) => console.error(`crm-email job failed: ${job?.id} -> ${err?.message}`));
   console.log("CRM Email worker started");
+
+  crmEmailSyncWorker = new Worker(
+    "crm-email-sync",
+    async (job) => {
+      const d = job.data as { tenantId: string; connectionId: string };
+      await processCrmEmailSyncJob(d);
+    },
+    { connection: redis, concurrency: 2 }
+  );
+  crmEmailSyncWorker.on("completed", (job) => console.log(`crm-email-sync completed: ${job.id}`));
+  crmEmailSyncWorker.on("failed", (job, err) => console.error(`crm-email-sync failed: ${job?.id} -> ${err?.message}`));
+  console.log("CRM Email sync worker started");
 }
 
 // Voicemail sync: `runVoicemailSyncCycle` in `./voicemailSyncCycle.ts` (fair helper scheduling).
