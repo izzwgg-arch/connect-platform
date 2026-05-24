@@ -29,6 +29,15 @@
 
 ---
 
+## Safe diagnostics (deploy + verification)
+
+- Do not paste raw `printenv`, `.env`, or entire `docker logs` into chats/docs. Summarize.
+- Redact secrets: JWTs, bearer tokens, OAuth secrets, deploy tokens, DB URLs, and URLs with embedded credentials
+  using labels like `[REDACTED_JWT]`, `[REDACTED_TOKEN]`, `[REDACTED_SECRET]`, `[REDACTED_DB_URL]`.
+- Prefer `scripts/summarize-deploy-log.ts` to extract only service, branch, commit, status, stage, timing, and health.
+- For production spot checks, prefer `scripts/safe-prod-check.ts` to print SET/MISSING flags, HTTP status codes, and counts — never raw values.
+- Keep diagnostics scoped to a single subsystem and branch per session.
+
 ## Docker Compose structure
 
 `docker-compose.app.yml` (production application stack):

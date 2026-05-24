@@ -1750,3 +1750,12 @@ happened because jssip.ts getSessionFrom() preferred display_name over uri.user.
 - pps/mobile/src/context/SipContext.tsx ? 
 emotePartyName, call record romName
 - pps/mobile/src/screens/tabs/RecentTab.tsx ? ormatRingGroupDisplayName() helper
+
+## Safe diagnostics policy (deploy verification)
+
+- Never paste raw `printenv` or full environment variable dumps into chat or tickets.
+- Never paste raw `docker logs` output. Summarize with key stages/timings only.
+- Redact JWTs, bearer tokens, secrets, DB URLs, and URLs containing credentials using labels like `[REDACTED_JWT]`, `[REDACTED_TOKEN]`, `[REDACTED_SECRET]`, `[REDACTED_DB_URL]`.
+- Prefer summaries over dumps. Use `scripts/summarize-deploy-log.ts` to extract only service/branch/commit/status/stage/timing/health.
+- For production checks, use `scripts/safe-prod-check.ts` to print SET/MISSING flags, HTTP status codes, and simple counts â€” never actual secret values.
+- Keep diagnostics scoped to the active subsystem and branch. Do not intermingle logs across unrelated services or chats.

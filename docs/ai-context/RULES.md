@@ -65,6 +65,12 @@
 14. **Encrypted credentials stay encrypted.** Use `@connect/security`
     (`encryptJson`/`decryptJson`). Never log decrypted secrets.
 
+### Safe diagnostics (guardrails)
+
+- Do not share raw `printenv`/`.env` dumps or unfiltered `docker logs` in chats/PRs.
+- Redact bearer tokens, JWTs, OAuth secrets, deploy tokens, and DB URLs; prefer labels like `[REDACTED_TOKEN]`, `[REDACTED_JWT]`, `[REDACTED_SECRET]`, `[REDACTED_DB_URL]`.
+- Prefer summaries over dumps; use `scripts/summarize-deploy-log.ts` and `scripts/safe-prod-check.ts` to avoid leaking values.
+
 ---
 
 ## CRM module (Phase 16A)
