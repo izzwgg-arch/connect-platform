@@ -417,6 +417,19 @@ Not a full inbox archive. Stores CRM-linked email metadata and summaries; does n
 - **Modified by:** `apps/api/src/connectChatRoutes.ts` (delegated; see
   `API_ROUTES.md`).
 
+WhatsApp-ready unified message extensions (additive)
+- New optional fields on `ConnectChatMessage` to support provider idempotency and reconciliation across channels (no runtime coupling yet):
+  - `externalProvider String?`, `externalMessageId String?`, `externalConversationId String?`
+  - `providerStatus String?`, `providerMetadata Json?`, `deliveredAt DateTime?`
+- Indexes added for reconciliation:
+  - `@@index([tenantId, externalProvider, externalMessageId])`
+  - `@@index([tenantId, externalConversationId])`
+- Enum `ConnectChatThreadType` now includes `WHATSAPP` (appended).
+
+- Migration note — provider message idempotency index:
+  - Future dedicated SQL migration may add a partial unique index on `ConnectChatMessage` for `(tenantId, externalProvider, externalMessageId)` only where `externalProvider IS NOT NULL` and `externalMessageId IS NOT NULL`.
+  - Do not use a nullable Prisma `@@unique` for that.
+
 ## SmsCampaign / SmsMessage / SmsWebhookEvent / SmsRoutingLog / TenantSmsNumber
 - **Schema:** lines 866 / 884 / 908 / 2815 / 2671
 - **Purpose:** SMS campaign lifecycle, per-message rows, carrier
@@ -434,6 +447,48 @@ Not a full inbox archive. Stores CRM-linked email metadata and summaries; does n
 - **High-risk?** Extreme — these are the live API keys for paid
   integrations.
 - **Modified by:** `apps/api` (admin settings).
+
+### WhatsApp (Option A — data-model foundation implemented)
+- **Runtime source of truth (design):** `ConnectChatThread` with `type = "WHATSAPP"` and `ConnectChatMessage` projects all WA traffic into the unified message shape (attachments, reactions, replies, delivery/read fields, signed media).
+- **Credentials/config:** `WhatsAppProviderConfig` stays as the encrypted credential/config store (Meta/Twilio). Mask in responses; decrypt only server-side.
+- **Legacy WA tables:** `WhatsAppThread` / `WhatsAppMessage` remain for migration/backfill; not the future runtime source once projection lands.
+- **Implemented fields:** `ConnectChatMessage` now has `externalProvider`, `externalMessageId`, `externalConversationId`, `providerStatus`, `providerMetadata`, `deliveredAt` with reconciliation indexes.
+- **Media:** Inbound provider media will be downloaded to Connect storage and referenced by `ConnectChatMessageAttachment` via signed URLs.
+
+### WhatsAppAccount — tenant WhatsApp identities (multi-number ready)
+- **Schema:** `WhatsAppAccount`
+- **Purpose:** Represents a tenant-wide (or future user-owned) WhatsApp Business identity and number; supports multiple numbers per tenant later.
+- **Key fields:** `tenantId`, `provider`, `phoneE164`, `phoneNumberId?`, `wabaId?`, `messagingServiceSid?`, `displayName?`, `profilePhotoUrl?`, `aboutText?`, lifecycle/verification/webhook fields, `ownershipKind` (TENANT|USER), `ownerUserId?`, `providerConfigId?`, `settings`, `isEnabled`.
+- **Lifecycle/verification fields:** `lifecycleStatus`, `verificationStatus`, `verificationMethod`, `verifiedAt`, `lastVerificationAttemptAt`, `lastProviderError`, `webhookStatus`, `lastWebhookAt`.
+- **Indexes/uniques:** `@@unique([tenantId, provider, phoneE164])`, `@@index([tenantId, provider, phoneNumberId])`, `@@index([tenantId, isEnabled])`.
+
+### WhatsAppTemplate — per-account template catalog
+- **Schema:** `WhatsAppTemplate` (account-required by design)
+- **Purpose:** Stores synced provider templates for a specific WhatsApp account (WABA) owned by the tenant.
+- **Key fields:** `tenantId`, `whatsappAccountId` (required), `provider`, `providerTemplateId?`, `name`, `language`, `category`, `status`, `rejectionReason?`, `variableSchema?`, `lastSyncedAt?`.
+- **Uniqueness:** `@@unique([tenantId, provider, whatsappAccountId, name, language])` (prevents cross-account collisions).
+
+### WhatsAppUsageEvent — immutable ledger (minor units)
+- **Schema:** `WhatsAppUsageEvent`
+- **Purpose:** Append-only usage ledger for billing and reconciliation (monthly billing suitability).
+- **Key fields:** `tenantId`, `whatsappAccountId?`, `provider`, `category`, `country?`, `conversationId?`, `externalMessageId?`, `connectChatMessageId?`, `templateId?`, money fields `providerCostMinor`, `billAmountMinor`, `currency`, `markupBps`, `mediaBytes?`, pricing snapshot fields, `reconciliationStatus`, `reconciledAt?`, `idempotencyKey @unique`, `occurredAt`, timestamps.
+- **Indexes:** `@@index([tenantId, occurredAt])`, `@@index([whatsappAccountId, occurredAt])`, `@@index([provider, category, occurredAt])`, `@@index([conversationId])`, `@@index([connectChatMessageId])`.
+- **Invariants:**
+  - `WhatsAppUsageEvent` is append-only/immutable for billing audit.
+  - Corrections must be recorded as explicit reversal/adjustment events; do not edit prior rows.
+  - All money amounts use integer minor units only.
+  - Message idempotency is enforced in application code for now; a partial unique SQL index on `ConnectChatMessage` for non-null `externalProvider`/`externalMessageId` may be added later.
+
+### WhatsAppPricingRate — reference pricing
+- **Schema:** `WhatsAppPricingRate`
+- **Purpose:** Provider pricing by `provider`, `country`, `category`, with `currency`, `providerCostMinor`, and effective window.
+- **Indexes:** `@@index([provider, country, category, effectiveFrom])`.
+
+### Compliance foundations
+- **WhatsAppContactPreference**: tenant+contact scoped opt-in/opt-out/block.
+  - `@@unique([tenantId, contactE164])`, `@@index([tenantId, optedOutAt])`, `@@index([tenantId, blockedAt])`.
+- **WhatsAppPolicyAuditEvent**: policy and guardrail audit breadcrumbs.
+  - Indexes on `(tenantId, createdAt)` and `(tenantId, eventType, createdAt)`.
 
 ## TurnConfig / TurnValidationJob / MediaTestRun
 - **Schema:** lines 1871 / 1886 / 1907

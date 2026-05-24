@@ -49,10 +49,47 @@ Mobile (apps/mobile)
 - Types (`types/index.ts`)
   - Adds `"WHATSAPP"` to `ChatThreadType` as a non-breaking future-proofing step (no runtime behavior change in this phase).
 
-WhatsApp (future — not implemented in this phase)
-- Target: first-class channel under `ConnectChatThread.type = "WHATSAPP"`; messages project into `ConnectChatMessage` with the same attachment/signing, reactions, replies, delivery status surface.
-- Push: new `wa_message` payload aligned with `dm_message`/`sms_message`.
-- No separate inbox; no aggregator route.
+WhatsApp — roadmap and guardrails (docs-only, Option A)
+- First-class inside Connect Chat
+  - `ConnectChatThread.type = "WHATSAPP"` — no parallel inbox and no long‑term API aggregation layer.
+  - One message shape (`ConnectChatMessage`) across SMS/DM/WA (attachments, reactions, replies, delivery/read surfaces, signed media URLs).
+- Data-model foundation added (no runtime yet)
+  - Unified message extensions: `externalProvider`, `externalMessageId`, `externalConversationId`, `providerStatus`, `providerMetadata`, `deliveredAt` + indexes for reconciliation.
+  - Identities: `WhatsAppAccount` (tenant or user-owned later) with lifecycle/verification/webhook fields and provider linkage (via `WhatsAppProviderConfig`).
+  - Billing/usage: `WhatsAppUsageEvent` (minor units), `WhatsAppPricingRate`.
+  - Templates: `WhatsAppTemplate` (account-required uniqueness).
+  - Compliance/audit: `WhatsAppContactPreference`, `WhatsAppPolicyAuditEvent`.
+- Provider/config and data migration
+  - Keep `WhatsAppProviderConfig` as the credential/config store (encrypted at rest).
+  - Existing `WhatsAppThread`/`WhatsAppMessage` become migration/backfill/source tables only — not the runtime source of truth once WA is unified under `ConnectChat*`.
+- Compliance guardrails
+  - Official providers only (Meta Business API, Twilio WhatsApp).
+  - Customer opt‑in tracking and opt‑out/block handling at the platform layer (tenant‑scoped).
+  - Enforce the 24‑hour customer‑service window; require approved templates outside the window.
+  - Quality/risk monitoring with provider health and error‑rate signals.
+  - No unsupported Status/Stories API automation.
+  - Backend‑only sends through a policy guard; mobile/web must never call Meta/Twilio directly.
+- Templates (docs-only roadmap)
+  - Admin endpoints to sync/list approved templates per tenant; template ownership is tenant‑scoped.
+  - Validate variables/placeholders at send time; store approval status and rejection reasons.
+  - When outside the 24‑hour window, template send is required (free‑form blocked by policy).
+- Profile / business identity (docs-only roadmap)
+  - Tenant‑wide WhatsApp identity (admin‑managed number/profile). Optional user‑owned identities later.
+  - Permission model: tenant admins manage the tenant‑wide number; owning user/admins manage user‑owned numbers. Profile photo/business info updates respect these roles.
+- Billing/usage (docs-only roadmap)
+  - Immutable `WhatsAppUsageEvent` ledger for every billable session/template category, with provider cost tracking and markup rules.
+  - Pricing table by country/category/effective date (audited), invoice integration, usage dashboard, spend alerts/limits.
+  - Webhook/status reconciliation and exact audit trail from provider message id → message row → ledger → invoice.
+- Media (docs-only roadmap)
+  - Support: text, images, video, voice notes/audio, PDFs, office docs, location, contacts.
+  - Inbound media is downloaded immediately to Connect storage (local/S3/R2) and served only via signed URLs. Provider media links are never exposed directly in UI.
+- Hybrid app coexistence (docs-only)
+  - Modes: Connect‑only; WhatsApp Business app‑only; Hybrid when the provider supports coexistence.
+  - Connect must accept external‑originated messages/statuses via webhooks and merge them into the same unified thread.
+- Delivery/read/typing
+  - Map provider delivery/read events to `ConnectChatMessage.deliveryStatus`/`deliveredAt`/`readAt` where applicable. Typing outbound is optional/deferred and must not block first ship.
+- Push
+  - Plan a `wa_message` push payload aligned with `dm_message` / `sms_message`.
 
 Operational notes
 - The default-group self-heal runs on thread list only to avoid boot-time surprises; it is now a cheap, idempotent call.

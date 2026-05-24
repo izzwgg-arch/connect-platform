@@ -14,43 +14,43 @@ enum CrmEmailConnectionScope {
 }
 
 model CrmEmailConnection {
-  id                      String                    @id @default(cuid())
-  tenantId                String
+  id                     String                  @id @default(cuid())
+  tenantId               String
   /// USER scope: required (personal sender). TENANT scope: null (shared sender).
   /// Enforced at DB layer via a CHECK constraint added in the migration.
-  userId                  String?
-  scope                   CrmEmailConnectionScope   @default(USER)
+  userId                 String?
+  scope                  CrmEmailConnectionScope @default(USER)
   /// For TENANT scope: the admin who created/owns the OAuth grant. Required for TENANT, ignored for USER.
-  managedByUserId         String?
+  managedByUserId        String?
   /// At most one TENANT row per (tenantId, provider) may have isDefaultForTenant=true (partial unique index).
-  isDefaultForTenant      Boolean                   @default(false)
+  isDefaultForTenant     Boolean                 @default(false)
   /// Optional human label shown in UI (e.g. "Sales Inbox").
-  label                   String?
+  label                  String?
   /// Optional From-header display name. NULL = use Google account's default displayName.
-  senderName              String?
-  provider                EmailProviderType         @default(GOOGLE_WORKSPACE)
-  emailAddress            String
-  displayName             String?
-  googleAccountId         String?
-  encryptedAccessToken    String                    /// AES-GCM envelope from @connect/security.encryptJson
-  encryptedRefreshToken   String                    /// AES-GCM envelope from @connect/security.encryptJson
-  tokenExpiresAt          DateTime?
-  scopes                  String[]                  @default([])
-  replyTrackingEnabled    Boolean                   @default(false)
-  gmailHistoryId          String?
-  bodyCacheMode           EmailPrivacyMode          @default(METADATA_ONLY)
-  bodyCacheRetentionDays  Int                       @default(30)
-  status                  String                    @default("CONNECTED") /// CONNECTED | ERROR | DISCONNECTED
-  lastSyncAt              DateTime?
-  lastError               String?
-  createdAt               DateTime                  @default(now())
-  updatedAt               DateTime                  @updatedAt
+  senderName             String?
+  provider               EmailProviderType       @default(GOOGLE_WORKSPACE)
+  emailAddress           String
+  displayName            String?
+  googleAccountId        String?
+  encryptedAccessToken   String /// AES-GCM envelope from @connect/security.encryptJson
+  encryptedRefreshToken  String /// AES-GCM envelope from @connect/security.encryptJson
+  tokenExpiresAt         DateTime?
+  scopes                 String[]                @default([])
+  replyTrackingEnabled   Boolean                 @default(false)
+  gmailHistoryId         String?
+  bodyCacheMode          EmailPrivacyMode        @default(METADATA_ONLY)
+  bodyCacheRetentionDays Int                     @default(30)
+  status                 String                  @default("CONNECTED") /// CONNECTED | ERROR | DISCONNECTED
+  lastSyncAt             DateTime?
+  lastError              String?
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
 
-  tenant       Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   /// User who owns this personal sender (USER scope only). Nullable for TENANT rows.
-  user         User?  @relation("CrmEmailConnection_user", fields: [userId], references: [id], onDelete: Cascade)
+  user      User?  @relation("CrmEmailConnection_user", fields: [userId], references: [id], onDelete: Cascade)
   /// Admin who manages a TENANT shared sender. Nullable for USER rows.
-  managedBy    User?  @relation("CrmEmailConnection_managedBy", fields: [managedByUserId], references: [id], onDelete: SetNull)
+  managedBy User?  @relation("CrmEmailConnection_managedBy", fields: [managedByUserId], references: [id], onDelete: SetNull)
 
   // Note: partial unique indexes (USER per tenant+user+provider, single TENANT default per
   // tenant+provider, single TENANT row per tenant+email+provider) are created via raw SQL
@@ -60,20 +60,20 @@ model CrmEmailConnection {
 }
 
 model CrmEmailThread {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   tenantId      String
   userId        String
   contactId     String?
   gmailThreadId String
   subject       String?
   lastMessageAt DateTime?
-  unreadCount   Int      @default(0)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  unreadCount   Int       @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
-  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  contact Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  tenant   Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user     User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contact  Contact?          @relation(fields: [contactId], references: [id], onDelete: SetNull)
   messages CrmEmailMessage[]
 
   /// Which CrmEmailConnection actually sent/owns this thread. Null = legacy/unknown.
@@ -85,27 +85,27 @@ model CrmEmailThread {
 }
 
 model CrmEmailMessage {
-  id               String   @id @default(cuid())
-  tenantId         String
-  userId           String
-  threadId         String?
-  contactId        String?
-  gmailMessageId   String
-  direction        String   /// OUTBOUND | INBOUND
-  subject          String?
-  fromEmail        String?
-  toEmail          String?
-  cc               String?
-  bcc              String?
-  previewSnippet   String?
-  aiSummary        String?
-  hasCachedBody    Boolean  @default(false)
+  id                 String    @id @default(cuid())
+  tenantId           String
+  userId             String
+  threadId           String?
+  contactId          String?
+  gmailMessageId     String
+  direction          String /// OUTBOUND | INBOUND
+  subject            String?
+  fromEmail          String?
+  toEmail            String?
+  cc                 String?
+  bcc                String?
+  previewSnippet     String?
+  aiSummary          String?
+  hasCachedBody      Boolean   @default(false)
   bodyCacheEncrypted String?
   bodyCacheExpiresAt DateTime?
-  sentAt           DateTime?
-  receivedAt       DateTime?
-  syncStatus       String?
-  createdAt        DateTime @default(now())
+  sentAt             DateTime?
+  receivedAt         DateTime?
+  syncStatus         String?
+  createdAt          DateTime  @default(now())
 
   tenant  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -136,8 +136,8 @@ model CrmEmailSendLog {
   sentAt         DateTime @default(now())
   createdAt      DateTime @default(now())
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   contact Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
 
   /// Which CrmEmailConnection sent this. Null = legacy/unknown.
@@ -151,20 +151,20 @@ model CrmEmailSendLog {
 /// CRM Email Template — Phase 1. Tenant-scoped, optionally user-scoped (private).
 /// Body is plain text; merge fields use {{contact.firstName}} style tokens.
 model CrmEmailTemplate {
-  id          String   @id @default(cuid())
-  tenantId    String
+  id              String   @id @default(cuid())
+  tenantId        String
   createdByUserId String?
-  name        String
-  subject     String
-  bodyText    String
+  name            String
+  subject         String
+  bodyText        String
   /// SHARED across tenant or PRIVATE to creator.
-  visibility  String   @default("SHARED")
-  isArchived  Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  visibility      String   @default("SHARED")
+  isArchived      Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  tenant      Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy   User?  @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User?  @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, isArchived, updatedAt])
   @@index([tenantId, createdByUserId])
@@ -615,6 +615,11 @@ model Tenant {
   crmEmailTemplates               CrmEmailTemplate[]
   customRoles                     CustomRole[]
   userCustomRoles                 UserCustomRole[]
+  whatsAppAccounts                WhatsAppAccount[]
+  whatsAppTemplates               WhatsAppTemplate[]
+  whatsAppUsageEvents             WhatsAppUsageEvent[]
+  whatsAppContactPreferences      WhatsAppContactPreference[]
+  whatsAppPolicyAuditEvents       WhatsAppPolicyAuditEvent[]
 }
 
 model User {
@@ -687,8 +692,8 @@ model User {
   crmCampaignMembersAssigned     CrmCampaignMember[]               @relation("CrmCampaignMemberAssignedTo")
   mappedSolaExternalSchedules    BillingSolaExternalScheduleLink[] @relation("SolaScheduleMappedBy")
   /// CRM email — Phase 1 relations
-  crmEmailConnections            CrmEmailConnection[] @relation("CrmEmailConnection_user")
-  crmEmailConnectionsManaged     CrmEmailConnection[] @relation("CrmEmailConnection_managedBy")
+  crmEmailConnections            CrmEmailConnection[]              @relation("CrmEmailConnection_user")
+  crmEmailConnectionsManaged     CrmEmailConnection[]              @relation("CrmEmailConnection_managedBy")
   crmEmailMessages               CrmEmailMessage[]
   crmEmailThreads                CrmEmailThread[]
   crmEmailSendLogs               CrmEmailSendLog[]
@@ -697,6 +702,7 @@ model User {
   customRolesUpdated             CustomRole[]                      @relation("CustomRoleUpdatedBy")
   customRoleAssignments          UserCustomRole[]
   customRolesAssigned            UserCustomRole[]                  @relation("UserCustomRoleAssignedBy")
+  whatsAppAccounts               WhatsAppAccount[]
 }
 
 enum UserRole {
@@ -1373,6 +1379,7 @@ model WhatsAppProviderConfig {
   tenant               Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdByUser        User                 @relation("WhatsAppProviderConfigCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
   updatedByUser        User                 @relation("WhatsAppProviderConfigUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Restrict)
+  whatsAppAccounts     WhatsAppAccount[]
 
   @@unique([tenantId, provider])
   @@index([tenantId, isEnabled])
@@ -1422,6 +1429,160 @@ model WhatsAppMessage {
   @@index([tenantId, createdAt])
   @@index([threadId, createdAt])
   @@index([externalMessageId])
+}
+
+model WhatsAppAccount {
+  id                        String               @id @default(cuid())
+  tenantId                  String
+  provider                  WhatsAppProviderType
+  phoneE164                 String
+  phoneNumberId             String?
+  wabaId                    String?
+  messagingServiceSid       String?
+  displayName               String?
+  profilePhotoUrl           String?
+  aboutText                 String?
+  verificationStatus        String?
+  lifecycleStatus           String?
+  verificationMethod        String?
+  verifiedAt                DateTime?
+  lastVerificationAttemptAt DateTime?
+  lastProviderError         String?
+  webhookStatus             String?
+  lastWebhookAt             DateTime?
+  ownershipKind             String               @default("TENANT")
+  ownerUserId               String?
+  providerConfigId          String?
+  settings                  Json?
+  isEnabled                 Boolean              @default(true)
+  lastSyncedAt              DateTime?
+  createdAt                 DateTime             @default(now())
+  updatedAt                 DateTime             @updatedAt
+
+  tenant              Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ownerUser           User?                   @relation(fields: [ownerUserId], references: [id], onDelete: SetNull)
+  providerConfig      WhatsAppProviderConfig? @relation(fields: [providerConfigId], references: [id], onDelete: SetNull)
+  whatsAppTemplates   WhatsAppTemplate[]
+  whatsAppUsageEvents WhatsAppUsageEvent[]
+
+  @@unique([tenantId, provider, phoneE164])
+  @@index([tenantId, provider, phoneNumberId])
+  @@index([tenantId, isEnabled])
+}
+
+model WhatsAppTemplate {
+  id                 String               @id @default(cuid())
+  tenantId           String
+  whatsappAccountId  String
+  provider           WhatsAppProviderType
+  providerTemplateId String?
+  name               String
+  language           String
+  category           String
+  status             String
+  rejectionReason    String?
+  bodyPreview        String?
+  variableSchema     Json?
+  lastSyncedAt       DateTime?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  tenant              Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  account             WhatsAppAccount      @relation(fields: [whatsappAccountId], references: [id], onDelete: Cascade)
+  whatsAppUsageEvents WhatsAppUsageEvent[]
+
+  @@unique([tenantId, provider, whatsappAccountId, name, language])
+  @@index([tenantId, provider, status])
+}
+
+model WhatsAppUsageEvent {
+  id                   String               @id @default(cuid())
+  tenantId             String
+  whatsappAccountId    String?
+  provider             WhatsAppProviderType
+  category             String
+  country              String?
+  conversationId       String?
+  externalMessageId    String?
+  connectChatMessageId String?
+  templateId           String?
+  providerCostMinor    Int?
+  markupBps            Int?
+  billAmountMinor      Int?
+  currency             String               @default("USD")
+  mediaBytes           Int?
+  pricingCountry       String?
+  pricingCategory      String?
+  pricingEffectiveAt   DateTime?
+  reconciliationStatus String               @default("estimated")
+  reconciledAt         DateTime?
+  idempotencyKey       String?              @unique
+  providerMetadata     Json?
+  occurredAt           DateTime             @default(now())
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  whatsappAccount WhatsAppAccount?    @relation(fields: [whatsappAccountId], references: [id], onDelete: SetNull)
+  message         ConnectChatMessage? @relation(fields: [connectChatMessageId], references: [id], onDelete: SetNull)
+  template        WhatsAppTemplate?   @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, occurredAt])
+  @@index([whatsappAccountId, occurredAt])
+  @@index([provider, category, occurredAt])
+  @@index([conversationId])
+  @@index([connectChatMessageId])
+}
+
+model WhatsAppPricingRate {
+  id                String               @id @default(cuid())
+  provider          WhatsAppProviderType
+  country           String
+  category          String
+  currency          String               @default("USD")
+  providerCostMinor Int
+  effectiveFrom     DateTime
+  effectiveTo       DateTime?
+  createdAt         DateTime             @default(now())
+
+  @@index([provider, country, category, effectiveFrom])
+}
+
+model WhatsAppContactPreference {
+  id          String    @id @default(cuid())
+  tenantId    String
+  contactE164 String
+  optedInAt   DateTime?
+  optedOutAt  DateTime?
+  blockedAt   DateTime?
+  blockReason String?
+  updatedBy   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, contactE164])
+  @@index([tenantId, optedOutAt])
+  @@index([tenantId, blockedAt])
+}
+
+model WhatsAppPolicyAuditEvent {
+  id                   String                @id @default(cuid())
+  tenantId             String
+  threadId             String?
+  connectChatMessageId String?
+  whatsappAccountId    String?
+  provider             WhatsAppProviderType?
+  eventType            String
+  detail               Json?
+  createdBy            String?
+  createdAt            DateTime              @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, eventType, createdAt])
 }
 
 model EmailProviderConfig {
@@ -3072,6 +3233,7 @@ enum ConnectChatThreadType {
   DM
   GROUP
   TENANT_GROUP
+  WHATSAPP
 }
 
 enum ConnectChatMessageDirection {
@@ -3200,34 +3362,43 @@ model ConnectChatParticipant {
 }
 
 model ConnectChatMessage {
-  id                   String                         @id @default(cuid())
-  tenantId             String
-  threadId             String
-  senderUserId         String?
-  senderExtensionId    String?
-  direction            ConnectChatMessageDirection
-  type                 ConnectChatMessageType         @default(TEXT)
-  body                 String                         @default("")
-  metadata             Json?
-  replyToMessageId     String?
-  editedAt             DateTime?
-  deletedForEveryoneAt DateTime?
-  deletedForUserIds    Json?
-  createdAt            DateTime                       @default(now())
-  updatedAt            DateTime                       @updatedAt
-  smsProviderMessageId String?
-  deliveryStatus       String?
-  deliveryError        String?
-  thread               ConnectChatThread              @relation(fields: [threadId], references: [id], onDelete: Cascade)
-  senderUser           User?                          @relation("ConnectChatMessageSenderUser", fields: [senderUserId], references: [id], onDelete: SetNull)
-  replyTo              ConnectChatMessage?            @relation("ConnectChatMessageReply", fields: [replyToMessageId], references: [id], onDelete: SetNull)
-  replies              ConnectChatMessage[]           @relation("ConnectChatMessageReply")
-  attachments          ConnectChatMessageAttachment[]
-  reactions            ConnectChatMessageReaction[]
+  id                     String                         @id @default(cuid())
+  tenantId               String
+  threadId               String
+  senderUserId           String?
+  senderExtensionId      String?
+  direction              ConnectChatMessageDirection
+  type                   ConnectChatMessageType         @default(TEXT)
+  body                   String                         @default("")
+  metadata               Json?
+  replyToMessageId       String?
+  editedAt               DateTime?
+  deletedForEveryoneAt   DateTime?
+  deletedForUserIds      Json?
+  createdAt              DateTime                       @default(now())
+  updatedAt              DateTime                       @updatedAt
+  smsProviderMessageId   String?
+  deliveryStatus         String?
+  deliveryError          String?
+  externalProvider       String?
+  externalMessageId      String?
+  externalConversationId String?
+  providerStatus         String?
+  providerMetadata       Json?
+  deliveredAt            DateTime?
+  thread                 ConnectChatThread              @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  senderUser             User?                          @relation("ConnectChatMessageSenderUser", fields: [senderUserId], references: [id], onDelete: SetNull)
+  replyTo                ConnectChatMessage?            @relation("ConnectChatMessageReply", fields: [replyToMessageId], references: [id], onDelete: SetNull)
+  replies                ConnectChatMessage[]           @relation("ConnectChatMessageReply")
+  attachments            ConnectChatMessageAttachment[]
+  reactions              ConnectChatMessageReaction[]
+  whatsAppUsageEvents    WhatsAppUsageEvent[]
 
   @@index([threadId, createdAt])
   @@index([tenantId, createdAt])
   @@index([smsProviderMessageId])
+  @@index([tenantId, externalProvider, externalMessageId])
+  @@index([tenantId, externalConversationId])
 }
 
 model ConnectChatMessageAttachment {
@@ -3669,12 +3840,12 @@ model CrmCampaign {
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
 
-  tenant    Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy User                @relation("CrmCampaignCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
-  script    CrmScript?          @relation(fields: [scriptId], references: [id], onDelete: SetNull)
-  checklist CrmChecklist?       @relation(fields: [checklistId], references: [id], onDelete: SetNull)
-  members      CrmCampaignMember[]
-  userAccess   CrmUserCampaignAssignment[]
+  tenant     Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy  User                        @relation("CrmCampaignCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  script     CrmScript?                  @relation(fields: [scriptId], references: [id], onDelete: SetNull)
+  checklist  CrmChecklist?               @relation(fields: [checklistId], references: [id], onDelete: SetNull)
+  members    CrmCampaignMember[]
+  userAccess CrmUserCampaignAssignment[]
 
   @@index([tenantId, status, createdAt])
 }
@@ -3750,9 +3921,9 @@ model CustomRole {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy       User?          @relation("CustomRoleCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
-  updatedBy       User?          @relation("CustomRoleUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy       User?            @relation("CustomRoleCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedBy       User?            @relation("CustomRoleUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
   userAssignments UserCustomRole[]
 
   @@unique([tenantId, name])
