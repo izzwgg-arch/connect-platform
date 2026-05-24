@@ -3473,6 +3473,7 @@ model CrmTimelineEvent {
   @@index([tenantId, type, createdAt])
   @@index([contactId, createdAt])
   @@index([contactId, linkedId]) // fast dedup lookup for CDR hook
+  @@unique([tenantId, type, linkedId])
 }
 
 /// Structured notes on a CRM contact. Multiple notes per contact; each has an author.
@@ -3776,4 +3777,106 @@ model UserCustomRole {
   @@unique([userId, customRoleId])
   @@index([tenantId, userId])
   @@index([tenantId, customRoleId])
+}
+
+// ─── Onboarding enums ─────────────────────────────────────────────
+enum OnboardingStatus {
+  INVITE_SENT
+  IN_PROGRESS
+  SUBMITTED
+  AWAITING_PBX_SETUP
+  AWAITING_PORT
+  AWAITING_PAYMENT
+  READY_TO_SYNC
+  ACTIVE
+  COMPLETED
+  CANCELED
+}
+
+enum OnboardingEventType {
+  CREATED
+  STARTED
+  AUTOSAVED
+  FILE_UPLOADED
+  SUBMITTED
+  STATUS_CHANGED
+  CHECKLIST_UPDATED
+  NOTES_UPDATED
+  CSV_DOWNLOADED
+}
+
+// ─── Onboarding models ────────────────────────────────────────────
+model OnboardingSubmission {
+  id                    String                     @id @default(cuid())
+  publicToken           String?                    @unique
+  companyName           String?
+  contactFirstName      String?
+  contactLastName       String?
+  companyAddress        String?
+  mainPhone             String?
+  mainEmail             String?
+  billingEmail          String?
+  phoneNumberChoice     String?
+  portingInfo           Json?
+  smsEnabled            Boolean                    @default(false)
+  smsMonthlyPriceCents  Int                        @default(0)
+  cardTokenPreview      String?
+  createdTenantId       String?
+  status                OnboardingStatus           @default(INVITE_SENT)
+  currentStep           String?
+  answers               Json?
+  provisioningChecklist Json?
+  internalNotes         String?
+  submittedAt           DateTime?
+  createdAt             DateTime                   @default(now())
+  updatedAt             DateTime                   @updatedAt
+
+  requestedExtensions   OnboardingRequestedExtension[]
+  uploadedFiles         OnboardingUploadedFile[]
+  events                OnboardingEvent[]
+
+  @@index([status, updatedAt])
+}
+
+model OnboardingRequestedExtension {
+  id           String                @id @default(cuid())
+  submissionId String
+  submission   OnboardingSubmission  @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  displayName  String?
+  extNumber    String
+  email        String?
+  smsEnabled   Boolean               @default(false)
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  @@unique([submissionId, extNumber])
+  @@index([submissionId])
+}
+
+model OnboardingUploadedFile {
+  id           String               @id @default(cuid())
+  submissionId String
+  submission   OnboardingSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  filename     String
+  mimeType     String?
+  sizeBytes    Int?
+  storageKey   String
+  kind         String               @default("PORTING_BILL")
+  createdAt    DateTime             @default(now())
+
+  @@index([submissionId])
+}
+
+model OnboardingEvent {
+  id           String               @id @default(cuid())
+  submissionId String
+  submission   OnboardingSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  type         OnboardingEventType
+  message      String?
+  metadata     Json?
+  actorUserId  String?
+  createdAt    DateTime             @default(now())
+
+  @@index([submissionId, createdAt])
+  @@index([submissionId])
 }

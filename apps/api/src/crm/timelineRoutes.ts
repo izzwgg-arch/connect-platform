@@ -36,6 +36,97 @@ async function resolveContact(
 // ── Route registrar ────────────────────────────────────────────────────────────
 
 export async function registerCrmTimelineRoutes(app: FastifyInstance) {
+  // ── GET /crm/timeline ───────────────────────────────────────────────────────
+  // Minimal unified timeline read for this pass (email-only from portal caller).
+  // Query:
+  //   - contactId: string (required in this slice)
+  //   - types: string | string[] (optional; e.g., EMAIL_SENT, EMAIL_RECEIVED)
+  //   - limit: number (default 50, max 200)
+  //   - cursor: base64(JSON { createdAt: ISO, id: string }) for DESC pagination
+  app.get("/crm/timeline", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply);
+    if (!user) return;
+    const { tenantId, role } = user;
+
+    const qSchema = z.object({
+      contactId: z.string().min(1),
+      types: z
+        .union([z.string(), z.array(z.string())])
+        .optional()
+        .transform((v) => (v == null ? [] : Array.isArray(v) ? v : [v])),
+      limit: z
+        .string()
+        .optional()
+        .transform((v) => (v ? parseInt(v, 10) : 50))
+        .pipe(z.number().int().min(1).max(200)),
+      cursor: z.string().optional(),
+    });
+
+    const parsed = qSchema.safeParse(req.query);
+    if (!parsed.success) return reply.status(400).send({ error: "invalid_query" });
+
+    const contactId = parsed.data.contactId;
+    const types = (parsed.data.types || []).filter((t) =>
+      [
+        "EMAIL_SENT",
+        "EMAIL_RECEIVED",
+        // future types can be added without changing API shape
+      ].includes(String(t))
+    ) as string[];
+    const limit = parsed.data.limit as number;
+
+    const contact = await resolveContact(contactId, tenantId, "read", role);
+    if (!contact) return reply.status(404).send({ error: "not_found" });
+
+    let cursorWhere: any = undefined;
+    if (parsed.data.cursor) {
+      try {
+        const raw = Buffer.from(parsed.data.cursor, "base64").toString("utf8");
+        const c = JSON.parse(raw) as { createdAt: string; id: string };
+        const cAt = new Date(c.createdAt);
+        cursorWhere = {
+          OR: [
+            { createdAt: { lt: cAt } },
+            { AND: [{ createdAt: cAt }, { id: { lt: c.id } }] },
+          ],
+        };
+      } catch {
+        // ignore bad cursor: treat as first page
+      }
+    }
+
+    const where: any = {
+      tenantId,
+      contactId,
+      ...(types.length ? { type: { in: types as any } } : {}),
+      ...(cursorWhere || {}),
+    };
+
+    const rows = await (db as any).crmTimelineEvent.findMany({
+      where,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: limit,
+      include: {
+        createdByUser: {
+          select: { id: true, firstName: true, lastName: true, displayName: true, email: true },
+        },
+      },
+    });
+
+    const last = rows[rows.length - 1];
+    const nextCursor = last
+      ? Buffer.from(
+          JSON.stringify({ createdAt: last.createdAt.toISOString(), id: last.id }),
+          "utf8",
+        ).toString("base64")
+      : null;
+
+    return {
+      contactId,
+      events: rows.map(formatTimelineEvent),
+      nextCursor,
+    };
+  });
 
   // ── GET /crm/contacts/:id/timeline ─────────────────────────────────────────
   // Replaces the Phase 1B placeholder. Returns all timeline events for the contact,

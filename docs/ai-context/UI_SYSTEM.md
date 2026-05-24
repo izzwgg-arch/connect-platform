@@ -1,4 +1,10 @@
-# UI system — Portal, Workspace, and CRM
+
+## Onboarding UI (minimal)
+
+- Admin → Onboarding list: small inline card to create a public onboarding link (optional company/email), copy button per-row when a link exists; no redesign.
+- Admin → Onboarding detail: compact readout (company, contact, emails, status, timestamps), requested extensions table, VitalPBX CSV link, file downloads, SMS/card summary, notes and activity if present. Copyable public link when `publicToken` exists.
+- Public wizard: minimal multi-section form under `/onboarding/:token` with autosave; upload latest bill; submit; simple success page. Card capture disabled.
+![alt text](image.png)# UI system — Portal, Workspace, and CRM
 
 > **Scope:** `apps/portal` visual language. Telephony/PBX/mobile are out of scope here.
 
@@ -99,6 +105,11 @@ The **Billing** collapsible section in the main sidebar shows **only Billing Ove
 | `crm` (`crmClasses.ts`) | Shared class strings for buttons, inputs, chips |
 
 Prefer primitives + `crm.*` classes over one-off `gray-*` / `white` utilities on CRM routes.
+
+### Contact page timeline (email-only unified slice)
+
+- The contact detail page (`/crm/contacts/[id]`) now loads the timeline via the unified endpoint `GET /crm/timeline?contactId=…`.
+- Current slice focuses on email events (`EMAIL_SENT`, `EMAIL_RECEIVED`) rendered by the existing `ContactTimeline` and `ContactTimelineItem` components; legacy `/crm/contacts/:id/timeline` remains as a fallback.
 
 ---
 

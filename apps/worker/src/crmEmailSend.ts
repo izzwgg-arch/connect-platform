@@ -145,7 +145,7 @@ export async function processCrmEmailSendJob(job: {
   }
 
   await db.$transaction(async (tx) => {
-    await tx.crmEmailMessage.create({
+    const message = await tx.crmEmailMessage.create({
       data: {
         tenantId: job.tenantId,
         userId: job.userId,
@@ -186,6 +186,7 @@ export async function processCrmEmailSendJob(job: {
           title: "Email sent",
           body: job.subject || "Email sent",
           metadata: { to: job.to, senderEmail: fromEmail, scope: conn.scope },
+          linkedId: message.id,
           createdByUserId: job.userId,
         },
       });

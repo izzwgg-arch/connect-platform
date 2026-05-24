@@ -1,3 +1,59 @@
+
+## Onboarding API (public + admin)
+
+Public (no JWT; bearer token is `publicToken` in URL):
+
+- GET `/onboarding/:token/validate`
+  - dev: `{ ok: true, exists: false }` for unknown token
+  - prod: 404 for unknown token
+- GET `/onboarding/:token/public-config`
+  - `{ canTokenize: false }` (card capture disabled)
+- PUT `/onboarding/:token/save`
+  - Autosave `currentStep` and `answers`
+  - dev: lazy-creates unknown token
+  - prod: 404 for unknown token
+  - Blocks writes for `SUBMITTED|CANCELED|COMPLETED`
+- POST `/onboarding/:token/upload-bill`
+  - Multipart file; persists under local onboarding storage; records file row + event
+- POST `/onboarding/:token/card`
+  - `503 card_disabled` (no card capture yet)
+- POST `/onboarding/:token/submit`
+  - Validates required fields
+  - Validates `extensions[].extNumber` numeric-only and de-duplicates
+  - `smsEnabled` → `smsMonthlyPriceCents = 1000`
+  - Sets `status=SUBMITTED`, `submittedAt`, writes requested extensions, appends event
+
+Admin (JWT; SUPER_ADMIN only):
+
+- POST `/admin/onboarding/public-links`
+  - Creates `OnboardingSubmission` + `publicToken` with optional `companyName`, `mainEmail`
+- GET `/admin/onboarding/submissions`
+  - List summary rows with `publicToken`, derived `publicUrl`, counts, timestamps, status
+- GET `/admin/onboarding/submissions/:id`
+  - Detail row with relations + derived `publicUrl`
+- POST `/admin/onboarding/submissions/:id/status`
+  - Guards transitions (`INVITE_SENT → … → SUBMITTED → … → COMPLETED`, or `CANCELED`)
+- POST `/admin/onboarding/submissions/:id/checklist`
+  - Persists checklist JSON + event
+- POST `/admin/onboarding/submissions/:id/notes`
+  - Persists notes string + event
+- GET `/admin/onboarding/submissions/:id/vitalpbx.csv`
+  - Generates CSV (no PBX upload)
+- GET `/admin/onboarding/submissions/:id/files/:fileId/download`
+  - Streams a stored file if it belongs to the submission
+
+## CRM Timeline
+
+**Registrar:** `apps/api/src/crm/timelineRoutes.ts`
+
+- `GET /crm/timeline`
+  - Query: `contactId` (required in current slice), `types` (optional, repeatable), `limit` (default 50, max 200), `cursor` (base64 of `{ createdAt, id }`).
+  - Behavior: tenant-scoped via `requireCrmAccess`; validates contact belongs to tenant; returns newest-first events with optional cursor pagination. Current slice primarily serves `EMAIL_SENT` and `EMAIL_RECEIVED` events.
+  - Response: `{ contactId, events: TimelineEvent[], nextCursor?: string }`.
+
+Legacy fallback remains available: `GET /crm/contacts/:id/timeline`.
+
+---
 # API Route Inventory — `apps/api/src/server.ts`
 
 > **Purpose:** Let agents jump to the right ~50-line slice of `server.ts`

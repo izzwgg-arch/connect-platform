@@ -100,7 +100,7 @@ export async function processCrmEmailSyncJob(job: { tenantId: string; connection
       if (!inbound) continue;
 
       try {
-        await db.crmEmailMessage.create({
+        const message = await db.crmEmailMessage.create({
           data: {
             tenantId,
             userId: t.userId,
@@ -127,6 +127,7 @@ export async function processCrmEmailSyncJob(job: { tenantId: string; connection
               title: "Email received",
               body: subject || "Email received",
               metadata: { from: fromEmail, to: toEmail, threadId: t.gmailThreadId },
+              linkedId: message.id,
               createdByUserId: null,
             },
           }).catch(() => undefined);

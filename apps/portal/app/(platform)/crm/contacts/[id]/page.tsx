@@ -280,12 +280,21 @@ function CrmContactDetailInner() {
   const loadTimeline = useCallback(async () => {
     setTimelineLoading(true);
     try {
-      const data = await apiGet<{ contactId: string; events: TimelineEvent[] }>(
-        `/crm/contacts/${id}/timeline`
+      // Prefer new unified timeline endpoint (email slice ready; future types compatible)
+      const data = await apiGet<{ contactId: string; events: TimelineEvent[]; nextCursor?: string }>(
+        `/crm/timeline?contactId=${id}`
       );
       setTimeline(data.events);
     } catch {
-      // Non-fatal — timeline failure should not block the contact view
+      // Fallback to legacy contact timeline route
+      try {
+        const legacy = await apiGet<{ contactId: string; events: TimelineEvent[] }>(
+          `/crm/contacts/${id}/timeline`
+        );
+        setTimeline(legacy.events);
+      } catch {
+        // Non-fatal — timeline failure should not block the contact view
+      }
     } finally {
       setTimelineLoading(false);
     }

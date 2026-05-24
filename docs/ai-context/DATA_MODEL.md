@@ -1,3 +1,27 @@
+
+## Onboarding (Phase 2 foundation)
+
+Enums:
+- `OnboardingStatus`: INVITE_SENT, IN_PROGRESS, SUBMITTED, AWAITING_PBX_SETUP, AWAITING_PORT, AWAITING_PAYMENT, READY_TO_SYNC, ACTIVE, COMPLETED, CANCELED
+- `OnboardingEventType`: CREATED, STARTED, AUTOSAVED, FILE_UPLOADED, SUBMITTED, STATUS_CHANGED, CHECKLIST_UPDATED, NOTES_UPDATED, CSV_DOWNLOADED
+
+Models:
+- `OnboardingSubmission` (nullable unique `publicToken`)
+  - company/contact/billing main fields
+  - `answers` (JSON), `provisioningChecklist` (JSON), `internalNotes`
+  - `smsEnabled` + `smsMonthlyPriceCents` (0 or 1000)
+  - `status`, `submittedAt`, timestamps
+  - Relations: `requestedExtensions`, `uploadedFiles`, `events`
+- `OnboardingRequestedExtension`
+  - `submissionId` FK; `extNumber` (String) unique per submission; `displayName`, `email`, `smsEnabled`
+- `OnboardingUploadedFile`
+  - `submissionId` FK; `filename`, `mimeType`, `sizeBytes`, `storageKey`, `kind` (default PORTING_BILL)
+- `OnboardingEvent`
+  - `submissionId` FK; `type` enum; `message`, `metadata`, `actorUserId`, `createdAt`
+
+Notes:
+- `publicToken` is bearer-secret for public onboarding URLs (distinct from DB id)
+- No tenant auto-create in this phase; no PBX writes
 # Data Model Cheat Sheet — Prisma / Postgres
 
 > **Goal:** keep agents from re-deriving the schema every chat.
@@ -37,6 +61,13 @@ Not a full inbox archive. Stores CRM-linked email metadata and summaries; does n
 
 ### Security
 - Token fields are AES-256-GCM envelopes via `@connect/security` (`CREDENTIALS_MASTER_KEY`). Never exposed to the frontend; never logged.
+
+## Unified CRM Timeline (Email-only slice)
+
+- Model: `CrmTimelineEvent` (append-only). No large payloads; snapshots only.
+- Event types in use for this slice: `EMAIL_SENT`, `EMAIL_RECEIVED`.
+- Dedupe/idempotency: unique constraint `@@unique([tenantId, type, linkedId])` to prevent duplicate visible events when the source row is known (here: `linkedId = CrmEmailMessage.id`). Multiple `NULL` linkedIds still allowed by Postgres semantics.
+- Indexes used by readers: `@@index([tenantId, contactId, createdAt])`, `@@index([tenantId, type, createdAt])`.
 
 ## How to read this doc
 
