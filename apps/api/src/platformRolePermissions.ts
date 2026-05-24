@@ -10,6 +10,7 @@ import {
   type PortalPermissionKey,
 } from "@connect/shared";
 import { portalBucketFromJwtRole, PORTAL_ROLE_BUCKETS as SHARED_PORTAL_ROLE_BUCKETS } from "./userManagementRoles";
+import { resolvePortalPermissionsWithCrmUserAccess } from "./crm/portalCrmPermissions";
 
 const SNAPSHOT_ID = "default";
 const SNAPSHOT_VERSION = 2;
@@ -101,8 +102,10 @@ export async function hasEffectivePortalPermission(
   user: PortalUser,
   permission: PortalPermissionKey,
 ): Promise<boolean> {
-  const list = await getEffectivePortalPermissionSetForJwtRole(user.role);
-  return (list || DEFAULT_ROLE_PERMISSIONS[jwtRoleToPortalPermissionBucket(user.role)]).includes(permission);
+  const list =
+    (await resolvePortalPermissionsWithCrmUserAccess(user.role, user.sub || "", user.tenantId)) ||
+    DEFAULT_ROLE_PERMISSIONS[jwtRoleToPortalPermissionBucket(user.role)];
+  return list.includes(permission);
 }
 
 export async function requirePortalPermission(

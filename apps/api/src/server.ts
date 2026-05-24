@@ -46,7 +46,6 @@ import {
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import {
   canonicalSmsPhone,
-  expandLegacyPortalPermissions,
   mapHelperVoicemailSpoolToRecordShape,
   type PortalPermissionKey,
   vmExtractCallerName,
@@ -111,6 +110,7 @@ import { registerConnectChatRoutes } from "./connectChatRoutes";
 import { registerCrmRoutes } from "./crm/routes";
 import { fireCrmCdrHook } from "./crm/cdrHook";
 import { registerAdminUserCrmAccessRoutes } from "./admin/userCrmAccessRoutes";
+import { resolvePortalPermissionsWithCrmUserAccess } from "./crm/portalCrmPermissions";
 import { registerBillingRoutes } from "./billing/routes";
 import { extractBillingInvoiceIdFromEmailJob, loadBillingInvoicePdfAttachmentForEmailJob } from "./billing/billingEmailAttachments";
 import { applySolaWebhookToBillingInvoice, resolvePlatformBillingInvoiceForWebhookRef } from "./billing/solaBillingPayments";
@@ -4624,34 +4624,11 @@ app.addHook("preHandler", async (req, reply) => {
 app.get("/me", async (req) => {
   const user = getUser(req);
   const row = await db.user.findUnique({ where: { id: user.sub }, select: { firstName: true, lastName: true, displayName: true, email: true, status: true, lastLoginAt: true, avatarUrl: true } as any }).catch(() => null);
-  let portalPermissionSet = await getEffectivePortalPermissionSetForJwtRole(user.role);
-
-  // Augment portal permissions for end users who have been granted CRM access via CrmUserAccess.
-  // Admin roles already receive can_view_section_crm from their role bucket (can_manage_crm).
-  // This ensures that when an admin enables CRM for a specific user in the CRM Settings page,
-  // the CRM nav section becomes visible for that user on their next login / permission refresh.
-  if (
-    user.tenantId &&
-    portalPermissionSet &&
-    !portalPermissionSet.includes("can_view_section_crm" as PortalPermissionKey)
-  ) {
-    const [crmSettings, crmAccess] = await Promise.all([
-      db.crmTenantSettings.findUnique({
-        where: { tenantId: user.tenantId },
-        select: { enabled: true },
-      }).catch(() => null),
-      db.crmUserAccess.findUnique({
-        where: { tenantId_userId: { tenantId: user.tenantId, userId: user.sub } },
-        select: { enabled: true },
-      }).catch(() => null),
-    ]);
-    if (crmSettings?.enabled && crmAccess?.enabled) {
-      const crmPerms = expandLegacyPortalPermissions(["can_view_crm"]);
-      portalPermissionSet = [
-        ...new Set([...portalPermissionSet, ...crmPerms]),
-      ] as PortalPermissionKey[];
-    }
-  }
+  const portalPermissionSet = await resolvePortalPermissionsWithCrmUserAccess(
+    user.role,
+    user.sub,
+    user.tenantId,
+  );
 
   // Resolve tenant display name so the portal can build its tenant object for
   // regular (non-super-admin) users. Without this, AppProvider falls back to

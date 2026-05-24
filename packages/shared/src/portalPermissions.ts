@@ -219,7 +219,7 @@ export const LEGACY_PERMISSION_EXPANSIONS: Record<string, PortalPermissionKey[]>
     "can_view_admin_call_flight",
   ],
   can_manage_deploys: [...ADMIN_SECTION, "can_view_admin_deploy_center"],
-  // CRM — tenant admins get view+manage; end users get neither by default (must be granted via CrmUserAccess)
+  // CRM — expanded for role buckets; API /me strips these unless CrmUserAccess.enabled
   can_view_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_checklists", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports"],
   can_manage_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_settings", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports"],
 };
@@ -286,6 +286,27 @@ export function expandLegacyPortalPermissions(input: readonly string[]): PortalP
     for (const expanded of LEGACY_PERMISSION_EXPANSIONS[key] || []) out.add(expanded);
   }
   return [...out];
+}
+
+/** Legacy + expanded keys for CRM sidebar/pages (role buckets must not grant CRM without CrmUserAccess). */
+export const CRM_PORTAL_PERMISSION_KEYS: PortalPermissionKey[] = [
+  ...new Set<PortalPermissionKey>([
+    "can_view_crm",
+    "can_manage_crm",
+    ...expandLegacyPortalPermissions(["can_view_crm"]),
+    ...expandLegacyPortalPermissions(["can_manage_crm"]),
+  ]),
+];
+
+export function isCrmPortalPermissionKey(key: string): boolean {
+  return (CRM_PORTAL_PERMISSION_KEYS as string[]).includes(key);
+}
+
+/** Legacy keys to expand when CrmUserAccess is enabled for the user. */
+export function crmLegacyPermissionKeysForAccess(role: string | null | undefined): ("can_view_crm" | "can_manage_crm")[] {
+  const normalized = String(role || "").trim().toUpperCase();
+  if (normalized === "ADMIN" || normalized === "MANAGER") return ["can_manage_crm"];
+  return ["can_view_crm"];
 }
 
 export const DEFAULT_ROLE_PERMISSIONS: Record<PortalRoleBucket, PortalPermissionKey[]> = {

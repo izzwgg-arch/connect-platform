@@ -33,7 +33,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/voicemailSyncFair.test.ts src/voicemailIngest.test.ts src/ariBridgedSnapshot.test.ts src/expoMobilePushFormat.test.ts",
+    "test": "tsx --test src/voicemailSyncFair.test.ts src/voicemailIngest.test.ts src/ariBridgedSnapshot.test.ts src/expoMobilePushFormat.test.ts src/portalPermissions.crm.test.ts",
     "lint": "echo lint-shared"
   },
   "dependencies": {
