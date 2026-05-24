@@ -62,7 +62,7 @@ export function LiveWorkspaceOutcomePanel({
           <div>
             <p className={crm.label}>Disposition *</p>
             <div className="mt-2 flex flex-wrap gap-1.5">
-              {DISPOSITION_OPTIONS.map((d) => (
+              {DISPOSITION_OPTIONS.map((d, i) => (
                 <button
                   key={d}
                   type="button"
@@ -75,6 +75,7 @@ export function LiveWorkspaceOutcomePanel({
                       : "border-crm-border text-crm-muted hover:border-crm-accent/40",
                   )}
                 >
+                  <span className="mr-1 rounded border border-crm-border bg-crm-surface-2 px-1 font-mono">{i + 1}</span>
                   {d}
                 </button>
               ))}
@@ -107,6 +108,25 @@ export function LiveWorkspaceOutcomePanel({
 
           <div>
             <p className={crm.label}>Outcome note (optional)</p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {[
+                "Left voicemail",
+                "Requested callback",
+                "Sent SMS",
+                "Interested",
+                "Wrong number",
+              ].map((label) => (
+                <button
+                  key={label}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => setOutcomeNote(outcomeNote ? outcomeNote + (outcomeNote.endsWith(" ") ? "" : " ") + label : label)}
+                  className="rounded-full border border-crm-border px-2.5 py-0.5 text-[11px] text-crm-muted hover:border-crm-accent/40"
+                >
+                  + {label}
+                </button>
+              ))}
+            </div>
             <textarea
               value={outcomeNote}
               onChange={(e) => setOutcomeNote(e.target.value)}
@@ -140,6 +160,28 @@ export function LiveWorkspaceOutcomePanel({
                 </Chip>
               ))}
             </div>
+            {disposition === "Callback" ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {[{ label: "+15m", mins: 15 }, { label: "+1h", mins: 60 }, { label: "Today 5:00p", eod: true }, { label: "Tomorrow 9:00a", tomorrow9: true }].map((opt) => (
+                  <button
+                    key={opt.label}
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => {
+                      const d = new Date();
+                      if (opt.mins) d.setMinutes(d.getMinutes() + opt.mins);
+                      if ((opt as any).eod) { d.setHours(17,0,0,0); }
+                      if ((opt as any).tomorrow9) { d.setDate(d.getDate()+1); d.setHours(9,0,0,0); }
+                      setFollowUpOption("custom");
+                      setFollowUpCustom(d.toISOString().slice(0,16));
+                    }}
+                    className="rounded-full border border-crm-border px-2.5 py-0.5 text-[11px] text-crm-muted hover:border-crm-accent/40"
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
             {followUpOption === "custom" ? (
               <input
                 type="datetime-local"

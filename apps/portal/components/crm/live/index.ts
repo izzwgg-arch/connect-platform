@@ -9,3 +9,4 @@ export { LiveWorkspaceChecklistPanel } from "./LiveWorkspaceChecklistPanel";
 export { LiveWorkspaceNotePanel } from "./LiveWorkspaceNotePanel";
 export { LiveWorkspaceOutcomePanel } from "./LiveWorkspaceOutcomePanel";
 export { LiveWorkspaceTasksPanel } from "./LiveWorkspaceTasksPanel";
+export { LiveWrapUpBar } from "./LiveWrapUpBar";

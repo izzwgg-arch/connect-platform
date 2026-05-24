@@ -4,6 +4,20 @@
 
 ---
 
+## Live Call Workspace — visual hierarchy (19F.2)
+
+- **Contact hero first.** Large identity block with initials/avatar, prominent name, stage chip, and optional campaign/queue chips. Primary action is Call; profile link secondary.
+- **Live status clarity.** Distinct visuals for idle, dialing/ringing, connected, and ended/wrap-up. Show a small Live badge with pulse and a timer when connected.
+- **Three-column posture.**
+  - Left: compact Session rail (back/next, campaign/queue context, quick shortcuts).
+  - Center: contact hero → live status → notes → SMS → outcome → timeline.
+  - Right: scripts, checklist, open tasks — collapsible when appropriate.
+- **Outcome = rapid workflow.** Disposition buttons are large and keyboard-addressable; numeric hints visible. Conditional follow-up appears only when relevant (e.g., Callback quick-time chips).
+- **Sticky wrap-up bar.** Persistent at bottom with Save and Save + Next (power). Shows keyboard hints: Enter, Shift+Enter, 1–6 to set disposition.
+- **Quick chips.** Small, subtle chips to append common notes (Left voicemail, Requested callback, etc.).
+- **Density without clutter.** Tighten vertical rhythm across hero/status/notes/SMS/outcome. Avoid oversized empty blocks; keep honest empty states.
+- **Dark/light themes.** All surfaces use `--crm-*` tokens. Dark = navy/slate operational with soft glow; Light = white/slate with subtle borders and shadows. No ad‑hoc grayscale backgrounds.
+
 ## Principles
 
 1. **One product** — CRM routes must feel like the same app as the Workspace shell (`console-shell`, sidebar, topbar), not a separate light admin theme.

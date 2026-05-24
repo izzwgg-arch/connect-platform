@@ -18,6 +18,7 @@ import {
   LiveWorkspaceScriptPanel,
   LiveWorkspaceSessionRail,
   LiveWorkspaceTasksPanel,
+  LiveWrapUpBar,
   type Checklist,
   type CrmStage,
   type CrmTask,
@@ -25,6 +26,7 @@ import {
   type ScriptSummary,
   type TimelineEvent,
 } from "../../../../components/crm";
+import { DISPOSITION_OPTIONS } from "../../../../components/crm/live";
 import type { QueueOperationalStats } from "../../../../components/crm/queue/queueTypes";
 import { apiGet, apiPatch, apiPost } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
@@ -107,6 +109,23 @@ function LiveCallWorkspaceInner() {
   const [outcomeError, setOutcomeError] = useState("");
 
   const saveOutcomeRef = useRef<() => Promise<void>>(async () => {});
+
+  // ── Draft note autosave ───────────────────────────────────────────────────
+  const draftKey = contactId ? `crm:live:note:${contactId}` : null;
+  useEffect(() => {
+    if (!contactId || noteBody) return;
+    try {
+      const v = localStorage.getItem(`crm:live:note:${contactId}`);
+      if (v) setNoteBody(v);
+    } catch {}
+  }, [contactId]);
+  useEffect(() => {
+    if (!draftKey) return;
+    try {
+      if (noteBody) localStorage.setItem(draftKey, noteBody);
+      else localStorage.removeItem(draftKey);
+    } catch {}
+  }, [draftKey, noteBody]);
 
   const isArchived = Boolean(contact?.archivedAt || contact?.active === false);
   const primaryPhone =
@@ -234,6 +253,44 @@ function LiveCallWorkspaceInner() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [isPowerMode, disposition, savingOutcome]);
+
+  // Keyboard shortcuts: 1–6 set disposition, Enter to save, Shift+Enter save+next (power)
+  useEffect(() => {
+    function onAnyKey(e: KeyboardEvent) {
+      const tgt = e.target as HTMLElement;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(tgt.tagName)) return;
+      if (tgt.getAttribute("contenteditable") === "true") return;
+      // number keys map to dispositions
+      if (!savingOutcome && !disabledOutcome()) {
+        if (e.key >= "1" && e.key <= "6") {
+          const idx = parseInt(e.key, 10) - 1;
+          const d = (DISPOSITION_OPTIONS as readonly string[])[idx];
+          if (d) {
+            e.preventDefault();
+            setDisposition(d);
+            return;
+          }
+        }
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        if (!savingOutcome && disposition) {
+          e.preventDefault();
+          void saveOutcomeRef.current();
+        }
+      } else if (e.key === "Enter" && e.shiftKey) {
+        if (isPowerMode && !savingOutcome && disposition) {
+          e.preventDefault();
+          void saveOutcomeRef.current();
+        }
+      }
+    }
+    window.addEventListener("keydown", onAnyKey);
+    return () => window.removeEventListener("keydown", onAnyKey);
+  }, [isPowerMode, disposition, savingOutcome]);
+
+  function disabledOutcome() {
+    return !contactId || isArchived;
+  }
 
   const handleCall = useCallback(async () => {
     if (!contact || !primaryPhone || !contactId) return;
@@ -379,6 +436,7 @@ function LiveCallWorkspaceInner() {
   }
 
   return (
+    <>
     <CRMPageShell innerClassName={crm.pageInnerLive}>
       {contact && !loading && !error ? (
         <LiveWorkspaceActionBar
@@ -423,7 +481,7 @@ function LiveCallWorkspaceInner() {
             />
           </aside>
 
-          <main className="flex min-w-0 flex-col gap-4 xl:col-span-6 xl:order-2">
+          <main className="flex min-w-0 flex-col gap-3 xl:col-span-6 xl:order-2">
             <LiveCallStatusBanner linkedId={linkedId} fromNumber={fromNumber} />
             <LiveWorkspaceContactHeader
               contact={contact}
@@ -434,6 +492,8 @@ function LiveCallWorkspaceInner() {
               sipNotice={sipNotice}
               onCall={() => void handleCall()}
               profileHref={`/crm/contacts/${contact.id}`}
+              campaignName={campaignName}
+              queueLabel={isPowerMode ? "Power session" : memberId ? "Queue session" : null}
             />
             <LiveWorkspaceNotePanel
               ref={noteRef}
@@ -514,5 +574,15 @@ function LiveCallWorkspaceInner() {
         <div className="py-12 text-center text-sm text-crm-muted">Contact not found.</div>
       ) : null}
     </CRMPageShell>
+    {/* Sticky wrap-up bar */}
+    <LiveWrapUpBar
+      visible={!loading && !error && Boolean(contact)}
+      canSave={Boolean(disposition) && !savingOutcome && !isArchived}
+      saving={savingOutcome}
+      isPowerMode={isPowerMode}
+      onSave={() => void saveOutcomeRef.current()}
+      onSaveNext={isPowerMode ? () => void saveOutcomeRef.current() : undefined}
+    />
+    </>
   );
 }

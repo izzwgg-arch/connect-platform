@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { AlertCircle, Mail, Phone } from "lucide-react";
+import { AlertCircle, Mail, Megaphone, ListOrdered, Phone } from "lucide-react";
 import { CRMCard } from "../CRMCard";
 import { crm } from "../crmClasses";
 import { cn } from "../cn";
@@ -17,6 +17,8 @@ export function LiveWorkspaceContactHeader({
   sipNotice,
   onCall,
   profileHref,
+  campaignName,
+  queueLabel,
 }: {
   contact: LiveContact;
   isArchived: boolean;
@@ -26,30 +28,44 @@ export function LiveWorkspaceContactHeader({
   sipNotice: string | null;
   onCall: () => void;
   profileHref: string;
+  campaignName?: string | null;
+  queueLabel?: string | null;
 }) {
   const stage = (contact.crmStage ?? "LEAD") as CrmStage;
   const phone = contact.primaryPhone?.numberRaw ?? contact.phones?.find((p) => p.isPrimary)?.numberRaw ?? null;
   const email = contact.primaryEmail?.email ?? contact.emails?.find((e) => e.isPrimary)?.email ?? null;
 
   return (
-    <CRMCard padding="lg">
+    <CRMCard padding="lg" className="shadow-[0_8px_24px_rgba(0,0,0,0.12)]">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex gap-4">
           <div
-            className="flex h-14 w-14 shrink-0 items-center justify-center rounded-crm-lg text-lg font-bold text-white"
+            className="flex h-16 w-16 shrink-0 items-center justify-center rounded-crm-lg text-xl font-bold text-white"
             style={{ background: stageColor(stage) }}
           >
             {initials(contact.displayName)}
           </div>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-xl font-semibold text-crm-text">{contact.displayName}</h2>
+              <h2 className="text-2xl font-semibold text-crm-text">{contact.displayName}</h2>
               <span
                 className="rounded-full px-2 py-0.5 text-xs font-semibold"
                 style={{ background: stageColor(stage) + "22", color: stageColor(stage) }}
               >
                 {stageLabel(stage)}
               </span>
+              {campaignName ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-crm-border bg-crm-surface-2/60 px-2 py-0.5 text-xs text-crm-muted">
+                  <Megaphone className="h-3.5 w-3.5" />
+                  {campaignName}
+                </span>
+              ) : null}
+              {queueLabel ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-crm-border bg-crm-surface-2/60 px-2 py-0.5 text-xs text-crm-muted">
+                  <ListOrdered className="h-3.5 w-3.5" />
+                  {queueLabel}
+                </span>
+              ) : null}
               {isArchived ? (
                 <span className={crm.chip}>Archived</span>
               ) : null}

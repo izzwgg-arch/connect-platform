@@ -23,6 +23,19 @@ export const LiveWorkspaceNotePanel = forwardRef<
     <div id="live-note-panel" className="scroll-mt-24">
     <CRMCard padding="md">
       <CRMSection title="Call note" description="Saved to timeline immediately.">
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          {["Left voicemail", "Requested callback", "Sent SMS", "Interested", "Wrong number"].map((label) => (
+            <button
+              key={label}
+              type="button"
+              onClick={() => setNoteBody(noteBody ? noteBody + (noteBody.endsWith(" ") ? "" : " ") + label : label)}
+              disabled={disabled}
+              className="rounded-full border border-crm-border px-2.5 py-0.5 text-[11px] text-crm-muted hover:border-crm-accent/40"
+            >
+              + {label}
+            </button>
+          ))}
+        </div>
         <textarea
           ref={ref}
           value={noteBody}
