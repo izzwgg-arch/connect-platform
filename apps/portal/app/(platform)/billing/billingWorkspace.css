@@ -87,13 +87,19 @@
   gap: 16px;
   margin-bottom: 18px;
 }
-.bw-kpi { padding: 18px; }
+.bw-kpi { padding: 18px; display: flex; flex-direction: column; }
 .bw-kpi-label { font-size: 12px; color: var(--bw-muted); margin-bottom: 8px; }
 .bw-kpi-value { font-size: 28px; line-height: 1.15; font-weight: 800; color: var(--bw-text); letter-spacing: -0.01em; }
 .bw-kpi-value.neg { color: var(--bw-danger); }
 .bw-kpi-value.pos { color: var(--bw-success); }
 .bw-kpi-sub { font-size: 12px; color: var(--bw-muted); margin-top: 6px; }
-.bw-kpi-cta { margin-top: 10px; }
+.bw-kpi-chips { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.bw-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 999px; font-size: 11px; color: var(--bw-text); background: color-mix(in srgb, var(--bw-surface-2) 80%, transparent); border: 1px solid var(--bw-border); }
+.bw-chip--accent { background: color-mix(in srgb, var(--bw-accent) 14%, transparent); color: var(--bw-text); border-color: color-mix(in srgb, var(--bw-accent) 30%, var(--bw-border)); }
+.bw-kpi-cta { margin-top: auto; }
+.bw-card-line { display: inline-flex; align-items: center; gap: 10px; }
+.bw-card-icon { width: 24px; height: 16px; color: var(--bw-text); opacity: 0.85; }
+.bw-card-brand { letter-spacing: 0; }
 
 /* Premium payment method tile */
 .bw-kpi--pm {
@@ -170,16 +176,17 @@
 .bw-trust-accept { grid-column: span 2; display:flex; align-items: center; justify-content: flex-end; gap: 10px; color: var(--bw-muted); font-size: 12px; }
 .bw-trust-accept-label { margin-right: 6px; }
 .bw-card-logos { display: inline-flex; align-items: center; gap: 10px; }
-.cc-logo { width: 48px; height: 20px; display: inline-block; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.05)); }
-.cc-logo.mc { width: 44px; }
-.cc-logo.amex { width: 58px; }
-.cc-logo.discover { width: 58px; }
+.cc-logo { height: 18px; width: auto; display: inline-block; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.05)); }
 .bw-trust-sola { grid-column: 1 / -1; color: var(--bw-muted); font-size: 12px; text-align: center; }
 
 /* Timeline polish (scoped) */
 .billing-workspace .billing-timeline-v2 { position: relative; }
 .billing-workspace .billing-timeline-v2__item { display: grid; grid-template-columns: 28px 1fr; gap: 12px; padding: 10px 2px; }
-.billing-workspace .billing-timeline-v2__icon { width: 22px; height: 22px; border-radius: 999px; background: color-mix(in srgb, var(--bw-accent) 16%, transparent); display:flex; align-items:center; justify-content:center; }
+.billing-workspace .billing-timeline-v2__icon { width: 22px; height: 22px; border-radius: 999px; background: color-mix(in srgb, var(--bw-accent) 16%, transparent); display:flex; align-items:center; justify-content:center; position: relative; }
+.billing-workspace .billing-timeline-v2__icon::before,
+.billing-workspace .billing-timeline-v2__icon::after { content: ""; position: absolute; left: 50%; transform: translateX(-50%); width: 2px; background: color-mix(in srgb, var(--bw-border) 60%, transparent); }
+.billing-workspace .billing-timeline-v2__icon::before { top: -10px; bottom: 50%; }
+.billing-workspace .billing-timeline-v2__icon::after { top: 50%; bottom: -10px; }
 .billing-workspace .billing-p8-timeline-day { color: var(--bw-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin: 6px 0; }
 .billing-workspace .billing-timeline-v2__label { font-weight: 700; color: var(--bw-text); }
 .billing-workspace .billing-timeline-v2__time { color: var(--bw-muted); font-size: 12px; }
@@ -191,9 +198,14 @@
   border: 1px dashed color-mix(in srgb, var(--bw-border) 80%, transparent);
   color: var(--bw-muted);
   border-radius: 14px;
-  padding: 16px;
+  padding: 18px 16px;
   text-align: center;
 }
+.billing-workspace .state-illus { display: flex; align-items: center; justify-content: center; margin-bottom: 8px; opacity: .9; }
+.billing-workspace .state-illus svg { width: 36px; height: 36px; color: var(--bw-muted); }
+.billing-workspace .state-title { font-weight: 700; color: var(--bw-text); margin-bottom: 2px; }
+.billing-workspace .state-text { font-size: 12px; color: var(--bw-muted); }
+.billing-workspace .state-actions { margin-top: 10px; }
 
 /* Responsive */
 @media (max-width: 1200px) {

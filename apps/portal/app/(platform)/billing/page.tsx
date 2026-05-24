@@ -247,6 +247,14 @@ export default function BillingOverviewPage() {
               <div className="bw-kpi-sub">
                 {defaultPm?.expMonth && defaultPm?.expYear ? `Expires ${defaultPm.expMonth}/${String(defaultPm.expYear).slice(-2)}` : s?.defaultPaymentMethodId ? "Default" : "No card on file"}
               </div>
+              <div className="bw-kpi-chips">
+                {s?.defaultPaymentMethodId && defaultPm ? (
+                  <span className="bw-chip" title="Default payment method">Default</span>
+                ) : null}
+                {s?.autoBillingEnabled ? (
+                  <span className="bw-chip bw-chip--accent" title="Autopay is enabled">Autopay</span>
+                ) : null}
+              </div>
               <div className="bw-kpi-cta"><Link className="btn ghost" href="/billing/payments">{defaultPm ? "Manage" : "Add card"}</Link></div>
             </div>
             <div className="billing-card bw-kpi">
@@ -317,7 +325,14 @@ export default function BillingOverviewPage() {
                 ) : null}
               </div>
             ) : (
-              <div className="state-box">Estimate not available.</div>
+              <div className="state-box">
+                <div className="state-illus" aria-hidden>
+                  <svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                </div>
+                <div className="state-title">No estimate available</div>
+                <div className="state-text">We’ll show your next invoice preview as soon as it’s ready.</div>
+                <div className="state-actions"><Link className="btn ghost" href="/billing/invoices">View invoices</Link></div>
+              </div>
             )}
           </div>
 
@@ -327,7 +342,13 @@ export default function BillingOverviewPage() {
             {timeline.status === "success" && timeline.data?.events?.length ? (
               <BillingActivityList events={timeline.data.events} />
             ) : (
-              <div className="state-box">No recent billing activity.</div>
+              <div className="state-box">
+                <div className="state-illus" aria-hidden>
+                  <svg viewBox="0 0 24 24" fill="none"><path d="M12 6v6l4 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                </div>
+                <div className="state-title">No recent billing activity</div>
+                <div className="state-text">You’ll see payments and invoice updates here.</div>
+              </div>
             )}
           </div>
 
@@ -352,7 +373,14 @@ export default function BillingOverviewPage() {
                 ))}
               </div>
             ) : (
-              <div className="state-box">No invoices yet.</div>
+              <div className="state-box">
+                <div className="state-illus" aria-hidden>
+                  <svg viewBox="0 0 24 24" fill="none"><path d="M6 7h12M6 12h12M6 17h7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                </div>
+                <div className="state-title">No invoices yet</div>
+                <div className="state-text">Your invoices will appear here once generated.</div>
+                <div className="state-actions"><Link className="btn ghost" href="/billing/settings">Review billing settings</Link></div>
+              </div>
             )}
           </div>
         </section>
