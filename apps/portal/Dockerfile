@@ -22,12 +22,15 @@ FROM deps AS builder
 ARG NEXT_PUBLIC_API_URL=""
 ARG NEXT_PUBLIC_TELEPHONY_WS_URL="wss://app.connectcomunications.com/ws/telephony"
 ARG NEXT_PUBLIC_FORCE_ICE_RELAY=""
+ARG NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED=""
 COPY apps/portal ./apps/portal
 COPY packages/shared ./packages/shared
-RUN NEXT_OUTPUT_STANDALONE=1 \
+RUN --mount=type=cache,id=connect-next-cache,target=/app/apps/portal/.next/cache \
+  NEXT_OUTPUT_STANDALONE=1 \
   NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL}" \
   NEXT_PUBLIC_TELEPHONY_WS_URL="${NEXT_PUBLIC_TELEPHONY_WS_URL}" \
   NEXT_PUBLIC_FORCE_ICE_RELAY="${NEXT_PUBLIC_FORCE_ICE_RELAY}" \
+  NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED="${NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED}" \
   pnpm --filter @connect/portal build
 
 FROM node:20-bookworm-slim AS runner
