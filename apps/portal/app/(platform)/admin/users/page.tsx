@@ -421,6 +421,7 @@ function CrmAccessModal({ user, onClose }: { user: AdminUser; onClose: () => voi
   const [crmRole, setCrmRole] = useState<"AGENT" | "MANAGER" | "ADMIN">("AGENT");
   const [selectedCampaignIds, setSelectedCampaignIds] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [enablingTenant, setEnablingTenant] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -448,6 +449,20 @@ function CrmAccessModal({ user, onClose }: { user: AdminUser; onClose: () => voi
       else next.delete(campaignId);
       return next;
     });
+  }
+
+  async function enableTenantCrm() {
+    setEnablingTenant(true);
+    setToast(null);
+    try {
+      await apiPost(`/admin/users/${user.id}/crm-access/enable-tenant`, {});
+      setToast({ kind: "ok", text: "CRM enabled for this tenant" });
+      await load();
+    } catch (e: any) {
+      setToast({ kind: "err", text: e?.message || "Failed to enable CRM for tenant" });
+    } finally {
+      setEnablingTenant(false);
+    }
   }
 
   async function save() {
@@ -491,7 +506,20 @@ function CrmAccessModal({ user, onClose }: { user: AdminUser; onClose: () => voi
         ) : data ? (
           <div className="stack" style={{ gap: 14, marginTop: 18 }}>
             {!data.crmTenantEnabled ? (
-              <div className="state-box">CRM is not enabled for this tenant. Enable it in CRM Settings before granting user access.</div>
+              <div className="state-box stack" style={{ gap: 12 }}>
+                <p style={{ margin: 0 }}>
+                  CRM is not enabled for <strong>{data.tenantName || "this tenant"}</strong>.
+                  Enable it here, then grant access to this user.
+                </p>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={enablingTenant || saving}
+                  onClick={enableTenantCrm}
+                >
+                  {enablingTenant ? "Enabling…" : "Enable CRM for this tenant"}
+                </button>
+              </div>
             ) : null}
 
             <section className="panel" style={{ padding: 14 }}>
@@ -506,7 +534,7 @@ function CrmAccessModal({ user, onClose }: { user: AdminUser; onClose: () => voi
                   <input
                     type="checkbox"
                     checked={crmEnabled}
-                    disabled={saving || !data.crmTenantEnabled}
+                    disabled={saving || enablingTenant || !data.crmTenantEnabled}
                     onChange={(e) => setCrmEnabled(e.target.checked)}
                   />
                   <span>{crmEnabled ? "Enabled" : "Disabled"}</span>
@@ -570,7 +598,7 @@ function CrmAccessModal({ user, onClose }: { user: AdminUser; onClose: () => voi
 
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
               <button className="btn ghost" onClick={onClose} disabled={saving}>Cancel</button>
-              <button className="btn" onClick={save} disabled={saving || !data.crmTenantEnabled}>
+              <button className="btn" onClick={save} disabled={saving || enablingTenant || !data.crmTenantEnabled}>
                 {saving ? "Saving…" : "Save"}
               </button>
             </div>

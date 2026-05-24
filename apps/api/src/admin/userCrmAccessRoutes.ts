@@ -100,6 +100,17 @@ export async function registerAdminUserCrmAccessRoutes(app: FastifyInstance, dep
       return reply.status(403).send({ error: "forbidden", detail: "Cannot manage CRM access for users in another tenant." });
     }
 
+    const tenantCrm = await db.crmTenantSettings.findUnique({
+      where: { tenantId: target.tenantId },
+      select: { enabled: true },
+    });
+    if (!tenantCrm?.enabled) {
+      return reply.status(400).send({
+        error: "crm_tenant_not_enabled",
+        detail: "Enable CRM for this tenant before granting user access.",
+      });
+    }
+
     const data = parsed.data;
     const campaignIds = Array.from(new Set(data.campaignIds ?? []));
 
@@ -168,6 +179,44 @@ export async function registerAdminUserCrmAccessRoutes(app: FastifyInstance, dep
       enabled: access.enabled,
       role: access.role,
       assignedCampaignIds: data.enabled ? campaignIds : [],
+    };
+  });
+
+  // Enable CRM for the target user's tenant (Admin → Users drawer).
+  // Does not require CRM nav / tenant JWT context — uses target user's tenantId.
+  app.post("/admin/users/:id/crm-access/enable-tenant", async (req, reply) => {
+    const admin = await requirePermission(req, reply, canManageUsers);
+    if (!admin) return;
+
+    const { id } = req.params as { id: string };
+    const target = await resolveAdminTargetUser(admin, id);
+    if (!target) return reply.status(404).send({ error: "user_not_found", detail: "User not found or not in your tenant." });
+
+    if (admin.role !== "SUPER_ADMIN" && target.tenantId !== admin.tenantId) {
+      return reply.status(403).send({ error: "forbidden", detail: "Cannot manage CRM access for users in another tenant." });
+    }
+
+    const settings = await db.crmTenantSettings.upsert({
+      where: { tenantId: target.tenantId },
+      create: { tenantId: target.tenantId, enabled: true },
+      update: { enabled: true },
+      select: { enabled: true },
+    });
+
+    await audit({
+      tenantId: target.tenantId,
+      actorUserId: admin.sub,
+      targetUserId: target.id,
+      action: "TENANT_CRM_ENABLED",
+      entityType: "Tenant",
+      entityId: target.tenantId,
+      metadata: { enabled: settings.enabled },
+    });
+
+    return {
+      ok: true,
+      tenantId: target.tenantId,
+      crmTenantEnabled: settings.enabled,
     };
   });
 }
