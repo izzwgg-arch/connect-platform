@@ -468,3 +468,30 @@ Scope: pages under `apps/portal/app/(platform)/billing/*` that are customer-faci
   - Don't introduce placeholder charts or fabricated interactions.
   - Don't change Cardknox/SOLA/iFields behavior on customer pages.
 
+### Customer billing workspace — micro‑polish patterns (2026‑05‑24)
+
+- **KPI chip patterns**
+  - Containers: `.bw-kpi-chips` (inline wrap, 6px gap).
+  - Chip: `.bw-chip` (pill radius, compact 11px font, thin border, surface‑2 wash).
+  - Accent: `.bw-chip--accent` (subtle accent wash + border tint). Use for "Autopay".
+  - Usage: small status affordances on KPI tiles only (e.g., "Default", "Autopay"). Keep copy to 1–2 words.
+
+- **Empty‑state patterns (scoped)**
+  - Illustration: `.state-illus` (36px inline SVG, muted tone).
+  - Title: `.state-title` (bold, primary text).
+  - Text: `.state-text` (12px, muted).
+  - Actions: `.state-actions` (top margin 10px; `btn ghost` CTA). All under `.billing-workspace` scope.
+  - Copy: one clear sentence + single relevant action. No placeholder lorem or oversized hero icons.
+
+- **Finance‑card polish rules**
+  - Premium PM tile: `.bw-kpi--pm` adds a very subtle accent radial gradient and softer border.
+  - Vertical rhythm: all `.bw-kpi` use column layout; `.bw-kpi-cta { margin-top: auto; }` so CTAs align to the bottom across tiles.
+  - Backgrounds/shadows: rely on `--bw-*` tokens; avoid hardcoded hex. Keep shadows soft and consistent across tiles/cards.
+  - Spacing: label → value → sub → chips → CTA. Preserve small, consistent gaps (`8px/6px`).
+
+- **Trust footer/logo treatment**
+  - Accepted cards render as real SVG marks in a row: `.bw-card-logos`.
+  - Sizing: `.cc-logo { height: 18px; width: auto; }` with subtle drop shadow for readability.
+  - Keep equal visual weight; do not stretch logos to match widths.
+
+

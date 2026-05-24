@@ -26,6 +26,27 @@ This pass converts `/billing` into a premium SaaS finance workspace with light-m
   - Tiles collapse to a single column; body sections stack; rows remain tappable with comfortable hit targets.
 
 
+### Customer billing workspace — visual polish recap (2026-05-24)
+
+- **KPI chips**
+  - `.bw-kpi-chips` holds status chips on tiles.
+  - `.bw-chip` standard pill; `.bw-chip--accent` for positive/high-signal states (e.g., Autopay).
+  - Keep chip copy concise (e.g., "Default", "Autopay").
+
+- **Empty states**
+  - Use `.state-illus`, `.state-title`, `.state-text`, `.state-actions` under `.billing-workspace`.
+  - Estimate preview, timeline, and invoices use a small inline icon, one-line helpful copy, and a relevant CTA.
+
+- **Finance-card polish**
+  - `.bw-kpi--pm` adds a subtle accent radial to the Payment method tile.
+  - KPI tiles align CTAs via `.bw-kpi-cta { margin-top: auto; }` to keep consistent vertical rhythm.
+  - Panel blending/shadows follow `--bw-*` tokens (no hardcoded hex); borders are thin and consistent.
+
+- **Trust footer / logos**
+  - Real brand SVGs for Visa/Mastercard/Amex/Discover under `.bw-card-logos`.
+  - Sizing unified: `.cc-logo { height: 18px; width: auto; }`.
+  - Maintain equal visual weight; avoid stretching.
+
 > Read `CURSOR_START_HERE.md` first. High-risk: payments and invoices.
 
 ## Canonical production hostname
