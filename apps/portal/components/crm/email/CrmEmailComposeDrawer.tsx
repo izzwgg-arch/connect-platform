@@ -7,12 +7,19 @@ import { apiGet, apiPost } from "../../../services/apiClient";
 import { crm } from "../crmClasses";
 import { cn } from "../cn";
 
-type EmailConnection = {
-  connected: boolean;
-  emailAddress: string | null;
+type Sender = {
+  id: string;
+  scope: "USER" | "TENANT";
+  emailAddress: string;
   displayName: string | null;
+  label: string | null;
+  senderName: string | null;
+  isDefaultForTenant: boolean;
   status: string;
+  isMine: boolean;
 };
+
+type ConnectionsResp = { senders: Sender[]; canManageTenantSenders: boolean };
 
 type EmailTemplate = {
   id: string;
@@ -56,8 +63,9 @@ export function CrmEmailComposeDrawer({
   mergeFields: ContactMergeFields;
   onSent?: () => void;
 }) {
-  const [conn, setConn] = useState<EmailConnection | null>(null);
+  const [senders, setSenders] = useState<Sender[]>([]);
   const [connLoading, setConnLoading] = useState(false);
+  const [senderId, setSenderId] = useState<string>("");
   const [templates, setTemplates] = useState<EmailTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [templateId, setTemplateId] = useState<string>("");
@@ -70,10 +78,15 @@ export function CrmEmailComposeDrawer({
   const loadConn = useCallback(async () => {
     setConnLoading(true);
     try {
-      const res = await apiGet<EmailConnection>("/crm/email/connection");
-      setConn(res);
+      const res = await apiGet<ConnectionsResp>("/crm/email/connections");
+      const usable = (res?.senders ?? []).filter((s) => s.status === "CONNECTED");
+      setSenders(usable);
+      // Default selection per fallback chain: my USER → tenant default → first
+      const mine = usable.find((s) => s.scope === "USER" && s.isMine);
+      const def = usable.find((s) => s.scope === "TENANT" && s.isDefaultForTenant);
+      setSenderId(mine?.id || def?.id || usable[0]?.id || "");
     } catch (e: any) {
-      setError(e?.message || "Failed to load email connection");
+      setError(e?.message || "Failed to load email senders");
     } finally {
       setConnLoading(false);
     }
@@ -112,16 +125,18 @@ export function CrmEmailComposeDrawer({
     setBodyText(applyMergeFields(tpl.bodyText, mergeFields));
   }, [templates, mergeFields]);
 
+  const selectedSender = useMemo(() => senders.find((s) => s.id === senderId) ?? null, [senders, senderId]);
+
   const canSend = useMemo(() => {
-    if (!conn?.connected) return false;
+    if (!selectedSender) return false;
     if (!contactEmail) return false;
     if (!subject.trim()) return false;
     if (!bodyText.trim()) return false;
     return !sending;
-  }, [conn, contactEmail, subject, bodyText, sending]);
+  }, [selectedSender, contactEmail, subject, bodyText, sending]);
 
   const handleSend = async () => {
-    if (!canSend) return;
+    if (!canSend || !selectedSender) return;
     setSending(true);
     setError(null);
     try {
@@ -130,6 +145,7 @@ export function CrmEmailComposeDrawer({
         subject: subject.trim().slice(0, 500),
         bodyText: bodyText.slice(0, 50000),
         templateId: templateId || undefined,
+        connectionId: selectedSender.id,
       });
       setSent(true);
       onSent?.();
@@ -170,13 +186,13 @@ export function CrmEmailComposeDrawer({
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {connLoading ? (
             <div className="flex items-center gap-2 text-sm text-crm-muted"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
-          ) : !conn?.connected ? (
+          ) : senders.length === 0 ? (
             <div className="flex flex-col gap-3 rounded-crm border border-crm-warning/40 bg-crm-warning/10 p-4">
               <div className="flex items-start gap-2 text-sm text-crm-warning">
                 <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
                 <div>
-                  <p className="font-semibold">Email not connected</p>
-                  <p className="mt-1 text-crm-text/80">Connect your Google account to send CRM emails as yourself. Tokens are encrypted; Connect never reads your inbox.</p>
+                  <p className="font-semibold">No sender available</p>
+                  <p className="mt-1 text-crm-text/80">Connect your own Google account, or ask a CRM admin to connect a shared mailbox. Send-only — Connect never reads your inbox.</p>
                 </div>
               </div>
               <Link href="/crm/email/settings" className={cn(crm.btnPrimary, "self-start text-xs")} onClick={onClose}>
@@ -195,9 +211,36 @@ export function CrmEmailComposeDrawer({
             </div>
           ) : (
             <div className="flex flex-col gap-4">
-              <div className="rounded-crm border border-crm-border/70 bg-crm-surface-2/40 px-3 py-2 text-xs text-crm-muted">
-                Sending as <span className="font-medium text-crm-text">{conn.displayName || conn.emailAddress}</span>
-              </div>
+              {senders.length > 1 ? (
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-crm-muted">Send from</label>
+                  <select
+                    value={senderId}
+                    onChange={(e) => setSenderId(e.target.value)}
+                    className={crm.select}
+                  >
+                    {senders.map((s) => {
+                      const display = s.label || s.senderName || s.displayName || s.emailAddress;
+                      const tag = s.scope === "USER" ? "My email" : s.isDefaultForTenant ? "Shared (default)" : "Shared";
+                      return (
+                        <option key={s.id} value={s.id}>
+                          {tag} — {display} &lt;{s.emailAddress}&gt;
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              ) : (
+                <div className="rounded-crm border border-crm-border/70 bg-crm-surface-2/40 px-3 py-2 text-xs text-crm-muted">
+                  Sending as{" "}
+                  <span className="font-medium text-crm-text">
+                    {selectedSender?.label || selectedSender?.senderName || selectedSender?.displayName || selectedSender?.emailAddress}
+                  </span>
+                  {selectedSender && selectedSender.scope === "TENANT" && (
+                    <span className="ml-1">(shared{selectedSender.isDefaultForTenant ? ", default" : ""})</span>
+                  )}
+                </div>
+              )}
 
               <div>
                 <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-crm-muted">

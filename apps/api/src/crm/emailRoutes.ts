@@ -29,6 +29,72 @@ async function requireAuth(req: any, reply: any): Promise<{ sub: string; tenantI
   return user;
 }
 
+/**
+ * Admins (tenant or platform) are allowed to manage TENANT-scoped shared senders.
+ * `can_manage_crm` already implies these roles per packages/shared/src/portalPermissions.ts.
+ */
+function canManageTenantSender(user: { role?: string }): boolean {
+  const r = String(user.role || "").toUpperCase();
+  return r === "ADMIN" || r === "TENANT_ADMIN" || r === "SUPER_ADMIN" || r === "MANAGER";
+}
+
+/**
+ * Resolve the CrmEmailConnection a caller should send from, given an optional explicit choice.
+ * Returns null when no usable sender exists.
+ *
+ * Fallback order:
+ *   1. explicit connectionId (caller-chosen) — must be allowed (own USER row OR any TENANT row in tenant)
+ *   2. caller's own USER connection (CONNECTED)
+ *   3. tenant default TENANT connection (CONNECTED)
+ *   4. lone TENANT connection (CONNECTED) when exactly one exists
+ *   5. null
+ */
+async function resolveSenderConnection(opts: {
+  tenantId: string;
+  userId: string;
+  explicitId?: string | null;
+}): Promise<{ id: string; emailAddress: string; senderName: string | null; displayName: string | null; scope: "USER" | "TENANT" } | null> {
+  const { tenantId, userId, explicitId } = opts;
+
+  if (explicitId) {
+    const row = await db.crmEmailConnection.findFirst({
+      where: {
+        id: explicitId,
+        tenantId,
+        status: "CONNECTED",
+        OR: [
+          { scope: "USER", userId },
+          { scope: "TENANT" },
+        ],
+      },
+      select: { id: true, emailAddress: true, senderName: true, displayName: true, scope: true },
+    });
+    if (row) return row as any;
+    return null;
+  }
+
+  const mine = await db.crmEmailConnection.findFirst({
+    where: { tenantId, userId, scope: "USER", status: "CONNECTED" },
+    select: { id: true, emailAddress: true, senderName: true, displayName: true, scope: true },
+  });
+  if (mine) return mine as any;
+
+  const def = await db.crmEmailConnection.findFirst({
+    where: { tenantId, scope: "TENANT", isDefaultForTenant: true, status: "CONNECTED" },
+    select: { id: true, emailAddress: true, senderName: true, displayName: true, scope: true },
+  });
+  if (def) return def as any;
+
+  const tenantRows = await db.crmEmailConnection.findMany({
+    where: { tenantId, scope: "TENANT", status: "CONNECTED" },
+    select: { id: true, emailAddress: true, senderName: true, displayName: true, scope: true },
+    take: 2,
+  });
+  if (tenantRows.length === 1) return tenantRows[0] as any;
+
+  return null;
+}
+
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
 const emailQueue = new Queue("crm-email-send", { connection: redis });
 
@@ -43,10 +109,12 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
   const cryptoReady = hasCredentialsMasterKey();
   if (!cryptoReady) app.log.warn("CRM email connection disabled: CREDENTIALS_MASTER_KEY missing/invalid");
 
-  // GET /crm/email/connection — current user's connection (sanitized)
+  // GET /crm/email/connection — backward-compat: caller's own USER connection
   app.get("/crm/email/connection", async (req, reply) => {
     const user = await requireAuth(req, reply); if (!user) return;
-    const row = await db.crmEmailConnection.findUnique({ where: { tenantId_userId: { tenantId: user.tenantId, userId: user.sub } } }).catch(() => null);
+    const row = await db.crmEmailConnection.findFirst({
+      where: { tenantId: user.tenantId, userId: user.sub, scope: "USER" },
+    }).catch(() => null);
     if (!row) return { connected: false, provider: null, emailAddress: null, displayName: null, replyTrackingEnabled: false, bodyCacheMode: "METADATA_ONLY", status: "DISCONNECTED" };
     return {
       connected: row.status === "CONNECTED",
@@ -59,6 +127,53 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       lastSyncAt: row.lastSyncAt,
       scopes: row.scopes,
     };
+  });
+
+  // GET /crm/email/connections — all senders the caller is allowed to send from
+  // Returns: { senders: SenderRef[], canManageTenantSenders: boolean }
+  app.get("/crm/email/connections", async (req, reply) => {
+    const user = await requireAuth(req, reply); if (!user) return;
+    const rows = await db.crmEmailConnection.findMany({
+      where: {
+        tenantId: user.tenantId,
+        OR: [
+          { scope: "USER", userId: user.sub },
+          { scope: "TENANT" },
+        ],
+      },
+      orderBy: [{ scope: "asc" }, { isDefaultForTenant: "desc" }, { createdAt: "asc" }],
+      select: {
+        id: true,
+        scope: true,
+        emailAddress: true,
+        displayName: true,
+        label: true,
+        senderName: true,
+        isDefaultForTenant: true,
+        status: true,
+        userId: true,
+        managedByUserId: true,
+        scopes: true,
+        lastSyncAt: true,
+        lastError: true,
+      },
+    });
+    const isAdmin = canManageTenantSender(user);
+    const senders = rows.map((r) => ({
+      id: r.id,
+      scope: r.scope,
+      emailAddress: r.emailAddress,
+      displayName: r.displayName,
+      label: r.label,
+      senderName: r.senderName,
+      isDefaultForTenant: r.isDefaultForTenant,
+      status: r.status,
+      isMine: r.scope === "USER" && r.userId === user.sub,
+      canManage: r.scope === "USER" ? r.userId === user.sub : isAdmin,
+      lastSyncAt: r.lastSyncAt,
+      lastError: r.lastError,
+    }));
+    return { senders, canManageTenantSenders: isAdmin };
   });
 
   // POST /crm/email/oauth/start — returns Google OAuth URL (send-only scope in Phase 1)
@@ -79,11 +194,22 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     const bodyCacheMode = String(body?.bodyCacheMode || "METADATA_ONLY");
     const replyTrackingEnabled = false; // Phase 1 fixed
 
+    // scope = USER (default) or TENANT (admins only). label/isDefaultForTenant apply to TENANT.
+    const scopeChoice: "USER" | "TENANT" = body?.scope === "TENANT" ? "TENANT" : "USER";
+    if (scopeChoice === "TENANT" && !canManageTenantSender(user)) {
+      return reply.status(403).send({ error: "forbidden", detail: "tenant_sender_requires_admin" });
+    }
+    const wantsDefault = scopeChoice === "TENANT" ? Boolean(body?.isDefaultForTenant) : false;
+    const label = typeof body?.label === "string" ? String(body.label).trim().slice(0, 120) : null;
+
     const payload = {
       tenantId: user.tenantId,
       userId: user.sub,
       bodyCacheMode,
       replyTrackingEnabled,
+      scopeChoice,
+      wantsDefault,
+      label: label || null,
       ts: Date.now(),
       nonce: base64url(Buffer.from(require("crypto").randomBytes(16))),
     };
@@ -120,7 +246,16 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       const payloadJson = Buffer.from(payloadB64.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
       const expectSig = hmacSha256(process.env.JWT_SECRET || "connect-secret", payloadJson);
       if (sig !== expectSig) return reply.status(400).send({ error: "invalid_state" });
-      const payload = JSON.parse(payloadJson) as { tenantId: string; userId: string; bodyCacheMode: string; replyTrackingEnabled: boolean };
+      const payload = JSON.parse(payloadJson) as {
+        tenantId: string;
+        userId: string;
+        bodyCacheMode: string;
+        replyTrackingEnabled: boolean;
+        scopeChoice?: "USER" | "TENANT";
+        wantsDefault?: boolean;
+        label?: string | null;
+      };
+      const scopeChoice: "USER" | "TENANT" = payload.scopeChoice === "TENANT" ? "TENANT" : "USER";
 
       let clientId: string;
       let clientSecret: string;
@@ -166,40 +301,144 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       const encryptedAccessToken = encryptJson({ accessToken, tokenType, scope });
       const encryptedRefreshToken = refreshToken ? encryptJson({ refreshToken }) : encryptJson({ refreshToken: null });
 
-      const row = await db.crmEmailConnection.upsert({
-        where: { tenantId_userId: { tenantId: payload.tenantId, userId: payload.userId } },
-        create: {
+      let createdId: string | null = null;
+      if (scopeChoice === "USER") {
+        const existing = await db.crmEmailConnection.findFirst({
+          where: { tenantId: payload.tenantId, userId: payload.userId, scope: "USER" },
+          select: { id: true },
+        });
+        if (existing) {
+          await db.crmEmailConnection.update({
+            where: { id: existing.id },
+            data: {
+              emailAddress: emailAddress || undefined,
+              displayName: displayName || undefined,
+              googleAccountId: googleAccountId || undefined,
+              encryptedAccessToken,
+              encryptedRefreshToken,
+              tokenExpiresAt,
+              scopes: scope,
+              replyTrackingEnabled: false,
+              status: "CONNECTED",
+              lastError: null,
+            },
+          });
+          createdId = existing.id;
+        } else {
+          const row = await db.crmEmailConnection.create({
+            data: {
+              tenantId: payload.tenantId,
+              userId: payload.userId,
+              scope: "USER",
+              managedByUserId: null,
+              provider: "GOOGLE_WORKSPACE",
+              emailAddress: emailAddress || "",
+              displayName: displayName || null,
+              googleAccountId: googleAccountId || null,
+              encryptedAccessToken,
+              encryptedRefreshToken,
+              tokenExpiresAt,
+              scopes: scope,
+              replyTrackingEnabled: false,
+              gmailHistoryId: null,
+              bodyCacheMode: (payload.bodyCacheMode as any) || "METADATA_ONLY",
+              bodyCacheRetentionDays: 30,
+              status: "CONNECTED",
+              lastSyncAt: null,
+              lastError: null,
+            },
+            select: { id: true },
+          });
+          createdId = row.id;
+        }
+      } else {
+        // TENANT scope — keyed by (tenantId, emailAddress, scope=TENANT). Reconnecting the
+        // same mailbox refreshes tokens; a different admin would still write the same row.
+        const existing = emailAddress
+          ? await db.crmEmailConnection.findFirst({
+              where: { tenantId: payload.tenantId, scope: "TENANT", emailAddress },
+              select: { id: true, isDefaultForTenant: true },
+            })
+          : null;
+
+        // Auto-promote: if this is the first TENANT sender for the tenant, mark as default.
+        const otherCount = await db.crmEmailConnection.count({
+          where: { tenantId: payload.tenantId, scope: "TENANT" },
+        });
+        const autoDefault = otherCount === 0;
+        const shouldBeDefault = Boolean(payload.wantsDefault) || autoDefault || (existing?.isDefaultForTenant ?? false);
+
+        if (existing) {
+          await db.crmEmailConnection.update({
+            where: { id: existing.id },
+            data: {
+              displayName: displayName || undefined,
+              googleAccountId: googleAccountId || undefined,
+              managedByUserId: payload.userId,
+              label: payload.label ?? undefined,
+              encryptedAccessToken,
+              encryptedRefreshToken,
+              tokenExpiresAt,
+              scopes: scope,
+              status: "CONNECTED",
+              lastError: null,
+            },
+          });
+          createdId = existing.id;
+        } else {
+          const row = await db.crmEmailConnection.create({
+            data: {
+              tenantId: payload.tenantId,
+              userId: null,
+              scope: "TENANT",
+              managedByUserId: payload.userId,
+              label: payload.label || null,
+              isDefaultForTenant: false, // promote below in a tx to avoid partial-index collisions
+              provider: "GOOGLE_WORKSPACE",
+              emailAddress: emailAddress || "",
+              displayName: displayName || null,
+              googleAccountId: googleAccountId || null,
+              encryptedAccessToken,
+              encryptedRefreshToken,
+              tokenExpiresAt,
+              scopes: scope,
+              replyTrackingEnabled: false,
+              gmailHistoryId: null,
+              bodyCacheMode: (payload.bodyCacheMode as any) || "METADATA_ONLY",
+              bodyCacheRetentionDays: 30,
+              status: "CONNECTED",
+              lastSyncAt: null,
+              lastError: null,
+            },
+            select: { id: true },
+          });
+          createdId = row.id;
+        }
+
+        if (shouldBeDefault && createdId) {
+          // Atomic swap: clear any previous default in same tenant, then set this one.
+          await db.$transaction([
+            db.crmEmailConnection.updateMany({
+              where: { tenantId: payload.tenantId, scope: "TENANT", isDefaultForTenant: true, NOT: { id: createdId } },
+              data: { isDefaultForTenant: false },
+            }),
+            db.crmEmailConnection.update({
+              where: { id: createdId },
+              data: { isDefaultForTenant: true },
+            }),
+          ]);
+        }
+      }
+
+      await db.auditLog.create({
+        data: {
           tenantId: payload.tenantId,
-          userId: payload.userId,
-          provider: "GOOGLE_WORKSPACE",
-          emailAddress: emailAddress || "",
-          displayName: displayName || null,
-          googleAccountId: googleAccountId || null,
-          encryptedAccessToken,
-          encryptedRefreshToken,
-          tokenExpiresAt,
-          scopes: scope,
-          replyTrackingEnabled: false,
-          gmailHistoryId: null,
-          bodyCacheMode: (payload.bodyCacheMode as any) || "METADATA_ONLY",
-          bodyCacheRetentionDays: 30,
-          status: "CONNECTED",
-          lastSyncAt: null,
-          lastError: null,
+          action: scopeChoice === "TENANT" ? "CRM_EMAIL_TENANT_CONNECTED" : "CRM_EMAIL_USER_CONNECTED",
+          entityType: "CrmEmailConnection",
+          entityId: createdId || "",
+          actorUserId: payload.userId,
         },
-        update: {
-          emailAddress: emailAddress || undefined,
-          displayName: displayName || undefined,
-          googleAccountId: googleAccountId || undefined,
-          encryptedAccessToken,
-          encryptedRefreshToken,
-          tokenExpiresAt,
-          scopes: scope,
-          replyTrackingEnabled: false,
-          status: "CONNECTED",
-          lastError: null,
-        },
-      });
+      }).catch(() => undefined);
 
       const portalUrl = (process.env.NEXT_PUBLIC_PORTAL_URL || "").trim();
       const redirectTarget = portalUrl ? `${portalUrl.replace(/\/$/, "")}/crm/email/settings?connected=1` : "/crm/email/settings?connected=1";
@@ -210,15 +449,10 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     }
   });
 
-  // DELETE /crm/email/connection — revoke + disconnect
-  app.delete("/crm/email/connection", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
-    const row = await db.crmEmailConnection.findUnique({ where: { tenantId_userId: { tenantId: user.tenantId, userId: user.sub } } });
-    if (!row) return reply.send({ ok: true });
-
+  // Shared revoke-and-disconnect logic for both DELETE endpoints.
+  async function softDisconnect(rowId: string, actorUserId: string, tenantId: string, encRefresh: string | null | undefined) {
     try {
-      // Best-effort revoke via Google using refresh token if present
-      const refreshPayload = row.encryptedRefreshToken ? (decryptJson<any>(row.encryptedRefreshToken) || {}) : {};
+      const refreshPayload = encRefresh ? (decryptJson<any>(encRefresh) || {}) : {};
       const tok = String(refreshPayload?.refreshToken || "");
       if (tok) {
         await fetch("https://oauth2.googleapis.com/revoke", {
@@ -228,9 +462,8 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
         }).catch(() => undefined);
       }
     } catch {}
-
     await db.crmEmailConnection.update({
-      where: { tenantId_userId: { tenantId: user.tenantId, userId: user.sub } },
+      where: { id: rowId },
       data: {
         status: "DISCONNECTED",
         encryptedAccessToken: encryptJson({ revoked: true }),
@@ -238,35 +471,137 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
         scopes: [],
         tokenExpiresAt: null,
         lastError: null,
+        isDefaultForTenant: false, // a disconnected sender can't be tenant default
       },
     });
+    await db.auditLog.create({
+      data: {
+        tenantId,
+        action: "CRM_EMAIL_DISCONNECTED",
+        entityType: "CrmEmailConnection",
+        entityId: rowId,
+        actorUserId,
+      },
+    }).catch(() => undefined);
+  }
 
-    await db.auditLog.create({ data: { tenantId: user.tenantId, action: "CRM_EMAIL_DISCONNECTED", entityType: "CrmEmailConnection", entityId: user.sub, actorUserId: user.sub } }).catch(() => undefined);
+  // DELETE /crm/email/connection — backward-compat: revoke caller's USER connection
+  app.delete("/crm/email/connection", async (req, reply) => {
+    const user = await requireAuth(req, reply); if (!user) return;
+    const row = await db.crmEmailConnection.findFirst({
+      where: { tenantId: user.tenantId, userId: user.sub, scope: "USER" },
+    });
+    if (!row) return reply.send({ ok: true });
+    await softDisconnect(row.id, user.sub, user.tenantId, row.encryptedRefreshToken);
     return { ok: true };
   });
 
-  // POST /crm/email/connection/test — queue a test email to self
+  // DELETE /crm/email/connections/:id — revoke any connection caller is allowed to manage
+  app.delete("/crm/email/connections/:id", async (req, reply) => {
+    const user = await requireAuth(req, reply); if (!user) return;
+    const { id } = req.params as { id: string };
+    const row = await db.crmEmailConnection.findFirst({ where: { id, tenantId: user.tenantId } });
+    if (!row) return reply.code(404).send({ error: "connection_not_found" });
+    const allowed =
+      (row.scope === "USER" && row.userId === user.sub) ||
+      (row.scope === "TENANT" && canManageTenantSender(user));
+    if (!allowed) return reply.code(403).send({ error: "forbidden" });
+    await softDisconnect(row.id, user.sub, user.tenantId, row.encryptedRefreshToken);
+    return { ok: true };
+  });
+
+  // PATCH /crm/email/connections/:id — edit label / senderName / isDefaultForTenant
+  app.patch("/crm/email/connections/:id", async (req, reply) => {
+    const user = await requireAuth(req, reply); if (!user) return;
+    const { id } = req.params as { id: string };
+    const row = await db.crmEmailConnection.findFirst({ where: { id, tenantId: user.tenantId } });
+    if (!row) return reply.code(404).send({ error: "connection_not_found" });
+    const allowed =
+      (row.scope === "USER" && row.userId === user.sub) ||
+      (row.scope === "TENANT" && canManageTenantSender(user));
+    if (!allowed) return reply.code(403).send({ error: "forbidden" });
+
+    const body = (req.body as any) || {};
+    const data: any = {};
+    if (typeof body?.label === "string") data.label = String(body.label).trim().slice(0, 120) || null;
+    if (typeof body?.senderName === "string") data.senderName = String(body.senderName).trim().slice(0, 120) || null;
+
+    // isDefaultForTenant: TENANT scope only; atomic swap.
+    const wantsDefault = typeof body?.isDefaultForTenant === "boolean" ? body.isDefaultForTenant : null;
+    if (wantsDefault !== null) {
+      if (row.scope !== "TENANT") return reply.code(400).send({ error: "invalid_payload", detail: "default_only_for_tenant_scope" });
+      if (wantsDefault) {
+        await db.$transaction([
+          db.crmEmailConnection.updateMany({
+            where: { tenantId: user.tenantId, scope: "TENANT", isDefaultForTenant: true, NOT: { id } },
+            data: { isDefaultForTenant: false },
+          }),
+          db.crmEmailConnection.update({ where: { id }, data: { ...data, isDefaultForTenant: true } }),
+        ]);
+      } else {
+        await db.crmEmailConnection.update({ where: { id }, data: { ...data, isDefaultForTenant: false } });
+      }
+    } else if (Object.keys(data).length > 0) {
+      await db.crmEmailConnection.update({ where: { id }, data });
+    }
+
+    await db.auditLog.create({
+      data: {
+        tenantId: user.tenantId,
+        action: "CRM_EMAIL_CONNECTION_UPDATED",
+        entityType: "CrmEmailConnection",
+        entityId: id,
+        actorUserId: user.sub,
+      },
+    }).catch(() => undefined);
+    return { ok: true };
+  });
+
+  // POST /crm/email/connection/test — queue a test email through resolved sender
+  // Body (optional): { connectionId?: string } — explicit sender; otherwise fallback chain
   app.post("/crm/email/connection/test", async (req, reply) => {
     const user = await requireAuth(req, reply); if (!user) return;
-    const row = await db.crmEmailConnection.findUnique({ where: { tenantId_userId: { tenantId: user.tenantId, userId: user.sub } } });
-    if (!row || row.status !== "CONNECTED") return reply.status(400).send({ error: "not_connected" });
+    const body = (req.body as any) || {};
+    const explicitId = body?.connectionId ? String(body.connectionId) : null;
+    const sender = await resolveSenderConnection({ tenantId: user.tenantId, userId: user.sub, explicitId });
+    if (!sender) return reply.status(400).send({ error: "not_connected" });
 
-    const to = row.emailAddress;
+    const to = sender.emailAddress;
     const subject = "Connect CRM test email";
     const bodyText = "This is a test email from Connect CRM.";
 
-    await emailQueue.add("send", { tenantId: user.tenantId, userId: user.sub, to, subject, bodyText, contactId: null }, { removeOnComplete: 100, removeOnFail: 100 });
-    await db.auditLog.create({ data: { tenantId: user.tenantId, action: "CRM_EMAIL_TEST_QUEUED", entityType: "CrmEmailConnection", entityId: user.sub, actorUserId: user.sub } }).catch(() => undefined);
-    return { ok: true };
+    await emailQueue.add("send", {
+      tenantId: user.tenantId,
+      userId: user.sub,
+      connectionId: sender.id,
+      to, subject, bodyText, contactId: null,
+    }, { removeOnComplete: 100, removeOnFail: 100 });
+    await db.auditLog.create({
+      data: {
+        tenantId: user.tenantId,
+        action: "CRM_EMAIL_TEST_QUEUED",
+        entityType: "CrmEmailConnection",
+        entityId: sender.id,
+        actorUserId: user.sub,
+      },
+    }).catch(() => undefined);
+    return { ok: true, senderId: sender.id, sentTo: to };
   });
 
-  // POST /crm/email/send — basic send (Phase 1). Body: { contactId?: string, toEmail?: string, subject?: string, bodyText?: string }
+  // POST /crm/email/send — basic send (Phase 1).
+  // Body: { contactId?, toEmail?, subject?, bodyText?, templateId?, connectionId? }
   app.post("/crm/email/send", async (req, reply) => {
     const user = await requireAuth(req, reply); if (!user) return;
-    const row = await db.crmEmailConnection.findUnique({ where: { tenantId_userId: { tenantId: user.tenantId, userId: user.sub } } });
-    if (!row || row.status !== "CONNECTED") return reply.status(400).send({ error: "not_connected" });
 
     const body = (req.body as any) || {};
+    const explicitConnectionId = body?.connectionId ? String(body.connectionId) : null;
+    const sender = await resolveSenderConnection({
+      tenantId: user.tenantId,
+      userId: user.sub,
+      explicitId: explicitConnectionId,
+    });
+    if (!sender) return reply.status(409).send({ error: "no_sender_available" });
+
     const contactId = body?.contactId ? String(body.contactId) : null;
     const toEmail = String(body?.toEmail || "").trim();
     let subject = String(body?.subject || "");
@@ -309,9 +644,17 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     const MAX_PER_MINUTE = Number(process.env.CRM_EMAIL_MAX_PER_MINUTE || 30);
     if (recent >= MAX_PER_MINUTE) return reply.status(429).send({ error: "rate_limited", retryAfterSec: 60 });
 
-    await emailQueue.add("send", { tenantId: user.tenantId, userId: user.sub, to: resolvedTo, subject, bodyText, contactId }, { removeOnComplete: 100, removeOnFail: 100 });
+    await emailQueue.add("send", {
+      tenantId: user.tenantId,
+      userId: user.sub,
+      connectionId: sender.id,
+      to: resolvedTo,
+      subject,
+      bodyText,
+      contactId,
+    }, { removeOnComplete: 100, removeOnFail: 100 });
     await db.auditLog.create({ data: { tenantId: user.tenantId, action: "CRM_EMAIL_SEND_QUEUED", entityType: "Contact", entityId: contactId || "", actorUserId: user.sub } }).catch(() => undefined);
-    return { ok: true };
+    return { ok: true, senderId: sender.id };
   });
 
   // GET /crm/email/templates — list templates available to this user (shared + own private)

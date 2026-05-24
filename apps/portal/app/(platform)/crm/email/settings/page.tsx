@@ -1,151 +1,442 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { PageHeader } from "../../../../../components/PageHeader";
-import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
-import { apiGet, apiPost, apiDelete } from "../../../../../services/apiClient";
+import {
+  Mail,
+  Users,
+  User as UserIcon,
+  Lock,
+  Star,
+  Send,
+  Trash2,
+  AlertCircle,
+  CheckCircle2,
+  Loader2,
+  Plus,
+  Pencil,
+  X,
+  Save,
+} from "lucide-react";
+import { CRMPageShell, CRMPageHeader, CRMCard, crm, cn } from "../../../../../components/crm";
+import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../../services/apiClient";
 
-type EmailConnection = {
-  connected: boolean;
-  provider: string | null;
-  emailAddress: string | null;
+type Sender = {
+  id: string;
+  scope: "USER" | "TENANT";
+  emailAddress: string;
   displayName: string | null;
-  replyTrackingEnabled: boolean;
-  bodyCacheMode: "METADATA_ONLY" | "METADATA_WITH_CACHE_30D" | "FULL_RETENTION";
+  label: string | null;
+  senderName: string | null;
+  isDefaultForTenant: boolean;
   status: string;
+  isMine: boolean;
+  canManage: boolean;
   lastSyncAt?: string | null;
-  scopes?: string[];
+  lastError?: string | null;
 };
 
-export default function CrmEmailSettingsPage() {
-  const [loading, setLoading] = useState(true);
-  const [conn, setConn] = useState<EmailConnection | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+type ConnectionsResp = { senders: Sender[]; canManageTenantSenders: boolean };
 
-  // Phase 1 is launching — default ON unless explicitly disabled at build time.
-  const featureEnabled = useMemo(() => String(process.env.NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED || "true").toLowerCase() !== "false", []);
+function isConnected(s: Sender): boolean {
+  return s.status === "CONNECTED";
+}
+
+export default function CrmEmailSettingsPage() {
+  const [data, setData] = useState<ConnectionsResp | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | "_connect_user_" | "_connect_tenant_" | null>(null);
+
+  // Inline edit state (per-row)
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editLabel, setEditLabel] = useState("");
+  const [editSenderName, setEditSenderName] = useState("");
+
   const justConnected = useMemo(() => {
     if (typeof window === "undefined") return false;
     return new URLSearchParams(window.location.search).get("connected") === "1";
   }, []);
 
   const load = useCallback(async () => {
-    setLoading(true); setError(null);
+    setLoading(true);
+    setError(null);
     try {
-      const res = await apiGet<EmailConnection>("/crm/email/connection");
-      setConn(res);
+      const res = await apiGet<ConnectionsResp>("/crm/email/connections");
+      setData(res);
     } catch (e: any) {
-      setError(e?.message || "Failed to load connection");
+      setError(e?.message || "Failed to load email connections");
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
-  const handleConnect = async () => {
-    setBusy(true); setError(null);
+  const userSender = data?.senders.find((s) => s.scope === "USER" && s.isMine) ?? null;
+  const tenantSenders = data?.senders.filter((s) => s.scope === "TENANT") ?? [];
+  const canManageTenant = Boolean(data?.canManageTenantSenders);
+
+  const startOAuth = async (scope: "USER" | "TENANT", label?: string, isDefaultForTenant?: boolean) => {
+    setBusyId(scope === "USER" ? "_connect_user_" : "_connect_tenant_");
+    setError(null);
     try {
-      const res = await apiPost<{ url: string }>("/crm/email/oauth/start", { bodyCacheMode: "METADATA_ONLY" });
-      if (res?.url) {
-        window.location.href = res.url;
-      }
+      const res = await apiPost<{ url: string }>("/crm/email/oauth/start", {
+        scope,
+        label: label ?? undefined,
+        isDefaultForTenant: isDefaultForTenant ?? undefined,
+        bodyCacheMode: "METADATA_ONLY",
+      });
+      if (res?.url) window.location.href = res.url;
     } catch (e: any) {
       setError(e?.message || "Failed to start OAuth");
     } finally {
-      setBusy(false);
+      setBusyId(null);
     }
   };
 
-  const handleDisconnect = async () => {
-    if (!confirm("Disconnect your Google account?")) return;
-    setBusy(true); setError(null);
+  const handleConnectTenant = async () => {
+    const label = window.prompt(
+      "Optional label for this shared mailbox (e.g. 'Sales Inbox'). Leave blank to use the mailbox display name.",
+      "",
+    );
+    if (label === null) return; // user cancelled
+    await startOAuth("TENANT", label.trim() || undefined, true);
+  };
+
+  const handleDisconnect = async (s: Sender) => {
+    const what = s.scope === "USER" ? "your personal email connection" : `the shared mailbox ${s.emailAddress}`;
+    if (!confirm(`Disconnect ${what}?`)) return;
+    setBusyId(s.id);
+    setError(null);
     try {
-      await apiDelete<{ ok: boolean }>("/crm/email/connection");
+      await apiDelete(`/crm/email/connections/${s.id}`);
       await load();
     } catch (e: any) {
       setError(e?.message || "Failed to disconnect");
     } finally {
-      setBusy(false);
+      setBusyId(null);
     }
   };
 
-  const handleTest = async () => {
-    setBusy(true); setError(null);
+  const handleTest = async (s: Sender) => {
+    setBusyId(s.id);
+    setError(null);
     try {
-      await apiPost<{ ok: boolean }>("/crm/email/connection/test");
-      alert("Test email queued. Check your inbox.");
+      await apiPost<{ ok: boolean }>("/crm/email/connection/test", { connectionId: s.id });
+      alert(`Test email queued. Check ${s.emailAddress}.`);
     } catch (e: any) {
       setError(e?.message || "Failed to queue test email");
     } finally {
-      setBusy(false);
+      setBusyId(null);
+    }
+  };
+
+  const handleSetDefault = async (s: Sender) => {
+    setBusyId(s.id);
+    setError(null);
+    try {
+      await apiPatch(`/crm/email/connections/${s.id}`, { isDefaultForTenant: true });
+      await load();
+    } catch (e: any) {
+      setError(e?.message || "Failed to set default");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const startEdit = (s: Sender) => {
+    setEditingId(s.id);
+    setEditLabel(s.label || "");
+    setEditSenderName(s.senderName || "");
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditLabel("");
+    setEditSenderName("");
+  };
+
+  const saveEdit = async (s: Sender) => {
+    setBusyId(s.id);
+    setError(null);
+    try {
+      await apiPatch(`/crm/email/connections/${s.id}`, {
+        label: editLabel.trim(),
+        senderName: editSenderName.trim(),
+      });
+      cancelEdit();
+      await load();
+    } catch (e: any) {
+      setError(e?.message || "Failed to save");
+    } finally {
+      setBusyId(null);
     }
   };
 
   return (
-    <div className="stack compact-stack">
-      <PageHeader title="CRM Email Settings" subtitle="Connect your Google account to send CRM emails as yourself." />
-
-      {!featureEnabled && (
-        <section className="panel" style={{ padding: "1.25rem" }}>
-          <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--text-dim)" }}>
-            CRM Email Phase 1 is not enabled for this environment.
-          </p>
-        </section>
-      )}
+    <CRMPageShell innerClassName="space-y-4">
+      <CRMPageHeader
+        icon={<Mail className="h-5 w-5" />}
+        title="CRM Email Settings"
+        subtitle="Send CRM emails from your personal Google account or a tenant-shared mailbox. Metadata-first — Connect never archives inboxes."
+      />
 
       {justConnected && (
-        <section className="panel" style={{ padding: "1.25rem", borderLeft: "4px solid var(--accent)" }}>
-          <div style={{ fontSize: "0.875rem" }}>Connected successfully.</div>
-        </section>
+        <div className="flex items-center gap-2 rounded-crm border border-crm-success/40 bg-crm-success/10 px-3 py-2 text-sm text-crm-success">
+          <CheckCircle2 className="h-4 w-4" /> Connected successfully.
+        </div>
+      )}
+      {error && (
+        <div className="flex items-center gap-2 rounded-crm border border-crm-danger/40 bg-crm-danger/10 px-3 py-2 text-sm text-crm-danger">
+          <AlertCircle className="h-4 w-4" /> {error}
+        </div>
       )}
 
-      <section className="panel" style={{ padding: "1.5rem" }}>
-        {loading && <LoadingSkeleton rows={3} />}
-        {error && (
-          <p style={{ color: "#ef4444", fontSize: "0.875rem", margin: 0 }}>{error}</p>
+      {/* ─── My Email ────────────────────────────────────────────────────────── */}
+      <CRMCard className="p-4 sm:p-5">
+        <div className="mb-3 flex items-center gap-2">
+          <UserIcon className="h-4 w-4 text-crm-muted" />
+          <h3 className="text-sm font-semibold text-crm-text">My Email</h3>
+        </div>
+
+        {loading ? (
+          <div className="flex items-center gap-2 text-sm text-crm-muted"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
+        ) : !userSender || !isConnected(userSender) ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-crm border border-crm-border/70 bg-crm-surface-2/40 px-3 py-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-crm-text">No personal sender connected</p>
+              <p className="mt-0.5 text-xs text-crm-muted">
+                Connect your Google account to send CRM emails as yourself. Send-only scope — Connect never reads your inbox.
+              </p>
+            </div>
+            <button
+              type="button"
+              className={cn(crm.btnPrimary, "text-xs")}
+              onClick={() => startOAuth("USER")}
+              disabled={busyId === "_connect_user_"}
+            >
+              {busyId === "_connect_user_" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
+              Connect Google
+            </button>
+          </div>
+        ) : (
+          <SenderRow
+            sender={userSender}
+            editingId={editingId}
+            editLabel={editLabel}
+            editSenderName={editSenderName}
+            busyId={busyId}
+            onEdit={startEdit}
+            onCancelEdit={cancelEdit}
+            onSaveEdit={saveEdit}
+            onLabelChange={setEditLabel}
+            onSenderNameChange={setEditSenderName}
+            onTest={handleTest}
+            onDisconnect={handleDisconnect}
+            onSetDefault={handleSetDefault}
+            isAdmin={canManageTenant}
+          />
+        )}
+      </CRMCard>
+
+      {/* ─── Tenant Shared Email ─────────────────────────────────────────────── */}
+      <CRMCard className="p-4 sm:p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-crm-muted" />
+            <h3 className="text-sm font-semibold text-crm-text">Tenant Shared Email</h3>
+            {!canManageTenant && (
+              <span className={cn(crm.chip, "text-[10px]")} title="Read-only — ask a CRM admin to manage shared senders">
+                <Lock className="h-3 w-3" /> Read-only
+              </span>
+            )}
+          </div>
+          {canManageTenant && (
+            <button
+              type="button"
+              className={cn(crm.btnPrimary, "text-xs")}
+              onClick={handleConnectTenant}
+              disabled={busyId === "_connect_tenant_"}
+            >
+              {busyId === "_connect_tenant_" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+              Connect shared mailbox
+            </button>
+          )}
+        </div>
+
+        {loading ? (
+          <div className="flex items-center gap-2 text-sm text-crm-muted"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
+        ) : tenantSenders.length === 0 ? (
+          <div className="rounded-crm border border-crm-border/70 bg-crm-surface-2/40 px-3 py-3 text-sm text-crm-muted">
+            {canManageTenant ? (
+              <>
+                No shared mailboxes connected yet. Connect one (e.g. <code>sales@</code>) so agents without personal senders can still email from your team.
+              </>
+            ) : (
+              <>No shared mailboxes are connected. A CRM admin can connect one to enable team-wide sending.</>
+            )}
+          </div>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {tenantSenders.map((s) => (
+              <li key={s.id}>
+                <SenderRow
+                  sender={s}
+                  editingId={editingId}
+                  editLabel={editLabel}
+                  editSenderName={editSenderName}
+                  busyId={busyId}
+                  onEdit={startEdit}
+                  onCancelEdit={cancelEdit}
+                  onSaveEdit={saveEdit}
+                  onLabelChange={setEditLabel}
+                  onSenderNameChange={setEditSenderName}
+                  onTest={handleTest}
+                  onDisconnect={handleDisconnect}
+                  onSetDefault={handleSetDefault}
+                  isAdmin={canManageTenant}
+                />
+              </li>
+            ))}
+          </ul>
         )}
 
-        {!loading && conn && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <div style={{ fontWeight: 600 }}>Connection</div>
-                <div style={{ fontSize: "0.875rem", color: "var(--text-dim)" }}>
-                  {conn.connected ? (
-                    <>
-                      Connected as <strong>{conn.displayName || conn.emailAddress}</strong>
-                    </>
-                  ) : (
-                    <>Not connected</>
-                  )}
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                {!conn.connected && (
-                  <button className="btn btn-primary" onClick={handleConnect} disabled={busy || !featureEnabled}>
-                    Connect Google
-                  </button>
-                )}
-                {conn.connected && (
-                  <>
-                    <button className="btn btn-secondary" onClick={handleTest} disabled={busy}>Send test</button>
-                    <button className="btn btn-ghost" onClick={handleDisconnect} disabled={busy}>Disconnect</button>
-                  </>
-                )}
-              </div>
-            </div>
+        <p className="mt-3 text-[11px] text-crm-muted">
+          Send fallback: <strong className="text-crm-text">your sender</strong> → <strong className="text-crm-text">tenant default</strong> → <strong className="text-crm-text">single shared sender</strong>.
+          Compose lets you override per send.
+        </p>
+      </CRMCard>
+    </CRMPageShell>
+  );
+}
 
-            <div style={{ borderTop: "1px solid var(--border)", paddingTop: "1rem" }}>
-              <div style={{ fontWeight: 600, marginBottom: 6 }}>Email Privacy Mode</div>
-              <div style={{ fontSize: "0.875rem", color: "var(--text-dim)" }}>
-                Metadata + live Gmail fetch (recommended). Connect CRM is not a full inbox archive. It stores CRM-linked email metadata and summaries by default.
-              </div>
-            </div>
+// ─── Sender row ───────────────────────────────────────────────────────────────
+
+function SenderRow({
+  sender,
+  editingId,
+  editLabel,
+  editSenderName,
+  busyId,
+  onEdit,
+  onCancelEdit,
+  onSaveEdit,
+  onLabelChange,
+  onSenderNameChange,
+  onTest,
+  onDisconnect,
+  onSetDefault,
+  isAdmin,
+}: {
+  sender: Sender;
+  editingId: string | null;
+  editLabel: string;
+  editSenderName: string;
+  busyId: string | null;
+  onEdit: (s: Sender) => void;
+  onCancelEdit: () => void;
+  onSaveEdit: (s: Sender) => void | Promise<void>;
+  onLabelChange: (v: string) => void;
+  onSenderNameChange: (v: string) => void;
+  onTest: (s: Sender) => void | Promise<void>;
+  onDisconnect: (s: Sender) => void | Promise<void>;
+  onSetDefault: (s: Sender) => void | Promise<void>;
+  isAdmin: boolean;
+}) {
+  const editing = editingId === sender.id;
+  const busy = busyId === sender.id;
+  const isUser = sender.scope === "USER";
+  const connected = isConnected(sender);
+
+  return (
+    <div className="rounded-crm border border-crm-border/70 bg-crm-surface-2/40 px-3 py-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <p className="truncate text-sm font-semibold text-crm-text">
+              {sender.label || sender.displayName || sender.emailAddress}
+            </p>
+            {isUser ? (
+              <span className={cn(crm.chip, "text-[10px]")}><UserIcon className="h-3 w-3" /> My email</span>
+            ) : (
+              <span className={cn(crm.chip, "text-[10px]")}><Users className="h-3 w-3" /> Shared</span>
+            )}
+            {sender.isDefaultForTenant && (
+              <span className={cn(crm.chip, crm.chipActive, "text-[10px]")} title="Default sender for this tenant">
+                <Star className="h-3 w-3" /> Default
+              </span>
+            )}
+            {!connected && (
+              <span className={cn(crm.chip, "text-[10px] text-crm-danger")} title={sender.lastError || undefined}>
+                Disconnected
+              </span>
+            )}
+          </div>
+          <p className="mt-0.5 truncate font-mono text-xs text-crm-muted">{sender.emailAddress}</p>
+          {sender.senderName && !editing && (
+            <p className="mt-0.5 text-[11px] text-crm-muted">
+              Sends as <span className="text-crm-text">{sender.senderName}</span>
+            </p>
+          )}
+        </div>
+
+        {sender.canManage && !editing && (
+          <div className="flex items-center gap-1.5">
+            {connected && (
+              <button type="button" className={cn(crm.btnGhost, "text-xs")} onClick={() => onTest(sender)} disabled={busy} title="Send a test email">
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                Test
+              </button>
+            )}
+            {!isUser && connected && !sender.isDefaultForTenant && isAdmin && (
+              <button type="button" className={cn(crm.btnGhost, "text-xs")} onClick={() => onSetDefault(sender)} disabled={busy} title="Make this the tenant default sender">
+                <Star className="h-3.5 w-3.5" /> Set default
+              </button>
+            )}
+            <button type="button" className={cn(crm.btnGhost, "text-xs")} onClick={() => onEdit(sender)} disabled={busy} title="Edit label and sender name">
+              <Pencil className="h-3.5 w-3.5" /> Edit
+            </button>
+            <button type="button" className={cn(crm.btnGhost, "text-xs text-crm-danger")} onClick={() => onDisconnect(sender)} disabled={busy} title="Disconnect">
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
           </div>
         )}
-      </section>
+      </div>
+
+      {editing && (
+        <div className="mt-3 flex flex-col gap-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-crm-muted">Label</label>
+              <input
+                className={crm.input}
+                value={editLabel}
+                onChange={(e) => onLabelChange(e.target.value)}
+                placeholder="e.g. Sales Inbox"
+                maxLength={120}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-crm-muted">From name</label>
+              <input
+                className={crm.input}
+                value={editSenderName}
+                onChange={(e) => onSenderNameChange(e.target.value)}
+                placeholder={sender.displayName || "Acme Sales"}
+                maxLength={120}
+              />
+            </div>
+          </div>
+          <div className="flex items-center justify-end gap-1.5">
+            <button type="button" className={cn(crm.btnGhost, "text-xs")} onClick={onCancelEdit} disabled={busy}>
+              <X className="h-3.5 w-3.5" /> Cancel
+            </button>
+            <button type="button" className={cn(crm.btnPrimary, "text-xs")} onClick={() => onSaveEdit(sender)} disabled={busy}>
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} Save
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

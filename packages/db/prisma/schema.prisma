@@ -5,33 +5,58 @@ generator client {
 
 // ─── CRM Email (Phase 1 — send-only, metadata-first) ───────────────────────────
 
+/// Whether a CrmEmailConnection is owned by a single user or shared at the tenant level.
+/// USER  → personal sender. userId is required.
+/// TENANT → shared sender (e.g. sales@acme.com). userId is null; managedByUserId is the admin who connected it.
+enum CrmEmailConnectionScope {
+  USER
+  TENANT
+}
+
 model CrmEmailConnection {
-  id                      String            @id @default(cuid())
+  id                      String                    @id @default(cuid())
   tenantId                String
-  userId                  String
-  provider                EmailProviderType @default(GOOGLE_WORKSPACE)
+  /// USER scope: required (personal sender). TENANT scope: null (shared sender).
+  /// Enforced at DB layer via a CHECK constraint added in the migration.
+  userId                  String?
+  scope                   CrmEmailConnectionScope   @default(USER)
+  /// For TENANT scope: the admin who created/owns the OAuth grant. Required for TENANT, ignored for USER.
+  managedByUserId         String?
+  /// At most one TENANT row per (tenantId, provider) may have isDefaultForTenant=true (partial unique index).
+  isDefaultForTenant      Boolean                   @default(false)
+  /// Optional human label shown in UI (e.g. "Sales Inbox").
+  label                   String?
+  /// Optional From-header display name. NULL = use Google account's default displayName.
+  senderName              String?
+  provider                EmailProviderType         @default(GOOGLE_WORKSPACE)
   emailAddress            String
   displayName             String?
   googleAccountId         String?
-  encryptedAccessToken    String            /// AES-GCM envelope from @connect/security.encryptJson
-  encryptedRefreshToken   String            /// AES-GCM envelope from @connect/security.encryptJson
+  encryptedAccessToken    String                    /// AES-GCM envelope from @connect/security.encryptJson
+  encryptedRefreshToken   String                    /// AES-GCM envelope from @connect/security.encryptJson
   tokenExpiresAt          DateTime?
-  scopes                  String[]          @default([])
-  replyTrackingEnabled    Boolean           @default(false)
+  scopes                  String[]                  @default([])
+  replyTrackingEnabled    Boolean                   @default(false)
   gmailHistoryId          String?
-  bodyCacheMode           EmailPrivacyMode  @default(METADATA_ONLY)
-  bodyCacheRetentionDays  Int               @default(30)
-  status                  String            @default("CONNECTED") /// CONNECTED | ERROR | DISCONNECTED
+  bodyCacheMode           EmailPrivacyMode          @default(METADATA_ONLY)
+  bodyCacheRetentionDays  Int                       @default(30)
+  status                  String                    @default("CONNECTED") /// CONNECTED | ERROR | DISCONNECTED
   lastSyncAt              DateTime?
   lastError               String?
-  createdAt               DateTime          @default(now())
-  updatedAt               DateTime          @updatedAt
+  createdAt               DateTime                  @default(now())
+  updatedAt               DateTime                  @updatedAt
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant       Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// User who owns this personal sender (USER scope only). Nullable for TENANT rows.
+  user         User?  @relation("CrmEmailConnection_user", fields: [userId], references: [id], onDelete: Cascade)
+  /// Admin who manages a TENANT shared sender. Nullable for USER rows.
+  managedBy    User?  @relation("CrmEmailConnection_managedBy", fields: [managedByUserId], references: [id], onDelete: SetNull)
 
-  @@unique([tenantId, userId])
+  // Note: partial unique indexes (USER per tenant+user+provider, single TENANT default per
+  // tenant+provider, single TENANT row per tenant+email+provider) are created via raw SQL
+  // in the migration. Prisma cannot express partial uniques natively.
   @@index([tenantId, status])
+  @@index([tenantId, scope, status])
 }
 
 model CrmEmailThread {
@@ -51,8 +76,12 @@ model CrmEmailThread {
   contact Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
   messages CrmEmailMessage[]
 
+  /// Which CrmEmailConnection actually sent/owns this thread. Null = legacy/unknown.
+  senderConnectionId String?
+
   @@unique([tenantId, gmailThreadId])
   @@index([tenantId, contactId, lastMessageAt])
+  @@index([senderConnectionId])
 }
 
 model CrmEmailMessage {
@@ -83,9 +112,13 @@ model CrmEmailMessage {
   thread  CrmEmailThread? @relation(fields: [threadId], references: [id], onDelete: SetNull)
   contact Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
 
+  /// Which CrmEmailConnection sent this message. Null = legacy/unknown.
+  senderConnectionId String?
+
   @@unique([tenantId, gmailMessageId])
   @@index([threadId, createdAt])
   @@index([tenantId, hasCachedBody, bodyCacheExpiresAt])
+  @@index([senderConnectionId])
 }
 
 model CrmEmailSendLog {
@@ -107,8 +140,12 @@ model CrmEmailSendLog {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   contact Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
 
+  /// Which CrmEmailConnection sent this. Null = legacy/unknown.
+  senderConnectionId String?
+
   @@index([tenantId, userId, sentAt])
   @@index([tenantId, gmailMessageId])
+  @@index([senderConnectionId])
 }
 
 /// CRM Email Template — Phase 1. Tenant-scoped, optionally user-scoped (private).
@@ -650,7 +687,8 @@ model User {
   crmCampaignMembersAssigned     CrmCampaignMember[]               @relation("CrmCampaignMemberAssignedTo")
   mappedSolaExternalSchedules    BillingSolaExternalScheduleLink[] @relation("SolaScheduleMappedBy")
   /// CRM email — Phase 1 relations
-  crmEmailConnections            CrmEmailConnection[]
+  crmEmailConnections            CrmEmailConnection[] @relation("CrmEmailConnection_user")
+  crmEmailConnectionsManaged     CrmEmailConnection[] @relation("CrmEmailConnection_managedBy")
   crmEmailMessages               CrmEmailMessage[]
   crmEmailThreads                CrmEmailThread[]
   crmEmailSendLogs               CrmEmailSendLog[]

@@ -24,9 +24,9 @@ async function refreshAccessToken(refreshToken: string): Promise<{ accessToken: 
   return { accessToken, expiresAt: expiresInSec ? new Date(Date.now() + expiresInSec * 1000) : null, scope, tokenType };
 }
 
-function buildPlainTextMime(fromEmail: string, to: string, subject: string, bodyText: string): string {
+function buildPlainTextMime(fromHeader: string, to: string, subject: string, bodyText: string): string {
   const headers = [
-    `From: <${fromEmail}>`,
+    `From: ${fromHeader}`,
     `To: <${to}>`,
     `Subject: ${subject}`,
     "MIME-Version: 1.0",
@@ -35,9 +35,41 @@ function buildPlainTextMime(fromEmail: string, to: string, subject: string, body
   return headers.join("\r\n") + "\r\n\r\n" + bodyText;
 }
 
-export async function processCrmEmailSendJob(job: { tenantId: string; userId: string; to: string; subject: string; bodyText: string; contactId?: string | null }) {
-  const conn = await db.crmEmailConnection.findUnique({ where: { tenantId_userId: { tenantId: job.tenantId, userId: job.userId } } });
+function formatFromHeader(senderName: string | null | undefined, displayName: string | null | undefined, emailAddress: string): string {
+  const name = (senderName && senderName.trim()) || (displayName && displayName.trim()) || "";
+  if (!name) return `<${emailAddress}>`;
+  // Escape quotes per RFC 5322 quoted-string
+  const safe = name.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `"${safe}" <${emailAddress}>`;
+}
+
+/**
+ * Process a CRM email send job.
+ *
+ * Resolves the sender CrmEmailConnection in this order:
+ *  1. job.connectionId (set by new API send/test paths)
+ *  2. Legacy fallback: any CONNECTED USER-scope row for (tenantId, userId)
+ *     — supports jobs queued before the Phase 1.5 worker deploy.
+ */
+export async function processCrmEmailSendJob(job: {
+  tenantId: string;
+  userId: string;
+  connectionId?: string | null;
+  to: string;
+  subject: string;
+  bodyText: string;
+  contactId?: string | null;
+}) {
+  let conn = job.connectionId
+    ? await db.crmEmailConnection.findFirst({ where: { id: job.connectionId, tenantId: job.tenantId } })
+    : null;
+  if (!conn) {
+    // Legacy queued job (no connectionId) — resolve caller's own USER sender by tenant+userId.
+    conn = await db.crmEmailConnection.findFirst({ where: { tenantId: job.tenantId, userId: job.userId, scope: "USER" } });
+  }
   if (!conn || conn.status !== "CONNECTED") throw new Error("not_connected");
+
+  const senderConnectionId = conn.id;
 
   const accessPayload = decryptJson<any>(conn.encryptedAccessToken);
   let accessToken = String(accessPayload?.accessToken || "");
@@ -49,7 +81,14 @@ export async function processCrmEmailSendJob(job: { tenantId: string; userId: st
       const refreshed = await refreshAccessToken(rt);
       if (refreshed) {
         accessToken = refreshed.accessToken;
-        await db.crmEmailConnection.update({ where: { tenantId_userId: { tenantId: job.tenantId, userId: job.userId } }, data: { encryptedAccessToken: encryptJson({ accessToken: refreshed.accessToken, tokenType: refreshed.tokenType, scope: refreshed.scope }), tokenExpiresAt: refreshed.expiresAt, scopes: refreshed.scope } });
+        await db.crmEmailConnection.update({
+          where: { id: senderConnectionId },
+          data: {
+            encryptedAccessToken: encryptJson({ accessToken: refreshed.accessToken, tokenType: refreshed.tokenType, scope: refreshed.scope }),
+            tokenExpiresAt: refreshed.expiresAt,
+            scopes: refreshed.scope,
+          },
+        });
       }
     }
   }
@@ -57,7 +96,8 @@ export async function processCrmEmailSendJob(job: { tenantId: string; userId: st
   if (!accessToken) throw new Error("no_access_token");
 
   const fromEmail = conn.emailAddress;
-  const rawMime = buildPlainTextMime(fromEmail, job.to, job.subject || "", job.bodyText || "");
+  const fromHeader = formatFromHeader(conn.senderName, conn.displayName, fromEmail);
+  const rawMime = buildPlainTextMime(fromHeader, job.to, job.subject || "", job.bodyText || "");
   const rawB64 = base64url(Buffer.from(rawMime, "utf8"));
 
   const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
@@ -67,7 +107,18 @@ export async function processCrmEmailSendJob(job: { tenantId: string; userId: st
   });
   const json: any = await res.json().catch(() => ({}));
   if (!res.ok) {
-    await db.crmEmailSendLog.create({ data: { tenantId: job.tenantId, userId: job.userId, contactId: job.contactId || null, toEmail: job.to, subject: job.subject || null, status: "FAILED", errorMessage: String(json?.error?.message || json?.message || `send_failed_${res.status}`) } });
+    await db.crmEmailSendLog.create({
+      data: {
+        tenantId: job.tenantId,
+        userId: job.userId,
+        senderConnectionId,
+        contactId: job.contactId || null,
+        toEmail: job.to,
+        subject: job.subject || null,
+        status: "FAILED",
+        errorMessage: String(json?.error?.message || json?.message || `send_failed_${res.status}`),
+      },
+    });
     throw new Error("gmail_send_failed");
   }
 
@@ -78,8 +129,17 @@ export async function processCrmEmailSendJob(job: { tenantId: string; userId: st
   if (gmailThreadId) {
     const t = await db.crmEmailThread.upsert({
       where: { tenantId_gmailThreadId: { tenantId: job.tenantId, gmailThreadId } },
-      create: { tenantId: job.tenantId, userId: job.userId, contactId: job.contactId || null, gmailThreadId, subject: job.subject || null, lastMessageAt: new Date(), unreadCount: 0 },
-      update: { lastMessageAt: new Date() },
+      create: {
+        tenantId: job.tenantId,
+        userId: job.userId,
+        senderConnectionId,
+        contactId: job.contactId || null,
+        gmailThreadId,
+        subject: job.subject || null,
+        lastMessageAt: new Date(),
+        unreadCount: 0,
+      },
+      update: { lastMessageAt: new Date(), senderConnectionId },
     });
     threadId = t.id;
   }
@@ -89,6 +149,7 @@ export async function processCrmEmailSendJob(job: { tenantId: string; userId: st
       data: {
         tenantId: job.tenantId,
         userId: job.userId,
+        senderConnectionId,
         threadId: threadId || null,
         contactId: job.contactId || null,
         gmailMessageId,
@@ -101,10 +162,33 @@ export async function processCrmEmailSendJob(job: { tenantId: string; userId: st
       },
     });
 
-    await tx.crmEmailSendLog.create({ data: { tenantId: job.tenantId, userId: job.userId, contactId: job.contactId || null, gmailMessageId, gmailThreadId: gmailThreadId || null, toEmail: job.to, subject: job.subject || null, status: "SENT", sentAt: new Date() } });
+    await tx.crmEmailSendLog.create({
+      data: {
+        tenantId: job.tenantId,
+        userId: job.userId,
+        senderConnectionId,
+        contactId: job.contactId || null,
+        gmailMessageId,
+        gmailThreadId: gmailThreadId || null,
+        toEmail: job.to,
+        subject: job.subject || null,
+        status: "SENT",
+        sentAt: new Date(),
+      },
+    });
 
     if (job.contactId) {
-      await tx.crmTimelineEvent.create({ data: { tenantId: job.tenantId, contactId: job.contactId, type: "EMAIL_SENT", title: "Email sent", body: job.subject || "Email sent", metadata: { to: job.to }, createdByUserId: job.userId } });
+      await tx.crmTimelineEvent.create({
+        data: {
+          tenantId: job.tenantId,
+          contactId: job.contactId,
+          type: "EMAIL_SENT",
+          title: "Email sent",
+          body: job.subject || "Email sent",
+          metadata: { to: job.to, senderEmail: fromEmail, scope: conn.scope },
+          createdByUserId: job.userId,
+        },
+      });
     }
   });
 
