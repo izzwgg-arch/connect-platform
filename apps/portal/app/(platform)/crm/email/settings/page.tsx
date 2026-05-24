@@ -31,6 +31,7 @@ type Sender = {
   status: string;
   isMine: boolean;
   canManage: boolean;
+  replyTrackingEnabled?: boolean;
   lastSyncAt?: string | null;
   lastError?: string | null;
 };
@@ -76,7 +77,12 @@ export default function CrmEmailSettingsPage() {
   const tenantSenders = data?.senders.filter((s) => s.scope === "TENANT") ?? [];
   const canManageTenant = Boolean(data?.canManageTenantSenders);
 
-  const startOAuth = async (scope: "USER" | "TENANT", label?: string, isDefaultForTenant?: boolean) => {
+  const startOAuth = async (
+    scope: "USER" | "TENANT",
+    label?: string,
+    isDefaultForTenant?: boolean,
+    enableReplyTracking?: boolean,
+  ) => {
     setBusyId(scope === "USER" ? "_connect_user_" : "_connect_tenant_");
     setError(null);
     try {
@@ -85,6 +91,7 @@ export default function CrmEmailSettingsPage() {
         label: label ?? undefined,
         isDefaultForTenant: isDefaultForTenant ?? undefined,
         bodyCacheMode: "METADATA_ONLY",
+        enableReplyTracking: Boolean(enableReplyTracking),
       });
       if (res?.url) window.location.href = res.url;
     } catch (e: any) {
@@ -101,6 +108,31 @@ export default function CrmEmailSettingsPage() {
     );
     if (label === null) return; // user cancelled
     await startOAuth("TENANT", label.trim() || undefined, true);
+  };
+
+  const handleEnableReplyTracking = async (s: Sender) => {
+    setBusyId(s.id);
+    setError(null);
+    try {
+      await startOAuth(s.scope, undefined, undefined, true);
+    } catch (e: any) {
+      setError(e?.message || "Failed to enable reply tracking");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleSyncNow = async (s: Sender) => {
+    setBusyId(s.id);
+    setError(null);
+    try {
+      await apiPost<{ ok: boolean; queued: number }>("/crm/email/sync-now", { connectionId: s.id });
+      alert("Sync queued. Check Recent replies in CRM Email.");
+    } catch (e: any) {
+      setError(e?.message || "Failed to queue sync");
+    } finally {
+      setBusyId(null);
+    }
   };
 
   const handleDisconnect = async (s: Sender) => {
@@ -232,6 +264,8 @@ export default function CrmEmailSettingsPage() {
             onLabelChange={setEditLabel}
             onSenderNameChange={setEditSenderName}
             onTest={handleTest}
+            onEnableReplyTracking={handleEnableReplyTracking}
+            onSyncNow={handleSyncNow}
             onDisconnect={handleDisconnect}
             onSetDefault={handleSetDefault}
             isAdmin={canManageTenant}
@@ -292,6 +326,8 @@ export default function CrmEmailSettingsPage() {
                   onLabelChange={setEditLabel}
                   onSenderNameChange={setEditSenderName}
                   onTest={handleTest}
+                  onEnableReplyTracking={handleEnableReplyTracking}
+                  onSyncNow={handleSyncNow}
                   onDisconnect={handleDisconnect}
                   onSetDefault={handleSetDefault}
                   isAdmin={canManageTenant}
@@ -324,6 +360,8 @@ function SenderRow({
   onLabelChange,
   onSenderNameChange,
   onTest,
+  onEnableReplyTracking,
+  onSyncNow,
   onDisconnect,
   onSetDefault,
   isAdmin,
@@ -339,6 +377,8 @@ function SenderRow({
   onLabelChange: (v: string) => void;
   onSenderNameChange: (v: string) => void;
   onTest: (s: Sender) => void | Promise<void>;
+  onEnableReplyTracking: (s: Sender) => void | Promise<void>;
+  onSyncNow: (s: Sender) => void | Promise<void>;
   onDisconnect: (s: Sender) => void | Promise<void>;
   onSetDefault: (s: Sender) => void | Promise<void>;
   isAdmin: boolean;
@@ -378,6 +418,15 @@ function SenderRow({
               Sends as <span className="text-crm-text">{sender.senderName}</span>
             </p>
           )}
+          {!editing && (
+            <p className="mt-1 text-[11px] text-crm-muted">
+              Reply tracking: {sender.replyTrackingEnabled ? (
+                <span className="text-crm-success">Enabled</span>
+              ) : (
+                <span className="text-crm-warning">Disabled</span>
+              )}
+            </p>
+          )}
         </div>
 
         {sender.canManage && !editing && (
@@ -386,6 +435,16 @@ function SenderRow({
               <button type="button" className={cn(crm.btnGhost, "text-xs")} onClick={() => onTest(sender)} disabled={busy} title="Send a test email">
                 {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
                 Test
+              </button>
+            )}
+            {connected && !sender.replyTrackingEnabled && (
+              <button type="button" className={cn(crm.btnGhost, "text-xs")} onClick={() => onEnableReplyTracking(sender)} disabled={busy} title="Enable reply tracking (re-consent)">
+                <Lock className="h-3.5 w-3.5" /> Enable Reply Tracking
+              </button>
+            )}
+            {connected && sender.replyTrackingEnabled && (
+              <button type="button" className={cn(crm.btnGhost, "text-xs")} onClick={() => onSyncNow(sender)} disabled={busy} title="Sync replies now">
+                <Loader2 className="h-3.5 w-3.5" /> Sync now
               </button>
             )}
             {!isUser && connected && !sender.isDefaultForTenant && isAdmin && (

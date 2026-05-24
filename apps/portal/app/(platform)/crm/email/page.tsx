@@ -22,6 +22,18 @@ type RecentSent = {
   contactId: string | null;
 };
 
+type RecentReply = {
+  id: string;
+  gmailMessageId: string;
+  gmailThreadId: string | null;
+  subject: string | null;
+  fromEmail: string | null;
+  toEmail: string | null;
+  previewSnippet: string | null;
+  receivedAt: string | null;
+  contactId: string | null;
+};
+
 function formatWhen(iso: string): string {
   try { return new Date(iso).toLocaleString(); } catch { return iso; }
 }
@@ -29,17 +41,20 @@ function formatWhen(iso: string): string {
 export default function CrmEmailLandingPage() {
   const [conn, setConn] = useState<EmailConnection | null>(null);
   const [recent, setRecent] = useState<RecentSent[]>([]);
+  const [replies, setReplies] = useState<RecentReply[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [c, r] = await Promise.all([
+      const [c, r, rr] = await Promise.all([
         apiGet<EmailConnection>("/crm/email/connection").catch(() => null),
         apiGet<{ sent: RecentSent[] }>("/crm/email/recent?limit=10").catch(() => ({ sent: [] })),
+        apiGet<{ replies: RecentReply[] }>("/crm/email/replies/recent?limit=5").catch(() => ({ replies: [] })),
       ]);
       setConn(c);
       setRecent(r?.sent ?? []);
+      setReplies(rr?.replies ?? []);
     } finally {
       setLoading(false);
     }
@@ -52,7 +67,7 @@ export default function CrmEmailLandingPage() {
       <CRMPageHeader
         icon={<Mail className="h-5 w-5" />}
         title="CRM Email"
-        subtitle="Send CRM emails from your connected Google account. Metadata-first — Connect never archives your inbox."
+        subtitle={`Send CRM emails from your connected Google account. Metadata-first — Connect never archives your inbox.${replies.length ? ` · ${replies.length} recent repl${replies.length === 1 ? "y" : "ies"}` : ""}`}
         actions={
           <>
             <Link href="/crm/email/templates" className={crm.btnSecondary}>
@@ -90,6 +105,44 @@ export default function CrmEmailLandingPage() {
             <Link href="/crm/email/settings" className={cn(crm.btnPrimary, "text-xs")}>Connect Google</Link>
           ) : null}
         </div>
+      </CRMCard>
+
+      <CRMCard className="p-4 sm:p-5">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold text-crm-text">
+            <Mail className="mr-1.5 inline h-4 w-4 text-crm-muted" />
+            Recent replies
+          </h3>
+          <Link href="/crm/email/settings" className="text-xs text-crm-accent hover:underline">Reply tracking →</Link>
+        </div>
+        {loading ? (
+          <div className="flex items-center gap-2 text-sm text-crm-muted"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
+        ) : replies.length === 0 ? (
+          <p className="py-6 text-center text-sm text-crm-muted">
+            No recent replies. Enable reply tracking in Settings, then click Sync now to fetch metadata.
+          </p>
+        ) : (
+          <ul className="divide-y divide-crm-border/70">
+            {replies.map((m) => (
+              <li key={m.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                <div className="min-w-0">
+                  <p className="truncate text-sm text-crm-text">{m.subject || "(no subject)"}</p>
+                  <p className="truncate text-xs text-crm-muted">
+                    {m.contactId ? (
+                      <Link href={`/crm/contacts/${m.contactId}`} className="text-crm-accent hover:underline">
+                        {m.fromEmail || "(unknown)"}
+                      </Link>
+                    ) : (m.fromEmail || "(unknown)")}
+                    {m.receivedAt ? ` · ${formatWhen(m.receivedAt)}` : null}
+                  </p>
+                  {m.previewSnippet && (
+                    <p className="mt-0.5 line-clamp-1 text-[11px] text-crm-muted">{m.previewSnippet}</p>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </CRMCard>
 
       <CRMCard className="p-4 sm:p-5">
