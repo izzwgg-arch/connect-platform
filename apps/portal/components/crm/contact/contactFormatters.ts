@@ -15,13 +15,17 @@ export const TASK_PRIORITY_COLOR: Record<string, string> = {
   URGENT: "#ef4444",
 };
 
-export function initials(name: string): string {
-  return name
-    .split(" ")
-    .map((p) => p[0])
+export function initials(name?: string | null): string {
+  const s = (name ?? "").trim();
+  if (!s) return "?";
+  const letters = s
+    .split(/\s+/)
+    .map((p) => p && p[0])
+    .filter(Boolean)
     .join("")
     .slice(0, 2)
     .toUpperCase();
+  return letters || "?";
 }
 
 export function formatDate(iso: string): string {

@@ -31,9 +31,9 @@ export function LiveWorkspaceContactHeader({
   campaignName?: string | null;
   queueLabel?: string | null;
 }) {
-  const stage = (contact.crmStage ?? "LEAD") as CrmStage;
-  const phone = contact.primaryPhone?.numberRaw ?? contact.phones?.find((p) => p.isPrimary)?.numberRaw ?? null;
-  const email = contact.primaryEmail?.email ?? contact.emails?.find((e) => e.isPrimary)?.email ?? null;
+  const stage = (contact?.crmStage ?? "LEAD") as CrmStage;
+  const phone = contact?.primaryPhone?.numberRaw ?? contact?.phones?.find((p) => p.isPrimary)?.numberRaw ?? null;
+  const email = contact?.primaryEmail?.email ?? contact?.emails?.find((e) => e.isPrimary)?.email ?? null;
 
   return (
     <CRMCard padding="lg" className="shadow-[0_8px_24px_rgba(0,0,0,0.12)]">
@@ -43,11 +43,11 @@ export function LiveWorkspaceContactHeader({
             className="flex h-16 w-16 shrink-0 items-center justify-center rounded-crm-lg text-xl font-bold text-white"
             style={{ background: stageColor(stage) }}
           >
-            {initials(contact.displayName)}
+            {initials(contact?.displayName ?? "")}
           </div>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-2xl font-semibold text-crm-text">{contact.displayName}</h2>
+              <h2 className="text-2xl font-semibold text-crm-text">{contact?.displayName ?? "Unknown"}</h2>
               <span
                 className="rounded-full px-2 py-0.5 text-xs font-semibold"
                 style={{ background: stageColor(stage) + "22", color: stageColor(stage) }}
