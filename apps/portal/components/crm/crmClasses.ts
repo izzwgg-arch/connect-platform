@@ -244,9 +244,8 @@ export const crm = {
   /** Phase 19H — task command desk (wide, two-column) */
   pageInnerTasks:
     "mx-auto w-full max-w-[min(100%,1500px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-3 min-h-0",
-  /** Forces dark CRM tokens on task routes when portal data-theme=light */
-  tasksWorkspace:
-    "crm-tasks-workspace [color-scheme:dark] [--panel:#141f2b] [--panel-2:#1a2635] [--bg-soft:#101923] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#141f2b] [--crm-surface-2:#1a2635] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",
+  /** Phase 19H — task command desk; theme tokens via globals `.crm-tasks-workspace` */
+  tasksWorkspace: "crm-tasks-workspace w-full min-h-0",
   tasksGrid: "grid gap-4 lg:grid-cols-12 lg:items-start",
   tasksMainCol: "lg:col-span-8 xl:col-span-9 flex flex-col gap-3 min-w-0",
   tasksSideCol:
