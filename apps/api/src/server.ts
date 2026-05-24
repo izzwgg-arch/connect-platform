@@ -116,6 +116,8 @@ import { extractBillingInvoiceIdFromEmailJob, loadBillingInvoicePdfAttachmentFor
 import { applySolaWebhookToBillingInvoice, resolvePlatformBillingInvoiceForWebhookRef } from "./billing/solaBillingPayments";
 import { getBillingSolaAdapter } from "./billing/solaGateway";
 import { maskSolaSecretsForResponse } from "./billing/solaConfigMasking";
+import { registerOnboardingPublicRoutes } from "./onboarding/publicRoutes";
+import { registerOnboardingProvisioningRoutes } from "./onboarding/provisioningRoutes";
 import {
   resolveSolaPutApiBaseUrl,
   resolveTenantPutAuthMode,
@@ -31447,6 +31449,8 @@ const port = Number(process.env.PORT || 3001);
   await registerBillingRoutes(app);
   await registerPlatformRolePermissionRoutes(app);
   await registerCustomRoleRoutes(app);
+  await registerOnboardingPublicRoutes(app);
+  await registerOnboardingProvisioningRoutes(app);
   registerUserExtensionProvisioningRoutes(app, {
     getUser: getUser as any,
     requirePermission: requirePermission as any,
