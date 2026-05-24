@@ -36,6 +36,12 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || path.endsWith("/voice/moh/sync-manifest")
     || path === "/voice/moh/upload"
     || path.endsWith("/voice/moh/upload");
+  const isOnboardingPublicPath = path.startsWith("/onboarding/");
+  // CRM Email OAuth callback: Google redirects the user's browser here with code+state.
+  // The browser cannot carry our Bearer token. Auth is performed inside the handler via
+  // HMAC-signed `state` (tenantId, userId, scope, ts) — see emailRoutes.ts.
+  const isCrmEmailOauthCallbackPath =
+    path === "/crm/email/oauth/callback" || path.endsWith("/crm/email/oauth/callback");
   if (
     path.includes("/webhooks/pbx")
     || path.startsWith("/billing/invoices/pay/")
@@ -49,6 +55,8 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || isInternalVoicemailNotifyPath
     || isIvrPromptSyncPath
     || isMohSyncPath
+    || isOnboardingPublicPath
+    || isCrmEmailOauthCallbackPath
     || [
       "/health",
       // Blue/green deploy + load balancers probe :3001/:3004 without JWT; must not 401.

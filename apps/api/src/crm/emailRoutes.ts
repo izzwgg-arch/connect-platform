@@ -243,9 +243,15 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       if (!code || !state) return reply.status(400).send({ error: "invalid_callback" });
 
       const [payloadB64, sig] = String(state).split(".");
+      if (!payloadB64 || !sig) return reply.status(400).send({ error: "invalid_state" });
       const payloadJson = Buffer.from(payloadB64.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
       const expectSig = hmacSha256(process.env.JWT_SECRET || "connect-secret", payloadJson);
-      if (sig !== expectSig) return reply.status(400).send({ error: "invalid_state" });
+      // Constant-time compare to avoid timing oracle on the HMAC.
+      const sigBuf = Buffer.from(sig);
+      const expectBuf = Buffer.from(expectSig);
+      const sigsMatch = sigBuf.length === expectBuf.length
+        && require("crypto").timingSafeEqual(sigBuf, expectBuf);
+      if (!sigsMatch) return reply.status(400).send({ error: "invalid_state" });
       const payload = JSON.parse(payloadJson) as {
         tenantId: string;
         userId: string;
@@ -254,7 +260,18 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
         scopeChoice?: "USER" | "TENANT";
         wantsDefault?: boolean;
         label?: string | null;
+        ts?: number;
       };
+      // Reject expired state (10-minute window). The OAuth round-trip is normally
+      // a few seconds; a 10-minute ceiling allows for slow consent screens but
+      // forecloses indefinite replay of leaked state.
+      const stateAgeMs = Date.now() - Number(payload.ts || 0);
+      if (!Number.isFinite(stateAgeMs) || stateAgeMs < -60_000 || stateAgeMs > 10 * 60_000) {
+        return reply.status(400).send({ error: "expired_state" });
+      }
+      if (!payload.tenantId || !payload.userId) {
+        return reply.status(400).send({ error: "invalid_state" });
+      }
       const scopeChoice: "USER" | "TENANT" = payload.scopeChoice === "TENANT" ? "TENANT" : "USER";
 
       let clientId: string;
