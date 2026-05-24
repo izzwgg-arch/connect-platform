@@ -511,6 +511,23 @@ All routes registered via `registerCrmRoutes(app)` in `server.ts`.
 | DELETE | `/crm/checklists/:id` | Archive (admin) |
 | POST | `/crm/checklists/:id/respond` | Save `CrmChecklistResponse`. Body: `{ contactId, linkedId?, answers }`. Writes `CHECKLIST_COMPLETED` event. |
 
+### CRM Email (Phase 1 — send-only, metadata-first)
+
+- Feature flag: `CRM_EMAIL_PHASE1_ENABLED=true`
+- OAuth scopes (Phase 1): `openid email profile https://www.googleapis.com/auth/gmail.send`
+- No inbox sync; no body fetch; no `gmail.readonly` yet.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/crm/email/connection` | Returns current user connection status. No secrets/tokens. |
+| POST | `/crm/email/oauth/start` | Returns Google OAuth URL (send-only scope). Body may include `bodyCacheMode` (defaults METADATA_ONLY). |
+| GET | `/crm/email/oauth/callback` | Exchanges code, encrypts tokens at rest, upserts `CrmEmailConnection` with `replyTrackingEnabled=false`. Redirects to `/crm/email/settings?connected=1`. |
+| DELETE | `/crm/email/connection` | Revokes (best-effort) and marks DISCONNECTED. Audited. |
+| POST | `/crm/email/connection/test` | Queues a test email to self on `crm-email-send` worker. Audited. |
+| POST | `/crm/email/send` | Queues a basic outbound email to a contact or explicit `toEmail`. Persists metadata + preview snippet only. Rate-limited. |
+
+DB models: `CrmEmailConnection`, `CrmEmailThread`, `CrmEmailMessage`, `CrmEmailSendLog` (see `DATA_MODEL.md`).
+
 **CDR hook (Phase 2A):** `POST /internal/cdr-ingest` calls `fireCrmCdrHook()` (no await) after `ConnectCdr` upsert. Writes `CDR_INBOUND`/`CDR_OUTBOUND` timeline events for CRM-enrolled contacts matched by phone.
 
 **Campaign routes (Phase 3A):** `apps/api/src/crm/campaignRoutes.ts`

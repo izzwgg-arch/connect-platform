@@ -3,6 +3,114 @@ generator client {
   binaryTargets = ["native", "debian-openssl-1.1.x", "debian-openssl-3.0.x"]
 }
 
+// ─── CRM Email (Phase 1 — send-only, metadata-first) ───────────────────────────
+
+model CrmEmailConnection {
+  id                      String            @id @default(cuid())
+  tenantId                String
+  userId                  String
+  provider                EmailProviderType @default(GOOGLE_WORKSPACE)
+  emailAddress            String
+  displayName             String?
+  googleAccountId         String?
+  encryptedAccessToken    String            /// AES-GCM envelope from @connect/security.encryptJson
+  encryptedRefreshToken   String            /// AES-GCM envelope from @connect/security.encryptJson
+  tokenExpiresAt          DateTime?
+  scopes                  String[]          @default([])
+  replyTrackingEnabled    Boolean           @default(false)
+  gmailHistoryId          String?
+  bodyCacheMode           EmailPrivacyMode  @default(METADATA_ONLY)
+  bodyCacheRetentionDays  Int               @default(30)
+  status                  String            @default("CONNECTED") /// CONNECTED | ERROR | DISCONNECTED
+  lastSyncAt              DateTime?
+  lastError               String?
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([tenantId, status])
+}
+
+model CrmEmailThread {
+  id            String   @id @default(cuid())
+  tenantId      String
+  userId        String
+  contactId     String?
+  gmailThreadId String
+  subject       String?
+  lastMessageAt DateTime?
+  unreadCount   Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contact Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  messages CrmEmailMessage[]
+
+  @@unique([tenantId, gmailThreadId])
+  @@index([tenantId, contactId, lastMessageAt])
+}
+
+model CrmEmailMessage {
+  id               String   @id @default(cuid())
+  tenantId         String
+  userId           String
+  threadId         String?
+  contactId        String?
+  gmailMessageId   String
+  direction        String   /// OUTBOUND | INBOUND
+  subject          String?
+  fromEmail        String?
+  toEmail          String?
+  cc               String?
+  bcc              String?
+  previewSnippet   String?
+  aiSummary        String?
+  hasCachedBody    Boolean  @default(false)
+  bodyCacheEncrypted String?
+  bodyCacheExpiresAt DateTime?
+  sentAt           DateTime?
+  receivedAt       DateTime?
+  syncStatus       String?
+  createdAt        DateTime @default(now())
+
+  tenant  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user    User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  thread  CrmEmailThread? @relation(fields: [threadId], references: [id], onDelete: SetNull)
+  contact Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, gmailMessageId])
+  @@index([threadId, createdAt])
+  @@index([tenantId, hasCachedBody, bodyCacheExpiresAt])
+}
+
+model CrmEmailSendLog {
+  id             String   @id @default(cuid())
+  tenantId       String
+  userId         String
+  contactId      String?
+  templateId     String?
+  gmailMessageId String?
+  gmailThreadId  String?
+  toEmail        String
+  subject        String?
+  status         String   @default("SENT") /// SENT | FAILED
+  errorMessage   String?
+  sentAt         DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contact Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, userId, sentAt])
+  @@index([tenantId, gmailMessageId])
+}
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -63,6 +171,13 @@ enum EmailProviderType {
   SENDGRID
   SMTP
   GOOGLE_WORKSPACE
+}
+
+/// Privacy mode for CRM email bodies. Phase 1 ships METADATA_ONLY only.
+enum EmailPrivacyMode {
+  METADATA_ONLY
+  METADATA_WITH_CACHE_30D
+  FULL_RETENTION
 }
 
 enum InvoiceStatus {
@@ -433,6 +548,11 @@ model Tenant {
   crmCampaigns                    CrmCampaign[]
   crmCampaignMembers              CrmCampaignMember[]
   crmCallerIdPool                 CrmCallerIdPool[]                 @relation("TenantCrmCallerIdPool")
+  /// CRM email — Phase 1 (send-only) metadata-first models
+  crmEmailConnections             CrmEmailConnection[]
+  crmEmailThreads                 CrmEmailThread[]
+  crmEmailMessages                CrmEmailMessage[]
+  crmEmailSendLogs                CrmEmailSendLog[]
 }
 
 model User {
@@ -504,6 +624,11 @@ model User {
   crmCampaignsCreated            CrmCampaign[]                     @relation("CrmCampaignCreatedBy")
   crmCampaignMembersAssigned     CrmCampaignMember[]               @relation("CrmCampaignMemberAssignedTo")
   mappedSolaExternalSchedules    BillingSolaExternalScheduleLink[] @relation("SolaScheduleMappedBy")
+  /// CRM email — Phase 1 relations
+  crmEmailConnections            CrmEmailConnection[]
+  crmEmailMessages               CrmEmailMessage[]
+  crmEmailThreads                CrmEmailThread[]
+  crmEmailSendLogs               CrmEmailSendLog[]
 }
 
 enum UserRole {
@@ -1345,6 +1470,10 @@ model Contact {
   crmTasks              CrmContactTask[]
   crmChecklistResponses CrmChecklistResponse[]
   crmCampaignMembers    CrmCampaignMember[]
+  // CRM email relations (Phase 1)
+  crmEmailThreads       CrmEmailThread[]
+  crmEmailMessages      CrmEmailMessage[]
+  crmEmailSendLogs      CrmEmailSendLog[]
 
   @@unique([tenantId, extensionId])
   @@index([tenantId, type, active])
@@ -3246,6 +3375,9 @@ enum CrmTimelineEventType {
   ASSIGNED_TO_USER
   SMS_SENT
   SMS_RECEIVED
+  EMAIL_SENT
+  EMAIL_RECEIVED
+  EMAIL_REPLY
 }
 
 /// Immutable audit-style record of CRM activity for a contact.

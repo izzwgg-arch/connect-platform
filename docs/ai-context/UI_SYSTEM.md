@@ -319,6 +319,9 @@ Campaign routes use **`crm.pageInnerCampaign`** (wide desk, up to ~1680px) and *
 - `/crm/tasks` (Phase 19H: task command desk)
 - `/crm/scripts` (Phase 19I: scripts playbook workspace)
 - `/crm/checklists` (Phase 19J: checklist operational workspace)
+- `/crm/email/settings` (Phase 1: CRM Email — per-user Google connection, send-only, privacy-first)
+
+Privacy note: CRM Email is not a full inbox archive. The UI surfaces connection status, send tests, and metadata-first indicators; full incoming bodies are not stored by default.
 
 Reports, wallboard: migrate opportunistically.
 

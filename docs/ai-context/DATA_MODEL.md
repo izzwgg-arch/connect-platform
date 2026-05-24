@@ -7,6 +7,37 @@
 > Rule of thumb: if the model is here, **read this doc instead of the
 > schema first.** If you do load the schema, jump to the line ranges below.
 
+---
+
+## CRM Email (Phase 1 — send-only, metadata-first)
+
+Not a full inbox archive. Stores CRM-linked email metadata and summaries; does not store full incoming bodies by default.
+
+- Models: `CrmEmailConnection`, `CrmEmailThread`, `CrmEmailMessage`, `CrmEmailSendLog` in `packages/db/prisma/schema.prisma`.
+- Enums: `EmailPrivacyMode` with `METADATA_ONLY` (default), `METADATA_WITH_CACHE_30D`, `FULL_RETENTION` (future/disabled).
+- Timeline: adds `EMAIL_SENT`, `EMAIL_RECEIVED`, `EMAIL_REPLY` to `CrmTimelineEventType`.
+
+### CrmEmailConnection
+- Per-user Gmail OAuth connection: `emailAddress`, `displayName`, `googleAccountId`, `encryptedAccessToken`, `encryptedRefreshToken`, `tokenExpiresAt`, `scopes[]`.
+- Privacy/Flags: `replyTrackingEnabled=false` (Phase 1), `gmailHistoryId?`, `bodyCacheMode=METADATA_ONLY`, `bodyCacheRetentionDays=30`.
+- Indexes: unique `(tenantId,userId)`, `(tenantId,status)`.
+
+### CrmEmailThread
+- Thread metadata only: `gmailThreadId` (unique per-tenant), `subject?`, `lastMessageAt?`, `unreadCount`.
+- Indexes: unique `(tenantId,gmailThreadId)`, `(tenantId,contactId,lastMessageAt)`.
+
+### CrmEmailMessage (metadata + minimal cache only)
+- No permanent `htmlBody`/`textBody`.
+- Fields: `gmailMessageId` (unique per-tenant), `direction`, `subject?`, `fromEmail?`, `toEmail?`, `previewSnippet?`, `aiSummary?`, `hasCachedBody` (default false), `bodyCacheEncrypted?`, `bodyCacheExpiresAt?`, `sentAt?`, `receivedAt?`.
+- Indexes: unique `(tenantId,gmailMessageId)`, `(threadId,createdAt)`, `(tenantId,hasCachedBody,bodyCacheExpiresAt)`.
+
+### CrmEmailSendLog
+- Outbound send log; no body persisted.
+- Fields: `toEmail`, `subject?`, `gmailMessageId?`, `gmailThreadId?`, `status=SENT\|FAILED`, `errorMessage?`, `sentAt`.
+
+### Security
+- Token fields are AES-256-GCM envelopes via `@connect/security` (`CREDENTIALS_MASTER_KEY`). Never exposed to the frontend; never logged.
+
 ## How to read this doc
 
 - **Tenant-scoped?** "Yes" means the model has a `tenantId` (or
