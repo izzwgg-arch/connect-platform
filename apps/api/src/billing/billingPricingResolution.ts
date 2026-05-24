@@ -16,6 +16,14 @@ export type PricingFieldKey =
   | "smsPriceCents"
   | "firstPhoneNumberFree";
 
+/** Tenant settings columns that represent explicit per-tenant unit pricing. */
+export const EXPLICIT_TENANT_PRICING_FIELD_KEYS = [
+  "extensionPriceCents",
+  "additionalPhoneNumberPriceCents",
+  "smsPriceCents",
+  "firstPhoneNumberFree",
+] as const satisfies readonly PricingFieldKey[];
+
 export type PricingFieldBadge = "legacy" | "from_plan" | "tenant_override";
 
 export type TenantBillingPricingPlanSlice = {
@@ -50,6 +58,20 @@ export function legacyResolveCents(
   hardDefault: number,
 ): number {
   return Number(settingsVal || planVal || hardDefault);
+}
+
+/**
+ * Saving explicit tenant unit prices (including $0.00) must use custom pricing mode.
+ * Legacy mode treats 0 as "inherit plan/default", which breaks complimentary SMS lines.
+ */
+export function shouldPromoteCustomPricingModeOnPricePatch(params: {
+  hasExplicitPriceFieldPatch: boolean;
+  requestedPricingMode: BillingPricingModeStored | null | undefined;
+}): boolean {
+  if (!params.hasExplicitPriceFieldPatch) return false;
+  if (params.requestedPricingMode === "catalog") return false;
+  if (params.requestedPricingMode === null) return false;
+  return true;
 }
 
 function catalogPrices(plan: TenantBillingPricingPlanSlice): {

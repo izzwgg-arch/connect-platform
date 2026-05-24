@@ -5,7 +5,13 @@ import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/secu
 import { SolaCardknoxAdapter, type SolaCardknoxConfig, TwilioSmsProvider, VoipMsSmsProvider, type TwilioCredentials, type VoipMsCredentials } from "@connect/integrations";
 import { buildBillingInvoicePreview, buildBillingInvoicePreviewFromSettings, createBillingInvoice, createOneTimeChargeInvoice, ensureTenantBillingSettings, logBillingEvent, markBillingInvoicePaid, tenantBillingPeriodBounds } from "./invoiceEngine";
 import { calculateTenantBillingUsage } from "./usage";
-import { BILLING_PRICING_MODE_METADATA_KEY, buildTenantSettingsResetToCatalog, parseBillingPricingMode } from "./billingPricingResolution";
+import {
+  BILLING_PRICING_MODE_METADATA_KEY,
+  EXPLICIT_TENANT_PRICING_FIELD_KEYS,
+  buildTenantSettingsResetToCatalog,
+  parseBillingPricingMode,
+  shouldPromoteCustomPricingModeOnPricePatch,
+} from "./billingPricingResolution";
 import { buildTenantPricingDiagnosticsFromPreview, rawBillingPricingModeFromMetadata } from "./billingPricingDiagnostics";
 import { billingPricingSettingsSliceFromLoaded, deriveBillingPricingState } from "./billingPricingState";
 import {
@@ -816,6 +822,11 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       ...pricing
     } = input as any;
     const pricingData = Object.fromEntries(Object.entries(pricing).filter(([, v]) => v !== undefined));
+    const hasExplicitPricePatch = EXPLICIT_TENANT_PRICING_FIELD_KEYS.some((key) => pricingData[key] !== undefined);
+    const promoteCustomPricingMode = shouldPromoteCustomPricingModeOnPricePatch({
+      hasExplicitPriceFieldPatch: hasExplicitPricePatch,
+      requestedPricingMode: billingPricingMode,
+    });
     let mergedMetadata: Record<string, unknown> | undefined;
     let pricingModeChangeFrom: ReturnType<typeof parseBillingPricingMode> | null = null;
     let flatRatePatch: ReturnType<typeof validateBillingFlatRateInput> | null = null;
@@ -854,6 +865,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     if (
       taxProviderId !== undefined ||
       billingPricingMode !== undefined ||
+      promoteCustomPricingMode ||
       billingFlatRate !== undefined ||
       billingQuantityOverrides !== undefined ||
       tollFreeDidPriceCents !== undefined ||
@@ -861,12 +873,13 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       billingScheduleOverride !== undefined
     ) {
       const cur = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId } });
-      if (billingPricingMode !== undefined) {
+      if (billingPricingMode !== undefined || promoteCustomPricingMode) {
         pricingModeChangeFrom = parseBillingPricingMode(cur?.metadata);
       }
       mergedMetadata = mergeTenantBillingSettingsMetadata(cur?.metadata, {
         ...(taxProviderId !== undefined ? { taxProviderId } : {}),
         ...(billingPricingMode !== undefined ? { billingPricingMode } : {}),
+        ...(promoteCustomPricingMode ? { billingPricingMode: "custom" } : {}),
         ...(flatRatePatch?.ok ? { billingFlatRate: flatRatePatch.value } : {}),
         ...(quantityOverridesPatch?.ok ? { billingQuantityOverrides: quantityOverridesPatch.value } : {}),
         ...(tollFreeDidPriceCents !== undefined ? { tollFreeDidPriceCents } : {}),
@@ -880,7 +893,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       create: { tenantId, ...createUpdate },
       update: createUpdate,
     });
-    if (billingPricingMode !== undefined && pricingModeChangeFrom !== null) {
+    if ((billingPricingMode !== undefined || promoteCustomPricingMode) && pricingModeChangeFrom !== null) {
       const meta = saved.metadata;
       const metaObj = meta && typeof meta === "object" && !Array.isArray(meta) ? (meta as Record<string, unknown>) : {};
       const toMode = parseBillingPricingMode(metaObj as unknown);

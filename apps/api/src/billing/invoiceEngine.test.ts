@@ -387,6 +387,16 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   assert.equal(pmCustom.pricingResolution?.mode, "custom");
   assert.equal(pmCustom.lineItems.find((l) => l.type === "EXTENSION")?.unitPriceCents, 4242);
 
+  state.settings.smsBillingEnabled = true;
+  state.settings.smsPriceCents = 0;
+  state.settings.metadata = { billingPricingMode: "custom" };
+  const pmComplimentarySms = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
+  const complimentarySmsLine = pmComplimentarySms.lineItems.find((l) => l.type === "SMS_PACKAGE");
+  assert.ok(complimentarySmsLine, "SMS line should appear when SMS billing is enabled");
+  assert.equal(complimentarySmsLine.unitPriceCents, 0, "custom mode must honor $0 SMS unit price");
+  assert.equal(complimentarySmsLine.amountCents, 0, "complimentary SMS must not add to invoice total");
+  state.settings.smsBillingEnabled = false;
+
   const effectiveAt2028Jan = new Date(Date.UTC(2028, 0, 1, 0, 0, 0, 0));
   const currentPlan28 = {
     id: "p-curr",

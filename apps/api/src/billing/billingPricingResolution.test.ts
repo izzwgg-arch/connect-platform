@@ -7,6 +7,7 @@ import {
   legacyResolveCents,
   parseBillingPricingMode,
   resolveTenantBillingPricing,
+  shouldPromoteCustomPricingModeOnPricePatch,
 } from "./billingPricingResolution";
 
 const planSample = {
@@ -36,6 +37,43 @@ test("legacyResolveCents matches historic || semantics (0 falls through)", () =>
   assert.equal(legacyResolveCents(0, 4000, 3000), 4000);
   assert.equal(legacyResolveCents(0, 0, 3000), 3000);
   assert.equal(legacyResolveCents(2500, 4000, 3000), 2500);
+});
+
+test("shouldPromoteCustomPricingModeOnPricePatch: explicit price saves use custom unless catalog", () => {
+  assert.equal(
+    shouldPromoteCustomPricingModeOnPricePatch({ hasExplicitPriceFieldPatch: true, requestedPricingMode: undefined }),
+    true,
+  );
+  assert.equal(
+    shouldPromoteCustomPricingModeOnPricePatch({ hasExplicitPriceFieldPatch: true, requestedPricingMode: "custom" }),
+    true,
+  );
+  assert.equal(
+    shouldPromoteCustomPricingModeOnPricePatch({ hasExplicitPriceFieldPatch: true, requestedPricingMode: "catalog" }),
+    false,
+  );
+  assert.equal(
+    shouldPromoteCustomPricingModeOnPricePatch({ hasExplicitPriceFieldPatch: true, requestedPricingMode: null }),
+    false,
+  );
+  assert.equal(
+    shouldPromoteCustomPricingModeOnPricePatch({ hasExplicitPriceFieldPatch: false, requestedPricingMode: undefined }),
+    false,
+  );
+});
+
+test("resolveTenantBillingPricing: custom honors complimentary SMS at 0 cents", () => {
+  const r = resolveTenantBillingPricing({
+    mode: "custom",
+    settings: {
+      extensionPriceCents: 3000,
+      additionalPhoneNumberPriceCents: 1000,
+      smsPriceCents: 0,
+      firstPhoneNumberFree: true,
+    },
+    activePlan: planSample,
+  });
+  assert.equal(r.smsPriceCents, 0);
 });
 
 test("resolveTenantBillingPricing: legacy matches plan-fallback when tenant cents are 0", () => {

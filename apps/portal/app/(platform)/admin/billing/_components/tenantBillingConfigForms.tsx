@@ -435,6 +435,7 @@ export function AdminTenantMonthlyPricingForm({ detail, onSaved }: { detail: Ten
                   additionalPhoneNumberPriceCents: toCents(form.get("numberPrice")),
                   smsPriceCents: toCents(form.get("smsPrice")),
                   firstPhoneNumberFree: form.get("firstPhoneNumberFree") === "on",
+                  billingPricingMode: "custom" as const,
                 };
             await apiPut(`/admin/billing/tenants/${detail.tenant.id}/settings`, {
               ...pricingPayload,

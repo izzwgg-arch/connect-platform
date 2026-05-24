@@ -513,6 +513,7 @@ export function AdminPricingWorkspace({
         payload.tollFreeDidPriceCents = draft.tollFreeDidPriceCents;
         payload.smsPriceCents = draft.smsPriceCents;
         payload.firstPhoneNumberFree = draft.firstPhoneNumberFree;
+        payload.billingPricingMode = "custom";
       } else {
         payload.tollFreeDidPriceCents = draft.tollFreeDidPriceCents;
       }
