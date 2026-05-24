@@ -87,6 +87,7 @@ export const navItems: NavItem[] = [
   { id: "crm.dashboard", href: "/crm/dashboard", label: "CRM Dashboard", icon: "CD", lucide: LayoutDashboard, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_dashboard" },
   { id: "crm.queue", href: "/crm/queue", label: "My Queue", icon: "CQ", lucide: ListOrdered, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_queue" },
   { id: "crm.contacts", href: "/crm/contacts", label: "Contacts", icon: "CC", lucide: UsersRound, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_contacts" },
+  { id: "crm.email", href: "/crm/email/settings", label: "Email", icon: "CE", lucide: Mail, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_settings" },
   { id: "crm.import", href: "/crm/import", label: "Import Leads", icon: "CI", lucide: FileUp, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_import" },
   { id: "crm.campaigns", href: "/crm/campaigns", label: "Campaigns", icon: "CA", lucide: Megaphone, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_campaigns" },
   { id: "crm.live_call", href: "/crm/live-call", label: "Live Call Workspace", icon: "CL", lucide: PhoneCall, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_live_call" },
