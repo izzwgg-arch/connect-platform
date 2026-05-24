@@ -1,0 +1,160 @@
+/* Tenant billing workspace — premium 2026 SaaS finance surface.
+   - Light mode default via portal theme (data-theme="light").
+   - Dark mode inherits portal dark tokens.
+   - No functional changes; purely presentational.
+*/
+
+.billing-workspace {
+  color-scheme: light;
+  --bw-bg: #f6f8fb;
+  --bw-surface: #ffffff;
+  --bw-surface-2: #f8fafc;
+  --bw-border: rgba(15, 23, 42, 0.1);
+  --bw-text: #0f172a;
+  --bw-muted: #64748b;
+  --bw-accent: #1d4ed8;
+  --bw-success: #16a34a;
+  --bw-warning: #f59e0b;
+  --bw-danger: #dc2626;
+  --bw-radius: 20px;
+  --bw-shadow:
+    0 1px 2px rgba(15,23,42,0.04),
+    0 16px 40px -12px rgba(15,23,42,0.08);
+  background: radial-gradient(120% 80% at 0% -10%, rgba(59, 130, 246, 0.08), transparent 60%),
+              radial-gradient(110% 70% at 100% -5%, rgba(14, 165, 233, 0.06), transparent 55%),
+              var(--bw-bg);
+  padding: 8px 0 24px;
+}
+
+:root[data-theme="dark"] .billing-workspace {
+  color-scheme: dark;
+  --bw-bg: #0b1420;
+  --bw-surface: #111a27;
+  --bw-surface-2: #162231;
+  --bw-border: rgba(255,255,255,0.08);
+  --bw-text: #e6edf6;
+  --bw-muted: #8ea0b2;
+  --bw-accent: #3b82f6;
+  --bw-success: #34d399;
+  --bw-warning: #fbbf24;
+  --bw-danger: #f87171;
+  --bw-shadow: 0 12px 40px -16px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.06);
+  background: radial-gradient(110% 70% at 10% -20%, rgba(59, 130, 246, 0.12), transparent 60%),
+              radial-gradient(100% 60% at 100% 0%, rgba(59, 130, 246, 0.06), transparent 55%),
+              linear-gradient(180deg, rgba(13, 21, 33, 0.8), rgba(7, 13, 23, 0.9));
+}
+
+.billing-card {
+  background: var(--bw-surface);
+  border: 1px solid var(--bw-border);
+  border-radius: var(--bw-radius);
+  box-shadow: var(--bw-shadow);
+  padding: 16px 16px;
+}
+
+/* Hero */
+.bw-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 12px 0 16px;
+}
+.bw-hero h2 {
+  margin: 0 0 6px;
+  font-size: 20px;
+  color: var(--bw-text);
+}
+.bw-hero .muted { color: var(--bw-muted); }
+
+/* KPI grid */
+.bw-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.bw-kpi { padding: 14px; }
+.bw-kpi-label { font-size: 12px; color: var(--bw-muted); margin-bottom: 8px; }
+.bw-kpi-value { font-size: 22px; font-weight: 700; color: var(--bw-text); }
+.bw-kpi-value.neg { color: var(--bw-danger); }
+.bw-kpi-value.pos { color: var(--bw-success); }
+.bw-kpi-sub { font-size: 12px; color: var(--bw-muted); margin-top: 6px; }
+.bw-kpi-cta { margin-top: 10px; }
+
+/* Main grid */
+.bw-main-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: 12px;
+}
+
+/* Estimate table */
+.bw-estimate-table-wrap { overflow-x: auto; }
+.bw-estimate-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.bw-estimate-table th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--bw-muted);
+  background: var(--bw-surface-2);
+  border-bottom: 1px solid var(--bw-border);
+  padding: 10px 12px;
+}
+.bw-estimate-table td { padding: 10px 12px; border-bottom: 1px solid var(--bw-border); }
+.bw-estimate-table td.num { text-align: right; }
+.bw-estimate-table td.num.neg { color: var(--bw-danger); font-weight: 600; }
+.bw-estimate-table tfoot td { font-weight: 700; background: var(--bw-surface-2); }
+
+/* Recent invoices */
+.bw-invoice-list { display: flex; flex-direction: column; }
+.bw-invoice-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 8px;
+  border-bottom: 1px solid var(--bw-border);
+  text-decoration: none;
+  color: inherit;
+}
+.bw-invoice-row:hover { background: color-mix(in srgb, var(--bw-surface-2) 80%, transparent); }
+.bw-invoice-row:last-child { border-bottom: none; }
+.bw-invoice-id small { display: block; }
+.bw-invoice-amt { font-weight: 700; }
+
+/* Section heads */
+.bw-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.bw-section-head h3 { margin: 0; font-size: 14px; }
+
+/* Trust footer */
+.bw-trust {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0,1fr));
+  gap: 10px;
+  align-items: center;
+  margin-top: 18px;
+}
+.bw-trust-item { background: var(--bw-surface); border: 1px solid var(--bw-border); border-radius: 12px; padding: 10px 12px; font-size: 12px; color: var(--bw-muted); }
+.bw-trust-item strong { display: block; color: var(--bw-text); font-size: 12px; }
+.bw-trust-accept { grid-column: span 2; text-align: right; color: var(--bw-muted); font-size: 12px; }
+.bw-trust-accept span { display: inline-block; margin-left: 8px; font-weight: 600; color: var(--bw-text); }
+.bw-trust-sola { grid-column: 1 / -1; color: var(--bw-muted); font-size: 12px; text-align: center; }
+
+/* Quick links */
+.bw-quick-links { margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Responsive */
+@media (max-width: 1200px) {
+  .bw-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .bw-main-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .bw-kpi-grid { grid-template-columns: 1fr; }
+  .bw-hero { flex-direction: column; align-items: flex-start; }
+}

@@ -3,6 +3,7 @@
 import "../admin/billing/_components/billingPhase3.css";
 import "../admin/billing/_components/billingPhase4.css";
 import "../admin/billing/_components/billingPhase5.css";
+import "./billingWorkspace.css";
 import Link from "next/link";
 import { useState } from "react";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
@@ -11,10 +12,13 @@ import { ErrorState } from "../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
 import { PageHeader } from "../../../components/PageHeader";
 import { PermissionGate } from "../../../components/PermissionGate";
+import { useAppContext } from "../../../hooks/useAppContext";
+import { BillingActivityList } from "../../../components/billing/BillingActivityList";
 import {
   dollars, formatDate, formatDateTime,
   invoiceStatusLabel, invoiceStatusClass,
   worstOpenInvoice, nextBillingSummary,
+  nextOpenInvoiceDueSummary,
 } from "../../../lib/billingUi";
 
 type PreviewLineItem = {
@@ -34,6 +38,14 @@ type InvoicePreview = {
   taxCents: number;
   totalCents: number;
 };
+
+function greetingForNow(name: string): string {
+  const hour = new Date().getHours();
+  const first = name.split(" ").filter(Boolean)[0] || name || "there";
+  if (hour < 12) return `Good morning, ${first} 👋`;
+  if (hour < 18) return `Good afternoon, ${first} 👋`;
+  return `Good evening, ${first} 👋`;
+}
 
 function invoiceDetailHref(id: string) {
   return `/billing/invoices/${encodeURIComponent(id)}`;
@@ -148,8 +160,12 @@ function FailedPaymentBanner({ invoice }: { invoice: any }) {
 }
 
 export default function BillingOverviewPage() {
+  const { user } = useAppContext();
   const settings = useAsyncResource(() => apiGet<any>("/billing/settings"), []);
   const invoices = useAsyncResource(() => apiGet<any[]>("/billing/platform/invoices"), []);
+  const methods = useAsyncResource(() => apiGet<any[]>("/billing/payment-methods"), []);
+  const usage = useAsyncResource(() => apiGet<any>("/billing/usage/current"), []);
+  const invoicePreview = useAsyncResource(() => apiGet<InvoicePreview>("/billing/invoice-preview"), []);
 
   const allInvoices = invoices.status === "success" ? invoices.data : [];
   const openBalance = allInvoices
@@ -162,134 +178,204 @@ export default function BillingOverviewPage() {
     .sort((a, b) => new Date(b.paidAt).getTime() - new Date(a.paidAt).getTime())
     .slice(0, 3);
 
+  const pmRows = methods.status === "success" ? methods.data : [];
+  const defaultPm = pmRows.find((m: any) => m.isDefault) || pmRows[0] || null;
+
   const s = settings.status === "success" ? settings.data : null;
   const nextBill = s ? nextBillingSummary(s.billingDayOfMonth, !!s.autoBillingEnabled) : null;
-  const defaultCard = s?.defaultPaymentMethodId ? "On file" : "None";
   const autopayLabel = s?.autoBillingEnabled
     ? (s.billingDayOfMonth ? `Day ${s.billingDayOfMonth}` : "Enabled")
     : "Off";
 
   const loading = settings.status === "loading" || invoices.status === "loading";
 
+  const timelineId = worst?.id || (allInvoices[0]?.id ?? null);
+  const timeline = useAsyncResource<any | null>(
+    () => (timelineId ? apiGet<any>(`/billing/platform/invoices/${timelineId}`) : Promise.resolve(null)),
+    [timelineId],
+  );
+
   return (
     <PermissionGate permission="can_view_billing_overview" fallback={<div className="state-box">You do not have billing access.</div>}>
-      <div className="stack compact-stack billing-admin-shell billing-phase3-tenant billing-p5-scope">
-        <PageHeader title="Billing overview" subtitle="Balance, upcoming charges, and quick links to invoices and payment methods." />
+      <div className="billing-workspace" data-testid="billing-tenant-overview-loaded">
+        <PageHeader title="Billing" subtitle="Premium customer billing workspace — balance, autopay, invoice history." />
 
         {loading ? <LoadingSkeleton rows={4} /> : null}
         {settings.status === "error" ? <ErrorState message={settings.error} /> : null}
         {invoices.status === "error" ? <ErrorState message={invoices.error} /> : null}
 
-        {/* Failed / overdue banner */}
-        {!loading && worst ? <FailedPaymentBanner invoice={worst} /> : null}
+        {/* Hero */}
+        <section className="bw-hero billing-card">
+          <div className="bw-hero-main">
+            <h2>{greetingForNow(user?.name || "")}</h2>
+            <p className="muted">
+              {openBalance > 0
+                ? `You have ${unpaid.length} unpaid invoice${unpaid.length !== 1 ? "s" : ""}.`
+                : "Your account is in good standing."}
+            </p>
+          </div>
+          <div className="bw-hero-actions">
+            {openBalance > 0 && worst ? (
+              <Link className="btn primary" href={invoicePayHref(worst)}>
+                Pay {dollars(openBalance)}
+              </Link>
+            ) : null}
+          </div>
+        </section>
 
-        {/* 3-stat summary */}
+        {/* KPI row */}
         {!loading && s ? (
-            <div className="billing-p5-tenant-hero" data-testid="billing-tenant-overview-loaded">
-            <div className="billing-stat-grid">
-            <div className="billing-stat-card">
-              <span className="stat-label">Balance due</span>
-              <span className={`stat-value ${openBalance > 0 ? "bad" : ""}`}>{dollars(openBalance)}</span>
-              {openBalance > 0 ? (
-                <span className="stat-sub">
-                  {unpaid.length} unpaid invoice{unpaid.length !== 1 ? "s" : ""}
-                </span>
-              ) : (
-                <span className="stat-sub">All clear</span>
-              )}
-            </div>
-            <div className="billing-stat-card">
-              <span className="stat-label">Autopay</span>
-              <span className="stat-value">{autopayLabel}</span>
-              {nextBill ? <span className="stat-sub">{nextBill}</span> : null}
-            </div>
-            <div className="billing-stat-card">
-              <span className="stat-label">Default card</span>
-              <span className="stat-value">{defaultCard}</span>
-              {!s.defaultPaymentMethodId ? (
-                <span className="stat-cta">
-                  <Link className="btn ghost" style={{ fontSize: 12, padding: "4px 10px" }} href="/billing/payments">
-                    Add card
-                  </Link>
-                </span>
+          <section className="bw-kpi-grid">
+            <div className="billing-card bw-kpi">
+              <div className="bw-kpi-label">Current balance</div>
+              <div className={`bw-kpi-value ${openBalance > 0 ? "neg" : ""}`}>{dollars(openBalance)}</div>
+              <div className="bw-kpi-sub">{nextOpenInvoiceDueSummary(allInvoices) || (openBalance === 0 ? "No balance due" : "")}</div>
+              {openBalance > 0 && worst ? (
+                <div className="bw-kpi-cta"><Link className="btn primary" href={invoicePayHref(worst)}>Pay now</Link></div>
               ) : null}
             </div>
-          </div>
-          </div>
+            <div className="billing-card bw-kpi">
+              <div className="bw-kpi-label">Next autopay</div>
+              <div className="bw-kpi-value">{s?.autoBillingEnabled ? (s.billingDayOfMonth ? `Day ${s.billingDayOfMonth}` : "Enabled") : "Off"}</div>
+              <div className="bw-kpi-sub">{nextBill || (s?.autoBillingEnabled ? "Auto-billing on" : "Autopay is off")}</div>
+            </div>
+            <div className="billing-card bw-kpi">
+              <div className="bw-kpi-label">Payment method</div>
+              <div className="bw-kpi-value">
+                {defaultPm ? `${defaultPm.brand || "Card"} ···${defaultPm.last4 || "••••"}` : "None"}
+              </div>
+              <div className="bw-kpi-sub">
+                {defaultPm?.expMonth && defaultPm?.expYear ? `Expires ${defaultPm.expMonth}/${String(defaultPm.expYear).slice(-2)}` : s?.defaultPaymentMethodId ? "Default" : "No card on file"}
+              </div>
+              <div className="bw-kpi-cta"><Link className="btn ghost" href="/billing/payments">{defaultPm ? "Manage" : "Add card"}</Link></div>
+            </div>
+            <div className="billing-card bw-kpi">
+              <div className="bw-kpi-label">Estimated next invoice</div>
+              <div className="bw-kpi-value">{invoicePreview.status === "success" ? dollars(invoicePreview.data?.totalCents) : "—"}</div>
+              <div className="bw-kpi-sub">{invoicePreview.status === "success" ? `${formatDate(invoicePreview.data.periodStart)} – ${formatDate(invoicePreview.data.periodEnd)}` : "Preview pending"}</div>
+              <div className="bw-kpi-cta"><a className="btn ghost" href="#estimate">View estimate</a></div>
+            </div>
+            <div className="billing-card bw-kpi">
+              <div className="bw-kpi-label">Active services</div>
+              <div className="bw-kpi-value">{usage.status === "success" ? String(usage.data.extensionCount || 0) : "—"}</div>
+              <div className="bw-kpi-sub">{usage.status === "success" ? `${usage.data.localPhoneNumberCount + usage.data.tollFreePhoneNumberCount} phone numbers` : "Extensions"}</div>
+            </div>
+            <div className="billing-card bw-kpi">
+              <div className="bw-kpi-label">Billing health</div>
+              <div className={`bw-kpi-value ${worst ? (worst.status === "FAILED" || worst.status === "OVERDUE" ? "neg" : "") : "pos"}`}>
+                {worst ? invoiceStatusLabel(worst.status) : "Good standing"}
+              </div>
+              <div className="bw-kpi-sub">{worst ? (worst.dueDate ? `Due ${formatDate(worst.dueDate)}` : "Open balance") : "Thank you!"}</div>
+            </div>
+          </section>
         ) : null}
 
-        {/* Unpaid invoices callout */}
-        {!loading && unpaid.length > 0 ? (
-          <div className="billing-unpaid-callout">
-            <div className="billing-unpaid-callout-head">
-              <span>Unpaid invoices ({unpaid.length})</span>
-              <Link className="btn ghost" style={{ fontSize: 12, padding: "4px 10px" }} href="/billing/invoices">
-                View all
-              </Link>
+        {/* Unpaid banner */}
+        {!loading && worst ? <FailedPaymentBanner invoice={worst} /> : null}
+
+        {/* Body grid: estimate · timeline · recent */}
+        <section className="bw-main-grid">
+          <div className="billing-card" id="estimate">
+            <div className="bw-section-head">
+              <h3>Estimated next invoice preview</h3>
+              <Link className="btn ghost" href="/billing/invoices">View full estimate</Link>
             </div>
-            {unpaid.slice(0, 4).map((inv) => (
-              <div className="billing-unpaid-item" key={inv.id}>
-                <span>
-                  <strong>{inv.invoiceNumber || inv.id}</strong>
-                  <small>Due {formatDate(inv.dueDate)}</small>
-                </span>
-                <span className={`billing-status-pill ${invoiceStatusClass(inv.status)}`}>
-                  {invoiceStatusLabel(inv.status)}
-                </span>
-                <div className="row-actions">
-                  <Link className="btn primary" style={{ fontSize: 12, padding: "5px 12px" }} href={invoicePayHref(inv)}>
-                    {inv.status === "FAILED" ? "Pay now" : dollars(inv.balanceDueCents)}
+            {invoicePreview.status === "loading" ? <LoadingSkeleton rows={3} /> : null}
+            {invoicePreview.status === "error" ? <ErrorState message={invoicePreview.error} /> : null}
+            {invoicePreview.status === "success" && invoicePreview.data?.lineItems?.length ? (
+              <div className="bw-estimate-table-wrap">
+                <table className="bw-estimate-table">
+                  <thead>
+                    <tr>
+                      <th>Item</th>
+                      <th>Qty</th>
+                      <th>Unit price</th>
+                      <th>Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoicePreview.data.lineItems.map((item, idx) => (
+                      <tr key={idx}>
+                        <td>{item.description}</td>
+                        <td className="num">{item.quantity ?? "—"}</td>
+                        <td className="num">{item.unitPriceCents != null ? dollars(item.unitPriceCents) : "—"}</td>
+                        <td className={`num ${item.amountCents < 0 ? "neg" : ""}`}>
+                          {item.amountCents < 0 ? `(${dollars(-item.amountCents)})` : dollars(item.amountCents)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td colSpan={3}>Estimated total</td>
+                      <td className="num">{dollars(invoicePreview.data.totalCents)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+                {invoicePreview.data.taxCents > 0 ? (
+                  <p className="muted" style={{ marginTop: 8 }}>Includes {dollars(invoicePreview.data.taxCents)} in taxes and fees.</p>
+                ) : null}
+              </div>
+            ) : (
+              <div className="state-box">Estimate not available.</div>
+            )}
+          </div>
+
+          <div className="billing-card">
+            <div className="bw-section-head"><h3>Billing timeline</h3></div>
+            {timeline.status === "loading" ? <LoadingSkeleton rows={3} /> : null}
+            {timeline.status === "success" && timeline.data?.events?.length ? (
+              <BillingActivityList events={timeline.data.events} />
+            ) : (
+              <div className="state-box">No recent billing activity.</div>
+            )}
+          </div>
+
+          <div className="billing-card">
+            <div className="bw-section-head">
+              <h3>Recent invoices</h3>
+              <Link className="btn ghost" href="/billing/invoices">View all</Link>
+            </div>
+            {!loading && allInvoices.slice(0, 5).length ? (
+              <div className="bw-invoice-list">
+                {allInvoices.slice(0, 5).map((inv) => (
+                  <Link className="bw-invoice-row" key={inv.id} href={invoiceDetailHref(inv.id)}>
+                    <div className="bw-invoice-id">
+                      <strong>{inv.invoiceNumber || inv.id.slice(0, 8)}</strong>
+                      <small className="muted">{inv.periodStart && inv.periodEnd ? `${formatDate(inv.periodStart)} – ${formatDate(inv.periodEnd)}` : "—"}</small>
+                    </div>
+                    <span className={`billing-status-pill ${invoiceStatusClass(inv.status)}`}>
+                      {invoiceStatusLabel(inv.status)}
+                    </span>
+                    <div className="bw-invoice-amt">{dollars(inv.totalCents)}</div>
                   </Link>
-                </div>
+                ))}
               </div>
-            ))}
+            ) : (
+              <div className="state-box">No invoices yet.</div>
+            )}
           </div>
-        ) : null}
+        </section>
 
-        {/* Recent payments */}
-        {!loading && recentPaid.length > 0 ? (
-          <div className="billing-unpaid-callout">
-            <div className="billing-unpaid-callout-head">
-              <span>Recent payments</span>
-              <Link className="btn ghost" style={{ fontSize: 12, padding: "4px 10px" }} href="/billing/receipts">
-                All receipts
-              </Link>
-            </div>
-            {recentPaid.map((inv) => (
-              <div className="billing-recent-item" key={inv.id}>
-                <span>
-                  <strong>{inv.invoiceNumber}</strong>
-                  <small style={{ color: "var(--muted)" }}>{formatDateTime(inv.paidAt)}</small>
-                </span>
-                <span className="billing-status-pill good">Paid</span>
-                <strong>{dollars(inv.totalCents)}</strong>
-              </div>
-            ))}
-          </div>
-        ) : null}
+        {/* Trust & security footer */}
+        <section className="bw-trust">
+          <div className="bw-trust-item"><strong>Secure & Encrypted</strong><span>256-bit SSL protection</span></div>
+          <div className="bw-trust-item"><strong>PCI Compliant</strong><span>Your data is safe with us</span></div>
+          <div className="bw-trust-item"><strong>AutoPay Protection</strong><span>Retry and reminders</span></div>
+          <div className="bw-trust-item"><strong>Trusted</strong><span>Reliable payments</span></div>
+          <div className="bw-trust-accept">We accept <span>VISA</span> <span>MASTERCARD</span> <span>AMEX</span> <span>DISCOVER</span></div>
+          <div className="bw-trust-sola">Secured by SOLA · Your payment data is encrypted and securely processed.</div>
+        </section>
 
-        {/* Empty state when all paid */}
-        {!loading && allInvoices.length > 0 && unpaid.length === 0 && openBalance === 0 ? (
-          <div className="state-box" style={{ textAlign: "center" }}>
-            <p style={{ fontSize: 16, fontWeight: 600, margin: "0 0 4px" }}>✓ All paid</p>
-            <p className="muted">No unpaid invoices. Your account is current.</p>
-          </div>
-        ) : null}
-
-        {/* Next invoice preview */}
-        {!loading ? <InvoicePreviewSection /> : null}
-
-        {/* Quick nav */}
-        {!loading ? (
-          <div className="billing-p5-tenant-actions">
-            <Link className="btn ghost" href="/billing/invoices">View invoices</Link>
-            <Link className="btn ghost" href="/billing/payments">Payment methods</Link>
-            <Link className="btn ghost" href="/billing/receipts">Receipts</Link>
-            <PermissionGate permission="can_view_settings_billing" fallback={null}>
-              <Link className="btn ghost" href="/billing/settings">Billing settings</Link>
-            </PermissionGate>
-          </div>
-        ) : null}
+        {/* Quick links */}
+        <div className="bw-quick-links">
+          <Link className="btn ghost" href="/billing/invoices">Invoices</Link>
+          <Link className="btn ghost" href="/billing/payments">Payment methods</Link>
+          <Link className="btn ghost" href="/billing/receipts">Receipts</Link>
+          <PermissionGate permission="can_view_settings_billing" fallback={null}>
+            <Link className="btn ghost" href="/billing/settings">Billing settings</Link>
+          </PermissionGate>
+        </div>
       </div>
     </PermissionGate>
   );

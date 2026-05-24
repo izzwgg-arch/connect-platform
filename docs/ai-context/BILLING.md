@@ -1,4 +1,30 @@
 ﻿# Billing — quick reference
+---
+
+## Customer billing workspace redesign (2026-05-23)
+
+This pass converts `/billing` into a premium SaaS finance workspace with light-mode default and dark-mode parity.
+
+- Visual system
+  - Wrapper `.billing-workspace` with dual-theme tokens (`--bw-*`), soft layered background, large-radius cards, thin borders, premium shadows.
+  - Cards use `.billing-card`; KPI tiles in `.bw-kpi-grid` adopt calm spacing and status tones (good/neg based on balance/health).
+  - Light by default; dark follows portal `data-theme="dark"` automatically. No forced black boxes.
+
+- Content structure
+  - Hero greeting with account-standing message and pay-now CTA when balance > 0.
+  - KPI tiles: Current balance, Next autopay, Payment method (brand/last4/exp), Estimated next invoice (from `GET /billing/invoice-preview`), Active services (from `GET /billing/usage/current`), Billing health (worst invoice status).
+  - Estimate preview: real itemized table (Item, Qty, Unit, Amount) with estimated total and tax note.
+  - Billing timeline: reuses `BillingActivityList` against the latest open or most recent invoice.
+  - Recent invoices: compact list with status pill and amount; links to detail.
+  - Trust + security footer: PCI/SSL badges, accepted cards, and secure-processing copy.
+
+- Data rules
+  - All data sources are existing tenant routes: `/billing/settings`, `/billing/platform/invoices`, `/billing/payment-methods`, `/billing/usage/current`, `/billing/invoice-preview`.
+  - No new backend routes or schema changes.
+
+- Mobile
+  - Tiles collapse to a single column; body sections stack; rows remain tappable with comfortable hit targets.
+
 
 > Read `CURSOR_START_HERE.md` first. High-risk: payments and invoices.
 

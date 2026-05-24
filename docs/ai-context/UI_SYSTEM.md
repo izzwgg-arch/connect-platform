@@ -1,4 +1,4 @@
-﻿# UI system — Portal, Workspace, and CRM
+# UI system — Portal, Workspace, and CRM
 
 > **Scope:** `apps/portal` visual language. Telephony/PBX/mobile are out of scope here.
 
@@ -410,3 +410,38 @@ pnpm exec tsc -p apps/portal --noEmit
 # Grep CRM routes for light-mode regressions:
 # bg-white | bg-gray-50 | text-gray- on dashboard/queue/campaigns/contacts/wallboard
 ```
+
+---
+
+## Customer billing workspace (Premium SaaS light-first)
+
+Scope: pages under `apps/portal/app/(platform)/billing/*` that are customer-facing (not Admin Billing). These pages intentionally adopt a premium finance-dashboard look and are light-mode by default.
+
+- Theme behavior
+  - Light is default. Pages follow the portal theme token via `document.documentElement.dataset.theme`.
+  - Dark mode activates automatically when `data-theme="dark"`.
+  - No forced black islands — surfaces and text switch using CSS variables only.
+
+- Primitives (billing)
+  - Wrapper: `.billing-workspace` (defined in `billing/billingWorkspace.css`). Applies the soft page wash, premium shadows, and dual-theme tokens (`--bw-*`).
+  - Card: `.billing-card` — white in light, premium navy in dark, thin borders, large radius (20px).
+  - KPI grid: `.bw-kpi-grid` with tiles `.bw-kpi` (`.bw-kpi-label`, `.bw-kpi-value`, `.bw-kpi-sub`, `.bw-kpi-cta`).
+  - Estimate table: `.bw-estimate-table(-wrap)` — thin borders, compact header, right-aligned numeric columns, negative amounts in danger tone.
+  - Timeline: uses existing `BillingActivityList` (Phase 4/9) inside billing cards.
+  - Recent invoices list: `.bw-invoice-list` + `.bw-invoice-row` (grid row with status pill and amount).
+  - Trust footer: `.bw-trust` — compact badges for PCI/SSL, accepted cards, and secure-processing copy.
+
+- Tokens (`--bw-*`) (resolved per theme)
+  - `--bw-bg`, `--bw-surface`, `--bw-surface-2`, `--bw-border`, `--bw-text`, `--bw-muted`, `--bw-accent`, `--bw-success`, `--bw-warning`, `--bw-danger`, `--bw-radius`, `--bw-shadow`.
+
+- Responsive
+  - Desktop: 6 KPI tiles; body grid `estimate · timeline · recent`.
+  - Tablet: 3 KPI tiles; stacked body sections.
+  - Mobile: 1-column stack with touch spacing; hero CTA remains primary; rows stay tappable.
+
+- Do / Don't
+  - Do keep all data real (invoices, payment methods, invoice preview). Empty states must be graceful.
+  - Do reuse existing billing pills, toasts, and components.
+  - Don't introduce placeholder charts or fabricated interactions.
+  - Don't change Cardknox/SOLA/iFields behavior on customer pages.
+
