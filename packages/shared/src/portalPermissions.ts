@@ -75,6 +75,7 @@ export const SIDEBAR_ITEMS = [
   { id: "admin.call_timeline", section: "admin", label: "Call Timeline", href: "/admin/call-timeline", permission: "can_view_admin_call_timeline" },
   { id: "admin.call_flight", section: "admin", label: "Call Flight Recorder", href: "/admin/call-flight", permission: "can_view_admin_call_flight" },
   { id: "admin.deploy_center", section: "admin", label: "Deploy Center", href: "/admin/deploy-center", permission: "can_view_admin_deploy_center" },
+  { id: "admin.roles", section: "admin", label: "Custom Roles", href: "/admin/roles", permission: "can_view_admin_roles" },
 
   { id: "settings.tenant", section: "settings", label: "Tenant Settings", href: "/settings", permission: "can_view_settings_tenant" },
   { id: "settings.email", section: "settings", label: "Email Settings", href: "/settings/email", permission: "can_view_settings_email" },
@@ -208,6 +209,7 @@ export const LEGACY_PERMISSION_EXPANSIONS: Record<string, PortalPermissionKey[]>
     "can_view_admin_pbx_events",
     "can_view_admin_billing",
     "can_view_admin_cdr_tenant_map",
+    "can_view_admin_roles",
   ],
   can_manage_global_settings: [
     ...ADMIN_SECTION,

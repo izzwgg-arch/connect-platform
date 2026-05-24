@@ -5,7 +5,7 @@ import {
   isCrmPortalPermissionKey,
   type PortalPermissionKey,
 } from "@connect/shared";
-import { getEffectivePortalPermissionSetForJwtRole } from "../platformRolePermissions";
+import { getEffectivePortalPermissionSetForJwtRole, getEffectiveCustomRolePermissions } from "../platformRolePermissions";
 
 /**
  * Role buckets may include CRM keys (e.g. tenant admin → can_manage_crm).
@@ -44,6 +44,13 @@ export async function resolvePortalPermissionsWithCrmUserAccess(
   if (crmTenantEnabled && crmUserAccessEnabled) {
     const crmPerms = expandLegacyPortalPermissions(crmLegacyPermissionKeysForAccess(crmAccessRole));
     portalPermissionSet = [...new Set([...portalPermissionSet, ...crmPerms])] as PortalPermissionKey[];
+  }
+
+  if (userId && tenantId) {
+    const customPerms = await getEffectiveCustomRolePermissions(userId, tenantId);
+    if (customPerms.length > 0) {
+      portalPermissionSet = [...new Set([...portalPermissionSet, ...customPerms])] as PortalPermissionKey[];
+    }
   }
 
   return portalPermissionSet;

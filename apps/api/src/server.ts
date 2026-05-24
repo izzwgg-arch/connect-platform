@@ -143,6 +143,7 @@ import {
   hasEffectivePortalPermission,
   registerPlatformRolePermissionRoutes,
 } from "./platformRolePermissions";
+import { registerCustomRoleRoutes } from "./customRoleRoutes";
 import { registerUserExtensionProvisioningRoutes } from "./userExtensionProvisioning";
 import {
   PORTAL_ROLE_BUCKETS,
@@ -2258,6 +2259,7 @@ type PortalApiPermissionRule = {
 
 const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/admin/role-permissions", permission: "can_view_admin_permissions" },
+  { prefix: "/admin/custom-roles", permission: "can_view_admin_roles" },
   { prefix: "/admin/users", permission: "can_view_admin_users" },
   { prefix: "/admin/extensions", permission: "can_view_admin_users" },
   { prefix: "/outbound-routes", permission: "can_view_admin_users" },
@@ -31444,6 +31446,7 @@ const port = Number(process.env.PORT || 3001);
 
   await registerBillingRoutes(app);
   await registerPlatformRolePermissionRoutes(app);
+  await registerCustomRoleRoutes(app);
   registerUserExtensionProvisioningRoutes(app, {
     getUser: getUser as any,
     requirePermission: requirePermission as any,

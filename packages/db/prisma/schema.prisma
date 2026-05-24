@@ -576,6 +576,8 @@ model Tenant {
   crmEmailMessages                CrmEmailMessage[]
   crmEmailSendLogs                CrmEmailSendLog[]
   crmEmailTemplates               CrmEmailTemplate[]
+  customRoles                     CustomRole[]
+  userCustomRoles                 UserCustomRole[]
 }
 
 model User {
@@ -653,6 +655,10 @@ model User {
   crmEmailThreads                CrmEmailThread[]
   crmEmailSendLogs               CrmEmailSendLog[]
   crmEmailTemplates              CrmEmailTemplate[]
+  customRolesCreated             CustomRole[]                      @relation("CustomRoleCreatedBy")
+  customRolesUpdated             CustomRole[]                      @relation("CustomRoleUpdatedBy")
+  customRoleAssignments          UserCustomRole[]
+  customRolesAssigned            UserCustomRole[]                  @relation("UserCustomRoleAssignedBy")
 }
 
 enum UserRole {
@@ -3690,4 +3696,46 @@ model CrmCallerIdPool {
   @@unique([tenantId, phoneNumberId])
   @@index([tenantId, areaCode3, isActive])
   @@index([tenantId, isActive])
+}
+
+/// Tenant-scoped custom role. Permissions are additive on top of the built-in role bucket.
+/// permissions is a JSON array of PortalPermissionKey strings.
+model CustomRole {
+  id              String   @id @default(cuid())
+  tenantId        String
+  name            String
+  description     String?
+  active          Boolean  @default(true)
+  permissions     Json     @default("[]")
+  createdByUserId String?
+  updatedByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy       User?          @relation("CustomRoleCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedBy       User?          @relation("CustomRoleUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  userAssignments UserCustomRole[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, active])
+}
+
+/// Assignment of a CustomRole to a User within a tenant.
+model UserCustomRole {
+  id               String   @id @default(cuid())
+  tenantId         String
+  userId           String
+  customRoleId     String
+  assignedByUserId String?
+  createdAt        DateTime @default(now())
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  customRole CustomRole @relation(fields: [customRoleId], references: [id], onDelete: Cascade)
+  assignedBy User?      @relation("UserCustomRoleAssignedBy", fields: [assignedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, customRoleId])
+  @@index([tenantId, userId])
+  @@index([tenantId, customRoleId])
 }

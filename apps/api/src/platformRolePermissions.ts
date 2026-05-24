@@ -98,6 +98,30 @@ export async function getEffectivePortalPermissionSetForJwtRole(
   }
 }
 
+export async function getEffectiveCustomRolePermissions(
+  userId: string,
+  tenantId: string,
+): Promise<PortalPermissionKey[]> {
+  try {
+    const assignments = await db.userCustomRole.findMany({
+      where: { userId, tenantId, customRole: { active: true } },
+      select: { customRole: { select: { permissions: true } } },
+    });
+    const out = new Set<PortalPermissionKey>();
+    for (const a of assignments) {
+      const perms = a.customRole.permissions;
+      if (Array.isArray(perms)) {
+        for (const p of perms) {
+          if (isPortalPermissionKey(String(p))) out.add(String(p) as PortalPermissionKey);
+        }
+      }
+    }
+    return [...out];
+  } catch {
+    return [];
+  }
+}
+
 export async function hasEffectivePortalPermission(
   user: PortalUser,
   permission: PortalPermissionKey,
