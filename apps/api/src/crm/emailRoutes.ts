@@ -97,6 +97,7 @@ async function resolveSenderConnection(opts: {
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
 const emailQueue = new Queue("crm-email-send", { connection: redis });
+const emailSyncQueue = new Queue("crm-email-sync", { connection: redis });
 
 export async function registerCrmEmailRoutes(app: FastifyInstance) {
   // CRM Email Phase 1 is launching — routes always register unless explicitly disabled.
@@ -154,6 +155,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
         userId: true,
         managedByUserId: true,
         scopes: true,
+        replyTrackingEnabled: true,
         lastSyncAt: true,
         lastError: true,
       },
@@ -170,6 +172,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       status: r.status,
       isMine: r.scope === "USER" && r.userId === user.sub,
       canManage: r.scope === "USER" ? r.userId === user.sub : isAdmin,
+      replyTrackingEnabled: r.replyTrackingEnabled,
       lastSyncAt: r.lastSyncAt,
       lastError: r.lastError,
     }));
@@ -192,7 +195,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
 
     const body = (req.body as any) || {};
     const bodyCacheMode = String(body?.bodyCacheMode || "METADATA_ONLY");
-    const replyTrackingEnabled = false; // Phase 1 fixed
+    const enableReplyTracking = Boolean(body?.enableReplyTracking);
 
     // scope = USER (default) or TENANT (admins only). label/isDefaultForTenant apply to TENANT.
     const scopeChoice: "USER" | "TENANT" = body?.scope === "TENANT" ? "TENANT" : "USER";
@@ -206,7 +209,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       tenantId: user.tenantId,
       userId: user.sub,
       bodyCacheMode,
-      replyTrackingEnabled,
+      replyTrackingEnabled: enableReplyTracking,
       scopeChoice,
       wantsDefault,
       label: label || null,
@@ -217,12 +220,14 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     const sig = hmacSha256(process.env.JWT_SECRET || "connect-secret", payloadStr);
     const state = base64url(payloadStr) + "." + sig;
 
-    const scope = [
+    const scopesArr = [
       "openid",
       "email",
       "profile",
       "https://www.googleapis.com/auth/gmail.send",
-    ].join(" ");
+    ];
+    if (enableReplyTracking) scopesArr.push("https://www.googleapis.com/auth/gmail.readonly");
+    const scope = scopesArr.join(" ");
 
     const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
     url.searchParams.set("client_id", clientId);
@@ -230,6 +235,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     url.searchParams.set("response_type", "code");
     url.searchParams.set("access_type", "offline");
     url.searchParams.set("prompt", "consent");
+    url.searchParams.set("include_granted_scopes", "true");
     url.searchParams.set("scope", scope);
     url.searchParams.set("state", state);
 
@@ -305,6 +311,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       const tokenType = String(tokenJson.token_type || "Bearer");
       const scope = String(tokenJson.scope || "").split(/\s+/).filter(Boolean);
       const tokenExpiresAt = expiresInSec ? new Date(Date.now() + expiresInSec * 1000) : null;
+      const replyEnabled = scope.includes("https://www.googleapis.com/auth/gmail.readonly");
 
       // Fetch profile/email (displayName/email)
       const profileRes = await fetch("https://openidconnect.googleapis.com/v1/userinfo", {
@@ -335,7 +342,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
               encryptedRefreshToken,
               tokenExpiresAt,
               scopes: scope,
-              replyTrackingEnabled: false,
+              replyTrackingEnabled: replyEnabled,
               status: "CONNECTED",
               lastError: null,
             },
@@ -356,7 +363,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
               encryptedRefreshToken,
               tokenExpiresAt,
               scopes: scope,
-              replyTrackingEnabled: false,
+              replyTrackingEnabled: replyEnabled,
               gmailHistoryId: null,
               bodyCacheMode: (payload.bodyCacheMode as any) || "METADATA_ONLY",
               bodyCacheRetentionDays: 30,
@@ -397,6 +404,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
               encryptedRefreshToken,
               tokenExpiresAt,
               scopes: scope,
+              replyTrackingEnabled: replyEnabled,
               status: "CONNECTED",
               lastError: null,
             },
@@ -419,7 +427,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
               encryptedRefreshToken,
               tokenExpiresAt,
               scopes: scope,
-              replyTrackingEnabled: false,
+              replyTrackingEnabled: replyEnabled,
               gmailHistoryId: null,
               bodyCacheMode: (payload.bodyCacheMode as any) || "METADATA_ONLY",
               bodyCacheRetentionDays: 30,
@@ -603,6 +611,81 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       },
     }).catch(() => undefined);
     return { ok: true, senderId: sender.id, sentTo: to };
+  });
+
+  // POST /crm/email/sync-now — enqueue metadata-only reply sync (opt-in connections only)
+  app.post("/crm/email/sync-now", async (req, reply) => {
+    const user = await requireAuth(req, reply); if (!user) return;
+    const body = (req.body as any) || {};
+    const explicitId = body?.connectionId ? String(body.connectionId) : null;
+    let targets: { id: string; scope: "USER" | "TENANT"; userId: string | null }[] = [];
+    if (explicitId) {
+      const r = await db.crmEmailConnection.findFirst({ where: { id: explicitId, tenantId: user.tenantId }, select: { id: true, scope: true, userId: true, replyTrackingEnabled: true, status: true } });
+      if (!r) return reply.code(404).send({ error: "connection_not_found" });
+      const allowed = (r.scope === "USER" && r.userId === user.sub) || (r.scope === "TENANT" && canManageTenantSender(user));
+      if (!allowed) return reply.code(403).send({ error: "forbidden" });
+      if (!r.replyTrackingEnabled || r.status !== "CONNECTED") return reply.code(400).send({ error: "not_enabled" });
+      targets = [{ id: r.id, scope: r.scope as any, userId: r.userId }];
+    } else {
+      const rows = await db.crmEmailConnection.findMany({
+        where: {
+          tenantId: user.tenantId,
+          replyTrackingEnabled: true,
+          status: "CONNECTED",
+          OR: [
+            { scope: "USER", userId: user.sub },
+            ...(canManageTenantSender(user) ? [{ scope: "TENANT" as const }] : []),
+          ],
+        },
+        select: { id: true, scope: true, userId: true },
+        take: 20,
+      });
+      targets = rows as any;
+    }
+    for (const t of targets) {
+      await emailSyncQueue.add("sync", { tenantId: user.tenantId, connectionId: t.id }, { removeOnComplete: 100, removeOnFail: 100 });
+    }
+    return { ok: true, queued: targets.length };
+  });
+
+  // GET /crm/email/replies/recent — metadata-only recent inbound messages
+  app.get("/crm/email/replies/recent", async (req, reply) => {
+    const user = await requireAuth(req, reply); if (!user) return;
+    const limit = Math.min(50, Math.max(1, Number((req.query as any)?.limit ?? 20)));
+    const isAdmin = canManageTenantSender(user);
+    const rows = await db.crmEmailMessage.findMany({
+      where: {
+        tenantId: user.tenantId,
+        direction: "INBOUND",
+        ...(isAdmin ? {} : { OR: [{ userId: user.sub }, { thread: { userId: user.sub } }] }),
+      },
+      orderBy: [{ receivedAt: "desc" }, { createdAt: "desc" }],
+      take: limit,
+      select: {
+        id: true,
+        gmailMessageId: true,
+        direction: true,
+        subject: true,
+        fromEmail: true,
+        toEmail: true,
+        previewSnippet: true,
+        receivedAt: true,
+        contactId: true,
+        thread: { select: { gmailThreadId: true } },
+      },
+    });
+    const replies = rows.map((r) => ({
+      id: r.id,
+      gmailMessageId: r.gmailMessageId,
+      gmailThreadId: r.thread?.gmailThreadId || null,
+      subject: r.subject || null,
+      fromEmail: r.fromEmail || null,
+      toEmail: r.toEmail || null,
+      previewSnippet: r.previewSnippet || null,
+      receivedAt: r.receivedAt || null,
+      contactId: r.contactId || null,
+    }));
+    return { replies };
   });
 
   // POST /crm/email/send — basic send (Phase 1).
