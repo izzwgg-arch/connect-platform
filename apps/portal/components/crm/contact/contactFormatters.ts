@@ -25,24 +25,26 @@ export function initials(name: string): string {
 }
 
 export function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  if (!iso) return "-";
+  const d = new Date(iso as any);
+  if (isNaN(d.getTime())) return String(iso).slice(0, 10) || "-";
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 export function formatDateTime(iso: string): string {
-  const d = new Date(iso);
-  return (
-    d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) +
-    " " +
-    d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
-  );
+  if (!iso) return "-";
+  const d = new Date(iso as any);
+  if (isNaN(d.getTime())) return String(iso).slice(0, 16) || "-";
+  const ds = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const ts = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return ds + " " + ts;
 }
 
 export function formatTimeAgo(iso: string): string {
-  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (!iso) return "unknown";
+  const d = new Date(iso as any);
+  if (isNaN(d.getTime())) return "unknown";
+  const mins = Math.floor((Date.now() - d.getTime()) / 60000);
   if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m ago`;
   const hrs = Math.floor(mins / 60);
@@ -76,7 +78,9 @@ export function ownerLabel(
 }
 
 export function callbackTimeLabel(iso: string): { label: string; urgent: boolean } {
-  const d = new Date(iso);
+  if (!iso) return { label: "-", urgent: false };
+  const d = new Date(iso as any);
+  if (isNaN(d.getTime())) return { label: String(iso), urgent: false };
   const diff = d.getTime() - Date.now();
   const absDiff = Math.abs(diff) / 1000;
 
