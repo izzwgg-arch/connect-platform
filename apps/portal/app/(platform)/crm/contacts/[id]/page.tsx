@@ -15,8 +15,11 @@ import {
   CRMSection,
   crm,
   ContactContextBar,
-  ContactWorkspaceHeader,
-  ContactStickyActionBar,
+  LiveWorkspaceActionBar,
+  LiveWorkspaceContactHeader,
+  LiveWorkspaceNotePanel,
+  LiveWorkspaceOutcomePanel,
+  LiveWrapUpBar,
   ContactTimeline,
   ContactSmsPanel,
   ContactRelationshipHealth,
@@ -36,6 +39,7 @@ import {
   stageLabel,
   cn,
 } from "../../../../../components/crm";
+import { DISPOSITION_OPTIONS, type LiveContact } from "../../../../../components/crm/live";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { apiGet, apiPatch, apiPost, apiDelete } from "../../../../../services/apiClient";
 import { useAppContext } from "../../../../../hooks/useAppContext";
@@ -159,6 +163,19 @@ function CrmContactDetailInner() {
   const noteComposerRef = useRef<HTMLDivElement>(null);
   const smsPanelRef = useRef<HTMLDivElement>(null);
   const tasksPanelRef = useRef<HTMLDivElement>(null);
+  const outcomePanelRef = useRef<HTMLDivElement>(null);
+  const [noteSavedAt, setNoteSavedAt] = useState<Date | null>(null);
+
+  // Live outcome workflow state (unified with live-call workspace)
+  const [disposition, setDisposition] = useState("");
+  const [outcomeNote, setOutcomeNote] = useState("");
+  const [followUpOption, setFollowUpOption] = useState<"" | "today" | "tomorrow" | "nextweek" | "custom">("");
+  const [followUpCustom, setFollowUpCustom] = useState("");
+  const [nextStage, setNextStage] = useState<CrmStage | "">("");
+  const [savingOutcome, setSavingOutcome] = useState(false);
+  const [outcomeSaved, setOutcomeSaved] = useState(false);
+  const [outcomeError, setOutcomeError] = useState("");
+  const saveOutcomeRef = useRef<() => Promise<void>>(async () => {});
 
   // Inline note edit
   const [editingNoteLinkedId, setEditingNoteLinkedId] = useState<string | null>(null);
@@ -252,6 +269,22 @@ function CrmContactDetailInner() {
     loadTasks();
     loadDuplicates();
   }, [loadContact, loadTimeline, loadTasks, loadDuplicates]);
+
+  // Draft note autosave keyed by contact id (shared UX with live workspace)
+  useEffect(() => {
+    if (!id || noteText) return;
+    try {
+      const v = localStorage.getItem(`crm:live:note:${id}`);
+      if (v) setNoteText(v);
+    } catch {}
+  }, [id]);
+  useEffect(() => {
+    if (!id) return;
+    try {
+      if (noteText) localStorage.setItem(`crm:live:note:${id}`, noteText);
+      else localStorage.removeItem(`crm:live:note:${id}`);
+    } catch {}
+  }, [id, noteText]);
 
   useEffect(() => {
     let cancelled = false;
@@ -413,6 +446,7 @@ function CrmContactDetailInner() {
     try {
       await apiPost(`/crm/contacts/${id}/notes`, { body: noteText.trim() });
       setNoteText("");
+      setNoteSavedAt(new Date());
       await loadTimeline();
     } catch (e: any) {
       setNoteError(e?.message || "Failed to post note");
@@ -681,9 +715,34 @@ function CrmContactDetailInner() {
     smsPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   };
 
-  const handleCall = () => {
-    const num = primaryPhoneRow?.numberRaw;
-    if (!num || !sipReady) return;
+  const [callerIdSelected, setCallerIdSelected] = useState<string | null>(null);
+  const [callerIdChecked, setCallerIdChecked] = useState(false);
+  const [callerIdLoading, setCallerIdLoading] = useState(false);
+  const primaryPhone = primaryPhoneRow?.numberRaw ?? null;
+  const sipNotice = sipReady || !primaryPhone
+    ? null
+    : (phone.regState === "connecting" || phone.regState === "registering")
+      ? "Phone connecting — call will dial once ready"
+      : "Phone not registered — open the dialer to reconnect";
+
+  const handleCall = async () => {
+    const num = primaryPhone;
+    if (!num) return;
+    if (!callerIdChecked) {
+      setCallerIdLoading(true);
+      try {
+        const res = await apiPost<{ callerId: string | null }>(`/crm/calls/originate`, {
+          destination: num,
+          contactId: id,
+        });
+        setCallerIdSelected(res.callerId ?? null);
+      } catch {
+        setCallerIdSelected(null);
+      } finally {
+        setCallerIdChecked(true);
+        setCallerIdLoading(false);
+      }
+    }
     window.dispatchEvent(new CustomEvent("crm:dial", { detail: { target: num } }));
   };
 
@@ -691,6 +750,90 @@ function CrmContactDetailInner() {
     if (returnTo) router.push(returnTo);
     else router.push("/crm/contacts");
   };
+
+  function disabledOutcome() {
+    return !id || !!(contact?.archivedAt != null || contact?.active === false);
+  }
+
+  async function saveOutcome() {
+    if (disabledOutcome() || !disposition) return;
+    setSavingOutcome(true);
+    setOutcomeError("");
+
+    let followUpAt: string | null = null;
+    if (followUpOption === "today") {
+      const d = new Date();
+      d.setHours(17, 0, 0, 0);
+      followUpAt = d.toISOString();
+    } else if (followUpOption === "tomorrow") {
+      const d = new Date();
+      d.setDate(d.getDate() + 1);
+      d.setHours(9, 0, 0, 0);
+      followUpAt = d.toISOString();
+    } else if (followUpOption === "nextweek") {
+      const d = new Date();
+      const day = d.getDay();
+      const daysToMonday = day === 0 ? 1 : 8 - day;
+      d.setDate(d.getDate() + daysToMonday);
+      d.setHours(9, 0, 0, 0);
+      followUpAt = d.toISOString();
+    } else if (followUpOption === "custom" && followUpCustom) {
+      followUpAt = new Date(followUpCustom).toISOString();
+    }
+
+    try {
+      await apiPost(`/crm/contacts/${id}/disposition`, {
+        disposition,
+        note: outcomeNote.trim() || undefined,
+        followUpAt: followUpAt ?? undefined,
+        nextStage: nextStage || undefined,
+      });
+      setOutcomeSaved(true);
+      setOutcomeNote("");
+      setFollowUpOption("");
+      setFollowUpCustom("");
+      await loadContact();
+      await loadTasks();
+      await loadTimeline();
+      setTimeout(() => setOutcomeSaved(false), 4000);
+    } catch {
+      setOutcomeError("Save failed — please try again.");
+    } finally {
+      setSavingOutcome(false);
+    }
+  }
+
+  useEffect(() => {
+    saveOutcomeRef.current = saveOutcome;
+  });
+
+  // Keyboard shortcuts: 1–6 set disposition, Enter to save (ignored in inputs)
+  useEffect(() => {
+    function onAnyKey(e: KeyboardEvent) {
+      const tgt = e.target as HTMLElement;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(tgt.tagName)) return;
+      if (tgt.getAttribute("contenteditable") === "true") return;
+      if (!savingOutcome && !disabledOutcome()) {
+        if (e.key >= "1" && e.key <= "6") {
+          const idx = parseInt(e.key, 10) - 1;
+          const d = (DISPOSITION_OPTIONS as readonly string[])[idx];
+          if (d) {
+            e.preventDefault();
+            setDisposition(d);
+            return;
+          }
+        }
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        if (!savingOutcome && disposition) {
+          e.preventDefault();
+          void saveOutcomeRef.current();
+        }
+      }
+    }
+    window.addEventListener("keydown", onAnyKey);
+    return () => window.removeEventListener("keydown", onAnyKey);
+  }, [disposition, savingOutcome]);
 
   const lastTimelineEvent = timeline[0] ?? null;
   const lastInteractionLabel =
@@ -721,7 +864,7 @@ function CrmContactDetailInner() {
     if (nextStep.action === "scroll_notes") scrollToNoteComposer();
   };
 
-  return (
+  return (<>
     <CRMPageShell innerClassName={crm.pageInnerContact}>
       <div className="space-y-4">
         <ContactContextBar
@@ -731,62 +874,72 @@ function CrmContactDetailInner() {
           onBack={handleBack}
         />
 
-        <ContactWorkspaceHeader
-          contact={contact}
-          stage={stage}
-          isArchived={isArchived}
-          nextStep={nextStep}
-          lastInteractionLabel={lastInteractionLabel}
-          lastInteractionAt={lastInteractionAt}
-          queueMember={queueMember}
-          campaignName={campaignName}
-          canLiveWorkspace={canLiveWorkspace}
-          sipReady={sipReady}
-          primaryPhone={primaryPhoneRow?.numberRaw ?? null}
-          primaryEmail={primaryEmailRow?.email ?? null}
-          workspaceHref={workspaceHref}
-          onCall={handleCall}
-          onSms={scrollToSms}
-          onNote={scrollToNoteComposer}
-          onTask={() => {
-            setAddingTask(true);
-            scrollToTasks();
-          }}
-          onEdit={() => setEditing(true)}
-          onArchive={handleArchiveContact}
-          onRestore={handleRestoreContact}
-          archivePosting={archivePosting}
-          restorePosting={restorePosting}
-          isAdmin={isAdmin}
-          editing={editing}
-          saving={saving}
-          onSave={handleSave}
-          onCancelEdit={() => {
-            setEditing(false);
-            setSaveError(null);
-          }}
-        />
+        {contact && (
+          <>
+            <LiveWorkspaceContactHeader
+              contact={contact as unknown as LiveContact}
+              isArchived={isArchived}
+              callerIdChecked={callerIdChecked}
+              callerIdSelected={callerIdSelected}
+              callerIdLoading={callerIdLoading}
+              sipNotice={sipNotice}
+              onCall={() => void handleCall()}
+              profileHref={`/crm/contacts/${contact.id}`}
+              campaignName={campaignName}
+              queueLabel={null}
+            />
+            <div className="flex justify-end gap-2">
+              {!isArchived ? (
+                <>
+                  <button type="button" className={crm.btnSecondary} onClick={() => setEditing(true)}>
+                    Edit contact
+                  </button>
+                  <button
+                    type="button"
+                    className={crm.btnSecondary}
+                    onClick={handleArchiveContact}
+                    disabled={archivePosting}
+                    title="Archive contact"
+                  >
+                    {archivePosting ? "Archiving…" : "Archive"}
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className={crm.btnSecondary}
+                  onClick={handleRestoreContact}
+                  disabled={restorePosting}
+                  title="Restore contact"
+                >
+                  {restorePosting ? "Restoring…" : "Restore"}
+                </button>
+              )}
+            </div>
+          </>
+        )}
 
         <div ref={headerSentinelRef} className="h-px w-full" aria-hidden />
 
-        <ContactStickyActionBar
-          visible={stickyVisible}
-          contactName={contact.displayName}
-          isArchived={isArchived}
-          canCall={!!primaryPhoneRow && sipReady}
-          canSms={!contact.doNotSms && contact.phones.length > 0}
-          canWorkspace={canLiveWorkspace}
-          hasEmail={!!primaryEmailRow}
-          workspaceHref={workspaceHref}
-          returnTo={returnTo}
-          onCall={handleCall}
-          onSms={scrollToSms}
-          onNote={scrollToNoteComposer}
-          onTask={() => {
-            setAddingTask(true);
-            scrollToTasks();
-          }}
-        />
+        {contact && (
+          <LiveWorkspaceActionBar
+            contactName={contact.displayName}
+            isArchived={isArchived}
+            canCall={!!primaryPhoneRow && sipReady}
+            canSms={!contact.doNotSms && contact.phones.length > 0}
+            hasDisposition={!!disposition}
+            queueBackHref={returnTo && returnTo.startsWith("/crm/queue") ? returnTo : null}
+            contactProfileHref={`/crm/contacts/${contact.id}`}
+            onCall={() => void handleCall()}
+            onSms={scrollToSms}
+            onNote={scrollToNoteComposer}
+            onTask={() => {
+              setAddingTask(true);
+              scrollToTasks();
+            }}
+            onDisposition={() => outcomePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          />
+        )}
 
       {editing && !isArchived && (
         <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.875rem" }}>
@@ -825,45 +978,18 @@ function CrmContactDetailInner() {
 
         <div className="flex min-w-0 flex-col gap-4 order-2 xl:order-1">
           <div ref={noteComposerRef}>
-            <CRMCard padding="lg">
-              <CRMSection title="Quick note" description="Posts to the relationship timeline">
-                {isArchived ? (
-                  <p className="text-sm text-crm-muted">Notes are read-only while archived.</p>
-                ) : (
-                  <div className="flex flex-col gap-2">
-                    <textarea
-                      ref={noteTextareaRef}
-                      value={noteText}
-                      onChange={(e) => setNoteText(e.target.value)}
-                      rows={2}
-                      placeholder="Log an update for the team…"
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                          e.preventDefault();
-                          handlePostNote();
-                        }
-                      }}
-                      className={crm.input}
-                    />
-                    <div className="flex items-center justify-between gap-2">
-                      {noteError ? (
-                        <span className="text-xs text-crm-danger">{noteError}</span>
-                      ) : (
-                        <span className="text-xs text-crm-muted">⌘↵ to post</span>
-                      )}
-                      <button
-                        type="button"
-                        onClick={handlePostNote}
-                        disabled={notePosting || !noteText.trim()}
-                        className={crm.btnPrimary}
-                      >
-                        {notePosting ? "Posting…" : "Add note"}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </CRMSection>
-            </CRMCard>
+            <LiveWorkspaceNotePanel
+              ref={noteTextareaRef}
+              noteBody={noteText}
+              setNoteBody={setNoteText}
+              savingNote={notePosting}
+              noteSavedAt={noteSavedAt}
+              onSave={handlePostNote}
+              disabled={isArchived}
+            />
+            {noteError ? (
+              <p className="mt-1 text-xs text-crm-danger">{noteError}</p>
+            ) : null}
           </div>
 
           <ContactSmsPanel
@@ -882,6 +1008,28 @@ function CrmContactDetailInner() {
             smsSuccess={smsSuccess}
             onSend={handleSendSms}
           />
+          <div ref={outcomePanelRef}>
+            <LiveWorkspaceOutcomePanel
+              id="contact-outcome"
+              contact={contact as unknown as LiveContact}
+              disposition={disposition}
+              setDisposition={setDisposition}
+              outcomeNote={outcomeNote}
+              setOutcomeNote={setOutcomeNote}
+              followUpOption={followUpOption}
+              setFollowUpOption={setFollowUpOption}
+              followUpCustom={followUpCustom}
+              setFollowUpCustom={setFollowUpCustom}
+              nextStage={nextStage}
+              setNextStage={setNextStage}
+              savingOutcome={savingOutcome}
+              outcomeSaved={outcomeSaved}
+              outcomeError={outcomeError}
+              isPowerMode={false}
+              onSave={() => void saveOutcomeRef.current()}
+              disabled={disabledOutcome()}
+            />
+          </div>
 
           <ContactTimeline
             events={timeline}
@@ -1413,5 +1561,13 @@ function CrmContactDetailInner() {
         </div>
       )}
     </CRMPageShell>
+    <LiveWrapUpBar
+      visible={Boolean(contact)}
+      canSave={Boolean(disposition) && !savingOutcome && !isArchived}
+      saving={savingOutcome}
+      isPowerMode={false}
+      onSave={() => void saveOutcomeRef.current()}
+    />
+    </>
   );
 }
