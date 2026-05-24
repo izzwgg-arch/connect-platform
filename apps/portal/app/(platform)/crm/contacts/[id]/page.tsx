@@ -1282,7 +1282,12 @@ function CrmContactDetailInner() {
                         {task.dueAt && (
                           <span style={{ fontSize: "0.75rem", color: isDue ? "#ef4444" : "var(--text-dim)", display: "flex", alignItems: "center", gap: "0.2rem" }}>
                             <Clock size={10} />
-                            {new Date(task.dueAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                            {(() => {
+                              const d = new Date(task.dueAt as any);
+                              return isNaN(d.getTime())
+                                ? String(task.dueAt).slice(0, 10)
+                                : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                            })()}
                             {isDue && " · overdue"}
                           </span>
                         )}
