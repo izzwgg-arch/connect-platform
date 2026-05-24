@@ -160,12 +160,15 @@ function FailedPaymentBanner({ invoice }: { invoice: any }) {
 }
 
 export default function BillingOverviewPage() {
-  const { user } = useAppContext();
-  const settings = useAsyncResource(() => apiGet<any>("/billing/settings"), []);
-  const invoices = useAsyncResource(() => apiGet<any[]>("/billing/platform/invoices"), []);
-  const methods = useAsyncResource(() => apiGet<any[]>("/billing/payment-methods"), []);
-  const usage = useAsyncResource(() => apiGet<any>("/billing/usage/current"), []);
-  const invoicePreview = useAsyncResource(() => apiGet<InvoicePreview>("/billing/invoice-preview"), []);
+  const { user, tenantId, tenant } = useAppContext();
+  const tenantScopeKey = tenantId;
+  const tenantResourceOpts = { keepPreviousData: false as const };
+
+  const settings = useAsyncResource(() => apiGet<any>("/billing/settings"), [tenantScopeKey], tenantResourceOpts);
+  const invoices = useAsyncResource(() => apiGet<any[]>("/billing/platform/invoices"), [tenantScopeKey], tenantResourceOpts);
+  const methods = useAsyncResource(() => apiGet<any[]>("/billing/payment-methods"), [tenantScopeKey], tenantResourceOpts);
+  const usage = useAsyncResource(() => apiGet<any>("/billing/usage/current"), [tenantScopeKey], tenantResourceOpts);
+  const invoicePreview = useAsyncResource(() => apiGet<InvoicePreview>("/billing/invoice-preview"), [tenantScopeKey], tenantResourceOpts);
 
   const allInvoices = invoices.status === "success" ? invoices.data : [];
   const openBalance = allInvoices
@@ -192,13 +195,14 @@ export default function BillingOverviewPage() {
   const timelineId = worst?.id || (allInvoices[0]?.id ?? null);
   const timeline = useAsyncResource<any | null>(
     () => (timelineId ? apiGet<any>(`/billing/platform/invoices/${timelineId}`) : Promise.resolve(null)),
-    [timelineId],
+    [timelineId, tenantScopeKey],
+    tenantResourceOpts,
   );
 
   return (
     <PermissionGate permission="can_view_billing_overview" fallback={<div className="state-box">You do not have billing access.</div>}>
       <div className="billing-workspace" data-testid="billing-tenant-overview-loaded">
-        <PageHeader title="Billing" />
+        <PageHeader title="Billing" subtitle={tenant?.name ? `${tenant.name} billing` : undefined} />
 
         {loading ? <LoadingSkeleton rows={4} /> : null}
         {settings.status === "error" ? <ErrorState message={settings.error} /> : null}
@@ -383,39 +387,6 @@ export default function BillingOverviewPage() {
               </div>
             )}
           </div>
-        </section>
-
-        {/* Trust & security footer */}
-        <section className="bw-trust">
-          <div className="bw-trust-item"><strong>Secure & Encrypted</strong><span>256-bit SSL protection</span></div>
-          <div className="bw-trust-item"><strong>PCI Compliant</strong><span>Your data is safe with us</span></div>
-          <div className="bw-trust-item"><strong>AutoPay Protection</strong><span>Retry and reminders</span></div>
-          <div className="bw-trust-item"><strong>Trusted</strong><span>Reliable payments</span></div>
-          <div className="bw-trust-accept">
-            <span className="bw-trust-accept-label">We accept</span>
-            <div className="bw-card-logos" aria-label="Accepted cards">
-              {/* Visa */}
-              <svg className="cc-logo visa" viewBox="0 0 64 20" role="img" aria-label="Visa"><path fill="#1A1F71" d="M28.4 19.3h-5.2l3.3-18.6h5.2l-3.3 18.6zM22.1.7l-5 12.8-.6-3.2L14.1 2s-.2-1.3-1.7-1.3H6.1L6 1c1.7.4 3.6 1 4.8 1.7.7.4.9.7 1.1 1.5L14.6 19h5.7L25  .7h-2.9zM52.9 15.4c1.1-.6 2-1.5 2.6-2.6.6-1.1.9-2.4.9-3.7 0-1.3-.3-2.6-.9-3.7-.6-1.1-1.5-2-2.6-2.6C50.9 1.7 48.8 1 46.1 1h-8.1l-3.3 18.3h5.2l1.1-6h2.4c.6 0 1.1 0 1.5-.1l2.6 6.1h5.7l-3.1-6.8zm-6.7-3.5c-.3 0-.6.1-.9.1h-1.9l1-5.4h2.2c1.1 0 2 .2 2.4.6.5.4.7 1 .7 1.7 0 1.5-1.1 3-3.5 3zM59.1.7L56 8.8l-1.3-6.6c-.3-1.3-1.2-1.6-2.2-1.6H46L45.9 2c1.9.5 3.7 1 5.3 1.7.8.3 1 .7 1.1 1.5L55.9 19h5.7L63.9.7h-4.8z"/></svg>
-              {/* Mastercard */}
-              <svg className="cc-logo mc" viewBox="0 0 60 20" role="img" aria-label="Mastercard">
-                <circle cx="26" cy="10" r="6" fill="#EB001B"/>
-                <circle cx="34" cy="10" r="6" fill="#F79E1B"/>
-                <path d="M30 4a6 6 0 0 0 0 12a6 6 0 0 0 0-12z" fill="#FF5F00"/>
-              </svg>
-              {/* American Express */}
-              <svg className="cc-logo amex" viewBox="0 0 64 20" role="img" aria-label="American Express">
-                <rect x="0.5" y="2" width="30" height="16" rx="3" fill="#2E77BC"/>
-                <path fill="#fff" d="M4 14l2.2-8h3.2l2.2 8H9.8l-.3-1.1H6.5L6.1 14H4zm3-3.1h1.9L8 7.8 7 10.9zM12.5 14l1.4-8h5.7l-.4 2.1h-3.5l-.1.6h3.2l-.4 2h-3.2l-.1.7h3.6L18.2 14h-5.7z"/>
-              </svg>
-              {/* Discover */}
-              <svg className="cc-logo discover" viewBox="0 0 64 20" role="img" aria-label="Discover">
-                <rect x="0.5" y="2" width="30" height="16" rx="3" fill="#F47216"/>
-                <circle cx="16" cy="10" r="5.5" fill="#fff"/>
-                <circle cx="17.5" cy="10" r="5.5" fill="#F47216"/>
-              </svg>
-            </div>
-          </div>
-          <div className="bw-trust-sola">Secured by SOLA · Your payment data is encrypted and securely processed.</div>
         </section>
       </div>
     </PermissionGate>

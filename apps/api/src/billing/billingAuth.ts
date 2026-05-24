@@ -14,6 +14,36 @@ export function canAccessPlatformAdminBillingRoutes(role: string | undefined): b
   return String(role || "") === "SUPER_ADMIN";
 }
 
+type TenantBillingScopeInput = {
+  tenantId: string;
+  role?: string;
+};
+
+type TenantBillingScopeRequest = {
+  headers?: Record<string, unknown>;
+  query?: Record<string, unknown>;
+};
+
+/** Tenant billing reads/writes honour super-admin workspace selection (x-tenant-context / ?tenantId=). */
+export function resolveEffectiveTenantBillingContext(
+  req: TenantBillingScopeRequest,
+  user: TenantBillingScopeInput,
+): string {
+  if (String(user.role || "") !== "SUPER_ADMIN") return user.tenantId;
+
+  const queryTenant = String(req.query?.tenantId || "").trim();
+  if (queryTenant && !queryTenant.startsWith("vpbx:") && queryTenant !== "local") {
+    return queryTenant;
+  }
+
+  const headerTenant = String(req.headers?.["x-tenant-context"] || "").trim();
+  if (headerTenant && !headerTenant.startsWith("vpbx:") && headerTenant !== "local") {
+    return headerTenant;
+  }
+
+  return user.tenantId;
+}
+
 export type QueueBillingEmailInput = {
   tenantId: string;
   to: string;

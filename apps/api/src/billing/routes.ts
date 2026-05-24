@@ -50,7 +50,12 @@ import {
 } from "./solaConfigPolicy";
 import { billingSolaCardknoxWebhookUrl } from "./solaPublicUrls";
 import { billingInvoicePublicPayUrl, queuePaymentLinkEmail } from "./billingEmailLifecycle";
-import { buildBillingEmailJobCreateData, canAccessPlatformAdminBillingRoutes, canAccessTenantBillingRoutes } from "./billingAuth";
+import {
+  buildBillingEmailJobCreateData,
+  canAccessPlatformAdminBillingRoutes,
+  canAccessTenantBillingRoutes,
+  resolveEffectiveTenantBillingContext,
+} from "./billingAuth";
 import { invoiceBrandingPutSchema, normalizeBrandingPayload, resolveInvoiceEmailBranding } from "./invoiceBranding";
 import { saveAdminCardWithSut } from "./adminCardSave";
 import { registerBillingPublicPayRoutes } from "./publicPayRoutes";
@@ -113,6 +118,8 @@ type BillingUser = {
   role?: string;
 };
 
+type TenantBillingContext = BillingUser & { effectiveTenantId: string };
+
 function user(req: any): BillingUser {
   return req.user as BillingUser;
 }
@@ -125,13 +132,13 @@ function canTenantBilling(u: BillingUser): boolean {
   return canAccessTenantBillingRoutes(u.role);
 }
 
-async function requireTenantBilling(req: any, reply: any): Promise<BillingUser | null> {
+async function requireTenantBilling(req: any, reply: any): Promise<TenantBillingContext | null> {
   const u = user(req);
   if (!canTenantBilling(u)) {
     reply.code(403).send({ error: "forbidden" });
     return null;
   }
-  return u;
+  return { ...u, effectiveTenantId: resolveEffectiveTenantBillingContext(req, u) };
 }
 
 async function requirePlatformBilling(req: any, reply: any): Promise<BillingUser | null> {
@@ -376,13 +383,13 @@ export async function registerBillingRoutes(app: FastifyInstance) {
   app.get("/billing/invoice-preview", async (req, reply) => {
     const u = await requireTenantBilling(req, reply);
     if (!u) return;
-    return buildBillingInvoicePreview({ tenantId: u.tenantId });
+    return buildBillingInvoicePreview({ tenantId: u.effectiveTenantId });
   });
 
   app.get("/billing/settings", async (req, reply) => {
     const u = await requireTenantBilling(req, reply);
     if (!u) return;
-    return ensureTenantBillingSettings(u.tenantId);
+    return ensureTenantBillingSettings(u.effectiveTenantId);
   });
 
   app.put("/billing/settings/branding", async (req, reply) => {
@@ -391,24 +398,24 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const parsed = invoiceBrandingPutSchema.parse(req.body || {});
     const data = normalizeBrandingPayload(parsed);
     if (!Object.keys(data).length) {
-      return ensureTenantBillingSettings(u.tenantId);
+      return ensureTenantBillingSettings(u.effectiveTenantId);
     }
-    await ensureTenantBillingSettings(u.tenantId);
-    return (db as any).tenantBillingSettings.update({ where: { tenantId: u.tenantId }, data });
+    await ensureTenantBillingSettings(u.effectiveTenantId);
+    return (db as any).tenantBillingSettings.update({ where: { tenantId: u.effectiveTenantId }, data });
   });
 
   app.get("/billing/usage/current", async (req, reply) => {
     const u = await requireTenantBilling(req, reply);
     if (!u) return;
-    const settings = await ensureTenantBillingSettings(u.tenantId);
-    return calculateTenantBillingUsage(u.tenantId, settings);
+    const settings = await ensureTenantBillingSettings(u.effectiveTenantId);
+    return calculateTenantBillingUsage(u.effectiveTenantId, settings);
   });
 
   app.get("/billing/platform/invoices", async (req, reply) => {
     const u = await requireTenantBilling(req, reply);
     if (!u) return;
     const invoices = await (db as any).billingInvoice.findMany({
-      where: { tenantId: u.tenantId },
+      where: { tenantId: u.effectiveTenantId },
       include: { lineItems: true, transactions: { orderBy: { createdAt: "desc" }, take: 5 } },
       orderBy: { createdAt: "desc" },
     });
@@ -423,7 +430,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     if (!u) return;
     const { id } = req.params as { id: string };
     const invoice = await (db as any).billingInvoice.findFirst({
-      where: { id, tenantId: u.tenantId },
+      where: { id, tenantId: u.effectiveTenantId },
       include: { lineItems: true, transactions: { orderBy: { createdAt: "desc" } }, events: { orderBy: { createdAt: "asc" } }, tenant: true },
     });
     if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
@@ -434,7 +441,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const u = await requireTenantBilling(req, reply);
     if (!u) return;
     const { id } = req.params as { id: string };
-    const invoice = await findBillingInvoiceForPdf(id, u);
+    const invoice = await findBillingInvoiceForPdf(id, u, u.effectiveTenantId);
     if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
     return sendBillingInvoicePdf(reply, invoice);
   });
@@ -444,7 +451,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     if (!u) return;
     const { id } = req.params as { id: string };
     const invoice = await (db as any).billingInvoice.findFirst({
-      where: { id, tenantId: u.tenantId },
+      where: { id, tenantId: u.effectiveTenantId },
       include: { tenant: { include: { billingSettings: true } } },
     });
     if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
@@ -469,7 +476,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     if (!u) return;
     const { id } = req.params as { id: string };
     const invoice = await (db as any).billingInvoice.findFirst({
-      where: { id, tenantId: u.tenantId },
+      where: { id, tenantId: u.effectiveTenantId },
       include: { tenant: { include: { billingSettings: true } } },
     });
     if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
@@ -501,14 +508,14 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const u = await requireTenantBilling(req, reply);
     if (!u) return;
     const { id } = req.params as { id: string };
-    const invoice = await (db as any).billingInvoice.findFirst({ where: { id, tenantId: u.tenantId } });
+    const invoice = await (db as any).billingInvoice.findFirst({ where: { id, tenantId: u.effectiveTenantId } });
     if (!invoice) return reply.code(404).send({ error: "invoice_not_found" });
     if (invoice.status === "PAID") return reply.code(400).send({ error: "invoice_already_paid" });
     if (billingLiveChargesDisabled()) return sendLiveChargesDisabled(reply);
-    const settings = await ensureTenantBillingSettings(u.tenantId);
+    const settings = await ensureTenantBillingSettings(u.effectiveTenantId);
     const method = settings.defaultPaymentMethodId
-      ? await (db as any).paymentMethod.findFirst({ where: { id: settings.defaultPaymentMethodId, tenantId: u.tenantId, active: true } })
-      : await (db as any).paymentMethod.findFirst({ where: { tenantId: u.tenantId, active: true, isDefault: true } });
+      ? await (db as any).paymentMethod.findFirst({ where: { id: settings.defaultPaymentMethodId, tenantId: u.effectiveTenantId, active: true } })
+      : await (db as any).paymentMethod.findFirst({ where: { tenantId: u.effectiveTenantId, active: true, isDefault: true } });
     if (!method) return reply.code(400).send({ error: "payment_method_required" });
 
     try {
@@ -530,7 +537,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const u = await requireTenantBilling(req, reply);
     if (!u) return;
     return (db as any).paymentMethod.findMany({
-      where: { tenantId: u.tenantId, active: true },
+      where: { tenantId: u.effectiveTenantId, active: true },
       select: { id: true, brand: true, last4: true, expMonth: true, expYear: true, cardholderName: true, billingZip: true, isDefault: true, lastUsedAt: true, createdAt: true },
       orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }],
     });
@@ -548,19 +555,19 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       makeDefault: z.boolean().default(true),
     }).parse(req.body || {});
     if (!input.xSut && !input.xTokenInput) return reply.code(400).send({ error: "sola_token_required" });
-    const adapter = await getBillingSolaAdapter(u.tenantId);
+    const adapter = await getBillingSolaAdapter(u.effectiveTenantId);
     const response = input.xSut
       ? await adapter.saveCardWithSut({ sut: input.xSut, exp: input.xExp, cardholderName: input.cardholderName, zip: input.billingZip })
       : await adapter.saveCardWithTokenInput({ tokenInput: input.xTokenInput, exp: input.xExp, cardholderName: input.cardholderName, zip: input.billingZip });
     if (!response.approved) return reply.code(402).send({ error: "card_save_failed", response });
     const method = await storeSolaPaymentMethod({
-      tenantId: u.tenantId,
+      tenantId: u.effectiveTenantId,
       response,
       cardholderName: input.cardholderName,
       billingZip: input.billingZip,
       makeDefault: input.makeDefault,
     });
-    await logBillingEvent({ tenantId: u.tenantId, type: "payment_method.saved", metadata: { paymentMethodId: method.id, brand: method.brand, last4: method.last4 } });
+    await logBillingEvent({ tenantId: u.effectiveTenantId, type: "payment_method.saved", metadata: { paymentMethodId: method.id, brand: method.brand, last4: method.last4 } });
     return { id: method.id, brand: method.brand, last4: method.last4, expMonth: method.expMonth, expYear: method.expYear, isDefault: method.isDefault };
   });
 
@@ -568,13 +575,13 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const u = await requireTenantBilling(req, reply);
     if (!u) return;
     const { id } = req.params as { id: string };
-    const method = await (db as any).paymentMethod.findFirst({ where: { id, tenantId: u.tenantId, active: true } });
+    const method = await (db as any).paymentMethod.findFirst({ where: { id, tenantId: u.effectiveTenantId, active: true } });
     if (!method) return reply.code(404).send({ error: "payment_method_not_found" });
-    await (db as any).paymentMethod.updateMany({ where: { tenantId: u.tenantId }, data: { isDefault: false } });
+    await (db as any).paymentMethod.updateMany({ where: { tenantId: u.effectiveTenantId }, data: { isDefault: false } });
     await (db as any).paymentMethod.update({ where: { id }, data: { isDefault: true } });
     await (db as any).tenantBillingSettings.upsert({
-      where: { tenantId: u.tenantId },
-      create: { tenantId: u.tenantId, defaultPaymentMethodId: id },
+      where: { tenantId: u.effectiveTenantId },
+      create: { tenantId: u.effectiveTenantId, defaultPaymentMethodId: id },
       update: { defaultPaymentMethodId: id },
     });
     return { ok: true };
@@ -584,7 +591,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const u = await requireTenantBilling(req, reply);
     if (!u) return;
     const { id } = req.params as { id: string };
-    await (db as any).paymentMethod.updateMany({ where: { id, tenantId: u.tenantId }, data: { active: false, isDefault: false } });
+    await (db as any).paymentMethod.updateMany({ where: { id, tenantId: u.effectiveTenantId }, data: { active: false, isDefault: false } });
     return { ok: true };
   });
 
@@ -592,7 +599,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const u = await requireTenantBilling(req, reply);
     if (!u) return;
     if (!ensureCredentialCrypto(reply)) return;
-    const resolved = await resolveBillingGatewayConfig(u.tenantId, { forTokenizing: true });
+    const resolved = await resolveBillingGatewayConfig(u.effectiveTenantId, { forTokenizing: true });
     return {
       configured: resolved.configured,
       enabled: resolved.enabled,

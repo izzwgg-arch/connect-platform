@@ -163,22 +163,6 @@
 .bw-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .bw-section-head h3 { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: -0.01em; }
 
-/* Trust footer */
-.bw-trust {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0,1fr));
-  gap: 10px;
-  align-items: center;
-  margin-top: 18px;
-}
-.bw-trust-item { background: var(--bw-surface); border: 1px solid var(--bw-border); border-radius: 14px; padding: 12px 14px; font-size: 12px; color: var(--bw-muted); box-shadow: var(--bw-shadow); }
-.bw-trust-item strong { display: block; color: var(--bw-text); font-size: 12px; }
-.bw-trust-accept { grid-column: span 2; display:flex; align-items: center; justify-content: flex-end; gap: 10px; color: var(--bw-muted); font-size: 12px; }
-.bw-trust-accept-label { margin-right: 6px; }
-.bw-card-logos { display: inline-flex; align-items: center; gap: 10px; }
-.cc-logo { height: 18px; width: auto; display: inline-block; filter: drop-shadow(0 1px 1px rgba(0,0,0,0.05)); }
-.bw-trust-sola { grid-column: 1 / -1; color: var(--bw-muted); font-size: 12px; text-align: center; }
-
 /* Timeline polish (scoped) */
 .billing-workspace .billing-timeline-v2 { position: relative; }
 .billing-workspace .billing-timeline-v2__item { display: grid; grid-template-columns: 28px 1fr; gap: 12px; padding: 10px 2px; }

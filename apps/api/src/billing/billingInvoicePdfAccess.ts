@@ -14,9 +14,16 @@ function safePdfFilename(invoice: { invoiceNumber?: string | null; id: string })
 }
 
 /** Load invoice for PDF when caller is tenant-scoped or platform SUPER_ADMIN. */
-export async function findBillingInvoiceForPdf(invoiceId: string, user: BillingInvoicePdfUser) {
-  const platformAdmin = canAccessPlatformAdminBillingRoutes(user.role);
-  const where = platformAdmin ? { id: invoiceId } : { id: invoiceId, tenantId: user.tenantId };
+export async function findBillingInvoiceForPdf(
+  invoiceId: string,
+  user: BillingInvoicePdfUser,
+  tenantScopeId?: string,
+) {
+  const where = tenantScopeId
+    ? { id: invoiceId, tenantId: tenantScopeId }
+    : canAccessPlatformAdminBillingRoutes(user.role)
+      ? { id: invoiceId }
+      : { id: invoiceId, tenantId: user.tenantId };
   return (db as any).billingInvoice.findFirst({
     where,
     include: { lineItems: true, tenant: { include: { billingSettings: true } } },

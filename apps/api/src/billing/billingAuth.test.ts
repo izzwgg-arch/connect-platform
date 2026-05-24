@@ -4,6 +4,7 @@ import {
   buildBillingEmailJobCreateData,
   canAccessPlatformAdminBillingRoutes,
   canAccessTenantBillingRoutes,
+  resolveEffectiveTenantBillingContext,
 } from "./billingAuth";
 
 test("TENANT_ADMIN can access tenant billing routes", () => {
@@ -46,6 +47,36 @@ test("queued billing email payload always sets invoiceId=null (EmailJob.invoiceI
   assert.equal(data.invoiceId, null);
   assert.equal(data.tenantId, "t1");
   assert.equal(data.toEmail, "a@b.com");
+});
+
+test("resolveEffectiveTenantBillingContext uses JWT tenant for non-super-admin", () => {
+  assert.equal(
+    resolveEffectiveTenantBillingContext(
+      { headers: { "x-tenant-context": "other-tenant" } },
+      { tenantId: "jwt-tenant", role: "TENANT_ADMIN" },
+    ),
+    "jwt-tenant",
+  );
+});
+
+test("resolveEffectiveTenantBillingContext honours x-tenant-context for super-admin", () => {
+  assert.equal(
+    resolveEffectiveTenantBillingContext(
+      { headers: { "x-tenant-context": "selected-tenant" } },
+      { tenantId: "jwt-tenant", role: "SUPER_ADMIN" },
+    ),
+    "selected-tenant",
+  );
+});
+
+test("resolveEffectiveTenantBillingContext ignores vpbx header for super-admin", () => {
+  assert.equal(
+    resolveEffectiveTenantBillingContext(
+      { headers: { "x-tenant-context": "vpbx:displaydex" } },
+      { tenantId: "jwt-tenant", role: "SUPER_ADMIN" },
+    ),
+    "jwt-tenant",
+  );
 });
 
 test("queued billing email payload uses null invoiceId when omitted", () => {
