@@ -12,10 +12,6 @@ overrides:
 importers:
 
   .:
-    dependencies:
-      fastify-raw-body:
-        specifier: ^5.0.0
-        version: 5.0.0
     devDependencies:
       eslint:
         specifier: ^9.36.0
