@@ -122,8 +122,7 @@ import { extractBillingInvoiceIdFromEmailJob, loadBillingInvoicePdfAttachmentFor
 import { applySolaWebhookToBillingInvoice, resolvePlatformBillingInvoiceForWebhookRef } from "./billing/solaBillingPayments";
 import { getBillingSolaAdapter } from "./billing/solaGateway";
 import { maskSolaSecretsForResponse } from "./billing/solaConfigMasking";
-import { registerOnboardingPublicRoutes } from "./onboarding/publicRoutes";
-import { registerOnboardingProvisioningRoutes } from "./onboarding/provisioningRoutes";
+ 
 import {
   resolveSolaPutApiBaseUrl,
   resolveTenantPutAuthMode,

@@ -3948,3 +3948,95 @@ model UserCustomRole {
   @@index([tenantId, userId])
   @@index([tenantId, customRoleId])
 }
+
+enum OnboardingStatus {
+  INVITE_SENT
+  IN_PROGRESS
+  SUBMITTED
+  AWAITING_PBX_SETUP
+  AWAITING_PORT
+  AWAITING_PAYMENT
+  READY_TO_SYNC
+  ACTIVE
+  COMPLETED
+  CANCELED
+}
+
+enum OnboardingEventType {
+  CREATED
+  AUTOSAVED
+  FILE_UPLOADED
+  STATUS_CHANGED
+  CHECKLIST_UPDATED
+  NOTES_UPDATED
+  SUBMITTED
+}
+
+model OnboardingSubmission {
+  id                    String                     @id @default(cuid())
+  publicToken           String?                    @unique
+  companyName           String?
+  contactFirstName      String?
+  contactLastName       String?
+  mainEmail             String?
+  billingEmail          String?
+  mainPhone             String?
+  phoneNumberChoice     String?
+  smsEnabled            Boolean                    @default(false)
+  smsMonthlyPriceCents  Int                        @default(0)
+  status                OnboardingStatus           @default(INVITE_SENT)
+  currentStep           String?
+  answers               Json?
+  provisioningChecklist Json?
+  internalNotes         Json?
+  cardTokenPreview      String?
+  createdTenantId       String?
+  submittedAt           DateTime?
+  createdAt             DateTime                   @default(now())
+  updatedAt             DateTime                   @updatedAt
+
+  requestedExtensions   OnboardingRequestedExtension[]
+  uploadedFiles         OnboardingUploadedFile[]
+  events                OnboardingEvent[]
+}
+
+model OnboardingRequestedExtension {
+  id           String               @id @default(cuid())
+  submissionId String
+  displayName  String?
+  extNumber    String
+  email        String?
+  smsEnabled   Boolean              @default(false)
+  createdAt    DateTime             @default(now())
+
+  submission   OnboardingSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId])
+}
+
+model OnboardingUploadedFile {
+  id           String               @id @default(cuid())
+  submissionId String
+  filename     String
+  mimeType     String?
+  sizeBytes    Int
+  storageKey   String
+  kind         String
+  createdAt    DateTime             @default(now())
+
+  submission   OnboardingSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId])
+}
+
+model OnboardingEvent {
+  id           String               @id @default(cuid())
+  submissionId String
+  type         OnboardingEventType
+  message      String?
+  createdAt    DateTime             @default(now())
+
+  submission   OnboardingSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId, createdAt])
+}

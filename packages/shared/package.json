@@ -9,6 +9,14 @@
       "types": "./src/index.ts",
       "default": "./src/index.ts"
     },
+    "./queues": {
+      "types": "./src/queues.ts",
+      "default": "./src/queues.ts"
+    },
+    "./src/queues": {
+      "types": "./src/queues.ts",
+      "default": "./src/queues.ts"
+    },
     "./chatSignedUrl": {
       "types": "./src/chatSignedUrl.ts",
       "default": "./src/chatSignedUrl.ts"
