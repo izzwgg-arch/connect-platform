@@ -402,6 +402,54 @@ function SenderRow({
   const isUser = sender.scope === "USER";
   const connected = isConnected(sender);
 
+  // Diagnostics state (visible for any connected sender the user can see)
+  const [diag, setDiag] = useState<{
+    threadsChecked: number;
+    fetched: number;
+    inserted: number;
+    skippedNotInbound: number;
+    skippedDuplicates: number;
+    errors: number;
+  } | null>(null);
+  const [diagAt, setDiagAt] = useState<string | null>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
+  const [diagError, setDiagError] = useState<string | null>(null);
+
+  const loadDiag = useCallback(async () => {
+    setDiagLoading(true);
+    setDiagError(null);
+    try {
+      const res = await apiGet<{ last: { createdAt?: string; metadata?: any } | null }>(`/crm/email/sync-last?connectionId=${sender.id}`);
+      const last = res?.last || null;
+      const md = (last?.metadata as any) || {};
+      if (last) {
+        setDiag({
+          threadsChecked: Number(md.threadsChecked || 0),
+          fetched: Number(md.fetched || 0),
+          inserted: Number(md.inserted || 0),
+          skippedNotInbound: Number(md.skippedNotInbound || 0),
+          skippedDuplicates: Number(md.skippedDuplicates || 0),
+          errors: Number(md.errors || 0),
+        });
+        setDiagAt(last.createdAt ? String(last.createdAt) : null);
+      } else {
+        setDiag(null);
+        setDiagAt(null);
+      }
+    } catch (e: any) {
+      // Gracefully degrade without exposing details
+      setDiag(null);
+      setDiagAt(null);
+      setDiagError(e?.message || "Failed to load diagnostics");
+    } finally {
+      setDiagLoading(false);
+    }
+  }, [sender.id]);
+
+  useEffect(() => {
+    if (connected) void loadDiag();
+  }, [connected, loadDiag]);
+
   return (
     <div className="rounded-crm border border-crm-border/70 bg-crm-surface-2/40 px-3 py-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -449,38 +497,79 @@ function SenderRow({
           )}
         </div>
 
-        {sender.canManage && !editing && (
+        {!editing && (
           <div className="flex items-center gap-1.5">
-            {connected && (
-              <button type="button" className={cn(crm.btnGhost, "text-xs")} onClick={() => onTest(sender)} disabled={busy} title="Send a test email">
-                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-                Test
-              </button>
-            )}
-            {connected && !sender.replyTrackingEnabled && (
-              <button type="button" className={cn(crm.btnGhost, "text-xs")} onClick={() => onEnableReplyTracking(sender)} disabled={busy} title="Enable reply tracking (re-consent)">
-                <Lock className="h-3.5 w-3.5" /> Enable Reply Tracking
-              </button>
-            )}
             {connected && sender.replyTrackingEnabled && (
               <button type="button" className={cn(crm.btnGhost, "text-xs")} onClick={() => onSyncNow(sender)} disabled={busy} title="Sync replies now">
                 <Loader2 className="h-3.5 w-3.5" /> Sync now
               </button>
             )}
-            {!isUser && connected && !sender.isDefaultForTenant && isAdmin && (
+            {sender.canManage && connected && (
+              <button type="button" className={cn(crm.btnGhost, "text-xs")} onClick={() => onTest(sender)} disabled={busy} title="Send a test email">
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                Test
+              </button>
+            )}
+            {sender.canManage && connected && !sender.replyTrackingEnabled && (
+              <button type="button" className={cn(crm.btnGhost, "text-xs")} onClick={() => onEnableReplyTracking(sender)} disabled={busy} title="Enable reply tracking (re-consent)">
+                <Lock className="h-3.5 w-3.5" /> Enable Reply Tracking
+              </button>
+            )}
+            {sender.canManage && !isUser && connected && !sender.isDefaultForTenant && isAdmin && (
               <button type="button" className={cn(crm.btnGhost, "text-xs")} onClick={() => onSetDefault(sender)} disabled={busy} title="Make this the tenant default sender">
                 <Star className="h-3.5 w-3.5" /> Set default
               </button>
             )}
-            <button type="button" className={cn(crm.btnGhost, "text-xs")} onClick={() => onEdit(sender)} disabled={busy} title="Edit label and sender name">
-              <Pencil className="h-3.5 w-3.5" /> Edit
-            </button>
-            <button type="button" className={cn(crm.btnGhost, "text-xs text-crm-danger")} onClick={() => onDisconnect(sender)} disabled={busy} title="Disconnect">
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
+            {sender.canManage && (
+              <button type="button" className={cn(crm.btnGhost, "text-xs")} onClick={() => onEdit(sender)} disabled={busy} title="Edit label and sender name">
+                <Pencil className="h-3.5 w-3.5" /> Edit
+              </button>
+            )}
+            {sender.canManage && (
+              <button type="button" className={cn(crm.btnGhost, "text-xs text-crm-danger")} onClick={() => onDisconnect(sender)} disabled={busy} title="Disconnect">
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
         )}
       </div>
+
+      {connected && (
+        <div className="mt-2 rounded-crm border border-crm-border/60 bg-crm-surface-2/30 px-2 py-2">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-crm-muted">Diagnostics</span>
+            <button
+              type="button"
+              className={cn(crm.btnGhost, "text-[11px]")}
+              onClick={loadDiag}
+              disabled={diagLoading}
+              title="Refresh diagnostics"
+            >
+              {diagLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+              Refresh diagnostics
+            </button>
+          </div>
+          {diagError ? (
+            <div className="flex items-center gap-1 text-[11px] text-crm-danger">
+              <AlertCircle className="h-3 w-3" /> {diagError}
+            </div>
+          ) : diag ? (
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-crm-muted">
+              <div>threadsChecked: <span className="text-crm-text">{diag.threadsChecked}</span></div>
+              <div>fetched: <span className="text-crm-text">{diag.fetched}</span></div>
+              <div>inserted: <span className="text-crm-text">{diag.inserted}</span></div>
+              <div>skippedNotInbound: <span className="text-crm-text">{diag.skippedNotInbound}</span></div>
+              <div>skippedDuplicates: <span className="text-crm-text">{diag.skippedDuplicates}</span></div>
+              <div>errors: <span className="text-crm-text">{diag.errors}</span></div>
+              <div className="col-span-2">lastSyncAt: <span className="text-crm-text">{diagAt ? new Date(diagAt).toLocaleString() : "—"}</span></div>
+            </div>
+          ) : (
+            <div className="text-[11px] text-crm-muted">
+              No sync diagnostics yet. Click <span className="text-crm-text">Sync now</span>, then <span className="text-crm-text">Refresh diagnostics</span>.
+            </div>
+          )}
+        </div>
+      )}
 
       {editing && (
         <div className="mt-3 flex flex-col gap-2">
