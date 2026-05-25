@@ -174,11 +174,11 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
   useEffect(() => {
     async function validate() {
       try {
-        const r = await apiGet<{ invite: any; exists?: boolean; submission: { id: string; currentStep: number; answers: any } }>(
+        const r = await apiGet<{ exists?: boolean; submission?: { id: string; currentStep: number; answers: any } }>(
           `/onboarding/${encodeURIComponent(token)}/validate`,
         );
         // Guard: link not found or not active
-        if (r.exists === false || !r.invite) {
+        if (r.exists !== true) {
           setTokenError("not_active");
           return;
         }
