@@ -1,4 +1,5 @@
 "use client";
+// noop: rollout bump for CRM Email diagnostics visibility
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
