@@ -402,6 +402,45 @@ function SenderRow({
   const isUser = sender.scope === "USER";
   const connected = isConnected(sender);
 
+  // Diagnostics state — admin/owner only; fetched via existing session
+  const [diag, setDiag] = useState<{
+    threadsChecked: number;
+    fetched: number;
+    inserted: number;
+    skippedNotInbound: number;
+    skippedDuplicates: number;
+    errors: number;
+  } | null>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
+  const [diagError, setDiagError] = useState<string | null>(null);
+  const [diagAt, setDiagAt] = useState<string | null>(null);
+
+  const loadDiag = useCallback(async () => {
+    setDiagLoading(true);
+    setDiagError(null);
+    try {
+      const res = await apiGet<{ last: { createdAt?: string; metadata?: any } | null }>(`/crm/email/sync-last?connectionId=${sender.id}`);
+      const md = (res?.last?.metadata as any) || {};
+      setDiag({
+        threadsChecked: Number(md.threadsChecked || 0),
+        fetched: Number(md.fetched || 0),
+        inserted: Number(md.inserted || 0),
+        skippedNotInbound: Number(md.skippedNotInbound || 0),
+        skippedDuplicates: Number(md.skippedDuplicates || 0),
+        errors: Number(md.errors || 0),
+      });
+      setDiagAt(res?.last?.createdAt ? String(res.last.createdAt) : null);
+    } catch (e: any) {
+      setDiagError(e?.message || "Failed to load diagnostics");
+    } finally {
+      setDiagLoading(false);
+    }
+  }, [sender.id]);
+
+  useEffect(() => {
+    if (sender.canManage) void loadDiag();
+  }, [sender.canManage, loadDiag]);
+
   return (
     <div className="rounded-crm border border-crm-border/70 bg-crm-surface-2/40 px-3 py-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -481,6 +520,39 @@ function SenderRow({
           </div>
         )}
       </div>
+
+      {sender.canManage && (
+        <div className="mt-2 rounded-crm border border-crm-border/60 bg-crm-surface-2/30 px-2 py-2">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-crm-muted">Diagnostics</span>
+            <button
+              type="button"
+              className={cn(crm.btnGhost, "text-[11px]")}
+              onClick={loadDiag}
+              disabled={diagLoading}
+              title="Refresh diagnostics"
+            >
+              {diagLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+              Refresh diagnostics
+            </button>
+          </div>
+          {diagError ? (
+            <div className="flex items-center gap-1 text-[11px] text-crm-danger">
+              <AlertCircle className="h-3 w-3" /> {diagError}
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-crm-muted">
+              <div>threadsChecked: <span className="text-crm-text">{diag?.threadsChecked ?? 0}</span></div>
+              <div>fetched: <span className="text-crm-text">{diag?.fetched ?? 0}</span></div>
+              <div>inserted: <span className="text-crm-text">{diag?.inserted ?? 0}</span></div>
+              <div>skippedNotInbound: <span className="text-crm-text">{diag?.skippedNotInbound ?? 0}</span></div>
+              <div>skippedDuplicates: <span className="text-crm-text">{diag?.skippedDuplicates ?? 0}</span></div>
+              <div>errors: <span className="text-crm-text">{diag?.errors ?? 0}</span></div>
+              <div className="col-span-2">lastSyncAt: <span className="text-crm-text">{diagAt ? new Date(diagAt).toLocaleString() : "—"}</span></div>
+            </div>
+          )}
+        </div>
+      )}
 
       {editing && (
         <div className="mt-3 flex flex-col gap-2">
