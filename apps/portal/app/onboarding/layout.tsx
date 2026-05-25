@@ -9,9 +9,15 @@ export default function OnboardingLayout({ children }: { children: ReactNode }) 
     const root = document.documentElement;
     const prev = root.getAttribute("data-theme");
     root.setAttribute("data-theme", "light");
+    const prevHtmlOverflow = root.style.overflow;
+    const prevBodyOverflow = document.body.style.overflow;
+    root.style.overflow = "auto";
+    document.body.style.overflow = "auto";
     return () => {
       if (prev) root.setAttribute("data-theme", prev);
       else root.removeAttribute("data-theme");
+      root.style.overflow = prevHtmlOverflow;
+      document.body.style.overflow = prevBodyOverflow;
     };
   }, []);
 
