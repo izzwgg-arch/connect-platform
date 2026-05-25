@@ -18,12 +18,64 @@
 - **Density without clutter.** Tighten vertical rhythm across hero/status/notes/SMS/outcome. Avoid oversized empty blocks; keep honest empty states.
 - **Dark/light themes.** All surfaces use `--crm-*` tokens. Dark = navy/slate operational with soft glow; Light = white/slate with subtle borders and shadows. No ad‑hoc grayscale backgrounds.
 
+## Public Onboarding — light-mode design system
+
+> **Scope:** `apps/portal/app/onboarding/**` only. Do NOT apply these rules to admin/CRM pages.
+
+The public customer-facing onboarding wizard (`/onboarding/[token]`) is **light mode first**.
+It sets `data-theme="light"` via `apps/portal/app/onboarding/layout.tsx` for its subtree.
+All styles live in `apps/portal/app/onboarding/onboarding.css`, scoped to `.ob-shell`.
+
+### Visual tokens (`.ob-shell`)
+
+| Role | Value |
+|------|-------|
+| Page background | `#f4f6f9` + subtle radial blue/indigo gradients |
+| Card surface | `#ffffff`, border `#e8edf3`, `box-shadow: 0 4px 16px rgba(15,23,42,0.06)` |
+| Primary accent | `#2563eb` (used sparingly: CTA buttons, step number, active fields) |
+| Secondary accent | `#4f46e5` (gradient partner only) |
+| Body text | `#0f172a` (headings) / `#64748b` (body) / `#94a3b8` (muted/hints) |
+| Border | `#e2e8f0` |
+| Input focus ring | `3px rgba(37,99,235,0.10)` |
+| Success state | `#059669` |
+
+### Design principles (onboarding-specific)
+
+1. **Light mode enforced.** Layout.tsx sets `document.documentElement.setAttribute("data-theme","light")` and reverts on unmount.
+2. **One step per screen.** Cards animate in with `ob-slide-in` (translateY 6px → 0, 220ms). Progress bar at top.
+3. **Subtle telecom illustration.** Each step has an `.ob-illustration` 52px icon tile with a restrained inline SVG (network nodes, phone, extensions tree, etc.). No mascots. No full-width hero art.
+4. **Autosave pulse.** Save indicator fades in/out; `ob-save-dot` pulses when saved.
+5. **Restrained motion.** All transitions ≤ 220ms. Respects `prefers-reduced-motion`.
+6. **Mobile-first.** Max-width 560px card, full-width at < 480px. Two-column field rows collapse to single at < 480px.
+
+### CSS class namespace
+
+All classes prefixed `ob-` (onboarding). Do not reuse or extend `crm-*`, `cinema-*`, or platform tokens inside `.ob-shell`.
+
+### Step structure
+
+| Step | ID | Key fields |
+|------|----|-----------|
+| 1 | `welcome` | companyName, firstName, lastName |
+| 2 | `contact` | mainPhone, address, mainEmail, billingEmail |
+| 3 | `phone` | numberChoice (new/port/unsure), porting details |
+| 4 | `extensions` | displayName, extNumber (numeric), email |
+| 5 | `addons` | smsEnabled toggle |
+| 6 | `review` | Full summary + submit |
+
+### Success page
+
+`/onboarding/[token]/success` uses `.ob-success-wrap` with centered layout, a system-online SVG radial motif, three next-steps cards, and a support email note.
+
+---
+
 ## Principles
 
 1. **One product** — CRM routes must feel like the same app as the Workspace shell (`console-shell`, sidebar, topbar), not a separate light admin theme.
 2. **Dark operational UI** — Default is dark-only (`:root` / `data-theme="dark"`). No accidental `bg-white` / `bg-gray-50` cards on CRM pages.
 3. **Calm SaaS** — Compact cards, honest metrics, no marketing gradients or banner spam.
 4. **CSS variables first** — Surfaces inherit `--panel`, `--text`, `--border`, `--accent` via CRM tokens.
+5. **Exception: public onboarding is light mode.** See section above. Do not apply dark CRM tokens to `/onboarding/**`.
 
 ---
 

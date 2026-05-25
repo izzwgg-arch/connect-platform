@@ -732,3 +732,21 @@
     area.** Future agents will save tokens.
 40. **Mark uncertain claims as "UNKNOWN — verify before changing".** Do not write
     fiction.
+
+---
+
+## Public onboarding UI
+
+95. **Public onboarding (`/onboarding/[token]`) is light mode only.** `apps/portal/app/onboarding/layout.tsx`
+    sets `data-theme="light"` on `<html>` and reverts on unmount. Do NOT apply dark platform
+    CSS variables, `--panel`, `--crm-*`, or `--bg` tokens inside `.ob-shell`.
+
+96. **All onboarding-specific styles must live in `onboarding.css` under the `ob-` prefix.**
+    Do not add onboarding styles to `globals.css` or import CRM tokens into the wizard.
+
+97. **Do not redesign the onboarding submission API.** Routes in `onboardingRoutes.ts`
+    (`validate`, `save`, `submit`) are stable. Only the portal UI layer may change.
+
+98. **No mascots, large hero images, or cartoon illustrations in onboarding.**
+    The design system is: 75% clear UI / 15% soft atmosphere / 10% restrained inline SVG motifs.
+    Each step gets one 52px `.ob-illustration` tile — no full-width visual art.
