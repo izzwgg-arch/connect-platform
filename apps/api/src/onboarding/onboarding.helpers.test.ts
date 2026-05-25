@@ -14,18 +14,21 @@ test("status transition helper allows forward moves and cancel, blocks from term
 
 test("VitalPBX CSV escaping + filename shape", () => {
   const { filename, mime, body } = generateVitalPbxCsv([
-    { extNumber: "101", name: "Alice, Sr.", email: "a\"b@example.com", voicemail: "enabled", class_of_service: "default" },
+    { extNumber: "101", name: "Alice, Sr.", email: "a\"b@example.com", vmEnabled: true, class_of_service: "default" },
     { extNumber: "102", name: "Bob\nSmith", email: "b@example.com" },
   ]);
   assert.ok(filename.startsWith("vitalpbx_extensions_"));
   assert.ok(filename.endsWith(".csv"));
   assert.equal(mime.startsWith("text/csv"), true);
   const lines = body.split(/\r?\n/);
-  assert.equal(lines[0], "extension,name,email,device,password,voicemail,class_of_service");
-  // Confirm quotes are escaped and commas/newlines are quoted
+  assert.equal(lines[0], "mode,extension,ext_name,email,class_of_service,vm_enabled,device_user,device_password");
+  // Row 1: mode=add, correct ext, name/email escaping
+  assert.ok(lines[1].startsWith("add,101,"));
   assert.ok(/"Alice, Sr\."/.test(lines[1]));
   assert.ok(/a""b@example\.com/.test(lines[1]));
-  assert.ok(/"Bob\nSmith"/.test(lines[2]));
+  assert.ok(lines[1].includes(",yes,101,"));
+  // Row 2: newline in name is quoted — check raw body since split breaks multi-line cells
+  assert.ok(/"Bob\nSmith"/.test(body));
 });
 
 test("VitalPBX CSV duplicate detection", () => {

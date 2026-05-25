@@ -83,9 +83,7 @@ export async function buildVitalPbxCsvForSubmission(id: string) {
     extNumber: e.extNumber,
     name: e.displayName || undefined,
     email: e.email || undefined,
-    device: "",
-    password: "",
-    voicemail: "enabled",
+    vmEnabled: true,
     class_of_service: "",
   }));
   return generateVitalPbxCsv(rows);
