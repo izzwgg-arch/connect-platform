@@ -67,6 +67,16 @@ PR1 (ingest skeleton; safe by default)
 - Enqueue is disabled by default: `WHATSAPP_WEBHOOK_ENQUEUE_ENABLED=false`.
 - Legacy `WhatsAppThread`/`WhatsAppMessage` writes remain unchanged.
 - Workers consume WhatsApp queues, but PR1 handlers only log sanitized summaries and ack (no projection/media/push).
+
+PR2 (inbound projection; still safe by default)
+- Projection flag off by default: `WHATSAPP_PROJECT_TO_CONNECT_CHAT_ENABLED=false`.
+- Inbound messages project to `ConnectChatThread`/`ConnectChatMessage`:
+  - Thread dedupe: `wa:{tenantId}:{accountKey}:{contactE164}` (Meta accountKey=phoneNumberId; Twilio=to E164 fallback accountRef).
+  - Message idempotency:
+    - Use `(tenantId, externalProvider, externalMessageId)` when present.
+    - If externalMessageId is missing, store deterministic `fallback:<sha256(provider|tenant|accountRef|from|to|timestamp|bodyHash))>` into `externalMessageId`.
+  - Participants: tenant-wide membership added (same minimal visibility behavior as SMS inbound path).
+  - Media: placeholder only (no download yet).
 - Provider/config and data migration
   - Keep `WhatsAppProviderConfig` as the credential/config store (encrypted at rest).
   - Existing `WhatsAppThread`/`WhatsAppMessage` become migration/backfill/source tables only — not the runtime source of truth once WA is unified under `ConnectChat*`.

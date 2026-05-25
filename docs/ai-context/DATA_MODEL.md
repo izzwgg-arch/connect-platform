@@ -430,6 +430,9 @@ WhatsApp-ready unified message extensions (additive)
   - Future dedicated SQL migration may add a partial unique index on `ConnectChatMessage` for `(tenantId, externalProvider, externalMessageId)` only where `externalProvider IS NOT NULL` and `externalMessageId IS NOT NULL`.
   - Do not use a nullable Prisma `@@unique` for that.
 
+Idempotency fallback (inbound WhatsApp only; runtime behavior)
+- If a provider `externalMessageId` is missing, the worker derives a deterministic fallback and stores it in `externalMessageId` with a `fallback:` prefix. Basis: provider|tenant|accountRef|from|to|timestamp|normalized body hash. This prevents silent message loss while avoiding obvious duplicates.
+
 ## SmsCampaign / SmsMessage / SmsWebhookEvent / SmsRoutingLog / TenantSmsNumber
 - **Schema:** lines 866 / 884 / 908 / 2815 / 2671
 - **Purpose:** SMS campaign lifecycle, per-message rows, carrier

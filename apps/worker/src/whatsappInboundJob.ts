@@ -2,10 +2,10 @@ import { Worker, Job } from "bullmq";
 import IORedis from "ioredis";
 import { WHATSAPP_INBOUND_QUEUE } from "@connect/shared/src/queues";
 import type { WaInboundMessageEvent } from "@connect/shared/src/whatsappTypes";
+import { projectInboundToConnectChat } from "./whatsappProject";
 
 export function registerWhatsAppInboundWorker(): void {
   const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
-  // No side effects in PR1; just log summary and ack.
   const worker = new Worker(
     WHATSAPP_INBOUND_QUEUE,
     async (job: Job) => {
@@ -17,7 +17,10 @@ export function registerWhatsAppInboundWorker(): void {
         hasExternalId: !!ev?.externalMessageId,
       };
       console.info(JSON.stringify({ event: "WA_INBOUND_JOB", summary: safe }));
-      return { ok: true };
+      const enabled = String(process.env.WHATSAPP_PROJECT_TO_CONNECT_CHAT_ENABLED || "false").toLowerCase() === "true";
+      if (!enabled) return { ok: true };
+      await projectInboundToConnectChat(ev);
+      return { ok: true, projected: true };
     },
     { connection: redis as any },
   );
