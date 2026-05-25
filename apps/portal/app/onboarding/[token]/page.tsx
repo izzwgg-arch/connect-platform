@@ -266,9 +266,9 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
     setSubmitting(true);
     try {
       await apiPost(`/onboarding/${encodeURIComponent(token)}/submit`, {
-        companyName:  form.companyName,
-        firstName:    form.firstName,
-        lastName:     form.lastName,
+        companyName:       form.companyName,
+        contactFirstName:  form.firstName,
+        contactLastName:   form.lastName,
         address:      form.address,
         mainPhone:    form.mainPhone,
         mainEmail:    form.mainEmail,
