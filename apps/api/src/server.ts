@@ -17,6 +17,10 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { z } from "zod";
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
+import fastifyRawBody from "fastify-raw-body";
+import { getWhatsAppInboundQueue, getWhatsAppStatusQueue } from "./queues";
+import { verifyMetaSignature, verifyTwilioSignature } from "./whatsapp/signature";
+import { normalizeMeta, normalizeTwilioStatus } from "./whatsapp/normalize";
 import {
   clearRegisteredShutdownTimers,
   isReadyToServeTraffic,
@@ -198,6 +202,8 @@ const app = Fastify({ logger: true, maxParamLength: 512 });
 const fallbackNumberProvider = new FakeNumberProvider();
 
 app.register(rateLimit, { max: 200, timeWindow: "1 minute" });
+// Route-scoped raw body capture (Meta webhook only). Not enabled globally.
+app.register(fastifyRawBody as any, { field: "rawBody", global: false, encoding: false, runFirst: true });
 app.register(jwt, { secret: process.env.JWT_SECRET || "change-me" });
 app.register(formbody);
 // File-upload support for MOH asset uploads. 50 MB cap per file covers
@@ -28878,7 +28884,10 @@ app.post("/webhooks/whatsapp/twilio/status", async (req, reply) => {
   const from = String(payload.From || payload.from || "").trim();
   const to = String(payload.To || payload.to || "").trim();
 
+  // Signature verification (required by default)
+  const twilioVerifyMode = String(process.env.WHATSAPP_TWILIO_VERIFY_SIGNATURE || "required").toLowerCase();
   let tenantId: string | null = null;
+  let twilioAuthToken: string | null = null;
   if (accountSid) {
     const rows = await db.whatsAppProviderConfig.findMany({ where: { provider: "WHATSAPP_TWILIO" } });
     for (const row of rows) {
@@ -28886,12 +28895,26 @@ app.post("/webhooks/whatsapp/twilio/status", async (req, reply) => {
         const creds = decryptJson<WhatsAppTwilioCredentialPayload>(row.credentialsEncrypted);
         if (creds.accountSid === accountSid) {
           tenantId = row.tenantId;
+          twilioAuthToken = String((creds as any).authToken || "");
           break;
         }
       } catch {
         // skip broken credential rows
       }
     }
+  }
+
+  if (twilioVerifyMode === "required") {
+    const sig = String((req.headers["x-twilio-signature"] || req.headers["X-Twilio-Signature"] || "")).trim();
+    // Build full URL for signature base
+    const publicBase = String(process.env.WHATSAPP_TWILIO_WEBHOOK_PUBLIC_BASE || "").trim();
+    const xfproto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() || "http";
+    const xfhost = String((req.headers["x-forwarded-host"] || req.headers["host"] || "")).split(",")[0].trim();
+    const fullUrl = publicBase ? `${publicBase.replace(/\/$/, "")}${req.url}` : `${xfproto}://${xfhost}${req.url}`;
+    const params: Record<string, string> = {};
+    for (const [k, v] of Object.entries(payload)) params[k] = String(v ?? "");
+    const ok = !!twilioAuthToken && !!sig && verifyTwilioSignature(fullUrl, params, twilioAuthToken, sig);
+    if (!ok) return reply.status(403).send({ error: "INVALID_TWILIO_SIGNATURE" });
   }
 
   if (tenantId) {
@@ -28955,6 +28978,19 @@ app.post("/webhooks/whatsapp/twilio/status", async (req, reply) => {
       });
     }
     await audit({ tenantId, action: "WHATSAPP_TWILIO_WEBHOOK_RECEIVED", entityType: "Tenant", entityId: tenantId });
+
+    // Enqueue normalized events behind flag (default disabled)
+    const enqueueEnabled = String(process.env.WHATSAPP_WEBHOOK_ENQUEUE_ENABLED || "false").toLowerCase() === "true";
+    if (enqueueEnabled) {
+      const events = normalizeTwilioStatus(payload, tenantId);
+      for (const ev of events) {
+        if (ev.type === "wa_inbound_message") {
+          await getWhatsAppInboundQueue().add("wa_inbound", ev, { removeOnComplete: true, removeOnFail: true });
+        } else {
+          await getWhatsAppStatusQueue().add("wa_status", ev, { removeOnComplete: true, removeOnFail: true });
+        }
+      }
+    }
   }
   return { ok: true, provider: "WHATSAPP_TWILIO", tenantMatched: !!tenantId, to: maskValue(to, 2, 2), from: maskValue(from, 2, 2) };
 });
@@ -28981,7 +29017,7 @@ app.get("/webhooks/whatsapp/meta", async (req, reply) => {
   return reply.status(403).send({ error: "INVALID_VERIFY_TOKEN" });
 });
 
-app.post("/webhooks/whatsapp/meta", async (req, reply) => {
+app.post("/webhooks/whatsapp/meta", { config: { rawBody: true } }, async (req, reply) => {
   const body = req.body as any;
   const entry = Array.isArray(body?.entry) ? body.entry[0] : null;
   const changes = Array.isArray(entry?.changes) ? entry.changes[0] : null;
@@ -28990,6 +29026,7 @@ app.post("/webhooks/whatsapp/meta", async (req, reply) => {
   const phoneNumberId = String(metadata?.phone_number_id || "").trim();
 
   let tenantId: string | null = null;
+  let appSecret: string | null = null;
   if (phoneNumberId) {
     const rows = await db.whatsAppProviderConfig.findMany({ where: { provider: "WHATSAPP_META" } });
     for (const row of rows) {
@@ -28997,12 +29034,22 @@ app.post("/webhooks/whatsapp/meta", async (req, reply) => {
         const creds = decryptJson<WhatsAppMetaCredentialPayload>(row.credentialsEncrypted);
         if (creds.phoneNumberId === phoneNumberId) {
           tenantId = row.tenantId;
+          appSecret = String((creds as any).appSecret || "");
           break;
         }
       } catch {
         // skip broken credential rows
       }
     }
+  }
+
+  // Signature verification (required by default)
+  const metaVerifyMode = String(process.env.WHATSAPP_META_VERIFY_SIGNATURE || "required").toLowerCase();
+  if (metaVerifyMode === "required") {
+    const sig = String((req.headers["x-hub-signature-256"] || req.headers["X-Hub-Signature-256"] || "")).trim();
+    const rawBody = (req as any).rawBody as Buffer | string | undefined;
+    const ok = !!appSecret && !!rawBody && !!sig && verifyMetaSignature(rawBody, appSecret, sig);
+    if (!ok) return reply.status(403).send({ error: "INVALID_META_SIGNATURE" });
   }
 
   if (tenantId) {
@@ -29057,6 +29104,18 @@ app.post("/webhooks/whatsapp/meta", async (req, reply) => {
     }
 
     await audit({ tenantId, action: "WHATSAPP_META_WEBHOOK_RECEIVED", entityType: "Tenant", entityId: tenantId });
+    // Enqueue normalized events behind flag (default disabled)
+    const enqueueEnabled = String(process.env.WHATSAPP_WEBHOOK_ENQUEUE_ENABLED || "false").toLowerCase() === "true";
+    if (enqueueEnabled) {
+      const events = normalizeMeta(body, tenantId, phoneNumberId);
+      for (const ev of events) {
+        if (ev.type === "wa_inbound_message") {
+          await getWhatsAppInboundQueue().add("wa_inbound", ev, { removeOnComplete: true, removeOnFail: true });
+        } else {
+          await getWhatsAppStatusQueue().add("wa_status", ev, { removeOnComplete: true, removeOnFail: true });
+        }
+      }
+    }
   }
 
   return { ok: true, provider: "WHATSAPP_META", tenantMatched: !!tenantId };

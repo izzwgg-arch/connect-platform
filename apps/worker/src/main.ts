@@ -43,6 +43,11 @@ import {
 } from "@connect/shared";
 import { processCrmEmailSendJob } from "./crmEmailSend";
 import { processCrmEmailSyncJob } from "./crmEmailSync";
+import { registerWhatsAppInboundWorker } from "./whatsappInboundJob";
+import { registerWhatsAppStatusWorker } from "./whatsappStatusJob";
+
+registerWhatsAppInboundWorker();
+registerWhatsAppStatusWorker();
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
 const smsQueue = new Queue("sms-send", { connection: redis });

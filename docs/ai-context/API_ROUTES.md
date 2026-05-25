@@ -23,6 +23,32 @@ Chat route notes (2026-05-24):
     - `?since=<ISO>`: alias for `after` when `after` is not supplied (useful for delta polling).
     - `?limit=<1..200>`: max rows (cap 200).
   - Soft-deleted-for-user rows are filtered out server-side.
+
+#### WhatsApp — API roadmap (docs-only)
+- Unification (Option A)
+  - No new `/whatsapp/*` inbox APIs. WhatsApp threads/messages will appear under existing `/chat/threads` and `/chat/threads/:id/messages` once implemented (runtime not changed by this doc).
+  - `POST /chat/threads` will accept `type: "whatsapp"` to create/find a WA thread by contact number (normalized) when shipped.
+  - `POST /chat/threads/:id/send` dispatches to a WhatsApp adapter when `thread.type === "WHATSAPP"` (server-side only; clients call the same unified send route).
+- Provider settings/webhooks (unchanged paths)
+  - Keep `/settings/providers/whatsapp/*` for tenant credential/config management (masked responses, encrypted at rest).
+  - Keep `/webhooks/whatsapp/*` (Meta verify, inbound messages/status updates). Webhooks project payloads into unified chat models; legacy WA tables may be dual-written during migration only.
+  - PR1 safety defaults:
+    - `WHATSAPP_META_VERIFY_SIGNATURE=required` (Meta POST uses route-scoped raw body; 403 on invalid)
+    - `WHATSAPP_TWILIO_VERIFY_SIGNATURE=required` (403 on invalid)
+    - Enqueue is off by default: `WHATSAPP_WEBHOOK_ENQUEUE_ENABLED=false` (legacy behavior unchanged until enabled)
+    - Workers in PR1 only log sanitized summaries and ack; no projection/media/push yet
+- Compliance policy guard
+  - Enforce 24‑hour customer‑service window; outside window, free‑form sends return a structured error that instructs the client to use an approved template.
+  - Respect tenant opt‑out/block lists; reject sends with explicit error when blocked.
+  - Official providers only (Meta Business API, Twilio WhatsApp). No Status/Stories automation.
+- Templates (docs-only endpoints to be added when implemented)
+  - `GET /whatsapp/templates` — list cached provider templates for the tenant (name, language, category, approval status/rejection reason, variables schema).
+  - `POST /whatsapp/templates/sync` — admin-only refresh from provider.
+  - Unified send accepts `{ template: { name, language, params } }` and returns clear errors on variable mismatch or unapproved templates.
+- Media handling
+  - Inbound provider media is downloaded server-side to Connect storage and referenced from chat via signed URLs. Provider media URLs are never surfaced directly to clients.
+- Push types
+  - Add `wa_message` push payload aligned with existing `dm_message` / `sms_message` semantics (title/body minimal; deeplink to thread).
 # API Route Inventory — `apps/api/src/server.ts`
 
 > **Purpose:** Let agents jump to the right ~50-line slice of `server.ts`

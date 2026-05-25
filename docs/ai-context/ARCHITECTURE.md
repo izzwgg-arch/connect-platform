@@ -59,6 +59,14 @@ WhatsApp — roadmap and guardrails (docs-only, Option A)
   - Billing/usage: `WhatsAppUsageEvent` (minor units), `WhatsAppPricingRate`.
   - Templates: `WhatsAppTemplate` (account-required uniqueness).
   - Compliance/audit: `WhatsAppContactPreference`, `WhatsAppPolicyAuditEvent`.
+
+PR1 (ingest skeleton; safe by default)
+- Signature verification required by default:
+  - `WHATSAPP_META_VERIFY_SIGNATURE=required` (route-scoped raw body enabled for Meta POST only)
+  - `WHATSAPP_TWILIO_VERIFY_SIGNATURE=required`
+- Enqueue is disabled by default: `WHATSAPP_WEBHOOK_ENQUEUE_ENABLED=false`.
+- Legacy `WhatsAppThread`/`WhatsAppMessage` writes remain unchanged.
+- Workers consume WhatsApp queues, but PR1 handlers only log sanitized summaries and ack (no projection/media/push).
 - Provider/config and data migration
   - Keep `WhatsAppProviderConfig` as the credential/config store (encrypted at rest).
   - Existing `WhatsAppThread`/`WhatsAppMessage` become migration/backfill/source tables only — not the runtime source of truth once WA is unified under `ConnectChat*`.
