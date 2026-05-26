@@ -19,7 +19,9 @@ export const crm = {
     "mx-auto w-full max-w-[min(100%,1400px)] px-4 py-5 sm:px-6 lg:px-8 flex flex-col gap-4 min-h-0",
   /** Phase 19C / 19C.1 — My Queue operational workbench (wide desk, 12-col). */
   pageInnerQueue:
-    "mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
+    "crm-queue-inner mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
+  /** CRM queue light-mode workspace; dark mode keeps existing queue token surfaces. */
+  queueWorkspace: "crm-queue-workspace w-full min-h-0",
   /** Phase 19E / 19E.1 — campaign command center (wide desk, compact rhythm) */
   pageInnerCampaign:
     "mx-auto w-full max-w-[min(100%,1680px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-3 min-h-0",
@@ -231,9 +233,9 @@ export const crm = {
 
   /** Phase 19C.1 — queue filter count pills (always dark surface). */
   queueCountPill:
-    "flex h-full min-h-[4.25rem] w-full min-w-0 flex-col items-start justify-center rounded-crm border border-crm-border bg-crm-surface-2 px-3 py-2.5 text-left transition-all hover:border-crm-border/90 hover:bg-crm-surface",
+    "crm-queue-kpi-card flex h-full min-h-[6.25rem] w-full min-w-0 flex-col items-start justify-between rounded-crm-lg border border-crm-border bg-crm-surface-2 px-3.5 py-3 text-left transition-all duration-200 hover:border-crm-border/90 hover:bg-crm-surface",
   queueCountPillActive:
-    "border-crm-accent/45 bg-crm-accent/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-crm-accent/25",
+    "crm-queue-kpi-active border-crm-accent/45 bg-crm-accent/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-crm-accent/25",
   queueCountPillUrgent: "border-crm-danger/35 bg-crm-danger/8",
 
   bannerSuccess: "border border-crm-success/35 bg-crm-success/10 text-crm-success",

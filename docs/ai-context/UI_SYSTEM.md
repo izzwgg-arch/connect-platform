@@ -193,6 +193,19 @@ Chart colors live in `components/crm/charts/chartColors.ts` (aligned with `--crm
 
 **Information hierarchy (19C.2):** Top `QueueCountPill` row is the **only** place for pending/due/overdue/upcoming counts. Right column is one stack: command context (`QueueOverviewPanel`: in-view total, next action, activity today, campaign) + exceptions (`QueueAttentionPanel`: tasks/callback exceptions only — no repeat queue snapshot counts).
 
+### Queue light-mode workspace (2026 redesign)
+
+- Route scope: `PageShell` adds `.crm-queue-shell` only for `/crm/queue`; `CRMPageShell` uses `crm.queueWorkspace` and `crm.pageInnerQueue`. Light styling lives under `:root[data-theme="light"] .crm-queue-*`, so theme switching keeps the same route tree and queue state.
+- Visual system: reuse dashboard light-mode shell treatment - warm cream/blue page wash, frosted white panels, soft tan borders, large radii, elevated shadows, and blue/violet/green/orange/red accent wells.
+- KPI styling: `QueueCountPill` is a six-card strip in light mode: Pending, Due, Overdue, Upcoming, Completed Today, Session Efficiency. Cards use accent variants (`blue`, `violet`, `rose`, `amber`, `green`, `cyan`), large tabular values, icon wells, and microcopy. Counts remain sourced from existing queue/task stats only.
+- Filter bar: campaign filtering remains the existing select/action flow, presented as a separate elevated `.crm-queue-filter-bar` below KPIs.
+- Empty workspace: `QueueEmptyOperational` is a premium caught-up workspace with illustration, calm productivity copy, and real actions only: campaigns, import, power session, reports, plus clear campaign/view pending when relevant. No placeholder data.
+- Active campaign strip: the bottom of the main workspace uses `ActiveCampaignStrip` to show active campaign context, running state, real queue counts, today calls/outcomes, and a real campaign CTA.
+- Right rail: `QueueOverviewPanel` renders Today's Snapshot and Session cards; `QueueAttentionPanel` renders Queue Health and Recent Activity. Rail metrics are derived from existing queue/task stats and collapse to a two-column tablet grid, then one column on mobile.
+- Priority section: bottom cards link to due today, overdue, follow-ups, and high-priority work. They visually align to KPI card accents and use real counts from queue/task stats.
+- Dark mode: existing CRM token surfaces remain the operational dark baseline. The queue redesign does not force a light island in dark mode; scoped compatibility classes only add layout for the new sections.
+- Responsive behavior: desktop uses an 8+4 main/right rail grid; tablet stacks the main workspace above a two-column rail; mobile stacks all cards with no fixed-width overflow and full-width CTAs.
+
 ---
 
 ## Campaign operational workspace (Phase 19E / 19E.1)

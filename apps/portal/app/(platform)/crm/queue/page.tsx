@@ -1,13 +1,14 @@
 "use client";
 
 import { Suspense, useEffect, useState, useCallback, useRef, useMemo } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ListOrdered, PhoneCall, ExternalLink, SkipForward, Clock, Ban,
   RefreshCw, CheckCheck, CalendarClock, UserCheck, X, Edit2,
   AlertCircle, Zap, ZapOff, Pause, Play, ArrowRight,
   PhoneMissed, Voicemail, ThumbsUp, ThumbsDown, CheckCircle2,
-  Sparkles, Megaphone,
+  Sparkles, Megaphone, Inbox, BarChart3, Flag,
 } from "lucide-react";
 import {
   CRMPageShell,
@@ -905,6 +906,100 @@ function WrapUpOverlay({
   );
 }
 
+function ActiveCampaignStrip({
+  campaignId,
+  campaignName,
+  stats,
+  counts,
+}: {
+  campaignId: string | null;
+  campaignName: string | null;
+  stats: QueueOperationalStats | null;
+  counts: QueueCounts;
+}) {
+  const href = campaignId ? `/crm/campaigns/${encodeURIComponent(campaignId)}` : "/crm/campaigns?status=ACTIVE";
+  const title = campaignName ?? "All active campaigns";
+  const status = campaignId ? "Focused" : stats && stats.activeCampaigns > 0 ? "Running" : "Ready";
+  const activeCampaigns = stats?.activeCampaigns ?? 0;
+
+  return (
+    <div className="crm-queue-active-campaign">
+      <div className="flex min-w-0 items-center gap-3">
+        <span className="crm-queue-active-icon">
+          <Megaphone className="h-5 w-5" />
+        </span>
+        <div className="min-w-0">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-crm-muted">Active Campaign</p>
+          <p className="truncate text-sm font-bold text-crm-text">{title}</p>
+          <p className="mt-1 inline-flex items-center gap-1.5 text-[11px] font-medium text-crm-success">
+            <span className={crm.statusDotLive} />
+            {status}
+          </p>
+        </div>
+      </div>
+      <div className="grid min-w-0 flex-1 grid-cols-2 gap-2 sm:grid-cols-4">
+        <CampaignMetric label="Leads" value={counts.pending + counts.due + counts.overdue + counts.upcoming} />
+        <CampaignMetric label="Contacted" value={stats?.callsLinkedToday ?? 0} />
+        <CampaignMetric label="Converted" value={stats?.dispositionsToday ?? 0} />
+        <CampaignMetric label={campaignId ? "Follow Ups" : "Campaigns"} value={campaignId ? counts.due + counts.overdue : activeCampaigns} />
+      </div>
+      <Link href={href} className="crm-queue-active-cta">
+        View campaign
+        <ArrowRight className="h-3.5 w-3.5" />
+      </Link>
+    </div>
+  );
+}
+
+function CampaignMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="min-w-0 rounded-crm border border-crm-border/60 bg-crm-surface/60 px-3 py-2">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-crm-muted">{label}</p>
+      <p className="mt-1 text-lg font-bold tabular-nums leading-none text-crm-text">{value}</p>
+    </div>
+  );
+}
+
+function PriorityFocusCards({
+  counts,
+  stats,
+  loading,
+}: {
+  counts: QueueCounts;
+  stats: QueueOperationalStats | null;
+  loading: boolean;
+}) {
+  const highPriority = counts.overdue + (stats?.myTasksOverdue ?? 0);
+  const items = [
+    { label: "Due Today", value: counts.due + (stats?.myTasksDueToday ?? 0), sub: "Tasks", href: "/crm/queue?filter=due", icon: <CalendarClock className="h-4 w-4" />, accent: "violet" },
+    { label: "Overdue", value: counts.overdue + (stats?.myTasksOverdue ?? 0), sub: "Tasks", href: "/crm/queue?filter=overdue", icon: <AlertCircle className="h-4 w-4" />, accent: "rose" },
+    { label: "Follow Ups", value: (stats?.myCallbacksDueToday ?? 0) + (stats?.myOverdueCallbacks ?? 0), sub: "Tasks", href: "/crm/tasks", icon: <PhoneCall className="h-4 w-4" />, accent: "amber" },
+    { label: "High Priority", value: highPriority, sub: "Tasks", href: highPriority > 0 ? "/crm/queue?filter=overdue" : "/crm/tasks", icon: <Flag className="h-4 w-4" />, accent: "pink" },
+  ] as const;
+
+  return (
+    <section className="crm-queue-priority-section">
+      <div className="mb-3">
+        <h2 className="text-sm font-bold text-crm-text">Priority Focus</h2>
+        <p className="mt-0.5 text-[11px] text-crm-muted">Quick access to what matters most</p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {items.map((item) => (
+          <Link key={item.label} href={item.href} className={cn("crm-queue-priority-card", `crm-queue-priority-${item.accent}`)}>
+            <span className="crm-queue-priority-icon">{item.icon}</span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-xs font-bold text-crm-text">{item.label}</span>
+              <span className="mt-1 block text-2xl font-bold tabular-nums leading-none text-crm-text">{loading ? "-" : item.value}</span>
+              <span className="mt-0.5 block text-[10px] text-crm-muted">{item.sub}</span>
+            </span>
+            <span className="text-[10px] font-bold text-crm-accent">View all</span>
+          </Link>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 // ── Inner page component (needs useSearchParams) ───────────────────────────────
 
 function QueuePageInner() {
@@ -1325,9 +1420,12 @@ function QueuePageInner() {
   const activeCampaignName = campaignId
     ? campaigns.find((c) => c.id === campaignId)?.name ?? null
     : null;
+  const completedToday = opStats?.dispositionsToday ?? 0;
+  const callsToday = opStats?.callsLinkedToday ?? 0;
+  const sessionEfficiency = callsToday > 0 ? Math.round((completedToday / callsToday) * 100) : 0;
 
   const sidePanels = (
-    <div className="col-span-12 flex flex-col gap-3 xl:col-span-4 2xl:col-span-4">
+    <div className="crm-queue-right-rail col-span-12 flex flex-col gap-3 xl:col-span-4 2xl:col-span-4">
       <QueueOverviewPanel
         filter={filter}
         total={total}
@@ -1348,7 +1446,7 @@ function QueuePageInner() {
   );
 
   return (
-    <CRMPageShell innerClassName={crm.pageInnerQueue}>
+    <CRMPageShell className={crm.queueWorkspace} innerClassName={crm.pageInnerQueue}>
       {callbackModalMember && (
         <SetCallbackModal
           member={callbackModalMember}
@@ -1385,6 +1483,7 @@ function QueuePageInner() {
 
       {!powerModeActive ? (
         <CRMPageHeader
+          className="crm-queue-hero"
           icon={<ListOrdered className="h-7 w-7" />}
           title="My Queue"
           subtitle={
@@ -1395,7 +1494,7 @@ function QueuePageInner() {
                 : `${total} lead${total !== 1 ? "s" : ""} in this view`
           }
           actions={
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="crm-queue-hero-actions flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={toggleSortMode}
@@ -1427,15 +1526,18 @@ function QueuePageInner() {
       ) : null}
 
       {!powerModeActive ? (
-        <CRMActionBar>
-          <div className="grid w-full grid-cols-2 items-stretch gap-2 sm:grid-cols-4">
-            <QueueCountPill label="Pending" count={counts.pending} active={filter === "pending"} onClick={() => switchFilter("pending")} disabled={loading} />
-            <QueueCountPill label="Due" count={counts.due} active={filter === "due"} urgent={counts.due > 0} onClick={() => switchFilter("due")} disabled={loading} />
-            <QueueCountPill label="Overdue" count={counts.overdue} active={filter === "overdue"} urgent={counts.overdue > 0} onClick={() => switchFilter("overdue")} disabled={loading} />
-            <QueueCountPill label="Upcoming" count={counts.upcoming} active={filter === "upcoming"} onClick={() => switchFilter("upcoming")} disabled={loading} />
+        <>
+          <div className="crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-3 xl:grid-cols-6">
+            <QueueCountPill label="Pending" count={counts.pending} active={filter === "pending"} icon={<Inbox className="h-4 w-4" />} accent="blue" onClick={() => switchFilter("pending")} disabled={loading} />
+            <QueueCountPill label="Due" count={counts.due} active={filter === "due"} urgent={counts.due > 0} icon={<Clock className="h-4 w-4" />} accent="violet" onClick={() => switchFilter("due")} disabled={loading} />
+            <QueueCountPill label="Overdue" count={counts.overdue} active={filter === "overdue"} urgent={counts.overdue > 0} icon={<AlertCircle className="h-4 w-4" />} accent="rose" onClick={() => switchFilter("overdue")} disabled={loading} />
+            <QueueCountPill label="Upcoming" count={counts.upcoming} active={filter === "upcoming"} icon={<CalendarClock className="h-4 w-4" />} accent="amber" onClick={() => switchFilter("upcoming")} disabled={loading} />
+            <QueueCountPill label="Completed Today" count={completedToday} active={false} icon={<CheckCheck className="h-4 w-4" />} accent="green" microcopy="0% vs yesterday" onClick={() => router.push("/crm/reports")} disabled={loading || opStatsLoading} />
+            <QueueCountPill label="Session Efficiency" count={`${sessionEfficiency}%`} active={false} icon={<BarChart3 className="h-4 w-4" />} accent="cyan" microcopy={`${sessionEfficiency}% today`} onClick={() => router.push("/crm/reports")} disabled={loading || opStatsLoading} />
           </div>
+          <CRMActionBar className="crm-queue-filter-bar">
           {campaigns.length > 0 ? (
-            <div className="flex w-full flex-wrap items-center gap-2 border-t border-crm-border/60 pt-3">
+            <div className="flex w-full flex-wrap items-center gap-2">
               <Megaphone className="h-4 w-4 shrink-0 text-crm-muted" />
               <label htmlFor="crm-queue-campaign" className={cn(crm.label, "shrink-0")}>Campaign</label>
               <select
@@ -1457,9 +1559,10 @@ function QueuePageInner() {
               ) : null}
             </div>
           ) : null}
-        </CRMActionBar>
+          </CRMActionBar>
+        </>
       ) : powerModeActive && campaigns.length > 0 ? (
-        <CRMActionBar className="mb-0">
+        <CRMActionBar className="crm-queue-filter-bar mb-0">
           <Megaphone className="h-4 w-4 shrink-0 text-crm-muted" />
           <label htmlFor="crm-queue-campaign-power" className={cn(crm.label, "shrink-0")}>Campaign</label>
           <select
@@ -1482,7 +1585,7 @@ function QueuePageInner() {
         </CRMActionBar>
       ) : null}
 
-      <div className="grid grid-cols-12 gap-4 items-start">
+      <div className="crm-queue-layout grid grid-cols-12 gap-4 items-start">
         <div className="col-span-12 flex min-w-0 flex-col gap-3 xl:col-span-8 2xl:col-span-8">
         {/* Content */}
         {loading ? (
@@ -1490,14 +1593,17 @@ function QueuePageInner() {
         ) : error ? (
           <div className="py-24 text-center text-red-500 text-sm">{error}</div>
         ) : !next ? (
-          <QueueEmptyOperational
-            filter={filter}
-            powerMode={powerModeActive}
-            campaignId={campaignId}
-            onClearCampaign={() => switchCampaign(null)}
-            onSwitchPending={() => switchFilter("pending")}
-            onExitPower={() => router.push("/crm/queue")}
-          />
+          <>
+            <QueueEmptyOperational
+              filter={filter}
+              powerMode={powerModeActive}
+              campaignId={campaignId}
+              onClearCampaign={() => switchCampaign(null)}
+              onSwitchPending={() => switchFilter("pending")}
+              onExitPower={() => router.push("/crm/queue")}
+            />
+            <ActiveCampaignStrip campaignId={campaignId} campaignName={activeCampaignName} stats={opStats} counts={counts} />
+          </>
         ) : powerModeActive ? (
           // ── Power Dialer layout ──────────────────────────────────────────────
           <>
@@ -1619,6 +1725,10 @@ function QueuePageInner() {
             )}
           </>
         )}
+        {!loading && !error && next && !powerModeActive ? (
+          <ActiveCampaignStrip campaignId={campaignId} campaignName={activeCampaignName} stats={opStats} counts={counts} />
+        ) : null}
+        {!powerModeActive ? <PriorityFocusCards counts={counts} stats={opStats} loading={opStatsLoading} /> : null}
       
         </div>
         {!loading && !error ? sidePanels : null}

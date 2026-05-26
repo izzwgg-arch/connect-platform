@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { AlertTriangle, CheckSquare, Megaphone } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, CheckSquare, Megaphone, ShieldCheck } from "lucide-react";
 import { CRMCard } from "../CRMCard";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
@@ -103,44 +103,110 @@ export function QueueAttentionPanel({
     accent: "text-crm-accent",
   };
 
-  return (
-    <CRMCard padding="md" className={cn(crm.sidebarCard, "flex flex-col")}>
-      <p className={crm.label}>Needs attention</p>
-      <p className="text-[11px] text-crm-muted leading-snug">Exceptions only — queue counts are in the top row.</p>
+  const overdueTotal = (stats?.myOverdueCallbacks ?? 0) + (stats?.myTasksOverdue ?? 0);
+  const dueSoonTotal = (stats?.myCallbacksDueToday ?? 0) + (stats?.myTasksDueToday ?? 0);
+  const healthScore = overdueTotal > 0 ? 62 : dueSoonTotal > 0 ? 84 : 100;
 
-      {statsLoading ? (
-        <p className={cn(crm.muted, "py-2")}>Checking…</p>
-      ) : items.length === 0 ? (
-        <div className="rounded-crm border border-crm-border/80 bg-crm-surface-2/50 px-3 py-4 text-center">
-          <CheckSquare className="mx-auto mb-1.5 h-6 w-6 text-crm-success opacity-90" />
-          <p className="text-xs font-medium text-crm-text">No exceptions</p>
-          <p className="mt-0.5 text-[10px] text-crm-muted">Tasks and callbacks look clear.</p>
+  return (
+    <>
+      <CRMCard padding="md" className="crm-queue-rail-card crm-queue-health-card flex flex-col">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-bold text-crm-text">Queue Health</p>
+            <p className="mt-0.5 text-[11px] text-crm-muted">
+              {statsLoading ? "Checking queue signals" : overdueTotal > 0 ? "Action needed" : "All good"}
+            </p>
+          </div>
+          <span className="crm-queue-rail-icon crm-queue-rail-icon-green">
+            <ShieldCheck className="h-4 w-4" />
+          </span>
         </div>
-      ) : (
-        <ul className="flex flex-col gap-1.5">
-          {items.map((item) => (
-            <li key={item.id}>
-              <Link
-                href={item.href}
-                className={cn(
-                  "block rounded-crm border px-2.5 py-2 transition-colors",
-                  toneClass[item.tone],
-                )}
-              >
-                <div className="flex items-start gap-2">
-                  <span className={cn("mt-0.5 shrink-0", toneText[item.tone])}>{item.icon}</span>
-                  <span className="min-w-0 flex-1">
-                    <span className={cn("block text-xs font-semibold leading-snug", toneText[item.tone])}>
-                      {item.label}
+        <div className="rounded-crm border border-crm-success/25 bg-crm-success/8 p-3">
+          <div className="mb-2 flex items-center gap-2">
+            <CheckCircle2 className="h-4 w-4 text-crm-success" />
+            <p className="text-xs font-bold text-crm-success">
+              {overdueTotal > 0 ? "Needs focus" : "All good"}
+            </p>
+          </div>
+          <p className="text-[11px] leading-snug text-crm-muted">
+            {overdueTotal > 0 ? "Overdue work is waiting. Start with the red queue signals." : "You're up to date. Keep it going."}
+          </p>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-crm-surface-2">
+            <div className="h-full rounded-full bg-crm-success transition-[width] duration-500" style={{ width: `${healthScore}%` }} />
+          </div>
+          <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+            <HealthMetric label="Overdue" value={statsLoading ? "-" : overdueTotal} tone={overdueTotal > 0 ? "danger" : "default"} />
+            <HealthMetric label="Due Soon" value={statsLoading ? "-" : dueSoonTotal} />
+            <HealthMetric label="Follow Ups" value={statsLoading ? "-" : (stats?.myCallbacksDueToday ?? 0)} />
+          </div>
+        </div>
+      </CRMCard>
+
+      <CRMCard padding="md" className="crm-queue-rail-card flex flex-col">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-bold text-crm-text">Recent Activity</p>
+            <p className="mt-0.5 text-[11px] text-crm-muted">Real queue signals</p>
+          </div>
+          <span className="crm-queue-rail-icon crm-queue-rail-icon-violet">
+            <Activity className="h-4 w-4" />
+          </span>
+        </div>
+
+        {statsLoading ? (
+          <p className={cn(crm.muted, "py-2")}>Checking...</p>
+        ) : items.length === 0 ? (
+          <div className="rounded-crm border border-crm-border/80 bg-crm-surface-2/50 px-3 py-4 text-center">
+            <CheckSquare className="mx-auto mb-1.5 h-6 w-6 text-crm-success opacity-90" />
+            <p className="text-xs font-medium text-crm-text">No exceptions</p>
+            <p className="mt-0.5 text-[10px] text-crm-muted">Tasks and callbacks look clear.</p>
+          </div>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {items.map((item) => (
+              <li key={item.id}>
+                <Link
+                  href={item.href}
+                  className={cn(
+                    "crm-queue-activity-row block rounded-crm border px-2.5 py-2 transition-colors",
+                    toneClass[item.tone],
+                  )}
+                >
+                  <div className="flex items-start gap-2">
+                    <span className={cn("crm-queue-activity-icon mt-0.5 shrink-0", toneText[item.tone])}>{item.icon}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center justify-between gap-2">
+                        <span className={cn("block text-xs font-semibold leading-snug", toneText[item.tone])}>
+                          {item.label}
+                        </span>
+                        <span className="shrink-0 text-[10px] text-crm-muted">Today</span>
+                      </span>
+                      <span className="mt-0.5 block text-[10px] text-crm-muted line-clamp-2">{item.detail}</span>
                     </span>
-                    <span className="mt-0.5 block text-[10px] text-crm-muted line-clamp-2">{item.detail}</span>
-                  </span>
-                </div>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      )}
-    </CRMCard>
+                  </div>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CRMCard>
+    </>
+  );
+}
+
+function HealthMetric({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: number | string;
+  tone?: "default" | "danger";
+}) {
+  return (
+    <div className="rounded-crm border border-crm-border/60 bg-crm-surface/70 px-2 py-2">
+      <p className={cn("text-sm font-bold tabular-nums", tone === "danger" ? "text-crm-danger" : "text-crm-text")}>{value}</p>
+      <p className="mt-0.5 text-[9px] font-semibold uppercase tracking-wide text-crm-muted">{label}</p>
+    </div>
   );
 }

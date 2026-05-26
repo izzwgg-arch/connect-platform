@@ -1,8 +1,7 @@
 "use client";
 
-import type { ReactNode } from "react";
 import Link from "next/link";
-import { AlertTriangle, ArrowRight, Megaphone, PhoneCall, Sparkles, TrendingUp, Zap } from "lucide-react";
+import { AlertTriangle, ArrowRight, CalendarDays, Megaphone, Sparkles, Timer, TrendingUp, Zap } from "lucide-react";
 import { CRMCard } from "../CRMCard";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
@@ -27,109 +26,100 @@ export function QueueOverviewPanel({
   campaignName: string | null;
 }) {
   const next = pickNextAction(filter, total, counts);
+  const completed = stats?.dispositionsToday ?? 0;
+  const calls = stats?.callsLinkedToday ?? 0;
+  const efficiency = calls > 0 ? Math.round((completed / calls) * 100) : 0;
 
   return (
-    <CRMCard padding="md" className={cn(crm.sidebarCard, "flex flex-col")}>
-      <SidebarSection title="In this view">
-        <p className="text-2xl font-bold tabular-nums leading-none text-crm-text">{total}</p>
-        <p className="mt-1 text-[11px] text-crm-muted">
-          {total === 1 ? "lead" : "leads"} · {filterLabel(filter)}
-        </p>
-      </SidebarSection>
-
-      {next ? (
-        <SidebarSection title="Next best action">
-          <p className="text-xs leading-relaxed text-crm-muted">{next.hint}</p>
-          <Link href={next.href} className={cn(crm.btnSecondary, "mt-2 w-full justify-center gap-2 text-xs")}>
-            {next.icon}
-            {next.cta}
-            <ArrowRight className="ml-auto h-3.5 w-3.5 opacity-70" />
-          </Link>
-        </SidebarSection>
-      ) : null}
-
-      <SidebarSection title="Your activity today">
-        {statsLoading ? (
-          <p className={crm.muted}>Loading…</p>
-        ) : stats ? (
-          <div className="grid grid-cols-3 gap-2">
-            <MetricTile label="Outcomes" value={stats.dispositionsToday} />
-            <MetricTile label="Calls" value={stats.callsLinkedToday} icon={<PhoneCall className="h-3 w-3" />} />
-            <MetricTile label="Open tasks" value={stats.myOpen} emphasize={stats.myOpen > 0 ? "warn" : "default"} />
+    <>
+      <CRMCard padding="md" className="crm-queue-rail-card crm-queue-rail-snapshot flex flex-col">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-bold text-crm-text">Today's Snapshot</p>
+            <p className="mt-0.5 text-[11px] text-crm-muted">{filterLabel(filter)} · live view</p>
           </div>
-        ) : (
-          <p className={crm.muted}>Unavailable</p>
-        )}
-      </SidebarSection>
+          <span className="crm-queue-rail-icon crm-queue-rail-icon-blue">
+            <CalendarDays className="h-4 w-4" />
+          </span>
+        </div>
+        <div className="grid grid-cols-3 overflow-hidden rounded-crm border border-crm-border/70 bg-crm-surface-2/45">
+          <SnapshotMetric label="Tasks" value={stats?.myOpen ?? 0} loading={statsLoading} />
+          <SnapshotMetric label="Calls" value={calls} loading={statsLoading} />
+          <SnapshotMetric label="Outcomes" value={completed} loading={statsLoading} />
+          <SnapshotMetric label="Open Tabs" value={total} />
+          <SnapshotMetric label="Completed" value={completed} loading={statsLoading} />
+          <SnapshotMetric label="Efficiency" value={`${efficiency}%`} loading={statsLoading} />
+        </div>
+      </CRMCard>
 
-      <SidebarSection title="Campaign" className="mt-auto border-t border-crm-border/60 pt-3">
-        {campaignId && campaignName ? (
-          <Link
-            href={`/crm/campaigns/${encodeURIComponent(campaignId)}`}
-            className={cn(crm.btnGhost, "w-full justify-start px-2 text-xs")}
-          >
-            <Megaphone className="h-3.5 w-3.5 shrink-0 text-crm-accent" />
-            <span className="truncate">{campaignName}</span>
+      <CRMCard padding="md" className="crm-queue-rail-card crm-queue-session-card flex flex-col">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-bold text-crm-text">Session</p>
+            <p className="mt-0.5 text-[11px] text-crm-muted">Power session readiness</p>
+          </div>
+          <span className="crm-queue-rail-icon crm-queue-rail-icon-violet">
+            <Timer className="h-4 w-4" />
+          </span>
+        </div>
+        <div className="rounded-crm border border-crm-border/70 bg-crm-surface-2/45 p-3">
+          <div className="mb-3 flex items-center gap-2">
+            <span className={cn(crm.statusDot, total > 0 ? "bg-crm-accent" : "bg-crm-muted/60")} />
+            <div>
+              <p className="text-xs font-bold text-crm-text">{total > 0 ? "Ready to focus" : "Power session inactive"}</p>
+              <p className="text-[11px] leading-snug text-crm-muted">
+                {total > 0 ? `${total} ${total === 1 ? "lead" : "leads"} available in this view.` : "Eliminate distractions and focus on your queue."}
+              </p>
+            </div>
+          </div>
+          {next ? (
+            <Link href={next.href} className={cn(crm.btnPrimary, "w-full justify-center gap-2 text-xs")}>
+              {next.icon}
+              {next.cta}
+              <ArrowRight className="ml-auto h-3.5 w-3.5 opacity-80" />
+            </Link>
+          ) : (
+            <Link href="/crm/queue?mode=power" className={cn(crm.btnPrimary, "w-full justify-center gap-2 text-xs")}>
+              <Zap className="h-3.5 w-3.5" />
+              Start power session
+            </Link>
+          )}
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          {campaignId && campaignName ? (
+            <Link href={`/crm/campaigns/${encodeURIComponent(campaignId)}`} className="crm-queue-mini-link">
+              <Megaphone className="h-3.5 w-3.5" />
+              <span className="truncate">{campaignName}</span>
+            </Link>
+          ) : stats && !statsLoading ? (
+            <Link href="/crm/campaigns?status=ACTIVE" className="crm-queue-mini-link">
+              <Megaphone className="h-3.5 w-3.5" />
+              {stats.activeCampaigns} active
+            </Link>
+          ) : null}
+          <Link href="/crm/dashboard" className="crm-queue-mini-link">
+            <TrendingUp className="h-3.5 w-3.5" />
+            Dashboard
           </Link>
-        ) : stats && !statsLoading ? (
-          <Link href="/crm/campaigns?status=ACTIVE" className={cn(crm.btnGhost, "w-full justify-start px-2 text-xs")}>
-            <Megaphone className="h-3.5 w-3.5" />
-            {stats.activeCampaigns} active campaigns
-          </Link>
-        ) : (
-          <p className="text-xs text-crm-muted">All campaigns</p>
-        )}
-        <Link href="/crm/dashboard" className={cn(crm.btnGhost, "mt-1 w-full justify-start px-2 text-xs")}>
-          <TrendingUp className="h-3.5 w-3.5" />
-          Command center
-        </Link>
-      </SidebarSection>
-    </CRMCard>
+        </div>
+      </CRMCard>
+    </>
   );
 }
 
-function SidebarSection({
-  title,
-  children,
-  className,
-}: {
-  title: string;
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <div className={cn(crm.sidebarSection, className)}>
-      <p className={crm.label}>{title}</p>
-      {children}
-    </div>
-  );
-}
-
-function MetricTile({
+function SnapshotMetric({
   label,
   value,
-  icon,
-  emphasize,
+  loading,
 }: {
   label: string;
-  value: number;
-  icon?: ReactNode;
-  emphasize?: "default" | "warn";
+  value: number | string;
+  loading?: boolean;
 }) {
   return (
-    <div className={cn(crm.metricTile, "min-h-[3.5rem]")}>
-      <p className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-crm-muted">
-        {icon}
-        {label}
-      </p>
-      <p
-        className={cn(
-          "mt-1 text-lg font-bold tabular-nums leading-none",
-          emphasize === "warn" && value > 0 ? "text-crm-warning" : "text-crm-text",
-        )}
-      >
-        {value}
-      </p>
+    <div className="border-r border-t border-crm-border/60 px-3 py-3 first:border-t-0 [&:nth-child(2)]:border-t-0 [&:nth-child(3)]:border-t-0 [&:nth-child(3n)]:border-r-0">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-crm-muted">{label}</p>
+      <p className="mt-1 text-lg font-bold tabular-nums leading-none text-crm-text">{loading ? "-" : value}</p>
     </div>
   );
 }
