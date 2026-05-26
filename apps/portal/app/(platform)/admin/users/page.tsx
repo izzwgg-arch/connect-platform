@@ -7,6 +7,7 @@ import { PermissionGate } from "../../../../components/PermissionGate";
 import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
+import { useTenantOptions } from "../../../../hooks/useTenantOptions";
 
 type TenantOption = { id: string; name: string; status: string; kind?: string };
 type ExtensionOption = {
@@ -141,6 +142,11 @@ export default function AdminUsersPage() {
   // Super admins default to "ALL" so they see every customer tenant at once.
   const [selectedTenantId, setSelectedTenantId] = useState<string>(() => isSuper ? "ALL" : contextTenantId);
 
+  // Canonical tenant options — refreshes automatically when PBX sync fires
+  // cc-pbx-tenants-refreshed event. Connect-only: filter and create form both
+  // require a real Connect tenant row (users cannot be created for vpbx: tenants).
+  const { options: tenantOptions } = useTenantOptions({ connectOnly: true });
+
   const [data, setData] = useState<UsersResponse | null>(null);
   const [selected, setSelected] = useState<AdminUser | null>(null);
   const [routeUser, setRouteUser] = useState<AdminUser | null>(null);
@@ -241,7 +247,7 @@ export default function AdminUsersPage() {
                 searchable
                 options={[
                   { value: "ALL", label: "All tenants" },
-                  ...(data?.tenants || []).map((t) => ({ value: t.id, label: t.name })),
+                  ...tenantOptions.map((t) => ({ value: t.id, label: t.name })),
                 ]}
               />
             ) : null}
@@ -1008,7 +1014,10 @@ function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
   } : { ...emptyForm, tenantId: defaultTenantId || "" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [tenants, setTenants] = useState<TenantOption[]>([]);
+  // Tenant list comes from the canonical useTenantOptions hook (connect-only —
+  // users require a real Connect tenant row; vpbx: virtual tenants cannot own users).
+  const { options: tenantOptions } = useTenantOptions({ connectOnly: true });
+  const tenants: TenantOption[] = tenantOptions.map((t) => ({ id: t.id, name: t.name, status: "ACTIVE" }));
   const [roles, setRoles] = useState<RoleOption[]>(DEFAULT_PORTAL_ROLES);
   const [extensionOptions, setExtensionOptions] = useState<ExtensionOption[]>([]);
   const [userFacingOnly, setUserFacingOnly] = useState(true);
@@ -1016,23 +1025,31 @@ function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
   const selectedExtension = extensionOptions.find((e) => e.id === form.extensionId);
   const roleOptions = roles.length ? roles : DEFAULT_PORTAL_ROLES;
 
-  // Bootstrap: fetch tenants + portal-bucket roles the first time the modal opens.
+  // Bootstrap: fetch portal-bucket roles once when modal opens.
+  // Tenant list is now provided by useTenantOptions; we only need the catalog for roles + extensions.
   useEffect(() => {
     let active = true;
     apiGet<CatalogResponse>(`/admin/users/catalog?userFacingOnly=${userFacingOnly ? "true" : "false"}`)
       .then((r) => {
         if (!active) return;
-        setTenants(r.tenants || []);
         if (r.roles?.length) setRoles(r.roles);
-        if (!form.tenantId) {
-          const initial = r.tenants.some((t) => t.id === defaultTenantId) ? defaultTenantId : (r.tenants[0]?.id || "");
+        if (!form.tenantId && tenants.length > 0) {
+          const initial = tenants.some((t) => t.id === defaultTenantId) ? defaultTenantId : (tenants[0]?.id || "");
           if (initial) setForm((f) => ({ ...f, tenantId: initial }));
         }
       })
-      .catch((e: any) => { if (active) setError(e?.message || "Failed to load tenants"); });
+      .catch((e: any) => { if (active) setError(e?.message || "Failed to load roles"); });
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Set default tenantId once tenant options have loaded (handles async hook).
+  useEffect(() => {
+    if (form.tenantId || tenants.length === 0) return;
+    const initial = tenants.some((t) => t.id === defaultTenantId) ? defaultTenantId : (tenants[0]?.id || "");
+    if (initial) setForm((f) => ({ ...f, tenantId: initial }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenants.length]);
 
   // Refresh the extension dropdown every time the tenant or the user-facing
   // toggle changes. The server already filters for us.

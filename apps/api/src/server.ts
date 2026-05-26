@@ -6575,6 +6575,140 @@ app.patch("/admin/tenants/:id", async (req, reply) => {
   return updated;
 });
 
+/**
+ * Canonical tenant option list for admin dropdowns.
+ *
+ * SUPER_ADMIN: returns all approved CUSTOMER Connect tenants (source "connect" or "linked")
+ * plus any PBX-only tenants from PbxTenantDirectory that have no linked Connect tenant
+ * (source "pbx", id "vpbx:{slug}").
+ *
+ * Non-SUPER_ADMIN: returns only their own tenant (source depends on whether it is linked).
+ *
+ * This is the canonical source for admin tenant selectors throughout the portal.
+ * After POST /admin/pbx/refresh-tenants, the portal emits a "cc-pbx-tenants-refreshed"
+ * browser event and all consumers of useTenantOptions() refetch this endpoint.
+ */
+app.get("/admin/tenant-options", async (req, reply) => {
+  const admin = await requirePermission(req, reply, canManageUsers);
+  if (!admin) return;
+
+  type TenantOption = {
+    id: string;
+    name: string;
+    source: "connect" | "pbx" | "linked";
+    pbxTenantId: string | null;
+    pbxTenantCode: string | null;
+    pbxSlug: string | null;
+  };
+
+  if (admin.role !== "SUPER_ADMIN") {
+    const tenant = await db.tenant.findUnique({
+      where: { id: admin.tenantId },
+      select: { id: true, name: true },
+    });
+    if (!tenant) return reply.status(404).send({ error: "tenant_not_found" });
+    const link = await db.tenantPbxLink
+      .findUnique({
+        where: { tenantId: admin.tenantId },
+        select: { pbxTenantId: true, pbxInstanceId: true },
+      })
+      .catch(() => null);
+    let pbxCode: string | null = null;
+    let pbxSlug: string | null = null;
+    if (link?.pbxTenantId && link?.pbxInstanceId) {
+      const dir = await db.pbxTenantDirectory
+        .findUnique({
+          where: { pbxInstanceId_vitalTenantId: { pbxInstanceId: link.pbxInstanceId, vitalTenantId: String(link.pbxTenantId) } },
+          select: { tenantCode: true, tenantSlug: true },
+        })
+        .catch(() => null);
+      pbxCode = dir?.tenantCode ?? null;
+      pbxSlug = dir?.tenantSlug ?? null;
+    }
+    return {
+      options: [
+        {
+          id: tenant.id,
+          name: tenant.name,
+          source: link?.pbxTenantId ? ("linked" as const) : ("connect" as const),
+          pbxTenantId: link?.pbxTenantId ?? null,
+          pbxTenantCode: pbxCode,
+          pbxSlug,
+        } satisfies TenantOption,
+      ],
+    };
+  }
+
+  // SUPER_ADMIN: merge Connect tenants + PBX-only directory tenants.
+  const [connectTenants, pbxLinks, allDirectory] = await Promise.all([
+    db.tenant.findMany({
+      where: {
+        kind: "CUSTOMER" as any,
+        isApproved: true,
+        NOT: [
+          { name: { contains: "smoke", mode: "insensitive" } },
+          { name: { contains: "dbg ", mode: "insensitive" } },
+          { name: { contains: "verify tenant", mode: "insensitive" } },
+          { name: { contains: "admin tenant", mode: "insensitive" } },
+          { name: { startsWith: "Tenant ", mode: "insensitive" } },
+          { name: { startsWith: "Connect Admin ", mode: "insensitive" } },
+        ],
+      },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    }),
+    db.tenantPbxLink.findMany({
+      select: { tenantId: true, pbxTenantId: true, pbxInstanceId: true },
+    }),
+    db.pbxTenantDirectory.findMany({
+      select: { vitalTenantId: true, tenantSlug: true, tenantCode: true, displayName: true, pbxInstanceId: true },
+    }),
+  ]);
+
+  const pbxLinkByTenantId = new Map(pbxLinks.map((l) => [l.tenantId, l]));
+  const linkedPbxTenantIds = new Set(
+    pbxLinks.filter((l) => l.pbxTenantId).map((l) => `${l.pbxInstanceId}:${l.pbxTenantId}`),
+  );
+
+  const options: TenantOption[] = [];
+
+  // Connect tenants first (with PBX link info where available).
+  for (const t of connectTenants) {
+    const link = pbxLinkByTenantId.get(t.id);
+    const dir =
+      link?.pbxTenantId && link?.pbxInstanceId
+        ? allDirectory.find((d) => d.pbxInstanceId === link.pbxInstanceId && d.vitalTenantId === String(link.pbxTenantId))
+        : null;
+    options.push({
+      id: t.id,
+      name: dir?.displayName || dir?.tenantSlug || t.name,
+      source: link?.pbxTenantId ? "linked" : "connect",
+      pbxTenantId: link?.pbxTenantId ?? null,
+      pbxTenantCode: dir?.tenantCode ?? null,
+      pbxSlug: dir?.tenantSlug ?? null,
+    });
+  }
+
+  // PBX-only tenants not linked to any Connect tenant.
+  for (const dir of allDirectory) {
+    const key = `${dir.pbxInstanceId}:${dir.vitalTenantId}`;
+    if (linkedPbxTenantIds.has(key)) continue;
+    const slug = dir.tenantSlug || dir.vitalTenantId;
+    const id = dir.tenantSlug ? `vpbx:${dir.tenantSlug}` : `vpbx:${dir.vitalTenantId}`;
+    const name = dir.displayName || slug.replace(/[_-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) || `Tenant ${dir.vitalTenantId}`;
+    options.push({
+      id,
+      name,
+      source: "pbx",
+      pbxTenantId: dir.vitalTenantId,
+      pbxTenantCode: dir.tenantCode,
+      pbxSlug: dir.tenantSlug,
+    });
+  }
+
+  return { options: options.sort((a, b) => a.name.localeCompare(b.name)) };
+});
+
 app.get("/admin/sms/provider-health", async (req, reply) => {
   const admin = await requireAdmin(req, reply);
   if (!admin) return;

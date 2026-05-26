@@ -5,6 +5,7 @@ import { hasPermission } from "../permissions/permissionMap";
 import { mapBackendRole, readJwtPayload } from "../services/session";
 import { ApiError, apiGet, apiPost } from "../services/apiClient";
 import { loadTenantOptions } from "../services/tenantData";
+import { PBX_TENANTS_REFRESHED_EVENT } from "./useTenantOptions";
 import { bootstrapVisualQaSession, isVisualQaModeEnabled } from "../services/visualQaMode";
 import type { AdminScope, Permission, Role, Tenant, User } from "../types/app";
 
@@ -158,6 +159,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         retryAfterMs?: number;
       }>("/admin/pbx/refresh-tenants", undefined, undefined, { timeoutMs: 30_000 });
       await reloadTenantOptions();
+      // Notify all useTenantOptions consumers to refetch.
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent(PBX_TENANTS_REFRESHED_EVENT));
+      }
       const changed = Number(result.directoryCreated || 0) + Number(result.directoryUpdated || 0);
       return {
         ok: true as const,

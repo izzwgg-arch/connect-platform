@@ -307,7 +307,7 @@ export const crm = {
 
   /** Phase 19J — checklist operational workspace */
   pageInnerChecklist:
-    "relative mx-auto w-full max-w-[min(100%,1600px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-3 min-h-0 z-[1]",
+    "relative mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0 z-[1]",
   /** Phase 19J — checklist operational workspace; theme tokens via globals `.crm-checklist-workspace` */
   checklistWorkspace: "crm-checklist-workspace relative min-h-full w-full min-h-0",
   checklistAmbientLayer:
@@ -325,9 +325,9 @@ export const crm = {
   checklistTabActive:
     "checklist-tab checklist-tab-active rounded-lg px-3.5 py-1.5 text-xs font-semibold text-crm-accent",
   checklistTipsStrip:
-    "checklist-tips-strip relative z-[1] overflow-hidden rounded-2xl border border-crm-border/35 px-3 py-2.5",
+    "checklist-tips-strip relative z-[1] overflow-hidden rounded-[1.35rem] border border-crm-border/35 px-3 py-2.5",
   checklistTipSegment:
-    "flex min-w-0 flex-1 items-center gap-2.5 rounded-xl border border-transparent px-2.5 py-2 transition-all hover:border-crm-accent/20 hover:bg-crm-accent/[0.06]",
+    "flex min-w-[13rem] flex-1 items-center gap-2.5 rounded-xl border border-transparent px-2.5 py-2 text-left transition-all hover:border-crm-accent/20 hover:bg-crm-accent/[0.06]",
   checklistCinematicHero:
     "checklist-cinematic-hero relative isolate min-h-[min(26rem,48vh)] overflow-hidden rounded-2xl border border-crm-accent/15",
   checklistCinematicHeroVignette:
@@ -350,7 +350,17 @@ export const crm = {
     "shadow-[0_0_28px_-6px_rgba(56,189,248,0.45)] hover:shadow-[0_0_36px_-4px_rgba(56,189,248,0.55)]",
   checklistFeatureCard:
     "checklist-feature-card group relative flex flex-col gap-1.5 overflow-hidden rounded-xl border border-crm-border/40 px-3.5 py-3 transition-all duration-300",
-  checklistGrid: "relative z-[1] grid gap-3 lg:grid-cols-12 lg:items-stretch",
+  checklistGrid: "relative z-[1] grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(19rem,23rem)] xl:items-start",
+  checklistMainCol: "flex min-w-0 flex-col gap-4",
+  checklistRailCol: "flex min-w-0 flex-col gap-3",
+  checklistTemplateWorkspace:
+    "checklist-template-workspace relative overflow-hidden rounded-[1.65rem] border border-crm-border/40 p-4 shadow-crm sm:p-5",
+  checklistTemplateGrid:
+    "grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3",
+  checklistScratchCard:
+    "checklist-scratch-card group flex w-full items-center gap-3 rounded-[1.35rem] border border-crm-border/45 p-4 text-left transition-all duration-200 hover:-translate-y-px",
+  checklistRailCard:
+    "checklist-rail-card rounded-[1.35rem] border border-crm-border/35 p-4 shadow-crm",
   checklistLibraryCol:
     "lg:col-span-3 xl:col-span-3 flex flex-col min-w-0 opacity-[0.92] lg:pt-1",
   checklistWorkspaceCol:

@@ -207,6 +207,49 @@ Plus four delegated registrars at lines ~30198–30265 (see top of file).
 - `GET /admin/users/:id/outbound-routes` (5170), `PUT /admin/users/:id/outbound-routes` (5193)
 - `GET /admin/users/:id/crm-access`, `PUT /admin/users/:id/crm-access` (`apps/api/src/admin/userCrmAccessRoutes.ts`)
 
+### Canonical tenant dropdown source (`GET /admin/tenant-options`)
+
+**Auth:** `canManageUsers` (SUPER_ADMIN / TENANT_ADMIN / ADMIN). End-users never receive this list.
+**Placement in `server.ts`:** added after `PATCH /admin/tenants/:id` (near `GET /admin/tenants`).
+**Purpose:** Single endpoint powering all admin tenant dropdowns throughout the portal.
+
+**Response shape:**
+```json
+{
+  "options": [
+    {
+      "id": "connect-cuid",
+      "name": "Acme Corp",
+      "source": "linked",
+      "pbxTenantId": "2",
+      "pbxTenantCode": "T2",
+      "pbxSlug": "acme_corp"
+    },
+    {
+      "id": "vpbx:new_tenant",
+      "name": "New Tenant",
+      "source": "pbx",
+      "pbxTenantId": "5",
+      "pbxTenantCode": "T5",
+      "pbxSlug": "new_tenant"
+    }
+  ]
+}
+```
+
+**`source` values:**
+- `"connect"` — a Connect `Tenant` row with no PBX link.
+- `"linked"` — a Connect `Tenant` row linked to VitalPBX via `TenantPbxLink`.
+- `"pbx"` — a VitalPBX tenant in `PbxTenantDirectory` with no Connect `Tenant` row yet (id `vpbx:{slug}`).
+
+**Security:** SUPER_ADMIN sees all; non-SUPER_ADMIN sees only their own tenant.
+
+**Cache invalidation:** After `POST /admin/pbx/refresh-tenants` succeeds, `useAppContext.refreshPbxTenants()` dispatches the `cc-pbx-tenants-refreshed` browser CustomEvent. Any component using `useTenantOptions()` (portal hook at `apps/portal/hooks/useTenantOptions.ts`) automatically refetches this endpoint.
+
+**Connect-only filter:** Pass `connectOnly: true` to `useTenantOptions()` to see only tenants with real Connect rows (`source: "connect" | "linked"`). Use this for user-creation forms and user-filter dropdowns — users must belong to a real Connect tenant; `vpbx:` virtual tenants cannot own users.
+
+**Do NOT use for billing** — billing has its own tenant list at `GET /admin/billing/platform/tenants`.
+
 ---
 
 ## Outbound Routes
