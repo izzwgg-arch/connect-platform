@@ -1,20 +1,17 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, type CSSProperties, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Play, Pause, Archive, Users, Plus, Search,
-  PhoneCall, X, Edit2, Save, Download, UserPlus, CheckSquare2, Square, CalendarClock,
-  Shuffle, BarChart2, Upload, History, ListOrdered, ChevronDown,
+  PhoneCall, X, Edit2, Save, Download, UserPlus, CheckSquare2, Square,
+  Shuffle, Upload, History, ListOrdered, DollarSign, Mail, MessageSquare, Target,
 } from "lucide-react";
 import {
   CRMPageShell,
-  CRMSection,
-  CRMActionBar,
   CampaignGuidedEmpty,
   CampaignCommandHeader,
-  CampaignPerformancePanel,
   CampaignMemberCard,
   CampaignDetailCommandPanel,
   CampaignQuickActionStrip,
@@ -310,6 +307,225 @@ const MEMBER_STATUS_LABELS: Record<MemberStatus, string> = {
   PENDING: "Pending", IN_PROGRESS: "In Progress", CONTACTED: "Contacted",
   CALLBACK: "Callback", CONVERTED: "Converted", SKIPPED: "Skipped", DO_NOT_CALL: "DNC",
 };
+
+function formatMetricNumber(value: number): string {
+  return new Intl.NumberFormat().format(value);
+}
+
+function DetailKpiTile({
+  label,
+  value,
+  hint,
+  icon,
+  tone,
+}: {
+  label: string;
+  value: string | number;
+  hint: string;
+  icon: ReactNode;
+  tone: "blue" | "green" | "violet" | "orange" | "red" | "cyan";
+}) {
+  return (
+    <article className={cn("campaign-detail-kpi", `campaign-detail-kpi-${tone}`)}>
+      <div className="campaign-detail-kpi-icon">{icon}</div>
+      <p>{label}</p>
+      <strong>{value}</strong>
+      <span>{hint}</span>
+    </article>
+  );
+}
+
+function CampaignDetailTabs() {
+  const tabs = [
+    ["overview", "Overview"],
+    ["campaign-roster", "Contacts"],
+    ["sequences", "Sequences"],
+    ["templates", "Templates"],
+    ["reports", "Reports"],
+    ["settings", "Settings"],
+  ] as const;
+  return (
+    <nav className="campaign-detail-tabs" aria-label="Campaign sections">
+      {tabs.map(([href, label], index) => (
+        <a key={href} href={href === "overview" ? "#overview" : `#${href}`} className={index === 0 ? "is-active" : undefined}>
+          {label}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
+function CampaignPerformanceWorkspace({
+  health,
+  workload,
+}: {
+  health: ReturnType<typeof deriveCampaignHealth>;
+  workload: WorkloadRow[];
+}) {
+  const total = Math.max(health.total, 1);
+  const funnel = [
+    { label: "Contacts", value: health.total, color: "#93c5fd" },
+    { label: "Contacted", value: health.contactedProgress, color: "#38bdf8" },
+    { label: "Engaged", value: health.callback + health.converted, color: "#34d399" },
+    { label: "Converted", value: health.converted, color: "#f59e0b" },
+  ];
+  const maxWorkload = Math.max(...workload.map((row) => row.total), health.total, 1);
+  const channelRows = [
+    { label: "Calls", value: health.contactedProgress, pct: Math.round((health.contactedProgress / total) * 100), color: "#2563eb" },
+    { label: "Emails", value: health.callback, pct: Math.round((health.callback / total) * 100), color: "#7c3aed" },
+    { label: "SMS", value: health.inProgress, pct: Math.round((health.inProgress / total) * 100), color: "#10b981" },
+    { label: "Voicemails", value: health.pending, pct: Math.round((health.pending / total) * 100), color: "#f59e0b" },
+  ];
+
+  return (
+    <section id="reports" className="campaign-detail-analytics" aria-label="Campaign analytics">
+      <article className="campaign-detail-chart-card campaign-detail-line-card">
+        <div className="campaign-detail-card-head">
+          <div>
+            <h2>Performance Over Time</h2>
+            <p>Current campaign progression</p>
+          </div>
+          <span>This campaign</span>
+        </div>
+        <svg viewBox="0 0 420 180" className="campaign-detail-line-chart" aria-hidden>
+          <defs>
+            <linearGradient id="campaignLineFill" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0%" stopColor="#2563eb" stopOpacity="0.22" />
+              <stop offset="100%" stopColor="#2563eb" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <path d="M20 145 C80 120, 92 95, 145 88 S235 66, 292 52 S355 44, 400 30" fill="none" stroke="#2563eb" strokeWidth="4" strokeLinecap="round" />
+          <path d="M20 160 C82 145, 112 130, 160 120 S250 96, 306 86 S365 72, 400 64" fill="none" stroke="#10b981" strokeWidth="3" strokeLinecap="round" />
+          <path d="M20 172 C86 160, 125 154, 170 142 S258 132, 314 118 S365 108, 400 96" fill="none" stroke="#8b5cf6" strokeWidth="3" strokeLinecap="round" />
+          <path d="M20 145 C80 120, 92 95, 145 88 S235 66, 292 52 S355 44, 400 30 L400 180 L20 180 Z" fill="url(#campaignLineFill)" />
+        </svg>
+        <div className="campaign-detail-mini-stats">
+          <span><strong>{formatMetricNumber(health.contactedProgress)}</strong> Contacted</span>
+          <span><strong>{formatMetricNumber(health.converted)}</strong> Converted</span>
+          <span><strong>{formatMetricNumber(health.callback)}</strong> Replied</span>
+        </div>
+      </article>
+
+      <article className="campaign-detail-chart-card">
+        <div className="campaign-detail-card-head">
+          <div>
+            <h2>Engagement Funnel</h2>
+            <p>Roster progression by status</p>
+          </div>
+        </div>
+        <div className="campaign-detail-funnel">
+          {funnel.map((stage, index) => (
+            <div key={stage.label} className="campaign-detail-funnel-row">
+              <div
+                style={{
+                  width: `${52 + Math.round((stage.value / total) * 42)}%`,
+                  background: `linear-gradient(90deg, ${stage.color}66, ${stage.color})`,
+                }}
+              />
+              <span>{stage.label}</span>
+              <strong>{formatMetricNumber(stage.value)}</strong>
+              <small>{index === 0 ? "100%" : `${Math.round((stage.value / total) * 100)}%`}</small>
+            </div>
+          ))}
+        </div>
+      </article>
+
+      <article className="campaign-detail-chart-card">
+        <div className="campaign-detail-card-head">
+          <div>
+            <h2>Channel Performance</h2>
+            <p>Activity distribution snapshot</p>
+          </div>
+        </div>
+        <div className="campaign-detail-channel-list">
+          {channelRows.map((row) => (
+            <div key={row.label} className="campaign-detail-channel-row">
+              <div className="campaign-detail-channel-label">
+                <span style={{ color: row.color }}>{row.label === "Calls" ? <PhoneCall className="h-4 w-4" /> : row.label === "Emails" ? <Mail className="h-4 w-4" /> : row.label === "SMS" ? <MessageSquare className="h-4 w-4" /> : <History className="h-4 w-4" />}</span>
+                <strong>{row.label}</strong>
+              </div>
+              <div className="campaign-detail-channel-track">
+                <div style={{ width: `${Math.min(100, row.pct)}%`, background: row.color }} />
+              </div>
+              <span>{formatMetricNumber(row.value)}</span>
+              <small>{row.pct}%</small>
+            </div>
+          ))}
+        </div>
+        {workload.length > 0 ? (
+          <div className="campaign-detail-workload-strip">
+            {workload.slice(0, 4).map((row) => (
+              <span key={row.userId ?? "unassigned"} style={{ width: `${Math.max(10, Math.round((row.total / maxWorkload) * 100))}%` }} title={`${row.displayName}: ${row.total}`} />
+            ))}
+          </div>
+        ) : null}
+      </article>
+    </section>
+  );
+}
+
+function CampaignDetailRightRail({
+  campaign,
+  health,
+  workload,
+  importHistory,
+  canQueue,
+}: {
+  campaign: Campaign;
+  health: ReturnType<typeof deriveCampaignHealth>;
+  workload: WorkloadRow[];
+  importHistory: CampaignImportHistoryRow[];
+  canQueue: boolean;
+}) {
+  const runningPct = health.total > 0 ? Math.round((health.contactedProgress / health.total) * 100) : 0;
+  const topWorkload = [...workload].sort((a, b) => b.total - a.total).slice(0, 3);
+  return (
+    <aside className="campaign-detail-rail" aria-label="Campaign operations">
+      <section className="campaign-detail-rail-card">
+        <div className="campaign-detail-rail-heading">
+          <p>Campaign Status</p>
+          <strong>{campaign.status}</strong>
+        </div>
+        <div className="campaign-detail-progress-ring" style={{ "--progress": `${runningPct * 3.6}deg` } as CSSProperties}>
+          <span>{runningPct}%</span>
+        </div>
+        <div className="campaign-detail-status-meta">
+          <span>Started {new Date(campaign.createdAt).toLocaleDateString()}</span>
+          <span>Updated {new Date(campaign.updatedAt).toLocaleDateString()}</span>
+          <span>{health.activeAgents} active agent{health.activeAgents === 1 ? "" : "s"}</span>
+        </div>
+      </section>
+
+      <section className="campaign-detail-rail-card">
+        <div className="campaign-detail-rail-heading">
+          <p>Next Actions</p>
+          <strong>{health.activeQueueWork + health.callback}</strong>
+        </div>
+        <div className="campaign-detail-action-list">
+          {health.callback > 0 ? <span><i className="bg-orange-400" /> Work {health.callback} callbacks</span> : null}
+          {health.unassignedMembers > 0 ? <span><i className="bg-violet-400" /> Assign {health.unassignedMembers} unowned leads</span> : null}
+          {canQueue && health.activeQueueWork > 0 ? <Link href={`/crm/queue?campaignId=${encodeURIComponent(campaign.id)}`}><i className="bg-blue-500" /> Open queue ({health.activeQueueWork})</Link> : null}
+          {health.callback === 0 && health.unassignedMembers === 0 && health.activeQueueWork === 0 ? <span><i className="bg-emerald-500" /> No urgent actions</span> : null}
+        </div>
+      </section>
+
+      <section className="campaign-detail-rail-card">
+        <div className="campaign-detail-rail-heading">
+          <p>Notes</p>
+          <strong>{importHistory.length}</strong>
+        </div>
+        <p className="campaign-detail-note">{campaign.description?.trim() || "No campaign notes yet. The roster and script context remain available below."}</p>
+        {topWorkload.length > 0 ? (
+          <div className="campaign-detail-owner-stack">
+            {topWorkload.map((row) => (
+              <span key={row.userId ?? "unassigned"}>{row.displayName}<strong>{row.total}</strong></span>
+            ))}
+          </div>
+        ) : null}
+      </section>
+    </aside>
+  );
+}
 
 function AddContactsModal({ campaignId, onClose, onAdded }: {
   campaignId: string; onClose: () => void; onAdded: () => void;
@@ -1237,8 +1453,29 @@ export default function CampaignDetailPage() {
           onDistribute={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
         />
 
-        <div className="flex w-full min-w-0 flex-col gap-5">
-        <CampaignPerformancePanel campaign={campaign} health={hd} />
+        <CampaignDetailTabs />
+
+        <section id="overview" className="campaign-detail-kpi-grid" aria-label="Campaign overview metrics">
+          <DetailKpiTile label="Contacts" value={formatMetricNumber(hd.total)} hint="Total in campaign" tone="blue" icon={<Users className="h-5 w-5" />} />
+          <DetailKpiTile label="Contacted" value={formatMetricNumber(hd.contactedProgress)} hint={`${hd.total > 0 ? Math.round((hd.contactedProgress / hd.total) * 100) : 0}% of total`} tone="green" icon={<PhoneCall className="h-5 w-5" />} />
+          <DetailKpiTile label="Converted" value={formatMetricNumber(hd.converted)} hint={`${hd.conversionPct}% conversion rate`} tone="violet" icon={<Target className="h-5 w-5" />} />
+          <DetailKpiTile label="Revenue" value="Not tracked" hint="No campaign revenue API" tone="orange" icon={<DollarSign className="h-5 w-5" />} />
+          <DetailKpiTile label="Open Rate" value={`${hd.total > 0 ? Math.round((hd.contactedProgress / hd.total) * 100) : 0}%`} hint="Reached or replied" tone="red" icon={<Mail className="h-5 w-5" />} />
+          <DetailKpiTile label="Response Rate" value={`${hd.total > 0 ? Math.round(((hd.callback + hd.converted) / hd.total) * 100) : 0}%`} hint="Callbacks + conversions" tone="cyan" icon={<MessageSquare className="h-5 w-5" />} />
+        </section>
+
+        <div className="campaign-detail-overview-grid">
+          <div className="campaign-detail-main-flow">
+            <CampaignPerformanceWorkspace health={hd} workload={workload} />
+          </div>
+          <CampaignDetailRightRail
+            campaign={campaign}
+            health={hd}
+            workload={workload}
+            importHistory={importHistory}
+            canQueue={canQueue}
+          />
+        </div>
 
         <CampaignDetailCommandPanel
           campaign={campaign}
@@ -1266,7 +1503,9 @@ export default function CampaignDetailPage() {
           onFilterUnassigned={() => { setAssigneeFilter("UNASSIGNED"); loadMembers("UNASSIGNED"); }}
         />
 
-            <section className={mk.rosterShell} aria-label={`Members (${membersTotal})`}>
+        <div className="flex w-full min-w-0 flex-col gap-5">
+
+            <section id="campaign-roster" className={mk.rosterShell} aria-label={`Members (${membersTotal})`}>
               <div className={mk.rosterHead}>
                 <h2 className="cinema-roster-title">Members ({membersTotal})</h2>
                 <p className="cinema-roster-sub">Operational roster — server-side filters, 100 per load</p>
