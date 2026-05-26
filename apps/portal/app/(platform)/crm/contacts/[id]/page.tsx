@@ -4,19 +4,20 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
-  ArrowLeft, Phone, Mail, Clock, User, MessageSquare, MessageSquareDot, Pencil, Trash2,
-  CheckSquare, Circle, Plus, CheckCheck, GitMerge, AlertTriangle, Calendar, Send,
-  ChevronRight,
+  ArrowLeft, Phone, Mail, Clock, User, MessageSquareDot, Trash2,
+  Circle, Plus, CheckCheck, GitMerge, AlertTriangle, Calendar,
+  ChevronRight, Headphones, Mic, Pause, Hash, Forward, Radio, PhoneOff, Sparkles,
 } from "lucide-react";
 import {
   CRMPageShell,
   CRMCard,
-  CRMEmptyState,
-  CRMSection,
   crm,
   ContactContextBar,
   LiveWorkspaceActionBar,
   LiveWorkspaceContactHeader,
+  LiveCallStatusBanner,
+  LiveWorkspaceScriptPanel,
+  LiveWorkspaceChecklistPanel,
   LiveWorkspaceNotePanel,
   LiveWorkspaceOutcomePanel,
   LiveWrapUpBar,
@@ -27,19 +28,17 @@ import {
   type CrmStage,
   type CrmTask,
   type DuplicateContact,
-  type NextStep,
   type QueueContextMember,
   type TimelineEvent,
   STAGE_OPTIONS,
   TASK_PRIORITY_COLOR,
   formatDate,
-  formatDateTime,
   formatTimeAgo,
   stageColor,
   stageLabel,
   cn,
 } from "../../../../../components/crm";
-import { DISPOSITION_OPTIONS, type LiveContact } from "../../../../../components/crm/live";
+import { DISPOSITION_OPTIONS, type Checklist, type LiveContact, type ScriptSummary } from "../../../../../components/crm/live";
 import { CrmEmailComposeDrawer } from "../../../../../components/crm/email/CrmEmailComposeDrawer";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { apiGet, apiPatch, apiPost, apiDelete } from "../../../../../services/apiClient";
@@ -158,6 +157,13 @@ function CrmContactDetailInner() {
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [newTaskDueAt, setNewTaskDueAt] = useState("");
   const [newTaskPosting, setNewTaskPosting] = useState(false);
+
+  // Script/checklist workspace state reuses existing CRM live-workspace APIs.
+  const [scriptSummaries, setScriptSummaries] = useState<ScriptSummary[]>([]);
+  const [checklists, setChecklists] = useState<Checklist[]>([]);
+  const [workspaceTab, setWorkspaceTab] = useState<"live" | "script" | "checklist" | "notes">("live");
+  const [communicationTab, setCommunicationTab] = useState<"call" | "sms" | "whatsapp" | "email">("call");
+  const workspacePanelRef = useRef<HTMLDivElement>(null);
 
   // Note composer
   const [noteText, setNoteText] = useState("");
@@ -305,12 +311,22 @@ function CrmContactDetailInner() {
     }
   }, [id]);
 
+  const loadWorkspaceGuides = useCallback(async () => {
+    const [scriptsRes, checklistRes] = await Promise.allSettled([
+      apiGet<{ scripts: ScriptSummary[] }>("/crm/scripts"),
+      apiGet<{ checklists: Checklist[] }>("/crm/checklists"),
+    ]);
+    if (scriptsRes.status === "fulfilled") setScriptSummaries(scriptsRes.value.scripts ?? []);
+    if (checklistRes.status === "fulfilled") setChecklists(checklistRes.value.checklists ?? []);
+  }, []);
+
   useEffect(() => {
     loadContact();
     loadTimeline();
     loadTasks();
     loadDuplicates();
-  }, [loadContact, loadTimeline, loadTasks, loadDuplicates]);
+    void loadWorkspaceGuides();
+  }, [loadContact, loadTimeline, loadTasks, loadDuplicates, loadWorkspaceGuides]);
 
   // Draft note autosave keyed by contact id (shared UX with live workspace)
   useEffect(() => {
@@ -753,8 +769,10 @@ function CrmContactDetailInner() {
     tasksPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   };
 
-  const scrollToSms = () => {
-    smsPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  const focusWorkspace = (tab: typeof workspaceTab, communication?: typeof communicationTab) => {
+    setWorkspaceTab(tab);
+    if (communication) setCommunicationTab(communication);
+    workspacePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const primaryPhone = primaryPhoneRow?.numberRaw ?? null;
@@ -943,17 +961,19 @@ function CrmContactDetailInner() {
             isArchived={isArchived}
             canCall={!!primaryPhoneRow && sipReady}
             canSms={!contact.doNotSms && contact.phones.length > 0}
+            canEmail={!!primaryEmailRow}
             hasDisposition={!!disposition}
             queueBackHref={returnTo && returnTo.startsWith("/crm/queue") ? returnTo : null}
-            contactProfileHref={`/crm/contacts/${contact.id}`}
+            powerDialHref={canLiveWorkspace ? workspaceHref : null}
             onCall={() => void handleCall()}
-            onSms={scrollToSms}
-            onNote={scrollToNoteComposer}
+            onSms={() => focusWorkspace("live", "sms")}
+            onEmail={() => setComposeOpen(true)}
+            onNote={() => focusWorkspace("notes")}
             onTask={() => {
               setAddingTask(true);
               scrollToTasks();
             }}
-            onDisposition={() => outcomePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            onDisposition={() => focusWorkspace("live", "call")}
           />
         )}
 
@@ -992,60 +1012,240 @@ function CrmContactDetailInner() {
       {/* ── Two-column body ───────────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(300px,380px)] xl:items-start">
 
-        <div className="flex min-w-0 flex-col gap-4 order-2 xl:order-1">
-          <div ref={noteComposerRef}>
-            <LiveWorkspaceNotePanel
-              ref={noteTextareaRef}
-              noteBody={noteText}
-              setNoteBody={setNoteText}
-              savingNote={notePosting}
-              noteSavedAt={noteSavedAt}
-              onSave={handlePostNote}
-              disabled={isArchived}
-            />
-            {noteError ? (
-              <p className="mt-1 text-xs text-crm-danger">{noteError}</p>
-            ) : null}
-          </div>
+        <div className="flex min-w-0 flex-col gap-4 order-2 xl:order-1" ref={workspacePanelRef}>
+          <CRMCard padding="lg" className="overflow-hidden border-crm-border/70">
+            <div className="mb-4 flex flex-col gap-3 border-b border-crm-border/60 pb-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-crm-accent">Live workspace</p>
+                <h3 className="mt-1 text-xl font-bold tracking-tight text-crm-text">Communication cockpit</h3>
+              </div>
+              <div className="flex gap-1 overflow-x-auto rounded-2xl border border-crm-border/70 bg-crm-surface-2/55 p-1">
+                {([
+                  ["live", "Live Workspace"],
+                  ["script", "Script"],
+                  ["checklist", "Checklist"],
+                  ["notes", "Notes"],
+                ] as const).map(([tab, label]) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setWorkspaceTab(tab)}
+                    className={cn(
+                      "whitespace-nowrap rounded-xl px-3 py-2 text-xs font-bold transition-colors",
+                      workspaceTab === tab
+                        ? "bg-crm-accent text-white shadow-sm"
+                        : "text-crm-muted hover:bg-crm-surface hover:text-crm-text",
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-          <ContactSmsPanel
-            ref={smsPanelRef}
-            phones={contact.phones}
-            smsEvents={smsEvents}
-            timelineLoading={timelineLoading}
-            isArchived={isArchived}
-            doNotSms={contact.doNotSms}
-            smsPhone={smsPhone}
-            setSmsPhone={setSmsPhone}
-            smsMessage={smsMessage}
-            setSmsMessage={setSmsMessage}
-            smsSending={smsSending}
-            smsError={smsError}
-            smsSuccess={smsSuccess}
-            onSend={handleSendSms}
-          />
-          <div ref={outcomePanelRef}>
-            <LiveWorkspaceOutcomePanel
-              id="contact-outcome"
-              contact={contact as unknown as LiveContact}
-              disposition={disposition}
-              setDisposition={setDisposition}
-              outcomeNote={outcomeNote}
-              setOutcomeNote={setOutcomeNote}
-              followUpOption={followUpOption}
-              setFollowUpOption={setFollowUpOption}
-              followUpCustom={followUpCustom}
-              setFollowUpCustom={setFollowUpCustom}
-              nextStage={nextStage}
-              setNextStage={setNextStage}
-              savingOutcome={savingOutcome}
-              outcomeSaved={outcomeSaved}
-              outcomeError={outcomeError}
-              isPowerMode={false}
-              onSave={() => void saveOutcomeRef.current()}
-              disabled={disabledOutcome()}
-            />
-          </div>
+            {workspaceTab === "live" ? (
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+                <div className="flex min-w-0 flex-col gap-3">
+                  <LiveCallStatusBanner linkedId={null} fromNumber={null} />
+                  <div className="rounded-2xl border border-crm-border/70 bg-crm-surface-2/45 p-3">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/12 text-emerald-500">
+                          <Headphones className="h-4 w-4" />
+                        </span>
+                        <div>
+                          <p className="text-sm font-bold text-crm-text">Call controls</p>
+                          <p className="text-xs text-crm-muted">{phone.callState === "idle" ? "Ready to dial" : phone.callState}</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void handleCall()}
+                        disabled={!primaryPhone || isArchived}
+                        className={cn(crm.btnPrimary, "px-3 py-2")}
+                      >
+                        <Phone className="h-4 w-4" />
+                        Call now
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+                      <button type="button" disabled={phone.callState === "idle"} onClick={() => phone.setMute(!phone.muted)} className={cn(crm.btnGhost, "flex-col gap-1 py-3 text-xs")}>
+                        <Mic className="h-4 w-4" />
+                        {phone.muted ? "Unmute" : "Mute"}
+                      </button>
+                      <button type="button" disabled={phone.callState === "idle"} onClick={phone.toggleHold} className={cn(crm.btnGhost, "flex-col gap-1 py-3 text-xs")}>
+                        <Pause className="h-4 w-4" />
+                        {phone.onHold ? "Resume" : "Hold"}
+                      </button>
+                      <button type="button" disabled className={cn(crm.btnGhost, "flex-col gap-1 py-3 text-xs")} title="Dialpad UI is not available in this workspace yet">
+                        <Hash className="h-4 w-4" />
+                        Keypad
+                      </button>
+                      <button type="button" disabled className={cn(crm.btnGhost, "flex-col gap-1 py-3 text-xs")} title="Transfer UI is not available in this workspace yet">
+                        <Forward className="h-4 w-4" />
+                        Transfer
+                      </button>
+                      <button type="button" disabled className={cn(crm.btnGhost, "flex-col gap-1 py-3 text-xs")} title="Recording control is not wired here">
+                        <Radio className="h-4 w-4" />
+                        Record
+                      </button>
+                    </div>
+                    <button type="button" disabled={phone.callState === "idle"} onClick={phone.hangup} className={cn(crm.btnDanger, "mt-2 w-full justify-center")}>
+                      <PhoneOff className="h-4 w-4" />
+                      End call
+                    </button>
+                  </div>
+
+                  <div className="rounded-2xl border border-crm-border/70 bg-crm-surface p-3">
+                    <div className="mb-3 flex flex-wrap gap-1">
+                      {([
+                        ["call", "Call"],
+                        ["sms", "SMS"],
+                        ["whatsapp", "WhatsApp"],
+                        ["email", "Email"],
+                      ] as const).map(([tab, label]) => (
+                        <button
+                          key={tab}
+                          type="button"
+                          onClick={() => setCommunicationTab(tab)}
+                          className={cn(
+                            "rounded-full border px-3 py-1.5 text-xs font-bold",
+                            communicationTab === tab
+                              ? "border-crm-accent bg-crm-accent text-white"
+                              : "border-crm-border bg-crm-surface-2 text-crm-muted hover:text-crm-text",
+                          )}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    {communicationTab === "call" ? (
+                      <p className="text-sm leading-relaxed text-crm-muted">
+                        Use the call controls above, then log disposition and notes without leaving this workspace.
+                      </p>
+                    ) : communicationTab === "sms" ? (
+                      <ContactSmsPanel
+                        ref={smsPanelRef}
+                        phones={contact.phones}
+                        smsEvents={smsEvents}
+                        timelineLoading={timelineLoading}
+                        isArchived={isArchived}
+                        doNotSms={contact.doNotSms}
+                        smsPhone={smsPhone}
+                        setSmsPhone={setSmsPhone}
+                        smsMessage={smsMessage}
+                        setSmsMessage={setSmsMessage}
+                        smsSending={smsSending}
+                        smsError={smsError}
+                        smsSuccess={smsSuccess}
+                        onSend={handleSendSms}
+                      />
+                    ) : communicationTab === "whatsapp" ? (
+                      <div className="rounded-2xl border border-dashed border-crm-border/80 bg-crm-surface-2/45 p-4 text-sm text-crm-muted">
+                        WhatsApp contact actions are not wired in this workspace yet. Use SMS or Email for this contact.
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-crm-border/70 bg-violet-500/8 p-4">
+                        <p className="text-sm font-semibold text-crm-text">Email composer</p>
+                        <p className="mt-1 text-sm text-crm-muted">
+                          Opens the existing CRM email compose drawer and records sent mail in the timeline.
+                        </p>
+                        <button type="button" onClick={() => setComposeOpen(true)} disabled={!primaryEmailRow || isArchived} className={cn(crm.btnPrimary, "mt-3")}>
+                          <Mail className="h-4 w-4" />
+                          Compose email
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex min-w-0 flex-col gap-3">
+                  <div ref={noteComposerRef}>
+                    <LiveWorkspaceNotePanel
+                      ref={noteTextareaRef}
+                      noteBody={noteText}
+                      setNoteBody={setNoteText}
+                      savingNote={notePosting}
+                      noteSavedAt={noteSavedAt}
+                      onSave={handlePostNote}
+                      disabled={isArchived}
+                    />
+                    {noteError ? (
+                      <p className="mt-1 text-xs text-crm-danger">{noteError}</p>
+                    ) : null}
+                  </div>
+                  <div ref={outcomePanelRef}>
+                    <LiveWorkspaceOutcomePanel
+                      id="contact-outcome"
+                      contact={contact as unknown as LiveContact}
+                      disposition={disposition}
+                      setDisposition={setDisposition}
+                      outcomeNote={outcomeNote}
+                      setOutcomeNote={setOutcomeNote}
+                      followUpOption={followUpOption}
+                      setFollowUpOption={setFollowUpOption}
+                      followUpCustom={followUpCustom}
+                      setFollowUpCustom={setFollowUpCustom}
+                      nextStage={nextStage}
+                      setNextStage={setNextStage}
+                      savingOutcome={savingOutcome}
+                      outcomeSaved={outcomeSaved}
+                      outcomeError={outcomeError}
+                      isPowerMode={false}
+                      onSave={() => void saveOutcomeRef.current()}
+                      disabled={disabledOutcome()}
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : workspaceTab === "script" ? (
+              <LiveWorkspaceScriptPanel
+                scriptSummaries={scriptSummaries}
+                defaultScriptId={null}
+              />
+            ) : workspaceTab === "checklist" ? (
+              <LiveWorkspaceChecklistPanel
+                checklists={checklists}
+                contactId={contact.id}
+                linkedId={null}
+                defaultChecklistId={null}
+                onSaved={() => void loadTimeline()}
+              />
+            ) : (
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div ref={noteComposerRef}>
+                  <LiveWorkspaceNotePanel
+                    ref={noteTextareaRef}
+                    noteBody={noteText}
+                    setNoteBody={setNoteText}
+                    savingNote={notePosting}
+                    noteSavedAt={noteSavedAt}
+                    onSave={handlePostNote}
+                    disabled={isArchived}
+                  />
+                  {noteError ? (
+                    <p className="mt-1 text-xs text-crm-danger">{noteError}</p>
+                  ) : null}
+                </div>
+                <div className="rounded-2xl border border-crm-border/70 bg-crm-surface-2/45 p-4">
+                  <h3 className="text-sm font-bold uppercase tracking-wide text-crm-muted">Scratch notes</h3>
+                  {editing && !isArchived ? (
+                    <textarea
+                      value={editNotes}
+                      onChange={(e) => setEditNotes(e.target.value)}
+                      rows={8}
+                      placeholder="Quick scratch pad for this contact…"
+                      style={{ ...inputStyle, resize: "vertical", lineHeight: 1.5 }}
+                    />
+                  ) : (
+                    <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-crm-text">
+                      {contact.notes || "No scratch notes."}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+          </CRMCard>
 
           <ContactTimeline
             events={timeline}
@@ -1082,6 +1282,37 @@ function CrmContactDetailInner() {
             callbackUrgent={callbackUrgent}
             recentActivityCount={recentActivityCount}
           />
+          <CRMCard padding="md" className="border-crm-border/70">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-crm-muted">Activity summary</p>
+                <p className="mt-1 text-sm font-semibold text-crm-text">{lastInteractionLabel ?? "No interactions yet"}</p>
+              </div>
+              <Sparkles className="h-4 w-4 text-crm-accent" />
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="rounded-xl border border-crm-border/70 bg-crm-surface-2/50 p-2">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Last touch</p>
+                <p className="mt-1 truncate text-xs font-semibold text-crm-text">
+                  {lastInteractionAt ? formatTimeAgo(lastInteractionAt) : "None"}
+                </p>
+              </div>
+              <div className="rounded-xl border border-crm-border/70 bg-crm-surface-2/50 p-2">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Recent events</p>
+                <p className="mt-1 text-xs font-semibold text-crm-text">{recentActivityCount} in 7d</p>
+              </div>
+              <div className="rounded-xl border border-crm-border/70 bg-crm-surface-2/50 p-2">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Callbacks</p>
+                <p className={cn("mt-1 text-xs font-semibold", callbackUrgent ? "text-crm-danger" : "text-crm-text")}>
+                  {callbackUrgent ? "Overdue" : queueMember?.callbackAt ? formatDate(queueMember.callbackAt) : "None due"}
+                </p>
+              </div>
+              <div className="rounded-xl border border-crm-border/70 bg-crm-surface-2/50 p-2">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Open tasks</p>
+                <p className="mt-1 text-xs font-semibold text-crm-text">{tasks.length}</p>
+              </div>
+            </div>
+          </CRMCard>
         <div className="flex flex-col gap-4">
 
           {/* CRM fields */}
@@ -1582,6 +1813,18 @@ function CrmContactDetailInner() {
         </div>
       )}
     </CRMPageShell>
+    {contact ? (
+      <div className="fixed inset-x-0 bottom-12 z-40 pointer-events-none px-3 sm:px-6">
+        <div className="pointer-events-auto mx-auto flex w-full max-w-3xl items-center gap-1 overflow-x-auto rounded-2xl border border-crm-border/70 bg-crm-bg/90 p-1.5 shadow-[0_-18px_44px_-34px_rgba(15,23,42,0.9)] backdrop-blur-xl">
+          <button type="button" disabled className="min-w-[5.5rem] rounded-xl px-3 py-2 text-xs font-bold text-crm-muted" title="Dialpad UI is not available in this workspace yet">Dialpad</button>
+          <button type="button" onClick={() => focusWorkspace("live", "sms")} disabled={isArchived || contact.doNotSms || contact.phones.length === 0} className="min-w-[5.5rem] rounded-xl px-3 py-2 text-xs font-bold text-crm-text hover:bg-crm-surface-2">SMS</button>
+          <button type="button" disabled className="min-w-[6.25rem] rounded-xl px-3 py-2 text-xs font-bold text-crm-muted" title="WhatsApp contact actions are not wired yet">WhatsApp</button>
+          <button type="button" onClick={() => setComposeOpen(true)} disabled={isArchived || !primaryEmailRow} className="min-w-[5.5rem] rounded-xl px-3 py-2 text-xs font-bold text-crm-text hover:bg-crm-surface-2">Email</button>
+          <button type="button" onClick={() => focusWorkspace("notes")} disabled={isArchived} className="min-w-[5.5rem] rounded-xl px-3 py-2 text-xs font-bold text-crm-text hover:bg-crm-surface-2">Notes</button>
+          <button type="button" disabled className="min-w-[7rem] rounded-xl px-3 py-2 text-xs font-bold text-crm-muted" title="AI summary shortcut is not wired here">AI summary</button>
+        </div>
+      </div>
+    ) : null}
     <LiveWrapUpBar
       visible={Boolean(contact)}
       canSave={Boolean(disposition) && !savingOutcome && !isArchived}

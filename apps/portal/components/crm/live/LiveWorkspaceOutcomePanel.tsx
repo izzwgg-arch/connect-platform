@@ -50,10 +50,18 @@ export function LiveWorkspaceOutcomePanel({
   disabled?: boolean;
 }) {
   const stage = contact?.crmStage;
+  const dispositionTone: Record<string, string> = {
+    Answered: "border-emerald-300/70 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
+    "No Answer": "border-slate-300/80 bg-slate-500/10 text-slate-700 dark:text-slate-300",
+    Voicemail: "border-violet-300/80 bg-violet-500/12 text-violet-700 dark:text-violet-300",
+    Callback: "border-amber-300/80 bg-amber-500/12 text-amber-700 dark:text-amber-300",
+    "Not Interested": "border-rose-300/80 bg-rose-500/12 text-rose-700 dark:text-rose-300",
+    Closed: "border-sky-300/80 bg-sky-500/12 text-sky-700 dark:text-sky-300",
+  };
 
   return (
     <div id={id ?? "live-outcome-panel"} className="scroll-mt-24">
-    <CRMCard padding="md">
+    <CRMCard padding="md" className="overflow-hidden border-crm-border/70">
       <CRMSection
         title="Call outcome"
         description="Disposition, follow-up, and optional stage advance."
@@ -61,7 +69,7 @@ export function LiveWorkspaceOutcomePanel({
         <div className="space-y-4">
           <div>
             <p className={crm.label}>Disposition *</p>
-            <div className="mt-2 flex flex-wrap gap-1.5">
+            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
               {DISPOSITION_OPTIONS.map((d, i) => (
                 <button
                   key={d}
@@ -69,14 +77,18 @@ export function LiveWorkspaceOutcomePanel({
                   disabled={disabled}
                   onClick={() => setDisposition(d)}
                   className={cn(
-                    "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                    "group min-h-[4.25rem] rounded-2xl border px-3 py-2 text-left text-xs font-bold transition-all focus:outline-none focus:ring-2 focus:ring-crm-accent/40",
                     disposition === d
-                      ? "border-crm-accent bg-crm-accent text-white"
-                      : "border-crm-border text-crm-muted hover:border-crm-accent/40",
+                      ? "border-crm-accent bg-crm-accent text-white shadow-[0_14px_30px_-22px_rgba(14,165,233,0.8)]"
+                      : dispositionTone[d] ?? "border-crm-border bg-crm-surface-2/50 text-crm-muted hover:border-crm-accent/40",
+                    disabled && "cursor-not-allowed opacity-60",
                   )}
                 >
-                  <span className="mr-1 rounded border border-crm-border bg-crm-surface-2 px-1 font-mono">{i + 1}</span>
-                  {d}
+                  <span className={cn(
+                    "mb-2 inline-flex h-5 min-w-5 items-center justify-center rounded-md border px-1 font-mono text-[10px]",
+                    disposition === d ? "border-white/35 bg-white/15 text-white" : "border-current/20 bg-white/30 dark:bg-white/5",
+                  )}>{i + 1}</span>
+                  <span className="block leading-tight">{d}</span>
                 </button>
               ))}
             </div>

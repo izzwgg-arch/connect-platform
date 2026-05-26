@@ -28,18 +28,32 @@ export function ContactRelationshipHealth({
   const smsCount = timeline.filter((e) => e.type.startsWith("SMS_")).length;
 
   return (
-    <CRMCard padding="md">
+    <CRMCard padding="md" className="border-crm-border/70">
       <CRMSection title="Relationship health" description="From real activity on this contact">
         <div className="flex flex-col gap-4">
-          <CRMRingMetric
-            value={recentActivityCount}
-            max={Math.max(recentActivityCount, 10)}
-            label="Touches (7d)"
-            sublabel={lastTouchAt ? `Last ${formatTimeAgo(lastTouchAt)}` : "No recent touch"}
-            color={recentActivityCount > 0 ? "var(--crm-accent)" : "var(--crm-muted)"}
-            size={76}
-            stroke={8}
-          />
+          <div className="flex items-center gap-4 rounded-2xl border border-crm-border/70 bg-crm-surface-2/50 p-3">
+            <CRMRingMetric
+              value={recentActivityCount}
+              max={Math.max(recentActivityCount, 10)}
+              label="Touches (7d)"
+              sublabel={lastTouchAt ? `Last ${formatTimeAgo(lastTouchAt)}` : "No recent touch"}
+              color={recentActivityCount > 0 ? "var(--crm-accent)" : "var(--crm-muted)"}
+              size={78}
+              stroke={8}
+            />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-crm-text">
+                {recentActivityCount > 0 ? "Active relationship" : "Quiet relationship"}
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-crm-muted">
+                {callbackUrgent
+                  ? "Callback pressure is active. Prioritize the next touch."
+                  : daysSinceComm != null && daysSinceComm > 7
+                    ? "Communication gap detected. Plan the next outreach."
+                    : "Engagement signals are current for this contact."}
+              </p>
+            </div>
+          </div>
           <StatGrid>
             <CRMStat label="Open tasks" value={openTasks.length} emphasize={overdueTasks > 0 ? "danger" : "default"} />
             {overdueTasks > 0 ? (

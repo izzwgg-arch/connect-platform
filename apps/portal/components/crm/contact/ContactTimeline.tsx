@@ -33,9 +33,9 @@ export function ContactTimeline({
   const smsCount = events.filter((e) => e.type.startsWith("SMS_")).length;
 
   return (
-    <CRMCard padding="lg" className="flex flex-col gap-4">
+    <CRMCard padding="lg" className="flex flex-col gap-4 border-crm-border/70">
       <CRMSection
-        title="Relationship timeline"
+        title="Activity timeline"
         description={
           events.length > 0
             ? `${events.length} events${callCount ? ` · ${callCount} calls` : ""}${smsCount ? ` · ${smsCount} SMS` : ""}`
@@ -62,7 +62,7 @@ export function ContactTimeline({
             }
           />
         ) : (
-          <div className="flex flex-col gap-2.5">
+          <div className="flex flex-col gap-2">
             {events.map((event) => (
               <ContactTimelineItem
                 key={event.id}

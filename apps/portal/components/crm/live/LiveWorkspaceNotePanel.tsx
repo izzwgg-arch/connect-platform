@@ -21,16 +21,16 @@ export const LiveWorkspaceNotePanel = forwardRef<
 ) {
   return (
     <div id="live-note-panel" className="scroll-mt-24">
-    <CRMCard padding="md">
-      <CRMSection title="Call note" description="Saved to timeline immediately.">
-        <div className="mb-2 flex flex-wrap gap-1.5">
+    <CRMCard padding="md" className="border-crm-border/70">
+      <CRMSection title="Live notes" description="Fast call notes saved directly to the timeline.">
+        <div className="mb-3 flex flex-wrap gap-1.5">
           {["Left voicemail", "Requested callback", "Sent SMS", "Interested", "Wrong number"].map((label) => (
             <button
               key={label}
               type="button"
               onClick={() => setNoteBody(noteBody ? noteBody + (noteBody.endsWith(" ") ? "" : " ") + label : label)}
               disabled={disabled}
-              className="rounded-full border border-crm-border px-2.5 py-0.5 text-[11px] text-crm-muted hover:border-crm-accent/40"
+              className="rounded-full border border-crm-border/80 bg-crm-surface-2/60 px-2.5 py-1 text-[11px] font-medium text-crm-muted hover:border-crm-accent/40 hover:text-crm-text"
             >
               + {label}
             </button>
@@ -41,9 +41,9 @@ export const LiveWorkspaceNotePanel = forwardRef<
           value={noteBody}
           onChange={(e) => setNoteBody(e.target.value)}
           placeholder="Type your call note…"
-          rows={4}
+          rows={5}
           disabled={disabled}
-          className={crm.input}
+          className={`${crm.input} min-h-[9rem] resize-y leading-relaxed`}
         />
         <div className="mt-2 flex items-center justify-between gap-2">
           {noteSavedAt ? (

@@ -96,10 +96,10 @@ export function ContactTimelineItem({
   return (
     <article
       className={cn(
-        "group relative flex gap-3 rounded-crm-lg border px-3 py-3 transition-colors sm:px-4",
+        "group relative flex gap-3 rounded-2xl border px-3 py-2.5 transition-colors sm:px-4",
         isComm
-          ? "border-crm-accent/20 bg-crm-accent/5 hover:border-crm-accent/30"
-          : "border-crm-border/80 bg-crm-surface hover:bg-crm-surface-2/40",
+          ? "border-crm-accent/20 bg-crm-accent/6 hover:border-crm-accent/35"
+          : "border-crm-border/70 bg-crm-surface/90 hover:bg-crm-surface-2/40",
       )}
     >
       <div
@@ -166,7 +166,7 @@ export function ContactTimelineItem({
 
 function TimelineIconBox({ type }: { type: string }) {
   return (
-    <div className="relative z-[1] flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border border-crm-border bg-crm-surface-2 shadow-crm">
+    <div className="relative z-[1] flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-crm-border/70 bg-crm-surface-2 shadow-[0_10px_24px_-20px_rgba(15,23,42,0.9)]">
       <TimelineIcon type={type} />
     </div>
   );

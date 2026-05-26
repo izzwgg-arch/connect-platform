@@ -47,9 +47,9 @@ export const ContactSmsPanel = forwardRef<
 
   return (
     <div ref={ref}>
-      <CRMCard padding="lg" className="border-crm-accent/15 bg-crm-accent/5">
+      <CRMCard padding="lg" className="border-crm-accent/20 bg-crm-accent/5">
         <CRMSection
-          title="SMS conversation"
+          title="SMS"
           description={
             smsEvents.length > 0
               ? `${smsEvents.length} recent message${smsEvents.length !== 1 ? "s" : ""}`
@@ -65,7 +65,7 @@ export const ContactSmsPanel = forwardRef<
               description="Send the first SMS below — it appears in the timeline when delivered."
             />
           ) : (
-            <div className="flex max-h-64 flex-col gap-2 overflow-y-auto pr-1">
+            <div className="flex max-h-80 flex-col gap-2 overflow-y-auto pr-1">
               {smsEvents.map((ev) => {
                 const isSent = ev.type === "SMS_SENT";
                 const m = ev.metadata as Record<string, unknown> | null;
@@ -110,8 +110,8 @@ export const ContactSmsPanel = forwardRef<
                 <textarea
                   value={smsMessage}
                   onChange={(e) => setSmsMessage(e.target.value)}
-                  rows={2}
-                  placeholder="Reply…"
+                  rows={3}
+                  placeholder="Type SMS reply…"
                   maxLength={1600}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
@@ -119,7 +119,7 @@ export const ContactSmsPanel = forwardRef<
                       onSend();
                     }
                   }}
-                  className={cn(crm.input, "min-h-[4rem] flex-1 resize-none")}
+                  className={cn(crm.input, "min-h-[5rem] flex-1 resize-none")}
                 />
                 <button
                   type="button"
