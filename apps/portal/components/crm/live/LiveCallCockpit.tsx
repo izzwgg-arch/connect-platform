@@ -114,7 +114,7 @@ export function LiveCallCockpit({
   linkedId: string | null;
   fromNumber: string | null;
   queueBackHref: string | null;
-  noteRef: RefObject<HTMLTextAreaElement | null>;
+  noteRef: RefObject<HTMLTextAreaElement>;
   noteBody: string;
   setNoteBody: (value: string) => void;
   savingNote: boolean;
@@ -616,7 +616,7 @@ function NotesActivityCard({
 }: {
   noteTab: "notes" | "activity" | "history";
   setNoteTab: (tab: "notes" | "activity" | "history") => void;
-  noteRef: RefObject<HTMLTextAreaElement | null>;
+  noteRef: RefObject<HTMLTextAreaElement>;
   noteBody: string;
   setNoteBody: (value: string) => void;
   savingNote: boolean;
