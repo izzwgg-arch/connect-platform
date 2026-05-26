@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { GripVertical, Plus, Trash2, X } from "lucide-react";
+import { CheckCircle2, FileText, GripVertical, Lightbulb, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { crm } from "../crmClasses";
 import { cn } from "../cn";
-import { parseScriptSections, serializeScriptSections } from "./ScriptTemplates";
+import { parseScriptSections, SCRIPT_TEMPLATES, serializeScriptSections } from "./ScriptTemplates";
 import type { Script } from "./scriptTypes";
 
 interface Section {
@@ -43,6 +43,7 @@ export function ScriptEditModal({ script, templateBody, onSave, onClose }: Scrip
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [selectedTemplate, setSelectedTemplate] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -59,6 +60,14 @@ export function ScriptEditModal({ script, templateBody, onSave, onClose }: Scrip
 
   function updateSection(id: string, field: "title" | "content", value: string) {
     setSections((prev) => prev.map((s) => (s.id === id ? { ...s, [field]: value } : s)));
+  }
+
+  function applyTemplate(key: string) {
+    setSelectedTemplate(key);
+    const tpl = SCRIPT_TEMPLATES.find((item) => item.key === key);
+    if (!tpl) return;
+    setSections(toSections(tpl.body));
+    if (!name.trim()) setName(tpl.label);
   }
 
   async function handleSave() {
@@ -85,93 +94,153 @@ export function ScriptEditModal({ script, templateBody, onSave, onClose }: Scrip
   const isCreate = !script;
 
   return (
-    <div className={crm.campaignModalBackdrop} onClick={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="scripts-modal-backdrop fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div
         className={cn(crm.card, crm.scriptsEditModal)}
       >
         {/* Modal header */}
-        <div className="flex items-center justify-between gap-3 border-b border-crm-border px-5 py-4">
-          <h2 className="text-sm font-semibold text-crm-text">
-            {isCreate ? "New Script" : "Edit Script"}
-          </h2>
+        <div className="scripts-modal-header flex items-center justify-between gap-3 border-b border-crm-border px-5 py-4 sm:px-6">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="scripts-mini-icon scripts-mini-icon--blue">
+              <FileText className="h-4 w-4" />
+            </span>
+            <div className="min-w-0">
+              <h2 className="text-lg font-bold tracking-tight text-crm-text">
+                {isCreate ? "Create New Call Script" : "Edit Call Script"}
+              </h2>
+              <p className="mt-0.5 text-xs text-crm-muted">Build reusable talk tracks for live calls.</p>
+            </div>
+          </div>
           <button
             type="button"
             onClick={onClose}
-            className="flex h-7 w-7 items-center justify-center rounded text-crm-muted hover:bg-crm-surface-2 hover:text-crm-text"
+            className="flex h-9 w-9 items-center justify-center rounded-2xl text-crm-muted hover:bg-crm-surface-2 hover:text-crm-text"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
         {/* Scrollable body */}
-        <div className="flex-1 overflow-y-auto px-5 py-4">
-          {/* Script name */}
-          <div className="mb-5">
-            <label className={cn(crm.label, "mb-1.5 block")}>Script name</label>
-            <input
-              ref={nameRef}
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Cold Call — SMB"
-              className={crm.input}
-            />
-          </div>
-
-          {/* Section editor */}
-          <div className="mb-2 flex items-center justify-between">
-            <label className={crm.label}>Sections</label>
-            <span className="text-[10px] text-crm-muted">
-              Use "---" to separate sections or add below
-            </span>
-          </div>
-
-          <div className="flex flex-col gap-3">
-            {sections.map((section, idx) => (
-              <SectionEditor
-                key={section.id}
-                section={section}
-                index={idx}
-                canRemove={sections.length > 1}
-                onUpdate={(field, val) => updateSection(section.id, field, val)}
-                onRemove={() => removeSection(section.id)}
+        <div className="grid flex-1 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
+          <div className="min-w-0 px-5 py-5 sm:px-6">
+            {/* Script name */}
+            <div className="mb-5">
+              <label className={cn(crm.label, "mb-2 block")}>Script name</label>
+              <input
+                ref={nameRef}
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. Cold Call — SMB"
+                className={cn(crm.input, "h-12 rounded-2xl text-base")}
               />
-            ))}
-          </div>
+            </div>
 
-          <button
-            type="button"
-            onClick={addSection}
-            className={cn(crm.btnGhost, "mt-3 w-full justify-center text-xs")}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Add section
-          </button>
+            {isCreate ? (
+              <div className="mb-5">
+                <label className={cn(crm.label, "mb-2 block")}>Template (optional)</label>
+                <select
+                  value={selectedTemplate}
+                  onChange={(e) => applyTemplate(e.target.value)}
+                  className={cn(crm.select, "h-12 rounded-2xl text-sm")}
+                >
+                  <option value="">Start from scratch</option>
+                  {SCRIPT_TEMPLATES.map((tpl) => (
+                    <option key={tpl.key} value={tpl.key}>{tpl.label}</option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
 
-          {/* Format hint */}
-          <div className="mt-4 rounded-crm border border-crm-border/60 bg-crm-surface-2/40 px-3 py-2.5">
-            <p className={cn(crm.footnote, "font-medium mb-1")}>Formatting tips</p>
-            <ul className="flex flex-col gap-0.5">
-              {[
-                "Start a line with **text** to create a bold sub-header (e.g. objection label)",
-                "Start a line with - or * for bullet points",
-                "Separate sections with ---",
-              ].map((tip) => (
-                <li key={tip} className="flex items-baseline gap-1.5 text-[11px] text-crm-muted">
-                  <span className="mt-1 h-1 w-1 shrink-0 rounded-full bg-crm-muted/60" />
-                  {tip}
-                </li>
+            {/* Section editor */}
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <label className="text-sm font-bold text-crm-text">Script Sections</label>
+              <span className="text-xs text-crm-muted">
+                Use "---" to separate sections or add below
+              </span>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              {sections.map((section, idx) => (
+                <SectionEditor
+                  key={section.id}
+                  section={section}
+                  index={idx}
+                  canRemove={sections.length > 1}
+                  onUpdate={(field, val) => updateSection(section.id, field, val)}
+                  onRemove={() => removeSection(section.id)}
+                />
               ))}
-            </ul>
+            </div>
+
+            <button
+              type="button"
+              onClick={addSection}
+              className={cn(crm.btnGhost, "mt-3 w-full justify-center rounded-2xl py-3 text-sm")}
+            >
+              <Plus className="h-4 w-4" />
+              Add section
+            </button>
+
+            {error ? (
+              <p className={cn(crm.bannerDanger, "mt-3 rounded-2xl px-3 py-2 text-xs")}>{error}</p>
+            ) : null}
           </div>
 
-          {error ? (
-            <p className={cn(crm.bannerDanger, "mt-3 rounded-crm px-3 py-2 text-xs")}>{error}</p>
-          ) : null}
+          <aside className="scripts-modal-guide border-t border-crm-border p-5 sm:p-6 lg:border-l lg:border-t-0">
+            <div className="scripts-guide-card rounded-[1.35rem] p-4">
+              <div className="mb-4 flex items-start gap-3">
+                <span className="scripts-mini-icon scripts-mini-icon--violet">
+                  <Sparkles className="h-4 w-4" />
+                </span>
+                <div>
+                  <h3 className="text-sm font-bold text-crm-text">How to create an effective call script</h3>
+                  <p className="mt-1 text-xs leading-relaxed text-crm-muted">
+                    A well-structured script helps your team stay consistent, confident, and goal-focused.
+                  </p>
+                </div>
+              </div>
+              <ol className="flex flex-col gap-3">
+                {[
+                  ["Name your script", "Use a clear, specific name that reflects the purpose."],
+                  ["Choose a template", "Start from a proven flow or build from scratch."],
+                  ["Add sections", "Break the call into opening, discovery, value, and next steps."],
+                  ["Keep it usable", "Use short prompts reps can read naturally on a live call."],
+                ].map(([title, body], index) => (
+                  <li key={title} className="flex gap-3">
+                    <span className="scripts-step-badge">{index + 1}</span>
+                    <span>
+                      <span className="block text-xs font-bold text-crm-text">{title}</span>
+                      <span className="mt-0.5 block text-xs leading-relaxed text-crm-muted">{body}</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+
+            <div className="mt-3 rounded-[1.35rem] border border-crm-border/60 bg-crm-surface-2/45 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <Lightbulb className="h-4 w-4 text-crm-warning" />
+                <p className="text-sm font-bold text-crm-text">Formatting Tips</p>
+              </div>
+              <ul className="flex flex-col gap-2">
+                {[
+                  "Start a line with **text** for a bold sub-header.",
+                  "Start a line with - or * for bullet points.",
+                  "Separate sections with ---.",
+                ].map((tip) => (
+                  <li key={tip} className="flex items-start gap-2 text-xs leading-relaxed text-crm-muted">
+                    <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-crm-success" />
+                    {tip}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </aside>
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2 border-t border-crm-border px-5 py-3">
+        <div className="scripts-modal-footer flex items-center justify-end gap-2 border-t border-crm-border px-5 py-4 sm:px-6">
           <button
             type="button"
             onClick={onClose}
@@ -208,9 +277,9 @@ function SectionEditor({
   onRemove: () => void;
 }) {
   return (
-    <div className="rounded-crm border border-crm-border bg-crm-surface-2/50">
+    <div className="scripts-section-editor rounded-[1.25rem] border border-crm-border bg-crm-surface-2/50">
       {/* Section header row */}
-      <div className="flex items-center gap-2 border-b border-crm-border/60 px-3 py-2">
+      <div className="flex items-center gap-2 border-b border-crm-border/60 px-3 py-2.5">
         <GripVertical className="h-3.5 w-3.5 shrink-0 text-crm-muted/50" />
         <span className="text-[10px] font-bold uppercase tracking-wider text-crm-muted">
           §{index + 1}
@@ -222,7 +291,7 @@ function SectionEditor({
           placeholder="Section title (optional)"
           className={cn(
             crm.input,
-            "flex-1 border-0 bg-transparent py-1 text-xs shadow-none focus:ring-0 focus:border-0",
+            "flex-1 border-0 bg-transparent py-1 text-sm font-semibold shadow-none focus:ring-0 focus:border-0",
           )}
         />
         {canRemove ? (
@@ -241,10 +310,10 @@ function SectionEditor({
         value={section.content}
         onChange={(e) => onUpdate("content", e.target.value)}
         placeholder="Script content for this section…"
-        rows={5}
+        rows={6}
         className={cn(
           crm.input,
-          "rounded-none border-0 bg-transparent font-mono text-xs leading-relaxed shadow-none focus:ring-0 focus:border-0 resize-y min-h-[7rem]",
+          "min-h-[8rem] resize-y rounded-none border-0 bg-transparent text-sm leading-relaxed shadow-none focus:border-0 focus:ring-0",
         )}
       />
     </div>

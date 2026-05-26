@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCircle2, ChevronDown, Copy, Square } from "lucide-react";
+import { CheckCircle2, ChevronDown, Copy, MoreHorizontal, Square } from "lucide-react";
 import { crm } from "../crmClasses";
 import { cn } from "../cn";
 
@@ -69,18 +69,19 @@ export function ScriptSectionBlock({
 
   const bodyLineCount = lines.filter((l) => l.type === "body" || l.type === "bullet").length;
   const checkedCount = Object.values(itemsDone).filter(Boolean).length;
+  const tone = ["lavender", "blue", "green", "amber", "rose"][index % 5];
 
   return (
     <div
       id={`section-${index}`}
-      className={cn("group", crm.scriptSectionCard, open && crm.scriptSectionCardOpen)}
+      className={cn("group", crm.scriptSectionCard, `scripts-section-card--${tone}`, open && crm.scriptSectionCardOpen)}
     >
       {/* Section header */}
-      <div className="flex items-center gap-2 px-4 py-3">
+      <div className="flex items-center gap-3 px-4 py-4">
         {/* Step badge */}
         <span
           className={cn(
-            "flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold",
+            "scripts-section-number flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold",
             checklistMode && stepDone
               ? "bg-crm-success text-white"
               : "bg-crm-surface border border-crm-border text-crm-muted",
@@ -91,12 +92,12 @@ export function ScriptSectionBlock({
 
         <button
           type="button"
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          className="flex min-w-0 flex-1 appearance-none items-center gap-2 border-0 bg-transparent p-0 text-left"
           onClick={() => setOpen((v) => !v)}
         >
           <span
             className={cn(
-              "truncate text-sm font-semibold",
+              "truncate text-base font-bold",
               checklistMode && stepDone ? "text-crm-muted line-through" : "text-crm-text",
             )}
           >
@@ -122,7 +123,7 @@ export function ScriptSectionBlock({
             type="button"
             title="Copy section"
             onClick={handleCopy}
-            className="flex h-6 w-6 items-center justify-center rounded text-crm-muted opacity-0 transition-opacity group-hover:opacity-100 hover:bg-crm-surface hover:text-crm-text focus:opacity-100"
+            className="flex h-8 w-8 appearance-none items-center justify-center rounded-xl border-0 bg-transparent p-0 text-crm-muted opacity-0 transition-opacity group-hover:opacity-100 hover:bg-crm-surface hover:text-crm-text focus:opacity-100"
           >
             {copied ? (
               <CheckCircle2 className="h-3.5 w-3.5 text-crm-success" />
@@ -132,8 +133,16 @@ export function ScriptSectionBlock({
           </button>
           <button
             type="button"
+            title="Copy section"
+            onClick={handleCopy}
+            className="flex h-8 w-8 appearance-none items-center justify-center rounded-xl border-0 bg-transparent p-0 text-crm-muted hover:bg-crm-surface hover:text-crm-text"
+          >
+            <MoreHorizontal className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
             onClick={() => setOpen((v) => !v)}
-            className="flex h-6 w-6 items-center justify-center rounded text-crm-muted hover:bg-crm-surface hover:text-crm-text"
+            className="flex h-8 w-8 appearance-none items-center justify-center rounded-xl border-0 bg-transparent p-0 text-crm-muted hover:bg-crm-surface hover:text-crm-text"
           >
             <ChevronDown
               className={cn(
@@ -147,7 +156,7 @@ export function ScriptSectionBlock({
 
       {/* Section body */}
       {open ? (
-        <div className="border-t border-crm-border/50 px-4 pb-4 pt-3">
+        <div className="border-t border-crm-border/50 px-4 pb-5 pt-4">
           {checklistMode ? (
             <div className="flex flex-col gap-1.5">
               {lines.map((line, i) => {

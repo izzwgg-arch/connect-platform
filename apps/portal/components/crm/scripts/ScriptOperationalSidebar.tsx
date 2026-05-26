@@ -3,15 +3,16 @@
 import Link from "next/link";
 import {
   ArrowRight,
+  BadgeCheck,
   CheckSquare,
   ClipboardList,
   Copy,
-  FileText,
-  Layers,
+  Lightbulb,
   PhoneCall,
   Plus,
   Zap,
 } from "lucide-react";
+import type { ReactNode } from "react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
 import { CRMRingMetric } from "../charts/CRMRingMetric";
@@ -21,9 +22,11 @@ import type { ScriptSummary } from "./scriptTypes";
 export function ScriptOperationalSidebar({
   scripts,
   onCreate,
+  onBrowseTemplates,
 }: {
   scripts: ScriptSummary[];
   onCreate: () => void;
+  onBrowseTemplates?: () => void;
 }) {
   const active = scripts.filter((s) => s.isActive);
   const archived = scripts.filter((s) => !s.isActive);
@@ -33,7 +36,74 @@ export function ScriptOperationalSidebar({
   return (
     <aside className={cn(crm.scriptsSideCol, "flex flex-col gap-2.5")}>
       <div className={crm.scriptsSidePanel}>
-        <p className={cn(crm.label, "mb-3")}>Progress overview</p>
+        <div className="mb-3 flex items-center gap-2">
+          <span className="scripts-mini-icon scripts-mini-icon--violet">
+            <BadgeCheck className="h-4 w-4" />
+          </span>
+          <p className="text-sm font-bold text-crm-text">Instructions</p>
+        </div>
+        <div className="scripts-instruction-card rounded-2xl px-3 py-3 text-sm text-crm-muted">
+          Follow these steps to create, organize, and optimize call scripts that drive better conversations and results.
+        </div>
+        <ol className="mt-3 flex flex-col gap-3">
+          {[
+            ["Create a Script", "Click New Script to build from scratch or use a template."],
+            ["Organize by Flow", "Use clear names so reps can find the right conversation fast."],
+            ["Activate Your Playbook", "Keep high-performing scripts active for live call use."],
+            ["Track & Improve", "Review and update scripts based on team feedback."],
+          ].map(([title, body], index) => (
+            <li key={title} className="flex gap-3">
+              <span className="scripts-step-badge">{index + 1}</span>
+              <span>
+                <span className="block text-xs font-bold text-crm-text">{title}</span>
+                <span className="mt-0.5 block text-xs leading-relaxed text-crm-muted">{body}</span>
+              </span>
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      <div className={cn(crm.scriptsSidePanel, "scripts-side-panel--tips")}>
+        <div className="mb-3 flex items-center gap-2">
+          <span className="scripts-mini-icon scripts-mini-icon--green">
+            <Lightbulb className="h-4 w-4" />
+          </span>
+          <p className="text-sm font-bold text-crm-text">Pro Tips</p>
+        </div>
+        <ul className="flex flex-col gap-2 text-xs text-crm-muted">
+          {[
+            "Keep scripts conversational, not robotic.",
+            "Personalize with the contact's name and context.",
+            "Review and update scripts regularly.",
+          ].map((tip) => (
+            <li key={tip} className="flex items-center gap-2">
+              <CheckSquare className="h-3.5 w-3.5 shrink-0 text-crm-success" />
+              <span>{tip}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className={cn(crm.scriptsSidePanel, "scripts-side-panel--actions")}>
+        <p className="mb-2.5 text-sm font-bold text-crm-text">Quick Actions</p>
+        <div className="flex flex-col gap-1.5">
+          <QuickAction icon={<Plus className="h-3.5 w-3.5" />} label="Create new script" onClick={onCreate} />
+          <QuickAction
+            icon={<Copy className="h-3.5 w-3.5" />}
+            label="Browse templates"
+            onClick={onBrowseTemplates}
+            href={onBrowseTemplates ? undefined : "#script-templates"}
+          />
+          <QuickAction
+            icon={<PhoneCall className="h-3.5 w-3.5" />}
+            label="Go live in Live Call"
+            href="/crm/live-call"
+          />
+        </div>
+      </div>
+
+      <div className={crm.scriptsSidePanel}>
+        <p className="mb-2.5 text-sm font-bold text-crm-text">Workspace Actions</p>
         <CRMRingMetric
           value={active.length}
           max={ringMax}
@@ -45,48 +115,10 @@ export function ScriptOperationalSidebar({
           }
           color="var(--crm-success)"
         />
-        <div className="mt-3 grid grid-cols-2 gap-2">
+        <div className="my-3 grid grid-cols-2 gap-2">
           <MetricChip label="Active" value={active.length} tone="success" />
-          <MetricChip label="Archived" value={archived.length} />
+          <MetricChip label="Templates" value={SCRIPT_TEMPLATES.length} />
         </div>
-      </div>
-
-      <div className={crm.scriptsSidePanel}>
-        <p className={cn(crm.label, "mb-2.5")}>Script workload</p>
-        <ul className="flex flex-col gap-1.5 text-xs">
-          <WorkloadRow icon={<FileText className="h-3.5 w-3.5" />} label="In library" value={total} />
-          <WorkloadRow
-            icon={<Layers className="h-3.5 w-3.5 text-crm-accent" />}
-            label="Starter templates"
-            value={SCRIPT_TEMPLATES.length}
-          />
-          <WorkloadRow
-            icon={<CheckSquare className="h-3.5 w-3.5 text-crm-success" />}
-            label="Ready to dial"
-            value={active.length}
-          />
-        </ul>
-      </div>
-
-      <div className={crm.scriptsSidePanel}>
-        <p className={cn(crm.label, "mb-2.5")}>Quick actions</p>
-        <div className="flex flex-col gap-1">
-          <QuickAction icon={<Plus className="h-3.5 w-3.5" />} label="Create new script" onClick={onCreate} />
-          <QuickAction
-            icon={<Copy className="h-3.5 w-3.5" />}
-            label="Browse templates"
-            href="#script-templates"
-          />
-          <QuickAction
-            icon={<PhoneCall className="h-3.5 w-3.5" />}
-            label="Go live in Live Call"
-            href="/crm/live-call"
-          />
-        </div>
-      </div>
-
-      <div className={crm.scriptsSidePanel}>
-        <p className={cn(crm.label, "mb-2.5")}>Workspace shortcuts</p>
         <div className="grid grid-cols-2 gap-2">
           <ShortcutCard href="/crm/tasks" label="Tasks" icon={<CheckSquare className="h-4 w-4" />} />
           <ShortcutCard
@@ -128,33 +160,13 @@ function MetricChip({
   );
 }
 
-function WorkloadRow({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: number;
-}) {
-  return (
-    <li className={crm.scriptsWorkloadRow}>
-      <span className="flex items-center gap-2 text-crm-muted">
-        {icon}
-        {label}
-      </span>
-      <span className="font-semibold tabular-nums text-crm-text">{value}</span>
-    </li>
-  );
-}
-
 function QuickAction({
   icon,
   label,
   onClick,
   href,
 }: {
-  icon: React.ReactNode;
+  icon: ReactNode;
   label: string;
   onClick?: () => void;
   href?: string;
@@ -192,7 +204,7 @@ function ShortcutCard({
 }: {
   href: string;
   label: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
 }) {
   return (
     <Link

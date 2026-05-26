@@ -8,6 +8,7 @@ import {
   ExternalLink,
   FileText,
   LayoutList,
+  MoreHorizontal,
   Pencil,
   RotateCcw,
 } from "lucide-react";
@@ -23,6 +24,7 @@ interface ScriptWorkspaceProps {
   onEdit: () => void;
   onArchive: (id: string) => void;
   onRestore: (id: string) => void;
+  onDuplicate?: () => void;
 }
 
 type ViewMode = "playbook" | "checklist";
@@ -33,6 +35,7 @@ export function ScriptWorkspace({
   onEdit,
   onArchive,
   onRestore,
+  onDuplicate,
 }: ScriptWorkspaceProps) {
   const [mode, setMode] = useState<ViewMode>("playbook");
   const [stepsDone, setStepsDone] = useState<Record<number, boolean>>({});
@@ -69,29 +72,29 @@ export function ScriptWorkspace({
   }
 
   return (
-    <div className={cn(crm.scriptsPanelPrimary, "flex min-h-[28rem] flex-col")}>
+    <div className={cn(crm.scriptsPanelPrimary, "crm-script-editor-shell flex min-h-[28rem] flex-col")}>
       <div className={crm.scriptsPanelPrimaryGlow} aria-hidden />
-      <div className="relative z-[1] flex flex-col gap-2.5 overflow-y-auto p-4 sm:p-5">
-        <div className={crm.scriptsInsetPanel}>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="flex min-w-0 items-start gap-3">
+      <div className="relative z-[1] flex flex-col gap-4 overflow-y-auto p-4 sm:p-5 lg:p-6">
+        <div className={cn(crm.scriptsInsetPanel, "scripts-editor-hero")}>
+          <div className="flex flex-col gap-4">
+            <div className="flex min-w-0 flex-1 items-start gap-3">
               <div className={crm.scriptsHeroIcon}>
-                <FileText className="h-5 w-5" />
+                <FileText className="h-6 w-6" />
               </div>
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="truncate text-base font-semibold text-crm-text">{script.name}</h2>
+                  <h2 className="min-w-0 break-words text-2xl font-bold tracking-tight text-crm-text sm:text-3xl">{script.name}</h2>
                   {!script.isActive ? (
-                    <span className="rounded-full border border-crm-border bg-crm-surface-2 px-2 py-0.5 text-[10px] font-medium text-crm-muted">
+                    <span className="scripts-status-pill scripts-status-pill--archived">
                       Archived
                     </span>
                   ) : (
-                    <span className="rounded-full border border-crm-success/35 bg-crm-success/10 px-2 py-0.5 text-[10px] font-medium text-crm-success">
+                    <span className="scripts-status-pill scripts-status-pill--active">
                       Active
                     </span>
                   )}
                 </div>
-                <p className={cn(crm.footnote, "mt-0.5")}>
+                <p className="mt-2 text-sm leading-relaxed text-crm-muted">
                   {sections.length} section{sections.length !== 1 ? "s" : ""}
                   {" · "}
                   Updated{" "}
@@ -104,7 +107,18 @@ export function ScriptWorkspace({
               </div>
             </div>
 
-            <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <div className="flex w-full shrink-0 flex-wrap items-center gap-2">
+              {onDuplicate ? (
+                <button
+                  type="button"
+                  onClick={onDuplicate}
+                  className={cn(crm.btnSecondary, "text-xs")}
+                  title="Duplicate script"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  Duplicate
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={handleCopyAll}
@@ -122,7 +136,7 @@ export function ScriptWorkspace({
               </button>
               <button type="button" onClick={onEdit} className={cn(crm.btnSecondary, "text-xs")}>
                 <Pencil className="h-3.5 w-3.5" />
-                Edit
+                Edit Template
               </button>
               {script.isActive ? (
                 <button
@@ -145,10 +159,18 @@ export function ScriptWorkspace({
                   Restore
                 </button>
               )}
+              <button
+                type="button"
+                className={cn(crm.btnGhost, "px-2 text-xs")}
+                title="More script actions"
+                onClick={script.isActive ? () => onArchive(script.id) : () => onRestore(script.id)}
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </button>
             </div>
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-crm-border/60 pt-3">
+          <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-crm-border/60 pt-4">
             <div className="flex items-center gap-1.5">
               <button
                 type="button"
