@@ -423,30 +423,30 @@ export const crm = {
 
   /** Phase 19I / 19I.1 / 19I.2 — scripts premium playbook (theme-aware via globals `.crm-scripts-workspace`) */
   pageInnerScripts:
-    "mx-auto w-full max-w-[min(100%,1680px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
+    "mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-5 min-h-0",
   scriptsWorkspace: "crm-scripts-workspace w-full min-h-0",
   scriptsHero:
-    "scripts-command-hero relative overflow-hidden rounded-crm-lg border px-4 py-4 sm:px-5 sm:py-5",
+    "scripts-command-hero relative overflow-hidden rounded-[1.75rem] border px-4 py-5 sm:px-6 sm:py-6 lg:px-7",
   scriptsHeroGlow:
     "scripts-command-hero-glow pointer-events-none absolute -right-12 -top-12 h-40 w-40 rounded-full blur-3xl motion-reduce:hidden",
   scriptsHeroIcon:
-    "scripts-command-hero-icon flex h-12 w-12 shrink-0 items-center justify-center rounded-crm-lg border",
+    "scripts-command-hero-icon flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border",
   scriptsKpiTile:
-    "scripts-kpi-tile flex min-w-[5.5rem] flex-col gap-0.5 rounded-crm border px-3 py-2.5 backdrop-blur-[2px]",
+    "scripts-kpi-tile flex min-h-[6.75rem] min-w-0 flex-col justify-between gap-2 rounded-[1.35rem] border px-4 py-3.5 backdrop-blur-[2px]",
   scriptsGrid:
-    "grid gap-3 lg:gap-4 xl:gap-5 lg:items-stretch lg:grid-cols-[minmax(15rem,20rem)_minmax(0,1fr)_minmax(15rem,20rem)] xl:grid-cols-[minmax(17.5rem,22.5rem)_minmax(0,1fr)_minmax(17.5rem,22.5rem)]",
+    "grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)] xl:gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,24rem)]",
   scriptsLibraryCol: "flex flex-col gap-2.5 min-w-0",
   scriptsWorkspaceCol: "flex flex-col gap-2.5 min-w-0 min-h-[30rem]",
   scriptsSideCol: "flex flex-col gap-2.5 min-w-0",
   scriptsPanelSupport:
-    "scripts-panel-support rounded-crm-lg border backdrop-blur-[2px]",
+    "scripts-panel-support rounded-[1.5rem] border backdrop-blur-[2px]",
   scriptsPanelPrimary:
-    "scripts-panel-primary relative overflow-hidden rounded-crm-lg border",
+    "scripts-panel-primary relative overflow-hidden rounded-[1.6rem] border",
   scriptsPanelPrimaryGlow:
     "scripts-panel-primary-glow pointer-events-none absolute inset-0",
-  scriptsSidePanel: "scripts-side-panel rounded-crm-lg border p-3.5",
+  scriptsSidePanel: "scripts-side-panel rounded-[1.35rem] border p-4",
   scriptCard:
-    "group relative flex items-stretch rounded-crm border border-crm-border/60 bg-crm-surface-2/40 transition-all duration-200 hover:border-crm-border/90 hover:bg-crm-surface-2/70 cursor-pointer scripts-script-card",
+    "group relative flex items-stretch rounded-[1.1rem] border border-crm-border/60 bg-crm-surface-2/40 transition-all duration-200 hover:border-crm-border/90 hover:bg-crm-surface-2/70 cursor-pointer scripts-script-card",
   scriptCardActive:
     "border-crm-accent/45 bg-crm-accent/10 ring-1 ring-crm-accent/25 scripts-script-card-active",
   scriptCardArchived: "opacity-50",
@@ -457,7 +457,7 @@ export const crm = {
   scriptTplIcon:
     "script-tpl-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border text-base transition-transform duration-200 group-hover:scale-105",
   scriptSectionCard:
-    "scripts-section-card rounded-crm border transition-all duration-200",
+    "scripts-section-card rounded-[1.35rem] border transition-all duration-200",
   scriptSectionCardOpen: "scripts-section-card-open",
   scriptCheckStep:
     "flex w-full items-start gap-2.5 rounded-crm border px-3 py-2.5 text-left text-sm transition-all duration-200",
@@ -470,18 +470,18 @@ export const crm = {
   scriptModeTab: "scripts-mode-tab",
   scriptModeTabActive: "scripts-mode-tab-active",
   scriptsTipsStrip:
-    "scripts-tips-strip flex flex-wrap items-center gap-x-4 gap-y-2 rounded-crm-lg border px-4 py-2.5 text-[11px] text-crm-muted",
+    "scripts-tips-strip flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[1.35rem] border px-4 py-3 text-[11px] text-crm-muted",
   scriptsFeatureCard:
     "scripts-feature-card flex flex-col gap-1 rounded-crm border px-3 py-2.5 transition-colors",
   scriptsLiveCta:
     "scripts-live-cta flex w-full items-center justify-center gap-2 rounded-crm border px-4 py-3 text-sm font-semibold transition-all",
   scriptsLibraryHeader:
-    "scripts-library-header flex items-center justify-between border-b px-3 py-2.5",
+    "scripts-library-header flex flex-col gap-3 border-b px-4 py-4 sm:flex-row sm:items-center sm:justify-between",
   scriptsLibraryCount:
     "scripts-library-count rounded-full border px-2 py-0.5 text-[10px] font-bold tabular-nums text-crm-muted",
   scriptsInsetPanel: "scripts-inset-panel rounded-crm-lg border px-4 py-3",
   scriptsWorkloadRow: "scripts-workload-row flex items-center justify-between gap-2 rounded-crm border px-2.5 py-1.5",
   scriptsShortcutCard:
     "scripts-shortcut-card flex flex-col items-center gap-1 rounded-crm border px-2 py-2.5 text-center text-[11px] font-medium transition-colors",
-  scriptsEditModal: "scripts-edit-modal w-full max-w-2xl max-h-[92vh] flex flex-col",
+  scriptsEditModal: "scripts-edit-modal w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden rounded-[1.75rem]",
 } as const;

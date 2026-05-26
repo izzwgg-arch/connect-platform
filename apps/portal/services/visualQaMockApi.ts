@@ -41,6 +41,46 @@ const queueMembers = [
   queueMember("qm-007", contacts[7], campaigns[1], "PENDING", 0, null, 7),
 ];
 
+function task(
+  id: string,
+  entry: ReturnType<typeof contact>,
+  title: string,
+  body: string,
+  priority: string,
+  status: string,
+  dueAt: string,
+  ownerId: string,
+  completedAt: string | null,
+) {
+  const owner = users.find((user) => user.userId === ownerId) ?? users[0];
+  return {
+    id,
+    contactId: entry.id,
+    title,
+    body,
+    dueAt,
+    priority,
+    status,
+    completedAt,
+    createdAt: hoursFromNow(-168),
+    assignedTo: { id: owner.userId, displayName: owner.displayName },
+    contact: { id: entry.id, displayName: entry.displayName, company: entry.company },
+  };
+}
+
+const tasks = [
+  task("task-001", contacts[0], "Follow up call with James Smith", "Solar Summer Outreach", "URGENT", "OPEN", hoursFromNow(-30), "qa-ae-1", null),
+  task("task-002", contacts[1], "Send proposal to Maria Garcia", "Solar Summer Outreach", "HIGH", "IN_PROGRESS", hoursFromNow(3), "qa-ae-2", null),
+  task("task-003", contacts[2], "Callback Robert Johnson", "Solar Summer Outreach", "MEDIUM", "IN_PROGRESS", hoursFromNow(5), "qa-ae-1", null),
+  task("task-004", contacts[3], "Review solar needs assessment", "Enterprise Outreach", "MEDIUM", "OPEN", hoursFromNow(7), "visual-qa-user", null),
+  task("task-005", contacts[4], "Schedule site visit with Jennifer Lee", "Enterprise Outreach", "MEDIUM", "OPEN", hoursFromNow(26), "qa-ae-2", null),
+  task("task-006", contacts[5], "Send follow-up email", "West Coast Campaign", "LOW", "OPEN", hoursFromNow(50), "visual-qa-user", null),
+  task("task-007", contacts[6], "Check in about financing options", "Solar Summer Outreach", "LOW", "OPEN", hoursFromNow(77), "qa-ae-1", null),
+  task("task-008", contacts[7], "Update contact notes", "Referral Program", "LOW", "DONE", hoursFromNow(-96), "qa-ae-2", hoursFromNow(-48)),
+  task("task-009", contacts[0], "Thank you call", "Solar Summer Outreach", "LOW", "DONE", hoursFromNow(-120), "visual-qa-user", hoursFromNow(-72)),
+  task("task-010", contacts[2], "Prepare custom proposal", "Enterprise Outreach", "MEDIUM", "DONE", hoursFromNow(-144), "qa-ae-1", hoursFromNow(-120)),
+];
+
 export function getVisualQaMockResponse(
   method: ApiMethod,
   path: string,
@@ -99,19 +139,42 @@ export function getVisualQaMockResponse(
     return {
       handled: true,
       data: {
-        myOpen: 12,
-        dueToday: 5,
-        overdue: 2,
+        myOpen: tasks.filter((entry) => entry.assignedTo?.id === "visual-qa-user" && isOpenTask(entry)).length,
+        dueToday: tasks.filter((entry) => isOpenTask(entry) && isDueToday(entry)).length,
+        overdue: tasks.filter((entry) => isOpenTask(entry) && isOverdue(entry)).length,
         callsLinkedToday: 18,
         dispositionsToday: 11,
         activeCampaigns: 2,
         queueRemaining: 98,
         myOverdueCallbacks: 1,
         myCallbacksDueToday: 4,
-        myTasksOverdue: 1,
-        myTasksDueToday: 3,
+        myTasksOverdue: tasks.filter((entry) => entry.assignedTo?.id === "visual-qa-user" && isOpenTask(entry) && isOverdue(entry)).length,
+        myTasksDueToday: tasks.filter((entry) => entry.assignedTo?.id === "visual-qa-user" && isOpenTask(entry) && isDueToday(entry)).length,
       },
     };
+  }
+
+  if (pathname === "/crm/tasks") {
+    let rows = [...tasks];
+    const status = parsed.searchParams.get("status") ?? "open";
+    const due = parsed.searchParams.get("due");
+    const assignedTo = parsed.searchParams.get("assignedTo");
+    const limit = Number(parsed.searchParams.get("limit") ?? "50");
+
+    if (assignedTo === "me") rows = rows.filter((entry) => entry.assignedTo?.id === "visual-qa-user");
+    if (status === "open") rows = rows.filter(isOpenTask);
+    else if (status && status !== "all") rows = rows.filter((entry) => entry.status === status);
+    if (due === "today") rows = rows.filter(isDueToday);
+    else if (due === "overdue") rows = rows.filter(isOverdue);
+    else if (due === "upcoming") rows = rows.filter((entry) => isOpenTask(entry) && !isDueToday(entry) && !isOverdue(entry));
+
+    rows.sort((a, b) => {
+      const aDue = a.dueAt ? new Date(a.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
+      const bDue = b.dueAt ? new Date(b.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
+      return aDue - bDue || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+
+    return { handled: true, data: { rows: rows.slice(0, limit), total: rows.length, page: 0, limit } };
   }
 
   if (pathname === "/crm/reports/daily") {
@@ -135,8 +198,68 @@ export function getVisualQaMockResponse(
     return {
       handled: true,
       data: {
-        callbacks: { overdue: { count: 1 }, dueToday: { count: 4 } },
-        tasks: { overdue: { count: 1 }, dueToday: { count: 3 } },
+        callbacks: {
+          overdue: {
+            count: 1,
+            rows: queueMembers
+              .filter((member) => member.status === "CALLBACK" && member.callbackAt && new Date(member.callbackAt).getTime() < now.getTime())
+              .map((member) => followUpMember(member)),
+          },
+          dueToday: {
+            count: 4,
+            rows: queueMembers
+              .filter((member) => member.status === "CALLBACK")
+              .slice(0, 4)
+              .map((member) => followUpMember(member)),
+          },
+        },
+        tasks: {
+          overdue: {
+            count: 1,
+            rows: tasks.filter((entry) => isOpenTask(entry) && isOverdue(entry)).slice(0, 2).map((entry) => followUpTask(entry)),
+          },
+          dueToday: {
+            count: 3,
+            rows: tasks.filter((entry) => isOpenTask(entry) && isDueToday(entry)).slice(0, 3).map((entry) => followUpTask(entry)),
+          },
+        },
+      },
+    };
+  }
+
+  if (pathname === "/crm/reports/agents") {
+    return {
+      handled: true,
+      data: {
+        agents: [
+          agentReport(users[0], "Sales Lead", 32, 5, 24, 3, 2, ["101"]),
+          agentReport(users[1], "Account Executive", 28, 2, 19, 2, 4, ["102"]),
+          agentReport(users[2], "Account Executive", 21, 1, 13, 1, 3, ["103"]),
+          {
+            userId: "qa-ae-3",
+            displayName: "Elena Torres",
+            email: "elena@connect.local",
+            crmRole: "Sales Rep",
+            assignedQueue: 18,
+            callbacksDueToday: 0,
+            dispositionsToday: 12,
+            convertedLast: 1,
+            openTasks: 1,
+            extensions: ["104"],
+          },
+          {
+            userId: "qa-ae-4",
+            displayName: "David Kim",
+            email: "david@connect.local",
+            crmRole: "Support",
+            assignedQueue: 0,
+            callbacksDueToday: 0,
+            dispositionsToday: 0,
+            convertedLast: 0,
+            openTasks: 0,
+            extensions: ["105"],
+          },
+        ],
       },
     };
   }
@@ -267,7 +390,36 @@ export function getVisualQaMockResponse(
   }
 
   if (pathname === "/crm/scripts") {
-    return { handled: true, data: { scripts: [{ id: "script-energy", name: "Consultative outreach" }] } };
+    return {
+      handled: true,
+      data: {
+        scripts: [
+          {
+            id: "script-energy",
+            name: "Consultative outreach",
+            isActive: true,
+            createdAt: "2026-05-20T14:30:00.000Z",
+            updatedAt: "2026-05-26T20:45:00.000Z",
+          },
+        ],
+      },
+    };
+  }
+
+  if (pathname === "/crm/scripts/script-energy") {
+    return {
+      handled: true,
+      data: {
+        script: {
+          id: "script-energy",
+          name: "Consultative outreach",
+          isActive: true,
+          createdAt: "2026-05-20T14:30:00.000Z",
+          updatedAt: "2026-05-26T20:45:00.000Z",
+          body: "# Opening\nHi, this is [Your Name] from Connect Solar. Is this a good time to talk for a minute about lowering your electric bill?\n\n---\n\n# Discovery / Qualification\nHave you looked into solar before?\n\nWhat is your biggest goal with solar?\n\n---\n\n# Value Proposition\nWe help homeowners reduce energy costs and take advantage of available incentives with no pressure.",
+        },
+      },
+    };
   }
 
   if (pathname === "/crm/checklists") {
@@ -289,6 +441,52 @@ export function getVisualQaMockResponse(
       return [entry.displayName, entry.company, entry.primaryEmail?.email].some((value) => String(value || "").toLowerCase().includes(q));
     });
     return { handled: true, data: { rows: filtered.slice(0, limit), total: filtered.length, page, limit } };
+  }
+
+  const contactDetailMatch = pathname.match(/^\/crm\/contacts\/([^/]+)$/);
+  if (contactDetailMatch) {
+    const entry = contacts.find((contact) => contact.id === contactDetailMatch[1]) ?? contacts[0];
+    return {
+      handled: true,
+      data: {
+        contact: {
+          ...entry,
+          phones: [{ id: `${entry.id}-phone`, type: "MOBILE", numberRaw: entry.primaryPhone.numberRaw, isPrimary: true }],
+          emails: [{ id: `${entry.id}-email`, type: "WORK", email: entry.primaryEmail.email, isPrimary: true }],
+          location: "San Francisco, CA",
+          leadScore: 89,
+          lastDisposition: "Interested",
+        },
+      },
+    };
+  }
+
+  const contactTasksMatch = pathname.match(/^\/crm\/contacts\/([^/]+)\/tasks$/);
+  if (contactTasksMatch) {
+    return {
+      handled: true,
+      data: {
+        tasks: [
+          { id: "task-live-1", title: "Send solar savings estimate", priority: "HIGH", status: "OPEN", dueAt: hoursFromNow(4), assignedTo: { id: "visual-qa-user", displayName: "CRM Visual QA" } },
+          { id: "task-live-2", title: "Confirm financing preference", priority: "MEDIUM", status: "OPEN", dueAt: hoursFromNow(26), assignedTo: { id: "visual-qa-user", displayName: "CRM Visual QA" } },
+        ],
+      },
+    };
+  }
+
+  const contactTimelineMatch = pathname.match(/^\/crm\/contacts\/([^/]+)\/timeline$/);
+  if (contactTimelineMatch) {
+    return {
+      handled: true,
+      data: {
+        events: [
+          { id: "tl-live-1", type: "CDR_OUTBOUND", title: "Call connected", body: "Connected with the lead.", createdAt: hoursFromNow(-0.1), createdBy: { id: "visual-qa-user", displayName: "CRM Visual QA" } },
+          { id: "tl-live-2", type: "NOTE_ADDED", title: "Note added", body: "Interested in solar after hearing financing options.", createdAt: hoursFromNow(-1.2), createdBy: { id: "visual-qa-user", displayName: "CRM Visual QA" } },
+          { id: "tl-live-3", type: "SMS_SENT", title: "Email sent", body: "Sent savings estimate and next steps.", createdAt: hoursFromNow(-3), createdBy: { id: "visual-qa-user", displayName: "CRM Visual QA" } },
+          { id: "tl-live-4", type: "DISPOSITION_SET", title: "Disposition set", body: "Interested", createdAt: hoursFromNow(-20), createdBy: { id: "visual-qa-user", displayName: "CRM Visual QA" } },
+        ],
+      },
+    };
   }
 
   if (pathname === "/crm/queue") {
@@ -326,6 +524,30 @@ function hoursFromNow(hours: number): string {
 
 function hoursFromNowDate(hours: number): Date {
   return new Date(now.getTime() + hours * 3600_000);
+}
+
+function startOfVisualQaDay(): Date {
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  return start;
+}
+
+function isOpenTask(entry: ReturnType<typeof task>): boolean {
+  return entry.status === "OPEN" || entry.status === "IN_PROGRESS";
+}
+
+function isDueToday(entry: ReturnType<typeof task>): boolean {
+  if (!entry.dueAt) return false;
+  const start = startOfVisualQaDay();
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  const due = new Date(entry.dueAt);
+  return due >= start && due < end;
+}
+
+function isOverdue(entry: ReturnType<typeof task>): boolean {
+  if (!entry.dueAt) return false;
+  return new Date(entry.dueAt) < startOfVisualQaDay();
 }
 
 function campaign(
@@ -418,6 +640,56 @@ function queueMember(
     callbackNote: callbackAt ? "Requested a focused follow-up window." : null,
     sortOrder,
     createdAt: hoursFromNow(-72 + sortOrder),
+  };
+}
+
+function followUpMember(member: ReturnType<typeof queueMember>) {
+  return {
+    id: member.id,
+    contactId: member.contactId,
+    contactName: member.contact.displayName,
+    contactPhone: member.contact.primaryPhone,
+    campaign: member.campaign ? { id: member.campaign.id, name: member.campaign.name } : null,
+    assignedTo: member.assignedTo ? { id: member.assignedTo.id, name: member.assignedTo.displayName } : null,
+    callbackAt: member.callbackAt,
+    callbackNote: member.callbackNote,
+    attemptCount: member.attemptCount,
+  };
+}
+
+function followUpTask(entry: ReturnType<typeof task>) {
+  return {
+    id: entry.id,
+    contactId: entry.contactId,
+    contactName: entry.contact.displayName,
+    title: entry.title,
+    dueAt: entry.dueAt,
+    priority: entry.priority,
+    assignedTo: entry.assignedTo ? { id: entry.assignedTo.id, name: entry.assignedTo.displayName } : null,
+  };
+}
+
+function agentReport(
+  user: (typeof users)[number],
+  crmRole: string,
+  assignedQueue: number,
+  callbacksDueToday: number,
+  dispositionsToday: number,
+  convertedLast: number,
+  openTasks: number,
+  extensions: string[],
+) {
+  return {
+    userId: user.userId,
+    displayName: user.displayName,
+    email: user.email,
+    crmRole,
+    assignedQueue,
+    callbacksDueToday,
+    dispositionsToday,
+    convertedLast,
+    openTasks,
+    extensions,
   };
 }
 
