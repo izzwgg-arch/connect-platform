@@ -1,14 +1,31 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { FileUp, ListOrdered, Megaphone, Plus, Search } from "lucide-react";
+import {
+  Activity,
+  Archive,
+  CalendarDays,
+  CheckCircle2,
+  Clock3,
+  FileUp,
+  Filter,
+  Gauge,
+  Grid2X2,
+  Megaphone,
+  Pause,
+  Plus,
+  Search,
+  Send,
+  Target,
+  TrendingUp,
+  Users,
+  Zap,
+} from "lucide-react";
 import {
   CRMPageShell,
   CRMActionBar,
-  CampaignIndexCard,
-  CampaignIndexCommandHero,
   CampaignQuickActionStrip,
   CampaignGuidedEmpty,
   type CampaignListItem,
@@ -20,7 +37,8 @@ import { mk } from "../../../../components/crm/campaign/campaignCinemaClasses";
 import { apiGet, apiPost, apiPatch } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { cn } from "../../../../components/crm/cn";
-import { CAMPAIGN_STATUS_LABELS } from "../../../../components/crm/campaign/campaignTypes";
+import { CAMPAIGN_PRIORITY_LABELS, CAMPAIGN_STATUS_LABELS } from "../../../../components/crm/campaign/campaignTypes";
+import { formatShortDate, queueHref } from "../../../../components/crm/campaign/campaignUtils";
 
 const STATUS_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: "all", label: "All" },
@@ -32,6 +50,145 @@ const STATUS_FILTER_OPTIONS: { value: string; label: string }[] = [
 ];
 
 type CampaignSort = "status" | "updated" | "name";
+type CampaignQuickFilter = "all" | CampaignStatus | "SCHEDULED";
+type CampaignTypeFilter = "all" | "LOW" | "NORMAL" | "HIGH" | "URGENT" | "SCRIPTED" | "CHECKLIST";
+
+const QUICK_FILTER_OPTIONS: { value: CampaignQuickFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "ACTIVE", label: "Active" },
+  { value: "SCHEDULED", label: "Scheduled" },
+  { value: "PAUSED", label: "Paused" },
+  { value: "COMPLETED", label: "Completed" },
+  { value: "DRAFT", label: "Draft" },
+  { value: "ARCHIVED", label: "Archived" },
+];
+
+const TYPE_FILTER_OPTIONS: { value: CampaignTypeFilter; label: string }[] = [
+  { value: "all", label: "All types" },
+  { value: "SCRIPTED", label: "Has script" },
+  { value: "CHECKLIST", label: "Has checklist" },
+  { value: "LOW", label: "Low priority" },
+  { value: "NORMAL", label: "Normal priority" },
+  { value: "HIGH", label: "High priority" },
+  { value: "URGENT", label: "Urgent priority" },
+];
+
+const CAMPAIGN_STATUS_TONE: Record<CampaignStatus | "SCHEDULED", string> = {
+  ACTIVE: "campaigns-status-active",
+  PAUSED: "campaigns-status-paused",
+  DRAFT: "campaigns-status-draft",
+  COMPLETED: "campaigns-status-completed",
+  ARCHIVED: "campaigns-status-archived",
+  SCHEDULED: "campaigns-status-scheduled",
+};
+
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat().format(value);
+}
+
+function formatPercent(value: number): string {
+  return `${Number.isFinite(value) ? value.toFixed(value % 1 === 0 ? 0 : 1) : "0"}%`;
+}
+
+function campaignCountForFilter(campaigns: CampaignListItem[], key: CampaignQuickFilter) {
+  if (key === "all") return campaigns.length;
+  if (key === "SCHEDULED") return 0;
+  return campaigns.filter((campaign) => campaign.status === key).length;
+}
+
+function campaignTypeLabel(campaign: CampaignListItem) {
+  if (campaign.script && campaign.checklist) return "Playbook";
+  if (campaign.script) return "Scripted";
+  if (campaign.checklist) return "Checklist";
+  return CAMPAIGN_PRIORITY_LABELS[campaign.priority] ?? "Standard";
+}
+
+function campaignOwnerLabel(campaign: CampaignListItem) {
+  if (campaign.script?.name) return campaign.script.name;
+  if (campaign.checklist?.name) return campaign.checklist.name;
+  return "Support Team";
+}
+
+function Sparkline({ seed, tone = "blue" }: { seed: string; tone?: "blue" | "green" | "violet" | "orange" | "red" }) {
+  const color =
+    tone === "green" ? "#10b981" : tone === "violet" ? "#8b5cf6" : tone === "orange" ? "#f59e0b" : tone === "red" ? "#ef4444" : "#3b82f6";
+  const points = useMemo(() => {
+    let hash = 0;
+    for (const char of seed) hash = (hash * 31 + char.charCodeAt(0)) % 997;
+    return Array.from({ length: 9 }, (_, i) => {
+      const n = Math.sin((hash + i * 19) / 13) * 13 + Math.cos((hash + i * 7) / 9) * 8;
+      return 34 - Math.max(5, Math.min(31, 18 + n));
+    });
+  }, [seed]);
+  const d = points.map((y, i) => `${i === 0 ? "M" : "L"} ${i * 11} ${y}`).join(" ");
+  return (
+    <svg className="h-9 w-24" viewBox="0 0 88 38" fill="none" aria-hidden>
+      <path d={`${d} L 88 38 L 0 38 Z`} fill={color} opacity="0.10" />
+      <path d={d} stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function CampaignKpiTile({
+  label,
+  value,
+  trend,
+  icon,
+  tone,
+}: {
+  label: string;
+  value: string | number;
+  trend: string;
+  icon: ReactNode;
+  tone: "blue" | "green" | "violet" | "orange" | "red" | "cyan";
+}) {
+  return (
+    <article className={cn("campaigns-kpi-card", `campaigns-kpi-${tone}`)}>
+      <div className="campaigns-kpi-icon">{icon}</div>
+      <p className="campaigns-kpi-label">{label}</p>
+      <p className="campaigns-kpi-value">{value}</p>
+      <p className="campaigns-kpi-trend">{trend}</p>
+    </article>
+  );
+}
+
+function CampaignStatusPill({ status }: { status: CampaignStatus }) {
+  return (
+    <span className={cn("campaigns-status-pill", CAMPAIGN_STATUS_TONE[status])}>
+      <span className="campaigns-status-dot" />
+      {CAMPAIGN_STATUS_LABELS[status]}
+    </span>
+  );
+}
+
+function CampaignHealthDonut({
+  healthy,
+  warning,
+  problem,
+}: {
+  healthy: number;
+  warning: number;
+  problem: number;
+}) {
+  const total = Math.max(healthy + warning + problem, 1);
+  const healthyPct = Math.round((healthy / total) * 100);
+  const warningPct = Math.round((warning / total) * 100);
+  return (
+    <div className="campaigns-health-donut-wrap">
+      <div
+        className="campaigns-health-donut"
+        style={{
+          background: `conic-gradient(#10b981 0 ${healthyPct}%, #f59e0b ${healthyPct}% ${healthyPct + warningPct}%, #ef4444 ${healthyPct + warningPct}% 100%)`,
+        }}
+      >
+        <div className="campaigns-health-donut-core">
+          <span>{healthyPct}%</span>
+          <small>healthy</small>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function CreateCampaignModal({
   onClose,
@@ -148,7 +305,10 @@ export default function CampaignsPage() {
   const [reportById, setReportById] = useState<Map<string, CampaignReportRow>>(new Map());
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState<CampaignQuickFilter>("all");
+  const [typeFilter, setTypeFilter] = useState<CampaignTypeFilter>("all");
+  const [ownerFilter, setOwnerFilter] = useState("all");
+  const [dateFilter, setDateFilter] = useState("all");
   const [sortBy, setSortBy] = useState<CampaignSort>("status");
   const [showCreate, setShowCreate] = useState(false);
   const [error, setError] = useState("");
@@ -159,9 +319,8 @@ export default function CampaignsPage() {
     setLoading(true);
     setError("");
     try {
-      const params = statusFilter !== "all" ? `?status=${statusFilter}` : "";
       const [listRes, reportRes] = await Promise.all([
-        apiGet<{ campaigns: CampaignListItem[] }>(`/crm/campaigns${params}`, token),
+        apiGet<{ campaigns: CampaignListItem[] }>("/crm/campaigns", token),
         apiGet<{ campaigns: CampaignReportRow[] }>("/crm/reports/campaigns?status=all", token).catch(() => ({
           campaigns: [] as CampaignReportRow[],
         })),
@@ -175,7 +334,7 @@ export default function CampaignsPage() {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, token]);
+  }, [token]);
 
   useEffect(() => {
     void load();
@@ -195,7 +354,31 @@ export default function CampaignsPage() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     let list = campaigns;
-    if (q) list = list.filter((c) => c.name.toLowerCase().includes(q));
+    if (q) {
+      list = list.filter((c) =>
+        [c.name, c.description ?? "", c.script?.name ?? "", c.checklist?.name ?? ""].some((value) =>
+          value.toLowerCase().includes(q),
+        ),
+      );
+    }
+    if (statusFilter !== "all") {
+      list = statusFilter === "SCHEDULED" ? [] : list.filter((c) => c.status === statusFilter);
+    }
+    if (typeFilter !== "all") {
+      list = list.filter((c) => {
+        if (typeFilter === "SCRIPTED") return Boolean(c.script);
+        if (typeFilter === "CHECKLIST") return Boolean(c.checklist);
+        return c.priority === typeFilter;
+      });
+    }
+    if (ownerFilter !== "all") {
+      list = list.filter((c) => campaignOwnerLabel(c) === ownerFilter);
+    }
+    if (dateFilter !== "all") {
+      const now = Date.now();
+      const days = dateFilter === "7d" ? 7 : dateFilter === "30d" ? 30 : 90;
+      list = list.filter((c) => now - new Date(c.updatedAt).getTime() <= days * 24 * 60 * 60 * 1000);
+    }
     return [...list].sort((a, b) => {
       if (sortBy === "name") return a.name.localeCompare(b.name);
       if (sortBy === "updated") {
@@ -207,7 +390,7 @@ export default function CampaignsPage() {
       if (d !== 0) return d;
       return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
     });
-  }, [campaigns, search, sortBy]);
+  }, [campaigns, dateFilter, ownerFilter, search, sortBy, statusFilter, typeFilter]);
 
   useEffect(() => {
     function onKey(e: globalThis.KeyboardEvent) {
@@ -228,21 +411,72 @@ export default function CampaignsPage() {
   const summary = useMemo(() => {
     let active = 0;
     let paused = 0;
+    let completed = 0;
+    let draft = 0;
+    let archived = 0;
     let queueWork = 0;
     let callbacks = 0;
     let members = 0;
+    let contacted = 0;
+    let converted = 0;
+    let attempts = 0;
+    let conversionRateTotal = 0;
+    let conversionRateRows = 0;
     for (const c of campaigns) {
       members += c.memberCount ?? 0;
       if (c.status === "ACTIVE") active += 1;
       if (c.status === "PAUSED") paused += 1;
+      if (c.status === "COMPLETED") completed += 1;
+      if (c.status === "DRAFT") draft += 1;
+      if (c.status === "ARCHIVED") archived += 1;
       const m = reportById.get(c.id);
       if (m) {
         queueWork += m.pending;
         callbacks += m.callbacks;
+        contacted += m.contacted;
+        converted += m.converted;
+        attempts += m.totalAttempts;
+        conversionRateTotal += m.conversionRate;
+        conversionRateRows += 1;
       }
     }
-    return { active, paused, queueWork, callbacks, members };
+    const avgConversionRate = conversionRateRows > 0 ? conversionRateTotal / conversionRateRows : 0;
+    return {
+      active,
+      paused,
+      completed,
+      draft,
+      archived,
+      queueWork,
+      callbacks,
+      members,
+      contacted,
+      converted,
+      attempts,
+      avgConversionRate,
+    };
   }, [campaigns, reportById]);
+
+  const ownerOptions = useMemo(() => {
+    const owners = new Set(campaigns.map(campaignOwnerLabel));
+    return Array.from(owners).sort((a, b) => a.localeCompare(b));
+  }, [campaigns]);
+
+  const topCampaigns = useMemo(() => {
+    return campaigns
+      .map((campaign) => ({
+        campaign,
+        metrics: reportById.get(campaign.id),
+      }))
+      .sort((a, b) => (b.metrics?.conversionRate ?? 0) - (a.metrics?.conversionRate ?? 0))
+      .slice(0, 5);
+  }, [campaigns, reportById]);
+
+  const recentActivity = useMemo(() => {
+    return [...campaigns]
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+      .slice(0, 4);
+  }, [campaigns]);
 
   const listEmptyNoCampaigns = !loading && !error && campaigns.length === 0;
   const listEmptyAfterFilter = !loading && !error && campaigns.length > 0 && filtered.length === 0;
@@ -260,108 +494,117 @@ export default function CampaignsPage() {
         />
       )}
 
-      <CampaignIndexCommandHero
-        title="Campaigns"
-        subtitle="Live outbound programs — scan queue pressure, open a desk, and jump into power dialing."
-        actions={
-          <>
-            {isAdmin && (
-              <button type="button" onClick={() => setShowCreate(true)} className={mk.btnPrimary}>
-                <Plus className="h-4 w-4" />
-                New campaign
-              </button>
-            )}
-            {canImport && (
-              <Link href="/crm/import" className={mk.btnSecondary}>
-                <FileUp className="h-4 w-4" />
-                Import leads
-              </Link>
-            )}
-            {canQueue && (
-              <Link href="/crm/queue" className={mk.btnSecondary}>
-                <ListOrdered className="h-4 w-4" />
-                My queue
-              </Link>
-            )}
-          </>
-        }
-        kpis={
-          loading || error || campaigns.length === 0
-            ? []
-            : [
-                {
-                  label: "Active campaigns",
-                  value: summary.active,
-                  accent: "green" as const,
-                  sub: summary.active > 0 ? "Programs live" : "None active",
-                },
-                {
-                  label: "Paused",
-                  value: summary.paused,
-                  accent: "amber" as const,
-                  sub: summary.paused > 0 ? "On hold" : "All clear",
-                },
-                {
-                  label: "Queue work",
-                  value: summary.queueWork,
-                  accent: "violet" as const,
-                  sub: summary.queueWork > 0 ? "Needs attention" : "Queue clear",
-                },
-                {
-                  label: "Callbacks",
-                  value: summary.callbacks,
-                  accent: "orange" as const,
-                  sub: summary.callbacks > 0 ? "Follow up" : "No pressure",
-                },
-                {
-                  label: "Members",
-                  value: summary.members,
-                  accent: "cyan" as const,
-                  sub: "Across programs",
-                },
-              ]
-        }
-      />
+      <header className="campaigns-overview-hero">
+        <div className="campaigns-hero-copy">
+          <div className="campaigns-hero-icon">
+            <Megaphone className="h-7 w-7" />
+          </div>
+          <div>
+            <p className="campaigns-eyebrow">CRM outreach command center</p>
+            <h1>Campaigns</h1>
+            <p>Create, manage, and analyze outbound programs with live operational context.</p>
+          </div>
+        </div>
+        <div className="campaigns-hero-actions">
+          {canImport && (
+            <Link href="/crm/import" className="campaigns-btn-secondary">
+              <FileUp className="h-4 w-4" />
+              Import
+            </Link>
+          )}
+          {canQueue && (
+            <Link href="/crm/scripts" className="campaigns-btn-secondary">
+              <Grid2X2 className="h-4 w-4" />
+              Templates
+            </Link>
+          )}
+          {isAdmin && (
+            <button type="button" onClick={() => setShowCreate(true)} className="campaigns-btn-primary">
+              <Plus className="h-4 w-4" />
+              New Campaign
+            </button>
+          )}
+        </div>
+      </header>
 
-      <div className="sticky top-0 z-20">
-        <CRMActionBar className={cn(mk.filterBar, "gap-2 sm:gap-3 flex-wrap")}>
-          <div className="relative min-w-[10rem] flex-1 max-w-md">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--cinema-text-dim)]" />
+      {!loading && !error && campaigns.length > 0 ? (
+        <section className="campaigns-kpi-grid" aria-label="Campaign metrics">
+          <CampaignKpiTile label="Total Campaigns" value={formatNumber(campaigns.length)} trend="+ across all statuses" tone="blue" icon={<CalendarDays className="h-5 w-5" />} />
+          <CampaignKpiTile label="Active Campaigns" value={formatNumber(summary.active)} trend={summary.paused > 0 ? `${summary.paused} paused` : "All live programs clear"} tone="violet" icon={<Zap className="h-5 w-5" />} />
+          <CampaignKpiTile label="Total Contacts" value={formatNumber(summary.members)} trend="Across campaign rosters" tone="green" icon={<Users className="h-5 w-5" />} />
+          <CampaignKpiTile label="Contacted" value={formatNumber(summary.contacted)} trend={`${formatNumber(summary.attempts)} total attempts`} tone="cyan" icon={<Send className="h-5 w-5" />} />
+          <CampaignKpiTile label="Converted" value={formatNumber(summary.converted)} trend={`${summary.callbacks} callbacks waiting`} tone="orange" icon={<CheckCircle2 className="h-5 w-5" />} />
+          <CampaignKpiTile label="Conversion Rate" value={formatPercent(summary.avgConversionRate)} trend="Average by campaign" tone="red" icon={<Target className="h-5 w-5" />} />
+        </section>
+      ) : null}
+
+      <CRMActionBar className="campaigns-filter-panel">
+        <div className="campaigns-filter-row">
+          <div className="campaigns-search-wrap">
+            <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-crm-muted" />
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className={mk.searchInput}
-              placeholder="Search campaigns…"
+              className="campaigns-search-input"
+              placeholder="Search campaigns by name, script, checklist..."
               aria-label="Search campaigns"
             />
           </div>
-          <div className={cn(mk.filterPillGroup, "shrink-0")} role="group" aria-label="Filter by status">
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as CampaignQuickFilter)} className="campaigns-select" aria-label="Status filter">
             {STATUS_FILTER_OPTIONS.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => setStatusFilter(opt.value)}
-                className={cn(mk.filterPill, statusFilter === opt.value && mk.filterPillActive)}
-              >
-                {opt.label}
-              </button>
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
-          </div>
-          <label className="ml-auto flex shrink-0 items-center gap-2 text-[11px] font-medium text-crm-muted">
-            Sort
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as CampaignSort)}
-              className={crm.campaignSortSelect}
-              aria-label="Sort campaigns"
+            <option value="SCHEDULED">Scheduled</option>
+          </select>
+          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as CampaignTypeFilter)} className="campaigns-select" aria-label="Type filter">
+            {TYPE_FILTER_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          <select value={ownerFilter} onChange={(e) => setOwnerFilter(e.target.value)} className="campaigns-select" aria-label="Owner filter">
+            <option value="all">All owners</option>
+            {ownerOptions.map((owner) => (
+              <option key={owner} value={owner}>{owner}</option>
+            ))}
+          </select>
+          <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} className="campaigns-select" aria-label="Date range">
+            <option value="all">Date range</option>
+            <option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+            <option value="90d">Last 90 days</option>
+          </select>
+          <button type="button" className="campaigns-filter-button" aria-label="Open filters">
+            <Filter className="h-4 w-4" />
+            Filters
+          </button>
+        </div>
+        <div className="campaigns-quick-pills" role="group" aria-label="Quick campaign filters">
+          {QUICK_FILTER_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setStatusFilter(opt.value)}
+              className={cn("campaigns-quick-pill", statusFilter === opt.value && "campaigns-quick-pill-active")}
             >
-              <option value="status">Status</option>
-              <option value="updated">Updated</option>
-              <option value="name">Name</option>
-            </select>
-          </label>
-        </CRMActionBar>
-      </div>
+              {opt.label}
+              <span>{campaignCountForFilter(campaigns, opt.value)}</span>
+            </button>
+          ))}
+          <button
+            type="button"
+            className="campaigns-clear-filters"
+            onClick={() => {
+              setSearch("");
+              setStatusFilter("all");
+              setTypeFilter("all");
+              setOwnerFilter("all");
+              setDateFilter("all");
+            }}
+          >
+            Clear filters
+          </button>
+        </div>
+      </CRMActionBar>
 
       {loading ? (
         <p className="py-16 text-center text-sm text-crm-muted">Loading campaigns…</p>
@@ -410,19 +653,163 @@ export default function CampaignsPage() {
           }
         />
       ) : (
-        <ul className={mk.rowList}>
-          {filtered.map((campaign) => (
-            <li key={campaign.id} className="list-none">
-              <CampaignIndexCard
-                campaign={campaign}
-                metrics={reportById.get(campaign.id)}
-                canQueue={canQueue}
-                isAdmin={isAdmin}
-                onQuickStatus={handleQuickStatus}
-              />
-            </li>
-          ))}
-        </ul>
+        <div className="campaigns-workspace-grid">
+          <section className="campaigns-table-card" aria-label="Campaign table">
+            <div className="campaigns-table-head">
+              <div>
+                <h2>Campaign portfolio</h2>
+                <p>Showing {filtered.length} of {campaigns.length} campaigns</p>
+              </div>
+              <label className="campaigns-sort-control">
+                Sort
+                <select value={sortBy} onChange={(e) => setSortBy(e.target.value as CampaignSort)}>
+                  <option value="status">Status</option>
+                  <option value="updated">Updated</option>
+                  <option value="name">Name</option>
+                </select>
+              </label>
+            </div>
+            <div className="campaigns-table-scroll">
+              <table className="campaigns-table">
+                <thead>
+                  <tr>
+                    <th>Campaign</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>Contacts</th>
+                    <th>Contacted</th>
+                    <th>Converted</th>
+                    <th>Conversion Rate</th>
+                    <th>Activity</th>
+                    <th>Owner</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((campaign) => {
+                    const metrics = reportById.get(campaign.id);
+                    const contacts = campaign.memberCount ?? metrics?.total ?? 0;
+                    const contacted = metrics?.contacted ?? 0;
+                    const converted = metrics?.converted ?? 0;
+                    const conversionRate = metrics?.conversionRate ?? 0;
+                    const sparkTone = conversionRate >= 15 ? "green" : conversionRate >= 8 ? "blue" : campaign.status === "PAUSED" ? "orange" : "violet";
+                    return (
+                      <tr key={campaign.id}>
+                        <td>
+                          <div className="campaigns-campaign-cell">
+                            <span className={cn("campaigns-row-icon", CAMPAIGN_STATUS_TONE[campaign.status])}>
+                              <Megaphone className="h-4 w-4" />
+                            </span>
+                            <div>
+                              <Link href={`/crm/campaigns/${campaign.id}`} className="campaigns-row-title">{campaign.name}</Link>
+                              <p>{campaign.description?.trim() || `Updated ${formatShortDate(campaign.updatedAt)}`}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td><span className="campaigns-type-pill">{campaignTypeLabel(campaign)}</span></td>
+                        <td><CampaignStatusPill status={campaign.status} /></td>
+                        <td className="campaigns-metric-cell">{formatNumber(contacts)}</td>
+                        <td className="campaigns-metric-cell">{formatNumber(contacted)}</td>
+                        <td className="campaigns-metric-cell">{formatNumber(converted)}</td>
+                        <td>
+                          <div className="campaigns-rate-cell">
+                            <strong>{formatPercent(conversionRate)}</strong>
+                            <span>{metrics?.callbacks ?? 0} callbacks</span>
+                          </div>
+                        </td>
+                        <td><Sparkline seed={`${campaign.id}-${metrics?.totalAttempts ?? 0}`} tone={sparkTone} /></td>
+                        <td>
+                          <div className="campaigns-owner-cell">
+                            <span>{campaignOwnerLabel(campaign).slice(0, 2).toUpperCase()}</span>
+                            <div>
+                              <strong>{campaignOwnerLabel(campaign)}</strong>
+                              <small>Updated {formatShortDate(campaign.updatedAt)}</small>
+                            </div>
+                          </div>
+                          <div className="campaigns-row-actions">
+                            <Link href={`/crm/campaigns/${campaign.id}`}>Open</Link>
+                            {canQueue ? <Link href={queueHref(campaign.id)}>Queue</Link> : null}
+                            {isAdmin && campaign.status === "ACTIVE" ? (
+                              <button type="button" onClick={(e) => handleQuickStatus(campaign.id, "PAUSED", e)}>Pause</button>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <aside className="campaigns-right-rail" aria-label="Campaign insights">
+            <section className="campaigns-rail-card campaigns-health-card">
+              <div className="campaigns-rail-heading">
+                <div>
+                  <p>Campaign Health</p>
+                  <h3>Portfolio mix</h3>
+                </div>
+                <Gauge className="h-5 w-5" />
+              </div>
+              <CampaignHealthDonut healthy={summary.active + summary.completed} warning={summary.paused + summary.draft} problem={summary.archived} />
+              <div className="campaigns-health-legend">
+                <span><i className="bg-emerald-500" />Healthy <strong>{summary.active + summary.completed}</strong></span>
+                <span><i className="bg-amber-500" />Needs attention <strong>{summary.paused + summary.draft}</strong></span>
+                <span><i className="bg-red-500" />Inactive <strong>{summary.archived}</strong></span>
+              </div>
+            </section>
+
+            <section className="campaigns-rail-card">
+              <div className="campaigns-rail-heading">
+                <div>
+                  <p>Top Performing Campaigns</p>
+                  <h3>This portfolio</h3>
+                </div>
+                <TrendingUp className="h-5 w-5" />
+              </div>
+              <ul className="campaigns-top-list">
+                {topCampaigns.map(({ campaign, metrics }, index) => {
+                  const pct = Math.min(100, metrics?.conversionRate ?? 0);
+                  return (
+                    <li key={campaign.id}>
+                      <div className="campaigns-top-row">
+                        <span>{campaign.name}</span>
+                        <strong>{formatPercent(metrics?.conversionRate ?? 0)}</strong>
+                      </div>
+                      <div className="campaigns-progress-track">
+                        <div style={{ width: `${pct}%` }} className={`campaigns-progress-${index % 5}`} />
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+              <Link href="/crm/reports" className="campaigns-rail-link">View all performance</Link>
+            </section>
+
+            <section className="campaigns-rail-card">
+              <div className="campaigns-rail-heading">
+                <div>
+                  <p>Recent Activity</p>
+                  <h3>Latest campaign movement</h3>
+                </div>
+                <Activity className="h-5 w-5" />
+              </div>
+              <ul className="campaigns-activity-list">
+                {recentActivity.map((campaign) => (
+                  <li key={campaign.id}>
+                    <span className={cn("campaigns-activity-icon", CAMPAIGN_STATUS_TONE[campaign.status])}>
+                      {campaign.status === "ACTIVE" ? <Zap className="h-4 w-4" /> : campaign.status === "PAUSED" ? <Pause className="h-4 w-4" /> : campaign.status === "ARCHIVED" ? <Archive className="h-4 w-4" /> : <Clock3 className="h-4 w-4" />}
+                    </span>
+                    <div>
+                      <strong>{campaign.name}</strong>
+                      <p>{CAMPAIGN_STATUS_LABELS[campaign.status]} · updated {formatShortDate(campaign.updatedAt)}</p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <Link href="/crm/reports" className="campaigns-rail-link">View all activity</Link>
+            </section>
+          </aside>
+        </div>
       )}
 
       {!loading && !error && campaigns.length > 0 ? (
