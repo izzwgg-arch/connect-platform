@@ -4,10 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000",
+    "dev:crm-visual-qa": "node scripts/start-crm-visual-qa.mjs",
     "build": "next build",
     "start": "next start -p 3000",
     "lint": "echo lint-portal",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "screenshots:crm": "node scripts/crm-visual-qa-screenshots.mjs",
     "test": "tsx --test lib/desktopNotificationPoll.test.ts lib/billingTaxSuggestions.test.ts lib/billingOneTimeChargeIFields.test.ts lib/billingUi.test.ts"
   },
   "dependencies": {

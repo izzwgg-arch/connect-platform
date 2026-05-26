@@ -476,6 +476,27 @@ pnpm exec tsc -p apps/portal --noEmit
 # bg-white | bg-gray-50 | text-gray- on dashboard/queue/campaigns/contacts/wallboard
 ```
 
+### Local CRM Visual QA Screenshots
+
+Use the dev-only CRM visual QA workflow when redesigning CRM pages and authenticated browser screenshots are required.
+
+1. Start the portal in local visual QA mode:
+   ```bash
+   pnpm --dir apps/portal dev:crm-visual-qa
+   ```
+2. Capture screenshots from another terminal:
+   ```bash
+   pnpm --dir apps/portal screenshots:crm -- --routes /crm/dashboard,/crm/queue,/crm/contacts --theme light
+   ```
+3. Default output is `_tmp_diag/crm-visual-qa-screenshots/`, with desktop, tablet, and mobile PNGs per route.
+
+Safety constraints:
+
+- Visual QA mode activates only when `NODE_ENV=development`, `NEXT_PUBLIC_CRM_VISUAL_QA=1`, and the browser host is `localhost`, `127.0.0.1`, or `::1`.
+- It seeds a local synthetic JWT only in browser localStorage and only in that guarded mode.
+- CRM API responses come from `services/visualQaMockApi.ts` only under the same guard. Production builds, production hosts, and normal local dev continue using real auth/API behavior.
+- Screenshot mocks are for visual density and layout QA only. Do not use them for product logic, permissions, billing, telephony, onboarding, or backend verification.
+
 ---
 
 ## Mobile — Chat UI patterns (addendum)

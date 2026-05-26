@@ -22,6 +22,35 @@
 | `apps/telephony` | `GET /metrics` | Prometheus. |
 | `apps/telephony` | `GET /telephony/health` | Same as `/health`, JWT-authed. |
 
+## Local CRM visual QA screenshots
+
+Use this only for portal UI screenshot verification. It is not a backend/API diagnostic and it does not prove production auth or tenant behavior.
+
+Start local visual QA mode:
+
+```bash
+pnpm --dir apps/portal dev:crm-visual-qa
+```
+
+Capture screenshots:
+
+```bash
+pnpm --dir apps/portal screenshots:crm -- --routes /crm/dashboard,/crm/queue,/crm/contacts --theme light
+```
+
+Default output:
+
+```text
+_tmp_diag/crm-visual-qa-screenshots/
+```
+
+Safety guardrails:
+
+- `AuthGate` seeds a synthetic local JWT only when `NODE_ENV=development`, `NEXT_PUBLIC_CRM_VISUAL_QA=1`, and the browser host is loopback.
+- `apiClient` returns seeded CRM visual data only through the same guard. Otherwise it calls the real configured API.
+- There is no backend route, production auth bypass, schema change, or server middleware change.
+- Use this for visual density, layout, theme switching, and responsive screenshots. Do not use it for telephony, billing, onboarding, tenant isolation, or API correctness.
+
 ## Forensic / diagnostic endpoints found in code
 
 `apps/telephony` (always exposed; no debug flag required):

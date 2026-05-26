@@ -5,6 +5,7 @@ import { hasPermission } from "../permissions/permissionMap";
 import { mapBackendRole, readJwtPayload } from "../services/session";
 import { ApiError, apiGet, apiPost } from "../services/apiClient";
 import { loadTenantOptions } from "../services/tenantData";
+import { bootstrapVisualQaSession, isVisualQaModeEnabled } from "../services/visualQaMode";
 import type { AdminScope, Permission, Role, Tenant, User } from "../types/app";
 
 type ThemeMode = "dark" | "light";
@@ -48,6 +49,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [portalPermissionOverride, setPortalPermissionOverride] = useState<Permission[] | null | undefined>(undefined);
 
   useEffect(() => {
+    if (isVisualQaModeEnabled()) bootstrapVisualQaSession();
+
     const stored = typeof window !== "undefined" ? localStorage.getItem("cc-theme") : null;
     if (stored === "dark" || stored === "light") setThemeState(stored);
     setThemeHydrated(true);

@@ -3,6 +3,7 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { readAuthToken } from "../services/session";
+import { bootstrapVisualQaSession, isVisualQaModeEnabled } from "../services/visualQaMode";
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const router = useRouter();
@@ -10,6 +11,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
+    if (isVisualQaModeEnabled()) {
+      bootstrapVisualQaSession();
+      setReady(true);
+      return undefined;
+    }
+
     const isDesktopPassiveWindow =
       typeof window !== "undefined" &&
       Boolean(window.connectDesktop?.isDesktop && window.connectDesktop.windowKind && window.connectDesktop.windowKind !== "full");

@@ -34,3 +34,8 @@ Scope: portal CRM UI/data-flow guardrails. Telephony, billing, workers, database
 
 - For CRM portal UI changes, run portal typecheck and portal build.
 - Confirm mobile responsiveness by keeping grids stacked on small screens and avoiding fixed desktop-only widths.
+- For CRM visual redesigns, use local visual QA mode for authenticated screenshots:
+  - Start: `pnpm --dir apps/portal dev:crm-visual-qa`
+  - Capture: `pnpm --dir apps/portal screenshots:crm -- --routes /crm/dashboard,/crm/queue,/crm/contacts --theme light`
+  - Output: `_tmp_diag/crm-visual-qa-screenshots/`
+- Visual QA mode is local-development only. It is gated by `NODE_ENV=development`, `NEXT_PUBLIC_CRM_VISUAL_QA=1`, and a loopback browser host. It must not be used as evidence for backend behavior, production auth, tenant isolation, billing, telephony, or onboarding.

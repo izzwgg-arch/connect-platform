@@ -1,3 +1,5 @@
+import { getVisualQaMockResponse } from "./visualQaMockApi";
+
 export class ApiError extends Error {
   status: number;
   /** Parsed JSON body returned by the server on non-2xx responses, if any.
@@ -83,6 +85,9 @@ async function apiRequest<T>(
   token?: string,
   options: ApiRequestOptions = {},
 ): Promise<T> {
+  const visualQaMock = getVisualQaMockResponse(method, path, body);
+  if (visualQaMock.handled) return visualQaMock.data as T;
+
   const controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? 10000;
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
