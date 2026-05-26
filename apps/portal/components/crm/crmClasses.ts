@@ -22,6 +22,15 @@ export const crm = {
     "crm-queue-inner mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
   /** CRM queue light-mode workspace; dark mode keeps existing queue token surfaces. */
   queueWorkspace: "crm-queue-workspace w-full min-h-0",
+  /** CRM Email light-mode operations workspace. */
+  pageInnerEmail:
+    "crm-email-inner mx-auto w-full max-w-[min(100%,1365px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-4 min-h-0",
+  emailWorkspace: "crm-email-workspace w-full min-h-0",
+  emailHero: "crm-email-hero rounded-crm-lg border border-crm-border bg-crm-surface p-4 shadow-crm sm:p-5",
+  emailPanel: "crm-email-panel relative overflow-hidden rounded-crm-lg border border-crm-border bg-crm-surface shadow-crm",
+  emailIconWell: "crm-email-icon-well flex shrink-0 items-center justify-center rounded-crm border",
+  emailKpiCard:
+    "crm-email-kpi-card relative min-h-[7rem] overflow-hidden rounded-crm-lg border border-crm-border bg-crm-surface p-4 shadow-crm",
   /** Phase 19E / 19E.1 — campaign command center (wide desk, compact rhythm) */
   pageInnerCampaign:
     "mx-auto w-full max-w-[min(100%,1680px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-3 min-h-0",

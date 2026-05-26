@@ -39,6 +39,7 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
     !activeNavItem || isNavItemVisibleForUser(activeNavItem, can, backendJwtRole);
   const isCrmDashboardRoute = pathname === "/crm/dashboard";
   const isCrmQueueRoute = pathname === "/crm/queue";
+  const isCrmEmailRoute = pathname === "/crm/email";
   const isCrmLiveCallRoute = pathname === "/crm/live-call";
 
   useEffect(() => {
@@ -57,9 +58,11 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
           ? "console-shell crm-dashboard-shell"
           : isCrmQueueRoute
             ? "console-shell crm-queue-shell"
-            : isCrmLiveCallRoute
-              ? "console-shell crm-live-shell"
-              : "console-shell"
+            : isCrmEmailRoute
+              ? "console-shell crm-email-shell"
+              : isCrmLiveCallRoute
+                ? "console-shell crm-live-shell"
+                : "console-shell"
       }
     >
       {/* Fixed header — always on top, never moves */}
