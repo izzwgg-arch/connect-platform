@@ -44,11 +44,13 @@ function OpsMetric({
   value,
   tone = "neutral",
   href,
+  meta,
 }: {
   label: string;
   value: number | string;
   tone?: "neutral" | "danger" | "warn" | "positive";
   href?: string;
+  meta?: string;
 }) {
   const valueClass =
     tone === "danger"
@@ -61,23 +63,24 @@ function OpsMetric({
 
   const borderClass =
     tone === "danger"
-      ? "border-crm-danger/35 bg-crm-danger/8"
+      ? "border-crm-danger/35 bg-crm-danger/8 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
       : tone === "warn"
-        ? "border-crm-warning/30 bg-crm-warning/6"
+        ? "border-crm-warning/30 bg-crm-warning/6 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
         : tone === "positive"
-          ? "border-crm-success/30 bg-crm-success/6"
-          : "border-crm-border/70 bg-crm-surface-2/30";
+          ? "border-crm-success/30 bg-crm-success/6 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+          : "border-crm-border/70 bg-crm-surface-2/35";
 
   const inner = (
     <div
       className={cn(
-        "flex flex-col gap-1 rounded-crm border px-3 py-2.5 transition-colors",
+        "flex min-h-[4.35rem] flex-col justify-between gap-1 rounded-crm border px-3 py-2.5 transition-all duration-200",
         borderClass,
-        href && "cursor-pointer hover:brightness-105",
+        href && "cursor-pointer hover:-translate-y-px hover:brightness-105",
       )}
     >
       <span className="text-[10px] font-bold uppercase tracking-wider text-crm-muted">{label}</span>
       <span className={cn("text-xl font-bold tabular-nums leading-tight", valueClass)}>{value}</span>
+      {meta ? <span className="truncate text-[10px] font-medium text-crm-muted">{meta}</span> : null}
     </div>
   );
 
@@ -108,25 +111,55 @@ export function LiveCrmOperationsPanel({
   const hasQueueItems = queueOverdueItems.length > 0 || queueDueItems.length > 0;
   const qNum = typeof queueDepth === "number" ? queueDepth : Number.isFinite(Number(queueDepth)) ? Number(queueDepth) : 0;
   const sixHourSeries = Array.from({ length: 18 }, () => qNum);
+  const queueTone = overdueCallbacks > 0 ? "danger" : dueTodayCallbacks > 0 ? "warn" : qNum > 0 ? "neutral" : "positive";
+  const queueStatus = overdueCallbacks > 0 ? "Degraded" : dueTodayCallbacks > 0 ? "Watch" : qNum > 0 ? "Live" : "Clear";
 
   return (
-    <div className="relative overflow-hidden rounded-crm-lg border border-crm-border/80 bg-crm-surface shadow-[0_8px_40px_-12px_rgba(0,0,0,0.55)]">
+    <div className={cn(crm.opCard, "border-crm-border/85")}>
       {/* Ambient glow overlay */}
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_65%_55%_at_0%_0%,rgba(56,189,248,0.07),transparent_52%),radial-gradient(ellipse_35%_35%_at_100%_105%,rgba(99,102,241,0.05),transparent_50%)]" />
+      <div className={crm.opCardGlow} />
 
       <div className="relative z-[1] p-4 sm:p-5">
         {/* Header */}
-        <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <span className={cn(crm.iconBox, "h-8 w-8 shrink-0")}>
               <Radio size={15} />
             </span>
-            <h2 className="text-sm font-semibold tracking-tight text-crm-text">Live CRM Operations</h2>
+            <div>
+              <h2 className="text-sm font-semibold tracking-tight text-crm-text">Live CRM Operations</h2>
+              <p className="mt-0.5 text-[11px] text-crm-muted">Queue pressure, campaigns, and follow-up exceptions</p>
+            </div>
           </div>
-          <span className={cn(crm.chip, crm.chipActive, "shrink-0 text-[10px]")}>
-            <Radio size={10} className="animate-pulse" />
-            Live
-          </span>
+          <div className="flex items-center gap-1.5">
+            <span
+              className={cn(
+                crm.chip,
+                "shrink-0 text-[10px]",
+                queueTone === "danger"
+                  ? "border-crm-danger/35 bg-crm-danger/10 text-crm-danger"
+                  : queueTone === "warn"
+                    ? "border-crm-warning/35 bg-crm-warning/10 text-crm-warning"
+                    : queueTone === "positive"
+                      ? "border-crm-success/35 bg-crm-success/10 text-crm-success"
+                      : crm.chipActive,
+              )}
+            >
+              <span
+                className={
+                  queueTone === "danger"
+                    ? crm.statusDotDanger
+                    : queueTone === "warn"
+                      ? crm.statusDotWarn
+                      : queueTone === "positive"
+                        ? crm.statusDotLive
+                        : crm.statusDotSync
+                }
+              />
+              {queueStatus}
+            </span>
+            <span className={cn(crm.chip, "shrink-0 text-[10px]")}>Now</span>
+          </div>
         </div>
 
         {loading ? (
@@ -134,12 +167,12 @@ export function LiveCrmOperationsPanel({
         ) : (
           <>
             {/* Centerpiece header: gauge + mini line (placeholder series from current value) */}
-            <div className="mb-4 grid gap-4 sm:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
+            <div className="mb-4 grid gap-4 lg:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
               <QueuePressureGauge value={qNum} className="justify-self-start" />
-              <div className="flex min-w-0 flex-col justify-center rounded-crm border border-crm-border/60 bg-crm-surface-2/30 px-3 py-2.5">
+              <div className={cn(crm.opInset, "flex min-w-0 flex-col justify-center px-3 py-2.5")}>
                 <div className="mb-1 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-crm-muted">
-                  <span>Queue depth (last 6 hours)</span>
-                  <span>6 Hours</span>
+                  <span>Current load visual</span>
+                  <span>{queueStatus}</span>
                 </div>
                 <Sparkline
                   series={sixHourSeries}
@@ -154,20 +187,27 @@ export function LiveCrmOperationsPanel({
             </div>
 
             {/* Metric grid */}
-            <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-              
+            <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
               <OpsMetric
                 label="Due today"
                 value={dueTodayCallbacks}
                 tone={dueTodayCallbacks > 0 ? "warn" : "neutral"}
                 href={canViewQueue && dueTodayCallbacks > 0 ? "/crm/queue?filter=due" : undefined}
+                meta="callbacks"
               />
               <OpsMetric
                 label="Calls today"
                 value={callsToday}
                 tone={typeof callsToday === "number" && callsToday > 0 ? "positive" : "neutral"}
+                meta="linked"
               />
-              <OpsMetric label="Outcomes" value={outcomesToday} />
+              <OpsMetric label="Outcomes" value={outcomesToday} meta="logged" />
+              <OpsMetric
+                label="Contacts"
+                value={contactsToday}
+                tone={typeof contactsToday === "number" && contactsToday > 0 ? "positive" : "neutral"}
+                meta="new today"
+              />
             </div>
 
             {/* Divider */}
@@ -199,7 +239,7 @@ export function LiveCrmOperationsPanel({
                         <Link
                           key={c.id}
                           href={`/crm/campaigns/${encodeURIComponent(c.id)}`}
-                          className="flex items-center justify-between gap-2 rounded-crm border border-crm-border/55 bg-crm-surface-2/40 px-2.5 py-1.5 text-inherit no-underline transition-colors hover:border-crm-border hover:bg-crm-surface-2/70"
+                          className="group flex items-center justify-between gap-2 rounded-crm border border-crm-border/55 bg-crm-surface-2/40 px-2.5 py-1.5 text-inherit no-underline transition-all duration-200 hover:-translate-y-px hover:border-crm-border hover:bg-crm-surface-2/70"
                         >
                           <span className="flex min-w-0 flex-1 items-center gap-1.5">
                             <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-crm-success" />
@@ -232,7 +272,7 @@ export function LiveCrmOperationsPanel({
                         <Link
                           key={`o-${m.id}`}
                           href="/crm/queue?filter=overdue"
-                          className="flex items-center gap-2 rounded-crm border border-crm-danger/25 bg-crm-danger/6 px-2.5 py-1.5 text-inherit no-underline transition-colors hover:bg-crm-danger/10"
+                          className="flex items-center gap-2 rounded-crm border border-crm-danger/25 bg-crm-danger/6 px-2.5 py-1.5 text-inherit no-underline transition-all duration-200 hover:-translate-y-px hover:bg-crm-danger/10"
                         >
                           <AlertCircle size={11} className="shrink-0 text-crm-danger" />
                           <span className="min-w-0 flex-1">
@@ -249,7 +289,7 @@ export function LiveCrmOperationsPanel({
                         <Link
                           key={`d-${m.id}`}
                           href="/crm/queue?filter=due"
-                          className="flex items-center gap-2 rounded-crm border border-crm-warning/25 bg-crm-warning/6 px-2.5 py-1.5 text-inherit no-underline transition-colors hover:bg-crm-warning/10"
+                          className="flex items-center gap-2 rounded-crm border border-crm-warning/25 bg-crm-warning/6 px-2.5 py-1.5 text-inherit no-underline transition-all duration-200 hover:-translate-y-px hover:bg-crm-warning/10"
                         >
                           <Clock size={11} className="shrink-0 text-crm-warning" />
                           <span className="min-w-0 flex-1">

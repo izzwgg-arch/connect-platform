@@ -170,6 +170,19 @@ export const crm = {
   cardPad: "p-5",
   cardPadLg: "p-6",
   cardHover: "transition-colors hover:border-crm-border/90",
+  opCard:
+    "relative overflow-hidden rounded-crm-lg border border-crm-border/80 bg-crm-surface shadow-[0_10px_36px_-18px_rgba(0,0,0,0.65)]",
+  opCardHover:
+    "transition-[border-color,box-shadow,transform,background-color] duration-200 hover:-translate-y-px hover:border-crm-border hover:shadow-[0_16px_44px_-22px_rgba(0,0,0,0.7)]",
+  opCardGlow:
+    "pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_70%_55%_at_0%_0%,rgba(56,189,248,0.08),transparent_55%),radial-gradient(ellipse_42%_35%_at_100%_0%,rgba(99,102,241,0.06),transparent_56%)]",
+  opInset:
+    "rounded-crm border border-crm-border/60 bg-crm-surface-2/35 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]",
+  statusDot: "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
+  statusDotLive: "inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-crm-success shadow-[0_0_0_3px_rgba(34,197,94,0.12)]",
+  statusDotWarn: "inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-crm-warning shadow-[0_0_0_3px_rgba(245,158,11,0.10)]",
+  statusDotDanger: "inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-crm-danger shadow-[0_0_0_3px_rgba(239,68,68,0.10)]",
+  statusDotSync: "inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-crm-accent shadow-[0_0_0_3px_rgba(56,189,248,0.12)]",
 
   sectionGap: "flex flex-col gap-4",
 

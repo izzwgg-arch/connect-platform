@@ -198,9 +198,9 @@ function ShortcutGrid({
         <Link
           key={a.key}
           href={a.href}
-          className="flex items-center gap-2 rounded-crm border border-crm-border/70 bg-crm-surface-2/50 px-2.5 py-2 text-xs font-medium text-crm-text no-underline transition-colors hover:border-crm-border hover:bg-crm-surface-2"
+          className="group flex items-center gap-2 rounded-crm border border-crm-border/70 bg-crm-surface-2/45 px-2.5 py-2 text-xs font-medium text-crm-text no-underline transition-all duration-200 hover:-translate-y-px hover:border-crm-border hover:bg-crm-surface-2"
         >
-          <span className="shrink-0 text-crm-accent">{a.icon}</span>
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface/60 text-crm-accent">{a.icon}</span>
           <span className="truncate">{a.label}</span>
         </Link>
       ))}
@@ -232,9 +232,10 @@ function PipelineStat({
             : "text-crm-text";
 
   const inner = (
-    <div className="flex flex-col gap-1 rounded-crm border border-crm-border/65 bg-crm-surface-2/35 px-3 py-2.5 transition-colors hover:border-crm-border/90 hover:bg-crm-surface-2/55">
+    <div className="group relative overflow-hidden rounded-crm border border-crm-border/65 bg-crm-surface-2/35 px-3 py-2.5 transition-all duration-200 hover:-translate-y-px hover:border-crm-border/90 hover:bg-crm-surface-2/60">
+      <div className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-crm-accent/50 opacity-0 transition-opacity group-hover:opacity-100" />
       <span className="text-[10px] font-bold uppercase tracking-wider text-crm-muted">{label}</span>
-      <span className={cn("text-xl font-bold tabular-nums leading-tight", valueClass)}>{value}</span>
+      <span className={cn("mt-1 block text-xl font-bold tabular-nums leading-tight", valueClass)}>{value}</span>
     </div>
   );
 
@@ -423,6 +424,8 @@ export default function CrmDashboardPage() {
   const recentImports = (importBatches ?? []).slice(0, 3);
 
   const contactStats = stats ?? { total: 0, leads: 0, mine: 0, recentlyAdded: 0 };
+  const queueNumeric = Number.isFinite(Number(queueDepth)) ? Number(queueDepth) : 0;
+  const opsTone = overdueCallbacksCount > 0 ? "degraded" : dueTodayCallbacks > 0 ? "watch" : "nominal";
 
   const shortcuts = [
     can("can_view_crm_queue")
@@ -454,11 +457,11 @@ export default function CrmDashboardPage() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <CRMPageShell innerClassName={crm.pageInnerWide}>
+    <CRMPageShell innerClassName={cn(crm.pageInnerWide, "gap-4")}>
       <CRMPageHeader
         icon={<LayoutDashboard size={22} strokeWidth={1.75} />}
         title="Command center"
-        subtitle={`${greet}, ${firstName}`}
+        subtitle={`${greet}, ${firstName} · communications operations workspace`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <span className={cn(crm.chip, crm.chipActive)}>
@@ -469,10 +472,39 @@ export default function CrmDashboardPage() {
         }
       />
 
+      <div className="sticky top-2 z-20 rounded-crm-lg border border-crm-border/75 bg-crm-surface/90 px-3 py-2 shadow-[0_14px_40px_-24px_rgba(0,0,0,0.7)] backdrop-blur-md">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-crm-muted">
+            <span
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-semibold uppercase tracking-wide",
+                opsTone === "degraded"
+                  ? "border-crm-danger/35 bg-crm-danger/10 text-crm-danger"
+                  : opsTone === "watch"
+                    ? "border-crm-warning/35 bg-crm-warning/10 text-crm-warning"
+                    : "border-crm-success/30 bg-crm-success/10 text-crm-success",
+              )}
+            >
+              <span className={opsTone === "degraded" ? crm.statusDotDanger : opsTone === "watch" ? crm.statusDotWarn : crm.statusDotLive} />
+              {opsTone === "degraded" ? "Degraded" : opsTone === "watch" ? "Watch" : "Nominal"}
+            </span>
+            <span><strong className="font-semibold text-crm-text">{queueDepth}</strong> queue</span>
+            <span><strong className="font-semibold text-crm-text">{activeCampaignsCount}</strong> active campaigns</span>
+            <span><strong className="font-semibold text-crm-text">{taskStats?.myOpen ?? 0}</strong> open tasks</span>
+          </div>
+          <Link href="/crm/reports?tab=operations" className="text-xs font-semibold text-crm-accent hover:brightness-110">
+            Operations report →
+          </Link>
+        </div>
+      </div>
+
       {/* Primary KPI row — each metric appears here only */}
       <section>
-        <p className={cn(crm.label, "mb-3")}>Today</p>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className={crm.label}>Today</p>
+          <span className="text-[11px] text-crm-muted">Status derived from current CRM APIs</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
           <DashboardKpiTile
             label="Active campaigns"
             value={activeCampaignsCount}
@@ -481,6 +513,8 @@ export default function CrmDashboardPage() {
             loading={loading}
             series={Array.from({ length: 12 }, () => Number(activeCampaignsCount) || 0)}
             trendText="current"
+            statusText={activeCampaignsCount > 0 ? "Running" : "Idle"}
+            statusTone={activeCampaignsCount > 0 ? "positive" : "neutral"}
           />
           <DashboardKpiTile
             label={isPlatformAdmin ? "Queue depth" : "My queue"}
@@ -490,6 +524,8 @@ export default function CrmDashboardPage() {
             loading={loading}
             series={Array.from({ length: 12 }, () => (Number.isFinite(Number(queueDepth)) ? Number(queueDepth) : 0))}
             trendText="current"
+            statusText={queueNumeric > 0 ? "Live queue" : "Clear"}
+            statusTone={queueNumeric > 0 ? "syncing" : "positive"}
           />
           <DashboardKpiTile
             label="Overdue callbacks"
@@ -500,6 +536,8 @@ export default function CrmDashboardPage() {
             loading={loading}
             series={Array.from({ length: 12 }, () => Number(overdueCallbacksCount) || 0)}
             trendText="current"
+            statusText={overdueCallbacksCount > 0 ? "Degraded" : "Healthy"}
+            statusTone={overdueCallbacksCount > 0 ? "danger" : "positive"}
           />
           <DashboardKpiTile
             label="Calls today"
@@ -509,6 +547,8 @@ export default function CrmDashboardPage() {
             loading={loading}
             series={Array.from({ length: 12 }, () => (Number.isFinite(Number(callsTodayCount)) ? Number(callsTodayCount) : 0))}
             trendText="current"
+            statusText={Number(callsTodayCount) > 0 ? "Active" : "Quiet"}
+            statusTone={Number(callsTodayCount) > 0 ? "positive" : "neutral"}
           />
           <DashboardKpiTile
             label="Contacts today"
@@ -519,15 +559,17 @@ export default function CrmDashboardPage() {
             loading={loading}
             series={Array.from({ length: 12 }, () => Number(contactsTodayCount) || 0)}
             trendText="current"
+            statusText={contactsTodayCount > 0 ? "Growing" : "Stable"}
+            statusTone={contactsTodayCount > 0 ? "positive" : "neutral"}
           />
         </div>
       </section>
 
       {/* Main grid — 8+4 cols: wide operations panel + action column */}
-      <div className="grid gap-5 lg:grid-cols-12">
+      <div className="grid gap-4 lg:grid-cols-12">
 
         {/* Left — centerpiece + secondary cards */}
-        <div className="flex flex-col gap-5 lg:col-span-8">
+        <div className="flex flex-col gap-4 lg:col-span-8">
 
           {/* Live CRM Operations — focal centerpiece */}
           <LiveCrmOperationsPanel
@@ -546,10 +588,12 @@ export default function CrmDashboardPage() {
           />
 
           {/* Pipeline Snapshot + Campaign Health — side by side */}
-          <div className="grid gap-5 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-2">
 
             {/* Pipeline Snapshot — merges Contact Pipeline + Contact Growth */}
-            <CRMCard className="p-5">
+            <CRMCard className={cn("p-5", crm.opCard, "border-crm-border/80")}>
+              <div className={crm.opCardGlow} />
+              <div className="relative z-[1]">
               <DashboardSectionHeader
                 title="Pipeline snapshot"
                 action={{ label: "Contacts", href: "/crm/contacts" }}
@@ -577,11 +621,14 @@ export default function CrmDashboardPage() {
                   />
                 </div>
               )}
+              </div>
             </CRMCard>
 
             {/* Campaign Health — replaces Campaign Status donut + list */}
             {can("can_view_crm_campaigns") ? (
-              <CRMCard className="p-5">
+              <CRMCard className={cn("p-5", crm.opCard, "border-crm-border/80")}>
+                <div className={crm.opCardGlow} />
+                <div className="relative z-[1]">
                 <DashboardSectionHeader
                   title="Campaign health"
                   action={{ label: "All campaigns", href: "/crm/campaigns" }}
@@ -619,19 +666,22 @@ export default function CrmDashboardPage() {
                     ))}
                   </div>
                 )}
+                </div>
               </CRMCard>
             ) : null}
           </div>
         </div>
 
         {/* Right — action column */}
-        <aside className="flex flex-col gap-5 lg:col-span-4">
+        <aside className="flex flex-col gap-4 lg:col-span-4">
 
           {/* Recent Activity — timeline or honest empty */}
           <RecentActivityPanel items={[]} />
 
           {/* Action Required — merges Needs Attention + Tasks (no ring chart) */}
-          <CRMCard className="p-5">
+          <CRMCard className={cn("p-5", crm.opCard, "border-crm-border/80")}>
+            <div className={crm.opCardGlow} />
+            <div className="relative z-[1]">
             <DashboardSectionHeader title="Action required" action={{ label: "Tasks", href: "/crm/tasks" }} />
             {loading ? (
               <LoadingSkeleton rows={4} />
@@ -697,19 +747,25 @@ export default function CrmDashboardPage() {
                 ) : null}
               </div>
             )}
+            </div>
           </CRMCard>
 
           {/* Compact Shortcuts */}
           {shortcuts.length > 0 ? (
-            <CRMCard className="p-5">
+            <CRMCard className={cn("p-5", crm.opCard, "border-crm-border/80")}>
+              <div className={crm.opCardGlow} />
+              <div className="relative z-[1]">
               <DashboardSectionHeader title="Shortcuts" />
               <ShortcutGrid items={shortcuts} />
+              </div>
             </CRMCard>
           ) : null}
 
           {/* Recent imports — compact, sidebar-weight */}
           {can("can_view_crm_import") && recentImports.length > 0 ? (
-            <CRMCard className="p-5">
+            <CRMCard className={cn("p-5", crm.opCard, "border-crm-border/80")}>
+              <div className={crm.opCardGlow} />
+              <div className="relative z-[1]">
               <DashboardSectionHeader
                 title="Recent imports"
                 action={
@@ -727,6 +783,7 @@ export default function CrmDashboardPage() {
                     href={`/crm/import?batch=${encodeURIComponent(b.id)}`}
                   />
                 ))}
+              </div>
               </div>
             </CRMCard>
           ) : null}

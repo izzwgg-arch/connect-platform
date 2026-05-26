@@ -17,6 +17,12 @@ import {
   Pencil,
   X,
   Save,
+  Server,
+  ShieldCheck,
+  RefreshCcw,
+  Activity,
+  Clock3,
+  WifiOff,
 } from "lucide-react";
 import { CRMPageShell, CRMPageHeader, CRMCard, crm, cn } from "../../../../../components/crm";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../../services/apiClient";
@@ -41,6 +47,60 @@ type ConnectionsResp = { senders: Sender[]; canManageTenantSenders: boolean; aut
 
 function isConnected(s: Sender): boolean {
   return s.status === "CONNECTED";
+}
+
+function formatWhen(iso?: string | null): string {
+  if (!iso) return "Never";
+  try { return new Date(iso).toLocaleString(); } catch { return iso; }
+}
+
+function ConnectionBadge({ connected, busy }: { connected: boolean; busy?: boolean }) {
+  return (
+    <span
+      className={cn(
+        crm.chip,
+        "text-[10px] uppercase tracking-wide",
+        busy
+          ? "border-crm-accent/35 bg-crm-accent/10 text-crm-accent"
+          : connected
+            ? "border-crm-success/35 bg-crm-success/10 text-crm-success"
+            : "border-crm-danger/35 bg-crm-danger/10 text-crm-danger",
+      )}
+    >
+      {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <span className={connected ? crm.statusDotLive : crm.statusDotDanger} />}
+      {busy ? "Working" : connected ? "Connected" : "Disconnected"}
+    </span>
+  );
+}
+
+function InfraStatPill({
+  label,
+  value,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string | number;
+  tone?: "neutral" | "success" | "warning" | "danger" | "syncing";
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide",
+        tone === "success"
+          ? "border-crm-success/30 bg-crm-success/10 text-crm-success"
+          : tone === "warning"
+            ? "border-crm-warning/30 bg-crm-warning/10 text-crm-warning"
+            : tone === "danger"
+              ? "border-crm-danger/30 bg-crm-danger/10 text-crm-danger"
+              : tone === "syncing"
+                ? "border-crm-accent/30 bg-crm-accent/10 text-crm-accent"
+                : "border-crm-border/65 bg-crm-surface-2/45 text-crm-muted",
+      )}
+    >
+      <span className="text-crm-muted">{label}</span>
+      <span className="font-mono text-crm-text">{value}</span>
+    </span>
+  );
 }
 
 export default function CrmEmailSettingsPage() {
@@ -209,23 +269,36 @@ export default function CrmEmailSettingsPage() {
   };
 
   return (
-    <CRMPageShell innerClassName="space-y-4">
+    <CRMPageShell innerClassName={cn(crm.pageInnerWide, "gap-4")}>
       <CRMPageHeader
-        icon={<Mail className="h-5 w-5" />}
+        icon={<Server className="h-5 w-5" />}
         title="CRM Email Settings"
-        subtitle="Send CRM emails from your personal Google account or a tenant-shared mailbox. Metadata-first — Connect never archives inboxes."
+        subtitle="Sender infrastructure, reply tracking, and sync diagnostics for CRM email. Metadata-first — Connect never archives inboxes."
       />
 
-      <div className="flex items-center gap-2 rounded-crm border border-crm-border/70 bg-crm-surface-2/40 px-3 py-2 text-xs text-crm-muted">
-        <span className="font-semibold text-crm-text">Auto-sync:</span>
-        {autoSyncEnabled ? (
-          <>
-            <span className="text-crm-success">Enabled</span>
-            {autoSyncIntervalMs ? <span>· every {Math.round(autoSyncIntervalMs / 60000)} min</span> : null}
-          </>
-        ) : (
-          <span className="text-crm-warning">Disabled</span>
-        )}
+      <div className="sticky top-2 z-20 rounded-crm-lg border border-crm-border/75 bg-crm-surface/90 px-3 py-2 shadow-[0_14px_40px_-24px_rgba(0,0,0,0.7)] backdrop-blur-md">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-crm-muted">
+            <span
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-semibold uppercase tracking-wide",
+                autoSyncEnabled
+                  ? "border-crm-success/35 bg-crm-success/10 text-crm-success"
+                  : "border-crm-warning/35 bg-crm-warning/10 text-crm-warning",
+              )}
+            >
+              <span className={autoSyncEnabled ? crm.statusDotLive : crm.statusDotWarn} />
+              Auto-sync {autoSyncEnabled ? "enabled" : "disabled"}
+            </span>
+            {autoSyncEnabled && autoSyncIntervalMs ? <span>Every {Math.round(autoSyncIntervalMs / 60000)} min</span> : null}
+            <span><strong className="font-semibold text-crm-text">{data?.senders.length ?? 0}</strong> sender{(data?.senders.length ?? 0) === 1 ? "" : "s"}</span>
+            <span><strong className="font-semibold text-crm-text">{tenantSenders.length}</strong> shared</span>
+          </div>
+          <span className="inline-flex items-center gap-1.5 text-[11px] text-crm-muted">
+            <Activity className="h-3.5 w-3.5 text-crm-accent" />
+            Last activity is shown per sender
+          </span>
+        </div>
       </div>
 
       {justConnected && (
@@ -240,16 +313,18 @@ export default function CrmEmailSettingsPage() {
       )}
 
       {/* ─── My Email ────────────────────────────────────────────────────────── */}
-      <CRMCard className="p-4 sm:p-5">
+      <CRMCard className={cn("p-4 sm:p-5", crm.opCard, "border-crm-border/80")}>
+        <div className={crm.opCardGlow} />
+        <div className="relative z-[1]">
         <div className="mb-3 flex items-center gap-2">
-          <UserIcon className="h-4 w-4 text-crm-muted" />
+          <UserIcon className="h-4 w-4 text-crm-accent" />
           <h3 className="text-sm font-semibold text-crm-text">My Email</h3>
         </div>
 
         {loading ? (
           <div className="flex items-center gap-2 text-sm text-crm-muted"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
         ) : !userSender || !isConnected(userSender) ? (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-crm border border-crm-border/70 bg-crm-surface-2/40 px-3 py-3">
+          <div className={cn(crm.opInset, "flex flex-wrap items-center justify-between gap-3 px-3 py-3")}>
             <div className="min-w-0">
               <p className="text-sm font-medium text-crm-text">No personal sender connected</p>
               <p className="mt-0.5 text-xs text-crm-muted">
@@ -286,13 +361,16 @@ export default function CrmEmailSettingsPage() {
             isAdmin={canManageTenant}
           />
         )}
+        </div>
       </CRMCard>
 
       {/* ─── Tenant Shared Email ─────────────────────────────────────────────── */}
-      <CRMCard className="p-4 sm:p-5">
+      <CRMCard className={cn("p-4 sm:p-5", crm.opCard, "border-crm-border/80")}>
+        <div className={crm.opCardGlow} />
+        <div className="relative z-[1]">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <Users className="h-4 w-4 text-crm-muted" />
+            <Users className="h-4 w-4 text-crm-accent" />
             <h3 className="text-sm font-semibold text-crm-text">Tenant Shared Email</h3>
             {!canManageTenant && (
               <span className={cn(crm.chip, "text-[10px]")} title="Read-only — ask a CRM admin to manage shared senders">
@@ -316,7 +394,7 @@ export default function CrmEmailSettingsPage() {
         {loading ? (
           <div className="flex items-center gap-2 text-sm text-crm-muted"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
         ) : tenantSenders.length === 0 ? (
-          <div className="rounded-crm border border-crm-border/70 bg-crm-surface-2/40 px-3 py-3 text-sm text-crm-muted">
+          <div className={cn(crm.opInset, "px-3 py-3 text-sm text-crm-muted")}>
             {canManageTenant ? (
               <>
                 No shared mailboxes connected yet. Connect one (e.g. <code>sales@</code>) so agents without personal senders can still email from your team.
@@ -356,6 +434,7 @@ export default function CrmEmailSettingsPage() {
           Send fallback: <strong className="text-crm-text">your sender</strong> → <strong className="text-crm-text">tenant default</strong> → <strong className="text-crm-text">single shared sender</strong>.
           Compose lets you override per send.
         </p>
+        </div>
       </CRMCard>
     </CRMPageShell>
   );
@@ -451,14 +530,28 @@ function SenderRow({
     if (connected) void loadDiag();
   }, [connected, loadDiag]);
 
+  const diagErrors = diag?.errors ?? 0;
+  const syncHealthy = connected && sender.replyTrackingEnabled && diagErrors === 0;
+  const syncTone = !connected ? "danger" : !sender.replyTrackingEnabled ? "warning" : diagErrors > 0 ? "danger" : "success";
+  const lastActivity = diagAt || sender.lastSyncAt || null;
+
   return (
-    <div className="rounded-crm border border-crm-border/70 bg-crm-surface-2/40 px-3 py-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
+    <div className={cn(crm.opCard, crm.opCardHover, "border-crm-border/75 bg-crm-surface/95")}>
+      <div className={crm.opCardGlow} />
+      <div className="relative z-[1] px-3 py-3 sm:px-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <p className="truncate text-sm font-semibold text-crm-text">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border border-crm-border/60 bg-crm-surface-2/60 text-crm-accent">
+              {isUser ? <UserIcon className="h-4 w-4" /> : <Users className="h-4 w-4" />}
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-crm-text">
               {sender.label || sender.displayName || sender.emailAddress}
-            </p>
+              </p>
+              <p className="mt-0.5 truncate font-mono text-xs text-crm-muted">{sender.emailAddress}</p>
+            </div>
+            <ConnectionBadge connected={connected} busy={busy} />
             {isUser ? (
               <span className={cn(crm.chip, "text-[10px]")}><UserIcon className="h-3 w-3" /> My email</span>
             ) : (
@@ -471,38 +564,37 @@ function SenderRow({
             )}
             {!connected && (
               <span className={cn(crm.chip, "text-[10px] text-crm-danger")} title={sender.lastError || undefined}>
-                Disconnected
+                <WifiOff className="h-3 w-3" /> Disconnected
               </span>
             )}
           </div>
-          <p className="mt-0.5 truncate font-mono text-xs text-crm-muted">{sender.emailAddress}</p>
           {sender.senderName && !editing && (
-            <p className="mt-0.5 text-[11px] text-crm-muted">
+            <p className="ml-11 mt-1 text-[11px] text-crm-muted">
               Sends as <span className="text-crm-text">{sender.senderName}</span>
             </p>
           )}
           {!editing && (
-            <p className="mt-1 text-[11px] text-crm-muted">
-              Reply tracking: {sender.replyTrackingEnabled ? (
-                <span className="text-crm-success">Enabled</span>
-              ) : (
-                <span className="text-crm-warning">Disabled</span>
-              )}
-              {sender.lastSyncAt && (
-                <>
-                  {" · Last synced "}
-                  <span className="text-crm-text">{new Date(sender.lastSyncAt).toLocaleString()}</span>
-                </>
-              )}
-            </p>
+            <div className="ml-11 mt-2 flex flex-wrap gap-1.5">
+              <InfraStatPill
+                label="reply"
+                value={sender.replyTrackingEnabled ? "on" : "off"}
+                tone={sender.replyTrackingEnabled ? "success" : "warning"}
+              />
+              <InfraStatPill
+                label="sync"
+                value={syncHealthy ? "healthy" : connected ? "watch" : "down"}
+                tone={syncTone}
+              />
+              <InfraStatPill label="last" value={formatWhen(lastActivity)} tone={lastActivity ? "neutral" : "warning"} />
+            </div>
           )}
         </div>
 
         {!editing && (
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
             {connected && sender.replyTrackingEnabled && (
               <button type="button" className={cn(crm.btnGhost, "text-xs")} onClick={() => onSyncNow(sender)} disabled={busy} title="Sync replies now">
-                <Loader2 className="h-3.5 w-3.5" /> Sync now
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />} Sync now
               </button>
             )}
             {sender.canManage && connected && (
@@ -536,9 +628,12 @@ function SenderRow({
       </div>
 
       {connected && (
-        <div className="mt-2 rounded-crm border border-crm-border/60 bg-crm-surface-2/30 px-2 py-2">
-          <div className="mb-1 flex items-center justify-between">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-crm-muted">Diagnostics</span>
+        <div className={cn(crm.opInset, "mt-3 px-3 py-2.5")}>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-crm-muted">
+              <ShieldCheck className="h-3.5 w-3.5 text-crm-accent" />
+              Sync diagnostics
+            </span>
             <button
               type="button"
               className={cn(crm.btnGhost, "text-[11px]")}
@@ -555,17 +650,22 @@ function SenderRow({
               <AlertCircle className="h-3 w-3" /> {diagError}
             </div>
           ) : diag ? (
-            <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-crm-muted">
-              <div>threadsChecked: <span className="text-crm-text">{diag.threadsChecked}</span></div>
-              <div>fetched: <span className="text-crm-text">{diag.fetched}</span></div>
-              <div>inserted: <span className="text-crm-text">{diag.inserted}</span></div>
-              <div>skippedNotInbound: <span className="text-crm-text">{diag.skippedNotInbound}</span></div>
-              <div>skippedDuplicates: <span className="text-crm-text">{diag.skippedDuplicates}</span></div>
-              <div>errors: <span className="text-crm-text">{diag.errors}</span></div>
-              <div className="col-span-2">lastSyncAt: <span className="text-crm-text">{diagAt ? new Date(diagAt).toLocaleString() : "—"}</span></div>
+            <div className="flex flex-wrap gap-1.5">
+              <InfraStatPill label="threads" value={diag.threadsChecked} tone="neutral" />
+              <InfraStatPill label="fetched" value={diag.fetched} tone="syncing" />
+              <InfraStatPill label="inserted" value={diag.inserted} tone="success" />
+              <InfraStatPill label="not inbound" value={diag.skippedNotInbound} tone="neutral" />
+              <InfraStatPill label="dupes" value={diag.skippedDuplicates} tone="neutral" />
+              <InfraStatPill label="errors" value={diag.errors} tone={diag.errors > 0 ? "danger" : "success"} />
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-crm-border/65 bg-crm-surface-2/45 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">
+                <Clock3 className="h-3 w-3 text-crm-accent" />
+                <span>last</span>
+                <span className="font-mono text-crm-text">{formatWhen(diagAt)}</span>
+              </span>
             </div>
           ) : (
-            <div className="text-[11px] text-crm-muted">
+            <div className="flex items-center gap-2 text-[11px] text-crm-muted">
+              <span className={cn(crm.statusDot, "bg-crm-muted/60")} />
               No sync diagnostics yet. Click <span className="text-crm-text">Sync now</span>, then <span className="text-crm-text">Refresh diagnostics</span>.
             </div>
           )}
@@ -606,6 +706,7 @@ function SenderRow({
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

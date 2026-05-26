@@ -323,6 +323,14 @@ Campaign routes use **`crm.pageInnerCampaign`** (wide desk, up to ~1680px) and *
 
 Privacy note: CRM Email is not a full inbox archive. The UI surfaces connection status, send tests, and metadata-first indicators; full incoming bodies are not stored by default.
 
+### CRM Dashboard + Email Operations (2026 UI pass)
+
+- `/crm/dashboard` uses a sticky operational summary strip plus premium KPI tiles. Status labels and dots must be derived from existing CRM API values only: queue depth, overdue callbacks, calls today, contacts today, campaign counts, and task counts.
+- Dashboard KPI/list cards use shared operational primitives in `crmClasses.ts`: `opCard`, `opCardGlow`, `opInset`, `opCardHover`, and `statusDot*`. Use these for dense mission-control surfaces instead of flat gray nested cards.
+- `/crm/email` is a metadata-first email operations workspace. It can show connection state, recent replies, recent sent messages, and last activity from the existing connection/recent/replies endpoints. Do not add inbox-style full-body archive UI.
+- `/crm/email/settings` treats senders as infrastructure cards: connection badge, reply tracking state, sync health, last activity, and diagnostics stat pills. Values come from existing sender fields plus `/crm/email/sync-last`; no fake health metrics.
+- Empty states should be compact operational states: one short title, one useful sentence, and at most one real route/action. Avoid large dead space or placeholder CTAs.
+
 Reports, wallboard: migrate opportunistically.
 
 ---
