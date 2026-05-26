@@ -3,29 +3,40 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  Phone,
-  Mail,
-  Plus,
-  Search,
-  X,
-  UserRound,
-  UserCheck,
-  Users,
-  FileUp,
-  ExternalLink,
-  Radio,
+  Activity,
+  Archive,
+  ArrowUpRight,
+  AtSign,
+  BarChart3,
+  CalendarClock,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  ListOrdered,
-  Archive,
+  Clock,
+  Download,
+  ExternalLink,
+  FileUp,
+  Filter,
+  Mail,
+  Megaphone,
+  MoreHorizontal,
+  Phone,
   PhoneOff,
-  AtSign,
-  Activity,
+  PieChart,
+  Plus,
+  Search,
+  Send,
+  Sparkles,
+  Tag,
+  UserCheck,
+  UserPlus,
+  UserRound,
+  Users,
+  X,
 } from "lucide-react";
 import {
   CRMPageShell,
   CRMPageHeader,
-  CRMEmptyState,
   CRMCard,
   crm,
   cn,
@@ -45,12 +56,20 @@ type AssignedUser = {
   email: string;
 };
 
+type ContactTag = {
+  id: string;
+  name: string;
+  color?: string | null;
+};
+
 type CrmContact = {
   id: string;
   displayName: string;
   firstName?: string | null;
   lastName?: string | null;
   company?: string | null;
+  title?: string | null;
+  tags?: ContactTag[];
   primaryPhone?: { numberRaw: string } | null;
   primaryEmail?: { email: string } | null;
   crmStage?: CrmStage | null;
@@ -59,6 +78,8 @@ type CrmContact = {
   createdAt: string;
   updatedAt?: string;
   lastActivityAt?: string | null;
+  lastDisposition?: string | null;
+  lastDispositionAt?: string | null;
   active?: boolean;
   archivedAt?: string | null;
 };
@@ -88,15 +109,20 @@ const STAGE_LABELS: Record<CrmStage | "all", string> = {
   CLOSED_LOST: "Closed Lost",
 };
 
-const STAGE_BADGE_CLASS: Record<CrmStage, string> = {
-  LEAD: "bg-crm-accent/12 text-crm-accent border-crm-accent/30",
-  CONTACTED: "bg-crm-warning/15 text-crm-warning border-crm-warning/35",
-  QUALIFIED: "bg-crm-success/15 text-crm-success border-crm-success/35",
-  CUSTOMER: "bg-crm-accent/15 text-crm-accent border-crm-accent/40",
-  CLOSED_LOST: "bg-crm-surface-2 text-crm-muted border-crm-border",
-};
-
 const FILTER_TABS = ["all", "LEAD", "CONTACTED", "QUALIFIED", "CUSTOMER", "CLOSED_LOST"] as const;
+
+type QuickFilter = "all" | "new" | "contacted" | "engaged" | "follow-up" | "unreachable" | "customer" | "lead";
+
+const QUICK_FILTERS: Array<{ key: QuickFilter; label: string }> = [
+  { key: "all", label: "All" },
+  { key: "new", label: "New" },
+  { key: "contacted", label: "Contacted" },
+  { key: "engaged", label: "Engaged" },
+  { key: "follow-up", label: "Follow Up" },
+  { key: "unreachable", label: "Unreachable" },
+  { key: "customer", label: "Customer" },
+  { key: "lead", label: "Lead" },
+];
 
 /** Phase 16B — admin-only CRM list scope (server-backed; agents always behave as active). */
 type ArchiveListScope = "active" | "archived" | "all";
@@ -145,33 +171,115 @@ function formatShortDate(iso: string | null | undefined): string {
   }
 }
 
-function SummaryStatTile({
+function relativeDate(iso: string | null | undefined): string {
+  if (!iso) return "No activity";
+  const ts = new Date(iso).getTime();
+  if (!Number.isFinite(ts)) return "No activity";
+  const diff = Math.max(0, Date.now() - ts);
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 60) return minutes <= 1 ? "just now" : `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `${days}d ago`;
+  return formatShortDate(iso);
+}
+
+function isNewThisMonth(c: CrmContact): boolean {
+  return Date.now() - new Date(c.createdAt).getTime() <= 30 * 24 * 60 * 60 * 1000;
+}
+
+function matchesQuickFilter(c: CrmContact, quickFilter: QuickFilter): boolean {
+  switch (quickFilter) {
+    case "all":
+      return true;
+    case "new":
+      return isNewThisMonth(c);
+    case "contacted":
+      return c.crmStage === "CONTACTED";
+    case "engaged":
+      return c.crmStage === "QUALIFIED" || c.crmStage === "CUSTOMER";
+    case "follow-up":
+      return !!c.lastActivityAt && c.crmStage !== "CUSTOMER" && c.crmStage !== "CLOSED_LOST";
+    case "unreachable":
+      return c.doNotCall || !c.primaryPhone;
+    case "customer":
+      return c.crmStage === "CUSTOMER";
+    case "lead":
+      return c.crmStage === "LEAD";
+  }
+}
+
+function stageTone(stage: CrmStage | null | undefined): string {
+  switch (stage) {
+    case "LEAD":
+      return "contacts-stage-lead";
+    case "CONTACTED":
+      return "contacts-stage-contacted";
+    case "QUALIFIED":
+      return "contacts-stage-qualified";
+    case "CUSTOMER":
+      return "contacts-stage-customer";
+    case "CLOSED_LOST":
+      return "contacts-stage-lost";
+    default:
+      return "contacts-stage-muted";
+  }
+}
+
+function ContactKpiTile({
   label,
   value,
   icon,
-  tone = "default",
+  micro,
+  accent,
 }: {
   label: string;
-  value: React.ReactNode;
-  icon: React.ReactNode;
-  tone?: "default" | "warn" | "muted";
+  value: string | number;
+  icon: JSX.Element;
+  micro: string;
+  accent: "blue" | "violet" | "green" | "amber" | "rose" | "cyan";
 }) {
-  const valueClass =
-    tone === "warn"
-      ? "text-xl font-semibold tabular-nums text-crm-warning"
-      : tone === "muted"
-        ? "text-xl font-semibold tabular-nums text-crm-muted"
-        : "text-xl font-semibold tabular-nums text-crm-text";
-
   return (
-    <div className={cn(crm.contactsKpiTile, "border-crm-border bg-crm-surface-2/60")}>
-      <div className="flex items-center gap-2 text-crm-muted">
-        <span className={cn(crm.contactsKpiIcon, "bg-crm-surface text-crm-accent")}>{icon}</span>
-        <span className="text-[11px] font-semibold uppercase tracking-wide">{label}</span>
+    <div className={cn(crm.contactsKpiTile, `contacts-kpi-${accent}`)}>
+      <div className="flex items-start justify-between gap-3">
+        <span className="contacts-kpi-label">{label}</span>
+        <span className={crm.contactsKpiIcon}>{icon}</span>
       </div>
-      <p className={valueClass}>{value}</p>
+      <p className="contacts-kpi-value">{value}</p>
+      <p className="contacts-kpi-micro">{micro}</p>
     </div>
   );
+}
+
+function RailCard({
+  title,
+  subtitle,
+  icon,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  icon: JSX.Element;
+  children: JSX.Element | JSX.Element[];
+}) {
+  return (
+    <CRMCard padding="md" className="contacts-rail-card">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-base font-bold tracking-tight text-crm-text">{title}</p>
+          <p className="mt-1 text-xs leading-relaxed text-crm-muted">{subtitle}</p>
+        </div>
+        <span className="contacts-rail-icon">{icon}</span>
+      </div>
+      {children}
+    </CRMCard>
+  );
+}
+
+function progressPercent(value: number, totalValue: number): number {
+  if (totalValue <= 0) return 0;
+  return Math.max(4, Math.round((value / totalValue) * 100));
 }
 
 
@@ -352,6 +460,8 @@ export default function CrmContactsPage() {
 
   const [search, setSearch] = useState("");
   const [stage, setStage] = useState<CrmStage | "all">("all");
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
+  const [tagFilter, setTagFilter] = useState("all");
   const [assignedToMe, setAssignedToMe] = useState(false);
   const [archiveScope, setArchiveScope] = useState<ArchiveListScope>("active");
   const [page, setPage] = useState(0);
@@ -428,6 +538,30 @@ export default function CrmContactsPage() {
     setTotal((t) => t + 1);
   };
 
+  const handleExportCsv = () => {
+    const headers = ["Name", "Company", "Phone", "Email", "Stage", "Assigned To", "Last Activity"];
+    const csvRows = rows.map((c) =>
+      [
+        c.displayName,
+        c.company ?? "",
+        c.primaryPhone?.numberRaw ?? "",
+        c.primaryEmail?.email ?? "",
+        c.crmStage ? STAGE_LABELS[c.crmStage] : "",
+        assignedLabel(c.assignedTo),
+        c.lastActivityAt ? formatShortDate(c.lastActivityAt) : "",
+      ]
+        .map((v) => `"${String(v).replaceAll('"', '""')}"`)
+        .join(","),
+    );
+    const blob = new Blob([[headers.join(","), ...csvRows].join("\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `crm-contacts-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const loadCrmUsers = useCallback(async () => {
     if (crmUsers.length > 0) return;
     try {
@@ -500,25 +634,74 @@ export default function CrmContactsPage() {
     }
   };
 
-  const selectableRows = useMemo(() => rows.filter((r) => !isContactArchived(r)), [rows]);
+  const pageTagOptions = useMemo(() => {
+    const counts = new Map<string, { tag: ContactTag; count: number }>();
+    for (const c of rows) {
+      for (const tagItem of c.tags ?? []) {
+        const existing = counts.get(tagItem.id);
+        counts.set(tagItem.id, { tag: tagItem, count: (existing?.count ?? 0) + 1 });
+      }
+    }
+    return Array.from(counts.values()).sort((a, b) => b.count - a.count || a.tag.name.localeCompare(b.tag.name));
+  }, [rows]);
+
+  const displayedRows = useMemo(() => {
+    return rows.filter((c) => {
+      const matchesTag = tagFilter === "all" || (c.tags ?? []).some((t) => t.id === tagFilter);
+      return matchesTag && matchesQuickFilter(c, quickFilter);
+    });
+  }, [quickFilter, rows, tagFilter]);
+
+  const selectableRows = useMemo(() => displayedRows.filter((r) => !isContactArchived(r)), [displayedRows]);
   const allSelectableSelected =
     selectableRows.length > 0 && selectableRows.every((r) => selectedIds.has(r.id));
 
   const hasListFilters =
-    !!search || stage !== "all" || assignedToMe || (isAdmin && archiveScope !== "active");
+    !!search ||
+    stage !== "all" ||
+    quickFilter !== "all" ||
+    tagFilter !== "all" ||
+    assignedToMe ||
+    (isAdmin && archiveScope !== "active");
 
   const summary = useMemo(() => {
     let missingPhone = 0;
     let missingEmail = 0;
     let archivedOnPage = 0;
     let activeOnPage = 0;
+    let contacted = 0;
+    let engaged = 0;
+    let newThisMonth = 0;
+    let needsFollowUp = 0;
     for (const r of rows) {
       if (!r.primaryPhone) missingPhone += 1;
       if (!r.primaryEmail) missingEmail += 1;
       if (isContactArchived(r)) archivedOnPage += 1;
       else activeOnPage += 1;
+      if (r.crmStage === "CONTACTED") contacted += 1;
+      if (r.crmStage === "QUALIFIED" || r.crmStage === "CUSTOMER") engaged += 1;
+      if (isNewThisMonth(r)) newThisMonth += 1;
+      if (!!r.lastActivityAt && r.crmStage !== "CUSTOMER" && r.crmStage !== "CLOSED_LOST") needsFollowUp += 1;
     }
-    return { missingPhone, missingEmail, archivedOnPage, activeOnPage };
+    return { missingPhone, missingEmail, archivedOnPage, activeOnPage, contacted, engaged, newThisMonth, needsFollowUp };
+  }, [rows]);
+
+  const stageDistribution = useMemo(() => {
+    const counts = new Map<CrmStage, number>();
+    for (const row of rows) {
+      if (row.crmStage) counts.set(row.crmStage, (counts.get(row.crmStage) ?? 0) + 1);
+    }
+    return (Object.keys(STAGE_LABELS) as Array<CrmStage | "all">)
+      .filter((key): key is CrmStage => key !== "all")
+      .map((key) => ({ key, label: STAGE_LABELS[key], count: counts.get(key) ?? 0 }))
+      .filter((item) => item.count > 0);
+  }, [rows]);
+
+  const recentActivity = useMemo(() => {
+    return [...rows]
+      .filter((c) => c.lastActivityAt || c.lastDispositionAt || c.updatedAt)
+      .sort((a, b) => new Date(b.lastActivityAt ?? b.lastDispositionAt ?? b.updatedAt ?? 0).getTime() - new Date(a.lastActivityAt ?? a.lastDispositionAt ?? a.updatedAt ?? 0).getTime())
+      .slice(0, 4);
   }, [rows]);
 
   const sliceFrom = total === 0 ? 0 : page * CONTACTS_PAGE_LIMIT + 1;
@@ -529,6 +712,8 @@ export default function CrmContactsPage() {
   const resetFilters = () => {
     setSearch("");
     setStage("all");
+    setQuickFilter("all");
+    setTagFilter("all");
     setAssignedToMe(false);
     if (isAdmin) setArchiveScope("active");
     setPage(0);
@@ -536,94 +721,60 @@ export default function CrmContactsPage() {
     void load("", "all", false, "active", 0);
   };
 
+  const firstEmail = displayedRows.find((c) => c.primaryEmail)?.primaryEmail?.email;
+  const engagementRate = rows.length > 0 ? Math.round((summary.engaged / rows.length) * 100) : 0;
+  const reachableTotal = rows.filter((c) => c.primaryPhone && !c.doNotCall).length;
+
   return (
-    <CRMPageShell innerClassName={cn(crm.pageInnerContacts, crm.contactsWorkspace)}>
+    <CRMPageShell className={crm.contactsWorkspace} innerClassName={crm.pageInnerContacts}>
       {showAdd && <AddContactModal onClose={() => setShowAdd(false)} onCreated={handleContactCreated} />}
 
       <CRMPageHeader
         className={crm.contactsHeaderPanel}
-        icon={<Users className="h-5 w-5" aria-hidden />}
+        icon={<Users className="h-6 w-6" aria-hidden />}
         title="Contacts"
-        subtitle="Relationship command center — search, open records, work the live desk, and bulk-assign when you are admin."
+        subtitle="A warmer relationship command center for search, segmentation, live workspace handoff, and clean follow-up operations."
         actions={
-          <>
-            <Link href="/crm/queue" className={crm.btnSecondary}>
-              <ListOrdered className="h-4 w-4 text-crm-muted" />
-              My queue
-            </Link>
+          <div className="contacts-hero-actions flex flex-wrap items-center gap-2">
             {canImport && (
               <Link href="/crm/import" className={crm.btnSecondary}>
-                <FileUp className="h-4 w-4 text-crm-muted" />
+                <FileUp className="h-4 w-4" />
                 Import
               </Link>
             )}
-            <button type="button" onClick={() => setShowAdd(true)} className={crm.btnPrimary}>
+            <button type="button" onClick={handleExportCsv} className={crm.btnSecondary} disabled={rows.length === 0}>
+              <Download className="h-4 w-4" />
+              Export
+            </button>
+            <button type="button" onClick={() => setShowAdd(true)} className={cn(crm.btnPrimary, "contacts-new-contact-cta")}>
               <Plus className="h-4 w-4" />
               New contact
             </button>
-          </>
+          </div>
         }
       />
 
       {!loading && !error && (rows.length > 0 || total > 0) && (
-        <CRMCard className={cn(crm.contactsPanel, "p-4 sm:p-5")}>
-          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <p className={crm.label}>Matching filters</p>
-              <p className="mt-1 text-3xl font-semibold tabular-nums tracking-tight text-crm-text">{total}</p>
-              <p className="mt-1 text-sm text-crm-muted">
-                Showing{" "}
-                <span className="font-medium tabular-nums text-crm-text">
-                  {sliceFrom}–{sliceTo}
-                </span>{" "}
-                on this page
-              </p>
-            </div>
-            <p className="max-w-md text-[11px] leading-relaxed text-crm-muted sm:text-right">
-              Phone, email, and active/archived tiles count only this page — not tenant-wide analytics.
-            </p>
-          </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-            <SummaryStatTile label="Active" value={summary.activeOnPage} icon={<Users className="h-4 w-4" />} />
-            {isAdmin && (
-              <SummaryStatTile
-                label="Archived"
-                value={summary.archivedOnPage}
-                icon={<Archive className="h-4 w-4" />}
-                tone="muted"
-              />
-            )}
-            <SummaryStatTile
-              label="No phone"
-              value={summary.missingPhone}
-              icon={<PhoneOff className="h-4 w-4" />}
-              tone="warn"
-            />
-            <SummaryStatTile
-              label="No email"
-              value={summary.missingEmail}
-              icon={<AtSign className="h-4 w-4" />}
-              tone="warn"
-            />
-            <SummaryStatTile
-              label="Stage filter"
-              value={stage === "all" ? "All" : STAGE_LABELS[stage]}
-              icon={<Activity className="h-4 w-4" />}
-            />
-          </div>
-        </CRMCard>
+        <section className="contacts-kpi-strip grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <ContactKpiTile label="Total Contacts" value={total} micro={`${sliceFrom}-${sliceTo} showing`} icon={<Users className="h-4 w-4" />} accent="blue" />
+          <ContactKpiTile label="New This 30 Days" value={summary.newThisMonth} micro="recently created" icon={<Sparkles className="h-4 w-4" />} accent="violet" />
+          <ContactKpiTile label="Contacted" value={summary.contacted} micro="stage matched" icon={<Phone className="h-4 w-4" />} accent="cyan" />
+          <ContactKpiTile label="Engaged" value={summary.engaged} micro={`${engagementRate}% of page`} icon={<CheckCircle2 className="h-4 w-4" />} accent="green" />
+          <ContactKpiTile label="Unreachable" value={summary.missingPhone + rows.filter((r) => r.doNotCall).length} micro="no phone or DNC" icon={<PhoneOff className="h-4 w-4" />} accent="rose" />
+          <ContactKpiTile label="Needs Follow Up" value={summary.needsFollowUp} micro="recent activity" icon={<CalendarClock className="h-4 w-4" />} accent="amber" />
+        </section>
       )}
 
       <CRMCard className={cn(crm.contactsPanel, crm.contactsFilterBar, "p-4 sm:p-5")}>
-          <p className={cn(crm.label, "mb-3")}>Find & filter</p>
-          <div className="relative w-full">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-crm-muted/80" />
+        <div className="contacts-filter-grid">
+          <div className="contacts-search-wrap">
+            <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-crm-muted/80" />
             <input
               ref={searchRef}
               value={search}
               onChange={(e) => handleSearchChange(e.target.value)}
-              placeholder="Search by name, phone, email, or company…"
-              className={cn(crm.input, crm.inputWithIcon, "py-3 text-[15px]")}
+              placeholder="Search name, phone, email, or company..."
+              className="contacts-search-input"
               aria-label="Search contacts"
             />
             {search && (
@@ -635,31 +786,60 @@ export default function CrmContactsPage() {
                   if (debounceRef.current) clearTimeout(debounceRef.current);
                   void load("", stage, assignedToMe, isAdmin ? archiveScope : "active", 0);
                 }}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-crm-muted/80 hover:bg-crm-surface-2"
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1.5 text-crm-muted/80 hover:bg-crm-surface-2"
                 aria-label="Clear search"
               >
                 <X className="h-4 w-4" />
               </button>
             )}
           </div>
+          <select className="contacts-filter-select" aria-label="Campaign filter" disabled>
+            <option>All campaigns</option>
+          </select>
+          <select
+            className="contacts-filter-select"
+            aria-label="Tag filter"
+            value={tagFilter}
+            onChange={(e) => setTagFilter(e.target.value)}
+          >
+            <option value="all">All tags</option>
+            {pageTagOptions.map(({ tag: tagItem, count }) => (
+              <option key={tagItem.id} value={tagItem.id}>{tagItem.name} ({count})</option>
+            ))}
+          </select>
+          <select
+            className="contacts-filter-select"
+            aria-label="Status filter"
+            value={stage}
+            onChange={(e) => {
+              setPage(0);
+              setStage(e.target.value as CrmStage | "all");
+            }}
+          >
+            {FILTER_TABS.map((tab) => (
+              <option key={tab} value={tab}>{STAGE_LABELS[tab]}</option>
+            ))}
+          </select>
+          <button type="button" onClick={resetFilters} className="contacts-filter-button">
+            <Filter className="h-4 w-4" />
+            Filters
+          </button>
+        </div>
 
-          <div className="mt-4 flex flex-col gap-4 border-t border-crm-border/60 pt-4 xl:flex-row xl:items-center xl:justify-between">
-            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Stage filter">
-              {FILTER_TABS.map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => {
-                    setPage(0);
-                    setStage(tab);
-                  }}
-                  className={stage === tab ? crm.filterPillActive : crm.filterPill}
-                >
-                  {STAGE_LABELS[tab]}
-                </button>
-              ))}
-            </div>
-
+        <div className="mt-4 flex flex-col gap-3 border-t border-crm-border/60 pt-4">
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Quick filters">
+            {QUICK_FILTERS.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => setQuickFilter(item.key)}
+                className={quickFilter === item.key ? crm.filterPillActive : crm.filterPill}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
             {isAdmin && (
               <div className={crm.filterPillGroup} role="group" aria-label="List scope">
                 <span className="pl-1 text-[10px] font-semibold uppercase tracking-wide text-crm-muted/80">List</span>
@@ -678,23 +858,22 @@ export default function CrmContactsPage() {
                 ))}
               </div>
             )}
-
             <button
               type="button"
               onClick={() => {
                 setPage(0);
                 setAssignedToMe((v) => !v);
               }}
-              className={cn(assignedToMe ? crm.filterPillActive : crm.filterPill, "lg:ml-auto")}
+              className={assignedToMe ? crm.filterPillActive : crm.filterPill}
             >
               Assigned to me
             </button>
           </div>
+        </div>
       </CRMCard>
 
-        {/* Bulk bar — compact, not full-width promo */}
-        {isAdmin && selectedIds.size > 0 && (
-          <div className={cn(crm.contactsBulkBar, "border-crm-border bg-crm-surface shadow-crm")}>
+      {isAdmin && selectedIds.size > 0 && (
+        <div className={cn(crm.contactsBulkBar, "border-crm-border bg-crm-surface shadow-crm")}>
             <span className="text-sm font-medium text-crm-text">{selectedIds.size} selected</span>
             <select
               value={bulkAssignUserId}
@@ -736,241 +915,236 @@ export default function CrmContactsPage() {
             >
               Dismiss
             </button>
-          </div>
-        )}
+        </div>
+      )}
 
-        {/* List */}
-        {loading && (
-          <div className="space-y-3 py-6" aria-busy="true" aria-label="Loading contacts">
-            {[0, 1, 2].map((i) => (
-              <div
-                key={i}
-                className="h-28 animate-pulse rounded-crm-lg border border-crm-border bg-crm-surface-2/80"
-              />
-            ))}
-          </div>
-        )}
+      {loading && (
+        <div className="space-y-3 py-6" aria-busy="true" aria-label="Loading contacts">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="h-28 animate-pulse rounded-crm-lg border border-crm-border bg-crm-surface-2/80" />
+          ))}
+        </div>
+      )}
 
-        {!loading && error && <div className="rounded-crm border border-crm-danger/35 bg-crm-danger/15 px-4 py-3 text-sm text-crm-danger">{error}</div>}
+      {!loading && error && <div className="rounded-crm border border-crm-danger/35 bg-crm-danger/15 px-4 py-3 text-sm text-crm-danger">{error}</div>}
 
-        {!loading && !error && rows.length === 0 && (
-          <div className={cn(crm.contactsEmpty, "border-crm-border bg-crm-surface")}>
-            <UserRound className="mx-auto mb-3 h-10 w-10 text-crm-border" aria-hidden />
+      {!loading && !error && (rows.length === 0 || displayedRows.length === 0) && (
+        <div className={cn(crm.contactsEmpty, "border-crm-border bg-crm-surface")}>
+          <UserRound className="mx-auto mb-3 h-10 w-10 text-crm-border" aria-hidden />
+          <p className="text-lg font-semibold text-crm-text">
+            {hasListFilters ? "No contacts match these filters" : "No contacts yet"}
+          </p>
+          <p className="mx-auto mt-2 max-w-md text-sm text-crm-muted">
+            {hasListFilters
+              ? "Adjust search, status, tag, assignment, or list scope to broaden this workspace."
+              : "Add a person manually or bring in a file from Import Leads. Records stay in this tenant only."}
+          </p>
+          <div className="mt-6 flex flex-wrap justify-center gap-2">
             {hasListFilters ? (
-              <>
-                <p className="text-base font-medium text-crm-text">No contacts match these filters</p>
-                <p className="mx-auto mt-2 max-w-md text-sm text-crm-muted">
-                  Adjust search, stage, assignment, or list scope — or reset everything to see the default active
-                  directory.
-                </p>
-                <div className="mt-5 flex flex-wrap justify-center gap-2">
-                  <button
-                    type="button"
-                    onClick={resetFilters}
-                    className={crm.btnSecondary}
-                  >
-                    Reset filters
-                  </button>
-                  {search && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSearch("");
-                        setPage(0);
-                        if (debounceRef.current) clearTimeout(debounceRef.current);
-                        void load("", stage, assignedToMe, isAdmin ? archiveScope : "active", 0);
-                      }}
-                      className={crm.btnPrimary}
-                    >
-                      Clear search only
-                    </button>
-                  )}
-                </div>
-              </>
-            ) : isAdmin && archiveScope === "archived" ? (
-              <>
-                <p className="text-base font-medium text-crm-text">No archived contacts</p>
-                <p className="mx-auto mt-2 max-w-md text-sm text-crm-muted">
-                  Archived contacts are hidden from the active list. When you archive from a contact record, it will
-                  appear here for admins.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setArchiveScope("active");
-                    setPage(0);
-                  }}
-                  className={cn(crm.btnSecondary, "mt-5")}
-                >
-                  View active contacts
-                </button>
-              </>
+              <button type="button" onClick={resetFilters} className={crm.btnSecondary}>Reset filters</button>
             ) : (
-              <>
-                <p className="text-base font-medium text-crm-text">No contacts yet</p>
-                <p className="mx-auto mt-2 max-w-md text-sm text-crm-muted">
-                  Add a person manually or bring in a file from Import Leads. Records stay in this tenant only.
-                </p>
-                <div className="mt-6 flex flex-wrap justify-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowAdd(true)}
-                    className={cn(crm.btnPrimary, "inline-flex items-center gap-2")}
-                  >
-                    <Plus className="h-4 w-4" />
-                    New contact
-                  </button>
-                  {canImport && (
-                    <Link
-                      href="/crm/import"
-                      className={cn(crm.btnSecondary, "inline-flex items-center gap-2")}
-                    >
-                      <FileUp className="h-4 w-4 text-crm-muted" />
-                      Import leads
-                    </Link>
-                  )}
-                </div>
-              </>
+              <button type="button" onClick={() => setShowAdd(true)} className={crm.btnPrimary}>
+                <Plus className="h-4 w-4" />
+                New contact
+              </button>
+            )}
+            {canImport && (
+              <Link href="/crm/import" className={crm.btnSecondary}>
+                <FileUp className="h-4 w-4" />
+                Import contacts
+              </Link>
             )}
           </div>
-        )}
+        </div>
+      )}
 
-        {!loading && !error && rows.length > 0 && (
-          <CRMCard className={cn(crm.contactsPanel, crm.contactsListShell)}>
-            {isAdmin && (
+      {!loading && !error && displayedRows.length > 0 && (
+        <div className="contacts-main-grid grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(19rem,24rem)]">
+          <div className="min-w-0">
+            <CRMCard className={cn(crm.contactsPanel, crm.contactsListShell)}>
               <div className={cn(crm.contactsListSelectBar, "border-crm-border bg-crm-surface-2/40")}>
-                <label className="flex cursor-pointer items-center gap-2.5 text-sm text-crm-muted">
-                  <input
-                    type="checkbox"
-                    checked={allSelectableSelected}
-                    onChange={toggleSelectAll}
-                    disabled={selectableRows.length === 0}
-                    className={crm.checkbox}
-                  />
-                  <span>Select active on this page</span>
-                </label>
-                <span className="text-xs text-crm-muted">{rows.length} on this page</span>
+                {isAdmin ? (
+                  <label className="flex cursor-pointer items-center gap-2.5 text-sm text-crm-muted">
+                    <input
+                      type="checkbox"
+                      checked={allSelectableSelected}
+                      onChange={toggleSelectAll}
+                      disabled={selectableRows.length === 0}
+                      className={crm.checkbox}
+                    />
+                    <span>Select active on this page</span>
+                  </label>
+                ) : (
+                  <span className="text-sm font-semibold text-crm-text">Contact directory</span>
+                )}
+                <span className="ml-auto text-xs text-crm-muted">{displayedRows.length} shown · {total} total</span>
               </div>
-            )}
-            <ul className="divide-y divide-crm-border/70">
-            {rows.map((c) => {
-              const archived = isContactArchived(c);
-              const hasLastActivity = !!c.lastActivityAt;
-              return (
-                <li
-                  key={c.id}
-                  className={cn(
-                    crm.contactsListRow,
-                    archived ? "bg-crm-bg/40 opacity-85" : "hover:bg-crm-surface-2/35",
-                  )}
-                >
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="flex min-w-0 flex-1 items-center gap-3 sm:gap-4">
-                      {isAdmin && (
-                        <div className="flex w-9 shrink-0 items-center justify-center sm:w-10" onClick={(e) => e.stopPropagation()}>
-                          {!archived ? (
-                            <input
-                              type="checkbox"
-                              checked={selectedIds.has(c.id)}
-                              onChange={() => {
-                                toggleSelect(c.id);
-                                void loadCrmUsers();
-                              }}
-                              className={crm.checkbox}
-                              aria-label={`Select ${c.displayName}`}
-                            />
-                          ) : (
-                            <span className="inline-block h-4 w-4" aria-hidden />
-                          )}
+              <ul className="contacts-row-list">
+                {displayedRows.map((c) => {
+                  const archived = isContactArchived(c);
+                  return (
+                    <li key={c.id} className={cn(crm.contactsListRow, "contacts-list-item", archived && "opacity-80")}>
+                      <div className="contacts-row-grid">
+                        {isAdmin && (
+                          <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+                            {!archived ? (
+                              <input
+                                type="checkbox"
+                                checked={selectedIds.has(c.id)}
+                                onChange={() => {
+                                  toggleSelect(c.id);
+                                  void loadCrmUsers();
+                                }}
+                                className={crm.checkbox}
+                                aria-label={`Select ${c.displayName}`}
+                              />
+                            ) : (
+                              <Archive className="h-4 w-4 text-crm-muted" />
+                            )}
+                          </div>
+                        )}
+                        <div className="contacts-avatar">{initials(c.displayName)}</div>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h2 className="truncate text-lg font-bold tracking-tight text-crm-text">{c.displayName}</h2>
+                            {c.crmStage && <span className={cn("contacts-stage-pill", stageTone(c.crmStage))}>{STAGE_LABELS[c.crmStage]}</span>}
+                            {c.doNotCall && <span className="contacts-danger-pill">DNC</span>}
+                          </div>
+                          <p className="mt-1 truncate text-sm font-medium text-crm-muted">
+                            {c.title || c.company || assignedLabel(c.assignedTo)}
+                          </p>
                         </div>
-                      )}
-                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border-2 border-crm-accent/35 bg-gradient-to-br from-crm-accent to-crm-accent/70 text-sm font-bold text-white shadow-crm sm:h-12 sm:w-12">
-                        {initials(c.displayName)}
-                      </div>
-                      <div className="min-w-0 flex-1 space-y-1 py-0.5">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h2 className="truncate text-lg font-semibold tracking-tight text-crm-text">{c.displayName}</h2>
-                          {archived && (
-                            <span className="rounded bg-crm-surface-2 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-crm-text">
-                              Archived
-                            </span>
-                          )}
-                          {c.doNotCall && (
-                            <span className="rounded bg-crm-danger/15 px-2 py-0.5 text-[10px] font-semibold text-crm-danger">
-                              DNC
-                            </span>
-                          )}
-                          {c.crmStage && (
-                            <span
-                              className={cn(
-                                "inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold",
-                                STAGE_BADGE_CLASS[c.crmStage],
-                              )}
-                            >
-                              {STAGE_LABELS[c.crmStage]}
-                            </span>
-                          )}
+                        <div className="contacts-data-cell">
+                          <Phone className="h-4 w-4" />
+                          <span className="truncate">{c.primaryPhone?.numberRaw ?? "No phone"}</span>
                         </div>
-                        {c.company && <p className="text-sm font-medium text-crm-muted">{c.company}</p>}
-                        <div className="flex flex-wrap gap-x-5 gap-y-1.5 text-sm">
-                          {c.primaryPhone ? (
-                            <span className="inline-flex items-center gap-1">
-                              <Phone className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                              {c.primaryPhone.numberRaw}
-                            </span>
-                          ) : (
-                            <span className="text-crm-warning">No phone</span>
-                          )}
-                          {c.primaryEmail ? (
-                            <span className="inline-flex min-w-0 items-center gap-1">
-                              <Mail className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                              <span className="truncate">{c.primaryEmail.email}</span>
-                            </span>
-                          ) : (
-                            <span className="text-crm-warning">No email</span>
-                          )}
+                        <div className="contacts-data-cell">
+                          <Mail className="h-4 w-4" />
+                          <span className="truncate">{c.primaryEmail?.email ?? "No email"}</span>
                         </div>
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-crm-muted">
-                          {hasLastActivity && (
-                            <span className="inline-flex items-center gap-1">
-                              <Activity className="h-3 w-3" aria-hidden />
-                              Last {formatShortDate(c.lastActivityAt)}
-                            </span>
+                        <div className="contacts-data-cell">
+                          <Clock className="h-4 w-4" />
+                          <span>{relativeDate(c.lastActivityAt ?? c.lastDispositionAt ?? c.updatedAt)}</span>
+                        </div>
+                        <div className="flex items-center justify-end gap-2">
+                          <Link href={`/crm/contacts/${c.id}`} className={cn(crm.btnPrimary, "contacts-open-button")}>
+                            Open
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </Link>
+                          {canLiveWorkspace && !archived && (
+                            <Link href={`/crm/live-call?contactId=${encodeURIComponent(c.id)}`} className="contacts-menu-button" aria-label={`Open ${c.displayName} live workspace`}>
+                              <Activity className="h-4 w-4" />
+                            </Link>
                           )}
-                          <span className="inline-flex items-center gap-1">
-                            <UserRound className="h-3 w-3" aria-hidden />
-                            {assignedLabel(c.assignedTo)}
-                          </span>
+                          <Link href={`/crm/contacts/${c.id}`} className="contacts-menu-button" aria-label={`More options for ${c.displayName}`}>
+                            <MoreHorizontal className="h-4 w-4" />
+                          </Link>
                         </div>
                       </div>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2 sm:justify-end lg:shrink-0 lg:pl-2">
-                      <Link
-                        href={`/crm/contacts/${c.id}`}
-                        className={cn(crm.btnPrimary, "min-w-[5.5rem]")}
-                      >
-                        Open
-                        <ExternalLink className="h-3.5 w-3.5 opacity-80" aria-hidden />
-                      </Link>
-                      {canLiveWorkspace && !archived && (
-                        <Link
-                          href={`/crm/live-call?contactId=${encodeURIComponent(c.id)}`}
-                          className={cn(crm.btnSecondary, "min-w-[6.5rem]")}
-                        >
-                          <Radio className="h-3.5 w-3.5 text-crm-muted" aria-hidden />
-                          Workspace
-                        </Link>
-                      )}
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-          </CRMCard>
-        )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </CRMCard>
+          </div>
 
-        {!loading && !error && total > 0 && (canPrev || canNext) && (
+          <aside className="contacts-right-rail flex min-w-0 flex-col gap-3">
+            <RailCard title="Contact Insights" subtitle="Current page relationship mix" icon={<PieChart className="h-4 w-4" />}>
+              <div className="contacts-donut-wrap">
+                <div className="contacts-donut" style={{ "--engaged": `${engagementRate}%` } as React.CSSProperties}>
+                  <span>{engagementRate}%</span>
+                </div>
+                <div className="min-w-0 flex-1 space-y-2">
+                  {stageDistribution.slice(0, 4).map((item) => (
+                    <div key={item.key} className="contacts-legend-row">
+                      <span className={cn("contacts-legend-dot", stageTone(item.key))} />
+                      <span>{item.label}</span>
+                      <strong>{item.count}</strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </RailCard>
+
+            <RailCard title="Top Contact Sources" subtitle="Live availability segments" icon={<BarChart3 className="h-4 w-4" />}>
+              {[
+                { label: "Reachable by phone", value: reachableTotal, icon: <Phone className="h-3.5 w-3.5" /> },
+                { label: "Email ready", value: rows.length - summary.missingEmail, icon: <AtSign className="h-3.5 w-3.5" /> },
+                { label: "Assigned records", value: rows.filter((c) => !!c.assignedTo).length, icon: <UserCheck className="h-3.5 w-3.5" /> },
+              ].map((item) => (
+                <div key={item.label} className="contacts-source-row">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-crm-text">
+                    <span className="contacts-source-icon">{item.icon}</span>
+                    {item.label}
+                  </div>
+                  <span className="text-xs font-bold tabular-nums text-crm-muted">{progressPercent(item.value, rows.length)}%</span>
+                  <div className="contacts-progress-track">
+                    <span style={{ width: `${progressPercent(item.value, rows.length)}%` }} />
+                  </div>
+                </div>
+              ))}
+            </RailCard>
+
+            <RailCard title="Recent Activity" subtitle="Newest contact movement" icon={<Activity className="h-4 w-4" />}>
+              <div className="space-y-2">
+                {recentActivity.map((item) => (
+                  <Link key={item.id} href={`/crm/contacts/${item.id}`} className="contacts-activity-row">
+                    <span className="contacts-activity-icon"><ArrowUpRight className="h-3.5 w-3.5" /></span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold text-crm-text">{item.displayName}</span>
+                      <span className="block text-xs text-crm-muted">{relativeDate(item.lastActivityAt ?? item.lastDispositionAt ?? item.updatedAt)}</span>
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            </RailCard>
+          </aside>
+        </div>
+      )}
+
+      {!loading && !error && displayedRows.length > 0 && (
+        <div className="contacts-bottom-grid grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,28rem)]">
+          <CRMCard className={cn(crm.contactsPanel, "p-4 sm:p-5")}>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-base font-bold text-crm-text">Quick Actions</p>
+                <p className="mt-1 text-xs text-crm-muted">Operational shortcuts for the current contact set.</p>
+              </div>
+              <Sparkles className="h-5 w-5 text-crm-accent" />
+            </div>
+            <div className="contacts-quick-actions">
+              <button type="button" onClick={() => setShowAdd(true)} className="contacts-quick-action contacts-quick-blue"><UserPlus className="h-4 w-4" />Add Contact</button>
+              {canImport && <Link href="/crm/import" className="contacts-quick-action contacts-quick-violet"><FileUp className="h-4 w-4" />Import Contacts</Link>}
+              <Link href="/crm/tasks" className="contacts-quick-action contacts-quick-green"><CalendarClock className="h-4 w-4" />Create Task</Link>
+              <a href={firstEmail ? `mailto:${firstEmail}` : undefined} aria-disabled={!firstEmail} className={cn("contacts-quick-action contacts-quick-amber", !firstEmail && "pointer-events-none opacity-50")}><Send className="h-4 w-4" />Send Email</a>
+              <Link href="/crm/campaigns" className="contacts-quick-action contacts-quick-rose"><Megaphone className="h-4 w-4" />Start Campaign</Link>
+            </div>
+          </CRMCard>
+
+          <CRMCard className={cn(crm.contactsPanel, "p-4 sm:p-5")}>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-base font-bold text-crm-text">Popular Tags</p>
+                <p className="mt-1 text-xs text-crm-muted">Top tags found in this live result set.</p>
+              </div>
+              <Tag className="h-5 w-5 text-crm-accent" />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {pageTagOptions.length > 0 ? pageTagOptions.slice(0, 10).map(({ tag: tagItem, count }) => (
+                <button key={tagItem.id} type="button" onClick={() => setTagFilter(tagItem.id)} className={tagFilter === tagItem.id ? crm.filterPillActive : crm.filterPill}>
+                  {tagItem.name}
+                  <span className="ml-1 tabular-nums opacity-75">{count}</span>
+                </button>
+              )) : (
+                <span className="rounded-full border border-crm-border bg-crm-surface-2 px-3 py-1.5 text-xs font-medium text-crm-muted">No tags on this page</span>
+              )}
+              <button type="button" disabled className={cn(crm.filterPill, "cursor-not-allowed opacity-60")}>Add tag</button>
+            </div>
+          </CRMCard>
+        </div>
+      )}
+
+      {!loading && !error && total > 0 && (canPrev || canNext) && (
           <nav
             className={cn(crm.contactsPagination, "border-crm-border bg-crm-surface shadow-crm")}
             aria-label="Contacts pagination"
@@ -1003,7 +1177,7 @@ export default function CrmContactsPage() {
               </button>
             </div>
           </nav>
-        )}
+      )}
     </CRMPageShell>
   );
 }

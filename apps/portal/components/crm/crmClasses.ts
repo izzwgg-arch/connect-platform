@@ -16,7 +16,7 @@ export const crm = {
     "mx-auto w-full max-w-[1400px] px-4 py-5 sm:px-6 lg:px-8 flex flex-col gap-4 min-h-0",
   /** Phase 19D.1 — contacts index relationship command center */
   pageInnerContacts:
-    "mx-auto w-full max-w-[min(100%,1400px)] px-4 py-5 sm:px-6 lg:px-8 flex flex-col gap-4 min-h-0",
+    "crm-contacts-inner mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
   /** Phase 19C / 19C.1 — My Queue operational workbench (wide desk, 12-col). */
   pageInnerQueue:
     "crm-queue-inner mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
@@ -32,7 +32,7 @@ export const crm = {
   contactsWorkspace: "crm-contacts-workspace w-full min-h-0",
   contactsHeaderPanel: "contacts-header-panel",
   contactsPanel: "contacts-panel",
-  contactsKpiTile: "contacts-kpi-tile flex min-w-[7.5rem] flex-1 flex-col gap-2 rounded-crm border px-4 py-3 sm:min-w-0",
+  contactsKpiTile: "contacts-kpi-tile relative flex min-h-[7.75rem] min-w-0 flex-col gap-2 overflow-hidden rounded-crm-lg border px-4 py-3.5 transition-all duration-200 sm:min-w-0",
   contactsKpiIcon: "contacts-kpi-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-crm",
   contactsFilterBar: "contacts-filter-bar",
   contactsBulkBar: "contacts-bulk-bar mb-4 flex flex-wrap items-center gap-3 rounded-crm border px-4 py-3",
