@@ -20,6 +20,7 @@ export function DashboardKpiTile({
   trendTone,
   statusText = "Live",
   statusTone,
+  accent = "blue",
 }: {
   label: string;
   value: number | string;
@@ -32,6 +33,7 @@ export function DashboardKpiTile({
   trendTone?: "neutral" | "warn" | "danger" | "positive";
   statusText?: string;
   statusTone?: "neutral" | "syncing" | "warn" | "danger" | "positive";
+  accent?: "blue" | "violet" | "rose" | "green" | "cyan" | "amber";
 }) {
   const border =
     tone === "danger"
@@ -63,16 +65,22 @@ export function DashboardKpiTile({
             : cn(crm.statusDot, "bg-crm-muted/60");
 
   const inner = (
-    <div className={cn("relative z-[1] flex min-h-[6.25rem] flex-col gap-2 p-3.5", href && "cursor-pointer")}>
+    <div
+      className={cn(
+        "crm-dashboard-kpi relative z-[1] flex min-h-[7.25rem] flex-col gap-2.5 p-3.5",
+        `crm-dashboard-kpi-${accent}`,
+        href && "cursor-pointer",
+      )}
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <span className="block truncate text-[0.65rem] font-bold uppercase tracking-wider text-crm-muted">{label}</span>
-          <span className="mt-1 inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">
+          <span className="crm-dashboard-kpi-label block truncate text-[0.65rem] font-bold uppercase tracking-wider text-crm-muted">{label}</span>
+          <span className="crm-dashboard-kpi-status mt-1 inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">
             <span className={dotClass} />
             {statusText}
           </span>
         </div>
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface-2/60 text-crm-accent shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+        <span className="crm-dashboard-kpi-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface-2/60 text-crm-accent shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
           {icon}
         </span>
       </div>
@@ -81,10 +89,10 @@ export function DashboardKpiTile({
           <LoadingSkeleton rows={1} />
         </div>
       ) : (
-        <span className={cn("text-[1.65rem] font-bold tabular-nums leading-none tracking-tight", valueClass)}>{value}</span>
+        <span className={cn("crm-dashboard-kpi-value text-[1.65rem] font-bold tabular-nums leading-none tracking-tight", valueClass)}>{value}</span>
       )}
       {!loading && series && series.length > 1 ? (
-        <div className="mt-auto flex items-end justify-between gap-2">
+        <div className="crm-dashboard-kpi-footer mt-auto flex items-end justify-between gap-2">
           <Sparkline
             series={series}
             width={120}
@@ -99,7 +107,7 @@ export function DashboardKpiTile({
                 ? "var(--crm-success)"
                 : "var(--crm-accent)"
             }
-            ariaLabel={`${label} — current visual placeholder`}
+            ariaLabel={`${label} current trend`}
           />
           {trendText ? (
             <span
@@ -123,7 +131,7 @@ export function DashboardKpiTile({
   );
 
   return (
-    <CRMCard padding="none" className={cn(crm.opCard, crm.opCardHover, border)}>
+    <CRMCard padding="none" className={cn("crm-dashboard-kpi-card", crm.opCard, crm.opCardHover, border)}>
       <div className={crm.opCardGlow} />
       {href ? (
         <Link href={href} className="block no-underline text-inherit">

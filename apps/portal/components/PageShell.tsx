@@ -37,6 +37,7 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
   );
   const routeAllowed =
     !activeNavItem || isNavItemVisibleForUser(activeNavItem, can, backendJwtRole);
+  const isCrmDashboardRoute = pathname === "/crm/dashboard";
 
   useEffect(() => {
     if (!isMobile) setMobileNavOpen(false);
@@ -48,7 +49,7 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
   };
 
   return (
-    <div className="console-shell">
+    <div className={isCrmDashboardRoute ? "console-shell crm-dashboard-shell" : "console-shell"}>
       {/* Fixed header — always on top, never moves */}
       <Topbar title={titleFromPath(pathname)} onToggleNav={handleToggleNav} />
 

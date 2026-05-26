@@ -106,26 +106,43 @@ Prefer primitives + `crm.*` classes over one-off `gray-*` / `white` utilities on
 
 The CRM command center (`/crm/dashboard`) is a **live operational cockpit**, not a widget dump. Data from existing CRM APIs only — no demo series or fake realtime.
 
-### Layout (19B.2 — current)
+### Layout (19B.4 — CRM dashboard light mode)
 
-`crm.pageInnerWide` (`max-w-[1400px]`) — 8+4 column grid on large screens; stacked on tablet/mobile.
+`crm.pageInnerDashboard` (`max-w-[1480px]`) — warm, scoped light dashboard shell with an 8+4 column operations grid on large screens; stacked on tablet/mobile.
 
 | Zone | Width (lg) | Role |
 |------|------------|------|
-| KPI row | full | Five headline metrics — one primary home per metric |
-| Live CRM Operations | 8 cols | `LiveCrmOperationsPanel` — metric grid + campaigns + queue feed |
+| Greeting header | full | Cardless large type, live chip, real actions only |
+| KPI row | 8 cols | Six headline metrics — colorful icon wells, large numbers, one primary home per metric |
+| Live CRM Operations | 8 cols | `LiveCrmOperationsPanel` — hero gauge + current load snapshot + campaigns + queue feed |
+| Right rail | 4 cols | Starts beside the KPI row in light mode; reminders, activity, actions, shortcuts, imports |
 | Pipeline Snapshot | 4 of 8 (sub-grid) | `CRMCard` with 4 stat tiles (total, leads, mine, new today) |
 | Campaign Health | 4 of 8 (sub-grid) | `CRMCard` with campaign list |
+| Upcoming Reminders | 4 cols | Real callback/campaign/import signals only |
+| Recent Activity | 4 cols | Honest activity or compact standing-by state |
 | Action Required | 4 cols | `DashboardActionCard` list — callbacks + tasks merged |
 | Shortcuts | 4 cols | Compact `ShortcutGrid` |
 | Recent imports | 4 cols | Optional, only if `can_view_crm_import` and has data |
+
+### Light-mode dashboard system (19B.4)
+
+- Route scope: `PageShell` adds `.crm-dashboard-shell` only for `/crm/dashboard`; `CRMPageShell` adds `.crm-dashboard-workspace`. All reference-matching light CSS is under `:root[data-theme="light"]` plus these classes, so dark mode stays on the existing operational CRM identity.
+- Color system: warm cream page wash, soft blue/purple accents, restrained orange warmth, semantic green/warning/danger for status. Avoid sterile white panels and harsh gray borders.
+- Typography: larger greeting (`clamp()` hero title), stronger section titles, larger KPI numerals, uppercase metadata used only for compact labels.
+- Spacing: `crm.pageInnerDashboard` uses wider max-width, consistent 14-18px gaps, and responsive padding that tightens on mobile.
+- Cards: `crm-dashboard-kpi-card`, `crm-dashboard-panel`, and `crm-dashboard-ops-panel` use soft borders, 24-30px radii, warm elevated shadows, subtle hover lift, and scoped ambient gradients.
+- KPI styling: `DashboardKpiTile` accepts `accent` (`blue`, `violet`, `rose`, `green`, `cyan`, `amber`) to drive icon wells and glow while preserving the shared data component.
+- Light-mode layout: the right rail begins at the top beside the KPI strip. Dark mode uses scoped grid placement to keep the prior dashboard structure.
+- Sidebar/topbar styling: `.crm-dashboard-shell` refines selected nav, search, account controls, and shell surfaces only on the dashboard light route.
+- Theme switching: no separate data tree. Shared hooks/actions/data remain in the page; light-mode presentation is CSS-scoped, so route state and loaded data are preserved when toggling themes.
+- Responsiveness: KPI tiles collapse from 6 to 3 to 2 columns; the right rail becomes a two-column tablet grid and a single-column mobile stack; shortcuts collapse to one column on mobile.
 
 ### Patterns
 
 | Pattern | Component | Use |
 |---------|-----------|-----|
-| KPI strip | `DashboardKpiTile` | 5 tiles, one metric per tile, no duplicates |
-| Centerpiece | `LiveCrmOperationsPanel` | Queue pressure + campaign status + today metrics + queue feed |
+| KPI strip | `DashboardKpiTile` | 6 tiles, one metric per tile, no duplicates |
+| Centerpiece | `LiveCrmOperationsPanel` | Queue pressure + current load snapshot + campaign status + queue feed |
 | Stat snapshot | `PipelineStat` (inline) | Clean number tiles; replaces donut for 2-segment data |
 | Campaign list | `DashboardListRow` | Active/paused with member count |
 | Priority actions | `DashboardActionCard` | Callbacks + tasks merged into one list |
@@ -149,7 +166,7 @@ Chart colors live in `components/crm/charts/chartColors.ts` (aligned with `--crm
 
 - One metric has one primary home on the dashboard. Do not repeat the same stat in multiple widgets unless the second use adds different action context.
 - The Queue Pressure gauge is the preferred visual centerpiece of Live CRM Operations.
-- Micro charts (sparklines/mini bars) are allowed only when backed by real history or rendered as clearly neutral current‑load placeholders derived from the current value. They must be labeled/obvious as non-historical when placeholders are used.
+- Micro charts (sparklines/mini bars) are allowed only when backed by real history or rendered as clearly neutral current-load snapshots derived from the current value. They must be labeled as snapshots when not historical.
 - Donut charts are only for real segmented data (3+ meaningful segments). Do not use donuts for simple splits.
 - Empty states must be honest and useful — brief message + relevant link.
 - All charts and cards must remain theme‑aware for both dark (navy glass) and light (white/slate) modes.

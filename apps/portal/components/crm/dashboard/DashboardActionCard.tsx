@@ -33,12 +33,12 @@ export function DashboardActionCard({
     <Link
       href={href}
       className={cn(
-        "group flex items-center gap-3 rounded-crm border px-3 py-2.5 text-inherit no-underline transition-all duration-200 hover:-translate-y-px",
+        "crm-dashboard-action-card group flex items-center gap-3 rounded-crm border px-3 py-2.5 text-inherit no-underline transition-all duration-200 hover:-translate-y-px",
         shell,
       )}
     >
       <span className={dot} />
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface/60 text-crm-accent">{icon}</span>
+      <span className="crm-dashboard-action-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface/60 text-crm-accent">{icon}</span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-semibold text-crm-text">{label}</span>
         <span className="mt-0.5 block text-[10px] font-semibold uppercase tracking-wide text-crm-muted">Needs attention</span>
@@ -75,7 +75,7 @@ export function DashboardListRow({
     <Link
       href={href}
       className={cn(
-        "group flex items-center gap-2 rounded-crm border px-3 py-2 text-inherit no-underline transition-all duration-200 hover:-translate-y-px",
+        "crm-dashboard-list-row group flex items-center gap-2 rounded-crm border px-3 py-2 text-inherit no-underline transition-all duration-200 hover:-translate-y-px",
         urgent
           ? "border-crm-danger/30 bg-crm-danger/8 hover:bg-crm-danger/12"
           : "border-crm-border/65 bg-crm-surface-2/45 hover:border-crm-border hover:bg-crm-surface-2",

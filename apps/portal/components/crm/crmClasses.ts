@@ -7,6 +7,10 @@ export const crm = {
   pageInner: "mx-auto w-full max-w-6xl px-4 py-6 flex flex-col gap-4",
   /** Phase 19B — dashboard command center uses full workspace width. */
   pageInnerWide: "mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6 flex flex-col gap-5",
+  /** CRM dashboard light-mode workspace; dark mode continues using standard CRM tokens. */
+  dashboardWorkspace: "crm-dashboard-workspace w-full min-h-0",
+  pageInnerDashboard:
+    "crm-dashboard-inner mx-auto w-full max-w-[1480px] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
   /** Phase 19D — contact relationship workspace */
   pageInnerContact:
     "mx-auto w-full max-w-[1400px] px-4 py-5 sm:px-6 lg:px-8 flex flex-col gap-4 min-h-0",

@@ -22,6 +22,7 @@ import {
   LayoutDashboard,
   Radio,
   UserPlus,
+  ClipboardList,
 } from "lucide-react";
 import {
   CRMPageShell,
@@ -193,14 +194,14 @@ function ShortcutGrid({
 }) {
   if (items.length === 0) return null;
   return (
-    <div className="grid grid-cols-2 gap-1.5">
+    <div className="crm-dashboard-shortcuts grid grid-cols-2 gap-2">
       {items.map((a) => (
         <Link
           key={a.key}
           href={a.href}
-          className="group flex items-center gap-2 rounded-crm border border-crm-border/70 bg-crm-surface-2/45 px-2.5 py-2 text-xs font-medium text-crm-text no-underline transition-all duration-200 hover:-translate-y-px hover:border-crm-border hover:bg-crm-surface-2"
+          className="crm-dashboard-shortcut group flex items-center gap-2 rounded-crm border border-crm-border/70 bg-crm-surface-2/45 px-2.5 py-2 text-xs font-medium text-crm-text no-underline transition-all duration-200 hover:-translate-y-px hover:border-crm-border hover:bg-crm-surface-2"
         >
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface/60 text-crm-accent">{a.icon}</span>
+          <span className="crm-dashboard-shortcut-icon flex h-7 w-7 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface/60 text-crm-accent">{a.icon}</span>
           <span className="truncate">{a.label}</span>
         </Link>
       ))}
@@ -425,7 +426,45 @@ export default function CrmDashboardPage() {
 
   const contactStats = stats ?? { total: 0, leads: 0, mine: 0, recentlyAdded: 0 };
   const queueNumeric = Number.isFinite(Number(queueDepth)) ? Number(queueDepth) : 0;
-  const opsTone = overdueCallbacksCount > 0 ? "degraded" : dueTodayCallbacks > 0 ? "watch" : "nominal";
+  const reminders = [
+    dueTodayCallbacks > 0 && can("can_view_crm_queue")
+      ? {
+          key: "callbacks",
+          href: "/crm/queue?filter=due",
+          icon: <PhoneCall size={14} />,
+          title: "Follow up on callbacks",
+          meta: `${dueTodayCallbacks} due today`,
+          tone: "danger" as const,
+        }
+      : null,
+    activeCampaignsCount > 0 && can("can_view_crm_campaigns")
+      ? {
+          key: "campaigns",
+          href: "/crm/campaigns?status=ACTIVE",
+          icon: <Megaphone size={14} />,
+          title: "Review campaigns",
+          meta: `${activeCampaignsCount} active campaign${activeCampaignsCount === 1 ? "" : "s"}`,
+          tone: "accent" as const,
+        }
+      : null,
+    importsToday !== null && can("can_view_crm_import")
+      ? {
+          key: "imports",
+          href: "/crm/import",
+          icon: <Upload size={14} />,
+          title: "Import leads",
+          meta: importsToday > 0 ? `${importsToday} import${importsToday === 1 ? "" : "s"} today` : "No imports scheduled",
+          tone: "success" as const,
+        }
+      : null,
+  ].filter(Boolean) as {
+    key: string;
+    href: string;
+    icon: React.ReactNode;
+    title: string;
+    meta: string;
+    tone: "danger" | "accent" | "success";
+  }[];
 
   const shortcuts = [
     can("can_view_crm_queue")
@@ -457,54 +496,38 @@ export default function CrmDashboardPage() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <CRMPageShell innerClassName={cn(crm.pageInnerWide, "gap-4")}>
+    <CRMPageShell className={crm.dashboardWorkspace} innerClassName={crm.pageInnerDashboard}>
       <CRMPageHeader
         icon={<LayoutDashboard size={22} strokeWidth={1.75} />}
-        title="Command center"
-        subtitle={`${greet}, ${firstName} · communications operations workspace`}
+        title={`${greet}, ${firstName}`}
+        subtitle="Here's what's happening with your communications operations."
+        className="crm-dashboard-hero"
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <span className={cn(crm.chip, crm.chipActive)}>
               <Radio size={12} className="animate-pulse" /> Live
             </span>
+            {can("can_view_crm_reports") ? (
+              <Link href="/crm/reports?tab=operations" className={cn(crm.btnSecondary, "crm-dashboard-header-action text-xs")}>
+                <BarChart3 size={14} /> Operations Report
+              </Link>
+            ) : null}
+            {can("can_view_crm_settings") ? (
+              <Link href="/crm/settings" className={cn(crm.btnSecondary, "crm-dashboard-header-action text-xs")}>
+                <Settings size={14} /> Customize
+              </Link>
+            ) : null}
             <NotifHint data={alertData} loading={loading} />
           </div>
         }
       />
 
-      <div className="sticky top-2 z-20 rounded-crm-lg border border-crm-border/75 bg-crm-surface/90 px-3 py-2 shadow-[0_14px_40px_-24px_rgba(0,0,0,0.7)] backdrop-blur-md">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-crm-muted">
-            <span
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-semibold uppercase tracking-wide",
-                opsTone === "degraded"
-                  ? "border-crm-danger/35 bg-crm-danger/10 text-crm-danger"
-                  : opsTone === "watch"
-                    ? "border-crm-warning/35 bg-crm-warning/10 text-crm-warning"
-                    : "border-crm-success/30 bg-crm-success/10 text-crm-success",
-              )}
-            >
-              <span className={opsTone === "degraded" ? crm.statusDotDanger : opsTone === "watch" ? crm.statusDotWarn : crm.statusDotLive} />
-              {opsTone === "degraded" ? "Degraded" : opsTone === "watch" ? "Watch" : "Nominal"}
-            </span>
-            <span><strong className="font-semibold text-crm-text">{queueDepth}</strong> queue</span>
-            <span><strong className="font-semibold text-crm-text">{activeCampaignsCount}</strong> active campaigns</span>
-            <span><strong className="font-semibold text-crm-text">{taskStats?.myOpen ?? 0}</strong> open tasks</span>
-          </div>
-          <Link href="/crm/reports?tab=operations" className="text-xs font-semibold text-crm-accent hover:brightness-110">
-            Operations report →
-          </Link>
-        </div>
-      </div>
-
-      {/* Primary KPI row — each metric appears here only */}
-      <section>
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <p className={crm.label}>Today</p>
-          <span className="text-[11px] text-crm-muted">Status derived from current CRM APIs</span>
-        </div>
-        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
+      {/* Main dashboard grid — KPI and operations left, operational rail right */}
+      <div className="crm-dashboard-grid grid gap-4 lg:grid-cols-12">
+        <div className="crm-dashboard-main-stack flex flex-col gap-4 lg:col-span-8">
+          {/* Primary KPI row — each metric appears here only */}
+          <section className="crm-dashboard-kpi-section">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
           <DashboardKpiTile
             label="Active campaigns"
             value={activeCampaignsCount}
@@ -515,6 +538,7 @@ export default function CrmDashboardPage() {
             trendText="current"
             statusText={activeCampaignsCount > 0 ? "Running" : "Idle"}
             statusTone={activeCampaignsCount > 0 ? "positive" : "neutral"}
+            accent="blue"
           />
           <DashboardKpiTile
             label={isPlatformAdmin ? "Queue depth" : "My queue"}
@@ -526,6 +550,7 @@ export default function CrmDashboardPage() {
             trendText="current"
             statusText={queueNumeric > 0 ? "Live queue" : "Clear"}
             statusTone={queueNumeric > 0 ? "syncing" : "positive"}
+            accent="violet"
           />
           <DashboardKpiTile
             label="Overdue callbacks"
@@ -538,6 +563,7 @@ export default function CrmDashboardPage() {
             trendText="current"
             statusText={overdueCallbacksCount > 0 ? "Degraded" : "Healthy"}
             statusTone={overdueCallbacksCount > 0 ? "danger" : "positive"}
+            accent="rose"
           />
           <DashboardKpiTile
             label="Calls today"
@@ -549,6 +575,7 @@ export default function CrmDashboardPage() {
             trendText="current"
             statusText={Number(callsTodayCount) > 0 ? "Active" : "Quiet"}
             statusTone={Number(callsTodayCount) > 0 ? "positive" : "neutral"}
+            accent="green"
           />
           <DashboardKpiTile
             label="Contacts today"
@@ -561,15 +588,23 @@ export default function CrmDashboardPage() {
             trendText="current"
             statusText={contactsTodayCount > 0 ? "Growing" : "Stable"}
             statusTone={contactsTodayCount > 0 ? "positive" : "neutral"}
+            accent="cyan"
           />
-        </div>
-      </section>
-
-      {/* Main grid — 8+4 cols: wide operations panel + action column */}
-      <div className="grid gap-4 lg:grid-cols-12">
-
-        {/* Left — centerpiece + secondary cards */}
-        <div className="flex flex-col gap-4 lg:col-span-8">
+          <DashboardKpiTile
+            label="Tasks due"
+            value={taskDueCount}
+            href={can("can_view_crm_tasks") ? (taskDueCount > 0 ? "/crm/tasks?due=today" : "/crm/tasks") : undefined}
+            icon={<ClipboardList size={17} />}
+            tone={taskDueCount > 0 ? "warn" : "neutral"}
+            loading={loading}
+            series={Array.from({ length: 12 }, () => Number(taskDueCount) || 0)}
+            trendText="current"
+            statusText="Due today"
+            statusTone={taskDueCount > 0 ? "warn" : "neutral"}
+            accent="amber"
+          />
+            </div>
+          </section>
 
           {/* Live CRM Operations — focal centerpiece */}
           <LiveCrmOperationsPanel
@@ -591,7 +626,7 @@ export default function CrmDashboardPage() {
           <div className="grid gap-4 md:grid-cols-2">
 
             {/* Pipeline Snapshot — merges Contact Pipeline + Contact Growth */}
-            <CRMCard className={cn("p-5", crm.opCard, "border-crm-border/80")}>
+            <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border/80")}>
               <div className={crm.opCardGlow} />
               <div className="relative z-[1]">
               <DashboardSectionHeader
@@ -626,7 +661,7 @@ export default function CrmDashboardPage() {
 
             {/* Campaign Health — replaces Campaign Status donut + list */}
             {can("can_view_crm_campaigns") ? (
-              <CRMCard className={cn("p-5", crm.opCard, "border-crm-border/80")}>
+              <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border/80")}>
                 <div className={crm.opCardGlow} />
                 <div className="relative z-[1]">
                 <DashboardSectionHeader
@@ -673,13 +708,39 @@ export default function CrmDashboardPage() {
         </div>
 
         {/* Right — action column */}
-        <aside className="flex flex-col gap-4 lg:col-span-4">
+        <aside className="crm-dashboard-right-rail flex flex-col gap-4 lg:col-span-4">
+          <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border/80")}>
+            <div className={crm.opCardGlow} />
+            <div className="relative z-[1]">
+              <DashboardSectionHeader title="Upcoming reminders" action={can("can_view_crm_tasks") ? { label: "View all", href: "/crm/tasks" } : undefined} />
+              <div className="flex flex-col gap-2">
+                {reminders.length > 0 ? reminders.map((item) => (
+                  <Link
+                    key={item.key}
+                    href={item.href}
+                    className={cn("crm-dashboard-reminder group flex items-center gap-3 rounded-crm border px-3 py-2.5 text-inherit no-underline transition-all duration-200 hover:-translate-y-px", `crm-dashboard-reminder-${item.tone}`)}
+                  >
+                    <span className="crm-dashboard-reminder-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-crm border">{item.icon}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold text-crm-text">{item.title}</span>
+                      <span className="mt-0.5 block truncate text-xs text-crm-muted">{item.meta}</span>
+                    </span>
+                  </Link>
+                )) : (
+                  <div className="crm-dashboard-empty-soft rounded-crm border border-dashed border-crm-border/70 px-3 py-4">
+                    <p className="text-sm font-semibold text-crm-text">No reminders queued</p>
+                    <p className="mt-1 text-xs text-crm-muted">Callbacks, active campaigns, and import activity will surface here.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </CRMCard>
 
           {/* Recent Activity — timeline or honest empty */}
           <RecentActivityPanel items={[]} />
 
           {/* Action Required — merges Needs Attention + Tasks (no ring chart) */}
-          <CRMCard className={cn("p-5", crm.opCard, "border-crm-border/80")}>
+          <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border/80")}>
             <div className={crm.opCardGlow} />
             <div className="relative z-[1]">
             <DashboardSectionHeader title="Action required" action={{ label: "Tasks", href: "/crm/tasks" }} />
@@ -752,7 +813,7 @@ export default function CrmDashboardPage() {
 
           {/* Compact Shortcuts */}
           {shortcuts.length > 0 ? (
-            <CRMCard className={cn("p-5", crm.opCard, "border-crm-border/80")}>
+            <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border/80")}>
               <div className={crm.opCardGlow} />
               <div className="relative z-[1]">
               <DashboardSectionHeader title="Shortcuts" />
@@ -762,8 +823,8 @@ export default function CrmDashboardPage() {
           ) : null}
 
           {/* Recent imports — compact, sidebar-weight */}
-          {can("can_view_crm_import") && recentImports.length > 0 ? (
-            <CRMCard className={cn("p-5", crm.opCard, "border-crm-border/80")}>
+          {can("can_view_crm_import") ? (
+            <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border/80")}>
               <div className={crm.opCardGlow} />
               <div className="relative z-[1]">
               <DashboardSectionHeader
@@ -774,16 +835,23 @@ export default function CrmDashboardPage() {
                     : { label: "Import", href: "/crm/import" }
                 }
               />
-              <div className="flex flex-col gap-1.5">
-                {recentImports.map((b) => (
-                  <DashboardListRow
-                    key={b.id}
-                    title={b.fileName}
-                    meta={`${formatShortDate(b.createdAt)} · ${b.status.toLowerCase()} · ${b.processedRows}/${b.totalRows}`}
-                    href={`/crm/import?batch=${encodeURIComponent(b.id)}`}
-                  />
-                ))}
-              </div>
+              {recentImports.length > 0 ? (
+                <div className="flex flex-col gap-1.5">
+                  {recentImports.map((b) => (
+                    <DashboardListRow
+                      key={b.id}
+                      title={b.fileName}
+                      meta={`${formatShortDate(b.createdAt)} · ${b.status.toLowerCase()} · ${b.processedRows}/${b.totalRows}`}
+                      href={`/crm/import?batch=${encodeURIComponent(b.id)}`}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="crm-dashboard-empty-soft rounded-crm border border-dashed border-crm-border/70 px-3 py-4">
+                  <p className="text-sm font-semibold text-crm-text">No recent imports</p>
+                  <p className="mt-1 text-xs text-crm-muted">Completed import batches will appear here when available.</p>
+                </div>
+              )}
               </div>
             </CRMCard>
           ) : null}

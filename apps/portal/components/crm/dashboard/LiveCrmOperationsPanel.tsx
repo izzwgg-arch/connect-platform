@@ -73,13 +73,13 @@ function OpsMetric({
   const inner = (
     <div
       className={cn(
-        "flex min-h-[4.35rem] flex-col justify-between gap-1 rounded-crm border px-3 py-2.5 transition-all duration-200",
+        "crm-dashboard-ops-metric flex min-h-[4.35rem] flex-col justify-between gap-1 rounded-crm border px-3 py-2.5 transition-all duration-200",
         borderClass,
         href && "cursor-pointer hover:-translate-y-px hover:brightness-105",
       )}
     >
-      <span className="text-[10px] font-bold uppercase tracking-wider text-crm-muted">{label}</span>
-      <span className={cn("text-xl font-bold tabular-nums leading-tight", valueClass)}>{value}</span>
+      <span className="crm-dashboard-ops-metric-label text-[10px] font-bold uppercase tracking-wider text-crm-muted">{label}</span>
+      <span className={cn("crm-dashboard-ops-metric-value text-xl font-bold tabular-nums leading-tight", valueClass)}>{value}</span>
       {meta ? <span className="truncate text-[10px] font-medium text-crm-muted">{meta}</span> : null}
     </div>
   );
@@ -115,7 +115,7 @@ export function LiveCrmOperationsPanel({
   const queueStatus = overdueCallbacks > 0 ? "Degraded" : dueTodayCallbacks > 0 ? "Watch" : qNum > 0 ? "Live" : "Clear";
 
   return (
-    <div className={cn(crm.opCard, "border-crm-border/85")}>
+    <div className={cn("crm-dashboard-ops-panel", crm.opCard, "border-crm-border/85")}>
       {/* Ambient glow overlay */}
       <div className={crm.opCardGlow} />
 
@@ -123,11 +123,11 @@ export function LiveCrmOperationsPanel({
         {/* Header */}
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
-            <span className={cn(crm.iconBox, "h-8 w-8 shrink-0")}>
+            <span className={cn("crm-dashboard-ops-icon", crm.iconBox, "h-8 w-8 shrink-0")}>
               <Radio size={15} />
             </span>
             <div>
-              <h2 className="text-sm font-semibold tracking-tight text-crm-text">Live CRM Operations</h2>
+              <h2 className="crm-dashboard-section-title text-sm font-semibold tracking-tight text-crm-text">Live CRM Operations</h2>
               <p className="mt-0.5 text-[11px] text-crm-muted">Queue pressure, campaigns, and follow-up exceptions</p>
             </div>
           </div>
@@ -166,12 +166,12 @@ export function LiveCrmOperationsPanel({
           <LoadingSkeleton rows={4} />
         ) : (
           <>
-            {/* Centerpiece header: gauge + mini line (placeholder series from current value) */}
-            <div className="mb-4 grid gap-4 lg:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
-              <QueuePressureGauge value={qNum} className="justify-self-start" />
-              <div className={cn(crm.opInset, "flex min-w-0 flex-col justify-center px-3 py-2.5")}>
+            {/* Centerpiece header: gauge + live load snapshot from current queue state */}
+            <div className="crm-dashboard-ops-visual mb-4 grid gap-4 lg:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
+              <QueuePressureGauge value={qNum} className="crm-dashboard-gauge justify-self-start" />
+              <div className={cn("crm-dashboard-load-chart", crm.opInset, "flex min-w-0 flex-col justify-center px-3 py-2.5")}>
                 <div className="mb-1 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-crm-muted">
-                  <span>Current load visual</span>
+                  <span>Current load snapshot</span>
                   <span>{queueStatus}</span>
                 </div>
                 <Sparkline
@@ -180,14 +180,14 @@ export function LiveCrmOperationsPanel({
                   height={44}
                   stroke={1.6}
                   color="var(--crm-accent)"
-                  fill="transparent"
-                  ariaLabel="Queue depth visual — current-load placeholder"
+                  fill="color-mix(in srgb, var(--crm-accent) 10%, transparent)"
+                  ariaLabel="Queue depth current load snapshot"
                 />
               </div>
             </div>
 
             {/* Metric grid */}
-            <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="crm-dashboard-ops-metrics mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
               <OpsMetric
                 label="Due today"
                 value={dueTodayCallbacks}
@@ -227,7 +227,7 @@ export function LiveCrmOperationsPanel({
                     )}
                   </p>
                   {activeCampaigns.length === 0 ? (
-                    <p className="text-xs text-crm-muted">
+                    <p className="crm-dashboard-empty-soft rounded-crm border border-dashed border-crm-border/70 px-3 py-3 text-xs text-crm-muted">
                       No active campaigns ·{" "}
                       <Link href="/crm/campaigns" className="text-crm-accent hover:brightness-110">
                         Launch one →
@@ -239,7 +239,7 @@ export function LiveCrmOperationsPanel({
                         <Link
                           key={c.id}
                           href={`/crm/campaigns/${encodeURIComponent(c.id)}`}
-                          className="group flex items-center justify-between gap-2 rounded-crm border border-crm-border/55 bg-crm-surface-2/40 px-2.5 py-1.5 text-inherit no-underline transition-all duration-200 hover:-translate-y-px hover:border-crm-border hover:bg-crm-surface-2/70"
+                          className="crm-dashboard-live-row group flex items-center justify-between gap-2 rounded-crm border border-crm-border/55 bg-crm-surface-2/40 px-2.5 py-1.5 text-inherit no-underline transition-all duration-200 hover:-translate-y-px hover:border-crm-border hover:bg-crm-surface-2/70"
                         >
                           <span className="flex min-w-0 flex-1 items-center gap-1.5">
                             <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-crm-success" />
@@ -260,7 +260,7 @@ export function LiveCrmOperationsPanel({
                 <div>
                   <p className={cn(crm.label, "mb-2")}>Queue activity</p>
                   {!hasQueueItems ? (
-                    <p className="text-xs text-crm-muted">
+                    <p className="crm-dashboard-empty-soft rounded-crm border border-dashed border-crm-border/70 px-3 py-3 text-xs text-crm-muted">
                       Queue clear ·{" "}
                       <Link href="/crm/queue" className="text-crm-accent hover:brightness-110">
                         Open queue →
@@ -272,7 +272,7 @@ export function LiveCrmOperationsPanel({
                         <Link
                           key={`o-${m.id}`}
                           href="/crm/queue?filter=overdue"
-                          className="flex items-center gap-2 rounded-crm border border-crm-danger/25 bg-crm-danger/6 px-2.5 py-1.5 text-inherit no-underline transition-all duration-200 hover:-translate-y-px hover:bg-crm-danger/10"
+                          className="crm-dashboard-live-row flex items-center gap-2 rounded-crm border border-crm-danger/25 bg-crm-danger/6 px-2.5 py-1.5 text-inherit no-underline transition-all duration-200 hover:-translate-y-px hover:bg-crm-danger/10"
                         >
                           <AlertCircle size={11} className="shrink-0 text-crm-danger" />
                           <span className="min-w-0 flex-1">
@@ -289,7 +289,7 @@ export function LiveCrmOperationsPanel({
                         <Link
                           key={`d-${m.id}`}
                           href="/crm/queue?filter=due"
-                          className="flex items-center gap-2 rounded-crm border border-crm-warning/25 bg-crm-warning/6 px-2.5 py-1.5 text-inherit no-underline transition-all duration-200 hover:-translate-y-px hover:bg-crm-warning/10"
+                          className="crm-dashboard-live-row flex items-center gap-2 rounded-crm border border-crm-warning/25 bg-crm-warning/6 px-2.5 py-1.5 text-inherit no-underline transition-all duration-200 hover:-translate-y-px hover:bg-crm-warning/10"
                         >
                           <Clock size={11} className="shrink-0 text-crm-warning" />
                           <span className="min-w-0 flex-1">

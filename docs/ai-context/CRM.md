@@ -17,6 +17,19 @@ Scope: portal CRM UI/data-flow guardrails. Telephony, billing, workers, database
 - Keep density practical: compact grids, sticky summary bars when useful, status dots, stat pills, and hover lift.
 - Dark mode must remain first-class. Avoid `bg-white`, `bg-gray-*`, and ad hoc light-only surfaces on CRM routes.
 
+## CRM Dashboard Light Mode
+
+- `/crm/dashboard` has a dedicated light-mode presentation scoped through `.crm-dashboard-shell` and `.crm-dashboard-workspace`; do not reuse these classes on other CRM routes unless the whole route adopts the same light system.
+- Shared data, hooks, permissions, links, and derived metrics stay in `apps/portal/app/(platform)/crm/dashboard/page.tsx`. Light mode is presentation-only CSS plus small component presentation hooks.
+- Light tokens use warm page backgrounds, soft elevated white/cream panels, blue and purple accents, semantic KPI color wells, 24-30px card radii, and modern soft shadows.
+- Typography hierarchy: large cardless greeting header, compact but readable section titles, large tabular KPI values, and short uppercase metadata labels.
+- KPI cards use `DashboardKpiTile` with the `accent` prop. Add new accent variants only in `globals.css` and keep the tile data-driven.
+- Sidebar and topbar refinements are route-scoped by `.crm-dashboard-shell` so the rest of the portal shell is not visually changed.
+- Right-side panels should be real operational groups: reminders, recent activity, action required, shortcuts, and optional import status. No fake reminders, demo data, or inactive buttons.
+- In light mode, the right rail starts beside the KPI strip to match the dashboard reference. Keep dark-mode grid placement scoped so the existing dark dashboard posture is not unintentionally rearranged.
+- Responsiveness: preserve the 8+4 desktop grid, collapse the right rail to two columns on tablet, and stack everything on mobile with no fixed-width overflow.
+- Theme switching must preserve route state and loaded data. Do not branch into separate fetching trees for light vs. dark.
+
 ## Verification
 
 - For CRM portal UI changes, run portal typecheck and portal build.
