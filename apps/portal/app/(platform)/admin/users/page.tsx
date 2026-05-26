@@ -142,10 +142,11 @@ export default function AdminUsersPage() {
   // Super admins default to "ALL" so they see every customer tenant at once.
   const [selectedTenantId, setSelectedTenantId] = useState<string>(() => isSuper ? "ALL" : contextTenantId);
 
-  // Canonical tenant options — refreshes automatically when PBX sync fires
-  // cc-pbx-tenants-refreshed event. Connect-only: filter and create form both
-  // require a real Connect tenant row (users cannot be created for vpbx: tenants).
-  const { options: tenantOptions } = useTenantOptions({ connectOnly: true });
+  // Canonical tenant options for the filter dropdown — includes PBX-only tenants
+  // so a newly synced PBX tenant appears immediately without a page refresh.
+  // connectOnly is NOT set here because filtering by a tenant is read-only;
+  // the user creation modal uses connectOnly:true separately.
+  const { options: tenantOptions } = useTenantOptions();
 
   const [data, setData] = useState<UsersResponse | null>(null);
   const [selected, setSelected] = useState<AdminUser | null>(null);
