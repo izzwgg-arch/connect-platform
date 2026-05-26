@@ -272,13 +272,13 @@ export const crm = {
 
   /** Phase 19H — task command desk (wide, two-column) */
   pageInnerTasks:
-    "mx-auto w-full max-w-[min(100%,1500px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-3 min-h-0",
+    "mx-auto w-full max-w-[min(100%,1540px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-4 min-h-0",
   /** Phase 19H — task command desk; theme tokens via globals `.crm-tasks-workspace` */
   tasksWorkspace: "crm-tasks-workspace w-full min-h-0",
-  tasksGrid: "grid gap-4 lg:grid-cols-12 lg:items-start",
-  tasksMainCol: "lg:col-span-8 xl:col-span-9 flex flex-col gap-3 min-w-0",
+  tasksGrid: "grid gap-4 xl:grid-cols-12 xl:items-start",
+  tasksMainCol: "xl:col-span-9 flex flex-col gap-3 min-w-0",
   tasksSideCol:
-    "lg:col-span-4 xl:col-span-3 flex flex-col gap-3 min-w-0 lg:min-w-[16rem]",
+    "xl:col-span-3 flex flex-col gap-3 min-w-0 xl:min-w-[18rem]",
 
   /** Priority rail on task cards */
   taskRailLow: "w-1 shrink-0 rounded-l-crm-lg bg-crm-border/80",

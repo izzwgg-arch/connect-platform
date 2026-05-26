@@ -1,9 +1,7 @@
 "use client";
 
-import Link from "next/link";
-import { AlertCircle, CheckCircle2, Clock, User } from "lucide-react";
+import { AlertCircle, CalendarClock, CheckCircle2, Clock, Filter, ListChecks, SortAsc } from "lucide-react";
 import { cn } from "../cn";
-import { crm } from "../crmClasses";
 
 export type TaskStats = {
   myOpen: number;
@@ -11,9 +9,12 @@ export type TaskStats = {
   overdue: number;
   myTasksOverdue: number;
   myTasksDueToday: number;
+  scheduled?: number;
+  allTasks?: number;
+  completed?: number;
 };
 
-type Tab = "mine" | "today" | "overdue" | "all";
+export type TaskTab = "all" | "today" | "overdue" | "completed";
 
 export function TaskKpiStrip({
   stats,
@@ -23,86 +24,115 @@ export function TaskKpiStrip({
 }: {
   stats: TaskStats | null;
   loading: boolean;
-  activeTab: Tab;
-  onTabChange: (tab: Tab) => void;
+  activeTab: TaskTab;
+  onTabChange: (tab: TaskTab) => void;
 }) {
   const tiles: Array<{
-    id: Tab;
+    id: TaskTab | "scheduled";
     label: string;
     value: number | null;
     icon: React.ReactNode;
-    tileClass: string;
-    valueClass: string;
-    href?: string;
+    tone: "danger" | "warning" | "scheduled" | "neutral" | "success";
+    clickable?: boolean;
   }> = [
     {
       id: "overdue",
       label: "Overdue",
       value: stats?.overdue ?? null,
-      icon: <AlertCircle className="h-4 w-4" />,
-      tileClass: crm.taskKpiTileDanger,
-      valueClass: (stats?.overdue ?? 0) > 0 ? "text-crm-danger" : "text-crm-text",
+      icon: <AlertCircle className="h-5 w-5" />,
+      tone: "danger",
+      clickable: true,
     },
     {
       id: "today",
-      label: "Due today",
+      label: "Due Today",
       value: stats?.dueToday ?? null,
-      icon: <Clock className="h-4 w-4" />,
-      tileClass: (stats?.dueToday ?? 0) > 0 ? crm.taskKpiTileWarning : "",
-      valueClass: (stats?.dueToday ?? 0) > 0 ? "text-crm-warning" : "text-crm-text",
+      icon: <Clock className="h-5 w-5" />,
+      tone: "warning",
+      clickable: true,
     },
     {
-      id: "mine",
-      label: "Assigned to me",
-      value: stats?.myOpen ?? null,
-      icon: <User className="h-4 w-4" />,
-      tileClass: "",
-      valueClass: "text-crm-text",
+      id: "scheduled",
+      label: "Scheduled",
+      value: stats?.scheduled ?? null,
+      icon: <CalendarClock className="h-5 w-5" />,
+      tone: "scheduled",
     },
     {
       id: "all",
-      label: "All open",
-      value: null,
-      icon: <CheckCircle2 className="h-4 w-4" />,
-      tileClass: "",
-      valueClass: "text-crm-muted",
+      label: "All Tasks",
+      value: stats?.allTasks ?? null,
+      icon: <ListChecks className="h-5 w-5" />,
+      tone: "neutral",
+      clickable: true,
+    },
+    {
+      id: "completed",
+      label: "Completed",
+      value: stats?.completed ?? null,
+      icon: <CheckCircle2 className="h-5 w-5" />,
+      tone: "success",
+      clickable: true,
     },
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+    <div className="tasks-kpi-grid grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
       {tiles.map((tile) => {
         const isActive = activeTab === tile.id;
+        const valueClass =
+          tile.tone === "danger"
+            ? "text-crm-danger"
+            : tile.tone === "warning"
+              ? "text-crm-warning"
+              : tile.tone === "success"
+                ? "text-crm-success"
+                : "text-crm-text";
+        const iconClass =
+          tile.tone === "danger"
+            ? "tasks-icon-danger"
+            : tile.tone === "warning"
+              ? "tasks-icon-warning"
+              : tile.tone === "success"
+                ? "tasks-icon-success"
+                : tile.tone === "scheduled"
+                  ? "tasks-icon-scheduled"
+                  : "tasks-icon-neutral";
+        const content = (
+          <>
+            <div className="flex min-w-0 flex-col gap-2">
+              <span className="text-[11px] font-semibold leading-none text-crm-muted">{tile.label}</span>
+              {loading || tile.value === null ? (
+                <span className="mt-1 h-7 w-12 animate-pulse rounded bg-crm-surface-2" />
+              ) : (
+                <span className={cn("text-3xl font-semibold leading-none tracking-tight tabular-nums", valueClass)}>
+                  {tile.value}
+                </span>
+              )}
+            </div>
+            <span className={cn("tasks-kpi-icon", iconClass)}>{tile.icon}</span>
+          </>
+        );
+
+        if (!tile.clickable) {
+          return (
+            <div key={tile.id} className="tasks-kpi-card">
+              {content}
+            </div>
+          );
+        }
+
         return (
           <button
             key={tile.id}
             type="button"
-            onClick={() => onTabChange(tile.id)}
+            onClick={() => onTabChange(tile.id as TaskTab)}
             className={cn(
-              crm.taskKpiTile,
-              tile.tileClass,
-              isActive &&
-                "ring-2 ring-crm-accent/40 border-crm-accent/40 bg-crm-surface-2/70",
-              "cursor-pointer text-left",
+              "tasks-kpi-card cursor-pointer text-left",
+              isActive && "tasks-kpi-card-active",
             )}
           >
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-crm-muted">
-                {tile.label}
-              </span>
-              <span className={cn("opacity-60", tile.valueClass)}>{tile.icon}</span>
-            </div>
-            {loading ? (
-              <div className="mt-1 h-7 w-10 animate-pulse rounded bg-crm-surface-2" />
-            ) : tile.value !== null ? (
-              <span className={cn("mt-1 text-2xl font-bold tabular-nums leading-none", tile.valueClass)}>
-                {tile.value}
-              </span>
-            ) : (
-              <span className="mt-1 text-2xl font-bold tabular-nums leading-none text-crm-muted opacity-50">
-                —
-              </span>
-            )}
+            {content}
           </button>
         );
       })}
@@ -110,35 +140,34 @@ export function TaskKpiStrip({
   );
 }
 
-/** Compact tab row with urgency counts */
+/** Mockup-style filter bar with real tab/filter behavior. */
 export function TaskTabRow({
   activeTab,
   onTabChange,
   stats,
   total,
   loading,
+  assignedToMe,
+  onAssignedToMeChange,
 }: {
-  activeTab: Tab;
-  onTabChange: (tab: Tab) => void;
+  activeTab: TaskTab;
+  onTabChange: (tab: TaskTab) => void;
   stats: TaskStats | null;
   total: number;
   loading: boolean;
+  assignedToMe: boolean;
+  onAssignedToMeChange: (next: boolean) => void;
 }) {
   const tabs: Array<{
-    id: Tab;
+    id: TaskTab;
     label: string;
     count?: number;
     urgent?: boolean;
   }> = [
-    {
-      id: "mine",
-      label: "My tasks",
-      count: stats?.myOpen,
-      urgent: (stats?.myTasksOverdue ?? 0) > 0,
-    },
+    { id: "all", label: "All Tasks", count: stats?.allTasks },
     {
       id: "today",
-      label: "Due today",
+      label: "Due Today",
       count: stats?.dueToday,
       urgent: (stats?.dueToday ?? 0) > 0,
     },
@@ -148,48 +177,45 @@ export function TaskTabRow({
       count: stats?.overdue,
       urgent: (stats?.overdue ?? 0) > 0,
     },
-    { id: "all", label: "All" },
+    { id: "completed", label: "Completed", count: stats?.completed },
   ];
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {tabs.map((tab) => {
-        const isActive = activeTab === tab.id;
-        const isUrgent = !isActive && tab.urgent;
-        return (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={() => onTabChange(tab.id)}
-            className={cn(
-              isActive
-                ? crm.taskTabPillActive
-                : isUrgent
-                  ? crm.taskTabPillDanger
-                  : crm.taskTabPill,
-            )}
-          >
-            {tab.label}
-            {tab.count !== undefined && !loading && (
-              <span
-                className={cn(
-                  "rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums leading-none",
-                  isActive
-                    ? "bg-crm-accent/20 text-crm-accent"
-                    : isUrgent
-                      ? "bg-crm-danger/20 text-crm-danger"
-                      : "bg-crm-surface-2 text-crm-muted",
-                )}
-              >
-                {tab.count}
-              </span>
-            )}
-          </button>
-        );
-      })}
-      <span className="ml-auto text-xs text-crm-muted tabular-nums">
-        {loading ? "…" : `${total} task${total !== 1 ? "s" : ""}`}
-      </span>
+    <div className="tasks-filter-bar flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-wrap items-center gap-2">
+        {tabs.map((tab) => {
+          const isActive = activeTab === tab.id;
+          const isUrgent = !isActive && tab.urgent;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => onTabChange(tab.id)}
+              className={cn("tasks-filter-pill", isActive && "tasks-filter-pill-active", isUrgent && "tasks-filter-pill-urgent")}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          onClick={() => onAssignedToMeChange(!assignedToMe)}
+          className={cn("tasks-filter-icon-button", assignedToMe && "tasks-filter-icon-button-active")}
+          title={assignedToMe ? "Showing tasks assigned to me" : "Filter to tasks assigned to me"}
+        >
+          <Filter className="h-4 w-4" />
+          <span className="sr-only">Assigned to me filter</span>
+        </button>
+      </div>
+      <div className="flex items-center justify-between gap-3 sm:justify-end">
+        <span className="text-xs font-medium text-crm-muted tabular-nums">
+          {loading ? "Loading tasks..." : `${total} shown`}
+        </span>
+        <div className="tasks-sort-pill" aria-label="Sorted by due date">
+          <SortAsc className="h-3.5 w-3.5" />
+          <span>Sort: Due Date</span>
+        </div>
+      </div>
     </div>
   );
 }

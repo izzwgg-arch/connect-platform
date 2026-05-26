@@ -2,60 +2,69 @@
 
 import Link from "next/link";
 import {
-  AlertTriangle,
   ArrowRight,
-  CheckSquare,
-  Megaphone,
-  PhoneCall,
-  Users,
-  Zap,
+  CalendarDays,
+  ChevronRight,
+  Clock,
+  FileText,
+  ListPlus,
+  Plus,
+  Search,
 } from "lucide-react";
 import { cn } from "../cn";
-import { crm } from "../crmClasses";
-import { CRMCard } from "../CRMCard";
-import { CRMRingMetric } from "../charts/CRMRingMetric";
 import type { TaskStats } from "./TaskKpiStrip";
+import type { CrmTask } from "./TaskCard";
+import { getTaskDueInfo } from "./TaskCard";
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function SideSection({
+function SidebarCard({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <section className={cn("tasks-sidebar-card", className)}>
+      {children}
+    </section>
+  );
+}
+
+function SidebarHeader({
   title,
-  children,
-  className,
+  action,
 }: {
   title: string;
-  children: React.ReactNode;
-  className?: string;
+  action?: React.ReactNode;
 }) {
   return (
-    <div className={cn("flex flex-col gap-2", className)}>
-      <p className={crm.label}>{title}</p>
-      {children}
+    <div className="mb-3 flex items-center justify-between gap-3">
+      <h3 className="text-xs font-bold uppercase tracking-[0.14em] text-crm-text">{title}</h3>
+      {action}
     </div>
   );
 }
 
-function SideMetric({
+function LegendRow({
   label,
   value,
   tone,
 }: {
   label: string;
   value: number;
-  tone?: "danger" | "warning" | "neutral";
+  tone: "danger" | "warning" | "scheduled" | "success";
 }) {
-  const valueClass =
+  const dotClass =
     tone === "danger"
-      ? "text-crm-danger"
+      ? "bg-crm-danger"
       : tone === "warning"
-        ? "text-crm-warning"
-        : "text-crm-text";
+        ? "bg-crm-warning"
+        : tone === "success"
+          ? "bg-crm-success"
+          : "bg-crm-accent";
   return (
-    <div className={cn(crm.metricTile, "min-h-[3.25rem]")}>
-      <p className="text-[10px] font-medium uppercase tracking-wide text-crm-muted">{label}</p>
-      <p className={cn("mt-0.5 text-lg font-bold tabular-nums leading-none", valueClass)}>
-        {value}
-      </p>
+    <div className="flex items-center justify-between gap-3 text-xs">
+      <span className="flex items-center gap-2 text-crm-muted">
+        <span className={cn("h-2 w-2 rounded-full", dotClass)} />
+        {label}
+      </span>
+      <span className="font-semibold tabular-nums text-crm-text">{value}</span>
     </div>
   );
 }
@@ -65,133 +74,107 @@ function SideMetric({
 export function TaskSidebar({
   stats,
   statsLoading,
+  upcomingTasks,
+  onCreateTask,
 }: {
   stats: TaskStats | null;
   statsLoading: boolean;
+  upcomingTasks: CrmTask[];
+  onCreateTask: () => void;
 }) {
   const overdue = stats?.overdue ?? 0;
-  const myOpen = stats?.myOpen ?? 0;
-  const myOverdue = stats?.myTasksOverdue ?? 0;
-  const myDueToday = stats?.myTasksDueToday ?? 0;
   const dueToday = stats?.dueToday ?? 0;
-
-  // Ring: overdue vs. open (my tasks urgency pressure)
-  const ringTotal = Math.max(myOpen, 1);
-  const ringOverdue = Math.min(myOverdue, ringTotal);
+  const scheduled = stats?.scheduled ?? 0;
+  const completed = stats?.completed ?? 0;
+  const total = Math.max(stats?.allTasks ?? 0, 0);
+  const completePct = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const donutStyle = {
+    background: `conic-gradient(var(--crm-success) 0 ${completePct}%, var(--crm-danger) ${completePct}% ${completePct + (total ? Math.round((overdue / total) * 100) : 0)}%, var(--crm-warning) 0 ${completePct + (total ? Math.round(((overdue + dueToday) / total) * 100) : 0)}%, var(--crm-accent) 0 100%)`,
+  };
 
   return (
-    <CRMCard padding="md" className={cn(crm.sidebarCard, "flex flex-col gap-4")}>
-      {/* Urgency ring */}
-      {!statsLoading && myOpen > 0 && (
-        <SideSection title="My task urgency">
-          <CRMRingMetric
-            value={ringOverdue}
-            max={ringTotal}
-            size={72}
-            stroke={8}
-            label={`${myOpen} open`}
-            sublabel={
-              myOverdue > 0
-                ? `${myOverdue} overdue`
-                : myDueToday > 0
-                  ? `${myDueToday} due today`
-                  : "on track"
-            }
-            color={
-              myOverdue > 0
-                ? "var(--crm-danger)"
-                : myDueToday > 0
-                  ? "var(--crm-warning)"
-                  : "var(--crm-accent)"
-            }
-          />
-        </SideSection>
-      )}
-
-      {/* Follow-up pressure */}
-      <SideSection title="Workload snapshot">
-        {statsLoading ? (
-          <p className={crm.muted}>Loading…</p>
+    <div className="flex flex-col gap-4">
+      <SidebarCard>
+        <SidebarHeader title="Upcoming Tasks" />
+        {upcomingTasks.length > 0 ? (
+          <div className="flex flex-col gap-3">
+            {upcomingTasks.slice(0, 3).map((task) => {
+              const due = getTaskDueInfo(task.dueAt);
+              return (
+                <Link key={task.id} href={`/crm/contacts/${task.contactId}`} className="tasks-upcoming-row">
+                  <span className={cn("tasks-upcoming-icon", task.priority === "URGENT" || task.priority === "HIGH" ? "text-crm-warning" : "text-crm-accent")}>
+                    <Clock className="h-4 w-4" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold text-crm-text">{task.title}</span>
+                    <span className="block truncate text-xs text-crm-muted">
+                      {task.contact?.displayName ?? "Contact"} · {due?.timeLabel ?? "Anytime"}
+                    </span>
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
         ) : (
-          <div className="grid grid-cols-2 gap-2">
-            <SideMetric
-              label="Overdue"
-              value={overdue}
-              tone={overdue > 0 ? "danger" : "neutral"}
-            />
-            <SideMetric
-              label="Due today"
-              value={dueToday}
-              tone={dueToday > 0 ? "warning" : "neutral"}
-            />
+          <div className="rounded-crm border border-dashed border-crm-border px-4 py-5 text-center">
+            <CalendarDays className="mx-auto mb-2 h-7 w-7 text-crm-muted" />
+            <p className="text-sm font-semibold text-crm-text">No upcoming tasks</p>
+            <p className="mt-1 text-xs leading-5 text-crm-muted">Scheduled follow-ups will appear here.</p>
           </div>
         )}
-      </SideSection>
+      </SidebarCard>
 
-      {/* Urgency action shortcuts */}
-      {!statsLoading && (overdue > 0 || dueToday > 0) && (
-        <SideSection title="Quick focus">
-          {overdue > 0 && (
-            <Link
-              href="/crm/tasks?due=overdue"
-              className={cn(crm.btnDanger, "w-full justify-between text-xs")}
-            >
-              <span className="flex items-center gap-1.5">
-                <AlertTriangle className="h-3.5 w-3.5" />
-                {overdue} overdue task{overdue !== 1 ? "s" : ""}
-              </span>
-              <ArrowRight className="h-3.5 w-3.5 opacity-70" />
-            </Link>
-          )}
-          {dueToday > 0 && (
-            <Link
-              href="/crm/tasks?due=today"
-              className={cn(
-                crm.btnSecondary,
-                "w-full justify-between text-xs border-crm-warning/35 text-crm-warning hover:bg-crm-warning/10",
-              )}
-            >
-              <span className="flex items-center gap-1.5">
-                <CheckSquare className="h-3.5 w-3.5" />
-                {dueToday} due today
-              </span>
-              <ArrowRight className="h-3.5 w-3.5 opacity-70" />
-            </Link>
-          )}
-        </SideSection>
-      )}
+      <SidebarCard>
+        <SidebarHeader title="Task Summary" />
+        {statsLoading ? (
+          <div className="h-36 animate-pulse rounded-crm bg-crm-surface-2" />
+        ) : (
+          <div className="flex items-center gap-5">
+            <div className="tasks-summary-donut" style={donutStyle}>
+              <div className="tasks-summary-donut-inner">
+                <span className="text-2xl font-semibold tabular-nums text-crm-text">{total}</span>
+                <span className="text-[10px] font-medium text-crm-muted">Total Tasks</span>
+              </div>
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col gap-2.5">
+              <LegendRow label="Overdue" value={overdue} tone="danger" />
+              <LegendRow label="Due Today" value={dueToday} tone="warning" />
+              <LegendRow label="Scheduled" value={scheduled} tone="scheduled" />
+              <LegendRow label="Completed" value={completed} tone="success" />
+            </div>
+          </div>
+        )}
+        <Link href="/crm/reports" className="tasks-sidebar-link mt-4 justify-center">
+          View full report
+          <ArrowRight className="h-3.5 w-3.5" />
+        </Link>
+      </SidebarCard>
 
-      {/* Workspace shortcuts */}
-      <SideSection title="Workspace links" className="mt-auto border-t border-crm-border/60 pt-3">
-        <Link
-          href="/crm/queue"
-          className={cn(crm.btnGhost, "w-full justify-start px-2 text-xs")}
-        >
-          <PhoneCall className="h-3.5 w-3.5 shrink-0 text-crm-accent" />
-          My queue
-        </Link>
-        <Link
-          href="/crm/campaigns?status=ACTIVE"
-          className={cn(crm.btnGhost, "w-full justify-start px-2 text-xs")}
-        >
-          <Megaphone className="h-3.5 w-3.5 shrink-0 text-crm-accent" />
-          Active campaigns
-        </Link>
-        <Link
-          href="/crm/contacts"
-          className={cn(crm.btnGhost, "w-full justify-start px-2 text-xs")}
-        >
-          <Users className="h-3.5 w-3.5 shrink-0 text-crm-accent" />
-          Contacts
-        </Link>
-        <Link
-          href="/crm/queue?mode=power"
-          className={cn(crm.btnGhost, "w-full justify-start px-2 text-xs")}
-        >
-          <Zap className="h-3.5 w-3.5 shrink-0 text-crm-accent" />
-          Power session
-        </Link>
-      </SideSection>
-    </CRMCard>
+      <SidebarCard>
+        <SidebarHeader title="Quick Actions" />
+        <div className="flex flex-col divide-y divide-crm-border/55">
+          <button type="button" onClick={onCreateTask} className="tasks-quick-action">
+            <Plus className="h-4 w-4" />
+            <span>Create New Task</span>
+            <ChevronRight className="ml-auto h-4 w-4" />
+          </button>
+          <button type="button" onClick={onCreateTask} className="tasks-quick-action">
+            <ListPlus className="h-4 w-4" />
+            <span>Schedule Follow-up</span>
+            <ChevronRight className="ml-auto h-4 w-4" />
+          </button>
+          <Link href="/crm/contacts" className="tasks-quick-action">
+            <Search className="h-4 w-4" />
+            <span>Add from Contact</span>
+            <ChevronRight className="ml-auto h-4 w-4" />
+          </Link>
+          <span className="tasks-quick-action tasks-quick-action-disabled" aria-disabled="true">
+            <FileText className="h-4 w-4" />
+            <span>Task Templates</span>
+            <span className="ml-auto text-[10px] font-semibold uppercase tracking-wide">No route</span>
+          </span>
+        </div>
+      </SidebarCard>
+    </div>
   );
 }
