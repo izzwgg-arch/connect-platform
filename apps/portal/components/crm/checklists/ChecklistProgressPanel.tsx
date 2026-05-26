@@ -3,10 +3,15 @@
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronRight,
   ClipboardCheck,
   ExternalLink,
+  Layers,
   ListChecks,
+  Plus,
+  Sparkles,
 } from "lucide-react";
+import Link from "next/link";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
 
@@ -20,11 +25,17 @@ type Checklist = {
   id: string;
   name: string;
   isActive: boolean;
+  updatedAt?: string;
   items: ChecklistItem[];
 };
 
 type Props = {
   checklist: Checklist | null;
+  checklists: Checklist[];
+  avgRequiredPct: number;
+  liveReadyCount: number;
+  onNewBlank: () => void;
+  onBrowseTemplates: () => void;
 };
 
 type ReadinessStatus = {
@@ -148,165 +159,196 @@ function StatRow({
   );
 }
 
-export function ChecklistProgressPanel({ checklist }: Props) {
-  if (!checklist) {
-    return (
-      <div className={cn(crm.checklistPanelSupport, crm.checklistProgressCard)}>
-        <span className={crm.label}>Overall progress</span>
-        <div
-          className={cn(
-            crm.emptyWrap,
-            cn(crm.checklistInsetSurface, "mt-3 border-crm-border/40 py-8")
-          )}
-        >
-          <ClipboardCheck
-            size={22}
-            className="mx-auto mb-2 text-crm-muted/40"
-          />
-          <p className="text-[11px] text-crm-muted">
-            Select a checklist to see structure and readiness
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  const total = checklist.items.length;
-  const required = checklist.items.filter((i) => i.required);
-  const optional = checklist.items.filter((i) => !i.required);
-  const requiredCount = required.length;
-  const optionalCount = optional.length;
+export function ChecklistProgressPanel({
+  checklist,
+  checklists,
+  avgRequiredPct,
+  liveReadyCount,
+  onNewBlank,
+  onBrowseTemplates,
+}: Props) {
+  const active = checklists.filter((item) => item.isActive);
+  const selectedTotal = checklist?.items.length ?? 0;
+  const selectedRequired = checklist?.items.filter((item) => item.required) ?? [];
+  const selectedRequiredCount = selectedRequired.length;
+  const selectedOptionalCount = Math.max(0, selectedTotal - selectedRequiredCount);
   const coveragePct =
-    total > 0 ? Math.round((requiredCount / total) * 100) : 0;
-  const status = readinessStatus(checklist);
+    checklist && selectedTotal > 0
+      ? Math.round((selectedRequiredCount / selectedTotal) * 100)
+      : avgRequiredPct;
+  const status = checklist ? readinessStatus(checklist) : null;
+  const recent = [...checklists]
+    .sort(
+      (a, b) =>
+        new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime()
+    )
+    .slice(0, 3);
+
+  const quality = [
+    {
+      label: coveragePct >= 75 ? "High completion rate" : "Completion structure improving",
+      ok: coveragePct >= 75,
+    },
+    {
+      label: active.some((item) => item.items.some((step) => step.required))
+        ? "Required steps defined"
+        : "Required steps needed",
+      ok: active.some((item) => item.items.some((step) => step.required)),
+    },
+    {
+      label: liveReadyCount > 0 ? "Used in live calls" : "Prepare for live calls",
+      ok: liveReadyCount > 0,
+    },
+    {
+      label: recent.length > 0 ? "Updated recently" : "No recent activity yet",
+      ok: recent.length > 0,
+    },
+  ];
 
   return (
-    <div className="flex flex-col gap-2.5">
-      <div className={cn(crm.checklistProgressCard, "flex flex-col gap-4")}>
-        <div className="flex items-center justify-between gap-2">
-          <span className={crm.label}>Overall progress</span>
-          {checklist.isActive && total > 0 && requiredCount > 0 && (
-            <span className="checklist-live-dot h-1.5 w-1.5 shrink-0 rounded-full bg-crm-success" />
+    <div className="flex flex-col gap-3">
+      <div className={crm.checklistRailCard}>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="text-sm font-bold text-crm-text">Instructions</h2>
+          <Sparkles size={14} className="text-crm-accent" />
+        </div>
+        <div className="rounded-[1rem] border border-violet-300/30 bg-violet-400/10 p-3 text-xs leading-relaxed text-crm-muted">
+          Use checklists to guide agents through consistent conversations and
+          improve outcomes.
+        </div>
+        <div className="mt-4 flex flex-col gap-3">
+          {[
+            ["Create a Checklist", "Build from scratch or use a template."],
+            ["Add Workflow Steps", "Break the call flow into clear, actionable steps."],
+            ["Set Required Steps", "Mark essential steps to ensure consistency."],
+            ["Track & Optimize", "Monitor completion rates and improve over time."],
+          ].map(([title, body], index) => (
+            <div key={title} className="flex gap-3">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-crm-accent/10 text-xs font-bold text-crm-accent">
+                {index + 1}
+              </span>
+              <span>
+                <span className="block text-xs font-bold text-crm-text">{title}</span>
+                <span className="block text-[11px] leading-snug text-crm-muted">
+                  {body}
+                </span>
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className={crm.checklistRailCard}>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="text-sm font-bold text-crm-text">Checklist Health</h2>
+          {status && (
+            <span className="text-[10px] font-semibold text-crm-muted">
+              {status.label}
+            </span>
           )}
         </div>
-
         <div className="flex items-center gap-4">
           <div className="relative shrink-0">
-            <div
-              className="absolute inset-0 rounded-full bg-crm-accent/12 blur-xl"
-              aria-hidden
-            />
+            <div className="absolute inset-0 rounded-full bg-crm-success/12 blur-xl" aria-hidden />
             <ProgressRing
-              requiredCount={requiredCount}
-              total={total}
-              size={76}
-              stroke={6}
+              requiredCount={coveragePct}
+              total={100}
+              size={86}
+              stroke={7}
             />
             <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span className="text-lg font-bold tabular-nums leading-none text-crm-text">
+              <span className="text-xl font-bold tabular-nums leading-none text-crm-text">
                 {coveragePct}%
               </span>
-              <span className="text-[9px] uppercase tracking-wide text-crm-muted">
-                required
+              <span className="text-[9px] font-semibold uppercase tracking-wide text-crm-muted">
+                Healthy
               </span>
             </div>
           </div>
-
           <div className="flex min-w-0 flex-1 flex-col gap-1.5">
             <StatRow
               dotClass="bg-crm-warning"
-              label="Required steps"
-              value={requiredCount}
-              valueClass={
-                requiredCount > 0 ? "text-crm-warning" : "text-crm-text"
-              }
+              label="Required"
+              value={selectedRequiredCount}
             />
             <StatRow
               dotClass="bg-crm-border"
-              label="Optional steps"
-              value={optionalCount}
+              label="Optional"
+              value={selectedOptionalCount}
             />
-            <StatRow
-              dotClass="bg-crm-accent"
-              label="Total steps"
-              value={total}
-            />
+            <StatRow dotClass="bg-crm-accent" label="Active" value={active.length} />
           </div>
         </div>
-
-        <div
-          className={cn(
-            "rounded-crm-lg border px-3 py-2.5",
-            status.tone === "success" &&
-              "border-crm-success/35 bg-gradient-to-r from-crm-success/12 to-transparent",
-            status.tone === "warning" &&
-              "border-crm-warning/35 bg-gradient-to-r from-crm-warning/12 to-transparent",
-            status.tone === "muted" &&
-              cn(crm.checklistInsetSurface, "border-crm-border/50")
-          )}
-        >
-          <div className="flex items-center gap-2">
-            {status.tone === "success" ? (
-              <CheckCircle2 size={14} className="shrink-0 text-crm-success" />
-            ) : (
-              <AlertTriangle
-                size={14}
-                className={cn(
-                  "shrink-0",
-                  status.tone === "warning"
-                    ? "text-crm-warning"
-                    : "text-crm-muted"
-                )}
-              />
-            )}
-            <div className="min-w-0">
-              <p className="text-xs font-semibold text-crm-text">{status.label}</p>
-              <p className="text-[10px] text-crm-muted">{status.hint}</p>
+        <div className="mt-4 flex flex-col gap-2">
+          {quality.map((item) => (
+            <div key={item.label} className="flex items-center gap-2 text-xs">
+              {item.ok ? (
+                <CheckCircle2 size={13} className="shrink-0 text-crm-success" />
+              ) : (
+                <AlertTriangle size={13} className="shrink-0 text-crm-warning" />
+              )}
+              <span className="text-crm-muted">{item.label}</span>
             </div>
-          </div>
+          ))}
         </div>
       </div>
 
-      {required.length > 0 && (
-        <div className={cn(crm.checklistProgressCard, "flex flex-col gap-3")}>
-          <div className="flex items-center gap-2">
-            <ListChecks size={12} className="text-crm-warning" />
-            <span className={crm.label}>Required steps</span>
+      <div className={crm.checklistRailCard}>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="text-sm font-bold text-crm-text">Recent Activity</h2>
+        </div>
+        {recent.length === 0 ? (
+          <div className="rounded-[1rem] border border-dashed border-crm-border/45 p-4 text-center">
+            <ClipboardCheck size={20} className="mx-auto mb-2 text-crm-muted/45" />
+            <p className="text-xs text-crm-muted">No checklist activity yet.</p>
           </div>
-          <div className="flex max-h-48 flex-col gap-1 overflow-y-auto">
-            {required.map((item) => (
-              <div
-                key={item.id}
-                className="flex items-start gap-2 rounded-crm border border-crm-warning/25 bg-gradient-to-r from-crm-warning/8 to-transparent px-2.5 py-2"
-              >
-                <span className="mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded-full border border-crm-warning/40 bg-crm-warning/10 text-[9px] font-bold tabular-nums text-crm-warning">
-                  {checklist.items.indexOf(item) + 1}
+        ) : (
+          <div className="flex flex-col gap-2">
+            {recent.map((item, index) => (
+              <div key={item.id} className="flex items-center gap-2 rounded-[1rem] border border-crm-border/35 bg-crm-surface/65 p-2.5">
+                <span className={cn(
+                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border",
+                  index === 0
+                    ? "border-crm-accent/25 bg-crm-accent/10 text-crm-accent"
+                    : index === 1
+                      ? "border-crm-warning/25 bg-crm-warning/10 text-crm-warning"
+                      : "border-violet-400/25 bg-violet-400/10 text-violet-300"
+                )}>
+                  <ListChecks size={14} />
                 </span>
-                <span className="text-[11px] leading-snug text-crm-text">
-                  {item.label}
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-xs font-semibold text-crm-text">
+                    {item.name} {item.isActive ? "updated" : "archived"}
+                  </span>
+                  <span className="text-[10px] text-crm-muted">
+                    {item.items.length} steps
+                  </span>
                 </span>
               </div>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      <div className={cn(crm.checklistPanelSupport, "p-3 flex flex-col gap-2")}>
-        <span className={crm.label}>Quick actions</span>
-        <a
-          href="/crm/live-call"
-          className={cn(crm.btnSecondary, "justify-start text-xs")}
-        >
-          <ExternalLink size={12} />
-          Open live call workspace
-        </a>
-        <a
-          href="/crm/campaigns"
-          className={cn(crm.btnGhost, "justify-start px-2 text-xs")}
-        >
-          <ExternalLink size={12} />
-          Assign to campaign
-        </a>
+      <div className={crm.checklistRailCard}>
+        <h2 className="mb-3 text-sm font-bold text-crm-text">Quick Actions</h2>
+        <div className="flex flex-col gap-2">
+          <button type="button" onClick={onNewBlank} className={cn(crm.btnPrimary, "justify-start text-xs")}>
+            <Plus size={13} />
+            Create new checklist
+          </button>
+          <button type="button" onClick={onBrowseTemplates} className={cn(crm.btnSecondary, "justify-between text-xs")}>
+            <span className="inline-flex items-center gap-2">
+              <Layers size={13} />
+              Browse templates
+            </span>
+            <ChevronRight size={13} />
+          </button>
+          <Link href="/crm/live-call" className={cn(crm.btnGhost, "justify-start px-2 text-xs no-underline")}>
+            <ExternalLink size={13} />
+            Open live call workspace
+          </Link>
+        </div>
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useMemo, useState, useRef, useCallback } from "react";
 import {
   Pencil,
   Archive,
@@ -13,7 +13,6 @@ import {
   ClipboardList,
   Layers,
   AlertCircle,
-  Sparkles,
   ArrowRight,
 } from "lucide-react";
 import { cn } from "../cn";
@@ -22,7 +21,6 @@ import {
   CHECKLIST_TEMPLATES,
   TEMPLATE_ACCENT_CLASSES,
 } from "./ChecklistTemplates";
-import { ChecklistCinematicHero } from "./ChecklistCinematicHero";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -46,6 +44,8 @@ type EditItem = { label: string; required: boolean; sortOrder: number };
 
 type Props = {
   selected: Checklist | null;
+  checklists: Checklist[];
+  onSelect: (id: string) => void;
   onSaveEdit: (name: string, items: EditItem[]) => Promise<void>;
   onArchive: (id: string) => Promise<void>;
   onRestore: (id: string) => Promise<void>;
@@ -61,8 +61,18 @@ type Props = {
   onPickTemplate: (templateId: string) => void;
   onNewBlank: () => void;
   templatesFocus?: boolean;
-  onBrowseTemplates?: () => void;
 };
+
+const CATEGORY_FILTERS = [
+  { id: "all", label: "All Playbooks" },
+  { id: "qualification", label: "Qualification" },
+  { id: "verification", label: "Verification" },
+  { id: "follow-up", label: "Follow Up" },
+  { id: "objection", label: "Objection" },
+  { id: "closing", label: "Closing" },
+] as const;
+
+type CategoryFilter = (typeof CATEGORY_FILTERS)[number]["id"];
 
 function PrimaryPanel({
   children,
@@ -213,11 +223,10 @@ function TemplateCard({
             <span className={crm.checklistMetricChip}>
               {template.items.length} steps
             </span>
-            {reqCount > 0 && (
-              <span className={cn(crm.checklistMetricChip, accent.meta)}>
-                {reqCount} required
-              </span>
-            )}
+            <span className={cn(crm.checklistMetricChip, accent.meta)}>
+              {template.usage}
+            </span>
+            <span className={crm.checklistMetricChip}>{reqCount} required</span>
           </div>
           <ArrowRight
             size={14}
@@ -229,98 +238,171 @@ function TemplateCard({
   );
 }
 
-const FEATURE_STRIP = [
-  {
-    title: "Proven playbooks",
-    body: "Cold call, callback, and follow-up flows",
-    icon: Sparkles,
-    tone: "text-crm-accent border-crm-accent/30 bg-crm-accent/10 shadow-[0_0_16px_-6px_rgba(56,189,248,0.2)]",
-  },
-  {
-    title: "Checklist mode",
-    body: "Guided steps during live calls",
-    icon: Layers,
-    tone: "text-crm-warning border-crm-warning/30 bg-crm-warning/10",
-  },
-  {
-    title: "Live call ready",
-    body: "Required steps surface in workspace",
-    icon: ClipboardList,
-    tone: "text-crm-success border-crm-success/30 bg-crm-success/10",
-  },
-  {
-    title: "Drive results",
-    body: "Structured outreach for agents",
-    icon: ArrowRight,
-    tone: "text-violet-300 border-violet-400/30 bg-violet-400/10",
-  },
-] as const;
-
 function TemplateGrid({
   onPick,
   onBlank,
   templatesFocus,
-  onBrowseTemplates,
 }: {
   onPick: (id: string) => void;
   onBlank: () => void;
   templatesFocus?: boolean;
-  onBrowseTemplates?: () => void;
 }) {
-  const templateCount = CHECKLIST_TEMPLATES.length;
-
-  const handleBrowse = () => {
-    if (onBrowseTemplates) {
-      onBrowseTemplates();
-      return;
-    }
-    const first = CHECKLIST_TEMPLATES[0];
-    if (first) onPick(first.id);
-  };
+  const [category, setCategory] = useState<CategoryFilter>("all");
+  const visibleTemplates = useMemo(
+    () =>
+      category === "all"
+        ? CHECKLIST_TEMPLATES
+        : CHECKLIST_TEMPLATES.filter((template) => template.category === category),
+    [category]
+  );
 
   return (
-    <div className="flex flex-col gap-5 p-3 sm:p-4">
-      <ChecklistCinematicHero
-        templateCount={templateCount}
-        onBrowseTemplates={handleBrowse}
-        onBlank={onBlank}
-      />
-
-      {templatesFocus && (
-        <div>
-          <div className="mb-3 flex items-center gap-2 px-1">
-            <Layers size={14} className="text-crm-accent" />
-            <span className={crm.label}>Starter playbooks</span>
-            <span className="ml-auto text-[10px] tabular-nums text-crm-muted">
-              {templateCount} templates
-            </span>
-          </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {CHECKLIST_TEMPLATES.map((t) => (
-              <TemplateCard key={t.id} template={t} onPick={onPick} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
-        {FEATURE_STRIP.map((f) => {
-          const Icon = f.icon;
-          return (
-            <div key={f.title} className={crm.checklistFeatureCard}>
-              <span
-                className={cn(
-                  "flex h-8 w-8 items-center justify-center rounded-lg border",
-                  f.tone
-                )}
-              >
-                <Icon size={14} />
-              </span>
-              <span className="text-xs font-semibold text-crm-text">{f.title}</span>
-              <span className="text-[10px] leading-snug text-crm-muted/90">
-                {f.body}
-              </span>
+    <div className={crm.checklistTemplateWorkspace}>
+      <div className="checklist-template-workspace-glow pointer-events-none absolute inset-0" aria-hidden />
+      <div className="relative z-[1] flex flex-col gap-5">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <Layers size={15} className="text-crm-accent" />
+              <h2 className="text-lg font-bold tracking-tight text-crm-text">
+                {templatesFocus ? "Browse templates" : "Start from a template"}
+              </h2>
             </div>
+            <p className="mt-1 text-sm text-crm-muted">
+              Choose a proven workflow or build your own
+            </p>
+          </div>
+          <span className="rounded-full border border-crm-border/50 bg-crm-surface-2/70 px-3 py-1 text-[11px] font-semibold text-crm-muted">
+            {CHECKLIST_TEMPLATES.length} playbooks available
+          </span>
+        </div>
+
+        <div className="flex gap-1.5 overflow-x-auto pb-1">
+          {CATEGORY_FILTERS.map((filter) => (
+            <button
+              key={filter.id}
+              type="button"
+              onClick={() => setCategory(filter.id)}
+              className={cn(
+                "shrink-0 rounded-full border px-3 py-1.5 text-xs font-semibold transition-all",
+                category === filter.id
+                  ? "border-crm-accent/45 bg-crm-accent/12 text-crm-accent shadow-[0_8px_20px_-14px_rgba(2,132,199,0.5)]"
+                  : "border-crm-border/45 bg-crm-surface-2/65 text-crm-muted hover:border-crm-border hover:bg-crm-surface"
+              )}
+            >
+              {filter.label}
+            </button>
+          ))}
+        </div>
+
+        <div className={crm.checklistTemplateGrid}>
+          {visibleTemplates.map((t) => (
+            <TemplateCard key={t.id} template={t} onPick={onPick} />
+          ))}
+        </div>
+
+        <button type="button" onClick={onBlank} className={crm.checklistScratchCard}>
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-crm-accent/25 bg-crm-accent/10 text-crm-accent">
+            <Plus size={18} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-bold text-crm-text">
+              Start from scratch
+            </span>
+            <span className="mt-0.5 block text-xs leading-relaxed text-crm-muted">
+              Build a custom checklist tailored to your team's process
+            </span>
+          </span>
+          <ArrowRight
+            size={16}
+            className="shrink-0 text-crm-muted transition-transform group-hover:translate-x-1 group-hover:text-crm-accent"
+          />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ActiveChecklistStrip({
+  checklists,
+  selectedId,
+  onSelect,
+}: {
+  checklists: Checklist[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const active = checklists.filter((checklist) => checklist.isActive);
+
+  if (active.length === 0) {
+    return (
+      <div className="checklist-empty-state rounded-[1.5rem] border border-dashed border-crm-border/45 p-5 text-center">
+        <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-crm-accent/25 bg-crm-accent/10 text-crm-accent">
+          <ClipboardList size={24} />
+        </span>
+        <h3 className="mt-3 text-base font-bold text-crm-text">
+          Choose a checklist to begin
+        </h3>
+        <p className="mx-auto mt-1 max-w-xl text-sm leading-relaxed text-crm-muted">
+          Start with proven outreach workflows built for live calls, campaign
+          follow-ups, and verification conversations.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="checklist-active-strip rounded-[1.5rem] border border-crm-border/35 p-4 shadow-crm">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-bold text-crm-text">Active checklists</h2>
+          <p className="text-xs text-crm-muted">
+            Select a workflow to review or edit its steps.
+          </p>
+        </div>
+        <span className="rounded-full border border-crm-success/25 bg-crm-success/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-crm-success">
+          {active.length} live
+        </span>
+      </div>
+      <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
+        {active.slice(0, 6).map((checklist) => {
+          const requiredCount = checklist.items.filter((item) => item.required).length;
+          const liveReady = checklist.items.length > 0 && requiredCount > 0;
+          const selected = checklist.id === selectedId;
+          return (
+            <button
+              key={checklist.id}
+              type="button"
+              onClick={() => onSelect(checklist.id)}
+              className={cn(
+                "group rounded-[1.1rem] border p-3 text-left transition-all hover:-translate-y-px",
+                selected
+                  ? "border-crm-accent/45 bg-crm-accent/10 ring-1 ring-crm-accent/20"
+                  : "border-crm-border/40 bg-crm-surface/75 hover:border-crm-border"
+              )}
+            >
+              <div className="flex items-start gap-2.5">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-crm-border/45 bg-crm-surface-2 text-crm-accent">
+                  <ClipboardList size={15} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-semibold text-crm-text">
+                    {checklist.name}
+                  </span>
+                  <span className="mt-1 flex flex-wrap gap-1.5 text-[10px] text-crm-muted">
+                    <span>{checklist.items.length} steps</span>
+                    <span>{requiredCount} required</span>
+                    <span className={liveReady ? "text-crm-success" : "text-crm-warning"}>
+                      {liveReady ? "Live ready" : "Needs setup"}
+                    </span>
+                  </span>
+                </span>
+                <ArrowRight
+                  size={14}
+                  className="mt-1 shrink-0 text-crm-muted/50 transition-transform group-hover:translate-x-1 group-hover:text-crm-accent"
+                />
+              </div>
+            </button>
           );
         })}
       </div>
@@ -403,6 +485,8 @@ function ItemListEditor({
 
 export function ChecklistWorkspace({
   selected,
+  checklists,
+  onSelect,
   onSaveEdit,
   onArchive,
   onRestore,
@@ -418,7 +502,6 @@ export function ChecklistWorkspace({
   onPickTemplate,
   onNewBlank,
   templatesFocus,
-  onBrowseTemplates,
 }: Props) {
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState("");
@@ -471,14 +554,25 @@ export function ChecklistWorkspace({
   if (creating) {
     return (
       <PrimaryPanel className="flex flex-col">
-        <div className={cn(crm.checklistWorkspaceHeader, "flex items-center gap-2")}>
-          <ClipboardList size={16} className="text-crm-accent" />
-          <h2 className="text-sm font-semibold text-crm-text">New checklist</h2>
+        <div className={cn(crm.checklistWorkspaceHeader, "flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between")}>
+          <div className="flex min-w-0 gap-3">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-crm-accent/25 bg-crm-accent/10 text-crm-accent">
+              <ClipboardList size={18} />
+            </span>
+            <div>
+              <h2 className="text-lg font-bold tracking-tight text-crm-text">
+                Create a checklist
+              </h2>
+              <p className="mt-1 max-w-2xl text-sm leading-relaxed text-crm-muted">
+                Name the playbook, add clear workflow steps, and mark the steps agents must complete.
+              </p>
+            </div>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 p-4 sm:p-5">
-          <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-5 p-4 sm:p-5">
+          <div className="checklist-form-section flex flex-col gap-2 rounded-[1.25rem] border border-crm-border/35 p-4">
             <label className={crm.label} htmlFor="checklist-name">
-              Name
+              Checklist name
             </label>
             <input
               id="checklist-name"
@@ -489,8 +583,10 @@ export function ChecklistWorkspace({
               autoFocus
             />
           </div>
-          <ItemListEditor items={createItems} onChange={onCreateItemsChange} />
-          <div className="flex items-center justify-end gap-2 border-t border-crm-border/40 pt-3">
+          <div className="checklist-form-section rounded-[1.25rem] border border-crm-border/35 p-4">
+            <ItemListEditor items={createItems} onChange={onCreateItemsChange} />
+          </div>
+          <div className="flex flex-col-reverse gap-2 border-t border-crm-border/40 pt-3 sm:flex-row sm:items-center sm:justify-end">
             <button type="button" onClick={onCancelCreate} className={crm.btnSecondary}>
               <X size={13} />
               Cancel
@@ -512,14 +608,18 @@ export function ChecklistWorkspace({
 
   if (!selected) {
     return (
-      <PrimaryPanel>
+      <div className="flex flex-col gap-4">
         <TemplateGrid
           onPick={onPickTemplate}
           onBlank={onNewBlank}
           templatesFocus={templatesFocus}
-          onBrowseTemplates={onBrowseTemplates}
         />
-      </PrimaryPanel>
+        <ActiveChecklistStrip
+          checklists={checklists}
+          selectedId={null}
+          onSelect={onSelect}
+        />
+      </div>
     );
   }
 

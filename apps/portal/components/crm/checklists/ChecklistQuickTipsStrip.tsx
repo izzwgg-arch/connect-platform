@@ -34,10 +34,15 @@ const TIPS = [
   },
 ] as const;
 
-export function ChecklistQuickTipsStrip() {
+type Props = {
+  onNewBlank: () => void;
+  onBrowseTemplates: () => void;
+};
+
+export function ChecklistQuickTipsStrip({ onNewBlank, onBrowseTemplates }: Props) {
   return (
     <div className={crm.checklistTipsStrip}>
-      <div className="flex flex-col gap-1 sm:flex-row sm:divide-x sm:divide-crm-border/35">
+      <div className="flex flex-col gap-1 md:flex-row md:flex-wrap md:divide-x md:divide-crm-border/35">
         {TIPS.map((tip) => {
           const Icon = tip.icon;
           const inner = (
@@ -60,6 +65,32 @@ export function ChecklistQuickTipsStrip() {
               </span>
             </>
           );
+
+          if (tip.title === "Press N") {
+            return (
+              <button
+                key={tip.title}
+                type="button"
+                onClick={onNewBlank}
+                className={crm.checklistTipSegment}
+              >
+                {inner}
+              </button>
+            );
+          }
+
+          if (tip.title === "Copy steps") {
+            return (
+              <button
+                key={tip.title}
+                type="button"
+                onClick={onBrowseTemplates}
+                className={crm.checklistTipSegment}
+              >
+                {inner}
+              </button>
+            );
+          }
 
           if ("href" in tip && tip.href) {
             return (

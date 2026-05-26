@@ -1,7 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ClipboardList, Plus, Radio } from "lucide-react";
+import {
+  BarChart3,
+  ClipboardList,
+  Layers,
+  type LucideIcon,
+  Plus,
+  Radio,
+  ShieldCheck,
+  Sparkles,
+} from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
 import { CHECKLIST_TEMPLATES } from "./ChecklistTemplates";
@@ -22,43 +31,54 @@ type Props = {
   tab: ChecklistHeaderTab;
   onTabChange: (tab: ChecklistHeaderTab) => void;
   onNewBlank: () => void;
+  onBrowseTemplates: () => void;
 };
 
 function KpiTile({
   label,
   value,
   hint,
+  icon: Icon,
   tone = "default",
 }: {
   label: string;
   value: string;
   hint: string;
+  icon: LucideIcon;
   tone?: "default" | "accent" | "success" | "warning";
 }) {
   const toneClass =
     tone === "accent"
-      ? "border-crm-accent/35 bg-crm-accent/8"
+      ? "checklist-kpi-blue"
       : tone === "success"
-        ? "border-crm-success/35 bg-crm-success/8"
+        ? "checklist-kpi-green"
         : tone === "warning"
-          ? "border-crm-warning/35 bg-crm-warning/8"
-          : "border-crm-border/35";
+          ? "checklist-kpi-amber"
+          : "checklist-kpi-violet";
 
   return (
     <div
       className={cn(
         crm.checklistKpiTile,
         toneClass,
-        "flex min-w-[6.5rem] flex-1 flex-col gap-0.5"
+        "relative flex min-h-[7.25rem] min-w-0 flex-col justify-between gap-3 overflow-hidden p-4"
       )}
     >
-      <span className="text-[10px] font-bold uppercase tracking-wider text-crm-muted">
-        {label}
-      </span>
-      <span className="text-lg font-bold tabular-nums leading-none text-crm-text">
-        {value}
-      </span>
-      <span className="text-[10px] text-crm-muted">{hint}</span>
+      <div className="flex items-start justify-between gap-3">
+        <span className="checklist-kpi-icon flex h-10 w-10 items-center justify-center rounded-xl border">
+          <Icon size={17} />
+        </span>
+        <span className="checklist-kpi-sparkline mt-2 h-5 w-14" aria-hidden />
+      </div>
+      <div>
+        <span className="block text-[11px] font-bold tracking-tight text-crm-text">
+          {label}
+        </span>
+        <span className="mt-1 block text-2xl font-bold tabular-nums leading-none text-crm-text">
+          {value}
+        </span>
+        <span className="mt-1 block text-[10px] text-crm-muted">{hint}</span>
+      </div>
     </div>
   );
 }
@@ -78,6 +98,7 @@ export function ChecklistCommandHeader({
   tab,
   onTabChange,
   onNewBlank,
+  onBrowseTemplates,
 }: Props) {
   const [, setTick] = useState(0);
   const [mountedAt] = useState(() => Date.now());
@@ -94,17 +115,17 @@ export function ChecklistCommandHeader({
     <div className={crm.checklistCommandHeader}>
       <div className={crm.checklistCommandHeaderGlow} aria-hidden />
 
-      <div className="relative z-[1] flex flex-col gap-4 p-4 sm:p-5">
+      <div className="relative z-[1] flex flex-col gap-5 p-4 sm:p-5 lg:p-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="flex min-w-0 gap-3">
+          <div className="flex min-w-0 gap-4">
             <span className={crm.checklistCommandIcon}>
-              <ClipboardList size={20} />
+              <ClipboardList size={24} />
             </span>
             <div className="min-w-0">
-              <h1 className="text-lg font-semibold tracking-tight text-crm-text sm:text-xl">
+              <h1 className="text-2xl font-bold tracking-tight text-crm-text sm:text-3xl">
                 Checklists
               </h1>
-              <p className="mt-0.5 max-w-xl text-sm text-crm-muted">
+              <p className="mt-1 max-w-2xl text-sm leading-relaxed text-crm-muted">
                 Workflow checklists for agents — used during live calls and
                 campaign outreach.
               </p>
@@ -125,43 +146,61 @@ export function ChecklistCommandHeader({
             </div>
           </div>
 
-          <button type="button" onClick={onNewBlank} className={cn(crm.btnPrimary, "shrink-0")}>
-            <Plus size={15} />
-            New checklist
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={onBrowseTemplates}
+              className={cn(crm.btnSecondary, "shrink-0")}
+            >
+              <Layers size={15} />
+              Browse templates
+            </button>
+            <button type="button" onClick={onNewBlank} className={cn(crm.btnPrimary, "shrink-0")}>
+              <Plus size={15} />
+              New checklist
+            </button>
+          </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <KpiTile
-            label="Active checklists"
+            label="Active Checklists"
             value={String(activeCount)}
-            hint="In use"
+            hint={activeCount === 1 ? "1 in use right now" : `${activeCount} in use right now`}
+            icon={ClipboardList}
             tone="accent"
           />
           <KpiTile
             label="Templates"
             value={String(CHECKLIST_TEMPLATES.length)}
-            hint="Playbooks"
+            hint="Playbooks available"
+            icon={Layers}
           />
           <KpiTile
-            label="Completion"
+            label="Completion Rate"
             value={`${avgRequiredPct}%`}
             hint="Avg required ratio"
+            icon={BarChart3}
             tone="warning"
           />
           <KpiTile
-            label="Checklist mode"
+            label="Live Mode"
             value={checklistModeOn ? "ON" : "OFF"}
             hint={
               checklistModeOn
                 ? `${liveReadyCount} live-ready`
                 : "Add required steps"
             }
+            icon={ShieldCheck}
             tone={checklistModeOn ? "success" : "default"}
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-1 border-t border-crm-border/40 pt-3">
+        <div className="flex flex-wrap items-center gap-2 border-t border-crm-border/40 pt-3">
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-crm-muted">
+            <Sparkles size={12} className="text-crm-accent" />
+            Command center
+          </span>
           {TABS.map((t) => (
             <button
               key={t.id}

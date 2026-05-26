@@ -8,7 +8,6 @@ import {
   ChecklistCommandHeader,
   type ChecklistHeaderTab,
 } from "../../../../components/crm/checklists/ChecklistCommandHeader";
-import { ChecklistLibraryPanel } from "../../../../components/crm/checklists/ChecklistLibraryPanel";
 import { ChecklistWorkspace } from "../../../../components/crm/checklists/ChecklistWorkspace";
 import { ChecklistProgressPanel } from "../../../../components/crm/checklists/ChecklistProgressPanel";
 import { ChecklistQuickTipsStrip } from "../../../../components/crm/checklists/ChecklistQuickTipsStrip";
@@ -83,7 +82,15 @@ export default function CrmChecklistsPage() {
       const res = await apiGet<{ checklists: Checklist[] }>(
         "/crm/checklists?includeInactive=true"
       );
-      setChecklists(res.checklists ?? []);
+      setChecklists(
+        (res.checklists ?? []).map((checklist) => ({
+          ...checklist,
+          isActive: checklist.isActive ?? true,
+          createdAt: checklist.createdAt ?? new Date().toISOString(),
+          updatedAt: checklist.updatedAt ?? checklist.createdAt ?? new Date().toISOString(),
+          items: checklist.items ?? [],
+        }))
+      );
     } catch (err: unknown) {
       setError(String((err as Error)?.message ?? "Failed to load checklists"));
     } finally {
@@ -101,6 +108,12 @@ export default function CrmChecklistsPage() {
     setCreateName("");
     setCreateItems([{ label: "", required: false, sortOrder: 0 }]);
     setHeaderTab("active");
+  }
+
+  function handleBrowseTemplates() {
+    setSelected(null);
+    setCreating(false);
+    setHeaderTab("templates");
   }
 
   useEffect(() => {
@@ -233,6 +246,7 @@ export default function CrmChecklistsPage() {
 
   return (
     <div className={cn(crm.checklistWorkspace, "crm-page-shell")}>
+      <span className="sr-only">CRM checklist command center</span>
       <div className={crm.checklistAmbientLayer} aria-hidden>
         <span className="checklist-ambient-orb left-[-8%] top-[8%] h-64 w-64 bg-crm-accent/10" />
         <span className="checklist-ambient-orb right-[-5%] top-[35%] h-48 w-48 bg-indigo-500/8" />
@@ -247,6 +261,7 @@ export default function CrmChecklistsPage() {
           tab={headerTab}
           onTabChange={setHeaderTab}
           onNewBlank={handleNewBlank}
+          onBrowseTemplates={handleBrowseTemplates}
         />
 
         {error && (
@@ -261,25 +276,12 @@ export default function CrmChecklistsPage() {
           </div>
         )}
 
-        {/* 3-column workspace */}
         <div className={crm.checklistGrid}>
-          {/* Left: library */}
-          <div className={crm.checklistLibraryCol}>
-            <ChecklistLibraryPanel
-              checklists={checklists}
-              selectedId={selected?.id ?? null}
-              onSelect={handleSelect}
-              onNewBlank={handleNewBlank}
-              onNewFromTemplate={handleNewFromTemplate}
-              isCreating={creating}
-              templatesExpanded={templatesFocus}
-            />
-          </div>
-
-          {/* Center: workspace */}
-          <div className={crm.checklistWorkspaceCol}>
+          <div className={crm.checklistMainCol}>
             <ChecklistWorkspace
               selected={selected}
+              checklists={checklists}
+              onSelect={handleSelect}
               onSaveEdit={handleSaveEdit}
               onArchive={handleArchive}
               onRestore={handleRestore}
@@ -295,22 +297,31 @@ export default function CrmChecklistsPage() {
               onPickTemplate={handleNewFromTemplate}
               onNewBlank={handleNewBlank}
               templatesFocus={templatesFocus}
-              onBrowseTemplates={() => setHeaderTab("templates")}
             />
           </div>
 
           <div
             className={cn(
-              crm.checklistSideCol,
+              crm.checklistRailCol,
               progressHighlight &&
                 "rounded-crm-lg ring-1 ring-crm-accent/25 transition-shadow"
             )}
           >
-            <ChecklistProgressPanel checklist={selected} />
+            <ChecklistProgressPanel
+              checklist={selected}
+              checklists={checklists}
+              avgRequiredPct={avgRequiredPct}
+              liveReadyCount={liveReadyCount}
+              onNewBlank={handleNewBlank}
+              onBrowseTemplates={handleBrowseTemplates}
+            />
           </div>
         </div>
 
-        <ChecklistQuickTipsStrip />
+        <ChecklistQuickTipsStrip
+          onNewBlank={handleNewBlank}
+          onBrowseTemplates={handleBrowseTemplates}
+        />
       </div>
     </div>
   );

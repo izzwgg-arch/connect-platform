@@ -17,12 +17,21 @@ export type ChecklistTemplateAccent =
   | "violet"
   | "teal";
 
+export type ChecklistTemplateCategory =
+  | "qualification"
+  | "verification"
+  | "follow-up"
+  | "objection"
+  | "closing";
+
 export type ChecklistTemplate = {
   id: string;
   name: string;
   description: string;
   icon: string;
   accent: ChecklistTemplateAccent;
+  category: ChecklistTemplateCategory;
+  usage: "High usage" | "Medium usage";
   items: TemplateItem[];
 };
 
@@ -126,6 +135,8 @@ export const CHECKLIST_TEMPLATES: ChecklistTemplate[] = [
     description: "Qualify a new prospect on an outbound cold call",
     icon: "📞",
     accent: "cyan",
+    category: "qualification",
+    usage: "High usage",
     items: [
       { label: "Confirm you have the decision maker", required: true },
       { label: "Introduce yourself and company", required: true },
@@ -145,6 +156,8 @@ export const CHECKLIST_TEMPLATES: ChecklistTemplate[] = [
     description: "Book a discovery call or demo with a qualified lead",
     icon: "📅",
     accent: "amber",
+    category: "qualification",
+    usage: "High usage",
     items: [
       { label: "Confirm contact name and role", required: true },
       { label: "Reference previous interaction or lead source", required: false },
@@ -163,6 +176,8 @@ export const CHECKLIST_TEMPLATES: ChecklistTemplate[] = [
     description: "Verify client insurance information on an inbound or outbound call",
     icon: "🛡️",
     accent: "blue",
+    category: "verification",
+    usage: "Medium usage",
     items: [
       { label: "Verify caller identity (name, DOB, policy number)", required: true },
       { label: "Confirm primary insurance carrier", required: true },
@@ -182,6 +197,8 @@ export const CHECKLIST_TEMPLATES: ChecklistTemplate[] = [
     description: "Follow through on a scheduled callback with context continuity",
     icon: "🔁",
     accent: "green",
+    category: "follow-up",
+    usage: "High usage",
     items: [
       { label: "Review previous call notes before dialing", required: true },
       { label: "Reference the scheduled callback date/time", required: true },
@@ -200,6 +217,8 @@ export const CHECKLIST_TEMPLATES: ChecklistTemplate[] = [
     description: "Structured flow for handling common sales objections",
     icon: "🎯",
     accent: "violet",
+    category: "objection",
+    usage: "High usage",
     items: [
       { label: "Acknowledge the objection without dismissing it", required: true },
       { label: "Clarify the objection (ask open-ended question)", required: true },
@@ -217,6 +236,8 @@ export const CHECKLIST_TEMPLATES: ChecklistTemplate[] = [
     description: "Post-demo or post-proposal follow-up to advance the deal",
     icon: "✅",
     accent: "teal",
+    category: "closing",
+    usage: "Medium usage",
     items: [
       { label: "Review demo / proposal notes before calling", required: true },
       { label: "Reference the specific solution discussed", required: true },
