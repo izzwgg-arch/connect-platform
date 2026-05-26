@@ -1,25 +1,13 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
 import {
   CRMPageShell,
-  ContactSmsPanel,
-  ContactTimeline,
   crm,
-  LiveCallStatusBanner,
-  LiveWorkspaceActionBar,
-  LiveWorkspaceChecklistPanel,
-  LiveWorkspaceContactHeader,
+  LiveCallCockpit,
   LiveWorkspaceIdle,
-  LiveWorkspaceNotePanel,
-  LiveWorkspaceOutcomePanel,
-  LiveWorkspaceScriptPanel,
-  LiveWorkspaceSessionRail,
-  LiveWorkspaceTasksPanel,
-  LiveWrapUpBar,
-  type Checklist,
   type CrmStage,
   type CrmTask,
   type LiveContact,
@@ -27,12 +15,19 @@ import {
   type TimelineEvent,
 } from "../../../../components/crm";
 import { DISPOSITION_OPTIONS } from "../../../../components/crm/live";
-import type { QueueOperationalStats } from "../../../../components/crm/queue/queueTypes";
+import type { QueueCounts, QueueMember, QueueOperationalStats } from "../../../../components/crm/queue/queueTypes";
 import { apiGet, apiPatch, apiPost } from "../../../../services/apiClient";
-import { useAppContext } from "../../../../hooks/useAppContext";
 import { useSipPhone } from "../../../../hooks/useSipPhone";
 
 const TIMELINE_LIMIT = 25;
+
+type DailyReport = {
+  dispositionsToday?: number;
+  callsLinkedToday?: number;
+  contactsCreatedToday?: number;
+  activeCampaigns?: number;
+  queueRemaining?: number;
+};
 
 function LiveCallPageFallback() {
   return <div className="py-24 text-center text-sm text-crm-muted">Loading workspace…</div>;
@@ -49,7 +44,6 @@ export default function LiveCallWorkspacePage() {
 function LiveCallWorkspaceInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { user: appUser } = useAppContext();
   const phone = useSipPhone();
 
   const contactId = searchParams.get("contactId");
@@ -75,11 +69,13 @@ function LiveCallWorkspaceInner() {
   const [error, setError] = useState<string | null>(null);
   const [idleStats, setIdleStats] = useState<QueueOperationalStats | null>(null);
   const [idleStatsLoading, setIdleStatsLoading] = useState(false);
+  const [opStats, setOpStats] = useState<QueueOperationalStats | null>(null);
+  const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
+  const [queueMembers, setQueueMembers] = useState<QueueMember[]>([]);
+  const [queueCounts, setQueueCounts] = useState<QueueCounts | null>(null);
 
   const [scriptSummaries, setScriptSummaries] = useState<ScriptSummary[]>([]);
-  const [checklists, setChecklists] = useState<Checklist[]>([]);
   const [campaignScriptId, setCampaignScriptId] = useState<string | null>(null);
-  const [campaignChecklistId, setCampaignChecklistId] = useState<string | null>(null);
   const [campaignName, setCampaignName] = useState<string | null>(null);
 
   const [callerIdSelected, setCallerIdSelected] = useState<string | null>(null);
@@ -90,14 +86,6 @@ function LiveCallWorkspaceInner() {
   const [savingNote, setSavingNote] = useState(false);
   const [noteSavedAt, setNoteSavedAt] = useState<Date | null>(null);
   const noteRef = useRef<HTMLTextAreaElement>(null);
-  const outcomeRef = useRef<HTMLDivElement>(null);
-  const smsPanelRef = useRef<HTMLDivElement>(null);
-
-  const [smsPhone, setSmsPhone] = useState("");
-  const [smsMessage, setSmsMessage] = useState("");
-  const [smsSending, setSmsSending] = useState(false);
-  const [smsError, setSmsError] = useState<string | null>(null);
-  const [smsSuccess, setSmsSuccess] = useState(false);
 
   const [disposition, setDisposition] = useState("");
   const [outcomeNote, setOutcomeNote] = useState("");
@@ -133,17 +121,7 @@ function LiveCallWorkspaceInner() {
     contact?.phones?.find((p) => p.isPrimary)?.numberRaw ??
     contact?.phones?.[0]?.numberRaw ??
     null;
-  const phones =
-    contact?.phones ??
-    (primaryPhone ? [{ id: "p", type: "MOBILE", numberRaw: primaryPhone, isPrimary: true }] : []);
-  const doNotSms = contact?.doNotSms ?? false;
   const canCall = Boolean(primaryPhone && !contact?.doNotCall && !isArchived);
-  const canSms = Boolean(phones.length > 0 && !doNotSms && !isArchived);
-
-  const smsEvents = useMemo(
-    () => timeline.filter((e) => e.type === "SMS_SENT" || e.type === "SMS_RECEIVED").slice(0, 25),
-    [timeline],
-  );
 
   const sipNotice =
     phone.regState !== "registered" && primaryPhone
@@ -197,11 +175,10 @@ function LiveCallWorkspaceInner() {
       apiGet<{ tasks: CrmTask[] }>(`/crm/contacts/${contactId}/tasks?status=open&limit=10`),
       apiGet<{ events: TimelineEvent[] }>(`/crm/contacts/${contactId}/timeline?limit=${TIMELINE_LIMIT}`),
       apiGet<{ scripts: ScriptSummary[] }>("/crm/scripts").catch(() => ({ scripts: [] as ScriptSummary[] })),
-      apiGet<{ checklists: Checklist[] }>("/crm/checklists").catch(() => ({ checklists: [] as Checklist[] })),
     ];
     if (campaignId) {
       fetches.push(
-        apiGet<{ campaign: { name: string; scriptId: string | null; checklistId: string | null } }>(
+        apiGet<{ campaign: { name: string; scriptId: string | null } }>(
           `/crm/campaigns/${campaignId}`,
         ).catch(() => null),
       );
@@ -209,26 +186,21 @@ function LiveCallWorkspaceInner() {
 
     Promise.all(fetches)
       .then((results) => {
-        const [contactRes, tasksRes, timelineRes, scriptsRes, checklistsRes, campaignRes] = results as [
+        const [contactRes, tasksRes, timelineRes, scriptsRes, campaignRes] = results as [
           { contact: LiveContact },
           { tasks: CrmTask[] },
           { events: TimelineEvent[] },
           { scripts: ScriptSummary[] },
-          { checklists: Checklist[] },
-          { campaign: { name: string; scriptId: string | null; checklistId: string | null } } | null | undefined,
+          { campaign: { name: string; scriptId: string | null } } | null | undefined,
         ];
         const c = contactRes.contact ?? (contactRes as unknown as LiveContact);
         setContact(c);
         setTasks(tasksRes.tasks ?? []);
         setTimeline(timelineRes.events ?? []);
         setScriptSummaries(scriptsRes.scripts ?? []);
-        setChecklists(checklistsRes.checklists ?? []);
-        const primary = c.primaryPhone?.numberRaw ?? c.phones?.find((p) => p.isPrimary)?.numberRaw ?? "";
-        setSmsPhone(primary);
         if (campaignRes?.campaign) {
           setCampaignName(campaignRes.campaign.name);
           setCampaignScriptId(campaignRes.campaign.scriptId);
-          setCampaignChecklistId(campaignRes.campaign.checklistId);
         }
       })
       .catch((err: unknown) => {
@@ -237,6 +209,30 @@ function LiveCallWorkspaceInner() {
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contactId]);
+
+  useEffect(() => {
+    const token = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
+
+    apiGet<QueueOperationalStats>("/crm/tasks/stats", token)
+      .then(setOpStats)
+      .catch(() => setOpStats(null));
+
+    apiGet<DailyReport>("/crm/reports/daily", token)
+      .then(setDailyReport)
+      .catch(() => setDailyReport(null));
+
+    const params = new URLSearchParams({ filter: "pending", sort: "smart", limit: "4" });
+    if (campaignId) params.set("campaignId", campaignId);
+    apiGet<{ queue: QueueMember[]; counts: QueueCounts }>(`/crm/queue?${params.toString()}`, token)
+      .then((res) => {
+        setQueueMembers(res.queue ?? []);
+        setQueueCounts(res.counts ?? null);
+      })
+      .catch(() => {
+        setQueueMembers([]);
+        setQueueCounts(null);
+      });
+  }, [campaignId]);
 
   useEffect(() => {
     if (!isPowerMode) return;
@@ -398,63 +394,16 @@ function LiveCallWorkspaceInner() {
     saveOutcomeRef.current = saveOutcome;
   });
 
-  async function sendSms() {
-    if (!contactId || !smsMessage.trim() || smsSending || doNotSms || isArchived) return;
-    setSmsSending(true);
-    setSmsError(null);
-    setSmsSuccess(false);
-    try {
-      await apiPost(`/crm/contacts/${contactId}/sms`, {
-        message: smsMessage.trim(),
-        ...(smsPhone ? { phone: smsPhone } : {}),
-      });
-      setSmsMessage("");
-      setSmsSuccess(true);
-      await refreshTimeline();
-      setTimeout(() => setSmsSuccess(false), 3000);
-    } catch (err: unknown) {
-      const e = err as { message?: string };
-      setSmsError(e?.message || "Failed to send SMS");
-    } finally {
-      setSmsSending(false);
-    }
-  }
-
-  const scrollToNote = () => noteRef.current?.focus();
-  const scrollToOutcome = () => outcomeRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  const scrollToSms = () => smsPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  const scrollToTasks = () => {
-    if (contactId) router.push(`/crm/contacts/${contactId}#tasks`);
-  };
-
   if (!contactId) {
     return (
-      <CRMPageShell innerClassName={crm.pageInnerLive}>
+      <CRMPageShell innerClassName={`${crm.pageInnerLive} ${crm.liveWorkspace}`}>
         <LiveWorkspaceIdle stats={idleStats} statsLoading={idleStatsLoading} />
       </CRMPageShell>
     );
   }
 
   return (
-    <>
-    <CRMPageShell innerClassName={crm.pageInnerLive}>
-      {contact && !loading && !error ? (
-        <LiveWorkspaceActionBar
-          contactName={contact.displayName}
-          isArchived={isArchived}
-          canCall={canCall}
-          canSms={canSms}
-          hasDisposition={Boolean(disposition)}
-          queueBackHref={queueBackHref}
-          contactProfileHref={`/crm/contacts/${contact.id}`}
-          onCall={() => void handleCall()}
-          onSms={scrollToSms}
-          onNote={scrollToNote}
-          onTask={scrollToTasks}
-          onDisposition={scrollToOutcome}
-        />
-      ) : null}
-
+    <CRMPageShell innerClassName={`${crm.pageInnerLive} ${crm.liveWorkspace}`}>
       {loading ? <LoadingSkeleton /> : null}
 
       {error ? (
@@ -464,125 +413,58 @@ function LiveCallWorkspaceInner() {
       ) : null}
 
       {!loading && !error && contact ? (
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-          <aside className="flex flex-col gap-4 xl:col-span-3 xl:order-1">
-            <LiveWorkspaceSessionRail
-              queueBackHref={queueBackHref}
-              memberId={memberId}
-              isPowerMode={isPowerMode}
-              campaignId={campaignId}
-              campaignName={campaignName}
-              contactId={contactId}
-              contactName={contact.displayName}
-              onBack={() => {
-                if (queueBackHref) router.push(queueBackHref);
-                else router.back();
-              }}
-            />
-          </aside>
-
-          <main className="flex min-w-0 flex-col gap-3 xl:col-span-6 xl:order-2">
-            <LiveCallStatusBanner linkedId={linkedId} fromNumber={fromNumber} />
-            <LiveWorkspaceContactHeader
-              contact={contact}
-              isArchived={isArchived}
-              callerIdChecked={callerIdChecked}
-              callerIdSelected={callerIdSelected}
-              callerIdLoading={callerIdLoading}
-              sipNotice={sipNotice}
-              onCall={() => void handleCall()}
-              profileHref={`/crm/contacts/${contact.id}`}
-              campaignName={campaignName}
-              queueLabel={isPowerMode ? "Power session" : memberId ? "Queue session" : null}
-            />
-            <LiveWorkspaceNotePanel
-              ref={noteRef}
-              noteBody={noteBody}
-              setNoteBody={setNoteBody}
-              savingNote={savingNote}
-              noteSavedAt={noteSavedAt}
-              onSave={() => void saveNote()}
-              disabled={isArchived}
-            />
-            {phones.length > 0 ? (
-              <ContactSmsPanel
-                ref={smsPanelRef}
-                phones={phones}
-                smsEvents={smsEvents}
-                timelineLoading={loading}
-                isArchived={isArchived}
-                doNotSms={doNotSms}
-                smsPhone={smsPhone}
-                setSmsPhone={setSmsPhone}
-                smsMessage={smsMessage}
-                setSmsMessage={setSmsMessage}
-                smsSending={smsSending}
-                smsError={smsError}
-                smsSuccess={smsSuccess}
-                onSend={() => void sendSms()}
-              />
-            ) : null}
-            <div ref={outcomeRef}>
-              <LiveWorkspaceOutcomePanel
-                contact={contact}
-                disposition={disposition}
-                setDisposition={setDisposition}
-                outcomeNote={outcomeNote}
-                setOutcomeNote={setOutcomeNote}
-                followUpOption={followUpOption}
-                setFollowUpOption={setFollowUpOption}
-                followUpCustom={followUpCustom}
-                setFollowUpCustom={setFollowUpCustom}
-                nextStage={nextStage}
-                setNextStage={setNextStage}
-                savingOutcome={savingOutcome}
-                outcomeSaved={outcomeSaved}
-                outcomeError={outcomeError}
-                isPowerMode={isPowerMode}
-                onSave={() => void saveOutcome()}
-                disabled={isArchived}
-              />
-            </div>
-            <ContactTimeline
-              events={timeline}
-              loading={loading}
-              currentUserId={appUser?.id}
-              editingNoteLinkedId={null}
-              editingNoteText=""
-              allowNoteMutations={false}
-              onEditNote={() => {}}
-              onDeleteNote={() => {}}
-              isArchived={isArchived}
-            />
-          </main>
-
-          <aside className="flex flex-col gap-4 xl:col-span-3 xl:order-3">
-            <LiveWorkspaceScriptPanel scriptSummaries={scriptSummaries} defaultScriptId={campaignScriptId} />
-            <LiveWorkspaceChecklistPanel
-              checklists={checklists}
-              contactId={contactId}
-              linkedId={linkedId}
-              defaultChecklistId={campaignChecklistId}
-              onSaved={() => void refreshTimeline()}
-            />
-            <LiveWorkspaceTasksPanel tasks={tasks} contactId={contactId} />
-          </aside>
-        </div>
+        <LiveCallCockpit
+          contact={contact}
+          isArchived={isArchived}
+          primaryPhone={primaryPhone}
+          canCall={canCall}
+          campaignName={campaignName}
+          memberId={memberId}
+          linkedId={linkedId}
+          fromNumber={fromNumber}
+          queueBackHref={queueBackHref}
+          noteRef={noteRef}
+          noteBody={noteBody}
+          setNoteBody={setNoteBody}
+          savingNote={savingNote}
+          noteSavedAt={noteSavedAt}
+          onSaveNote={() => void saveNote()}
+          disposition={disposition}
+          setDisposition={setDisposition}
+          outcomeNote={outcomeNote}
+          setOutcomeNote={setOutcomeNote}
+          followUpOption={followUpOption}
+          setFollowUpOption={setFollowUpOption}
+          followUpCustom={followUpCustom}
+          setFollowUpCustom={setFollowUpCustom}
+          nextStage={nextStage}
+          setNextStage={setNextStage}
+          savingOutcome={savingOutcome}
+          outcomeSaved={outcomeSaved}
+          outcomeError={outcomeError}
+          isPowerMode={isPowerMode}
+          onSaveOutcome={() => void saveOutcome()}
+          timeline={timeline}
+          tasks={tasks}
+          scriptSummaries={scriptSummaries}
+          campaignScriptId={campaignScriptId}
+          queueMembers={queueMembers}
+          queueCounts={queueCounts}
+          opStats={opStats}
+          dailyReport={dailyReport}
+          phone={phone}
+          sipNotice={sipNotice}
+          callerIdChecked={callerIdChecked}
+          callerIdSelected={callerIdSelected}
+          callerIdLoading={callerIdLoading}
+          onCall={() => void handleCall()}
+          onOpenContact={() => router.push(`/crm/contacts/${contact.id}`)}
+        />
       ) : null}
 
       {!loading && !error && !contact ? (
         <div className="py-12 text-center text-sm text-crm-muted">Contact not found.</div>
       ) : null}
     </CRMPageShell>
-    {/* Sticky wrap-up bar */}
-    <LiveWrapUpBar
-      visible={!loading && !error && Boolean(contact)}
-      canSave={Boolean(disposition) && !savingOutcome && !isArchived}
-      saving={savingOutcome}
-      isPowerMode={isPowerMode}
-      onSave={() => void saveOutcomeRef.current()}
-      onSaveNext={isPowerMode ? () => void saveOutcomeRef.current() : undefined}
-    />
-    </>
   );
 }

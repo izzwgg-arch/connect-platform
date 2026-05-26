@@ -156,7 +156,8 @@ export const crm = {
     "rounded-crm border border-crm-border bg-crm-surface-2 py-2 pl-3 pr-8 text-xs font-medium text-crm-text shadow-none focus:border-crm-accent/50 focus:outline-none focus:ring-2 focus:ring-crm-accent/30 [color-scheme:dark]",
   /** Phase 19F — live call agent workspace */
   pageInnerLive:
-    "mx-auto w-full max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8 flex flex-col gap-4 min-h-0",
+    "crm-live-inner mx-auto w-full max-w-[min(100%,1680px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
+  liveWorkspace: "crm-live-workspace w-full min-h-0",
   /** Phase 19G — live wallboard; theme tokens via globals `.crm-wallboard-workspace` */
   wallboardWorkspace: "crm-wallboard-workspace w-full min-h-0",
   /** Phase 19K — CRM Intelligence reports; theme tokens via globals `.crm-reports-workspace` */

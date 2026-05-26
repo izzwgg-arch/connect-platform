@@ -10,3 +10,4 @@ export { LiveWorkspaceNotePanel } from "./LiveWorkspaceNotePanel";
 export { LiveWorkspaceOutcomePanel } from "./LiveWorkspaceOutcomePanel";
 export { LiveWorkspaceTasksPanel } from "./LiveWorkspaceTasksPanel";
 export { LiveWrapUpBar } from "./LiveWrapUpBar";
+export { LiveCallCockpit } from "./LiveCallCockpit";
