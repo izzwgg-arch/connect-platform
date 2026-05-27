@@ -142,9 +142,10 @@ export function ManualInvoiceDrawer({
     setLoadingBill(true);
     setError(null);
     try {
+      // serviceStartDate / serviceEndDate must be YYYY-MM-DD only (no time suffix)
       const params = new URLSearchParams();
-      if (periodStart) params.set("serviceStartDate", `${periodStart}T00:00:00Z`);
-      if (periodEnd) params.set("serviceEndDate", `${periodEnd}T00:00:00Z`);
+      if (periodStart) params.set("serviceStartDate", periodStart);
+      if (periodEnd) params.set("serviceEndDate", periodEnd);
 
       const preview = await apiGet<{ lineItems: PreviewLineItem[] }>(
         `/admin/billing/platform/tenants/${tenant.id}/invoice-preview?${params.toString()}`,
