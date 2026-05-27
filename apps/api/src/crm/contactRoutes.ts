@@ -928,6 +928,8 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
   // ── POST /crm/contacts/bulk-reassign ─────────────────────────────────────
   // Admin-only. Updates CrmContactMeta.assignedToUserId for a batch of contacts.
   // Skips contacts that don't belong to the tenant (silently). Capped at 500.
+  // skipAssigned: when true, only assigns contacts that are currently unassigned
+  //   (assignedToUserId IS NULL) — protects existing agent assignments.
   app.post("/crm/contacts/bulk-reassign", async (req, reply) => {
     const user = await requireCrmAdmin(req, reply);
     if (!user) return;
@@ -936,12 +938,13 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     const schema = z.object({
       contactIds: z.array(z.string().min(1)).min(1).max(500),
       assignedToUserId: z.string().nullable(),
+      skipAssigned: z.boolean().optional().default(false),
     });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) {
       return reply.status(400).send({ error: "invalid_payload", detail: parsed.error.format() });
     }
-    const { contactIds, assignedToUserId } = parsed.data;
+    const { contactIds, assignedToUserId, skipAssigned } = parsed.data;
 
     // Validate assignee belongs to tenant (skip validation when clearing)
     if (assignedToUserId) {
@@ -954,18 +957,97 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
       }
     }
 
-    // Update crmContactMeta for contacts that belong to this tenant
-    // Using updateMany with tenantId in the where clause enforces tenant isolation
+    // Build the where clause — when skipAssigned is true and we're assigning (not clearing),
+    // only touch contacts that are currently unassigned so existing assignments are preserved.
+    const whereClause: Record<string, unknown> = {
+      tenantId,
+      contactId: { in: contactIds },
+      contact: { active: true, archivedAt: null },
+    };
+    if (skipAssigned && assignedToUserId) {
+      whereClause.assignedToUserId = null;
+    }
+
+    const result = await (db as any).crmContactMeta.updateMany({
+      where: whereClause,
+      data: { assignedToUserId: assignedToUserId ?? null },
+    });
+
+    // Calculate how many were skipped due to skipAssigned protection
+    const skipped = skipAssigned && assignedToUserId ? contactIds.length - result.count : 0;
+
+    return { ok: true, updated: result.count, skipped };
+  });
+
+  // ── POST /crm/contacts/smart-assign ──────────────────────────────────────
+  // Admin-only. Assigns the next `count` UNASSIGNED contacts in the tenant
+  // to the given agent — in insertion order (oldest unassigned first).
+  // Never touches contacts already assigned to any agent, guaranteeing each
+  // lead belongs to at most one agent at a time.
+  app.post("/crm/contacts/smart-assign", async (req, reply) => {
+    const user = await requireCrmAdmin(req, reply);
+    if (!user) return;
+    const { tenantId } = user;
+
+    const schema = z.object({
+      count: z.number().int().min(1).max(500),
+      assignedToUserId: z.string().min(1),
+      campaignId: z.string().optional(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "invalid_payload", detail: parsed.error.format() });
+    }
+    const { count, assignedToUserId, campaignId } = parsed.data;
+
+    // Validate assignee belongs to tenant
+    const assignee = await db.user.findFirst({
+      where: { id: assignedToUserId, tenantId },
+      select: { id: true },
+    });
+    if (!assignee) {
+      return reply.status(400).send({ error: "invalid_assigned_user", detail: "User not found in tenant" });
+    }
+
+    // Find the next `count` unassigned active contacts for this tenant
+    const unassignedMeta = await (db as any).crmContactMeta.findMany({
+      where: {
+        tenantId,
+        assignedToUserId: null,
+        contact: { active: true, archivedAt: null },
+        ...(campaignId ? { contact: { campaignMembers: { some: { campaignId } } } } : {}),
+      },
+      select: { contactId: true },
+      orderBy: { contact: { createdAt: "asc" } },
+      take: count,
+    });
+
+    if (unassignedMeta.length === 0) {
+      return reply.status(200).send({ ok: true, assigned: 0, remaining: 0 });
+    }
+
+    const contactIds = unassignedMeta.map((m: { contactId: string }) => m.contactId);
+
     const result = await (db as any).crmContactMeta.updateMany({
       where: {
         tenantId,
         contactId: { in: contactIds },
+        assignedToUserId: null,
         contact: { active: true, archivedAt: null },
       },
-      data: { assignedToUserId: assignedToUserId ?? null },
+      data: { assignedToUserId },
     });
 
-    return { ok: true, updated: result.count };
+    // Count how many remain unassigned after this batch
+    const remaining = await (db as any).crmContactMeta.count({
+      where: {
+        tenantId,
+        assignedToUserId: null,
+        contact: { active: true, archivedAt: null },
+      },
+    });
+
+    return { ok: true, assigned: result.count, contactIds, remaining };
   });
 
   // ── GET /crm/contacts/:id/duplicates ─────────────────────────────────────

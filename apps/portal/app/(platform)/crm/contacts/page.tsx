@@ -472,6 +472,15 @@ export default function CrmContactsPage() {
   const [bulkAssignUserId, setBulkAssignUserId] = useState<string>("");
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkSkipped, setBulkSkipped] = useState<number>(0);
+
+  // Smart assign (quantity-based, unassigned-only)
+  const [showSmartAssign, setShowSmartAssign] = useState(false);
+  const [smartAssignCount, setSmartAssignCount] = useState<string>("25");
+  const [smartAssignUserId, setSmartAssignUserId] = useState<string>("");
+  const [smartAssigning, setSmartAssigning] = useState(false);
+  const [smartAssignResult, setSmartAssignResult] = useState<{ assigned: number; remaining: number } | null>(null);
+  const [smartAssignError, setSmartAssignError] = useState<string | null>(null);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -598,39 +607,67 @@ export default function CrmContactsPage() {
     setSelectedIds(new Set());
     setBulkAssignUserId("");
     setBulkError(null);
+    setBulkSkipped(0);
   };
 
   const handleBulkReassign = async (assignUserId: string | null) => {
     if (selectedIds.size === 0) return;
     setBulkAssigning(true);
     setBulkError(null);
+    setBulkSkipped(0);
     try {
-      await apiPost("/crm/contacts/bulk-reassign", {
-        contactIds: Array.from(selectedIds),
-        assignedToUserId: assignUserId,
-      });
+      // skipAssigned=true: when assigning (not clearing), only touch unassigned contacts
+      // so contacts already belonging to an agent are never overwritten.
+      const res = await apiPost<{ ok: boolean; updated: number; skipped: number }>(
+        "/crm/contacts/bulk-reassign",
+        {
+          contactIds: Array.from(selectedIds),
+          assignedToUserId: assignUserId,
+          skipAssigned: assignUserId !== null,
+        },
+      );
+      setBulkSkipped(res.skipped ?? 0);
       const assignee = assignUserId ? crmUsers.find((u) => u.userId === assignUserId) ?? null : null;
       setRows((prev) =>
-        prev.map((r) =>
-          selectedIds.has(r.id)
-            ? {
-                ...r,
-                assignedTo: assignee
-                  ? {
-                      id: assignee.userId,
-                      displayName: assignee.displayName,
-                      email: assignee.email,
-                    }
-                  : null,
-              }
-            : r,
-        ),
+        prev.map((r) => {
+          if (!selectedIds.has(r.id)) return r;
+          // Only update rows that were actually assigned (not skipped)
+          if (assignUserId && r.assignedTo?.id && r.assignedTo.id !== assignUserId) return r;
+          return {
+            ...r,
+            assignedTo: assignee
+              ? { id: assignee.userId, displayName: assignee.displayName, email: assignee.email }
+              : null,
+          };
+        }),
       );
-      clearSelection();
+      if ((res.skipped ?? 0) === 0) clearSelection();
     } catch (e: unknown) {
       setBulkError((e as Error)?.message || "Bulk reassign failed");
     } finally {
       setBulkAssigning(false);
+    }
+  };
+
+  const handleSmartAssign = async () => {
+    const count = parseInt(smartAssignCount, 10);
+    if (!count || count < 1 || !smartAssignUserId) return;
+    setSmartAssigning(true);
+    setSmartAssignError(null);
+    setSmartAssignResult(null);
+    try {
+      void loadCrmUsers();
+      const res = await apiPost<{ ok: boolean; assigned: number; remaining: number }>(
+        "/crm/contacts/smart-assign",
+        { count, assignedToUserId: smartAssignUserId },
+      );
+      setSmartAssignResult({ assigned: res.assigned, remaining: res.remaining });
+      // Refresh the contacts list to reflect new assignments
+      void load(search, stage, assignedToMe, isAdmin ? archiveScope : "active", page);
+    } catch (e: unknown) {
+      setSmartAssignError((e as Error)?.message || "Smart assign failed");
+    } finally {
+      setSmartAssigning(false);
     }
   };
 
@@ -866,6 +903,68 @@ export default function CrmContactsPage() {
         </div>
       </CRMCard>
 
+      {/* Smart Assign panel — admin only, quantity-based, unassigned leads only */}
+      {isAdmin && (
+        <div className={cn(crm.contactsBulkBar, "border-crm-border bg-crm-surface shadow-crm flex-wrap gap-y-2")}>
+          <button
+            type="button"
+            onClick={() => {
+              setShowSmartAssign((v) => !v);
+              setSmartAssignResult(null);
+              setSmartAssignError(null);
+              void loadCrmUsers();
+            }}
+            className={cn(crm.btnSecondary, "px-3 py-1.5 text-sm gap-1.5")}
+          >
+            <UserPlus className="h-3.5 w-3.5" />
+            Smart Assign
+          </button>
+          {showSmartAssign && (
+            <>
+              <input
+                type="number"
+                min={1}
+                max={500}
+                value={smartAssignCount}
+                onChange={(e) => { setSmartAssignCount(e.target.value); setSmartAssignResult(null); }}
+                className={cn(crm.selectCompact, "w-20 text-center")}
+                aria-label="Number of leads to assign"
+                placeholder="25"
+              />
+              <span className="text-sm text-crm-muted">unassigned leads to</span>
+              <select
+                value={smartAssignUserId}
+                onChange={(e) => { setSmartAssignUserId(e.target.value); setSmartAssignResult(null); }}
+                className={crm.selectCompact}
+                aria-label="Assign to agent"
+              >
+                <option value="">Pick agent…</option>
+                {crmUsers.map((u) => (
+                  <option key={u.userId} value={u.userId}>{u.displayName}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={handleSmartAssign}
+                disabled={smartAssigning || !smartAssignUserId || !smartAssignCount || parseInt(smartAssignCount, 10) < 1}
+                className={cn(crm.btnSecondary, "px-3 py-1.5 text-sm disabled:opacity-50")}
+              >
+                <UserCheck className="h-3.5 w-3.5" />
+                {smartAssigning ? "Assigning…" : "Assign"}
+              </button>
+              {smartAssignResult && (
+                <span className={cn("text-xs font-medium", smartAssignResult.assigned === 0 ? "text-crm-muted" : "text-crm-success")}>
+                  {smartAssignResult.assigned === 0
+                    ? "No unassigned leads available"
+                    : `✓ ${smartAssignResult.assigned} assigned · ${smartAssignResult.remaining} unassigned remain`}
+                </span>
+              )}
+              {smartAssignError && <span className="text-xs text-crm-danger">{smartAssignError}</span>}
+            </>
+          )}
+        </div>
+      )}
+
       {isAdmin && selectedIds.size > 0 && (
         <div className={cn(crm.contactsBulkBar, "border-crm-border bg-crm-surface shadow-crm")}>
             <span className="text-sm font-medium text-crm-text">{selectedIds.size} selected</span>
@@ -901,6 +1000,11 @@ export default function CrmContactsPage() {
             >
               Clear assignment
             </button>
+            {bulkSkipped > 0 && (
+              <span className="text-xs text-amber-600 dark:text-amber-400">
+                {bulkSkipped} skipped (already assigned to another agent)
+              </span>
+            )}
             {bulkError && <span className="text-xs text-crm-danger">{bulkError}</span>}
             <button
               type="button"
