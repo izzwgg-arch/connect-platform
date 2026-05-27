@@ -493,7 +493,7 @@ export default function CampaignsPage() {
 
   return (
     <CRMPageShell innerClassName={cn(mk.pageInner, mk.workspace, "pb-36")}>
-      {showCreate && isAdmin && (
+      {showCreate && (
         <CreateCampaignModal
           importAfterCreate={createForImport}
           onClose={() => { setShowCreate(false); setCreateForImport(false); }}
