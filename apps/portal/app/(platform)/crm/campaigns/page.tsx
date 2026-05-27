@@ -521,7 +521,7 @@ export default function CampaignsPage() {
           </div>
         </div>
         <div className="campaigns-hero-actions">
-          {canImport && isAdmin && (
+          {canImport && (
             <button
               type="button"
               onClick={() => { setCreateForImport(true); setShowCreate(true); }}
@@ -645,7 +645,7 @@ export default function CampaignsPage() {
                   <Plus className="h-4 w-4" /> New campaign
                 </button>
               )}
-              {canImport && isAdmin && (
+              {canImport && (
                 <button
                   type="button"
                   onClick={() => { setCreateForImport(true); setShowCreate(true); }}
