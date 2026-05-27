@@ -8,26 +8,13 @@ import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { useTenantOptions } from "../../../../hooks/useTenantOptions";
+import { useExtensionOptions, type ExtensionOption } from "../../../../hooks/useExtensionOptions";
 
 type TenantOption = { id: string; name: string; status: string; kind?: string };
-type ExtensionOption = {
-  id: string;
-  extNumber: string;
-  displayName: string;
-  pbxUserEmail?: string | null;
-  ownerUserId?: string | null;
-  status?: string;
-  webrtcEnabled?: boolean;
-  pbxDeviceName?: string | null;
-  provisionStatus?: string | null;
-  isUserFacing?: boolean;
-};
 type RoleOption = { id: string; label: string };
 type CatalogResponse = {
   tenantId: string | null;
-  tenants: TenantOption[];
   roles: RoleOption[];
-  extensions: ExtensionOption[];
   userFacingOnly: boolean;
   totalExtensions: number;
   filteredOut: number;
@@ -1021,14 +1008,18 @@ function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
   const { options: tenantOptions } = useTenantOptions();
   const tenants: TenantOption[] = tenantOptions.map((t) => ({ id: t.id, name: t.name, status: "ACTIVE" }));
   const [roles, setRoles] = useState<RoleOption[]>(DEFAULT_PORTAL_ROLES);
-  const [extensionOptions, setExtensionOptions] = useState<ExtensionOption[]>([]);
   const [userFacingOnly, setUserFacingOnly] = useState(true);
-  const [extensionFilterStats, setExtensionFilterStats] = useState<{ total: number; hidden: number }>({ total: 0, hidden: 0 });
+  // Canonical extension options — auto-refetches when cc-pbx-sync-complete fires.
+  const { extensions: extensionOptions, totalExtensions: extTotal, filteredOut: extFilteredOut } = useExtensionOptions({
+    tenantId: form.tenantId,
+    userFacingOnly,
+  });
+  const extensionFilterStats = { total: extTotal, hidden: extFilteredOut };
   const selectedExtension = extensionOptions.find((e) => e.id === form.extensionId);
   const roleOptions = roles.length ? roles : DEFAULT_PORTAL_ROLES;
 
   // Bootstrap: fetch portal-bucket roles once when modal opens.
-  // Tenant list is now provided by useTenantOptions; we only need the catalog for roles + extensions.
+  // Tenant list is provided by useTenantOptions; extension list by useExtensionOptions.
   useEffect(() => {
     let active = true;
     apiGet<CatalogResponse>(`/admin/users/catalog?userFacingOnly=${userFacingOnly ? "true" : "false"}`)
@@ -1052,25 +1043,6 @@ function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
     if (initial) setForm((f) => ({ ...f, tenantId: initial }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenants.length]);
-
-  // Refresh the extension dropdown every time the tenant or the user-facing
-  // toggle changes. The server already filters for us.
-  useEffect(() => {
-    let active = true;
-    if (!form.tenantId) return;
-    const qs = new URLSearchParams({
-      tenantId: form.tenantId,
-      userFacingOnly: userFacingOnly ? "true" : "false",
-    });
-    apiGet<CatalogResponse>(`/admin/users/catalog?${qs.toString()}`)
-      .then((r) => {
-        if (!active) return;
-        setExtensionOptions(r.extensions || []);
-        setExtensionFilterStats({ total: r.totalExtensions, hidden: r.filteredOut });
-      })
-      .catch(() => { if (active) setExtensionOptions([]); });
-    return () => { active = false; };
-  }, [form.tenantId, userFacingOnly]);
 
   async function pickExtension(id: string) {
     setForm((f) => ({ ...f, extensionId: id }));

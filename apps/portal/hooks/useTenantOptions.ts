@@ -4,8 +4,9 @@
  * useTenantOptions — canonical shared hook for admin tenant dropdowns.
  *
  * Fetches GET /admin/tenant-options which returns merged Connect + PBX tenants.
- * Automatically refetches when the "cc-pbx-tenants-refreshed" browser event fires
- * (dispatched by useAppContext.refreshPbxTenants after a successful PBX sync).
+ * Automatically refetches when either:
+ *   - "cc-pbx-tenants-refreshed" fires (legacy, tenant-directory sync only)
+ *   - "cc-pbx-sync-complete" fires (full sync including extensions)
  *
  * source values:
  *   "connect" — a Connect Tenant row with no PBX link
@@ -21,6 +22,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { apiGet } from "../services/apiClient";
 
 export const PBX_TENANTS_REFRESHED_EVENT = "cc-pbx-tenants-refreshed";
+/** Fired after the full PBX sync (tenant directory + extension sync) completes. */
+export const PBX_SYNC_COMPLETE_EVENT = "cc-pbx-sync-complete";
 
 export type TenantOption = {
   id: string;
@@ -72,11 +75,13 @@ export function useTenantOptions(opts?: { connectOnly?: boolean }) {
   }, [load]);
 
   useEffect(() => {
-    const handler = () => {
-      void load();
-    };
+    const handler = () => { void load(); };
     window.addEventListener(PBX_TENANTS_REFRESHED_EVENT, handler);
-    return () => window.removeEventListener(PBX_TENANTS_REFRESHED_EVENT, handler);
+    window.addEventListener(PBX_SYNC_COMPLETE_EVENT, handler);
+    return () => {
+      window.removeEventListener(PBX_TENANTS_REFRESHED_EVENT, handler);
+      window.removeEventListener(PBX_SYNC_COMPLETE_EVENT, handler);
+    };
   }, [load]);
 
   const options = connectOnly

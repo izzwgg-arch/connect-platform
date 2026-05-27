@@ -244,11 +244,68 @@ Plus four delegated registrars at lines ~30198–30265 (see top of file).
 
 **Security:** SUPER_ADMIN sees all; non-SUPER_ADMIN sees only their own tenant.
 
-**Cache invalidation:** After `POST /admin/pbx/refresh-tenants` succeeds, `useAppContext.refreshPbxTenants()` dispatches the `cc-pbx-tenants-refreshed` browser CustomEvent. Any component using `useTenantOptions()` (portal hook at `apps/portal/hooks/useTenantOptions.ts`) automatically refetches this endpoint.
+**Cache invalidation:** After `POST /admin/pbx/refresh-tenants` succeeds, `useAppContext.refreshPbxTenants()` dispatches two browser CustomEvents:
+- `cc-pbx-tenants-refreshed` — legacy, fired first
+- `cc-pbx-sync-complete` — full sync complete (includes extension sync); carries sync summary as `event.detail`
 
-**Connect-only filter:** Pass `connectOnly: true` to `useTenantOptions()` to see only tenants with real Connect rows (`source: "connect" | "linked"`). Use this for user-creation forms and user-filter dropdowns — users must belong to a real Connect tenant; `vpbx:` virtual tenants cannot own users.
+Any component using `useTenantOptions()` (`apps/portal/hooks/useTenantOptions.ts`) automatically refetches on either event.
+
+**Connect-only filter:** Pass `connectOnly: true` to `useTenantOptions()` to see only tenants with real Connect rows (`source: "connect" | "linked"`). Use this when restricting to real tenant rows.
+
+**PBX-only tenants in dropdowns:** By default `useTenantOptions()` (no `connectOnly`) shows PBX-only tenants too. `resolveManagedTenant()` on the API auto-provisions a real `Tenant` + `TenantPbxLink` when a `vpbx:` ID is submitted for a user-creation operation.
 
 **Do NOT use for billing** — billing has its own tenant list at `GET /admin/billing/platform/tenants`.
+
+### Canonical PBX sync pipeline (`POST /admin/pbx/refresh-tenants`)
+
+**Auth:** SUPER_ADMIN only. **Rate-limited:** 30 s per instance.
+
+**What it does (as of 2026-05-26):**
+1. `client.listTenants()` → `syncPbxTenantDirectoryFromRows()` → updates `PbxTenantDirectory`.
+2. `syncExtensionsFromPbx()` → for all linked tenants (`TenantPbxLink`), fetches extensions from VitalPBX and upserts `Extension` + `PbxExtensionLink` rows.
+3. Invalidates `PBX_TENANT_LIST_CACHE` for the instance.
+
+**Response:**
+```json
+{
+  "ok": true,
+  "instanceId": "...",
+  "pbxTenantCount": 10,
+  "directoryCreated": 1,
+  "directoryUpdated": 0,
+  "directoryDeleted": 0,
+  "extensionsFound": 45,
+  "extensionsUpserted": 3,
+  "extensionsSkippedTenants": 2,
+  "extensionErrors": 0,
+  "linkedTenants": 8,
+  "lastSyncedAt": "2026-05-26T23:00:00.000Z",
+  "durationMs": 4200
+}
+```
+
+Extension sync failure is **non-fatal** — tenant directory sync succeeds even if extensions fail.
+
+**Frontend invalidation sequence after success:**
+1. `useAppContext.reloadTenantOptions()` → sidebar `TenantSwitcher` updates.
+2. `cc-pbx-tenants-refreshed` event → `useTenantOptions()` refetches `GET /admin/tenant-options`.
+3. `cc-pbx-sync-complete` event → all `useTenantOptions()` consumers refetch + `useExtensionOptions()` consumers refetch + PBX Extensions page increments `reloadKey`.
+
+**Structured logs emitted:**
+- `pbx_sync_start`
+- `tenant_options_refreshed` (counts: created/updated/deleted)
+- `extension_sync_complete` (counts: total/upserted/skipped/errors/linkedTenants)
+- `pbx_sync_complete` (total durationMs)
+- `pbx_sync_tenant_failed` / `extension_sync_failed` on errors
+
+### Canonical extension options hook (`useExtensionOptions`)
+
+**Portal hook:** `apps/portal/hooks/useExtensionOptions.ts`
+**Endpoint:** `GET /admin/users/catalog?tenantId=...&userFacingOnly=...`
+**Auto-refetches on:** `cc-pbx-sync-complete` event
+**Used by:** `UserModal` in `admin/users/page.tsx`
+**Returns:** `{ extensions, totalExtensions, filteredOut, isLoading, reload }`
+**Source:** Connect DB `Extension` table (not live VitalPBX) — always reflects the last sync result.
 
 ---
 

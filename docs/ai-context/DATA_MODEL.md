@@ -257,27 +257,39 @@ Not a full inbox archive. Stores CRM-linked email metadata and summaries; does n
 
 ### PBX tenant sync behavior and canonical dropdown source
 
-`POST /admin/pbx/refresh-tenants` → `syncPbxTenantDirectoryFromRows()` → updates `PbxTenantDirectory` only. Does **not** create or update Connect `Tenant` rows. After refresh:
+`POST /admin/pbx/refresh-tenants` (updated 2026-05-26) performs a **full sync** in sequence:
 
-1. `useAppContext.refreshPbxTenants()` calls `reloadTenantOptions()` (updates TenantSwitcher) **and** dispatches `cc-pbx-tenants-refreshed` browser CustomEvent.
-2. All `useTenantOptions()` consumers (portal hook at `apps/portal/hooks/useTenantOptions.ts`) refetch `GET /admin/tenant-options`.
+1. `client.listTenants()` → `syncPbxTenantDirectoryFromRows()` → updates `PbxTenantDirectory`. Does **not** create or update Connect `Tenant` rows directly.
+2. `syncExtensionsFromPbx()` → for every `TenantPbxLink` on the instance, fetches extensions from VitalPBX and upserts `Extension` + `PbxExtensionLink`. Extension sync failure is **non-fatal** (tenant directory already saved).
+
+After `POST /admin/pbx/refresh-tenants` succeeds, `useAppContext.refreshPbxTenants()`:
+1. Calls `reloadTenantOptions()` → updates `TenantSwitcher`.
+2. Dispatches `cc-pbx-tenants-refreshed` → `useTenantOptions()` consumers refetch.
+3. Dispatches `cc-pbx-sync-complete` (with summary payload) → `useTenantOptions()` + `useExtensionOptions()` consumers refetch + PBX Extensions page increments `reloadKey`.
 
 **Canonical admin tenant dropdown endpoint:** `GET /admin/tenant-options` (added 2026-05-26).
 - Returns merged Connect tenants (`source: "connect" | "linked"`) + PBX-only tenants (`source: "pbx"`, id `vpbx:{slug}`).
-- `useTenantOptions({ connectOnly: true })` filters to Connect tenants only (required for user-creation forms — users must belong to real Connect tenants).
 - See `API_ROUTES.md` § Canonical tenant dropdown source for full shape and security rules.
 
-**Affected dropdowns (as of 2026-05-26):**
-- `TenantSwitcher` — uses `useAppContext().tenants` via `loadTenantOptions()` (reads `GET /admin/tenants?light=1` + `GET /admin/pbx/tenants`). Shows all Connect + PBX tenants.
-- `Admin → Users filter` — uses `useTenantOptions({ connectOnly: true })`. Connect tenants only. Refreshes on `cc-pbx-tenants-refreshed`.
-- `Admin → Users create/edit modal` — uses `useTenantOptions({ connectOnly: true })`. Connect tenants only.
-- `Admin Billing shell` — uses `GET /admin/billing/platform/tenants` (billing-specific; not affected by PBX sync).
+**Canonical extension options hook:** `useExtensionOptions` (`apps/portal/hooks/useExtensionOptions.ts`).
+- Wraps `GET /admin/users/catalog?tenantId=&userFacingOnly=`.
+- Auto-refetches on `cc-pbx-sync-complete`.
+- Used by `UserModal` in `admin/users/page.tsx`.
+
+**Affected dropdowns/pages (as of 2026-05-26):**
+- `TenantSwitcher` — `useAppContext().tenants` via `loadTenantOptions()` → ✅ updated by `reloadTenantOptions()`.
+- `Admin → Users filter` — `useTenantOptions()` → ✅ updated on `cc-pbx-tenants-refreshed` / `cc-pbx-sync-complete`.
+- `Admin → Users create/edit modal (tenant)` — `useTenantOptions()` → ✅ same. PBX-only tenants visible; `resolveManagedTenant` auto-provisions Connect tenant on first user save.
+- `Admin → Users create/edit modal (extension)` — `useExtensionOptions()` → ✅ updated on `cc-pbx-sync-complete`.
+- `/pbx/extensions/` page — `useAsyncResource` + `reloadKey` → ✅ incremented on `cc-pbx-sync-complete`.
+- `Admin Billing shell` — `GET /admin/billing/platform/tenants` → ❌ billing-specific source, not affected by PBX sync.
+- `CDR tenant map` — `GET /admin/pbx/tenants` direct fetch → not connected to canonical hook (low priority).
 
 **Security rules:**
 - SUPER_ADMIN: sees all tenant options from `GET /admin/tenant-options`.
 - TENANT_ADMIN / ADMIN: sees only their own tenant.
 - End-users: never receive any admin tenant list.
-- PBX-only tenants (`vpbx:` ids) cannot own Connect Users, Extensions, Billing rows, etc. until linked to a Connect Tenant via `TenantPbxLink`.
+- PBX-only tenants (`vpbx:` ids) appear in dropdowns but cannot own Connect Users, Extensions, Billing rows until a Connect `Tenant` + `TenantPbxLink` is created (auto-provisioned on first user-creation action).
 
 ## CdrTenantRule
 - **Schema:** line 1756

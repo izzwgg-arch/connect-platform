@@ -92,7 +92,7 @@ import { resolveExtensionForVoicemailNotify } from "./voicemailNotifyResolveExte
 import { syncPbxTenantDirectory, syncPbxTenantDirectoryFromRows } from "./pbxTenantDirectorySync";
 import { syncPbxTenantInboundDids } from "./pbxTenantInboundDidSync";
 import { resolveCdrTenant } from "./pbxTenantResolve";
-import { syncExtensionsFromPbx } from "./pbxExtensionSync";
+import { syncExtensionsFromPbx, type ExtensionSyncResult } from "./pbxExtensionSync";
 import {
   buildMohClassName,
   buildMohPbxWavStorageKey,
@@ -13626,48 +13626,83 @@ app.post("/admin/pbx/refresh-tenants", async (req, reply) => {
   const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
   const startedAt = Date.now();
   app.log.info(
-    { event: "pbx_tenant_manual_refresh_start", pbxInstanceId: instance.id, requestedBy: (admin as any).id ?? "unknown" },
-    "pbx_tenant_manual_refresh_start",
+    { event: "pbx_sync_start", pbxInstanceId: instance.id, requestedBy: (admin as any).id ?? "unknown" },
+    "pbx_sync_start",
   );
   let tenants: any[] = [];
-  let syncResult = { upserted: 0, created: 0, updated: 0, deleted: 0 };
+  let tenantSyncResult = { upserted: 0, created: 0, updated: 0, deleted: 0 };
+  let client: ReturnType<typeof getVitalPbxClient>;
   try {
-    const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret, timeoutMs: 8_000 });
+    client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret, timeoutMs: 8_000 });
     tenants = await client.listTenants();
-    syncResult = await syncPbxTenantDirectoryFromRows(db, instance.id, tenants);
+    tenantSyncResult = await syncPbxTenantDirectoryFromRows(db, instance.id, tenants);
     // Invalidate in-memory cache so the next GET /admin/pbx/tenants serves fresh data.
     PBX_TENANT_LIST_CACHE.delete(cacheKey);
+    app.log.info(
+      {
+        event: "tenant_options_refreshed",
+        pbxInstanceId: instance.id,
+        pbxTenantCount: tenants.length,
+        created: tenantSyncResult.created,
+        updated: tenantSyncResult.updated,
+        deleted: tenantSyncResult.deleted,
+      },
+      "tenant_options_refreshed",
+    );
   } catch (e: any) {
     app.log.warn(
-      { event: "pbx_tenant_manual_refresh_failed", pbxInstanceId: instance.id, err: e?.message },
-      "pbx_tenant_manual_refresh_failed",
+      { event: "pbx_sync_tenant_failed", pbxInstanceId: instance.id, err: e?.message },
+      "pbx_sync_tenant_failed",
     );
     return reply.status(502).send({ error: "PBX_TENANT_REFRESH_FAILED", message: String(e?.message || "PBX unavailable") });
   }
+
+  // Extension sync — runs after tenant directory is up to date so that newly
+  // created PbxTenantDirectory rows are already present for the mapping step.
+  // Skipped tenants (no TenantPbxLink) are counted but do not cause errors.
+  let extensionSyncResult: ExtensionSyncResult | null = null;
+  try {
+    extensionSyncResult = await syncExtensionsFromPbx(db, instance.id, client!, {});
+    app.log.info(
+      {
+        event: "extension_sync_complete",
+        pbxInstanceId: instance.id,
+        totalExtensions: extensionSyncResult.totalExtensions,
+        totalUpserted: extensionSyncResult.totalUpserted,
+        totalSkipped: extensionSyncResult.totalSkipped,
+        totalErrors: extensionSyncResult.totalErrors,
+        linkedTenants: extensionSyncResult.tenantResults.filter((r) => !r.skipped).length,
+      },
+      "extension_sync_complete",
+    );
+  } catch (e: any) {
+    // Extension sync failure is non-fatal — tenant directory is already updated.
+    app.log.warn(
+      { event: "extension_sync_failed", pbxInstanceId: instance.id, err: e?.message },
+      "extension_sync_failed",
+    );
+  }
+
   const durationMs = Date.now() - startedAt;
   app.log.info(
-    {
-      event: "pbx_tenant_manual_refresh_complete",
-      pbxInstanceId: instance.id,
-      pbxTenantCount: tenants.length,
-      upserted: syncResult.upserted,
-      created: syncResult.created,
-      updated: syncResult.updated,
-      deleted: syncResult.deleted,
-      durationMs,
-    },
-    "pbx_tenant_manual_refresh_complete",
+    { event: "pbx_sync_complete", pbxInstanceId: instance.id, durationMs },
+    "pbx_sync_complete",
   );
+
   return {
     ok: true,
     instanceId: instance.id,
     pbxTenantCount: tenants.length,
-    directoryUpserted: syncResult.upserted,
-    directoryCreated: syncResult.created,
-    directoryUpdated: syncResult.updated,
-    directoryDeleted: syncResult.deleted,
+    directoryCreated: tenantSyncResult.created,
+    directoryUpdated: tenantSyncResult.updated,
+    directoryDeleted: tenantSyncResult.deleted,
+    extensionsFound: extensionSyncResult?.totalExtensions ?? null,
+    extensionsUpserted: extensionSyncResult?.totalUpserted ?? null,
+    extensionsSkippedTenants: extensionSyncResult?.totalSkipped ?? null,
+    extensionErrors: extensionSyncResult?.totalErrors ?? null,
+    linkedTenants: extensionSyncResult?.tenantResults.filter((r) => !r.skipped).length ?? null,
+    lastSyncedAt: new Date().toISOString(),
     durationMs,
-    note: "PbxTenantDirectory updated. Telephony PbxTenantMapCache will pick up changes within its poll interval (default 60 s).",
   };
 });
 

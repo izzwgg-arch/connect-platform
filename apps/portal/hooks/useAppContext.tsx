@@ -5,7 +5,7 @@ import { hasPermission } from "../permissions/permissionMap";
 import { mapBackendRole, readJwtPayload } from "../services/session";
 import { ApiError, apiGet, apiPost } from "../services/apiClient";
 import { loadTenantOptions } from "../services/tenantData";
-import { PBX_TENANTS_REFRESHED_EVENT } from "./useTenantOptions";
+import { PBX_TENANTS_REFRESHED_EVENT, PBX_SYNC_COMPLETE_EVENT } from "./useTenantOptions";
 import { bootstrapVisualQaSession, isVisualQaModeEnabled } from "../services/visualQaMode";
 import type { AdminScope, Permission, Role, Tenant, User } from "../types/app";
 
@@ -156,17 +156,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
         directoryCreated?: number;
         directoryUpdated?: number;
         directoryDeleted?: number;
+        extensionsFound?: number | null;
+        extensionsUpserted?: number | null;
+        extensionsSkippedTenants?: number | null;
+        linkedTenants?: number | null;
+        lastSyncedAt?: string;
+        durationMs?: number;
         retryAfterMs?: number;
-      }>("/admin/pbx/refresh-tenants", undefined, undefined, { timeoutMs: 30_000 });
+      }>("/admin/pbx/refresh-tenants", undefined, undefined, { timeoutMs: 60_000 });
       await reloadTenantOptions();
       // Notify all useTenantOptions consumers to refetch.
       if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent(PBX_TENANTS_REFRESHED_EVENT));
+        // Full sync complete — includes extension data. Triggers useExtensionOptions refetch.
+        window.dispatchEvent(new CustomEvent(PBX_SYNC_COMPLETE_EVENT, { detail: result }));
       }
-      const changed = Number(result.directoryCreated || 0) + Number(result.directoryUpdated || 0);
+      const tenantChanged = Number(result.directoryCreated || 0) + Number(result.directoryUpdated || 0);
+      const extParts: string[] = [];
+      if (result.extensionsFound != null) extParts.push(`${result.extensionsFound} extensions seen`);
+      if (result.extensionsUpserted != null && result.extensionsUpserted > 0) extParts.push(`${result.extensionsUpserted} updated`);
+      const extSummary = extParts.length ? ` | ${extParts.join(", ")}` : "";
       return {
         ok: true as const,
-        message: `PBX tenants refreshed (${result.pbxTenantCount ?? "unknown"} seen, ${changed} changed, ${result.directoryDeleted || 0} deleted).`,
+        message: `PBX sync complete — ${result.pbxTenantCount ?? "?"} tenants (${tenantChanged} changed, ${result.directoryDeleted || 0} deleted)${extSummary}.`,
+        detail: result,
       };
     } catch (err) {
       if (err instanceof ApiError && err.status === 429) {

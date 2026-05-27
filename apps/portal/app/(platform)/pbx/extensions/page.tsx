@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { PBX_SYNC_COMPLETE_EVENT } from "../../../../hooks/useTenantOptions";
 import { EmptyState } from "../../../../components/EmptyState";
 import { ErrorState } from "../../../../components/ErrorState";
 import { FilterBar } from "../../../../components/FilterBar";
@@ -686,6 +687,13 @@ export default function PbxExtensionsPage() {
     { keepPreviousData: false },
   );
   const telephony = useTelephony();
+
+  // Invalidate extension list after a full PBX sync (tenant + extension sync).
+  useEffect(() => {
+    const handler = () => setReloadKey((k) => k + 1);
+    window.addEventListener(PBX_SYNC_COMPLETE_EVENT, handler);
+    return () => window.removeEventListener(PBX_SYNC_COMPLETE_EVENT, handler);
+  }, []);
 
   const activeExts = useMemo(() => {
     const s = new Set<string>();
