@@ -736,12 +736,6 @@ export default function CrmContactsPage() {
         subtitle="A warmer relationship command center for search, segmentation, live workspace handoff, and clean follow-up operations."
         actions={
           <div className="contacts-hero-actions flex flex-wrap items-center gap-2">
-            {canImport && (
-              <Link href="/crm/import" className={crm.btnSecondary}>
-                <FileUp className="h-4 w-4" />
-                Import
-              </Link>
-            )}
             <button type="button" onClick={handleExportCsv} className={crm.btnSecondary} disabled={rows.length === 0}>
               <Download className="h-4 w-4" />
               Export
@@ -937,7 +931,7 @@ export default function CrmContactsPage() {
           <p className="mx-auto mt-2 max-w-md text-sm text-crm-muted">
             {hasListFilters
               ? "Adjust search, status, tag, assignment, or list scope to broaden this workspace."
-              : "Add a person manually or bring in a file from Import Leads. Records stay in this tenant only."}
+              : "Add a person manually or import via a Campaign. Records stay in this tenant only."}
           </p>
           <div className="mt-6 flex flex-wrap justify-center gap-2">
             {hasListFilters ? (
@@ -949,9 +943,9 @@ export default function CrmContactsPage() {
               </button>
             )}
             {canImport && (
-              <Link href="/crm/import" className={crm.btnSecondary}>
+              <Link href="/crm/campaigns" className={crm.btnSecondary}>
                 <FileUp className="h-4 w-4" />
-                Import contacts
+                Import via Campaign
               </Link>
             )}
           </div>
@@ -1114,7 +1108,7 @@ export default function CrmContactsPage() {
             </div>
             <div className="contacts-quick-actions">
               <button type="button" onClick={() => setShowAdd(true)} className="contacts-quick-action contacts-quick-blue"><UserPlus className="h-4 w-4" />Add Contact</button>
-              {canImport && <Link href="/crm/import" className="contacts-quick-action contacts-quick-violet"><FileUp className="h-4 w-4" />Import Contacts</Link>}
+              {canImport && <Link href="/crm/campaigns" className="contacts-quick-action contacts-quick-violet"><FileUp className="h-4 w-4" />Import via Campaign</Link>}
               <Link href="/crm/tasks" className="contacts-quick-action contacts-quick-green"><CalendarClock className="h-4 w-4" />Create Task</Link>
               <a href={firstEmail ? `mailto:${firstEmail}` : undefined} aria-disabled={!firstEmail} className={cn("contacts-quick-action contacts-quick-amber", !firstEmail && "pointer-events-none opacity-50")}><Send className="h-4 w-4" />Send Email</a>
               <Link href="/crm/campaigns" className="contacts-quick-action contacts-quick-rose"><Megaphone className="h-4 w-4" />Start Campaign</Link>

@@ -12,7 +12,6 @@ import {
   ListOrdered,
   Bell,
   Settings,
-  Upload,
   BarChart3,
   Stethoscope,
   BookUser,
@@ -447,16 +446,7 @@ export default function CrmDashboardPage() {
           tone: "accent" as const,
         }
       : null,
-    importsToday !== null && can("can_view_crm_import")
-      ? {
-          key: "imports",
-          href: "/crm/import",
-          icon: <Upload size={14} />,
-          title: "Import leads",
-          meta: importsToday > 0 ? `${importsToday} import${importsToday === 1 ? "" : "s"} today` : "No imports scheduled",
-          tone: "success" as const,
-        }
-      : null,
+    null,
   ].filter(Boolean) as {
     key: string;
     href: string;
@@ -479,9 +469,7 @@ export default function CrmDashboardPage() {
     can("can_view_crm_campaigns")
       ? { key: "campaigns", href: "/crm/campaigns", icon: <Megaphone size={14} />, label: "Campaigns" }
       : null,
-    can("can_view_crm_import")
-      ? { key: "import", href: "/crm/import", icon: <Upload size={14} />, label: "Import" }
-      : null,
+    null,
     can("can_view_crm_reports")
       ? { key: "reports", href: "/crm/reports", icon: <BarChart3 size={14} />, label: "Reports" }
       : null,
@@ -829,11 +817,7 @@ export default function CrmDashboardPage() {
               <div className="relative z-[1]">
               <DashboardSectionHeader
                 title="Recent imports"
-                action={
-                  importsToday !== null
-                    ? { label: `${importsToday} today`, href: "/crm/import" }
-                    : { label: "Import", href: "/crm/import" }
-                }
+                action={{ label: "Import via Campaigns →", href: "/crm/campaigns" }}
               />
               {recentImports.length > 0 ? (
                 <div className="flex flex-col gap-1.5">

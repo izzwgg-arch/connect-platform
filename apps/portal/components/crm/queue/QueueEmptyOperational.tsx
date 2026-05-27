@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { BarChart3, CheckCheck, ClipboardList, Download, ListOrdered, Megaphone, Zap } from "lucide-react";
+import { BarChart3, CheckCheck, ClipboardList, ListOrdered, Megaphone, Zap } from "lucide-react";
 import { CRMCard } from "../CRMCard";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
@@ -83,7 +83,7 @@ export function QueueEmptyOperational({
             <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-crm-muted">What you can do next</p>
             <div className="crm-queue-quick-actions grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
               <QueueQuickAction href="/crm/campaigns?status=ACTIVE" icon={<Megaphone className="h-4 w-4" />} label="Open campaigns" hint="View active campaigns" accent="blue" />
-              <QueueQuickAction href="/crm/import" icon={<Download className="h-4 w-4" />} label="Import leads" hint="Bring in new leads" accent="green" />
+              <QueueQuickAction href="/crm/campaigns" icon={<Megaphone className="h-4 w-4" />} label="Import leads" hint="Create campaign then import" accent="green" />
               <QueueQuickAction href="/crm/queue?mode=power" icon={<Zap className="h-4 w-4" />} label="Power session" hint="Focus time mode" accent="violet" />
               <QueueQuickAction href="/crm/reports" icon={<BarChart3 className="h-4 w-4" />} label="View reports" hint="See performance" accent="cyan" />
             </div>
