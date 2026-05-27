@@ -295,6 +295,7 @@ export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
   const tenantName = invoice.tenant?.name || "Customer";
   const brand = resolveInvoiceEmailBranding(settings, tenantName);
   const billingEmail = sanitizeLine(settings.billingEmail, 320);
+  const billingPhone = sanitizeLine(settings.invoiceSupportPhone, 80);
   const billToAddress = formatBillingAddress(settings.billingAddress);
   const serviceAddress = formatBillingAddress(settings.serviceAddress);
   const billToLines = (billToAddress.length ? billToAddress : serviceAddress).slice(0, 4);
@@ -367,7 +368,7 @@ export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
     label(doc, "Bill to", billToX, infoY, 150);
     doc.fillColor(ink).font(FONT_SEMIBOLD).fontSize(9.8).text(tenantName, billToX, infoY + 20, { width: 142 });
     let toY = doc.y + 8;
-    for (const value of [...billToLines, billingEmail].filter(Boolean).slice(0, 5)) {
+    for (const value of [...billToLines, billingEmail, billingPhone].filter(Boolean).slice(0, 6)) {
       doc.fillColor(text).font(FONT_REGULAR).fontSize(8.4).text(value, billToX, toY, { width: 142, lineGap: 1.1 });
       toY = doc.y + 5.5;
     }

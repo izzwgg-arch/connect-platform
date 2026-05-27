@@ -1,13 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Hash, RefreshCw, Search } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
+import { Hash, RefreshCw, Search, Star } from "lucide-react";
 import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
 import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
 import { ErrorState } from "../../../../components/ErrorState";
-import { apiGet } from "../../../../services/apiClient";
+import { apiGet, apiPut } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { useTenantOptions } from "../../../../hooks/useTenantOptions";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
@@ -44,10 +44,10 @@ type ConnectPhoneNumber = {
   tenant?: { name: string } | null;
 };
 
-type PbxDidsResponse = {
-  instanceId: string;
-  count: number;
-  rows: PbxDidRow[];
+type PbxDidsResponse = { instanceId: string; count: number; rows: PbxDidRow[] };
+
+type TenantBillingSettings = {
+  invoiceSupportPhone?: string | null;
 };
 
 type UnifiedRow = {
@@ -60,7 +60,6 @@ type UnifiedRow = {
   monthlyCostCents: number | null;
   region: string | null;
   lastUpdated: string;
-  pbxTenantSlug: string | null;
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -88,6 +87,10 @@ function fmtDate(iso: string | null): string {
   return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
+function isSameNumber(a: string, b: string) {
+  return a.replace(/\D/g, "") === b.replace(/\D/g, "");
+}
+
 function statusBadge(source: "pbx_did" | "connect", status: string) {
   if (source === "pbx_did") {
     return status === "active"
@@ -95,8 +98,7 @@ function statusBadge(source: "pbx_did" | "connect", status: string) {
       : <span className="badge neutral">Inactive</span>;
   }
   const map: Record<string, string> = { ACTIVE: "success", RELEASING: "warning", RELEASED: "neutral", SUSPENDED: "error" };
-  const tone = map[status] || "neutral";
-  return <span className={`badge ${tone}`}>{status.charAt(0) + status.slice(1).toLowerCase()}</span>;
+  return <span className={`badge ${map[status] || "neutral"}`}>{status.charAt(0) + status.slice(1).toLowerCase()}</span>;
 }
 
 function sourceBadge(source: "pbx_did" | "connect") {
@@ -128,13 +130,13 @@ export default function AdminPhoneNumbersPage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [search, setSearch] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
+  const [settingMain, setSettingMain] = useState<string | null>(null);
+  const [mainNumberOverride, setMainNumberOverride] = useState<string | null>(null);
 
   const { options: tenantOptions } = useTenantOptions({ connectOnly: false });
 
-  // Fetch PBX DIDs (always active-only for invoicing focus; pass connectTenantId if set)
-  const pbxParams = tenantFilter
-    ? `?connectTenantId=${encodeURIComponent(tenantFilter)}`
-    : "";
+  // Fetch PBX DIDs
+  const pbxParams = tenantFilter ? `?connectTenantId=${encodeURIComponent(tenantFilter)}` : "";
   const pbxDids = useAsyncResource(
     () => apiGet<PbxDidsResponse>(`/admin/pbx/tenant-inbound-dids${pbxParams}`),
     [tenantFilter, reloadKey],
@@ -149,17 +151,55 @@ export default function AdminPhoneNumbersPage() {
     { keepPreviousData: true },
   );
 
-  // Build tenant lookup from PBX rows (slugs for unlinked DIDs)
+  // Fetch billing settings for selected tenant (to show current main number)
+  const billingSettings = useAsyncResource(
+    () =>
+      tenantFilter
+        ? apiGet<{ billingSettings?: TenantBillingSettings }>(`/admin/billing/platform/tenants/${encodeURIComponent(tenantFilter)}`)
+        : Promise.resolve(null),
+    [tenantFilter, reloadKey],
+    { keepPreviousData: false },
+  );
+
+  const currentMainNumber: string =
+    mainNumberOverride ??
+    (billingSettings.status === "success" && billingSettings.data
+      ? (billingSettings.data.billingSettings?.invoiceSupportPhone ?? "")
+      : "");
+
+  const setMainNumber = useCallback(
+    async (tenantId: string, phoneNumber: string) => {
+      setSettingMain(phoneNumber);
+      try {
+        await apiPut(`/admin/billing/tenants/${encodeURIComponent(tenantId)}/settings`, {
+          invoiceSupportPhone: phoneNumber,
+        });
+        setMainNumberOverride(phoneNumber);
+      } catch (e) {
+        alert(`Failed to set main number: ${e instanceof Error ? e.message : "Unknown error"}`);
+      } finally {
+        setSettingMain(null);
+      }
+    },
+    [],
+  );
+
+  // Build tenant lookup
   const tenantNameById = useMemo(() => {
     const m = new Map<string, string>();
     for (const opt of tenantOptions) m.set(opt.id, opt.name);
     return m;
   }, [tenantOptions]);
 
-  // Merge into unified rows
+  // Reset main number override when tenant filter changes
+  const handleTenantChange = (v: string) => {
+    setTenantFilter(v);
+    setMainNumberOverride(null);
+  };
+
+  // Merge rows
   const allRows = useMemo<UnifiedRow[]>(() => {
     const rows: UnifiedRow[] = [];
-
     if (pbxDids.status === "success") {
       for (const d of pbxDids.data.rows) {
         const tenantName = d.connectTenantId
@@ -175,11 +215,9 @@ export default function AdminPhoneNumbersPage() {
           monthlyCostCents: null,
           region: null,
           lastUpdated: d.lastSeenAt,
-          pbxTenantSlug: d.pbxTenantSlug,
         });
       }
     }
-
     if (connectNumbers.status === "success") {
       for (const n of connectNumbers.data) {
         rows.push({
@@ -192,13 +230,19 @@ export default function AdminPhoneNumbersPage() {
           monthlyCostCents: n.monthlyCostCents ?? null,
           region: n.region ?? null,
           lastUpdated: n.purchasedAt ?? n.createdAt,
-          pbxTenantSlug: null,
         });
       }
     }
-
+    // Sort: main number first, then by phone number
+    rows.sort((a, b) => {
+      const aMain = currentMainNumber ? isSameNumber(a.phoneNumber, currentMainNumber) : false;
+      const bMain = currentMainNumber ? isSameNumber(b.phoneNumber, currentMainNumber) : false;
+      if (aMain && !bMain) return -1;
+      if (!aMain && bMain) return 1;
+      return a.phoneNumber.localeCompare(b.phoneNumber);
+    });
     return rows;
-  }, [pbxDids.status, pbxDids.data, connectNumbers.status, connectNumbers.data, tenantNameById]);
+  }, [pbxDids.status, pbxDids.data, connectNumbers.status, connectNumbers.data, tenantNameById, currentMainNumber]);
 
   // Client-side filtering
   const filteredRows = useMemo(() => {
@@ -208,31 +252,22 @@ export default function AdminPhoneNumbersPage() {
     if (statusFilter === "inactive") r = r.filter((row) => row.status !== "active" && row.status !== "ACTIVE");
     if (search.trim()) {
       const q = search.trim().replace(/\D/g, "");
-      r = r.filter((row) => {
-        const digits = row.phoneNumber.replace(/\D/g, "");
-        const name = (row.tenantName ?? "").toLowerCase();
-        return digits.includes(q) || name.includes(search.trim().toLowerCase());
-      });
+      const ql = search.trim().toLowerCase();
+      r = r.filter((row) => row.phoneNumber.replace(/\D/g, "").includes(q) || (row.tenantName ?? "").toLowerCase().includes(ql));
     }
     return r;
   }, [allRows, sourceFilter, statusFilter, search]);
 
-  // Stats
   const pbxTotal = pbxDids.status === "success" ? pbxDids.data.rows.length : 0;
   const cnTotal = connectNumbers.status === "success" ? connectNumbers.data.length : 0;
   const activeCount = allRows.filter((r) => r.status === "active" || r.status === "ACTIVE").length;
-
-  const isLoading =
-    (pbxDids.status === "loading" && !pbxDids.data) ||
-    (connectNumbers.status === "loading" && !connectNumbers.data);
+  const isLoading = (pbxDids.status === "loading" && !pbxDids.data) || (connectNumbers.status === "loading" && !connectNumbers.data);
   const isRefreshing = pbxDids.status === "success" && pbxDids.refreshing;
   const hasError = pbxDids.status === "error" || connectNumbers.status === "error";
+  const showMainFeature = isSuper && !!tenantFilter;
 
   return (
-    <PermissionGate
-      permission="can_view_admin_phone_numbers"
-      fallback={<div className="state-box">You do not have access to this page.</div>}
-    >
+    <PermissionGate permission="can_view_admin_phone_numbers" fallback={<div className="state-box">You do not have access to this page.</div>}>
       <div className="stack" style={{ gap: 18 }}>
         <PageHeader
           title="Phone Numbers"
@@ -276,11 +311,8 @@ export default function AdminPhoneNumbersPage() {
             {isSuper && (
               <ConnectSelect
                 value={tenantFilter}
-                onChange={(v) => setTenantFilter(v as string)}
-                options={[
-                  { value: "", label: "All tenants" },
-                  ...tenantOptions.map((t) => ({ value: t.id, label: t.name })),
-                ]}
+                onChange={(v) => handleTenantChange(v as string)}
+                options={[{ value: "", label: "All tenants" }, ...tenantOptions.map((t) => ({ value: t.id, label: t.name }))]}
                 placeholder="All tenants"
                 style={{ minWidth: 200 }}
               />
@@ -311,25 +343,27 @@ export default function AdminPhoneNumbersPage() {
               />
             </div>
             {(tenantFilter || sourceFilter || statusFilter || search) && (
-              <button
-                className="btn btn-sm btn-ghost"
-                onClick={() => { setTenantFilter(""); setSourceFilter(""); setStatusFilter(""); setSearch(""); }}
-              >
+              <button className="btn btn-sm btn-ghost" onClick={() => { handleTenantChange(""); setSourceFilter(""); setStatusFilter(""); setSearch(""); }}>
                 Clear filters
               </button>
             )}
           </div>
+          {showMainFeature && currentMainNumber && (
+            <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 6 }}>
+              <Star size={12} style={{ color: "#f59e0b" }} />
+              Main number for this tenant: <strong style={{ color: "var(--text-secondary)" }}>{formatE164(currentMainNumber)}</strong>
+              <span style={{ opacity: 0.6 }}>— appears in invoice header</span>
+            </div>
+          )}
         </section>
 
         {/* Table */}
         <section className="panel" style={{ padding: 0, overflow: "hidden" }}>
           {isLoading ? (
-            <div style={{ padding: 16 }}>
-              <LoadingSkeleton rows={8} />
-            </div>
+            <div style={{ padding: 16 }}><LoadingSkeleton rows={8} /></div>
           ) : hasError ? (
             <div style={{ padding: 16 }}>
-              <ErrorState message={pbxDids.status === "error" ? pbxDids.error : (connectNumbers as any).error} />
+              <ErrorState message={pbxDids.status === "error" ? (pbxDids as any).error : (connectNumbers as any).error} />
             </div>
           ) : (
             <div className="table-wrap">
@@ -337,71 +371,88 @@ export default function AdminPhoneNumbersPage() {
                 <thead>
                   <tr>
                     <th>Phone Number</th>
-                    <th>Tenant</th>
+                    {!tenantFilter && <th>Tenant</th>}
                     <th>Source</th>
                     <th>Status</th>
                     <th>Monthly Rate</th>
                     <th>Region</th>
                     <th>Last Updated</th>
+                    {showMainFeature && <th style={{ width: 120 }}>Invoice</th>}
                   </tr>
                 </thead>
                 <tbody>
                   {filteredRows.length === 0 ? (
                     <tr>
-                      <td colSpan={7} style={{ textAlign: "center", padding: "32px 16px", color: "var(--text-muted)" }}>
+                      <td colSpan={showMainFeature ? 8 : 7} style={{ textAlign: "center", padding: "32px 16px", color: "var(--text-muted)" }}>
                         <Hash size={20} style={{ marginBottom: 6, opacity: 0.4 }} />
                         <div>No phone numbers found{search || tenantFilter || sourceFilter || statusFilter ? " matching filters" : ""}.</div>
+                        {!tenantFilter && (
+                          <div style={{ marginTop: 6, fontSize: 12 }}>
+                            Select a tenant or click <strong>Refresh</strong> after running "Refresh PBX tenants."
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ) : (
-                    filteredRows.map((row) => (
-                      <tr key={row.id}>
-                        <td style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 500 }}>
-                          {formatE164(row.phoneNumber)}
-                        </td>
-                        <td>
-                          {row.tenantName ? (
-                            <span title={row.tenantId ?? undefined}>{row.tenantName}</span>
-                          ) : row.tenantId ? (
-                            <span style={{ color: "var(--text-muted)", fontSize: 12 }}>{row.tenantId.slice(0, 12)}…</span>
-                          ) : (
-                            <span style={{ color: "var(--text-muted)" }}>Unlinked</span>
+                    filteredRows.map((row) => {
+                      const isMain = !!currentMainNumber && isSameNumber(row.phoneNumber, currentMainNumber);
+                      const isSetting = settingMain === row.phoneNumber;
+                      return (
+                        <tr key={row.id} style={isMain ? { background: "var(--bg-accent-subtle, #fafaf7)" } : undefined}>
+                          <td style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 500 }}>
+                            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              {isMain && <Star size={13} style={{ color: "#f59e0b", flexShrink: 0 }} />}
+                              {formatE164(row.phoneNumber)}
+                            </span>
+                          </td>
+                          {!tenantFilter && (
+                            <td>
+                              {row.tenantName ? (
+                                <span title={row.tenantId ?? undefined}>{row.tenantName}</span>
+                              ) : row.tenantId ? (
+                                <span style={{ color: "var(--text-muted)", fontSize: 12 }}>{row.tenantId.slice(0, 12)}…</span>
+                              ) : (
+                                <span style={{ color: "var(--text-muted)" }}>Unlinked</span>
+                              )}
+                            </td>
                           )}
-                        </td>
-                        <td>{sourceBadge(row.source)}</td>
-                        <td>{statusBadge(row.source, row.status)}</td>
-                        <td style={{ color: "var(--text-secondary)", fontSize: 13 }}>
-                          {formatCents(row.monthlyCostCents)}
-                        </td>
-                        <td style={{ color: "var(--text-muted)", fontSize: 13 }}>
-                          {row.region ?? "—"}
-                        </td>
-                        <td style={{ color: "var(--text-muted)", fontSize: 13 }}>
-                          {fmtDate(row.lastUpdated)}
-                        </td>
-                      </tr>
-                    ))
+                          <td>{sourceBadge(row.source)}</td>
+                          <td>{statusBadge(row.source, row.status)}</td>
+                          <td style={{ color: "var(--text-secondary)", fontSize: 13 }}>{formatCents(row.monthlyCostCents)}</td>
+                          <td style={{ color: "var(--text-muted)", fontSize: 13 }}>{row.region ?? "—"}</td>
+                          <td style={{ color: "var(--text-muted)", fontSize: 13 }}>{fmtDate(row.lastUpdated)}</td>
+                          {showMainFeature && (
+                            <td>
+                              {isMain ? (
+                                <span className="badge warning" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                                  <Star size={11} /> Main
+                                </span>
+                              ) : row.tenantId ? (
+                                <button
+                                  className="btn btn-xs btn-ghost"
+                                  disabled={!!settingMain}
+                                  onClick={() => void setMainNumber(row.tenantId!, row.phoneNumber)}
+                                  title="Set as main number for this tenant (appears in invoice header)"
+                                >
+                                  {isSetting ? "Saving…" : "Set as Main"}
+                                </button>
+                              ) : null}
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>
             </div>
           )}
-
-          {/* Footer counts */}
           {!isLoading && !hasError && (
-            <div
-              style={{
-                padding: "10px 16px",
-                borderTop: "1px solid var(--border)",
-                fontSize: 12,
-                color: "var(--text-muted)",
-                display: "flex",
-                gap: 16,
-              }}
-            >
-              <span>
-                Showing <strong>{filteredRows.length}</strong> of <strong>{allRows.length}</strong> numbers
-              </span>
+            <div style={{ padding: "10px 16px", borderTop: "1px solid var(--border)", fontSize: 12, color: "var(--text-muted)", display: "flex", gap: 16 }}>
+              <span>Showing <strong>{filteredRows.length}</strong> of <strong>{allRows.length}</strong> numbers</span>
+              {showMainFeature && (
+                <span style={{ opacity: 0.7 }}>Select a tenant to set the main invoice number.</span>
+              )}
               {isRefreshing && <span style={{ color: "var(--text-accent)" }}>Refreshing…</span>}
             </div>
           )}

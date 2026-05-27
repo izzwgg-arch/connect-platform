@@ -323,26 +323,40 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
   // ── PBX-synced inbound DIDs (PbxTenantInboundDid) ──────────────────────────
   // Always included on invoices for visibility/audit, even when price is 0.
   // Price defaults to 0 (no charge); set TenantBillingSettings.pbxDidPriceCents > 0 to bill per DID.
+  // The "main" number (invoiceSupportPhone) appears in the invoice header — skip it here.
   const pbxDidUnitPrice = Number((settings as any).pbxDidPriceCents ?? 0);
-  const pbxDids: { id: string; e164: string }[] = await (db as any).pbxTenantInboundDid.findMany({
-    where: { connectTenantId: tenantId, active: true },
-    select: { id: true, e164: true },
-    orderBy: { e164: "asc" },
+  const mainPhone = ((settings as any).invoiceSupportPhone ?? "").trim();
+  // Prefer TenantPbxLink lookup (by instance + vitalTenantId) — more reliable than denormalized connectTenantId.
+  const pbxLink = await (db as any).tenantPbxLink.findUnique({
+    where: { tenantId },
+    select: { pbxInstanceId: true, pbxTenantId: true },
   });
-  if (pbxDids.length > 0) {
+  let pbxDids: { id: string; e164: string }[] = [];
+  if (pbxLink?.pbxInstanceId && pbxLink?.pbxTenantId) {
+    pbxDids = await (db as any).pbxTenantInboundDid.findMany({
+      where: { pbxInstanceId: pbxLink.pbxInstanceId, vitalTenantId: pbxLink.pbxTenantId, active: true },
+      select: { id: true, e164: true },
+      orderBy: { e164: "asc" },
+    });
+  } else {
+    // Fallback: denormalized connectTenantId set during Ombutel sync
+    pbxDids = await (db as any).pbxTenantInboundDid.findMany({
+      where: { connectTenantId: tenantId, active: true },
+      select: { id: true, e164: true },
+      orderBy: { e164: "asc" },
+    });
+  }
+  for (const did of pbxDids) {
+    // Skip main number — it appears in the "Bill to" header, not as a line item.
+    if (mainPhone && (did.e164 === mainPhone || did.e164.replace(/\D/g, "") === mainPhone.replace(/\D/g, ""))) continue;
     lineItems.push({
       type: "DID",
-      description: "PBX phone numbers",
-      quantity: pbxDids.length,
+      description: did.e164,
+      quantity: 1,
       unitPriceCents: pbxDidUnitPrice,
-      amountCents: pbxDids.length * pbxDidUnitPrice,
-      taxable: true,
-      metadata: {
-        lineItemKind: "pbx_inbound_dids",
-        e164Numbers: pbxDids.map((d) => d.e164),
-        pbxDidCount: pbxDids.length,
-        unitPriceCents: pbxDidUnitPrice,
-      },
+      amountCents: pbxDidUnitPrice,
+      taxable: pbxDidUnitPrice > 0,
+      metadata: { lineItemKind: "pbx_inbound_did", e164: did.e164, didId: did.id },
     });
   }
   if (billingQuantities.billing.smsPackages > 0) {

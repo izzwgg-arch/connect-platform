@@ -87,6 +87,7 @@ import {
   validateTenantCollectionsConfigUpdate,
   writeTenantCollectionsConfig,
 } from "./billingCollections";
+import { applyDunningAfterAutopayFailure } from "./billingDunning";
 import { validateScheduledPlanChangeEffectiveAt } from "./billingScheduledPlan";
 import {
   aggregateBillingPlanUsageCounts,
@@ -748,6 +749,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         extensionPriceCents: z.number().int().nonnegative().optional(),
         additionalPhoneNumberPriceCents: z.number().int().nonnegative().optional(),
         tollFreeDidPriceCents: z.number().int().nonnegative().nullable().optional(),
+        pbxDidPriceCents: z.number().int().nonnegative().optional(),
         smsPriceCents: z.number().int().nonnegative().optional(),
         firstPhoneNumberFree: z.boolean().optional(),
         smsBillingEnabled: z.boolean().optional(),
@@ -2760,6 +2762,14 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     }
     try {
       const transaction = await chargeBillingInvoice(invoice, method, { note: input.note });
+      if (transaction?.status !== "APPROVED") {
+        await applyDunningAfterAutopayFailure({ invoiceId: id, tenantId: invoice.tenantId, runId: null }).catch(() => null);
+        return reply.code(402).send({
+          error: "card_declined",
+          message: `Card declined: ${transaction?.responseMessage || transaction?.responseCode || "No details from processor"}`,
+          transactionId: transaction?.id || null,
+        });
+      }
       const updatedInvoice = await (db as any).billingInvoice.findUnique({ where: { id } });
       return { transaction, invoice: updatedInvoice };
     } catch (err: any) {
@@ -2802,7 +2812,16 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const method = methodId ? await (db as any).paymentMethod.findUnique({ where: { id: methodId } }) : null;
     if (!method) return reply.code(400).send({ error: "payment_method_required" });
     try {
-      return await chargeBillingInvoice(invoice, method, { allowRetry: true, note: "admin_retry" });
+      const transaction = await chargeBillingInvoice(invoice, method, { allowRetry: true, note: "admin_retry" });
+      if (transaction?.status !== "APPROVED") {
+        await applyDunningAfterAutopayFailure({ invoiceId: id, tenantId: invoice.tenantId, runId: null }).catch(() => null);
+        return reply.code(402).send({
+          error: "card_declined",
+          message: `Card declined: ${transaction?.responseMessage || transaction?.responseCode || "No details from processor"}`,
+          transactionId: transaction?.id || null,
+        });
+      }
+      return transaction;
     } catch (err: any) {
       if (err?.code === "BILLING_LIVE_CHARGES_DISABLED") return sendLiveChargesDisabled(reply);
       if (err?.code === "CHARGE_IN_PROGRESS") {
