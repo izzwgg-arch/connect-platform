@@ -279,12 +279,16 @@ Any component using `useTenantOptions()` (`apps/portal/hooks/useTenantOptions.ts
   "extensionsSkippedTenants": 2,
   "extensionErrors": 0,
   "linkedTenants": 8,
-  "lastSyncedAt": "2026-05-26T23:00:00.000Z",
-  "durationMs": 4200
+  "didSource": "ombutel_mysql",
+  "didTenantsProcessed": 8,
+  "didNumbersUpserted": 24,
+  "didErrors": 0,
+  "lastSyncedAt": "2026-05-27T23:00:00.000Z",
+  "durationMs": 4800
 }
 ```
 
-Extension sync failure is **non-fatal** — tenant directory sync succeeds even if extensions fail.
+Extension sync failure is **non-fatal** — tenant directory sync succeeds even if extensions fail. DID sync failure is also **non-fatal** — `didSource: "skipped"` when MySQL not configured.
 
 **Frontend invalidation sequence after success:**
 1. `useAppContext.reloadTenantOptions()` → sidebar `TenantSwitcher` updates.
@@ -295,8 +299,9 @@ Extension sync failure is **non-fatal** — tenant directory sync succeeds even 
 - `pbx_sync_start`
 - `tenant_options_refreshed` (counts: created/updated/deleted)
 - `extension_sync_complete` (counts: total/upserted/skipped/errors/linkedTenants)
+- `did_sync_complete` (source/tenantsProcessed/numbersUpserted/errors/skipReason)
 - `pbx_sync_complete` (total durationMs)
-- `pbx_sync_tenant_failed` / `extension_sync_failed` on errors
+- `pbx_sync_tenant_failed` / `extension_sync_failed` / `did_sync_failed` on errors
 
 ### Canonical extension options hook (`useExtensionOptions`)
 
@@ -304,6 +309,16 @@ Extension sync failure is **non-fatal** — tenant directory sync succeeds even 
 **Endpoint:** `GET /admin/users/catalog?tenantId=...&userFacingOnly=...`
 **Auto-refetches on:** `cc-pbx-sync-complete` event
 **Used by:** `UserModal` in `admin/users/page.tsx`
+
+### PBX DID billing (`PbxTenantInboundDid` → invoice line items)
+
+**Invoice line item type:** `DID` (`BillingLineItemType.DID`)
+**Source:** `PbxTenantInboundDid` where `{ connectTenantId: tenantId, active: true }`
+**Pricing:** `TenantBillingSettings.pbxDidPriceCents` — defaults to `0` (always shown, no charge). Set per-tenant to bill for DIDs.
+**Built in:** `apps/api/src/billing/invoiceEngine.ts` › `buildBillingInvoicePreviewWithLoadedSettings`
+**Metadata on line item:** `lineItemKind: "pbx_inbound_dids"`, `e164Numbers: string[]`, `pbxDidCount: number`
+**DID sync trigger:** `POST /admin/pbx/refresh-tenants` step 3 (`syncPbxTenantInboundDids`). Only populates when `ombuMysqlUrlEncrypted` is set on the `PbxInstance`.
+**Note:** These are separate from `PhoneNumber` (Twilio/VoIP.ms purchased numbers). Both can appear on the same invoice.
 **Returns:** `{ extensions, totalExtensions, filteredOut, isLoading, reload }`
 **Source:** Connect DB `Extension` table (not live VitalPBX) — always reflects the last sync result.
 

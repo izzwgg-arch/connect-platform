@@ -953,6 +953,10 @@ model TenantBillingSettings {
   nextBillingPlanId               String?
   /// UTC midnight on the first day of the billing period when nextBillingPlanId becomes effective.
   nextBillingPlanEffectiveAt      DateTime?
+  /// Per-DID monthly price for PBX-synced inbound numbers (PbxTenantInboundDid).
+  /// Default 0 = all PBX DIDs appear on invoices at no charge.
+  /// Set > 0 to bill per synced DID (e.g. 100 = $1.00/month each).
+  pbxDidPriceCents                Int            @default(0)
   createdAt                       DateTime       @default(now())
   updatedAt                       DateTime       @updatedAt
   tenant                          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)

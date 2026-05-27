@@ -160,6 +160,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         extensionsUpserted?: number | null;
         extensionsSkippedTenants?: number | null;
         linkedTenants?: number | null;
+        didSource?: string | null;
+        didTenantsProcessed?: number | null;
+        didNumbersUpserted?: number | null;
+        didErrors?: number | null;
         lastSyncedAt?: string;
         durationMs?: number;
         retryAfterMs?: number;
@@ -176,9 +180,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (result.extensionsFound != null) extParts.push(`${result.extensionsFound} extensions seen`);
       if (result.extensionsUpserted != null && result.extensionsUpserted > 0) extParts.push(`${result.extensionsUpserted} updated`);
       const extSummary = extParts.length ? ` | ${extParts.join(", ")}` : "";
+      const didParts: string[] = [];
+      if (result.didSource && result.didSource !== "skipped") {
+        if (result.didNumbersUpserted != null) didParts.push(`${result.didNumbersUpserted} DIDs synced`);
+        if (result.didTenantsProcessed != null) didParts.push(`${result.didTenantsProcessed} tenants`);
+      }
+      const didSummary = didParts.length ? ` | ${didParts.join(", ")}` : "";
       return {
         ok: true as const,
-        message: `PBX sync complete — ${result.pbxTenantCount ?? "?"} tenants (${tenantChanged} changed, ${result.directoryDeleted || 0} deleted)${extSummary}.`,
+        message: `PBX sync complete — ${result.pbxTenantCount ?? "?"} tenants (${tenantChanged} changed, ${result.directoryDeleted || 0} deleted)${extSummary}${didSummary}.`,
         detail: result,
       };
     } catch (err) {

@@ -257,10 +257,11 @@ Not a full inbox archive. Stores CRM-linked email metadata and summaries; does n
 
 ### PBX tenant sync behavior and canonical dropdown source
 
-`POST /admin/pbx/refresh-tenants` (updated 2026-05-26) performs a **full sync** in sequence:
+`POST /admin/pbx/refresh-tenants` (updated 2026-05-27) performs a **full sync** in sequence:
 
 1. `client.listTenants()` → `syncPbxTenantDirectoryFromRows()` → updates `PbxTenantDirectory`. Does **not** create or update Connect `Tenant` rows directly.
 2. `syncExtensionsFromPbx()` → for every `TenantPbxLink` on the instance, fetches extensions from VitalPBX and upserts `Extension` + `PbxExtensionLink`. Extension sync failure is **non-fatal** (tenant directory already saved).
+3. `syncPbxTenantInboundDids()` → reads Ombutel MySQL (`ombu_inbound_routes`) and upserts `PbxTenantInboundDid` rows. Sets `connectTenantId` from `TenantPbxLink`. Automatically **skipped** (non-fatal) if `ombuMysqlUrlEncrypted` is not configured on the instance. DID sync failure is also non-fatal.
 
 After `POST /admin/pbx/refresh-tenants` succeeds, `useAppContext.refreshPbxTenants()`:
 1. Calls `reloadTenantOptions()` → updates `TenantSwitcher`.

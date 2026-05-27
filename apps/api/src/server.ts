@@ -13683,6 +13683,31 @@ app.post("/admin/pbx/refresh-tenants", async (req, reply) => {
     );
   }
 
+  // ── Step 3: Sync inbound DIDs (PbxTenantInboundDid) from Ombutel MySQL.
+  // Non-fatal: skipped automatically if ombuMysqlUrlEncrypted is not configured.
+  let didSyncResult: Awaited<ReturnType<typeof syncPbxTenantInboundDids>> | null = null;
+  try {
+    didSyncResult = await syncPbxTenantInboundDids(db, instance.id);
+    app.log.info(
+      {
+        event: "did_sync_complete",
+        pbxInstanceId: instance.id,
+        source: didSyncResult.source,
+        tenantsProcessed: didSyncResult.tenantsProcessed,
+        numbersUpserted: didSyncResult.numbersUpserted,
+        errors: didSyncResult.errors,
+        skipReason: (didSyncResult as any).skipReason ?? null,
+      },
+      "did_sync_complete",
+    );
+  } catch (e: any) {
+    // DID sync failure is non-fatal — extension and tenant syncs already completed.
+    app.log.warn(
+      { event: "did_sync_failed", pbxInstanceId: instance.id, err: e?.message },
+      "did_sync_failed",
+    );
+  }
+
   const durationMs = Date.now() - startedAt;
   app.log.info(
     { event: "pbx_sync_complete", pbxInstanceId: instance.id, durationMs },
@@ -13701,6 +13726,10 @@ app.post("/admin/pbx/refresh-tenants", async (req, reply) => {
     extensionsSkippedTenants: extensionSyncResult?.totalSkipped ?? null,
     extensionErrors: extensionSyncResult?.totalErrors ?? null,
     linkedTenants: extensionSyncResult?.tenantResults.filter((r) => !r.skipped).length ?? null,
+    didSource: didSyncResult?.source ?? null,
+    didTenantsProcessed: didSyncResult?.tenantsProcessed ?? null,
+    didNumbersUpserted: didSyncResult?.numbersUpserted ?? null,
+    didErrors: didSyncResult?.errors ?? null,
     lastSyncedAt: new Date().toISOString(),
     durationMs,
   };

@@ -320,6 +320,31 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
       },
     });
   }
+  // ── PBX-synced inbound DIDs (PbxTenantInboundDid) ──────────────────────────
+  // Always included on invoices for visibility/audit, even when price is 0.
+  // Price defaults to 0 (no charge); set TenantBillingSettings.pbxDidPriceCents > 0 to bill per DID.
+  const pbxDidUnitPrice = Number((settings as any).pbxDidPriceCents ?? 0);
+  const pbxDids: { id: string; e164: string }[] = await (db as any).pbxTenantInboundDid.findMany({
+    where: { connectTenantId: tenantId, active: true },
+    select: { id: true, e164: true },
+    orderBy: { e164: "asc" },
+  });
+  if (pbxDids.length > 0) {
+    lineItems.push({
+      type: "DID",
+      description: "PBX phone numbers",
+      quantity: pbxDids.length,
+      unitPriceCents: pbxDidUnitPrice,
+      amountCents: pbxDids.length * pbxDidUnitPrice,
+      taxable: true,
+      metadata: {
+        lineItemKind: "pbx_inbound_dids",
+        e164Numbers: pbxDids.map((d) => d.e164),
+        pbxDidCount: pbxDids.length,
+        unitPriceCents: pbxDidUnitPrice,
+      },
+    });
+  }
   if (billingQuantities.billing.smsPackages > 0) {
     const qty = billingQuantities.billing.smsPackages;
     lineItems.push({
