@@ -26,6 +26,7 @@ import {
   crm,
   cn,
 } from "../../../../components/crm";
+import { BulkEmailModal } from "../../../../components/crm/email/BulkEmailModal";
 import { apiGet, apiPost, apiDelete } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 
@@ -569,6 +570,8 @@ export default function FundersPage() {
   const [showNew, setShowNew] = useState(false);
   const [showNewTag, setShowNewTag] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showBulkEmail, setShowBulkEmail] = useState(false);
+  const [bulkEmailToast, setBulkEmailToast] = useState<string | null>(null);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
@@ -668,6 +671,25 @@ export default function FundersPage() {
 
   return (
     <div className={cn(crm.contactsWorkspace)}>
+      {showBulkEmail && (
+        <BulkEmailModal
+          audience={{
+            sourceType: "FUNDERS",
+            funderIds: Array.from(selected),
+            selectAll: false,
+            tagId: tagFilter ?? undefined,
+          }}
+          onClose={() => setShowBulkEmail(false)}
+          onQueued={(res) => {
+            setShowBulkEmail(false);
+            clearSelection();
+            setBulkEmailToast(
+              `Bulk email queued: ${res.queuedCount} recipients${res.skippedCount > 0 ? `, ${res.skippedCount} skipped` : ""}`,
+            );
+            setTimeout(() => setBulkEmailToast(null), 6000);
+          }}
+        />
+      )}
       <div className={crm.pageInnerContacts}>
         {/* ── Header ─────────────────────────────────────────────────────────── */}
         <CRMPageHeader
@@ -745,11 +767,25 @@ export default function FundersPage() {
               </select>
             </div>
 
+            {bulkEmailToast && (
+              <div className="rounded-crm border border-crm-success/40 bg-crm-success/10 px-4 py-2 text-sm font-medium text-crm-success">
+                {bulkEmailToast}
+              </div>
+            )}
+
             {/* ── Bulk Action Bar ───────────────────────────────────────────── */}
             {selected.size > 0 && (
               <div className={crm.contactsBulkBar}>
                 <span className="text-sm font-medium text-crm-text">{selected.size} selected</span>
                 <button onClick={clearSelection} className={crm.btnGhost} style={{ padding: "0.375rem" }}><X size={14} /></button>
+                <button
+                  type="button"
+                  onClick={() => setShowBulkEmail(true)}
+                  className={cn(crm.btnSecondary, "gap-1.5 text-sm")}
+                >
+                  <Mail size={13} />
+                  Send Email
+                </button>
                 <div className="ml-auto flex flex-wrap items-center gap-2">
                   <select
                     className={crm.selectCompact}

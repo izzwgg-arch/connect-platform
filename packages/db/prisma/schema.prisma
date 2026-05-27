@@ -52,6 +52,8 @@ model CrmEmailConnection {
   /// Admin who manages a TENANT shared sender. Nullable for USER rows.
   managedBy User?  @relation("CrmEmailConnection_managedBy", fields: [managedByUserId], references: [id], onDelete: SetNull)
 
+  bulkJobs  CrmBulkEmailJob[]
+
   // Note: partial unique indexes (USER per tenant+user+provider, single TENANT default per
   // tenant+provider, single TENANT row per tenant+email+provider) are created via raw SQL
   // in the migration. Prisma cannot express partial uniques natively.
@@ -163,8 +165,9 @@ model CrmEmailTemplate {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy User?  @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User?           @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  bulkJobs  CrmBulkEmailJob[]
 
   @@index([tenantId, isArchived, updatedAt])
   @@index([tenantId, createdByUserId])
@@ -616,6 +619,7 @@ model Tenant {
   crmEmailMessages                CrmEmailMessage[]
   crmEmailSendLogs                CrmEmailSendLog[]
   crmEmailTemplates               CrmEmailTemplate[]
+  crmBulkEmailJobs                CrmBulkEmailJob[]
   customRoles                     CustomRole[]
   userCustomRoles                 UserCustomRole[]
   whatsAppAccounts                WhatsAppAccount[]
@@ -702,6 +706,7 @@ model User {
   crmEmailThreads                CrmEmailThread[]
   crmEmailSendLogs               CrmEmailSendLog[]
   crmEmailTemplates              CrmEmailTemplate[]
+  crmBulkEmailJobsCreated        CrmBulkEmailJob[]                 @relation("CrmBulkEmailJobCreator")
   customRolesCreated             CustomRole[]                      @relation("CustomRoleCreatedBy")
   customRolesUpdated             CustomRole[]                      @relation("CustomRoleUpdatedBy")
   customRoleAssignments          UserCustomRole[]
@@ -4129,4 +4134,74 @@ model FunderImportBatch {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, createdAt])
+}
+
+/// Bulk email job — tenant-scoped, server-side queued send to many recipients.
+/// sourceType: CONTACTS | CAMPAIGN | FUNDERS
+/// status: QUEUED | RUNNING | COMPLETED | FAILED | CANCELLED
+model CrmBulkEmailJob {
+  id              String   @id @default(cuid())
+  tenantId        String
+  createdByUserId String?
+  /// CONTACTS | CAMPAIGN | FUNDERS
+  sourceType      String
+  /// Optional: campaign members source
+  campaignId      String?
+  /// Optional: tag filter (ContactTag.id or FunderTag.id depending on sourceType)
+  tagId           String?
+  /// Optional: explicit list of contact IDs or funder IDs. Null = all filtered results.
+  contactIds      Json?
+  /// Required: email template to render and send
+  templateId      String
+  /// Optional: resolved CrmEmailConnection to send from. Null = deferred to worker.
+  connectionId    String?
+  /// QUEUED | RUNNING | COMPLETED | FAILED | CANCELLED
+  status          String   @default("QUEUED")
+  totalCount      Int      @default(0)
+  queuedCount     Int      @default(0)
+  sentCount       Int      @default(0)
+  failedCount     Int      @default(0)
+  skippedCount    Int      @default(0)
+  errorSummary    String?
+  createdAt       DateTime @default(now())
+  startedAt       DateTime?
+  completedAt     DateTime?
+
+  tenant     Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy  User?                @relation("CrmBulkEmailJobCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  template   CrmEmailTemplate     @relation(fields: [templateId], references: [id])
+  connection CrmEmailConnection?  @relation(fields: [connectionId], references: [id])
+  recipients CrmBulkEmailRecipient[]
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status])
+}
+
+/// Per-recipient row for a CrmBulkEmailJob. One row per intended email send.
+/// status: QUEUED | SENT | FAILED | SKIPPED
+model CrmBulkEmailRecipient {
+  id             String   @id @default(cuid())
+  jobId          String
+  tenantId       String
+  /// FK to Contact (for CONTACTS / CAMPAIGN source)
+  contactId      String?
+  /// FK to Funder (for FUNDERS source)
+  funderId       String?
+  /// Resolved email address at job creation time
+  toEmail        String
+  /// QUEUED | SENT | FAILED | SKIPPED
+  status         String   @default("QUEUED")
+  /// MISSING_EMAIL | DUPLICATE | OTHER
+  skipReason     String?
+  /// Prevents duplicate sends if worker restarts
+  idempotencyKey String   @unique
+  gmailMessageId String?
+  errorMessage   String?
+  sentAt         DateTime?
+  createdAt      DateTime @default(now())
+
+  job CrmBulkEmailJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, status])
+  @@index([tenantId, jobId])
 }

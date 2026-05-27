@@ -41,6 +41,7 @@ import {
   crm,
   cn,
 } from "../../../../components/crm";
+import { BulkEmailModal } from "../../../../components/crm/email/BulkEmailModal";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 
@@ -482,6 +483,9 @@ export default function CrmContactsPage() {
   const [smartAssignResult, setSmartAssignResult] = useState<{ assigned: number; remaining: number } | null>(null);
   const [smartAssignError, setSmartAssignError] = useState<string | null>(null);
 
+  const [showBulkEmail, setShowBulkEmail] = useState(false);
+  const [bulkEmailToast, setBulkEmailToast] = useState<string | null>(null);
+
   const searchRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -765,6 +769,26 @@ export default function CrmContactsPage() {
   return (
     <CRMPageShell className={crm.contactsWorkspace} innerClassName={crm.pageInnerContacts}>
       {showAdd && <AddContactModal onClose={() => setShowAdd(false)} onCreated={handleContactCreated} />}
+      {showBulkEmail && (
+        <BulkEmailModal
+          audience={{
+            sourceType: "CONTACTS",
+            contactIds: Array.from(selectedIds),
+            selectAll: false,
+            tagId: tagFilter !== "all" ? tagFilter : undefined,
+            stage: stage !== "all" ? stage : undefined,
+          }}
+          onClose={() => setShowBulkEmail(false)}
+          onQueued={(res) => {
+            setShowBulkEmail(false);
+            clearSelection();
+            setBulkEmailToast(
+              `Bulk email queued: ${res.queuedCount} recipients${res.skippedCount > 0 ? `, ${res.skippedCount} skipped` : ""}`,
+            );
+            setTimeout(() => setBulkEmailToast(null), 6000);
+          }}
+        />
+      )}
 
       <CRMPageHeader
         className={crm.contactsHeaderPanel}
@@ -965,9 +989,23 @@ export default function CrmContactsPage() {
         </div>
       )}
 
+      {bulkEmailToast && (
+        <div className="rounded-crm border border-crm-success/40 bg-crm-success/10 px-4 py-2.5 text-sm font-medium text-crm-success">
+          {bulkEmailToast}
+        </div>
+      )}
+
       {isAdmin && selectedIds.size > 0 && (
         <div className={cn(crm.contactsBulkBar, "border-crm-border bg-crm-surface shadow-crm")}>
             <span className="text-sm font-medium text-crm-text">{selectedIds.size} selected</span>
+            <button
+              type="button"
+              onClick={() => setShowBulkEmail(true)}
+              className={cn(crm.btnSecondary, "px-3 py-1.5 text-sm gap-1.5")}
+            >
+              <Mail className="h-3.5 w-3.5" />
+              Send Email
+            </button>
             <select
               value={bulkAssignUserId}
               onChange={(e) => {

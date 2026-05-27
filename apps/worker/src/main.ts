@@ -43,6 +43,7 @@ import {
 } from "@connect/shared";
 import { processCrmEmailSendJob } from "./crmEmailSend";
 import { processCrmEmailSyncJob } from "./crmEmailSync";
+import { processCrmBulkEmailJob } from "./crmBulkEmailJob";
 import { registerWhatsAppInboundWorker } from "./whatsappInboundJob";
 import { registerWhatsAppStatusWorker } from "./whatsappStatusJob";
 
@@ -1307,6 +1308,26 @@ if (!_crmEmailPhase1Off) {
     console.log("CRM Email auto-sync disabled (set CRM_EMAIL_AUTO_SYNC_ENABLED=true to enable)");
   }
 }
+
+// ─── CRM Bulk Email Worker ────────────────────────────────────────────────────
+// Processes server-side bulk email jobs queued via POST /crm/email/bulk-jobs.
+// Concurrency=1: each job processes recipients serially with throttling to
+// respect Gmail send rate limits. Multiple replicas are safe (BullMQ jobId lock).
+const crmBulkEmailJobWorker = new Worker(
+  "crm-bulk-email-job",
+  async (job) => {
+    const d = job.data as { jobId: string; tenantId: string };
+    await processCrmBulkEmailJob(d);
+  },
+  { connection: redis, concurrency: 1 },
+);
+crmBulkEmailJobWorker.on("completed", (job) =>
+  console.log(`crm-bulk-email-job completed: ${job.id}`),
+);
+crmBulkEmailJobWorker.on("failed", (job, err) =>
+  console.error(`crm-bulk-email-job failed: ${job?.id} -> ${err?.message}`),
+);
+console.log("CRM Bulk Email worker started");
 
 // Voicemail sync: `runVoicemailSyncCycle` in `./voicemailSyncCycle.ts` (fair helper scheduling).
 

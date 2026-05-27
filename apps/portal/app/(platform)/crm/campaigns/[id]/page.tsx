@@ -22,6 +22,7 @@ import {
 import { crm } from "../../../../../components/crm/crmClasses";
 import { mk } from "../../../../../components/crm/campaign/campaignCinemaClasses";
 import { cn } from "../../../../../components/crm/cn";
+import { BulkEmailModal } from "../../../../../components/crm/email/BulkEmailModal";
 import { apiGet, apiPost, apiPatch } from "../../../../../services/apiClient";
 import { useAppContext } from "../../../../../hooks/useAppContext";
 
@@ -743,6 +744,10 @@ export default function CampaignDetailPage() {
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [bulkMsg, setBulkMsg] = useState("");
 
+  // Bulk email
+  const [showBulkEmail, setShowBulkEmail] = useState(false);
+  const [bulkEmailToast, setBulkEmailToast] = useState<string | null>(null);
+
   const [importHistory, setImportHistory] = useState<CampaignImportHistoryRow[]>([]);
   const [importHistoryLoading, setImportHistoryLoading] = useState(false);
 
@@ -1090,6 +1095,28 @@ export default function CampaignDetailPage() {
           campaignId={campaignId}
           onClose={() => setShowAddContacts(false)}
           onAdded={() => { loadCampaign(); loadMembers(); }}
+        />
+      )}
+
+      {showBulkEmail && campaign && (
+        <BulkEmailModal
+          audience={{
+            sourceType: "CAMPAIGN",
+            campaignId,
+            campaignName: campaign.name,
+            contactIds: selected.size > 0
+              ? members.filter((m) => selected.has(m.id) && m.contactId).map((m) => m.contactId!)
+              : [],
+          }}
+          onClose={() => setShowBulkEmail(false)}
+          onQueued={(res) => {
+            setShowBulkEmail(false);
+            setSelected(new Set());
+            setBulkEmailToast(
+              `Bulk email queued: ${res.queuedCount} recipients${res.skippedCount > 0 ? `, ${res.skippedCount} skipped` : ""}`,
+            );
+            setTimeout(() => setBulkEmailToast(null), 6000);
+          }}
         />
       )}
 
@@ -1536,6 +1563,17 @@ export default function CampaignDetailPage() {
               <div className={mk.rosterHead}>
                 <h2 className="cinema-roster-title">Members ({membersTotal})</h2>
                 <p className="cinema-roster-sub">Operational roster — server-side filters, 100 per load</p>
+                {isAdmin && membersTotal > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => { setSelected(new Set()); setShowBulkEmail(true); }}
+                    className={cn(crm.btnSecondary, "ml-auto text-sm gap-1.5 py-1.5 px-3")}
+                    title="Send email to all campaign members"
+                  >
+                    <Mail className="h-3.5 w-3.5" />
+                    Email all members
+                  </button>
+                )}
               </div>
           <div className={mk.rosterToolbar}>
             <div className="relative flex-1 min-w-[160px] max-w-xs">
@@ -1575,10 +1613,26 @@ export default function CampaignDetailPage() {
             </select>
           </div>
 
+          {bulkEmailToast && (
+            <div className="mb-3 rounded-crm border border-crm-success/40 bg-crm-success/10 px-4 py-2 text-sm font-medium text-crm-success">
+              {bulkEmailToast}
+            </div>
+          )}
+
           {/* Bulk action bar */}
           {selected.size > 0 && (
             <div className="mb-4 flex items-center gap-3 p-3 bg-crm-accent/10 border border-crm-accent/30 rounded-crm flex-wrap">
               <span className="text-sm font-medium text-crm-text">{selected.size} selected</span>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setShowBulkEmail(true)}
+                  className={cn(crm.btnSecondary, "text-sm py-1.5 px-3 gap-1.5 shrink-0")}
+                >
+                  <Mail className="h-3.5 w-3.5" />
+                  Send Email
+                </button>
+              )}
               <div className="flex items-center gap-2 flex-1 min-w-0">
                 <UserPlus className="h-4 w-4 text-crm-accent shrink-0" />
                 <select
