@@ -1262,7 +1262,9 @@ if (!_crmEmailPhase1Off) {
   console.log("CRM Email sync worker started");
 
   // ─── CRM Email auto-sync scheduler (metadata-only, threads-only) ───────────
-  const autoSyncEnabled = (process.env.CRM_EMAIL_AUTO_SYNC_ENABLED || "false").toLowerCase() === "true";
+  // Default is ON: reply sync needs to run automatically for tracked connections.
+  // Set CRM_EMAIL_AUTO_SYNC_ENABLED=false to disable (e.g. for testing or cost control).
+  const autoSyncEnabled = (process.env.CRM_EMAIL_AUTO_SYNC_ENABLED || "true").toLowerCase() !== "false";
   const autoSyncIntervalMs = Math.max(60_000, Number(process.env.CRM_EMAIL_AUTO_SYNC_INTERVAL_MS || 300_000));
   const autoSyncBatchSize = Math.max(1, Math.min(100, Number(process.env.CRM_EMAIL_AUTO_SYNC_BATCH_SIZE || 20)));
 
@@ -1305,7 +1307,7 @@ if (!_crmEmailPhase1Off) {
     setInterval(runCrmEmailAutoSyncTick, autoSyncIntervalMs);
     console.log(`CRM Email auto-sync enabled (intervalMs=${autoSyncIntervalMs}, batchSize=${autoSyncBatchSize})`);
   } else {
-    console.log("CRM Email auto-sync disabled (set CRM_EMAIL_AUTO_SYNC_ENABLED=true to enable)");
+    console.log("CRM Email auto-sync disabled (set CRM_EMAIL_AUTO_SYNC_ENABLED=true, or unset, to re-enable)");
   }
 }
 
@@ -2436,7 +2438,7 @@ async function runBillingDunningRetries(): Promise<void> {
 
 setInterval(() => {
   runBillingDunningRetries().catch((err) => console.error("billing dunning sweep failed", err?.message || err));
-}, 6 * 60 * 60 * 1000);
+}, 1 * 60 * 60 * 1000);
 
 runBillingDunningRetries().catch((err) => console.error("initial billing dunning sweep failed", err?.message || err));
 
