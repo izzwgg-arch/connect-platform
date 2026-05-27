@@ -103,6 +103,24 @@ function buildVarsFromFunder(funder: {
 
 export async function registerCrmBulkEmailRoutes(app: FastifyInstance) {
   /**
+   * GET /crm/contact-tags
+   * Returns all ContactTag records for the tenant, ordered by name.
+   * Used by BulkEmailModal to populate the tag picker for CONTACTS / CAMPAIGN sources.
+   */
+  app.get("/crm/contact-tags", async (req, reply) => {
+    const user = await requireCrmAdmin(req, reply);
+    if (!user) return;
+
+    const tags = await db.contactTag.findMany({
+      where: { tenantId: user.tenantId },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, color: true },
+    });
+    return { tags };
+  });
+
+
+  /**
    * POST /crm/email/bulk-jobs
    *
    * Creates a bulk email job. Resolves all recipients server-side, dedupes by email,

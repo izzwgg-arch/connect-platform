@@ -1,13 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertCircle,
   CheckCircle2,
-  ChevronDown,
   Loader2,
   Mail,
   Send,
+  Tag,
   Users,
   X,
 } from "lucide-react";
@@ -16,6 +16,12 @@ import { crm } from "../crmClasses";
 import { cn } from "../cn";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+
+type CrmTag = {
+  id: string;
+  name: string;
+  color?: string | null;
+};
 
 type Sender = {
   id: string;
@@ -89,6 +95,14 @@ export function BulkEmailModal({
   const [templatesLoading, setTemplatesLoading] = useState(true);
   const [templateId, setTemplateId] = useState<string>("");
 
+  // Tag picker state — starts from the page-level filter but user can override
+  const [tags, setTags] = useState<CrmTag[]>([]);
+  const [tagsLoading, setTagsLoading] = useState(true);
+  const [localTagId, setLocalTagId] = useState<string>(audience.tagId ?? "");
+  // "all-with-tag" scope: when true, send to all contacts/funders with selected tag
+  // (not just the explicitly selected rows).  Only available for CONTACTS and FUNDERS.
+  const [sendToAllWithTag, setSendToAllWithTag] = useState(false);
+
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BulkJobResult | null>(null);
@@ -96,6 +110,7 @@ export function BulkEmailModal({
   const selectedTemplate = templates.find((t) => t.id === templateId) ?? null;
   const selectedSender = senders.find((s) => s.id === senderId) ?? null;
   const connectedSenders = senders.filter((s) => s.status === "CONNECTED");
+  const selectedTag = tags.find((t) => t.id === localTagId) ?? null;
 
   // Load senders
   useEffect(() => {
@@ -119,7 +134,29 @@ export function BulkEmailModal({
       .finally(() => setTemplatesLoading(false));
   }, []);
 
+  // Load tags — contact tags for CONTACTS/CAMPAIGN, funder tags for FUNDERS
+  useEffect(() => {
+    const endpoint =
+      audience.sourceType === "FUNDERS" ? "/crm/funder-tags" : "/crm/contact-tags";
+    apiGet<{ tags: CrmTag[] }>(endpoint)
+      .then((data) => setTags(data.tags ?? []))
+      .catch(() => undefined)
+      .finally(() => setTagsLoading(false));
+  }, [audience.sourceType]);
+
+  // When sendToAllWithTag is turned on but no tag chosen, auto-select first tag
+  useEffect(() => {
+    if (sendToAllWithTag && !localTagId && tags.length > 0) {
+      setLocalTagId(tags[0].id);
+    }
+  }, [sendToAllWithTag, localTagId, tags]);
+
   const audienceLabel = (): string => {
+    if (sendToAllWithTag && localTagId) {
+      const tagName = selectedTag?.name ?? localTagId;
+      if (audience.sourceType === "FUNDERS") return `All funders — tag: ${tagName}`;
+      return `All contacts — tag: ${tagName}`;
+    }
     if (audience.sourceType === "CONTACTS") {
       if (audience.selectAll) return "All filtered contacts";
       return `${audience.contactIds.length} selected contact${audience.contactIds.length !== 1 ? "s" : ""}`;
@@ -147,6 +184,10 @@ export function BulkEmailModal({
       setError("Please choose a sender.");
       return;
     }
+    if (sendToAllWithTag && !localTagId) {
+      setError("Please choose a tag to send to all contacts with that tag.");
+      return;
+    }
 
     setSubmitting(true);
     setError(null);
@@ -156,24 +197,28 @@ export function BulkEmailModal({
         connectionId: senderId,
       };
 
+      // When "send to all with tag" is on, override to selectAll=true with the chosen tag.
+      const effectiveTagId = localTagId || undefined;
+      const effectiveSelectAll = sendToAllWithTag;
+
       if (audience.sourceType === "CONTACTS") {
         payload.sourceType = "CONTACTS";
-        payload.selectAll = audience.selectAll ?? false;
-        payload.contactIds = audience.contactIds;
-        if (audience.tagId) payload.tagId = audience.tagId;
+        payload.selectAll = effectiveSelectAll || (audience.selectAll ?? false);
+        if (!effectiveSelectAll) payload.contactIds = audience.contactIds;
+        if (effectiveTagId) payload.tagId = effectiveTagId;
         if (audience.stage) payload.stage = audience.stage;
       } else if (audience.sourceType === "CAMPAIGN") {
         payload.sourceType = "CAMPAIGN";
         payload.campaignId = audience.campaignId;
-        if (audience.contactIds && audience.contactIds.length > 0) {
+        if (!effectiveSelectAll && audience.contactIds && audience.contactIds.length > 0) {
           payload.contactIds = audience.contactIds;
         }
-        if (audience.tagId) payload.tagId = audience.tagId;
+        if (effectiveTagId) payload.tagId = effectiveTagId;
       } else if (audience.sourceType === "FUNDERS") {
         payload.sourceType = "FUNDERS";
-        payload.selectAll = audience.selectAll ?? false;
-        payload.contactIds = audience.funderIds;
-        if (audience.tagId) payload.tagId = audience.tagId;
+        payload.selectAll = effectiveSelectAll || (audience.selectAll ?? false);
+        if (!effectiveSelectAll) payload.contactIds = audience.funderIds;
+        if (effectiveTagId) payload.tagId = effectiveTagId;
       }
 
       const res = await apiPost<BulkJobResult>("/crm/email/bulk-jobs", payload);
@@ -274,15 +319,68 @@ export function BulkEmailModal({
             <div className="flex items-center gap-2 rounded-crm border border-crm-border bg-crm-surface-2 px-3 py-2.5">
               <Users className="h-4 w-4 shrink-0 text-crm-accent" />
               <span className="text-sm font-medium text-crm-text">{audienceLabel()}</span>
-              {audience.tagId && (
-                <span className="ml-auto rounded-full bg-crm-accent/10 px-2 py-0.5 text-xs font-medium text-crm-accent">
-                  filtered by tag
+              {selectedTag && (
+                <span
+                  className="ml-auto rounded-full px-2 py-0.5 text-xs font-medium"
+                  style={
+                    selectedTag.color
+                      ? { background: `${selectedTag.color}22`, color: selectedTag.color }
+                      : undefined
+                  }
+                >
+                  {selectedTag.name}
                 </span>
               )}
             </div>
             <p className="mt-1.5 text-xs text-crm-muted">
-              Recipients with no email address will be skipped automatically. Duplicate email addresses are deduplicated.
+              Recipients with no email address are skipped automatically. Duplicate emails are deduplicated.
             </p>
+
+            {/* Tag filter picker */}
+            <div className="mt-3 space-y-2.5">
+              <div className="flex items-center gap-2">
+                <Tag className="h-3.5 w-3.5 shrink-0 text-crm-muted" />
+                <label className="text-xs font-medium text-crm-muted">Narrow by tag</label>
+              </div>
+              {tagsLoading ? (
+                <div className="flex items-center gap-1.5 text-xs text-crm-muted">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading tags…
+                </div>
+              ) : tags.length === 0 ? (
+                <p className="text-xs text-crm-muted">No tags found for this tenant.</p>
+              ) : (
+                <select
+                  value={localTagId}
+                  onChange={(e) => {
+                    setLocalTagId(e.target.value);
+                    if (!e.target.value) setSendToAllWithTag(false);
+                  }}
+                  className={crm.select}
+                >
+                  <option value="">No tag filter — all recipients</option>
+                  {tags.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+              )}
+
+              {/* Scope toggle — only for CONTACTS and FUNDERS where "all with tag" makes sense */}
+              {localTagId && audience.sourceType !== "CAMPAIGN" && (
+                <label className="flex cursor-pointer items-center gap-2.5 rounded-crm border border-crm-border bg-crm-surface-2 px-3 py-2.5 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={sendToAllWithTag}
+                    onChange={(e) => setSendToAllWithTag(e.target.checked)}
+                    className={crm.checkbox}
+                  />
+                  <span className="text-crm-text">
+                    Send to <strong>all</strong>{" "}
+                    {audience.sourceType === "FUNDERS" ? "funders" : "contacts"} with this tag
+                    <span className="ml-1 text-xs text-crm-muted">(ignores row selection)</span>
+                  </span>
+                </label>
+              )}
+            </div>
           </section>
 
           {/* Template picker */}
