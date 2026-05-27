@@ -1015,9 +1015,10 @@ function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
   } : { ...emptyForm, tenantId: defaultTenantId || "" });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  // Tenant list comes from the canonical useTenantOptions hook (connect-only —
-  // users require a real Connect tenant row; vpbx: virtual tenants cannot own users).
-  const { options: tenantOptions } = useTenantOptions({ connectOnly: true });
+  // Tenant list — includes PBX-only tenants so a newly synced PBX tenant
+  // appears here. If a PBX-only (vpbx:) tenant is selected, the API will
+  // auto-provision a real Connect Tenant + TenantPbxLink on save.
+  const { options: tenantOptions } = useTenantOptions();
   const tenants: TenantOption[] = tenantOptions.map((t) => ({ id: t.id, name: t.name, status: "ACTIVE" }));
   const [roles, setRoles] = useState<RoleOption[]>(DEFAULT_PORTAL_ROLES);
   const [extensionOptions, setExtensionOptions] = useState<ExtensionOption[]>([]);

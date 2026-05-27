@@ -2006,6 +2006,30 @@ async function resolveManagedTenant(actor: JwtUser, requestedTenantId?: string |
             .some((v) => v === normalizeTenantLookupValue(directory.vitalTenantId) || v === normalizeTenantLookupValue(directory.tenantCode));
         });
         if (byDirectory) return byDirectory.tenantId;
+
+        // PBX tenant exists in directory but has no Connect tenant yet.
+        // Auto-provision a real Tenant + TenantPbxLink so the caller can
+        // immediately create users, extensions, etc. for this tenant.
+        const displayName =
+          (directory as any).displayName ||
+          String((directory as any).tenantSlug || "").replace(/[_-]/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()) ||
+          `PBX Tenant ${directory.vitalTenantId}`;
+        const provisioned = await db.$transaction(async (tx) => {
+          const t = await tx.tenant.create({
+            data: { name: displayName, kind: "CUSTOMER" as any, isApproved: true },
+          });
+          await (tx as any).tenantPbxLink.create({
+            data: {
+              tenantId: t.id,
+              pbxInstanceId: directory.pbxInstanceId,
+              pbxTenantId: directory.vitalTenantId,
+              pbxTenantCode: (directory as any).tenantCode ?? null,
+              status: "LINKED",
+            },
+          });
+          return t;
+        });
+        return provisioned.id;
       }
     }
 
