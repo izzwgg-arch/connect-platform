@@ -606,14 +606,21 @@ export async function createBillingInvoice(input: {
   return invoice;
 }
 
-export async function markBillingInvoicePaid(invoiceId: string, amountCents?: number): Promise<any> {
+export async function markBillingInvoicePaid(
+  invoiceId: string,
+  amountCents?: number,
+  opts?: { operatorUserId?: string; note?: string },
+): Promise<any> {
   const invoice = await (db as any).billingInvoice.findUnique({ where: { id: invoiceId } });
   if (!invoice) throw new Error("BILLING_INVOICE_NOT_FOUND");
   const paid = amountCents ?? invoice.totalCents;
+  // Simple "mark paid" only supports full payment. Partial payments must use
+  // POST /admin/billing/invoices/:id/external-payment which creates an auditable
+  // PaymentTransaction and handles balance tracking correctly.
   if (paid < invoice.totalCents) {
     const err: any = new Error("PARTIAL_PAYMENT_NOT_SUPPORTED");
     err.code = "PARTIAL_PAYMENT_NOT_SUPPORTED";
-    err.hint = "Partial mark-paid is not supported yet. Pass the full remaining balance or wait for PARTIALLY_PAID support.";
+    err.hint = "Use POST /admin/billing/invoices/:id/external-payment to record partial payments with full audit trail.";
     throw err;
   }
   const updated = await (db as any).billingInvoice.update({
@@ -627,7 +634,15 @@ export async function markBillingInvoicePaid(invoiceId: string, amountCents?: nu
       metadata: clearDunningSlice(invoice.metadata),
     },
   });
-  await logBillingEvent({ tenantId: invoice.tenantId, invoiceId, type: "invoice.paid", metadata: { amountCents: paid } });
+  await logBillingEvent({
+    tenantId: invoice.tenantId,
+    invoiceId,
+    type: "invoice.paid",
+    metadata: {
+      amountCents: paid,
+      operatorUserId: opts?.operatorUserId ?? null,
+    },
+  });
   return updated;
 }
 
@@ -764,6 +779,144 @@ export async function createOneTimeChargeInvoice(input: {
     type: "invoice.one_time_created",
     message: input.operatorNote || `One-time charge invoice ${invoiceNumber}`,
     metadata: { invoiceNumber, amountCents: input.amountCents, description: input.description },
+  });
+
+  return invoice;
+}
+
+// ---------------------------------------------------------------------------
+// Manual invoice creation — admin-authored invoice with arbitrary line items
+// ---------------------------------------------------------------------------
+
+export type ManualInvoiceLineItemInput = {
+  type: string;
+  description: string;
+  quantity: number;
+  unitPriceCents: number;
+  taxable?: boolean;
+  metadata?: Record<string, unknown>;
+};
+
+const VALID_LINE_ITEM_TYPES = new Set([
+  "EXTENSION", "PHONE_NUMBER", "SMS_PACKAGE", "SALES_TAX", "E911_FEE",
+  "REGULATORY_FEE", "CREDIT", "DISCOUNT", "MANUAL_ADJUSTMENT",
+  "TRUNK", "DID", "ONE_TIME", "CUSTOM",
+]);
+
+function calcManualInvoiceTotals(items: ManualInvoiceLineItemInput[]): {
+  subtotalCents: number;
+  taxCents: number;
+  totalCents: number;
+} {
+  let sub = 0;
+  let tax = 0;
+  for (const item of items) {
+    const amt = Math.round(item.quantity * item.unitPriceCents);
+    if (item.type === "SALES_TAX" || item.type === "E911_FEE" || item.type === "REGULATORY_FEE") {
+      tax += amt;
+    } else {
+      sub += amt;
+    }
+  }
+  return { subtotalCents: sub, taxCents: tax, totalCents: sub + tax };
+}
+
+export async function createManualInvoice(input: {
+  tenantId: string;
+  periodStart: Date;
+  periodEnd: Date;
+  issueDate?: Date;
+  dueDate: Date;
+  lineItems: ManualInvoiceLineItemInput[];
+  notes?: string | null;
+  billingEmail?: string | null;
+  status?: "DRAFT" | "OPEN";
+  createdByUserId: string;
+  markPaidImmediately?: boolean;
+}): Promise<any> {
+  if (!input.lineItems.length) {
+    const err: any = new Error("MANUAL_INVOICE_REQUIRES_LINE_ITEMS");
+    err.code = "MANUAL_INVOICE_REQUIRES_LINE_ITEMS";
+    throw err;
+  }
+  for (const item of input.lineItems) {
+    if (!VALID_LINE_ITEM_TYPES.has(item.type)) {
+      const err: any = new Error(`INVALID_LINE_ITEM_TYPE: ${item.type}`);
+      err.code = "INVALID_LINE_ITEM_TYPE";
+      throw err;
+    }
+    if (!item.description?.trim()) {
+      const err: any = new Error("LINE_ITEM_DESCRIPTION_REQUIRED");
+      err.code = "LINE_ITEM_DESCRIPTION_REQUIRED";
+      throw err;
+    }
+    if (typeof item.quantity !== "number" || !Number.isFinite(item.quantity)) {
+      const err: any = new Error("LINE_ITEM_QUANTITY_INVALID");
+      err.code = "LINE_ITEM_QUANTITY_INVALID";
+      throw err;
+    }
+    if (!Number.isInteger(item.unitPriceCents)) {
+      const err: any = new Error("LINE_ITEM_UNIT_PRICE_MUST_BE_INTEGER_CENTS");
+      err.code = "LINE_ITEM_UNIT_PRICE_MUST_BE_INTEGER_CENTS";
+      throw err;
+    }
+  }
+
+  const { subtotalCents, taxCents, totalCents } = calcManualInvoiceTotals(input.lineItems);
+  const status = input.markPaidImmediately ? "PAID" : (input.status ?? "OPEN");
+
+  const invoice = await createBillingInvoiceRowWithUniqueNumber(
+    input.tenantId,
+    async (invoiceNumber) =>
+      (db as any).billingInvoice.create({
+        data: {
+          tenantId: input.tenantId,
+          invoiceNumber,
+          status,
+          periodStart: input.periodStart,
+          periodEnd: input.periodEnd,
+          issueDate: input.issueDate ?? new Date(),
+          dueDate: input.dueDate,
+          subtotalCents,
+          taxCents,
+          totalCents,
+          amountPaidCents: input.markPaidImmediately ? totalCents : 0,
+          balanceDueCents: input.markPaidImmediately ? 0 : totalCents,
+          paidAt: input.markPaidImmediately ? new Date() : null,
+          notes: input.notes ?? null,
+          billingEmail: input.billingEmail ?? null,
+          source: "MANUAL",
+          createdByUserId: input.createdByUserId,
+          metadata: { source: "manual_invoice" },
+          lineItems: {
+            create: input.lineItems.map((item) => ({
+              tenantId: input.tenantId,
+              type: item.type,
+              description: item.description.trim(),
+              quantity: item.quantity,
+              unitPriceCents: item.unitPriceCents,
+              amountCents: Math.round(item.quantity * item.unitPriceCents),
+              taxable: item.taxable ?? true,
+              metadata: item.metadata ?? null,
+            })),
+          },
+        },
+        include: { lineItems: true, tenant: true },
+      }),
+  );
+
+  await logBillingEvent({
+    tenantId: input.tenantId,
+    invoiceId: invoice.id,
+    type: "invoice.manual_created",
+    message: `Manual invoice ${invoice.invoiceNumber} created by operator`,
+    metadata: {
+      invoiceNumber: invoice.invoiceNumber,
+      totalCents,
+      lineItemCount: input.lineItems.length,
+      createdByUserId: input.createdByUserId,
+      markPaidImmediately: input.markPaidImmediately ?? false,
+    },
   });
 
   return invoice;

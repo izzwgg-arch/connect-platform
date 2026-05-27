@@ -18,6 +18,9 @@ import { InvoiceRowMenu } from "../../../../../components/billing/InvoiceRowMenu
 import { dollars, invoiceCanDelete, invoiceFilterStatusLabel, invoiceStatusLabel, transactionStatusLabel } from "../../../../../lib/billingUi";
 import { useAppContext } from "../../../../../hooks/useAppContext";
 import { adminBillingTenantQuery, type AdminOpsTab } from "./adminBillingLinks";
+import { InvoiceEditorDrawer } from "./invoiceEditor";
+import { ExternalPaymentDrawer, type ExternalPaymentInvoice } from "./externalPaymentDrawer";
+import { ManualInvoiceDrawer } from "./manualInvoiceDrawer";
 import { useAdminBillingTenant } from "./useAdminBillingTenant";
 
 function openAdminInvoicePdf(invoiceId: string) {
@@ -1458,6 +1461,10 @@ export function InvoicesTab() {
   const [markPaidTarget, setMarkPaidTarget] = useState<InvoiceRow | null>(null);
   const [voidTarget, setVoidTarget] = useState<InvoiceRow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<InvoiceRow | null>(null);
+  // Invoice editor + external payment drawers
+  const [editInvoiceId, setEditInvoiceId] = useState<string | null>(null);
+  const [extPayInvoice, setExtPayInvoice] = useState<InvoiceRow | null>(null);
+  const [manualInvoiceOpen, setManualInvoiceOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const searchPending = searchInput.trim() !== search.trim();
 
@@ -1584,7 +1591,27 @@ export function InvoicesTab() {
             </button>
           ) : null}
         </div>
+        {/* Manual invoice creation */}
+        {effectiveTenantId ? (
+          <button
+            type="button"
+            className="btn primary"
+            style={{ fontSize: 13, padding: "6px 14px", whiteSpace: "nowrap" }}
+            onClick={() => setManualInvoiceOpen(true)}
+          >
+            + Manual Invoice
+          </button>
+        ) : null}
       </div>
+
+      {/* Manual invoice drawer — shown when tenantId is set */}
+      {manualInvoiceOpen && effectiveTenantId ? (
+        <ManualInvoiceDrawer
+          tenant={{ id: effectiveTenantId, name: effectiveTenantId }}
+          onClose={() => setManualInvoiceOpen(false)}
+          onCreated={() => { setManualInvoiceOpen(false); setListRev((r) => r + 1); }}
+        />
+      ) : null}
 
       {data.status === "loading" ? <BillingTableSkeleton variant="invoice" rows={8} /> : null}
       {data.status === "error" ? <ErrorState message={data.error} /> : null}
@@ -1683,6 +1710,8 @@ export function InvoicesTab() {
                     onVoid={canCollect ? () => setVoidTarget(inv) : undefined}
                     onDelete={invoiceCanDelete(inv) ? () => setDeleteTarget(inv) : undefined}
                     onSms={canSendInvoice ? () => setSmsInvoice(inv) : undefined}
+                    onEditInvoice={inv.status !== "VOID" ? () => setEditInvoiceId(inv.id) : undefined}
+                    onPostExternalPayment={inv.status !== "VOID" && inv.status !== "PAID" ? () => setExtPayInvoice(inv) : undefined}
                   />
                   </div>
 
@@ -1744,6 +1773,24 @@ export function InvoicesTab() {
           invoice={smsInvoice}
           onClose={() => setSmsInvoice(null)}
           onSuccess={() => setListRev((r) => r + 1)}
+        />
+      ) : null}
+
+      {/* Invoice editor drawer */}
+      {editInvoiceId ? (
+        <InvoiceEditorDrawer
+          invoiceId={editInvoiceId}
+          onClose={() => setEditInvoiceId(null)}
+          onSaved={() => setListRev((r) => r + 1)}
+        />
+      ) : null}
+
+      {/* External payment drawer */}
+      {extPayInvoice ? (
+        <ExternalPaymentDrawer
+          invoice={extPayInvoice as unknown as ExternalPaymentInvoice}
+          onClose={() => setExtPayInvoice(null)}
+          onPosted={() => setListRev((r) => r + 1)}
         />
       ) : null}
 

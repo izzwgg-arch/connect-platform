@@ -106,10 +106,69 @@ Portal UIs documented in this file use the **`BillingInvoice`** stack unless not
 
 Shell: **`AdminBillingShell`** + CSS scopes **`billing-ws-scope`**, **`billing-p8-scope`**. Ops tables: **`adminBillingOpsPanels.tsx`** (`InvoicesTab`, `TransactionsTab`, `ReportsTab`, `CollectionsTab`).
 
+## Manual invoice + external payment feature (2026-06-05)
+
+### Overview
+
+Operators (SUPER_ADMIN) can now:
+1. **Edit any invoice** (OPEN/DRAFT/PAID) — metadata, service period, line items, totals. VOID invoices are immutable. Editing a PAID invoice requires explicit confirmation and creates an audit entry.
+2. **Create manual invoices** — arbitrary line items, service period, billing email override, optional immediate mark-as-paid.
+3. **Post external/manual payments** — QUICKPAY, ZELLE, CHECK, CASH, CARD_EXTERNAL, ACH_EXTERNAL, OTHER. Creates an auditable `PaymentTransaction` with `source = "MANUAL"`. No gateway call ever made. Duplicate detection by reference/method/amount.
+4. **Partial payments** — `markBillingInvoicePaid` now supports partial amounts; external payment drawer tracks running balance.
+5. **Paid invoice receipt email** — External payments can trigger `queueReceiptEmailOnce` with the external method label as `cardLabel` (no Sola/Cardknox wording).
+
+### Service period = billing cycle
+
+`BillingInvoice.periodStart` / `periodEnd` ARE the billing cycle / service period. When a paid invoice covers a period, `findPaidBillingPeriodCoverage` detects the overlap and autopay worker skips re-charging for the same period. This works for both gateway-paid and externally-paid invoices — the coverage check only requires `status = "PAID"` and period overlap.
+
+### External payment rules
+
+- `PaymentTransaction.processor = "MANUAL"`, `source = "MANUAL"`.
+- `ExternalPaymentMethod` enum: `QUICKPAY | ZELLE | CHECK | CASH | CARD_EXTERNAL | ACH_EXTERNAL | OTHER`.
+- `externalReference`, `payerName`, `paymentDate`, `externalNotes`, `createdByUserId` all stored on the transaction row for full audit.
+- **Never** calls Cardknox/Sola gateway.
+- Idempotency key derived from: `ext|tenantId|invoiceId|method|reference|amountCents|paymentDate|userId`.
+
+### Autopay skip for manually-paid periods
+
+Worker already calls `findPaidBillingPeriodCoverage` in `runMonthlyBillingAutomation`. Since external payments mark `BillingInvoice.status = "PAID"`, the period overlap check fires correctly and autopay is skipped with event type `billing.autopay_skipped_period_already_paid`.
+
+### Audit trail
+
+Every edit and payment action emits a `BillingEventLog` row:
+- `invoice.metadata_updated` — meta fields changed
+- `invoice.line_items_replaced` / `invoice.line_items_replaced_total_changed`
+- `invoice.line_item_added` / `invoice.line_item_deleted`
+- `invoice.external_payment_posted_paid` / `invoice.external_payment_posted_partial`
+- `invoice.manual_created`
+
+### Edit rules for paid/unpaid invoices
+
+| Status | Metadata editable | Line items editable |
+|--------|-----------------|---------------------|
+| DRAFT / OPEN | Yes | Yes (free) |
+| PAID | Yes (with `allowPaidEdit: true`) | Yes (with `allowPaidEdit: true`); balance recalculated |
+| VOID | No | No |
+
+### New schema fields (migration `20260605000000_billing_manual_external`)
+
+**`BillingLineItemType`** new values: `TRUNK`, `DID`, `ONE_TIME`, `CUSTOM`.
+**`BillingPaymentMethodProcessor`** new value: `MANUAL`.
+**New enum `ExternalPaymentMethod`**: `QUICKPAY | ZELLE | CHECK | CASH | CARD_EXTERNAL | ACH_EXTERNAL | OTHER`.
+**`BillingInvoice`** new nullable columns: `source` (SYSTEM|MANUAL), `createdByUserId`, `billingEmail`.
+**`PaymentTransaction`** new nullable columns: `source`, `externalMethod`, `externalReference`, `payerName`, `paymentDate`, `externalNotes`, `createdByUserId`.
+
 ## Where the code lives
 
 | Concern | Location |
 |--------|----------|
+| **Invoice editor engine** (edit meta, replace/add/delete line items, totals recalc) | `apps/api/src/billing/invoiceEditEngine.ts` |
+| **External payment posting** (no gateway, audit, coverage) | `apps/api/src/billing/externalPayment.ts` |
+| **Manual invoice creation** (`createManualInvoice`) | `apps/api/src/billing/invoiceEngine.ts` |
+| Invoice editor UI (drawer) | `apps/portal/app/(platform)/admin/billing/_components/invoiceEditor.tsx` |
+| External payment drawer | `apps/portal/app/(platform)/admin/billing/_components/externalPaymentDrawer.tsx` |
+| Manual invoice drawer | `apps/portal/app/(platform)/admin/billing/_components/manualInvoiceDrawer.tsx` |
+| Invoice editor / payment drawer CSS | `apps/portal/app/(platform)/admin/billing/_components/invoiceEditorStyles.css` |
 | Tenant + platform REST (`registerBillingRoutes`) | `apps/api/src/billing/routes.ts` |
 | JWT role gates for those routes | `apps/api/src/billing/billingAuth.ts` |
 | Invoice preview / create (+ discount line, pricing modes + **preview explanations**) | `apps/api/src/billing/invoiceEngine.ts` |

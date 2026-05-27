@@ -18,6 +18,10 @@ export type InvoiceRowMenuProps = {
   onVoid?: () => void;
   onDelete?: () => void;
   onSms?: () => void;
+  /** Open full invoice editor (metadata + line items) */
+  onEditInvoice?: () => void;
+  /** Open external / manual payment posting drawer */
+  onPostExternalPayment?: () => void;
 };
 
 export function InvoiceRowMenu({
@@ -35,6 +39,8 @@ export function InvoiceRowMenu({
   onVoid,
   onDelete,
   onSms,
+  onEditInvoice,
+  onPostExternalPayment,
 }: InvoiceRowMenuProps) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -127,6 +133,16 @@ export function InvoiceRowMenu({
           {canAct && onMarkPaid ? (
             <button type="button" role="menuitem" disabled={disabled} onClick={act(onMarkPaid)}>
               Mark paid
+            </button>
+          ) : null}
+          {onPostExternalPayment ? (
+            <button type="button" role="menuitem" disabled={disabled} onClick={act(onPostExternalPayment)}>
+              Post external payment
+            </button>
+          ) : null}
+          {onEditInvoice ? (
+            <button type="button" role="menuitem" disabled={disabled} onClick={act(onEditInvoice)}>
+              Edit invoice
             </button>
           ) : null}
           <button type="button" role="menuitem" onClick={act(onPdf)}>

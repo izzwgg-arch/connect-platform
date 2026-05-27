@@ -3,7 +3,9 @@ import { z } from "zod";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import { SolaCardknoxAdapter, type SolaCardknoxConfig, TwilioSmsProvider, VoipMsSmsProvider, type TwilioCredentials, type VoipMsCredentials } from "@connect/integrations";
-import { buildBillingInvoicePreview, buildBillingInvoicePreviewFromSettings, createBillingInvoice, createOneTimeChargeInvoice, ensureTenantBillingSettings, logBillingEvent, markBillingInvoicePaid, tenantBillingPeriodBounds } from "./invoiceEngine";
+import { buildBillingInvoicePreview, buildBillingInvoicePreviewFromSettings, createBillingInvoice, createManualInvoice, createOneTimeChargeInvoice, ensureTenantBillingSettings, logBillingEvent, markBillingInvoicePaid, tenantBillingPeriodBounds } from "./invoiceEngine";
+import { updateInvoiceMeta, replaceInvoiceLineItems, addInvoiceLineItem, deleteInvoiceLineItem } from "./invoiceEditEngine";
+import { postExternalPayment, externalMethodLabel, type ExternalPaymentMethodType } from "./externalPayment";
 import { calculateTenantBillingUsage } from "./usage";
 import {
   BILLING_PRICING_MODE_METADATA_KEY,
@@ -2811,6 +2813,242 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       }
       throw err;
     }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Invoice editor routes (SUPER_ADMIN only)
+  // ---------------------------------------------------------------------------
+
+  // PUT /admin/billing/invoices/:id — update invoice metadata (dates, notes, recipient, status)
+  app.put("/admin/billing/invoices/:id", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const body = z.object({
+      periodStart: z.string().datetime().optional(),
+      periodEnd: z.string().datetime().optional(),
+      issueDate: z.string().datetime().optional(),
+      dueDate: z.string().datetime().optional(),
+      notes: z.string().max(2000).nullable().optional(),
+      billingEmail: z.string().email().nullable().optional(),
+      status: z.enum(["DRAFT", "OPEN", "OVERDUE"]).optional(),
+      allowPaidEdit: z.boolean().optional(),
+    }).parse(req.body || {});
+
+    const update: Record<string, unknown> = {};
+    if (body.periodStart) update.periodStart = new Date(body.periodStart);
+    if (body.periodEnd) update.periodEnd = new Date(body.periodEnd);
+    if (body.issueDate) update.issueDate = new Date(body.issueDate);
+    if (body.dueDate) update.dueDate = new Date(body.dueDate);
+    if ("notes" in body) update.notes = body.notes;
+    if ("billingEmail" in body) update.billingEmail = body.billingEmail;
+    if (body.status) update.status = body.status;
+
+    try {
+      return await updateInvoiceMeta(id, update as any, u.sub, { allowPaidEdit: body.allowPaidEdit });
+    } catch (err: any) {
+      if (err?.code === "INVOICE_NOT_FOUND") return reply.code(404).send({ error: "invoice_not_found" });
+      if (err?.code === "INVOICE_VOID_NOT_EDITABLE") return reply.code(409).send({ error: "invoice_void_not_editable" });
+      if (err?.code === "INVOICE_PAID_EDIT_REQUIRES_CONFIRMATION") {
+        return reply.code(409).send({ error: "invoice_paid_edit_requires_confirmation", hint: err.hint });
+      }
+      throw err;
+    }
+  });
+
+  // PUT /admin/billing/invoices/:id/line-items — replace all line items (recalculates totals)
+  app.put("/admin/billing/invoices/:id/line-items", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const body = z.object({
+      lineItems: z.array(z.object({
+        type: z.string(),
+        description: z.string().min(1).max(500),
+        quantity: z.number(),
+        unitPriceCents: z.number().int(),
+        taxable: z.boolean().optional(),
+        metadata: z.record(z.unknown()).optional(),
+      })).min(1),
+      allowPaidEdit: z.boolean().optional(),
+    }).parse(req.body || {});
+
+    try {
+      return await replaceInvoiceLineItems(id, body.lineItems, u.sub, { allowPaidEdit: body.allowPaidEdit });
+    } catch (err: any) {
+      if (err?.code === "INVOICE_NOT_FOUND") return reply.code(404).send({ error: "invoice_not_found" });
+      if (err?.code === "INVOICE_VOID_NOT_EDITABLE") return reply.code(409).send({ error: "invoice_void_not_editable" });
+      if (err?.code === "INVOICE_PAID_EDIT_REQUIRES_CONFIRMATION") {
+        return reply.code(409).send({ error: "invoice_paid_edit_requires_confirmation", hint: err.hint });
+      }
+      if (err?.code === "LINE_ITEM_INVALID") return reply.code(400).send({ error: "line_item_invalid", detail: err.detail });
+      throw err;
+    }
+  });
+
+  // POST /admin/billing/invoices/:id/line-items — add a single line item
+  app.post("/admin/billing/invoices/:id/line-items", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const body = z.object({
+      type: z.string(),
+      description: z.string().min(1).max(500),
+      quantity: z.number(),
+      unitPriceCents: z.number().int(),
+      taxable: z.boolean().optional(),
+      metadata: z.record(z.unknown()).optional(),
+      allowPaidEdit: z.boolean().optional(),
+    }).parse(req.body || {});
+
+    const { allowPaidEdit, ...item } = body;
+    try {
+      return await addInvoiceLineItem(id, item, u.sub, { allowPaidEdit });
+    } catch (err: any) {
+      if (err?.code === "INVOICE_NOT_FOUND") return reply.code(404).send({ error: "invoice_not_found" });
+      if (err?.code === "INVOICE_VOID_NOT_EDITABLE") return reply.code(409).send({ error: "invoice_void_not_editable" });
+      if (err?.code === "INVOICE_PAID_EDIT_REQUIRES_CONFIRMATION") {
+        return reply.code(409).send({ error: "invoice_paid_edit_requires_confirmation", hint: err.hint });
+      }
+      if (err?.code === "LINE_ITEM_INVALID") return reply.code(400).send({ error: "line_item_invalid" });
+      throw err;
+    }
+  });
+
+  // DELETE /admin/billing/invoices/:id/line-items/:lineItemId
+  app.delete("/admin/billing/invoices/:id/line-items/:lineItemId", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id, lineItemId } = req.params as { id: string; lineItemId: string };
+    const q = req.query as { allowPaidEdit?: string };
+    const allowPaidEdit = q.allowPaidEdit === "true";
+
+    try {
+      return await deleteInvoiceLineItem(id, lineItemId, u.sub, { allowPaidEdit });
+    } catch (err: any) {
+      if (err?.code === "INVOICE_NOT_FOUND") return reply.code(404).send({ error: "invoice_not_found" });
+      if (err?.code === "LINE_ITEM_NOT_FOUND") return reply.code(404).send({ error: "line_item_not_found" });
+      if (err?.code === "INVOICE_VOID_NOT_EDITABLE") return reply.code(409).send({ error: "invoice_void_not_editable" });
+      if (err?.code === "INVOICE_PAID_EDIT_REQUIRES_CONFIRMATION") {
+        return reply.code(409).send({ error: "invoice_paid_edit_requires_confirmation", hint: err.hint });
+      }
+      throw err;
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Manual invoice creation
+  // ---------------------------------------------------------------------------
+
+  // POST /admin/billing/invoices/manual — create a fully manual invoice
+  app.post("/admin/billing/invoices/manual", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const body = z.object({
+      tenantId: z.string(),
+      periodStart: z.string().datetime(),
+      periodEnd: z.string().datetime(),
+      issueDate: z.string().datetime().optional(),
+      dueDate: z.string().datetime(),
+      lineItems: z.array(z.object({
+        type: z.string(),
+        description: z.string().min(1).max(500),
+        quantity: z.number(),
+        unitPriceCents: z.number().int(),
+        taxable: z.boolean().optional(),
+        metadata: z.record(z.unknown()).optional(),
+      })).min(1),
+      notes: z.string().max(2000).nullable().optional(),
+      billingEmail: z.string().email().nullable().optional(),
+      status: z.enum(["DRAFT", "OPEN"]).optional(),
+      markPaidImmediately: z.boolean().optional(),
+    }).parse(req.body || {});
+
+    try {
+      const invoice = await createManualInvoice({
+        tenantId: body.tenantId,
+        periodStart: new Date(body.periodStart),
+        periodEnd: new Date(body.periodEnd),
+        issueDate: body.issueDate ? new Date(body.issueDate) : undefined,
+        dueDate: new Date(body.dueDate),
+        lineItems: body.lineItems,
+        notes: body.notes,
+        billingEmail: body.billingEmail,
+        status: body.status,
+        createdByUserId: u.sub,
+        markPaidImmediately: body.markPaidImmediately,
+      });
+      return reply.code(201).send(invoice);
+    } catch (err: any) {
+      if (err?.code === "MANUAL_INVOICE_REQUIRES_LINE_ITEMS") return reply.code(400).send({ error: "line_items_required" });
+      if (err?.code === "INVALID_LINE_ITEM_TYPE") return reply.code(400).send({ error: "invalid_line_item_type", detail: err.message });
+      if (err?.code === "LINE_ITEM_DESCRIPTION_REQUIRED") return reply.code(400).send({ error: "line_item_description_required" });
+      if (err?.code === "LINE_ITEM_QUANTITY_INVALID") return reply.code(400).send({ error: "line_item_quantity_invalid" });
+      if (err?.code === "LINE_ITEM_UNIT_PRICE_MUST_BE_INTEGER_CENTS") return reply.code(400).send({ error: "unit_price_must_be_integer_cents" });
+      throw err;
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // External / manual payment posting
+  // ---------------------------------------------------------------------------
+
+  // POST /admin/billing/invoices/:id/external-payment
+  app.post("/admin/billing/invoices/:id/external-payment", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+
+    const EXTERNAL_METHODS = ["QUICKPAY", "ZELLE", "CHECK", "CASH", "CARD_EXTERNAL", "ACH_EXTERNAL", "OTHER"] as const;
+    const body = z.object({
+      amountCents: z.number().int().min(1),
+      paymentDate: z.string().datetime(),
+      method: z.enum(EXTERNAL_METHODS),
+      externalReference: z.string().max(200).optional(),
+      payerName: z.string().max(200).optional(),
+      externalNotes: z.string().max(1000).optional(),
+      sendReceiptEmail: z.boolean().optional(),
+    }).parse(req.body || {});
+
+    try {
+      const result = await postExternalPayment({
+        invoiceId: id,
+        amountCents: body.amountCents,
+        paymentDate: new Date(body.paymentDate),
+        method: body.method as ExternalPaymentMethodType,
+        externalReference: body.externalReference,
+        payerName: body.payerName,
+        externalNotes: body.externalNotes,
+        createdByUserId: u.sub,
+        sendReceiptEmail: body.sendReceiptEmail,
+      });
+      return result;
+    } catch (err: any) {
+      if (err?.code === "INVOICE_NOT_FOUND") return reply.code(404).send({ error: "invoice_not_found" });
+      if (err?.code === "INVOICE_VOID_CANNOT_RECEIVE_PAYMENT") return reply.code(409).send({ error: "invoice_void_cannot_receive_payment" });
+      if (err?.code === "EXTERNAL_PAYMENT_AMOUNT_MUST_BE_POSITIVE") return reply.code(400).send({ error: "amount_must_be_positive" });
+      throw err;
+    }
+  });
+
+  // GET /admin/billing/invoices/:id/line-items — list line items for an invoice
+  app.get("/admin/billing/invoices/:id/line-items", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { id } = req.params as { id: string };
+    const items = await (db as any).billingInvoiceLineItem.findMany({
+      where: { invoiceId: id },
+      orderBy: { createdAt: "asc" },
+    });
+    return items;
+  });
+
+  // GET /admin/billing/external-payment-methods — list available external payment methods
+  app.get("/admin/billing/external-payment-methods", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const methods = ["QUICKPAY", "ZELLE", "CHECK", "CASH", "CARD_EXTERNAL", "ACH_EXTERNAL", "OTHER"] as const;
+    return methods.map((m) => ({ value: m, label: externalMethodLabel(m as ExternalPaymentMethodType) }));
   });
 
   app.get("/admin/billing/tax-profiles", async (req, reply) => {
