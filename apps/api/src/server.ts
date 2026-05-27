@@ -790,8 +790,13 @@ async function sendEmailJobNow(job: any): Promise<void> {
     const fromEmail = provider.fromEmail || "billing@connectcomunications.com";
     const fromName = provider.fromName || "Connect Communications";
     const pdfAttachment = await loadBillingInvoicePdfAttachmentForEmailJob(job).catch(() => null);
+    const toAddresses = String(job.toEmail || "")
+      .split(",")
+      .map((e: string) => e.trim())
+      .filter((e: string) => e.length > 0)
+      .map((e: string) => ({ email: e }));
     const payload: Record<string, unknown> = {
-      personalizations: [{ to: [{ email: job.toEmail }] }],
+      personalizations: [{ to: toAddresses.length > 0 ? toAddresses : [{ email: job.toEmail }] }],
       from: { email: fromEmail, name: fromName },
       subject: job.subject,
       content: [

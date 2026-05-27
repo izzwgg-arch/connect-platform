@@ -362,7 +362,11 @@ export function AdminTenantBillingCycleForm({ detail, onSaved }: { detail: Tenan
         }}
       >
         <label>
-          Billing email <input name="billingEmail" type="email" defaultValue={settings.billingEmail || ""} placeholder="billing@tenant.com" />
+          Billing email
+          <input name="billingEmail" type="text" defaultValue={settings.billingEmail || ""} placeholder="billing@tenant.com or a@b.com, c@d.com" />
+          <span style={{ fontSize: 12, color: "#6b7280", display: "block", marginTop: 2 }}>
+            Separate multiple addresses with commas — all will receive invoices.
+          </span>
         </label>
         <label>
           Billing day <input name="billingDayOfMonth" type="number" min={1} max={28} defaultValue={settings.billingDayOfMonth || 1} />
@@ -468,7 +472,11 @@ export function AdminTenantMonthlyPricingForm({ detail, onSaved }: { detail: Ten
           <input name="smsPrice" readOnly={catalogLocked} defaultValue={toDollars(displaySms)} />
         </label>
         <label>
-          Billing email <input name="billingEmail" type="email" defaultValue={settings.billingEmail || ""} placeholder="billing@tenant.com" />
+          Billing email
+          <input name="billingEmail" type="text" defaultValue={settings.billingEmail || ""} placeholder="billing@tenant.com or a@b.com, c@d.com" />
+          <span style={{ fontSize: 12, color: "#6b7280", display: "block", marginTop: 2 }}>
+            Separate multiple addresses with commas — all will receive invoices.
+          </span>
         </label>
         <label>
           Billing day <input name="billingDayOfMonth" type="number" min={1} max={28} defaultValue={settings.billingDayOfMonth || 1} />

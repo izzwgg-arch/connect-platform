@@ -51,7 +51,7 @@ import {
   solaWebhookPinMissingForProd,
 } from "./solaConfigPolicy";
 import { billingSolaCardknoxWebhookUrl } from "./solaPublicUrls";
-import { billingInvoicePublicPayUrl, queuePaymentLinkEmail } from "./billingEmailLifecycle";
+import { billingInvoicePublicPayUrl, isValidMultiBillingEmail, normalizeMultiBillingEmail, queuePaymentLinkEmail } from "./billingEmailLifecycle";
 import {
   buildBillingEmailJobCreateData,
   canAccessPlatformAdminBillingRoutes,
@@ -758,7 +758,10 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         autoBillingEnabled: z.boolean().optional(),
         billingDayOfMonth: z.number().int().min(1).max(28).optional(),
         paymentTermsDays: z.number().int().min(0).max(90).optional(),
-        billingEmail: z.string().email().nullable().optional(),
+        billingEmail: z.string().nullable().optional().refine(
+          (v) => v == null || isValidMultiBillingEmail(v),
+          { message: "billingEmail must be a valid email address or comma-separated list of valid addresses" },
+        ).transform((v) => (v ? normalizeMultiBillingEmail(v) || null : v ?? null)),
         creditsCents: z.number().int().optional(),
         discountPercent: z.number().min(0).max(1).optional(),
         billingAddress: z.any().optional(),
@@ -2849,7 +2852,10 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       issueDate: z.string().datetime().optional(),
       dueDate: z.string().datetime().optional(),
       notes: z.string().max(2000).nullable().optional(),
-      billingEmail: z.string().email().nullable().optional(),
+      billingEmail: z.string().nullable().optional().refine(
+        (v) => v == null || isValidMultiBillingEmail(v),
+        { message: "billingEmail must be a valid email address or comma-separated list of valid addresses" },
+      ).transform((v) => (v ? normalizeMultiBillingEmail(v) || null : v ?? null)),
       status: z.enum(["DRAFT", "OPEN", "OVERDUE"]).optional(),
       allowPaidEdit: z.boolean().optional(),
     }).parse(req.body || {});
@@ -2978,7 +2984,10 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         metadata: z.record(z.unknown()).optional(),
       })).min(1),
       notes: z.string().max(2000).nullable().optional(),
-      billingEmail: z.string().email().nullable().optional(),
+      billingEmail: z.string().nullable().optional().refine(
+        (v) => v == null || isValidMultiBillingEmail(v),
+        { message: "billingEmail must be a valid email address or comma-separated list of valid addresses" },
+      ).transform((v) => (v ? normalizeMultiBillingEmail(v) || null : v ?? null)),
       status: z.enum(["DRAFT", "OPEN"]).optional(),
       markPaidImmediately: z.boolean().optional(),
     }).parse(req.body || {});
@@ -3365,7 +3374,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     });
 
     if (!result.ok) return reply.code(result.code).send({ error: result.error, disableError: result.disableError });
-    return { ok: true, cutoverAt: result.cutoverAt, paymentMethodId: result.paymentMethodId };
+    return { ok: true, cutoverAt: result.cutoverAt, paymentMethodId: result.paymentMethodId, nextConnectChargeAt: result.nextConnectChargeAt };
   });
 }
 

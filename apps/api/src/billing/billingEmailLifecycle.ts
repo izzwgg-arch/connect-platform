@@ -63,6 +63,37 @@ async function hasFailureEmailForTransaction(transactionId: string): Promise<boo
   return !!e;
 }
 
+/**
+ * Parse a billing email field that may contain multiple comma-separated addresses.
+ * Returns a normalized comma-separated string with each address trimmed,
+ * or empty string if none are valid.
+ *
+ * Examples:
+ *   "a@b.com"              → "a@b.com"
+ *   "a@b.com, c@d.com"     → "a@b.com, c@d.com"
+ *   "  a@b.com,c@d.com  "  → "a@b.com, c@d.com"
+ */
+export function normalizeMultiBillingEmail(raw: unknown): string {
+  const str = String(raw || "").trim();
+  if (!str) return "";
+  return str
+    .split(",")
+    .map((e) => e.trim())
+    .filter((e) => e.length > 0)
+    .join(", ");
+}
+
+/**
+ * Validate that a string (which may be comma-separated) contains only valid email addresses.
+ * Returns true if every address passes a basic email format check.
+ */
+export function isValidMultiBillingEmail(raw: unknown): boolean {
+  const str = String(raw || "").trim();
+  if (!str) return true; // empty is allowed (nullable)
+  const simple = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return str.split(",").every((e) => simple.test(e.trim()));
+}
+
 function invoiceMetadataEmail(metadata: unknown): string {
   const meta = (metadata || {}) as Record<string, unknown>;
   const candidates = [
@@ -73,7 +104,7 @@ function invoiceMetadataEmail(metadata: unknown): string {
     meta.billingContactEmail,
   ];
   for (const candidate of candidates) {
-    const email = String(candidate || "").trim();
+    const email = normalizeMultiBillingEmail(candidate);
     if (email) return email;
   }
   return "";
@@ -96,7 +127,7 @@ async function resolveBillingEmailRecipient(params: {
       : Promise.resolve(null),
   ]);
   const settings = tenant?.billingSettings;
-  const tenantEmail = String(settings?.billingEmail || "").trim();
+  const tenantEmail = normalizeMultiBillingEmail(settings?.billingEmail);
   if (tenantEmail) return { to: tenantEmail, source: "tenant_billing_email", tenantName: tenant?.name, settings };
 
   const invoiceEmail = invoiceMetadataEmail(invoice?.metadata);

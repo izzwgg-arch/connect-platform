@@ -405,10 +405,10 @@ export function InvoiceEditor({ invoice, onSaved, onCancel }: InvoiceEditorProps
             <div className="inv-editor__field" style={{ gridColumn: "1 / -1" }}>
               <label className="inv-editor__label">Billing Email (override)</label>
               <input
-                type="email"
+                type="text"
                 className="inv-editor__input"
                 value={billingEmail}
-                placeholder="Leave blank to use tenant default"
+                placeholder="Leave blank to use tenant default (comma-separate for multiple)"
                 disabled={isVoid}
                 onChange={(e: ChangeEvent<HTMLInputElement>) =>
                   setBillingEmail(e.target.value)

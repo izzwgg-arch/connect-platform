@@ -319,10 +319,10 @@ export function ManualInvoiceDrawer({
                     Billing Email Override (optional)
                   </label>
                   <input
-                    type="email"
+                    type="text"
                     className="inv-editor__input"
                     value={billingEmail}
-                    placeholder="Leave blank to use tenant default"
+                    placeholder="Leave blank to use tenant default (comma-separate for multiple)"
                     onChange={(e: ChangeEvent<HTMLInputElement>) =>
                       setBillingEmail(e.target.value)
                     }
