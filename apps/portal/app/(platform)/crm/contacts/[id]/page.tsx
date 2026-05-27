@@ -1714,6 +1714,27 @@ function CrmContactDetailInner() {
                 <Plus size={12} /> Add email
               </button>
             ))}
+
+            {/* Addresses — display read-only (imported from CSV or set via API) */}
+            {(contact.addresses ?? []).length > 0 && (
+              <>
+                <div style={{ borderTop: "1px solid var(--border)", margin: "0.25rem 0" }} />
+                {(contact.addresses ?? []).map((addr) => {
+                  const line1 = addr.street ?? "";
+                  const line2 = [addr.city, addr.state, addr.zip].filter(Boolean).join(", ");
+                  if (!line1 && !line2) return null;
+                  return (
+                    <div key={addr.id} style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem" }}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--accent)", flexShrink: 0, marginTop: "0.2rem" }}><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        {line1 && <div style={{ fontSize: "0.875rem" }}>{line1}</div>}
+                        {line2 && <div style={{ fontSize: "0.8125rem", color: "var(--text-dim)" }}>{line2}</div>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </>
+            )}
           </div>
 
           {/* Possible duplicates panel — shown when the API finds matches */}

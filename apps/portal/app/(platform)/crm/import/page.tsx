@@ -68,12 +68,17 @@ const btnBase: React.CSSProperties = {
 // ── Expected columns helper ───────────────────────────────────────────────────
 
 const EXPECTED_COLUMNS = [
-  { key: "phone / mobile / telephone", note: "Required — used for deduplication" },
-  { key: "email / email address", note: "Required if no phone column" },
+  { key: "phone / phone1 / mobile / telephone / primary phone", note: "Required — used for deduplication" },
+  { key: "phone2 / Phone2 / secondary phone / alternate phone", note: "Optional — saved as second phone number" },
+  { key: "email / email address / e-mail", note: "Required if no phone column" },
+  { key: "name / full name / owner name / owner nme", note: "Optional — full display name (misspellings like 'owner nme' accepted)" },
   { key: "first name / firstname", note: "Optional" },
   { key: "last name / lastname", note: "Optional" },
-  { key: "name / full name", note: "Optional — used if first/last missing" },
-  { key: "company / organization", note: "Optional" },
+  { key: "company / company name / business", note: "Optional" },
+  { key: "address / street / street address / address1", note: "Optional — street address" },
+  { key: "city", note: "Optional" },
+  { key: "state / st", note: "Optional" },
+  { key: "zip / zipcode / postal code", note: "Optional" },
   { key: "title / job title", note: "Optional" },
   { key: "notes", note: "Optional — added as scratch notes" },
   { key: "tags", note: "Optional — comma-separated" },

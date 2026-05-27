@@ -82,7 +82,12 @@ export type CrmImportField =
   | "company"
   | "title"
   | "phone"
+  | "phone2"
   | "email"
+  | "address"
+  | "city"
+  | "state"
+  | "zip"
   | "notes"
   | "tags";
 
@@ -104,7 +109,12 @@ const COLUMN_ALIASES: Record<string, CrmImportField> = {
   contact: "displayName",
   "customer name": "displayName",
   "lead name": "displayName",
+  // "owner nme" / "owner name" are common misspellings/variants in exported CRM files
+  "owner nme": "displayName",
+  "owner name": "displayName",
+  "owner": "displayName",
   company: "company",
+  "company name": "company",
   organization: "company",
   organisation: "company",
   org: "company",
@@ -116,6 +126,7 @@ const COLUMN_ALIASES: Record<string, CrmImportField> = {
   "job title": "title",
   position: "title",
   role: "title",
+  // Primary phone aliases
   phone: "phone",
   "phone number": "phone",
   mobile: "phone",
@@ -125,12 +136,36 @@ const COLUMN_ALIASES: Record<string, CrmImportField> = {
   telephone: "phone",
   number: "phone",
   "phone 1": "phone",
+  phone1: "phone",
   "primary phone": "phone",
   direct: "phone",
+  // Secondary / alternate phone aliases
+  phone2: "phone2",
+  "phone 2": "phone2",
+  "secondary phone": "phone2",
+  "alternate phone": "phone2",
+  "alt phone": "phone2",
+  "other phone": "phone2",
+  "second phone": "phone2",
+  "phone #2": "phone2",
   email: "email",
   "email address": "email",
   "e-mail": "email",
   mail: "email",
+  // Address aliases
+  address: "address",
+  "street address": "address",
+  street: "address",
+  address1: "address",
+  addr: "address",
+  city: "city",
+  state: "state",
+  st: "state",
+  zip: "zip",
+  zipcode: "zip",
+  "zip code": "zip",
+  "postal code": "zip",
+  postcode: "zip",
   notes: "notes",
   note: "notes",
   description: "notes",
@@ -464,6 +499,17 @@ export async function processImportRow(
     phoneRaw ||
     emailRaw;
 
+  // Secondary phone
+  const phone2Raw = data.phone2?.trim() ?? "";
+  const phone2Norm = normalisePhone(phone2Raw);
+
+  // Address fields
+  const addrStreet = data.address?.trim() ?? "";
+  const addrCity = data.city?.trim() ?? "";
+  const addrState = data.state?.trim() ?? "";
+  const addrZip = data.zip?.trim() ?? "";
+  const hasAddress = addrStreet || addrCity || addrState || addrZip;
+
   const existingContactId = await findLiveContactIdByPhoneOrEmail(tenantId, phoneNorm, emailRaw);
 
   if (existingContactId) {
@@ -513,6 +559,25 @@ export async function processImportRow(
       }
     }
 
+    // Secondary phone: add only if not already on the contact
+    if (phone2Norm && phone2Raw) {
+      const phone2Exists = await db.contactPhone.findFirst({
+        where: { contactId: existingContactId, numberNormalized: phone2Norm },
+        select: { id: true },
+      });
+      if (!phone2Exists) {
+        await db.contactPhone.create({
+          data: {
+            contactId: existingContactId,
+            type: "OTHER",
+            numberRaw: phone2Raw,
+            numberNormalized: phone2Norm,
+            isPrimary: false,
+          },
+        });
+      }
+    }
+
     if (emailRaw) {
       const emailExists = await db.contactEmail.findFirst({
         where: { contactId: existingContactId, email: emailRaw },
@@ -525,6 +590,25 @@ export async function processImportRow(
             type: "WORK",
             email: emailRaw,
             isPrimary: false,
+          },
+        });
+      }
+    }
+
+    // Address: only create if no address record exists yet (non-destructive)
+    if (hasAddress) {
+      const addrExists = await db.contactAddress.findFirst({
+        where: { contactId: existingContactId },
+        select: { id: true },
+      });
+      if (!addrExists) {
+        await db.contactAddress.create({
+          data: {
+            contactId: existingContactId,
+            street: addrStreet || null,
+            city: addrCity || null,
+            state: addrState || null,
+            zip: addrZip || null,
           },
         });
       }
@@ -549,11 +633,21 @@ export async function processImportRow(
         ? {
             create: [
               {
-                type: "MOBILE",
+                type: "MOBILE" as const,
                 numberRaw: phoneRaw,
                 numberNormalized: phoneNorm,
                 isPrimary: true,
               },
+              ...(phone2Norm && phone2Norm !== phoneNorm
+                ? [
+                    {
+                      type: "OTHER" as const,
+                      numberRaw: phone2Raw,
+                      numberNormalized: phone2Norm,
+                      isPrimary: false,
+                    },
+                  ]
+                : []),
             ],
           }
         : undefined,
@@ -564,6 +658,18 @@ export async function processImportRow(
                 type: "WORK",
                 email: emailRaw,
                 isPrimary: true,
+              },
+            ],
+          }
+        : undefined,
+      addresses: hasAddress
+        ? {
+            create: [
+              {
+                street: addrStreet || null,
+                city: addrCity || null,
+                state: addrState || null,
+                zip: addrZip || null,
               },
             ],
           }

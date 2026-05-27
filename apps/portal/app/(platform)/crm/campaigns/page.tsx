@@ -193,9 +193,11 @@ function CampaignHealthDonut({
 function CreateCampaignModal({
   onClose,
   onCreate,
+  importAfterCreate = false,
 }: {
   onClose: () => void;
   onCreate: (c: CampaignListItem) => void;
+  importAfterCreate?: boolean;
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -225,7 +227,14 @@ function CreateCampaignModal({
   return (
     <div className={crm.campaignModalBackdrop}>
       <div className={cn(crm.card, "w-full max-w-md p-6 shadow-xl")}>
-        <h2 className="text-lg font-semibold text-crm-text mb-4">New campaign</h2>
+        <h2 className="text-lg font-semibold text-crm-text mb-1">
+          {importAfterCreate ? "Create campaign & import leads" : "New campaign"}
+        </h2>
+        {importAfterCreate && (
+          <p className="text-sm text-crm-muted mb-4">
+            Name your campaign, then import a CSV on the next screen. Contacts will be added as campaign members.
+          </p>
+        )}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-crm-text mb-1">Campaign name</label>
@@ -280,7 +289,7 @@ function CreateCampaignModal({
               Cancel
             </button>
             <button type="submit" disabled={saving || !name.trim()} className={crm.btnPrimary}>
-              {saving ? "Creating…" : "Create"}
+              {saving ? "Creating…" : importAfterCreate ? "Create & go to import" : "Create"}
             </button>
           </div>
         </form>
@@ -311,6 +320,7 @@ export default function CampaignsPage() {
   const [dateFilter, setDateFilter] = useState("all");
   const [sortBy, setSortBy] = useState<CampaignSort>("status");
   const [showCreate, setShowCreate] = useState(false);
+  const [createForImport, setCreateForImport] = useState(false);
   const [error, setError] = useState("");
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
@@ -485,11 +495,16 @@ export default function CampaignsPage() {
     <CRMPageShell innerClassName={cn(mk.pageInner, mk.workspace, "pb-36")}>
       {showCreate && isAdmin && (
         <CreateCampaignModal
-          onClose={() => setShowCreate(false)}
+          importAfterCreate={createForImport}
+          onClose={() => { setShowCreate(false); setCreateForImport(false); }}
           onCreate={(c) => {
             setCampaigns((prev) => [{ ...c, memberCount: c.memberCount ?? 0 }, ...prev]);
+            const dest = createForImport
+              ? `/crm/campaigns/${c.id}?openImport=1`
+              : `/crm/campaigns/${c.id}`;
             setShowCreate(false);
-            router.push(`/crm/campaigns/${c.id}`);
+            setCreateForImport(false);
+            router.push(dest);
           }}
         />
       )}
@@ -506,11 +521,15 @@ export default function CampaignsPage() {
           </div>
         </div>
         <div className="campaigns-hero-actions">
-          {canImport && (
-            <Link href="/crm/import" className="campaigns-btn-secondary">
+          {canImport && isAdmin && (
+            <button
+              type="button"
+              onClick={() => { setCreateForImport(true); setShowCreate(true); }}
+              className="campaigns-btn-secondary"
+            >
               <FileUp className="h-4 w-4" />
-              Import
-            </Link>
+              Import Leads
+            </button>
           )}
           {canQueue && (
             <Link href="/crm/scripts" className="campaigns-btn-secondary">
@@ -626,10 +645,14 @@ export default function CampaignsPage() {
                   <Plus className="h-4 w-4" /> New campaign
                 </button>
               )}
-              {canImport && (
-                <Link href="/crm/import" className={crm.btnSecondary}>
+              {canImport && isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => { setCreateForImport(true); setShowCreate(true); }}
+                  className={crm.btnSecondary}
+                >
                   <FileUp className="h-4 w-4" /> Import leads
-                </Link>
+                </button>
               )}
             </>
           }

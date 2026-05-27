@@ -719,6 +719,12 @@ export default function CampaignDetailPage() {
 
   // CSV import into campaign (admin — matches API requireCrmAdmin)
   const [importOpen, setImportOpen] = useState(false);
+  /** Set to true when the page is entered via ?openImport=1; opened once the campaign loads. */
+  const [pendingOpenImport, setPendingOpenImport] = useState(() =>
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("openImport") === "1"
+      : false,
+  );
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importAssigneeId, setImportAssigneeId] = useState("");
   const [importing, setImporting] = useState(false);
@@ -764,6 +770,27 @@ export default function CampaignDetailPage() {
     setImportPreview(null);
     setImportPreviewContextKeyState(null);
   }, [importFile, importAssigneeId]);
+
+  // Auto-open the import modal when the page is entered via ?openImport=1 (campaign-native import flow).
+  useEffect(() => {
+    if (pendingOpenImport && campaign && isAdmin) {
+      setPendingOpenImport(false);
+      // Clean the URL param so refreshing doesn't reopen the modal.
+      if (typeof window !== "undefined") {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("openImport");
+        window.history.replaceState({}, "", url.toString());
+      }
+      setImportOpen(true);
+      setImportErr("");
+      setImportSummary(null);
+      setImportFile(null);
+      setImportAssigneeId("");
+      setImportPreview(null);
+      setImportPreviewContextKeyState(null);
+      setImportCompareBaseline(null);
+    }
+  }, [pendingOpenImport, campaign, isAdmin]);
 
   const loadCampaign = useCallback(async () => {
     try {

@@ -10,6 +10,14 @@ export type AssignedUser = {
 
 export type ContactPhone = { id: string; type: string; numberRaw: string; isPrimary: boolean };
 export type ContactEmail = { id: string; type: string; email: string; isPrimary: boolean };
+export type ContactAddress = {
+  id: string;
+  street?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+  country?: string | null;
+};
 export type ContactTag = { id: string; name: string; color?: string | null };
 
 export type CrmContactDetail = {
@@ -22,6 +30,7 @@ export type CrmContactDetail = {
   notes?: string | null;
   phones: ContactPhone[];
   emails: ContactEmail[];
+  addresses?: ContactAddress[];
   tags?: ContactTag[];
   crmStage?: CrmStage | null;
   assignedTo?: AssignedUser | null;
