@@ -13788,13 +13788,14 @@ app.get("/admin/pbx/extensions", async (req, reply) => {
 app.get("/admin/pbx/tenant-inbound-dids", async (req, reply) => {
   const admin = await requireSuperAdmin(req, reply);
   if (!admin) return;
-  const query = z.object({ instanceId: z.string().optional(), vitalTenantId: z.string().optional(), activeOnly: z.enum(["0", "1"]).optional() }).parse(req.query || {});
+  const query = z.object({ instanceId: z.string().optional(), vitalTenantId: z.string().optional(), connectTenantId: z.string().optional(), activeOnly: z.enum(["0", "1"]).optional() }).parse(req.query || {});
   const instance = query.instanceId
     ? await db.pbxInstance.findUnique({ where: { id: query.instanceId } })
     : await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
   if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
   const where: Record<string, unknown> = { pbxInstanceId: instance.id };
   if (query.vitalTenantId?.trim()) where.vitalTenantId = query.vitalTenantId.trim();
+  if (query.connectTenantId?.trim()) where.connectTenantId = query.connectTenantId.trim();
   if (query.activeOnly === "1") where.active = true;
   const rows = await db.pbxTenantInboundDid.findMany({
     where: where as any,

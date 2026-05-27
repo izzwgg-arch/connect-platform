@@ -14,6 +14,7 @@ import {
   FileText,
   GitBranch,
   Grid3X3,
+  Hash,
   Headphones,
   History,
   CheckSquare,
@@ -121,6 +122,7 @@ export const navItems: NavItem[] = [
   { id: "admin.call_flight", href: "/admin/call-flight", label: "Call Flight Recorder", icon: "CF", lucide: Plane, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_call_flight" },
   { id: "admin.deploy_center", href: "/admin/deploy-center", label: "Deploy Center", icon: "DC", lucide: Rocket, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_deploy_center" },
   { id: "admin.roles", href: "/admin/roles", label: "Custom Roles", icon: "RO", lucide: Shield, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_roles" },
+  { id: "admin.phone_numbers", href: "/admin/phone-numbers", label: "Phone Numbers", icon: "PN", lucide: Hash, section: "admin", sectionPermission: "can_view_section_admin", permission: "can_view_admin_phone_numbers" },
 
   { id: "billing.overview", href: "/billing", label: "Billing Overview", icon: "BL", lucide: Receipt, section: "billing", sectionPermission: "can_view_section_billing", permission: "can_view_billing_overview" },
 
