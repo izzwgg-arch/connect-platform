@@ -307,7 +307,6 @@ export default function CampaignsPage() {
     backendJwtRole === "TENANT_ADMIN" ||
     backendJwtRole === "SUPER_ADMIN";
 
-  const canImport = can("can_view_crm_import");
   const canQueue = can("can_view_crm_queue");
 
   const [campaigns, setCampaigns] = useState<CampaignListItem[]>([]);
@@ -521,7 +520,7 @@ export default function CampaignsPage() {
           </div>
         </div>
         <div className="campaigns-hero-actions">
-          {canImport && (
+          {isAdmin && (
             <button
               type="button"
               onClick={() => { setCreateForImport(true); setShowCreate(true); }}
@@ -645,7 +644,7 @@ export default function CampaignsPage() {
                   <Plus className="h-4 w-4" /> New campaign
                 </button>
               )}
-              {canImport && (
+              {isAdmin && (
                 <button
                   type="button"
                   onClick={() => { setCreateForImport(true); setShowCreate(true); }}
