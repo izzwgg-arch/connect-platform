@@ -7,8 +7,8 @@
  * Calls POST /admin/billing/invoices/manual.
  */
 
-import { useState, useCallback, type ChangeEvent } from "react";
-import { apiPost } from "../../../../../services/apiClient";
+import { useState, useCallback, useRef, type ChangeEvent } from "react";
+import { apiGet, apiPost } from "../../../../../services/apiClient";
 import { LINE_ITEM_TYPE_LABELS, type EditableLineItem, type LineItemType } from "./invoiceEditor";
 import "./invoiceEditorStyles.css";
 
@@ -45,6 +45,16 @@ function netDays(n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Shape returned by GET /admin/billing/platform/tenants/:id/invoice-preview
+type PreviewLineItem = {
+  type: string;
+  description: string;
+  quantity: number;
+  unitPriceCents: number;
+  amountCents: number;
+  taxable: boolean;
+};
+
 let _keyCounter = 0;
 function nextKey() {
   return `li-m-${++_keyCounter}-${Date.now()}`;
@@ -58,6 +68,22 @@ function newLineItem(): EditableLineItem {
     quantity: 1,
     unitPriceCents: 0,
     taxable: true,
+  };
+}
+
+function previewLineToEditable(li: PreviewLineItem): EditableLineItem {
+  // Map the type to an allowed EditableLineItem type; fall back to CUSTOM if unknown
+  const knownTypes = Object.keys(LINE_ITEM_TYPE_LABELS) as LineItemType[];
+  const type = knownTypes.includes(li.type as LineItemType)
+    ? (li.type as LineItemType)
+    : "CUSTOM";
+  return {
+    _key: nextKey(),
+    type,
+    description: li.description,
+    quantity: li.quantity,
+    unitPriceCents: li.unitPriceCents,
+    taxable: li.taxable,
   };
 }
 
@@ -96,14 +122,48 @@ export function ManualInvoiceDrawer({
   const [markPaid, setMarkPaid] = useState(false);
   const [lineItems, setLineItems] = useState<EditableLineItem[]>([newLineItem()]);
   const [submitting, setSubmitting] = useState(false);
+  const [loadingBill, setLoadingBill] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const lastLoadedPeriodRef = useRef<string | null>(null);
 
   const totals = calcTotals(lineItems);
 
   const addItem = useCallback(() => {
     setLineItems((prev) => [...prev, newLineItem()]);
   }, []);
+
+  /**
+   * Fetch the standard billing items from the tenant's pricing profile
+   * (same data the autopay engine would use for this period) and replace
+   * the current line items with those items.
+   */
+  const loadStandardBill = useCallback(async () => {
+    setLoadingBill(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (periodStart) params.set("serviceStartDate", `${periodStart}T00:00:00Z`);
+      if (periodEnd) params.set("serviceEndDate", `${periodEnd}T00:00:00Z`);
+
+      const preview = await apiGet<{ lineItems: PreviewLineItem[] }>(
+        `/admin/billing/platform/tenants/${tenant.id}/invoice-preview?${params.toString()}`,
+      );
+
+      if (!preview.lineItems?.length) {
+        setError("No billing items returned from the pricing profile. Check the tenant's pricing settings.");
+        return;
+      }
+
+      const loaded = preview.lineItems.map(previewLineToEditable);
+      setLineItems(loaded);
+      lastLoadedPeriodRef.current = `${periodStart}→${periodEnd}`;
+    } catch {
+      setError("Could not load standard billing items. Check the tenant's pricing profile is configured.");
+    } finally {
+      setLoadingBill(false);
+    }
+  }, [tenant.id, periodStart, periodEnd]);
 
   const updateItem = useCallback(
     (key: string, field: keyof EditableLineItem, value: unknown) => {
@@ -284,9 +344,46 @@ export function ManualInvoiceDrawer({
 
           {/* Line items */}
           <div className="inv-editor__section">
-            <div className="inv-editor__section-head">
+            <div className="inv-editor__section-head" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <h4 className="inv-editor__section-title">Line Items</h4>
+              <button
+                type="button"
+                className="inv-editor__btn inv-editor__btn--secondary"
+                style={{ fontSize: 12, padding: "4px 10px", display: "flex", alignItems: "center", gap: 5 }}
+                onClick={() => void loadStandardBill()}
+                disabled={loadingBill || submitting}
+                title="Pre-fill line items from this tenant's pricing profile (extensions, DIDs, SMS, taxes, fees)"
+              >
+                {loadingBill ? (
+                  "Loading…"
+                ) : (
+                  <>
+                    <span style={{ fontSize: 14 }}>⚡</span>
+                    Load standard bill
+                  </>
+                )}
+              </button>
             </div>
+            {lastLoadedPeriodRef.current && (
+              <div
+                style={{
+                  margin: "0 16px 4px",
+                  fontSize: 11,
+                  color: "var(--ie-text-muted, #6b7280)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                <span style={{ color: "#22c55e" }}>✓</span>
+                Standard bill loaded from pricing profile
+                {lastLoadedPeriodRef.current !== `${periodStart}→${periodEnd}` && (
+                  <span style={{ color: "#f59e0b", marginLeft: 4 }}>
+                    ⚠ Service period changed — reload to update amounts
+                  </span>
+                )}
+              </div>
+            )}
             <div className="inv-editor__section-body" style={{ padding: "0 0 16px" }}>
               <table className="inv-editor__li-table">
                 <thead>
