@@ -15,6 +15,7 @@ import { registerCrmSmsRoutes } from "./smsRoutes";
 import { registerCrmDiagnosticsRoutes } from "./diagnosticsRoutes";
 import { registerCrmPilotReadinessRoutes } from "./pilotReadinessRoutes";
 import { registerCrmEmailRoutes } from "./emailRoutes";
+import { registerCrmFunderRoutes } from "./funderRoutes";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -382,4 +383,7 @@ export async function registerCrmRoutes(app: FastifyInstance) {
 
   // CRM Email (Phase 1 — send-only, feature-flagged)
   await registerCrmEmailRoutes(app);
+
+  // CRM Funders — separate entity workspace for funding/referral/insurance/provider records
+  await registerCrmFunderRoutes(app);
 }

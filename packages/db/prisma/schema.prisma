@@ -545,6 +545,9 @@ model Tenant {
   customers                       Customer[]
   contacts                        Contact[]
   contactTags                     ContactTag[]
+  funders                         Funder[]
+  funderTags                      FunderTag[]
+  funderImportBatches             FunderImportBatch[]
   customerNotes                   CustomerNote[]
   customerTasks                   CustomerTask[]
   automationRules                 AutomationRule[]
@@ -669,6 +672,7 @@ model User {
   updatedSbcConfigs              SbcConfig[]                       @relation("SbcConfigUpdatedBy")
   customerNotes                  CustomerNote[]
   createdContacts                Contact[]                         @relation("ContactCreatedBy")
+  createdFunders                 Funder[]                          @relation("FunderCreatedBy")
   createdCustomerTasks           CustomerTask[]                    @relation("CustomerTaskCreatedBy")
   completedCustomerTasks         CustomerTask[]                    @relation("CustomerTaskCompletedBy")
   createdAutomationRules         AutomationRule[]                  @relation("AutomationRuleCreatedBy")
@@ -4039,4 +4043,90 @@ model OnboardingEvent {
   submission   OnboardingSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 
   @@index([submissionId, createdAt])
+}
+
+// ─── CRM Funders ─────────────────────────────────────────────────────────────
+// Separate entity workspace for funding/referral/insurance/provider records.
+// Deliberately NOT reusing Contact to avoid cross-contamination of CRM contact
+// workflows, tags, and CDR screen-pop. Funders have their own tag namespace.
+
+enum FunderStatus {
+  ACTIVE
+  INACTIVE
+  PROSPECT
+  PENDING
+}
+
+model Funder {
+  id           String       @id @default(cuid())
+  tenantId     String
+  name         String
+  organization String?
+  email        String?
+  phone        String?
+  phone2       String?
+  city         String?
+  state        String?
+  zip          String?
+  notes        String?
+  status       FunderStatus @default(ACTIVE)
+  active       Boolean      @default(true)
+  archivedAt   DateTime?
+  createdBy    String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  tenant   Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  creator  User?                  @relation("FunderCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  tagLinks FunderTagAssignment[]
+
+  @@index([tenantId, active])
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, name])
+}
+
+model FunderTag {
+  id          String               @id @default(cuid())
+  tenantId    String
+  name        String
+  color       String?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignments FunderTagAssignment[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+model FunderTagAssignment {
+  funderId String
+  tagId    String
+  funder   Funder    @relation(fields: [funderId], references: [id], onDelete: Cascade)
+  tag      FunderTag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([funderId, tagId])
+  @@index([tagId])
+}
+
+model FunderImportBatch {
+  id           String   @id @default(cuid())
+  tenantId     String
+  fileName     String
+  status       String   @default("PENDING")
+  totalRows    Int      @default(0)
+  createdCount Int      @default(0)
+  updatedCount Int      @default(0)
+  skippedCount Int      @default(0)
+  errorCount   Int      @default(0)
+  errors       Json     @default("[]")
+  mapping      Json     @default("{}")
+  createdBy    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
 }
