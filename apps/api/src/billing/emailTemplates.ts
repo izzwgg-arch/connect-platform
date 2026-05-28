@@ -385,3 +385,108 @@ export function paymentFailedEmail(input: {
     text: `${subject}\n${input.updateUrl}${input.payUrl ? `\n${input.payUrl}` : ""}`,
   };
 }
+
+// ─── Refund confirmation email ────────────────────────────────────────────────
+
+export type PaymentRefundedEmailInput = {
+  customerName?: string | null;
+  invoiceNumber: string;
+  refundedAmountCents: number;
+  originalPaymentDate?: Date | string | null;
+  refundIssuedDate?: Date | string | null;
+  cardLabel?: string | null;
+  portalInvoiceUrl?: string | null;
+  /** true = copy should acknowledge a billing glitch; false = routine refund */
+  isDuplicateChargeRefund?: boolean;
+  brand?: InvoiceEmailBranding | null;
+};
+
+export function paymentRefundedEmail(input: PaymentRefundedEmailInput): { subject: string; html: string; text: string } {
+  const brand = mergeBrand(input.brand);
+  const amount = money(input.refundedAmountCents);
+  const subject = `Refund of ${amount} — Invoice ${escapeHtml(input.invoiceNumber)}`;
+
+  const rows: string[] = [];
+  if (input.customerName) rows.push(summaryRow("Account", escapeHtml(input.customerName), false));
+  rows.push(summaryRow("Invoice", escapeHtml(input.invoiceNumber), !input.customerName));
+  rows.push(summaryRow("Refund amount", `<strong style="color:#16a34a;">${escapeHtml(amount)}</strong>`));
+  if (input.cardLabel) rows.push(summaryRow("Payment method", escapeHtml(input.cardLabel)));
+  if (input.originalPaymentDate) rows.push(summaryRow("Original payment date", fmtDate(input.originalPaymentDate)));
+  if (input.refundIssuedDate) rows.push(summaryRow("Refund issued", fmtDate(input.refundIssuedDate)));
+  rows.push(summaryRow("Expected timing", "2–3 business days to appear on your statement"));
+
+  const viewBtn = input.portalInvoiceUrl
+    ? `<p style="margin:24px 0 0;">${ctaButton(input.portalInvoiceUrl, "View invoice", CONNECT_BLUE)}</p>`
+    : "";
+
+  const intro = input.isDuplicateChargeRefund
+    ? `<p style="margin:0 0 6px;font-size:14px;color:#64748b;">We're sorry for the inconvenience — a billing glitch caused a duplicate charge this month. We've issued a full refund.</p>`
+    : `<p style="margin:0 0 6px;font-size:14px;color:#64748b;">Your refund has been processed and should appear within 2–3 business days.</p>`;
+
+  const body = `
+    <div style="margin-bottom:16px;">
+      <span style="display:inline-block;background:#dcfce7;color:#15803d;font-weight:700;font-size:13px;padding:4px 14px;border-radius:20px;">✓ Refund issued</span>
+    </div>
+    <p style="margin:0 0 12px;font-size:16px;font-weight:600;color:#1e293b;">Your refund of ${escapeHtml(amount)} is on its way.</p>
+    ${intro}
+    ${infoBox(rows.join(""))}
+    ${viewBtn}
+  `;
+
+  return {
+    subject,
+    html: emailShell("Refund confirmation", body, brand),
+    text: `${subject}\nRefund amount: ${amount}\nInvoice: ${input.invoiceNumber}\nExpected: 2-3 business days`,
+  };
+}
+
+// ─── One-time duplicate-charge apology email ──────────────────────────────────
+
+export type BillingApologyEmailInput = {
+  customerName?: string | null;
+  refundedAmountCents?: number | null;
+  invoiceNumber?: string | null;
+  originalPaymentDate?: Date | string | null;
+  portalInvoiceUrl?: string | null;
+  brand?: InvoiceEmailBranding | null;
+};
+
+export function billingApologyEmail(input: BillingApologyEmailInput): { subject: string; html: string; text: string } {
+  const brand = mergeBrand(input.brand);
+  const subject = "Important: Billing update and refund confirmation";
+  const greeting = input.customerName ? `Hi ${escapeHtml(input.customerName)},` : "Hello,";
+
+  const rows: string[] = [];
+  if (input.invoiceNumber) rows.push(summaryRow("Invoice", escapeHtml(input.invoiceNumber), false));
+  if (input.refundedAmountCents) rows.push(summaryRow("Amount refunded", `<strong style="color:#16a34a;">${escapeHtml(money(input.refundedAmountCents))}</strong>`));
+  if (input.originalPaymentDate) rows.push(summaryRow("Original payment date", fmtDate(input.originalPaymentDate)));
+  rows.push(summaryRow("Expected timing", "2–3 business days to appear on your statement"));
+
+  const viewBtn = input.portalInvoiceUrl
+    ? `<p style="margin:24px 0 0;">${ctaButton(input.portalInvoiceUrl, "View invoice", CONNECT_BLUE)}</p>`
+    : "";
+
+  const body = `
+    <p style="margin:0 0 16px;font-size:16px;font-weight:600;color:#1e293b;">${escapeHtml(greeting)}</p>
+    <p style="margin:0 0 16px;font-size:15px;color:#334155;">
+      We want to let you know about a billing issue that occurred today. Due to a system glitch,
+      your account was charged a duplicate payment for this month. We sincerely apologize for this.
+    </p>
+    <p style="margin:0 0 16px;font-size:15px;color:#334155;">
+      A full refund has already been issued. Depending on your bank, it should appear on your
+      statement within 2–3 business days.
+    </p>
+    ${rows.length ? infoBox(rows.join("")) : ""}
+    ${viewBtn}
+    <p style="margin:24px 0 0;font-size:14px;color:#64748b;">
+      If you have any questions or do not see the refund after 3 business days, please don't
+      hesitate to reach out — we're happy to assist.
+    </p>
+  `;
+
+  return {
+    subject,
+    html: emailShell("Billing update", body, brand),
+    text: `${subject}\n${greeting}\nA duplicate charge occurred this month. A full refund has been issued and should appear within 2-3 business days.`,
+  };
+}

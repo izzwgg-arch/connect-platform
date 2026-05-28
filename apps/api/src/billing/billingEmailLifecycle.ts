@@ -1,6 +1,6 @@
 import { db } from "@connect/db";
 import { buildBillingEmailJobCreateData } from "./billingAuth";
-import { invoiceSentEmail, paymentFailedEmail, paymentLinkEmail, paymentReceiptEmail } from "./emailTemplates";
+import { billingApologyEmail, invoiceSentEmail, paymentFailedEmail, paymentLinkEmail, paymentReceiptEmail, paymentRefundedEmail } from "./emailTemplates";
 import { clearDunningSlice } from "./billingDunning";
 import { resolveInvoiceEmailBranding } from "./invoiceBranding";
 import { createBillingInvoicePayToken } from "./billingPayToken";
@@ -340,4 +340,140 @@ export async function clearInvoiceDunningMetadata(invoiceId: string): Promise<vo
   if (!inv) return;
   const next = clearDunningSlice(inv.metadata);
   await (db as any).billingInvoice.update({ where: { id: invoiceId }, data: { metadata: next } });
+}
+
+// ─── Refund confirmation email ────────────────────────────────────────────────
+
+/** Idempotency guard — did we already send a refund email for this transactionId? */
+async function hasRefundEmailForTransaction(transactionId: string): Promise<boolean> {
+  const e = await (db as any).billingEventLog.findFirst({
+    where: { type: "refund_emailed", message: transactionId },
+  });
+  return !!e;
+}
+
+/**
+ * Queue a refund confirmation email exactly once per transactionId.
+ * Safe to call multiple times (idempotent via billingEventLog sentinel).
+ */
+export async function queueRefundEmailOnce(params: {
+  tenantId: string;
+  invoiceId: string | null;
+  invoiceNumber: string;
+  refundedAmountCents: number;
+  transactionId: string;
+  cardLabel?: string | null;
+  originalPaymentDate?: Date | null;
+  isDuplicateChargeRefund?: boolean;
+}): Promise<boolean> {
+  if (await hasRefundEmailForTransaction(params.transactionId)) return false;
+  const recipient = await resolveBillingEmailRecipient({ tenantId: params.tenantId, invoiceId: params.invoiceId });
+  const to = recipient.to;
+  if (!to) {
+    await logLifecycle("refund_email_skipped", params.tenantId, params.invoiceId ?? null, "No billingEmail", { transactionId: params.transactionId });
+    return false;
+  }
+  const brand = resolveInvoiceEmailBranding(recipient.settings || {}, recipient.tenantName);
+  const portalInvoiceUrl = params.invoiceId ? billingInvoicePortalUrl(params.invoiceId) : null;
+  const tpl = paymentRefundedEmail({
+    customerName: recipient.tenantName ?? null,
+    invoiceNumber: params.invoiceNumber,
+    refundedAmountCents: params.refundedAmountCents,
+    cardLabel: params.cardLabel ?? null,
+    originalPaymentDate: params.originalPaymentDate ?? null,
+    refundIssuedDate: new Date(),
+    portalInvoiceUrl,
+    isDuplicateChargeRefund: params.isDuplicateChargeRefund ?? false,
+    brand,
+  });
+  await (db as any).emailJob.create({
+    data: buildBillingEmailJobCreateData({
+      tenantId: params.tenantId,
+      invoiceId: null,
+      to,
+      type: "BILLING_REFUND",
+      subject: tpl.subject,
+      html: tpl.html,
+      text: tpl.text,
+    }),
+  });
+  await (db as any).billingEventLog.create({
+    data: {
+      tenantId: params.tenantId,
+      invoiceId: params.invoiceId,
+      type: "refund_emailed",
+      message: params.transactionId,
+      metadata: { emailType: "BILLING_REFUND", to, recipientSource: recipient.source },
+    },
+  });
+  return true;
+}
+
+// ─── One-time apology email ────────────────────────────────────────────────────
+
+/** Idempotency guard — did we already send an apology email for this tenant? */
+async function hasApologyEmailForTenant(tenantId: string): Promise<boolean> {
+  const e = await (db as any).billingEventLog.findFirst({
+    where: { tenantId, type: "apology_email_sent" },
+  });
+  return !!e;
+}
+
+export type QueueApologyEmailParams = {
+  tenantId: string;
+  invoiceId: string | null;
+  invoiceNumber?: string | null;
+  refundedAmountCents?: number | null;
+  originalPaymentDate?: Date | null;
+  adminUserId: string;
+  /** true = preview only; does NOT record apology_email_sent and CAN be resent */
+  isPreview?: boolean;
+};
+
+/**
+ * Queue a one-time duplicate-charge apology email.
+ * Idempotent: re-runs return false if already sent (unless isPreview=true).
+ * Hard rule: only SUPER_ADMIN callers may invoke this; enforce at route layer.
+ */
+export async function queueApologyEmailOnce(params: QueueApologyEmailParams): Promise<{ queued: boolean; reason?: string }> {
+  if (!params.isPreview && await hasApologyEmailForTenant(params.tenantId)) {
+    return { queued: false, reason: "already_sent" };
+  }
+  const recipient = await resolveBillingEmailRecipient({ tenantId: params.tenantId, invoiceId: params.invoiceId });
+  const to = recipient.to;
+  if (!to) {
+    return { queued: false, reason: "no_billing_email" };
+  }
+  const brand = resolveInvoiceEmailBranding(recipient.settings || {}, recipient.tenantName);
+  const portalInvoiceUrl = params.invoiceId ? billingInvoicePortalUrl(params.invoiceId) : null;
+  const tpl = billingApologyEmail({
+    customerName: recipient.tenantName ?? null,
+    refundedAmountCents: params.refundedAmountCents ?? null,
+    invoiceNumber: params.invoiceNumber ?? null,
+    portalInvoiceUrl,
+    brand,
+  });
+  await (db as any).emailJob.create({
+    data: buildBillingEmailJobCreateData({
+      tenantId: params.tenantId,
+      invoiceId: null,
+      to,
+      type: "BILLING_APOLOGY",
+      subject: tpl.subject,
+      html: tpl.html,
+      text: tpl.text,
+    }),
+  });
+  if (!params.isPreview) {
+    await (db as any).billingEventLog.create({
+      data: {
+        tenantId: params.tenantId,
+        invoiceId: params.invoiceId,
+        type: "apology_email_sent",
+        message: `Apology email sent by admin ${params.adminUserId}`,
+        metadata: { adminUserId: params.adminUserId, emailType: "BILLING_APOLOGY", to },
+      },
+    });
+  }
+  return { queued: true };
 }

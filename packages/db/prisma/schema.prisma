@@ -1108,6 +1108,8 @@ model PaymentTransaction {
   status                   BillingPaymentTransactionStatus @default(PENDING)
   processor                BillingPaymentMethodProcessor   @default(SOLA)
   processorTransactionId   String?
+  /// xRefNum returned by the processor for the refund (cc:refund / cc:credit). Set when a refund is confirmed at the processor.
+  processorRefundRef       String?
   responseCode             String?
   responseMessage          String?
   rawResponseSafeJson      Json?
@@ -1139,6 +1141,7 @@ model PaymentTransaction {
   @@index([invoiceId, createdAt])
   @@index([billingChargeOperationId])
   @@index([processor, processorTransactionId])
+  @@index([processor, processorRefundRef])
 }
 
 model BillingChargeOperation {

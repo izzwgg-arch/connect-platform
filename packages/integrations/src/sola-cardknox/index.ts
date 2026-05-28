@@ -261,6 +261,73 @@ export function verifyCardknoxSignature(rawBody: string, signature: string | und
   return safeEquals(signature.toLowerCase(), md5.toLowerCase());
 }
 
+/**
+ * Returns safe diagnostic info about why webhook signature verification failed.
+ * Does NOT expose the actual secret or the expected hash.
+ */
+export function diagnoseWebhookSignature(
+  headers: Record<string, string | string[] | undefined>,
+  rawBody: string,
+  webhookSecret: string | undefined,
+): {
+  hasCkSignature: boolean;
+  hasSolaSignature: boolean;
+  hasWebhookSecret: boolean;
+  rawBodyIsJson: boolean;
+  rawBodyIsFormEncoded: boolean;
+  rawBodyLength: number;
+  ckSignatureResult: "no_header" | "no_secret" | "match" | "mismatch";
+  solaSignatureResult: "no_header" | "no_secret" | "match" | "mismatch" | "expired";
+} {
+  const ckSig = getHeader(headers, "ck-signature");
+  const solaSig = getHeader(headers, "x-sola-signature");
+  const solaTs = getHeader(headers, "x-sola-timestamp");
+  const rawBodyIsJson = !!rawBody && rawBody.trim().startsWith("{");
+  const rawBodyIsFormEncoded = !rawBodyIsJson && !!rawBody && rawBody.includes("=");
+
+  let ckSignatureResult: "no_header" | "no_secret" | "match" | "mismatch" = "no_header";
+  if (ckSig) {
+    if (!webhookSecret) {
+      ckSignatureResult = "no_secret";
+    } else {
+      ckSignatureResult = verifyCardknoxSignature(rawBody, ckSig, webhookSecret) ? "match" : "mismatch";
+    }
+  }
+
+  let solaSignatureResult: "no_header" | "no_secret" | "match" | "mismatch" | "expired" = "no_header";
+  if (solaSig) {
+    if (!webhookSecret) {
+      solaSignatureResult = "no_secret";
+    } else if (!solaTs) {
+      solaSignatureResult = "no_header";
+    } else {
+      const ts = Number(solaTs);
+      const now = Math.floor(Date.now() / 1000);
+      if (!Number.isFinite(ts) || Math.abs(now - ts) > 300) {
+        solaSignatureResult = "expired";
+      } else {
+        const source = `${solaTs}.${rawBody}`;
+        const { createHmac: _createHmac } = require("node:crypto");
+        const hex = _createHmac("sha256", webhookSecret).update(source).digest("hex");
+        const b64 = _createHmac("sha256", webhookSecret).update(source).digest("base64");
+        solaSignatureResult = (safeEquals(solaSig, hex) || safeEquals(solaSig, b64)) ? "match" : "mismatch";
+      }
+    }
+  }
+
+  return {
+    hasCkSignature: !!ckSig,
+    hasSolaSignature: !!solaSig,
+    hasWebhookSecret: !!webhookSecret,
+    rawBodyIsJson,
+    rawBodyIsFormEncoded,
+    rawBodyLength: rawBody?.length ?? 0,
+    ckSignatureResult,
+    solaSignatureResult,
+  };
+}
+
+
 async function postJson(config: SolaCardknoxConfig, path: string, body: Record<string, any>): Promise<any> {
   if (config.simulate) {
     return {

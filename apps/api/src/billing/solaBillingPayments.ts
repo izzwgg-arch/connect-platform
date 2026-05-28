@@ -12,6 +12,7 @@ import {
 import {
   queuePaymentFailedEmailOnce,
   queueReceiptEmailOnce,
+  queueRefundEmailOnce,
 } from "./billingEmailLifecycle";
 import { billingPeriodAlreadyPaidError, findPaidBillingPeriodCoverage } from "./billingPeriodGuards";
 
@@ -563,7 +564,7 @@ export async function refundBillingTransaction(
 ): Promise<any> {
   const tx = await (db as any).paymentTransaction.findUnique({
     where: { id: transactionId },
-    include: { invoice: true, tenant: { include: { billingSolaConfig: true } } },
+    include: { invoice: true, tenant: { include: { billingSolaConfig: true } }, paymentMethod: true },
   });
   if (!tx) {
     const err: any = new Error("TRANSACTION_NOT_FOUND");
@@ -593,6 +594,7 @@ export async function refundBillingTransaction(
     where: { id: transactionId },
     data: {
       status: nextStatus,
+      processorRefundRef: response.approved ? (response.xRefNum ?? null) : undefined,
       responseMessage: response.xError || response.xStatus || tx.responseMessage,
       rawResponseSafeJson: {
         ...(typeof tx.rawResponseSafeJson === "object" && tx.rawResponseSafeJson ? tx.rawResponseSafeJson : {}),
@@ -611,8 +613,27 @@ export async function refundBillingTransaction(
         transactionId: tx.id,
         refundAmountCents: refundCents,
         adminUserId: options?.adminUserId || null,
+        processorRefundRef: response.xRefNum ?? null,
       },
     });
+    // Queue refund confirmation email exactly once.
+    if (tx.invoiceId) {
+      const invoice = tx.invoice;
+      if (invoice) {
+        const pm = tx.paymentMethod;
+        const cardLabel = pm?.last4 ? `${pm.brand || "Card"} ending ${pm.last4}` : null;
+        await queueRefundEmailOnce({
+          tenantId: tx.tenantId,
+          invoiceId: tx.invoiceId,
+          invoiceNumber: invoice.invoiceNumber,
+          refundedAmountCents: refundCents,
+          transactionId: tx.id,
+          cardLabel,
+          originalPaymentDate: tx.createdAt ? new Date(tx.createdAt) : null,
+          isDuplicateChargeRefund: false,
+        }).catch(() => null);
+      }
+    }
   } else {
     await logBillingEvent({
       tenantId: tx.tenantId,
@@ -777,6 +798,55 @@ export async function applySolaWebhookToBillingInvoice(ctx: ApplyBillingWebhookC
   else if (event.status === "FAILED") txStatus = xRes === "E" ? "ERROR" : "DECLINED";
   else txStatus = "PENDING";
 
+  // ── Refund / credit webhook: update the existing APPROVED charge instead of creating a new row.
+  const xCmd = String(payload.xCommand || payload.xcommand || "").toLowerCase();
+  const isRefundEvent = xCmd.includes("credit") || xCmd.includes("refund") || xCmd.includes("void");
+  if (isRefundEvent && approved) {
+    const existingCharge = await (db as any).paymentTransaction.findFirst({
+      where: { invoiceId: platformInvoice.id, status: "APPROVED" },
+      orderBy: { createdAt: "desc" },
+    });
+    if (existingCharge) {
+      const alreadyReconciled = String(existingCharge.processorRefundRef || "").trim();
+      if (alreadyReconciled) {
+        await logBillingEvent({
+          tenantId: platformInvoice.tenantId, invoiceId: platformInvoice.id,
+          type: "webhook.refund_deduped",
+          message: "Refund webhook deduped — transaction already has processorRefundRef",
+          metadata: { existingRefundRef: alreadyReconciled, incomingRef: processorRef },
+        }).catch(() => null);
+        return { ok: true, deduped: true, invoiceId: platformInvoice.id };
+      }
+      await (db as any).paymentTransaction.update({
+        where: { id: existingCharge.id },
+        data: {
+          status: "REFUNDED",
+          processorRefundRef: processorRef || null,
+          rawResponseSafeJson: {
+            ...(typeof existingCharge.rawResponseSafeJson === "object" && existingCharge.rawResponseSafeJson ? existingCharge.rawResponseSafeJson : {}),
+            refund: { ...payload, _source: "webhook" },
+          },
+        },
+      });
+      await logBillingEvent({
+        tenantId: platformInvoice.tenantId, invoiceId: platformInvoice.id,
+        type: "payment.refunded",
+        message: "Refund confirmed via SOLA/Cardknox webhook",
+        metadata: { transactionId: existingCharge.id, processorRefundRef: processorRef, source: "webhook" },
+      }).catch(() => null);
+      await queueRefundEmailOnce({
+        tenantId: platformInvoice.tenantId,
+        invoiceId: platformInvoice.id,
+        invoiceNumber: platformInvoice.invoiceNumber,
+        refundedAmountCents: amountCents,
+        transactionId: existingCharge.id,
+        originalPaymentDate: existingCharge.createdAt ? new Date(existingCharge.createdAt) : null,
+        isDuplicateChargeRefund: false,
+      }).catch(() => null);
+      return { ok: true, invoiceId: platformInvoice.id, transactionId: existingCharge.id, approved: true };
+    }
+  }
+
   const tx = await (db as any).paymentTransaction.create({
     data: {
       tenantId: platformInvoice.tenantId,
@@ -864,4 +934,155 @@ export async function applySolaWebhookToBillingInvoice(ctx: ApplyBillingWebhookC
   }
 
   return { ok: true, invoiceId: platformInvoice.id, transactionId: tx.id, approved };
+}
+
+// ─── Emergency portal-refund reconciliation ───────────────────────────────────
+
+export type ReconcilePortalRefundParams = {
+  /** Connect PaymentTransaction ID to reconcile. */
+  transactionId: string;
+  /** xRefNum of the CC Credit transaction in Sola/Cardknox portal (human-confirmed). */
+  processorRefundRef: string;
+  /** Amount refunded in cents (must match original or partial, operator-confirmed). */
+  refundAmountCents: number;
+  /** ISO timestamp when the refund was verified in Sola portal. */
+  refundVerifiedAt: Date;
+  adminUserId: string;
+  /** true = log and return result without writing to DB */
+  dryRun?: boolean;
+};
+
+export type ReconcilePortalRefundResult = {
+  tenantId: string;
+  transactionId: string;
+  originalProcessorRef: string;
+  processorRefundRef: string;
+  oldStatus: string;
+  newStatus: string;
+  emailQueued: boolean;
+  eventLogged: boolean;
+  /** "already_reconciled" | "ok" | "dry_run" */
+  action: string;
+};
+
+/**
+ * Safe one-time reconciliation for manual Sola/Cardknox portal refunds that bypassed the webhook.
+ * Idempotent: re-running when already REFUNDED and processorRefundRef already set returns "already_reconciled".
+ * Hard rules:
+ *  - Does NOT call the processor (no cc:refund / cc:credit).
+ *  - Only updates a transaction that is currently APPROVED with a processorTransactionId.
+ *  - processorRefundRef must be explicitly supplied by the operator.
+ */
+export async function reconcileBillingTransactionFromPortalRefund(
+  params: ReconcilePortalRefundParams,
+): Promise<ReconcilePortalRefundResult> {
+  const tx = await (db as any).paymentTransaction.findUnique({
+    where: { id: params.transactionId },
+    include: {
+      invoice: { select: { id: true, invoiceNumber: true, totalCents: true } },
+      paymentMethod: { select: { brand: true, last4: true } },
+    },
+  });
+  if (!tx) {
+    const err: any = new Error("TRANSACTION_NOT_FOUND");
+    err.code = "TRANSACTION_NOT_FOUND";
+    throw err;
+  }
+  if (!tx.processorTransactionId) {
+    const err: any = new Error("PROCESSOR_REF_MISSING");
+    err.code = "PROCESSOR_REF_MISSING";
+    throw err;
+  }
+
+  const existingRefundRef = String(tx.processorRefundRef || "").trim();
+  const isAlreadyReconciled = tx.status === "REFUNDED" && existingRefundRef;
+  if (isAlreadyReconciled) {
+    return {
+      tenantId: tx.tenantId,
+      transactionId: tx.id,
+      originalProcessorRef: tx.processorTransactionId,
+      processorRefundRef: existingRefundRef,
+      oldStatus: tx.status,
+      newStatus: tx.status,
+      emailQueued: false,
+      eventLogged: false,
+      action: "already_reconciled",
+    };
+  }
+
+  if (params.dryRun) {
+    return {
+      tenantId: tx.tenantId,
+      transactionId: tx.id,
+      originalProcessorRef: tx.processorTransactionId,
+      processorRefundRef: params.processorRefundRef,
+      oldStatus: tx.status,
+      newStatus: "REFUNDED",
+      emailQueued: false,
+      eventLogged: false,
+      action: "dry_run",
+    };
+  }
+
+  const prevSafe = typeof tx.rawResponseSafeJson === "object" && tx.rawResponseSafeJson ? tx.rawResponseSafeJson : {};
+  await (db as any).paymentTransaction.update({
+    where: { id: params.transactionId },
+    data: {
+      status: "REFUNDED",
+      processorRefundRef: params.processorRefundRef,
+      rawResponseSafeJson: {
+        ...prevSafe,
+        refund: {
+          processorRefundRef: params.processorRefundRef,
+          refundAmountCents: params.refundAmountCents,
+          refundVerifiedAt: params.refundVerifiedAt.toISOString(),
+          originalProcessorTransactionId: tx.processorTransactionId,
+          source: "manual_sola_portal_reconciliation",
+        },
+      },
+    },
+  });
+
+  await logBillingEvent({
+    tenantId: tx.tenantId,
+    invoiceId: tx.invoiceId,
+    type: "payment.refunded",
+    message: `Manual portal refund reconciled by admin ${params.adminUserId}`,
+    metadata: {
+      transactionId: tx.id,
+      processorRefundRef: params.processorRefundRef,
+      refundAmountCents: params.refundAmountCents,
+      originalProcessorTransactionId: tx.processorTransactionId,
+      source: "manual_sola_portal_reconciliation",
+      adminUserId: params.adminUserId,
+    },
+  });
+
+  let emailQueued = false;
+  if (tx.invoiceId && tx.invoice) {
+    const pm = tx.paymentMethod;
+    const cardLabel = pm?.last4 ? `${pm.brand || "Card"} ending ${pm.last4}` : null;
+    emailQueued = await queueRefundEmailOnce({
+      tenantId: tx.tenantId,
+      invoiceId: tx.invoiceId,
+      invoiceNumber: tx.invoice.invoiceNumber,
+      refundedAmountCents: params.refundAmountCents,
+      transactionId: tx.id,
+      cardLabel,
+      originalPaymentDate: tx.createdAt ? new Date(tx.createdAt) : null,
+      isDuplicateChargeRefund: true,
+    }).catch(() => false);
+  }
+
+  return {
+    tenantId: tx.tenantId,
+    transactionId: tx.id,
+    originalProcessorRef: tx.processorTransactionId,
+    processorRefundRef: params.processorRefundRef,
+    oldStatus: tx.status === "REFUNDED" ? "REFUNDED" : "APPROVED",
+    newStatus: "REFUNDED",
+    emailQueued,
+    eventLogged: true,
+    action: "ok",
+  };
 }

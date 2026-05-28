@@ -99,6 +99,8 @@ type TxDetail = {
 
   processorTransactionId: string | null;
 
+  processorRefundRef: string | null;
+
   tenant: { id: string; name: string };
 
   invoice: { id: string; invoiceNumber: string | null; status: string; totalCents: number; balanceDueCents: number } | null;
@@ -1007,6 +1009,10 @@ export function PaymentTransactionDrawer({
               <div><dt>Invoice</dt><dd>{tx.invoice?.invoiceNumber || "—"}</dd></div>
 
               {tx.responseMessage ? <div><dt>Processor message</dt><dd>{tx.responseMessage}</dd></div> : null}
+
+              {tx.processorTransactionId ? <div><dt>Processor charge ref</dt><dd style={{ fontFamily: "monospace", fontSize: 13 }}>{tx.processorTransactionId}</dd></div> : null}
+
+              {tx.processorRefundRef ? <div><dt>Processor refund ref</dt><dd style={{ fontFamily: "monospace", fontSize: 13, color: "#16a34a" }}>{tx.processorRefundRef}</dd></div> : null}
 
             </dl>
 

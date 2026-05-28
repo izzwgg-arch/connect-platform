@@ -119,7 +119,7 @@ import { registerAdminUserCrmAccessRoutes } from "./admin/userCrmAccessRoutes";
 import { resolvePortalPermissionsWithCrmUserAccess } from "./crm/portalCrmPermissions";
 import { registerBillingRoutes } from "./billing/routes";
 import { extractBillingInvoiceIdFromEmailJob, loadBillingInvoicePdfAttachmentForEmailJob } from "./billing/billingEmailAttachments";
-import { applySolaWebhookToBillingInvoice, resolvePlatformBillingInvoiceForWebhookRef } from "./billing/solaBillingPayments";
+import { applySolaWebhookToBillingInvoice, reconcileBillingTransactionFromPortalRefund, resolvePlatformBillingInvoiceForWebhookRef } from "./billing/solaBillingPayments";
 import { getBillingSolaAdapter } from "./billing/solaGateway";
 import { maskSolaSecretsForResponse } from "./billing/solaConfigMasking";
  
@@ -29348,13 +29348,20 @@ app.post("/webhooks/whatsapp/meta", { config: { rawBody: true } }, async (req, r
   return { ok: true, provider: "WHATSAPP_META", tenantMatched: !!tenantId };
 });
 
-app.post("/webhooks/sola-cardknox", async (req, reply) => {
+app.post("/webhooks/sola-cardknox", { config: { rawBody: true } }, async (req, reply) => {
   const ip = String((req.headers["x-forwarded-for"] || req.ip || "")).split(",")[0].trim();
   if (!checkBillingRateLimit(`webhook:${ip}`, 240, 60 * 1000)) {
     return reply.status(429).send({ error: "RATE_LIMITED" });
   }
 
-  const rawBody = typeof req.body === "string" ? req.body : JSON.stringify(req.body || {});
+  // Prefer the raw Buffer captured before Fastify body parsing (formbody plugin parses
+  // application/x-www-form-urlencoded into an object, which would break MD5 signature
+  // verification because the hash is computed over the original form-encoded field values).
+  const rawBodyBuffer = (req as any).rawBody as Buffer | string | undefined;
+  const rawBody = rawBodyBuffer
+    ? (typeof rawBodyBuffer === "string" ? rawBodyBuffer : rawBodyBuffer.toString("utf-8"))
+    : (typeof req.body === "string" ? req.body : JSON.stringify(req.body || {}));
+
   const envAdapter = getSolaAdapter();
 
   let event;
@@ -29380,6 +29387,7 @@ app.post("/webhooks/sola-cardknox", async (req, reply) => {
     });
     if (!result.ok) {
       if (result.error === "missing_correlation") return reply.status(400).send({ error: "missing_event_id" });
+      app.log.warn({ ip, contentType: req.headers["content-type"], hasRawBody: !!rawBodyBuffer, bodyIsObject: typeof req.body === "object" }, "sola-cardknox webhook signature rejected (BillingInvoice branch)");
       return reply.status(403).send({ error: "invalid_signature" });
     }
     if ("deduped" in result && result.deduped) return { ok: true, deduped: true, invoiceId: result.invoiceId };
@@ -29410,7 +29418,10 @@ app.post("/webhooks/sola-cardknox", async (req, reply) => {
       envAdapter.verifyCardknoxWebhook(req.headers as any, rawBody) ||
       verifyAdapter.verifyWebhook(req.headers as any, rawBody) ||
       envAdapter.verifyWebhook(req.headers as any, rawBody);
-    if (!validSignature) return reply.status(403).send({ error: "invalid_signature" });
+    if (!validSignature) {
+      app.log.warn({ ip, contentType: req.headers["content-type"], hasRawBody: !!rawBodyBuffer, bodyIsObject: typeof req.body === "object" }, "sola-cardknox webhook signature rejected (legacy invoice branch)");
+      return reply.status(403).send({ error: "invalid_signature" });
+    }
 
     await db.paymentEvent.create({
       data: {

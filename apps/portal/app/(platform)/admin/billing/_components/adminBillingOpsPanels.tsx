@@ -2586,3 +2586,91 @@ export function AdminBillingOpsView({ view }: { view: AdminOpsTab }) {
   );
 }
 
+// ── One-time apology email button (SUPER_ADMIN only) ─────────────────────────
+// Use isPreview=true for Landau Home (preview-only, never logs apology_email_sent).
+// Use isPreview=false for confirmed affected tenants (Gesheft, LUZER, Solidify Concrete).
+
+export type ApologyEmailButtonProps = {
+  tenantId: string;
+  tenantName?: string | null;
+  invoiceId?: string | null;
+  invoiceNumber?: string | null;
+  refundedAmountCents?: number | null;
+  /** true = preview only (Landau Home). false = one-time send for affected tenants. */
+  isPreview?: boolean;
+  label?: string;
+};
+
+export function ApologyEmailButton({
+  tenantId,
+  tenantName,
+  invoiceId,
+  invoiceNumber,
+  refundedAmountCents,
+  isPreview = false,
+  label,
+}: ApologyEmailButtonProps) {
+  const { can, backendJwtRole } = useAppContext();
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ queued: boolean; reason?: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const isSuperAdmin = backendJwtRole === "SUPER_ADMIN" && can("can_view_admin_billing");
+  if (!isSuperAdmin) return null;
+
+  const alreadySent = !isPreview && result?.queued === false && result.reason === "already_sent";
+  const sent = result?.queued === true;
+
+  const defaultLabel = isPreview
+    ? `Send preview apology email${tenantName ? ` (${tenantName})` : ""}`
+    : `Send duplicate-charge apology email${tenantName ? ` to ${tenantName}` : ""}`;
+
+  async function send() {
+    if (busy || alreadySent || (!isPreview && sent)) return;
+    if (!isPreview) {
+      const confirmed = window.confirm(
+        `This will send a one-time apology email to ${tenantName || tenantId}.\n\nThis action cannot be undone. Continue?`,
+      );
+      if (!confirmed) return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await apiPost<{ queued: boolean; reason?: string }>(
+        `/admin/billing/tenants/${tenantId}/send-apology-email`,
+        { invoiceId: invoiceId ?? null, invoiceNumber: invoiceNumber ?? null, refundedAmountCents: refundedAmountCents ?? null, isPreview },
+      );
+      setResult(res);
+    } catch (e: any) {
+      setError(e?.message || "Failed to send apology email");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <button
+        className={isPreview ? "btn ghost" : "btn primary"}
+        type="button"
+        disabled={busy || alreadySent || (!isPreview && sent)}
+        onClick={() => void send()}
+        style={{ maxWidth: 340 }}
+      >
+        {busy ? "Sending…" : alreadySent ? "Already sent" : sent ? (isPreview ? "Preview sent ✓" : "Apology sent ✓") : (label || defaultLabel)}
+      </button>
+      {result?.queued && (
+        <p style={{ margin: 0, fontSize: 13, color: "#16a34a" }}>
+          {isPreview ? "Preview apology email queued." : "Apology email queued and will be sent shortly."}
+        </p>
+      )}
+      {result?.reason === "already_sent" && !isPreview && (
+        <p style={{ margin: 0, fontSize: 13, color: "#64748b" }}>Apology already sent to this account.</p>
+      )}
+      {result?.reason === "no_billing_email" && (
+        <p style={{ margin: 0, fontSize: 13, color: "#ea580c" }}>No billing email configured for this account.</p>
+      )}
+      {error && <p style={{ margin: 0, fontSize: 13, color: "#dc2626" }}>{error}</p>}
+    </div>
+  );
+}

@@ -35,6 +35,7 @@ import {
   billingLiveChargesDisabled,
   chargeBillingInvoice,
   chargeBillingInvoiceWithSut,
+  reconcileBillingTransactionFromPortalRefund,
   refundBillingTransaction,
 } from "./solaBillingPayments";
 import {
@@ -51,7 +52,7 @@ import {
   solaWebhookPinMissingForProd,
 } from "./solaConfigPolicy";
 import { billingSolaCardknoxWebhookUrl } from "./solaPublicUrls";
-import { billingInvoicePublicPayUrl, isValidMultiBillingEmail, normalizeMultiBillingEmail, queuePaymentLinkEmail } from "./billingEmailLifecycle";
+import { billingInvoicePublicPayUrl, isValidMultiBillingEmail, normalizeMultiBillingEmail, queueApologyEmailOnce, queuePaymentLinkEmail } from "./billingEmailLifecycle";
 import {
   buildBillingEmailJobCreateData,
   canAccessPlatformAdminBillingRoutes,
@@ -3584,6 +3585,97 @@ export async function registerBillingRoutes(app: FastifyInstance) {
 
     if (!result.ok) return reply.code(result.code).send({ error: result.error, disableError: result.disableError });
     return { ok: true, cutoverAt: result.cutoverAt, paymentMethodId: result.paymentMethodId, nextConnectChargeAt: result.nextConnectChargeAt };
+  });
+
+  // ─── Phase 1: Emergency portal-refund reconciliation (SUPER_ADMIN) ─────────
+  // POST /admin/billing/transactions/reconcile-portal-refund
+  // Accepts a human-confirmed Sola/Cardknox portal CC Credit xRefNum and reconciles
+  // the given PaymentTransaction in Connect (status → REFUNDED, processorRefundRef set).
+  // HARD RULE: does NOT call the processor. No cc:refund / cc:credit issued.
+  app.post("/admin/billing/transactions/reconcile-portal-refund", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    if ((u as any).role !== "SUPER_ADMIN") return reply.status(403).send({ error: "SUPER_ADMIN_REQUIRED" });
+
+    const input = z.object({
+      transactionId: z.string().min(1),
+      processorRefundRef: z.string().min(1),
+      refundAmountCents: z.number().int().min(1),
+      refundVerifiedAt: z.string().datetime().transform((s) => new Date(s)),
+      dryRun: z.boolean().default(false),
+    }).parse(req.body || {});
+
+    const result = await reconcileBillingTransactionFromPortalRefund({
+      transactionId: input.transactionId,
+      processorRefundRef: input.processorRefundRef,
+      refundAmountCents: input.refundAmountCents,
+      refundVerifiedAt: input.refundVerifiedAt,
+      adminUserId: (u as any).sub,
+      dryRun: input.dryRun,
+    });
+    return result;
+  });
+
+  // ─── Phase 3: Webhook failure diagnostics (SUPER_ADMIN) ────────────────────
+  // GET /admin/billing/webhook-diagnostics
+  app.get("/admin/billing/webhook-diagnostics", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    if ((u as any).role !== "SUPER_ADMIN") return reply.status(403).send({ error: "SUPER_ADMIN_REQUIRED" });
+
+    const recentRejections = await (db as any).billingEventLog.findMany({
+      where: { type: "webhook.signature_rejected" },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      select: {
+        id: true, tenantId: true, invoiceId: true, createdAt: true, message: true, metadata: true,
+      },
+    });
+    const recentRefundDeduped = await (db as any).billingEventLog.findMany({
+      where: { type: "webhook.refund_deduped" },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+      select: { id: true, tenantId: true, createdAt: true, metadata: true },
+    });
+    return {
+      signatureRejections: {
+        count: recentRejections.length,
+        last: recentRejections[0]?.createdAt ?? null,
+        entries: recentRejections,
+      },
+      refundDeduped: {
+        count: recentRefundDeduped.length,
+        entries: recentRefundDeduped,
+      },
+    };
+  });
+
+  // ─── Phase 5: One-time apology email (SUPER_ADMIN) ─────────────────────────
+  // POST /admin/billing/tenants/:tenantId/send-apology-email
+  // Sends a one-time duplicate-charge apology email. Idempotent.
+  // isPreview=true → preview only, no idempotency lock (Landau Home use case).
+  app.post("/admin/billing/tenants/:tenantId/send-apology-email", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    if ((u as any).role !== "SUPER_ADMIN") return reply.status(403).send({ error: "SUPER_ADMIN_REQUIRED" });
+
+    const { tenantId } = req.params as { tenantId: string };
+    const input = z.object({
+      invoiceId: z.string().nullable().optional(),
+      invoiceNumber: z.string().nullable().optional(),
+      refundedAmountCents: z.number().int().nullable().optional(),
+      isPreview: z.boolean().default(false),
+    }).parse(req.body || {});
+
+    const result = await queueApologyEmailOnce({
+      tenantId,
+      invoiceId: input.invoiceId ?? null,
+      invoiceNumber: input.invoiceNumber ?? null,
+      refundedAmountCents: input.refundedAmountCents ?? null,
+      adminUserId: (u as any).sub,
+      isPreview: input.isPreview,
+    });
+    return result;
   });
 }
 
