@@ -3499,7 +3499,23 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     const body = z.object({ tenantId: z.string().min(1) }).parse(req.body || {});
     const result = await mapSolaExternalSchedule({ linkId: id, tenantId: body.tenantId, operatorId: u.sub });
     if (!result.ok) return reply.code(result.code).send({ error: result.error });
-    return result.link;
+
+    // Auto-link the vault token so the card immediately appears in the tenant's payment methods.
+    // Non-fatal: if token linking fails (e.g. Cardknox unreachable) the map still succeeds and
+    // the operator can manually click "Link card token" later from the table.
+    let tokenLink: { ok: true; paymentMethodId: string; brand: string | null; last4: string | null } | { ok: false; error: string } = { ok: false, error: "not_attempted" };
+    try {
+      const tlResult = await linkSolaTokenToPaymentMethod({ linkId: id, operatorId: u.sub });
+      if (tlResult.ok) {
+        tokenLink = { ok: true, paymentMethodId: tlResult.paymentMethodId, brand: tlResult.brand, last4: tlResult.last4 };
+      } else {
+        tokenLink = { ok: false, error: tlResult.error };
+      }
+    } catch (e: unknown) {
+      tokenLink = { ok: false, error: e instanceof Error ? e.message : "token_link_failed" };
+    }
+
+    return { ...(result.link as object), tokenLink };
   });
 
   app.post("/admin/billing/platform/sola-import/schedules/:id/ignore", async (req, reply) => {

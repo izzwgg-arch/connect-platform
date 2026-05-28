@@ -49,7 +49,98 @@ function statusChipClass(status: string) {
 type CutoverConfirmState = {
   row: ScheduleRow;
   step: "warning" | "confirming";
+  nextConnectChargeAt?: string | null;
 };
+
+type TokenLinkResult = { ok: true; paymentMethodId: string; brand: string | null; last4: string | null } | { ok: false; error: string };
+
+function MapTenantDrawer({
+  row,
+  initialTenantId,
+  tenants,
+  onClose,
+  onMapped,
+  onError,
+}: {
+  row: ScheduleRow;
+  initialTenantId: string;
+  tenants: TenantOption[];
+  onClose: () => void;
+  onMapped: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [tenantId, setTenantId] = useState(initialTenantId);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<{ tenantName: string; tokenLink: TokenLinkResult } | null>(null);
+
+  async function confirm() {
+    setBusy(true);
+    try {
+      const res = await apiPost<{ tokenLink: TokenLinkResult }>(
+        `/admin/billing/platform/sola-import/schedules/${row.id}/map`,
+        { tenantId },
+      );
+      const tenantName = tenants.find((t) => t.id === tenantId)?.name ?? "the tenant";
+      setDone({ tenantName, tokenLink: res.tokenLink ?? { ok: false, error: "no_response" } });
+      onMapped();
+    } catch (e: unknown) {
+      onError(e instanceof Error ? e.message : "Map failed");
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="billing-p8-overlay" onClick={() => !busy && !done && onClose()}>
+      <div className="billing-p8-drawer" onClick={(e) => e.stopPropagation()}>
+        {done ? (
+          <>
+            <h3>Mapped successfully</h3>
+            <p style={{ marginBottom: 8, fontSize: 14 }}>
+              Schedule mapped to <strong>{done.tenantName}</strong>.
+            </p>
+            {done.tokenLink.ok ? (
+              <p style={{ fontSize: 13, color: "var(--billing-good, #16a34a)", marginBottom: 12 }}>
+                ✓ Card token imported automatically —{" "}
+                <strong>{done.tokenLink.brand || "Card"} ···· {done.tokenLink.last4 || "----"}</strong>{" "}
+                is now in that tenant&apos;s payment methods.
+              </p>
+            ) : (
+              <p style={{ fontSize: 13, color: "var(--billing-warn, #b45309)", marginBottom: 12 }}>
+                ⚠ Card token could not be auto-imported ({done.tokenLink.error}). Use &quot;Link card token&quot; in the table to retry.
+              </p>
+            )}
+            <button type="button" className="btn primary" onClick={onClose}>Done</button>
+          </>
+        ) : (
+          <>
+            <h3>Map to tenant</h3>
+            <p style={{ fontSize: 13, marginBottom: 10, color: "var(--text-dim)" }}>
+              Choose the Connect company that owns this Sola recurring schedule.
+              The card token will be imported automatically.
+            </p>
+            <select
+              className="input"
+              value={tenantId}
+              onChange={(e) => setTenantId(e.target.value)}
+              disabled={busy}
+              style={{ marginBottom: 12, width: "100%" }}
+            >
+              {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
+              <button type="button" className="btn primary" disabled={busy || !tenantId} onClick={() => void confirm()}>
+                {busy ? "Mapping & importing card…" : "Confirm"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function cutoverStatusLabel(status: string | null): string {
   if (!status) return "Mapped";
@@ -257,15 +348,14 @@ export function SolaImportsWorkspace() {
 
       {/* Map to tenant drawer */}
       {mapTarget && (
-        <div className="billing-p8-overlay" onClick={() => setMapTarget(null)}>
-          <div className="billing-p8-drawer" onClick={(e) => e.stopPropagation()}>
-            <h3>Map to tenant</h3>
-            <select className="input" value={mapTarget.tenantId} onChange={(e) => setMapTarget({ ...mapTarget, tenantId: e.target.value })}>
-              {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
-            <button type="button" className="btn primary" onClick={() => void apiPost(`/admin/billing/platform/sola-import/schedules/${mapTarget.row.id}/map`, { tenantId: mapTarget.tenantId }).then(() => { setMapTarget(null); bumpList(); })}>Confirm</button>
-          </div>
-        </div>
+        <MapTenantDrawer
+          row={mapTarget.row}
+          initialTenantId={mapTarget.tenantId}
+          tenants={tenants}
+          onClose={() => setMapTarget(null)}
+          onMapped={bumpList}
+          onError={(msg) => setActionError(msg)}
+        />
       )}
 
       {/* Take Over Billing confirmation drawer */}
@@ -278,7 +368,16 @@ export function SolaImportsWorkspace() {
                 <div className="billing-sola-cutover-warnings">
                   <p className="billing-sola-cutover-warn-item">⚠ The old Sola recurring schedule will be <strong>permanently disabled</strong>.</p>
                   <p className="billing-sola-cutover-warn-item">⚠ Connect autopay will be <strong>enabled</strong> for this tenant.</p>
-                  <p className="billing-sola-cutover-warn-item">✓ <strong>No charge will happen now.</strong> The next charge runs on the tenant&apos;s next billing day.</p>
+                  <p className="billing-sola-cutover-warn-item billing-sola-cutover-warn-item--safe">
+                    ✓ <strong>This will NOT charge the card today.</strong>{" "}
+                    The current billing period was already paid by Sola. Connect will only charge starting on the <strong>next</strong> billing cycle.
+                  </p>
+                  {cutoverTarget.row.nextRunAt && (
+                    <p className="billing-sola-cutover-warn-item billing-sola-cutover-warn-item--info">
+                      Sola&apos;s next scheduled charge: <strong>{new Date(cutoverTarget.row.nextRunAt).toLocaleDateString()}</strong>.
+                      This period is already covered by Sola. First Connect charge will be after this date.
+                    </p>
+                  )}
                   <p className="billing-sola-cutover-warn-item">⚠ Never run both old Sola schedule and Connect autopay at the same time.</p>
                 </div>
                 <p style={{ fontSize: 13, color: "#6b7280", marginTop: 8 }}>
@@ -297,16 +396,22 @@ export function SolaImportsWorkspace() {
               <>
                 <h3>Final confirmation</h3>
                 <p style={{ fontSize: 14 }}>This action is <strong>irreversible</strong>. The Sola schedule will be disabled immediately.</p>
+                <p style={{ fontSize: 13, color: "#15803d", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 6, padding: "8px 12px", margin: "8px 0" }}>
+                  No charge will be made now or today. The card will only be charged on the next billing cycle.
+                  {cutoverTarget.nextConnectChargeAt && (
+                    <> First Connect charge scheduled for: <strong>{new Date(cutoverTarget.nextConnectChargeAt).toLocaleDateString()}</strong>.</>
+                  )}
+                </p>
                 <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
                   <button
                     type="button"
-                    className="btn primary"
+                    className="btn danger"
                     disabled={cutoverWorking}
                     onClick={() => void (async () => {
                       setCutoverWorking(true);
                       setActionError("");
                       try {
-                        await apiPost(
+                        const res = await apiPost(
                           `/admin/billing/platform/tenants/${cutoverTarget.row.tenantId}/billing-cutover/take-over`,
                           {
                             solaScheduleLinkId: cutoverTarget.row.id,
@@ -315,8 +420,13 @@ export function SolaImportsWorkspace() {
                             confirmEnableConnectAutopay: true,
                             confirmNoImmediateCharge: true,
                           },
-                        );
-                        setCutoverTarget(null);
+                        ) as { ok?: boolean; nextConnectChargeAt?: string } | undefined;
+                        const nextAt = res?.nextConnectChargeAt ?? null;
+                        if (nextAt) {
+                          setCutoverTarget((prev) => prev ? { ...prev, nextConnectChargeAt: nextAt } : null);
+                        } else {
+                          setCutoverTarget(null);
+                        }
                         bumpList();
                       } catch (e: unknown) {
                         setActionError(e instanceof Error ? e.message : "Cutover failed");
