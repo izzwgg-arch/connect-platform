@@ -69,7 +69,15 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
       }
       return reply.code(404).send({ error: "invalid_token" });
     }
-    return { ok: true, exists: true };
+    return {
+      ok: true,
+      exists: true,
+      submission: {
+        id: row.id,
+        currentStep: typeof row.currentStep === "number" ? row.currentStep : 0,
+        answers: row.answers ?? null,
+      },
+    };
   });
 
   // Public config — card capture disabled for now
