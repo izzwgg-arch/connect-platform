@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import { SolaCardknoxAdapter, type SolaCardknoxConfig, TwilioSmsProvider, VoipMsSmsProvider, type TwilioCredentials, type VoipMsCredentials } from "@connect/integrations";
-import { buildBillingInvoicePreview, buildBillingInvoicePreviewFromSettings, createBillingInvoice, createManualInvoice, createOneTimeChargeInvoice, ensureTenantBillingSettings, logBillingEvent, markBillingInvoicePaid, tenantBillingPeriodBounds } from "./invoiceEngine";
+import { buildBillingInvoicePreview, buildBillingInvoicePreviewFromSettings, createBillingInvoice, createBillingInvoiceRowWithUniqueNumber, createManualInvoice, createOneTimeChargeInvoice, ensureTenantBillingSettings, logBillingEvent, markBillingInvoicePaid, tenantBillingPeriodBounds } from "./invoiceEngine";
 import { updateInvoiceMeta, replaceInvoiceLineItems, addInvoiceLineItem, deleteInvoiceLineItem } from "./invoiceEditEngine";
 import { postExternalPayment, externalMethodLabel, type ExternalPaymentMethodType } from "./externalPayment";
 import { calculateTenantBillingUsage } from "./usage";
@@ -3077,6 +3077,215 @@ export async function registerBillingRoutes(app: FastifyInstance) {
     if (!u) return;
     const methods = ["QUICKPAY", "ZELLE", "CHECK", "CASH", "CARD_EXTERNAL", "ACH_EXTERNAL", "OTHER"] as const;
     return methods.map((m) => ({ value: m, label: externalMethodLabel(m as ExternalPaymentMethodType) }));
+  });
+
+  // ---------------------------------------------------------------------------
+  // Billing Profiles — sub-invoices per end-client within one tenant (MSP/reseller)
+  // ---------------------------------------------------------------------------
+
+  const billingProfileLineItemSchema = z.object({
+    type: z.string().min(1).max(64),
+    description: z.string().min(1).max(500),
+    quantity: z.number().int().min(1),
+    unitPriceCents: z.number().int().min(0),
+  });
+
+  const billingProfileBodySchema = z.object({
+    label: z.string().min(1).max(200),
+    paymentMethodId: z.string().min(1).optional().nullable(),
+    autoBillingEnabled: z.boolean().optional(),
+    billingEmail: z.string().email().optional().nullable(),
+    notes: z.string().max(2000).optional().nullable(),
+    lineItemsJson: z.array(billingProfileLineItemSchema).optional().nullable(),
+  });
+
+  // GET /admin/billing/platform/tenants/:tenantId/billing-profiles
+  app.get("/admin/billing/platform/tenants/:tenantId/billing-profiles", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const profiles = await (db as any).tenantBillingProfile.findMany({
+      where: { tenantId },
+      include: {
+        paymentMethod: { select: { id: true, brand: true, last4: true, expMonth: true, expYear: true, isImported: true, active: true } },
+        invoices: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { id: true, invoiceNumber: true, status: true, totalCents: true, periodStart: true, periodEnd: true, createdAt: true },
+        },
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    return profiles.map((p: any) => ({
+      ...p,
+      lastInvoice: p.invoices?.[0] ?? null,
+      invoices: undefined,
+    }));
+  });
+
+  // POST /admin/billing/platform/tenants/:tenantId/billing-profiles
+  app.post("/admin/billing/platform/tenants/:tenantId/billing-profiles", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId } = req.params as { tenantId: string };
+    const input = billingProfileBodySchema.parse(req.body || {});
+    if (input.paymentMethodId) {
+      const pm = await (db as any).paymentMethod.findFirst({ where: { id: input.paymentMethodId, tenantId, active: true } });
+      if (!pm) return reply.code(400).send({ error: "payment_method_not_found" });
+    }
+    const profile = await (db as any).tenantBillingProfile.create({
+      data: {
+        tenantId,
+        label: input.label,
+        paymentMethodId: input.paymentMethodId ?? null,
+        autoBillingEnabled: input.autoBillingEnabled ?? false,
+        billingEmail: input.billingEmail ?? null,
+        notes: input.notes ?? null,
+        lineItemsJson: input.lineItemsJson ?? null,
+        createdByUserId: u.sub,
+      },
+      include: { paymentMethod: { select: { id: true, brand: true, last4: true, isImported: true, active: true } } },
+    });
+    await logBillingEvent({ tenantId, invoiceId: null, type: "billing.profile_created", message: `Billing profile created: ${profile.label}`, metadata: { profileId: profile.id, createdByUserId: u.sub } });
+    return reply.code(201).send(profile);
+  });
+
+  // PUT /admin/billing/platform/tenants/:tenantId/billing-profiles/:id
+  app.put("/admin/billing/platform/tenants/:tenantId/billing-profiles/:id", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId, id } = req.params as { tenantId: string; id: string };
+    const profile = await (db as any).tenantBillingProfile.findFirst({ where: { id, tenantId } });
+    if (!profile) return reply.code(404).send({ error: "billing_profile_not_found" });
+    const input = billingProfileBodySchema.partial().parse(req.body || {});
+    if (input.paymentMethodId) {
+      const pm = await (db as any).paymentMethod.findFirst({ where: { id: input.paymentMethodId, tenantId, active: true } });
+      if (!pm) return reply.code(400).send({ error: "payment_method_not_found" });
+    }
+    const updated = await (db as any).tenantBillingProfile.update({
+      where: { id },
+      data: {
+        ...(input.label !== undefined ? { label: input.label } : {}),
+        ...(input.paymentMethodId !== undefined ? { paymentMethodId: input.paymentMethodId } : {}),
+        ...(input.autoBillingEnabled !== undefined ? { autoBillingEnabled: input.autoBillingEnabled } : {}),
+        ...(input.billingEmail !== undefined ? { billingEmail: input.billingEmail } : {}),
+        ...(input.notes !== undefined ? { notes: input.notes } : {}),
+        ...(input.lineItemsJson !== undefined ? { lineItemsJson: input.lineItemsJson } : {}),
+      },
+      include: { paymentMethod: { select: { id: true, brand: true, last4: true, isImported: true, active: true } } },
+    });
+    await logBillingEvent({ tenantId, invoiceId: null, type: "billing.profile_updated", message: `Billing profile updated: ${updated.label}`, metadata: { profileId: id, changes: Object.keys(input), updatedByUserId: u.sub } });
+    return updated;
+  });
+
+  // DELETE /admin/billing/platform/tenants/:tenantId/billing-profiles/:id
+  app.delete("/admin/billing/platform/tenants/:tenantId/billing-profiles/:id", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId, id } = req.params as { tenantId: string; id: string };
+    const profile = await (db as any).tenantBillingProfile.findFirst({
+      where: { id, tenantId },
+      include: { invoices: { where: { status: { in: ["OPEN", "OVERDUE", "FAILED"] } }, take: 1, select: { id: true, status: true } } },
+    });
+    if (!profile) return reply.code(404).send({ error: "billing_profile_not_found" });
+    if (profile.invoices?.length > 0) {
+      return reply.code(409).send({ error: "profile_has_active_invoices", message: "Cannot delete a billing profile with open, overdue, or failed invoices. Resolve or void them first." });
+    }
+    await (db as any).tenantBillingProfile.delete({ where: { id } });
+    await logBillingEvent({ tenantId, invoiceId: null, type: "billing.profile_deleted", message: `Billing profile deleted: ${profile.label}`, metadata: { profileId: id, deletedByUserId: u.sub } });
+    return reply.code(204).send();
+  });
+
+  // POST /admin/billing/platform/tenants/:tenantId/billing-profiles/:id/charge-now
+  // Immediately create an invoice for this profile and charge its payment method.
+  app.post("/admin/billing/platform/tenants/:tenantId/billing-profiles/:id/charge-now", async (req, reply) => {
+    const u = await requirePlatformBilling(req, reply);
+    if (!u) return;
+    const { tenantId, id } = req.params as { tenantId: string; id: string };
+    const profile = await (db as any).tenantBillingProfile.findFirst({
+      where: { id, tenantId },
+      include: { paymentMethod: true },
+    });
+    if (!profile) return reply.code(404).send({ error: "billing_profile_not_found" });
+    if (!profile.paymentMethod?.active) return reply.code(400).send({ error: "payment_method_required", message: "Assign an active payment method to this profile before charging." });
+    if (billingLiveChargesDisabled()) return sendLiveChargesDisabled(reply);
+
+    const input = z.object({
+      periodStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      periodEnd: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      note: z.string().max(500).optional(),
+    }).parse(req.body || {});
+
+    const settings = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId } });
+    const now = new Date();
+    const periodStart = input.periodStart ? new Date(input.periodStart + "T00:00:00.000Z") : new Date(now.getFullYear(), now.getMonth(), 1);
+    const periodEnd = input.periodEnd ? new Date(input.periodEnd + "T23:59:59.999Z") : new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    const dueDate = new Date(periodEnd.getTime() + (settings?.paymentTermsDays ?? 15) * 24 * 60 * 60 * 1000);
+    const lineItems: any[] = Array.isArray(profile.lineItemsJson) ? profile.lineItemsJson : [];
+    const subtotalCents = lineItems.reduce((sum: number, li: any) => sum + Math.round(li.unitPriceCents * li.quantity), 0);
+
+    const invoice = await createBillingInvoiceRowWithUniqueNumber(tenantId, async (invoiceNumber) =>
+      (db as any).billingInvoice.create({
+        data: {
+          tenantId,
+          billingProfileId: profile.id,
+          invoiceNumber,
+          status: "OPEN",
+          source: "PROFILE",
+          createdByUserId: u.sub,
+          billingEmail: profile.billingEmail ?? null,
+          periodStart,
+          periodEnd,
+          issueDate: now,
+          dueDate,
+          subtotalCents,
+          taxCents: 0,
+          totalCents: subtotalCents,
+          balanceDueCents: subtotalCents,
+          amountPaidCents: 0,
+          notes: profile.notes ?? null,
+          lineItems: {
+            create: lineItems.map((li: any, idx: number) => ({
+              tenantId,
+              type: li.type || "CUSTOM",
+              description: li.description,
+              quantity: li.quantity,
+              unitPriceCents: li.unitPriceCents,
+              amountCents: li.quantity * li.unitPriceCents,
+              taxable: true,
+              metadata: { profileId: profile.id, position: idx },
+            })),
+          },
+          metadata: { source: "profile_charge_now", profileLabel: profile.label, adminUserId: u.sub },
+        },
+        include: { lineItems: true },
+      })
+    );
+
+    await logBillingEvent({ tenantId, invoiceId: invoice.id, type: "billing.profile_invoice_created", message: `Profile invoice created: ${profile.label}`, metadata: { profileId: profile.id, invoiceNumber: invoice.invoiceNumber } });
+
+    if (subtotalCents <= 0) {
+      return { invoice, transaction: null, charged: false, reason: "zero_balance" };
+    }
+
+    try {
+      const transaction = await chargeBillingInvoice(invoice, profile.paymentMethod, { allowRetry: false, note: input.note || "profile_charge_now" });
+      if (transaction?.status !== "APPROVED") {
+        await applyDunningAfterAutopayFailure({ invoiceId: invoice.id, tenantId, runId: null }).catch(() => null);
+        return reply.code(402).send({
+          error: "card_declined",
+          message: `Card declined: ${transaction?.responseMessage || transaction?.responseCode || "No details from processor"}`,
+          transactionId: transaction?.id || null,
+          invoice,
+        });
+      }
+      const paidInvoice = await (db as any).billingInvoice.findUnique({ where: { id: invoice.id }, include: { lineItems: true } });
+      return { invoice: paidInvoice, transaction, charged: true };
+    } catch (err: any) {
+      if (err?.code === "BILLING_LIVE_CHARGES_DISABLED") return sendLiveChargesDisabled(reply);
+      if (err?.code === "CHARGE_IN_PROGRESS") return reply.code(409).send({ error: "charge_in_progress" });
+      throw err;
+    }
   });
 
   app.get("/admin/billing/tax-profiles", async (req, reply) => {

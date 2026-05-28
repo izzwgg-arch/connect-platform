@@ -106,6 +106,61 @@ Portal UIs documented in this file use the **`BillingInvoice`** stack unless not
 
 Shell: **`AdminBillingShell`** + CSS scopes **`billing-ws-scope`**, **`billing-p8-scope`**. Ops tables: **`adminBillingOpsPanels.tsx`** (`InvoicesTab`, `TransactionsTab`, `ReportsTab`, `CollectionsTab`).
 
+## Billing Profiles — multiple invoices per tenant (2026-05-28)
+
+### Overview
+
+**Billing Profiles** allow a single tenant to have N recurring sub-invoices, each with its own payment method, label, and line items. Designed for MSP/reseller tenants whose end-clients share one phone system but need separate invoices charged to separate cards.
+
+### Data model
+
+- `TenantBillingProfile` — new table; one row per sub-client within a tenant.
+  - `label` — sub-client display name shown on invoice
+  - `paymentMethodId` — FK to `PaymentMethod` (often an imported Sola card)
+  - `autoBillingEnabled` — if true, worker generates + charges a profile invoice on the monthly billing cycle
+  - `billingEmail`, `notes`, `lineItemsJson` — per-profile customization
+- `BillingInvoice.billingProfileId` — new nullable FK; set on all profile-generated invoices so they can be filtered by profile.
+
+### API routes (all require SUPER_ADMIN / `requirePlatformBilling`)
+
+| Route | Purpose |
+|-------|---------|
+| `GET  /admin/billing/platform/tenants/:tenantId/billing-profiles` | List profiles with last invoice |
+| `POST /admin/billing/platform/tenants/:tenantId/billing-profiles` | Create profile |
+| `PUT  /admin/billing/platform/tenants/:tenantId/billing-profiles/:id` | Update profile |
+| `DELETE /admin/billing/platform/tenants/:tenantId/billing-profiles/:id` | Delete (blocked if active unpaid invoices) |
+| `POST /admin/billing/platform/tenants/:tenantId/billing-profiles/:id/charge-now` | Create invoice + charge immediately |
+
+### Worker autopay integration
+
+`runBillingProfilesForTenant()` is called inside `runMonthlyBillingAutomation` after the main tenant invoice runs. For each profile with `autoBillingEnabled = true`:
+1. Skip if the profile has an existing non-VOID invoice for the same period.
+2. Create an invoice with the profile's `lineItemsJson` line items.
+3. Charge the profile's `paymentMethodId`.
+4. On decline: mark `FAILED`, apply dunning (`nextRetryAt = now + 12h`).
+
+All profile invoices carry `source: "PROFILE"` and `billingProfileId` so they're distinguishable from main tenant and manual invoices.
+
+### UI
+
+`BillingProfilesSection` is embedded on the **Plans & Pricing** tab of the admin billing settings page (below `AdminPricingWorkspace`). Features:
+- Table of profiles with: client name, assigned card (brand/last4/imported badge), autopay status, monthly total, last invoice status.
+- **Add/Edit profile drawer**: label, card picker (shows all tenant payment methods, highlights imported ones), autopay toggle, billing email, line item editor with "⚡ Standard bill" pre-population.
+- **Charge now** dialog: pick period dates, creates + charges immediately.
+- **Delete**: blocked if open/failed/overdue invoices exist.
+
+### Files
+
+| File | Role |
+|------|------|
+| `packages/db/prisma/schema.prisma` | `TenantBillingProfile` model + `billingProfileId` on `BillingInvoice` |
+| `packages/db/prisma/migrations/20260528000000_billing_profiles/` | Additive SQL migration |
+| `apps/api/src/billing/routes.ts` | 5 profile routes |
+| `apps/api/src/billing/invoiceEngine.ts` | `createBillingInvoiceRowWithUniqueNumber` exported for reuse |
+| `apps/worker/src/main.ts` | `runBillingProfilesForTenant()` in monthly autopay |
+| `apps/portal/app/(platform)/admin/billing/_components/billingProfilesSection.tsx` | UI component |
+| `apps/portal/app/(platform)/admin/billing/settings/page.tsx` | Wired into Plans & Pricing tab |
+
 ## Manual invoice + external payment feature (2026-06-05)
 
 ### Overview

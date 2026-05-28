@@ -719,7 +719,7 @@ function isInvoiceNumberUniqueViolation(err: unknown): boolean {
   return String(target || "").includes("invoiceNumber");
 }
 
-async function createBillingInvoiceRowWithUniqueNumber<T extends { invoiceNumber: string }>(
+export async function createBillingInvoiceRowWithUniqueNumber<T extends { invoiceNumber: string }>(
   tenantId: string,
   createRow: (invoiceNumber: string) => Promise<T>,
 ): Promise<T> {

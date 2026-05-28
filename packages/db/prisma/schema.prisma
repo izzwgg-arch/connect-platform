@@ -52,7 +52,7 @@ model CrmEmailConnection {
   /// Admin who manages a TENANT shared sender. Nullable for USER rows.
   managedBy User?  @relation("CrmEmailConnection_managedBy", fields: [managedByUserId], references: [id], onDelete: SetNull)
 
-  bulkJobs  CrmBulkEmailJob[]
+  bulkJobs CrmBulkEmailJob[]
 
   // Note: partial unique indexes (USER per tenant+user+provider, single TENANT default per
   // tenant+provider, single TENANT row per tenant+email+provider) are created via raw SQL
@@ -165,8 +165,8 @@ model CrmEmailTemplate {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy User?           @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User?             @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
   bulkJobs  CrmBulkEmailJob[]
 
   @@index([tenantId, isArchived, updatedAt])
@@ -555,6 +555,7 @@ model Tenant {
   invoices                        Invoice[]
   billingPlan                     BillingPlan?
   billingSettings                 TenantBillingSettings?
+  billingProfiles                 TenantBillingProfile[]
   billingInvoices                 BillingInvoice[]
   paymentMethods                  PaymentMethod[]
   paymentTransactions             PaymentTransaction[]
@@ -919,6 +920,31 @@ model TaxProfile {
   @@index([enabled, state, county])
 }
 
+/// Recurring billing profile within a tenant — one profile per end-client/sub-account.
+/// Each profile generates its own invoice on the tenant's autopay schedule,
+/// charged to its own payment method. Designed for MSP/reseller tenants.
+model TenantBillingProfile {
+  id                 String           @id @default(cuid())
+  tenantId           String
+  /// Sub-client or cost-center name displayed on the invoice.
+  label              String
+  paymentMethodId    String?
+  autoBillingEnabled Boolean          @default(false)
+  billingEmail       String?
+  notes              String?
+  /// Serialized line items: array of { type, description, quantity, unitPriceCents }.
+  lineItemsJson      Json?
+  createdByUserId    String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  tenant             Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  paymentMethod      PaymentMethod?   @relation("BillingProfilePaymentMethod", fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  invoices           BillingInvoice[]
+
+  @@index([tenantId])
+  @@index([tenantId, autoBillingEnabled])
+}
+
 model TenantBillingSettings {
   id                              String         @id @default(cuid())
   tenantId                        String         @unique
@@ -971,47 +997,51 @@ model TenantBillingSettings {
 }
 
 model BillingInvoice {
-  id              String                   @id @default(cuid())
-  tenantId        String
-  invoiceNumber   String                   @unique
-  status          BillingInvoiceStatus     @default(DRAFT)
-  currency        String                   @default("USD")
-  periodStart     DateTime
-  periodEnd       DateTime
-  issueDate       DateTime                 @default(now())
-  dueDate         DateTime
-  subtotalCents   Int                      @default(0)
-  taxCents        Int                      @default(0)
-  totalCents      Int                      @default(0)
-  amountPaidCents Int                      @default(0)
-  balanceDueCents Int                      @default(0)
-  paymentMethodId String?
-  paidAt          DateTime?
-  failedAt        DateTime?
-  voidedAt        DateTime?
-  lastEmailStatus String?
-  lastEmailedAt   DateTime?
-  pdfStorageKey   String?
-  pdfGeneratedAt  DateTime?
-  notes           String?
-  metadata        Json?
+  id               String                   @id @default(cuid())
+  tenantId         String
+  invoiceNumber    String                   @unique
+  status           BillingInvoiceStatus     @default(DRAFT)
+  currency         String                   @default("USD")
+  periodStart      DateTime
+  periodEnd        DateTime
+  issueDate        DateTime                 @default(now())
+  dueDate          DateTime
+  subtotalCents    Int                      @default(0)
+  taxCents         Int                      @default(0)
+  totalCents       Int                      @default(0)
+  amountPaidCents  Int                      @default(0)
+  balanceDueCents  Int                      @default(0)
+  paymentMethodId  String?
+  paidAt           DateTime?
+  failedAt         DateTime?
+  voidedAt         DateTime?
+  lastEmailStatus  String?
+  lastEmailedAt    DateTime?
+  pdfStorageKey    String?
+  pdfGeneratedAt   DateTime?
+  notes            String?
+  metadata         Json?
   /// "SYSTEM" = auto-generated by billing run | "MANUAL" = operator-created
-  source          String?
+  source           String?
   /// userId of operator who created this invoice (null = system-generated)
-  createdByUserId String?
+  createdByUserId  String?
   /// Override billing recipient email for this invoice
-  billingEmail    String?
-  createdAt       DateTime                 @default(now())
-  updatedAt       DateTime                 @updatedAt
-  tenant          Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  paymentMethod   PaymentMethod?           @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
-  lineItems       BillingInvoiceLineItem[]
-  transactions    PaymentTransaction[]
-  events          BillingEventLog[]
+  billingEmail     String?
+  /// FK to TenantBillingProfile — set when this invoice was generated for a billing profile.
+  billingProfileId String?
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+  tenant           Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  paymentMethod    PaymentMethod?           @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  billingProfile   TenantBillingProfile?    @relation(fields: [billingProfileId], references: [id], onDelete: SetNull)
+  lineItems        BillingInvoiceLineItem[]
+  transactions     PaymentTransaction[]
+  events           BillingEventLog[]
 
   @@index([tenantId, status, dueDate])
   @@index([tenantId, periodStart, periodEnd])
   @@index([tenantId, source])
+  @@index([tenantId, billingProfileId])
   @@index([createdAt])
 }
 
@@ -1057,6 +1087,7 @@ model PaymentMethod {
   updatedAt                 DateTime                          @updatedAt
   tenant                    Tenant                            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   defaultForBillingSettings TenantBillingSettings[]           @relation("DefaultTenantBillingPaymentMethod")
+  billingProfiles           TenantBillingProfile[]            @relation("BillingProfilePaymentMethod")
   invoices                  BillingInvoice[]
   transactions              PaymentTransaction[]
   solaScheduleLinks         BillingSolaExternalScheduleLink[] @relation("LinkedPaymentMethod")
@@ -1173,48 +1204,56 @@ model BillingEventLog {
 
 /// Read-only mirror of Sola/Cardknox recurring schedules for operator mapping (no raw PAN/token).
 model BillingSolaExternalScheduleLink {
-  id                      String                        @id @default(cuid())
-  tenantId                String?
-  suggestedTenantId       String?
-  solaCustomerId          String
-  solaPaymentMethodId     String?
-  solaScheduleId          String                        @unique
-  customerName            String?
-  customerEmail           String?
-  companyName             String?
-  maskedCard              String?
-  brand                   String?
-  last4                   String?
-  expMonth                String?
-  expYear                 String?
-  amountCents             Int?
-  intervalType            String?
-  intervalCount           Int?
-  nextRunAt               DateTime?
-  lastRunAt               DateTime?
-  lastTransactionStatus   String?
-  isActive                Boolean                       @default(false)
-  mappingStatus           SolaScheduleLinkMappingStatus @default(UNMAPPED)
-  matchConfidence         String?
-  matchReason             String?
-  rawSafeJson             Json?
-  mappedByUserId          String?
-  mappedAt                DateTime?
-  lastSyncedAt            DateTime?
-  cutoverStatus           String?
-  linkedPaymentMethodId   String?
-  tokenLinkedAt           DateTime?
-  cutoverAt               DateTime?
-  cutoverByUserId         String?
-  disabledSolaAt          DateTime?
-  disableAttemptedAt      DateTime?
-  disableError            String?
-  connectAutopayEnabledAt DateTime?
-  createdAt               DateTime                      @default(now())
-  updatedAt               DateTime                      @updatedAt
-  tenant                  Tenant?                       @relation(fields: [tenantId], references: [id], onDelete: SetNull)
-  mappedByUser            User?                         @relation("SolaScheduleMappedBy", fields: [mappedByUserId], references: [id], onDelete: SetNull)
-  linkedPaymentMethod     PaymentMethod?                @relation("LinkedPaymentMethod", fields: [linkedPaymentMethodId], references: [id], onDelete: SetNull)
+  id                       String                        @id @default(cuid())
+  tenantId                 String?
+  suggestedTenantId        String?
+  solaCustomerId           String
+  solaPaymentMethodId      String?
+  solaScheduleId           String                        @unique
+  customerName             String?
+  customerEmail            String?
+  companyName              String?
+  maskedCard               String?
+  brand                    String?
+  last4                    String?
+  expMonth                 String?
+  expYear                  String?
+  amountCents              Int?
+  intervalType             String?
+  intervalCount            Int?
+  nextRunAt                DateTime?
+  lastRunAt                DateTime?
+  lastTransactionStatus    String?
+  isActive                 Boolean                       @default(false)
+  mappingStatus            SolaScheduleLinkMappingStatus @default(UNMAPPED)
+  matchConfidence          String?
+  matchReason              String?
+  rawSafeJson              Json?
+  mappedByUserId           String?
+  mappedAt                 DateTime?
+  lastSyncedAt             DateTime?
+  cutoverStatus            String?
+  linkedPaymentMethodId    String?
+  tokenLinkedAt            DateTime?
+  cutoverAt                DateTime?
+  cutoverByUserId          String?
+  disabledSolaAt           DateTime?
+  disableAttemptedAt       DateTime?
+  disableError             String?
+  connectAutopayEnabledAt  DateTime?
+  /// First UTC timestamp at which Connect is allowed to charge this tenant.
+  /// Set during takeOverBillingFromSola to the start of the NEXT billing period
+  /// (i.e. the period after Sola already covered with its last charge).
+  /// Worker must NOT charge before this time.
+  nextConnectChargeAt      DateTime?
+  /// NextScheduledRunTime from Sola at the time of cutover — used for forensics
+  /// and to compute nextConnectChargeAt when billingDayOfMonth is unavailable.
+  sourceSolaNextChargeDate DateTime?
+  createdAt                DateTime                      @default(now())
+  updatedAt                DateTime                      @updatedAt
+  tenant                   Tenant?                       @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  mappedByUser             User?                         @relation("SolaScheduleMappedBy", fields: [mappedByUserId], references: [id], onDelete: SetNull)
+  linkedPaymentMethod      PaymentMethod?                @relation("LinkedPaymentMethod", fields: [linkedPaymentMethodId], references: [id], onDelete: SetNull)
 
   @@index([tenantId])
   @@index([suggestedTenantId])
@@ -4024,8 +4063,8 @@ enum OnboardingEventType {
 }
 
 model OnboardingSubmission {
-  id                    String                     @id @default(cuid())
-  publicToken           String?                    @unique
+  id                    String           @id @default(cuid())
+  publicToken           String?          @unique
   companyName           String?
   contactFirstName      String?
   contactLastName       String?
@@ -4033,9 +4072,9 @@ model OnboardingSubmission {
   billingEmail          String?
   mainPhone             String?
   phoneNumberChoice     String?
-  smsEnabled            Boolean                    @default(false)
-  smsMonthlyPriceCents  Int                        @default(0)
-  status                OnboardingStatus           @default(INVITE_SENT)
+  smsEnabled            Boolean          @default(false)
+  smsMonthlyPriceCents  Int              @default(0)
+  status                OnboardingStatus @default(INVITE_SENT)
   currentStep           String?
   answers               Json?
   provisioningChecklist Json?
@@ -4043,51 +4082,51 @@ model OnboardingSubmission {
   cardTokenPreview      String?
   createdTenantId       String?
   submittedAt           DateTime?
-  createdAt             DateTime                   @default(now())
-  updatedAt             DateTime                   @updatedAt
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
 
-  requestedExtensions   OnboardingRequestedExtension[]
-  uploadedFiles         OnboardingUploadedFile[]
-  events                OnboardingEvent[]
+  requestedExtensions OnboardingRequestedExtension[]
+  uploadedFiles       OnboardingUploadedFile[]
+  events              OnboardingEvent[]
 }
 
 model OnboardingRequestedExtension {
-  id           String               @id @default(cuid())
+  id           String   @id @default(cuid())
   submissionId String
   displayName  String?
   extNumber    String
   email        String?
-  smsEnabled   Boolean              @default(false)
-  createdAt    DateTime             @default(now())
+  smsEnabled   Boolean  @default(false)
+  createdAt    DateTime @default(now())
 
-  submission   OnboardingSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  submission OnboardingSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 
   @@index([submissionId])
 }
 
 model OnboardingUploadedFile {
-  id           String               @id @default(cuid())
+  id           String   @id @default(cuid())
   submissionId String
   filename     String
   mimeType     String?
   sizeBytes    Int
   storageKey   String
   kind         String
-  createdAt    DateTime             @default(now())
+  createdAt    DateTime @default(now())
 
-  submission   OnboardingSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  submission OnboardingSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 
   @@index([submissionId])
 }
 
 model OnboardingEvent {
-  id           String               @id @default(cuid())
+  id           String              @id @default(cuid())
   submissionId String
   type         OnboardingEventType
   message      String?
-  createdAt    DateTime             @default(now())
+  createdAt    DateTime            @default(now())
 
-  submission   OnboardingSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  submission OnboardingSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
 
   @@index([submissionId, createdAt])
 }
@@ -4123,8 +4162,8 @@ model Funder {
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
-  tenant   Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  creator  User?                  @relation("FunderCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
+  tenant   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  creator  User?                 @relation("FunderCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
   tagLinks FunderTagAssignment[]
 
   @@index([tenantId, active])
@@ -4134,13 +4173,13 @@ model Funder {
 }
 
 model FunderTag {
-  id          String               @id @default(cuid())
+  id          String                @id @default(cuid())
   tenantId    String
   name        String
   color       String?
-  createdAt   DateTime             @default(now())
-  updatedAt   DateTime             @updatedAt
-  tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  tenant      Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   assignments FunderTagAssignment[]
 
   @@unique([tenantId, name])
@@ -4182,7 +4221,7 @@ model FunderImportBatch {
 /// sourceType: CONTACTS | CAMPAIGN | FUNDERS
 /// status: QUEUED | RUNNING | COMPLETED | FAILED | CANCELLED
 model CrmBulkEmailJob {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   tenantId        String
   createdByUserId String?
   /// CONTACTS | CAMPAIGN | FUNDERS
@@ -4198,21 +4237,21 @@ model CrmBulkEmailJob {
   /// Optional: resolved CrmEmailConnection to send from. Null = deferred to worker.
   connectionId    String?
   /// QUEUED | RUNNING | COMPLETED | FAILED | CANCELLED
-  status          String   @default("QUEUED")
-  totalCount      Int      @default(0)
-  queuedCount     Int      @default(0)
-  sentCount       Int      @default(0)
-  failedCount     Int      @default(0)
-  skippedCount    Int      @default(0)
+  status          String    @default("QUEUED")
+  totalCount      Int       @default(0)
+  queuedCount     Int       @default(0)
+  sentCount       Int       @default(0)
+  failedCount     Int       @default(0)
+  skippedCount    Int       @default(0)
   errorSummary    String?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime  @default(now())
   startedAt       DateTime?
   completedAt     DateTime?
 
-  tenant     Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy  User?                @relation("CrmBulkEmailJobCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
-  template   CrmEmailTemplate     @relation(fields: [templateId], references: [id])
-  connection CrmEmailConnection?  @relation(fields: [connectionId], references: [id])
+  tenant     Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy  User?                   @relation("CrmBulkEmailJobCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  template   CrmEmailTemplate        @relation(fields: [templateId], references: [id])
+  connection CrmEmailConnection?     @relation(fields: [connectionId], references: [id])
   recipients CrmBulkEmailRecipient[]
 
   @@index([tenantId, createdAt])
@@ -4222,7 +4261,7 @@ model CrmBulkEmailJob {
 /// Per-recipient row for a CrmBulkEmailJob. One row per intended email send.
 /// status: QUEUED | SENT | FAILED | SKIPPED
 model CrmBulkEmailRecipient {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   jobId          String
   tenantId       String
   /// FK to Contact (for CONTACTS / CAMPAIGN source)
@@ -4232,15 +4271,15 @@ model CrmBulkEmailRecipient {
   /// Resolved email address at job creation time
   toEmail        String
   /// QUEUED | SENT | FAILED | SKIPPED
-  status         String   @default("QUEUED")
+  status         String    @default("QUEUED")
   /// MISSING_EMAIL | DUPLICATE | OTHER
   skipReason     String?
   /// Prevents duplicate sends if worker restarts
-  idempotencyKey String   @unique
+  idempotencyKey String    @unique
   gmailMessageId String?
   errorMessage   String?
   sentAt         DateTime?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
 
   job CrmBulkEmailJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
 

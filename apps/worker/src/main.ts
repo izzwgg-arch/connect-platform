@@ -25,7 +25,7 @@ import {
   clearInvoiceDunningMetadata,
   queueInvoiceSentOnFinalize,
 } from "../../api/src/billing/billingEmailLifecycle";
-import { createBillingInvoice } from "../../api/src/billing/invoiceEngine";
+import { createBillingInvoice, createBillingInvoiceRowWithUniqueNumber } from "../../api/src/billing/invoiceEngine";
 import { findPaidBillingPeriodCoverage } from "../../api/src/billing/billingPeriodGuards";
 import { consumeScheduledPlanChange } from "../../api/src/billing/billingScheduledPlanConsume";
 import { processConnectChatSmsJob } from "./connectChatSmsJob";
@@ -1915,6 +1915,35 @@ async function checkActiveSolaScheduleBlock(
 }
 
 /**
+ * Phase D Worker Guard (post-cutover) — returns a block descriptor if a
+ * recently-cutover Sola schedule has a nextConnectChargeAt that is still in
+ * the future. This prevents the worker from charging in the billing period
+ * that Sola already paid (the current period at cutover time).
+ *
+ * Critical: this guard must be checked BEFORE invoice creation so no orphan
+ * OPEN invoice is left behind when we block.
+ */
+async function checkCutoverNextChargeAtBlock(
+  tenantId: string,
+  now: Date,
+): Promise<{ linkId: string; solaScheduleId: string; nextConnectChargeAt: Date } | null> {
+  const link = await (db as any).billingSolaExternalScheduleLink.findFirst({
+    where: {
+      tenantId,
+      mappingStatus: "MAPPED",
+      cutoverStatus: "CUTOVER_COMPLETE",
+      nextConnectChargeAt: { not: null },
+    },
+    orderBy: { cutoverAt: "desc" },
+    select: { id: true, solaScheduleId: true, nextConnectChargeAt: true },
+  });
+  if (!link) return null;
+  const nextAt = link.nextConnectChargeAt instanceof Date ? link.nextConnectChargeAt : new Date(link.nextConnectChargeAt);
+  if (now.getTime() >= nextAt.getTime()) return null; // due — allow charging
+  return { linkId: link.id, solaScheduleId: link.solaScheduleId, nextConnectChargeAt: nextAt };
+}
+
+/**
  * Check billingScheduleOverride from TenantBillingSettings.metadata.
  * Returns:
  *   "skipped"      — skipNextPayment was true (flag consumed, event logged)
@@ -2034,6 +2063,53 @@ async function runMonthlyBillingAutomation(): Promise<void> {
         }
 
         const { periodStart, periodEnd } = schedule;
+
+        // ── PRE-INVOICE GUARD 1: Sola active schedule (not yet cut over) ──────
+        // Must run BEFORE invoice creation so no orphan OPEN invoice is left.
+        const activeSolaBlock = await checkActiveSolaScheduleBlock(setting.tenantId);
+        if (activeSolaBlock) {
+          await (db as any).billingEventLog.create({
+            data: {
+              tenantId: setting.tenantId,
+              runId: run.id,
+              type: "billing.autopay_skipped_active_sola_schedule",
+              message: `Connect autopay skipped — tenant has active Sola recurring schedule not yet cut over. Schedule link ID: ${activeSolaBlock.linkId}. Disable old schedule and complete cutover before Connect charges.`,
+              metadata: {
+                solaScheduleLinkId: activeSolaBlock.linkId,
+                solaScheduleId: activeSolaBlock.solaScheduleId,
+                reason: "active_sola_schedule_not_cutover",
+              },
+            },
+          }).catch(() => null);
+          results.push({ tenantId: setting.tenantId, invoiceId: null, transactionId: null, skipped: "active_sola_schedule" });
+          continue;
+        }
+
+        // ── PRE-INVOICE GUARD 2: nextConnectChargeAt not yet reached ──────────
+        // After takeOverBillingFromSola, the link stores the first date Connect
+        // is allowed to charge. The current billing period was already paid by
+        // Sola, so Connect must skip it entirely — no invoice, no charge.
+        const cutoverChargeBlock = await checkCutoverNextChargeAtBlock(setting.tenantId, now);
+        if (cutoverChargeBlock) {
+          await (db as any).billingEventLog.create({
+            data: {
+              tenantId: setting.tenantId,
+              runId: run.id,
+              type: "billing.autopay_skipped_sola_cutover_not_due_yet",
+              message: `Connect autopay skipped — Sola cutover complete but nextConnectChargeAt has not been reached. Current period was already paid by Sola. First Connect charge will be at ${cutoverChargeBlock.nextConnectChargeAt.toISOString()}.`,
+              metadata: {
+                solaScheduleLinkId: cutoverChargeBlock.linkId,
+                solaScheduleId: cutoverChargeBlock.solaScheduleId,
+                nextConnectChargeAt: cutoverChargeBlock.nextConnectChargeAt.toISOString(),
+                now: now.toISOString(),
+                reason: "sola_cutover_next_charge_at_not_reached",
+              },
+            },
+          }).catch(() => null);
+          results.push({ tenantId: setting.tenantId, invoiceId: null, transactionId: null, skipped: "sola_cutover_not_due_yet" });
+          continue;
+        }
+
         const existing = await (db as any).billingInvoice.findFirst({
           where: {
             tenantId: setting.tenantId,
@@ -2098,26 +2174,6 @@ async function runMonthlyBillingAutomation(): Promise<void> {
               },
             })
             .catch(() => null);
-        }
-        // ── Phase D Worker Guard: skip autopay if tenant has active Sola schedule not yet cut over ──
-        const activeSolaBlock = await checkActiveSolaScheduleBlock(setting.tenantId);
-        if (activeSolaBlock) {
-          await (db as any).billingEventLog.create({
-            data: {
-              tenantId: setting.tenantId,
-              invoiceId: invoice.id,
-              runId: run.id,
-              type: "billing.autopay_skipped_active_sola_schedule",
-              message: `Connect autopay skipped — tenant has active Sola recurring schedule not yet cut over. Schedule link ID: ${activeSolaBlock.linkId}. Disable old schedule and complete cutover before Connect charges.`,
-              metadata: {
-                solaScheduleLinkId: activeSolaBlock.linkId,
-                solaScheduleId: activeSolaBlock.solaScheduleId,
-                reason: "active_sola_schedule_not_cutover",
-              },
-            },
-          }).catch(() => null);
-          results.push({ tenantId: setting.tenantId, invoiceId: invoice.id, transactionId: null, skipped: "active_sola_schedule" });
-          continue;
         }
 
         // ── billingScheduleOverride: skipNextPayment ───────────────────────────
@@ -2227,6 +2283,11 @@ async function runMonthlyBillingAutomation(): Promise<void> {
           }).catch(() => null);
         }
         results.push({ tenantId: setting.tenantId, invoiceId: invoice.id, transactionId: transaction?.id || null });
+
+        // ── Billing Profiles: generate + charge sub-invoices for each active profile ──
+        await runBillingProfilesForTenant(setting.tenantId, schedule, run.id, results).catch((err: any) => {
+          console.error("billing profiles sweep failed for", setting.tenantId, err?.message || err);
+        });
       } catch (err: any) {
         results.push({ tenantId: setting.tenantId, error: err?.message || "billing_failed" });
         await (db as any).billingEventLog.create({ data: { tenantId: setting.tenantId, runId: run.id, type: "billing_run.tenant_failed", message: err?.message || "billing_failed" } }).catch(() => null);
@@ -2237,6 +2298,148 @@ async function runMonthlyBillingAutomation(): Promise<void> {
     console.error("monthly billing automation failed", err?.message || err);
   } finally {
     _billingAutomationRunning = false;
+  }
+}
+
+/** Charge each active TenantBillingProfile for the given tenant on this billing cycle. */
+async function runBillingProfilesForTenant(
+  tenantId: string,
+  schedule: BillingSchedule,
+  runId: string,
+  results: any[],
+): Promise<void> {
+  if (billingLiveChargesDisabled()) return;
+
+  const profiles = await (db as any).tenantBillingProfile.findMany({
+    where: { tenantId, autoBillingEnabled: true },
+    include: { paymentMethod: true },
+  });
+  if (!profiles.length) return;
+
+  const settings = await (db as any).tenantBillingSettings.findUnique({ where: { tenantId } });
+  const termsDays = Number(settings?.paymentTermsDays ?? 15);
+
+  for (const profile of profiles) {
+    try {
+      if (!profile.paymentMethod?.active || profile.paymentMethod.tenantId !== tenantId) {
+        await (db as any).billingEventLog.create({
+          data: {
+            tenantId,
+            runId,
+            type: "billing.profile_autopay_skipped_no_card",
+            message: `Billing profile "${profile.label}" skipped — no active payment method`,
+            metadata: { profileId: profile.id, paymentMethodId: profile.paymentMethodId },
+          },
+        }).catch(() => null);
+        results.push({ tenantId, profileId: profile.id, profileLabel: profile.label, skipped: "no_active_payment_method" });
+        continue;
+      }
+
+      // Skip if a profile invoice already exists for this period
+      const existingInvoice = await (db as any).billingInvoice.findFirst({
+        where: {
+          tenantId,
+          billingProfileId: profile.id,
+          status: { not: "VOID" },
+          OR: [
+            { periodStart: schedule.periodStart, periodEnd: schedule.periodEnd },
+            { periodStart: { lte: schedule.scheduledChargeAt }, periodEnd: { gte: schedule.scheduledChargeAt } },
+          ],
+        },
+        orderBy: { createdAt: "desc" },
+      });
+      if (existingInvoice) {
+        await (db as any).billingEventLog.create({
+          data: {
+            tenantId,
+            invoiceId: existingInvoice.id,
+            runId,
+            type: "billing.profile_autopay_skipped_existing",
+            message: `Billing profile "${profile.label}" already has an invoice for this period`,
+            metadata: { profileId: profile.id, existingInvoiceId: existingInvoice.id, status: existingInvoice.status },
+          },
+        }).catch(() => null);
+        results.push({ tenantId, profileId: profile.id, profileLabel: profile.label, invoiceId: existingInvoice.id, skipped: "existing_invoice" });
+        continue;
+      }
+
+      const lineItems: any[] = Array.isArray(profile.lineItemsJson) ? profile.lineItemsJson : [];
+      const subtotalCents = lineItems.reduce((sum: number, li: any) => sum + Math.round(li.unitPriceCents * li.quantity), 0);
+      const dueDate = new Date(schedule.periodEnd.getTime() + termsDays * 24 * 60 * 60 * 1000);
+
+      const invoice = await createBillingInvoiceRowWithUniqueNumber(tenantId, async (invoiceNumber) =>
+        (db as any).billingInvoice.create({
+          data: {
+            tenantId,
+            billingProfileId: profile.id,
+            invoiceNumber,
+            status: "OPEN",
+            source: "PROFILE",
+            billingEmail: profile.billingEmail ?? null,
+            periodStart: schedule.periodStart,
+            periodEnd: schedule.periodEnd,
+            issueDate: new Date(),
+            dueDate,
+            subtotalCents,
+            taxCents: 0,
+            totalCents: subtotalCents,
+            balanceDueCents: subtotalCents,
+            amountPaidCents: 0,
+            notes: profile.notes ?? null,
+            lineItems: {
+              create: lineItems.map((li: any, idx: number) => ({
+                tenantId,
+                type: li.type || "CUSTOM",
+                description: li.description,
+                quantity: li.quantity,
+                unitPriceCents: li.unitPriceCents,
+                amountCents: li.quantity * li.unitPriceCents,
+                taxable: true,
+                metadata: { profileId: profile.id, position: idx },
+              })),
+            },
+            metadata: {
+              source: "worker_monthly_profile",
+              profileLabel: profile.label,
+              scheduledChargeAt: schedule.scheduledChargeAt.toISOString(),
+              runId,
+            },
+          },
+          include: { lineItems: true },
+        })
+      );
+
+      await (db as any).billingEventLog.create({
+        data: {
+          tenantId,
+          invoiceId: invoice.id,
+          runId,
+          type: "billing.profile_invoice_created",
+          message: `Profile invoice created for "${profile.label}"`,
+          metadata: { profileId: profile.id, invoiceNumber: invoice.invoiceNumber, subtotalCents },
+        },
+      }).catch(() => null);
+
+      if (subtotalCents <= 0) {
+        results.push({ tenantId, profileId: profile.id, profileLabel: profile.label, invoiceId: invoice.id, skipped: "zero_balance" });
+        continue;
+      }
+
+      const transaction = await chargeWorkerInvoice(invoice, profile.paymentMethod, runId);
+      results.push({ tenantId, profileId: profile.id, profileLabel: profile.label, invoiceId: invoice.id, transactionId: transaction?.id || null });
+    } catch (err: any) {
+      console.error("billing profile failed", tenantId, profile.id, err?.message || err);
+      results.push({ tenantId, profileId: profile.id, profileLabel: profile.label, error: err?.message || "profile_billing_failed" });
+      await (db as any).billingEventLog.create({
+        data: {
+          tenantId,
+          runId,
+          type: "billing.profile_autopay_failed",
+          message: `Profile billing failed for "${profile.label}": ${err?.message || "unknown error"}`,
+          metadata: { profileId: profile.id, error: err?.message },
+        },
+      }).catch(() => null);
+    }
   }
 }
 

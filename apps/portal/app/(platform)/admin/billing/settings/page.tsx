@@ -18,6 +18,7 @@ import {
 } from "../_components/tenantBillingConfigForms";
 import { AdminPricingWorkspace } from "../_components/AdminPricingWorkspace";
 import { AdminTaxesFeesWorkspace } from "../_components/AdminTaxesFeesWorkspace";
+import { BillingProfilesSection } from "../_components/billingProfilesSection";
 import { dollars, formatDate, humanizePricingStateMode } from "../../../../../lib/billingUi";
 import { BILLING_SECTION_QUERY, isBillingSettingsSection, mergeSearchParams, OPS_TAB_QUERY, type BillingSettingsSection } from "../_components/adminBillingLinks";
 import { useAdminBillingTenant } from "../_components/useAdminBillingTenant";
@@ -934,14 +935,17 @@ function AdminBillingSettingsBody() {
       {detail && !detailLoading ? (
         <>
           {settingsView === "plans-pricing" ? (
-            <AdminPricingWorkspace
-              detail={detail}
-              onSaved={() => void loadDetail(detail.tenant.id)}
-              previewMonth={previewMonth}
-              previewYear={previewYear}
-              settingsSectionHref={settingsSectionHref}
-              activeSection={settingsView}
-            />
+            <>
+              <AdminPricingWorkspace
+                detail={detail}
+                onSaved={() => void loadDetail(detail.tenant.id)}
+                previewMonth={previewMonth}
+                previewYear={previewYear}
+                settingsSectionHref={settingsSectionHref}
+                activeSection={settingsView}
+              />
+              <BillingProfilesSection tenant={{ id: detail.tenant.id, name: detail.tenant.name }} />
+            </>
           ) : null}
 
           {settingsView === "tax-billing" ? (
