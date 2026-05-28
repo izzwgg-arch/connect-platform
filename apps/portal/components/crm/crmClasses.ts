@@ -13,7 +13,7 @@ export const crm = {
     "crm-dashboard-inner mx-auto w-full max-w-[1480px] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
   /** Phase 19D — contact relationship workspace */
   pageInnerContact:
-    "mx-auto w-full max-w-[1400px] px-4 py-5 sm:px-6 lg:px-8 flex flex-col gap-4 min-h-0",
+    "mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
   /** Phase 19D.1 — contacts index relationship command center */
   pageInnerContacts:
     "crm-contacts-inner mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
@@ -39,6 +39,10 @@ export const crm = {
     "crm-campaign-workspace [color-scheme:dark] [--panel:#141f2b] [--panel-2:#1a2635] [--bg-soft:#101923] [--text:#e1e9f1] [--text-dim:#8ea0b2] [--border:#26374a] [--crm-surface:#141f2b] [--crm-surface-2:#1a2635] [--crm-text:#e1e9f1] [--crm-text-muted:#8ea0b2] [--crm-border:#26374a]",
   /** Phase 19D.2+ — contacts index; theme tokens via globals `.crm-contacts-workspace` */
   contactsWorkspace: "crm-contacts-workspace w-full min-h-0",
+  /** CRM Funders light-mode command center; dark mode keeps standard CRM token surfaces. */
+  fundersWorkspace: "crm-funders-workspace w-full min-h-0",
+  pageInnerFunders:
+    "crm-funders-inner mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
   contactsHeaderPanel: "contacts-header-panel",
   contactsPanel: "contacts-panel",
   contactsKpiTile: "contacts-kpi-tile relative flex min-h-[7.75rem] min-w-0 flex-col gap-2 overflow-hidden rounded-crm-lg border px-4 py-3.5 transition-all duration-200 sm:min-w-0",

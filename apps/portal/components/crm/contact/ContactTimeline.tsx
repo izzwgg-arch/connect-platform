@@ -1,7 +1,7 @@
 "use client";
 
-import { Activity } from "lucide-react";
-import { CRMCard, CRMEmptyState, CRMSection, crm } from "..";
+import { Activity, Filter } from "lucide-react";
+import { CRMEmptyState, CRMSection, crm } from "..";
 import { LoadingSkeleton } from "../../LoadingSkeleton";
 import type { TimelineEvent } from "./contactTypes";
 import { ContactTimelineItem } from "./ContactTimelineItem";
@@ -33,13 +33,19 @@ export function ContactTimeline({
   const smsCount = events.filter((e) => e.type.startsWith("SMS_")).length;
 
   return (
-    <CRMCard padding="lg" className="flex flex-col gap-4 border-crm-border/70">
+    <div className="flex flex-col gap-4">
       <CRMSection
         title="Activity timeline"
         description={
           events.length > 0
             ? `${events.length} events${callCount ? ` · ${callCount} calls` : ""}${smsCount ? ` · ${smsCount} SMS` : ""}`
             : "Every call, message, note, and task in one stream"
+        }
+        actions={
+          <button type="button" className="inline-flex items-center gap-1.5 rounded-full border border-crm-border bg-crm-surface-2 px-3 py-1.5 text-xs font-bold text-crm-muted hover:text-crm-text">
+            <Filter className="h-3.5 w-3.5" />
+            Filter
+          </button>
         }
       >
         {loading ? (
@@ -62,7 +68,7 @@ export function ContactTimeline({
             }
           />
         ) : (
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-2.5">
             {events.map((event) => (
               <ContactTimelineItem
                 key={event.id}
@@ -80,6 +86,6 @@ export function ContactTimeline({
           </div>
         )}
       </CRMSection>
-    </CRMCard>
+    </div>
   );
 }
