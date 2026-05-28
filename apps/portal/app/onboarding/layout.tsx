@@ -9,9 +9,13 @@ export default function OnboardingLayout({ children }: { children: ReactNode }) 
     const root = document.documentElement;
     const prev = root.getAttribute("data-theme");
     root.setAttribute("data-theme", "light");
+    root.classList.add("ob-page");
+    document.body.classList.add("ob-page");
     return () => {
       if (prev) root.setAttribute("data-theme", prev);
       else root.removeAttribute("data-theme");
+      root.classList.remove("ob-page");
+      document.body.classList.remove("ob-page");
     };
   }, []);
 

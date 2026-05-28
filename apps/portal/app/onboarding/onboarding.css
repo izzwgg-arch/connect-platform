@@ -3,6 +3,13 @@
    Do not use CRM or admin tokens here.
    ──────────────────────────────────────────────────────────────────────────── */
 
+/* Allow the page to scroll — the global platform CSS locks html/body */
+html.ob-page,
+html.ob-page body {
+  overflow: auto !important;
+  height: auto !important;
+}
+
 .ob-shell {
   min-height: 100dvh;
   background: #f4f6f9;
