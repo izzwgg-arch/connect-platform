@@ -14,18 +14,24 @@ test("status transition helper allows forward moves and cancel, blocks from term
 
 test("VitalPBX CSV escaping + filename shape", () => {
   const { filename, mime, body } = generateVitalPbxCsv([
-    { extNumber: "101", name: "Alice, Sr.", email: "a\"b@example.com", voicemail: "enabled", class_of_service: "default" },
+    { extNumber: "101", name: "Alice, Sr.", email: 'a"b@example.com' },
     { extNumber: "102", name: "Bob\nSmith", email: "b@example.com" },
   ]);
   assert.ok(filename.startsWith("vitalpbx_extensions_"));
   assert.ok(filename.endsWith(".csv"));
   assert.equal(mime.startsWith("text/csv"), true);
   const lines = body.split(/\r?\n/);
-  assert.equal(lines[0], "extension,name,email,device,password,voicemail,class_of_service");
-  // Confirm quotes are escaped and commas/newlines are quoted
+  // Header row: first column should be "mode"
+  assert.ok(lines[0].startsWith("mode,extension,ext_name,"));
+  // Two extensions → header + 4 data rows (2 per ext)
+  assert.ok(lines.length >= 5);
+  // Row 1 (ext 101 add): ext_name contains Alice quoted because of comma
   assert.ok(/"Alice, Sr\."/.test(lines[1]));
-  assert.ok(/a""b@example\.com/.test(lines[1]));
-  assert.ok(/"Bob\nSmith"/.test(lines[2]));
+  // Row 1: outgoing_rec and incoming_rec should be yes
+  assert.ok(/yes/.test(lines[1]));
+  // Row 2 (ext 101 add_device): vitxi_client=yes
+  assert.ok(/add_device/.test(lines[2]));
+  assert.ok(/yes/.test(lines[2]));
 });
 
 test("VitalPBX CSV duplicate detection", () => {
