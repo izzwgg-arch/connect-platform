@@ -78,6 +78,7 @@ export const SIDEBAR_ITEMS = [
   { id: "admin.deploy_center", section: "admin", label: "Deploy Center", href: "/admin/deploy-center", permission: "can_view_admin_deploy_center" },
   { id: "admin.roles", section: "admin", label: "Custom Roles", href: "/admin/roles", permission: "can_view_admin_roles" },
   { id: "admin.phone_numbers", section: "admin", label: "Phone Numbers", href: "/admin/phone-numbers", permission: "can_view_admin_phone_numbers" },
+  { id: "admin.onboarding", section: "admin", label: "Onboarding", href: "/admin/onboarding", permission: "can_view_admin_onboarding" },
 
   { id: "settings.tenant", section: "settings", label: "Tenant Settings", href: "/settings", permission: "can_view_settings_tenant" },
   { id: "settings.email", section: "settings", label: "Email Settings", href: "/settings/email", permission: "can_view_settings_email" },
@@ -218,6 +219,7 @@ export const LEGACY_PERMISSION_EXPANSIONS: Record<string, PortalPermissionKey[]>
     "can_view_admin_cdr_tenant_map",
     "can_view_admin_roles",
     "can_view_admin_phone_numbers",
+    "can_view_admin_onboarding",
   ],
   can_manage_global_settings: [
     ...ADMIN_SECTION,
