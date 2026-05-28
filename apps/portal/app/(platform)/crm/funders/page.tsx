@@ -4,26 +4,29 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Activity,
-  Building2,
+  BarChart3,
   ChevronLeft,
   ChevronRight,
-  Clock,
+  CircleDollarSign,
   Download,
+  ExternalLink,
   FileUp,
-  Filter,
   HandCoins,
   Mail,
+  MapPin,
   MoreHorizontal,
-  Phone,
   Plus,
   Search,
+  SlidersHorizontal,
   Tag,
-  TrendingUp,
   Upload,
   Users,
   X,
 } from "lucide-react";
-import { CRMCard, crm, cn } from "../../../../components/crm";
+import {
+  crm,
+  cn,
+} from "../../../../components/crm";
 import { BulkEmailModal } from "../../../../components/crm/email/BulkEmailModal";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
@@ -77,14 +80,14 @@ type FunderStats = {
 const PAGE_LIMIT = 50;
 
 const STATUS_LABELS: Record<FunderStatus | "all", string> = {
-  all: "All Status",
+  all: "All",
   ACTIVE: "Active",
   INACTIVE: "Inactive",
   PROSPECT: "Prospect",
   PENDING: "Pending",
 };
 
-const STATUS_PILL: Record<FunderStatus, string> = {
+const STATUS_COLORS: Record<FunderStatus, string> = {
   ACTIVE: "bg-emerald-500/15 text-emerald-600 border-emerald-400/30",
   INACTIVE: "bg-gray-400/15 text-gray-500 border-gray-400/30",
   PROSPECT: "bg-blue-500/15 text-blue-600 border-blue-400/30",
@@ -148,73 +151,6 @@ function parseCsvLocally(text: string): string[][] {
   return rows;
 }
 
-// ── Funder Overview Donut ─────────────────────────────────────────────────────
-
-function FunderDonut({
-  active,
-  inactive,
-  prospects,
-  total,
-}: {
-  active: number;
-  inactive: number;
-  prospects: number;
-  total: number;
-}) {
-  if (!total) {
-    return (
-      <div className="relative flex h-28 w-28 shrink-0 items-center justify-center rounded-full border border-crm-border bg-crm-surface-2">
-        <span className="text-xs text-crm-muted">No data</span>
-      </div>
-    );
-  }
-
-  const r = 38;
-  const C = 2 * Math.PI * r;
-  const segs = [
-    { v: active, color: "#16a34a" },
-    { v: inactive, color: "#94a3b8" },
-    { v: prospects, color: "#f97316" },
-  ].filter((s) => s.v > 0);
-
-  let acc = 0;
-
-  return (
-    <div className="relative h-28 w-28 shrink-0">
-      <svg viewBox="0 0 100 100" className="h-full w-full -rotate-90">
-        <circle
-          cx={50} cy={50} r={r}
-          fill="none"
-          stroke="currentColor"
-          className="text-crm-border"
-          strokeWidth={11}
-        />
-        {segs.map((s, i) => {
-          const ratio = s.v / total;
-          const dash = C * ratio;
-          const offset = C * (1 - acc);
-          acc += ratio;
-          return (
-            <circle
-              key={i}
-              cx={50} cy={50} r={r}
-              fill="none"
-              stroke={s.color}
-              strokeWidth={11}
-              strokeDasharray={`${dash} ${C}`}
-              strokeDashoffset={offset}
-            />
-          );
-        })}
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-2xl font-bold tabular-nums leading-none text-crm-text">{total}</span>
-        <span className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">Total</span>
-      </div>
-    </div>
-  );
-}
-
 // ── Modal: New Funder ─────────────────────────────────────────────────────────
 
 type NewFunderModalProps = {
@@ -226,45 +162,47 @@ type NewFunderModalProps = {
 
 function NewFunderModal({ open, tags, onClose, onCreated }: NewFunderModalProps) {
   const [form, setForm] = useState({
-    name: "", organization: "", email: "", phone: "", phone2: "",
-    city: "", state: "", zip: "", notes: "", status: "ACTIVE" as FunderStatus,
+    name: "", organization: "", website: "", email: "", phone: "", phone2: "",
+    address: "", city: "", state: "", zip: "", notes: "", status: "ACTIVE" as FunderStatus,
   });
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
-  const [addAnother, setAddAnother] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   if (!open) return null;
 
-  const field =
-    (key: keyof typeof form) =>
+  const field = (key: keyof typeof form) => (
     (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
-      setForm((f) => ({ ...f, [key]: e.target.value }));
-
-  const resetForm = () => {
-    setForm({ name: "", organization: "", email: "", phone: "", phone2: "", city: "", state: "", zip: "", notes: "", status: "ACTIVE" });
-    setSelectedTagIds([]);
-    setErr(null);
-  };
+      setForm((f) => ({ ...f, [key]: e.target.value }))
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.name.trim()) { setErr("Funder name is required"); return; }
+    if (!form.name.trim()) { setErr("Name is required"); return; }
     setSaving(true);
     setErr(null);
     try {
+      const enrichedNotes = [
+        form.website.trim() ? `Website: ${form.website.trim()}` : "",
+        form.address.trim() ? `Address: ${form.address.trim()}` : "",
+        form.notes.trim(),
+      ].filter(Boolean).join("\n\n");
       const funder = await apiPost<Funder>("/crm/funders", {
-        ...form,
         name: form.name.trim(),
+        organization: form.organization,
+        email: form.email,
+        phone: form.phone,
+        phone2: form.phone2,
+        city: form.city,
+        state: form.state,
+        zip: form.zip,
+        notes: enrichedNotes,
+        status: form.status,
         tagIds: selectedTagIds,
       });
       onCreated(funder);
-      if (addAnother) {
-        resetForm();
-      } else {
-        onClose();
-        resetForm();
-      }
+      setForm({ name: "", organization: "", website: "", email: "", phone: "", phone2: "", address: "", city: "", state: "", zip: "", notes: "", status: "ACTIVE" });
+      setSelectedTagIds([]);
     } catch (e: any) {
       setErr(e?.message ?? "Failed to create funder");
     } finally {
@@ -272,182 +210,159 @@ function NewFunderModal({ open, tags, onClose, onCreated }: NewFunderModalProps)
     }
   };
 
-  const SectionDivider = () => (
-    <div className="my-5 border-t" style={{ borderColor: "var(--crm-border)" }} />
-  );
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6"
-      style={{ background: "rgba(15, 23, 42, 0.55)", backdropFilter: "blur(4px)" }}
-      onClick={onClose}
-    >
+    <div className="funders-modal-backdrop fixed inset-0 z-50 flex items-center justify-center px-3 py-6 sm:px-4" onClick={onClose}>
       <div
-        className={cn(crm.contactsModalPanel, "w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl shadow-2xl")}
+        className="funders-modal-panel w-full max-w-2xl overflow-hidden rounded-[1.5rem] border bg-white shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
-        <div
-          className="flex items-center justify-between border-b px-6 py-4"
-          style={{ borderColor: "var(--crm-border)" }}
-        >
+        <div className="flex items-start justify-between border-b border-slate-200/80 px-5 py-4 sm:px-6">
           <div>
-            <h2 className="text-base font-semibold text-crm-text">Add New Funder</h2>
-            <p className="mt-0.5 text-xs text-crm-muted">Fill in the details to create a new funder record.</p>
+            <h2 className="text-base font-semibold text-slate-950">Add New Funder</h2>
+            <p className="mt-1 text-sm text-slate-500">Create a funding partner profile for grants, referrals, and financial relationships.</p>
           </div>
-          <button
-            onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-crm-muted transition-colors hover:bg-crm-surface-2 hover:text-crm-text"
-          >
+          <button onClick={onClose} className="rounded-full border border-slate-200 bg-white p-2 text-slate-500 shadow-sm transition hover:bg-slate-50 hover:text-slate-900">
             <X size={16} />
           </button>
         </div>
+        <form onSubmit={handleSubmit} className="max-h-[calc(100vh-7rem)] overflow-y-auto">
+          <div className="space-y-5 px-5 py-5 sm:px-6">
+            {err && (
+              <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{err}</div>
+            )}
 
-        <form onSubmit={handleSubmit} className="p-6">
-          {err && (
-            <div className={cn(crm.bannerDanger, "mb-4 rounded-xl px-4 py-3 text-sm")}>{err}</div>
-          )}
-
-          {/* A: Organization Information */}
-          <div>
-            <p className="mb-3 text-[11px] font-bold uppercase tracking-wider text-crm-muted">Organization Information</p>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <section className="funders-form-section">
               <div>
-                <label className="mb-1.5 block text-xs font-medium text-crm-text">
-                  Funder Name <span className="text-crm-danger">*</span>
-                </label>
-                <input
-                  className={crm.input}
-                  value={form.name}
-                  onChange={field("name")}
-                  placeholder="Enter funder name"
-                  autoFocus
-                />
+                <h3>Organization Information</h3>
+                <p>Core identity and partner classification.</p>
               </div>
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-crm-text">Organization Type</label>
-                <input
-                  className={crm.input}
-                  value={form.organization}
-                  onChange={field("organization")}
-                  placeholder="Foundation, Nonprofit, Corp…"
-                />
-              </div>
-            </div>
-            <div className="mt-3">
-              <label className="mb-1.5 block text-xs font-medium text-crm-text">Status</label>
-              <select className={crm.select} value={form.status} onChange={field("status")}>
-                {(["ACTIVE", "INACTIVE", "PROSPECT", "PENDING"] as FunderStatus[]).map((s) => (
-                  <option key={s} value={s}>{STATUS_LABELS[s]}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <SectionDivider />
-
-          {/* B: Contact Information */}
-          <div>
-            <p className="mb-3 text-[11px] font-bold uppercase tracking-wider text-crm-muted">Contact Information</p>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-crm-text">Email</label>
-                <input type="email" className={crm.input} value={form.email} onChange={field("email")} placeholder="email@example.com" />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-crm-text">Primary Phone</label>
-                <input className={crm.input} value={form.phone} onChange={field("phone")} placeholder="(555) 000-0000" />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-crm-text">Secondary Phone</label>
-                <input className={crm.input} value={form.phone2} onChange={field("phone2")} placeholder="(555) 000-0000" />
-              </div>
-            </div>
-          </div>
-
-          <SectionDivider />
-
-          {/* C: Location */}
-          <div>
-            <p className="mb-3 text-[11px] font-bold uppercase tracking-wider text-crm-muted">Location</p>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-crm-text">City</label>
-                <input className={crm.input} value={form.city} onChange={field("city")} placeholder="City" />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-crm-text">State</label>
-                <input className={crm.input} value={form.state} onChange={field("state")} placeholder="State" />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-crm-text">ZIP Code</label>
-                <input className={crm.input} value={form.zip} onChange={field("zip")} placeholder="ZIP" />
-              </div>
-            </div>
-          </div>
-
-          <SectionDivider />
-
-          {/* D: Additional Information */}
-          <div>
-            <p className="mb-3 text-[11px] font-bold uppercase tracking-wider text-crm-muted">Additional Information</p>
-            {tags.length > 0 && (
-              <div className="mb-3">
-                <label className="mb-1.5 block text-xs font-medium text-crm-text">Tags</label>
-                <div className="flex flex-wrap gap-1.5">
-                  {tags.map((t) => (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() =>
-                        setSelectedTagIds((prev) =>
-                          prev.includes(t.id) ? prev.filter((id) => id !== t.id) : [...prev, t.id]
-                        )
-                      }
-                      className={cn(
-                        "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
-                        selectedTagIds.includes(t.id)
-                          ? "border-crm-accent/50 bg-crm-accent/15 text-crm-accent"
-                          : "border-crm-border bg-crm-surface-2 text-crm-muted hover:border-crm-border/90"
-                      )}
-                    >
-                      {t.name}
-                    </button>
-                  ))}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="funders-field-label">Funder Name *</label>
+                  <input className="funders-field mt-1" value={form.name} onChange={field("name")} placeholder="Enter funder name" />
+                </div>
+                <div>
+                  <label className="funders-field-label">Organization Type</label>
+                  <select className="funders-field mt-1" value={form.organization} onChange={field("organization")}>
+                    <option value="">Select type</option>
+                    <option value="Foundation">Foundation</option>
+                    <option value="Grantmaker">Grantmaker</option>
+                    <option value="Nonprofit">Nonprofit</option>
+                    <option value="Corporation">Corporation</option>
+                    <option value="Government">Government</option>
+                    <option value="Financial Partner">Financial Partner</option>
+                  </select>
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="funders-field-label">Website</label>
+                  <input className="funders-field mt-1" value={form.website} onChange={field("website")} placeholder="https://example.org" />
                 </div>
               </div>
-            )}
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-crm-text">Notes</label>
-              <textarea
-                className={cn(crm.input, "min-h-[80px] resize-y")}
-                value={form.notes}
-                onChange={field("notes")}
-                placeholder="Add any notes about this funder…"
-              />
-            </div>
-          </div>
+            </section>
 
-          {/* Footer */}
-          <div
-            className="mt-5 flex items-center justify-between border-t pt-4"
-            style={{ borderColor: "var(--crm-border)" }}
-          >
-            <label className="flex cursor-pointer items-center gap-2 text-sm text-crm-muted">
-              <input
-                type="checkbox"
-                checked={addAnother}
-                onChange={(e) => setAddAnother(e.target.checked)}
-                className={crm.checkbox}
-              />
-              Add another
-            </label>
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={onClose} className={crm.btnSecondary}>Cancel</button>
-              <button type="submit" disabled={saving} className={crm.btnPrimary}>
-                {saving ? "Saving…" : "Save Funder"}
-              </button>
-            </div>
+            <section className="funders-form-section">
+              <div>
+                <h3>Contact Information</h3>
+                <p>Primary outreach details for this funder.</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div>
+                  <label className="funders-field-label">Email *</label>
+                  <input type="email" className="funders-field mt-1" value={form.email} onChange={field("email")} placeholder="email@example.org" />
+                </div>
+                <div>
+                  <label className="funders-field-label">Primary Phone</label>
+                  <input className="funders-field mt-1" value={form.phone} onChange={field("phone")} placeholder="(555) 000-0000" />
+                </div>
+                <div>
+                  <label className="funders-field-label">Secondary Phone</label>
+                  <input className="funders-field mt-1" value={form.phone2} onChange={field("phone2")} placeholder="(555) 000-0000" />
+                </div>
+              </div>
+            </section>
+
+            <section className="funders-form-section">
+              <div>
+                <h3>Location</h3>
+                <p>Office or mailing location for records.</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-6">
+                <div className="sm:col-span-6">
+                  <label className="funders-field-label">Address</label>
+                  <input className="funders-field mt-1" value={form.address} onChange={field("address")} placeholder="Street address" />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="funders-field-label">City</label>
+                  <input className="funders-field mt-1" value={form.city} onChange={field("city")} placeholder="City" />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="funders-field-label">State</label>
+                  <input className="funders-field mt-1" value={form.state} onChange={field("state")} placeholder="State" />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="funders-field-label">ZIP Code</label>
+                  <input className="funders-field mt-1" value={form.zip} onChange={field("zip")} placeholder="ZIP code" />
+                </div>
+              </div>
+            </section>
+
+            <section className="funders-form-section">
+              <div>
+                <h3>Additional Information</h3>
+                <p>Status, tags, and notes for internal context.</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="funders-field-label">Status</label>
+                  <select className="funders-field mt-1" value={form.status} onChange={field("status")}>
+                    {(["ACTIVE", "INACTIVE", "PROSPECT", "PENDING"] as FunderStatus[]).map((s) => (
+                      <option key={s} value={s}>{STATUS_LABELS[s]}</option>
+                    ))}
+                  </select>
+                </div>
+                {tags.length > 0 && (
+                  <div>
+                    <label className="funders-field-label">Tags</label>
+                    <div className="mt-1 flex min-h-[2.75rem] flex-wrap gap-1.5 rounded-xl border border-slate-200 bg-slate-50/80 p-2">
+                      {tags.map((t) => (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() =>
+                            setSelectedTagIds((prev) =>
+                              prev.includes(t.id) ? prev.filter((id) => id !== t.id) : [...prev, t.id]
+                            )
+                          }
+                          className={cn(
+                            "rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors",
+                            selectedTagIds.includes(t.id)
+                              ? "border-orange-200 bg-orange-50 text-orange-700"
+                              : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                          )}
+                        >
+                          {t.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div className="sm:col-span-2">
+                  <label className="funders-field-label">Notes</label>
+                  <textarea
+                    className="funders-field mt-1 min-h-[92px] resize-y"
+                    value={form.notes}
+                    onChange={field("notes")}
+                    placeholder="Add notes about this funder..."
+                  />
+                </div>
+              </div>
+            </section>
+          </div>
+          <div className="flex items-center justify-end gap-2 border-t border-slate-200/80 bg-slate-50/80 px-5 py-4 sm:px-6">
+            <button type="button" onClick={onClose} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50">Cancel</button>
+            <button type="submit" disabled={saving} className="rounded-xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none">
+              {saving ? "Saving..." : "Save Funder"}
+            </button>
           </div>
         </form>
       </div>
@@ -479,7 +394,6 @@ function NewTagModal({ open, onClose, onCreated }: NewTagModalProps) {
       const tag = await apiPost<FunderTag>("/crm/funder-tags", { name: name.trim(), color });
       onCreated(tag);
       setName(""); setColor("#6366f1");
-      onClose();
     } catch (e: any) {
       setErr(e?.message ?? "Failed to create tag");
     } finally {
@@ -488,53 +402,27 @@ function NewTagModal({ open, onClose, onCreated }: NewTagModalProps) {
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center px-4"
-      style={{ background: "rgba(15, 23, 42, 0.55)", backdropFilter: "blur(4px)" }}
-      onClick={onClose}
-    >
-      <div
-        className={cn(crm.contactsModalPanel, "w-full max-w-sm rounded-2xl shadow-2xl")}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div
-          className="flex items-center justify-between border-b px-5 py-4"
-          style={{ borderColor: "var(--crm-border)" }}
-        >
+    <div className={crm.contactsModalBackdrop} onClick={onClose}>
+      <div className={cn(crm.contactsModalPanel, "max-w-sm w-full")} onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-center justify-between">
           <h2 className="text-base font-semibold text-crm-text">New Tag</h2>
-          <button
-            onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-crm-muted transition-colors hover:bg-crm-surface-2 hover:text-crm-text"
-          >
-            <X size={16} />
-          </button>
+          <button onClick={onClose} className={crm.btnGhost} style={{ padding: "0.375rem" }}><X size={16} /></button>
         </div>
-        <form onSubmit={handleSubmit} className="p-5 flex flex-col gap-3">
-          {err && <div className={cn(crm.bannerDanger, "rounded-xl px-3 py-2 text-sm")}>{err}</div>}
+        {err && <div className={cn(crm.bannerDanger, "mb-3 rounded-crm px-3 py-2 text-sm")}>{err}</div>}
+        <form onSubmit={handleSubmit} className="flex flex-col gap-3">
           <div>
-            <label className="mb-1.5 block text-xs font-medium text-crm-text">Tag Name</label>
-            <input
-              className={crm.input}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Insurance, Medicaid"
-              autoFocus
-            />
+            <label className={crm.label}>Tag Name</label>
+            <input className={cn(crm.input, "mt-1")} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Insurance, Medicaid" autoFocus />
           </div>
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-crm-text">Color</label>
-            <input
-              type="color"
-              className="h-9 w-16 cursor-pointer rounded-lg border border-crm-border bg-crm-surface-2 p-0.5"
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
-            />
+          <div className="flex items-center gap-3">
+            <div>
+              <label className={crm.label}>Color</label>
+              <input type="color" className="mt-1 h-9 w-16 cursor-pointer rounded-crm border border-crm-border bg-crm-surface-2 p-0.5" value={color} onChange={(e) => setColor(e.target.value)} />
+            </div>
           </div>
-          <div className="flex justify-end gap-2 pt-1">
+          <div className="flex justify-end gap-2">
             <button type="button" onClick={onClose} className={crm.btnSecondary}>Cancel</button>
-            <button type="submit" disabled={saving} className={crm.btnPrimary}>
-              {saving ? "Creating…" : "Create Tag"}
-            </button>
+            <button type="submit" disabled={saving} className={crm.btnPrimary}>{saving ? "Creating…" : "Create Tag"}</button>
           </div>
         </form>
       </div>
@@ -631,149 +519,117 @@ function ImportModal({ open, onClose, onImported }: ImportModalProps) {
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center px-4"
-      style={{ background: "rgba(15, 23, 42, 0.55)", backdropFilter: "blur(4px)" }}
-      onClick={onClose}
-    >
-      <div
-        className={cn(crm.contactsModalPanel, "w-full max-w-xl max-h-[85vh] overflow-y-auto rounded-2xl shadow-2xl")}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div
-          className="flex items-center justify-between border-b px-6 py-4"
-          style={{ borderColor: "var(--crm-border)" }}
-        >
+    <div className={crm.contactsModalBackdrop} onClick={onClose}>
+      <div className={cn(crm.contactsModalPanel, "max-w-xl w-full max-h-[85vh] overflow-y-auto")} onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-center justify-between">
           <h2 className="text-base font-semibold text-crm-text">Import Funders</h2>
-          <button
-            onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-crm-muted transition-colors hover:bg-crm-surface-2 hover:text-crm-text"
-          >
-            <X size={16} />
-          </button>
+          <button onClick={onClose} className={crm.btnGhost} style={{ padding: "0.375rem" }}><X size={16} /></button>
         </div>
+        {err && <div className={cn(crm.bannerDanger, "mb-3 rounded-crm px-3 py-2 text-sm")}>{err}</div>}
 
-        <div className="p-6">
-          {err && <div className={cn(crm.bannerDanger, "mb-4 rounded-xl px-4 py-3 text-sm")}>{err}</div>}
-
-          {phase === "upload" && (
-            <div className="flex flex-col gap-4">
-              <p className={crm.muted}>
-                Upload a CSV, Excel (.xlsx / .xls), or spreadsheet file. Supported columns: name, organization, email, phone, phone2, city, state, zip, notes, tags.
-              </p>
-              <div
-                className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-crm-border bg-crm-surface-2/40 px-6 py-10 transition-colors hover:border-crm-accent/50 hover:bg-crm-surface-2/60"
-                onClick={() => fileRef.current?.click()}
-              >
-                <Upload size={32} className="text-crm-muted" />
-                <span className={crm.muted}>{fileName !== "import.csv" ? fileName : "Click to select a file"}</span>
-                <span className="text-xs text-crm-muted/60">CSV · Excel (.xlsx, .xls) · ODS</span>
-                {csvText && (
-                  <span className="text-xs text-crm-accent">✓ File loaded — {parseCsvLocally(csvText).length - 1} rows</span>
-                )}
-              </div>
-              <input
-                ref={fileRef}
-                type="file"
-                accept=".csv,text/csv,.xlsx,.xls,.ods,.numbers,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-                className="hidden"
-                onChange={handleFile}
-              />
-              <div className="flex justify-end gap-2">
-                <button onClick={onClose} className={crm.btnSecondary}>Cancel</button>
-                <button onClick={handlePreview} disabled={!csvText || loading} className={crm.btnPrimary}>
-                  {loading ? "Loading…" : "Preview Mapping"}
-                </button>
-              </div>
+        {phase === "upload" && (
+          <div className="flex flex-col gap-4">
+            <p className={crm.muted}>Upload a CSV, Excel (.xlsx / .xls), or spreadsheet file with funder records. Supported columns: name, organization, email, phone, phone2, city, state, zip, notes, tags.</p>
+            <div
+              className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-crm-lg border-2 border-dashed border-crm-border bg-crm-surface-2/40 px-6 py-10 transition-colors hover:border-crm-accent/50 hover:bg-crm-surface-2/60"
+              onClick={() => fileRef.current?.click()}
+            >
+              <Upload size={32} className="text-crm-muted" />
+              <span className={crm.muted}>{fileName !== "import.csv" ? fileName : "Click to select a file"}</span>
+              <span className="text-xs text-crm-border">CSV · Excel (.xlsx, .xls) · ODS spreadsheet</span>
+              {csvText && <span className="text-xs text-crm-accent">✓ File loaded — {parseCsvLocally(csvText).length - 1} rows</span>}
             </div>
-          )}
-
-          {phase === "preview" && preview && (
-            <div className="flex flex-col gap-4">
-              <div className="rounded-xl border border-crm-border bg-crm-surface-2/40 p-3">
-                <p className={cn(crm.muted, "text-xs mb-2")}>Detected column mapping ({preview.totalDataRows} rows)</p>
-                <div className="flex flex-wrap gap-2">
-                  {Object.entries(preview.mapping).map(([col, field]) => (
-                    <span key={col} className={crm.chip}>
-                      <span className="text-crm-accent">{preview.headers[Number(col)]}</span>
-                      <span className="mx-1 text-crm-border">→</span>
-                      <span>{String(field)}</span>
-                    </span>
-                  ))}
-                </div>
-              </div>
-              {preview.preview?.length > 0 && (
-                <div>
-                  <p className={cn(crm.label, "mb-2")}>Preview (first {preview.preview.length} rows)</p>
-                  <div className="overflow-x-auto rounded-xl border border-crm-border">
-                    <table className="min-w-full text-xs">
-                      <thead className="bg-crm-surface-2/60">
-                        <tr>
-                          {Object.keys(preview.preview[0]).map((k) => (
-                            <th key={k} className="border-b border-crm-border px-3 py-2 text-left font-semibold text-crm-muted">{k}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {preview.preview.map((row: any, i: number) => (
-                          <tr key={i} className="border-b border-crm-border/50 last:border-0">
-                            {Object.values(row).map((v: any, j) => (
-                              <td key={j} className="px-3 py-2 text-crm-text">{v || <span className="text-crm-border">—</span>}</td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-              <div className="flex justify-end gap-2">
-                <button onClick={() => setPhase("upload")} className={crm.btnSecondary}>Back</button>
-                <button onClick={handleExecute} disabled={loading} className={crm.btnPrimary}>
-                  {loading ? "Importing…" : `Import ${preview.totalDataRows} rows`}
-                </button>
-              </div>
+            <input ref={fileRef} type="file" accept=".csv,text/csv,.xlsx,.xls,.ods,.numbers,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" className="hidden" onChange={handleFile} />
+            <div className="flex justify-end gap-2">
+              <button onClick={onClose} className={crm.btnSecondary}>Cancel</button>
+              <button onClick={handlePreview} disabled={!csvText || loading} className={crm.btnPrimary}>
+                {loading ? "Loading…" : "Preview Mapping"}
+              </button>
             </div>
-          )}
+          </div>
+        )}
 
-          {phase === "result" && result && (
-            <div className="flex flex-col gap-4">
-              <div className={cn("rounded-xl border px-4 py-3", result.errorCount === result.totalRows ? crm.bannerDanger : crm.bannerSuccess)}>
-                <p className="font-semibold">
-                  {result.status === "DONE" ? "Import complete" : result.status === "PARTIAL" ? "Import completed with some errors" : "Import failed"}
-                </p>
-              </div>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {[
-                  { label: "Created", value: result.createdCount, color: "text-crm-success" },
-                  { label: "Updated", value: result.updatedCount, color: "text-crm-accent" },
-                  { label: "Skipped", value: result.skippedCount, color: "text-crm-muted" },
-                  { label: "Errors", value: result.errorCount, color: "text-crm-danger" },
-                ].map((m) => (
-                  <div key={m.label} className="rounded-xl border border-crm-border bg-crm-surface-2/40 p-3 text-center">
-                    <div className={cn("text-2xl font-bold tabular-nums", m.color)}>{m.value}</div>
-                    <div className={crm.muted}>{m.label}</div>
-                  </div>
+        {phase === "preview" && preview && (
+          <div className="flex flex-col gap-4">
+            <div className="rounded-crm border border-crm-border bg-crm-surface-2/40 p-3">
+              <p className={cn(crm.muted, "text-xs mb-2")}>Detected column mapping ({preview.totalDataRows} rows)</p>
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(preview.mapping).map(([col, field]) => (
+                  <span key={col} className={crm.chip}>
+                    <span className="text-crm-accent">{preview.headers[Number(col)]}</span>
+                    <span className="mx-1 text-crm-border">→</span>
+                    <span>{String(field)}</span>
+                  </span>
                 ))}
               </div>
-              {result.errors?.length > 0 && (
-                <details className="rounded-xl border border-crm-danger/30 bg-crm-danger/5 p-3">
-                  <summary className="cursor-pointer text-sm font-medium text-crm-danger">
-                    View {result.errors.length} errors
-                  </summary>
-                  <ul className="mt-2 space-y-1 text-xs text-crm-muted">
-                    {result.errors.map((e: any, i: number) => (
-                      <li key={i}>Row {e.row}: {e.reason}</li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-              <div className="flex justify-end">
-                <button onClick={handleDone} className={crm.btnPrimary}>Done</button>
-              </div>
             </div>
-          )}
-        </div>
+            {preview.preview?.length > 0 && (
+              <div>
+                <p className={cn(crm.label, "mb-2")}>Preview (first {preview.preview.length} rows)</p>
+                <div className="overflow-x-auto rounded-crm border border-crm-border">
+                  <table className="min-w-full text-xs">
+                    <thead className="bg-crm-surface-2/60">
+                      <tr>
+                        {Object.keys(preview.preview[0]).map((k) => (
+                          <th key={k} className="border-b border-crm-border px-3 py-2 text-left font-semibold text-crm-muted">{k}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {preview.preview.map((row: any, i: number) => (
+                        <tr key={i} className="border-b border-crm-border/50 last:border-0">
+                          {Object.values(row).map((v: any, j) => (
+                            <td key={j} className="px-3 py-2 text-crm-text">{v || <span className="text-crm-border">—</span>}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setPhase("upload")} className={crm.btnSecondary}>Back</button>
+              <button onClick={handleExecute} disabled={loading} className={crm.btnPrimary}>
+                {loading ? "Importing…" : `Import ${preview.totalDataRows} rows`}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {phase === "result" && result && (
+          <div className="flex flex-col gap-4">
+            <div className={cn("rounded-crm border px-4 py-3", result.errorCount === result.totalRows ? crm.bannerDanger : crm.bannerSuccess)}>
+              <p className="font-semibold">{result.status === "DONE" ? "Import complete" : result.status === "PARTIAL" ? "Import completed with some errors" : "Import failed"}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {[
+                { label: "Created", value: result.createdCount, color: "text-crm-success" },
+                { label: "Updated", value: result.updatedCount, color: "text-crm-accent" },
+                { label: "Skipped", value: result.skippedCount, color: "text-crm-muted" },
+                { label: "Errors", value: result.errorCount, color: "text-crm-danger" },
+              ].map((m) => (
+                <div key={m.label} className="rounded-crm border border-crm-border bg-crm-surface-2/40 p-3 text-center">
+                  <div className={cn("text-2xl font-bold tabular-nums", m.color)}>{m.value}</div>
+                  <div className={crm.muted}>{m.label}</div>
+                </div>
+              ))}
+            </div>
+            {result.errors?.length > 0 && (
+              <details className="rounded-crm border border-crm-danger/30 bg-crm-danger/5 p-3">
+                <summary className="cursor-pointer text-sm font-medium text-crm-danger">View {result.errors.length} errors</summary>
+                <ul className="mt-2 space-y-1 text-xs text-crm-muted">
+                  {result.errors.map((e: any, i: number) => (
+                    <li key={i}>Row {e.row}: {e.reason}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
+            <div className="flex justify-end">
+              <button onClick={handleDone} className={crm.btnPrimary}>Done</button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -792,6 +648,7 @@ export default function FundersPage() {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<FunderStatus | "all">("all");
+  const [typeFilter, setTypeFilter] = useState<string>("all");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [tags, setTags] = useState<FunderTag[]>([]);
   const [stats, setStats] = useState<FunderStats | null>(null);
@@ -838,8 +695,13 @@ export default function FundersPage() {
     } catch { /* ignore */ }
   }, []);
 
-  useEffect(() => { fetchFunders(); }, [fetchFunders]);
-  useEffect(() => { fetchTags(); }, [fetchTags]);
+  useEffect(() => {
+    fetchFunders();
+  }, [fetchFunders]);
+
+  useEffect(() => {
+    fetchTags();
+  }, [fetchTags]);
 
   useEffect(() => {
     clearTimeout(debounceRef.current);
@@ -851,7 +713,6 @@ export default function FundersPage() {
   }, [search]);
 
   const totalPages = Math.ceil(total / PAGE_LIMIT);
-  const inactive = stats ? Math.max(0, stats.total - stats.active - stats.prospects) : 0;
 
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
@@ -861,7 +722,15 @@ export default function FundersPage() {
       return next;
     });
   };
-  const selectAll = () => setSelected(new Set(funders.map((f) => f.id)));
+
+  const typeOptions = Array.from(
+    new Set(funders.map((f) => f.organization).filter((value): value is string => Boolean(value))),
+  ).sort((a, b) => a.localeCompare(b));
+  const visibleFunders = typeFilter === "all"
+    ? funders
+    : funders.filter((f) => (f.organization || "Other") === typeFilter);
+
+  const selectAll = () => setSelected(new Set(visibleFunders.map((f) => f.id)));
   const clearSelection = () => setSelected(new Set());
 
   const handleBulkTag = async () => {
@@ -889,73 +758,51 @@ export default function FundersPage() {
     window.open(`/api/crm/funders/export?${params.toString()}`, "_blank");
   };
 
-  // KPI card definitions
-  const kpiCards = [
-    {
-      label: "Total Funders",
-      value: stats?.total ?? 0,
-      desc: "All funders in your CRM",
-      iconVariant: "contacts-kpi-violet",
-      icon: <HandCoins size={18} />,
-      valueClass: "text-crm-text",
-    },
-    {
-      label: "Active",
-      value: stats?.active ?? 0,
-      desc: "Currently active funders",
-      iconVariant: "contacts-kpi-green",
-      icon: <Users size={18} />,
-      valueClass: "text-emerald-600",
-    },
-    {
-      label: "Inactive",
-      value: inactive,
-      desc: "Not currently active",
-      iconVariant: "",
-      icon: <Activity size={18} />,
-      valueClass: "text-crm-muted",
-    },
-    {
-      label: "Prospects",
-      value: stats?.prospects ?? 0,
-      desc: "Potential funders",
-      iconVariant: "contacts-kpi-amber",
-      icon: <TrendingUp size={18} />,
-      valueClass: "text-orange-500",
-    },
-  ];
-
-  // Sidebar: top tags with counts from current funders
-  const tagCounts = tags
-    .map((t) => ({
-      ...t,
-      count: funders.filter((f) => f.tags.some((ft) => ft.id === t.id)).length,
+  const totalFunders = stats?.total ?? total;
+  const activeFunders = stats?.active ?? 0;
+  const prospectFunders = stats?.prospects ?? 0;
+  const inactiveFunders = Math.max(totalFunders - activeFunders - prospectFunders, 0);
+  const selectedCount = selected.size;
+  const topTags = [...tags]
+    .map((tag) => ({
+      ...tag,
+      count: funders.filter((f) => f.tags.some((funderTag) => funderTag.id === tag.id)).length,
     }))
     .sort((a, b) => b.count - a.count)
-    .slice(0, 6);
+    .slice(0, 5);
+  const recentActivity = [...funders]
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    .slice(0, 3);
+  const statusBreakdown = (["ACTIVE", "INACTIVE", "PROSPECT"] as FunderStatus[]).map((status) => ({
+    status,
+    label: STATUS_LABELS[status],
+    count: status === "ACTIVE" ? activeFunders : status === "PROSPECT" ? prospectFunders : inactiveFunders,
+  }));
+  const donutTotal = Math.max(statusBreakdown.reduce((sum, item) => sum + item.count, 0), 1);
+  let donutCursor = 0;
+  const donutColors: Record<string, string> = {
+    ACTIVE: "#10b981",
+    INACTIVE: "#cbd5e1",
+    PROSPECT: "#f59e0b",
+  };
+  const donutGradient = statusBreakdown
+    .map((item) => {
+      const start = donutCursor;
+      const end = donutCursor + (item.count / donutTotal) * 100;
+      donutCursor = end;
+      return `${donutColors[item.status]} ${start}% ${end}%`;
+    })
+    .join(", ");
 
-  // Sidebar: recent activity (last 4 funders by createdAt)
-  const recentFunders = [...funders]
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    .slice(0, 4);
+  const kpiCards = [
+    { label: "Total Funders", value: totalFunders, description: "All funders in your CRM", icon: <Users size={18} />, tone: "violet" },
+    { label: "Active", value: activeFunders, description: "Currently active funders", icon: <Activity size={18} />, tone: "emerald" },
+    { label: "Inactive", value: inactiveFunders, description: "Not currently active", icon: <BarChart3 size={18} />, tone: "slate" },
+    { label: "Prospects", value: prospectFunders, description: "Potential funders", icon: <CircleDollarSign size={18} />, tone: "amber" },
+  ];
 
   return (
-    <div
-      className={cn(crm.contactsWorkspace)}
-      style={{
-        "--crm-light-panel": "rgba(255,255,255,0.97)",
-        "--crm-light-panel-2": "#f8fafc",
-        "--crm-light-border": "rgba(15,23,42,0.11)",
-        "--crm-light-border-strong": "rgba(15,23,42,0.18)",
-        "--crm-light-text": "#0f172a",
-        "--crm-light-muted": "#64748b",
-        "--crm-light-accent": "#0284c7",
-        "--crm-light-success": "#16a34a",
-        "--crm-light-warning": "#d97706",
-        "--crm-light-danger": "#dc2626",
-      } as React.CSSProperties}
-    >
-      {/* Bulk Email Modal */}
+    <div className={cn(crm.fundersWorkspace)}>
       {showBulkEmail && (
         <BulkEmailModal
           audience={{
@@ -975,355 +822,272 @@ export default function FundersPage() {
           }}
         />
       )}
-
-      <div className={crm.pageInnerContacts}>
-
-        {/* ── Page Header ────────────────────────────────────────────────────── */}
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <h1 className="text-2xl font-semibold tracking-tight text-crm-text">Funders</h1>
-            <p className="mt-1 text-sm leading-relaxed text-crm-muted">
-              Manage funding sources, grant organizations, and financial partners.
-            </p>
+      <div className={crm.pageInnerFunders}>
+        {/* ── Header ─────────────────────────────────────────────────────────── */}
+        <div className="funders-command-header">
+          <div>
+            <h1>Funders</h1>
+            <p>Manage funding sources, grant organizations, and financial partners.</p>
           </div>
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <button
-              onClick={() => setShowImport(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 active:bg-slate-100"
-            >
-              <FileUp size={14} />
-              Import CSV
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={() => setShowImport(true)} className="funders-btn funders-btn-secondary">
+              <FileUp size={15} /> Import CSV
             </button>
-            <button
-              onClick={handleExport}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 active:bg-slate-100"
-            >
-              <Download size={14} />
-              Export CSV
+            <button onClick={handleExport} className="funders-btn funders-btn-secondary">
+              <Download size={15} /> Export CSV
             </button>
-            <button
-              onClick={() => setShowNew(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-transparent bg-orange-500 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-orange-600 active:bg-orange-700"
-            >
-              <Plus size={14} />
-              Add Funder
+            <button onClick={() => setShowNew(true)} className="funders-btn funders-btn-primary">
+              <Plus size={15} /> Add Funder
             </button>
           </div>
         </div>
 
-        {/* ── KPI Row ────────────────────────────────────────────────────────── */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {/* ── KPI Cards ──────────────────────────────────────────────────────── */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {kpiCards.map((kpi) => (
-            <div key={kpi.label} className={cn(crm.contactsKpiTile, "border-crm-border")}>
-              <div className="flex items-center justify-between">
-                <div className={cn(crm.contactsKpiIcon, "h-9 w-9 rounded-xl", kpi.iconVariant)}>
-                  {kpi.icon}
-                </div>
-                <span className="contacts-kpi-label">{kpi.label}</span>
+            <div
+              key={kpi.label}
+              className={cn("funders-kpi-card", `funders-kpi-${kpi.tone}`)}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="funders-kpi-icon">{kpi.icon}</div>
+                <span className="funders-kpi-label">{kpi.label}</span>
               </div>
-              <div className={cn("contacts-kpi-value", kpi.valueClass)}>
-                {loading ? <span className="opacity-40">—</span> : kpi.value}
+              <div className="funders-kpi-value">
+                {loading ? <span className="animate-pulse opacity-40">—</span> : kpi.value}
               </div>
-              <div className="contacts-kpi-micro">{kpi.desc}</div>
+              <p className="funders-kpi-description">{kpi.description}</p>
             </div>
           ))}
         </div>
 
-        {/* ── Bulk Email Toast ───────────────────────────────────────────────── */}
-        {bulkEmailToast && (
-          <div className="rounded-xl border border-crm-success/40 bg-crm-success/10 px-4 py-2.5 text-sm font-medium text-crm-success">
-            {bulkEmailToast}
-          </div>
-        )}
-
-        {/* ── Main Grid ──────────────────────────────────────────────────────── */}
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,18rem)] lg:items-start">
-
-          {/* Left column */}
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)] xl:items-start">
           <div className="flex min-w-0 flex-col gap-3">
-
-            {/* Filter Bar */}
-            <div className={cn(crm.contactsFilterBar, "flex flex-wrap items-center gap-2 rounded-xl border border-crm-border p-3")}>
-              <div className="relative min-w-[180px] flex-1">
-                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-crm-muted" />
-                <input
-                  className={cn(crm.input, "pl-9 py-2 rounded-xl")}
-                  placeholder="Search funders…"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
+            <div className="funders-filter-card">
+              <div className="funders-filter-grid">
+                <div className="relative min-w-0">
+                  <Search size={16} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    className="funders-control pl-10"
+                    placeholder="Search funders..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </div>
+                <select
+                  className="funders-control"
+                  value={statusFilter}
+                  onChange={(e) => { setStatusFilter(e.target.value as any); setPage(0); }}
+                >
+                  {(["all", "ACTIVE", "INACTIVE", "PROSPECT", "PENDING"] as const).map((s) => (
+                    <option key={s} value={s}>{s === "all" ? "All Status" : STATUS_LABELS[s]}</option>
+                  ))}
+                </select>
+                <select
+                  className="funders-control"
+                  value={typeFilter}
+                  onChange={(e) => { setTypeFilter(e.target.value); setPage(0); }}
+                >
+                  <option value="all">All Types</option>
+                  {typeOptions.map((type) => <option key={type} value={type}>{type}</option>)}
+                </select>
+                <select
+                  className="funders-control"
+                  value={tagFilter ?? ""}
+                  onChange={(e) => { setTagFilter(e.target.value || null); setPage(0); }}
+                >
+                  <option value="">All Tags</option>
+                  {tags.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+                <button type="button" className="funders-btn funders-btn-filter">
+                  <SlidersHorizontal size={15} /> Filters
+                </button>
               </div>
-              <select
-                className={cn(crm.selectCompact, "rounded-xl")}
-                value={statusFilter}
-                onChange={(e) => { setStatusFilter(e.target.value as any); setPage(0); }}
-              >
-                {(["all", "ACTIVE", "INACTIVE", "PROSPECT", "PENDING"] as const).map((s) => (
-                  <option key={s} value={s}>{STATUS_LABELS[s]}</option>
-                ))}
-              </select>
-              <select
-                className={cn(crm.selectCompact, "rounded-xl")}
-                value={tagFilter ?? ""}
-                onChange={(e) => { setTagFilter(e.target.value || null); setPage(0); }}
-              >
-                <option value="">All Tags</option>
-                {tags.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
-              <button className={cn(crm.btnSecondary, "rounded-xl gap-1.5")}>
-                <Filter size={14} />
-                Filters
-              </button>
             </div>
 
-            {/* Bulk Action Bar */}
-            {selected.size > 0 && (
-              <div className={cn(crm.contactsBulkBar, "rounded-xl")}>
-                <span className="text-sm font-semibold text-crm-text">{selected.size} selected</span>
-                <button onClick={clearSelection} className="flex h-6 w-6 items-center justify-center rounded-md text-crm-muted transition-colors hover:bg-crm-surface-2 hover:text-crm-text">
-                  <X size={14} />
-                </button>
-                <button
-                  onClick={() => setShowBulkEmail(true)}
-                  className={cn(crm.btnSecondary, "rounded-xl gap-1.5 text-sm")}
-                >
-                  <Mail size={13} />
-                  Send Email
-                </button>
-                <div className="ml-auto flex flex-wrap items-center gap-2">
-                  <select
-                    className={cn(crm.selectCompact, "rounded-xl")}
-                    value={bulkTagId}
-                    onChange={(e) => setBulkTagId(e.target.value)}
-                  >
-                    <option value="">Add Tag…</option>
-                    {tags.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                  </select>
-                  <select
-                    className={cn(crm.selectCompact, "rounded-xl")}
-                    value={bulkAction}
-                    onChange={(e) => setBulkAction(e.target.value as any)}
-                  >
-                    <option value="assign">Assign tag</option>
-                    <option value="remove">Remove tag</option>
-                  </select>
-                  <button
-                    onClick={handleBulkTag}
-                    disabled={!bulkTagId || bulkWorking}
-                    className={cn(crm.btnSecondary, "rounded-xl")}
-                  >
-                    {bulkWorking ? "Working…" : "Apply"}
-                  </button>
-                  <button onClick={handleExport} className={cn(crm.btnSecondary, "rounded-xl gap-1.5")}>
-                    <Download size={13} />
-                    Export
-                  </button>
-                </div>
+            {bulkEmailToast && (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
+                {bulkEmailToast}
               </div>
             )}
 
-            {/* Funder Table */}
-            <CRMCard className={cn(crm.contactsListShell, "rounded-xl")}>
-              {/* Select-all bar */}
-              <div className={cn(crm.contactsListSelectBar, "rounded-t-xl")}>
-                <input
-                  type="checkbox"
-                  className={crm.checkbox}
-                  checked={funders.length > 0 && selected.size === funders.length}
-                  onChange={() => selected.size === funders.length ? clearSelection() : selectAll()}
-                  title="Select all on this page"
-                />
-                <span className="text-xs text-crm-muted">{total} funders</span>
+            <div className={cn("funders-bulk-toolbar", selectedCount > 0 && "funders-bulk-toolbar-active")}>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-slate-800">{selectedCount} selected</span>
+                {selectedCount > 0 && (
+                  <button onClick={clearSelection} className="rounded-full p-1 text-slate-400 transition hover:bg-white hover:text-slate-700">
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => selectedCount > 0 && setShowBulkEmail(true)}
+                  disabled={selectedCount === 0}
+                  className="funders-bulk-action"
+                >
+                  <Mail size={14} /> Send Email
+                </button>
+                <select
+                  className="funders-bulk-select"
+                  value={bulkTagId}
+                  onChange={(e) => setBulkTagId(e.target.value)}
+                  disabled={selectedCount === 0}
+                >
+                  <option value="">Add Tag</option>
+                  {tags.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+                <select
+                  className="funders-bulk-select"
+                  value={bulkAction}
+                  onChange={(e) => setBulkAction(e.target.value as any)}
+                  disabled={selectedCount === 0}
+                >
+                  <option value="assign">Assign</option>
+                  <option value="remove">Remove</option>
+                </select>
+                <button
+                  onClick={handleBulkTag}
+                  disabled={selectedCount === 0 || !bulkTagId || bulkWorking}
+                  className="funders-bulk-action"
+                >
+                  <Tag size={14} /> {bulkWorking ? "Working..." : "Apply"}
+                </button>
+                <button
+                  onClick={handleExport}
+                  disabled={selectedCount === 0}
+                  className="funders-bulk-action"
+                >
+                  <Download size={14} /> Export
+                </button>
+              </div>
+            </div>
+
+            <section className="funders-table-shell">
+              <div className="funders-table-topbar">
+                <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  <input
+                    type="checkbox"
+                    className="funders-checkbox"
+                    checked={visibleFunders.length > 0 && visibleFunders.every((f) => selected.has(f.id))}
+                    onChange={() => visibleFunders.length > 0 && visibleFunders.every((f) => selected.has(f.id)) ? clearSelection() : selectAll()}
+                    title="Select all visible funders"
+                  />
+                  {visibleFunders.length} shown
+                </label>
+                <button type="button" onClick={() => setShowNewTag(true)} className="funders-mini-action">
+                  <Plus size={13} /> New Tag
+                </button>
               </div>
 
-              {/* Desktop column headers */}
-              {funders.length > 0 && (
-                <div className="hidden items-center gap-3 border-b border-crm-border/50 bg-crm-surface-2/40 px-4 py-2 lg:flex">
-                  <div className="h-4 w-4 shrink-0" />
-                  <div className="funders-table-cols min-w-0 flex-1 grid items-center gap-3 text-[10px] font-bold uppercase tracking-wider text-crm-muted">
-                    <span>Funder</span>
-                    <span>Type</span>
-                    <span>Email</span>
-                    <span>Phone</span>
-                    <span>Status</span>
-                    <span>Tags</span>
-                    <span>Added</span>
-                    <span />
-                  </div>
+              <div className="funders-table-scroll">
+                <div className="funders-table-head">
+                  <span></span>
+                  <span>Funder</span>
+                  <span>Type</span>
+                  <span>Email</span>
+                  <span>Phone</span>
+                  <span>Status</span>
+                  <span>Tags</span>
+                  <span>Added</span>
+                  <span></span>
                 </div>
-              )}
 
-              {loading ? (
-                <div className="flex items-center justify-center p-12">
-                  <div className="flex flex-col items-center gap-3">
-                    <div className="h-8 w-8 animate-spin rounded-full border-2 border-crm-border border-t-crm-accent" />
-                    <span className="text-sm text-crm-muted">Loading funders…</span>
+                {loading ? (
+                  <div className="px-5 py-12 text-center text-sm font-medium text-slate-500">Loading funders...</div>
+                ) : visibleFunders.length === 0 ? (
+                  <div className="m-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 px-6 py-12 text-center">
+                    <HandCoins size={34} className="mx-auto mb-3 text-slate-300" />
+                    <p className="text-base font-semibold text-slate-900">No funders found</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {search || statusFilter !== "all" || tagFilter || typeFilter !== "all"
+                        ? "Try adjusting your filters."
+                        : "Add your first funder to get started."}
+                    </p>
+                    {!search && statusFilter === "all" && !tagFilter && typeFilter === "all" && (
+                      <button onClick={() => setShowNew(true)} className="funders-btn funders-btn-primary mx-auto mt-4">
+                        <Plus size={14} /> Add Funder
+                      </button>
+                    )}
                   </div>
-                </div>
-              ) : funders.length === 0 ? (
-                <div className={cn(crm.contactsEmpty, "m-4 rounded-xl")}>
-                  <HandCoins size={32} className="mx-auto mb-3 text-crm-muted/50" />
-                  <p className={crm.emptyTitle}>No funders found</p>
-                  <p className={crm.emptyBody}>
-                    {search || statusFilter !== "all" || tagFilter
-                      ? "Try adjusting your filters."
-                      : "Add your first funder to get started."}
-                  </p>
-                  {!search && statusFilter === "all" && !tagFilter && (
-                    <button onClick={() => setShowNew(true)} className={cn(crm.btnPrimary, "mt-4")}>
-                      <Plus size={14} />
-                      Add Funder
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <ul className="divide-y divide-crm-border/50">
-                  {funders.map((f) => (
-                    <li
-                      key={f.id}
-                      className={cn(
-                        crm.contactsListRow,
-                        "flex items-center gap-3 px-4 py-3",
-                        selected.has(f.id) && "bg-crm-accent/5"
-                      )}
-                    >
-                      {/* Checkbox */}
-                      <input
-                        type="checkbox"
-                        className={cn(crm.checkbox, "shrink-0")}
-                        checked={selected.has(f.id)}
-                        onChange={() => toggleSelect(f.id)}
-                      />
-
-                      {/* Desktop table row */}
-                      <div className="funders-table-cols hidden min-w-0 flex-1 items-center gap-3 lg:grid">
-                        {/* Funder column */}
-                        <Link href={`/crm/funders/${f.id}`} className="flex min-w-0 items-center gap-2.5 hover:no-underline">
-                          <div className="contacts-avatar flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white">
-                            {initials(f.name)}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-semibold text-crm-text">{f.name}</div>
-                            {(f.city || f.state) && (
-                              <div className="truncate text-xs text-crm-muted">
-                                {[f.city, f.state].filter(Boolean).join(", ")}
-                              </div>
-                            )}
-                          </div>
-                        </Link>
-                        {/* Type */}
-                        <span className="truncate text-sm text-crm-muted">
-                          {f.organization || <span className="text-crm-border">—</span>}
-                        </span>
-                        {/* Email */}
-                        <span className="truncate text-sm text-crm-muted">
-                          {f.email ? (
-                            <a href={`mailto:${f.email}`} className="hover:text-crm-text hover:underline">{f.email}</a>
-                          ) : (
-                            <span className="text-crm-border">—</span>
-                          )}
-                        </span>
-                        {/* Phone */}
-                        <span className="truncate text-sm text-crm-muted">
-                          {f.phone || <span className="text-crm-border">—</span>}
-                        </span>
-                        {/* Status */}
-                        <span className={cn("inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold", STATUS_PILL[f.status])}>
-                          {STATUS_LABELS[f.status]}
-                        </span>
-                        {/* Tags */}
-                        <div className="flex min-w-0 flex-wrap gap-1">
-                          {f.tags.slice(0, 2).map((t) => (
-                            <span
-                              key={t.id}
-                              className="rounded-full border px-2 py-0.5 text-[10px] font-medium"
-                              style={t.color ? { borderColor: `${t.color}55`, color: t.color, background: `${t.color}18` } : {}}
-                            >
-                              {t.name}
-                            </span>
-                          ))}
-                          {f.tags.length > 2 && (
-                            <span className="rounded-full border border-crm-border bg-crm-surface-2 px-1.5 py-0.5 text-[10px] text-crm-muted">
-                              +{f.tags.length - 2}
-                            </span>
-                          )}
+                ) : (
+                  <div className="funders-table-body">
+                    {visibleFunders.map((f) => (
+                      <div key={f.id} className="funders-table-row">
+                        <div>
+                          <input
+                            type="checkbox"
+                            className="funders-checkbox"
+                            checked={selected.has(f.id)}
+                            onChange={() => toggleSelect(f.id)}
+                          />
                         </div>
-                        {/* Added */}
-                        <span className="shrink-0 text-xs text-crm-muted">{formatShortDate(f.createdAt)}</span>
-                        {/* Actions */}
-                        <Link
-                          href={`/crm/funders/${f.id}`}
-                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-crm-border text-crm-muted transition-colors hover:border-crm-border/90 hover:text-crm-text"
-                        >
-                          <MoreHorizontal size={14} />
+                        <Link href={`/crm/funders/${f.id}`} className="funders-funder-cell hover:no-underline">
+                          <span className="funders-avatar">{initials(f.name)}</span>
+                          <span className="min-w-0">
+                            <span className="block truncate font-semibold text-slate-950">{f.name}</span>
+                            <span className="mt-0.5 flex items-center gap-1 truncate text-xs text-slate-500">
+                              <MapPin size={11} />
+                              {[f.city, f.state].filter(Boolean).join(", ") || "Location not set"}
+                            </span>
+                          </span>
+                        </Link>
+                        <span className="funders-table-text">{f.organization || "Other"}</span>
+                        <span className="funders-table-text truncate">{f.email || "No email"}</span>
+                        <span className="funders-table-text">{f.phone || "No phone"}</span>
+                        <span>
+                          <button
+                            type="button"
+                            onClick={() => { setStatusFilter(f.status); setPage(0); }}
+                            className={cn("funders-status-pill", `funders-status-${f.status.toLowerCase()}`)}
+                          >
+                            {STATUS_LABELS[f.status]}
+                          </button>
+                        </span>
+                        <span className="flex min-w-0 flex-wrap gap-1">
+                          {f.tags.length > 0 ? f.tags.slice(0, 2).map((tag) => (
+                            <button
+                              type="button"
+                              key={tag.id}
+                              onClick={() => { setTagFilter(tagFilter === tag.id ? null : tag.id); setPage(0); }}
+                              className="funders-tag-pill"
+                              style={tag.color ? { borderColor: `${tag.color}40`, color: tag.color, background: `${tag.color}12` } : undefined}
+                            >
+                              {tag.name}
+                            </button>
+                          )) : <span className="text-xs text-slate-400">No tags</span>}
+                          {f.tags.length > 2 && <span className="funders-tag-pill">+{f.tags.length - 2}</span>}
+                        </span>
+                        <span className="funders-table-text whitespace-nowrap">{formatShortDate(f.createdAt)}</span>
+                        <Link href={`/crm/funders/${f.id}`} className="funders-row-action" aria-label={`Open ${f.name}`}>
+                          <MoreHorizontal size={16} />
                         </Link>
                       </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
 
-                      {/* Mobile card row */}
-                      <Link href={`/crm/funders/${f.id}`} className="flex min-w-0 flex-1 items-start gap-3 hover:no-underline lg:hidden">
-                        <div className="contacts-avatar flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white">
-                          {initials(f.name)}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-semibold text-crm-text">{f.name}</span>
-                            <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-semibold", STATUS_PILL[f.status])}>
-                              {STATUS_LABELS[f.status]}
-                            </span>
-                          </div>
-                          {f.organization && (
-                            <div className="mt-0.5 flex items-center gap-1 text-xs text-crm-muted">
-                              <Building2 size={11} />
-                              <span>{f.organization}</span>
-                            </div>
-                          )}
-                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-crm-muted">
-                            {f.email && <span className="flex items-center gap-1"><Mail size={10} />{f.email}</span>}
-                            {f.phone && <span className="flex items-center gap-1"><Phone size={10} />{f.phone}</span>}
-                          </div>
-                          {f.tags.length > 0 && (
-                            <div className="mt-1.5 flex flex-wrap gap-1">
-                              {f.tags.map((t) => (
-                                <span
-                                  key={t.id}
-                                  className="rounded-full border px-2 py-0.5 text-[10px] font-medium"
-                                  style={t.color ? { borderColor: `${t.color}55`, color: t.color, background: `${t.color}18` } : {}}
-                                >
-                                  {t.name}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                        <div className="shrink-0 text-xs text-crm-muted">{formatShortDate(f.createdAt)}</div>
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CRMCard>
-
-            {/* Pagination */}
             {totalPages > 1 && (
-              <div className={cn(crm.contactsPagination, "rounded-xl")}>
-                <span className={crm.muted}>
-                  {page * PAGE_LIMIT + 1}–{Math.min((page + 1) * PAGE_LIMIT, total)} of {total}
+              <div className="funders-pagination">
+                <span>
+                  Showing {page * PAGE_LIMIT + 1} to {Math.min((page + 1) * PAGE_LIMIT, total)} of {total} funders
                 </span>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1.5">
                   <button
                     onClick={() => setPage((p) => Math.max(0, p - 1))}
                     disabled={page === 0}
-                    className={cn(crm.btnSecondary, "rounded-xl p-1.5")}
+                    className="funders-page-button"
                   >
                     <ChevronLeft size={15} />
                   </button>
-                  <span className="min-w-[4rem] text-center text-sm text-crm-text">
-                    {page + 1} / {totalPages}
-                  </span>
+                  <span className="px-2 text-sm font-semibold text-slate-700">{page + 1} / {totalPages}</span>
                   <button
                     onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
                     disabled={page >= totalPages - 1}
-                    className={cn(crm.btnSecondary, "rounded-xl p-1.5")}
+                    className="funders-page-button"
                   >
                     <ChevronRight size={15} />
                   </button>
@@ -1332,173 +1096,98 @@ export default function FundersPage() {
             )}
           </div>
 
-          {/* ── Right Sidebar ───────────────────────────────────────────────── */}
-          <div className="flex flex-col gap-3">
-
-            {/* Funder Overview */}
-            <CRMCard className="rounded-xl p-4">
-              <h3 className={cn(crm.label, "mb-4")}>Funder Overview</h3>
-              <div className="flex items-center gap-4">
-                <FunderDonut
-                  active={stats?.active ?? 0}
-                  inactive={inactive}
-                  prospects={stats?.prospects ?? 0}
-                  total={stats?.total ?? 0}
-                />
-                <div className="flex flex-col gap-2">
-                  {[
-                    { label: "Active", value: stats?.active ?? 0, color: "#16a34a", pct: stats?.total ? Math.round((stats.active / stats.total) * 100) : 0 },
-                    { label: "Inactive", value: inactive, color: "#94a3b8", pct: stats?.total ? Math.round((inactive / stats.total) * 100) : 0 },
-                    { label: "Prospects", value: stats?.prospects ?? 0, color: "#f97316", pct: stats?.total ? Math.round((stats.prospects / stats.total) * 100) : 0 },
-                  ].map((item) => (
-                    <div key={item.label} className="flex items-center gap-2">
-                      <span
-                        className="h-2.5 w-2.5 shrink-0 rounded-full"
-                        style={{ background: item.color }}
-                      />
-                      <span className="text-xs text-crm-muted">{item.label}</span>
-                      <span className="ml-auto text-xs font-semibold tabular-nums text-crm-text">{item.value}</span>
-                      <span className="w-8 text-right text-[10px] text-crm-muted">{item.pct}%</span>
-                    </div>
-                  ))}
-                </div>
+          <aside className="funders-rail">
+            <section className="funders-rail-card">
+              <div className="funders-rail-title">
+                <h3>Funder Overview</h3>
               </div>
-            </CRMCard>
-
-            {/* Top Tags */}
-            <CRMCard className="rounded-xl p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className={crm.label}>Top Tags</h3>
-                <button
-                  onClick={() => setShowNewTag(true)}
-                  className="flex items-center gap-1 text-[11px] font-medium text-crm-accent hover:underline"
+              <div className="funders-donut-wrap">
+                <div
+                  className="funders-donut"
+                  style={{ background: `conic-gradient(${donutGradient})` }}
                 >
-                  <Plus size={11} />
-                  New
-                </button>
+                  <span>{totalFunders}</span>
+                  <small>Total</small>
+                </div>
+                <div className="flex flex-1 flex-col gap-2">
+                  {statusBreakdown.map((item) => (
+                    <button
+                      type="button"
+                      key={item.status}
+                      onClick={() => { setStatusFilter(statusFilter === item.status ? "all" : item.status); setPage(0); }}
+                      className="funders-legend-row"
+                    >
+                      <span className="funders-legend-dot" style={{ background: donutColors[item.status] }} />
+                      <span>{item.label}</span>
+                      <strong>{item.count}</strong>
+                    </button>
+                  ))}
+                </div>
               </div>
-              {tags.length === 0 ? (
-                <p className={crm.muted}>No tags yet.</p>
-              ) : (
-                <div className="flex flex-col gap-1.5">
-                  {tagCounts.map((t) => (
-                    <button
-                      key={t.id}
-                      onClick={() => { setTagFilter(tagFilter === t.id ? null : t.id); setPage(0); }}
-                      className={cn(
-                        "flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs transition-colors",
-                        tagFilter === t.id
-                          ? "bg-crm-accent/10 text-crm-accent"
-                          : "text-crm-text hover:bg-crm-surface-2"
-                      )}
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span
-                          className="h-2 w-2 shrink-0 rounded-full"
-                          style={t.color ? { background: t.color } : { background: "var(--crm-accent)" }}
-                        />
-                        <span className="truncate font-medium">{t.name}</span>
-                      </div>
-                      <span className="ml-2 shrink-0 font-semibold tabular-nums text-crm-muted">{t.count}</span>
-                    </button>
-                  ))}
-                  {tagFilter && (
-                    <button
-                      onClick={() => { setTagFilter(null); setPage(0); }}
-                      className="mt-1 flex items-center gap-1 text-[11px] text-crm-muted hover:text-crm-text"
-                    >
-                      <X size={11} /> Clear filter
-                    </button>
-                  )}
-                </div>
-              )}
-            </CRMCard>
+            </section>
 
-            {/* Recent Activity */}
-            <CRMCard className="rounded-xl p-4">
-              <h3 className={cn(crm.label, "mb-3")}>Recent Activity</h3>
-              {recentFunders.length === 0 ? (
-                <p className={crm.muted}>No recent activity.</p>
-              ) : (
-                <div className="flex flex-col gap-2.5">
-                  {recentFunders.map((f) => (
-                    <Link
-                      key={f.id}
-                      href={`/crm/funders/${f.id}`}
-                      className="flex items-center gap-2.5 rounded-lg p-1.5 transition-colors hover:bg-crm-surface-2 hover:no-underline"
-                    >
-                      <div className="contacts-avatar flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white">
-                        {initials(f.name)}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-xs font-semibold text-crm-text">{f.name}</div>
-                        <div className="flex items-center gap-1 text-[10px] text-crm-muted">
-                          <Clock size={9} />
-                          <span>{formatShortDate(f.createdAt)}</span>
-                        </div>
-                      </div>
-                      <span className={cn("shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-semibold", STATUS_PILL[f.status])}>
-                        {STATUS_LABELS[f.status]}
-                      </span>
-                    </Link>
-                  ))}
-                </div>
-              )}
-            </CRMCard>
-
-            {/* Status Breakdown */}
-            {stats && (
-              <CRMCard className="rounded-xl p-4">
-                <h3 className={cn(crm.label, "mb-3")}>Status Breakdown</h3>
-                <div className="flex flex-col gap-1.5">
-                  {(["ACTIVE", "INACTIVE", "PROSPECT", "PENDING"] as FunderStatus[]).map((s) => {
-                    const count = funders.filter((f) => f.status === s).length;
-                    return (
-                      <button
-                        key={s}
-                        onClick={() => { setStatusFilter(statusFilter === s ? "all" : s); setPage(0); }}
-                        className={cn(
-                          "flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs transition-colors",
-                          statusFilter === s
-                            ? "bg-crm-accent/10 text-crm-accent"
-                            : "text-crm-text hover:bg-crm-surface-2"
-                        )}
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className={cn(
-                            "h-2 w-2 rounded-full",
-                            s === "ACTIVE" && "bg-emerald-500",
-                            s === "INACTIVE" && "bg-gray-400",
-                            s === "PROSPECT" && "bg-blue-500",
-                            s === "PENDING" && "bg-amber-500",
-                          )} />
-                          <span>{STATUS_LABELS[s]}</span>
-                        </div>
-                        <span className="font-semibold tabular-nums">{count}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </CRMCard>
-            )}
-
-            {/* Quick Actions */}
-            <CRMCard className="rounded-xl p-4">
-              <h3 className={cn(crm.label, "mb-3")}>Quick Actions</h3>
+            <section className="funders-rail-card">
+              <div className="funders-rail-title">
+                <h3>Top Tags</h3>
+                <button type="button" onClick={() => setShowNewTag(true)}>New</button>
+              </div>
               <div className="flex flex-col gap-2">
-                <button onClick={() => setShowNew(true)} className={cn(crm.btnPrimary, "w-full rounded-xl text-sm")}>
-                  <Plus size={14} /> Add Funder
+                {topTags.length === 0 ? (
+                  <p className="text-sm text-slate-500">No tags yet.</p>
+                ) : topTags.map((tag) => (
+                  <button
+                    key={tag.id}
+                    type="button"
+                    onClick={() => { setTagFilter(tagFilter === tag.id ? null : tag.id); setPage(0); }}
+                    className="funders-tag-stat"
+                  >
+                    <span className="funders-legend-dot" style={{ background: tag.color || "#f97316" }} />
+                    <span>{tag.name}</span>
+                    <strong>{tag.count}</strong>
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="funders-rail-card">
+              <div className="funders-rail-title">
+                <h3>Recent Activity</h3>
+              </div>
+              <div className="flex flex-col gap-2">
+                {recentActivity.length === 0 ? (
+                  <p className="text-sm text-slate-500">No recent funder activity.</p>
+                ) : recentActivity.map((funder) => (
+                  <Link key={funder.id} href={`/crm/funders/${funder.id}`} className="funders-activity-row hover:no-underline">
+                    <span className="funders-activity-avatar">{initials(funder.name)}</span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-semibold text-slate-900">{funder.name}</span>
+                      <span className="block text-xs text-slate-500">Updated {formatShortDate(funder.updatedAt)}</span>
+                    </span>
+                  </Link>
+                ))}
+              </div>
+              <Link href="/crm/funders" className="mt-2 inline-flex text-xs font-semibold text-orange-600 hover:text-orange-700">
+                View all activity
+              </Link>
+            </section>
+
+            <section className="funders-rail-card">
+              <div className="funders-rail-title">
+                <h3>Quick Actions</h3>
+              </div>
+              <div className="grid gap-2">
+                <button onClick={() => setShowNew(true)} className="funders-quick-action">
+                  <Plus size={15} /> Add Funder
                 </button>
-                <button onClick={() => setShowImport(true)} className={cn(crm.btnSecondary, "w-full rounded-xl text-sm")}>
-                  <FileUp size={14} /> Import CSV
+                <button onClick={() => setShowImport(true)} className="funders-quick-action">
+                  <FileUp size={15} /> Import CSV
                 </button>
-                <button onClick={handleExport} className={cn(crm.btnSecondary, "w-full rounded-xl text-sm")}>
-                  <Download size={14} /> Export CSV
+                <button onClick={handleExport} className="funders-quick-action">
+                  <ExternalLink size={15} /> Export List
                 </button>
               </div>
-            </CRMCard>
-
-          </div>
+            </section>
+          </aside>
         </div>
       </div>
 
@@ -1507,15 +1196,12 @@ export default function FundersPage() {
         open={showNew}
         tags={tags}
         onClose={() => setShowNew(false)}
-        onCreated={() => { fetchFunders(); }}
+        onCreated={(f) => { setShowNew(false); fetchFunders(); }}
       />
       <NewTagModal
         open={showNewTag}
         onClose={() => setShowNewTag(false)}
-        onCreated={(t) => {
-          setTags((prev) => [...prev, t].sort((a, b) => a.name.localeCompare(b.name)));
-          setShowNewTag(false);
-        }}
+        onCreated={(t) => { setTags((prev) => [...prev, t].sort((a, b) => a.name.localeCompare(b.name))); setShowNewTag(false); }}
       />
       <ImportModal open={showImport} onClose={() => setShowImport(false)} onImported={fetchFunders} />
     </div>

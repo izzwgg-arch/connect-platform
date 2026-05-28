@@ -150,6 +150,7 @@ async function waitForPage(cdp, route) {
   const expectedText =
     route.startsWith("/crm/dashboard") ? "Here's what's happening" :
     route.startsWith("/crm/contacts") ? "Contacts" :
+    route.startsWith("/crm/funders") ? "Funders" :
     route.startsWith("/crm/queue") ? "My Queue" :
     route.startsWith("/crm/tasks") ? "Follow-ups, callbacks" :
     "CRM";

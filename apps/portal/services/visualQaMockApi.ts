@@ -31,6 +31,25 @@ const contacts = [
   contact("ct-008", "Amara Okafor", "Summit Financial", "LEAD", "+1 (555) 010-1108", "amara@summit.example", "qa-ae-2", 8),
 ];
 
+const funderTags = [
+  { id: "fund-tag-health", name: "Health", color: "#10b981" },
+  { id: "fund-tag-wellness", name: "Wellness", color: "#8b5cf6" },
+  { id: "fund-tag-community", name: "Community", color: "#f97316" },
+  { id: "fund-tag-education", name: "Education", color: "#0ea5e9" },
+  { id: "fund-tag-youth", name: "Youth", color: "#ec4899" },
+];
+
+const funders = [
+  funder("fd-001", "Sun Wellness Foundation", "Foundation", "grants@sunwellness.org", "(555) 123-4567", "Austin", "TX", "ACTIVE", ["fund-tag-health", "fund-tag-wellness"], 1),
+  funder("fd-002", "Healthy Futures Grantmakers", "Grantmaker", "info@healthyfutures.org", "(555) 987-6543", "Denver", "CO", "ACTIVE", ["fund-tag-health", "fund-tag-youth"], 2),
+  funder("fd-003", "Community Care Fund", "Nonprofit", "partners@communitycare.org", "(555) 456-7890", "Portland", "OR", "PROSPECT", ["fund-tag-community"], 3),
+  funder("fd-004", "Wellness Impact Partners", "Foundation", "hello@wellnessimpact.org", "(555) 234-1188", "Seattle", "WA", "ACTIVE", ["fund-tag-wellness"], 4),
+  funder("fd-005", "Bright Health Initiative", "Grantmaker", "contact@brighthealth.org", "(555) 564-8821", "Chicago", "IL", "INACTIVE", ["fund-tag-health", "fund-tag-education"], 5),
+  funder("fd-006", "Care Access Foundation", "Foundation", "funding@careaccess.org", "(555) 772-4100", "Boston", "MA", "PROSPECT", ["fund-tag-health"], 6),
+  funder("fd-007", "Youth Forward Fund", "Nonprofit", "team@youthforward.org", "(555) 310-9090", "Phoenix", "AZ", "PENDING", ["fund-tag-youth"], 7),
+  funder("fd-008", "Wellbeing Collective", "Foundation", "hello@wellbeingcollective.org", "(555) 889-1122", "Nashville", "TN", "ACTIVE", ["fund-tag-wellness", "fund-tag-community"], 8),
+];
+
 const queueMembers = [
   queueMember("qm-001", contacts[0], campaigns[0], "PENDING", 0, null, 1),
   queueMember("qm-002", contacts[1], campaigns[0], "CALLBACK", 2, hoursFromNow(-3), 2),
@@ -110,6 +129,7 @@ export function getVisualQaMockResponse(
           "can_view_crm_dashboard",
           "can_view_crm_contacts",
           "can_manage_crm_contacts",
+          "can_view_crm_funders",
           "can_view_crm_queue",
           "can_manage_crm_queue",
           "can_view_crm_campaigns",
@@ -443,6 +463,39 @@ export function getVisualQaMockResponse(
     return { handled: true, data: { rows: filtered.slice(0, limit), total: filtered.length, page, limit } };
   }
 
+  if (pathname === "/crm/funders/stats") {
+    return {
+      handled: true,
+      data: {
+        total: funders.length,
+        active: funders.filter((entry) => entry.status === "ACTIVE").length,
+        prospects: funders.filter((entry) => entry.status === "PROSPECT").length,
+        recentlyAdded: 3,
+      },
+    };
+  }
+
+  if (pathname === "/crm/funder-tags") {
+    return { handled: true, data: { tags: funderTags } };
+  }
+
+  if (pathname === "/crm/funders") {
+    const q = (parsed.searchParams.get("q") || "").toLowerCase();
+    const status = parsed.searchParams.get("status");
+    const tagId = parsed.searchParams.get("tagId");
+    const page = Number(parsed.searchParams.get("page") || 0);
+    const limit = Number(parsed.searchParams.get("limit") || 50);
+    const filtered = funders.filter((entry) => {
+      if (status && status !== "all" && entry.status !== status) return false;
+      if (tagId && !entry.tags.some((tag) => tag.id === tagId)) return false;
+      if (!q) return true;
+      return [entry.name, entry.organization, entry.email, entry.phone, entry.city, entry.state].some((value) =>
+        String(value || "").toLowerCase().includes(q),
+      );
+    });
+    return { handled: true, data: { rows: filtered.slice(page * limit, page * limit + limit), total: filtered.length, page, limit } };
+  }
+
   const contactDetailMatch = pathname.match(/^\/crm\/contacts\/([^/]+)$/);
   if (contactDetailMatch) {
     const entry = contacts.find((contact) => contact.id === contactDetailMatch[1]) ?? contacts[0];
@@ -602,6 +655,39 @@ function contact(
     lastActivityAt: hoursFromNow(-6 * daysAgo),
     active: true,
     archivedAt: null,
+  };
+}
+
+function funder(
+  id: string,
+  name: string,
+  organization: string,
+  email: string,
+  phone: string,
+  city: string,
+  state: string,
+  status: string,
+  tagIds: string[],
+  daysAgo: number,
+) {
+  return {
+    id,
+    tenantId: "visual-qa-tenant",
+    name,
+    organization,
+    email,
+    phone,
+    phone2: null,
+    city,
+    state,
+    zip: "00000",
+    notes: null,
+    status,
+    active: true,
+    archivedAt: null,
+    tags: funderTags.filter((tag) => tagIds.includes(tag.id)),
+    createdAt: hoursFromNow(-24 * (daysAgo + 4)),
+    updatedAt: hoursFromNow(-24 * daysAgo),
   };
 }
 
