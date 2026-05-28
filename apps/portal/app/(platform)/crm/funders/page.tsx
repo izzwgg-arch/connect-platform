@@ -365,13 +365,31 @@ function NewTagModal({ open, onClose, onCreated }: NewTagModalProps) {
   );
 }
 
-// ── Modal: Import CSV ─────────────────────────────────────────────────────────
+// ── Modal: Import ─────────────────────────────────────────────────────────────
 
 type ImportModalProps = {
   open: boolean;
   onClose: () => void;
   onImported: () => void;
 };
+
+const SPREADSHEET_EXTS = /\.(xlsx|xls|ods|numbers)$/i;
+
+async function fileToCSV(file: File): Promise<string> {
+  if (SPREADSHEET_EXTS.test(file.name)) {
+    const XLSX = await import("xlsx");
+    const buffer = await file.arrayBuffer();
+    const wb = XLSX.read(buffer, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]!];
+    return XLSX.utils.sheet_to_csv(ws ?? {});
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => resolve((ev.target?.result as string) ?? "");
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsText(file);
+  });
+}
 
 function ImportModal({ open, onClose, onImported }: ImportModalProps) {
   const [phase, setPhase] = useState<"upload" | "preview" | "result">("upload");
@@ -385,13 +403,17 @@ function ImportModal({ open, onClose, onImported }: ImportModalProps) {
 
   if (!open) return null;
 
-  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = (ev) => setCsvText((ev.target?.result as string) ?? "");
-    reader.readAsText(file);
+    setErr(null);
+    try {
+      const text = await fileToCSV(file);
+      setCsvText(text);
+    } catch {
+      setErr("Could not read file. Please try a CSV, Excel (.xlsx), or spreadsheet file.");
+    }
   };
 
   const handlePreview = async () => {
@@ -442,16 +464,17 @@ function ImportModal({ open, onClose, onImported }: ImportModalProps) {
 
         {phase === "upload" && (
           <div className="flex flex-col gap-4">
-            <p className={crm.muted}>Upload a CSV file with funder records. Supported columns: name, organization, email, phone, phone2, city, state, zip, notes, tags.</p>
+            <p className={crm.muted}>Upload a CSV, Excel (.xlsx / .xls), or spreadsheet file with funder records. Supported columns: name, organization, email, phone, phone2, city, state, zip, notes, tags.</p>
             <div
               className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-crm-lg border-2 border-dashed border-crm-border bg-crm-surface-2/40 px-6 py-10 transition-colors hover:border-crm-accent/50 hover:bg-crm-surface-2/60"
               onClick={() => fileRef.current?.click()}
             >
               <Upload size={32} className="text-crm-muted" />
-              <span className={crm.muted}>{fileName !== "import.csv" ? fileName : "Click to select CSV file"}</span>
+              <span className={crm.muted}>{fileName !== "import.csv" ? fileName : "Click to select a file"}</span>
+              <span className="text-xs text-crm-border">CSV · Excel (.xlsx, .xls) · ODS spreadsheet</span>
               {csvText && <span className="text-xs text-crm-accent">✓ File loaded — {parseCsvLocally(csvText).length - 1} rows</span>}
             </div>
-            <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={handleFile} />
+            <input ref={fileRef} type="file" accept=".csv,text/csv,.xlsx,.xls,.ods,.numbers,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" className="hidden" onChange={handleFile} />
             <div className="flex justify-end gap-2">
               <button onClick={onClose} className={crm.btnSecondary}>Cancel</button>
               <button onClick={handlePreview} disabled={!csvText || loading} className={crm.btnPrimary}>
@@ -699,7 +722,7 @@ export default function FundersPage() {
           actions={
             <div className="flex flex-wrap items-center gap-2">
               <button onClick={() => setShowImport(true)} className={crm.btnSecondary}>
-                <FileUp size={14} /> Import CSV
+                <FileUp size={14} /> Import
               </button>
               <button onClick={handleExport} className={crm.btnSecondary}>
                 <Download size={14} /> Export
@@ -981,7 +1004,7 @@ export default function FundersPage() {
                   <Plus size={14} /> New Funder
                 </button>
                 <button onClick={() => setShowImport(true)} className={cn(crm.btnSecondary, "w-full text-sm")}>
-                  <FileUp size={14} /> Import CSV
+                  <FileUp size={14} /> Import
                 </button>
                 <button onClick={handleExport} className={cn(crm.btnSecondary, "w-full text-sm")}>
                   <Download size={14} /> Export CSV
