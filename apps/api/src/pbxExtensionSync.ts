@@ -131,6 +131,8 @@ export async function syncExtensionsFromPbx(
       tenantResult.extensionsFound = extensions.length;
       result.totalExtensions += extensions.length;
 
+      let syncFoundWebrtcExtension = false;
+
       for (const ext of extensions) {
         const pbxExtensionId = String(
           ext.extension_id ?? ext.id ?? "",
@@ -199,6 +201,7 @@ export async function syncExtensionsFromPbx(
           ? String(activeDevice.device_name).trim()
           : null;
         const webrtcEnabled: boolean = !!webrtcDevice;
+        if (webrtcEnabled) syncFoundWebrtcExtension = true;
         const pbxDeviceIdFromSync: string | null = activeDevice?.device_id != null
           ? String(activeDevice.device_id)
           : null;
@@ -307,6 +310,37 @@ export async function syncExtensionsFromPbx(
           const msg = `ext ${extNumber}: ${err?.message ?? String(err)}`;
           tenantResult.errors.push(msg);
           result.totalErrors++;
+        }
+      }
+      // 5. Auto-enable WebRTC on the tenant if it isn't already and we confirmed
+      //    at least one WebRTC-capable extension exists on the PBX.  This prevents
+      //    new tenants from being silently stuck: phone "not registered" / no QR code
+      //    because Tenant.webrtcEnabled defaulted to false even though the PBX side
+      //    is fully wired up.
+      if (syncFoundWebrtcExtension) {
+        try {
+          const tenantRow = await db.tenant.findUnique({
+            where: { id: connectTenantId },
+            select: { webrtcEnabled: true, sipWsUrl: true, sipDomain: true },
+          });
+          if (tenantRow && !tenantRow.webrtcEnabled) {
+            // Derive defaults from the PBX_WS_ENDPOINT env var (e.g. wss://host:8089/ws)
+            // so the tenant immediately gets working SIP credentials without manual setup.
+            const rawWsEndpoint = process.env.PBX_WS_ENDPOINT?.trim() || null;
+            const derivedDomain = rawWsEndpoint
+              ? (() => { try { return new URL(rawWsEndpoint.replace(/^wss?:\/\//, "https://")).hostname; } catch { return null; } })()
+              : null;
+            await db.tenant.update({
+              where: { id: connectTenantId },
+              data: {
+                webrtcEnabled: true,
+                ...(!tenantRow.sipWsUrl && rawWsEndpoint ? { sipWsUrl: rawWsEndpoint } : {}),
+                ...(!tenantRow.sipDomain && derivedDomain ? { sipDomain: derivedDomain } : {}),
+              },
+            });
+          }
+        } catch {
+          // Non-fatal — tenant will work once an admin manually enables WebRTC
         }
       }
     } catch (err: any) {

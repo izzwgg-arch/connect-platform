@@ -7291,6 +7291,30 @@ app.post("/pbx/link", async (req, reply) => {
     }
   });
 
+  // Auto-bootstrap WebRTC for new tenants: if the tenant has never had webrtcEnabled
+  // set and we have a known PBX WebSocket endpoint, enable it now so the softphone
+  // and QR-code provisioning work immediately without a separate manual step.
+  const tenantRow = await db.tenant.findUnique({
+    where: { id: admin.tenantId },
+    select: { webrtcEnabled: true, sipWsUrl: true, sipDomain: true },
+  });
+  if (tenantRow && !tenantRow.webrtcEnabled) {
+    const rawWsEndpoint = pbxWsEndpoint || null; // module-level const from PBX_WS_ENDPOINT
+    const resolvedDomain =
+      input.pbxDomain ||
+      (rawWsEndpoint
+        ? (() => { try { return new URL(rawWsEndpoint.replace(/^wss?:\/\//, "https://")).hostname; } catch { return null; } })()
+        : null);
+    await db.tenant.update({
+      where: { id: admin.tenantId },
+      data: {
+        webrtcEnabled: true,
+        ...(!tenantRow.sipWsUrl && rawWsEndpoint ? { sipWsUrl: rawWsEndpoint } : {}),
+        ...(!tenantRow.sipDomain && resolvedDomain ? { sipDomain: resolvedDomain } : {}),
+      },
+    });
+  }
+
   await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_LINKED", entityType: "TenantPbxLink", entityId: linked.id });
   return linked;
 });
@@ -7354,7 +7378,10 @@ app.post("/pbx/extensions", async (req, reply) => {
     return { extension: ext, pbxLink: saved, provisioning };
   } catch (e: any) {
     await queuePbxJob({ tenantId: admin.tenantId, pbxInstanceId: link.pbxInstanceId, type: "CREATE_EXTENSION", payload: { extensionId: ext.id, extensionNumber: input.extensionNumber, displayName: input.displayName, enableWebrtc: input.enableWebrtc, enableMobile: input.enableMobile }, lastError: String(e?.code || e?.message || "PBX_UNAVAILABLE") });
-    await db.tenantPbxLink.update({ where: { id: link.id }, data: { status: "ERROR", lastError: String(e?.code || e?.message || "PBX_UNAVAILABLE") } });
+    // Do NOT mark the TenantPbxLink as ERROR here — the link itself is healthy;
+    // only this individual extension creation hit a transient PBX error.
+    // The job is queued for retry; poisoning the link status blocks the UI
+    // and prevents QR codes / registration for the entire tenant.
     await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_EXTENSION_QUEUED", entityType: "Extension", entityId: ext.id });
     return reply.status(202).send({ queued: true, error: "PBX_UNAVAILABLE", extensionId: ext.id });
   }
