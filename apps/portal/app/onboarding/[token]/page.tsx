@@ -281,7 +281,12 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
       });
       window.location.href = `/onboarding/${encodeURIComponent(token)}/success`;
     } catch (e: any) {
-      setSubmitError(e?.message || "Submission failed. Please try again.");
+      const msg = e?.message || "";
+      if (msg.includes("write_blocked") || msg.includes("already been submitted")) {
+        setSubmitError("This form has already been submitted. If you need to make changes, please contact your Connect Communications representative for a new link.");
+      } else {
+        setSubmitError(msg || "Submission failed. Please try again.");
+      }
     } finally {
       setSubmitting(false);
     }

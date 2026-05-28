@@ -51,11 +51,9 @@ function generatePublicToken(bytes: number = 24): string {
   return randomBytes(bytes).toString("base64url");
 }
 
-async function assertWritable(row: any): Promise<void> {
+function isWriteBlocked(row: any): boolean {
   const s = String(row?.status || "");
-  if (["SUBMITTED", "CANCELED", "COMPLETED"].includes(s)) {
-    throw Object.assign(new Error("write_blocked"), { code: 409 });
-  }
+  return ["SUBMITTED", "CANCELED", "COMPLETED"].includes(s);
 }
 
 export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
@@ -102,7 +100,7 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
         },
       });
     } else {
-      await assertWritable(row);
+      if (isWriteBlocked(row)) return reply.code(409).send({ error: "write_blocked", detail: "This form has already been submitted." });
       await (db as any).onboardingSubmission.update({
         where: { id: row.id },
         data: {
@@ -121,7 +119,7 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
     const { token } = (req.params as any) as { token: string };
     const row = await ensureRowForToken(token);
     if (!row) return reply.code(404).send({ error: "invalid_token" });
-    await assertWritable(row);
+    if (isWriteBlocked(row)) return reply.code(409).send({ error: "write_blocked", detail: "This form has already been submitted." });
 
     // fastify/multipart is registered globally in server.ts
     const parts: any = req.parts ? req.parts() : null;
@@ -176,7 +174,7 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
 
     const row = await ensureRowForToken(token);
     if (!row) return reply.code(404).send({ error: "invalid_token" });
-    await assertWritable(row);
+    if (isWriteBlocked(row)) return reply.code(409).send({ error: "write_blocked", detail: "This form has already been submitted." });
 
     // validate extensions numeric + unique
     const seen = new Set<string>();
