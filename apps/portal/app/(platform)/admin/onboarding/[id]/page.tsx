@@ -3,10 +3,40 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiGet, getPortalApiBaseUrl } from "../../../../../services/apiClient";
 
+async function downloadCsv(apiBase: string, id: string) {
+  const token =
+    localStorage.getItem("token") ||
+    localStorage.getItem("cc-token") ||
+    localStorage.getItem("authToken") ||
+    "";
+  const res = await fetch(
+    `${apiBase}/admin/onboarding/submissions/${encodeURIComponent(id)}/vitalpbx.csv`,
+    { headers: { ...(token ? { authorization: `Bearer ${token}` } : {}) }, cache: "no-store" },
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `Download failed (${res.status})`);
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get("content-disposition") || "";
+  const match = disposition.match(/filename[^;=\n]*=\s*(?:UTF-8'')?["']?([^"'\n;]+)["']?/i);
+  const filename = match?.[1]?.trim() || "vitalpbx_extensions.csv";
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export default function AdminOnboardingDetailPage({ params }: { params: { id: string } }) {
   const id = params.id;
   const [row, setRow] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [csvError, setCsvError] = useState<string | null>(null);
+  const [csvDownloading, setCsvDownloading] = useState(false);
 
   useEffect(() => {
     async function run() {
@@ -40,7 +70,21 @@ export default function AdminOnboardingDetailPage({ params }: { params: { id: st
         <div><b>Status:</b> {row.status}</div>
         <div><b>Submitted:</b> {row.submittedAt || "—"}</div>
         <div><b>Public Link:</b> {publicUrl ? <a href={publicUrl} target="_blank" rel="noreferrer">{row.publicUrl}</a> : "—"} {publicUrl ? <button onClick={() => copy(publicUrl)} style={{ marginLeft: 8 }}>Copy</button> : null}</div>
-        <div><b>CSV:</b> <a href={`${apiBase}/admin/onboarding/submissions/${encodeURIComponent(row.id)}/vitalpbx.csv`} target="_blank" rel="noreferrer">Download VitalPBX CSV</a></div>
+        <div><b>CSV:</b>{" "}
+          <button
+            disabled={csvDownloading}
+            onClick={async () => {
+              setCsvError(null);
+              setCsvDownloading(true);
+              try { await downloadCsv(apiBase, row.id); }
+              catch (e: any) { setCsvError(e?.message || "Download failed"); }
+              finally { setCsvDownloading(false); }
+            }}
+          >
+            {csvDownloading ? "Downloading…" : "Download VitalPBX CSV"}
+          </button>
+          {csvError && <span style={{ color: "red", marginLeft: 8 }}>{csvError}</span>}
+        </div>
       </div>
 
       <h2>Requested Extensions</h2>
