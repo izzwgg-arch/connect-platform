@@ -3,8 +3,22 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
-import { PageHeader } from "../../../../components/PageHeader";
 import { apiGet, apiPut, apiPost, apiPatch, apiDelete } from "../../../../services/apiClient";
+import { CRMPageShell, crm, cn } from "../../../../components/crm";
+import {
+  Settings,
+  Users,
+  Phone,
+  SlidersHorizontal,
+  MapPin,
+  FlaskConical,
+  ShieldOff,
+  ChevronRight,
+  CheckCircle2,
+  XCircle,
+  Plus,
+  Trash2,
+} from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -72,7 +86,7 @@ const SYSTEM_ROLE_LABELS: Record<string, string> = {
   READ_ONLY: "Read Only",
 };
 
-// ── Toggle component ───────────────────────────────────────────────────────────
+// ── CRM-system toggle ──────────────────────────────────────────────────────────
 
 function Toggle({
   checked,
@@ -86,46 +100,76 @@ function Toggle({
   label: string;
 }) {
   return (
-    <label
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "0.625rem",
-        cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.5 : 1,
-        userSelect: "none",
-      }}
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => !disabled && onChange(!checked)}
+      className={cn(
+        "relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-crm-accent/40 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-40",
+        checked ? "bg-crm-accent" : "bg-crm-border",
+      )}
     >
       <span
-        onClick={() => !disabled && onChange(!checked)}
-        style={{
-          position: "relative",
-          display: "inline-block",
-          width: 38,
-          height: 22,
-          borderRadius: 11,
-          background: checked ? "var(--accent, #3b82f6)" : "var(--border, #334155)",
-          transition: "background 0.15s",
-          flexShrink: 0,
-          cursor: disabled ? "not-allowed" : "pointer",
-        }}
-      >
-        <span
-          style={{
-            position: "absolute",
-            top: 3,
-            left: checked ? 19 : 3,
-            width: 16,
-            height: 16,
-            borderRadius: "50%",
-            background: "#fff",
-            transition: "left 0.15s",
-            boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
-          }}
-        />
-      </span>
-      <span style={{ fontSize: "0.875rem", color: "var(--text)" }}>{label}</span>
-    </label>
+        className={cn(
+          "inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform duration-150",
+          checked ? "translate-x-4" : "translate-x-0",
+        )}
+      />
+    </button>
+  );
+}
+
+// ── Section label ──────────────────────────────────────────────────────────────
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="mb-4 text-[10px] font-bold uppercase tracking-[0.18em] text-crm-muted/70">
+      {children}
+    </p>
+  );
+}
+
+// ── Setting row ────────────────────────────────────────────────────────────────
+
+function SettingRow({
+  title,
+  description,
+  badge,
+  dim,
+  children,
+  noBorder,
+}: {
+  title: string;
+  description: string;
+  badge?: string;
+  dim?: boolean;
+  children: React.ReactNode;
+  noBorder?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between gap-4 py-3.5",
+        !noBorder && "border-b border-crm-border/40",
+        dim && "opacity-45",
+      )}
+    >
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-crm-text">{title}</span>
+          {badge && (
+            <span className="rounded border border-crm-border/70 bg-crm-surface-2 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-crm-muted">
+              {badge}
+            </span>
+          )}
+        </div>
+        <p className="mt-0.5 text-xs leading-relaxed text-crm-muted">{description}</p>
+      </div>
+      <div className="shrink-0">{children}</div>
+    </div>
   );
 }
 
@@ -247,7 +291,6 @@ export default function CrmSettingsPage() {
         ),
       );
     } catch {
-      // silently re-load on error
       loadUsers();
     } finally {
       setUserSaving((prev) => ({ ...prev, [userId]: false }));
@@ -305,415 +348,473 @@ export default function CrmSettingsPage() {
 
   if (!isAdmin) {
     return (
-      <div className="stack compact-stack">
-        <PageHeader title="CRM Settings" subtitle="Configuration for the CRM module." />
-        <div className="panel" style={{ padding: "1.5rem" }}>
-          <p style={{ margin: 0, color: "var(--text-dim)", fontSize: "0.875rem" }}>
-            You need admin access to manage CRM settings.
-          </p>
+      <CRMPageShell>
+        <div className={crm.pageInner}>
+          <div className="flex items-center gap-3 pb-2">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-crm-border/60 bg-crm-surface-2 text-crm-muted">
+              <Settings className="h-4 w-4" />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold text-crm-text">CRM Settings</h1>
+              <p className="text-xs text-crm-muted">Configuration for the CRM module</p>
+            </div>
+          </div>
+          <div className={cn(crm.card, "px-5 py-4")}>
+            <div className="flex items-center gap-2.5">
+              <ShieldOff className="h-4 w-4 shrink-0 text-crm-muted" />
+              <p className="text-sm text-crm-muted">You need admin access to manage CRM settings.</p>
+            </div>
+          </div>
         </div>
-      </div>
+      </CRMPageShell>
     );
   }
 
   return (
-    <div className="stack compact-stack">
-      <PageHeader
-        title="CRM Settings"
-        subtitle="Enable the CRM module, configure feature flags, and manage user access."
-      />
+    <CRMPageShell>
+      <div className={crm.pageInner}>
 
-      {/* ── Feature flags panel ─────────────────────────────────────────────── */}
-      <section className="panel" style={{ padding: "1.5rem" }}>
-        <h3 style={{ margin: "0 0 1rem", fontSize: "0.9375rem", fontWeight: 600 }}>Feature Flags</h3>
-
-        {settingsLoading && <LoadingSkeleton rows={3} />}
-        {settingsError && (
-          <p style={{ color: "#ef4444", fontSize: "0.875rem", margin: 0 }}>{settingsError}</p>
-        )}
-
-        {!settingsLoading && settings && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "1.125rem" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "1rem", paddingBottom: "1.125rem", borderBottom: "1px solid var(--border)" }}>
-              <div>
-                <div style={{ fontWeight: 600, fontSize: "0.9375rem" }}>CRM Enabled</div>
-                <div style={{ fontSize: "0.8125rem", color: "var(--text-dim)", marginTop: 2 }}>
-                  Activates the CRM module for this tenant. Disabling hides the CRM section from all users without affecting the phone system.
-                </div>
-              </div>
-              <Toggle
-                label=""
-                checked={settings.enabled}
-                disabled={settingsSaving}
-                onChange={(v) => updateSetting({ enabled: v })}
-              />
-            </div>
-
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "1rem", opacity: settings.enabled ? 1 : 0.45, paddingBottom: "1.125rem", borderBottom: "1px solid var(--border)" }}>
-              <div>
-                <div style={{ fontWeight: 600, fontSize: "0.9375rem" }}>Local Presence</div>
-                <div style={{ fontSize: "0.8125rem", color: "var(--text-dim)", marginTop: 2 }}>
-                  Allow outbound calls to use a DID from the same area code as the destination number.
-                  <span style={{ marginLeft: 6, padding: "0.1rem 0.4rem", borderRadius: 4, fontSize: "0.6875rem", fontWeight: 700, background: "var(--surface-hover)", color: "var(--text-dim)" }}>
-                    Phase 2
-                  </span>
-                </div>
-              </div>
-              <Toggle
-                label=""
-                checked={settings.localPresenceEnabled}
-                disabled={settingsSaving || !settings.enabled}
-                onChange={(v) => updateSetting({ localPresenceEnabled: v })}
-              />
-            </div>
-
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "1rem", opacity: settings.enabled ? 1 : 0.45 }}>
-              <div>
-                <div style={{ fontWeight: 600, fontSize: "0.9375rem" }}>Call Transcription</div>
-                <div style={{ fontSize: "0.8125rem", color: "var(--text-dim)", marginTop: 2 }}>
-                  Automatically transcribe call recordings and show transcripts in the customer timeline.
-                  <span style={{ marginLeft: 6, padding: "0.1rem 0.4rem", borderRadius: 4, fontSize: "0.6875rem", fontWeight: 700, background: "var(--surface-hover)", color: "var(--text-dim)" }}>
-                    Phase 3
-                  </span>
-                </div>
-              </div>
-              <Toggle
-                label=""
-                checked={settings.transcriptionEnabled}
-                disabled={settingsSaving || !settings.enabled}
-                onChange={(v) => updateSetting({ transcriptionEnabled: v })}
-              />
-            </div>
-
-            {settingsSaving && (
-              <p style={{ margin: 0, fontSize: "0.8125rem", color: "var(--text-dim)" }}>Saving…</p>
-            )}
+        {/* ── Page header ─────────────────────────────────────────────────────── */}
+        <div className="flex items-center gap-3 pb-1">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-crm-border/60 bg-crm-surface-2 text-crm-muted">
+            <Settings className="h-4 w-4" />
           </div>
-        )}
-      </section>
-
-      {/* ── Queue Defaults panel ────────────────────────────────────────────── */}
-      {settings && (
-        <section className="panel" style={{ padding: "1.5rem" }}>
-          <h3 style={{ margin: "0 0 0.25rem", fontSize: "0.9375rem", fontWeight: 600 }}>Queue Defaults</h3>
-          <p style={{ margin: "0 0 1.25rem", fontSize: "0.8125rem", color: "var(--text-dim)" }}>
-            Default sort and filter applied to agents&apos; queues when they have not set a personal preference.
-            Agents can still override these with the UI controls on the queue page.
-          </p>
-
-          {/* Default sort */}
-          <div style={{ marginBottom: "1.25rem" }}>
-            <div style={{ fontWeight: 600, fontSize: "0.875rem", marginBottom: "0.5rem" }}>Default Sort</div>
-            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              {(["SMART", "ORIGINAL"] as const).map((v) => (
-                <button
-                  key={v}
-                  disabled={settingsSaving}
-                  onClick={() => updateSetting({ defaultQueueSort: v })}
-                  style={{
-                    padding: "0.375rem 1rem",
-                    borderRadius: "0.5rem",
-                    border: "1px solid",
-                    fontSize: "0.875rem",
-                    fontWeight: 500,
-                    cursor: settingsSaving ? "not-allowed" : "pointer",
-                    background: settings.defaultQueueSort === v ? "var(--accent, #3b82f6)" : "var(--surface)",
-                    color: settings.defaultQueueSort === v ? "#fff" : "var(--text)",
-                    borderColor: settings.defaultQueueSort === v ? "var(--accent, #3b82f6)" : "var(--border)",
-                    transition: "all 0.15s",
-                  }}
-                >
-                  {v === "SMART" ? "Smart Priority" : "Original Order"}
-                </button>
-              ))}
-            </div>
-            <p style={{ margin: "0.375rem 0 0", fontSize: "0.75rem", color: "var(--text-dim)" }}>
-              {settings.defaultQueueSort === "SMART"
-                ? "Agents' queues default to Smart Priority — overdue callbacks first, then fresh leads by campaign priority."
-                : "Agents' queues default to original import/sort order."}
-            </p>
-          </div>
-
-          {/* Default filter */}
           <div>
-            <div style={{ fontWeight: 600, fontSize: "0.875rem", marginBottom: "0.5rem" }}>Default Filter Tab</div>
-            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              {(["PENDING", "DUE", "OVERDUE", "UPCOMING"] as const).map((v) => (
-                <button
-                  key={v}
-                  disabled={settingsSaving}
-                  onClick={() => updateSetting({ defaultQueueFilter: v })}
-                  style={{
-                    padding: "0.375rem 1rem",
-                    borderRadius: "0.5rem",
-                    border: "1px solid",
-                    fontSize: "0.875rem",
-                    fontWeight: 500,
-                    cursor: settingsSaving ? "not-allowed" : "pointer",
-                    background: settings.defaultQueueFilter === v ? "var(--accent, #3b82f6)" : "var(--surface)",
-                    color: settings.defaultQueueFilter === v ? "#fff" : "var(--text)",
-                    borderColor: settings.defaultQueueFilter === v ? "var(--accent, #3b82f6)" : "var(--border)",
-                    transition: "all 0.15s",
-                  }}
-                >
-                  {v === "PENDING" ? "Next Up" : v === "DUE" ? "Due Today" : v === "OVERDUE" ? "Overdue" : "Upcoming"}
-                </button>
-              ))}
-            </div>
-            <p style={{ margin: "0.375rem 0 0", fontSize: "0.75rem", color: "var(--text-dim)" }}>
-              Which tab agents see first when they open the queue. Applies when URL has no explicit ?filter= param.
-            </p>
+            <h1 className="text-lg font-bold text-crm-text">CRM Settings</h1>
+            <p className="text-xs text-crm-muted">Feature flags, queue defaults, local presence, and user access</p>
           </div>
-
-          {settingsSaving && (
-            <p style={{ margin: "0.75rem 0 0", fontSize: "0.8125rem", color: "var(--text-dim)" }}>Saving…</p>
-          )}
-        </section>
-      )}
-
-      {/* ── Local Presence pool panel ───────────────────────────────────────── */}
-      {settings?.localPresenceEnabled && (
-        <section className="panel" style={{ padding: "1.5rem" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
-            <div>
-              <h3 style={{ margin: 0, fontSize: "0.9375rem", fontWeight: 600 }}>Local Presence — Caller ID Pool</h3>
-              <p style={{ margin: "0.25rem 0 0", fontSize: "0.8125rem", color: "var(--text-dim)" }}>
-                Associate tenant-owned DIDs with US area codes. Only numbers already assigned to your tenant can be added.
-              </p>
-            </div>
-            <button
-              onClick={() => setAddPoolOpen((v) => !v)}
-              style={{ padding: "0.4rem 0.875rem", borderRadius: "0.5rem", background: "var(--accent)", color: "#fff", fontWeight: 600, fontSize: "0.8125rem", border: "none", cursor: "pointer" }}
-            >
-              + Add Number
-            </button>
-          </div>
-
-          {poolError && <p style={{ color: "#ef4444", fontSize: "0.8125rem", margin: "0 0 0.75rem" }}>{poolError}</p>}
-
-          {/* Add number form */}
-          {addPoolOpen && (
-            <div style={{ padding: "1rem", borderRadius: "0.5rem", background: "var(--surface-hover)", marginBottom: "1rem", display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "flex-end" }}>
-              <div>
-                <label style={{ display: "block", fontSize: "0.75rem", fontWeight: 600, color: "var(--text-dim)", marginBottom: 4 }}>Phone Number</label>
-                <select
-                  value={addPhoneId}
-                  onChange={(e) => {
-                    setAddPhoneId(e.target.value);
-                    const n = availableNumbers.find((x) => x.id === e.target.value);
-                    if (n?.areaCode) setAddAreaCode(n.areaCode.replace(/\D/g, "").slice(0, 3));
-                  }}
-                  style={{ padding: "0.375rem 0.5rem", border: "1px solid var(--border)", borderRadius: "0.375rem", fontSize: "0.875rem", background: "var(--surface)", color: "var(--text)", minWidth: 200 }}
-                >
-                  <option value="">— select number —</option>
-                  {availableNumbers.map((n) => (
-                    <option key={n.id} value={n.id}>
-                      {n.phoneNumber}{n.friendlyName ? ` (${n.friendlyName})` : ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label style={{ display: "block", fontSize: "0.75rem", fontWeight: 600, color: "var(--text-dim)", marginBottom: 4 }}>Area Code (3 digits)</label>
-                <input
-                  type="text"
-                  value={addAreaCode}
-                  onChange={(e) => setAddAreaCode(e.target.value.replace(/\D/g, "").slice(0, 3))}
-                  placeholder="512"
-                  maxLength={3}
-                  style={{ padding: "0.375rem 0.5rem", border: "1px solid var(--border)", borderRadius: "0.375rem", fontSize: "0.875rem", background: "var(--surface)", color: "var(--text)", width: 80 }}
-                />
-              </div>
-              <div>
-                <label style={{ display: "block", fontSize: "0.75rem", fontWeight: 600, color: "var(--text-dim)", marginBottom: 4 }}>Label (optional)</label>
-                <input
-                  type="text"
-                  value={addLabel}
-                  onChange={(e) => setAddLabel(e.target.value)}
-                  placeholder="e.g. Austin TX"
-                  maxLength={100}
-                  style={{ padding: "0.375rem 0.5rem", border: "1px solid var(--border)", borderRadius: "0.375rem", fontSize: "0.875rem", background: "var(--surface)", color: "var(--text)", width: 160 }}
-                />
-              </div>
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                <button
-                  onClick={handleAddToPool}
-                  disabled={addSaving || !addPhoneId || !/^\d{3}$/.test(addAreaCode)}
-                  style={{ padding: "0.375rem 0.875rem", borderRadius: "0.375rem", background: "var(--accent)", color: "#fff", fontWeight: 600, fontSize: "0.8125rem", border: "none", cursor: addSaving ? "not-allowed" : "pointer", opacity: (!addPhoneId || !/^\d{3}$/.test(addAreaCode)) ? 0.5 : 1 }}
-                >
-                  {addSaving ? "Adding…" : "Add"}
-                </button>
-                <button
-                  onClick={() => setAddPoolOpen(false)}
-                  style={{ padding: "0.375rem 0.75rem", borderRadius: "0.375rem", background: "var(--surface-hover)", border: "1px solid var(--border)", color: "var(--text)", fontSize: "0.8125rem", cursor: "pointer" }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-
-          {poolLoading ? <LoadingSkeleton rows={2} /> : pool.length === 0 ? (
-            <p style={{ color: "var(--text-dim)", fontSize: "0.875rem" }}>No numbers in the pool yet. Click &ldquo;Add Number&rdquo; to assign a DID to an area code.</p>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.875rem" }}>
-                <thead>
-                  <tr style={{ background: "var(--surface-hover)" }}>
-                    {["Phone Number", "Area Code", "Label", "Status", "Actions"].map((h) => (
-                      <th key={h} style={{ padding: "0.45rem 0.875rem", textAlign: "left", fontWeight: 600, fontSize: "0.75rem", color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {pool.map((entry, idx) => (
-                    <tr key={entry.id} style={{ borderTop: idx === 0 ? undefined : "1px solid var(--border)" }}>
-                      <td style={{ padding: "0.5rem 0.875rem", fontWeight: 500 }}>
-                        {entry.phoneNumber?.phoneNumber ?? entry.phoneNumberId}
-                        {entry.phoneNumber?.friendlyName && (
-                          <div style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>{entry.phoneNumber.friendlyName}</div>
-                        )}
-                      </td>
-                      <td style={{ padding: "0.5rem 0.875rem" }}>
-                        <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: "0.9375rem" }}>{entry.areaCode3}</span>
-                      </td>
-                      <td style={{ padding: "0.5rem 0.875rem", color: "var(--text-dim)", fontSize: "0.8125rem" }}>{entry.label ?? "—"}</td>
-                      <td style={{ padding: "0.5rem 0.875rem" }}>
-                        <span style={{ padding: "0.15rem 0.5rem", borderRadius: 4, fontSize: "0.75rem", fontWeight: 700, background: entry.isActive ? "#d1fae5" : "#f1f5f9", color: entry.isActive ? "#065f46" : "#64748b" }}>
-                          {entry.isActive ? "Active" : "Inactive"}
-                        </span>
-                      </td>
-                      <td style={{ padding: "0.5rem 0.875rem" }}>
-                        <div style={{ display: "flex", gap: "0.5rem" }}>
-                          <button onClick={() => handleTogglePoolEntry(entry)} style={{ padding: "0.2rem 0.5rem", fontSize: "0.75rem", border: "1px solid var(--border)", borderRadius: 4, background: "var(--surface)", color: "var(--text)", cursor: "pointer" }}>
-                            {entry.isActive ? "Deactivate" : "Activate"}
-                          </button>
-                          <button onClick={() => handleRemovePoolEntry(entry)} style={{ padding: "0.2rem 0.5rem", fontSize: "0.75rem", border: "1px solid #fca5a5", borderRadius: 4, background: "transparent", color: "#ef4444", cursor: "pointer" }}>
-                            Remove
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {/* Test / suggest input */}
-          <div style={{ marginTop: "1.25rem", paddingTop: "1rem", borderTop: "1px solid var(--border)" }}>
-            <div style={{ fontWeight: 600, fontSize: "0.875rem", marginBottom: "0.5rem" }}>Test Local Presence</div>
-            <p style={{ margin: "0 0 0.625rem", fontSize: "0.8125rem", color: "var(--text-dim)" }}>
-              Enter a destination number to see which caller ID would be selected.
-            </p>
-            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-              <input
-                type="text"
-                value={suggestTo}
-                onChange={(e) => setSuggestTo(e.target.value)}
-                placeholder="(512) 555-1234"
-                style={{ padding: "0.375rem 0.625rem", border: "1px solid var(--border)", borderRadius: "0.375rem", fontSize: "0.875rem", background: "var(--surface)", color: "var(--text)", width: 200 }}
-                onKeyDown={(e) => e.key === "Enter" && handleSuggest()}
-              />
-              <button onClick={handleSuggest} disabled={suggesting || !suggestTo.trim()} style={{ padding: "0.375rem 0.875rem", borderRadius: "0.375rem", background: "var(--accent)", color: "#fff", fontWeight: 600, fontSize: "0.8125rem", border: "none", cursor: "pointer", opacity: !suggestTo.trim() ? 0.5 : 1 }}>
-                {suggesting ? "…" : "Test"}
-              </button>
-            </div>
-            {suggestResult && (
-              <div style={{ marginTop: "0.625rem", padding: "0.75rem", borderRadius: "0.5rem", background: suggestResult.matched ? "#d1fae5" : "#f1f5f9", border: `1px solid ${suggestResult.matched ? "#6ee7b7" : "var(--border)"}`, fontSize: "0.8125rem" }}>
-                {suggestResult.matched ? (
-                  <><strong>✓ Match found</strong> — Area code <code>{suggestResult.areaCode3}</code> → Caller ID: <strong>{suggestResult.selectedCallerId}</strong></>
-                ) : (
-                  <><strong>No match</strong> — {suggestResult.localPresenceEnabled ? `Area code ${suggestResult.areaCode3 ?? "?"} not in pool. Default caller ID will be used.` : "Local presence is disabled."}</>
-                )}
-              </div>
-            )}
-          </div>
-        </section>
-      )}
-
-      {/* ── User access panel ───────────────────────────────────────────────── */}
-      <section className="panel" style={{ padding: 0, overflow: "hidden" }}>
-        <div style={{ padding: "1rem 1.25rem 0.75rem", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: "0.625rem" }}>
-          <h3 style={{ margin: 0, fontSize: "0.9375rem", fontWeight: 600 }}>User Access</h3>
-          <span style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>
-            Control which users can access CRM features and at what role.
-          </span>
         </div>
 
-        {usersLoading && (
-          <div style={{ padding: "1rem 1.25rem" }}>
-            <LoadingSkeleton rows={4} />
-          </div>
-        )}
-        {usersError && (
-          <div style={{ padding: "1rem 1.25rem", color: "#ef4444", fontSize: "0.875rem" }}>
-            {usersError}
+        {settingsError && (
+          <div className={cn(crm.bannerDanger, "flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm")}>
+            <XCircle className="h-4 w-4 shrink-0" />
+            {settingsError}
           </div>
         )}
 
-        {!usersLoading && users.length === 0 && !usersError && (
-          <div style={{ padding: "1.5rem 1.25rem", color: "var(--text-dim)", fontSize: "0.875rem" }}>
-            No users found for this tenant.
+        {/* ── Feature Flags ───────────────────────────────────────────────────── */}
+        <div className={cn(crm.card, "overflow-hidden")}>
+          <div className="border-b border-crm-border/40 px-5 py-3.5">
+            <div className="flex items-center gap-2">
+              <SlidersHorizontal className="h-3.5 w-3.5 text-crm-muted" />
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-crm-muted/70">Feature Flags</p>
+            </div>
           </div>
-        )}
+          <div className="px-5">
+            {settingsLoading ? (
+              <div className="py-4"><LoadingSkeleton rows={3} /></div>
+            ) : settings ? (
+              <>
+                <SettingRow
+                  title="CRM Enabled"
+                  description="Activates the CRM module for this tenant. Disabling hides the CRM section from all users without affecting the phone system."
+                >
+                  <Toggle
+                    label="CRM Enabled"
+                    checked={settings.enabled}
+                    disabled={settingsSaving}
+                    onChange={(v) => updateSetting({ enabled: v })}
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Local Presence"
+                  description="Allow outbound calls to use a DID from the same area code as the destination number."
+                  badge="Phase 2"
+                  dim={!settings.enabled}
+                >
+                  <Toggle
+                    label="Local Presence"
+                    checked={settings.localPresenceEnabled}
+                    disabled={settingsSaving || !settings.enabled}
+                    onChange={(v) => updateSetting({ localPresenceEnabled: v })}
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Call Transcription"
+                  description="Automatically transcribe call recordings and show transcripts in the customer timeline."
+                  badge="Phase 3"
+                  dim={!settings.enabled}
+                  noBorder
+                >
+                  <Toggle
+                    label="Call Transcription"
+                    checked={settings.transcriptionEnabled}
+                    disabled={settingsSaving || !settings.enabled}
+                    onChange={(v) => updateSetting({ transcriptionEnabled: v })}
+                  />
+                </SettingRow>
+                {settingsSaving && (
+                  <p className="pb-3 text-xs text-crm-muted">Saving…</p>
+                )}
+              </>
+            ) : null}
+          </div>
+        </div>
 
-        {!usersLoading && users.length > 0 && (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.875rem" }}>
-              <thead>
-                <tr style={{ background: "var(--surface-hover)" }}>
-                  {["User", "System Role", "CRM Access", "CRM Role"].map((h) => (
-                    <th
-                      key={h}
-                      style={{
-                        padding: "0.5rem 1rem",
-                        textAlign: "left",
-                        fontWeight: 600,
-                        fontSize: "0.75rem",
-                        color: "var(--text-dim)",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.04em",
-                        whiteSpace: "nowrap",
-                      }}
+        {/* ── Queue Defaults ───────────────────────────────────────────────────── */}
+        {settings && (
+          <div className={cn(crm.card, "overflow-hidden")}>
+            <div className="border-b border-crm-border/40 px-5 py-3.5">
+              <div className="flex items-center gap-2">
+                <SlidersHorizontal className="h-3.5 w-3.5 text-crm-muted" />
+                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-crm-muted/70">Queue Defaults</p>
+              </div>
+              <p className="mt-0.5 text-xs text-crm-muted">
+                Default sort and filter for agents who have not set a personal preference.
+              </p>
+            </div>
+            <div className="flex flex-col gap-5 px-5 py-4">
+
+              {/* Default Sort */}
+              <div>
+                <p className="mb-2.5 text-xs font-semibold text-crm-text">Default Sort</p>
+                <div className="flex gap-1.5">
+                  {(["SMART", "ORIGINAL"] as const).map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      disabled={settingsSaving}
+                      onClick={() => updateSetting({ defaultQueueSort: v })}
+                      className={cn(
+                        "rounded-lg border px-3.5 py-1.5 text-sm font-medium transition-all duration-150",
+                        settings.defaultQueueSort === v
+                          ? "border-crm-accent/70 bg-crm-accent/12 text-crm-accent"
+                          : "border-crm-border/60 text-crm-muted hover:border-crm-border hover:text-crm-text",
+                        settingsSaving && "cursor-not-allowed opacity-60",
+                      )}
                     >
-                      {h}
-                    </th>
+                      {v === "SMART" ? "Smart Priority" : "Original Order"}
+                    </button>
                   ))}
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((u, idx) => {
+                </div>
+                <p className="mt-1.5 text-xs text-crm-muted">
+                  {settings.defaultQueueSort === "SMART"
+                    ? "Overdue callbacks first, then fresh leads by campaign priority."
+                    : "Original import/sort order."}
+                </p>
+              </div>
+
+              {/* Default Filter */}
+              <div>
+                <p className="mb-2.5 text-xs font-semibold text-crm-text">Default Filter Tab</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {(["PENDING", "DUE", "OVERDUE", "UPCOMING"] as const).map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      disabled={settingsSaving}
+                      onClick={() => updateSetting({ defaultQueueFilter: v })}
+                      className={cn(
+                        "rounded-lg border px-3.5 py-1.5 text-sm font-medium transition-all duration-150",
+                        settings.defaultQueueFilter === v
+                          ? "border-crm-accent/70 bg-crm-accent/12 text-crm-accent"
+                          : "border-crm-border/60 text-crm-muted hover:border-crm-border hover:text-crm-text",
+                        settingsSaving && "cursor-not-allowed opacity-60",
+                      )}
+                    >
+                      {v === "PENDING" ? "Next Up" : v === "DUE" ? "Due Today" : v === "OVERDUE" ? "Overdue" : "Upcoming"}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-1.5 text-xs text-crm-muted">
+                  Which tab agents see first when opening the queue.
+                </p>
+              </div>
+
+              {settingsSaving && (
+                <p className="text-xs text-crm-muted">Saving…</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Local Presence Pool ─────────────────────────────────────────────── */}
+        {settings?.localPresenceEnabled && (
+          <div className={cn(crm.card, "overflow-hidden")}>
+            <div className="flex items-start justify-between gap-3 border-b border-crm-border/40 px-5 py-3.5">
+              <div>
+                <div className="flex items-center gap-2">
+                  <MapPin className="h-3.5 w-3.5 text-crm-muted" />
+                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-crm-muted/70">Local Presence — Caller ID Pool</p>
+                </div>
+                <p className="mt-0.5 text-xs text-crm-muted">
+                  Associate tenant-owned DIDs with US area codes. Only numbers already assigned to your tenant can be added.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAddPoolOpen((v) => !v)}
+                className={cn(crm.btnSecondary, "shrink-0 text-xs py-1.5")}
+              >
+                <Plus className="h-3.5 w-3.5" /> Add Number
+              </button>
+            </div>
+
+            {poolError && (
+              <div className={cn(crm.bannerDanger, "mx-5 mt-3 flex items-center gap-2 rounded-lg px-3 py-2 text-xs")}>
+                {poolError}
+              </div>
+            )}
+
+            {/* Add number form */}
+            {addPoolOpen && (
+              <div className="border-b border-crm-border/40 bg-crm-surface-2/30 px-5 py-4">
+                <p className="mb-3 text-xs font-semibold text-crm-text">Add Number to Pool</p>
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-crm-muted">Phone Number</label>
+                    <select
+                      value={addPhoneId}
+                      onChange={(e) => {
+                        setAddPhoneId(e.target.value);
+                        const n = availableNumbers.find((x) => x.id === e.target.value);
+                        if (n?.areaCode) setAddAreaCode(n.areaCode.replace(/\D/g, "").slice(0, 3));
+                      }}
+                      className={cn(crm.select, "min-w-[200px]")}
+                    >
+                      <option value="">— select number —</option>
+                      {availableNumbers.map((n) => (
+                        <option key={n.id} value={n.id}>
+                          {n.phoneNumber}{n.friendlyName ? ` (${n.friendlyName})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-crm-muted">Area Code</label>
+                    <input
+                      type="text"
+                      value={addAreaCode}
+                      onChange={(e) => setAddAreaCode(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                      placeholder="512"
+                      maxLength={3}
+                      className={cn(crm.input, "w-20")}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-crm-muted">Label (optional)</label>
+                    <input
+                      type="text"
+                      value={addLabel}
+                      onChange={(e) => setAddLabel(e.target.value)}
+                      placeholder="e.g. Austin TX"
+                      maxLength={100}
+                      className={cn(crm.input, "w-40")}
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleAddToPool}
+                      disabled={addSaving || !addPhoneId || !/^\d{3}$/.test(addAreaCode)}
+                      className={crm.btnPrimary}
+                    >
+                      {addSaving ? "Adding…" : "Add"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAddPoolOpen(false)}
+                      className={crm.btnSecondary}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Pool list */}
+            <div className="px-5 py-3">
+              {poolLoading ? (
+                <LoadingSkeleton rows={2} />
+              ) : pool.length === 0 ? (
+                <div className={cn(crm.emptyWrap, "py-8")}>
+                  <Phone className="mx-auto mb-2 h-7 w-7 text-crm-muted/40" />
+                  <p className={crm.emptyTitle}>No numbers in the pool</p>
+                  <p className={crm.emptyBody}>Click "Add Number" to assign a DID to an area code.</p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  {/* Header row */}
+                  <div className="hidden grid-cols-[1fr_80px_120px_90px_120px] gap-3 border-b border-crm-border/40 pb-2 lg:grid">
+                    {["Phone Number", "Area Code", "Label", "Status", "Actions"].map((h) => (
+                      <span key={h} className="text-[10px] font-bold uppercase tracking-wider text-crm-muted">{h}</span>
+                    ))}
+                  </div>
+                  {pool.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className="grid grid-cols-1 gap-2 rounded-lg border border-crm-border/50 bg-crm-surface-2/20 px-3 py-2.5 transition-colors hover:bg-crm-surface-2/40 lg:grid-cols-[1fr_80px_120px_90px_120px] lg:items-center lg:gap-3"
+                    >
+                      <div>
+                        <div className="text-sm font-medium tabular-nums text-crm-text">
+                          {entry.phoneNumber?.phoneNumber ?? entry.phoneNumberId}
+                        </div>
+                        {entry.phoneNumber?.friendlyName && (
+                          <div className="text-xs text-crm-muted">{entry.phoneNumber.friendlyName}</div>
+                        )}
+                      </div>
+                      <div className="font-mono text-sm font-bold text-crm-text">{entry.areaCode3}</div>
+                      <div className="text-xs text-crm-muted">{entry.label ?? "—"}</div>
+                      <div>
+                        <span className={cn(
+                          "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold",
+                          entry.isActive
+                            ? "border-crm-success/40 bg-crm-success/10 text-crm-success"
+                            : "border-crm-border/60 bg-crm-surface-2 text-crm-muted",
+                        )}>
+                          {entry.isActive ? <CheckCircle2 className="h-2.5 w-2.5" /> : <XCircle className="h-2.5 w-2.5" />}
+                          {entry.isActive ? "Active" : "Inactive"}
+                        </span>
+                      </div>
+                      <div className="flex gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleTogglePoolEntry(entry)}
+                          className={cn(crm.btnSecondary, "py-1 text-xs")}
+                        >
+                          {entry.isActive ? "Deactivate" : "Activate"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRemovePoolEntry(entry)}
+                          className={cn(crm.btnDanger, "py-1 text-xs px-2")}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Test local presence */}
+            <div className="border-t border-crm-border/40 px-5 py-4">
+              <div className="flex items-center gap-2 mb-2">
+                <FlaskConical className="h-3.5 w-3.5 text-crm-muted" />
+                <p className="text-xs font-semibold text-crm-text">Test Local Presence</p>
+              </div>
+              <p className="mb-3 text-xs text-crm-muted">
+                Enter a destination number to see which caller ID would be selected.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={suggestTo}
+                  onChange={(e) => setSuggestTo(e.target.value)}
+                  placeholder="(512) 555-1234"
+                  className={cn(crm.input, "max-w-[220px]")}
+                  onKeyDown={(e) => e.key === "Enter" && handleSuggest()}
+                />
+                <button
+                  type="button"
+                  onClick={handleSuggest}
+                  disabled={suggesting || !suggestTo.trim()}
+                  className={crm.btnSecondary}
+                >
+                  {suggesting ? "…" : "Test"}
+                </button>
+              </div>
+              {suggestResult && (
+                <div className={cn(
+                  "mt-3 flex items-start gap-2 rounded-lg border px-3 py-2.5 text-xs",
+                  suggestResult.matched
+                    ? "border-crm-success/35 bg-crm-success/8 text-crm-success"
+                    : "border-crm-border/60 bg-crm-surface-2/40 text-crm-muted",
+                )}>
+                  {suggestResult.matched ? (
+                    <>
+                      <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span>
+                        <strong>Match found</strong> — Area code <code className="rounded bg-crm-surface-2 px-1">{suggestResult.areaCode3}</code> → Caller ID: <strong>{suggestResult.selectedCallerId}</strong>
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span>
+                        <strong>No match</strong> — {suggestResult.localPresenceEnabled
+                          ? `Area code ${suggestResult.areaCode3 ?? "?"} not in pool. Default caller ID will be used.`
+                          : "Local presence is disabled."}
+                      </span>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── User Access ─────────────────────────────────────────────────────── */}
+        <div className={cn(crm.card, "overflow-hidden")}>
+          <div className="border-b border-crm-border/40 px-5 py-3.5">
+            <div className="flex items-center gap-2">
+              <Users className="h-3.5 w-3.5 text-crm-muted" />
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-crm-muted/70">User Access</p>
+            </div>
+            <p className="mt-0.5 text-xs text-crm-muted">
+              Control which users can access CRM features and at what role.
+            </p>
+          </div>
+
+          {usersLoading ? (
+            <div className="px-5 py-4"><LoadingSkeleton rows={4} /></div>
+          ) : usersError ? (
+            <div className={cn(crm.bannerDanger, "mx-5 my-3 flex items-center gap-2 rounded-lg px-3 py-2 text-sm")}>
+              {usersError}
+            </div>
+          ) : users.length === 0 ? (
+            <div className="px-5 py-4">
+              <p className="text-sm text-crm-muted">No users found for this tenant.</p>
+            </div>
+          ) : (
+            <div>
+              {/* Table header */}
+              <div className="hidden grid-cols-[1fr_120px_120px_140px] gap-4 border-b border-crm-border/40 bg-crm-surface-2/30 px-5 py-2.5 lg:grid">
+                {["User", "System Role", "CRM Access", "CRM Role"].map((h) => (
+                  <span key={h} className="text-[10px] font-bold uppercase tracking-wider text-crm-muted">{h}</span>
+                ))}
+              </div>
+              {/* User rows */}
+              <div className="flex flex-col divide-y divide-crm-border/30">
+                {users.map((u) => {
                   const saving = userSaving[u.userId];
                   return (
-                    <tr
+                    <div
                       key={u.userId}
-                      style={{
-                        borderTop: idx === 0 ? undefined : "1px solid var(--border)",
-                        opacity: saving ? 0.6 : 1,
-                        transition: "opacity 0.1s",
-                      }}
+                      className={cn(
+                        "grid grid-cols-1 gap-3 px-5 py-3 transition-opacity lg:grid-cols-[1fr_120px_120px_140px] lg:items-center lg:gap-4",
+                        saving && "opacity-50",
+                      )}
                     >
-                      <td style={{ padding: "0.625rem 1rem" }}>
-                        <div style={{ fontWeight: 500 }}>{u.displayName || u.email}</div>
+                      {/* User */}
+                      <div>
+                        <div className="text-sm font-medium text-crm-text">{u.displayName || u.email}</div>
                         {u.displayName && u.displayName !== u.email && (
-                          <div style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>{u.email}</div>
+                          <div className="text-xs text-crm-muted">{u.email}</div>
                         )}
-                      </td>
-                      <td style={{ padding: "0.625rem 1rem" }}>
-                        <span style={{ fontSize: "0.8125rem", color: "var(--text-dim)" }}>
+                      </div>
+                      {/* System role */}
+                      <div>
+                        <span className="text-xs text-crm-muted">
                           {SYSTEM_ROLE_LABELS[u.systemRole] || u.systemRole}
                         </span>
-                      </td>
-                      <td style={{ padding: "0.625rem 1rem" }}>
+                      </div>
+                      {/* CRM access toggle */}
+                      <div className="flex items-center gap-2">
                         <Toggle
                           label={u.crmEnabled ? "Enabled" : "Disabled"}
                           checked={u.crmEnabled}
                           disabled={saving || !settings?.enabled}
                           onChange={(v) => updateUserAccess(u.userId, { enabled: v, role: u.crmRole ?? "AGENT" })}
                         />
-                      </td>
-                      <td style={{ padding: "0.625rem 1rem" }}>
+                        <span className={cn("text-xs", u.crmEnabled ? "text-crm-success" : "text-crm-muted")}>
+                          {u.crmEnabled ? "On" : "Off"}
+                        </span>
+                      </div>
+                      {/* CRM role select */}
+                      <div>
                         {u.hasAccess ? (
                           <select
                             value={u.crmRole ?? "AGENT"}
@@ -721,39 +822,34 @@ export default function CrmSettingsPage() {
                             onChange={(e) =>
                               updateUserAccess(u.userId, { role: e.target.value, enabled: u.crmEnabled })
                             }
-                            style={{
-                              padding: "0.3rem 0.5rem",
-                              borderRadius: "0.375rem",
-                              border: "1px solid var(--border)",
-                              background: "var(--surface)",
-                              color: "var(--text)",
-                              fontSize: "0.8125rem",
-                              cursor: saving || !u.crmEnabled ? "not-allowed" : "pointer",
-                              opacity: !u.crmEnabled || !settings?.enabled ? 0.45 : 1,
-                            }}
+                            className={cn(
+                              crm.select,
+                              "py-1.5 text-xs",
+                              (!u.crmEnabled || !settings?.enabled) && "opacity-40",
+                            )}
                           >
                             {Object.entries(ROLE_LABELS).map(([val, label]) => (
                               <option key={val} value={val}>{label}</option>
                             ))}
                           </select>
                         ) : (
-                          <span style={{ fontSize: "0.8125rem", color: "var(--text-dim)" }}>—</span>
+                          <span className="text-xs text-crm-muted">—</span>
                         )}
-                      </td>
-                    </tr>
+                      </div>
+                    </div>
                   );
                 })}
-              </tbody>
-            </table>
-          </div>
-        )}
+              </div>
+              {!settings?.enabled && (
+                <div className="border-t border-crm-border/40 px-5 py-2.5">
+                  <p className="text-xs text-crm-muted">Enable CRM above to activate user access controls.</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
-        {!settings?.enabled && !usersLoading && users.length > 0 && (
-          <div style={{ padding: "0.625rem 1rem", borderTop: "1px solid var(--border)", fontSize: "0.75rem", color: "var(--text-dim)" }}>
-            Enable CRM above to activate user access controls.
-          </div>
-        )}
-      </section>
-    </div>
+      </div>
+    </CRMPageShell>
   );
 }

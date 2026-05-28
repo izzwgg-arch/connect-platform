@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -14,11 +14,13 @@ import {
   AlertTriangle,
   CheckCircle2,
   AlertCircle,
+  Activity,
+  ShieldOff,
 } from "lucide-react";
 import { useAppContext } from "../../../../../hooks/useAppContext";
-import { PageHeader } from "../../../../../components/PageHeader";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { apiGet } from "../../../../../services/apiClient";
+import { CRMPageShell, crm, cn } from "../../../../../components/crm";
 
 type Diagnostics = {
   generatedAt: string;
@@ -42,20 +44,19 @@ type Diagnostics = {
       skippedCount: number;
       errorCount: number;
       createdAt: string;
-      campaignId: string | null;
     }>;
   };
   sms: {
+    providerConfigured: boolean;
+    providerMissingWarning: string | null;
     smsSentToday: number;
     smsReceivedToday: number;
     lastInboundAt: string | null;
     lastOutboundAt: string | null;
     contactsWithDoNotSms: number;
     crmTimelineSmsFailureEvents: number;
-    crmTimelineSmsNote: string;
+    crmTimelineSmsNote: string | null;
     marketingSmsFailedToday: number;
-    providerConfigured: boolean;
-    providerMissingWarning: string | null;
   };
   ownership: {
     membersOnArchivedOrInactiveContacts: number;
@@ -67,8 +68,8 @@ type Diagnostics = {
     activeWithZeroMembers: number;
     campaignsWithOver1000Members: number;
     activeNoMemberActivity30d: number;
+    staleActivityNote: string | null;
     activeAllMembersTerminal: number;
-    staleActivityNote: string;
   };
   wallboard: {
     telephonyFetchOk: boolean;
@@ -85,13 +86,9 @@ type Diagnostics = {
 
 type Severity = "ok" | "warn" | "bad";
 
-function cardTone(sev: Severity): { border: string; background: string } {
-  if (sev === "ok") return { border: "#86efac", background: "#f0fdf4" };
-  if (sev === "warn") return { border: "#fcd34d", background: "#fffbeb" };
-  return { border: "#fca5a5", background: "#fef2f2" };
-}
+// ── CRM-system section card ───────────────────────────────────────────────────
 
-function SectionCard({
+function DiagCard({
   title,
   severity,
   children,
@@ -102,50 +99,76 @@ function SectionCard({
   children: ReactNode;
   actions?: ReactNode;
 }) {
-  const t = cardTone(severity);
   const Icon = severity === "ok" ? CheckCircle2 : severity === "warn" ? AlertTriangle : AlertCircle;
-  const iconColor = severity === "ok" ? "#15803d" : severity === "warn" ? "#b45309" : "#b91c1c";
+  const borderClass =
+    severity === "ok"
+      ? "border-crm-success/40"
+      : severity === "warn"
+        ? "border-crm-warning/40"
+        : "border-crm-danger/40";
+  const bgClass =
+    severity === "ok"
+      ? "bg-crm-success/[0.04]"
+      : severity === "warn"
+        ? "bg-crm-warning/[0.04]"
+        : "bg-crm-danger/[0.04]";
+  const iconClass =
+    severity === "ok"
+      ? "text-crm-success"
+      : severity === "warn"
+        ? "text-crm-warning"
+        : "text-crm-danger";
+
   return (
-    <section
-      style={{
-        border: `1px solid ${t.border}`,
-        background: t.background,
-        borderRadius: "0.75rem",
-        padding: "1rem 1.125rem",
-        marginBottom: "1rem",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem", marginBottom: "0.75rem" }}>
-        <h2 style={{ margin: 0, fontSize: "0.9375rem", fontWeight: 700, display: "flex", alignItems: "center", gap: "0.5rem", color: "var(--text)" }}>
-          <Icon size={18} style={{ color: iconColor }} aria-hidden />
+    <div className={cn("overflow-hidden rounded-xl border", borderClass, bgClass)}>
+      <div className="flex items-center justify-between gap-3 border-b border-crm-border/30 px-4 py-3">
+        <h2 className="flex items-center gap-2 text-sm font-bold text-crm-text">
+          <Icon className={cn("h-4 w-4 shrink-0", iconClass)} aria-hidden />
           {title}
         </h2>
         {actions}
       </div>
-      {children}
-    </section>
-  );
-}
-
-function MetricLine({ label, value, hint }: { label: string; value: string | number; hint?: string }) {
-  return (
-    <div style={{ marginBottom: "0.5rem", fontSize: "0.8125rem", lineHeight: 1.5 }}>
-      <span style={{ color: "var(--text-dim)" }}>{label}: </span>
-      <strong style={{ color: "var(--text)" }}>{value}</strong>
-      {hint ? (
-        <div style={{ fontSize: "0.75rem", color: "var(--text-dim)", marginTop: "0.15rem" }}>{hint}</div>
-      ) : null}
+      <div className="flex flex-col gap-0 divide-y divide-crm-border/25 px-4 py-2">
+        {children}
+      </div>
     </div>
   );
 }
 
-function warnLine(text: string) {
+// ── Metric line ───────────────────────────────────────────────────────────────
+
+function MetricLine({ label, value, hint }: { label: string; value: string | number; hint?: string }) {
+  const isZero = value === 0 || value === "0";
   return (
-    <div style={{ fontSize: "0.75rem", color: "#b45309", marginTop: "0.35rem", lineHeight: 1.45 }}>
+    <div className="py-2">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="text-xs text-crm-muted">{label}</span>
+        <span className={cn(
+          "shrink-0 text-xs font-bold tabular-nums",
+          isZero ? "text-crm-muted/60" : "text-crm-text",
+        )}>
+          {value}
+        </span>
+      </div>
+      {hint && (
+        <p className="mt-0.5 text-[10px] leading-relaxed text-crm-muted/70">{hint}</p>
+      )}
+    </div>
+  );
+}
+
+// ── Warn line ─────────────────────────────────────────────────────────────────
+
+function WarnLine({ text }: { text: string }) {
+  return (
+    <div className="flex items-start gap-1.5 py-2 text-xs text-crm-warning">
+      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
       {text}
     </div>
   );
 }
+
+// ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function CrmAdminDiagnosticsPage() {
   const { backendJwtRole } = useAppContext();
@@ -187,39 +210,78 @@ export default function CrmAdminDiagnosticsPage() {
 
   if (!isAdmin) return null;
 
+  // Quick links bar
+  const quickLinks = (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {[
+        { href: "/crm/queue", label: "Queue", Icon: ListOrdered },
+        { href: "/crm/campaigns", label: "Campaigns", Icon: Megaphone },
+        { href: "/crm/import", label: "Imports", Icon: FileUp },
+        { href: "/crm/settings", label: "Users & access", Icon: Settings2 },
+        { href: "/crm/reports", label: "Reports", Icon: BarChart3 },
+        { href: "/crm/wallboard", label: "Wallboard", Icon: LayoutGrid },
+      ].map(({ href, label, Icon }) => (
+        <Link
+          key={href}
+          href={href}
+          className={cn(crm.chip, "gap-1.5 hover:text-crm-text transition-colors no-underline")}
+        >
+          <Icon className="h-3 w-3" />
+          {label}
+        </Link>
+      ))}
+    </div>
+  );
+
   if (loading && !data) {
     return (
-      <div style={{ padding: "1.5rem" }}>
-        <PageHeader title="CRM diagnostics" subtitle="Operational health snapshot (admin only)" />
-        <LoadingSkeleton rows={6} />
-      </div>
+      <CRMPageShell>
+        <div className={crm.pageInner}>
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-crm-border/60 bg-crm-surface-2 text-crm-muted">
+              <Activity className="h-4 w-4" />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold text-crm-text">CRM Diagnostics</h1>
+              <p className="text-xs text-crm-muted">Operational health snapshot — admin only</p>
+            </div>
+          </div>
+          {quickLinks}
+          <div className={cn(crm.card, "px-5 py-4")}><LoadingSkeleton rows={6} /></div>
+        </div>
+      </CRMPageShell>
     );
   }
 
   if (error || !data) {
     return (
-      <div style={{ padding: "1.5rem", maxWidth: 640 }}>
-        <PageHeader title="CRM diagnostics" subtitle="Operational health snapshot (admin only)" />
-        <div style={{ padding: "1rem", borderRadius: "0.75rem", border: "1px solid var(--border)", background: "var(--surface)" }}>
-          <p style={{ margin: "0 0 0.75rem", color: "var(--text)" }}>{error ?? "Unknown error"}</p>
-          <button
-            type="button"
-            onClick={() => void load()}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "0.35rem",
-              padding: "0.5rem 1rem",
-              borderRadius: "0.5rem",
-              border: "1px solid var(--border)",
-              background: "var(--background)",
-              cursor: "pointer",
-            }}
-          >
-            <RefreshCw size={16} /> Retry
-          </button>
+      <CRMPageShell>
+        <div className={crm.pageInner}>
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-crm-border/60 bg-crm-surface-2 text-crm-muted">
+              <Activity className="h-4 w-4" />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold text-crm-text">CRM Diagnostics</h1>
+              <p className="text-xs text-crm-muted">Operational health snapshot — admin only</p>
+            </div>
+          </div>
+          {quickLinks}
+          <div className={cn(crm.card, "flex items-start gap-3 px-5 py-4")}>
+            <ShieldOff className="mt-0.5 h-4 w-4 shrink-0 text-crm-danger" />
+            <div>
+              <p className="text-sm text-crm-text">{error ?? "Unknown error"}</p>
+              <button
+                type="button"
+                onClick={() => void load()}
+                className={cn(crm.btnSecondary, "mt-3 text-xs")}
+              >
+                <RefreshCw className="h-3.5 w-3.5" /> Retry
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      </CRMPageShell>
     );
   }
 
@@ -256,232 +318,176 @@ export default function CrmAdminDiagnosticsPage() {
         ? "warn"
         : "ok";
 
-  const quickLinks = (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1.25rem" }}>
-      <Link href="/crm/queue" style={linkPill()}>
-        <ListOrdered size={14} /> Queue
-      </Link>
-      <Link href="/crm/campaigns" style={linkPill()}>
-        <Megaphone size={14} /> Campaigns
-      </Link>
-      <Link href="/crm/import" style={linkPill()}>
-        <FileUp size={14} /> Imports
-      </Link>
-      <Link href="/crm/settings" style={linkPill()}>
-        <Settings2 size={14} /> Users &amp; access
-      </Link>
-      <Link href="/crm/reports" style={linkPill()}>
-        <BarChart3 size={14} /> Reports
-      </Link>
-      <Link href="/crm/wallboard" style={linkPill()}>
-        <LayoutGrid size={14} /> Wallboard
-      </Link>
-    </div>
-  );
-
   return (
-    <div style={{ padding: "1.5rem", maxWidth: 920 }}>
-      <PageHeader
-        title="CRM diagnostics"
-        subtitle={`Snapshot at ${new Date(data.generatedAt).toLocaleString()} · Refresh is manual only (no auto-polling)`}
-      />
-      {quickLinks}
-      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "1rem" }}>
-        <button
-          type="button"
-          onClick={() => void load()}
-          disabled={loading}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "0.35rem",
-            padding: "0.45rem 0.9rem",
-            borderRadius: "0.5rem",
-            border: "1px solid var(--border)",
-            background: "var(--surface)",
-            cursor: loading ? "wait" : "pointer",
-            fontSize: "0.8125rem",
-            fontWeight: 600,
-          }}
-        >
-          <RefreshCw size={15} /> Refresh
-        </button>
-      </div>
+    <CRMPageShell>
+      <div className={crm.pageInner}>
 
-      <SectionCard
-        title="Queue integrity"
-        severity={queueSeverity}
-        actions={<Link href="/crm/queue" style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--accent)" }}>Open queue →</Link>}
-      >
-        <MetricLine label="Active work-queue members (ACTIVE campaign · PENDING / IN_PROGRESS / CALLBACK)" value={q.totalActiveMembers} />
-        <MetricLine
-          label="Unassigned in that set"
-          value={q.unassignedMembers}
-          hint="Unassigned rows do not show in ‘My Queue’ for agents and can look like leads vanished."
-        />
-        <MetricLine
-          label="CALLBACK overdue (before today, ACTIVE campaign)"
-          value={q.callbackOverdue}
-          hint="Agents often report ‘callbacks vanished’ when these age out of their filter; overdue still need action."
-        />
-        <MetricLine
-          label="Duplicate (campaignId, contactId) groups"
-          value={q.duplicateCampaignContactPairGroups}
-          hint="Schema enforces uniqueness; a non-zero count means historic corruption or a failed constraint."
-        />
-        <MetricLine label="Members missing contact row" value={q.membersMissingContact} hint="Should be impossible with FKs; indicates damaged data." />
-        <MetricLine label="Members missing campaign row" value={q.membersMissingCampaign} hint="Should be impossible with FKs; indicates damaged data." />
-        <MetricLine
-          label="Assigned to DISABLED users"
-          value={q.membersAssignedToDisabledUsers}
-          hint="Work may stall because disabled users cannot work their assignments."
-        />
-        <MetricLine
-          label="Assigned users without CRM access"
-          value={q.membersAssignedWithoutCrmAccess}
-          hint="Assignees cannot open CRM to disposition; they will see permission errors."
-        />
-      </SectionCard>
-
-      <SectionCard
-        title="Import health (last 20 batches)"
-        severity={importSeverity}
-        actions={<Link href="/crm/import" style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--accent)" }}>Import leads →</Link>}
-      >
-        <p style={{ margin: "0 0 0.5rem", fontSize: "0.75rem", color: "var(--text-dim)" }}>
-          Imports are not linked to a single campaign in the database; assign routing happens inside each import run.
-        </p>
-        <div style={{ display: "grid", gap: "0.35rem" }}>
-          {imp.length === 0 ? (
-            <span style={{ fontSize: "0.8125rem", color: "var(--text-dim)" }}>No import batches yet.</span>
-          ) : (
-            imp.map((b) => (
-              <div
-                key={b.id}
-                style={{
-                  fontSize: "0.75rem",
-                  padding: "0.45rem 0.6rem",
-                  borderRadius: "0.5rem",
-                  border: "1px solid var(--border)",
-                  background: "var(--surface)",
-                  display: "grid",
-                  gridTemplateColumns: "1fr auto",
-                  gap: "0.25rem 0.75rem",
-                }}
-              >
-                <span style={{ fontWeight: 600, color: "var(--text)" }}>{b.fileName}</span>
-                <span style={{ textAlign: "right", color: "var(--text-dim)" }}>{new Date(b.createdAt).toLocaleString()}</span>
-                <span style={{ color: "var(--text-dim)" }}>
-                  {b.status} · +{b.createdCount} ~{b.updatedCount} skip {b.skippedCount} err {b.errorCount}
-                </span>
-              </div>
-            ))
-          )}
+        {/* Page header */}
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-crm-border/60 bg-crm-surface-2 text-crm-muted">
+              <Activity className="h-4 w-4" />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold text-crm-text">CRM Diagnostics</h1>
+              <p className="text-xs text-crm-muted">
+                Snapshot at {new Date(data.generatedAt).toLocaleString()} · Manual refresh only
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void load()}
+            disabled={loading}
+            className={cn(crm.btnSecondary, "shrink-0 text-xs")}
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+            {loading ? "Loading…" : "Refresh"}
+          </button>
         </div>
-      </SectionCard>
 
-      <SectionCard
-        title="SMS health"
-        severity={smsSeverity}
-        actions={<Link href="/settings/messaging" style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--accent)" }}>Messaging settings →</Link>}
-      >
-        {!s.providerConfigured && s.providerMissingWarning ? warnLine(s.providerMissingWarning) : null}
-        <MetricLine label="SMS_SENT today (CRM timeline)" value={s.smsSentToday} />
-        <MetricLine label="SMS_RECEIVED today (CRM timeline)" value={s.smsReceivedToday} />
-        <MetricLine label="Last inbound SMS (any day)" value={s.lastInboundAt ? new Date(s.lastInboundAt).toLocaleString() : "—"} />
-        <MetricLine label="Last CRM SMS_SENT (any day)" value={s.lastOutboundAt ? new Date(s.lastOutboundAt).toLocaleString() : "—"} />
-        <MetricLine
-          label="Contacts with doNotSms"
-          value={s.contactsWithDoNotSms}
-          hint="These numbers are blocked for compliance — sends will be rejected."
-        />
-        <MetricLine label="CRM timeline SMS failure events" value={s.crmTimelineSmsFailureEvents} hint={s.crmTimelineSmsNote} />
-        <MetricLine
-          label="Marketing / broadcast SMS FAILED today (SmsMessage)"
-          value={s.marketingSmsFailedToday}
-          hint="Separate from CRM contact SMS; counts tenant-scoped campaign messages that failed today."
-        />
-      </SectionCard>
+        {/* Quick links */}
+        {quickLinks}
 
-      <SectionCard
-        title="Queue ownership & data quality"
-        severity={ownSeverity}
-        actions={<Link href="/crm/settings" style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--accent)" }}>User access →</Link>}
-      >
-        <MetricLine
-          label="Members on ACTIVE campaigns tied to archived/inactive contacts"
-          value={o.membersOnArchivedOrInactiveContacts}
-          hint="Contacts hidden or inactive while still enrolled confuse agents and wallboards."
-        />
-        <MetricLine
-          label="Cross-tenant member rows (member vs contact/campaign tenant)"
-          value={o.crossTenantMemberRows}
-          hint="Must always be zero; non-zero is a serious integrity defect."
-        />
-        <MetricLine
-          label="CALLBACK rows with null callbackAt"
-          value={o.activeCampaignCallbackWithNullCallbackAt}
-          hint="Callbacks cannot sort or filter correctly without a scheduled time."
-        />
-      </SectionCard>
+        {/* ── Diagnostic sections ──────────────────────────────────────────── */}
 
-      <SectionCard
-        title="Campaign health"
-        severity={campSeverity}
-        actions={<Link href="/crm/campaigns" style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--accent)" }}>Campaigns →</Link>}
-      >
-        <MetricLine label="ACTIVE campaigns" value={c.active} />
-        <MetricLine
-          label="ACTIVE with zero members"
-          value={c.activeWithZeroMembers}
-          hint="Empty active campaigns inflate dashboards and can hide that a list was never loaded."
-        />
-        <MetricLine
-          label="Campaigns with &gt;1000 members"
-          value={c.campaignsWithOver1000Members}
-          hint="Large lists are valid but slow bulk operations; watch import and assignment tooling."
-        />
-        <MetricLine label="ACTIVE, no campaign/member updates in 30d" value={c.activeNoMemberActivity30d} hint={c.staleActivityNote} />
-        <MetricLine
-          label="ACTIVE with all members terminal"
-          value={c.activeAllMembersTerminal}
-          hint="Should usually auto-complete; if stuck ACTIVE, completion hooks may not have run."
-        />
-      </SectionCard>
+        <DiagCard
+          title="Queue Integrity"
+          severity={queueSeverity}
+          actions={<Link href="/crm/queue" className="text-[11px] font-semibold text-crm-accent hover:opacity-80">Open queue →</Link>}
+        >
+          <MetricLine label="Active work-queue members (ACTIVE campaign · PENDING / IN_PROGRESS / CALLBACK)" value={q.totalActiveMembers} />
+          <MetricLine
+            label="Unassigned in that set"
+            value={q.unassignedMembers}
+            hint="Unassigned rows do not show in 'My Queue' for agents."
+          />
+          <MetricLine
+            label="CALLBACK overdue (before today, ACTIVE campaign)"
+            value={q.callbackOverdue}
+            hint="Agents often report 'callbacks vanished' when these age out of their filter."
+          />
+          <MetricLine
+            label="Duplicate (campaignId, contactId) groups"
+            value={q.duplicateCampaignContactPairGroups}
+            hint="Schema enforces uniqueness; non-zero indicates historic corruption."
+          />
+          <MetricLine label="Members missing contact row" value={q.membersMissingContact} hint="Should be impossible with FKs; indicates damaged data." />
+          <MetricLine label="Members missing campaign row" value={q.membersMissingCampaign} hint="Should be impossible with FKs; indicates damaged data." />
+          <MetricLine label="Assigned to DISABLED users" value={q.membersAssignedToDisabledUsers} hint="Work may stall because disabled users cannot work their assignments." />
+          <MetricLine label="Assigned users without CRM access" value={q.membersAssignedWithoutCrmAccess} hint="Assignees cannot open CRM to disposition; they will see permission errors." />
+        </DiagCard>
 
-      <SectionCard
-        title="Wallboard & telephony snapshot"
-        severity={wallSeverity}
-        actions={<Link href="/crm/wallboard" style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--accent)" }}>Wallboard →</Link>}
-      >
-        {!w.telephonyFetchOk ? warnLine(`Telephony health fetch failed: ${w.telephonyFetchError ?? "unknown"}`) : null}
-        <MetricLine label="Active telephony calls (service /health)" value={w.activeTelephonyCalls ?? "—"} />
-        <MetricLine label="Active telephony queues" value={w.activeTelephonyQueues ?? "—"} />
-        <MetricLine label="Telephony status" value={w.telephonyStatus ?? "—"} />
-        <MetricLine label="PBX link state" value={w.pbxLinkState ?? "—"} />
-        <MetricLine
-          label="CRM queue remaining (PENDING + IN_PROGRESS on ACTIVE campaigns)"
-          value={w.crmQueueRemainingPendingOrInProgress}
-          hint="Same definition as reports `queueRemaining` for wallboard panels."
-        />
-        <p style={{ margin: "0.35rem 0 0", fontSize: "0.75rem", color: "var(--text-dim)", lineHeight: 1.45 }}>{w.wallboardReportsRefreshNote}</p>
-      </SectionCard>
-    </div>
+        <DiagCard
+          title="Import Health (last 20 batches)"
+          severity={importSeverity}
+          actions={<Link href="/crm/import" className="text-[11px] font-semibold text-crm-accent hover:opacity-80">Import leads →</Link>}
+        >
+          <p className="py-1.5 text-xs text-crm-muted">
+            Imports are not linked to a single campaign in the database; assign routing happens inside each import run.
+          </p>
+          {imp.length === 0 ? (
+            <p className="py-2 text-xs text-crm-muted">No import batches yet.</p>
+          ) : (
+            <div className="flex flex-col gap-1 py-1">
+              {imp.map((b) => (
+                <div
+                  key={b.id}
+                  className="flex items-start justify-between gap-3 rounded-lg border border-crm-border/50 bg-crm-surface-2/30 px-3 py-2 text-xs"
+                >
+                  <div>
+                    <div className="font-medium text-crm-text">{b.fileName}</div>
+                    <div className="mt-0.5 text-crm-muted">
+                      {b.status} · +{b.createdCount} ~{b.updatedCount} skip {b.skippedCount} err {b.errorCount}
+                    </div>
+                  </div>
+                  <span className="shrink-0 text-crm-muted/70">{new Date(b.createdAt).toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </DiagCard>
+
+        <DiagCard
+          title="SMS Health"
+          severity={smsSeverity}
+          actions={<Link href="/settings/messaging" className="text-[11px] font-semibold text-crm-accent hover:opacity-80">Messaging settings →</Link>}
+        >
+          {!s.providerConfigured && s.providerMissingWarning ? <WarnLine text={s.providerMissingWarning} /> : null}
+          <MetricLine label="SMS_SENT today (CRM timeline)" value={s.smsSentToday} />
+          <MetricLine label="SMS_RECEIVED today (CRM timeline)" value={s.smsReceivedToday} />
+          <MetricLine label="Last inbound SMS (any day)" value={s.lastInboundAt ? new Date(s.lastInboundAt).toLocaleString() : "—"} />
+          <MetricLine label="Last CRM SMS_SENT (any day)" value={s.lastOutboundAt ? new Date(s.lastOutboundAt).toLocaleString() : "—"} />
+          <MetricLine label="Contacts with doNotSms" value={s.contactsWithDoNotSms} hint="These numbers are blocked for compliance — sends will be rejected." />
+          <MetricLine label="CRM timeline SMS failure events" value={s.crmTimelineSmsFailureEvents} hint={s.crmTimelineSmsNote ?? undefined} />
+          <MetricLine label="Marketing / broadcast SMS FAILED today" value={s.marketingSmsFailedToday} hint="Separate from CRM contact SMS; counts tenant-scoped campaign messages that failed today." />
+        </DiagCard>
+
+        <DiagCard
+          title="Queue Ownership & Data Quality"
+          severity={ownSeverity}
+          actions={<Link href="/crm/settings" className="text-[11px] font-semibold text-crm-accent hover:opacity-80">User access →</Link>}
+        >
+          <MetricLine
+            label="Members on ACTIVE campaigns tied to archived/inactive contacts"
+            value={o.membersOnArchivedOrInactiveContacts}
+            hint="Contacts hidden or inactive while still enrolled confuse agents and wallboards."
+          />
+          <MetricLine
+            label="Cross-tenant member rows (member vs contact/campaign tenant)"
+            value={o.crossTenantMemberRows}
+            hint="Must always be zero; non-zero is a serious integrity defect."
+          />
+          <MetricLine
+            label="CALLBACK rows with null callbackAt"
+            value={o.activeCampaignCallbackWithNullCallbackAt}
+            hint="Callbacks cannot sort or filter correctly without a scheduled time."
+          />
+        </DiagCard>
+
+        <DiagCard
+          title="Campaign Health"
+          severity={campSeverity}
+          actions={<Link href="/crm/campaigns" className="text-[11px] font-semibold text-crm-accent hover:opacity-80">Campaigns →</Link>}
+        >
+          <MetricLine label="ACTIVE campaigns" value={c.active} />
+          <MetricLine
+            label="ACTIVE with zero members"
+            value={c.activeWithZeroMembers}
+            hint="Empty active campaigns inflate dashboards and can hide that a list was never loaded."
+          />
+          <MetricLine
+            label="Campaigns with &gt;1000 members"
+            value={c.campaignsWithOver1000Members}
+            hint="Large lists are valid but slow bulk operations; watch import and assignment tooling."
+          />
+          <MetricLine label="ACTIVE, no campaign/member updates in 30d" value={c.activeNoMemberActivity30d} hint={c.staleActivityNote ?? undefined} />
+          <MetricLine
+            label="ACTIVE with all members terminal"
+            value={c.activeAllMembersTerminal}
+            hint="Should usually auto-complete; if stuck ACTIVE, completion hooks may not have run."
+          />
+        </DiagCard>
+
+        <DiagCard
+          title="Wallboard & Telephony Snapshot"
+          severity={wallSeverity}
+          actions={<Link href="/crm/wallboard" className="text-[11px] font-semibold text-crm-accent hover:opacity-80">Wallboard →</Link>}
+        >
+          {!w.telephonyFetchOk ? <WarnLine text={`Telephony health fetch failed: ${w.telephonyFetchError ?? "unknown"}`} /> : null}
+          <MetricLine label="Active telephony calls (service /health)" value={w.activeTelephonyCalls ?? "—"} />
+          <MetricLine label="Active telephony queues" value={w.activeTelephonyQueues ?? "—"} />
+          <MetricLine label="Telephony status" value={w.telephonyStatus ?? "—"} />
+          <MetricLine label="PBX link state" value={w.pbxLinkState ?? "—"} />
+          <MetricLine
+            label="CRM queue remaining (PENDING + IN_PROGRESS on ACTIVE campaigns)"
+            value={w.crmQueueRemainingPendingOrInProgress}
+            hint="Same definition as reports queueRemaining for wallboard panels."
+          />
+          <p className="py-1.5 text-[10px] leading-relaxed text-crm-muted/70">{w.wallboardReportsRefreshNote}</p>
+        </DiagCard>
+
+      </div>
+    </CRMPageShell>
   );
-}
-
-function linkPill(): CSSProperties {
-  return {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "0.35rem",
-    padding: "0.35rem 0.65rem",
-    borderRadius: "999px",
-    border: "1px solid var(--border)",
-    background: "var(--surface)",
-    fontSize: "0.75rem",
-    fontWeight: 600,
-    color: "var(--text)",
-    textDecoration: "none",
-  };
 }

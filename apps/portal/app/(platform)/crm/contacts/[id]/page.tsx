@@ -6,24 +6,17 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft, Phone, Mail, Clock, User, MessageSquareDot, Trash2,
   Circle, Plus, CheckCheck, GitMerge, AlertTriangle, Calendar,
-  ChevronRight, Headphones, Mic, Pause, Hash, Forward, Radio, PhoneOff, Sparkles,
+  ChevronRight, Star, MoreHorizontal, ChevronDown, Zap,
+  TrendingUp, MessageSquare, FileText, ClipboardList, CheckSquare,
 } from "lucide-react";
 import {
   CRMPageShell,
-  CRMCard,
   crm,
   ContactContextBar,
-  LiveWorkspaceActionBar,
-  LiveWorkspaceContactHeader,
-  LiveCallStatusBanner,
-  LiveWorkspaceScriptPanel,
-  LiveWorkspaceChecklistPanel,
   LiveWorkspaceNotePanel,
-  LiveWorkspaceOutcomePanel,
   LiveWrapUpBar,
   ContactTimeline,
   ContactSmsPanel,
-  ContactRelationshipHealth,
   type CrmContactDetail,
   type CrmStage,
   type CrmTask,
@@ -39,14 +32,18 @@ import {
   cn,
 } from "../../../../../components/crm";
 import { DISPOSITION_OPTIONS, type Checklist, type LiveContact, type ScriptSummary } from "../../../../../components/crm/live";
+import { LiveWorkspaceScriptPanel } from "../../../../../components/crm/live/LiveWorkspaceScriptPanel";
+import { LiveWorkspaceChecklistPanel } from "../../../../../components/crm/live/LiveWorkspaceChecklistPanel";
 import { CrmEmailComposeDrawer } from "../../../../../components/crm/email/CrmEmailComposeDrawer";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { apiGet, apiPatch, apiPost, apiDelete } from "../../../../../services/apiClient";
 import { useAppContext } from "../../../../../hooks/useAppContext";
 import { useSipPhone } from "../../../../../hooks/useSipPhone";
 import type { QueueMember } from "../../../../../components/crm/queue/queueTypes";
+import { initials, ownerLabel } from "../../../../../components/crm/contact/contactFormatters";
+import { CRMRingMetric } from "../../../../../components/crm/charts";
 
-// ── Shared form styles (edit panels) ─────────────────────────────────────────
+// ── Shared form styles ────────────────────────────────────────────────────────
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
@@ -79,6 +76,7 @@ const btnSmall: React.CSSProperties = {
   color: "var(--text-dim)",
 };
 
+type ContactTab = "timeline" | "script" | "checklist" | "sms" | "notes" | "tasks" | "email";
 
 export default function CrmContactDetailPage() {
   return (
@@ -104,8 +102,6 @@ function CrmContactDetailInner() {
   const urlMemberId = searchParams.get("memberId");
   const urlCampaignId = searchParams.get("campaignId");
 
-  const headerSentinelRef = useRef<HTMLDivElement>(null);
-  const [stickyVisible, setStickyVisible] = useState(false);
   const [queueMember, setQueueMember] = useState<QueueContextMember | null>(null);
   const [campaignName, setCampaignName] = useState<string | null>(null);
 
@@ -158,12 +154,16 @@ function CrmContactDetailInner() {
   const [newTaskDueAt, setNewTaskDueAt] = useState("");
   const [newTaskPosting, setNewTaskPosting] = useState(false);
 
-  // Script/checklist workspace state reuses existing CRM live-workspace APIs.
+  // Script/checklist workspace
   const [scriptSummaries, setScriptSummaries] = useState<ScriptSummary[]>([]);
   const [checklists, setChecklists] = useState<Checklist[]>([]);
-  const [workspaceTab, setWorkspaceTab] = useState<"live" | "script" | "checklist" | "notes">("live");
-  const [communicationTab, setCommunicationTab] = useState<"call" | "sms" | "whatsapp" | "email">("call");
+
+  // ── Contact tab navigation ─────────────────────────────────────────────────
+  const [contactTab, setContactTab] = useState<ContactTab>("timeline");
   const workspacePanelRef = useRef<HTMLDivElement>(null);
+
+  // Actions dropdown
+  const [actionsOpen, setActionsOpen] = useState(false);
 
   // Note composer
   const [noteText, setNoteText] = useState("");
@@ -173,10 +173,9 @@ function CrmContactDetailInner() {
   const noteComposerRef = useRef<HTMLDivElement>(null);
   const smsPanelRef = useRef<HTMLDivElement>(null);
   const tasksPanelRef = useRef<HTMLDivElement>(null);
-  const outcomePanelRef = useRef<HTMLDivElement>(null);
   const [noteSavedAt, setNoteSavedAt] = useState<Date | null>(null);
 
-  // Live outcome workflow state (unified with live-call workspace)
+  // Live outcome workflow state
   const [disposition, setDisposition] = useState("");
   const [outcomeNote, setOutcomeNote] = useState("");
   const [followUpOption, setFollowUpOption] = useState<"" | "today" | "tomorrow" | "nextweek" | "custom">("");
@@ -211,13 +210,11 @@ function CrmContactDetailInner() {
   const [smsError, setSmsError] = useState<string | null>(null);
   const [smsSuccess, setSmsSuccess] = useState(false);
 
-  // Caller-ID workflow (must be declared before any early return — Rules of Hooks)
+  // Caller-ID workflow
   const [callerIdSelected, setCallerIdSelected] = useState<string | null>(null);
   const [callerIdChecked, setCallerIdChecked] = useState(false);
   const [callerIdLoading, setCallerIdLoading] = useState(false);
 
-  // Outcome save ref + keyboard shortcuts — hoisted before any early return
-  // so React sees a consistent hook order on every render.
   useEffect(() => {
     saveOutcomeRef.current = saveOutcome;
   });
@@ -249,6 +246,17 @@ function CrmContactDetailInner() {
     return () => window.removeEventListener("keydown", onAnyKey);
   }, [disposition, savingOutcome]);
 
+  // Close actions dropdown when clicking outside
+  useEffect(() => {
+    if (!actionsOpen) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest("[data-actions-dropdown]")) setActionsOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [actionsOpen]);
+
   // ── Loaders ────────────────────────────────────────────────────────────────
 
   const loadContact = useCallback(async () => {
@@ -279,7 +287,7 @@ function CrmContactDetailInner() {
       const data = await apiGet<{ duplicates: DuplicateContact[] }>(`/crm/contacts/${id}/duplicates`);
       setDuplicates(data.duplicates ?? []);
     } catch {
-      // Non-fatal — duplicate detection failure must not block the contact view
+      // Non-fatal
     }
   }, [id]);
 
@@ -291,7 +299,7 @@ function CrmContactDetailInner() {
       );
       setTimeline(data.events);
     } catch {
-      // Non-fatal — timeline failure should not block the contact view
+      // Non-fatal
     } finally {
       setTimelineLoading(false);
     }
@@ -328,7 +336,7 @@ function CrmContactDetailInner() {
     void loadWorkspaceGuides();
   }, [loadContact, loadTimeline, loadTasks, loadDuplicates, loadWorkspaceGuides]);
 
-  // Draft note autosave keyed by contact id (shared UX with live workspace)
+  // Draft note autosave
   useEffect(() => {
     if (!id || noteText) return;
     try {
@@ -369,17 +377,12 @@ function CrmContactDetailInner() {
         /* non-fatal */
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [id, urlMemberId]);
 
   useEffect(() => {
     const cid = urlCampaignId ?? queueMember?.campaign?.id;
-    if (!cid) {
-      setCampaignName(null);
-      return;
-    }
+    if (!cid) { setCampaignName(null); return; }
     let cancelled = false;
     (async () => {
       try {
@@ -389,29 +392,13 @@ function CrmContactDetailInner() {
         if (!cancelled) setCampaignName(queueMember?.campaign?.name ?? null);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [urlCampaignId, queueMember?.campaign?.id, queueMember?.campaign?.name]);
-
-  useEffect(() => {
-    const el = headerSentinelRef.current;
-    if (!el) return;
-    const obs = new IntersectionObserver(
-      ([entry]) => setStickyVisible(!entry.isIntersecting),
-      { root: null, threshold: 0, rootMargin: "-64px 0px 0px 0px" },
-    );
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, [contact?.id]);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
   const handleSave = async () => {
-    if (!editDisplayName.trim()) {
-      setSaveError("Display name is required");
-      return;
-    }
+    if (!editDisplayName.trim()) { setSaveError("Display name is required"); return; }
     setSaving(true);
     setSaveError(null);
     try {
@@ -428,7 +415,6 @@ function CrmContactDetailInner() {
       });
       setContact(updated);
       setEditing(false);
-      // Reload timeline in case stage changed
       loadTimeline();
     } catch (e: any) {
       setSaveError(e?.message || "Failed to save");
@@ -441,13 +427,9 @@ function CrmContactDetailInner() {
     setMerging(true);
     setMergeError(null);
     try {
-      await apiPost("/crm/contacts/merge", {
-        keepContactId: id,
-        mergeContactId: dupId,
-      });
+      await apiPost("/crm/contacts/merge", { keepContactId: id, mergeContactId: dupId });
       setMergeTarget(null);
       setDuplicates([]);
-      // Refresh contact (phones/emails may have been added) + timeline
       await loadContact();
       loadTimeline();
     } catch (e: any) {
@@ -458,13 +440,7 @@ function CrmContactDetailInner() {
   };
 
   const handleArchiveContact = async () => {
-    if (
-      !window.confirm(
-        "Archive this contact? They will be removed from active CRM lists and search. Timeline, tasks, and campaign history are preserved.",
-      )
-    ) {
-      return;
-    }
+    if (!window.confirm("Archive this contact? They will be removed from active CRM lists and search. Timeline, tasks, and campaign history are preserved.")) return;
     setArchivePosting(true);
     setError(null);
     try {
@@ -522,9 +498,7 @@ function CrmContactDetailInner() {
     if (!editingNoteLinkedId || !editingNoteText.trim()) return;
     setEditingNoteSaving(true);
     try {
-      await apiPatch(`/crm/contacts/${id}/notes/${editingNoteLinkedId}`, {
-        body: editingNoteText.trim(),
-      });
+      await apiPatch(`/crm/contacts/${id}/notes/${editingNoteLinkedId}`, { body: editingNoteText.trim() });
       setEditingNoteLinkedId(null);
       setEditingNoteText("");
       await loadTimeline();
@@ -545,10 +519,7 @@ function CrmContactDetailInner() {
     if (!newTaskTitle.trim()) return;
     setNewTaskPosting(true);
     try {
-      await apiPost(`/crm/contacts/${id}/tasks`, {
-        title: newTaskTitle.trim(),
-        dueAt: newTaskDueAt || undefined,
-      });
+      await apiPost(`/crm/contacts/${id}/tasks`, { title: newTaskTitle.trim(), dueAt: newTaskDueAt || undefined });
       setNewTaskTitle("");
       setNewTaskDueAt("");
       setAddingTask(false);
@@ -648,7 +619,7 @@ function CrmContactDetailInner() {
     }
   };
 
-  // ── Memos (must come before all early returns — Rules of Hooks) ───────────
+  // ── Memos ──────────────────────────────────────────────────────────────────
 
   const nextStep = useMemo((): {
     title: string;
@@ -659,20 +630,10 @@ function CrmContactDetailInner() {
     if (!contact) return { title: "Loading…", detail: "", action: "none" };
     const archived = !!(contact.archivedAt != null || contact.active === false);
     if (archived) {
-      return {
-        title: "Archived — read-only",
-        detail:
-          "This record is out of active CRM rotation. Review the timeline below; restore from the banner when you need to edit or message again.",
-        action: "none",
-      };
+      return { title: "Archived — read-only", detail: "This record is out of active CRM rotation. Review the timeline below; restore from the banner when you need to edit or message again.", action: "none" };
     }
     if (contact.phones.length === 0) {
-      return {
-        title: "Add a phone number",
-        detail: "Voice and SMS both need a number on file. Add one under Contact info.",
-        actionLabel: "Add phone",
-        action: "add_phone",
-      };
+      return { title: "Add a phone number", detail: "Voice and SMS both need a number on file. Add one under Contact info.", actionLabel: "Add phone", action: "add_phone" };
     }
     const open = tasks.filter((t) => t.status !== "DONE" && t.status !== "CANCELED");
     const sorted = [...open].sort((a, b) => {
@@ -686,28 +647,13 @@ function CrmContactDetailInner() {
       const t = overdue ?? dueSoon;
       if (t) {
         const late = t.dueAt && new Date(t.dueAt) < new Date();
-        return {
-          title: late ? "Overdue follow-up" : "Open task",
-          detail: `${t.title}${t.dueAt ? ` · Due ${formatDate(t.dueAt)}` : ""}`,
-          actionLabel: "View tasks",
-          action: "scroll_tasks",
-        };
+        return { title: late ? "Overdue follow-up" : "Open task", detail: `${t.title}${t.dueAt ? ` · Due ${formatDate(t.dueAt)}` : ""}`, actionLabel: "View tasks", action: "scroll_tasks" };
       }
     }
     if (contact.doNotSms) {
-      return {
-        title: "SMS opted out",
-        detail: "This contact cannot receive SMS. Use voice or email, and log updates in the timeline.",
-        actionLabel: "Add note",
-        action: "scroll_notes",
-      };
+      return { title: "SMS opted out", detail: "This contact cannot receive SMS. Use voice or email, and log updates in the timeline.", actionLabel: "Add note", action: "scroll_notes" };
     }
-    return {
-      title: "Keep the record current",
-      detail: "Review recent activity, add a note, or schedule a follow-up so the next touch is intentional.",
-      actionLabel: "Add note",
-      action: "scroll_notes",
-    };
+    return { title: "Keep the record current", detail: "Review recent activity, add a note, or schedule a follow-up so the next touch is intentional.", actionLabel: "Add note", action: "scroll_notes" };
   }, [contact, tasks]);
 
   const workspaceHref = useMemo(() => {
@@ -721,23 +667,59 @@ function CrmContactDetailInner() {
     return `/crm/live-call?${params}`;
   }, [contact, queueMember, urlCampaignId, urlMemberId, returnTo]);
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // ── Derived signals ────────────────────────────────────────────────────────
+
+  const lastTimelineEvent = timeline[0] ?? null;
+  const lastInteractionAt = lastTimelineEvent?.createdAt ?? contact?.lastActivityAt ?? null;
+  const weekAgo = Date.now() - 7 * 86400000;
+  const thirtyDaysAgo = Date.now() - 30 * 86400000;
+  const recentActivityCount = timeline.filter((e) => new Date(e.createdAt).getTime() >= weekAgo).length;
+  const thirtyDayActivityCount = timeline.filter((e) => new Date(e.createdAt).getTime() >= thirtyDaysAgo).length;
+  const overdueTasks = tasks.filter((t) => t.dueAt && new Date(t.dueAt) < new Date()).length;
+  const lastComm = timeline.find((e) => e.type.startsWith("CDR_") || e.type.startsWith("SMS_"));
+  const daysSinceComm = lastComm ? Math.floor((Date.now() - new Date(lastComm.createdAt).getTime()) / 86400000) : null;
+  const callbackUrgent = queueMember?.callbackAt ? new Date(queueMember.callbackAt) < new Date() : false;
+
+  // Computed relationship score (0-100)
+  const leadScore = useMemo(() => {
+    let score = 40;
+    const callCount = timeline.filter((e) => e.type.startsWith("CDR_")).length;
+    const smsCount = timeline.filter((e) => e.type.startsWith("SMS_")).length;
+    const answeredCount = timeline.filter(
+      (e) => e.type === "CDR_INBOUND" || (e.type === "CDR_OUTBOUND" && (e.metadata as any)?.disposition === "answered")
+    ).length;
+    score += Math.min(25, recentActivityCount * 5);
+    score += Math.min(15, answeredCount * 5);
+    score += Math.min(10, smsCount * 2);
+    if (contact?.doNotCall) score -= 15;
+    if (overdueTasks > 0) score -= 5;
+    return Math.max(10, Math.min(100, Math.round(score)));
+  }, [timeline, contact, recentActivityCount, overdueTasks]);
+
+  const leadScoreLabel = leadScore >= 70 ? "High" : leadScore >= 45 ? "Medium" : "Low";
+
+  const engagementLabel = recentActivityCount >= 4 ? "High" : recentActivityCount >= 2 ? "Medium" : "Low";
+  const responsivenessLabel = (() => {
+    const answered = timeline.filter((e) => e.type === "CDR_INBOUND" || (e.type === "CDR_OUTBOUND" && (e.metadata as any)?.disposition === "answered")).length;
+    const totalCalls = timeline.filter((e) => e.type.startsWith("CDR_")).length;
+    if (totalCalls === 0) return "No data";
+    const rate = answered / totalCalls;
+    if (rate >= 0.6) return "Very Good";
+    if (rate >= 0.35) return "Good";
+    return "Low";
+  })();
+  const trendLabel = recentActivityCount > 0 ? "Improving" : daysSinceComm != null && daysSinceComm > 14 ? "Declining" : "Stable";
+
+  // ── Render helpers ─────────────────────────────────────────────────────────
 
   if (loading) {
-    return (
-      <div style={{ padding: "2rem" }}>
-        <LoadingSkeleton rows={8} />
-      </div>
-    );
+    return <div style={{ padding: "2rem" }}><LoadingSkeleton rows={8} /></div>;
   }
 
   if (error || !contact) {
     return (
       <div style={{ padding: "2rem" }}>
-        <button
-          onClick={() => router.push("/crm/contacts")}
-          style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", fontSize: "0.875rem", marginBottom: "1rem", padding: 0 }}
-        >
+        <button onClick={() => router.push("/crm/contacts")} style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", fontSize: "0.875rem", marginBottom: "1rem", padding: 0 }}>
           <ArrowLeft size={14} /> Back to Contacts
         </button>
         <p style={{ color: "#ef4444", fontSize: "0.875rem" }}>{error || "Contact not found"}</p>
@@ -748,34 +730,18 @@ function CrmContactDetailInner() {
   const stage = contact.crmStage ?? "LEAD";
   const isArchived = !!(contact.archivedAt != null || contact.active === false);
 
-  // Derive SMS conversation from timeline — newest-first, capped at 25.
-  // No new API call; reuses the timeline already loaded for the Activity feed.
   const smsEvents = timeline
     .filter((e) => e.type === "SMS_SENT" || e.type === "SMS_RECEIVED")
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     .slice(0, 25);
 
-  const lastSmsIn = smsEvents.find((e) => e.type === "SMS_RECEIVED") ?? null;
-
   const primaryPhoneRow = contact.phones.find((p) => p.isPrimary) ?? contact.phones[0] ?? null;
   const primaryEmailRow = contact.emails.find((e) => e.isPrimary) ?? contact.emails[0] ?? null;
-
-  const scrollToNoteComposer = () => {
-    noteComposerRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    setTimeout(() => noteTextareaRef.current?.focus(), 300);
-  };
-
-  const scrollToTasks = () => {
-    tasksPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  };
-
-  const focusWorkspace = (tab: typeof workspaceTab, communication?: typeof communicationTab) => {
-    setWorkspaceTab(tab);
-    if (communication) setCommunicationTab(communication);
-    workspacePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
-
   const primaryPhone = primaryPhoneRow?.numberRaw ?? null;
+  const primaryEmail = primaryEmailRow?.email ?? null;
+  const owner = ownerLabel(contact.assignedTo) ?? "Unassigned";
+  const lastTouch = lastInteractionAt ? formatTimeAgo(lastInteractionAt) : "No activity";
+
   const sipNotice = sipReady || !primaryPhone
     ? null
     : (phone.regState === "connecting" || phone.regState === "registering")
@@ -788,10 +754,7 @@ function CrmContactDetailInner() {
     if (!callerIdChecked) {
       setCallerIdLoading(true);
       try {
-        const res = await apiPost<{ callerId: string | null }>(`/crm/calls/originate`, {
-          destination: num,
-          contactId: id,
-        });
+        const res = await apiPost<{ callerId: string | null }>(`/crm/calls/originate`, { destination: num, contactId: id });
         setCallerIdSelected(res.callerId ?? null);
       } catch {
         setCallerIdSelected(null);
@@ -816,28 +779,11 @@ function CrmContactDetailInner() {
     if (disabledOutcome() || !disposition) return;
     setSavingOutcome(true);
     setOutcomeError("");
-
     let followUpAt: string | null = null;
-    if (followUpOption === "today") {
-      const d = new Date();
-      d.setHours(17, 0, 0, 0);
-      followUpAt = d.toISOString();
-    } else if (followUpOption === "tomorrow") {
-      const d = new Date();
-      d.setDate(d.getDate() + 1);
-      d.setHours(9, 0, 0, 0);
-      followUpAt = d.toISOString();
-    } else if (followUpOption === "nextweek") {
-      const d = new Date();
-      const day = d.getDay();
-      const daysToMonday = day === 0 ? 1 : 8 - day;
-      d.setDate(d.getDate() + daysToMonday);
-      d.setHours(9, 0, 0, 0);
-      followUpAt = d.toISOString();
-    } else if (followUpOption === "custom" && followUpCustom) {
-      followUpAt = new Date(followUpCustom).toISOString();
-    }
-
+    if (followUpOption === "today") { const d = new Date(); d.setHours(17, 0, 0, 0); followUpAt = d.toISOString(); }
+    else if (followUpOption === "tomorrow") { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); followUpAt = d.toISOString(); }
+    else if (followUpOption === "nextweek") { const d = new Date(); const day = d.getDay(); const daysToMonday = day === 0 ? 1 : 8 - day; d.setDate(d.getDate() + daysToMonday); d.setHours(9, 0, 0, 0); followUpAt = d.toISOString(); }
+    else if (followUpOption === "custom" && followUpCustom) { followUpAt = new Date(followUpCustom).toISOString(); }
     try {
       await apiPost(`/crm/contacts/${id}/disposition`, {
         disposition,
@@ -860,972 +806,992 @@ function CrmContactDetailInner() {
     }
   }
 
-  const lastTimelineEvent = timeline[0] ?? null;
-  const lastInteractionLabel =
-    lastTimelineEvent?.title ?? contact.lastDisposition ?? null;
-  const lastInteractionAt =
-    lastTimelineEvent?.createdAt ?? contact.lastActivityAt ?? null;
-
-  const weekAgo = Date.now() - 7 * 86400000;
-  const recentActivityCount = timeline.filter(
-    (e) => new Date(e.createdAt).getTime() >= weekAgo,
-  ).length;
-  const overdueTasks = tasks.filter(
-    (t) => t.dueAt && new Date(t.dueAt) < new Date(),
-  ).length;
-  const lastComm = timeline.find(
-    (e) => e.type.startsWith("CDR_") || e.type.startsWith("SMS_"),
-  );
-  const daysSinceComm = lastComm
-    ? Math.floor((Date.now() - new Date(lastComm.createdAt).getTime()) / 86400000)
-    : null;
-  const callbackUrgent = queueMember?.callbackAt
-    ? new Date(queueMember.callbackAt) < new Date()
-    : false;
-
   const runNextStepAction = () => {
     if (nextStep.action === "add_phone") setAddingPhone(true);
-    if (nextStep.action === "scroll_tasks") scrollToTasks();
-    if (nextStep.action === "scroll_notes") scrollToNoteComposer();
+    if (nextStep.action === "scroll_tasks") { setContactTab("tasks"); tasksPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
+    if (nextStep.action === "scroll_notes") { setContactTab("notes"); setTimeout(() => noteTextareaRef.current?.focus(), 300); }
   };
 
-  return (<>
-    <CRMPageShell innerClassName={crm.pageInnerContact}>
-      <div className="space-y-4">
-        <ContactContextBar
-          returnTo={returnTo}
-          queueMember={queueMember}
-          campaignName={campaignName}
-          onBack={handleBack}
-        />
+  const focusTab = (tab: ContactTab) => {
+    setContactTab(tab);
+    workspacePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
-        {contact && (
-          <>
-            <LiveWorkspaceContactHeader
-              contact={contact as unknown as LiveContact}
-              isArchived={isArchived}
-              callerIdChecked={callerIdChecked}
-              callerIdSelected={callerIdSelected}
-              callerIdLoading={callerIdLoading}
-              sipNotice={sipNotice}
-              onCall={() => void handleCall()}
-              profileHref={`/crm/contacts/${contact.id}`}
-              campaignName={campaignName}
-              queueLabel={null}
-            />
-            <div className="flex justify-end gap-2">
-              {!isArchived ? (
-                <>
-                  <button
-                    type="button"
-                    className={crm.btnPrimary}
-                    onClick={() => setComposeOpen(true)}
-                    title={primaryEmailRow ? "Send email" : "Add an email address to send"}
-                  >
-                    <Mail className="h-4 w-4" />
-                    Send Email
-                  </button>
-                  <button type="button" className={crm.btnSecondary} onClick={() => setEditing(true)}>
-                    Edit contact
-                  </button>
-                  <button
-                    type="button"
-                    className={crm.btnSecondary}
-                    onClick={handleArchiveContact}
-                    disabled={archivePosting}
-                    title="Archive contact"
-                  >
-                    {archivePosting ? "Archiving…" : "Archive"}
-                  </button>
-                </>
-              ) : (
+  const TABS: Array<{ id: ContactTab; label: string }> = [
+    { id: "timeline", label: "Timeline" },
+    { id: "script", label: "Script" },
+    { id: "checklist", label: "Checklist" },
+    { id: "email", label: "Email" },
+    { id: "sms", label: "SMS" },
+    { id: "notes", label: "Notes" },
+    { id: "tasks", label: "Tasks" },
+  ];
+
+  return (
+    <>
+      <CRMPageShell innerClassName={crm.pageInnerContact}>
+        <div className="flex flex-col gap-0 min-h-0">
+
+          {/* ── Back nav ────────────────────────────────────────────────────── */}
+          <ContactContextBar
+            returnTo={returnTo}
+            queueMember={queueMember}
+            campaignName={campaignName}
+            onBack={handleBack}
+          />
+
+          {/* ── Archived banner ─────────────────────────────────────────────── */}
+          {isArchived && (
+            <div className="mb-2 flex items-center justify-between gap-3 rounded-xl border border-crm-warning/40 bg-crm-warning/8 px-4 py-2.5">
+              <p className="text-sm text-crm-warning">This contact is archived — read only.</p>
+              {isAdmin && (
                 <button
                   type="button"
-                  className={crm.btnSecondary}
                   onClick={handleRestoreContact}
                   disabled={restorePosting}
-                  title="Restore contact"
+                  className={cn(crm.btnSecondary, "text-xs py-1")}
                 >
                   {restorePosting ? "Restoring…" : "Restore"}
                 </button>
               )}
             </div>
-          </>
-        )}
+          )}
 
-        <div ref={headerSentinelRef} className="h-px w-full" aria-hidden />
-
-        {contact && (
-          <LiveWorkspaceActionBar
-            contactName={contact.displayName}
-            isArchived={isArchived}
-            canCall={!!primaryPhoneRow && sipReady}
-            canSms={!contact.doNotSms && contact.phones.length > 0}
-            canEmail={!!primaryEmailRow}
-            hasDisposition={!!disposition}
-            queueBackHref={returnTo && returnTo.startsWith("/crm/queue") ? returnTo : null}
-            powerDialHref={canLiveWorkspace ? workspaceHref : null}
-            onCall={() => void handleCall()}
-            onSms={() => focusWorkspace("live", "sms")}
-            onEmail={() => setComposeOpen(true)}
-            onNote={() => focusWorkspace("notes")}
-            onTask={() => {
-              setAddingTask(true);
-              scrollToTasks();
-            }}
-            onDisposition={() => focusWorkspace("live", "call")}
-          />
-        )}
-
-      {editing && !isArchived && (
-        <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.875rem" }}>
-          <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>Edit Contact</h3>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
-            <div style={{ gridColumn: "1 / -1" }}>
-              <label style={labelStyle}>Display Name *</label>
-              <input value={editDisplayName} onChange={(e) => setEditDisplayName(e.target.value)} style={inputStyle} placeholder="Full name or company name" />
-            </div>
-            <div>
-              <label style={labelStyle}>First Name</label>
-              <input value={editFirstName} onChange={(e) => setEditFirstName(e.target.value)} style={inputStyle} placeholder="First" />
-            </div>
-            <div>
-              <label style={labelStyle}>Last Name</label>
-              <input value={editLastName} onChange={(e) => setEditLastName(e.target.value)} style={inputStyle} placeholder="Last" />
-            </div>
-            <div>
-              <label style={labelStyle}>Company</label>
-              <input value={editCompany} onChange={(e) => setEditCompany(e.target.value)} style={inputStyle} placeholder="Company name" />
-            </div>
-            <div>
-              <label style={labelStyle}>Title</label>
-              <input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} style={inputStyle} placeholder="Job title" />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {saveError && (
-        <p style={{ color: "#ef4444", fontSize: "0.875rem", margin: "0 0 0.5rem" }}>{saveError}</p>
-      )}
-
-      {/* ── Two-column body ───────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(300px,380px)] xl:items-start">
-
-        <div className="flex min-w-0 flex-col gap-4 order-2 xl:order-1" ref={workspacePanelRef}>
-          <CRMCard padding="lg" className="overflow-hidden border-crm-border/70">
-            <div className="mb-4 flex flex-col gap-3 border-b border-crm-border/60 pb-4 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-crm-accent">Live workspace</p>
-                <h3 className="mt-1 text-xl font-bold tracking-tight text-crm-text">Communication cockpit</h3>
+          {/* ── Compact contact header ───────────────────────────────────────── */}
+          <div className="relative border-b border-crm-border/50 pb-3 pt-1.5">
+            <div className="flex items-start gap-3.5">
+              {/* Avatar */}
+              <div
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white shadow-sm"
+                style={{ background: `linear-gradient(135deg, ${stageColor(stage)}, #6366f1)` }}
+              >
+                {initials(contact.displayName)}
               </div>
-              <div className="flex gap-1 overflow-x-auto rounded-2xl border border-crm-border/70 bg-crm-surface-2/55 p-1">
-                {([
-                  ["live", "Live Workspace"],
-                  ["script", "Script"],
-                  ["checklist", "Checklist"],
-                  ["notes", "Notes"],
-                ] as const).map(([tab, label]) => (
-                  <button
-                    key={tab}
-                    type="button"
-                    onClick={() => setWorkspaceTab(tab)}
-                    className={cn(
-                      "whitespace-nowrap rounded-xl px-3 py-2 text-xs font-bold transition-colors",
-                      workspaceTab === tab
-                        ? "bg-crm-accent text-white shadow-sm"
-                        : "text-crm-muted hover:bg-crm-surface hover:text-crm-text",
-                    )}
+
+              {/* Name + contact details */}
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <h1 className="text-lg font-bold tracking-tight text-crm-text sm:text-xl">
+                    {contact.displayName}
+                  </h1>
+                  <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
+                  <span
+                    className="rounded-full px-2 py-0.5 text-xs font-bold uppercase tracking-wide"
+                    style={{ background: stageColor(stage) + "22", color: stageColor(stage) }}
                   >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {workspaceTab === "live" ? (
-              <div className="grid gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-                <div className="flex min-w-0 flex-col gap-3">
-                  <LiveCallStatusBanner linkedId={null} fromNumber={null} />
-                  <div className="rounded-2xl border border-crm-border/70 bg-crm-surface-2/45 p-3">
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-2">
-                        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/12 text-emerald-500">
-                          <Headphones className="h-4 w-4" />
-                        </span>
-                        <div>
-                          <p className="text-sm font-bold text-crm-text">Call controls</p>
-                          <p className="text-xs text-crm-muted">{phone.callState === "idle" ? "Ready to dial" : phone.callState}</p>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => void handleCall()}
-                        disabled={!primaryPhone || isArchived}
-                        className={cn(crm.btnPrimary, "px-3 py-2")}
-                      >
-                        <Phone className="h-4 w-4" />
-                        Call now
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
-                      <button type="button" disabled={phone.callState === "idle"} onClick={() => phone.setMute(!phone.muted)} className={cn(crm.btnGhost, "flex-col gap-1 py-3 text-xs")}>
-                        <Mic className="h-4 w-4" />
-                        {phone.muted ? "Unmute" : "Mute"}
-                      </button>
-                      <button type="button" disabled={phone.callState === "idle"} onClick={phone.toggleHold} className={cn(crm.btnGhost, "flex-col gap-1 py-3 text-xs")}>
-                        <Pause className="h-4 w-4" />
-                        {phone.onHold ? "Resume" : "Hold"}
-                      </button>
-                      <button type="button" disabled className={cn(crm.btnGhost, "flex-col gap-1 py-3 text-xs")} title="Dialpad UI is not available in this workspace yet">
-                        <Hash className="h-4 w-4" />
-                        Keypad
-                      </button>
-                      <button type="button" disabled className={cn(crm.btnGhost, "flex-col gap-1 py-3 text-xs")} title="Transfer UI is not available in this workspace yet">
-                        <Forward className="h-4 w-4" />
-                        Transfer
-                      </button>
-                      <button type="button" disabled className={cn(crm.btnGhost, "flex-col gap-1 py-3 text-xs")} title="Recording control is not wired here">
-                        <Radio className="h-4 w-4" />
-                        Record
-                      </button>
-                    </div>
-                    <button type="button" disabled={phone.callState === "idle"} onClick={phone.hangup} className={cn(crm.btnDanger, "mt-2 w-full justify-center")}>
-                      <PhoneOff className="h-4 w-4" />
-                      End call
-                    </button>
-                  </div>
-
-                  <div className="rounded-2xl border border-crm-border/70 bg-crm-surface p-3">
-                    <div className="mb-3 flex flex-wrap gap-1">
-                      {([
-                        ["call", "Call"],
-                        ["sms", "SMS"],
-                        ["whatsapp", "WhatsApp"],
-                        ["email", "Email"],
-                      ] as const).map(([tab, label]) => (
-                        <button
-                          key={tab}
-                          type="button"
-                          onClick={() => setCommunicationTab(tab)}
-                          className={cn(
-                            "rounded-full border px-3 py-1.5 text-xs font-bold",
-                            communicationTab === tab
-                              ? "border-crm-accent bg-crm-accent text-white"
-                              : "border-crm-border bg-crm-surface-2 text-crm-muted hover:text-crm-text",
-                          )}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                    {communicationTab === "call" ? (
-                      <p className="text-sm leading-relaxed text-crm-muted">
-                        Use the call controls above, then log disposition and notes without leaving this workspace.
-                      </p>
-                    ) : communicationTab === "sms" ? (
-                      <ContactSmsPanel
-                        ref={smsPanelRef}
-                        phones={contact.phones}
-                        smsEvents={smsEvents}
-                        timelineLoading={timelineLoading}
-                        isArchived={isArchived}
-                        doNotSms={contact.doNotSms}
-                        smsPhone={smsPhone}
-                        setSmsPhone={setSmsPhone}
-                        smsMessage={smsMessage}
-                        setSmsMessage={setSmsMessage}
-                        smsSending={smsSending}
-                        smsError={smsError}
-                        smsSuccess={smsSuccess}
-                        onSend={handleSendSms}
-                      />
-                    ) : communicationTab === "whatsapp" ? (
-                      <div className="rounded-2xl border border-dashed border-crm-border/80 bg-crm-surface-2/45 p-4 text-sm text-crm-muted">
-                        WhatsApp contact actions are not wired in this workspace yet. Use SMS or Email for this contact.
-                      </div>
-                    ) : (
-                      <div className="rounded-2xl border border-crm-border/70 bg-violet-500/8 p-4">
-                        <p className="text-sm font-semibold text-crm-text">Email composer</p>
-                        <p className="mt-1 text-sm text-crm-muted">
-                          Opens the existing CRM email compose drawer and records sent mail in the timeline.
-                        </p>
-                        <button type="button" onClick={() => setComposeOpen(true)} disabled={!primaryEmailRow || isArchived} className={cn(crm.btnPrimary, "mt-3")}>
-                          <Mail className="h-4 w-4" />
-                          Compose email
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex min-w-0 flex-col gap-3">
-                  <div ref={noteComposerRef}>
-                    <LiveWorkspaceNotePanel
-                      ref={noteTextareaRef}
-                      noteBody={noteText}
-                      setNoteBody={setNoteText}
-                      savingNote={notePosting}
-                      noteSavedAt={noteSavedAt}
-                      onSave={handlePostNote}
-                      disabled={isArchived}
-                    />
-                    {noteError ? (
-                      <p className="mt-1 text-xs text-crm-danger">{noteError}</p>
-                    ) : null}
-                  </div>
-                  <div ref={outcomePanelRef}>
-                    <LiveWorkspaceOutcomePanel
-                      id="contact-outcome"
-                      contact={contact as unknown as LiveContact}
-                      disposition={disposition}
-                      setDisposition={setDisposition}
-                      outcomeNote={outcomeNote}
-                      setOutcomeNote={setOutcomeNote}
-                      followUpOption={followUpOption}
-                      setFollowUpOption={setFollowUpOption}
-                      followUpCustom={followUpCustom}
-                      setFollowUpCustom={setFollowUpCustom}
-                      nextStage={nextStage}
-                      setNextStage={setNextStage}
-                      savingOutcome={savingOutcome}
-                      outcomeSaved={outcomeSaved}
-                      outcomeError={outcomeError}
-                      isPowerMode={false}
-                      onSave={() => void saveOutcomeRef.current()}
-                      disabled={disabledOutcome()}
-                    />
-                  </div>
-                </div>
-              </div>
-            ) : workspaceTab === "script" ? (
-              <LiveWorkspaceScriptPanel
-                scriptSummaries={scriptSummaries}
-                defaultScriptId={null}
-              />
-            ) : workspaceTab === "checklist" ? (
-              <LiveWorkspaceChecklistPanel
-                checklists={checklists}
-                contactId={contact.id}
-                linkedId={null}
-                defaultChecklistId={null}
-                onSaved={() => void loadTimeline()}
-              />
-            ) : (
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div ref={noteComposerRef}>
-                  <LiveWorkspaceNotePanel
-                    ref={noteTextareaRef}
-                    noteBody={noteText}
-                    setNoteBody={setNoteText}
-                    savingNote={notePosting}
-                    noteSavedAt={noteSavedAt}
-                    onSave={handlePostNote}
-                    disabled={isArchived}
-                  />
-                  {noteError ? (
-                    <p className="mt-1 text-xs text-crm-danger">{noteError}</p>
-                  ) : null}
-                </div>
-                <div className="rounded-2xl border border-crm-border/70 bg-crm-surface-2/45 p-4">
-                  <h3 className="text-sm font-bold uppercase tracking-wide text-crm-muted">Scratch notes</h3>
-                  {editing && !isArchived ? (
-                    <textarea
-                      value={editNotes}
-                      onChange={(e) => setEditNotes(e.target.value)}
-                      rows={8}
-                      placeholder="Quick scratch pad for this contact…"
-                      style={{ ...inputStyle, resize: "vertical", lineHeight: 1.5 }}
-                    />
-                  ) : (
-                    <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-crm-text">
-                      {contact.notes || "No scratch notes."}
-                    </p>
+                    {stageLabel(stage)}
+                  </span>
+                  {contact.doNotCall && (
+                    <span className="rounded-full border border-crm-danger/40 bg-crm-danger/10 px-2 py-0.5 text-xs font-bold text-crm-danger">DNC</span>
+                  )}
+                  {contact.doNotSms && (
+                    <span className="rounded-full border border-crm-warning/40 bg-crm-warning/10 px-2 py-0.5 text-xs font-bold text-crm-warning">No SMS</span>
+                  )}
+                  {isArchived && (
+                    <span className="rounded-full border border-crm-border bg-crm-surface-2 px-2 py-0.5 text-xs font-medium text-crm-muted">Archived</span>
                   )}
                 </div>
-              </div>
-            )}
-          </CRMCard>
 
-          <ContactTimeline
-            events={timeline}
-            loading={timelineLoading}
-            currentUserId={appUser?.id}
-            editingNoteLinkedId={editingNoteLinkedId}
-            editingNoteText={editingNoteText}
-            allowNoteMutations={!isArchived}
-            onEditNote={handleEditNote}
-            onDeleteNote={handleDeleteNote}
-            isArchived={isArchived}
-            onStartOutreach={scrollToNoteComposer}
-          />
-        </div>
+                {(contact.company || contact.title) && (
+                  <p className="mt-0.5 text-sm text-crm-muted">
+                    {[contact.title, contact.company].filter(Boolean).join(" · ")}
+                  </p>
+                )}
 
-        <div className="flex flex-col gap-4 order-1 xl:order-2 xl:sticky xl:top-20 xl:self-start">
-          <CRMCard padding="md" className="border-crm-accent/25 bg-crm-accent/5">
-            <p className="text-xs font-bold uppercase tracking-wide text-crm-accent">Next step</p>
-            <p className="mt-1 text-base font-semibold text-crm-text">{nextStep.title}</p>
-            <p className="mt-1 text-sm text-crm-muted">{nextStep.detail}</p>
-            {nextStep.actionLabel && nextStep.action !== "none" && (
-              <button type="button" onClick={runNextStepAction} className={cn(crm.btnPrimary, "mt-3 w-full justify-center")}>
-                {nextStep.actionLabel}
-                <ChevronRight className="h-4 w-4" />
-              </button>
-            )}
-          </CRMCard>
-          <ContactRelationshipHealth
-            timeline={timeline}
-            openTasks={tasks}
-            overdueTasks={overdueTasks}
-            lastTouchAt={contact.lastActivityAt ?? null}
-            daysSinceComm={daysSinceComm}
-            callbackUrgent={callbackUrgent}
-            recentActivityCount={recentActivityCount}
-          />
-          <CRMCard padding="md" className="border-crm-border/70">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wide text-crm-muted">Activity summary</p>
-                <p className="mt-1 text-sm font-semibold text-crm-text">{lastInteractionLabel ?? "No interactions yet"}</p>
-              </div>
-              <Sparkles className="h-4 w-4 text-crm-accent" />
-            </div>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              <div className="rounded-xl border border-crm-border/70 bg-crm-surface-2/50 p-2">
-                <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Last touch</p>
-                <p className="mt-1 truncate text-xs font-semibold text-crm-text">
-                  {lastInteractionAt ? formatTimeAgo(lastInteractionAt) : "None"}
-                </p>
-              </div>
-              <div className="rounded-xl border border-crm-border/70 bg-crm-surface-2/50 p-2">
-                <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Recent events</p>
-                <p className="mt-1 text-xs font-semibold text-crm-text">{recentActivityCount} in 7d</p>
-              </div>
-              <div className="rounded-xl border border-crm-border/70 bg-crm-surface-2/50 p-2">
-                <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Callbacks</p>
-                <p className={cn("mt-1 text-xs font-semibold", callbackUrgent ? "text-crm-danger" : "text-crm-text")}>
-                  {callbackUrgent ? "Overdue" : queueMember?.callbackAt ? formatDate(queueMember.callbackAt) : "None due"}
-                </p>
-              </div>
-              <div className="rounded-xl border border-crm-border/70 bg-crm-surface-2/50 p-2">
-                <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Open tasks</p>
-                <p className="mt-1 text-xs font-semibold text-crm-text">{tasks.length}</p>
-              </div>
-            </div>
-          </CRMCard>
-        <div className="flex flex-col gap-4">
-
-          {/* CRM fields */}
-          <div className="panel rounded-crm-lg border border-crm-border/60 shadow-crm" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
-            <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>
-              Outreach rules &amp; signal
-            </h3>
-
-            <div>
-              <label style={labelStyle}>Stage</label>
-              {editing ? (
-                <select
-                  value={editStage}
-                  onChange={(e) => setEditStage(e.target.value as CrmStage)}
-                  style={inputStyle}
-                >
-                  {STAGE_OPTIONS.map((s) => (
-                    <option key={s.value} value={s.value}>{s.label}</option>
-                  ))}
-                </select>
-              ) : (
-                <span style={{
-                  display: "inline-block",
-                  padding: "0.2rem 0.6rem",
-                  borderRadius: "0.25rem",
-                  fontSize: "0.8125rem",
-                  fontWeight: 600,
-                  background: stageColor(stage) + "22",
-                  color: stageColor(stage),
-                  textTransform: "uppercase",
-                  letterSpacing: "0.04em",
-                }}>
-                  {stageLabel(stage)}
-                </span>
-              )}
-            </div>
-
-            <div>
-              <label style={labelStyle}>Do Not Call</label>
-              {editing ? (
-                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}>
-                  <input
-                    type="checkbox"
-                    checked={editDoNotCall}
-                    onChange={(e) => setEditDoNotCall(e.target.checked)}
-                  />
-                  <span style={{ fontSize: "0.875rem" }}>Do Not Call</span>
-                </label>
-              ) : (
-                <span style={{ fontSize: "0.875rem", color: contact.doNotCall ? "#ef4444" : "var(--text-dim)" }}>
-                  {contact.doNotCall ? "Yes" : "No"}
-                </span>
-              )}
-            </div>
-
-            <div>
-              <label style={labelStyle}>Do Not SMS</label>
-              {editing ? (
-                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}>
-                  <input
-                    type="checkbox"
-                    checked={editDoNotSms}
-                    onChange={(e) => setEditDoNotSms(e.target.checked)}
-                  />
-                  <span style={{ fontSize: "0.875rem" }}>Do Not SMS</span>
-                </label>
-              ) : (
-                <span style={{ fontSize: "0.875rem", color: contact.doNotSms ? "#ef4444" : "var(--text-dim)" }}>
-                  {contact.doNotSms ? "Yes" : "No"}
-                </span>
-              )}
-            </div>
-
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "1rem 1.5rem", fontSize: "0.8125rem", color: "var(--text-dim)", paddingTop: "0.375rem", borderTop: "1px solid var(--border)" }}>
-              <span style={{ display: "flex", alignItems: "center", gap: "0.3rem" }}>
-                <Clock size={12} /> Added {formatDate(contact.createdAt)}
-              </span>
-              {contact.lastActivityAt && (
-                <span style={{ display: "flex", alignItems: "center", gap: "0.3rem" }}>
-                  <User size={12} /> Last activity {formatDate(contact.lastActivityAt)}
-                </span>
-              )}
-              {contact.lastDisposition && (
-                <span style={{ display: "flex", alignItems: "center", gap: "0.3rem", color: "#0ea5e9" }}>
-                  <CheckCheck size={12} />
-                  Last disposition: <strong style={{ fontWeight: 600 }}>{contact.lastDisposition}</strong>
-                  {contact.lastDispositionAt && (
-                    <span style={{ color: "var(--text-dim)", fontWeight: 400 }}>
-                      &nbsp;· {formatDate(contact.lastDispositionAt)}
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+                  {primaryEmail && (
+                    <span className="flex items-center gap-1.5 text-crm-muted">
+                      <Mail className="h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate max-w-[200px]">{primaryEmail}</span>
                     </span>
                   )}
-                </span>
-              )}
-              {lastSmsIn && (
-                <span style={{ display: "flex", alignItems: "center", gap: "0.3rem", color: "#7c3aed" }}>
-                  <MessageSquareDot size={12} />
-                  Last SMS in: {formatTimeAgo(lastSmsIn.createdAt)}
-                </span>
-              )}
-            </div>
-          </div>
+                  {primaryPhone && (
+                    <span className="flex items-center gap-1.5 tabular-nums text-crm-muted">
+                      <Phone className="h-3.5 w-3.5 shrink-0" />
+                      {primaryPhone}
+                    </span>
+                  )}
+                </div>
 
-          {/* ── Open tasks panel ──────────────────────────────────────────── */}
-          <div ref={tasksPanelRef} className="panel rounded-crm-lg border border-crm-border/60 shadow-crm" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>
-                Open Tasks {tasks.length > 0 && <span style={{ fontWeight: 400, color: "var(--accent)" }}>({tasks.length})</span>}
-              </h3>
-              {!isArchived && (
-                <button
-                  onClick={() => setAddingTask((v) => !v)}
-                  title="Add follow-up"
-                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--accent)", padding: "0.125rem", display: "flex", alignItems: "center", gap: "0.25rem", fontSize: "0.8125rem", fontWeight: 600 }}
-                >
-                  <Plus size={13} /> Add
+                {/* Meta row — separator-joined */}
+                <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-crm-muted">
+                  <span className={cn(
+                    "font-semibold",
+                    leadScore >= 70 ? "text-emerald-500" : leadScore >= 45 ? "text-amber-500" : "text-crm-muted"
+                  )}>
+                    {leadScore} {leadScoreLabel}
+                  </span>
+                  <span className="select-none text-crm-border">·</span>
+                  <span>{lastTouch}</span>
+                  <span className="select-none text-crm-border">·</span>
+                  <span className="flex items-center gap-1"><User className="h-3 w-3 shrink-0" />{owner}</span>
+                  {campaignName && (
+                    <>
+                      <span className="select-none text-crm-border">·</span>
+                      <span>{campaignName}</span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Right side: Actions + overflow */}
+              <div className="flex shrink-0 items-center gap-2" data-actions-dropdown>
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setActionsOpen((v) => !v)}
+                    className={cn(crm.btnSecondary, "gap-1.5")}
+                  >
+                    Actions
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </button>
+                  {actionsOpen && (
+                    <div className="absolute right-0 top-full z-50 mt-1.5 w-48 overflow-hidden rounded-xl border border-crm-border bg-crm-surface shadow-[0_8px_32px_-8px_rgba(0,0,0,0.5)]">
+                      {!isArchived && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => { setActionsOpen(false); setEditing(true); }}
+                            className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-crm-text hover:bg-crm-surface-2/60"
+                          >
+                            Edit Contact
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setActionsOpen(false); setComposeOpen(true); }}
+                            disabled={!primaryEmailRow}
+                            className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-crm-text hover:bg-crm-surface-2/60 disabled:opacity-40"
+                          >
+                            Send Email
+                          </button>
+                          {canLiveWorkspace && (
+                            <Link
+                              href={workspaceHref}
+                              onClick={() => setActionsOpen(false)}
+                              className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-crm-text hover:bg-crm-surface-2/60"
+                            >
+                              Open Live Workspace
+                            </Link>
+                          )}
+                          <div className="mx-3 my-1 border-t border-crm-border/60" />
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => { setActionsOpen(false); void handleArchiveContact(); }}
+                              disabled={archivePosting}
+                              className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-crm-danger hover:bg-crm-danger/8"
+                            >
+                              {archivePosting ? "Archiving…" : "Archive Contact"}
+                            </button>
+                          )}
+                        </>
+                      )}
+                      {isArchived && isAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => { setActionsOpen(false); void handleRestoreContact(); }}
+                          disabled={restorePosting}
+                          className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-crm-text hover:bg-crm-surface-2/60"
+                        >
+                          {restorePosting ? "Restoring…" : "Restore Contact"}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <button type="button" className={cn(crm.btnGhost, "px-2 py-2")}>
+                  <MoreHorizontal className="h-4 w-4" />
                 </button>
+              </div>
+            </div>
+
+            {sipNotice && (
+              <div className="mt-3 flex items-center gap-2 rounded-lg border border-crm-warning/35 bg-crm-warning/8 px-3 py-2 text-xs text-crm-warning">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                {sipNotice}
+              </div>
+            )}
+          </div>
+
+          {/* ── Edit contact modal ───────────────────────────────────────────── */}
+          {editing && !isArchived && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+              onClick={(e) => { if (e.target === e.currentTarget) setEditing(false); }}
+            >
+              <div className="w-full max-w-lg overflow-hidden rounded-2xl border border-crm-border bg-crm-surface shadow-[0_24px_64px_-16px_rgba(0,0,0,0.6)]">
+                <div className="flex items-center justify-between border-b border-crm-border/60 px-6 py-4">
+                  <h3 className="text-base font-bold text-crm-text">Edit Contact</h3>
+                  <button type="button" onClick={() => setEditing(false)} className="text-crm-muted hover:text-crm-text">✕</button>
+                </div>
+                <div className="p-6">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="col-span-2">
+                      <label style={labelStyle}>Display Name *</label>
+                      <input value={editDisplayName} onChange={(e) => setEditDisplayName(e.target.value)} style={inputStyle} placeholder="Full name or company name" />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>First Name</label>
+                      <input value={editFirstName} onChange={(e) => setEditFirstName(e.target.value)} style={inputStyle} placeholder="First" />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Last Name</label>
+                      <input value={editLastName} onChange={(e) => setEditLastName(e.target.value)} style={inputStyle} placeholder="Last" />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Company</label>
+                      <input value={editCompany} onChange={(e) => setEditCompany(e.target.value)} style={inputStyle} placeholder="Company name" />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Title</label>
+                      <input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} style={inputStyle} placeholder="Job title" />
+                    </div>
+                    <div className="col-span-2">
+                      <label style={labelStyle}>Stage</label>
+                      <select value={editStage} onChange={(e) => setEditStage(e.target.value as CrmStage)} style={inputStyle}>
+                        {STAGE_OPTIONS.map((s) => (<option key={s.value} value={s.value}>{s.label}</option>))}
+                      </select>
+                    </div>
+                    <div className="col-span-2 flex gap-6">
+                      <label className="flex items-center gap-2 cursor-pointer text-sm">
+                        <input type="checkbox" checked={editDoNotCall} onChange={(e) => setEditDoNotCall(e.target.checked)} />
+                        Do Not Call
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer text-sm">
+                        <input type="checkbox" checked={editDoNotSms} onChange={(e) => setEditDoNotSms(e.target.checked)} />
+                        Do Not SMS
+                      </label>
+                    </div>
+                    <div className="col-span-2">
+                      <label style={labelStyle}>Notes</label>
+                      <textarea value={editNotes} onChange={(e) => setEditNotes(e.target.value)} rows={3} style={{ ...inputStyle, resize: "vertical", lineHeight: 1.5 }} placeholder="Scratch notes…" />
+                    </div>
+                  </div>
+                  {saveError && <p className="mt-2 text-sm text-crm-danger">{saveError}</p>}
+                </div>
+                <div className="flex justify-end gap-2 border-t border-crm-border/60 px-6 py-4">
+                  <button type="button" onClick={() => setEditing(false)} disabled={saving} className={crm.btnSecondary}>Cancel</button>
+                  <button type="button" onClick={() => void handleSave()} disabled={saving} className={crm.btnPrimary}>
+                    {saving ? "Saving…" : "Save Changes"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── Horizontal tab navigation — pill segmented control ───────────── */}
+          <div className="mt-3 overflow-x-auto pb-0.5">
+            <div className="inline-flex items-center gap-0.5 rounded-xl bg-crm-surface-2/70 p-1 shadow-[inset_0_1px_3px_rgba(0,0,0,0.08)]">
+              {TABS.map(({ id: tabId, label }) => (
+                <button
+                  key={tabId}
+                  type="button"
+                  onClick={() => focusTab(tabId)}
+                  className={cn(
+                    "whitespace-nowrap rounded-lg px-3.5 py-1.5 text-sm font-medium transition-all duration-150",
+                    contactTab === tabId
+                      ? "bg-crm-surface text-crm-text shadow-sm ring-1 ring-crm-border/30"
+                      : "text-crm-muted hover:text-crm-text",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* ── Main 3-column body ───────────────────────────────────────────── */}
+          <div className="grid grid-cols-1 gap-4 pt-4 lg:grid-cols-[210px_1fr] xl:grid-cols-[210px_1fr_288px] xl:items-start">
+
+            {/* ── LEFT COLUMN — Communication launcher ─────────────────────── */}
+            <div className="order-3 flex flex-col gap-3 lg:order-1">
+
+              {/* Communicate section */}
+              <div className="overflow-hidden rounded-xl border border-crm-border/60 bg-crm-surface">
+                <p className="px-4 pt-3 pb-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-crm-muted/70">Communicate</p>
+                <div className="flex flex-col pb-1">
+                  <CommAction
+                    icon={<Phone className="h-4 w-4" />}
+                    iconBg="bg-emerald-500/10 text-emerald-500"
+                    label="Call"
+                    onClick={() => void handleCall()}
+                    disabled={!primaryPhone || isArchived}
+                  />
+                  <CommAction
+                    icon={<MessageSquareDot className="h-4 w-4" />}
+                    iconBg="bg-sky-500/10 text-sky-400"
+                    label="SMS"
+                    onClick={() => focusTab("sms")}
+                    disabled={isArchived || contact.doNotSms || contact.phones.length === 0}
+                    active={contactTab === "sms"}
+                  />
+                  <CommAction
+                    icon={
+                      <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current" aria-hidden>
+                        <path d="M12 2C6.48 2 2 6.48 2 12c0 1.85.5 3.58 1.37 5.07L2 22l5.08-1.34A9.93 9.93 0 0 0 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2Zm5.07 14.14c-.22.61-1.27 1.17-1.74 1.22-.46.05-1 .07-1.62-.1-.37-.1-.85-.24-1.47-.5-2.59-1.12-4.28-3.73-4.41-3.9-.13-.18-1.07-1.43-1.07-2.72 0-1.3.68-1.94 .92-2.21.24-.26.52-.33.7-.33.17 0 .35 0 .5.01.16.01.38-.06.6.46.22.52.74 1.8.81 1.93.07.14.11.3.02.48-.09.18-.13.3-.26.46l-.38.44c-.13.13-.26.27-.11.53.15.26.66 1.09 1.42 1.77.98.88 1.8 1.15 2.06 1.28.26.13.41.11.56-.07.15-.18.64-.74.81-1 .17-.26.34-.22.58-.13.24.09 1.52.72 1.78.85.26.13.43.2.5.31.07.11.07.64-.15 1.25Z" />
+                      </svg>
+                    }
+                    iconBg="bg-green-500/10 text-green-500"
+                    label="WhatsApp"
+                    disabled
+                    disabledHint="Not enabled"
+                  />
+                  <CommAction
+                    icon={<Mail className="h-4 w-4" />}
+                    iconBg="bg-violet-500/10 text-violet-400"
+                    label="Email"
+                    onClick={() => setComposeOpen(true)}
+                    disabled={isArchived || !primaryEmailRow}
+                  />
+                  <CommAction
+                    icon={<Calendar className="h-4 w-4" />}
+                    iconBg="bg-amber-500/10 text-amber-400"
+                    label="Add Task"
+                    onClick={() => { setAddingTask(true); focusTab("tasks"); }}
+                    disabled={isArchived}
+                  />
+                  <CommAction
+                    icon={<MessageSquare className="h-4 w-4" />}
+                    iconBg="bg-crm-accent/10 text-crm-accent"
+                    label="Add Note"
+                    onClick={() => { focusTab("notes"); setTimeout(() => noteTextareaRef.current?.focus(), 100); }}
+                    disabled={isArchived}
+                    active={contactTab === "notes"}
+                  />
+                </div>
+              </div>
+
+              {/* Quick Disposition — keyboard-chip style */}
+              {!isArchived && (
+                <div className="overflow-hidden rounded-xl border border-crm-border/60 bg-crm-surface">
+                  <div className="flex items-center justify-between px-4 pt-3 pb-2">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-crm-muted/70">Disposition</p>
+                    {disposition && (
+                      <button
+                        type="button"
+                        onClick={() => setDisposition("")}
+                        className="text-[10px] text-crm-muted hover:text-crm-text"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-1 px-3 pb-3">
+                    {DISPOSITION_OPTIONS.map((d, i) => (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => setDisposition(d === disposition ? "" : d)}
+                        className={cn(
+                          "flex items-center gap-1.5 rounded-lg border px-2 py-2 text-left text-xs font-medium transition-all duration-100",
+                          disposition === d
+                            ? "border-crm-accent/70 bg-crm-accent/10 text-crm-accent shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
+                            : "border-crm-border/60 text-crm-muted hover:border-crm-border hover:text-crm-text",
+                        )}
+                      >
+                        <span className={cn(
+                          "flex h-4 min-w-[1rem] items-center justify-center rounded text-[9px] font-bold tabular-nums",
+                          disposition === d
+                            ? "bg-crm-accent/20 text-crm-accent"
+                            : "bg-crm-surface-2 text-crm-muted/60",
+                        )}>
+                          {i + 1}
+                        </span>
+                        <span className="truncate leading-tight">{d}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="border-t border-crm-border/40 px-3 py-3">
+                    <input
+                      value={outcomeNote}
+                      onChange={(e) => setOutcomeNote(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter" && disposition && !savingOutcome) void saveOutcomeRef.current(); }}
+                      placeholder="Outcome note…"
+                      className={crm.input}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void saveOutcomeRef.current()}
+                      disabled={!disposition || savingOutcome || disabledOutcome()}
+                      className={cn(crm.btnPrimary, "mt-2 w-full justify-between")}
+                    >
+                      <span>{savingOutcome ? "Saving…" : "Save"}</span>
+                      <kbd className="rounded border border-white/25 bg-white/10 px-1.5 py-0.5 text-[10px] font-mono">↵</kbd>
+                    </button>
+                    {outcomeSaved && (
+                      <p className="mt-1.5 flex items-center gap-1 text-xs text-crm-success"><CheckCheck className="h-3 w-3" /> Saved</p>
+                    )}
+                    {outcomeError && <p className="mt-1 text-xs text-crm-danger">{outcomeError}</p>}
+                  </div>
+                </div>
               )}
             </div>
 
-            {/* Inline add form */}
-            {!isArchived && addingTask && (
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.375rem" }}>
-                <input
-                  value={newTaskTitle}
-                  onChange={(e) => setNewTaskTitle(e.target.value)}
-                  placeholder="Follow-up title…"
-                  autoFocus
-                  onKeyDown={(e) => { if (e.key === "Enter") handleCreateTask(); if (e.key === "Escape") setAddingTask(false); }}
-                  style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
+            {/* ── CENTER COLUMN — Tab content ──────────────────────────────── */}
+            <div className="order-1 flex min-w-0 flex-col gap-4 lg:order-2" ref={workspacePanelRef}>
+
+              {/* Timeline tab */}
+              {contactTab === "timeline" && (
+                <ContactTimeline
+                  events={timeline}
+                  loading={timelineLoading}
+                  currentUserId={appUser?.id}
+                  editingNoteLinkedId={editingNoteLinkedId}
+                  editingNoteText={editingNoteText}
+                  allowNoteMutations={!isArchived}
+                  onEditNote={handleEditNote}
+                  onDeleteNote={handleDeleteNote}
+                  isArchived={isArchived}
+                  onStartOutreach={() => { focusTab("notes"); setTimeout(() => noteTextareaRef.current?.focus(), 300); }}
                 />
-                {/* Date presets */}
-                <div style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap" }}>
-                  {[
-                    { label: "Today", days: 0 },
-                    { label: "Tomorrow", days: 1 },
-                    { label: "Next week", days: 7 },
-                  ].map(({ label, days }) => {
-                    const d = new Date();
-                    d.setDate(d.getDate() + days);
-                    const val = d.toISOString().slice(0, 10);
-                    return (
-                      <button
-                        key={label}
-                        type="button"
-                        onClick={() => setNewTaskDueAt(val)}
-                        style={{
-                          padding: "0.2rem 0.5rem",
-                          borderRadius: "0.25rem",
-                          border: `1px solid ${newTaskDueAt === val ? "var(--accent)" : "var(--border)"}`,
-                          background: newTaskDueAt === val ? "var(--accent)" : "var(--surface-hover)",
-                          color: newTaskDueAt === val ? "#fff" : "var(--text-dim)",
-                          fontSize: "0.75rem",
-                          cursor: "pointer",
-                          display: "flex", alignItems: "center", gap: "0.2rem",
-                        }}
-                      >
-                        <Calendar size={10} /> {label}
-                      </button>
-                    );
-                  })}
-                  <input
-                    type="date"
-                    value={newTaskDueAt}
-                    onChange={(e) => setNewTaskDueAt(e.target.value)}
-                    style={{ ...inputStyle, width: "auto", fontSize: "0.75rem", padding: "0.2rem 0.4rem" }}
-                    title="Custom date"
+              )}
+
+              {/* Script tab */}
+              {contactTab === "script" && (
+                <LiveWorkspaceScriptPanel
+                  scriptSummaries={scriptSummaries}
+                  defaultScriptId={null}
+                />
+              )}
+
+              {/* Checklist tab */}
+              {contactTab === "checklist" && (
+                <LiveWorkspaceChecklistPanel
+                  checklists={checklists}
+                  contactId={contact.id}
+                  linkedId={null}
+                  defaultChecklistId={null}
+                  onSaved={() => void loadTimeline()}
+                />
+              )}
+
+              {/* SMS tab */}
+              {contactTab === "sms" && (
+                <div className="overflow-hidden rounded-xl border border-crm-border/70 bg-crm-surface shadow-crm">
+                  <div className="border-b border-crm-border/60 px-4 py-3">
+                    <h3 className="text-sm font-semibold text-crm-text">SMS Thread</h3>
+                  </div>
+                  <ContactSmsPanel
+                    ref={smsPanelRef}
+                    phones={contact.phones}
+                    smsEvents={smsEvents}
+                    timelineLoading={timelineLoading}
+                    isArchived={isArchived}
+                    doNotSms={contact.doNotSms}
+                    smsPhone={smsPhone}
+                    setSmsPhone={setSmsPhone}
+                    smsMessage={smsMessage}
+                    setSmsMessage={setSmsMessage}
+                    smsSending={smsSending}
+                    smsError={smsError}
+                    smsSuccess={smsSuccess}
+                    onSend={handleSendSms}
                   />
                 </div>
-                <div style={{ display: "flex", gap: "0.375rem" }}>
-                  <button
-                    onClick={handleCreateTask}
-                    disabled={newTaskPosting || !newTaskTitle.trim()}
-                    style={{ padding: "0.4rem 0.75rem", borderRadius: "0.3rem", border: "none", cursor: "pointer", background: "var(--accent)", color: "#fff", fontSize: "0.8125rem", fontWeight: 600, opacity: !newTaskTitle.trim() ? 0.5 : 1 }}
-                  >
-                    {newTaskPosting ? "…" : "Add"}
-                  </button>
-                  <button
-                    onClick={() => { setAddingTask(false); setNewTaskDueAt(""); setNewTaskTitle(""); }}
-                    style={{ padding: "0.4rem 0.75rem", borderRadius: "0.3rem", border: "1px solid var(--border)", cursor: "pointer", background: "var(--surface-hover)", color: "var(--text-dim)", fontSize: "0.8125rem" }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
+              )}
 
-            {/* Task list */}
-            {tasksLoading ? (
-              <LoadingSkeleton rows={2} />
-            ) : tasks.length === 0 && !addingTask ? (
-              <p style={{ margin: 0, fontSize: "0.8125rem", color: "var(--text-dim)" }}>No open tasks.</p>
-            ) : (
-              tasks.map((task) => {
-                const isDue = task.dueAt && new Date(task.dueAt) < new Date();
-                return (
-                  <div key={task.id} style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", paddingTop: "0.375rem" }}>
-                    {!isArchived ? (
-                      <button
-                        onClick={() => handleCompleteTask(task.id)}
-                        title="Mark done"
-                        style={{ background: "none", border: "none", cursor: "pointer", padding: "0.1rem", color: "var(--text-dim)", flexShrink: 0, marginTop: "0.1rem" }}
-                      >
-                        <Circle size={14} />
-                      </button>
-                    ) : (
-                      <span style={{ width: 14, flexShrink: 0, marginTop: "0.1rem" }} aria-hidden />
-                    )}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: "0.875rem", fontWeight: 500 }}>{task.title}</div>
-                      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.15rem", alignItems: "center" }}>
-                        <span style={{ fontSize: "0.7rem", fontWeight: 700, padding: "0.1rem 0.35rem", borderRadius: "0.2rem", background: TASK_PRIORITY_COLOR[task.priority] + "22", color: TASK_PRIORITY_COLOR[task.priority], textTransform: "uppercase" }}>
-                          {task.priority}
-                        </span>
-                        {task.dueAt && (
-                          <span style={{ fontSize: "0.75rem", color: isDue ? "#ef4444" : "var(--text-dim)", display: "flex", alignItems: "center", gap: "0.2rem" }}>
-                            <Clock size={10} />
-                            {(() => {
-                              const d = new Date(task.dueAt as any);
-                              return isNaN(d.getTime())
-                                ? String(task.dueAt).slice(0, 10)
-                                : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-                            })()}
-                            {isDue && " · overdue"}
-                          </span>
-                        )}
-                      </div>
-                    </div>
+              {/* Email tab */}
+              {contactTab === "email" && (
+                <div className="overflow-hidden rounded-xl border border-crm-border/70 bg-crm-surface shadow-crm">
+                  <div className="border-b border-crm-border/60 px-4 py-3">
+                    <h3 className="text-sm font-semibold text-crm-text">Email</h3>
                   </div>
-                );
-              })
-            )}
-          </div>
-
-          {/* Scratch notes (Contact.notes — single text field) */}
-          <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
-            <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>Scratch Notes</h3>
-            {editing && !isArchived ? (
-              <textarea
-                value={editNotes}
-                onChange={(e) => setEditNotes(e.target.value)}
-                rows={4}
-                placeholder="Quick scratch pad for this contact…"
-                style={{ ...inputStyle, resize: "vertical", lineHeight: 1.5 }}
-              />
-            ) : (
-              <p style={{ margin: 0, fontSize: "0.875rem", color: contact.notes ? "var(--text)" : "var(--text-dim)", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
-                {contact.notes || "No scratch notes."}
-              </p>
-            )}
-          </div>
-
-          {/* All phones & emails */}
-          <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
-            <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>Contact Info</h3>
-
-            {contact.phones.length === 0 && contact.emails.length === 0 && !addingPhone && !addingEmail && (
-              <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--text-dim)" }}>No contact info yet.</p>
-            )}
-
-            {/* Phones */}
-            {contact.phones.map((p) => (
-              <div key={p.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <Phone size={13} style={{ color: "var(--accent)", flexShrink: 0 }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: "0.875rem", fontWeight: p.isPrimary ? 600 : 400 }}>{p.numberRaw}</div>
-                  <div style={{ fontSize: "0.75rem", color: "var(--text-dim)", textTransform: "capitalize" }}>
-                    {p.type.toLowerCase()}{p.isPrimary ? " · primary" : ""}
-                  </div>
-                </div>
-                {!isArchived && (
-                  <button
-                    onClick={() => handleRemovePhone(p.id)}
-                    title="Remove phone"
-                    style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: "0.1rem", lineHeight: 1, flexShrink: 0 }}
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                )}
-              </div>
-            ))}
-
-            {/* Add phone inline form */}
-            {!isArchived && (addingPhone ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.375rem", paddingTop: "0.25rem" }}>
-                <div style={{ display: "flex", gap: "0.375rem" }}>
-                  <input
-                    autoFocus
-                    value={newPhoneRaw}
-                    onChange={(e) => setNewPhoneRaw(e.target.value)}
-                    placeholder="Phone number"
-                    onKeyDown={(e) => { if (e.key === "Enter") handleAddPhone(); if (e.key === "Escape") { setAddingPhone(false); setNewPhoneRaw(""); } }}
-                    style={{ ...inputStyle, flex: 1, fontSize: "0.8125rem" }}
-                  />
-                  <select
-                    value={newPhoneType}
-                    onChange={(e) => setNewPhoneType(e.target.value as typeof newPhoneType)}
-                    style={{ ...inputStyle, width: "auto", fontSize: "0.8125rem" }}
-                  >
-                    <option value="MOBILE">Mobile</option>
-                    <option value="OFFICE">Office</option>
-                    <option value="HOME">Home</option>
-                    <option value="OTHER">Other</option>
-                  </select>
-                </div>
-                <div style={{ display: "flex", gap: "0.375rem" }}>
-                  <button
-                    onClick={handleAddPhone}
-                    disabled={newPhonePosting || !newPhoneRaw.trim()}
-                    style={{ padding: "0.3rem 0.625rem", borderRadius: "0.3rem", border: "none", cursor: "pointer", background: "var(--accent)", color: "#fff", fontSize: "0.75rem", fontWeight: 600 }}
-                  >
-                    {newPhonePosting ? "…" : "Add"}
-                  </button>
-                  <button
-                    onClick={() => { setAddingPhone(false); setNewPhoneRaw(""); }}
-                    style={{ padding: "0.3rem 0.625rem", borderRadius: "0.3rem", border: "1px solid var(--border)", cursor: "pointer", background: "var(--surface-hover)", color: "var(--text-dim)", fontSize: "0.75rem" }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                onClick={() => setAddingPhone(true)}
-                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--accent)", fontSize: "0.8125rem", fontWeight: 600, padding: 0, textAlign: "left", display: "flex", alignItems: "center", gap: "0.25rem" }}
-              >
-                <Plus size={12} /> Add phone
-              </button>
-            ))}
-
-            {/* Divider */}
-            <div style={{ borderTop: "1px solid var(--border)", margin: "0.25rem 0" }} />
-
-            {/* Emails */}
-            {contact.emails.map((e) => (
-              <div key={e.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <Mail size={13} style={{ color: "var(--accent)", flexShrink: 0 }} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: "0.875rem", fontWeight: e.isPrimary ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.email}</div>
-                  <div style={{ fontSize: "0.75rem", color: "var(--text-dim)", textTransform: "capitalize" }}>
-                    {e.type.toLowerCase()}{e.isPrimary ? " · primary" : ""}
-                  </div>
-                </div>
-                {!isArchived && (
-                  <button
-                    onClick={() => handleRemoveEmail(e.id)}
-                    title="Remove email"
-                    style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-dim)", padding: "0.1rem", lineHeight: 1, flexShrink: 0 }}
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                )}
-              </div>
-            ))}
-
-            {/* Add email inline form */}
-            {!isArchived && (addingEmail ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.375rem", paddingTop: "0.25rem" }}>
-                <div style={{ display: "flex", gap: "0.375rem" }}>
-                  <input
-                    autoFocus
-                    type="email"
-                    value={newEmailAddress}
-                    onChange={(e) => setNewEmailAddress(e.target.value)}
-                    placeholder="Email address"
-                    onKeyDown={(e) => { if (e.key === "Enter") handleAddEmail(); if (e.key === "Escape") { setAddingEmail(false); setNewEmailAddress(""); } }}
-                    style={{ ...inputStyle, flex: 1, fontSize: "0.8125rem" }}
-                  />
-                  <select
-                    value={newEmailType}
-                    onChange={(e) => setNewEmailType(e.target.value as typeof newEmailType)}
-                    style={{ ...inputStyle, width: "auto", fontSize: "0.8125rem" }}
-                  >
-                    <option value="WORK">Work</option>
-                    <option value="PERSONAL">Personal</option>
-                    <option value="OTHER">Other</option>
-                  </select>
-                </div>
-                <div style={{ display: "flex", gap: "0.375rem" }}>
-                  <button
-                    onClick={handleAddEmail}
-                    disabled={newEmailPosting || !newEmailAddress.trim()}
-                    style={{ padding: "0.3rem 0.625rem", borderRadius: "0.3rem", border: "none", cursor: "pointer", background: "var(--accent)", color: "#fff", fontSize: "0.75rem", fontWeight: 600 }}
-                  >
-                    {newEmailPosting ? "…" : "Add"}
-                  </button>
-                  <button
-                    onClick={() => { setAddingEmail(false); setNewEmailAddress(""); }}
-                    style={{ padding: "0.3rem 0.625rem", borderRadius: "0.3rem", border: "1px solid var(--border)", cursor: "pointer", background: "var(--surface-hover)", color: "var(--text-dim)", fontSize: "0.75rem" }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                onClick={() => setAddingEmail(true)}
-                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--accent)", fontSize: "0.8125rem", fontWeight: 600, padding: 0, textAlign: "left", display: "flex", alignItems: "center", gap: "0.25rem" }}
-              >
-                <Plus size={12} /> Add email
-              </button>
-            ))}
-
-            {/* Addresses — display read-only (imported from CSV or set via API) */}
-            {(contact.addresses ?? []).length > 0 && (
-              <>
-                <div style={{ borderTop: "1px solid var(--border)", margin: "0.25rem 0" }} />
-                {(contact.addresses ?? []).map((addr) => {
-                  const line1 = addr.street ?? "";
-                  const line2 = [addr.city, addr.state, addr.zip].filter(Boolean).join(", ");
-                  if (!line1 && !line2) return null;
-                  return (
-                    <div key={addr.id} style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem" }}>
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--accent)", flexShrink: 0, marginTop: "0.2rem" }}><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        {line1 && <div style={{ fontSize: "0.875rem" }}>{line1}</div>}
-                        {line2 && <div style={{ fontSize: "0.8125rem", color: "var(--text-dim)" }}>{line2}</div>}
-                      </div>
+                  <div className="p-6 text-center">
+                    <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-violet-500/12 text-violet-400">
+                      <Mail className="h-5 w-5" />
                     </div>
-                  );
-                })}
-              </>
-            )}
-          </div>
-
-          {/* Possible duplicates panel — shown when the API finds matches */}
-          {duplicates.length > 0 && !isArchived && (
-            <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem", borderLeft: "3px solid #f59e0b" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.375rem" }}>
-                <AlertTriangle size={13} style={{ color: "#d97706" }} />
-                <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, color: "#92400e" }}>
-                  Possible Duplicates ({duplicates.length})
-                </h3>
-              </div>
-              <p style={{ margin: 0, fontSize: "0.75rem", color: "#92400e" }}>
-                These contacts share phone, email, or name with this record.
-              </p>
-              {duplicates.map((dup) => (
-                <div key={dup.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem", padding: "0.5rem 0", borderTop: "1px solid var(--border)" }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: "0.875rem", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {dup.displayName}
-                    </div>
-                    <div style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>
-                      {[dup.company, dup.primaryPhone].filter(Boolean).join(" · ")}
-                    </div>
-                    <div style={{ fontSize: "0.6875rem", color: "#d97706", marginTop: "0.1rem" }}>
-                      Match: {dup.matchReasons.join(", ")}
-                    </div>
-                  </div>
-                  <a
-                    href={`/crm/contacts/${dup.id}`}
-                    style={{ ...btnSmall, textDecoration: "none", fontSize: "0.75rem" }}
-                  >
-                    View
-                  </a>
-                  {isAdmin && (
+                    <p className="text-sm font-medium text-crm-text">Compose an email to {contact.displayName}</p>
+                    <p className="mt-1 text-xs text-crm-muted">Sent emails are recorded in the timeline automatically.</p>
                     <button
-                      onClick={() => { setMergeTarget(dup); setMergeError(null); }}
-                      style={{ ...btnSmall, color: "#b45309", borderColor: "#fde68a", background: "#fffbeb", fontSize: "0.75rem", display: "flex", alignItems: "center", gap: "0.2rem" }}
+                      type="button"
+                      onClick={() => setComposeOpen(true)}
+                      disabled={!primaryEmailRow || isArchived}
+                      className={cn(crm.btnPrimary, "mt-4")}
                     >
-                      <GitMerge size={11} /> Merge
+                      <Mail className="h-4 w-4" />
+                      Compose Email
+                    </button>
+                    {!primaryEmailRow && (
+                      <p className="mt-2 text-xs text-crm-warning">No email address on file — add one via Actions → Edit Contact.</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Notes tab */}
+              {contactTab === "notes" && (
+                <div className="flex flex-col gap-4">
+                  <div ref={noteComposerRef} className="overflow-hidden rounded-xl border border-crm-border/70 bg-crm-surface shadow-crm">
+                    <div className="border-b border-crm-border/60 px-4 py-3">
+                      <h3 className="text-sm font-semibold text-crm-text">Add Note</h3>
+                    </div>
+                    <div className="p-4">
+                      <LiveWorkspaceNotePanel
+                        ref={noteTextareaRef}
+                        noteBody={noteText}
+                        setNoteBody={setNoteText}
+                        savingNote={notePosting}
+                        noteSavedAt={noteSavedAt}
+                        onSave={handlePostNote}
+                        disabled={isArchived}
+                      />
+                      {noteError && <p className="mt-1 text-xs text-crm-danger">{noteError}</p>}
+                    </div>
+                  </div>
+                  {/* Scratch notes */}
+                  {contact.notes && (
+                    <div className="overflow-hidden rounded-xl border border-crm-border/70 bg-crm-surface shadow-crm">
+                      <div className="border-b border-crm-border/60 px-4 py-3">
+                        <h3 className="text-sm font-semibold text-crm-text">Scratch Notes</h3>
+                      </div>
+                      <div className="p-4">
+                        <p className="whitespace-pre-wrap text-sm leading-relaxed text-crm-text">{contact.notes}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Tasks tab */}
+              {contactTab === "tasks" && (
+                <div ref={tasksPanelRef} className="overflow-hidden rounded-xl border border-crm-border/70 bg-crm-surface shadow-crm">
+                  <div className="flex items-center justify-between border-b border-crm-border/60 px-4 py-3">
+                    <h3 className="text-sm font-semibold text-crm-text">
+                      Open Tasks
+                      {tasks.length > 0 && <span className="ml-2 rounded-full border border-crm-border bg-crm-surface-2 px-2 py-0.5 text-[11px] font-medium text-crm-muted">{tasks.length}</span>}
+                    </h3>
+                    {!isArchived && (
+                      <button
+                        type="button"
+                        onClick={() => setAddingTask((v) => !v)}
+                        className={cn(crm.btnGhost, "text-xs py-1 px-2")}
+                      >
+                        <Plus className="h-3.5 w-3.5" /> Add
+                      </button>
+                    )}
+                  </div>
+                  <div className="p-4">
+                    {/* Add task form */}
+                    {!isArchived && addingTask && (
+                      <div className="mb-4 flex flex-col gap-2 rounded-xl border border-crm-border/70 bg-crm-surface-2/40 p-3">
+                        <input
+                          value={newTaskTitle}
+                          onChange={(e) => setNewTaskTitle(e.target.value)}
+                          placeholder="Follow-up title…"
+                          autoFocus
+                          onKeyDown={(e) => { if (e.key === "Enter") void handleCreateTask(); if (e.key === "Escape") setAddingTask(false); }}
+                          className={crm.input}
+                        />
+                        <div className="flex flex-wrap gap-1.5">
+                          {[{ label: "Today", days: 0 }, { label: "Tomorrow", days: 1 }, { label: "Next week", days: 7 }].map(({ label, days }) => {
+                            const d = new Date();
+                            d.setDate(d.getDate() + days);
+                            const val = d.toISOString().slice(0, 10);
+                            return (
+                              <button
+                                key={label}
+                                type="button"
+                                onClick={() => setNewTaskDueAt(val)}
+                                className={cn(
+                                  "rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors",
+                                  newTaskDueAt === val
+                                    ? "border-crm-accent bg-crm-accent/15 text-crm-accent"
+                                    : "border-crm-border text-crm-muted hover:border-crm-accent/40"
+                                )}
+                              >
+                                <Calendar className="mr-1 inline h-2.5 w-2.5" />{label}
+                              </button>
+                            );
+                          })}
+                          <input
+                            type="date"
+                            value={newTaskDueAt}
+                            onChange={(e) => setNewTaskDueAt(e.target.value)}
+                            className={cn(crm.input, "w-auto py-0.5 text-xs")}
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void handleCreateTask()}
+                            disabled={newTaskPosting || !newTaskTitle.trim()}
+                            className={crm.btnPrimary}
+                          >
+                            {newTaskPosting ? "…" : "Add Task"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setAddingTask(false); setNewTaskDueAt(""); setNewTaskTitle(""); }}
+                            className={crm.btnSecondary}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {tasksLoading ? (
+                      <LoadingSkeleton rows={2} />
+                    ) : tasks.length === 0 && !addingTask ? (
+                      <p className="text-sm text-crm-muted">No open tasks.</p>
+                    ) : (
+                      <div className="flex flex-col gap-2">
+                        {tasks.map((task) => {
+                          const isDue = task.dueAt && new Date(task.dueAt) < new Date();
+                          return (
+                            <div key={task.id} className="flex items-center gap-3 rounded-xl border border-crm-border/60 bg-crm-surface-2/30 px-3 py-2.5 transition-colors hover:bg-crm-surface-2/50">
+                              {!isArchived ? (
+                                <button
+                                  type="button"
+                                  onClick={() => void handleCompleteTask(task.id)}
+                                  title="Mark done"
+                                  className="shrink-0 text-crm-muted hover:text-crm-success"
+                                >
+                                  <Circle className="h-4 w-4" />
+                                </button>
+                              ) : <span className="w-4 shrink-0" />}
+                              <div className="flex min-w-0 flex-1 flex-col">
+                                <span className="truncate text-sm text-crm-text">{task.title}</span>
+                                <div className="mt-0.5 flex items-center gap-2">
+                                  <span style={{ fontSize: "0.7rem", fontWeight: 700, padding: "0.1rem 0.35rem", borderRadius: "0.2rem", background: TASK_PRIORITY_COLOR[task.priority] + "22", color: TASK_PRIORITY_COLOR[task.priority], textTransform: "uppercase" }}>
+                                    {task.priority}
+                                  </span>
+                                  {task.dueAt && (
+                                    <span className={cn("flex items-center gap-1 text-xs", isDue ? "text-crm-danger" : "text-crm-muted")}>
+                                      <Clock className="h-2.5 w-2.5" />
+                                      {(() => {
+                                        const d = new Date(task.dueAt as any);
+                                        return isNaN(d.getTime()) ? String(task.dueAt).slice(0, 10) : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                                      })()}
+                                      {isDue && " · overdue"}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+            </div>
+
+            {/* ── RIGHT COLUMN — Intelligence rail ────────────────────────── */}
+            <div className="order-2 flex flex-col gap-3 xl:order-3 xl:sticky xl:top-20 xl:self-start">
+
+              {/* ── Card 1: Relationship Health + Next Best Action (merged) ── */}
+              <div className="overflow-hidden rounded-xl border border-crm-border/50 bg-crm-surface">
+                {/* Health ring + metrics */}
+                <div className="px-4 pt-3 pb-1">
+                  <p className="mb-3 text-[10px] font-bold uppercase tracking-[0.18em] text-crm-muted/70">Relationship Health</p>
+                  <CRMRingMetric
+                    value={leadScore}
+                    max={100}
+                    label={`${leadScore} ${leadScoreLabel}`}
+                    sublabel={`Last 30 days · ${thirtyDayActivityCount} interactions`}
+                    color={leadScore >= 70 ? "#22c55e" : leadScore >= 45 ? "#f59e0b" : "var(--crm-muted)"}
+                    size={72}
+                    stroke={6}
+                  />
+                  <div className="mt-3 flex flex-col gap-0.5">
+                    <RailMetricRow label="Engagement" value={engagementLabel} positive={engagementLabel === "High"} />
+                    <RailMetricRow label="Responsiveness" value={responsivenessLabel} positive={responsivenessLabel === "Very Good" || responsivenessLabel === "Good"} />
+                    <RailMetricRow
+                      label="Trend"
+                      value={trendLabel}
+                      positive={trendLabel === "Improving"}
+                      icon={trendLabel === "Improving" ? <TrendingUp className="h-3 w-3" /> : undefined}
+                    />
+                  </div>
+                </div>
+                {/* Divider */}
+                <div className="mx-4 my-2.5 border-t border-crm-border/40" />
+                {/* Next Best Action */}
+                <div className="flex items-start justify-between gap-2 px-4 pb-4">
+                  <div className="min-w-0 flex-1">
+                    <p className="mb-0.5 text-[10px] font-bold uppercase tracking-[0.18em] text-crm-accent/70">Next Action</p>
+                    <p className="text-sm font-semibold text-crm-text">{nextStep.title}</p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-crm-muted">{nextStep.detail}</p>
+                  </div>
+                  {nextStep.action !== "none" && (
+                    <button
+                      type="button"
+                      onClick={runNextStepAction}
+                      className="mt-4 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-crm-accent/30 bg-crm-accent/8 text-crm-accent transition-colors hover:bg-crm-accent/15"
+                    >
+                      <ChevronRight className="h-3.5 w-3.5" />
                     </button>
                   )}
                 </div>
-              ))}
+              </div>
+
+              {/* ── Card 2: Open Tasks ── */}
+              <div className="overflow-hidden rounded-xl border border-crm-border/50 bg-crm-surface">
+                <div className="flex items-center justify-between px-4 pt-3 pb-1">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-crm-muted/70">
+                    Tasks{tasks.length > 0 && <span className="ml-1.5 font-normal text-crm-accent">{tasks.length}</span>}
+                  </p>
+                  {!isArchived && (
+                    <button
+                      type="button"
+                      onClick={() => { setAddingTask(true); focusTab("tasks"); }}
+                      className="flex items-center gap-1 text-xs font-medium text-crm-accent transition-colors hover:opacity-80"
+                    >
+                      <Plus className="h-3 w-3" /> Add
+                    </button>
+                  )}
+                </div>
+                <div className="px-3 pb-3 pt-1">
+                  {tasksLoading ? (
+                    <LoadingSkeleton rows={2} />
+                  ) : tasks.length === 0 ? (
+                    <p className="px-1 text-xs text-crm-muted">No open tasks.</p>
+                  ) : (
+                    <div className="flex flex-col gap-0.5">
+                      {tasks.slice(0, 4).map((task) => {
+                        const isDue = task.dueAt && new Date(task.dueAt) < new Date();
+                        return (
+                          <div key={task.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-crm-surface-2/50">
+                            {!isArchived ? (
+                              <button
+                                type="button"
+                                onClick={() => void handleCompleteTask(task.id)}
+                                className="h-3.5 w-3.5 shrink-0 rounded-sm border border-crm-border/80 transition-colors hover:border-crm-success hover:bg-crm-success/10"
+                              />
+                            ) : <span className="h-3.5 w-3.5 shrink-0" />}
+                            <span className="flex-1 truncate text-xs text-crm-text">{task.title}</span>
+                            {task.dueAt && (
+                              <span className={cn("shrink-0 text-[10px]", isDue ? "font-medium text-crm-danger" : "text-crm-muted/70")}>
+                                {(() => {
+                                  const d = new Date(task.dueAt as any);
+                                  return isNaN(d.getTime()) ? String(task.dueAt).slice(0, 10) : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                                })()}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {tasks.length > 4 && (
+                        <button
+                          type="button"
+                          onClick={() => focusTab("tasks")}
+                          className="mt-0.5 px-2 text-xs font-medium text-crm-accent hover:opacity-80"
+                        >
+                          +{tasks.length - 4} more
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* ── Card 3: Contact Info + Tags (merged) ── */}
+              <div className="overflow-hidden rounded-xl border border-crm-border/50 bg-crm-surface">
+                {/* Contact Info */}
+                <div className="flex items-center justify-between px-4 pt-3 pb-1">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-crm-muted/70">Contact</p>
+                  {!isArchived && (
+                    <button
+                      type="button"
+                      onClick={() => setEditing(true)}
+                      className="text-xs font-medium text-crm-accent hover:opacity-80"
+                    >
+                      Edit
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-col pt-1">
+                  {contact.emails.length === 0 && contact.phones.length === 0 ? (
+                    <p className="px-4 pb-2 text-xs text-crm-muted">No contact info on file.</p>
+                  ) : null}
+                  {contact.emails.map((e) => (
+                    <div key={e.id} className="group flex items-center gap-2.5 px-4 py-2 transition-colors hover:bg-crm-surface-2/30">
+                      <Mail className="h-3.5 w-3.5 shrink-0 text-crm-muted/60" />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-xs font-medium text-crm-text">{e.email}</div>
+                        <div className="text-[10px] capitalize text-crm-muted/60">{e.type.toLowerCase()}{e.isPrimary ? " · Primary" : ""}</div>
+                      </div>
+                      {!isArchived && (
+                        <button
+                          type="button"
+                          onClick={() => void handleRemoveEmail(e.id)}
+                          className="shrink-0 text-crm-muted/40 opacity-0 transition-opacity group-hover:opacity-100 hover:text-crm-danger"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  {!isArchived && !addingEmail && (
+                    <button
+                      type="button"
+                      onClick={() => setAddingEmail(true)}
+                      className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-crm-accent/80 transition-colors hover:text-crm-accent"
+                    >
+                      <Plus className="h-3 w-3" /> Add email
+                    </button>
+                  )}
+                  {!isArchived && addingEmail && (
+                    <div className="flex flex-col gap-2 px-3 py-2">
+                      <div className="flex gap-2">
+                        <input autoFocus type="email" value={newEmailAddress} onChange={(e) => setNewEmailAddress(e.target.value)} placeholder="Email address" onKeyDown={(e) => { if (e.key === "Enter") void handleAddEmail(); if (e.key === "Escape") { setAddingEmail(false); setNewEmailAddress(""); } }} style={{ ...inputStyle, flex: 1, fontSize: "0.8125rem" }} />
+                        <select value={newEmailType} onChange={(e) => setNewEmailType(e.target.value as typeof newEmailType)} style={{ ...inputStyle, width: "auto", fontSize: "0.8125rem" }}>
+                          <option value="WORK">Work</option>
+                          <option value="PERSONAL">Personal</option>
+                          <option value="OTHER">Other</option>
+                        </select>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={() => void handleAddEmail()} disabled={newEmailPosting || !newEmailAddress.trim()} style={{ padding: "0.3rem 0.625rem", borderRadius: "0.3rem", border: "none", cursor: "pointer", background: "var(--accent)", color: "#fff", fontSize: "0.75rem", fontWeight: 600 }}>
+                          {newEmailPosting ? "…" : "Add"}
+                        </button>
+                        <button onClick={() => { setAddingEmail(false); setNewEmailAddress(""); }} style={{ padding: "0.3rem 0.625rem", borderRadius: "0.3rem", border: "1px solid var(--border)", cursor: "pointer", background: "var(--surface-hover)", color: "var(--text-dim)", fontSize: "0.75rem" }}>
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {contact.phones.map((p) => (
+                    <div key={p.id} className="group flex items-center gap-2.5 px-4 py-2 transition-colors hover:bg-crm-surface-2/30">
+                      <Phone className="h-3.5 w-3.5 shrink-0 text-crm-muted/60" />
+                      <div className="min-w-0 flex-1">
+                        <div className="tabular-nums text-xs font-medium text-crm-text">{p.numberRaw}</div>
+                        <div className="text-[10px] capitalize text-crm-muted/60">{p.type.toLowerCase()}{p.isPrimary ? " · Primary" : ""}</div>
+                      </div>
+                      {!isArchived && (
+                        <button
+                          type="button"
+                          onClick={() => void handleRemovePhone(p.id)}
+                          className="shrink-0 text-crm-muted/40 opacity-0 transition-opacity group-hover:opacity-100 hover:text-crm-danger"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  {!isArchived && !addingPhone && (
+                    <button
+                      type="button"
+                      onClick={() => setAddingPhone(true)}
+                      className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-crm-accent/80 transition-colors hover:text-crm-accent"
+                    >
+                      <Plus className="h-3 w-3" /> Add phone
+                    </button>
+                  )}
+                  {!isArchived && addingPhone && (
+                    <div className="flex flex-col gap-2 px-3 py-2">
+                      <div className="flex gap-2">
+                        <input autoFocus value={newPhoneRaw} onChange={(e) => setNewPhoneRaw(e.target.value)} placeholder="Phone number" onKeyDown={(e) => { if (e.key === "Enter") void handleAddPhone(); if (e.key === "Escape") { setAddingPhone(false); setNewPhoneRaw(""); } }} style={{ ...inputStyle, flex: 1, fontSize: "0.8125rem" }} />
+                        <select value={newPhoneType} onChange={(e) => setNewPhoneType(e.target.value as typeof newPhoneType)} style={{ ...inputStyle, width: "auto", fontSize: "0.8125rem" }}>
+                          <option value="MOBILE">Mobile</option>
+                          <option value="OFFICE">Office</option>
+                          <option value="HOME">Home</option>
+                          <option value="OTHER">Other</option>
+                        </select>
+                      </div>
+                      <div className="flex gap-2">
+                        <button onClick={() => void handleAddPhone()} disabled={newPhonePosting || !newPhoneRaw.trim()} style={{ padding: "0.3rem 0.625rem", borderRadius: "0.3rem", border: "none", cursor: "pointer", background: "var(--accent)", color: "#fff", fontSize: "0.75rem", fontWeight: 600 }}>
+                          {newPhonePosting ? "…" : "Add"}
+                        </button>
+                        <button onClick={() => { setAddingPhone(false); setNewPhoneRaw(""); }} style={{ padding: "0.3rem 0.625rem", borderRadius: "0.3rem", border: "1px solid var(--border)", cursor: "pointer", background: "var(--surface-hover)", color: "var(--text-dim)", fontSize: "0.75rem" }}>
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Tags (merged into same card with divider) */}
+                {(contact.tags ?? []).length > 0 && (
+                  <>
+                    <div className="mx-4 my-1 border-t border-crm-border/40" />
+                    <div className="flex flex-wrap gap-1 px-4 py-3">
+                      {(contact.tags ?? []).map((tag) => (
+                        <span
+                          key={tag.id}
+                          className="rounded-full border border-crm-border/50 bg-crm-surface-2/60 px-2 py-0.5 text-[11px] font-medium text-crm-muted"
+                          style={tag.color ? { borderColor: tag.color + "44", color: tag.color, background: tag.color + "0e" } : {}}
+                        >
+                          {tag.name}
+                        </span>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Possible duplicates — shown when detected */}
+              {duplicates.length > 0 && !isArchived && (
+                <div className="overflow-hidden rounded-xl border border-amber-500/40 bg-amber-500/5 shadow-crm">
+                  <div className="flex items-center gap-2 border-b border-amber-500/30 px-4 py-3">
+                    <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+                    <p className="text-[11px] font-bold uppercase tracking-wide text-amber-600">Possible Duplicates ({duplicates.length})</p>
+                  </div>
+                  <div className="flex flex-col divide-y divide-amber-500/20">
+                    {duplicates.map((dup) => (
+                      <div key={dup.id} className="flex items-center gap-2 px-4 py-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-semibold text-crm-text">{dup.displayName}</p>
+                          <p className="text-[10px] text-crm-muted">{dup.matchReasons.join(", ")}</p>
+                        </div>
+                        <a href={`/crm/contacts/${dup.id}`} style={{ ...btnSmall, textDecoration: "none", fontSize: "0.7rem" }}>View</a>
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => { setMergeTarget(dup); setMergeError(null); }}
+                            className="flex items-center gap-1 rounded border border-amber-400/50 bg-amber-50 px-2 py-0.5 text-[0.7rem] font-medium text-amber-700 hover:bg-amber-100"
+                          >
+                            <GitMerge className="h-2.5 w-2.5" /> Merge
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </div>
-        </div>
-      </div>
-      </div>
+      </CRMPageShell>
 
       {/* ── Merge confirmation modal ──────────────────────────────────────────── */}
       {mergeTarget && (
         <div
-          style={{
-            position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 10000,
-            display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem",
-          }}
+          className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
           onClick={(e) => { if (e.target === e.currentTarget) setMergeTarget(null); }}
         >
-          <div style={{
-            background: "var(--surface, #fff)", borderRadius: "0.75rem",
-            padding: "1.5rem", maxWidth: 420, width: "100%",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.22)",
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.75rem" }}>
-              <GitMerge size={18} style={{ color: "#7c3aed" }} />
-              <h3 style={{ margin: 0, fontSize: "1rem", fontWeight: 700 }}>Merge Contact</h3>
+          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-crm-border bg-crm-surface shadow-[0_24px_64px_-16px_rgba(0,0,0,0.6)]">
+            <div className="flex items-center gap-2 border-b border-crm-border/60 px-6 py-4">
+              <GitMerge className="h-4 w-4 text-violet-400" />
+              <h3 className="text-base font-bold text-crm-text">Merge Contact</h3>
             </div>
-            <p style={{ margin: "0 0 0.75rem", fontSize: "0.875rem", color: "var(--text)" }}>
-              Merge <strong>{mergeTarget.displayName}</strong> into <strong>{contact?.displayName}</strong>?
-            </p>
-            <div style={{ background: "#fef3c7", border: "1px solid #fde68a", borderRadius: "0.5rem", padding: "0.625rem 0.875rem", marginBottom: "1rem" }}>
-              <p style={{ margin: 0, fontSize: "0.8125rem", color: "#92400e" }}>
-                <strong>This cannot be undone.</strong> All activity, tasks, notes, and campaign memberships from <em>{mergeTarget.displayName}</em> will be moved to this contact. <em>{mergeTarget.displayName}</em> will be archived.
+            <div className="p-6">
+              <p className="text-sm text-crm-text">
+                Merge <strong>{mergeTarget.displayName}</strong> into <strong>{contact?.displayName}</strong>?
               </p>
+              <div className="mt-3 rounded-xl border border-amber-400/40 bg-amber-500/8 p-3">
+                <p className="text-xs text-amber-700 dark:text-amber-300">
+                  <strong>This cannot be undone.</strong> All activity, tasks, notes, and campaign memberships from <em>{mergeTarget.displayName}</em> will be moved here. <em>{mergeTarget.displayName}</em> will be archived.
+                </p>
+              </div>
+              {mergeError && <p className="mt-3 text-sm text-crm-danger">{mergeError}</p>}
             </div>
-            {mergeError && (
-              <p style={{ margin: "0 0 0.75rem", fontSize: "0.8125rem", color: "#ef4444" }}>{mergeError}</p>
-            )}
-            <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+            <div className="flex justify-end gap-2 border-t border-crm-border/60 px-6 py-4">
               <button
+                type="button"
                 onClick={() => { setMergeTarget(null); setMergeError(null); }}
                 disabled={merging}
-                style={{ ...btnSmall, padding: "0.4375rem 0.875rem" }}
+                className={crm.btnSecondary}
               >
                 Cancel
               </button>
               <button
-                onClick={() => handleMerge(mergeTarget.id)}
+                type="button"
+                onClick={() => void handleMerge(mergeTarget.id)}
                 disabled={merging}
-                style={{ padding: "0.4375rem 0.875rem", borderRadius: "0.375rem", border: "none", cursor: "pointer", background: "#7c3aed", color: "#fff", fontSize: "0.875rem", fontWeight: 700 }}
+                className={cn(crm.btnPrimary, "bg-violet-600 hover:brightness-110")}
               >
                 {merging ? "Merging…" : "Confirm Merge"}
               </button>
@@ -1833,43 +1799,114 @@ function CrmContactDetailInner() {
           </div>
         </div>
       )}
-    </CRMPageShell>
-    {contact ? (
-      <div className="fixed inset-x-0 bottom-12 z-40 pointer-events-none px-3 sm:px-6">
-        <div className="pointer-events-auto mx-auto flex w-full max-w-3xl items-center gap-1 overflow-x-auto rounded-2xl border border-crm-border/70 bg-crm-bg/90 p-1.5 shadow-[0_-18px_44px_-34px_rgba(15,23,42,0.9)] backdrop-blur-xl">
-          <button type="button" disabled className="min-w-[5.5rem] rounded-xl px-3 py-2 text-xs font-bold text-crm-muted" title="Dialpad UI is not available in this workspace yet">Dialpad</button>
-          <button type="button" onClick={() => focusWorkspace("live", "sms")} disabled={isArchived || contact.doNotSms || contact.phones.length === 0} className="min-w-[5.5rem] rounded-xl px-3 py-2 text-xs font-bold text-crm-text hover:bg-crm-surface-2">SMS</button>
-          <button type="button" disabled className="min-w-[6.25rem] rounded-xl px-3 py-2 text-xs font-bold text-crm-muted" title="WhatsApp contact actions are not wired yet">WhatsApp</button>
-          <button type="button" onClick={() => setComposeOpen(true)} disabled={isArchived || !primaryEmailRow} className="min-w-[5.5rem] rounded-xl px-3 py-2 text-xs font-bold text-crm-text hover:bg-crm-surface-2">Email</button>
-          <button type="button" onClick={() => focusWorkspace("notes")} disabled={isArchived} className="min-w-[5.5rem] rounded-xl px-3 py-2 text-xs font-bold text-crm-text hover:bg-crm-surface-2">Notes</button>
-          <button type="button" disabled className="min-w-[7rem] rounded-xl px-3 py-2 text-xs font-bold text-crm-muted" title="AI summary shortcut is not wired here">AI summary</button>
-        </div>
-      </div>
-    ) : null}
-    <LiveWrapUpBar
-      visible={Boolean(contact)}
-      canSave={Boolean(disposition) && !savingOutcome && !isArchived}
-      saving={savingOutcome}
-      isPowerMode={false}
-      onSave={() => void saveOutcomeRef.current()}
-    />
-    {contact ? (
-      <CrmEmailComposeDrawer
-        open={composeOpen}
-        onClose={() => setComposeOpen(false)}
-        contactId={contact.id}
-        contactName={contact.displayName}
-        contactEmail={(contact.emails.find((e) => e.isPrimary) ?? contact.emails[0])?.email ?? null}
-        mergeFields={{
-          firstName: contact.firstName ?? null,
-          lastName: contact.lastName ?? null,
-          displayName: contact.displayName,
-          company: contact.company ?? null,
-          email: (contact.emails.find((e) => e.isPrimary) ?? contact.emails[0])?.email ?? null,
-        }}
-        onSent={() => { void loadTimeline(); }}
+
+      <LiveWrapUpBar
+        visible={Boolean(contact)}
+        canSave={Boolean(disposition) && !savingOutcome && !isArchived}
+        saving={savingOutcome}
+        isPowerMode={false}
+        onSave={() => void saveOutcomeRef.current()}
       />
-    ) : null}
+
+      {contact && (
+        <CrmEmailComposeDrawer
+          open={composeOpen}
+          onClose={() => setComposeOpen(false)}
+          contactId={contact.id}
+          contactName={contact.displayName}
+          contactEmail={(contact.emails.find((e) => e.isPrimary) ?? contact.emails[0])?.email ?? null}
+          mergeFields={{
+            firstName: contact.firstName ?? null,
+            lastName: contact.lastName ?? null,
+            displayName: contact.displayName,
+            company: contact.company ?? null,
+            email: (contact.emails.find((e) => e.isPrimary) ?? contact.emails[0])?.email ?? null,
+          }}
+          onSent={() => { void loadTimeline(); }}
+        />
+      )}
     </>
+  );
+}
+
+// ── Small UI helpers ──────────────────────────────────────────────────────────
+
+
+function CommAction({
+  icon,
+  iconBg,
+  label,
+  onClick,
+  disabled,
+  disabledHint,
+  active,
+}: {
+  icon: React.ReactNode;
+  iconBg: string;
+  label: string;
+  onClick?: () => void;
+  disabled?: boolean;
+  disabledHint?: string;
+  active?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={disabledHint}
+      className={cn(
+        "group relative flex w-full items-center gap-3 py-2.5 pr-4 text-left transition-all duration-150",
+        active
+          ? "bg-crm-accent/[0.06] pl-[calc(1rem-2px)] border-l-2 border-crm-accent/60"
+          : "pl-4",
+        disabled
+          ? "cursor-not-allowed opacity-40"
+          : active
+            ? "hover:bg-crm-accent/[0.09]"
+            : "hover:bg-crm-surface-2/50 hover:-translate-y-px",
+      )}
+    >
+      <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-transform duration-150", iconBg, !disabled && "group-hover:scale-110")}>
+        {icon}
+      </span>
+      <span className={cn(
+        "flex-1 text-sm font-medium transition-colors duration-150",
+        active ? "text-crm-accent" : disabled ? "text-crm-muted" : "text-crm-text",
+      )}>
+        {label}
+      </span>
+      {!disabled && (
+        <ChevronRight className={cn(
+          "h-3.5 w-3.5 transition-all duration-150",
+          active ? "text-crm-accent/60" : "text-crm-border group-hover:translate-x-0.5 group-hover:text-crm-muted",
+        )} />
+      )}
+    </button>
+  );
+}
+
+function RailMetricRow({
+  label,
+  value,
+  positive,
+  icon,
+}: {
+  label: string;
+  value: string;
+  positive?: boolean;
+  icon?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between py-1">
+      <span className="text-[11px] text-crm-muted/80">{label}</span>
+      <span className={cn(
+        "flex items-center gap-1 text-[11px] font-semibold tabular-nums",
+        positive ? "text-emerald-500" : "text-crm-muted",
+      )}>
+        {icon}
+        {value}
+      </span>
+    </div>
   );
 }
