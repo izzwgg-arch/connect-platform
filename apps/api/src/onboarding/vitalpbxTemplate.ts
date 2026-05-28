@@ -123,6 +123,7 @@ export function generateVitalPbxCsv(rows: CsvExtensionRow[]): { filename: string
       extension:                  ext,
       technology:                 "pjsip",
       profile_name:               "Default_WebRTC",
+      device_user:                `${ext}_1`,
       max_contacts:               3,
       vitxi_client:               "yes",
     }));
