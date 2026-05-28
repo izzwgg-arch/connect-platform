@@ -3,8 +3,8 @@
  *
  * Column order matches the official VitalPBX import spec exactly.
  * Each extension produces TWO rows:
- *   1. mode=add      — primary PJSIP device (Default_PJSIP profile, 5 max contacts, recording on)
- *   2. mode=add_device — WebRTC device     (Default_WebRTC profile, 3 max contacts, vitxi_client=yes)
+ *   1. mode=add      — primary PJSIP device (Default PJSIP Profile, 5 max contacts, recording on)
+ *   2. mode=add_device — WebRTC device     (Default WebRTC Profile, 3 max contacts, vitxi_client=yes)
  */
 
 function csvEscapeCell(raw: string | number | null | undefined): string {
@@ -109,7 +109,7 @@ export function generateVitalPbxCsv(rows: CsvExtensionRow[]): { filename: string
       extension:                  ext,
       ext_name:                   name,
       technology:                 "pjsip",
-      profile_name:               "Default_PJSIP",
+      profile_name:               "Default PJSIP Profile",
       device_user:                ext,
       device_description:         name,
       max_contacts:               5,
@@ -125,7 +125,7 @@ export function generateVitalPbxCsv(rows: CsvExtensionRow[]): { filename: string
       mode:                       "add_device",
       extension:                  ext,
       technology:                 "pjsip",
-      profile_name:               "Default_WebRTC",
+      profile_name:               "Default WebRTC Profile",
       device_user:                `${ext}_1`,
       max_contacts:               3,
       vitxi_client:               "yes",

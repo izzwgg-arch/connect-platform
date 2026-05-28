@@ -31,6 +31,8 @@ test("VitalPBX CSV escaping + filename shape", () => {
   assert.ok(/yes/.test(lines[1]));
   // Row 2 (ext 101 add_device): vitxi_client=yes
   assert.ok(/add_device/.test(lines[2]));
+  assert.ok(/Default WebRTC Profile/.test(lines[2]));
+  assert.ok(/101_1/.test(lines[2]));
   assert.ok(/yes/.test(lines[2]));
 });
 

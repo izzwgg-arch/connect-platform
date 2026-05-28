@@ -174,20 +174,29 @@ export async function syncExtensionsFromPbx(
         // (desk / mobile) use the bare extension (e.g. "T7_101").
         //
         // Detection order:
-        //   1. Prefer any device whose `user` or `device_name` ends in "_1"  ← WebRTC
-        //   2. Fall back to a device whose profile_id matches a VitalPBX
-        //      "WebRTC" device profile (legacy detection, still works).
+        //   1. Prefer a trailing "_1" device only when its profile is WebRTC
+        //      (or when profile discovery failed and we have no better signal).
+        //   2. Fall back to any device whose profile_id matches a VitalPBX
+        //      "WebRTC" device profile.
         //   3. Fall back to devices[0] so desk-phone extensions keep syncing.
+        //
+        // The suffix alone is not enough: a bad VitalPBX CSV import can create
+        // "102_1" as a normal PJSIP/UDP device. Marking that as WebRTC makes
+        // Connect say "synced" while the softphone stays stuck connecting.
         const devices: any[] = Array.isArray(ext.devices) ? ext.devices : [];
         const endsWithWebrtcSuffix = (d: any): boolean => {
           const u = String(d?.user ?? "").trim();
           const n = String(d?.device_name ?? "").trim();
           return /_1$/.test(u) || /_1$/.test(n);
         };
+        const profileIsWebrtc = (d: any): boolean => webrtcProfileIds.has(String(d?.profile_id));
+        const suffixWebrtcDevice = devices.find(endsWithWebrtcSuffix) ?? null;
         const webrtcDevice =
-          devices.find(endsWithWebrtcSuffix) ??
+          (suffixWebrtcDevice && (webrtcProfileIds.size === 0 || profileIsWebrtc(suffixWebrtcDevice))
+            ? suffixWebrtcDevice
+            : null) ??
           (webrtcProfileIds.size > 0
-            ? devices.find((d: any) => webrtcProfileIds.has(String(d.profile_id)))
+            ? devices.find(profileIsWebrtc)
             : null) ??
           null;
         const activeDevice = webrtcDevice ?? devices[0] ?? null;
