@@ -5,15 +5,12 @@
  *
  * Designed for MSP/reseller tenants where each end-client gets its own invoice
  * charged to its own payment method (often imported from Sola).
- *
- * Each profile stores a label, an assigned card, autopay toggle, billing email,
- * and a set of recurring line items. The worker generates + charges a separate
- * invoice per profile on the same monthly billing schedule as the main tenant.
  */
 
 import { useState, useCallback, useRef, type ChangeEvent } from "react";
 import { apiGet, apiPost, apiPut, apiDelete } from "../../../../../services/apiClient";
 import { useAsyncResource } from "../../../../../hooks/useAsyncResource";
+import { dollars, invoiceStatusLabel } from "../../../../../lib/billingUi";
 import { LINE_ITEM_TYPE_LABELS, type EditableLineItem, type LineItemType } from "./invoiceEditor";
 import "./invoiceEditorStyles.css";
 
@@ -28,6 +25,7 @@ type PaymentMethodSummary = {
   expMonth: string | null;
   expYear: string | null;
   isImported: boolean;
+  isDefault: boolean;
   active: boolean;
 };
 
@@ -80,16 +78,10 @@ export type BillingProfilesTenant = {
 // ---------------------------------------------------------------------------
 
 let _keyCounter = 0;
-function nextKey() {
-  return `bp-li-${++_keyCounter}-${Date.now()}`;
-}
+function nextKey() { return `bp-li-${++_keyCounter}-${Date.now()}`; }
 
 function fmt(cents: number): string {
-  return `$${(cents / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}`;
-}
-
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  return dollars(cents);
 }
 
 function firstOfMonth(): string {
@@ -104,46 +96,31 @@ function lastOfMonth(): string {
 }
 
 function cardLabel(pm: PaymentMethodSummary | null): string {
-  if (!pm) return "No card assigned";
+  if (!pm) return "No card";
   const brand = pm.brand || "Card";
-  const l4 = pm.last4 ? ` •••• ${pm.last4}` : "";
-  const imported = pm.isImported ? " (imported)" : "";
-  return `${brand}${l4}${imported}`;
+  const l4 = pm.last4 ? ` ···· ${pm.last4}` : "";
+  return `${brand}${l4}`;
 }
 
-function statusBadge(status: string) {
-  const cls: Record<string, string> = {
-    PAID: "billing-chip--green",
-    OPEN: "billing-chip--blue",
-    OVERDUE: "billing-chip--orange",
-    FAILED: "billing-chip--red",
-    VOID: "billing-chip--gray",
-    DRAFT: "billing-chip--gray",
-  };
-  return (
-    <span className={`billing-chip ${cls[status.toUpperCase()] ?? "billing-chip--gray"}`}>
-      {status}
-    </span>
-  );
+function invStatusPillClass(status: string): string {
+  if (status === "PAID") return "good";
+  if (status === "FAILED" || status === "OVERDUE") return "bad";
+  if (status === "VOID") return "";
+  return "warn";
 }
 
 const TAX_TYPES: string[] = ["SALES_TAX", "E911_FEE", "REGULATORY_FEE"];
 
-function calcTotals(items: EditableLineItem[]): { subtotal: number; tax: number; total: number } {
-  let sub = 0;
-  let tax = 0;
+function calcTotals(items: EditableLineItem[]) {
+  let sub = 0; let tax = 0;
   for (const item of items) {
     const amt = Math.round(item.quantity * item.unitPriceCents);
-    if (TAX_TYPES.includes(item.type)) {
-      tax += amt;
-    } else {
-      sub += amt;
-    }
+    if (TAX_TYPES.includes(item.type)) tax += amt; else sub += amt;
   }
   return { subtotal: sub, tax, total: sub + tax };
 }
 
-function editableToProfileLineItem(li: EditableLineItem): ProfileLineItem {
+function editableToProfile(li: EditableLineItem): ProfileLineItem {
   return { type: li.type, description: li.description, quantity: li.quantity, unitPriceCents: li.unitPriceCents };
 }
 
@@ -151,7 +128,7 @@ function profileToEditable(li: ProfileLineItem): EditableLineItem {
   return { _key: nextKey(), type: (li.type || "CUSTOM") as LineItemType, description: li.description, quantity: li.quantity, unitPriceCents: li.unitPriceCents, taxable: true };
 }
 
-function previewLineToEditable(li: PreviewLineItem): EditableLineItem {
+function previewToEditable(li: PreviewLineItem): EditableLineItem {
   const knownTypes = Object.keys(LINE_ITEM_TYPE_LABELS) as LineItemType[];
   const type = knownTypes.includes(li.type as LineItemType) ? (li.type as LineItemType) : "CUSTOM";
   return { _key: nextKey(), type, description: li.description, quantity: li.quantity, unitPriceCents: li.unitPriceCents, taxable: li.taxable };
@@ -165,14 +142,17 @@ function newLineItem(): EditableLineItem {
 // Profile Drawer (create / edit)
 // ---------------------------------------------------------------------------
 
-type ProfileDrawerProps = {
+function ProfileDrawer({
+  tenant,
+  profile,
+  onClose,
+  onSaved,
+}: {
   tenant: BillingProfilesTenant;
   profile?: BillingProfile | null;
   onClose: () => void;
   onSaved: () => void;
-};
-
-function ProfileDrawer({ tenant, profile, onClose, onSaved }: ProfileDrawerProps) {
+}) {
   const isEdit = !!profile;
   const [label, setLabel] = useState(profile?.label ?? "");
   const [paymentMethodId, setPaymentMethodId] = useState(profile?.paymentMethodId ?? "");
@@ -187,9 +167,9 @@ function ProfileDrawer({ tenant, profile, onClose, onSaved }: ProfileDrawerProps
   const [periodStart, setPeriodStart] = useState(firstOfMonth());
   const [periodEnd, setPeriodEnd] = useState(lastOfMonth());
   const [error, setError] = useState<string | null>(null);
-  const lastLoadedPeriodRef = useRef<string | null>(null);
+  const lastLoadedRef = useRef<string | null>(null);
 
-  const pmData = useAsyncResource<{ methods: { id: string; brand: string | null; last4: string | null; expMonth: string | null; expYear: string | null; isImported: boolean; isDefault: boolean; active: boolean }[] }>(
+  const pmData = useAsyncResource<{ methods: PaymentMethodSummary[] }>(
     () => apiGet(`/admin/billing/platform/tenants/${tenant.id}/payment-methods`),
     [tenant.id],
   );
@@ -206,13 +186,13 @@ function ProfileDrawer({ tenant, profile, onClose, onSaved }: ProfileDrawerProps
         `/admin/billing/platform/tenants/${tenant.id}/invoice-preview?serviceStartDate=${periodStart}&serviceEndDate=${periodEnd}`
       );
       if (res.lineItems?.length) {
-        setLineItems(res.lineItems.map(previewLineToEditable));
-        lastLoadedPeriodRef.current = `${periodStart}:${periodEnd}`;
+        setLineItems(res.lineItems.map(previewToEditable));
+        lastLoadedRef.current = `${periodStart}:${periodEnd}`;
       } else {
         setError("No standard line items found for this period.");
       }
     } catch {
-      setError("Failed to load standard bill. Check the service period and try again.");
+      setError("Failed to load standard bill.");
     } finally {
       setLoadingBill(false);
     }
@@ -240,7 +220,7 @@ function ProfileDrawer({ tenant, profile, onClose, onSaved }: ProfileDrawerProps
         autoBillingEnabled: autoBilling,
         billingEmail: billingEmail.trim() || null,
         notes: notes.trim() || null,
-        lineItemsJson: lineItems.filter(li => li.description.trim()).map(editableToProfileLineItem),
+        lineItemsJson: lineItems.filter(li => li.description.trim()).map(editableToProfile),
       };
       if (isEdit && profile) {
         await apiPut(`/admin/billing/platform/tenants/${tenant.id}/billing-profiles/${profile.id}`, body);
@@ -249,229 +229,248 @@ function ProfileDrawer({ tenant, profile, onClose, onSaved }: ProfileDrawerProps
       }
       onSaved();
     } catch (err: any) {
-      const msg = err?.body?.message || err?.body?.error || err?.message || "Save failed.";
-      setError(String(msg));
+      setError(err?.body?.message || err?.body?.error || err?.message || "Save failed.");
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <div className="invoice-editor-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="invoice-editor-drawer" style={{ maxWidth: 580 }}>
-        <div className="invoice-editor-drawer__header">
+    <div
+      className="manual-inv-drawer__overlay inv-editor"
+      onClick={(e) => { if (e.target === e.currentTarget && !submitting) onClose(); }}
+    >
+      <div className="manual-inv-drawer__panel">
+        <div className="manual-inv-drawer__header">
           <div>
-            <div className="invoice-editor-drawer__eyebrow">{tenant.name}</div>
-            <h2 className="invoice-editor-drawer__title">{isEdit ? "Edit Billing Profile" : "Add Billing Profile"}</h2>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ie-text-muted)", marginBottom: 2 }}>
+              {tenant.name}
+            </div>
+            <h3 className="manual-inv-drawer__title">
+              {isEdit ? "Edit Billing Profile" : "Add Billing Profile"}
+            </h3>
           </div>
-          <button className="invoice-editor-drawer__close" type="button" onClick={onClose} aria-label="Close">✕</button>
+          <button className="manual-inv-drawer__close" type="button" onClick={onClose} aria-label="Close">✕</button>
         </div>
 
-        <form className="invoice-editor-drawer__body" onSubmit={(e) => void handleSubmit(e)}>
-          {error && <div className="invoice-editor-error">{error}</div>}
+        <form className="manual-inv-drawer__body" onSubmit={(e) => void handleSubmit(e)}>
+          {error && (
+            <div style={{ background: "var(--ie-bg-danger)", border: "1px solid #fca5a5", borderRadius: 6, padding: "10px 14px", fontSize: 13, color: "var(--ie-text-danger)" }}>
+              {error}
+            </div>
+          )}
 
           {/* Client label */}
-          <label className="invoice-editor-field">
-            <span className="invoice-editor-label">Client / Sub-account name</span>
-            <input
-              className="invoice-editor-input"
-              type="text"
-              value={label}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setLabel(e.target.value)}
-              placeholder="e.g. Bookkeeping Co, Law Firm Client"
-              required
-            />
-          </label>
+          <div className="inv-editor__section">
+            <div className="inv-editor__section-head">
+              <h4 className="inv-editor__section-title">Profile details</h4>
+            </div>
+            <div className="inv-editor__section-body">
+              <div className="inv-editor__meta-grid">
+                <div className="inv-editor__field" style={{ gridColumn: "1 / -1" }}>
+                  <label className="inv-editor__label">Client / Sub-account name</label>
+                  <input
+                    className="inv-editor__input"
+                    type="text"
+                    value={label}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setLabel(e.target.value)}
+                    placeholder="e.g. Bookkeeping Co, Law Firm Client"
+                    required
+                  />
+                </div>
 
-          {/* Payment method */}
-          <label className="invoice-editor-field">
-            <span className="invoice-editor-label">Payment method</span>
-            <select
-              className="invoice-editor-input"
-              value={paymentMethodId}
-              onChange={(e: ChangeEvent<HTMLSelectElement>) => setPaymentMethodId(e.target.value)}
-            >
-              <option value="">— None (manual charge only) —</option>
-              {paymentMethods.map((pm) => (
-                <option key={pm.id} value={pm.id}>
-                  {cardLabel(pm)}{pm.isDefault ? " (default)" : ""}
-                </option>
-              ))}
-            </select>
-            {paymentMethods.length === 0 && pmData.status === "success" && (
-              <p className="invoice-editor-hint">No payment methods found. Import cards from Sola first.</p>
-            )}
-          </label>
+                <div className="inv-editor__field" style={{ gridColumn: "1 / -1" }}>
+                  <label className="inv-editor__label">Payment method</label>
+                  <select
+                    className="inv-editor__input"
+                    value={paymentMethodId}
+                    onChange={(e: ChangeEvent<HTMLSelectElement>) => setPaymentMethodId(e.target.value)}
+                  >
+                    <option value="">— None (manual charge only) —</option>
+                    {paymentMethods.map((pm) => (
+                      <option key={pm.id} value={pm.id}>
+                        {cardLabel(pm)}{pm.isImported ? " (imported)" : ""}{pm.isDefault ? " ★ default" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {pmData.status === "success" && paymentMethods.length === 0 && (
+                    <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--ie-text-muted)" }}>
+                      No payment methods found. Import cards from Sola first.
+                    </p>
+                  )}
+                </div>
 
-          {/* Autopay toggle */}
-          <label className="invoice-editor-field invoice-editor-field--row">
-            <input
-              type="checkbox"
-              checked={autoBilling}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setAutoBilling(e.target.checked)}
-            />
-            <span className="invoice-editor-label">Enable autopay for this profile</span>
-          </label>
+                <div className="inv-editor__field">
+                  <label className="inv-editor__label">Billing email <span style={{ fontWeight: 400 }}>(optional)</span></label>
+                  <input
+                    className="inv-editor__input"
+                    type="email"
+                    value={billingEmail}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setBillingEmail(e.target.value)}
+                    placeholder="client@example.com"
+                  />
+                </div>
 
-          {/* Billing email */}
-          <label className="invoice-editor-field">
-            <span className="invoice-editor-label">Billing email <span style={{ fontWeight: 400, color: "#64748b" }}>(optional)</span></span>
-            <input
-              className="invoice-editor-input"
-              type="email"
-              value={billingEmail}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setBillingEmail(e.target.value)}
-              placeholder="client@example.com"
-            />
-          </label>
-
-          {/* Notes */}
-          <label className="invoice-editor-field">
-            <span className="invoice-editor-label">Notes <span style={{ fontWeight: 400, color: "#64748b" }}>(optional)</span></span>
-            <textarea
-              className="invoice-editor-input"
-              value={notes}
-              onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setNotes(e.target.value)}
-              rows={2}
-              placeholder="Internal notes about this billing profile"
-            />
-          </label>
-
-          {/* Line items */}
-          <div className="invoice-editor-section">
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-              <span className="invoice-editor-label" style={{ margin: 0 }}>Recurring line items</span>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                {/* Load standard bill */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <div className="inv-editor__field">
+                  <label className="inv-editor__label" style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
                     <input
-                      className="invoice-editor-input"
-                      type="date"
-                      value={periodStart}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) => { setPeriodStart(e.target.value); lastLoadedPeriodRef.current = null; }}
-                      style={{ width: 130, padding: "2px 6px", fontSize: 12 }}
-                      title="Period start for standard bill preview"
+                      type="checkbox"
+                      checked={autoBilling}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) => setAutoBilling(e.target.checked)}
+                      style={{ width: 16, height: 16, cursor: "pointer" }}
                     />
-                    <span style={{ fontSize: 11, color: "#64748b" }}>→</span>
-                    <input
-                      className="invoice-editor-input"
-                      type="date"
-                      value={periodEnd}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) => { setPeriodEnd(e.target.value); lastLoadedPeriodRef.current = null; }}
-                      style={{ width: 130, padding: "2px 6px", fontSize: 12 }}
-                      title="Period end for standard bill preview"
-                    />
-                    <button
-                      type="button"
-                      className="btn ghost"
-                      style={{ fontSize: 12, padding: "3px 10px", whiteSpace: "nowrap" }}
-                      disabled={loadingBill || !periodStart || !periodEnd}
-                      onClick={() => void loadStandardBill()}
-                      title="Load line items from this tenant's pricing profile"
-                    >
-                      {loadingBill ? "Loading…" : "⚡ Standard bill"}
-                    </button>
-                  </div>
+                    Enable autopay for this profile
+                  </label>
+                  <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--ie-text-muted)" }}>
+                    When on, this profile is charged automatically each billing cycle.
+                  </p>
+                </div>
+
+                <div className="inv-editor__field" style={{ gridColumn: "1 / -1" }}>
+                  <label className="inv-editor__label">Notes <span style={{ fontWeight: 400 }}>(optional)</span></label>
+                  <textarea
+                    className="inv-editor__input inv-editor__textarea"
+                    value={notes}
+                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setNotes(e.target.value)}
+                    placeholder="Internal notes about this client"
+                    rows={2}
+                  />
                 </div>
               </div>
             </div>
+          </div>
 
-            <table className="invoice-editor-line-items">
-              <thead>
-                <tr>
-                  <th>Type</th>
-                  <th>Description</th>
-                  <th style={{ width: 60, textAlign: "right" }}>Qty</th>
-                  <th style={{ width: 100, textAlign: "right" }}>Unit price</th>
-                  <th style={{ width: 90, textAlign: "right" }}>Amount</th>
-                  <th style={{ width: 32 }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {lineItems.map((li) => (
-                  <tr key={li._key}>
-                    <td>
-                      <select
-                        className="invoice-editor-input"
-                        style={{ fontSize: 12 }}
-                        value={li.type}
-                        onChange={(e: ChangeEvent<HTMLSelectElement>) => updateItem(li._key, "type", e.target.value)}
-                      >
-                        {Object.entries(LINE_ITEM_TYPE_LABELS).map(([k, v]) => (
-                          <option key={k} value={k}>{v}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <input
-                        className="invoice-editor-input"
-                        type="text"
-                        value={li.description}
-                        onChange={(e: ChangeEvent<HTMLInputElement>) => updateItem(li._key, "description", e.target.value)}
-                        placeholder="Description"
-                        style={{ fontSize: 12 }}
-                      />
-                    </td>
-                    <td style={{ textAlign: "right" }}>
-                      <input
-                        className="invoice-editor-input"
-                        type="number"
-                        min={1}
-                        style={{ width: 55, textAlign: "right", fontSize: 12 }}
-                        value={li.quantity}
-                        onChange={(e: ChangeEvent<HTMLInputElement>) => updateItem(li._key, "quantity", Math.max(1, parseInt(e.target.value, 10) || 1))}
-                      />
-                    </td>
-                    <td style={{ textAlign: "right" }}>
-                      <input
-                        className="invoice-editor-input"
-                        type="number"
-                        min={0}
-                        step={1}
-                        style={{ width: 90, textAlign: "right", fontSize: 12 }}
-                        value={(li.unitPriceCents / 100).toFixed(2)}
-                        onChange={(e: ChangeEvent<HTMLInputElement>) => updateItem(li._key, "unitPriceCents", Math.round((parseFloat(e.target.value) || 0) * 100))}
-                      />
-                    </td>
-                    <td style={{ textAlign: "right", fontSize: 13, color: "#1e293b" }}>
-                      {fmt(li.quantity * li.unitPriceCents)}
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="btn ghost"
-                        style={{ padding: "2px 6px", fontSize: 12, color: "#dc2626" }}
-                        onClick={() => removeItem(li._key)}
-                        title="Remove line item"
-                      >✕</button>
-                    </td>
+          {/* Line items */}
+          <div className="inv-editor__section">
+            <div className="inv-editor__section-head">
+              <h4 className="inv-editor__section-title">Recurring line items</h4>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  className="inv-editor__input"
+                  type="date"
+                  value={periodStart}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => { setPeriodStart(e.target.value); lastLoadedRef.current = null; }}
+                  style={{ width: 130, padding: "4px 8px", fontSize: 12 }}
+                  title="Period start for standard bill"
+                />
+                <span style={{ fontSize: 11, color: "var(--ie-text-muted)" }}>→</span>
+                <input
+                  className="inv-editor__input"
+                  type="date"
+                  value={periodEnd}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => { setPeriodEnd(e.target.value); lastLoadedRef.current = null; }}
+                  style={{ width: 130, padding: "4px 8px", fontSize: 12 }}
+                  title="Period end for standard bill"
+                />
+                <button
+                  type="button"
+                  className="btn ghost"
+                  style={{ fontSize: 12, padding: "4px 12px", whiteSpace: "nowrap" }}
+                  disabled={loadingBill || !periodStart || !periodEnd}
+                  onClick={() => void loadStandardBill()}
+                  title="Load line items from this tenant's pricing profile"
+                >
+                  {loadingBill ? "Loading…" : "⚡ Standard bill"}
+                </button>
+              </div>
+            </div>
+            <div className="inv-editor__section-body" style={{ padding: 0 }}>
+              <table className="inv-editor__li-table">
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Description</th>
+                    <th style={{ textAlign: "right", width: 56 }}>Qty</th>
+                    <th style={{ textAlign: "right", width: 100 }}>Unit price</th>
+                    <th style={{ textAlign: "right", width: 90 }}>Amount</th>
+                    <th style={{ width: 32 }}></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-
-            <button type="button" className="btn ghost" style={{ marginTop: 8, fontSize: 13 }} onClick={addItem}>
-              + Add line item
-            </button>
+                </thead>
+                <tbody>
+                  {lineItems.map((li) => (
+                    <tr key={li._key}>
+                      <td>
+                        <select
+                          className="inv-editor__input"
+                          style={{ fontSize: 12 }}
+                          value={li.type}
+                          onChange={(e: ChangeEvent<HTMLSelectElement>) => updateItem(li._key, "type", e.target.value)}
+                        >
+                          {Object.entries(LINE_ITEM_TYPE_LABELS).map(([k, v]) => (
+                            <option key={k} value={k}>{v}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td>
+                        <input
+                          className="inv-editor__input"
+                          type="text"
+                          value={li.description}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => updateItem(li._key, "description", e.target.value)}
+                          placeholder="Description"
+                          style={{ fontSize: 12 }}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          className="inv-editor__input"
+                          type="number"
+                          min={1}
+                          style={{ width: 50, textAlign: "right", fontSize: 12 }}
+                          value={li.quantity}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => updateItem(li._key, "quantity", Math.max(1, parseInt(e.target.value, 10) || 1))}
+                        />
+                      </td>
+                      <td>
+                        <input
+                          className="inv-editor__input"
+                          type="number"
+                          min={0}
+                          step={0.01}
+                          style={{ width: 90, textAlign: "right", fontSize: 12 }}
+                          value={(li.unitPriceCents / 100).toFixed(2)}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => updateItem(li._key, "unitPriceCents", Math.round((parseFloat(e.target.value) || 0) * 100))}
+                        />
+                      </td>
+                      <td style={{ textAlign: "right", fontSize: 13 }}>
+                        {fmt(li.quantity * li.unitPriceCents)}
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          onClick={() => removeItem(li._key)}
+                          style={{ background: "none", border: "none", cursor: "pointer", color: "var(--ie-text-muted)", fontSize: 16, padding: "0 4px", lineHeight: 1 }}
+                          title="Remove"
+                        >×</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div style={{ padding: "10px 20px", borderTop: "1px solid var(--ie-border)" }}>
+                <button type="button" className="btn ghost" style={{ fontSize: 13 }} onClick={addItem}>
+                  + Add line item
+                </button>
+              </div>
+            </div>
 
             {/* Totals */}
-            <div className="invoice-editor-totals" style={{ marginTop: 12 }}>
-              <div className="invoice-editor-totals__row">
+            <div style={{ padding: "12px 20px 16px", borderTop: "1px solid var(--ie-border)", display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+              <div style={{ display: "flex", gap: 48, fontSize: 13, color: "var(--ie-text-muted)" }}>
                 <span>Subtotal</span><span>{fmt(totals.subtotal)}</span>
               </div>
               {totals.tax > 0 && (
-                <div className="invoice-editor-totals__row">
+                <div style={{ display: "flex", gap: 48, fontSize: 13, color: "var(--ie-text-muted)" }}>
                   <span>Tax / fees</span><span>{fmt(totals.tax)}</span>
                 </div>
               )}
-              <div className="invoice-editor-totals__row invoice-editor-totals__row--total">
-                <strong>Monthly total</strong><strong>{fmt(totals.total)}</strong>
+              <div style={{ display: "flex", gap: 48, fontSize: 15, fontWeight: 700 }}>
+                <span>Monthly total</span><span>{fmt(totals.total)}</span>
               </div>
             </div>
           </div>
 
-          <div className="invoice-editor-drawer__footer">
+          <div className="manual-inv-drawer__footer">
             <button type="button" className="btn ghost" disabled={submitting} onClick={onClose}>Cancel</button>
             <button type="submit" className="btn primary" disabled={submitting}>
               {submitting ? "Saving…" : isEdit ? "Save changes" : "Create profile"}
@@ -484,17 +483,20 @@ function ProfileDrawer({ tenant, profile, onClose, onSaved }: ProfileDrawerProps
 }
 
 // ---------------------------------------------------------------------------
-// Charge Now Confirmation Dialog
+// Charge Now Dialog
 // ---------------------------------------------------------------------------
 
-type ChargeNowDialogProps = {
+function ChargeNowDialog({
+  profile,
+  tenantId,
+  onClose,
+  onCharged,
+}: {
   profile: BillingProfile;
   tenantId: string;
   onClose: () => void;
   onCharged: () => void;
-};
-
-function ChargeNowDialog({ profile, tenantId, onClose, onCharged }: ChargeNowDialogProps) {
+}) {
   const [periodStart, setPeriodStart] = useState(firstOfMonth());
   const [periodEnd, setPeriodEnd] = useState(lastOfMonth());
   const [busy, setBusy] = useState(false);
@@ -507,15 +509,11 @@ function ChargeNowDialog({ profile, tenantId, onClose, onCharged }: ChargeNowDia
     setBusy(true);
     setResult(null);
     try {
-      await apiPost(`/admin/billing/platform/tenants/${tenantId}/billing-profiles/${profile.id}/charge-now`, {
-        periodStart,
-        periodEnd,
-      });
+      await apiPost(`/admin/billing/platform/tenants/${tenantId}/billing-profiles/${profile.id}/charge-now`, { periodStart, periodEnd });
       setResult({ type: "ok", msg: "Invoice created and card charged successfully." });
-      setTimeout(onCharged, 1500);
+      setTimeout(onCharged, 1400);
     } catch (err: any) {
-      const body = err?.body;
-      const msg = body?.message || body?.error || err?.message || "Charge failed.";
+      const msg = err?.body?.message || err?.body?.error || err?.message || "Charge failed.";
       setResult({ type: "err", msg: String(msg) });
     } finally {
       setBusy(false);
@@ -523,53 +521,80 @@ function ChargeNowDialog({ profile, tenantId, onClose, onCharged }: ChargeNowDia
   }
 
   return (
-    <div className="invoice-editor-overlay" onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
-      <div className="invoice-editor-drawer" style={{ maxWidth: 440 }}>
-        <div className="invoice-editor-drawer__header">
+    <div
+      className="manual-inv-drawer__overlay inv-editor"
+      onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}
+    >
+      <div className="manual-inv-drawer__panel" style={{ maxWidth: 420 }}>
+        <div className="manual-inv-drawer__header">
           <div>
-            <div className="invoice-editor-drawer__eyebrow">{profile.label}</div>
-            <h2 className="invoice-editor-drawer__title">Charge now</h2>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ie-text-muted)", marginBottom: 2 }}>
+              {profile.label}
+            </div>
+            <h3 className="manual-inv-drawer__title">Charge now</h3>
           </div>
-          <button className="invoice-editor-drawer__close" type="button" onClick={onClose} disabled={busy} aria-label="Close">✕</button>
+          <button className="manual-inv-drawer__close" type="button" onClick={onClose} disabled={busy} aria-label="Close">✕</button>
         </div>
-        <div className="invoice-editor-drawer__body">
+
+        <div className="manual-inv-drawer__body">
           {result ? (
-            <div style={{ color: result.type === "ok" ? "#16a34a" : "#dc2626", padding: "12px 0", fontWeight: 500 }}>
+            <div style={{
+              padding: "14px 16px",
+              borderRadius: 8,
+              fontSize: 14,
+              fontWeight: 500,
+              background: result.type === "ok" ? "var(--ie-bg-success)" : "var(--ie-bg-danger)",
+              color: result.type === "ok" ? "var(--ie-text-success)" : "var(--ie-text-danger)",
+              border: `1px solid ${result.type === "ok" ? "#86efac" : "#fca5a5"}`,
+            }}>
               {result.msg}
             </div>
           ) : (
             <>
-              <p style={{ margin: "0 0 16px", color: "#475569", fontSize: 14 }}>
-                Create an invoice for <strong>{profile.label}</strong> and charge{" "}
-                <strong>{cardLabel(profile.paymentMethod)}</strong> immediately.
+              <p style={{ margin: 0, fontSize: 14, color: "var(--ie-text-muted)", lineHeight: 1.5 }}>
+                Create an invoice for <strong style={{ color: "var(--ie-text)" }}>{profile.label}</strong> and charge{" "}
+                <strong style={{ color: "var(--ie-text)" }}>{cardLabel(profile.paymentMethod)}</strong> immediately.
               </p>
-              <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-                <label className="invoice-editor-field" style={{ flex: 1 }}>
-                  <span className="invoice-editor-label">Period start</span>
-                  <input className="invoice-editor-input" type="date" value={periodStart} onChange={(e: ChangeEvent<HTMLInputElement>) => setPeriodStart(e.target.value)} />
-                </label>
-                <label className="invoice-editor-field" style={{ flex: 1 }}>
-                  <span className="invoice-editor-label">Period end</span>
-                  <input className="invoice-editor-input" type="date" value={periodEnd} onChange={(e: ChangeEvent<HTMLInputElement>) => setPeriodEnd(e.target.value)} />
-                </label>
+
+              <div className="inv-editor__section">
+                <div className="inv-editor__section-head">
+                  <h4 className="inv-editor__section-title">Service period</h4>
+                </div>
+                <div className="inv-editor__section-body">
+                  <div className="inv-editor__meta-grid">
+                    <div className="inv-editor__field">
+                      <label className="inv-editor__label">Start</label>
+                      <input className="inv-editor__input" type="date" value={periodStart} onChange={(e: ChangeEvent<HTMLInputElement>) => setPeriodStart(e.target.value)} />
+                    </div>
+                    <div className="inv-editor__field">
+                      <label className="inv-editor__label">End</label>
+                      <input className="inv-editor__input" type="date" value={periodEnd} onChange={(e: ChangeEvent<HTMLInputElement>) => setPeriodEnd(e.target.value)} />
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div style={{ background: "#f8fafc", borderRadius: 8, padding: "10px 14px", marginBottom: 16 }}>
-                <div style={{ fontSize: 13, color: "#64748b", marginBottom: 4 }}>Invoice total</div>
-                <div style={{ fontSize: 22, fontWeight: 700, color: "#1e293b" }}>{fmt(total)}</div>
-                <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>{lineItems.length} line item{lineItems.length !== 1 ? "s" : ""}</div>
+
+              <div style={{ background: "var(--ie-bg-subtle)", borderRadius: 8, padding: "12px 16px", border: "1px solid var(--ie-border)" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--ie-text-muted)", marginBottom: 6 }}>Invoice total</div>
+                <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: "-0.02em" }}>{fmt(total)}</div>
+                <div style={{ fontSize: 12, color: "var(--ie-text-muted)", marginTop: 2 }}>
+                  {lineItems.length} line item{lineItems.length !== 1 ? "s" : ""}
+                  {profile.paymentMethod ? ` · ${cardLabel(profile.paymentMethod)}` : ""}
+                </div>
               </div>
             </>
           )}
-          <div className="invoice-editor-drawer__footer">
-            <button type="button" className="btn ghost" disabled={busy} onClick={onClose}>
-              {result?.type === "ok" ? "Close" : "Cancel"}
+        </div>
+
+        <div className="manual-inv-drawer__footer">
+          <button type="button" className="btn ghost" disabled={busy} onClick={onClose}>
+            {result?.type === "ok" ? "Close" : "Cancel"}
+          </button>
+          {!result && (
+            <button type="button" className="btn primary" disabled={busy || !periodStart || !periodEnd} onClick={() => void submit()}>
+              {busy ? "Charging…" : "Charge now"}
             </button>
-            {!result && (
-              <button type="button" className="btn primary" disabled={busy || !periodStart || !periodEnd} onClick={() => void submit()}>
-                {busy ? "Charging…" : "Charge now"}
-              </button>
-            )}
-          </div>
+          )}
         </div>
       </div>
     </div>
@@ -580,28 +605,23 @@ function ChargeNowDialog({ profile, tenantId, onClose, onCharged }: ChargeNowDia
 // Main section component
 // ---------------------------------------------------------------------------
 
-type BillingProfilesSectionProps = {
-  tenant: BillingProfilesTenant;
-};
-
-export function BillingProfilesSection({ tenant }: BillingProfilesSectionProps) {
+export function BillingProfilesSection({ tenant }: { tenant: BillingProfilesTenant }) {
   const [showDrawer, setShowDrawer] = useState<"add" | BillingProfile | null>(null);
   const [chargeTarget, setChargeTarget] = useState<BillingProfile | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<BillingProfile | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
-  const reloadRef = useRef(0);
+  const [reloadTick, setReloadTick] = useState(0);
 
   const data = useAsyncResource<BillingProfile[]>(
     () => apiGet(`/admin/billing/platform/tenants/${tenant.id}/billing-profiles`),
-    [tenant.id, reloadRef.current],
+    [tenant.id, reloadTick],
   );
 
   function reload() {
-    reloadRef.current += 1;
-    // Force re-render by updating a state that the hook depends on
     setShowDrawer(null);
     setChargeTarget(null);
+    setReloadTick((n) => n + 1);
   }
 
   async function handleDelete(profile: BillingProfile) {
@@ -610,10 +630,9 @@ export function BillingProfilesSection({ tenant }: BillingProfilesSectionProps) 
     try {
       await apiDelete(`/admin/billing/platform/tenants/${tenant.id}/billing-profiles/${profile.id}`);
       setDeleteTarget(null);
-      reloadRef.current += 1;
+      setReloadTick((n) => n + 1);
     } catch (err: any) {
-      const msg = err?.body?.message || err?.body?.error || err?.message || "Delete failed.";
-      setDeleteError(String(msg));
+      setDeleteError(err?.body?.message || err?.body?.error || err?.message || "Delete failed.");
     } finally {
       setDeleteBusy(false);
     }
@@ -622,40 +641,40 @@ export function BillingProfilesSection({ tenant }: BillingProfilesSectionProps) 
   const profiles = data.status === "success" ? data.data : [];
 
   return (
-    <section className="billing-pricing-page billing-p8-scope" style={{ marginTop: 32 }}>
+    <div className="billing-flat-rate-card billing-p8-scope" style={{ marginTop: 16 }}>
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+      <div className="billing-flat-rate-card__head">
         <div>
-          <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: "#1e293b" }}>Billing Profiles</h3>
-          <p style={{ margin: "4px 0 0", fontSize: 13, color: "#64748b" }}>
-            Sub-invoices for individual clients within this tenant. Each profile has its own payment method and recurring line items.
-          </p>
+          <h3>Billing Profiles</h3>
+          <p>Sub-invoices for individual clients within this tenant. Each profile has its own payment method and recurring line items.</p>
         </div>
-        <button
-          className="btn primary"
-          type="button"
-          onClick={() => setShowDrawer("add")}
-          style={{ whiteSpace: "nowrap" }}
-        >
+        <button className="btn primary billing-pricing-page__action" type="button" onClick={() => setShowDrawer("add")}>
           + Add profile
         </button>
       </div>
 
-      {/* Loading / error */}
+      {/* Loading */}
       {data.status === "loading" && (
-        <div style={{ padding: 24, color: "#64748b", fontSize: 14 }}>Loading profiles…</div>
+        <p style={{ margin: 0, fontSize: 13, color: "var(--billing-muted, var(--text-dim))" }}>Loading profiles…</p>
       )}
+
+      {/* Error */}
       {data.status === "error" && (
-        <div style={{ padding: 24, color: "#dc2626", fontSize: 14 }}>Failed to load billing profiles.</div>
+        <p style={{ margin: 0, fontSize: 13, color: "var(--billing-danger, #dc2626)" }}>Failed to load billing profiles.</p>
       )}
 
       {/* Empty state */}
       {data.status === "success" && profiles.length === 0 && (
-        <div style={{ padding: "32px 0", textAlign: "center", color: "#94a3b8", fontSize: 14, border: "1.5px dashed #e2e8f0", borderRadius: 10 }}>
-          <div style={{ fontSize: 28, marginBottom: 8 }}>🧾</div>
-          <div style={{ fontWeight: 600, marginBottom: 4, color: "#64748b" }}>No billing profiles yet</div>
-          <div>Click <strong>+ Add profile</strong> to set up sub-invoices for your clients.</div>
-          <div style={{ marginTop: 8, fontSize: 12, color: "#cbd5e1" }}>
+        <div style={{
+          padding: "28px 0",
+          textAlign: "center",
+          border: "1.5px dashed var(--billing-border, var(--border))",
+          borderRadius: 10,
+          color: "var(--billing-muted, var(--text-dim))",
+        }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>No billing profiles yet</div>
+          <div style={{ fontSize: 12 }}>Click <strong>+ Add profile</strong> to set up sub-invoices for your clients.</div>
+          <div style={{ fontSize: 11, marginTop: 6, opacity: 0.65 }}>
             Tip: assign imported Sola cards to profiles so each client is charged automatically.
           </div>
         </div>
@@ -663,16 +682,16 @@ export function BillingProfilesSection({ tenant }: BillingProfilesSectionProps) 
 
       {/* Profile table */}
       {data.status === "success" && profiles.length > 0 && (
-        <div style={{ overflowX: "auto" }}>
+        <div style={{ overflowX: "auto", marginTop: 4 }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
-              <tr style={{ borderBottom: "2px solid #e2e8f0", color: "#64748b", textAlign: "left" }}>
-                <th style={{ padding: "8px 12px" }}>Client</th>
-                <th style={{ padding: "8px 12px" }}>Payment method</th>
-                <th style={{ padding: "8px 12px", textAlign: "center" }}>Autopay</th>
-                <th style={{ padding: "8px 12px", textAlign: "right" }}>Monthly total</th>
-                <th style={{ padding: "8px 12px" }}>Last invoice</th>
-                <th style={{ padding: "8px 12px" }}></th>
+              <tr style={{ borderBottom: "1.5px solid var(--billing-border, var(--border))", color: "var(--billing-muted, var(--text-dim))", textAlign: "left" }}>
+                <th style={{ padding: "7px 10px", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em" }}>Client</th>
+                <th style={{ padding: "7px 10px", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em" }}>Payment method</th>
+                <th style={{ padding: "7px 10px", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", textAlign: "center" }}>Autopay</th>
+                <th style={{ padding: "7px 10px", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em", textAlign: "right" }}>Monthly</th>
+                <th style={{ padding: "7px 10px", fontWeight: 600, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em" }}>Last invoice</th>
+                <th style={{ padding: "7px 10px", width: 160 }}></th>
               </tr>
             </thead>
             <tbody>
@@ -680,57 +699,56 @@ export function BillingProfilesSection({ tenant }: BillingProfilesSectionProps) 
                 const lineItems: ProfileLineItem[] = Array.isArray(profile.lineItemsJson) ? profile.lineItemsJson : [];
                 const total = lineItems.reduce((s, li) => s + li.quantity * li.unitPriceCents, 0);
                 return (
-                  <tr key={profile.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                    <td style={{ padding: "10px 12px", fontWeight: 600, color: "#1e293b" }}>{profile.label}</td>
-                    <td style={{ padding: "10px 12px", color: profile.paymentMethod ? "#334155" : "#94a3b8" }}>
-                      {cardLabel(profile.paymentMethod)}
-                      {profile.paymentMethod?.isImported && (
-                        <span style={{ marginLeft: 6, fontSize: 11, background: "#f0fdf4", color: "#16a34a", borderRadius: 4, padding: "1px 5px" }}>imported</span>
+                  <tr key={profile.id} style={{ borderBottom: "1px solid color-mix(in srgb, var(--billing-border, var(--border)) 60%, transparent)" }}>
+                    <td style={{ padding: "9px 10px", fontWeight: 600 }}>{profile.label}</td>
+                    <td style={{ padding: "9px 10px", color: "var(--billing-muted, var(--text-dim))", fontSize: 13 }}>
+                      {profile.paymentMethod ? (
+                        <>
+                          {cardLabel(profile.paymentMethod)}
+                          {profile.paymentMethod.isImported && (
+                            <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, background: "color-mix(in srgb, var(--accent) 12%, transparent)", color: "var(--accent)", borderRadius: 4, padding: "1px 5px", textTransform: "uppercase", letterSpacing: "0.03em" }}>
+                              imported
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span style={{ color: "var(--billing-muted, var(--text-dim))", fontStyle: "italic" }}>None</span>
                       )}
                     </td>
-                    <td style={{ padding: "10px 12px", textAlign: "center" }}>
-                      <span style={{ color: profile.autoBillingEnabled ? "#16a34a" : "#94a3b8", fontWeight: 600 }}>
+                    <td style={{ padding: "9px 10px", textAlign: "center" }}>
+                      <span style={{ fontWeight: 600, fontSize: 12, color: profile.autoBillingEnabled ? "var(--billing-good, #16a34a)" : "var(--billing-muted, var(--text-dim))" }}>
                         {profile.autoBillingEnabled ? "On" : "Off"}
                       </span>
                     </td>
-                    <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 600, color: "#1e293b" }}>
-                      {total > 0 ? fmt(total) : <span style={{ color: "#94a3b8" }}>—</span>}
+                    <td style={{ padding: "9px 10px", textAlign: "right", fontWeight: 600 }}>
+                      {total > 0 ? fmt(total) : <span style={{ color: "var(--billing-muted, var(--text-dim))" }}>—</span>}
                     </td>
-                    <td style={{ padding: "10px 12px" }}>
+                    <td style={{ padding: "9px 10px" }}>
                       {profile.lastInvoice ? (
-                        <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          {statusBadge(profile.lastInvoice.status)}
-                          <span style={{ color: "#64748b", fontSize: 12 }}>
-                            {profile.lastInvoice.invoiceNumber} · {fmt(profile.lastInvoice.totalCents)}
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                          <span className={`billing-status-pill ${invStatusPillClass(profile.lastInvoice.status)}`} style={{ fontSize: 11 }}>
+                            {invoiceStatusLabel(profile.lastInvoice.status)}
+                          </span>
+                          <span style={{ color: "var(--billing-muted, var(--text-dim))", fontSize: 12 }}>
+                            {profile.lastInvoice.invoiceNumber}
                           </span>
                         </span>
                       ) : (
-                        <span style={{ color: "#94a3b8" }}>None yet</span>
+                        <span style={{ color: "var(--billing-muted, var(--text-dim))", fontSize: 12, fontStyle: "italic" }}>None yet</span>
                       )}
                     </td>
-                    <td style={{ padding: "10px 12px" }}>
-                      <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                        <button
-                          className="btn ghost"
-                          type="button"
-                          style={{ fontSize: 12, padding: "3px 10px" }}
-                          onClick={() => setChargeTarget(profile)}
-                          title="Charge now"
-                        >
+                    <td style={{ padding: "9px 10px" }}>
+                      <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
+                        <button className="btn ghost" type="button" style={{ fontSize: 12, padding: "3px 10px" }} onClick={() => setChargeTarget(profile)}>
                           Charge
                         </button>
-                        <button
-                          className="btn ghost"
-                          type="button"
-                          style={{ fontSize: 12, padding: "3px 10px" }}
-                          onClick={() => setShowDrawer(profile)}
-                        >
+                        <button className="btn ghost" type="button" style={{ fontSize: 12, padding: "3px 10px" }} onClick={() => setShowDrawer(profile)}>
                           Edit
                         </button>
                         <button
                           className="btn ghost"
                           type="button"
-                          style={{ fontSize: 12, padding: "3px 10px", color: "#dc2626" }}
+                          style={{ fontSize: 12, padding: "3px 10px", color: "var(--billing-danger, #dc2626)" }}
                           onClick={() => { setDeleteTarget(profile); setDeleteError(null); }}
                         >
                           Delete
@@ -747,23 +765,36 @@ export function BillingProfilesSection({ tenant }: BillingProfilesSectionProps) 
 
       {/* Delete confirmation */}
       {deleteTarget && (
-        <div className="invoice-editor-overlay" onClick={(e) => { if (e.target === e.currentTarget && !deleteBusy) setDeleteTarget(null); }}>
-          <div className="invoice-editor-drawer" style={{ maxWidth: 400 }}>
-            <div className="invoice-editor-drawer__header">
-              <h2 className="invoice-editor-drawer__title">Delete profile?</h2>
-              <button className="invoice-editor-drawer__close" type="button" onClick={() => setDeleteTarget(null)} disabled={deleteBusy} aria-label="Close">✕</button>
+        <div
+          className="manual-inv-drawer__overlay inv-editor"
+          onClick={(e) => { if (e.target === e.currentTarget && !deleteBusy) setDeleteTarget(null); }}
+        >
+          <div className="manual-inv-drawer__panel" style={{ maxWidth: 400 }}>
+            <div className="manual-inv-drawer__header">
+              <h3 className="manual-inv-drawer__title">Delete profile?</h3>
+              <button className="manual-inv-drawer__close" type="button" onClick={() => setDeleteTarget(null)} disabled={deleteBusy} aria-label="Close">✕</button>
             </div>
-            <div className="invoice-editor-drawer__body">
-              <p style={{ color: "#475569", fontSize: 14 }}>
-                Delete billing profile <strong>{deleteTarget.label}</strong>? This cannot be undone. Existing paid invoices are kept.
+            <div className="manual-inv-drawer__body">
+              <p style={{ margin: 0, fontSize: 14, color: "var(--ie-text-muted)" }}>
+                Delete billing profile <strong style={{ color: "var(--ie-text)" }}>{deleteTarget.label}</strong>? This cannot be undone. Existing paid invoices are kept.
               </p>
-              {deleteError && <div style={{ color: "#dc2626", fontSize: 13, marginBottom: 8 }}>{deleteError}</div>}
-              <div className="invoice-editor-drawer__footer">
-                <button className="btn ghost" type="button" disabled={deleteBusy} onClick={() => setDeleteTarget(null)}>Cancel</button>
-                <button className="btn primary" type="button" disabled={deleteBusy} style={{ background: "#dc2626", borderColor: "#dc2626" }} onClick={() => void handleDelete(deleteTarget)}>
-                  {deleteBusy ? "Deleting…" : "Delete profile"}
-                </button>
-              </div>
+              {deleteError && (
+                <div style={{ fontSize: 13, color: "var(--ie-text-danger)", padding: "8px 12px", background: "var(--ie-bg-danger)", borderRadius: 6, border: "1px solid #fca5a5" }}>
+                  {deleteError}
+                </div>
+              )}
+            </div>
+            <div className="manual-inv-drawer__footer">
+              <button className="btn ghost" type="button" disabled={deleteBusy} onClick={() => setDeleteTarget(null)}>Cancel</button>
+              <button
+                className="btn primary"
+                type="button"
+                disabled={deleteBusy}
+                style={{ background: "var(--billing-danger, #dc2626)", borderColor: "var(--billing-danger, #dc2626)" }}
+                onClick={() => void handleDelete(deleteTarget)}
+              >
+                {deleteBusy ? "Deleting…" : "Delete profile"}
+              </button>
             </div>
           </div>
         </div>
@@ -775,7 +806,7 @@ export function BillingProfilesSection({ tenant }: BillingProfilesSectionProps) 
           tenant={tenant}
           profile={showDrawer === "add" ? null : showDrawer}
           onClose={() => setShowDrawer(null)}
-          onSaved={() => { reload(); }}
+          onSaved={reload}
         />
       )}
 
@@ -785,9 +816,9 @@ export function BillingProfilesSection({ tenant }: BillingProfilesSectionProps) 
           profile={chargeTarget}
           tenantId={tenant.id}
           onClose={() => setChargeTarget(null)}
-          onCharged={() => { setChargeTarget(null); reloadRef.current += 1; }}
+          onCharged={() => { setChargeTarget(null); setReloadTick((n) => n + 1); }}
         />
       )}
-    </section>
+    </div>
   );
 }
