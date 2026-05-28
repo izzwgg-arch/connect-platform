@@ -3,9 +3,10 @@
    Do not use CRM or admin tokens here.
    ──────────────────────────────────────────────────────────────────────────── */
 
-/* Allow the page to scroll — the global platform CSS locks html/body */
-html.ob-page,
-html.ob-page body {
+/* The global platform CSS sets html,body { overflow: hidden; height: 100% }
+   which kills scrolling everywhere. Re-enable it for the onboarding shell. */
+html:has(.ob-shell),
+body:has(.ob-shell) {
   overflow: auto !important;
   height: auto !important;
 }

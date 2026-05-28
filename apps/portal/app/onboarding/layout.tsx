@@ -7,15 +7,24 @@ import "./onboarding.css";
 export default function OnboardingLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
     const root = document.documentElement;
+    const body = document.body;
     const prev = root.getAttribute("data-theme");
+    const prevRootOverflow = root.style.overflow;
+    const prevRootHeight = root.style.height;
+    const prevBodyOverflow = body.style.overflow;
+    const prevBodyHeight = body.style.height;
     root.setAttribute("data-theme", "light");
-    root.classList.add("ob-page");
-    document.body.classList.add("ob-page");
+    root.style.overflow = "auto";
+    root.style.height = "auto";
+    body.style.overflow = "auto";
+    body.style.height = "auto";
     return () => {
       if (prev) root.setAttribute("data-theme", prev);
       else root.removeAttribute("data-theme");
-      root.classList.remove("ob-page");
-      document.body.classList.remove("ob-page");
+      root.style.overflow = prevRootOverflow;
+      root.style.height = prevRootHeight;
+      body.style.overflow = prevBodyOverflow;
+      body.style.height = prevBodyHeight;
     };
   }, []);
 
