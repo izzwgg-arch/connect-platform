@@ -98,6 +98,21 @@ export async function registerOnboardingProvisioningRoutes(app: FastifyInstance)
     return csv.body;
   });
 
+  // Delete submission (SUPER_ADMIN only)
+  app.delete("/admin/onboarding/submissions/:id", async (req, reply) => {
+    const admin = await requireSuperAdmin(req, reply); if (!admin) return;
+    const { id } = (req.params as any) as { id: string };
+    const exists = await (db as any).onboardingSubmission.findUnique({ where: { id }, select: { id: true } });
+    if (!exists) return reply.code(404).send({ error: "not_found" });
+    await (db as any).$transaction([
+      (db as any).onboardingEvent.deleteMany({ where: { submissionId: id } }),
+      (db as any).onboardingRequestedExtension.deleteMany({ where: { submissionId: id } }),
+      (db as any).onboardingUploadedFile.deleteMany({ where: { submissionId: id } }),
+      (db as any).onboardingSubmission.delete({ where: { id } }),
+    ]);
+    return { ok: true };
+  });
+
   // File download (admin-only)
   app.get("/admin/onboarding/submissions/:id/files/:fileId/download", async (req: any, reply) => {
     const admin = await requireSuperAdmin(req, reply); if (!admin) return;

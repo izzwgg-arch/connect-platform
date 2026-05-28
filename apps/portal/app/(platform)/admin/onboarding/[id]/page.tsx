@@ -37,6 +37,7 @@ export default function AdminOnboardingDetailPage({ params }: { params: { id: st
   const [error, setError] = useState<string | null>(null);
   const [csvError, setCsvError] = useState<string | null>(null);
   const [csvDownloading, setCsvDownloading] = useState(false);
+  const [csvRegenerating, setCsvRegenerating] = useState(false);
 
   useEffect(() => {
     async function run() {
@@ -70,7 +71,8 @@ export default function AdminOnboardingDetailPage({ params }: { params: { id: st
         <div><b>Status:</b> {row.status}</div>
         <div><b>Submitted:</b> {row.submittedAt || "—"}</div>
         <div><b>Public Link:</b> {publicUrl ? <a href={publicUrl} target="_blank" rel="noreferrer">{row.publicUrl}</a> : "—"} {publicUrl ? <button onClick={() => copy(publicUrl)} style={{ marginLeft: 8 }}>Copy</button> : null}</div>
-        <div><b>CSV:</b>{" "}
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <b>CSV:</b>
           <button
             disabled={csvDownloading}
             onClick={async () => {
@@ -83,7 +85,19 @@ export default function AdminOnboardingDetailPage({ params }: { params: { id: st
           >
             {csvDownloading ? "Downloading…" : "Download VitalPBX CSV"}
           </button>
-          {csvError && <span style={{ color: "red", marginLeft: 8 }}>{csvError}</span>}
+          <button
+            disabled={csvRegenerating}
+            onClick={async () => {
+              setCsvError(null);
+              setCsvRegenerating(true);
+              try { await downloadCsv(apiBase, row.id); }
+              catch (e: any) { setCsvError(e?.message || "Regenerate failed"); }
+              finally { setCsvRegenerating(false); }
+            }}
+          >
+            {csvRegenerating ? "Regenerating…" : "Regenerate CSV"}
+          </button>
+          {csvError && <span style={{ color: "red" }}>{csvError}</span>}
         </div>
       </div>
 
