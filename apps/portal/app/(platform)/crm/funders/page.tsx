@@ -940,7 +940,21 @@ export default function FundersPage() {
     .slice(0, 4);
 
   return (
-    <div className={cn(crm.contactsWorkspace)}>
+    <div
+      className={cn(crm.contactsWorkspace)}
+      style={{
+        "--crm-light-panel": "rgba(255,255,255,0.97)",
+        "--crm-light-panel-2": "#f8fafc",
+        "--crm-light-border": "rgba(15,23,42,0.11)",
+        "--crm-light-border-strong": "rgba(15,23,42,0.18)",
+        "--crm-light-text": "#0f172a",
+        "--crm-light-muted": "#64748b",
+        "--crm-light-accent": "#0284c7",
+        "--crm-light-success": "#16a34a",
+        "--crm-light-warning": "#d97706",
+        "--crm-light-danger": "#dc2626",
+      } as React.CSSProperties}
+    >
       {/* Bulk Email Modal */}
       {showBulkEmail && (
         <BulkEmailModal
@@ -973,15 +987,24 @@ export default function FundersPage() {
             </p>
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <button onClick={() => setShowImport(true)} className={crm.btnSecondary}>
+            <button
+              onClick={() => setShowImport(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 active:bg-slate-100"
+            >
               <FileUp size={14} />
               Import CSV
             </button>
-            <button onClick={handleExport} className={crm.btnSecondary}>
+            <button
+              onClick={handleExport}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 active:bg-slate-100"
+            >
               <Download size={14} />
               Export CSV
             </button>
-            <button onClick={() => setShowNew(true)} className={crm.btnPrimary}>
+            <button
+              onClick={() => setShowNew(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-transparent bg-orange-500 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-orange-600 active:bg-orange-700"
+            >
               <Plus size={14} />
               Add Funder
             </button>
