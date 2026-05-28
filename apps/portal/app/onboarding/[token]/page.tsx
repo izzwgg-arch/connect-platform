@@ -266,22 +266,18 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
     setSubmitting(true);
     try {
       await apiPost(`/onboarding/${encodeURIComponent(token)}/submit`, {
-        companyName:  form.companyName,
-        firstName:    form.firstName,
-        lastName:     form.lastName,
-        address:      form.address,
+        companyName:        form.companyName,
+        contactFirstName:   form.firstName,
+        contactLastName:    form.lastName,
+        address:            form.address,
         mainPhone:    form.mainPhone,
         mainEmail:    form.mainEmail,
         billingEmail: form.billingEmail,
-        smsEnabled:   form.smsEnabled,
-        extensions:   form.extensions
+        phoneNumberChoice: form.numberChoice || undefined,
+        smsEnabled:        form.smsEnabled,
+        extensions:        form.extensions
           .filter((e) => e.displayName.trim() && e.extNumber.trim())
           .map((e) => ({ displayName: e.displayName.trim(), extNumber: e.extNumber.trim(), email: e.email.trim() || undefined })),
-        porting: form.numberChoice === "port" ? {
-          choice:     "port",
-          provideNow: form.provideNow,
-          details:    form.provideNow ? form.porting : undefined,
-        } : { choice: form.numberChoice || "new" },
       });
       window.location.href = `/onboarding/${encodeURIComponent(token)}/success`;
     } catch (e: any) {
