@@ -79,6 +79,7 @@ export type CsvExtensionRow = {
   extNumber: string;
   name?: string | null;
   email?: string | null;
+  vmPassword?: string | null;
 };
 
 function makeRow(fields: Record<string, string | number>): string {
@@ -114,6 +115,7 @@ export function generateVitalPbxCsv(rows: CsvExtensionRow[]): { filename: string
       max_contacts:               5,
       email:                      email,
       vm_enabled:                 "yes",
+      vm_password:                (r.vmPassword || "").trim() || undefined,
       outgoing_rec:               "yes",
       incoming_rec:               "yes",
     }));

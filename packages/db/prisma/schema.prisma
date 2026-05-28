@@ -4099,6 +4099,7 @@ model OnboardingRequestedExtension {
   displayName  String?
   extNumber    String
   email        String?
+  vmPassword   String?
   smsEnabled   Boolean  @default(false)
   createdAt    DateTime @default(now())
 

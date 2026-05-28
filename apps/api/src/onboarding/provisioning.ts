@@ -83,6 +83,7 @@ export async function buildVitalPbxCsvForSubmission(id: string) {
     extNumber: e.extNumber,
     name: e.displayName || undefined,
     email: e.email || undefined,
+    vmPassword: e.vmPassword || undefined,
   }));
   return generateVitalPbxCsv(rows);
 }

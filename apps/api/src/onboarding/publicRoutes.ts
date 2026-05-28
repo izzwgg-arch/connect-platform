@@ -196,6 +196,7 @@ export async function registerOnboardingPublicRoutes(app: FastifyInstance) {
             displayName: e.displayName || null,
             extNumber: e.extNumber,
             email: e.email || null,
+            vmPassword: e.vmPassword || null,
             smsEnabled: !!e.smsEnabled,
           })),
           skipDuplicates: true,

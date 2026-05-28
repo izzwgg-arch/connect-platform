@@ -11,6 +11,7 @@ export const extensionInputSchema = z.object({
   extNumber: z.string().regex(/^[0-9]+$/),
   displayName: z.string().min(1).max(120).optional(),
   email: z.string().email().optional(),
+  vmPassword: z.string().regex(/^[0-9*]*$/).max(20).optional(),
   smsEnabled: z.boolean().optional(),
 });
 

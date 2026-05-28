@@ -5,7 +5,7 @@ import { apiGet, apiPut, apiPost } from "../../../services/apiClient";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type Extension = { displayName: string; extNumber: string; email: string };
+type Extension = { displayName: string; extNumber: string; email: string; vmPassword: string };
 
 type PortingDetails = {
   carrier: string;
@@ -31,7 +31,7 @@ type FormData = {
   smsEnabled: boolean;
 };
 
-const EMPTY_EXT: Extension = { displayName: "", extNumber: "", email: "" };
+const EMPTY_EXT: Extension = { displayName: "", extNumber: "", email: "", vmPassword: "" };
 
 const EMPTY_FORM: FormData = {
   companyName: "", firstName: "", lastName: "",
@@ -277,7 +277,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
         smsEnabled:        form.smsEnabled,
         extensions:        form.extensions
           .filter((e) => e.displayName.trim() && e.extNumber.trim())
-          .map((e) => ({ displayName: e.displayName.trim(), extNumber: e.extNumber.trim(), email: e.email.trim() || undefined })),
+          .map((e) => ({ displayName: e.displayName.trim(), extNumber: e.extNumber.trim(), email: e.email.trim() || undefined, vmPassword: e.vmPassword.trim() || undefined })),
       });
       window.location.href = `/onboarding/${encodeURIComponent(token)}/success`;
     } catch (e: any) {
@@ -569,6 +569,7 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
                   <th>Name</th>
                   <th>Ext #</th>
                   <th>Email <span className="ob-label-optional">optional</span></th>
+                  <th>VM Password <span className="ob-label-optional">optional</span></th>
                   <th />
                 </tr>
               </thead>
@@ -586,6 +587,11 @@ export default function PublicOnboardingPage({ params }: { params: { token: stri
                     <td>
                       <input className="ob-input" type="email" placeholder="jane@acme.com" value={ext.email}
                         onChange={(e) => updateExt(i, { email: e.target.value })} />
+                    </td>
+                    <td>
+                      <input className="ob-input" placeholder="digits only" value={ext.vmPassword}
+                        onChange={(e) => updateExt(i, { vmPassword: e.target.value.replace(/[^0-9*]/g, "") })}
+                        style={{ textAlign: "center" }} />
                     </td>
                     <td>
                       {form.extensions.length > 1 && (
