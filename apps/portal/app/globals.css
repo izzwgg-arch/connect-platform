@@ -4181,6 +4181,40 @@
   }
 }
 
+/* ── Funders redesign (light-mode scoped additions) ────────────────────────── */
+
+/* Table grid: checkbox | funder | type | email | phone | status | tags | added | actions */
+.crm-contacts-workspace .funders-table-cols {
+  grid-template-columns:
+    minmax(10rem, 1.6fr)
+    minmax(8rem, 0.9fr)
+    minmax(10rem, 1fr)
+    minmax(8rem, 0.75fr)
+    minmax(6rem, 0.6fr)
+    minmax(8rem, 0.85fr)
+    minmax(6rem, 0.55fr)
+    2rem;
+}
+
+@media (max-width: 1280px) {
+  .crm-contacts-workspace .funders-table-cols {
+    grid-template-columns:
+      minmax(10rem, 1.6fr)
+      minmax(8rem, 0.75fr)
+      minmax(8rem, 0.85fr)
+      minmax(5rem, 0.55fr)
+      minmax(8rem, 0.85fr)
+      minmax(5rem, 0.5fr)
+      2rem;
+  }
+}
+
+/* Strengthen modal backdrop in light mode (was 28% — too washed out) */
+:root[data-theme="light"] .crm-contacts-workspace .contacts-modal-backdrop {
+  background: rgba(15, 23, 42, 0.52);
+  backdrop-filter: blur(4px);
+}
+
 /* Phase 19I.2 — scripts playbook: theme-aware (light integrates with portal; dark keeps 19I.1 premium) */
 :root[data-theme="dark"] .crm-scripts-workspace,
 :root:not([data-theme="light"]) .crm-scripts-workspace {
