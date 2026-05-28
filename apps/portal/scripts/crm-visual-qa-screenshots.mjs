@@ -124,6 +124,15 @@ async function captureRoute(route, viewport) {
   await cdp.send("Runtime.evaluate", {
     expression: `document.documentElement.dataset.theme = ${JSON.stringify(theme)}; undefined`,
   });
+  if (args.scrollTo) {
+    await cdp.send("Runtime.evaluate", {
+      expression: `
+        document.querySelector(${JSON.stringify(String(args.scrollTo))})
+          ?.scrollIntoView({ block: "start", inline: "nearest" });
+        undefined
+      `,
+    });
+  }
   await sleep(Number(args.settleMs || 1800));
 
   const text = await cdp.send("Runtime.evaluate", {
@@ -149,6 +158,8 @@ async function captureRoute(route, viewport) {
 async function waitForPage(cdp, route) {
   const expectedText =
     route.startsWith("/crm/dashboard") ? "Here's what's happening" :
+    route.startsWith("/crm/campaigns/") ? "Members" :
+    route.startsWith("/crm/campaigns") ? "Campaigns" :
     route.startsWith("/crm/contacts") ? "Contacts" :
     route.startsWith("/crm/funders") ? "Funders" :
     route.startsWith("/crm/queue") ? "My Queue" :

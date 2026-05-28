@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarClock, Edit2, ExternalLink, PhoneCall, X } from "lucide-react";
+import { CalendarClock, Edit2, ExternalLink, X } from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
 import { mk } from "./campaignCinemaClasses";
@@ -49,6 +49,12 @@ export function CampaignMemberCard({
   if (rowMode) {
     const displayName = member.contact?.displayName ?? "Unknown";
     const avatarInitial = displayName.charAt(0).toUpperCase();
+    const contactMeta = [
+      member.contact?.primaryEmail,
+      member.contact?.primaryPhone,
+      member.contact?.company,
+    ].filter((value): value is string => Boolean(value && value.trim()));
+    const workspaceHref = `/crm/contacts/${member.contactId}?campaignId=${encodeURIComponent(campaignId)}&memberId=${encodeURIComponent(member.id)}`;
 
     return (
       <article
@@ -66,18 +72,18 @@ export function CampaignMemberCard({
             checked={selected}
             disabled={readOnly}
             onChange={(e) => onSelect(e.target.checked)}
-            className="cinema-member-checkbox mt-0.5 lg:mt-0 disabled:opacity-40"
+            className="cinema-member-checkbox mt-1 lg:mt-0 disabled:opacity-40"
             aria-label={`Select ${displayName}`}
           />
           <div className={mk.memberAvatar} aria-hidden>
             {avatarInitial}
           </div>
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-1.5">
+            <div className="flex min-w-0 items-center gap-1.5">
               <button
                 type="button"
                 onClick={() => router.push(`/crm/contacts/${member.contactId}`)}
-                className="truncate cinema-member-name"
+                className="min-w-0 truncate cinema-member-name"
               >
                 {displayName}
               </button>
@@ -87,21 +93,30 @@ export function CampaignMemberCard({
                 </span>
               )}
             </div>
-            <p className="truncate cinema-member-phone">{member.contact?.primaryPhone ?? "—"}</p>
-            {member.contact?.lastDisposition ? (
-              <p className="mt-0.5 truncate text-[10px] text-crm-muted lg:hidden">
-                {member.contact.lastDisposition}
-              </p>
-            ) : null}
+            <p className="cinema-member-contact-line">
+              {contactMeta.length > 0
+                ? contactMeta.map((item, index) => (
+                    <span key={`${item}-${index}`} className="min-w-0 truncate">
+                      {index > 0 ? <span className="cinema-member-meta-dot" aria-hidden>•</span> : null}
+                      {item}
+                    </span>
+                  ))
+                : <span>Missing email, phone, and company</span>}
+            </p>
+            <div className="cinema-member-mobile-ops lg:hidden">
+              <span>{member.assignedTo?.displayName ?? "Unassigned"}</span>
+              <span>{member.attemptCount} attempt{member.attemptCount === 1 ? "" : "s"}</span>
+              <span>{lastTouch}</span>
+            </div>
           </div>
         </div>
 
-        <div className="text-xs">
+        <div className="hidden text-xs min-w-0 lg:block">
           <span className="cinema-member-col-label lg:hidden">Agent</span>
           <p className="truncate cinema-member-agent">{member.assignedTo?.displayName ?? "Unassigned"}</p>
         </div>
 
-        <div className="flex flex-col gap-1">
+        <div className="flex min-w-0 flex-row items-center justify-between gap-2 lg:flex-col lg:items-start lg:justify-center lg:gap-1">
           <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Status</span>
           {readOnly ? (
             <span className={cn(mk.pill, "inline-flex w-fit", MEMBER_STATUS_CHIP[member.status])}>
@@ -111,7 +126,7 @@ export function CampaignMemberCard({
             <select
               value={member.status}
               onChange={(e) => onStatusChange(member.id, e.target.value as MemberStatus)}
-              className={cn(crm.input, "w-full max-w-[9rem] text-xs py-1", MEMBER_STATUS_CHIP[member.status])}
+              className={cn("cinema-member-status-select", MEMBER_STATUS_CHIP[member.status])}
             >
               {(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => (
                 <option key={s} value={s}>
@@ -132,12 +147,12 @@ export function CampaignMemberCard({
           ) : null}
         </div>
 
-        <div>
+        <div className="hidden lg:block">
           <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Attempts</span>
           <p className="cinema-member-attempts">{member.attemptCount}</p>
         </div>
 
-        <div>
+        <div className="hidden lg:block">
           <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Last touch</span>
           <p className="cinema-member-touch">{lastTouch}</p>
         </div>
@@ -148,33 +163,13 @@ export function CampaignMemberCard({
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 lg:justify-end">
-          <MemberCallbackEditor
-            member={member}
-            campaignId={campaignId}
-            readOnly={readOnly}
-            token={token}
-            onUpdated={onUpdated}
-          />
           <button
             type="button"
-            onClick={() =>
-              router.push(
-                `/crm/live-call?contactId=${member.contactId}&campaignId=${campaignId}&memberId=${member.id}`,
-              )
-            }
-            disabled={readOnly}
-            className={cn(mk.btnPrimary, "text-xs py-1.5 px-2 disabled:opacity-40")}
-          >
-            <PhoneCall className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Workspace</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => router.push(`/crm/contacts/${member.contactId}`)}
-            className={cn(mk.btnQueueRow, "p-1.5")}
-            aria-label="Open contact"
+            onClick={() => router.push(workspaceHref)}
+            className="cinema-member-workspace-btn"
           >
             <ExternalLink className="h-3.5 w-3.5" />
+            <span>Open workspace</span>
           </button>
         </div>
       </article>
@@ -297,14 +292,14 @@ export function CampaignMemberCard({
             type="button"
             onClick={() =>
               router.push(
-                `/crm/live-call?contactId=${member.contactId}&campaignId=${campaignId}&memberId=${member.id}`,
+                `/crm/contacts/${member.contactId}?campaignId=${encodeURIComponent(campaignId)}&memberId=${encodeURIComponent(member.id)}`,
               )
             }
             disabled={readOnly}
             className={cn(crm.btnPrimary, "text-xs py-2 justify-center disabled:opacity-40")}
           >
-            <PhoneCall className="h-3.5 w-3.5" />
-            Workspace
+            <ExternalLink className="h-3.5 w-3.5" />
+            Open workspace
           </button>
           <button
             type="button"

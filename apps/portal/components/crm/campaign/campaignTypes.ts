@@ -54,6 +54,7 @@ export type CampaignMember = {
   contact: {
     id: string;
     displayName: string;
+    company: string | null;
     active?: boolean;
     archivedAt?: string | null;
     primaryPhone: string | null;

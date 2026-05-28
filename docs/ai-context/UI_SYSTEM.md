@@ -229,7 +229,15 @@ Campaign routes use **`crm.pageInnerCampaign`** (wide desk, up to ~1680px) and *
 
 **Cinema workspace (19E.5 / 19E.6):** Wrap index and detail in **`mk.workspace`** (`.crm-campaign-cinema` in `globals.css`) + `campaignCinemaClasses.ts` hook classes. **Dual theme (19E.6):** must support portal `data-theme=light` and `data-theme=dark` — do **not** force `[color-scheme:dark]` or a navy “black island” when the shell is light. Light mode: soft off-white page wash, frosted elevated panels, pale cyan/blue gradients, dark readable text, softer glow/shadow accents (hero, KPI cards, rows, performance widgets, ops grid, roster, quick strip). Dark mode: keep mockup-faithful neon cinema dashboard — no light surfaces leak in. Colors live in `--cinema-*` / scoped `--crm-*` overrides, not hardcoded hex in components. Index filters: `mk.filterBar` + `mk.filterPill*` + `mk.searchInput`; forms use mapped `crm.input` / `crm.select` inside the workspace.
 
-**Layout (19E.3 detail):** No skinny right rail. Vertical `crm.campaignDetailStack`: `CampaignCommandHeader` (12-col at `lg+`: identity / live snapshot / operations) → `CampaignPerformancePanel` (funnel only) → full-width `CampaignDetailCommandPanel` (next actions, workload, imports, settings in responsive grid) → full-width members feed. Counts once in header snapshot; performance panel does not repeat member totals.
+**Layout (2026 light-mode redesign):** `/crm/campaigns` is a portfolio overview with premium hero, six KPI cards, elevated filters, analytics table, and stacked right-rail insight cards. `/crm/campaigns/[id]` keeps the real campaign operations and member roster, but its top overview is a tabbed performance workspace: KPI row, analytics area, and operational right rail that stacks on tablet/mobile. Dark mode remains theme-aware through campaign-scoped tokens; do not add forced dark islands in light mode or light surfaces in dark mode.
+
+**Campaign member roster density (2026 operational table):** Member rows should target ~44-52px on desktop with compact avatars, tight line-height, small status controls, and aligned columns. The contact cell owns the hierarchy: name first, then `email • phone • company` on a single subtle line. Do not hide email, phone, or company behind hovers/cards when the table is the active work surface.
+
+**Roster actions:** Each member row gets one premium Connect-blue `Open workspace` action that opens the CRM contact workspace with campaign/member context. Do not stack duplicate Workspace, Contact, callback, or secondary icon buttons inside the dense row; callback state belongs in the status/next-action text or the contact workspace.
+
+**Compact status pills:** Campaign member statuses use restrained pill/select treatment: small uppercase text, subtle semantic wash, thin border, consistent width, and no bulky vertical padding. Preserve `Pending`, `In progress`, `Contacted`, `Callback`, `Converted`, `Skipped`, and `DNC` labels from the existing status map.
+
+**Responsive roster behavior:** Desktop renders as a dense aligned table. Tablet/mobile collapse each row into a compact card-like stack with labels for secondary columns, a visible contact meta line, and a full-width or easy-tap workspace action. Avoid fixed widths that create horizontal overflow.
 
 **Queue continuity:** `/crm/queue?campaignId=…` and `/crm/queue?mode=power&campaignId=…`. No fake realtime or AI analytics.
 
@@ -307,6 +315,14 @@ Campaign routes use **`crm.pageInnerCampaign`** (wide desk, up to ~1680px) and *
 **Workspace:** `ScriptSectionBlock` per `---` section; Playbook vs Checklist mode; copy-per-section; live-call link. **Keyboard:** `N` opens new script (guarded).
 
 **Edit modal:** `crm.scriptsEditModal` follows portal theme (no forced dark vars). Ban raw `bg-white` / `bg-gray-50` utility classes on script routes — use semantic `crm-*` + workspace CSS hooks.
+
+### Scripts light-mode redesign (2026-05-26)
+
+- `/crm/scripts` is a light-mode premium script library: large warm gradient hero, four KPI cards, elevated searchable script list, starter templates, and a right rail with instructions, pro tips, real quick actions, and workspace shortcuts.
+- `/crm/scripts/[id]` is the script detail/editor workspace. It loads the selected script from existing `/crm/scripts/:id`, keeps edit/archive/restore/copy flows, adds real duplicate via `POST /crm/scripts`, and uses tinted section cards with alternating lavender/blue/green/amber/rose families.
+- Create/edit modal uses the existing `name` + section-body API contract only. The template selector applies real local starter templates; unsupported category/tag fields were not added.
+- Light visuals are scoped to `:root[data-theme="light"] .crm-scripts-workspace` and `.scripts-edit-modal`. Dark mode keeps the existing token-based scripts treatment.
+- Responsive layout: index uses library + right rail on desktop, stacking on tablet/mobile; detail uses editor + metadata/guidance rail on desktop, stacking below the editor on smaller screens.
 
 ---
 

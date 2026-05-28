@@ -55,6 +55,7 @@ type Member = {
   contact: {
     id: string;
     displayName: string;
+    company: string | null;
     active?: boolean;
     archivedAt?: string | null;
     primaryPhone: string | null;
@@ -1722,15 +1723,15 @@ export default function CampaignDetailPage() {
           ) : (
             <div className={crm.campaignRosterBody}>
               <div className={mk.rosterTableHead}>
-                <span>Member</span>
+                <span>Contact</span>
                 <span>Agent</span>
                 <span>Status</span>
                 <span>Attempts</span>
                 <span>Last touch</span>
                 <span>Next</span>
-                <span className="text-right">Actions</span>
+                <span className="text-right">Workspace</span>
 </div>
-              <div className="flex items-center gap-2 px-1 pb-1 lg:px-2">
+              <div className="flex items-center gap-2 px-3 py-1.5 lg:px-4">
                 <button type="button" onClick={toggleSelectAll} className="p-1 rounded border border-transparent hover:border-crm-border hover:bg-crm-surface-2" aria-label="Select all visible members">
                   {selected.size > 0 && bulkSelectableMembers.length > 0 && bulkSelectableMembers.every((m) => selected.has(m.id))
                     ? <CheckSquare2 className="h-4 w-4 text-crm-accent" />

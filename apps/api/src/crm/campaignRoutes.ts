@@ -40,6 +40,7 @@ const MEMBER_INCLUDE = {
     select: {
       id: true,
       displayName: true,
+      company: true,
       active: true,
       archivedAt: true,
       phones: { where: { isPrimary: true }, select: { numberRaw: true }, take: 1 },
@@ -126,6 +127,7 @@ function formatMember(m: any) {
       ? {
           id: m.contact.id,
           displayName: m.contact.displayName,
+          company: m.contact.company ?? null,
           active: m.contact.active,
           archivedAt: m.contact.archivedAt ? new Date(m.contact.archivedAt).toISOString() : null,
           primaryPhone: phone,

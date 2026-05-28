@@ -17,6 +17,14 @@ Scope: portal CRM UI/data-flow guardrails. Telephony, billing, workers, database
 - Keep density practical: compact grids, sticky summary bars when useful, status dots, stat pills, and hover lift.
 - Dark mode must remain first-class. Avoid `bg-white`, `bg-gray-*`, and ad hoc light-only surfaces on CRM routes.
 
+## Campaign Member Dense Rows
+
+- `/crm/campaigns/[id]` member rosters are operational tables, not card feeds. Desktop rows should stay near 44-52px with compact avatars, tight cell padding, aligned columns, and readable 11-13px support text.
+- Contact identity is mandatory in-row: full name on the primary line, then email, phone, and company on a subtle secondary line. Do not move these fields into hover-only panels.
+- Row actions must be single-purpose: one premium Connect-blue `Open workspace` button that opens the CRM contact workspace with campaign/member context. Do not add duplicate Workspace, Contact, callback, or icon-only action clusters to member rows.
+- Member status pills/selects should be compact, semantic, and consistent width. Use subtle backgrounds and borders; avoid large glossy pills or tall native controls.
+- Responsive behavior: desktop is a dense table; tablet/mobile stack each member into a compact card row with visible labels and an easy-tap workspace action. No horizontal overflow.
+
 ## CRM Dashboard Light Mode
 
 - `/crm/dashboard` has a dedicated light-mode presentation scoped through `.crm-dashboard-shell` and `.crm-dashboard-workspace`; do not reuse these classes on other CRM routes unless the whole route adopts the same light system.
@@ -29,6 +37,25 @@ Scope: portal CRM UI/data-flow guardrails. Telephony, billing, workers, database
 - In light mode, the right rail starts beside the KPI strip to match the dashboard reference. Keep dark-mode grid placement scoped so the existing dark dashboard posture is not unintentionally rearranged.
 - Responsiveness: preserve the 8+4 desktop grid, collapse the right rail to two columns on tablet, and stack everything on mobile with no fixed-width overflow.
 - Theme switching must preserve route state and loaded data. Do not branch into separate fetching trees for light vs. dark.
+
+## CRM Queue Light Mode
+
+- `/crm/queue` is a premium operational workspace in light mode, scoped by `.crm-queue-shell` and `.crm-queue-workspace`; do not reuse dashboard route classes directly.
+- Preserve the existing queue APIs, hooks, URL filters, power session behavior, SIP actions, campaign filter, and live-call/contact routing. The redesign is presentation and layout only.
+- Queue KPI cards use `QueueCountPill` variants for Pending, Due, Overdue, Upcoming, Completed Today, and Session Efficiency. Do not duplicate these headline counts elsewhere unless the second location adds different action context.
+- Empty state rules: `QueueEmptyOperational` should feel intentional when there is no queue work. It may link only to real routes/actions: `/crm/campaigns`, `/crm/import`, `/crm/queue?mode=power`, `/crm/reports`, clear campaign, or switch pending.
+- Right rail architecture: `QueueOverviewPanel` owns Today's Snapshot and Session; `QueueAttentionPanel` owns Queue Health and Recent Activity. Keep data honest and derived from existing queue/task/campaign stats.
+- Active campaign strip and priority cards belong below the main workspace. They should support real campaign context and queue/task counts without adding backend fields.
+- Responsive behavior: desktop 8+4 layout, tablet two-column right rail, mobile single-column stack. Avoid fixed widths that can create horizontal overflow.
+- Dark mode remains operational and token-based. Light-mode polish should stay under queue-scoped CSS so theme toggles do not remount or reset queue state.
+
+## CRM Scripts Light Mode
+
+- `/crm/scripts` is a UI-only redesign around the existing scripts list/create APIs. It keeps `GET /crm/scripts?includeInactive=true`, `POST /crm/scripts`, keyboard `N`, and real template prefill behavior.
+- `/crm/scripts/[id]` loads and edits a single script through existing `/crm/scripts/:id` APIs. Visible actions remain real: edit/save, archive, restore, copy, duplicate, and Live Call navigation.
+- The create/edit modal only exposes fields backed by current state/API: script name, optional starter template, and editable sections serialized to the existing body format. Do not add fake category/tag persistence unless backend support is added.
+- Light-mode styling is scoped by `.crm-scripts-workspace` and `.scripts-edit-modal`; dark mode continues through CRM tokens.
+- Right-rail instructions, tips, quick actions, metadata, and shortcuts must use real routes/actions only.
 
 ## Verification
 

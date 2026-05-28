@@ -707,6 +707,7 @@ function queueMember(
     contact: {
       id: entry.id,
       displayName: entry.displayName,
+      company: entry.company,
       active: true,
       archivedAt: null,
       primaryPhone: entry.primaryPhone?.numberRaw ?? null,

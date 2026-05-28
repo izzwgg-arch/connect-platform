@@ -84,17 +84,17 @@ export const mk = {
   opsAlert: "crm-cinema-ops-alert rounded-xl px-3 py-3",
   rosterShell: "crm-cinema-roster overflow-hidden rounded-2xl",
   rosterHead:
-    "border-b border-[color:var(--cinema-border-subtle)] px-4 py-4 sm:px-6 cinema-roster-head",
+    "border-b border-[color:var(--cinema-border-subtle)] px-3 py-3 sm:px-4 lg:px-5 cinema-roster-head",
   rosterToolbar:
-    "flex flex-wrap items-center gap-2 border-b border-[color:var(--cinema-border-subtle)] px-4 py-3 sm:px-6",
+    "flex flex-wrap items-center gap-2 border-b border-[color:var(--cinema-border-subtle)] px-3 py-2.5 sm:px-4 lg:px-5",
   rosterTableHead:
-    "crm-cinema-roster-thead hidden lg:grid lg:grid-cols-[minmax(0,1.5fr)_minmax(0,0.65fr)_minmax(0,0.7fr)_repeat(4,minmax(0,0.55fr))_minmax(0,0.6fr)_auto] lg:gap-3 lg:px-6 lg:py-2.5 text-[10px] font-bold uppercase tracking-wider text-[var(--cinema-text-dim)]",
+    "crm-cinema-roster-thead hidden lg:grid lg:grid-cols-[minmax(0,1.85fr)_minmax(0,0.7fr)_minmax(0,0.74fr)_minmax(0,0.42fr)_minmax(0,0.6fr)_minmax(0,0.78fr)_auto] lg:gap-2.5 lg:px-4 lg:py-2 text-[10px] font-bold uppercase tracking-wider text-[var(--cinema-text-dim)]",
   memberRow:
-    "crm-cinema-member-row grid grid-cols-1 gap-2 border-b border-[color:var(--cinema-border-subtle)] px-4 py-3 transition-[background,box-shadow] last:border-b-0 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,0.65fr)_minmax(0,0.7fr)_repeat(4,minmax(0,0.55fr))_minmax(0,0.6fr)_auto] lg:items-center lg:gap-3 lg:px-6 lg:py-3.5",
+    "crm-cinema-member-row grid grid-cols-1 gap-2 border-b border-[color:var(--cinema-border-subtle)] px-3 py-2.5 transition-[background,box-shadow] last:border-b-0 sm:px-4 lg:min-h-[48px] lg:grid-cols-[minmax(0,1.85fr)_minmax(0,0.7fr)_minmax(0,0.74fr)_minmax(0,0.42fr)_minmax(0,0.6fr)_minmax(0,0.78fr)_auto] lg:items-center lg:gap-2.5 lg:px-4 lg:py-1.5",
   memberAvatar:
-    "flex h-9 w-9 shrink-0 items-center justify-center rounded-full border text-sm font-bold cinema-member-avatar",
+    "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[11px] font-bold cinema-member-avatar",
   pill:
-    "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide",
+    "cinema-member-status-pill inline-flex items-center justify-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide",
   statusPillActive: "cinema-pill-active",
   statusPillPaused: "cinema-pill-paused",
   btnPowerOrange: "cinema-btn-power-orange",
