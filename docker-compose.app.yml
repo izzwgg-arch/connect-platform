@@ -88,6 +88,11 @@ services:
       # invitation email. Leave unset to auto-derive from PUBLIC_API_URL.
       ANDROID_APK_DOWNLOAD_URL: ${ANDROID_APK_DOWNLOAD_URL:-}
       ANDROID_APK_DOWNLOAD_URL_BASE: ${ANDROID_APK_DOWNLOAD_URL_BASE:-}
+      # ── CRM lead document storage ─────────────────────────────────────────
+      # Volume-backed directory for imported tenant Drive documents. Files survive
+      # container rebuilds. Signed open URLs use PROMPT_URL_SIGNING_SECRET as
+      # fallback HMAC secret if CRM_DOC_URL_SIGNING_SECRET is not set explicitly.
+      CRM_DOC_STORAGE_DIR: ${CRM_DOC_STORAGE_DIR:-/var/lib/connect/crm-lead-docs}
     # Migrations run in scripts/deploy-api.sh before containers; boot should listen quickly.
     command: sh -lc "pnpm --filter @connect/api start"
     ports:
@@ -114,6 +119,9 @@ services:
       # the published binary.
       - /opt/connectcomms/downloads:/var/lib/connect/downloads:ro
       - chat-attachments:/var/lib/connect/chat-attachments
+      # Persistent CRM lead document storage. Tenant document files survive
+      # container rebuilds and blue/green API rollouts.
+      - crm-lead-docs:/var/lib/connect/crm-lead-docs
     networks:
       - default
       - infra_default
@@ -178,6 +186,7 @@ services:
       APK_DOWNLOAD_DIR: ${APK_DOWNLOAD_DIR:-/var/lib/connect/downloads}
       ANDROID_APK_DOWNLOAD_URL: ${ANDROID_APK_DOWNLOAD_URL:-}
       ANDROID_APK_DOWNLOAD_URL_BASE: ${ANDROID_APK_DOWNLOAD_URL_BASE:-}
+      CRM_DOC_STORAGE_DIR: ${CRM_DOC_STORAGE_DIR:-/var/lib/connect/crm-lead-docs}
     command: sh -lc "pnpm --filter @connect/api start"
     ports:
       - "127.0.0.1:3004:3001"
@@ -193,6 +202,7 @@ services:
       - ivr-prompts:/var/lib/connect/ivr-prompts
       - /opt/connectcomms/downloads:/var/lib/connect/downloads:ro
       - chat-attachments:/var/lib/connect/chat-attachments
+      - crm-lead-docs:/var/lib/connect/crm-lead-docs
     networks:
       - default
       - infra_default
@@ -365,4 +375,9 @@ volumes:
   ivr-prompts:
     driver: local
   chat-attachments:
+    driver: local
+  # Persistent storage for CRM imported lead documents (Drive files pulled into
+  # tenant-scoped local storage). Survives container rebuilds and blue/green rollouts.
+  # Shared between api and api_candidate so signed open URLs resolve during cutover.
+  crm-lead-docs:
     driver: local
