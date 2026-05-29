@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
-import { requireCrmAccess, requireCrmAdmin, isCrmQueuePatchOwnershipForbidden, isAdminRole } from "./guard";
+import { requireCrmAccess, requireCrmAdmin, requireCrmManager, isCrmQueuePatchOwnershipForbidden, isAdminRole } from "./guard";
 import {
   assertCrmCampaignAllowed,
   crmCampaignScopeForUser,
@@ -394,7 +394,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
   // ── POST /crm/campaigns/:id/import/preview ───────────────────────────────
   // Dry-run: same parse/map/dedup/resolution as real import; no DB writes (no batch, contacts, members).
   app.post("/crm/campaigns/:id/import/preview", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmManager(req, reply);
     if (!user) return;
     const { tenantId, sub: userId } = user;
     const { id: campaignId } = req.params as { id: string };
@@ -483,7 +483,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
   // Multipart CSV (field "file") — reuses CRM import parse/dedup pipeline,
   // then enrolls contacts into this campaign. Optional field assignedToUserId.
   app.post("/crm/campaigns/:id/import", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmManager(req, reply);
     if (!user) return;
     const { tenantId, sub: userId } = user;
     const { id: campaignId } = req.params as { id: string };

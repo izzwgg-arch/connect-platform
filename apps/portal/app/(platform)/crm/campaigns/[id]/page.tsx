@@ -690,7 +690,8 @@ export default function CampaignDetailPage() {
   const isAdmin =
     backendJwtRole === "ADMIN" ||
     backendJwtRole === "TENANT_ADMIN" ||
-    backendJwtRole === "SUPER_ADMIN";
+    backendJwtRole === "SUPER_ADMIN" ||
+    can("can_manage_crm");
 
   const [campaign, setCampaign] = useState<CampaignDetail | null>(null);
   const [members, setMembers] = useState<CampaignMember[]>([]);
