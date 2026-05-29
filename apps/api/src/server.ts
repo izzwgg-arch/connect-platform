@@ -33,6 +33,7 @@ import {
 import { installApiRequestProfiler } from "./apiRequestProfiler";
 import { shouldSkipJwtVerification } from "./jwtPublicRouteBypass";
 import { fetchAriSliceForPbxLiveFromRedisOrAri } from "./pbxLiveAriSlice";
+import { buildVoiceProvisioningBundleFromIdentity, resolveWebrtcSipIdentity } from "./voiceProvisioningBundle";
 import {
   acknowledgeVoicemailIngestIncident,
   classifyHelperFailure,
@@ -570,6 +571,14 @@ function resolveWebrtcConfig(tenant: any, link: any) {
   };
 }
 
+function buildVoiceProvisioningBundle(
+  tenant: any,
+  tenantLink: any,
+  pbxLink: { pbxSipUsername?: string | null; pbxDeviceName?: string | null },
+  sipPassword: string | null,
+) {
+  return buildVoiceProvisioningBundleFromIdentity(resolveWebrtcConfig(tenant, tenantLink), pbxLink, sipPassword);
+}
 
 function maskIceServersForResponse(input: any[]): any[] {
   if (!Array.isArray(input)) return [];
@@ -581,22 +590,6 @@ function maskIceServersForResponse(input: any[]): any[] {
       hasCredential: !!row?.credential
     };
   });
-}
-
-function buildVoiceProvisioningBundle(tenant: any, link: any, sipUsername: string, sipPassword: string | null, authUsername?: string | null) {
-  const cfg = resolveWebrtcConfig(tenant, link);
-  return {
-    sipUsername,
-    // authUsername is the PJSIP auth object name (e.g. "T2_103_1" in VitalPBX 4).
-    // It goes into the SIP Authorization header. Falls back to sipUsername when absent.
-    authUsername: authUsername || sipUsername,
-    sipPassword,
-    sipWsUrl: cfg.sipWsUrl,
-    sipDomain: cfg.sipDomain,
-    outboundProxy: cfg.outboundProxy,
-    iceServers: cfg.iceServers,
-    dtmfMode: cfg.dtmfMode
-  };
 }
 
 async function getOrCreateSubscription(tenantId: string) {
@@ -2207,12 +2200,9 @@ async function issueOneTimeProvisioningForUser(user: JwtUser): Promise<{ sipPass
   });
 
   const tenant = await db.tenant.findUnique({ where: { id: user.tenantId } });
-  // authUsername = PJSIP auth object name (pbxDeviceName in VitalPBX 4, e.g. "T2_103_1").
-  // This is what goes into the SIP Authorization header digest — distinct from the SIP URI user.
-  const authUsername = (row as any).pbxDeviceName || row.pbxSipUsername;
   return {
     sipPassword,
-    provisioning: buildVoiceProvisioningBundle(tenant, link, row.pbxSipUsername, sipPassword, authUsername),
+    provisioning: buildVoiceProvisioningBundle(tenant, link, row, sipPassword),
     pbxExtensionLinkId: row.id
   };
 }
@@ -7377,7 +7367,7 @@ app.post("/pbx/extensions", async (req, reply) => {
       }
     });
 
-    const provisioning = buildVoiceProvisioningBundle(tenantCfg, link, saved.pbxSipUsername, dev.sipPassword || null);
+    const provisioning = buildVoiceProvisioningBundle(tenantCfg, link, saved, dev.sipPassword || null);
 
     await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_EXTENSION_CREATED", entityType: "PbxExtensionLink", entityId: saved.id });
     return { extension: ext, pbxLink: saved, provisioning };
@@ -7458,7 +7448,7 @@ app.post("/pbx/extensions/:id/reset-sip-password", async (req, reply) => {
   await db.pbxExtensionLink.update({ where: { id: row.id }, data: { sipPasswordIssuedAt: new Date() } });
   const tenantCfg = await db.tenant.findUnique({ where: { id: admin.tenantId } });
   await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_EXTENSION_SIP_PASSWORD_RESET", entityType: "PbxExtensionLink", entityId: row.id });
-  return { sipPassword, provisioning: buildVoiceProvisioningBundle(tenantCfg, link, row.pbxSipUsername, sipPassword) };
+  return { sipPassword, provisioning: buildVoiceProvisioningBundle(tenantCfg, link, row, sipPassword) };
 });
 
 /**
@@ -8131,16 +8121,14 @@ app.get("/voice/me/extension", async (req, reply) => {
   }
 
   const cfg = resolveWebrtcConfig(tenant, link);
+  const { sipUsername, authUsername } = resolveWebrtcSipIdentity(row);
   return {
     extensionId: ext.id,
     pbxExtensionLinkId: row.id,
     extensionNumber: ext.extNumber,
     displayName: ext.displayName,
-    sipUsername: row.pbxSipUsername,
-    // authUsername = the PJSIP auth object username in Asterisk (= pbxDeviceName e.g. "T2_103_1").
-    // VitalPBX creates auth objects named after the device_name, so this is what goes in
-    // the SIP Authorization header. Falls back to pbxSipUsername if device name not stored.
-    authUsername: (row as any).pbxDeviceName || row.pbxSipUsername,
+    sipUsername,
+    authUsername,
     // True only when the encrypted SIP password has actually been stored — not stale issuedAt
     hasSipPassword: !!(row as any).sipPasswordEncrypted,
     webrtcEnabled: cfg.webrtcEnabled,

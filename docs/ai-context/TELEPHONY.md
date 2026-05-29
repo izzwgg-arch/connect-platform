@@ -154,6 +154,371 @@
   switch between LOCAL Kamailio (`infra/sbc/kamailio/`) and a REMOTE upstream.
   UNKNOWN current production mode.
 
+### Incident: Relax Tires T25 / ext 101 / `T25_101_1` — SIP not registered (2026-05-29)
+
+> **Status:** **FIX IMPLEMENTED** (2026-05-29). Root cause: SIP URI identity mismatch —
+> `sipUsername=101_1` in bundle while PBX requires `T25_101_1` in From/To URI.
+> **Fix:** `resolveWebrtcSipIdentity()` sets both `sipUsername` and `authUsername` to
+> `pbxDeviceName` when present. Tests: `voiceProvisioningBundle.test.ts`. **Deploy +
+> QR re-provision required** for Relax Tires mobile. Runbooks: `WEBRTC_DIAGNOSTICS.md`.
+
+**Symptom:** Mobile app shows SIP Not Registered for Relax Tires extension 101.
+53 `SIP_REGISTER_FAILED` VoiceDiag events on 2026-05-29 — **all Relax Tires only**,
+**single user** (`relaxtires@gmail.com`). Zero PJSIP contacts for any `T25_*` WebRTC
+endpoint; `T30_102_1` holds a live Avail contact on the same WSS transport.
+
+#### Hypothesis matrix (2026-05-29 post-recreation)
+
+| Hypothesis | Verdict | Proof |
+|------------|---------|-------|
+| **1. Extension-number specific (101 only)** | **INCONCLUSIVE** | Only T25 WebRTC ext is 101; ext **199 not created** (API blocked). All T25 REGISTER probes fail for 101; no second T25 WebRTC ext to compare |
+| **2. Tenant-wide (all T25 WebRTC)** | **INCONCLUSIVE** | Same blocker — cannot test `T25_199_1` |
+| **Connect provisioning mismatch** | **PROVED (URI identity)** | Password correct; `sipUsername=101_1` in bundle causes 401; `sipUsername=T25_101_1` → **200 OK** (identity probe) |
+| **4. PBX runtime auth verification defect** | **SUPERSEDED** | Prior 401 was with `uriUser=101_1`; same runtime password succeeds when URI user matches endpoint name |
+| **5. Tenant-level Connect/PBX config** | **DISPROVED** (Connect) | T25 vs T30: identical `sipDomain`, `sipWsUrl`, `webrtcRouteViaSbc`, `outboundProxy`, `dtmfMode`. PBX: only identity fields + `max_contacts` differ (see below) |
+| **Recreate ext 101 / stale auth object** | **INVALIDATED** | Operator recreated ext 101 WebRTC device, re-synced Connect, re-issued QR. Device still `T25_101_1`; password re-issued; REGISTER probe **still 401** |
+
+#### Isolation audit — hard conclusions (2026-05-29)
+
+| Question | Verdict | Proof |
+|----------|---------|-------|
+| PBX endpoint **config file** corruption on `T25_101_1`? | **DISPROVED** (static config) | GetConfig cross-refs OK; 57 fields match T30; DB password matches GetConfig `authT25_101_1.password` |
+| Connect **provisioning bug**? | **PROVED** | `sipUsername` (`101_1`) ≠ endpoint/AOR identity (`T25_101_1`); see § Identity URI probe |
+| **Exact failing layer** | **PROVED** | **SIP URI identity mismatch** on REGISTER From/To — not password, not WSS |
+| **`T25_101_1`-specific vs tenant-wide T25** | **INCONCLUSIVE** | Only T25 WebRTC ext is 101; ext 199 not created |
+| **Connect stale credentials** | **DISPROVED** | See § Credential chain + § Auth trace |
+| **Recreate device fixes auth** | **DISPROVED** | Post-recreation probe still **401** with canonical `uriUser=101_1` |
+
+#### Identity URI probe — definitive root cause (2026-05-29)
+
+Script: `_tmp_diag/identity_uri_probe.js` (from `app-api-1`).
+
+Credentials: live runtime password (= Connect DB = bundle), `authUsername=T25_101_1`,
+`domain=m.connectcomunications.com`, WSS `wss://m.connectcomunications.com:8089/ws`.
+
+| Mode | uriUser (From/To) | authUsername (Digest + Contact) | WSS | Challenge | Auth REGISTER |
+|------|-------------------|-----------------------------------|-----|-----------|---------------|
+| **Current Connect/mobile** | `101_1` | `T25_101_1` | OK | 401 challenge OK | **401 Unauthorized** |
+| **Identity test** | `T25_101_1` | `T25_101_1` | OK | 401 challenge OK | **200 OK** |
+
+Post-probe `pjsip show contacts` for `T25_101`: **NONE** in AMI window (200 OK received;
+contact may not have persisted to AMI snapshot timing — auth success is the decisive signal).
+
+**Root cause (proved):** Connect provisions **`sipUsername=101_1`** (VitalPBX device `user`
+field) for JsSIP From/To URI, while **`authUsername=T25_101_1`** (device name / PJSIP
+endpoint). Asterisk binds REGISTER authentication to the **URI identity**; when From/To
+use `101_1` but digest Contact/auth reference `T25_101_1`, authenticated REGISTER returns
+**401** despite correct password. Setting **both URI user and auth user to `T25_101_1`**
+returns **200 OK** with the same password.
+
+**Why T30 appeared to work:** T30 probe with `uriUser=102_1` + `authUsername=T30_102_1`
+succeeds — tenant/endpoint identify rules differ, or T30 endpoint accepts the split.
+T25 requires URI user to match endpoint name `T25_101_1`.
+
+**Fix direction (not implemented):** For WebRTC/mobile provisioning, set **`sipUsername`**
+to **`pbxDeviceName`** (`T25_101_1`), not **`pbxSipUsername`** (`101_1`). Re-provision
+mobile after bundle change. Code path: `buildVoiceProvisioningBundle()` in
+`apps/api/src/server.ts`.
+
+#### Fixed provisioning behavior (2026-05-29 — shipped in code, pending deploy)
+
+**Module:** `apps/api/src/voiceProvisioningBundle.ts`
+
+```typescript
+resolveWebrtcSipIdentity(pbxLink):
+  sipUsername  = pbxDeviceName || pbxSipUsername
+  authUsername = pbxDeviceName || pbxSipUsername
+```
+
+**Before (Relax Tires 101):**
+
+| Field | Value |
+|-------|-------|
+| `sipUsername` | `101_1` |
+| `authUsername` | `T25_101_1` |
+| JsSIP URI | `sip:101_1@m.connectcomunications.com` → **401** |
+
+**After:**
+
+| Field | Value |
+|-------|-------|
+| `sipUsername` | `T25_101_1` |
+| `authUsername` | `T25_101_1` |
+| JsSIP URI | `sip:T25_101_1@m.connectcomunications.com` → **200 OK** (identity probe) |
+
+**Paths updated:** `issueOneTimeProvisioningForUser` (QR / one-time exchange),
+`/voice/me/extension`, `/voice/me/softphone-config`, `POST /pbx/extensions` response,
+`POST /pbx/extensions/:id/reset-sip-password`.
+
+**Mobile:** No code change — `apps/mobile/src/sip/jssip.ts` already uses
+`bundle.sipUsername` for URI and `bundle.authUsername` for digest.
+
+**Tests:** `apps/api/src/voiceProvisioningBundle.test.ts` (5 cases including Relax Tires regression).
+
+**Verification after deploy:**
+
+1. Deploy `api` service via deploy queue.
+2. Admin: generate new pairing QR for Relax Tires ext 101 (or user re-scans).
+3. Confirm bundle: `sipUsername=T25_101_1`, `authUsername=T25_101_1`.
+4. Mobile registers; `pjsip show contacts` → `T25_101_1` Avail.
+5. Run `_tmp_diag/identity_uri_probe.js` — canonical mode should now match identity test (**200 OK**).
+
+**Prevention:** Future WebRTC registration probes must test **both** URI/auth combinations:
+`uriUser=pbxSipUsername` vs `uriUser=pbxDeviceName` when they differ.
+
+#### Auth trace — full SIP REGISTER digest flow (2026-05-29)
+
+Script: `_tmp_diag/auth_trace_full.js` (from `app-api-1`).
+
+##### A. Challenge comparison (T25 vs T30)
+
+| Field | T25_101_1 | T30_102_1 | Verdict |
+|-------|-----------|-----------|---------|
+| `WWW-Authenticate` realm | `asterisk` | `asterisk` | **Same** |
+| algorithm | `MD5` | `MD5` | **Same** |
+| qop | `auth` | `auth` | **Same** |
+| nonce | unique per request | unique per request | Expected |
+| opaque | unique per request | unique per request | Expected |
+| Digest username sent | `T25_101_1` | `T30_102_1` | Canonical per endpoint |
+| Digest URI | `sip:m.connectcomunications.com` | same | **Same** |
+| HA2 fingerprint | `48523544fe30f942` | `48523544fe30f942` | **Identical** — digest URI/method calc correct |
+| Final status (auth REGISTER) | **401 Unauthorized** | **200 OK** | — |
+
+**Second 401 behavior (T25):** Asterisk returns **same nonce**, **new opaque** on the
+authenticated REGISTER rejection. This is Asterisk's signature for **credential rejection**
+(wrong password for the challenged auth object), not stale-nonce or malformed digest.
+
+##### B. What is excluded (proved NOT the cause)
+
+| Component | Proof |
+|-----------|-------|
+| **Username** | T30 succeeds only with `T30_102_1`; T25 uses parallel canonical `T25_101_1`. Alternate usernames (`101_1`) fail on both tenants |
+| **Realm** | Both challenged with `realm="asterisk"` |
+| **Nonce / qop / algorithm** | Identical challenge structure; T30 succeeds with same scheme |
+| **Digest calculation** | Identical HA2 fp proves URI/method hashing correct; T30 **200 OK** proves client digest math valid |
+| **Connect / bundle credential** | DB fp `e4cbf167c36af633` = GetConfig fp; probe with **GetConfig password directly** (not via DB decrypt) → still **401** |
+| **Endpoint reachability** | Challenge received; endpoint `T25_101_1` is engaged in REGISTER flow |
+
+##### C. Source-of-truth chain
+
+| Layer | Source | T25_101_1 | Matches DB? |
+|-------|--------|-----------|-------------|
+| Connect DB | `PbxExtensionLink.sipPasswordEncrypted` | fp `e4cbf167c36af633` | — |
+| Provisioning bundle | `buildVoiceProvisioningBundle()` | same fp | **Yes** |
+| REGISTER probe | DB decrypt | same fp | **Yes** |
+| AMI GetConfig | `pjsip.conf` category `authT25_101_1` | same fp, `auth_type=userpass`, `username=T25_101_1` | **Yes** |
+| Asterisk verification | runtime PJSIP auth check | **Rejects** digest built from above | **No** — divergence here |
+| VitalPBX Ombu DB | `ombu_devices.secret` | not queried (`mysql2` absent in container) | **Gap** — operator query required |
+| `pjsip show auth` runtime | AMI Command | **TIMEOUT** (AMI user or PBX restriction) | **Gap** — elevated PBX access required |
+
+VitalPBX 4 on this build uses **sorcery-wizard-locked** PJSIP objects (see § MOH/PJSIP
+notes below): generated `pjsip.conf` (GetConfig) is not necessarily the sole runtime
+verification store.
+
+##### D. Recreation / reload analysis
+
+| Event | Timestamp | Effect on 401 |
+|-------|-----------|---------------|
+| Ext 101 WebRTC device recreated | ~2026-05-29 19:29 UTC | Password re-issued in Connect; GetConfig updated; **401 persists** |
+| Same object names retained | `T25_101_1`, `authT25_101_1` | Recreation did not allocate new auth object name |
+| `max_contacts` after recreate | `1` (was `3`) | Config file changed; auth still **401** |
+
+Recreation updated **GetConfig-visible** password but did **not** restore registration.
+Auth trace proves Asterisk verification still rejects the GetConfig-equivalent credential.
+
+##### E. Definitive root cause (evidence-only)
+
+1. **Exact failing component:** PJSIP **`authT25_101_1` password verification** during
+   authenticated REGISTER.
+
+2. **Exact reason for 401:** Asterisk computes an expected digest that **does not match**
+   the client `Authorization` response built from the password in Connect DB / GetConfig
+   `pjsip.conf`. Second 401 retains challenge nonce with new opaque = **credential rejection**
+   at verification time.
+
+3. **Problem location:**
+   - **NOT** Connect provisioning, bundle generation, or client digest math
+   - **NOT** username, realm, nonce, qop, or algorithm mismatch
+   - **NOT** WSS / network / mobile path
+   - **IS** Asterisk PJSIP **runtime auth verification** for `authT25_101_1` — the
+     credential in GetConfig/Connect is **not accepted** at verification despite matching
+     each other
+
+4. **Remaining gap (requires elevated PBX operator):** Read runtime `pjsip show auth
+   authT25_101_1` and VitalPBX `ombu_devices.secret` for ext 101 tenant 25 to determine
+   whether runtime sorcery store, Ombu DB, or GetConfig is the divergent store. AMI
+   `pjsip show auth` timed out from Connect AMI user; PBX read-only SSH disallows this
+   command.
+
+#### Test B — ext 199 experiment (2026-05-29)
+
+| Step | Result | Evidence |
+|------|--------|----------|
+| Create ext 199 via Wire `POST /extensions` on `pbxInstance.baseUrl` | **FAILED** | nginx **404** (`https://m.connectcomunications.com/extensions`) |
+| Create via helper `209.145.60.79:8757/extensions` | **FAILED** | **404** `not_found` |
+| Create via Vital API `POST /api/v2/extensions` | **FAILED** | **401** Access Denied (token lacks create scope or expired) |
+| Ext 199 in Connect | **NOT CREATED** | Only T25 exts: 1002, 1003, 101 |
+| Ext 199 in PBX | **NOT CREATED** | Vital list unreachable (401); Wire list 404 |
+| REGISTER probe ext 199 | **NOT RUN** | Prerequisite missing |
+
+**Operator action required:** Create ext 199 + WebRTC device `T25_199_1` in **VitalPBX UI**,
+then `POST /admin/pbx/refresh-tenants`, then re-run `_tmp_diag/test_b_register_probe.js`
+with ext 199 added.
+
+#### Post-recreation REGISTER probe (2026-05-29T19:36 UTC)
+
+After operator recreated ext 101 WebRTC device, Connect sync, and new QR:
+
+| Endpoint | WSS | Challenge | Auth REGISTER | Contact |
+|----------|-----|-----------|---------------|---------|
+| `T25_101_1` | OK (~514 ms) | 401 challenge OK | **401 Unauthorized** | None |
+| `T30_102_1` | OK (~448 ms) | 401 challenge OK | **200 OK** | Created |
+
+Connect state after recreation: `pbxDeviceName=T25_101_1`, `pbxSipUsername=101_1`,
+`sipPasswordIssuedAt=2026-05-29T19:29:16.905Z`.
+
+#### Credential chain verification — ext 101 (4 sources)
+
+| Source | sipUsername | authUsername | Password fingerprint (sha256/16) |
+|--------|-------------|--------------|--------------------------------|
+| Connect DB (`PbxExtensionLink`) | `101_1` | `T25_101_1` | `e4cbf167c36af633` |
+| Generated bundle (`buildVoiceProvisioningBundle`) | `101_1` | `T25_101_1` | same |
+| AMI GetConfig `authT25_101_1.password` | — | `T25_101_1` | **matches DB** (isolation_audit) |
+| REGISTER probe (`test_b_register_probe.js`) | `101_1` | `T25_101_1` | same DB decrypt |
+
+**All four sources match.** Authenticated REGISTER still returns **401**.
+
+#### Digest username matrix (`test_b_auth_matrix.js`)
+
+| Variant | T25_101_1 | T30_102_1 |
+|---------|-----------|-----------|
+| Canonical (`authUser=T25_101_1` / `T30_102_1`) | **401** | **200 OK** |
+| Auth user = sip user only (`101_1` / `102_1`) | **401** | **401** |
+| URI user = bare ext (`101`) | **401** | (not tested) |
+
+T25 fails on **every** username variant tested. T30 succeeds **only** with canonical
+`T30_102_1` auth username — same pattern Connect provisions.
+
+#### PBX diff change after ext 101 recreation
+
+Post-recreation AMI GetConfig (2026-05-29T19:36 UTC):
+
+| Field | T25_101_1 (post-recreate) | T30_102_1 |
+|-------|---------------------------|-----------|
+| `max_contacts` | **`1`** | `3` |
+| All other registration fields | Same as prior audit | Same |
+
+Prior audit listed `max_contacts=3` for both; recreation changed T25 to **`1`**.
+
+#### Root cause (evidence-only — 2026-05-29, updated after identity probe)
+
+1. **Exact failing layer:** SIP REGISTER **From/To URI user** (`101_1`) does not match
+   PJSIP endpoint identity (`T25_101_1`) required by Asterisk for auth on tenant T25.
+
+2. **Exact 401 mechanism:** With `uriUser=101_1`, `authUsername=T25_101_1`, and correct
+   password → **401**. With `uriUser=T25_101_1` → **200 OK** (same password, same probe).
+
+3. **Not the cause:** Wrong password, stale Connect DB, WSS failure, digest math errors.
+
+4. **Evidence scripts:** `_tmp_diag/identity_uri_probe.js`, `_tmp_diag/verify_runtime_pwd.js`
+
+#### Permanent remediation (not shipped — fix direction)
+
+| Priority | Action | Verification |
+|----------|--------|--------------|
+| **1** | Deploy `api` + QR re-provision Relax Tires ext 101 user | Bundle shows `sipUsername=T25_101_1`; mobile REGISTER + contact Avail |
+| **2** | QR re-provision Relax Tires user after bundle fix | `pjsip show contacts` → `T25_101_1` Avail |
+| **3** | Audit other T25/T* tenants for same `101_1` vs `T25_101_1` split | Server-side identity probe per extension |
+| **4** | Optional: create ext 199 for isolation (API still blocked) | Confirm fix pattern on second T25 WebRTC ext |
+
+#### Prevention strategy + 5-minute diagnostic workflow
+
+1. **Identity URI probe** (`identity_uri_probe.js`) — when `pbxSipUsername ≠ pbxDeviceName`,
+   test both URI modes before blaming password or PBX runtime.
+2. **Auth trace** (`auth_trace_full.js`) — WWW-Authenticate + second-401 pattern.
+3. **Server-side REGISTER probe** per extension after any provisioning change.
+4. **Provisioning audit:** flag bundles where `sipUsername !== authUsername` on tenants
+   where VitalPBX endpoint name differs from device `user` field.
+
+**Test B ext 199 (manual):** VitalPBX UI → tenant T25 → ext 199 → WebRTC device
+`T25_199_1` → Connect `POST /admin/pbx/refresh-tenants` → assign user → QR → probe.
+
+#### Isolation audit — prior static conclusions (still valid)
+
+#### A. PBX diff table — `T25_101_1` vs `T30_102_1` (AMI GetConfig)
+
+**Identical (56 fields post-recreation):** `transport`, `webrtc=yes`, timers, DTLS,
+codecs, ICE flags — full list in `_tmp_diag/isolation_audit.js`.
+
+**Different:**
+
+| Field | T25_101_1 | T30_102_1 |
+|-------|-----------|-----------|
+| `max_contacts` | **`1`** (was `3` pre-recreation) | `3` |
+| `aors` | `T25_101_1` | `T30_102_1` |
+| `auth` / `outbound_auth` | `authT25_101_1` | `authT30_102_1` |
+| `context` | `T25_cos-all` | `T30_cos-all` |
+| `subscribe_context` | `T25_extension-hints` | `T30_extension-hints` |
+| `mailboxes` | `101@relax_tires-voicemail` | `102@ribit_capital-voicemail` |
+| `callerid` | `"Y M Weiss" <101>` | `"Christian Dominic Servidad" <102>` |
+| `set_var` | `parking-25` | `parking-30` |
+| `auth.username` | `T25_101_1` | `T30_102_1` |
+| `auth.password` | (unique per ext) | (unique per ext) |
+
+**AOR / identify objects:** empty in `pjsip.conf` GetConfig for both (registration
+parameters live on endpoint object — normal for VitalPBX WebRTC devices).
+
+#### C. Connect provisioning bundle (side-by-side)
+
+| Field | T25_101_1 | T30_102_1 | T7_102_1 (CAB) |
+|-------|-----------|-----------|----------------|
+| `sipWsUrl` | `wss://m.connectcomunications.com:8089/ws` | same | same |
+| `sipDomain` | `m.connectcomunications.com` | same | same |
+| `outboundProxy` | `null` | same | same |
+| `webrtcRouteViaSbc` | `false` | same | same |
+| `webrtcEnabled` | `true` | same | same |
+| `dtmfMode` | `RFC2833` | same | same |
+| `sipUsername` | `101_1` | `102_1` | `102_1` |
+| `authUsername` | `T25_101_1` | `T30_102_1` | `T7_102_1` |
+
+#### D. PBX object integrity — `T25_101_1`
+
+| Check | Result |
+|-------|--------|
+| `endpoint.auth` → `authT25_101_1` | OK |
+| `endpoint.outbound_auth` → `authT25_101_1` | OK |
+| `endpoint.aors` → `T25_101_1` | OK |
+| `auth.username` → `T25_101_1` | OK |
+| DB `sipPasswordEncrypted` → AMI auth password | **Match** |
+| Live endpoint state | `Unavailable`, **0 contacts** |
+| Peer `T30_102_1` live state | **Avail contact** on same transport |
+
+#### Isolation Test B — decision tree (ext 199 — manual VitalPBX UI required)
+
+| Outcome | Conclusion | Permanent fix direction |
+|---------|------------|-------------------------|
+| `T25_199_1` **registers** | Failure isolated to **ext 101 artifacts** (not Connect, not tenant transport) | Move user to ext 199; decommission ext 101 PBX objects |
+| `T25_199_1` **401** like 101 | **Tenant-wide T25 WebRTC auth defect** | VitalPBX tenant 25 audit with elevated access |
+| Post-recreation 101 still **401** | **Recreate-same-number insufficient** | Do not repeat recreate-101; proceed to ext 199 or new ext number |
+
+**API blocker:** Wire `/extensions` nginx 404; Vital API 401. Operator must create ext 199 in VitalPBX UI.
+
+#### Transition point (proved)
+
+| Milestone | Timestamp (UTC) | Evidence |
+|-----------|-----------------|----------|
+| Last known good registration | **2026-05-27 19:13:25** | `VoiceClientSession` `lastRegState: REGISTERED` after answered call |
+| First failure session start | **2026-05-29 14:25:59** | `SESSION_START` Samsung SM-S938U, app `1.0.0` |
+| First `SIP_REGISTER_FAILED` | **2026-05-29 14:26:14.464** | 53 failures May 29, all tenant `cmnlgryme000up9paz1w40fg0`, user `cmnmjhlu3004xp96hv4g49htg` |
+| Ext 101 recreation + re-sync | **2026-05-29 ~19:29** | `sipPasswordIssuedAt` refreshed; REGISTER probe still **401** at 19:36 |
+| Control success | **2026-05-29 15:38:36** | Create A Box `T7_102_1` registered on same `sipWsUrl` |
+
+#### Prior investigation notes (still valid)
+
+Objects unchanged May 27 19:13 → May 29 14:26: Tenant WebRTC fields, `PbxExtensionLink`
+credentials, provisioning code path. `sipUsername` ≠ `authUsername` split existed while
+registration worked May 27. See `WEBRTC_DIAGNOSTICS.md` for full entity IDs and event timeline.
+
 ---
 
 ## Dashboard active-call tenant badge (admin/global)

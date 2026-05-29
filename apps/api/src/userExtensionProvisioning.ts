@@ -33,6 +33,7 @@ import {
   portalBucketLabel,
   type PortalRoleBucket,
 } from "./userManagementRoles";
+import { resolveWebrtcSipIdentity } from "./voiceProvisioningBundle";
 
 // These types are intentionally loose (`any`) because the actual getUser /
 // requirePermission / canManageUsers in server.ts are typed with the server's
@@ -233,12 +234,14 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
     });
     if (!row) return reply.status(404).send({ error: "EXTENSION_NOT_ASSIGNED" });
 
+    const { sipUsername, authUsername } = resolveWebrtcSipIdentity(row as any);
+
     return {
       extensionNumber: row.extension.extNumber,
       endpointName: (row as any).pbxDeviceName || row.pbxSipUsername,
       displayName: row.extension.displayName,
-      sipUsername: row.pbxSipUsername,
-      authUsername: (row as any).pbxDeviceName || row.pbxSipUsername,
+      sipUsername,
+      authUsername,
       hasSipPassword: !!(row as any).sipPasswordEncrypted,
       webrtcEnabled: !!row.webrtcEnabled,
       provisionStatus: (row as any).provisionStatus || "PENDING",
