@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { ApiError } from "../../services/apiClient";
 import {
   formatCrmSaveError,
+  mergeScriptSummaries,
   requireSavedChecklist,
   requireSavedScript,
 } from "./crmSaveHelpers";
@@ -35,4 +36,28 @@ test("formatCrmSaveError includes ApiError detail", () => {
   );
   assert.match(message, /crm_permission_denied/);
   assert.match(message, /CRM admin access required/);
+});
+
+test("mergeScriptSummaries keeps local rows missing from refetch", () => {
+  const local = [
+    {
+      id: "new-script",
+      name: "Fresh",
+      isActive: true,
+      createdAt: "2026-05-30T00:00:00.000Z",
+      updatedAt: "2026-05-30T00:00:00.000Z",
+    },
+  ];
+  const fetched = [
+    {
+      id: "old-script",
+      name: "Existing",
+      isActive: true,
+      createdAt: "2026-05-29T00:00:00.000Z",
+      updatedAt: "2026-05-29T00:00:00.000Z",
+    },
+  ];
+  const merged = mergeScriptSummaries(local, fetched);
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0]?.id, "new-script");
 });

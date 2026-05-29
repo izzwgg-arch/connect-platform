@@ -12,7 +12,7 @@ import { ScriptOperationalSidebar } from "../../../../components/crm/scripts/Scr
 import { ScriptQuickTipsStrip } from "../../../../components/crm/scripts/ScriptQuickTipsStrip";
 import { ScriptEditModal } from "../../../../components/crm/scripts/ScriptEditModal";
 import { SCRIPT_TEMPLATES } from "../../../../components/crm/scripts/ScriptTemplates";
-import { requireSavedScript } from "../../../../components/crm/crmSaveHelpers";
+import { mergeScriptSummaries, requireSavedScript, toScriptSummary } from "../../../../components/crm/crmSaveHelpers";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 import type { Script, ScriptSummary } from "../../../../components/crm/scripts/scriptTypes";
 
@@ -24,12 +24,20 @@ export default function CrmScriptsPage() {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [templateBody, setTemplateBody] = useState<string | undefined>(undefined);
+  const [libraryResetToken, setLibraryResetToken] = useState(0);
 
-  async function loadList(options?: { silent?: boolean }) {
+  async function loadList(options?: { silent?: boolean; mergeLocal?: ScriptSummary[] }) {
     if (!options?.silent) setLoading(true);
     try {
       const res = await apiGet<{ scripts: ScriptSummary[] }>("/crm/scripts?includeInactive=true");
-      setScripts(res.scripts ?? []);
+      const fetched = res.scripts ?? [];
+      if (options?.mergeLocal?.length) {
+        setScripts(mergeScriptSummaries(options.mergeLocal, fetched));
+      } else if (options?.silent) {
+        setScripts((prev) => mergeScriptSummaries(prev, fetched));
+      } else {
+        setScripts(fetched);
+      }
       setFetchError(null);
     } catch (err: unknown) {
       setFetchError(String((err as Error)?.message ?? "Failed to load scripts"));
@@ -76,9 +84,11 @@ export default function CrmScriptsPage() {
   async function handleSave(data: { name: string; body: string }) {
     const res = await apiPost<{ script: Script }>("/crm/scripts", data);
     const script = requireSavedScript(res);
-    await loadList({ silent: true });
+    const summary = toScriptSummary(script);
+    setScripts((prev) => mergeScriptSummaries([summary, ...prev], prev));
+    setLibraryResetToken((token) => token + 1);
     closeModal();
-    router.push(`/crm/scripts/${script.id}`);
+    void loadList({ silent: true, mergeLocal: [summary] });
   }
 
   function scrollToTemplates() {
@@ -129,6 +139,7 @@ export default function CrmScriptsPage() {
               <ScriptLibraryPanel
                 scripts={scripts}
                 selectedId={null}
+                resetFiltersToken={libraryResetToken}
                 onSelect={(id) => router.push(`/crm/scripts/${id}`)}
                 onCreate={() => openCreate()}
                 onUseTemplate={(key) => openCreate(key)}

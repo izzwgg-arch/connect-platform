@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Archive,
   ChevronDown,
@@ -25,6 +25,8 @@ import type { ScriptSummary } from "./scriptTypes";
 interface ScriptLibraryPanelProps {
   scripts: ScriptSummary[];
   selectedId: string | null;
+  /** Increment after a successful create so search/status filters reset. */
+  resetFiltersToken?: number;
   onSelect: (id: string) => void;
   onCreate: () => void;
   onUseTemplate: (templateKey: string) => void;
@@ -63,6 +65,7 @@ function categoryFor(script: ScriptSummary): { label: string; tone: string } {
 export function ScriptLibraryPanel({
   scripts,
   selectedId,
+  resetFiltersToken = 0,
   onSelect,
   onCreate,
   onUseTemplate,
@@ -70,6 +73,13 @@ export function ScriptLibraryPanel({
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<StatusFilter>("all");
   const [templatesOpen, setTemplatesOpen] = useState(true);
+
+  useEffect(() => {
+    if (resetFiltersToken > 0) {
+      setSearch("");
+      setStatus("all");
+    }
+  }, [resetFiltersToken]);
 
   const activeScripts = scripts.filter((s) => s.isActive);
 

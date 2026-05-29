@@ -14,6 +14,21 @@ export function isAdminRole(role: string | undefined): boolean {
   return role === "ADMIN" || role === "TENANT_ADMIN" || role === "SUPER_ADMIN";
 }
 
+/** Honour portal workspace tenant selection for super-admins (x-tenant-context UUID). */
+export function resolveEffectiveCrmTenantId(req: any, user: CrmAuthUser): string {
+  if (user.role !== "SUPER_ADMIN") return user.tenantId;
+  const headerTenant = String(req.headers?.["x-tenant-context"] || "").trim();
+  if (headerTenant && !headerTenant.startsWith("vpbx:") && headerTenant !== "local") {
+    return headerTenant;
+  }
+  return user.tenantId;
+}
+
+function withEffectiveCrmTenant(req: any, user: CrmAuthUser): CrmAuthUser {
+  const tenantId = resolveEffectiveCrmTenantId(req, user);
+  return tenantId === user.tenantId ? user : { ...user, tenantId };
+}
+
 /** Body fields used to decide queue PATCH ownership (action + raw status path). */
 export type CrmQueuePatchAuthInput = {
   action?: string;
@@ -64,12 +79,13 @@ export async function requireCrmAccess(
   req: any,
   reply: any,
 ): Promise<CrmAuthUser | null> {
-  const user = req.user as CrmAuthUser | undefined;
-  if (!user?.sub) {
+  const rawUser = req.user as CrmAuthUser | undefined;
+  if (!rawUser?.sub) {
     reply.status(401).send({ error: "unauthorized" });
     return null;
   }
 
+  const user = withEffectiveCrmTenant(req, rawUser);
   const { tenantId, sub: userId, role } = user;
   if (!tenantId) {
     reply.status(400).send({ error: "no_tenant" });

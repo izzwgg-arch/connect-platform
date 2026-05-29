@@ -1,6 +1,32 @@
 import { ApiError } from "../../services/apiClient";
+import type { Script, ScriptSummary } from "./scripts/scriptTypes";
 
 type SavedEntity = { id?: unknown };
+
+export function toScriptSummary(script: Pick<Script, "id" | "name" | "isActive" | "createdAt" | "updatedAt">): ScriptSummary {
+  return {
+    id: script.id,
+    name: script.name,
+    isActive: script.isActive ?? true,
+    createdAt: script.createdAt ?? new Date().toISOString(),
+    updatedAt: script.updatedAt ?? script.createdAt ?? new Date().toISOString(),
+  };
+}
+
+/** Keep freshly saved rows when a refetch is briefly stale. */
+export function mergeScriptSummaries(
+  local: ScriptSummary[],
+  fetched: ScriptSummary[],
+): ScriptSummary[] {
+  const byId = new Map<string, ScriptSummary>();
+  for (const row of fetched) byId.set(row.id, row);
+  for (const row of local) {
+    if (!byId.has(row.id)) byId.set(row.id, row);
+  }
+  return [...byId.values()].sort(
+    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+  );
+}
 
 export function formatCrmSaveError(err: unknown): string {
   if (err instanceof ApiError) {
