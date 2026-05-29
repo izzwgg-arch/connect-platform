@@ -98,7 +98,7 @@ export const navItems: NavItem[] = [
   { id: "crm.voicemail_drops", href: "/crm/voicemail-drops", label: "Voicemail Drops", icon: "VM", lucide: Voicemail, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_voicemail_drops" },
   { id: "crm.checklists", href: "/crm/checklists", label: "Checklists", icon: "CC", lucide: ClipboardList, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_checklists" },
   { id: "crm.reports", href: "/crm/reports", label: "Reports", icon: "CR", lucide: BarChart3, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_reports" },
-  { id: "crm.wallboard", href: "/crm/wallboard", label: "Live Wallboard", icon: "CW", lucide: LayoutGrid, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_reports" },
+  { id: "crm.wallboard", href: "/crm/wallboard", label: "Live Wallboard", icon: "CW", lucide: LayoutGrid, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_wallboard" },
   { id: "crm.settings", href: "/crm/settings", label: "CRM Settings", icon: "CS", lucide: Settings2, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_settings" },
   { id: "crm.diagnostics", href: "/crm/admin/diagnostics", label: "CRM Diagnostics", icon: "DX", lucide: Stethoscope, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_settings" },
 

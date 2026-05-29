@@ -50,6 +50,7 @@ export const SIDEBAR_ITEMS = [
   { id: "crm.reports", section: "crm", label: "Reports", href: "/crm/reports", permission: "can_view_crm_reports" },
   { id: "crm.import", section: "crm", label: "Import Leads", href: "/crm/import", permission: "can_view_crm_import" },
   { id: "crm.funders", section: "crm", label: "Funders", href: "/crm/funders", permission: "can_view_crm_funders" },
+  { id: "crm.wallboard", section: "crm", label: "Live Wallboard", href: "/crm/wallboard", permission: "can_view_crm_wallboard" },
   { id: "crm.settings", section: "crm", label: "CRM Settings", href: "/crm/settings", permission: "can_view_crm_settings" },
 
   { id: "apps.home", section: "apps", label: "Apps", href: "/apps", permission: "can_view_apps_home" },
@@ -133,6 +134,7 @@ export const ACTION_PERMISSION_KEYS = [
   "can_manage_deploys",
   "can_view_crm",
   "can_manage_crm",
+  "can_manage_crm_admin",
   "can_view_crm_tasks",
   "can_view_crm_import",
   "can_view_crm_live_call",
@@ -234,8 +236,12 @@ export const LEGACY_PERMISSION_EXPANSIONS: Record<string, PortalPermissionKey[]>
   ],
   can_manage_deploys: [...ADMIN_SECTION, "can_view_admin_deploy_center"],
   // CRM — expanded for role buckets; API /me strips these unless CrmUserAccess.enabled
+  // AGENT  → can_view_crm  (read-only CRM access, no settings/wallboard)
+  // MANAGER → can_manage_crm (manage campaigns/import, still no settings/wallboard)
+  // ADMIN  → can_manage_crm + can_manage_crm_admin (full CRM access incl. settings + wallboard)
   can_view_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_voicemail_drops", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports", "can_view_crm_funders"],
-  can_manage_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_voicemail_drops", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_settings", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports", "can_view_crm_funders"],
+  can_manage_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_voicemail_drops", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports", "can_view_crm_funders"],
+  can_manage_crm_admin: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_voicemail_drops", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_settings", "can_view_crm_wallboard", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports", "can_view_crm_funders"],
 };
 
 const END_USER_ACTIONS: PortalPermissionKey[] = [
@@ -307,8 +313,10 @@ export const CRM_PORTAL_PERMISSION_KEYS: PortalPermissionKey[] = [
   ...new Set<PortalPermissionKey>([
     "can_view_crm",
     "can_manage_crm",
+    "can_manage_crm_admin",
     ...expandLegacyPortalPermissions(["can_view_crm"]),
     ...expandLegacyPortalPermissions(["can_manage_crm"]),
+    ...expandLegacyPortalPermissions(["can_manage_crm_admin"]),
   ]),
 ];
 
@@ -317,9 +325,10 @@ export function isCrmPortalPermissionKey(key: string): boolean {
 }
 
 /** Legacy keys to expand when CrmUserAccess is enabled for the user. */
-export function crmLegacyPermissionKeysForAccess(role: string | null | undefined): ("can_view_crm" | "can_manage_crm")[] {
+export function crmLegacyPermissionKeysForAccess(role: string | null | undefined): ("can_view_crm" | "can_manage_crm" | "can_manage_crm_admin")[] {
   const normalized = String(role || "").trim().toUpperCase();
-  if (normalized === "ADMIN" || normalized === "MANAGER") return ["can_manage_crm"];
+  if (normalized === "ADMIN") return ["can_manage_crm", "can_manage_crm_admin"];
+  if (normalized === "MANAGER") return ["can_manage_crm"];
   return ["can_view_crm"];
 }
 
