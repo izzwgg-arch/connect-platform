@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, FileText, GripVertical, Lightbulb, Plus, Sparkles, Trash2, X } from "lucide-react";
+import { formatCrmSaveError } from "../crmSaveHelpers";
 import { crm } from "../crmClasses";
 import { cn } from "../cn";
 import { parseScriptSections, SCRIPT_TEMPLATES, serializeScriptSections } from "./ScriptTemplates";
@@ -85,8 +86,8 @@ export function ScriptEditModal({ script, templateBody, onSave, onClose }: Scrip
     setError("");
     try {
       await onSave({ name: name.trim(), body });
-    } catch {
-      setError("Save failed. Please try again.");
+    } catch (err) {
+      setError(formatCrmSaveError(err));
       setSaving(false);
     }
   }

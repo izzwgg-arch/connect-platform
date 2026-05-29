@@ -100,6 +100,148 @@ const tasks = [
   task("task-010", contacts[2], "Prepare custom proposal", "Enterprise Outreach", "MEDIUM", "DONE", hoursFromNow(-144), "qa-ae-1", hoursFromNow(-120)),
 ];
 
+const mockScripts = [
+  {
+    id: "script-energy",
+    name: "Consultative outreach",
+    isActive: true,
+    createdAt: "2026-05-20T14:30:00.000Z",
+    updatedAt: "2026-05-26T20:45:00.000Z",
+    body: "# Opening\nHi, this is [Your Name] from Connect Solar. Is this a good time to talk for a minute about lowering your electric bill?\n\n---\n\n# Discovery / Qualification\nHave you looked into solar before?\n\nWhat is your biggest goal with solar?\n\n---\n\n# Value Proposition\nWe help homeowners reduce energy costs and take advantage of available incentives with no pressure.",
+  },
+];
+
+const mockChecklists = [
+  {
+    id: "checklist-standard",
+    name: "Qualification checklist",
+    isActive: true,
+    createdAt: "2026-05-20T14:30:00.000Z",
+    updatedAt: "2026-05-26T20:45:00.000Z",
+    items: [
+      { id: "checklist-standard-1", label: "Confirm decision maker", required: true, sortOrder: 0 },
+      { id: "checklist-standard-2", label: "Capture primary pain point", required: true, sortOrder: 1 },
+      { id: "checklist-standard-3", label: "Confirm next step", required: false, sortOrder: 2 },
+    ],
+  },
+];
+
+let mockScriptSeq = 1;
+let mockChecklistSeq = 1;
+
+function nextMockId(prefix: string, seqRef: { value: number }) {
+  seqRef.value += 1;
+  return `${prefix}-${seqRef.value}`;
+}
+
+const mockScriptSeqRef = { value: mockScriptSeq };
+const mockChecklistSeqRef = { value: mockChecklistSeq };
+
+function handleVisualQaScriptMutation(
+  method: ApiMethod,
+  path: string,
+  body?: Record<string, unknown>,
+): MockResult | null {
+  if (path === "/crm/scripts" && method === "POST") {
+    const name = String(body?.name ?? "").trim() || "Untitled script";
+    const scriptBody = String(body?.body ?? "").trim() || "# Opening\nStart here.";
+    const script = {
+      id: nextMockId("script", mockScriptSeqRef),
+      name,
+      body: scriptBody,
+      isActive: true,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+    mockScripts.unshift(script);
+    return { handled: true, data: { script } };
+  }
+
+  const scriptMatch = /^\/crm\/scripts\/([^/]+)$/.exec(path);
+  if (!scriptMatch) return null;
+  const scriptId = scriptMatch[1];
+  const existing = mockScripts.find((entry) => entry.id === scriptId);
+  if (!existing) return { handled: true, data: { error: "not_found" } };
+
+  if (method === "PATCH") {
+    if (typeof body?.name === "string" && body.name.trim()) existing.name = body.name.trim();
+    if (typeof body?.body === "string" && body.body.trim()) existing.body = body.body.trim();
+    if (typeof body?.isActive === "boolean") existing.isActive = body.isActive;
+    existing.updatedAt = now.toISOString();
+    return { handled: true, data: { script: existing } };
+  }
+
+  if (method === "DELETE") {
+    existing.isActive = false;
+    existing.updatedAt = now.toISOString();
+    return { handled: true, data: { ok: true } };
+  }
+
+  return null;
+}
+
+function handleVisualQaChecklistMutation(
+  method: ApiMethod,
+  path: string,
+  body?: Record<string, unknown>,
+): MockResult | null {
+  if (path === "/crm/checklists" && method === "POST") {
+    const name = String(body?.name ?? "").trim() || "Untitled checklist";
+    const rawItems = Array.isArray(body?.items) ? body.items : [];
+    const items = rawItems.map((item, index) => {
+      const row = item as { label?: unknown; required?: unknown; sortOrder?: unknown };
+      return {
+        id: nextMockId(`checklist-item-${mockChecklistSeqRef.value}`, mockChecklistSeqRef),
+        label: String(row.label ?? "").trim() || `Step ${index + 1}`,
+        required: Boolean(row.required),
+        sortOrder: typeof row.sortOrder === "number" ? row.sortOrder : index,
+      };
+    });
+    const checklist = {
+      id: nextMockId("checklist", mockChecklistSeqRef),
+      name,
+      isActive: true,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      items,
+    };
+    mockChecklists.unshift(checklist);
+    return { handled: true, data: { checklist } };
+  }
+
+  const checklistMatch = /^\/crm\/checklists\/([^/]+)$/.exec(path);
+  if (!checklistMatch) return null;
+  const checklistId = checklistMatch[1];
+  const existing = mockChecklists.find((entry) => entry.id === checklistId);
+  if (!existing) return { handled: true, data: { error: "not_found" } };
+
+  if (method === "PATCH") {
+    if (typeof body?.name === "string" && body.name.trim()) existing.name = body.name.trim();
+    if (typeof body?.isActive === "boolean") existing.isActive = body.isActive;
+    if (Array.isArray(body?.items)) {
+      existing.items = body.items.map((item, index) => {
+        const row = item as { label?: unknown; required?: unknown; sortOrder?: unknown };
+        return {
+          id: nextMockId(`checklist-item-${mockChecklistSeqRef.value}`, mockChecklistSeqRef),
+          label: String(row.label ?? "").trim() || `Step ${index + 1}`,
+          required: Boolean(row.required),
+          sortOrder: typeof row.sortOrder === "number" ? row.sortOrder : index,
+        };
+      });
+    }
+    existing.updatedAt = now.toISOString();
+    return { handled: true, data: { checklist: existing } };
+  }
+
+  if (method === "DELETE") {
+    existing.isActive = false;
+    existing.updatedAt = now.toISOString();
+    return { handled: true, data: { ok: true } };
+  }
+
+  return null;
+}
+
 export function getVisualQaMockResponse(
   method: ApiMethod,
   path: string,
@@ -108,6 +250,10 @@ export function getVisualQaMockResponse(
   if (!isVisualQaModeEnabled()) return { handled: false };
 
   if (method !== "GET") {
+    const scriptMutation = handleVisualQaScriptMutation(method, path, body);
+    if (scriptMutation) return scriptMutation;
+    const checklistMutation = handleVisualQaChecklistMutation(method, path, body);
+    if (checklistMutation) return checklistMutation;
     if (path.startsWith("/crm/")) return { handled: true, data: { ok: true, visualQa: true, body: body ?? null } };
     return { handled: false };
   }
@@ -413,37 +559,27 @@ export function getVisualQaMockResponse(
     return {
       handled: true,
       data: {
-        scripts: [
-          {
-            id: "script-energy",
-            name: "Consultative outreach",
-            isActive: true,
-            createdAt: "2026-05-20T14:30:00.000Z",
-            updatedAt: "2026-05-26T20:45:00.000Z",
-          },
-        ],
+        scripts: mockScripts.map(({ body: _body, ...summary }) => summary),
       },
     };
   }
 
-  if (pathname === "/crm/scripts/script-energy") {
-    return {
-      handled: true,
-      data: {
-        script: {
-          id: "script-energy",
-          name: "Consultative outreach",
-          isActive: true,
-          createdAt: "2026-05-20T14:30:00.000Z",
-          updatedAt: "2026-05-26T20:45:00.000Z",
-          body: "# Opening\nHi, this is [Your Name] from Connect Solar. Is this a good time to talk for a minute about lowering your electric bill?\n\n---\n\n# Discovery / Qualification\nHave you looked into solar before?\n\nWhat is your biggest goal with solar?\n\n---\n\n# Value Proposition\nWe help homeowners reduce energy costs and take advantage of available incentives with no pressure.",
-        },
-      },
-    };
+  if (pathname.startsWith("/crm/scripts/")) {
+    const scriptId = pathname.slice("/crm/scripts/".length);
+    const script = mockScripts.find((entry) => entry.id === scriptId);
+    if (!script) return { handled: true, data: { error: "not_found" } };
+    return { handled: true, data: { script } };
   }
 
   if (pathname === "/crm/checklists") {
-    return { handled: true, data: { checklists: [{ id: "checklist-standard", name: "Qualification checklist" }] } };
+    return { handled: true, data: { checklists: mockChecklists } };
+  }
+
+  if (pathname.startsWith("/crm/checklists/") && !pathname.endsWith("/respond")) {
+    const checklistId = pathname.slice("/crm/checklists/".length);
+    const checklist = mockChecklists.find((entry) => entry.id === checklistId);
+    if (!checklist) return { handled: true, data: { error: "not_found" } };
+    return { handled: true, data: { checklist } };
   }
 
   if (pathname === "/crm/users") {

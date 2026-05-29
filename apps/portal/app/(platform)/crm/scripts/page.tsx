@@ -12,6 +12,7 @@ import { ScriptOperationalSidebar } from "../../../../components/crm/scripts/Scr
 import { ScriptQuickTipsStrip } from "../../../../components/crm/scripts/ScriptQuickTipsStrip";
 import { ScriptEditModal } from "../../../../components/crm/scripts/ScriptEditModal";
 import { SCRIPT_TEMPLATES } from "../../../../components/crm/scripts/ScriptTemplates";
+import { requireSavedScript } from "../../../../components/crm/crmSaveHelpers";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 import type { Script, ScriptSummary } from "../../../../components/crm/scripts/scriptTypes";
 
@@ -24,14 +25,16 @@ export default function CrmScriptsPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [templateBody, setTemplateBody] = useState<string | undefined>(undefined);
 
-  async function loadList() {
+  async function loadList(options?: { silent?: boolean }) {
+    if (!options?.silent) setLoading(true);
     try {
       const res = await apiGet<{ scripts: ScriptSummary[] }>("/crm/scripts?includeInactive=true");
       setScripts(res.scripts ?? []);
+      setFetchError(null);
     } catch (err: unknown) {
       setFetchError(String((err as Error)?.message ?? "Failed to load scripts"));
     } finally {
-      setLoading(false);
+      if (!options?.silent) setLoading(false);
     }
   }
 
@@ -72,9 +75,10 @@ export default function CrmScriptsPage() {
 
   async function handleSave(data: { name: string; body: string }) {
     const res = await apiPost<{ script: Script }>("/crm/scripts", data);
-    setScripts((prev) => [res.script, ...prev]);
+    const script = requireSavedScript(res);
+    await loadList({ silent: true });
     closeModal();
-    router.push(`/crm/scripts/${res.script.id}`);
+    router.push(`/crm/scripts/${script.id}`);
   }
 
   function scrollToTemplates() {

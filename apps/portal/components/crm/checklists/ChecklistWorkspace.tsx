@@ -15,6 +15,7 @@ import {
   AlertCircle,
   ArrowRight,
 } from "lucide-react";
+import { formatCrmSaveError } from "../crmSaveHelpers";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
 import {
@@ -58,6 +59,7 @@ type Props = {
   onConfirmCreate: () => Promise<void>;
   onCancelCreate: () => void;
   createSaving: boolean;
+  createError?: string | null;
   onPickTemplate: (templateId: string) => void;
   onNewBlank: () => void;
   templatesFocus?: boolean;
@@ -499,6 +501,7 @@ export function ChecklistWorkspace({
   onConfirmCreate,
   onCancelCreate,
   createSaving,
+  createError,
   onPickTemplate,
   onNewBlank,
   templatesFocus,
@@ -507,6 +510,7 @@ export function ChecklistWorkspace({
   const [editName, setEditName] = useState("");
   const [editItems, setEditItems] = useState<EditItem[]>([]);
   const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   const prevSelectedId = useRef<string | null>(null);
 
@@ -533,11 +537,13 @@ export function ChecklistWorkspace({
         sortOrder: i.sortOrder,
       }))
     );
+    setEditError(null);
     setEditing(true);
   }, [selected]);
 
   const handleSaveEdit = useCallback(async () => {
     setSaving(true);
+    setEditError(null);
     try {
       await onSaveEdit(
         editName,
@@ -546,6 +552,8 @@ export function ChecklistWorkspace({
           .map((i, idx) => ({ ...i, sortOrder: idx }))
       );
       setEditing(false);
+    } catch (err) {
+      setEditError(formatCrmSaveError(err));
     } finally {
       setSaving(false);
     }
@@ -586,6 +594,11 @@ export function ChecklistWorkspace({
           <div className="checklist-form-section rounded-[1.25rem] border border-crm-border/35 p-4">
             <ItemListEditor items={createItems} onChange={onCreateItemsChange} />
           </div>
+          {createError ? (
+            <p className={cn(crm.bannerDanger, "rounded-2xl px-3 py-2 text-xs")} role="alert">
+              {createError}
+            </p>
+          ) : null}
           <div className="flex flex-col-reverse gap-2 border-t border-crm-border/40 pt-3 sm:flex-row sm:items-center sm:justify-end">
             <button type="button" onClick={onCancelCreate} className={crm.btnSecondary}>
               <X size={13} />
@@ -657,6 +670,11 @@ export function ChecklistWorkspace({
         </div>
         <div className="p-4 sm:p-5">
           <ItemListEditor items={editItems} onChange={setEditItems} />
+          {editError ? (
+            <p className={cn(crm.bannerDanger, "mt-3 rounded-2xl px-3 py-2 text-xs")} role="alert">
+              {editError}
+            </p>
+          ) : null}
         </div>
       </PrimaryPanel>
     );

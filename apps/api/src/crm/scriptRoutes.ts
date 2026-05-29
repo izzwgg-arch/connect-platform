@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
-import { requireCrmAccess, requireCrmAdmin } from "./guard";
+import { requireCrmAccess } from "./guard";
 
 const createSchema = z.object({
   name: z.string().min(1).max(200),
@@ -50,9 +50,9 @@ export async function registerCrmScriptRoutes(app: FastifyInstance) {
   });
 
   // ── POST /crm/scripts ────────────────────────────────────────────────────────
-  // Create a new script. Requires admin.
+  // Create a new script. Any CRM-enabled user in the tenant.
   app.post("/crm/scripts", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
     const { tenantId, sub: userId } = user;
 
@@ -71,9 +71,9 @@ export async function registerCrmScriptRoutes(app: FastifyInstance) {
   });
 
   // ── PATCH /crm/scripts/:id ───────────────────────────────────────────────────
-  // Update name, body, or archive. Requires admin.
+  // Update name, body, or archive. Any CRM-enabled user in the tenant.
   app.patch("/crm/scripts/:id", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id } = req.params as { id: string };
@@ -96,9 +96,9 @@ export async function registerCrmScriptRoutes(app: FastifyInstance) {
   });
 
   // ── DELETE /crm/scripts/:id ──────────────────────────────────────────────────
-  // Archive (soft-delete) a script. Requires admin.
+  // Archive (soft-delete) a script. Any CRM-enabled user in the tenant.
   app.delete("/crm/scripts/:id", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id } = req.params as { id: string };

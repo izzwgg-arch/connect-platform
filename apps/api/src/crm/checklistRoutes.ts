@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
-import { requireCrmAccess, requireCrmAdmin } from "./guard";
+import { requireCrmAccess } from "./guard";
 import { writeTimelineEvent } from "./timelineHelper";
 
 const itemSchema = z.object({
@@ -66,9 +66,9 @@ export async function registerCrmChecklistRoutes(app: FastifyInstance) {
   });
 
   // ── POST /crm/checklists ─────────────────────────────────────────────────────
-  // Create checklist with items. Requires admin.
+  // Create checklist with items. Any CRM-enabled user in the tenant.
   app.post("/crm/checklists", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
     const { tenantId, sub: userId } = user;
 
@@ -94,9 +94,9 @@ export async function registerCrmChecklistRoutes(app: FastifyInstance) {
   });
 
   // ── PATCH /crm/checklists/:id ────────────────────────────────────────────────
-  // Update checklist name/active status, optionally replace all items. Admin only.
+  // Update checklist name/active status, optionally replace all items.
   app.patch("/crm/checklists/:id", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id } = req.params as { id: string };
@@ -134,9 +134,9 @@ export async function registerCrmChecklistRoutes(app: FastifyInstance) {
   });
 
   // ── DELETE /crm/checklists/:id ───────────────────────────────────────────────
-  // Archive (soft-delete). Admin only.
+  // Archive (soft-delete). Any CRM-enabled user in the tenant.
   app.delete("/crm/checklists/:id", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id } = req.params as { id: string };

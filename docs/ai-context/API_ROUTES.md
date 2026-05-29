@@ -664,18 +664,18 @@ All routes registered via `registerCrmRoutes(app)` in `server.ts`.
 |--------|------|-------|
 | GET | `/crm/scripts` | List active scripts (`includeInactive=true` for archived) |
 | GET | `/crm/scripts/:id` | Single script with full body |
-| POST | `/crm/scripts` | Create (admin); requires `name` + `body` |
-| PATCH | `/crm/scripts/:id` | Update name/body/isActive (admin) |
-| DELETE | `/crm/scripts/:id` | Archive — sets `isActive=false` (admin) |
+| POST | `/crm/scripts` | Create; requires `name` + `body` (any CRM-enabled user) |
+| PATCH | `/crm/scripts/:id` | Update name/body/isActive (any CRM-enabled user) |
+| DELETE | `/crm/scripts/:id` | Archive — sets `isActive=false` (any CRM-enabled user) |
 
 ### Checklists (Phase 2C)
 | Method | Path | Notes |
 |--------|------|-------|
 | GET | `/crm/checklists` | List active checklists with items |
 | GET | `/crm/checklists/:id` | Single checklist with items |
-| POST | `/crm/checklists` | Create + items (admin) |
-| PATCH | `/crm/checklists/:id` | Update; `items` array replaces all items atomically (admin) |
-| DELETE | `/crm/checklists/:id` | Archive (admin) |
+| POST | `/crm/checklists` | Create + items (any CRM-enabled user) |
+| PATCH | `/crm/checklists/:id` | Update; `items` array replaces all items atomically (any CRM-enabled user) |
+| DELETE | `/crm/checklists/:id` | Archive (any CRM-enabled user) |
 | POST | `/crm/checklists/:id/respond` | Save `CrmChecklistResponse`. Body: `{ contactId, linkedId?, answers }`. Writes `CHECKLIST_COMPLETED` event. |
 
 ### CRM Email (Phase 1 — send-only, metadata-first)

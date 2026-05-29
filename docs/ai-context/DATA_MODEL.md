@@ -687,6 +687,7 @@ Important: `onDelete: Restrict` on `createdByUserId` — a user cannot be delete
 - **Tenant-scoped?** Yes.
 - **High-risk?** No (read-only by agents during calls; no telephony coupling).
 - **Soft-delete:** `isActive = false` (archive). No hard deletes.
+- **Write access:** any CRM-enabled tenant user (`requireCrmAccess`) — not platform-admin-only.
 - **Routes:** `apps/api/src/crm/scriptRoutes.ts`
 
 Key fields: `name`, `body` (Text), `isActive`, `createdByUserId`.
@@ -699,6 +700,7 @@ Key fields: `name`, `body` (Text), `isActive`, `createdByUserId`.
 - **Tenant-scoped?** Yes.
 - **High-risk?** No.
 - **Soft-delete:** `isActive = false` (archive).
+- **Write access:** any CRM-enabled tenant user (`requireCrmAccess`) — not platform-admin-only.
 - **Routes:** `apps/api/src/crm/checklistRoutes.ts`
 
 Key fields: `name`, `isActive`, `createdByUserId`. Related: `items CrmChecklistItem[]`, `responses CrmChecklistResponse[]`.

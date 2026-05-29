@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
+import { formatCrmSaveError, normalizeChecklist, requireSavedChecklist } from "../../../../components/crm/crmSaveHelpers";
 import { apiGet, apiPost, apiPatch } from "../../../../services/apiClient";
 import { crm } from "../../../../components/crm/crmClasses";
 import {
@@ -58,6 +59,7 @@ export default function CrmChecklistsPage() {
   const [createName, setCreateName] = useState("");
   const [createItems, setCreateItems] = useState<EditItem[]>([]);
   const [createSaving, setCreateSaving] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   const activeChecklists = useMemo(
     () => checklists.filter((c) => c.isActive),
@@ -77,24 +79,18 @@ export default function CrmChecklistsPage() {
     return Math.round(sum / activeChecklists.length);
   }, [activeChecklists]);
 
-  async function loadList() {
+  async function loadList(options?: { silent?: boolean }) {
+    if (!options?.silent) setLoading(true);
     try {
       const res = await apiGet<{ checklists: Checklist[] }>(
         "/crm/checklists?includeInactive=true"
       );
-      setChecklists(
-        (res.checklists ?? []).map((checklist) => ({
-          ...checklist,
-          isActive: checklist.isActive ?? true,
-          createdAt: checklist.createdAt ?? new Date().toISOString(),
-          updatedAt: checklist.updatedAt ?? checklist.createdAt ?? new Date().toISOString(),
-          items: checklist.items ?? [],
-        }))
-      );
+      setChecklists((res.checklists ?? []).map((checklist) => normalizeChecklist(checklist)));
+      setError(null);
     } catch (err: unknown) {
       setError(String((err as Error)?.message ?? "Failed to load checklists"));
     } finally {
-      setLoading(false);
+      if (!options?.silent) setLoading(false);
     }
   }
 
@@ -107,6 +103,7 @@ export default function CrmChecklistsPage() {
     setSelected(null);
     setCreateName("");
     setCreateItems([{ label: "", required: false, sortOrder: 0 }]);
+    setCreateError(null);
     setHeaderTab("active");
   }
 
@@ -152,12 +149,14 @@ export default function CrmChecklistsPage() {
         sortOrder: idx,
       }))
     );
+    setCreateError(null);
     setHeaderTab("active");
   }
 
   const handleConfirmCreate = useCallback(async () => {
     if (!createName.trim()) return;
     setCreateSaving(true);
+    setCreateError(null);
     try {
       const validItems = createItems
         .filter((i) => i.label.trim())
@@ -166,11 +165,14 @@ export default function CrmChecklistsPage() {
         name: createName.trim(),
         items: validItems,
       });
-      setChecklists((prev) => [res.checklist, ...prev]);
+      const checklist = normalizeChecklist(requireSavedChecklist(res));
+      await loadList({ silent: true });
       setCreating(false);
-      setSelected(res.checklist);
+      setSelected(checklist);
       setCreateName("");
       setCreateItems([]);
+    } catch (err: unknown) {
+      setCreateError(formatCrmSaveError(err));
     } finally {
       setCreateSaving(false);
     }
@@ -180,19 +182,22 @@ export default function CrmChecklistsPage() {
     setCreating(false);
     setCreateName("");
     setCreateItems([]);
+    setCreateError(null);
   }, []);
 
   const handleSaveEdit = useCallback(
     async (name: string, items: EditItem[]) => {
-      if (!selected) return;
+      if (!selected) throw new Error("No checklist selected.");
       const res = await apiPatch<{ checklist: Checklist }>(
         `/crm/checklists/${selected.id}`,
         { name, items }
       );
-      setSelected(res.checklist);
+      const checklist = normalizeChecklist(requireSavedChecklist(res));
+      setSelected(checklist);
       setChecklists((prev) =>
-        prev.map((c) => (c.id === res.checklist.id ? res.checklist : c))
+        prev.map((c) => (c.id === checklist.id ? checklist : c))
       );
+      await loadList({ silent: true });
       setSavedMsg("Saved");
       setTimeout(() => setSavedMsg(""), 2500);
     },
@@ -294,6 +299,7 @@ export default function CrmChecklistsPage() {
               onConfirmCreate={handleConfirmCreate}
               onCancelCreate={handleCancelCreate}
               createSaving={createSaving}
+              createError={createError}
               onPickTemplate={handleNewFromTemplate}
               onNewBlank={handleNewBlank}
               templatesFocus={templatesFocus}

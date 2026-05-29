@@ -13,6 +13,7 @@ import { ScriptEditModal } from "../../../../../components/crm/scripts/ScriptEdi
 import { ScriptWorkspace } from "../../../../../components/crm/scripts/ScriptWorkspace";
 import { parseScriptSections } from "../../../../../components/crm/scripts/ScriptTemplates";
 import type { Script } from "../../../../../components/crm/scripts/scriptTypes";
+import { requireSavedScript } from "../../../../../components/crm/crmSaveHelpers";
 import { apiGet, apiPatch, apiPost } from "../../../../../services/apiClient";
 
 export default function CrmScriptDetailPage() {
@@ -44,7 +45,8 @@ export default function CrmScriptDetailPage() {
 
   async function handleSave(data: { name: string; body: string }) {
     const res = await apiPatch<{ script: Script }>(`/crm/scripts/${scriptId}`, data);
-    setScript(res.script);
+    const saved = requireSavedScript(res);
+    setScript(saved);
     setModalOpen(false);
   }
 
@@ -64,7 +66,8 @@ export default function CrmScriptDetailPage() {
       name: `${script.name} Copy`,
       body: script.body,
     });
-    router.push(`/crm/scripts/${res.script.id}`);
+    const copy = requireSavedScript(res);
+    router.push(`/crm/scripts/${copy.id}`);
   }
 
   return (
