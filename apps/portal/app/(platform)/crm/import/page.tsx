@@ -25,6 +25,10 @@ type ImportBatch = {
   updatedCount: number;
   skippedCount: number;
   errorCount: number;
+  /** Non-zero means some audit row writes failed; Drive matching may miss those rows. */
+  auditErrorCount?: number;
+  /** Only present on GET /crm/import/batches/:id detail view. */
+  auditRowCount?: number;
   errors: { row: number; reason: string }[];
   mapping?: Record<string, string> | null;
   createdAt: string;
@@ -175,6 +179,15 @@ function BatchCard({ batch, showDetailLink }: { batch: ImportBatch; showDetailLi
             View imported contacts →
           </Link>
         )}
+        {/* Drive document matching */}
+        {(batch.status === "DONE" || batch.status === "PARTIAL") && (
+          <Link
+            href={`/crm/drive/match/${encodeURIComponent(batch.id)}`}
+            style={{ fontSize: "0.8125rem", color: "var(--accent)", fontWeight: 600, textDecoration: "none" }}
+          >
+            Match Drive documents →
+          </Link>
+        )}
       </div>
     </div>
   );
@@ -251,7 +264,49 @@ function ImportBatchDetailPanel({ batch }: { batch: ImportBatch }) {
         <span><strong style={{ color: "#3b82f6" }}>{batch.updatedCount}</strong> <span style={{ color: "var(--text-dim)" }}>updated</span></span>
         <span><strong style={{ color: "#6b7280" }}>{batch.skippedCount}</strong> <span style={{ color: "var(--text-dim)" }}>skipped</span></span>
         <span><strong style={{ color: "#ef4444" }}>{batch.errorCount}</strong> <span style={{ color: "var(--text-dim)" }}>row errors</span></span>
+        {batch.auditRowCount !== undefined && (
+          <span>
+            <strong style={{ color: batch.auditRowCount < batch.totalRows ? "#f59e0b" : "#10b981" }}>
+              {batch.auditRowCount}
+            </strong>{" "}
+            <span style={{ color: "var(--text-dim)" }}>audit rows</span>
+          </span>
+        )}
       </div>
+
+      {/* Audit health warning */}
+      {(batch.auditErrorCount ?? 0) > 0 && (
+        <div
+          style={{
+            padding: "0.65rem 0.85rem",
+            background: "#fffbeb",
+            border: "1px solid #fcd34d",
+            borderRadius: "0.375rem",
+            fontSize: "0.8125rem",
+            color: "#92400e",
+          }}
+        >
+          <strong>Drive match warning:</strong>{" "}
+          {batch.auditErrorCount} audit row write{(batch.auditErrorCount ?? 0) !== 1 ? "s" : ""} failed
+          during import. Drive matching may miss those companies. Re-import the file to fix this.
+        </div>
+      )}
+      {batch.auditRowCount !== undefined && batch.auditRowCount === 0 && batch.totalRows > 0 && (
+        <div
+          style={{
+            padding: "0.65rem 0.85rem",
+            background: "#fef2f2",
+            border: "1px solid #fca5a5",
+            borderRadius: "0.375rem",
+            fontSize: "0.8125rem",
+            color: "#991b1b",
+          }}
+        >
+          <strong>Drive match unavailable:</strong>{" "}
+          No audit rows were recorded for this batch. Drive document matching cannot run.
+          Re-import the file to recover.
+        </div>
+      )}
 
       {source === "campaign" && batch.campaignId && (
         <Link

@@ -54,6 +54,17 @@ type SuggestResult = {
   matched: boolean;
 };
 
+type AiSettings = {
+  aiEnabled: boolean;
+  maxDocumentsPerReport: number;
+  maxCharsPerDocument: number;
+  maxTotalCharsPerReport: number;
+  allowBatchGeneration: boolean;
+  maxBatchReportsPerRun: number;
+  regenerationCooldownMinutes: number;
+  isDefault?: boolean;
+};
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 const ROLE_LABELS: Record<string, string> = {
@@ -299,6 +310,48 @@ export default function CrmSettingsPage() {
       setSuggestResult(res);
     } catch {}
     setSuggesting(false);
+  };
+
+  // ── AI Settings state ────────────────────────────────────────────────────
+  const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
+  const [aiSettingsLoading, setAiSettingsLoading] = useState(true);
+  const [aiSettingsSaving, setAiSettingsSaving] = useState(false);
+  const [aiSettingsError, setAiSettingsError] = useState<string | null>(null);
+  const [aiSettingsDraft, setAiSettingsDraft] = useState<AiSettings | null>(null);
+
+  const loadAiSettings = useCallback(async () => {
+    setAiSettingsLoading(true);
+    setAiSettingsError(null);
+    try {
+      const s = await apiGet<AiSettings>("/crm/ai-settings");
+      setAiSettings(s);
+      setAiSettingsDraft(s);
+    } catch (e: any) {
+      setAiSettingsError(e?.message || "Failed to load AI settings");
+    } finally {
+      setAiSettingsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { if (isAdmin) loadAiSettings(); }, [isAdmin, loadAiSettings]);
+
+  const saveAiSettings = async () => {
+    if (!aiSettingsDraft) return;
+    setAiSettingsSaving(true);
+    setAiSettingsError(null);
+    try {
+      const saved = await apiPut<AiSettings>("/crm/ai-settings", aiSettingsDraft);
+      setAiSettings(saved);
+      setAiSettingsDraft(saved);
+    } catch (e: any) {
+      setAiSettingsError(e?.message || "Failed to save AI settings");
+    } finally {
+      setAiSettingsSaving(false);
+    }
+  };
+
+  const patchAiDraft = (patch: Partial<AiSettings>) => {
+    setAiSettingsDraft((prev) => prev ? { ...prev, ...patch } : null);
   };
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -753,6 +806,219 @@ export default function CrmSettingsPage() {
             Enable CRM above to activate user access controls.
           </div>
         )}
+      </section>
+
+      {/* ── AI Intelligence Settings ────────────────────────────────────────── */}
+      <section className="panel" style={{ overflow: "hidden" }}>
+        <div
+          style={{
+            padding: "1rem 1.25rem",
+            borderBottom: "1px solid var(--border)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "1rem",
+          }}
+        >
+          <div>
+            <h3 style={{ margin: 0, fontSize: "0.9375rem", fontWeight: 600 }}>AI Intelligence Settings</h3>
+            <p style={{ margin: "0.25rem 0 0", fontSize: "0.8125rem", color: "var(--text-dim)" }}>
+              Control AI Lead Intelligence limits and cost guardrails for this tenant.
+              Only CRM admins can change these settings.
+            </p>
+          </div>
+        </div>
+
+        {aiSettingsLoading ? (
+          <div style={{ padding: "1.5rem" }}>
+            <LoadingSkeleton rows={5} />
+          </div>
+        ) : aiSettingsError ? (
+          <div style={{ padding: "1rem 1.25rem", color: "var(--error, #ef4444)", fontSize: "0.875rem" }}>
+            {aiSettingsError}
+          </div>
+        ) : aiSettingsDraft ? (
+          <div style={{ padding: "1.25rem" }}>
+            {/* Master switch */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "0.75rem 1rem",
+                background: "var(--surface-2, rgba(255,255,255,0.04))",
+                borderRadius: "0.375rem",
+                marginBottom: "1.25rem",
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 600, fontSize: "0.875rem" }}>AI Intelligence Enabled</div>
+                <div style={{ fontSize: "0.75rem", color: "var(--text-dim)", marginTop: 2 }}>
+                  Master switch — disabling blocks all AI generation for this tenant.
+                </div>
+              </div>
+              <Toggle
+                label={aiSettingsDraft.aiEnabled ? "Enabled" : "Disabled"}
+                checked={aiSettingsDraft.aiEnabled}
+                onChange={(v) => patchAiDraft({ aiEnabled: v })}
+                disabled={aiSettingsSaving}
+              />
+            </div>
+
+            {/* Numeric settings grid */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+                gap: "1rem",
+                marginBottom: "1.25rem",
+              }}
+            >
+              {[
+                {
+                  key: "maxDocumentsPerReport" as const,
+                  label: "Max Documents per Report",
+                  min: 1,
+                  max: 10,
+                  help: "Maximum imported documents sent to the AI per contact (hard cap: 10).",
+                },
+                {
+                  key: "maxCharsPerDocument" as const,
+                  label: "Max Chars per Document",
+                  min: 100,
+                  max: 5000,
+                  help: "Characters of extracted text included per document (hard cap: 5 000).",
+                },
+                {
+                  key: "maxTotalCharsPerReport" as const,
+                  label: "Max Total Chars per Report",
+                  min: 500,
+                  max: 25000,
+                  help: "Total characters across all documents sent to the AI (hard cap: 25 000).",
+                },
+                {
+                  key: "maxBatchReportsPerRun" as const,
+                  label: "Max Batch Reports per Run",
+                  min: 1,
+                  max: 25,
+                  help: "Maximum contacts processed in a single batch generation call (hard cap: 25).",
+                },
+                {
+                  key: "regenerationCooldownMinutes" as const,
+                  label: "Regeneration Cooldown (minutes)",
+                  min: 0,
+                  max: 10080,
+                  help: "Minimum minutes between force-regenerations for the same contact. 0 = no cooldown. CRM admins can bypass.",
+                },
+              ].map(({ key, label, min, max, help }) => (
+                <div key={key}>
+                  <label style={{ fontSize: "0.8125rem", fontWeight: 500, display: "block", marginBottom: "0.375rem" }}>
+                    {label}
+                  </label>
+                  <input
+                    type="number"
+                    min={min}
+                    max={max}
+                    value={aiSettingsDraft[key]}
+                    disabled={aiSettingsSaving || !aiSettingsDraft.aiEnabled}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      if (!isNaN(n)) patchAiDraft({ [key]: Math.max(min, Math.min(max, n)) });
+                    }}
+                    style={{
+                      width: "100%",
+                      padding: "0.4375rem 0.625rem",
+                      background: "var(--input-bg, rgba(255,255,255,0.06))",
+                      border: "1px solid var(--border)",
+                      borderRadius: "0.375rem",
+                      color: "var(--text)",
+                      fontSize: "0.875rem",
+                    }}
+                  />
+                  <div style={{ fontSize: "0.75rem", color: "var(--text-dim)", marginTop: "0.25rem" }}>
+                    {help}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Batch generation toggle */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "0.75rem 1rem",
+                background: "var(--surface-2, rgba(255,255,255,0.04))",
+                borderRadius: "0.375rem",
+                marginBottom: "1.25rem",
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 500, fontSize: "0.875rem" }}>Allow Batch Generation</div>
+                <div style={{ fontSize: "0.75rem", color: "var(--text-dim)", marginTop: 2 }}>
+                  If disabled, the "Generate Intelligence" action on import batches is blocked.
+                </div>
+              </div>
+              <Toggle
+                label={aiSettingsDraft.allowBatchGeneration ? "Allowed" : "Blocked"}
+                checked={aiSettingsDraft.allowBatchGeneration}
+                onChange={(v) => patchAiDraft({ allowBatchGeneration: v })}
+                disabled={aiSettingsSaving || !aiSettingsDraft.aiEnabled}
+              />
+            </div>
+
+            {/* Error */}
+            {aiSettingsError && (
+              <div style={{ color: "var(--error, #ef4444)", fontSize: "0.8125rem", marginBottom: "0.75rem" }}>
+                {aiSettingsError}
+              </div>
+            )}
+
+            {/* Save button */}
+            <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+              <button
+                onClick={saveAiSettings}
+                disabled={aiSettingsSaving}
+                style={{
+                  padding: "0.5rem 1.25rem",
+                  background: "var(--accent, #3b82f6)",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: "0.375rem",
+                  cursor: aiSettingsSaving ? "not-allowed" : "pointer",
+                  fontSize: "0.875rem",
+                  fontWeight: 500,
+                  opacity: aiSettingsSaving ? 0.6 : 1,
+                }}
+              >
+                {aiSettingsSaving ? "Saving…" : "Save AI Settings"}
+              </button>
+              {aiSettings && (
+                <button
+                  onClick={() => setAiSettingsDraft(aiSettings)}
+                  disabled={aiSettingsSaving}
+                  style={{
+                    padding: "0.5rem 1rem",
+                    background: "transparent",
+                    color: "var(--text-dim)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "0.375rem",
+                    cursor: "pointer",
+                    fontSize: "0.875rem",
+                  }}
+                >
+                  Reset
+                </button>
+              )}
+              {aiSettings?.isDefault && (
+                <span style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>
+                  Using defaults — no custom settings saved yet.
+                </span>
+              )}
+            </div>
+          </div>
+        ) : null}
       </section>
     </div>
   );

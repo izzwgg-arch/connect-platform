@@ -1058,6 +1058,166 @@ When you find a new fragile area, add it here.
   The production DB was not affected because the CRM had not yet been deployed at the
   time of the fix.
 
+## CRM Drive document import — no background job queue (Phase 3, open)
+
+`POST /crm/import/batches/:batchId/import-documents` processes up to 20 documents per HTTP call (synchronous, no queue). For batches larger than 20 confirmed documents, the caller must loop: call until `attempted === 0`. This is a **known limitation** — there is no Bull/BullMQ/Redis job queue or PM2 worker for CRM document import in Phase 3.
+
+**Impact:** Large batches (>20 confirmed matches) require multiple sequential API calls. Each call may take several seconds (Drive download + disk write). The UI "Import all" button covers this use case for normal batch sizes.
+
+**Clean seam for future worker:** `importBatchDocuments(batchId, tenantId, limit)` in `docImportService.ts` is a pure async function with no HTTP coupling. A future `connect-worker` job can call it with any limit size and a retry loop.
+
+**Workaround:** If the portal "Import all" button only sends one batch, call the API in a loop with `limit=20` until `attempted === 0`.
+
+## CRM document access — signed URL only (Phase 3) → RESOLVED Phase 4
+
+**Status: Resolved (Phase 4)**
+
+Phase 3 served imported CRM documents via `GET /crm/documents/:id/open` protected by HMAC-signed URL only. A leaked URL (browser history, proxy log, referer header) could be used by any anonymous party until expiry.
+
+**Resolution (Phase 4):** `GET /crm/documents/:id/open` now requires **both**:
+1. Valid CRM JWT (`requireCrmAccess`) — identifies `tenantId` + `userId`
+2. Valid HMAC signature bound to `docId + tenantId + userId + expiry (v2 format)`
+
+Old Phase 3 signatures automatically fail (different HMAC message format). The frontend uses `apiFetchBlob(signedUrl)` (passes Bearer header) instead of `window.open(signedUrl)` (drops auth header). Audit events are logged for all denial paths. See `API_ROUTES.md` § CRM Document Import for full detail.
+
+## CRM document text extraction — image OCR supported (Phase 5B, resolved)
+
+**Status: Resolved for image files (PNG/JPG/JPEG/TIFF). Scanned PDFs remain open.**
+
+Phase 5B added `TesseractJsOcrProvider` — pure WASM OCR for image files. When `CRM_OCR_ENABLED=true`, PNG/JPG/JPEG/TIFF documents are processed by Tesseract.js, and `extractionConfidence` + `extractionMetadata` are stored.
+
+**What works now:** PNG, JPG/JPEG, TIFF image OCR when `CRM_OCR_ENABLED=true`.
+
+**What remains unsupported — scanned PDFs:**
+
+`pdf-parse` returns an empty string for PDFs with no embedded text layer. These are marked `TEXT_FAILED` with `extractionProvider = future_ocr` and error `scanned_pdf_ocr_provider_not_configured`. The reason: safely rasterizing PDF pages to images in Node.js requires either:
+- `node-canvas` (native: Cairo + Pango system packages) — fragile in Docker
+- `pdfjs-dist` with canvas polyfill — complex and memory-heavy
+- Ghostscript / Poppler system binaries — fragile, not guaranteed in production containers
+
+**Workaround for scanned PDFs:** Print-to-PDF from a modern scanner (which embeds a text layer via the scanner's built-in OCR), or flatten to image format (PNG/JPG) before uploading.
+
+**Clean seam for scanned PDF OCR:** `docOcrProvider.ts` exports `DocumentOcrProvider` interface. Add a `PdfOcrProvider` that:
+1. Uses `pdfjs-dist` + canvas to render pages to PNG buffers
+2. Chains `TesseractJsOcrProvider` per page
+3. Sets `CRM_OCR_PROVIDER=pdf_ocr` in env
+No route or schema changes needed.
+
+## CRM document text extraction — OCR requires Tesseract language data download (Phase 5B, operational)
+
+**Status: Operational concern — documented**
+
+Tesseract.js downloads language model files (`.traineddata`) from a CDN at runtime on first use. In Docker containers without internet access, this fails silently or throws network errors.
+
+**Fix for air-gapped production environments:**
+1. Pre-download `eng.traineddata` from https://github.com/naptha/tessdata/raw/main/4.0.0_best/eng.traineddata.gz
+2. Place in a persistent volume or container path (e.g. `/opt/tessdata/`)
+3. Set `CRM_OCR_LANG_PATH=/opt/tessdata/` in the API environment
+
+**Clean seam:** `loadOcrConfig().langPath` is passed to `createWorker()` as `workerOptions.langPath`.
+
+## CRM document text extraction — batch limited to 5 per call (Phase 5, open)
+
+`POST /crm/import/batches/:batchId/text-extraction` processes at most 5 documents per HTTP call. For batches with more than 5 IMPORTED documents, the caller must loop until `attempted === 0`. The UI "Extract text" batch button does this automatically. The limit exists because extraction can be CPU-intensive (pdf-parse, mammoth) and we have no background worker queue for CRM text extraction in Phase 5.
+
+**Clean seam:** `extractBatchDocumentText(batchId, tenantId, limit)` in `docTextExtractionService.ts` is a pure async function with no HTTP coupling. A future worker can call it with any limit.
+
+## CRM contact discovery — US phone numbers only (Phase 6, open)
+
+**Status: Open — by design**
+
+The discovery regex (`contactDiscoveryService.ts :: extractPhones`) recognises US-format phone numbers only: 10-digit local numbers and 11-digit numbers starting with `1` (+1 country code). International numbers in other formats (e.g., UK `+44 20 XXXX XXXX`, Mexico `+52 ...`) are not detected.
+
+**Impact:** Documents containing non-US phone numbers will return no phone discoveries for those numbers. Extracted text is otherwise unaffected.
+
+**Workaround:** Manual entry via `POST /crm/contacts/:id/phones` (existing route). The contact's phone list is shown on the Contact page.
+
+**Clean seam:** `normalizePhone(raw)` and `extractPhones(text)` in `contactDiscoveryService.ts` are pure functions. Add new format branches or a library like `libphonenumber-js` without touching the service, routes, or schema.
+
+## CRM lead intelligence — synchronous HTTP generation (Phase 7, open)
+
+**Status: Open — by design, pending worker integration**
+
+`POST /crm/contacts/:id/intelligence` runs the OpenAI API call synchronously in the HTTP request. For documents with heavy text, the call may take 10–30 seconds and could hit Fastify's request timeout if the server is configured with a short timeout.
+
+**Impact:** Very large batches may experience timeouts on the individual-contact route. The batch route (`/crm/import/batches/:batchId/intelligence`, respects `maxBatchReportsPerRun`) is less affected because each contact's call is typically well under 30 seconds.
+
+**Workaround:** Increase `requestTimeout` on the Fastify server if needed. The UI batch button loops automatically, so partial batch completion is safe. Reduce `maxCharsPerDocument` and `maxTotalCharsPerReport` in AI settings to shorten prompt processing time.
+
+**Clean seam:** `generateIntelligenceReport(contactId, tenantId, options)` and `generateBatchIntelligence(batchId, tenantId, limit, force, isAdmin)` in `leadIntelligenceService.ts` are pure async functions with no HTTP coupling. A future BullMQ worker can call them directly.
+
+## CRM lead intelligence — one model (OpenAI) supported (Phase 7, open)
+
+**Status: Open — by design**
+
+Only the `OpenAiLeadIntelligenceProvider` is implemented. Anthropic, local LLMs, or other providers are not supported yet.
+
+**Clean seam:** `LeadIntelligenceProvider` interface in `leadIntelligenceProvider.ts`. Add a new class implementing `{ name: string; generateReport(input): Promise<IntelligenceOutput> }` and switch `getLeadIntelligenceProvider()` to return it. No route or service changes needed.
+
+## CRM lead intelligence — audit events are structured logs only (Phase 7B, open)
+
+**Status: Open — by design**
+
+AI audit events (`crm_ai_report_generated`, `crm_ai_limit_blocked`, etc.) are written as structured JSON lines to stdout (captured by Pino). They are not stored in a database table, so there is no UI or API to query the audit trail.
+
+**Impact:** Audit events are visible in server logs (`docker logs app-api-1 | grep '"audit":true'`) but cannot be queried in-app.
+
+**Clean seam:** All events go through the `auditLog()` helper in `leadIntelligenceService.ts`. Replace the `console.log` with a `db.crmAiAuditLog.create(...)` write if a queryable log table is added later.
+
+## CRM lead intelligence — cooldown bypass requires CRM admin role only (Phase 7B, design note)
+
+**Status: By design**
+
+Regeneration cooldown is bypassed when the user has a CRM admin role (`ADMIN`, `TENANT_ADMIN`, `SUPER_ADMIN`). Regular CRM agents and managers cannot bypass cooldown regardless of UI actions.
+
+If per-user cooldown bypass is needed in future, the `isAdmin` flag in `generateIntelligenceReport()` can be replaced with a finer-grained permissions check without schema changes.
+
+## CRM contact discovery — batch limited to 10 per call (Phase 6, open)
+
+`POST /crm/import/batches/:batchId/discover` processes at most 10 documents per call. For large batches the UI "Run Discovery" button loops automatically until `documentsProcessed === 0`. The limit exists because no background worker queue is available for Phase 6 discovery.
+
+**Clean seam:** `extractDiscoveriesForBatch(batchId, tenantId, limit)` in `contactDiscoveryService.ts` is a pure async function — a future worker can call it with any limit.
+
+## CRM batch pipeline — no background worker queue (Phase 8, open)
+
+**Status: Open — by design, pending worker integration**
+
+The pipeline service (`batchPipelineService.ts`) runs all five steps synchronously in a single HTTP request. Each step is bounded by natural limits (import: 20, extraction: 5, discovery: 10, AI: 5) and additionally capped by `CRM_PIPELINE_MAX_STEP_ITEMS` (default: 20). Large batches require multiple "Continue Processing" clicks.
+
+**No fake async is used.** The API returns the actual pipeline run state after each call. The UI shows "Continue Processing" when `hasMore=true` on a `PARTIAL` run. This is intentional and honest.
+
+**Clean seam for future worker queue:** A future BullMQ or Postgres-backed queue worker can call `continueBatchPipeline(batchId, tenantId, userId)` on a loop without any route or service changes. The `CrmImportBatchPipelineRun` record provides all necessary state for resumption.
+
+**Impact on large batches:** For a batch of 100 documents, expect 5–10 "Continue" clicks to process all text extraction (5 per call). AI generation is similarly chunked. This is intentional — each click is fast and the user sees incremental progress.
+
+**Workaround:** Click "Continue Processing" until `hasMore=false`. Or use the individual batch routes directly for custom pagination.
+
+**Phase 8 hardening applied:**
+- **Stale RUNNING recovery:** A RUNNING run older than `CRM_PIPELINE_STALE_MINUTES` (default: 30 min) is automatically recovered to FAILED on the next start/continue call. The run record gets `recoveredAt` set and a `stale_run_recovered` error entry.
+- **Single active run protection:** Only one non-stale RUNNING run is allowed per (tenant, batch). Starting a second → `409 already_running`.
+- **Health endpoint:** `GET .../pipeline/health` exposes `{ healthy, staleDetected, activeRunCount, hasMore, latestRunStatus, lastUpdatedAt }` with no sensitive data.
+- **Progress tracking:** `overallProgressPercent` (0–100) in every `PipelineRunResult`.
+- **Configurable limits:** `CRM_PIPELINE_STALE_MINUTES` and `CRM_PIPELINE_MAX_STEP_ITEMS` via env vars.
+- **Audit logging:** `crm_pipeline_started/completed/partial/failed/cancelled/stale_recovered` events emitted on every lifecycle transition.
+- **Hardened cancel:** RUNNING runs can now also be cancelled (not just PENDING/PARTIAL). COMPLETE, FAILED, CANCELLED runs are immutable.
+
+## CRM batch diagnostics — no automatic alerting (Phase 9, open)
+
+**Status: Open — by design**
+
+The diagnostics service (`batchDiagnosticsService.ts`) is pull-based: it computes health score and warnings on demand when the diagnostics endpoint is called. There is no push-based alerting or scheduled health checks.
+
+**Impact:** Admins must proactively visit the batch page to see health score and warnings. Degraded batches (failed imports, OCR failures, AI failures) are only noticed if someone opens the diagnostics panel.
+
+**Operational workflow:**
+1. Open the batch's Drive Match page in the portal.
+2. Expand the "Batch Diagnostics" panel (automatic refresh on page load).
+3. Health score < 80 → review warnings and failures.
+4. Click "Download Support Bundle" to generate a safe JSON export for investigation.
+5. Failures are categorized: DOCUMENT (import/extraction), OCR, AI, PIPELINE, CONFIGURATION.
+
+**Future improvement:** Scheduled health checks + tenant admin email alerts when `healthScore < 60` after a pipeline run. Clean seam: `getBatchDiagnostics()` is a pure async function callable from a worker.
+
 ## API — voicemail cross-context spool playback (fixed 2026-05-17)
 
 - **Root cause:** `tryStreamFromHelperSpool()` in `apps/api/src/server.ts` called

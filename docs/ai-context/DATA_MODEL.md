@@ -785,8 +785,11 @@ Key fields: `campaignId`, `contactId`, `assignedToUserId?`, `status`, `attemptCo
 
 Key fields: `status` (`CrmImportBatchStatus`: `PENDING | PROCESSING | DONE | PARTIAL | FAILED`),
 `totalRows`, `createdCount`, `updatedCount`, `skippedCount`, `errorCount`,
+`auditErrorCount` _(added Phase 2 harden)_ — count of `CrmImportBatchRow` writes that failed; non-zero means Drive matching may miss those rows,
 `errors` (JSON array of `{ row, reason }` objects, capped at 50 in API response),
 `mapping` (JSON: detected column mapping `{ csvColumnIndex: fieldName }`).
+
+**Phase 2 harden note:** `CrmImportBatchRow` writes are now awaited (previously fire-and-forget). Failures increment `auditErrorCount` and are logged as `crm_import_audit_row_write_failed`. The import itself still completes, but non-zero `auditErrorCount` is surfaced in the batch detail UI and blocks Drive matching with a warning.
 
 ---
 
@@ -919,6 +922,538 @@ Added for Sola vault token import and cutover:
 | `metadata` | `Json?` | `{ solaScheduleLinkId, solaCustomerId, solaPaymentMethodId, source: "sola_recurring_import" }` |
 
 Multiple active/imported payment methods per tenant are supported. `PaymentMethod.isDefault` and `TenantBillingSettings.defaultPaymentMethodId` are tenant-level defaults for the current Connect autopay path; they are not proof that every recurring obligation for that tenant should use the same card.
+
+---
+
+## CRM Drive — Phase 2 (migration 20260608010000_crm_drive_match_phase2)
+
+### CrmImportBatchRow (new)
+
+Per-row audit record written during `POST /crm/import/upload`. Captures the company name and resolved `contactId` for each CSV row so the Drive match engine can map normalised company names → contacts.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `tenantId` | `String` | Strict tenant isolation |
+| `batchId` | `String` | FK → `CrmImportBatch` (cascade delete) |
+| `rowNumber` | `Int` | 1-based row number from the CSV |
+| `contactId` | `String?` | FK → `Contact` (SetNull on delete); null when row was skipped |
+| `companyName` | `String?` | Raw company name from CSV |
+| `companyNameNormalized` | `String?` | Result of `normalizeForMatch(companyName)` |
+| `action` | `String` | `"created"` \| `"updated"` \| `"skipped"` |
+
+- Writes are now **awaited** (Phase 2 harden). Failure increments `CrmImportBatch.auditErrorCount` and logs `crm_import_audit_row_write_failed`. The import itself still succeeds.
+- Indexes: `(batchId)`, `(tenantId, contactId)`, `(tenantId, companyNameNormalized)`.
+
+### CrmLeadDocument — Phase 2 extensions
+
+New fields added in migration `20260608010000_crm_drive_match_phase2`:
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `contactId` | `String?` | FK → `Contact`. The real CRM entity (no separate Lead model exists). |
+| `importBatchId` | `String?` | FK → `CrmImportBatch` — which batch triggered discovery |
+| `matchConfidence` | `String?` | `HIGH` \| `MEDIUM` \| `AMBIGUOUS` |
+| `matchReason` | `String?` | Machine reason: `exact_company_name`, `file_contains_company`, `company_contains_file`, or those with `:ambiguous` suffix |
+| `reviewedByUserId` | `String?` | FK → `User` — who confirmed or rejected |
+| `reviewedAt` | `DateTime?` | When reviewed |
+
+`CrmLeadDocumentStatus` enum values (Phase 1–3):
+
+| Status | Meaning |
+|---|---|
+| `DISCOVERED` | Match found by Drive match engine — not yet reviewed |
+| `IMPORT_PENDING` | User confirmed the match — queued for local copy |
+| `IMPORTING` | Download + storage in progress (set at start of import attempt) |
+| `IMPORTED` | File successfully stored locally with hash computed |
+| `IMPORT_FAILED` | Download/storage/export failed — check `importError` |
+| `FAILED` | Legacy generic failure value (Phase 1; prefer `IMPORT_FAILED` for new code) |
+| `REJECTED` | User rejected the match — not attached to this contact |
+
+Status lifecycle:
+- Match flow: `DISCOVERED` → (confirm) → `IMPORT_PENDING` or (reject) → `REJECTED`
+- Import flow: `IMPORT_PENDING` → `IMPORTING` → `IMPORTED` or `IMPORT_FAILED`
+- Retry: set status back to `IMPORT_PENDING` to re-queue, or call with `force=true`
+
+**Phase 3 fields added (migration 20260608030000_crm_lead_doc_import_phase3):**
+
+| Field | Type | Notes |
+|---|---|---|
+| `importedAt` | `DateTime?` | When file was successfully stored locally |
+| `importError` | `String?` | Short safe error message for `IMPORT_FAILED` records |
+| `importedMimeType` | `String?` | MIME type actually stored (may differ from `mimeType` for exported Workspace files) |
+
+Fields that were already present but now actively used: `storageKey` (tenant-scoped FS path), `contentHash` (SHA-256 of stored bytes), `sizeBytes` (actual stored bytes).
+
+**Storage location:** `CRM_DOC_STORAGE_DIR` (default: `data/crm-lead-docs`). Path layout: `tenants/<tenantId>/<docId>/file<ext>`. Served via HMAC-signed URLs from `GET /crm/documents/:id/open`.
+
+**Environment variables (Phase 3):**
+- `CRM_DOC_STORAGE_DIR` — absolute path for stored files (default: `data/crm-lead-docs` relative to CWD)
+- `CRM_DOC_IMPORT_MAX_BYTES` — max file size in bytes (default: 52428800 / 50 MB)
+- `CRM_DOC_URL_SIGNING_SECRET` — HMAC key for signed open URLs; falls back to `PROMPT_URL_SIGNING_SECRET` / `MOH_URL_SIGNING_SECRET` / `CDR_INGEST_SECRET`
+
+---
+
+### CrmLeadDocument — Phase 5 extensions (text extraction)
+
+New fields added in migration `20260608040000_crm_lead_doc_text_extraction`:
+
+| Field | Type | Notes |
+|---|---|---|
+| `textExtractionStatus` | `CrmDocTextExtractionStatus?` | Denormalized mirror of `CrmLeadDocumentText.extractionStatus`. Null = not yet attempted. |
+| `textExtractionError` | `String?` | Safe error message if text extraction failed. |
+| `textExtractedAt` | `DateTime?` | When text extraction last completed successfully. |
+
+These fields are denormalized for fast filtering (e.g. "find all IMPORTED docs without completed extraction") without always joining `CrmLeadDocumentText`.
+
+**Text extraction status lifecycle:**
+
+| Status | Meaning |
+|---|---|
+| `TEXT_PENDING` | Queued for extraction |
+| `TEXT_PROCESSING` | Extraction in progress |
+| `TEXT_COMPLETE` | Text extracted and stored in `CrmLeadDocumentText` |
+| `TEXT_FAILED` | Extraction failed — check `extractionError`. Retryable. |
+
+Full lifecycle: `null → TEXT_PENDING → TEXT_PROCESSING → TEXT_COMPLETE` or `TEXT_FAILED`
+Text extraction runs only on docs with `status = IMPORTED`.
+
+---
+
+### `CrmLeadDocumentText` (Phase 5 / 5B)
+
+- **Table:** `CrmLeadDocumentText`
+- **Migrations:** `20260608040000_crm_lead_doc_text_extraction`, `20260608080000_crm_doc_ocr`
+- **Purpose:** Stores extracted text content and metadata for imported CRM documents. One row per document (unique on `documentId`). Upserted on each extraction run — never duplicated.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | `String` | cuid |
+| `tenantId` | `String` | FK to `Tenant` — cascade delete |
+| `documentId` | `String` | Unique FK to `CrmLeadDocument` — cascade delete |
+| `contactId` | `String?` | Denormalized for fast tenant-scoped queries |
+| `importBatchId` | `String?` | Denormalized for batch-level aggregation |
+| `text` | `String` | Extracted text — capped at 500,000 chars |
+| `pageCount` | `Int?` | Page count from PDF metadata; null for non-PDF |
+| `charCount` | `Int` | Character count of `text` field |
+| `extractionProvider` | `CrmDocTextExtractionProvider` | How text was extracted (see enum below) |
+| `extractionStatus` | `CrmDocTextExtractionStatus` | Current status |
+| `extractionError` | `String?` | Safe error message (no content, no paths) |
+| `extractedAt` | `DateTime?` | When extraction completed successfully |
+| `extractionConfidence` | `Float?` | OCR confidence (0–100). Null for non-OCR providers. *(Phase 5B)* |
+| `extractionMetadata` | `Json?` | Provider-specific metadata. For `tesseract_js`: `{ "ocrEngine": "tesseract_js", "language": "eng", "pageCount": 1 }`. Never stores document content. *(Phase 5B)* |
+
+**`CrmDocTextExtractionProvider` enum:**
+
+| Value | Meaning |
+|---|---|
+| `pdf_text_layer` | PDF with embedded text (pdf-parse library) |
+| `plain_text` | .txt / .csv / text/plain MIME (Node fs) |
+| `docx_text` | DOCX via mammoth library |
+| `unsupported` | File type has no supported extractor |
+| `future_ocr` | Backward-compat: scanned PDFs without OCR. Stored for rows before Phase 5B. |
+| `tesseract_js` | *(Phase 5B)* Tesseract.js WASM OCR for PNG/JPG/JPEG/TIFF images |
+
+**`CrmDocTextExtractionStatus` enum:**
+
+| Value | Meaning |
+|---|---|
+| `TEXT_PENDING` | Queued for extraction |
+| `TEXT_PROCESSING` | Extraction in progress |
+| `TEXT_COMPLETE` | Text extracted and stored |
+| `TEXT_FAILED` | Extraction failed — retryable |
+
+**Scanned PDF / image-only PDF behaviour:**
+`pdf-parse` returns an empty text string for PDFs with no embedded text layer. The service stores a `TEXT_FAILED` record with `extractionProvider = future_ocr` and error `scanned_pdf_ocr_provider_not_configured`. PDF page rasterization is not supported (requires native binaries). See KNOWN_ISSUES.md.
+
+**Image OCR behaviour (Phase 5B):**
+When `CRM_OCR_ENABLED=true`, PNG/JPG/JPEG/TIFF files are routed to the `TesseractJsOcrProvider`. Tesseract.js runs WASM-based OCR, returns `text` and `confidence` (0–100). Size limit (`CRM_OCR_MAX_FILE_BYTES`, default 10 MB) is enforced before processing.
+
+**Dependencies (in `apps/api`):**
+- `pdf-parse` (+ `@types/pdf-parse`) — reads text layer from PDFs
+- `mammoth` — extracts raw text from DOCX files (ships own types, no `@types/mammoth`)
+- `tesseract.js` *(Phase 5B)* — pure WASM OCR, no native binaries required. Language data downloaded from CDN at runtime (set `CRM_OCR_LANG_PATH` for air-gapped environments).
+
+**Unique constraint (Phase 2 harden — migration 20260608020000):** The Phase 1 constraint `UNIQUE (tenantId, googleDriveFileId)` was too broad — it prevented the same Drive file from being discovered across two separate import batches for the same tenant. Replaced with a scoped partial unique index:
+
+```sql
+UNIQUE (tenantId, importBatchId, googleDriveFileId)
+WHERE importBatchId IS NOT NULL AND googleDriveFileId IS NOT NULL
+```
+
+This allows the same Drive file to appear in multiple batches. The match engine uses `createMany({ skipDuplicates: true })` for idempotent reruns — existing `IMPORT_PENDING` / `REJECTED` records are never overwritten.
+
+---
+
+### Contact Discovery (Phase 6)
+
+**Migration:** `20260608050000_crm_contact_discovery`
+
+Discovery models store phones and emails found in extracted document text, pending user review. All discoveries are **user-gated** — nothing is attached to a contact automatically.
+
+#### `CrmDiscoveryStatus` enum
+
+| Value | Meaning |
+|---|---|
+| `PENDING` | Found, awaiting user accept/reject |
+| `ACCEPTED` | User approved — value has been attached to the contact |
+| `REJECTED` | User dismissed — record kept for audit, never resurfaces |
+
+Re-running discovery **never reopens** `ACCEPTED` or `REJECTED` records.
+
+#### `CrmLeadDiscoveredPhone`
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | `String` | cuid |
+| `tenantId` | `String` | FK → Tenant (Cascade delete) |
+| `contactId` | `String` | FK → Contact (Cascade delete) |
+| `documentId` | `String` | FK → CrmLeadDocument (Cascade delete) |
+| `documentTextId` | `String` | FK → CrmLeadDocumentText (Cascade delete) |
+| `phoneNumber` | `String` | Raw text as found (e.g. "(555) 123-4567") |
+| `normalizedPhone` | `String` | Digits-only (e.g. "5551234567") — used for dedup |
+| `confidence` | `String` | `HIGH` or `MEDIUM` |
+| `sourceSnippet` | `String?` | Up to 200 chars of surrounding text — never the full document |
+| `sourcePage` | `Int?` | Page number if available |
+| `status` | `CrmDiscoveryStatus` | Default: `PENDING` |
+| `createdAt` | `DateTime` | |
+| `updatedAt` | `DateTime` | |
+
+**Unique constraint:** `(tenantId, contactId, normalizedPhone, documentId)` — prevents duplicate discoveries on rerun.
+
+**Confidence scoring:**
+- `HIGH` — valid US 10-digit phone AND appears within 80 chars of a phone label (`phone`, `mobile`, `cell`, `tel`, `contact`, `call`, `direct`).
+- `MEDIUM` — valid US 10-digit phone but no label context.
+
+**Normalization:** strip all non-digits; 10 digits → valid; 11 digits starting with `1` → strip leading 1 → valid; anything else discarded.
+
+**Deduplication at accept time:** if `ContactPhone.numberNormalized` already matches, the acceptance reuses the existing phone row and marks the discovery `ACCEPTED` without duplicating.
+
+#### `CrmLeadDiscoveredEmail`
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | `String` | cuid |
+| `tenantId` | `String` | FK → Tenant (Cascade delete) |
+| `contactId` | `String` | FK → Contact (Cascade delete) |
+| `documentId` | `String` | FK → CrmLeadDocument (Cascade delete) |
+| `documentTextId` | `String` | FK → CrmLeadDocumentText (Cascade delete) |
+| `email` | `String` | Lowercased |
+| `confidence` | `String` | `HIGH` (standard email format) |
+| `sourceSnippet` | `String?` | Up to 200 chars of surrounding text |
+| `sourcePage` | `Int?` | Page number if available |
+| `status` | `CrmDiscoveryStatus` | Default: `PENDING` |
+| `createdAt` | `DateTime` | |
+| `updatedAt` | `DateTime` | |
+
+**Unique constraint:** `(tenantId, contactId, email, documentId)` — prevents duplicate discoveries on rerun.
+
+**Suppression:** values already present on the contact (`ContactEmail.email`) are silently skipped when discovery runs — the discovery list only shows genuinely new values.
+
+#### Security
+
+- All discovery routes require `requireCrmAccess` (tenant JWT).
+- Extracted document text is **never** returned from discovery endpoints — only `sourceSnippet` (≤ 200 chars) is exposed.
+- Tenant B cannot read or act on Tenant A's discoveries (tenant-scoped `findFirst` on every lookup).
+- Accepting a phone never overwrites an existing primary phone (`isPrimary: false` on create).
+
+---
+
+---
+
+### AI Lead Intelligence (Phase 7)
+
+**Migration:** `20260608060000_crm_lead_intelligence`
+
+**Package added:** `openai ^6.x` in `apps/api`
+
+#### `CrmLeadIntelligenceStatus` enum
+
+| Value | Meaning |
+|---|---|
+| `PENDING` | Report queued, not yet started |
+| `PROCESSING` | AI call in progress |
+| `COMPLETE` | Report generated; all output fields populated |
+| `FAILED` | AI call failed; `error` field has a safe message |
+
+#### `CrmLeadIntelligenceReport`
+
+One row per contact (`UNIQUE on contactId`). Upserted on `force` regeneration.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | `String` | cuid |
+| `tenantId` | `String` | FK → Tenant (Cascade delete) |
+| `contactId` | `String @unique` | FK → Contact (Cascade delete). One report per contact. |
+| `importBatchId` | `String?` | Optional link to the import batch that triggered generation |
+| `status` | `CrmLeadIntelligenceStatus` | Default: `PENDING` |
+| `summary` | `String?` | 2-3 sentence executive summary (≤ 2000 chars) |
+| `businessOverview` | `String?` | Paragraph about the company (≤ 3000 chars) |
+| `keyFindings` | `Json?` | `{ phoneCount, emailCount, documentCount, namesFound[], addressesFound[], additionalNotes[] }` |
+| `discoveredEntities` | `Json?` | `{ phones[], emails[], websites[], names[], addresses[] }` |
+| `riskFlags` | `Json?` | Array of risk-flag code strings |
+| `missingInformation` | `Json?` | Array of missing-info code strings |
+| `confidenceScore` | `Float?` | 0.0–1.0 AI-assessed confidence |
+| `modelName` | `String?` | e.g. `"gpt-4o-mini"` |
+| `providerName` | `String?` | e.g. `"openai"` — provider identifier |
+| `generatedAt` | `DateTime?` | When the report was successfully generated |
+| `error` | `String?` | Safe error message if FAILED (≤ 500 chars, no document content, no tokens) |
+| `sourceDocumentCount` | `Int?` | All imported documents for contact |
+| `sourceTextCount` | `Int?` | Documents with TEXT_COMPLETE extraction |
+| `sourceDiscoveryCount` | `Int?` | Total phone + email discoveries (any status) |
+| `promptCharCount` | `Int?` | Total characters of text sent to the AI provider |
+| `documentsIncluded` | `Int?` | Documents actually included in the AI prompt |
+| `documentsExcluded` | `Int?` | Documents excluded due to `maxDocumentsPerReport` limit |
+| `generationDurationMs` | `Int?` | Wall-clock time of the AI provider call (milliseconds) |
+| `createdAt` | `DateTime` | |
+| `updatedAt` | `DateTime` | |
+
+**Never stored:** raw prompt text, API keys, document content.
+
+**Idempotency:** If `status=COMPLETE` and `force=false`, the existing report is returned immediately. `status=FAILED` can always be retried without `force`. `status=PROCESSING` skips to prevent duplicate AI calls.
+
+**Cooldown:** `force=true` on a COMPLETE report within `regenerationCooldownMinutes` throws `cooldown_active` (HTTP 429) with `retryAfterMs` and a human-readable message. CRM admin roles bypass.
+
+**Input limits:** Controlled by `CrmAiSettings` (see below). Defaults: 5 docs, 2000 chars/doc, 10000 total chars.
+
+**Provider abstraction:** `LeadIntelligenceProvider` interface in `leadIntelligenceProvider.ts`. Currently: `OpenAiLeadIntelligenceProvider`. Switch provider in `getLeadIntelligenceProvider()` without touching routes or service.
+
+**Environment variables:**
+- `OPENAI_API_KEY` — required; if missing, routes return `503 ai_not_configured`
+- `LEAD_INTELLIGENCE_MODEL` — optional override (default: `gpt-4o-mini`)
+
+**Advisory only:** no contact data is modified, no discoveries are auto-accepted, no ContactPhone/ContactEmail rows are created by intelligence generation.
+
+---
+
+#### `CrmAiSettings` *(Phase 7B — governance)*
+
+Per-tenant AI generation settings. Absence of a row means all defaults apply. One row per tenant (`UNIQUE on tenantId`).
+
+| Field | Type | Default | Hard Server Cap |
+|---|---|---|---|
+| `id` | `String` | cuid | — |
+| `tenantId` | `String @unique` | — | — |
+| `aiEnabled` | `Boolean` | `true` | — |
+| `maxDocumentsPerReport` | `Int` | `5` | `10` |
+| `maxCharsPerDocument` | `Int` | `2000` | `5000` |
+| `maxTotalCharsPerReport` | `Int` | `10000` | `25000` |
+| `allowBatchGeneration` | `Boolean` | `true` | — |
+| `maxBatchReportsPerRun` | `Int` | `25` | `25` |
+| `regenerationCooldownMinutes` | `Int` | `60` | none (min: 0) |
+| `createdAt` | `DateTime` | | |
+| `updatedAt` | `DateTime` | | |
+
+**Hard caps** are enforced server-side in `loadTenantAiSettings()` regardless of stored values.
+Only CRM admin role can write this table via `PUT /crm/ai-settings`.
+See `docs/ai-context/CRM_AI.md` for full governance documentation.
+
+---
+
+### CRM Import Batch Pipeline (Phase 8)
+
+**Migration:** `20260608090000_crm_batch_pipeline`
+
+Tracks orchestrated "Process Batch" pipeline runs that automate the five CRM pipeline steps for a given import batch.
+
+#### `CrmPipelineRunStatus` enum
+
+| Value | Meaning |
+|---|---|
+| `PENDING` | Run created but not yet started |
+| `RUNNING` | Actively processing (short-lived since synchronous per call) |
+| `COMPLETE` | All steps finished; no more work remaining |
+| `PARTIAL` | Progress made but work remains or some documents failed |
+| `FAILED` | Could not start (e.g. no Drive folder configured) |
+| `CANCELLED` | Manually cancelled |
+
+#### `CrmImportBatchPipelineRun`
+
+One record per pipeline invocation. Multiple runs per batch are allowed; `Start New Run` always creates a new record, while `Continue Processing` updates the latest `PARTIAL` run.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | `String` | cuid |
+| `tenantId` | `String` | FK → `Tenant` (cascade delete) |
+| `importBatchId` | `String` | FK → `CrmImportBatch` (cascade delete) |
+| `status` | `CrmPipelineRunStatus` | default `PENDING` |
+| `startedByUserId` | `String?` | User who started or continued this run |
+| `currentStep` | `String?` | Step currently executing or last completed |
+| `steps` | `Json` | Per-step results (see below) |
+| `totals` | `Json` | Aggregate counts across all steps |
+| `errors` | `Json` | Safe error list (max 10 entries; no doc text/keys) |
+| `startedAt` | `DateTime?` | |
+| `completedAt` | `DateTime?` | Null while PARTIAL/RUNNING |
+| `recoveredAt` | `DateTime?` | Set when a stale RUNNING run is auto-recovered to FAILED |
+| `createdAt` | `DateTime` | |
+| `updatedAt` | `DateTime` | Used as the staleness timestamp for RUNNING run detection |
+
+**Indexes:** `(tenantId, importBatchId)`, `(tenantId, status)`
+
+**`steps` JSON shape** — one key per pipeline step:
+```json
+{
+  "drive_match": {
+    "status": "complete",
+    "startedAt": "2026-06-08T09:00:00Z",
+    "completedAt": "2026-06-08T09:00:01Z",
+    "attempted": 15,
+    "succeeded": 12,
+    "skipped": 3,
+    "failed": 0,
+    "errorSummary": null
+  },
+  "document_import": { ... },
+  "text_extraction": { ... },
+  "contact_discovery": { ... },
+  "ai_intelligence": { ... }
+}
+```
+
+Step statuses: `pending | running | complete | partial | skipped | failed`
+
+**`totals` JSON shape:**
+```json
+{
+  "driveFilesScanned": 15,
+  "documentsMatched": 12,
+  "documentsImported": 10,
+  "textExtracted": 8,
+  "discoveriesFound": 14,
+  "aiReportsGenerated": 5
+}
+```
+
+**`errors` JSON shape** (capped at 10 entries):
+```json
+[{ "step": "document_import", "error": "Drive token expired", "at": "2026-06-08T09:00:05Z" }]
+```
+
+**Pipeline step per-call limits** (bounded synchronous execution):
+- Drive match: unlimited (fast idempotent scan)
+- Document import: 20 per call
+- Text extraction: 5 per call (OCR may be slow)
+- Contact discovery: 10 per call
+- AI intelligence: 5 per call (governed by `CrmAiSettings`)
+
+**AI step skipping:**
+- If `CrmAiSettings.aiEnabled=false` or `allowBatchGeneration=false`, the `ai_intelligence` step is recorded as `skipped` (not `failed`) and the pipeline can still complete as `COMPLETE`.
+
+**Pipeline never force-regenerates AI reports.** Default pipeline passes `force=false` to `generateBatchIntelligence`.
+
+#### Pipeline configuration (env vars)
+
+| Variable | Default | Description |
+|---|---|---|
+| `CRM_PIPELINE_STALE_MINUTES` | `30` | Minutes before a RUNNING run is considered stale (crashed server recovery). Min: 1. |
+| `CRM_PIPELINE_MAX_STEP_ITEMS` | `20` | Global ceiling for items per step per call. Range: 1–50. Each step also has its own natural limit (5 for extraction, 10 for discovery). Effective = min(natural, max_step_items). |
+
+#### Stale RUNNING recovery (Phase 8 hardening)
+
+When `startBatchPipeline` or `continueBatchPipeline` is called, the service first checks for any runs with `status=RUNNING` and `updatedAt < now - CRM_PIPELINE_STALE_MINUTES`. These are assumed to have been abandoned due to a server crash.
+
+- Stale runs are marked `FAILED`.
+- `recoveredAt` is set to the current timestamp.
+- `errors` array gets a `{ step: "system", error: "stale_run_recovered" }` entry.
+- Audit event `crm_pipeline_stale_recovered` is emitted.
+- After recovery, a fresh run can start without getting a 409.
+
+#### Pipeline audit events
+
+| Event | When emitted |
+|---|---|
+| `crm_pipeline_started` | New run created and execution begins |
+| `crm_pipeline_completed` | Run finishes with status COMPLETE |
+| `crm_pipeline_partial` | Run finishes with status PARTIAL (more work remains) |
+| `crm_pipeline_failed` | Run finishes with status FAILED |
+| `crm_pipeline_cancelled` | Run is cancelled by user |
+| `crm_pipeline_stale_recovered` | Stale RUNNING run auto-recovered to FAILED |
+
+All audit events include: `tenantId`, `batchId`, `runId`, `durationMs` (where applicable). They NEVER include document text, AI prompts, storage paths, or API keys.
+
+---
+
+### CRM Batch Diagnostics (Phase 9)
+
+`batchDiagnosticsService.ts` provides a unified read-only diagnostics view for a single import batch. **No new DB models** — all data is aggregated from existing tables.
+
+#### Data sources
+
+| Source table | Fields used |
+|---|---|
+| `CrmImportBatch` | id, fileName, status, totalRows, counts, createdAt, completedAt |
+| `CrmLeadDocument` | status (IMPORT_PENDING/IMPORTED/IMPORT_FAILED), per-batch counts |
+| `CrmLeadDocumentText` | extractionStatus, extractionProvider, charCount, extractionError |
+| `CrmLeadDiscoveredPhone/Email` | status (PENDING/ACCEPTED/REJECTED), per-batch counts |
+| `CrmLeadIntelligenceReport` | status (PENDING/PROCESSING/COMPLETE/FAILED), importBatchId |
+| `CrmImportBatchPipelineRun` | latest run, staleRecoveries (recoveredAt != null), steps JSON |
+
+#### Health score
+
+Deterministic integer 0–100 derived from:
+
+| Condition | Penalty |
+|---|---|
+| No Drive folder configured | -20 |
+| Failed imports | -5 each, max -30 |
+| Failed extractions | -5 each, max -20 |
+| OCR failures | -5 each, max -10 |
+| AI generation failures | -5 each, max -10 |
+| Stale run recoveries | -15 each, max -30 |
+
+Result clamped to 0–100. Score is **deterministic** — given the same DB state it always returns the same value.
+
+**Interpretation:** ≥80 = healthy (green), 50–79 = degraded (amber), <50 = critical (red).
+
+#### Failure categories
+
+| Category | Trigger |
+|---|---|
+| `CONFIGURATION` | Missing Drive folder, AI/OCR disabled |
+| `DOCUMENT` | `CrmLeadDocument.status = IMPORT_FAILED` or text extraction failed (non-OCR) |
+| `OCR` | `CrmLeadDocumentText.extractionStatus = TEXT_FAILED` with OCR provider |
+| `AI` | `CrmLeadIntelligenceReport.status = FAILED` |
+| `PIPELINE` | Pipeline step `status = "failed"` in `CrmImportBatchPipelineRun.steps` |
+| `SECURITY` | Reserved for future cross-tenant or access violation detection |
+
+#### Warning codes
+
+| Code | Condition |
+|---|---|
+| `no_drive_folder` | Drive match step failed with `no_drive_folder` error |
+| `ocr_disabled` | `CRM_OCR_ENABLED` is not `"true"` |
+| `ai_disabled` | `CrmAiSettings.aiEnabled = false` |
+| `batch_ai_disabled` | `CrmAiSettings.allowBatchGeneration = false` |
+| `stale_run_recovered` | One or more runs have `recoveredAt != null` |
+| `import_failures_present` | Any `IMPORT_FAILED` documents |
+| `extraction_failures_present` | Any `TEXT_FAILED` extraction records |
+| `scanned_pdfs_unsupported` | PDF extraction failed with "scanned" in error |
+
+#### Support bundle
+
+Safe JSON export returned by `GET .../diagnostics/support-bundle`. Contains everything in `BatchDiagnostics` plus timeline and operational config. Intentionally excludes:
+- Document text (any field)
+- AI prompts or outputs
+- Storage keys or file paths
+- API keys, tokens, or credentials
+
+---
+
+### Matching algorithm (driveMatchService.ts)
+
+- `normalizeForMatch(text)`: lowercase → replace `&` with `and` → strip punctuation → strip common legal words (llc, inc, corp, co, ltd, company, group, the, and, of, a, an) → collapse whitespace.
+- `normalizeFileName(name)`: strip extension, then `normalizeForMatch`.
+- `scoreMatch(companyNorm, fileNorm)`:
+  - `HIGH` — exact token equality.
+  - `MEDIUM` — one token contains the other AND contained token is ≥ 4 chars.
+  - `LOW` — no meaningful overlap (discarded; no record written).
+- Ambiguity: if one file matches N > 1 companies **or** one company matches N > 1 files, all those candidates are marked `AMBIGUOUS`.
+
+### Security rules
+
+- `runDriveMatchForBatch` filters by `(batchId, tenantId)` → Tenant B cannot trigger matching for Tenant A's batch.
+- `folderConfig` loaded with `{ tenantId }` → cross-tenant Drive folder access is impossible.
+- Confirm/reject routes load doc by `(docId, tenantId)` → cross-tenant doc access returns 404.
+- Contact documents route verifies `(contactId, tenantId)` before any document query.
 
 ## BillingSolaExternalScheduleLink — new fields (migration 20260518100000_billing_sola_cutover)
 

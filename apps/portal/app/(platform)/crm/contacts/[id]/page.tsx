@@ -6,7 +6,7 @@ import {
   ArrowLeft, Phone, Mail, Clock, User, MessageSquareDot, Trash2,
   Circle, Plus, CheckCheck, GitMerge, AlertTriangle, Calendar,
   ChevronRight, Sparkles, Star, MoreVertical, Voicemail, NotebookPen,
-  FileText, Files, ListTodo, ClipboardCheck, Activity,
+  FileText, Files, ListTodo, ClipboardCheck, Activity, ScanText, Brain,
 } from "lucide-react";
 import {
   CRMPageShell,
@@ -36,7 +36,7 @@ import { DISPOSITION_OPTIONS, type Checklist, type ScriptSummary } from "../../.
 import { CrmEmailComposeDrawer } from "../../../../../components/crm/email/CrmEmailComposeDrawer";
 import { CrmVoicemailDropDrawer } from "../../../../../components/crm/voicemail-drops/CrmVoicemailDropDrawer";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
-import { apiGet, apiPatch, apiPost, apiDelete } from "../../../../../services/apiClient";
+import { apiGet, apiPatch, apiPost, apiDelete, apiFetchBlob } from "../../../../../services/apiClient";
 import { useAppContext } from "../../../../../hooks/useAppContext";
 import { useSipPhone } from "../../../../../hooks/useSipPhone";
 import { useTelephony } from "../../../../../contexts/TelephonyContext";
@@ -83,6 +83,8 @@ type ContactWorkspaceTab =
   | "sms"
   | "notes"
   | "files"
+  | "discoveries"
+  | "intelligence"
   | "tasks";
 
 function HeaderMetric({
@@ -162,6 +164,1015 @@ export default function CrmContactDetailPage() {
 
 function ContactPageFallback() {
   return <div className="py-24 text-center text-sm text-crm-muted">Loading contact…</div>;
+}
+
+// ── Drive Documents panel (files tab) ─────────────────────────────────────────
+
+type DriveLeadDoc = {
+  id: string;
+  googleDriveFileId: string | null;
+  originalFileName: string;
+  mimeType: string | null;
+  importedMimeType: string | null;
+  sizeBytes: number | null;
+  status: string;
+  matchConfidence: string | null;
+  driveViewUrl: string | null;
+  importedAt: string | null;
+  importError: string | null;
+  textExtractionStatus: string | null;
+  textExtractionError: string | null;
+  createdAt: string;
+};
+
+function fmtDocSize(bytes: number | null): string {
+  if (bytes == null) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1048576).toFixed(1)} MB`;
+}
+
+function ContactDriveDocuments({ contactId }: { contactId: string }) {
+  const [docs, setDocs] = useState<DriveLeadDoc[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [importingId, setImportingId] = useState<string | null>(null);
+  const [extractingId, setExtractingId] = useState<string | null>(null);
+  const [viewTextDoc, setViewTextDoc] = useState<{
+    id: string;
+    fileName: string;
+    text: string;
+    charCount: number;
+    pageCount: number | null;
+    provider: string | null;
+    confidence: number | null;
+    ocrLang: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setErr(null);
+    apiGet<{ documents: DriveLeadDoc[] }>(`/crm/contacts/${contactId}/documents`)
+      .then((res) => {
+        if (!cancelled) setDocs(res.documents);
+      })
+      .catch((e: any) => {
+        if (!cancelled) setErr(e?.message ?? "Failed to load documents.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [contactId]);
+
+  const handleDocOpen = async (docId: string) => {
+    const doc = docs.find((d) => d.id === docId);
+    if (doc?.status === "IMPORTED") {
+      try {
+        // Fetch a short-lived signed URL (requires JWT auth), then fetch the
+        // document binary with auth headers, and open as a blob URL.
+        // window.open(signedUrl) alone drops the Authorization header and is denied.
+        const res = await apiGet<{ signedUrl: string }>(`/crm/documents/${docId}/open-url`);
+        const blob = await apiFetchBlob(res.signedUrl);
+        const blobUrl = URL.createObjectURL(blob);
+        window.open(blobUrl, "_blank", "noopener,noreferrer");
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
+      } catch (e: any) {
+        alert(`Could not open document: ${e?.message ?? "error"}`);
+      }
+      return;
+    }
+    setImportingId(docId);
+    try {
+      const result = await apiPost<{ status: string; errorMessage?: string; importedMimeType?: string }>(
+        `/crm/documents/${docId}/import`,
+        {},
+      );
+      setDocs((prev) =>
+        prev.map((d) =>
+          d.id === docId
+            ? {
+                ...d,
+                status: result.status === "IMPORTED" ? "IMPORTED" : "IMPORT_FAILED",
+                importedAt: result.status === "IMPORTED" ? new Date().toISOString() : null,
+                importError: result.errorMessage ?? null,
+                importedMimeType: result.importedMimeType ?? null,
+              }
+            : d,
+        ),
+      );
+    } catch (e: any) {
+      alert(`Import failed: ${e?.message ?? "error"}`);
+    } finally {
+      setImportingId(null);
+    }
+  };
+
+  const handleExtract = async (docId: string) => {
+    setExtractingId(docId);
+    try {
+      await apiPost(`/crm/documents/${docId}/text-extraction`, {});
+      // Refresh the doc list to pick up new textExtractionStatus
+      const res = await apiGet<{ documents: DriveLeadDoc[] }>(`/crm/contacts/${contactId}/documents`);
+      setDocs(res.documents);
+    } catch (e: any) {
+      alert(`Text extraction failed: ${e?.message ?? "error"}`);
+    } finally {
+      setExtractingId(null);
+    }
+  };
+
+  const handleViewText = async (docId: string) => {
+    const doc = docs.find((d) => d.id === docId);
+    try {
+      const res = await apiGet<{
+        text: string | null;
+        charCount: number | null;
+        pageCount: number | null;
+        extractionProvider: string | null;
+        extractionConfidence: number | null;
+        extractionMetadata: Record<string, unknown> | null;
+        originalFileName: string;
+      }>(`/crm/documents/${docId}/text-extraction`);
+      setViewTextDoc({
+        id: docId,
+        fileName: res.originalFileName ?? doc?.originalFileName ?? "Document",
+        text: res.text ?? "",
+        charCount: res.charCount ?? 0,
+        pageCount: res.pageCount ?? null,
+        provider: res.extractionProvider ?? null,
+        confidence: res.extractionConfidence ?? null,
+        ocrLang: typeof res.extractionMetadata?.language === "string"
+          ? (res.extractionMetadata.language as string)
+          : null,
+      });
+    } catch (e: any) {
+      alert(`Could not load extracted text: ${e?.message ?? "error"}`);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-6 text-center text-sm text-crm-muted">
+        Loading documents…
+      </div>
+    );
+  }
+
+  if (err) {
+    return (
+      <div className="rounded-[1.35rem] border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-400">
+        {err}
+      </div>
+    );
+  }
+
+  if (docs.length === 0) {
+    return (
+      <div className="rounded-[1.35rem] border border-dashed border-crm-border/80 bg-crm-surface-2/40 p-8 text-center">
+        <Files className="mx-auto h-8 w-8 text-crm-muted" />
+        <p className="mt-3 text-sm font-semibold text-crm-text">No Drive documents attached yet.</p>
+        <p className="mt-1 text-sm text-crm-muted">
+          Upload a lead sheet and run Drive Match to automatically find and attach files from Google Drive.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+      <div className="mb-3">
+        <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-crm-accent">
+          Google Drive Documents
+        </p>
+        <h3 className="text-lg font-bold text-crm-text">
+          {docs.length} attached file{docs.length !== 1 ? "s" : ""}
+        </h3>
+      </div>
+      <div className="flex flex-col gap-2">
+        {docs.map((doc) => (
+          <div
+            key={doc.id}
+            className="flex items-start gap-3 rounded-xl border border-crm-border/60 bg-crm-surface p-3"
+          >
+            <FileText className="h-4 w-4 shrink-0 text-crm-muted mt-0.5" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold text-crm-text">
+                {doc.originalFileName}
+              </p>
+              <p className="mt-0.5 text-xs text-crm-muted">
+                {fmtDocSize(doc.sizeBytes)}
+                {(doc.importedMimeType || doc.mimeType)
+                  ? ` · ${(doc.importedMimeType || doc.mimeType)!.split("/").pop()}`
+                  : ""}
+                {" · "}
+                {new Date(doc.createdAt).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                })}
+                {" · "}
+                <span
+                  className={cn(
+                    "font-medium",
+                    doc.status === "IMPORTED"
+                      ? "text-crm-success"
+                      : doc.status === "IMPORT_PENDING"
+                        ? "text-crm-accent"
+                        : doc.status === "IMPORT_FAILED"
+                          ? "text-red-400"
+                          : doc.status === "REJECTED"
+                            ? "text-red-400"
+                            : "text-crm-muted",
+                  )}
+                >
+                  {doc.status === "DISCOVERED"
+                    ? "Pending review"
+                    : doc.status === "IMPORT_PENDING"
+                      ? "Confirmed — ready to import"
+                      : doc.status === "IMPORTING"
+                        ? "Importing…"
+                        : doc.status === "IMPORTED"
+                          ? "Imported"
+                          : doc.status === "IMPORT_FAILED"
+                            ? "Import failed"
+                            : doc.status === "REJECTED"
+                              ? "Ignored"
+                              : doc.status}
+                </span>
+                {doc.importError && (
+                  <span className="ml-1 text-red-400" title={doc.importError}>
+                    (see error)
+                  </span>
+                )}
+                {doc.status === "IMPORTED" && doc.textExtractionStatus === "TEXT_COMPLETE" && (
+                  <span className="ml-2 text-purple-400">· Text extracted</span>
+                )}
+                {doc.status === "IMPORTED" && doc.textExtractionStatus === "TEXT_FAILED" && (
+                  <span
+                    className="ml-2 text-amber-400"
+                    title={
+                      doc.textExtractionError?.includes("scanned_pdf") || doc.textExtractionError?.includes("Scanned PDF")
+                        ? "Scanned PDF — PDF OCR not configured. Import the document as an image (PNG/JPG) to use OCR."
+                        : doc.textExtractionError?.includes("ocr_not_enabled") || doc.textExtractionError?.includes("OCR is not enabled")
+                          ? "OCR is not enabled. Set CRM_OCR_ENABLED=true in the API environment."
+                          : doc.textExtractionError?.includes("ocr_file_too_large") || doc.textExtractionError?.includes("exceeds OCR limit")
+                            ? "File too large for OCR."
+                            : doc.textExtractionError ?? "Extraction failed"
+                    }
+                  >
+                    · Extraction failed
+                  </span>
+                )}
+                {doc.status === "IMPORTED" && doc.textExtractionStatus === "TEXT_PROCESSING" && (
+                  <span className="ml-2 text-blue-400">· Extracting…</span>
+                )}
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-col items-end gap-1">
+              {doc.status === "IMPORTED" && (
+                <button
+                  type="button"
+                  onClick={() => handleDocOpen(doc.id)}
+                  disabled={importingId === doc.id}
+                  className="rounded-lg border border-crm-border/60 bg-crm-surface-2/50 px-2.5 py-1 text-xs font-semibold text-crm-muted hover:text-crm-text transition-colors"
+                >
+                  Open document
+                </button>
+              )}
+              {doc.status === "IMPORTED" && doc.textExtractionStatus === "TEXT_COMPLETE" && (
+                <button
+                  type="button"
+                  onClick={() => handleViewText(doc.id)}
+                  className="rounded-lg border border-purple-500/30 bg-purple-500/10 px-2.5 py-1 text-xs font-semibold text-purple-400 hover:bg-purple-500/20 transition-colors"
+                >
+                  View text
+                </button>
+              )}
+              {doc.status === "IMPORTED" &&
+                (doc.textExtractionStatus == null ||
+                  doc.textExtractionStatus === "TEXT_PENDING" ||
+                  doc.textExtractionStatus === "TEXT_FAILED") && (
+                <button
+                  type="button"
+                  onClick={() => handleExtract(doc.id)}
+                  disabled={extractingId === doc.id}
+                  title={
+                    doc.textExtractionStatus === "TEXT_FAILED"
+                      ? doc.textExtractionError
+                        ? doc.textExtractionError.includes("scanned_pdf") || doc.textExtractionError.includes("Scanned PDF")
+                          ? "Scanned PDF — PDF page rasterization not configured. Only image files (PNG/JPG) support OCR."
+                          : doc.textExtractionError.includes("ocr_not_enabled") || doc.textExtractionError.includes("OCR is not enabled")
+                            ? "OCR is not enabled. Set CRM_OCR_ENABLED=true in the API environment to process image files."
+                            : doc.textExtractionError.includes("ocr_file_too_large") || doc.textExtractionError.includes("exceeds OCR limit")
+                              ? "File is too large for OCR. Adjust CRM_OCR_MAX_FILE_BYTES in the API environment."
+                              : doc.textExtractionError
+                        : "Retry text extraction"
+                      : "Extract text from document"
+                  }
+                  className="rounded-lg border border-purple-500/30 bg-purple-500/8 px-2.5 py-1 text-xs font-semibold text-purple-400 hover:bg-purple-500/20 transition-colors"
+                >
+                  {extractingId === doc.id
+                    ? "Extracting…"
+                    : doc.textExtractionStatus === "TEXT_FAILED"
+                      ? "Retry extraction"
+                      : "Extract text"}
+                </button>
+              )}
+              {(doc.status === "IMPORT_PENDING" || doc.status === "IMPORT_FAILED") && (
+                <button
+                  type="button"
+                  onClick={() => handleDocOpen(doc.id)}
+                  disabled={importingId === doc.id}
+                  className="rounded-lg border border-crm-border/60 bg-crm-accent/10 px-2.5 py-1 text-xs font-semibold text-crm-accent hover:bg-crm-accent/20 transition-colors"
+                >
+                  {importingId === doc.id
+                    ? "Importing…"
+                    : doc.status === "IMPORT_FAILED"
+                      ? "Retry import"
+                      : "Import document"}
+                </button>
+              )}
+              {doc.driveViewUrl && (
+                <a
+                  href={doc.driveViewUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-lg border border-crm-border/60 bg-crm-surface-2/50 px-2.5 py-1 text-xs font-semibold text-crm-muted hover:text-crm-text transition-colors"
+                >
+                  View in Drive
+                </a>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Extracted text view modal */}
+      {viewTextDoc && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setViewTextDoc(null)}
+        >
+          <div
+            className="flex max-h-[80vh] w-full max-w-2xl flex-col gap-4 rounded-[0.875rem] border border-crm-border bg-crm-surface p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wider text-purple-400">Extracted Text</p>
+                <p className="mt-0.5 text-sm font-semibold text-crm-text">{viewTextDoc.fileName}</p>
+                <p className="text-xs text-crm-muted">
+                  {viewTextDoc.charCount > 0 && `${viewTextDoc.charCount.toLocaleString()} chars`}
+                  {viewTextDoc.pageCount != null && ` · ${viewTextDoc.pageCount} page${viewTextDoc.pageCount !== 1 ? "s" : ""}`}
+                  {viewTextDoc.provider && ` · ${viewTextDoc.provider}`}
+                  {viewTextDoc.ocrLang && ` · lang: ${viewTextDoc.ocrLang}`}
+                  {viewTextDoc.confidence !== null && (
+                    <span
+                      className={
+                        viewTextDoc.confidence >= 70
+                          ? " · OCR confidence: " + Math.round(viewTextDoc.confidence) + "% ✓"
+                          : viewTextDoc.confidence >= 40
+                            ? " · OCR confidence: " + Math.round(viewTextDoc.confidence) + "% (medium)"
+                            : " · OCR confidence: " + Math.round(viewTextDoc.confidence) + "% (low — review carefully)"
+                      }
+                      style={{
+                        color: viewTextDoc.confidence >= 70 ? "#10b981" : viewTextDoc.confidence >= 40 ? "#f59e0b" : "#ef4444",
+                      }}
+                    >
+                      {" · OCR confidence: " + Math.round(viewTextDoc.confidence) + "%"}
+                    </span>
+                  )}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewTextDoc(null)}
+                className="shrink-0 text-xl leading-none text-crm-muted hover:text-crm-text"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto rounded-lg border border-crm-border/60 bg-crm-surface-2/60 p-4 font-mono text-[0.8125rem] leading-relaxed text-crm-text whitespace-pre-wrap break-words">
+              {viewTextDoc.text || (
+                <span className="italic text-crm-muted">No text content available.</span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── ContactDiscoveries panel (discoveries tab) ────────────────────────────────
+
+type DiscoveredPhoneItem = {
+  id: string;
+  phoneNumber: string;
+  normalizedPhone: string;
+  confidence: string;
+  sourceSnippet: string | null;
+  status: "PENDING" | "ACCEPTED" | "REJECTED";
+  createdAt: string;
+  document: { id: string; originalFileName: string } | null;
+};
+
+type DiscoveredEmailItem = {
+  id: string;
+  email: string;
+  confidence: string;
+  sourceSnippet: string | null;
+  status: "PENDING" | "ACCEPTED" | "REJECTED";
+  createdAt: string;
+  document: { id: string; originalFileName: string } | null;
+};
+
+function ContactDiscoveries({ contactId }: { contactId: string }) {
+  const [phones, setPhones] = useState<DiscoveredPhoneItem[]>([]);
+  const [emails, setEmails] = useState<DiscoveredEmailItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [working, setWorking] = useState<string | null>(null);
+  const [runningDiscovery, setRunningDiscovery] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await apiGet<{ phones: DiscoveredPhoneItem[]; emails: DiscoveredEmailItem[] }>(
+        `/crm/contacts/${contactId}/discoveries`,
+      );
+      setPhones(res.phones ?? []);
+      setEmails(res.emails ?? []);
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to load discoveries.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, [contactId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleAcceptPhone = async (id: string) => {
+    setWorking(id);
+    try {
+      await apiPost(`/crm/discoveries/phones/${id}/accept`, {});
+      setPhones((prev) => prev.filter((p) => p.id !== id));
+    } catch (e: any) {
+      alert(`Could not accept: ${e?.message ?? "error"}`);
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const handleRejectPhone = async (id: string) => {
+    setWorking(id);
+    try {
+      await apiPost(`/crm/discoveries/phones/${id}/reject`, {});
+      setPhones((prev) => prev.filter((p) => p.id !== id));
+    } catch (e: any) {
+      alert(`Could not reject: ${e?.message ?? "error"}`);
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const handleAcceptEmail = async (id: string) => {
+    setWorking(id);
+    try {
+      await apiPost(`/crm/discoveries/emails/${id}/accept`, {});
+      setEmails((prev) => prev.filter((e) => e.id !== id));
+    } catch (e: any) {
+      alert(`Could not accept: ${e?.message ?? "error"}`);
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const handleRejectEmail = async (id: string) => {
+    setWorking(id);
+    try {
+      await apiPost(`/crm/discoveries/emails/${id}/reject`, {});
+      setEmails((prev) => prev.filter((e) => e.id !== id));
+    } catch (e: any) {
+      alert(`Could not reject: ${e?.message ?? "error"}`);
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-6 text-center text-sm text-crm-muted">
+        Loading discoveries…
+      </div>
+    );
+  }
+
+  if (err) {
+    return (
+      <div className="rounded-[1.35rem] border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-400">
+        {err}
+      </div>
+    );
+  }
+
+  const hasDiscoveries = phones.length > 0 || emails.length > 0;
+
+  if (!hasDiscoveries) {
+    return (
+      <div className="rounded-[1.35rem] border border-dashed border-crm-border/80 bg-crm-surface-2/40 p-8 text-center">
+        <ScanText className="mx-auto h-8 w-8 text-crm-muted" />
+        <p className="mt-3 text-sm font-semibold text-crm-text">No pending discoveries.</p>
+        <p className="mt-1 text-sm text-crm-muted">
+          Import documents, extract their text, then click{" "}
+          <strong>Run Discovery</strong> on the document to find phones and emails.
+        </p>
+      </div>
+    );
+  }
+
+  const confidenceBadge = (c: string) =>
+    c === "HIGH"
+      ? "inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-400"
+      : "inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-400";
+
+  return (
+    <div className="flex flex-col gap-4">
+      {phones.length > 0 && (
+        <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+          <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.16em] text-purple-400">
+            Discovered Phone Numbers ({phones.length})
+          </p>
+          <div className="flex flex-col gap-2">
+            {phones.map((p) => (
+              <div
+                key={p.id}
+                className="flex items-start gap-3 rounded-xl border border-crm-border/60 bg-crm-surface p-3"
+              >
+                <Phone className="h-4 w-4 shrink-0 text-crm-muted mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-semibold text-crm-text">{p.phoneNumber}</span>
+                    <span className={confidenceBadge(p.confidence)}>{p.confidence}</span>
+                  </div>
+                  {p.document && (
+                    <p className="mt-0.5 text-xs text-crm-muted truncate">
+                      From: {p.document.originalFileName}
+                    </p>
+                  )}
+                  {p.sourceSnippet && (
+                    <p className="mt-1 rounded bg-crm-surface-2/60 px-2 py-1 text-xs text-crm-muted italic leading-relaxed">
+                      …{p.sourceSnippet.slice(0, 150)}…
+                    </p>
+                  )}
+                </div>
+                <div className="flex shrink-0 gap-1.5">
+                  <button
+                    type="button"
+                    disabled={working === p.id}
+                    onClick={() => handleAcceptPhone(p.id)}
+                    className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                  >
+                    {working === p.id ? "…" : "Accept"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={working === p.id}
+                    onClick={() => handleRejectPhone(p.id)}
+                    className="rounded-lg border border-red-500/25 bg-red-500/8 px-2.5 py-1 text-xs font-semibold text-red-400 hover:bg-red-500/15 transition-colors"
+                  >
+                    {working === p.id ? "…" : "Reject"}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {emails.length > 0 && (
+        <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+          <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.16em] text-purple-400">
+            Discovered Emails ({emails.length})
+          </p>
+          <div className="flex flex-col gap-2">
+            {emails.map((e) => (
+              <div
+                key={e.id}
+                className="flex items-start gap-3 rounded-xl border border-crm-border/60 bg-crm-surface p-3"
+              >
+                <Mail className="h-4 w-4 shrink-0 text-crm-muted mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-semibold text-crm-text">{e.email}</span>
+                    <span className={confidenceBadge(e.confidence)}>{e.confidence}</span>
+                  </div>
+                  {e.document && (
+                    <p className="mt-0.5 text-xs text-crm-muted truncate">
+                      From: {e.document.originalFileName}
+                    </p>
+                  )}
+                  {e.sourceSnippet && (
+                    <p className="mt-1 rounded bg-crm-surface-2/60 px-2 py-1 text-xs text-crm-muted italic leading-relaxed">
+                      …{e.sourceSnippet.slice(0, 150)}…
+                    </p>
+                  )}
+                </div>
+                <div className="flex shrink-0 gap-1.5">
+                  <button
+                    type="button"
+                    disabled={working === e.id}
+                    onClick={() => handleAcceptEmail(e.id)}
+                    className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                  >
+                    {working === e.id ? "…" : "Accept"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={working === e.id}
+                    onClick={() => handleRejectEmail(e.id)}
+                    className="rounded-lg border border-red-500/25 bg-red-500/8 px-2.5 py-1 text-xs font-semibold text-red-400 hover:bg-red-500/15 transition-colors"
+                  >
+                    {working === e.id ? "…" : "Reject"}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── ContactIntelligence panel (AI Intelligence tab) ───────────────────────────
+
+type IntelligenceReport = {
+  id: string;
+  status: "PENDING" | "PROCESSING" | "COMPLETE" | "FAILED";
+  summary: string | null;
+  businessOverview: string | null;
+  keyFindings: Record<string, unknown> | null;
+  discoveredEntities: Record<string, unknown> | null;
+  riskFlags: string[] | null;
+  missingInformation: string[] | null;
+  confidenceScore: number | null;
+  modelName: string | null;
+  providerName: string | null;
+  generatedAt: string | null;
+  error: string | null;
+  sourceDocumentCount: number;
+  sourceTextCount: number;
+  sourceDiscoveryCount: number;
+  promptCharCount: number | null;
+  documentsIncluded: number | null;
+  documentsExcluded: number | null;
+  generationDurationMs: number | null;
+  updatedAt: string;
+};
+
+const RISK_FLAG_LABELS: Record<string, string> = {
+  missing_primary_phone: "No confirmed phone number",
+  missing_primary_email: "No confirmed email address",
+  conflicting_phone_numbers: "Multiple phones, no clear primary",
+  conflicting_addresses: "Multiple conflicting addresses",
+  insufficient_documentation: "Fewer than 2 documents imported",
+  extraction_failures: "One or more documents could not be extracted",
+  scanned_documents: "Documents appear to be scanned/image-only",
+  no_company_identified: "No company name found in documents",
+  stale_contact_data: "Contact information may be outdated",
+};
+
+const MISSING_INFO_LABELS: Record<string, string> = {
+  missing_owner: "Owner/principal name not found",
+  missing_address: "Business address not found",
+  missing_email: "No email address",
+  missing_phone: "No phone number",
+  missing_financial_docs: "No financial documentation imported",
+  missing_business_description: "Cannot determine business type",
+  missing_website: "No website found",
+};
+
+function ConfidenceMeter({ score }: { score: number }) {
+  const pct = Math.round(score * 100);
+  const color = score >= 0.7 ? "#10b981" : score >= 0.4 ? "#f59e0b" : "#ef4444";
+  return (
+    <div className="flex items-center gap-3">
+      <div className="h-2 flex-1 overflow-hidden rounded-full bg-crm-surface-2/60">
+        <div
+          className="h-full rounded-full transition-all"
+          style={{ width: `${pct}%`, background: color }}
+        />
+      </div>
+      <span className="w-10 shrink-0 text-right text-xs font-bold" style={{ color }}>
+        {pct}%
+      </span>
+    </div>
+  );
+}
+
+function ContactIntelligence({ contactId }: { contactId: string }) {
+  const [report, setReport] = useState<IntelligenceReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [cooldownMsg, setCooldownMsg] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await apiGet<{ report: IntelligenceReport | null }>(
+        `/crm/contacts/${contactId}/intelligence`,
+      );
+      setReport(res.report);
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to load intelligence report.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, [contactId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleGenerate = async (force = false) => {
+    setGenerating(true);
+    setErr(null);
+    setCooldownMsg(null);
+    try {
+      await apiPost(`/crm/contacts/${contactId}/intelligence`, { force });
+      await load();
+    } catch (e: any) {
+      const code = e?.responseBody?.error ?? e?.code;
+      if (code === "cooldown_active") {
+        setCooldownMsg(e?.responseBody?.detail ?? e?.message ?? "Regeneration cooldown active. Try again later.");
+      } else {
+        setErr(e?.message ?? "Failed to generate intelligence report.");
+      }
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-6 text-center text-sm text-crm-muted">
+        Loading…
+      </div>
+    );
+  }
+
+  if (!report) {
+    return (
+      <div className="rounded-[1.35rem] border border-dashed border-crm-border/80 bg-crm-surface-2/40 p-8 text-center">
+        <Brain className="mx-auto h-8 w-8 text-crm-muted" />
+        <p className="mt-3 text-sm font-semibold text-crm-text">No intelligence report yet.</p>
+        <p className="mt-1 text-sm text-crm-muted">
+          Import documents, extract their text, then generate an AI advisory report.
+        </p>
+        {err && <p className="mt-3 text-xs text-red-400">{err}</p>}
+        <button
+          type="button"
+          disabled={generating}
+          onClick={() => handleGenerate(false)}
+          className="mt-4 inline-flex items-center gap-2 rounded-xl bg-crm-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+        >
+          <Sparkles className="h-4 w-4" />
+          {generating ? "Generating…" : "Generate Intelligence"}
+        </button>
+      </div>
+    );
+  }
+
+  if (report.status === "PROCESSING") {
+    return (
+      <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-8 text-center">
+        <Brain className="mx-auto h-8 w-8 animate-pulse text-crm-accent" />
+        <p className="mt-3 text-sm font-semibold text-crm-text">Generating intelligence report…</p>
+        <p className="mt-1 text-sm text-crm-muted">This may take 10–30 seconds.</p>
+      </div>
+    );
+  }
+
+  if (report.status === "FAILED") {
+    return (
+      <div className="flex flex-col gap-3">
+        <div className="rounded-[1.35rem] border border-red-500/20 bg-red-500/5 p-4">
+          <p className="text-sm font-semibold text-red-400">Intelligence generation failed</p>
+          {report.error && <p className="mt-1 text-xs text-red-300">{report.error}</p>}
+        </div>
+        <button
+          type="button"
+          disabled={generating}
+          onClick={() => handleGenerate(true)}
+          className="self-start inline-flex items-center gap-2 rounded-xl bg-crm-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+        >
+          <Sparkles className="h-4 w-4" />
+          {generating ? "Generating…" : "Retry"}
+        </button>
+      </div>
+    );
+  }
+
+  // COMPLETE
+  const kf = (report.keyFindings ?? {}) as Record<string, unknown>;
+  const de = (report.discoveredEntities ?? {}) as Record<string, unknown>;
+  const riskFlags = report.riskFlags ?? [];
+  const missingInfo = report.missingInformation ?? [];
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4 rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 mb-1">
+            <Brain className="h-4 w-4 text-crm-accent" />
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-crm-accent">AI Intelligence Report</p>
+          </div>
+          {report.summary && (
+            <p className="text-sm text-crm-text leading-relaxed">{report.summary}</p>
+          )}
+          <div className="mt-2 flex flex-wrap gap-3 text-xs text-crm-muted">
+            {report.documentsIncluded !== null && (
+              <span>{report.documentsIncluded} doc{report.documentsIncluded !== 1 ? "s" : ""} analyzed</span>
+            )}
+            {report.documentsIncluded === null && (
+              <span>{report.sourceDocumentCount} doc{report.sourceDocumentCount !== 1 ? "s" : ""} analyzed</span>
+            )}
+            <span>{report.sourceTextCount} with text</span>
+            <span>{report.sourceDiscoveryCount} discoveries</span>
+            {report.promptCharCount !== null && (
+              <span>{report.promptCharCount.toLocaleString()} chars processed</span>
+            )}
+            {report.providerName && <span>Provider: {report.providerName}</span>}
+            {report.modelName && <span>Model: {report.modelName}</span>}
+            {report.generationDurationMs !== null && (
+              <span>{(report.generationDurationMs / 1000).toFixed(1)}s generation time</span>
+            )}
+            {report.generatedAt && (
+              <span>Generated: {new Date(report.generatedAt).toLocaleString()}</span>
+            )}
+          </div>
+          {/* Exclusion warning — shown when documents were dropped due to tenant limits */}
+          {report.documentsExcluded !== null && report.documentsExcluded > 0 && (
+            <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-400">
+              <span>⚠</span>
+              <span>
+                {report.documentsExcluded} document{report.documentsExcluded !== 1 ? "s were" : " was"} excluded due
+                to AI document limits. Adjust limits in CRM Settings → AI Intelligence Settings.
+              </span>
+            </div>
+          )}
+          {report.confidenceScore !== null && (
+            <div className="mt-3 max-w-xs">
+              <p className="mb-1 text-xs text-crm-muted">Confidence</p>
+              <ConfidenceMeter score={report.confidenceScore} />
+            </div>
+          )}
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <button
+            type="button"
+            disabled={generating}
+            onClick={() => handleGenerate(true)}
+            className="shrink-0 inline-flex items-center gap-1.5 rounded-xl border border-crm-accent/30 bg-crm-accent/10 px-3 py-1.5 text-xs font-semibold text-crm-accent hover:bg-crm-accent/20 transition-colors disabled:opacity-50"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            {generating ? "…" : "Regenerate"}
+          </button>
+          {cooldownMsg && (
+            <p className="text-xs text-amber-400 max-w-[200px] text-right">{cooldownMsg}</p>
+          )}
+        </div>
+      </div>
+
+      {/* Business Overview */}
+      {report.businessOverview && (
+        <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+          <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-crm-muted">Business Overview</p>
+          <p className="text-sm text-crm-text leading-relaxed">{report.businessOverview}</p>
+        </div>
+      )}
+
+      {/* Key Findings */}
+      {Object.keys(kf).length > 0 && (
+        <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+          <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.16em] text-crm-muted">Key Findings</p>
+          <div className="grid grid-cols-3 gap-3 mb-3">
+            {typeof kf.phoneCount === "number" && (
+              <div className="rounded-xl bg-crm-surface/60 p-3 text-center">
+                <p className="text-xl font-bold text-crm-text">{kf.phoneCount}</p>
+                <p className="text-[10px] text-crm-muted mt-0.5">Phone{kf.phoneCount !== 1 ? "s" : ""}</p>
+              </div>
+            )}
+            {typeof kf.emailCount === "number" && (
+              <div className="rounded-xl bg-crm-surface/60 p-3 text-center">
+                <p className="text-xl font-bold text-crm-text">{kf.emailCount}</p>
+                <p className="text-[10px] text-crm-muted mt-0.5">Email{kf.emailCount !== 1 ? "s" : ""}</p>
+              </div>
+            )}
+            {typeof kf.documentCount === "number" && (
+              <div className="rounded-xl bg-crm-surface/60 p-3 text-center">
+                <p className="text-xl font-bold text-crm-text">{kf.documentCount}</p>
+                <p className="text-[10px] text-crm-muted mt-0.5">Document{kf.documentCount !== 1 ? "s" : ""}</p>
+              </div>
+            )}
+          </div>
+          {Array.isArray(kf.namesFound) && kf.namesFound.length > 0 && (
+            <div className="mb-2">
+              <p className="text-xs text-crm-muted mb-1">Names found:</p>
+              <div className="flex flex-wrap gap-1.5">
+                {(kf.namesFound as string[]).map((n, i) => (
+                  <span key={i} className="rounded-full bg-crm-accent/10 px-2.5 py-0.5 text-xs text-crm-accent">{n}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {Array.isArray(kf.addressesFound) && kf.addressesFound.length > 0 && (
+            <div className="mb-2">
+              <p className="text-xs text-crm-muted mb-1">Addresses found:</p>
+              <div className="flex flex-col gap-1">
+                {(kf.addressesFound as string[]).map((a, i) => (
+                  <p key={i} className="text-xs text-crm-text">{a}</p>
+                ))}
+              </div>
+            </div>
+          )}
+          {Array.isArray(kf.additionalNotes) && kf.additionalNotes.length > 0 && (
+            <div>
+              <p className="text-xs text-crm-muted mb-1">Notes:</p>
+              <ul className="flex flex-col gap-0.5">
+                {(kf.additionalNotes as string[]).map((n, i) => (
+                  <li key={i} className="text-xs text-crm-text">• {n}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Discovered Entities */}
+      {Object.values(de).some((v) => Array.isArray(v) && v.length > 0) && (
+        <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+          <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.16em] text-purple-400">Discovered Entities</p>
+          {(["phones", "emails", "websites", "names", "addresses"] as const).map((key) => {
+            const items = Array.isArray(de[key]) ? (de[key] as string[]) : [];
+            if (items.length === 0) return null;
+            const label = key.charAt(0).toUpperCase() + key.slice(1);
+            return (
+              <div key={key} className="mb-2">
+                <p className="text-xs text-crm-muted mb-1">{label}:</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {items.map((v, i) => (
+                    <span key={i} className="rounded-full bg-purple-500/10 px-2.5 py-0.5 text-xs text-purple-300">{v}</span>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Risk Flags */}
+      {riskFlags.length > 0 && (
+        <div className="rounded-[1.35rem] border border-amber-500/20 bg-amber-500/5 p-4">
+          <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-amber-400">Risk Flags</p>
+          <ul className="flex flex-col gap-1.5">
+            {riskFlags.map((flag, i) => (
+              <li key={i} className="flex items-center gap-2 text-xs text-amber-300">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+                {RISK_FLAG_LABELS[flag] ?? flag}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Missing Information */}
+      {missingInfo.length > 0 && (
+        <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+          <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-crm-muted">Missing Information</p>
+          <ul className="flex flex-col gap-1.5">
+            {missingInfo.map((item, i) => (
+              <li key={i} className="text-xs text-crm-muted">
+                • {MISSING_INFO_LABELS[item] ?? item}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {err && <p className="text-xs text-red-400">{err}</p>}
+    </div>
+  );
 }
 
 function CrmContactDetailInner() {
@@ -982,7 +1993,11 @@ function CrmContactDetailInner() {
             ? "Notes"
             : workspaceTab === "files"
               ? "Files"
-              : workspaceTab === "tasks"
+              : workspaceTab === "discoveries"
+                ? "Document Discoveries"
+                : workspaceTab === "intelligence"
+                  ? "AI Lead Intelligence"
+                  : workspaceTab === "tasks"
                 ? "Tasks"
                 : workspaceTab === "script"
                   ? "Script"
@@ -1236,6 +2251,8 @@ function CrmContactDetailInner() {
                 ["sms", "SMS", MessageSquareDot],
                 ["notes", "Notes", NotebookPen],
                 ["files", "Files", Files],
+                ["discoveries", "Discoveries", ScanText],
+                ["intelligence", "AI Intelligence", Brain],
                 ["tasks", "Tasks", ListTodo],
               ] as const).map(([tab, label, Icon]) => (
                 <button
@@ -1317,6 +2334,8 @@ function CrmContactDetailInner() {
                   ["sms", "SMS"],
                   ["notes", "Notes"],
                   ["files", "Files"],
+                  ["discoveries", "Discoveries"],
+                  ["intelligence", "AI"],
                   ["tasks", "Tasks"],
                 ] as const).map(([tab, label]) => (
                   <button
@@ -1396,11 +2415,11 @@ function CrmContactDetailInner() {
                 </div>
               </div>
             ) : workspaceTab === "files" ? (
-              <div className="rounded-[1.35rem] border border-dashed border-crm-border/80 bg-crm-surface-2/40 p-8 text-center">
-                <Files className="mx-auto h-8 w-8 text-crm-muted" />
-                <p className="mt-3 text-sm font-semibold text-crm-text">No file workspace is wired for this contact yet.</p>
-                <p className="mt-1 text-sm text-crm-muted">Files are shown as a navigation target only; no unsupported upload action was added.</p>
-              </div>
+              <ContactDriveDocuments contactId={id} />
+            ) : workspaceTab === "discoveries" ? (
+              <ContactDiscoveries contactId={id} />
+            ) : workspaceTab === "intelligence" ? (
+              <ContactIntelligence contactId={id} />
             ) : workspaceTab === "tasks" ? (
               <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">

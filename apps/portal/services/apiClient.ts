@@ -153,6 +153,59 @@ export async function apiDelete<T>(path: string, token?: string): Promise<T> {
   return apiRequest<T>("DELETE", path, undefined, token);
 }
 
+/**
+ * Fetches a binary resource at an absolute URL with the current user's Bearer
+ * token included as an Authorization header.
+ *
+ * Use this for authenticated document streaming — the server requires BOTH a
+ * valid JWT and a valid HMAC-signed URL. Passing `window.open(signedUrl)` alone
+ * would lose the Authorization header and be rejected with 401.
+ *
+ * Usage:
+ *   const blob = await apiFetchBlob(signedUrl);
+ *   const blobUrl = URL.createObjectURL(blob);
+ *   window.open(blobUrl, "_blank", "noopener,noreferrer");
+ *   setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
+ *
+ * @param absoluteUrl  Full URL (e.g. from /crm/documents/:id/open-url response).
+ * @param timeoutMs    Abort timeout (default 60 s for potentially large files).
+ */
+export async function apiFetchBlob(absoluteUrl: string, timeoutMs = 60_000): Promise<Blob> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const token = browserToken();
+    const headers: Record<string, string> = {};
+    if (token) headers["authorization"] = `Bearer ${token}`;
+    const tenantCtx = browserTenantContext();
+    if (tenantCtx) headers["x-tenant-context"] = tenantCtx;
+
+    const res = await fetch(absoluteUrl, {
+      method: "GET",
+      headers,
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      let errCode = `http_${res.status}`;
+      try {
+        const json = await res.json();
+        errCode = json?.error ?? errCode;
+      } catch { /* non-JSON error body */ }
+      throw new ApiError(`Document fetch failed: ${errCode}`, res.status);
+    }
+    return await res.blob();
+  } catch (err) {
+    if (isAbortError(err)) {
+      throw new ApiError(`Document fetch timed out after ${Math.round(timeoutMs / 1000)}s`, 408);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function apiUploadCrmVoicemailDrop(
   input: {
     name: string;

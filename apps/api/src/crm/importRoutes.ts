@@ -14,6 +14,7 @@ import {
   type CrmImportField,
   type RowData,
 } from "./importPipeline";
+import { normalizeForMatch } from "./driveMatchService";
 
 // ── Route registrar ────────────────────────────────────────────────────────────
 
@@ -96,6 +97,7 @@ export async function registerCrmImportRoutes(app: FastifyInstance) {
     let updatedCount = 0;
     let skippedCount = 0;
     let errorCount = 0;
+    let auditErrorCount = 0;
     const errors: { row: number; reason: string }[] = [];
 
     for (let i = 0; i < dataRows.length; i++) {
@@ -113,6 +115,29 @@ export async function registerCrmImportRoutes(app: FastifyInstance) {
         else {
           skippedCount++;
           errors.push({ row: i + 2, reason: result.reason ?? "skipped" });
+        }
+
+        // Write per-row audit record for Drive matching. Awaited — Drive matching
+        // depends on these rows. Failure is counted and surfaced in batch response.
+        const companyName = rowData.company?.trim() || null;
+        try {
+          await db.crmImportBatchRow.create({
+            data: {
+              tenantId,
+              batchId: batch.id,
+              rowNumber: i + 2,
+              contactId: result.contactId ?? null,
+              companyName,
+              companyNameNormalized: companyName ? normalizeForMatch(companyName) || null : null,
+              action: result.action,
+            },
+          });
+        } catch (auditErr: any) {
+          auditErrorCount++;
+          app.log.error(
+            { batchId: batch.id, rowNumber: i + 2, err: auditErr?.message },
+            "crm_import_audit_row_write_failed",
+          );
         }
       } catch (err: any) {
         errorCount++;
@@ -136,6 +161,7 @@ export async function registerCrmImportRoutes(app: FastifyInstance) {
         updatedCount,
         skippedCount,
         errorCount,
+        auditErrorCount,
         errors: errors as any,
         completedAt: new Date(),
       },
@@ -150,6 +176,7 @@ export async function registerCrmImportRoutes(app: FastifyInstance) {
       updatedCount,
       skippedCount,
       errorCount,
+      auditErrorCount,
       errors: errors.slice(0, 50),
       detectedHeaders: headers,
       mapping: colMapping,
@@ -190,24 +217,30 @@ export async function registerCrmImportRoutes(app: FastifyInstance) {
   });
 
   // ── GET /crm/import/batches/:id ──────────────────────────────────────────
+  // Includes auditRowCount: how many CrmImportBatchRow rows exist for this batch.
+  // Non-zero auditErrorCount with auditRowCount < processedRows means some rows
+  // were not captured — Drive matching will be incomplete for those rows.
   app.get("/crm/import/batches/:id", async (req, reply) => {
     const user = await requireCrmAccess(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id } = req.params as { id: string };
 
-    const batch = await db.crmImportBatch.findFirst({
-      where: { id, tenantId },
-      include: {
-        createdBy: {
-          select: { id: true, firstName: true, lastName: true, displayName: true, email: true },
+    const [batch, auditRowCount] = await Promise.all([
+      db.crmImportBatch.findFirst({
+        where: { id, tenantId },
+        include: {
+          createdBy: {
+            select: { id: true, firstName: true, lastName: true, displayName: true, email: true },
+          },
         },
-      },
-    });
+      }),
+      db.crmImportBatchRow.count({ where: { batchId: id, tenantId } }),
+    ]);
 
     if (!batch) return reply.status(404).send({ error: "not_found" });
 
-    return formatBatch(batch);
+    return { ...formatBatch(batch), auditRowCount };
   });
 }
 
@@ -225,6 +258,8 @@ function formatBatch(b: any) {
     updatedCount: b.updatedCount,
     skippedCount: b.skippedCount,
     errorCount: b.errorCount,
+    /// Non-zero means some CrmImportBatchRow writes failed; Drive matching may miss those rows.
+    auditErrorCount: b.auditErrorCount ?? 0,
     errors: b.errors ?? [],
     mapping: b.mapping ?? null,
     createdAt: b.createdAt,

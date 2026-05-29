@@ -763,6 +763,470 @@ Registered via `registerCrmDriveRoutes(app)` in `apps/api/src/crm/driveRoutes.ts
 
 **Audit actions emitted:** `CRM_DRIVE_CONNECTED`, `CRM_DRIVE_FOLDER_SAVED`, `CRM_DRIVE_FOLDER_REMOVED`.
 
+### CRM Drive Match (Phase 2 + Phase 2 Harden)
+
+Registered via `registerCrmDriveMatchRoutes(app)` in `apps/api/src/crm/driveMatchRoutes.ts`.
+**Auth:** `requireCrmAccess` (same as all CRM routes).
+**Risk:** LOW — metadata only; no file content; no OCR.
+**Source:** `apps/api/src/crm/driveMatchRoutes.ts` + `apps/api/src/crm/driveMatchService.ts`
+
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/crm/drive/match/run` | Runs the Drive match engine for a batch. Body: `{ batchId }`. Requires `CrmDriveFolder.LEAD_IMPORT_INBOX` configured. Returns `DriveMatchRunResult` (see below). **Idempotent** — uses `createMany({ skipDuplicates: true })`; existing `IMPORT_PENDING` / `REJECTED` records are never overwritten. Returns 422 `no_audit_rows` if batch rows exist but no `CrmImportBatchRow` records were captured. |
+| GET | `/crm/drive/match/results` | Returns `CrmLeadDocument` records for a batch + unmatched company list + audit health. Query: `?batchId=`. Returns `{ batch, documents, unmatchedCompanies }` where `batch` includes `auditRowCount`, `auditErrorCount`, `auditWarning`. |
+| POST | `/crm/drive/match/:docId/confirm` | Confirms a DISCOVERED match → status `IMPORT_PENDING`. Records `reviewedByUserId` + `reviewedAt`. |
+| POST | `/crm/drive/match/:docId/reject` | Rejects a DISCOVERED match → status `REJECTED`. Records reviewer. |
+| GET | `/crm/contacts/:id/documents` | Lists attached `CrmLeadDocument` for a contact. Excludes `REJECTED` by default; pass `?includeRejected=1` to include. |
+
+**`DriveMatchRunResult` shape (POST `/crm/drive/match/run`):**
+
+```json
+{
+  "batchId": "...",
+  "filesScanned": 42,
+  "auditRowCount": 10,
+  "rowsWithCompany": 10,
+  "matchesCreated": 7,
+  "duplicatesSkipped": 0,
+  "ambiguousMatches": 2,
+  "unmatchedCompanies": ["Acme Corp"],
+  "unmatchedFiles": ["Random File.pdf"]
+}
+```
+
+**`GET /crm/drive/match/results` — batch sub-object:**
+
+```json
+{
+  "id": "...",
+  "fileName": "leads.csv",
+  "status": "DONE",
+  "totalRows": 50,
+  "auditRowCount": 50,
+  "auditErrorCount": 0,
+  "auditWarning": null,
+  "createdAt": "...",
+  "completedAt": "..."
+}
+```
+`auditWarning` is non-null when audit rows are missing or `auditErrorCount > 0`.
+
+**Error codes:**
+
+| Code | HTTP | When |
+|------|------|------|
+| `batchId_required` | 400 | Missing `batchId` in request |
+| `batch_not_found` | 404 | Batch does not belong to this tenant |
+| `no_drive_folder` | 409 | No `CrmDriveFolder` configured for `LEAD_IMPORT_INBOX` |
+| `no_audit_rows` | 422 | Batch has rows but no `CrmImportBatchRow` records — audit writes failed during import |
+| `document_not_found` | 404 | Doc does not belong to this tenant |
+| `invalid_status` | 409 | Confirm/reject called on a doc that is not `DISCOVERED` |
+| `contact_not_found` | 404 | Contact does not belong to this tenant |
+
+**`GET /crm/import/batches` and `GET /crm/import/batches/:id`** — batch objects now include `auditErrorCount` (stored). The `:id` detail endpoint additionally returns `auditRowCount` (live count of `CrmImportBatchRow` records for the batch).
+
+**Matching confidence levels:**
+
+| Value | Meaning |
+|-------|---------|
+| `HIGH` | Normalised company name exactly equals normalised file name |
+| `MEDIUM` | One token contains the other, min 4 chars |
+| `AMBIGUOUS` | One file matched multiple companies OR one company matched multiple files |
+| _(discarded)_ | `LOW` matches are never written to DB |
+
+**Tenant isolation:** every DB query includes `tenantId` in `WHERE` clause. Cross-tenant batch, document, or contact access returns 404.
+
+### CRM Document Import (Phase 3 + Phase 4 security hardening)
+
+Registered via `registerCrmDocImportRoutes(app)` in `apps/api/src/crm/docImportRoutes.ts`.
+**Auth:** `requireCrmAccess` (JWT) required for **all** routes including `/crm/documents/:id/open`.
+**Risk:** MEDIUM — reads Drive file content; stores to local FS.
+**Source:** `apps/api/src/crm/docImportService.ts` + `apps/api/src/crm/docImportStorage.ts`
+
+#### Phase 4 — dual-gate document access (security hardening)
+
+`GET /crm/documents/:id/open` now requires **both** checks to pass:
+
+1. **Gate 1 — JWT auth**: `requireCrmAccess` validates the Bearer token and resolves `tenantId` + `userId` from it.
+2. **Gate 2 — HMAC signature**: `verifySignedCrmDocUrl(docId, tenantId, userId, exp, sig)` verifies the signature is bound to the authenticated user and tenant.
+
+A leaked URL (browser history, proxy log, referer header) is useless without a matching valid JWT for the same tenant and user. A stolen JWT is useless without a fresh valid HMAC signature.
+
+**Signed URL format (v2):** `?exp=<unix_ts>&sig=<hex_hmac>`
+HMAC message: `crm-doc-open:v2:<docId>:<tenantId>:<userId>:<exp>` — binds purpose, document, tenant, user, and expiry.
+Old v1 Phase 3 signatures (format `crm-doc:<docId>:<storageKey>:<exp>`) automatically fail.
+
+**Frontend open flow (authenticated blob):**
+```
+1. GET /crm/documents/:id/open-url  →  { signedUrl }   (JWT required)
+2. fetch(signedUrl, { Authorization: Bearer <jwt> })    (JWT + HMAC required)
+3. URL.createObjectURL(blob)  →  window.open(blobUrl)
+```
+`window.open(signedUrl)` alone is rejected because it drops the Authorization header.
+
+**Audit log events** (no content, no storage paths, no tokens logged):
+| Event key | When |
+|---|---|
+| `crm_doc_opened` | Successful stream — logs `{ docId, tenantId, userId, bytes }` |
+| `crm_doc_invalid_signature` | HMAC mismatch, v1 sig, wrong tenant/user — logs `{ docId, tenantId, userId, event: "invalid_signature" }` |
+| `crm_doc_link_expired` | `exp` is in the past — logs `{ docId, tenantId, userId, event: "expired_link" }` |
+| `crm_doc_cross_tenant_attempt` | JWT tenant ≠ document tenant — logs `{ docId, callerTenantId, docTenantId }` |
+
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/crm/documents/:id/import` | Imports a single doc. Body: `{ force?: boolean }`. Transitions `IMPORT_PENDING → IMPORTING → IMPORTED` or `IMPORT_FAILED`. Returns `DocImportResult`. |
+| POST | `/crm/import/batches/:batchId/import-documents` | Imports up to 20 `IMPORT_PENDING` docs for a batch. Body: `{ limit?: number }`. Returns `BatchImportResult`. Call repeatedly until `attempted === 0` for large batches. |
+| GET | `/crm/import/batches/:batchId/document-import-status` | Returns document count by status + per-doc list. |
+| GET | `/crm/documents/:id/open-url` | Returns a 10-minute signed URL for the imported file. Requires `status=IMPORTED`. Signature binds `docId + tenantId + userId + expiry (v2)`. |
+| GET | `/crm/documents/:id/open` | **Phase 4:** Streams the imported file. Requires valid CRM JWT **AND** valid HMAC signature bound to the authenticated user+tenant. Denied if either check fails. Returns `Content-Type`, `Content-Disposition: inline`, `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff`. |
+| GET | `/crm/documents/:id/status` | Returns safe metadata and current import status for one doc. |
+
+**`DocImportResult` shape:**
+
+```json
+{ "docId": "...", "status": "IMPORTED", "storageKey": "...", "contentHash": "...", "storedBytes": 123456, "importedMimeType": "application/pdf" }
+```
+
+or on failure:
+
+```json
+{ "docId": "...", "status": "IMPORT_FAILED", "errorCode": "file_too_large", "errorMessage": "..." }
+```
+
+**Google Workspace files:** `application/vnd.google-apps.document`, `spreadsheet`, `presentation`, and `drawing` are exported to PDF via Drive export API. `importedMimeType` is set to `application/pdf`. Other Workspace types result in `IMPORT_FAILED` with `unsupported_workspace_type`.
+
+**Size limit:** `CRM_DOC_IMPORT_MAX_BYTES` env var (default: 50 MB). Files exceeding the limit result in `IMPORT_FAILED` with `file_too_large`.
+
+**Storage:** `CRM_DOC_STORAGE_DIR` env var (default: `data/crm-lead-docs`). Tenant-scoped path. Raw storage keys are NEVER returned to callers — access is via HMAC-signed URLs only.
+
+**Error codes:**
+
+| Code | HTTP | When |
+|------|------|------|
+| `doc_not_found` | 404 | Document not found for this tenant |
+| `invalid_status` | 409 | Doc is not in a state that allows import |
+| `no_drive_folder` | 409 | No `CrmDriveFolder` configured for `LEAD_IMPORT_INBOX` |
+| `no_drive_file_id` | 422 | Document has no Drive file ID |
+| `batch_not_found` | 404 | Batch does not belong to this tenant |
+| `doc_not_imported` | 404 | `/open-url` called on a doc that is not `IMPORTED` |
+| `link_expired` | 410 | `/open` called with an expired signature (audit: `crm_doc_link_expired`) |
+| `invalid_signature` | 403 | `/open` HMAC mismatch — tampered params, wrong tenant/user, or old v1 sig (audit: `crm_doc_invalid_signature`) |
+| `cross_tenant_attempt` | 403 | JWT tenant does not match document tenant (audit: `crm_doc_cross_tenant_attempt`) |
+
+---
+
+### CRM Document Text Extraction (Phase 5)
+
+Registered via `registerCrmDocTextExtractionRoutes(app)` in `apps/api/src/crm/docTextExtractionRoutes.ts`.
+**Auth:** `requireCrmAccess` (JWT) required for all routes.
+**Risk:** LOW — reads only locally-stored files; no external API calls.
+**Source:** `apps/api/src/crm/docTextExtractionService.ts`
+
+**Supported file types:**
+
+| MIME / Extension | Provider | Library |
+|---|---|---|
+| `application/pdf` / `.pdf` | `pdf_text_layer` | `pdf-parse` |
+| `text/plain`, `text/csv` / `.txt`, `.csv` | `plain_text` | Node `fs` |
+| `application/vnd.openxmlformats-officedocument.wordprocessingml.document` / `.docx` | `docx_text` | `mammoth` |
+| Everything else | `unsupported` → `TEXT_FAILED` | — |
+| Scanned / image-only PDF (no text layer) | `future_ocr` → `TEXT_FAILED` | — |
+
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/crm/documents/:id/text-extraction` | Trigger text extraction for a single IMPORTED doc. Body: `{ force?: boolean }`. If `TEXT_COMPLETE` and `force=false`, returns `{ status: "skipped" }`. |
+| GET | `/crm/documents/:id/text-extraction` | Get extraction status, provider, error, and extracted text for a single doc. Returns null text if never extracted. |
+| POST | `/crm/import/batches/:batchId/text-extraction` | Extract text for up to 5 docs in a batch. Body: `{ limit?: number, force?: boolean }`. Returns `BatchExtractionSummary`. Loop until `attempted === 0` for large batches. |
+| GET | `/crm/import/batches/:batchId/text-extraction-status` | Returns aggregate counts by extraction status for IMPORTED docs in a batch. |
+
+**`BatchExtractionSummary` shape:**
+```json
+{ "attempted": 3, "complete": 2, "failed": 1, "skipped": 0 }
+```
+
+**Idempotency:**
+- `TEXT_COMPLETE` with `force=false` → `{ status: "skipped", reason: "already_complete" }`
+- `TEXT_FAILED` → always retried (no `force` required)
+- `CrmLeadDocumentText` row is **upserted** on each run — never duplicated
+
+**Max chars stored:** 500,000 (truncated; configurable by changing `MAX_STORED_CHARS` in service)
+**Max docs per batch call:** 5 (hard-coded `min(5, limit)`)
+
+**Error codes:**
+
+| Code | Status | Meaning |
+|---|---|---|
+| `doc_not_imported` | 404 | Document not found or `status ≠ IMPORTED` for this tenant |
+| `no_storage_key` | 422 | IMPORTED document has no storage key (storage inconsistency) |
+| `batch_not_found` | 404 | Batch does not belong to this tenant |
+| `scanned_or_image_ocr_not_configured` | (in error field) | PDF has no text layer — OCR not yet available |
+| `unsupported_file_type` | (in error field) | File format not supported by any extractor |
+
+### CRM Contact Discovery _(Phase 6)_
+
+**Auth:** `requireCrmAccess` on all routes. Strict tenant isolation — tenant B cannot read or act on tenant A discoveries.
+
+**Security constraint:** extracted document text is never returned from any discovery endpoint. Only `sourceSnippet` (≤ 200 chars) is exposed.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/crm/documents/:id/discover` | Run phone + email discovery for a single `IMPORTED` + `TEXT_COMPLETE` document. Returns `{ phonesFound, emailsFound, phonesSkipped, emailsSkipped }`. |
+| GET | `/crm/contacts/:id/discoveries` | Get discoveries for a contact. Default: PENDING only. `?includeAll=true` includes ACCEPTED + REJECTED. Returns `{ contactId, phones[], emails[] }`. |
+| POST | `/crm/discoveries/phones/:id/accept` | Accept a phone discovery — creates `ContactPhone` (isPrimary=false), marks ACCEPTED. Returns `{ ok: true, phoneId }`. |
+| POST | `/crm/discoveries/phones/:id/reject` | Reject a phone discovery — marks REJECTED, record kept for audit. Returns `{ ok: true }`. |
+| POST | `/crm/discoveries/emails/:id/accept` | Accept an email discovery — creates `ContactEmail` (isPrimary=false), marks ACCEPTED. Returns `{ ok: true, emailId }`. |
+| POST | `/crm/discoveries/emails/:id/reject` | Reject an email discovery — marks REJECTED, record kept for audit. Returns `{ ok: true }`. |
+| POST | `/crm/import/batches/:batchId/discover` | Run discovery for up to 10 `IMPORTED + TEXT_COMPLETE` docs in a batch. Body: `{ limit?: number }`. Returns `{ documentsProcessed, totalPhonesFound, totalEmailsFound }`. Loop until `documentsProcessed === 0` for large batches. |
+| GET | `/crm/import/batches/:batchId/discovery-status` | Aggregate discovery counts for a batch. Returns `{ phones: { pending, accepted, rejected }, emails: { pending, accepted, rejected } }`. |
+
+**Idempotency:**
+- Existing `ACCEPTED` or `REJECTED` discoveries are never overwritten on rerun.
+- Existing `PENDING` discoveries are reused (unique constraint on `(tenantId, contactId, normalizedPhone, documentId)`).
+- Values already on the contact (`ContactPhone`, `ContactEmail`) are silently skipped — not stored as discoveries.
+
+**Max docs per batch call:** 10 (hard-coded `min(10, limit)`)
+
+**Error codes:**
+
+| Code | Status | Meaning |
+|---|---|---|
+| `doc_not_found` | 404 | Document not found, not IMPORTED, or belongs to another tenant |
+| `doc_no_contact` | 404 | Document not attached to a contact — run Drive match first |
+| `text_not_extracted` | 422 | `extractionStatus ≠ TEXT_COMPLETE` — run text extraction first |
+| `not_found` | 404 | Discovery record not found or belongs to another tenant |
+| `already_accepted` | 422 | Cannot reject an already-accepted discovery |
+| `already_rejected` | 422 | Cannot accept an already-rejected discovery |
+| `batch_not_found` | 404 | Batch not found or belongs to another tenant |
+
+---
+
+### CRM Lead Intelligence _(Phase 7)_
+
+**Auth:** `requireCrmAccess` on all routes. Strict tenant isolation.
+
+**Advisory only:** no contact data is modified by any intelligence route. AI output is informational only.
+
+**Requires:** `OPENAI_API_KEY` env var on the API server. Missing key → `503 ai_not_configured`.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/crm/contacts/:id/intelligence` | Generate intelligence for a contact. Body: `{ force?: boolean }`. Returns `{ reportId, status, skipped?, cooldownActive?, retryAfterMs?, retryAfterMessage? }`. CRM admin bypasses cooldown. |
+| GET | `/crm/contacts/:id/intelligence` | Get the latest intelligence report for a contact. Returns `{ report }` (may be `null`). |
+| POST | `/crm/import/batches/:batchId/intelligence` | Batch generation respecting `CrmAiSettings`. Body: `{ force?: boolean, limit?: number }`. Returns `{ contactsProcessed, complete, failed, skipped_existing, skipped_limit }`. |
+| GET | `/crm/import/batches/:batchId/intelligence-status` | Aggregate status counts. Returns `{ pending, processing, complete, failed, noReport }`. |
+| GET | `/crm/ai-settings` | Get current AI settings for the tenant (or defaults). Any CRM user. |
+| PUT | `/crm/ai-settings` | Update AI settings. **CRM admin only.** Body: partial `CrmAiSettings` fields. Hard caps enforced server-side. Returns saved settings. |
+
+**GET /crm/contacts/:id/intelligence — report shape when COMPLETE:**
+```json
+{
+  "report": {
+    "id": "...",
+    "status": "COMPLETE",
+    "summary": "...",
+    "businessOverview": "...",
+    "keyFindings": { "phoneCount": 2, "emailCount": 1, "documentCount": 3, "namesFound": [...], "addressesFound": [...], "additionalNotes": [...] },
+    "discoveredEntities": { "phones": [...], "emails": [...], "websites": [...], "names": [...], "addresses": [...] },
+    "riskFlags": ["missing_primary_phone"],
+    "missingInformation": ["missing_address"],
+    "confidenceScore": 0.72,
+    "modelName": "gpt-4o-mini",
+    "providerName": "openai",
+    "generatedAt": "...",
+    "sourceDocumentCount": 5,
+    "sourceTextCount": 4,
+    "sourceDiscoveryCount": 6,
+    "promptCharCount": 8432,
+    "documentsIncluded": 5,
+    "documentsExcluded": 0,
+    "generationDurationMs": 3210
+  }
+}
+```
+
+**POST /crm/import/batches/:batchId/intelligence — result shape:**
+```json
+{
+  "contactsProcessed": 10,
+  "complete": 7,
+  "failed": 1,
+  "skipped_existing": 1,
+  "skipped_limit": 2
+}
+```
+- `skipped_existing` — contacts already had a COMPLETE report (and `force=false`)
+- `skipped_limit` — contacts beyond `maxBatchReportsPerRun`
+
+**GET /crm/ai-settings — shape:**
+```json
+{
+  "aiEnabled": true,
+  "maxDocumentsPerReport": 5,
+  "maxCharsPerDocument": 2000,
+  "maxTotalCharsPerReport": 10000,
+  "allowBatchGeneration": true,
+  "maxBatchReportsPerRun": 25,
+  "regenerationCooldownMinutes": 60,
+  "isDefault": false
+}
+```
+
+**Risk flag codes:** `missing_primary_phone`, `missing_primary_email`, `conflicting_phone_numbers`, `conflicting_addresses`, `insufficient_documentation`, `extraction_failures`, `scanned_documents`, `no_company_identified`, `stale_contact_data`
+
+**Missing info codes:** `missing_owner`, `missing_address`, `missing_email`, `missing_phone`, `missing_financial_docs`, `missing_business_description`, `missing_website`
+
+**Idempotency:**
+- `COMPLETE` + `force=false` → `{ skipped: true, status: "COMPLETE" }`
+- `FAILED` → always retried (no `force` required)
+- `PROCESSING` → returns `{ skipped: true, status: "PROCESSING" }` (no duplicate AI call)
+- `force=true` within cooldown window → `429 cooldown_active` with `retryAfterMs`
+
+**Error codes:**
+
+| Code | Status | Meaning |
+|---|---|---|
+| `contact_not_found` | 404 | Contact not found or belongs to another tenant |
+| `ai_not_configured` | 503 | `OPENAI_API_KEY` is not set |
+| `ai_disabled` | 403 | `aiEnabled=false` in `CrmAiSettings` |
+| `cooldown_active` | 429 | Force-regen within cooldown window; `retryAfterMs` in body |
+| `batch_generation_disabled` | 403 | `allowBatchGeneration=false` in `CrmAiSettings` |
+| `generation_failed` | 422 | AI call failed; safe error stored in report |
+| `batch_not_found` | 404 | Batch not found or belongs to another tenant |
+| `forbidden` | 403 | Non-admin attempted `PUT /crm/ai-settings` |
+
+---
+
+### CRM Import Batch Pipeline (Phase 8)
+
+Registered via `registerCrmBatchPipelineRoutes(app)` in `apps/api/src/crm/batchPipelineRoutes.ts`.
+**Auth:** `requireCrmAccess` required on all routes. All routes are tenant-scoped by JWT `tenantId`.
+**Source:** `batchPipelineService.ts` orchestrates existing services; does not duplicate logic.
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/crm/import/batches/:batchId/pipeline/start` | Start a new pipeline run. Recovers stale RUNNING runs first. Returns **409** `already_running` if a non-stale RUNNING run exists. Returns **404** `batch_not_found` for unknown/cross-tenant batch. Returns `PipelineRunResult`. |
+| POST | `/crm/import/batches/:batchId/pipeline/continue` | Continue the most recent PARTIAL run. Recovers stale RUNNING runs first. If no PARTIAL/RUNNING run exists, starts fresh. Returns `PipelineRunResult`. |
+| GET | `/crm/import/batches/:batchId/pipeline/status` | Get the latest pipeline run for a batch. Returns `{ run: PipelineRunResult | null }`. `run` is null when no runs exist yet. |
+| GET | `/crm/import/batches/:batchId/pipeline/runs/:runId` | Get a specific pipeline run by id. Returns **404** `run_not_found` if not found or cross-tenant. |
+| POST | `/crm/import/batches/:batchId/pipeline/cancel` | Cancel the latest PENDING, **RUNNING**, or PARTIAL run. Returns `{ cancelled: boolean, runId?: string, reason?: string }`. No-op when no cancellable run exists. COMPLETE, FAILED, and CANCELLED runs cannot be cancelled. |
+| GET | `/crm/import/batches/:batchId/pipeline/health` | Health check: stale detection, active run count, hasMore. No sensitive data. Returns `PipelineHealthResult`. |
+
+**`PipelineRunResult` shape:**
+```json
+{
+  "runId": "clxyz...",
+  "batchId": "clxyz...",
+  "status": "PARTIAL",
+  "currentStep": "text_extraction",
+  "steps": {
+    "drive_match":      { "status": "complete", "attempted": 12, "succeeded": 12, "skipped": 0, "failed": 0, "errorSummary": null, ... },
+    "document_import":  { "status": "complete", "attempted": 10, "succeeded": 10, "skipped": 0, "failed": 0, "errorSummary": null, ... },
+    "text_extraction":  { "status": "partial",  "attempted": 5,  "succeeded": 4,  "skipped": 0, "failed": 1, "errorSummary": null, ... },
+    "contact_discovery":{ "status": "pending",  "attempted": 0, ... },
+    "ai_intelligence":  { "status": "skipped",  "errorSummary": "AI is disabled for this tenant.", ... }
+  },
+  "totals": {
+    "driveFilesScanned": 12,
+    "documentsMatched": 12,
+    "documentsImported": 10,
+    "textExtracted": 4,
+    "discoveriesFound": 0,
+    "aiReportsGenerated": 0
+  },
+  "errors": [{ "step": "text_extraction", "error": "File exceeds OCR limit", "at": "..." }],
+  "overallProgressPercent": 50,
+  "hasMore": true,
+  "nextAction": "5 document(s) still need text extraction. Click Continue to extract the next batch.",
+  "startedAt": "2026-06-08T09:00:00Z",
+  "completedAt": null,
+  "recoveredAt": null
+}
+```
+
+**`overallProgressPercent`:** Integer 0–100. Derived from step states:
+- complete / skipped → 20 pts each (5 steps × 20 = 100)
+- partial → 10 pts (half credit)
+- running → 5 pts (quarter credit, in-progress)
+- failed / pending → 0 pts
+
+**`recoveredAt`:** ISO timestamp set when a stale RUNNING run was auto-recovered to FAILED. `null` for normal runs.
+
+**Step behavior:**
+- `drive_match` — calls `runDriveMatchForBatch`. Idempotent; skips already-matched files. No Drive folder → run status `FAILED`, no further steps run.
+- `document_import` — calls `importBatchDocuments`. Effective limit = `min(20, CRM_PIPELINE_MAX_STEP_ITEMS)`. Only processes `IMPORT_PENDING` docs.
+- `text_extraction` — calls `extractBatchDocumentText`. Effective limit = `min(5, CRM_PIPELINE_MAX_STEP_ITEMS)`. Only `IMPORTED` docs without `TEXT_COMPLETE`. OCR limits apply.
+- `contact_discovery` — calls `extractDiscoveriesForBatch`. Effective limit = `min(10, CRM_PIPELINE_MAX_STEP_ITEMS)`. Only `TEXT_COMPLETE` docs.
+- `ai_intelligence` — calls `generateBatchIntelligence`. Effective limit = `min(5, CRM_PIPELINE_MAX_STEP_ITEMS)`. `force=false` — never force-regenerates. Skipped (not failed) when AI or batch generation disabled.
+
+**`hasMore` flag:** Set to `true` on `PARTIAL` runs when import, extraction, or AI work remains. The UI shows a "Continue Processing" button. When `hasMore=false` and `status=PARTIAL`, the pipeline is stalled (e.g. all remaining docs failed extraction); manual investigation needed.
+
+**`PipelineHealthResult` shape** (returned by `GET .../pipeline/health`):
+```json
+{
+  "healthy": true,
+  "latestRunStatus": "COMPLETE",
+  "staleDetected": false,
+  "activeRunCount": 0,
+  "hasMore": false,
+  "lastUpdatedAt": "2026-06-08T09:05:00Z"
+}
+```
+`healthy=true` when: `activeRunCount ≤ 1`, no stale runs, and `latestRunStatus ≠ FAILED`. No sensitive data.
+
+**Stale run recovery:** `start` and `continue` automatically recover stale RUNNING runs before checking for active ones. A stale run has `status=RUNNING` and `updatedAt < now - CRM_PIPELINE_STALE_MINUTES`. Recovered runs are marked `FAILED` with `recoveredAt` set and a `stale_run_recovered` error entry.
+
+**Cancellation rules:** Only `PENDING`, `RUNNING`, and `PARTIAL` may be cancelled. `COMPLETE`, `FAILED`, and `CANCELLED` cannot. Returns `{ cancelled: false, reason: "no_cancellable_run" }` when nothing cancellable exists.
+
+**Error codes:**
+| Code | HTTP | Description |
+|---|---|---|
+| `batch_not_found` | 404 | Batch not found or belongs to another tenant |
+| `already_running` | 409 | A non-stale RUNNING pipeline run exists for this batch |
+| `run_not_found` | 404 | Specific run ID not found |
+
+---
+
+### CRM Batch Diagnostics _(Phase 9)_
+
+Requires `requireCrmAccess` (tenant-scoped). All routes return 404 `batch_not_found` for unknown or cross-tenant batches.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/crm/import/batches/:batchId/diagnostics` | Full diagnostics: batch overview, pipeline summary, document/extraction/discovery/AI counts, health score, warnings, failures. |
+| GET | `/crm/import/batches/:batchId/diagnostics/failures` | Categorized failures only. Returns `{ failures: DiagnosticsFailure[] }`. |
+| GET | `/crm/import/batches/:batchId/diagnostics/timeline` | Pipeline step timeline from the latest run. Returns `{ steps: TimelineStep[] }`. Always returns 5 steps (pending if no run exists). |
+| GET | `/crm/import/batches/:batchId/diagnostics/support-bundle` | Safe JSON export for internal support. Returns `SupportBundle` with `Content-Disposition: attachment`. Never includes doc text, AI prompts, storage keys, or tokens. |
+
+**`BatchDiagnostics` shape:**
+```json
+{
+  "generatedAt": "2026-06-08T09:00:00Z",
+  "healthScore": 85,
+  "batch": { "batchId": "...", "fileName": "leads.csv", "status": "COMPLETE", ... },
+  "pipeline": {
+    "latestRunId": "...", "latestRunStatus": "COMPLETE", "overallProgressPercent": 100,
+    "staleRecoveries": 0, "totalRuns": 1, "durationMs": 45000
+  },
+  "documents": { "total": 10, "matched": 8, "imported": 8, "importPending": 0, "importFailed": 0, "importSkipped": 2 },
+  "extraction": { "total": 8, "complete": 7, "failed": 1, "ocrComplete": 1, "ocrFailed": 0, "totalCharsExtracted": 52000 },
+  "discovery": { "phonesTotal": 5, "phonesAccepted": 3, "emailsTotal": 3, "emailsAccepted": 2, ... },
+  "ai": { "total": 5, "complete": 4, "failed": 1, "pending": 0 },
+  "warnings": [{ "code": "extraction_failures_present", "message": "...", "count": 1 }],
+  "failures": [{ "category": "DOCUMENT", "count": 1, "latestOccurrence": "...", "exampleMessage": "import_failed" }]
+}
+```
+
+**Health score:** 0–100 integer. See DATA_MODEL.md §CRM Batch Diagnostics for full penalty table.
+
+**`SupportBundle`** adds `timeline`, `config` (safe operational context), and `version: "1"`. Contains no document text, prompts, storage paths, API keys, or tokens.
+
+**Error codes:**
+| Code | HTTP | Description |
+|---|---|---|
+| `batch_not_found` | 404 | Batch not found or belongs to another tenant |
+
+---
+
 ### CRM Reports _(Phase 4A)_
 
 All report endpoints require `requireCrmAccess` (not admin-only). Tenant-isolated. No pagination on aggregate endpoints; detail rows are capped at 100.

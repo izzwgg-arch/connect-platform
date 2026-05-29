@@ -19,6 +19,14 @@ import { registerCrmBulkEmailRoutes } from "./bulkEmailRoutes";
 import { registerCrmFunderRoutes } from "./funderRoutes";
 import { registerCrmVoicemailDropRoutes } from "./voicemailDropRoutes";
 import { registerCrmDriveRoutes } from "./driveRoutes";
+import { registerCrmDriveMatchRoutes } from "./driveMatchRoutes";
+import { registerCrmDocImportRoutes } from "./docImportRoutes";
+import { registerCrmDocTextExtractionRoutes } from "./docTextExtractionRoutes";
+import { registerCrmContactDiscoveryRoutes } from "./contactDiscoveryRoutes";
+import { registerCrmLeadIntelligenceRoutes } from "./leadIntelligenceRoutes";
+import { registerCrmAiSettingsRoutes } from "./crmAiSettingsRoutes";
+import { registerCrmBatchPipelineRoutes } from "./batchPipelineRoutes";
+import { registerCrmBatchDiagnosticsRoutes } from "./batchDiagnosticsRoutes";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -398,4 +406,28 @@ export async function registerCrmRoutes(app: FastifyInstance) {
 
   // CRM Drive (Phase 1 — Google Drive folder connection + lead document foundation)
   await registerCrmDriveRoutes(app);
+
+  // CRM Drive Match (Phase 2 — import batch ↔ Drive file matching + review)
+  await registerCrmDriveMatchRoutes(app);
+
+  // CRM Document Import (Phase 3 — Drive → local storage, signed open URLs)
+  await registerCrmDocImportRoutes(app);
+
+  // CRM Document Text Extraction (Phase 5 — PDF/DOCX/plain text extraction)
+  await registerCrmDocTextExtractionRoutes(app);
+
+  // CRM Contact Discovery (Phase 6 — phone/email discovery from extracted text)
+  await registerCrmContactDiscoveryRoutes(app);
+
+  // CRM Lead Intelligence (Phase 7 — AI-generated advisory reports)
+  await registerCrmLeadIntelligenceRoutes(app);
+
+  // CRM AI Settings (Phase 7B — tenant-level AI governance + limits)
+  await registerCrmAiSettingsRoutes(app);
+
+  // CRM Batch Pipeline (Phase 8 — orchestrated Process Batch workflow)
+  await registerCrmBatchPipelineRoutes(app);
+
+  // CRM Batch Diagnostics (Phase 9 — observability and support tooling)
+  await registerCrmBatchDiagnosticsRoutes(app);
 }

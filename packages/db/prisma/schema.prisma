@@ -641,6 +641,13 @@ model Tenant {
   crmBulkEmailJobs                CrmBulkEmailJob[]
   crmDriveFolders                 CrmDriveFolder[]
   crmLeadDocuments                CrmLeadDocument[]
+  crmLeadDocumentTexts            CrmLeadDocumentText[]
+  crmLeadDiscoveredPhones         CrmLeadDiscoveredPhone[]
+  crmLeadDiscoveredEmails         CrmLeadDiscoveredEmail[]
+  crmLeadIntelligenceReports      CrmLeadIntelligenceReport[]
+  crmAiSettings                   CrmAiSettings?
+  crmImportBatchRows              CrmImportBatchRow[]
+  crmImportBatchPipelineRuns      CrmImportBatchPipelineRun[]
   customRoles                     CustomRole[]
   userCustomRoles                 UserCustomRole[]
   whatsAppAccounts                WhatsAppAccount[]
@@ -734,6 +741,8 @@ model User {
   customRoleAssignments          UserCustomRole[]
   customRolesAssigned            UserCustomRole[]                  @relation("UserCustomRoleAssignedBy")
   whatsAppAccounts               WhatsAppAccount[]
+  /// CRM Drive match Phase 2
+  crmLeadDocumentsReviewed       CrmLeadDocument[] @relation("CrmLeadDocumentReviewedBy")
 }
 
 enum UserRole {
@@ -1801,6 +1810,11 @@ model Contact {
   crmEmailThreads       CrmEmailThread[]
   crmEmailMessages      CrmEmailMessage[]
   crmEmailSendLogs      CrmEmailSendLog[]
+  leadDocuments         CrmLeadDocument[]
+  importBatchRows       CrmImportBatchRow[]
+  discoveredPhones      CrmLeadDiscoveredPhone[]
+  discoveredEmails      CrmLeadDiscoveredEmail[]
+  intelligenceReport    CrmLeadIntelligenceReport?
 
   @@unique([tenantId, extensionId])
   @@index([tenantId, type, active])
@@ -3825,6 +3839,8 @@ enum CrmImportBatchStatus {
 /// Tracks a single CSV import run. Rows are processed synchronously for MVP.
 /// errors Json stores per-row error details: [{ row: number, reason: string }]
 /// mapping Json stores the auto-detected column mapping: { csvHeader: fieldKey }
+/// auditErrorCount: how many CrmImportBatchRow writes failed during the import run.
+/// Non-zero means Drive matching may be incomplete for this batch.
 model CrmImportBatch {
   id              String               @id @default(cuid())
   tenantId        String
@@ -3836,16 +3852,45 @@ model CrmImportBatch {
   updatedCount    Int                  @default(0)
   skippedCount    Int                  @default(0)
   errorCount      Int                  @default(0)
+  /// Count of CrmImportBatchRow writes that failed. Non-zero = Drive match may be incomplete.
+  auditErrorCount Int                  @default(0)
   errors          Json                 @default("[]")
   mapping         Json?
   createdByUserId String
   createdAt       DateTime             @default(now())
   completedAt     DateTime?
 
-  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy User   @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+  tenant        Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy     User                 @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+  batchRows     CrmImportBatchRow[]
+  leadDocuments CrmLeadDocument[]
+  pipelineRuns  CrmImportBatchPipelineRun[]
 
   @@index([tenantId, createdAt])
+}
+
+/// Per-row audit record for a CRM import batch.
+/// Captures the company name and resolved contactId for each row so the Drive
+/// match engine can map normalised company names → contacts.
+model CrmImportBatchRow {
+  id                    String   @id @default(cuid())
+  tenantId              String
+  batchId               String
+  rowNumber             Int
+  contactId             String?
+  companyName           String?
+  companyNameNormalized String?
+  action                String
+
+  createdAt DateTime @default(now())
+
+  tenant  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  batch   CrmImportBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  contact Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@index([batchId])
+  @@index([tenantId, contactId])
+  @@index([tenantId, companyNameNormalized])
 }
 
 /// Call script — plain-text body shown in the Live Call Workspace.
@@ -4356,10 +4401,21 @@ enum CrmLeadDocumentSource {
 }
 
 enum CrmLeadDocumentStatus {
+  /// Match found but not yet confirmed by a user.
   DISCOVERED
+  /// User confirmed the match — document queued for local copy.
   IMPORT_PENDING
+  /// Download + local storage in progress (set at start of import attempt).
+  IMPORTING
+  /// File successfully downloaded, stored locally, and hash computed.
   IMPORTED
+  /// Import failed (download error, storage error, unsupported type).
+  /// Check importError for the safe failure reason.
+  IMPORT_FAILED
+  /// Generic failure (legacy / Phase 1 use). Prefer IMPORT_FAILED for new code.
   FAILED
+  /// User explicitly rejected the match — not relevant for import.
+  REJECTED
 }
 
 /// Tenant-scoped Google Drive folder configuration.
@@ -4385,33 +4441,373 @@ model CrmDriveFolder {
   @@index([googleConnectionId])
 }
 
-/// Lead document reference — foundation model for future OCR / import pipeline.
-/// Phase 1: inert data model. No worker consumer. No download. No OCR.
-/// leadId is nullable because the lead import pipeline is not yet built.
+/// Lead document reference — links a Google Drive file to a CRM contact.
+/// Phase 1: model foundation.
+/// Phase 2: contactId + match fields populated by the Drive matching engine.
+/// Phase 3: file download to local storage, contentHash, importedAt, importError.
+/// Phase 5: text extraction status fields (textExtractionStatus, textExtractionError, textExtractedAt).
+/// No AI summaries.
 model CrmLeadDocument {
   id                  String                 @id @default(cuid())
   tenantId            String
-  /// FK to a future CRM lead/contact row. Nullable until lead import ships.
-  leadId              String?
+  /// FK to Contact — the CRM entity this document belongs to.
+  /// Nullable: may be unmatched or pending review.
+  contactId           String?
+  /// Which import batch triggered discovery of this document.
+  importBatchId       String?
   source              CrmLeadDocumentSource  @default(GOOGLE_DRIVE)
   /// Google Drive file ID (when source=GOOGLE_DRIVE).
   googleDriveFileId   String?
   /// Google Drive folder ID from which this file was discovered.
   googleDriveFolderId String?
   originalFileName    String
+  /// Original MIME type as reported by Google Drive.
   mimeType            String?
+  /// Reported file size in bytes from Drive metadata (may differ from stored size).
   sizeBytes           BigInt?
+  /// SHA-256 hex hash of the stored file bytes. Computed during import.
   contentHash         String?
-  /// Storage key for a future local copy (Phase 2+).
+  /// Tenant-scoped storage key for the local copy (set after IMPORTED).
   storageKey          String?
   status              CrmLeadDocumentStatus  @default(DISCOVERED)
+  /// HIGH | MEDIUM | AMBIGUOUS — confidence of the name-match algorithm.
+  matchConfidence     String?
+  /// Machine reason code, e.g. "exact_company_name", "file_contains_company".
+  matchReason         String?
+  /// User who confirmed or rejected this document match.
+  reviewedByUserId    String?
+  reviewedAt          DateTime?
+  /// When the file was successfully stored locally (Phase 3).
+  importedAt          DateTime?
+  /// Short safe error message if status=IMPORT_FAILED (Phase 3).
+  importError         String?
+  /// MIME type of the file actually stored — may differ from mimeType when
+  /// a Google Workspace file (Docs/Sheets/Slides) is exported to PDF (Phase 3).
+  importedMimeType    String?
+  /// Phase 5: denormalized extraction status mirror (null = not yet attempted).
+  /// Source of truth is CrmLeadDocumentText.extractionStatus; this field is for
+  /// fast filtering (e.g. "find all IMPORTED docs without completed extraction").
+  textExtractionStatus CrmDocTextExtractionStatus?
+  /// Safe error message if text extraction failed (no content, no paths).
+  textExtractionError  String?
+  /// When text extraction last completed successfully.
+  textExtractedAt      DateTime?
   createdAt           DateTime               @default(now())
   updatedAt           DateTime               @updatedAt
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant          Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact         Contact?                 @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  importBatch     CrmImportBatch?          @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+  reviewedBy      User?                    @relation("CrmLeadDocumentReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  textExtraction    CrmLeadDocumentText?
+  discoveredPhones  CrmLeadDiscoveredPhone[]
+  discoveredEmails  CrmLeadDiscoveredEmail[]
 
   @@index([tenantId, status])
-  @@index([tenantId, leadId])
+  @@index([tenantId, contactId])
+  @@index([importBatchId])
   @@index([tenantId, googleDriveFolderId])
-  // Partial unique on (tenantId, googleDriveFileId) enforced in migration SQL (WHERE NOT NULL)
+  @@index([tenantId, textExtractionStatus])
+  // Unique per (tenant, batch, Drive file) — partial, enforced in migration SQL WHERE both NOT NULL.
+  // This replaced the over-broad Phase 1 (tenantId, googleDriveFileId) constraint.
+  // Enables the same Drive file to appear in separate import batches for the same tenant.
+  @@unique([tenantId, importBatchId, googleDriveFileId])
+}
+
+// ─── CRM Document Text Extraction (Phase 5) ──────────────────────────────────
+
+/// Extraction status lifecycle:
+///   TEXT_PENDING → TEXT_PROCESSING → TEXT_COMPLETE
+///                                  → TEXT_FAILED (retryable)
+enum CrmDocTextExtractionStatus {
+  TEXT_PENDING
+  TEXT_PROCESSING
+  TEXT_COMPLETE
+  TEXT_FAILED
+}
+
+/// How the text was extracted.
+/// pdf_text_layer — PDF with embedded text (pdf-parse library)
+/// pdf_text_layer — native PDF text layer via pdf-parse
+/// plain_text     — .txt / .csv / other plain-text MIME
+/// docx_text      — DOCX via mammoth library
+/// unsupported    — file type has no supported extractor in this version
+/// future_ocr     — reserved for scanned-image OCR (not yet implemented); kept for
+///                  backward-compatibility with rows created before Phase 5B
+/// tesseract_js   — Tesseract.js WASM OCR for PNG/JPG/JPEG images (Phase 5B)
+enum CrmDocTextExtractionProvider {
+  pdf_text_layer
+  plain_text
+  docx_text
+  unsupported
+  future_ocr
+  tesseract_js
+}
+
+// ── Pipeline run tracking ────────────────────────────────────────────────────
+
+/// Status of an orchestrated import batch pipeline run.
+/// PENDING  — created, not yet started
+/// RUNNING  — processing (short-lived since pipeline is synchronous per call)
+/// COMPLETE — all steps done and no more work remaining
+/// PARTIAL  — progress made but work remains or some docs failed
+/// FAILED   — pipeline could not start (e.g. no Drive folder configured)
+/// CANCELLED — manually cancelled by user
+enum CrmPipelineRunStatus {
+  PENDING
+  RUNNING
+  COMPLETE
+  PARTIAL
+  FAILED
+  CANCELLED
+}
+
+/// Tracks one "Process Batch" invocation for a CRM import batch.
+/// Each Start creates a new run; Continue updates the latest PARTIAL run.
+/// steps JSON stores per-step results (see batchPipelineService.ts for shape).
+/// totals JSON stores aggregated progress counts across pipeline steps.
+/// errors JSON stores safe error summaries (capped at 10).
+model CrmImportBatchPipelineRun {
+  id               String                 @id @default(cuid())
+  tenantId         String
+  importBatchId    String
+  status           CrmPipelineRunStatus   @default(PENDING)
+  startedByUserId  String?
+  /// Step currently running or last completed. Null when PENDING.
+  currentStep      String?
+  /// Per-step results. Shape: { [stepName]: StepRecord }
+  steps            Json                   @default("{}")
+  /// Aggregate pipeline totals.
+  totals           Json                   @default("{}")
+  /// Safe error list (no document text, no keys). Capped at 10 entries.
+  errors           Json                   @default("[]")
+  startedAt        DateTime?
+  completedAt      DateTime?
+  /// Set when a stale RUNNING run is automatically recovered to FAILED by the
+  /// stale-run recovery mechanism (triggered on next start/continue call).
+  recoveredAt      DateTime?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  importBatch CrmImportBatch   @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, importBatchId])
+  @@index([tenantId, status])
+}
+
+/// Stores the extracted text content and metadata for an imported CRM document.
+/// One row per document (unique on documentId).
+/// Created/replaced by the text extraction service; never deleted independently.
+model CrmLeadDocumentText {
+  id                  String                        @id @default(cuid())
+  tenantId            String
+  documentId          String                        @unique
+  /// Denormalized for fast tenant-scoped queries without joining CrmLeadDocument.
+  contactId           String?
+  importBatchId       String?
+  /// The full extracted text. Empty string if extraction failed.
+  text                String                        @default("")
+  /// Page count from PDF metadata; null for non-PDF types.
+  pageCount           Int?
+  /// Character count of the extracted text field.
+  charCount           Int                           @default(0)
+  extractionProvider  CrmDocTextExtractionProvider
+  extractionStatus    CrmDocTextExtractionStatus    @default(TEXT_PENDING)
+  /// Safe error message (no document content, no storage paths, no tokens).
+  extractionError     String?
+  extractedAt         DateTime?
+  /// OCR confidence score (0–100); null for non-OCR providers.
+  extractionConfidence Float?
+  /// Provider-specific metadata JSON. For tesseract_js:
+  ///   { "ocrEngine": "tesseract_js", "language": "eng", "pageCount": 1 }
+  /// Never stores document content or storage paths.
+  extractionMetadata  Json?
+  createdAt           DateTime                      @default(now())
+  updatedAt           DateTime                      @updatedAt
+
+  document  CrmLeadDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  discoveredPhones CrmLeadDiscoveredPhone[]
+  discoveredEmails CrmLeadDiscoveredEmail[]
+
+  @@index([tenantId, documentId])
+  @@index([tenantId, extractionStatus])
+  @@index([contactId])
+  @@index([importBatchId])
+}
+
+// ─── CRM Contact Discovery (Phase 6) ─────────────────────────────────────────
+
+/// Discovery status lifecycle:
+///   PENDING  → ACCEPTED (value attached to contact)
+///           → REJECTED (dismissed; record kept for audit)
+/// Re-running discovery never reopens ACCEPTED or REJECTED records.
+enum CrmDiscoveryStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+/// A phone number discovered in an imported document's extracted text.
+/// One row per (tenant, contact, normalizedPhone, document) — unique index prevents
+/// duplicate discoveries when extraction or discovery is rerun.
+model CrmLeadDiscoveredPhone {
+  id              String              @id @default(cuid())
+  tenantId        String
+  contactId       String
+  documentId      String
+  documentTextId  String
+  /// Raw phone text as found in the document (e.g. "(555) 123-4567")
+  phoneNumber     String
+  /// Digits-only normalized form for dedup (e.g. "5551234567")
+  normalizedPhone String
+  /// HIGH — valid US format + near phone label; MEDIUM — valid format only
+  confidence      String              @default("MEDIUM")
+  /// Up to 200 chars of surrounding text. Never the full document text.
+  sourceSnippet   String?
+  sourcePage      Int?
+  status          CrmDiscoveryStatus  @default(PENDING)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact      Contact              @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  document     CrmLeadDocument      @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  documentText CrmLeadDocumentText  @relation(fields: [documentTextId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, contactId, normalizedPhone, documentId])
+  @@index([tenantId, contactId])
+  @@index([tenantId, status])
+  @@index([documentId])
+}
+
+/// An email address discovered in an imported document's extracted text.
+/// One row per (tenant, contact, email, document) — unique index prevents duplicates.
+model CrmLeadDiscoveredEmail {
+  id             String              @id @default(cuid())
+  tenantId       String
+  contactId      String
+  documentId     String
+  documentTextId String
+  /// Email as extracted (lowercased)
+  email          String
+  /// HIGH — valid format; MEDIUM — plausible but unusual
+  confidence     String              @default("HIGH")
+  /// Up to 200 chars of surrounding text.
+  sourceSnippet  String?
+  sourcePage     Int?
+  status         CrmDiscoveryStatus  @default(PENDING)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  tenant       Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact      Contact              @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  document     CrmLeadDocument      @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  documentText CrmLeadDocumentText  @relation(fields: [documentTextId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, contactId, email, documentId])
+  @@index([tenantId, contactId])
+  @@index([tenantId, status])
+  @@index([documentId])
+}
+
+// ─── CRM Lead Intelligence (Phase 7) ─────────────────────────────────────────
+
+/// AI-generated report status.
+///   PENDING    — report queued, not yet started
+///   PROCESSING — AI call in progress
+///   COMPLETE   — report generated successfully; output fields are populated
+///   FAILED     — AI call failed; error field has safe message
+enum CrmLeadIntelligenceStatus {
+  PENDING
+  PROCESSING
+  COMPLETE
+  FAILED
+}
+
+/// AI-generated lead intelligence report for a contact.
+/// One row per contact (unique on contactId). Upserted on force-regeneration.
+/// All output is advisory only — no auto-modification of contact data.
+model CrmLeadIntelligenceReport {
+  id                   String                      @id @default(cuid())
+  tenantId             String
+  /// One report per contact — upserted on force regeneration.
+  contactId            String                      @unique
+  importBatchId        String?
+  status               CrmLeadIntelligenceStatus   @default(PENDING)
+  /// 2-3 sentence executive summary.
+  summary              String?
+  /// Paragraph describing the company/lead's business.
+  businessOverview     String?
+  /// Structured findings: phoneCount, emailCount, documentCount, namesFound[], addressesFound[].
+  keyFindings          Json?
+  /// Structured entities extracted: phones[], emails[], websites[], names[], addresses[].
+  discoveredEntities   Json?
+  /// Array of risk flag codes: "missing_primary_phone", "conflicting_addresses", etc.
+  riskFlags            Json?
+  /// Array of missing-info codes: "missing_owner", "missing_email", etc.
+  missingInformation   Json?
+  /// 0.0–1.0; AI-assessed confidence based on input data quality.
+  confidenceScore      Float?
+  /// Model that generated this report, e.g. "gpt-4o-mini".
+  modelName            String?
+  generatedAt          DateTime?
+  /// Safe error message (no document content, no tokens, ≤ 500 chars).
+  error                String?
+  /// Source counts that were fed into the AI call.
+  sourceDocumentCount  Int                         @default(0)
+  sourceTextCount      Int                         @default(0)
+  sourceDiscoveryCount Int                         @default(0)
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
+
+  /// Total characters of all document snippets sent to the AI.
+  promptCharCount      Int?
+  /// Documents actually included in the AI prompt (after limit enforcement).
+  documentsIncluded    Int?
+  /// Documents excluded due to per-tenant limits.
+  documentsExcluded    Int?
+  /// Wall-clock duration of the AI provider call in milliseconds.
+  generationDurationMs Int?
+  /// Provider name, e.g. "openai".
+  providerName         String?
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+  @@index([tenantId, contactId])
+  @@index([importBatchId])
+}
+
+// ─── CRM AI Governance Settings (Phase 7B) ───────────────────────────────────
+
+/// Per-tenant AI generation settings and limits.
+/// Absence of a row = all defaults (see field defaults below).
+/// Limits have hard server-side caps enforced in leadIntelligenceService.ts
+/// regardless of what is stored here.
+model CrmAiSettings {
+  id                          String   @id @default(cuid())
+  tenantId                    String   @unique
+  /// Master switch — false blocks all AI generation for this tenant.
+  aiEnabled                   Boolean  @default(true)
+  /// Max imported documents included per report. Hard server cap: 10.
+  maxDocumentsPerReport       Int      @default(5)
+  /// Max extracted text characters per document. Hard server cap: 5000.
+  maxCharsPerDocument         Int      @default(2000)
+  /// Max total characters across all documents in one prompt. Hard server cap: 25000.
+  maxTotalCharsPerReport      Int      @default(10000)
+  /// Whether batch generation (/crm/import/batches/:id/intelligence) is allowed.
+  allowBatchGeneration        Boolean  @default(true)
+  /// Max contacts processed per single batch call. Hard server cap: 25.
+  maxBatchReportsPerRun       Int      @default(25)
+  /// Minimum minutes between force-regenerations for the same contact.
+  /// 0 = no cooldown. CRM admin role can bypass.
+  regenerationCooldownMinutes Int      @default(60)
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }

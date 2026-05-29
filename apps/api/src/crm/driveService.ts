@@ -293,6 +293,110 @@ export async function testDriveFolderAccess(
   return { ok: true, folderName: folderMeta.name, fileCount: files.length };
 }
 
+// ── File download ────────────────────────────────────────────────────────────
+
+/**
+ * Downloads the binary content of a regular Drive file (non-Workspace).
+ * Use this for PDFs, DOCX, images, etc. that Drive stores natively.
+ *
+ * For Google Workspace files (Docs/Sheets/Slides) use exportDriveWorkspaceFile.
+ *
+ * SECURITY: content bytes are NEVER logged. Token is never logged.
+ *
+ * @param maxBytes  Hard cap on response size. Throws "file_too_large" if exceeded.
+ */
+export async function downloadDriveFile(
+  connection: DriveConnectionRow,
+  fileId: string,
+  maxBytes: number,
+): Promise<{ buffer: Buffer; mimeType: string }> {
+  const accessToken = await getDriveAccessToken(connection);
+
+  // First fetch metadata to validate file is accessible and get mimeType
+  const meta = await getDriveFileMetadata(connection, fileId);
+
+  const res = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,
+    { headers: { authorization: `Bearer ${accessToken}` } },
+  );
+
+  if (res.status === 404) {
+    throw new DriveServiceError("file_not_found", `Drive file ${fileId} not found`);
+  }
+  if (!res.ok) {
+    const err: any = await res.json().catch(() => ({}));
+    throw new DriveServiceError(
+      "drive_download_failed",
+      `Drive download failed: ${res.status} ${err?.error?.message || "unknown"}`,
+    );
+  }
+
+  const contentLength = Number(res.headers.get("content-length") ?? NaN);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new DriveServiceError(
+      "file_too_large",
+      `Drive file size ${contentLength} exceeds limit ${maxBytes}`,
+    );
+  }
+
+  const arrayBuf = await res.arrayBuffer();
+  const buffer = Buffer.from(arrayBuf);
+  if (buffer.length > maxBytes) {
+    throw new DriveServiceError(
+      "file_too_large",
+      `Downloaded file size ${buffer.length} exceeds limit ${maxBytes}`,
+    );
+  }
+
+  const mimeType = meta.mimeType || String(res.headers.get("content-type") || "application/octet-stream");
+  return { buffer, mimeType };
+}
+
+/**
+ * Exports a Google Workspace file (Docs/Sheets/Slides/Drawing) to PDF.
+ * Uses the Drive export API: GET /files/{id}/export?mimeType=application/pdf
+ *
+ * SECURITY: content bytes are NEVER logged. Token is never logged.
+ *
+ * @param maxBytes  Hard cap on response size.
+ */
+export async function exportDriveWorkspaceFile(
+  connection: DriveConnectionRow,
+  fileId: string,
+  exportMimeType: string,
+  maxBytes: number,
+): Promise<{ buffer: Buffer; mimeType: string }> {
+  const accessToken = await getDriveAccessToken(connection);
+
+  const params = new URLSearchParams({ mimeType: exportMimeType });
+  const res = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/export?${params}`,
+    { headers: { authorization: `Bearer ${accessToken}` } },
+  );
+
+  if (res.status === 404) {
+    throw new DriveServiceError("file_not_found", `Drive file ${fileId} not found for export`);
+  }
+  if (!res.ok) {
+    const err: any = await res.json().catch(() => ({}));
+    throw new DriveServiceError(
+      "drive_export_failed",
+      `Drive export failed: ${res.status} ${err?.error?.message || "unknown"}`,
+    );
+  }
+
+  const arrayBuf = await res.arrayBuffer();
+  const buffer = Buffer.from(arrayBuf);
+  if (buffer.length > maxBytes) {
+    throw new DriveServiceError(
+      "file_too_large",
+      `Exported file size ${buffer.length} exceeds limit ${maxBytes}`,
+    );
+  }
+
+  return { buffer, mimeType: exportMimeType };
+}
+
 // ── Error type ───────────────────────────────────────────────────────────────
 
 export class DriveServiceError extends Error {
