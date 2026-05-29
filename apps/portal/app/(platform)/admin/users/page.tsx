@@ -461,6 +461,7 @@ function CrmAccessModal({ user, onClose }: { user: AdminUser; onClose: () => voi
 
   async function save() {
     if (!data) return;
+    const wasEnabled = crmEnabled;
     setSaving(true);
     setToast(null);
     try {
@@ -469,8 +470,8 @@ function CrmAccessModal({ user, onClose }: { user: AdminUser; onClose: () => voi
         role: crmRole,
         campaignIds: crmEnabled ? [...selectedCampaignIds] : [],
       });
-      setToast({ kind: "ok", text: crmEnabled ? "CRM access saved" : "CRM access removed" });
       await load();
+      setToast({ kind: "ok", text: wasEnabled ? "CRM access saved" : "CRM access removed" });
     } catch (e: any) {
       setToast({ kind: "err", text: e?.message || "Failed to save CRM access" });
     } finally {
