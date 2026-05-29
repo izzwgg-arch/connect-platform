@@ -52,7 +52,8 @@ model CrmEmailConnection {
   /// Admin who manages a TENANT shared sender. Nullable for USER rows.
   managedBy User?  @relation("CrmEmailConnection_managedBy", fields: [managedByUserId], references: [id], onDelete: SetNull)
 
-  bulkJobs CrmBulkEmailJob[]
+  bulkJobs     CrmBulkEmailJob[]
+  driveFolders CrmDriveFolder[]
 
   // Note: partial unique indexes (USER per tenant+user+provider, single TENANT default per
   // tenant+provider, single TENANT row per tenant+email+provider) are created via raw SQL
@@ -607,6 +608,7 @@ model Tenant {
   outboundRoutes                  OutboundRoute[]
   userOutboundRoutePermissions    UserOutboundRoutePermission[]
   mohAssets                       MohAsset[]
+  crmVoicemailDrops               CrmVoicemailDrop[]
   pbxMohClasses                   PbxMohClass[]
   pbxCallEvents                   PbxCallEvent[]
   smsLiveEnabledByUser            User?                             @relation("TenantSmsLiveEnabledBy", fields: [smsLiveEnabledByUserId], references: [id], onDelete: SetNull)
@@ -637,6 +639,8 @@ model Tenant {
   crmEmailSendLogs                CrmEmailSendLog[]
   crmEmailTemplates               CrmEmailTemplate[]
   crmBulkEmailJobs                CrmBulkEmailJob[]
+  crmDriveFolders                 CrmDriveFolder[]
+  crmLeadDocuments                CrmLeadDocument[]
   customRoles                     CustomRole[]
   userCustomRoles                 UserCustomRole[]
   whatsAppAccounts                WhatsAppAccount[]
@@ -711,6 +715,7 @@ model User {
   crmTasksCreated                CrmContactTask[]                  @relation("CrmTaskCreatedBy")
   crmImportBatches               CrmImportBatch[]
   crmScriptsCreated              CrmScript[]                       @relation("CrmScriptCreatedBy")
+  crmVoicemailDropsCreated       CrmVoicemailDrop[]                @relation("CrmVoicemailDropCreatedBy")
   crmChecklistsCreated           CrmChecklist[]                    @relation("CrmChecklistCreatedBy")
   crmChecklistResponses          CrmChecklistResponse[]            @relation("CrmChecklistResponseCompletedBy")
   crmCampaignsCreated            CrmCampaign[]                     @relation("CrmCampaignCreatedBy")
@@ -3710,6 +3715,7 @@ enum CrmTimelineEventType {
   EMAIL_SENT
   EMAIL_RECEIVED
   EMAIL_REPLY
+  VOICEMAIL_DROP
 }
 
 /// Immutable audit-style record of CRM activity for a contact.
@@ -3861,6 +3867,49 @@ model CrmScript {
   @@index([tenantId, isActive, createdAt])
 }
 
+enum CrmVoicemailDropStatus {
+  READY
+  PROCESSING
+  FAILED
+  ARCHIVED
+}
+
+/// Tenant-scoped pre-recorded voicemail audio that agents can drop into an active outbound call.
+model CrmVoicemailDrop {
+  id                 String                 @id @default(cuid())
+  tenantId           String
+  createdByUserId    String
+  name               String
+  description        String?
+  campaignId         String?
+  isDefault          Boolean                @default(false)
+  status             CrmVoicemailDropStatus @default(PROCESSING)
+  durationSeconds    Int?
+  originalFileName   String?
+  originalMimeType   String?
+  originalStorageKey String?
+  pbxStorageKey      String?
+  pbxFileBaseName    String?
+  pbxFormat          String?
+  contentHash        String?
+  sizeBytes          Int?
+  conversionStatus   String                 @default("pending")
+  conversionError    String?
+  usageCount         Int                    @default(0)
+  lastUsedAt         DateTime?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User         @relation("CrmVoicemailDropCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  campaign  CrmCampaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status, updatedAt])
+  @@index([tenantId, isDefault])
+  @@index([tenantId, campaignId])
+  @@index([tenantId, createdAt])
+}
+
 /// Call checklist template — a named list of required/optional items.
 /// Agents fill in a CrmChecklistResponse per call/contact.
 model CrmChecklist {
@@ -3937,6 +3986,7 @@ model CrmCampaign {
   createdBy  User                        @relation("CrmCampaignCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
   script     CrmScript?                  @relation(fields: [scriptId], references: [id], onDelete: SetNull)
   checklist  CrmChecklist?               @relation(fields: [checklistId], references: [id], onDelete: SetNull)
+  voicemailDrops CrmVoicemailDrop[]
   members    CrmCampaignMember[]
   userAccess CrmUserCampaignAssignment[]
 
@@ -4289,4 +4339,79 @@ model CrmBulkEmailRecipient {
 
   @@index([jobId, status])
   @@index([tenantId, jobId])
+}
+
+// ─── CRM Drive Foundation (Phase 1) ─────────────────────────────────────────
+// Google Drive integration — folder selection + lead document model foundation.
+// Phase 1: auth, folder config, file listing, metadata only.
+// Phase 2+: OCR, AI summaries, download, auto-matching (NOT in this phase).
+
+enum CrmDriveFolderPurpose {
+  LEAD_IMPORT_INBOX
+}
+
+enum CrmLeadDocumentSource {
+  GOOGLE_DRIVE
+  MANUAL_UPLOAD
+}
+
+enum CrmLeadDocumentStatus {
+  DISCOVERED
+  IMPORT_PENDING
+  IMPORTED
+  FAILED
+}
+
+/// Tenant-scoped Google Drive folder configuration.
+/// Each row links a tenant to a specific Drive folder for a given purpose.
+/// The googleConnection (CrmEmailConnection) must have the Drive readonly scope.
+/// Unique per (tenantId, purpose) — one active folder per purpose per tenant.
+model CrmDriveFolder {
+  id                 String                 @id @default(cuid())
+  tenantId           String
+  googleConnectionId String
+  folderId           String
+  folderName         String
+  purpose            CrmDriveFolderPurpose  @default(LEAD_IMPORT_INBOX)
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  googleConnection CrmEmailConnection @relation(fields: [googleConnectionId], references: [id], onDelete: Cascade)
+
+  // Partial unique enforced by migration SQL: one folder per (tenantId, purpose)
+  @@unique([tenantId, purpose])
+  @@index([tenantId])
+  @@index([googleConnectionId])
+}
+
+/// Lead document reference — foundation model for future OCR / import pipeline.
+/// Phase 1: inert data model. No worker consumer. No download. No OCR.
+/// leadId is nullable because the lead import pipeline is not yet built.
+model CrmLeadDocument {
+  id                  String                 @id @default(cuid())
+  tenantId            String
+  /// FK to a future CRM lead/contact row. Nullable until lead import ships.
+  leadId              String?
+  source              CrmLeadDocumentSource  @default(GOOGLE_DRIVE)
+  /// Google Drive file ID (when source=GOOGLE_DRIVE).
+  googleDriveFileId   String?
+  /// Google Drive folder ID from which this file was discovered.
+  googleDriveFolderId String?
+  originalFileName    String
+  mimeType            String?
+  sizeBytes           BigInt?
+  contentHash         String?
+  /// Storage key for a future local copy (Phase 2+).
+  storageKey          String?
+  status              CrmLeadDocumentStatus  @default(DISCOVERED)
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+  @@index([tenantId, leadId])
+  @@index([tenantId, googleDriveFolderId])
+  // Partial unique on (tenantId, googleDriveFileId) enforced in migration SQL (WHERE NOT NULL)
 }

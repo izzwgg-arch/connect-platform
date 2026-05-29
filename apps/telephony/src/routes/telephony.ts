@@ -5,6 +5,7 @@ import type { TelephonyModule } from "../telephony";
 import { normalizeCallForClient } from "../telephony/normalizers/normalizeCallEvent";
 import { normalizeExtensionForClient } from "../telephony/normalizers/normalizeExtensionEvent";
 import { normalizeQueueForClient } from "../telephony/normalizers/normalizeQueueEvent";
+import { selectPlaybackChannelName } from "./telephonyPlaybackHelpers";
 
 export function registerTelephonyRoutes(
   router: Router,
@@ -244,6 +245,85 @@ export function registerTelephonyRoutes(
       answeredAt: call.answeredAt,
       channels: [...call.channels],
     });
+  });
+
+  router.post("/telephony/internal/calls/play-prompt", async (req: Request, res: Response) => {
+    if (!isInternalRouteAuthorized(req)) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const { linkedId, tenantId, fileBaseName, targetLeg } = req.body as {
+      linkedId?: unknown;
+      tenantId?: unknown;
+      fileBaseName?: unknown;
+      targetLeg?: unknown;
+    };
+    const callId = typeof linkedId === "string" ? linkedId.trim() : "";
+    const requestedTenantId = typeof tenantId === "string" ? tenantId.trim() : "";
+    const baseName = typeof fileBaseName === "string" ? fileBaseName.trim() : "";
+    const leg = targetLeg === "agent" ? "agent" : "external";
+
+    if (!callId) {
+      res.status(400).json({ error: "linkedId_required" });
+      return;
+    }
+    if (!requestedTenantId) {
+      res.status(400).json({ error: "tenantId_required" });
+      return;
+    }
+    if (!/^[a-zA-Z0-9_-]{1,160}$/.test(baseName)) {
+      res.status(400).json({ error: "invalid_file_base_name" });
+      return;
+    }
+
+    const call = telephony.callStore.getById(callId);
+    if (!call || call.state === "hungup") {
+      res.status(404).json({ error: "no_active_call" });
+      return;
+    }
+    if (call.tenantId !== requestedTenantId) {
+      res.status(403).json({ error: "tenant_mismatch" });
+      return;
+    }
+    if (!telephony.callStore.getActive().some((active) => active.id === call.id)) {
+      res.status(409).json({ error: "call_not_bridged" });
+      return;
+    }
+    if (!telephony.ari._isConnected) {
+      res.status(503).json({ error: "ari_not_connected" });
+      return;
+    }
+
+    try {
+      const ariChannels = await telephony.ariActions.getChannels();
+      const targetName = selectPlaybackChannelName(call.channels, leg);
+      if (!targetName) {
+        res.status(409).json({ error: "no_playable_channel" });
+        return;
+      }
+      const target = ariChannels.find((channel) => channel.name === targetName || channel.name.startsWith(`${targetName};`));
+      if (!target?.id) {
+        res.status(409).json({ error: "ari_channel_not_found", channel: targetName });
+        return;
+      }
+      const playbackId = `crm-vm-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const playback = await telephony.ariActions.playSoundOnChannel(
+        target.id,
+        `sound:custom/${baseName}`,
+        playbackId,
+      );
+      res.json({
+        ok: true,
+        linkedId: call.id,
+        channelId: target.id,
+        channelName: target.name,
+        playbackId: playback?.id || playbackId,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(503).json({ error: "pbx_playback_failed", detail: msg });
+    }
   });
 
   router.delete(

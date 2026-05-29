@@ -95,6 +95,7 @@ export const navItems: NavItem[] = [
   { id: "crm.live_call", href: "/crm/live-call", label: "Live Call Workspace", icon: "CL", lucide: PhoneCall, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_live_call" },
   { id: "crm.tasks", href: "/crm/tasks", label: "Tasks", icon: "CT", lucide: CheckSquare, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_tasks" },
   { id: "crm.scripts", href: "/crm/scripts", label: "Scripts", icon: "CS", lucide: FileText, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_scripts" },
+  { id: "crm.voicemail_drops", href: "/crm/voicemail-drops", label: "Voicemail Drops", icon: "VM", lucide: Voicemail, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_voicemail_drops" },
   { id: "crm.checklists", href: "/crm/checklists", label: "Checklists", icon: "CC", lucide: ClipboardList, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_checklists" },
   { id: "crm.reports", href: "/crm/reports", label: "Reports", icon: "CR", lucide: BarChart3, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_reports" },
   { id: "crm.wallboard", href: "/crm/wallboard", label: "Live Wallboard", icon: "CW", lucide: LayoutGrid, section: "crm", sectionPermission: "can_view_section_crm", permission: "can_view_crm_reports" },

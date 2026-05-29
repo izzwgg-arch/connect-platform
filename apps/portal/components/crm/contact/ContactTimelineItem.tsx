@@ -17,6 +17,7 @@ import {
   User,
   UserPlus,
   ClipboardList,
+  Voicemail,
 } from "lucide-react";
 import { CrmRecordingPlayer } from "../../CrmRecordingPlayer";
 import { cn } from "../cn";
@@ -55,6 +56,8 @@ function TimelineIcon({ type }: { type: string }) {
     return <Mail className={cn(wrap, "text-emerald-400")} size={sz} />;
   if (type === "EMAIL_RECEIVED" || type === "EMAIL_REPLY")
     return <Mail className={cn(wrap, "text-sky-400")} size={sz} />;
+  if (type === "VOICEMAIL_DROP")
+    return <Voicemail className={cn(wrap, "text-violet-400")} size={sz} />;
   return <Clock className={cn(wrap, "text-crm-muted")} size={sz} />;
 }
 
@@ -62,6 +65,7 @@ function eventTypeChip(type: string): string | null {
   if (type.startsWith("CDR_")) return "Call";
   if (type.startsWith("SMS_")) return "SMS";
   if (type.startsWith("EMAIL_")) return "Email";
+  if (type === "VOICEMAIL_DROP") return "Voicemail Dropped";
   if (type.startsWith("NOTE_")) return "Note";
   if (type.startsWith("TASK_")) return "Task";
   if (type === "STAGE_CHANGED") return "Pipeline";
@@ -91,7 +95,8 @@ export function ContactTimelineItem({
     event.type === "CDR_INBOUND" ||
     event.type === "CDR_OUTBOUND" ||
     event.type === "SMS_SENT" ||
-    event.type === "SMS_RECEIVED";
+    event.type === "SMS_RECEIVED" ||
+    event.type === "VOICEMAIL_DROP";
 
   return (
     <article
@@ -268,6 +273,19 @@ function EventMeta({ event }: { event: TimelineEvent }) {
         {to ? <span className="text-xs text-crm-muted">→ {to}</span> : null}
         <span className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[0.6875rem] font-semibold text-violet-300">
           inbound
+        </span>
+      </MetaRow>
+    );
+  }
+  if (event.type === "VOICEMAIL_DROP" && event.metadata) {
+    const m = event.metadata as Record<string, unknown>;
+    const duration = typeof m.durationSeconds === "number" ? m.durationSeconds : null;
+    const status = typeof m.status === "string" ? m.status : "Voicemail Dropped";
+    return (
+      <MetaRow>
+        {duration ? <span className="text-xs text-crm-muted">{Math.floor(duration / 60)}m {duration % 60}s</span> : null}
+        <span className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[0.6875rem] font-semibold text-violet-300">
+          {status}
         </span>
       </MetaRow>
     );

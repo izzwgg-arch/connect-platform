@@ -17,6 +17,7 @@ import { encryptJson } from "@connect/security";
 import { SolaRecurringClient } from "@connect/integrations";
 import { logBillingEvent } from "./invoiceEngine";
 import { resolveSolaRecurringClientConfig, parseSolaCardExpiry, last4FromMaskedCard } from "./solaExternalSchedules";
+import { buildBillingSchedule } from "./billingSchedule";
 
 // ─── Cutover status values (string enum, no Prisma migration needed) ──────────
 export const CUTOVER_STATUS = {
@@ -416,7 +417,7 @@ export type TakeOverBillingInput = {
 };
 
 export type TakeOverBillingResult =
-  | { ok: true; cutoverAt: string; paymentMethodId: string }
+  | { ok: true; cutoverAt: string; paymentMethodId: string; nextConnectChargeAt: string }
   | { ok: false; code: number; error: string; disableError?: string };
 
 /**
@@ -466,7 +467,7 @@ export async function takeOverBillingFromSola(
   // 3. Verify Connect autopay not already enabled (double-charge guard)
   const settings = await (d.db as AnyDb).tenantBillingSettings.findUnique({
     where: { tenantId: input.tenantId },
-    select: { autoBillingEnabled: true },
+    select: { autoBillingEnabled: true, billingDayOfMonth: true, metadata: true },
   });
   if (settings?.autoBillingEnabled) {
     return { ok: false, code: 409, error: "connect_autopay_already_enabled" };
@@ -543,18 +544,59 @@ export async function takeOverBillingFromSola(
     data: { isDefault: true },
   });
 
-  // 6. Enable Connect autopay for tenant (upsert billingSettings)
+  // 6. Enable Connect autopay for tenant (upsert billingSettings).
+  //
+  // CRITICAL: Also set billingScheduleOverride.nextPaymentDate to the NEXT
+  // billing period's payment date. This is a belt-and-suspenders guard that
+  // prevents the worker from charging in the current period that Sola already
+  // covered. Without this, the worker sees autoBillingEnabled=true, finds no
+  // Connect PAID invoice for the current period (Sola's payment is external),
+  // and charges immediately — causing a duplicate charge.
   const connectAutopayEnabledAt = d.now?.() ?? new Date();
+
+  // Compute nextConnectChargeAt = start of the NEXT billing period.
+  // Current period is the one Sola already paid; Connect must skip it.
+  const billingDayOfMonth = Number(settings?.billingDayOfMonth ?? 1) || 1;
+  const currentSchedule = buildBillingSchedule({ now, billingDayOfMonth, metadata: settings?.metadata });
+  // The next period starts at periodEnd + 1ms, and its charge date is the
+  // scheduledChargeAt from that next period's schedule.
+  const nextPeriodSeed = new Date(currentSchedule.periodEnd.getTime() + 60_000); // 1 min into next period
+  const nextSchedule = buildBillingSchedule({ now: nextPeriodSeed, billingDayOfMonth, metadata: settings?.metadata });
+  const nextConnectChargeAt = nextSchedule.scheduledChargeAt;
+
+  // Also store sourceSolaNextChargeDate from the link's nextRunAt for forensics.
+  const sourceSolaNextChargeDate = (link.nextRunAt instanceof Date ? link.nextRunAt : null);
+
+  // Persist nextPaymentDate override in billing settings metadata so the worker
+  // guard (getAndConsumeBillingScheduleOverride) also fires as a second layer.
+  const existingMeta =
+    settings?.metadata && typeof settings.metadata === "object" && !Array.isArray(settings.metadata)
+      ? (settings.metadata as Record<string, unknown>)
+      : {};
+  const updatedMeta = {
+    ...existingMeta,
+    billingScheduleOverride: {
+      ...(existingMeta.billingScheduleOverride && typeof existingMeta.billingScheduleOverride === "object"
+        ? (existingMeta.billingScheduleOverride as Record<string, unknown>)
+        : {}),
+      nextPaymentDate: nextSchedule.paymentDate,
+      _solaTransitionGuard: true,
+      _solaTransitionGuardSetAt: now.toISOString(),
+    },
+  };
+
   await (d.db as AnyDb).tenantBillingSettings.upsert({
     where: { tenantId: input.tenantId },
     create: {
       tenantId: input.tenantId,
       autoBillingEnabled: true,
       defaultPaymentMethodId: pm.id,
+      metadata: updatedMeta,
     },
     update: {
       autoBillingEnabled: true,
       defaultPaymentMethodId: pm.id,
+      metadata: updatedMeta,
     },
   });
 
@@ -570,7 +612,7 @@ export async function takeOverBillingFromSola(
     },
   });
 
-  // 7. Mark schedule link CUTOVER_COMPLETE
+  // 7. Mark schedule link CUTOVER_COMPLETE with nextConnectChargeAt
   const cutoverAt = d.now?.() ?? new Date();
   await (d.db as AnyDb).billingSolaExternalScheduleLink.update({
     where: { id: link.id },
@@ -582,6 +624,9 @@ export async function takeOverBillingFromSola(
       disableAttemptedAt,
       disableError: null,
       connectAutopayEnabledAt,
+      // Guard: Connect must not charge before this date (next period after Sola's last charge)
+      nextConnectChargeAt,
+      sourceSolaNextChargeDate: sourceSolaNextChargeDate ?? null,
     },
   });
 
@@ -594,6 +639,11 @@ export async function takeOverBillingFromSola(
       solaScheduleLinkId: link.id,
       solaScheduleId: link.solaScheduleId,
       paymentMethodId: pm.id,
+      nextConnectChargeAt: nextConnectChargeAt.toISOString(),
+      nextConnectPaymentDate: nextSchedule.paymentDate,
+      sourceSolaNextChargeDate: sourceSolaNextChargeDate?.toISOString() ?? null,
+      solaCurrentPeriodStart: currentSchedule.periodStart.toISOString(),
+      solaCurrentPeriodEnd: currentSchedule.periodEnd.toISOString(),
     },
   });
 
@@ -601,5 +651,6 @@ export async function takeOverBillingFromSola(
     ok: true,
     cutoverAt: cutoverAt.toISOString(),
     paymentMethodId: pm.id,
+    nextConnectChargeAt: nextConnectChargeAt.toISOString(),
   };
 }

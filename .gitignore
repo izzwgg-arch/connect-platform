@@ -48,3 +48,7 @@ ops/snapshots
 
 # local DB repair scratch (do not ship)
 tmp-link-repair-*.sql
+
+# diagnostic/temp folders (do not ship)
+_tmp_diag/
+_tmp_*/

@@ -16,6 +16,9 @@ import {
   Send,
   Settings,
   Sparkles,
+  ShieldCheck,
+  Clock3,
+  WifiOff,
 } from "lucide-react";
 import { CRMPageShell, CRMCard, crm, cn } from "../../../../components/crm";
 import { apiGet } from "../../../../services/apiClient";
@@ -24,7 +27,23 @@ type EmailConnection = {
   connected: boolean;
   emailAddress: string | null;
   displayName: string | null;
+  replyTrackingEnabled?: boolean;
 };
+
+type ReplyTrackingDiag = {
+  trackedThreads: number;
+  inboundReplies: number;
+  outboundMessages: number;
+  legacyThreadsWithNullSender: number;
+  connectionsTotal: number;
+  connectionsEnabled: number;
+  connectionsDisabled: number;
+  connectionsMissingScope: number;
+  lastSyncAt: string | null;
+  autoSyncEnabled: boolean;
+  autoSyncIntervalMs: number;
+};
+
 
 type RecentSent = {
   id: string;
@@ -134,24 +153,79 @@ function KpiCard({
   );
 }
 
+function formatRelative(iso: string | null | undefined): string {
+  if (!iso) return "never";
+  try {
+    const diff = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diff / 60_000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  } catch { return iso; }
+}
+
+function ReplyTrackingHealthBanner({
+  conn,
+  diag,
+  loading,
+}: {
+  conn: EmailConnection | null;
+  diag: ReplyTrackingDiag | null;
+  loading: boolean;
+}) {
+  if (loading || !conn?.connected) return null;
+
+  // Show warning when no connection has reply tracking enabled
+  const noTracking = diag !== null && diag.connectionsEnabled === 0;
+  const missingScope = diag !== null && diag.connectionsMissingScope > 0;
+
+  if (!noTracking && !missingScope) return null;
+
+  return (
+    <div className="flex flex-wrap items-start gap-3 rounded-crm-lg border border-crm-warning/40 bg-crm-warning/10 px-4 py-3">
+      <WifiOff className="mt-0.5 h-4 w-4 shrink-0 text-crm-warning" />
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold text-crm-text">Reply tracking not active</p>
+        <p className="mt-0.5 text-xs text-crm-muted">
+          {missingScope
+            ? `${diag!.connectionsMissingScope} sender${diag!.connectionsMissingScope !== 1 ? "s" : ""} need${diag!.connectionsMissingScope === 1 ? "s" : ""} to be reconnected to grant the gmail.readonly scope. `
+            : ""}
+          {noTracking && !missingScope
+            ? "Reply tracking is disabled on all connected senders. "
+            : ""}
+          Replies will not be synced until reply tracking is enabled.
+        </p>
+      </div>
+      <Link href="/crm/email/settings" className={cn(crm.btnPrimary, "shrink-0 text-xs")}>
+        <Settings className="h-3.5 w-3.5" /> Fix in Settings
+      </Link>
+    </div>
+  );
+}
+
 export default function CrmEmailLandingPage() {
   const [conn, setConn] = useState<EmailConnection | null>(null);
   const [recent, setRecent] = useState<RecentSent[]>([]);
   const [replies, setReplies] = useState<RecentReply[]>([]);
+  const [diag, setDiag] = useState<ReplyTrackingDiag | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMoreSent, setLoadingMoreSent] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [c, r, rr] = await Promise.all([
+      const [c, r, rr, d] = await Promise.all([
         apiGet<EmailConnection>("/crm/email/connection").catch(() => null),
         apiGet<{ sent: RecentSent[] }>("/crm/email/recent?limit=10").catch(() => ({ sent: [] })),
         apiGet<{ replies: RecentReply[] }>("/crm/email/replies/recent?limit=5").catch(() => ({ replies: [] })),
+        apiGet<ReplyTrackingDiag>("/crm/email/diagnostics/reply-tracking").catch(() => null),
       ]);
       setConn(c);
       setRecent(r?.sent ?? []);
       setReplies(rr?.replies ?? []);
+      setDiag(d);
     } finally {
       setLoading(false);
     }
@@ -210,6 +284,8 @@ export default function CrmEmailLandingPage() {
         </div>
       </section>
 
+      <ReplyTrackingHealthBanner conn={conn} diag={diag} loading={loading} />
+
       <CRMCard padding="none" className={cn(crm.emailPanel, "crm-email-sender-card")}>
         <div className="crm-email-card-glow" />
         <div className="relative z-[1] grid min-h-[10.75rem] gap-0 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.36fr)]">
@@ -258,6 +334,31 @@ export default function CrmEmailLandingPage() {
                 <p className="mt-1 text-lg font-bold tabular-nums text-crm-text">{loading ? "..." : sentCount}</p>
               </div>
             </div>
+            {diag && (
+              <div className="flex flex-wrap items-center gap-2 border-t border-crm-border/50 pt-3">
+                <span className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide",
+                  diag.connectionsEnabled > 0
+                    ? "border-crm-success/30 bg-crm-success/10 text-crm-success"
+                    : "border-crm-warning/30 bg-crm-warning/10 text-crm-warning",
+                )}>
+                  <ShieldCheck className="h-3 w-3" />
+                  {diag.connectionsEnabled > 0 ? "Reply tracking active" : "Reply tracking off"}
+                </span>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-crm-border/65 bg-crm-surface-2/45 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">
+                  <Clock3 className="h-3 w-3 text-crm-accent" />
+                  Last sync <span className="font-mono text-crm-text">{formatRelative(diag.lastSyncAt)}</span>
+                </span>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-crm-border/65 bg-crm-surface-2/45 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">
+                  <span className="text-crm-muted">tracked</span>
+                  <span className="font-mono text-crm-text">{diag.trackedThreads}</span>
+                </span>
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-crm-border/65 bg-crm-surface-2/45 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">
+                  <span className="text-crm-muted">replies</span>
+                  <span className="font-mono text-crm-text">{diag.inboundReplies}</span>
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="crm-email-sender-aside flex min-w-0 flex-col justify-between gap-4 p-4 sm:p-5">

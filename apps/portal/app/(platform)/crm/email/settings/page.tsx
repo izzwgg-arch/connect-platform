@@ -41,6 +41,7 @@ type Sender = {
   replyTrackingEnabled?: boolean;
   lastSyncAt?: string | null;
   lastError?: string | null;
+  scopes?: string[];
 };
 
 type ConnectionsResp = { senders: Sender[]; canManageTenantSenders: boolean; autoSyncEnabled?: boolean; autoSyncIntervalMs?: number };
@@ -52,6 +53,43 @@ function isConnected(s: Sender): boolean {
 function formatWhen(iso?: string | null): string {
   if (!iso) return "Never";
   try { return new Date(iso).toLocaleString(); } catch { return iso; }
+}
+
+const GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
+
+function hasReadonlyScope(scopes?: string[]): boolean {
+  return Array.isArray(scopes) && scopes.includes(GMAIL_READONLY_SCOPE);
+}
+
+/** Returns "healthy" | "no_scope" | "disabled" | "off" mirroring the API helper. */
+function replyTrackingState(s: Sender): "healthy" | "no_scope" | "disabled" | "off" {
+  if (!isConnected(s)) return "off";
+  const scope = hasReadonlyScope(s.scopes);
+  if (s.replyTrackingEnabled && scope) return "healthy";
+  if (!scope) return "no_scope";
+  return "disabled";
+}
+
+function ReplyTrackingStatePill({ state }: { state: "healthy" | "no_scope" | "disabled" | "off" }) {
+  if (state === "healthy")
+    return (
+      <span className={cn(crm.chip, "text-[10px] border-crm-success/35 bg-crm-success/10 text-crm-success")}>
+        <ShieldCheck className="h-3 w-3" /> Reply tracking active
+      </span>
+    );
+  if (state === "no_scope")
+    return (
+      <span className={cn(crm.chip, "text-[10px] border-crm-danger/35 bg-crm-danger/10 text-crm-danger")}>
+        <AlertCircle className="h-3 w-3" /> Reconnect required
+      </span>
+    );
+  if (state === "disabled")
+    return (
+      <span className={cn(crm.chip, "text-[10px] border-crm-warning/35 bg-crm-warning/10 text-crm-warning")}>
+        <AlertCircle className="h-3 w-3" /> Reply tracking off
+      </span>
+    );
+  return null;
 }
 
 function ConnectionBadge({ connected, busy }: { connected: boolean; busy?: boolean }) {
@@ -531,8 +569,9 @@ function SenderRow({
   }, [connected, loadDiag]);
 
   const diagErrors = diag?.errors ?? 0;
-  const syncHealthy = connected && sender.replyTrackingEnabled && diagErrors === 0;
-  const syncTone = !connected ? "danger" : !sender.replyTrackingEnabled ? "warning" : diagErrors > 0 ? "danger" : "success";
+  const rtState = replyTrackingState(sender);
+  const syncHealthy = connected && rtState === "healthy" && diagErrors === 0;
+  const syncTone = !connected ? "danger" : rtState !== "healthy" ? "warning" : diagErrors > 0 ? "danger" : "success";
   const lastActivity = diagAt || sender.lastSyncAt || null;
 
   return (
@@ -575,11 +614,7 @@ function SenderRow({
           )}
           {!editing && (
             <div className="ml-11 mt-2 flex flex-wrap gap-1.5">
-              <InfraStatPill
-                label="reply"
-                value={sender.replyTrackingEnabled ? "on" : "off"}
-                tone={sender.replyTrackingEnabled ? "success" : "warning"}
-              />
+              <ReplyTrackingStatePill state={rtState} />
               <InfraStatPill
                 label="sync"
                 value={syncHealthy ? "healthy" : connected ? "watch" : "down"}
@@ -603,9 +638,28 @@ function SenderRow({
                 Test
               </button>
             )}
-            {sender.canManage && connected && !sender.replyTrackingEnabled && (
-              <button type="button" className={cn(crm.btnGhost, "text-xs")} onClick={() => onEnableReplyTracking(sender)} disabled={busy} title="Enable reply tracking (re-consent)">
-                <Lock className="h-3.5 w-3.5" /> Enable Reply Tracking
+            {sender.canManage && connected && rtState === "no_scope" && (
+              <button
+                type="button"
+                className={cn(crm.btnGhost, "text-xs border-crm-danger/35 text-crm-danger")}
+                onClick={() => onEnableReplyTracking(sender)}
+                disabled={busy}
+                title="gmail.readonly scope not granted — reconnect to add reply tracking"
+              >
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <AlertCircle className="h-3.5 w-3.5" />}
+                Reconnect for reply tracking
+              </button>
+            )}
+            {sender.canManage && connected && rtState === "disabled" && (
+              <button
+                type="button"
+                className={cn(crm.btnGhost, "text-xs")}
+                onClick={() => onEnableReplyTracking(sender)}
+                disabled={busy}
+                title="Enable reply tracking (scope already granted — re-consent to confirm)"
+              >
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lock className="h-3.5 w-3.5" />}
+                Enable reply tracking
               </button>
             )}
             {sender.canManage && !isUser && connected && !sender.isDefaultForTenant && isAdmin && (
@@ -629,6 +683,22 @@ function SenderRow({
 
       {connected && (
         <div className={cn(crm.opInset, "mt-3 px-3 py-2.5")}>
+          {rtState === "no_scope" && (
+            <div className="mb-2.5 flex items-start gap-2 rounded-crm border border-crm-danger/35 bg-crm-danger/10 px-3 py-2 text-xs text-crm-danger">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <div>
+                <strong>Reconnect required.</strong> The <code>gmail.readonly</code> permission was not granted when this account was connected. Reply sync is disabled. Click <strong>Reconnect for reply tracking</strong> above to grant the scope.
+              </div>
+            </div>
+          )}
+          {rtState === "disabled" && (
+            <div className="mb-2.5 flex items-start gap-2 rounded-crm border border-crm-warning/35 bg-crm-warning/10 px-3 py-2 text-xs text-crm-warning">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <div>
+                Reply tracking is off for this sender. The <code>gmail.readonly</code> scope was granted — click <strong>Enable reply tracking</strong> above to activate it.
+              </div>
+            </div>
+          )}
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-crm-muted">
               <ShieldCheck className="h-3.5 w-3.5 text-crm-accent" />

@@ -5,7 +5,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft, Phone, Mail, Clock, User, MessageSquareDot, Trash2,
   Circle, Plus, CheckCheck, GitMerge, AlertTriangle, Calendar,
-  ChevronRight, Sparkles, Star, MoreVertical, MessageCircle, NotebookPen,
+  ChevronRight, Sparkles, Star, MoreVertical, Voicemail, NotebookPen,
   FileText, Files, ListTodo, ClipboardCheck, Activity,
 } from "lucide-react";
 import {
@@ -34,10 +34,12 @@ import {
 } from "../../../../../components/crm";
 import { DISPOSITION_OPTIONS, type Checklist, type ScriptSummary } from "../../../../../components/crm/live";
 import { CrmEmailComposeDrawer } from "../../../../../components/crm/email/CrmEmailComposeDrawer";
+import { CrmVoicemailDropDrawer } from "../../../../../components/crm/voicemail-drops/CrmVoicemailDropDrawer";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { apiGet, apiPatch, apiPost, apiDelete } from "../../../../../services/apiClient";
 import { useAppContext } from "../../../../../hooks/useAppContext";
 import { useSipPhone } from "../../../../../hooks/useSipPhone";
+import { useTelephony } from "../../../../../contexts/TelephonyContext";
 import type { QueueMember } from "../../../../../components/crm/queue/queueTypes";
 
 // ── Shared form styles (edit panels) ─────────────────────────────────────────
@@ -146,6 +148,9 @@ function CommandButton({
   );
 }
 
+function phoneDigits(value: string | null | undefined): string {
+  return String(value || "").replace(/\D/g, "");
+}
 
 export default function CrmContactDetailPage() {
   return (
@@ -165,6 +170,7 @@ function CrmContactDetailInner() {
   const searchParams = useSearchParams();
   const { backendJwtRole, user: appUser } = useAppContext();
   const phone = useSipPhone();
+  const telephony = useTelephony();
   const sipReady = phone.regState === "registered";
 
   const returnTo = searchParams.get("returnTo");
@@ -188,6 +194,7 @@ function CrmContactDetailInner() {
 
   // Compose email state
   const [composeOpen, setComposeOpen] = useState(false);
+  const [voicemailDropOpen, setVoicemailDropOpen] = useState(false);
 
   // Edit state
   const [editing, setEditing] = useState(false);
@@ -828,6 +835,12 @@ function CrmContactDetailInner() {
   };
 
   const primaryPhone = primaryPhoneRow?.numberRaw ?? null;
+  const contactPhoneDigits = contact.phones.map((p) => phoneDigits(p.numberRaw)).filter(Boolean);
+  const activeContactCall = telephony.activeCalls.find((call) => {
+    if (call.state !== "up" && call.state !== "held") return false;
+    const candidates = [call.to, call.from, call.connectedLine].map(phoneDigits).filter(Boolean);
+    return contactPhoneDigits.some((digits) => candidates.some((candidate) => candidate.endsWith(digits) || digits.endsWith(candidate)));
+  }) ?? null;
   const sipNotice = sipReady || !primaryPhone
     ? null
     : (phone.regState === "connecting" || phone.regState === "registering")
@@ -1149,8 +1162,7 @@ function CrmContactDetailInner() {
                 <CommandButton icon={<Phone className="h-4 w-4" />} label="Call" onClick={() => void handleCall()} disabled={!primaryPhone || isArchived} active />
                 <CommandButton icon={<MessageSquareDot className="h-4 w-4" />} label="SMS" onClick={() => focusWorkspace("sms")} disabled={contact.doNotSms || contact.phones.length === 0 || isArchived} />
                 <CommandButton icon={<Mail className="h-4 w-4" />} label="Email" onClick={() => focusWorkspace("email")} disabled={!primaryEmailRow || isArchived} />
-                <CommandButton icon={<MessageCircle className="h-4 w-4" />} label="WhatsApp" disabled title="WhatsApp is not wired for this workspace yet" />
-                <CommandButton icon={<ListTodo className="h-4 w-4" />} label="Task" onClick={() => { setWorkspaceTab("tasks"); setAddingTask(true); setTimeout(scrollToTasks, 50); }} disabled={isArchived} />
+                <CommandButton icon={<Voicemail className="h-4 w-4" />} label="Drop Voicemail" onClick={() => setVoicemailDropOpen(true)} disabled={isArchived || contact.doNotCall || contact.phones.length === 0} title={!activeContactCall ? "Start or select an active outbound call first" : undefined} />
               </div>
               <div className="flex items-center gap-2">
                 {sipNotice ? <span className="text-xs font-medium text-crm-warning">{sipNotice}</span> : null}
@@ -2042,6 +2054,16 @@ function CrmContactDetailInner() {
           email: (contact.emails.find((e) => e.isPrimary) ?? contact.emails[0])?.email ?? null,
         }}
         onSent={() => { void loadTimeline(); }}
+      />
+    ) : null}
+    {contact ? (
+      <CrmVoicemailDropDrawer
+        open={voicemailDropOpen}
+        onClose={() => setVoicemailDropOpen(false)}
+        contactId={contact.id}
+        contactName={contact.displayName}
+        activeCallId={activeContactCall?.linkedId ?? activeContactCall?.id ?? null}
+        onDropped={() => { void loadTimeline(); }}
       />
     ) : null}
     </>

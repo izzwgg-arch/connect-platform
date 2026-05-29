@@ -790,6 +790,67 @@ Key fields: `status` (`CrmImportBatchStatus`: `PENDING | PROCESSING | DONE | PAR
 
 ---
 
+---
+
+## CRM Drive Foundation (Phase 1)
+
+Added in migration `20260608000000_crm_drive_foundation`. All additive — no existing models modified.
+
+### `CrmDriveFolder`
+- **Schema:** end of `packages/db/prisma/schema.prisma` (CRM Drive section)
+- **Purpose:** Tenant-scoped Google Drive folder configuration. Stores which Drive folder to use for lead document discovery per purpose (e.g. `LEAD_IMPORT_INBOX`).
+- **Tenant-scoped?** Yes — `tenantId` FK (CASCADE) + `@@unique([tenantId, purpose])` prevents cross-tenant collision and duplicate folder configs per purpose.
+- **High-risk?** No — config only; no telephony coupling; no immediate data transfer.
+- **Modified by:** `apps/api/src/crm/driveRoutes.ts` via `POST /crm/drive/folder-config`.
+
+Key fields:
+- `googleConnectionId`: FK → `CrmEmailConnection.id` (CASCADE). The connection must have the `drive.readonly` scope in its `scopes[]` array.
+- `folderId`: Google Drive folder ID (opaque string from Drive API).
+- `folderName`: Human-readable folder name stored at config time.
+- `purpose`: `CrmDriveFolderPurpose` enum — `LEAD_IMPORT_INBOX` only in Phase 1.
+- Unique: `(tenantId, purpose)` — one folder config per purpose per tenant.
+
+**Security rules:**
+- A tenant can only save a folder config using a `CrmEmailConnection` that belongs to their tenant (`loadConnectionForTenant` enforces `WHERE id=? AND tenantId=?`).
+- Tenant A cannot read or write Tenant B's `CrmDriveFolder` rows.
+
+---
+
+### `CrmLeadDocument`
+- **Schema:** end of `packages/db/prisma/schema.prisma` (CRM Drive section)
+- **Purpose:** Foundation model for per-lead document references. **Phase 1 is inert** — no worker consumer, no download, no OCR. The model exists so the document pipeline can be built incrementally.
+- **Tenant-scoped?** Yes — `tenantId` FK (CASCADE).
+- **High-risk?** No.
+- **Modified by:** No active writer in Phase 1. Ready for Phase 2 worker.
+
+Key fields:
+- `leadId String?` — nullable FK to a future lead/contact row. Not linked yet because the lead import pipeline is not built.
+- `source`: `CrmLeadDocumentSource` enum — `GOOGLE_DRIVE | MANUAL_UPLOAD`.
+- `googleDriveFileId String?` — Drive file ID; partial unique index prevents duplicate rows per tenant.
+- `googleDriveFolderId String?` — which folder this file came from.
+- `originalFileName`, `mimeType`, `sizeBytes` — metadata from Drive API.
+- `contentHash String?` — for deduplication (Phase 2).
+- `storageKey String?` — path in Connect storage after download (Phase 2+).
+- `status`: `CrmLeadDocumentStatus` enum — `DISCOVERED | IMPORT_PENDING | IMPORTED | FAILED`.
+
+**Note:** Google Drive file content is **never** fetched or stored in Phase 1. Only metadata (name, size, mimeType, modifiedTime) is available.
+
+---
+
+### New enums (Phase 1)
+- `CrmDriveFolderPurpose`: `LEAD_IMPORT_INBOX`
+- `CrmLeadDocumentSource`: `GOOGLE_DRIVE | MANUAL_UPLOAD`
+- `CrmLeadDocumentStatus`: `DISCOVERED | IMPORT_PENDING | IMPORTED | FAILED`
+
+---
+
+### Drive scope choice
+Google Drive scope used: `https://www.googleapis.com/auth/drive.readonly`.
+Narrower `drive.metadata.readonly` does not support `files.list` with folder traversal.
+`drive.readonly` is the narrowest scope covering: listing folders, listing files by folder, and reading file metadata without file content. Using `drive.readonly` now avoids a second incremental re-auth when file download capability ships in Phase 2.
+
+---
+
 ## What is NOT in this cheat sheet (intentional)
 
 To keep this file short and useful, the following lower-traffic models are

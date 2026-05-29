@@ -54,6 +54,11 @@ export class AriActions {
     return this.ari.rest<AriChannel>("POST", "/ari/channels", body);
   }
 
+  async playSoundOnChannel(channelId: string, media: string, playbackId?: string): Promise<{ id?: string } | void> {
+    log.info({ channelId, media, playbackId }, "ARI play sound on channel");
+    return this.ari.playSoundOnChannel(channelId, media, playbackId);
+  }
+
   // ── Placeholders requiring PBX-side dialplan / channel-var configuration ───
 
   // TODO: Implement snoop channel for whisper/barge. Requires the snoopChannel

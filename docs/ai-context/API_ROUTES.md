@@ -723,6 +723,46 @@ DB models: `CrmEmailConnection`, `CrmEmailThread`, `CrmEmailMessage`, `CrmEmailS
 
 **Guard errors:** `crm_not_enabled` (403), `crm_user_not_enabled` (403), `crm_permission_denied` (403), `contact_not_in_crm` (400 for disposition on non-enrolled contact).
 
+### CRM Drive Integration (Phase 1)
+
+Registered via `registerCrmDriveRoutes(app)` in `apps/api/src/crm/driveRoutes.ts`.
+**Auth:** JWT (any authenticated user — no separate CRM admin gate for status/folders; folder config write uses connection ownership check).
+**Risk:** **LOW** — no telephony coupling; no file content; metadata + config only.
+**Source:** `apps/api/src/crm/driveRoutes.ts` + `apps/api/src/crm/driveService.ts`
+
+**Drive scope:** `https://www.googleapis.com/auth/drive.readonly` — see `DATA_MODEL.md` § CRM Drive Foundation for scope rationale.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/crm/drive/status` | Drive + Gmail connection status + saved folder config. No tokens. Returns `{ gmailConnected, gmailEmail, driveConnected, driveEmail, driveConnectionId, folderConfig }`. |
+| POST | `/crm/drive/oauth/start` | Returns Google OAuth URL with Gmail + Drive scopes. Body: `{ connectionId? }`. Incremental auth — upgrades an existing connection if `connectionId` provided. |
+| GET | `/crm/drive/oauth/callback` | OAuth callback. Upserts `CrmEmailConnection` with Drive scopes; redirects to `/crm/drive?connected=1`. |
+| GET | `/crm/drive/folders` | Lists Drive folders. Query: `?connectionId=`, `?parentId=`, `?pageToken=`. Returns `{ folders: [{id, name, modifiedTime}], nextPageToken }`. 400 `drive_not_connected` if no Drive-capable connection. |
+| GET | `/crm/drive/folder-config` | Returns saved folder config for this tenant (`purpose=LEAD_IMPORT_INBOX`). Returns `{ folderConfig: {...} \| null }`. |
+| POST | `/crm/drive/folder-config` | Upserts folder config. Body: `{ connectionId, folderId, folderName }`. Validates connection belongs to tenant + has Drive scope. Audited. |
+| DELETE | `/crm/drive/folder-config` | Removes saved folder config. Idempotent. Audited. |
+| POST | `/crm/drive/folder-config/test` | Tests folder access. Body: `{ folderId?, connectionId? }` — uses saved config if omitted. Returns `{ ok, folderName, fileCount }`. |
+| GET | `/crm/drive/folder-config/files` | Lists recent files in saved folder. Query: `?limit=<1..20>`. Returns `{ folderName, folderId, files: [{id, name, mimeType, size, modifiedTime, webViewLink}], nextPageToken }`. |
+
+**Error codes:**
+
+| Code | When |
+|------|------|
+| `drive_not_connected` | No Drive-capable connection found for this tenant |
+| `drive_scope_missing` | Connection found but lacks `drive.readonly` scope |
+| `connection_not_found` | Specified `connectionId` does not exist or belongs to different tenant |
+| `no_folder_config` | Route requires a saved folder config but none exists |
+| `drive_api_error` | Drive API call failed (502) |
+| `token_revoked` | Google revoked the OAuth grant — reconnect required |
+| `not_a_folder` | Specified Drive item is not a folder |
+
+**Tenant isolation:**
+- All DB queries filter by `tenantId`. `loadConnectionForTenant(id, tenantId)` uses `WHERE id=? AND tenantId=?`.
+- `CrmDriveFolder` upsert is keyed by `{ tenantId_purpose: { tenantId, purpose } }` — Tenant A cannot overwrite Tenant B's config.
+- Folder listing uses the OAuth token from the tenant's own connection — no shared token pool.
+
+**Audit actions emitted:** `CRM_DRIVE_CONNECTED`, `CRM_DRIVE_FOLDER_SAVED`, `CRM_DRIVE_FOLDER_REMOVED`.
+
 ### CRM Reports _(Phase 4A)_
 
 All report endpoints require `requireCrmAccess` (not admin-only). Tenant-isolated. No pagination on aggregate endpoints; detail rows are capped at 100.

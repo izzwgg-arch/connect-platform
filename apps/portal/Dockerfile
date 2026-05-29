@@ -19,13 +19,14 @@ RUN --mount=type=cache,id=connect-pnpm-store,target=/pnpm/store \
   pnpm install --frozen-lockfile --filter @connect/portal...
 
 FROM deps AS builder
+ARG BUILD_COMMIT=""
 ARG NEXT_PUBLIC_API_URL=""
 ARG NEXT_PUBLIC_TELEPHONY_WS_URL="wss://app.connectcomunications.com/ws/telephony"
 ARG NEXT_PUBLIC_FORCE_ICE_RELAY=""
 ARG NEXT_PUBLIC_CRM_EMAIL_PHASE1_ENABLED=""
 COPY apps/portal ./apps/portal
 COPY packages/shared ./packages/shared
-RUN --mount=type=cache,id=connect-next-cache,target=/app/apps/portal/.next/cache \
+RUN --mount=type=cache,id=connect-next-cache-${BUILD_COMMIT},target=/app/apps/portal/.next/cache \
   NEXT_OUTPUT_STANDALONE=1 \
   NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL}" \
   NEXT_PUBLIC_TELEPHONY_WS_URL="${NEXT_PUBLIC_TELEPHONY_WS_URL}" \
@@ -35,12 +36,15 @@ RUN --mount=type=cache,id=connect-next-cache,target=/app/apps/portal/.next/cache
 
 FROM node:20-bookworm-slim AS runner
 WORKDIR /app
+ARG BUILD_COMMIT
 ENV NODE_ENV=production \
     PORT=3000 \
     HOSTNAME=0.0.0.0
 RUN apt-get update -y \
   && apt-get install -y --no-install-recommends openssl curl \
   && rm -rf /var/lib/apt/lists/*
+LABEL org.opencontainers.image.revision=$BUILD_COMMIT
+RUN printf '%s\n' "$BUILD_COMMIT" > /app/.build-commit
 COPY --from=builder /app/apps/portal/.next/standalone ./
 COPY --from=builder /app/apps/portal/.next/static ./apps/portal/.next/static
 COPY --from=builder /app/apps/portal/public ./apps/portal/public

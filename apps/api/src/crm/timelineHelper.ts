@@ -15,7 +15,8 @@ export type TimelineEventType =
   | "CHECKLIST_COMPLETED"
   | "DISPOSITION_SET"
   | "CONTACT_MERGED"
-  | "ASSIGNED_TO_USER";
+  | "ASSIGNED_TO_USER"
+  | "VOICEMAIL_DROP";
 
 export type WriteTimelineEventInput = {
   tenantId: string;

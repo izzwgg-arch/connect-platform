@@ -153,6 +153,54 @@ export async function apiDelete<T>(path: string, token?: string): Promise<T> {
   return apiRequest<T>("DELETE", path, undefined, token);
 }
 
+export async function apiUploadCrmVoicemailDrop(
+  input: {
+    name: string;
+    description?: string;
+    campaignId?: string;
+    isDefault?: boolean;
+    file: File;
+  },
+  token?: string,
+): Promise<{
+  voicemailDrop: unknown;
+}> {
+  const fd = new FormData();
+  fd.append("name", input.name);
+  if (input.description) fd.append("description", input.description);
+  if (input.campaignId) fd.append("campaignId", input.campaignId);
+  if (input.isDefault) fd.append("isDefault", "true");
+  fd.append("file", input.file);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120000);
+  try {
+    const res = await fetch(`${baseUrl()}/crm/voicemail-drops`, {
+      method: "POST",
+      headers: {
+        ...((token || browserToken()) ? { authorization: `Bearer ${token || browserToken()}` } : {}),
+        ...(browserTenantContext() ? { "x-tenant-context": browserTenantContext() } : {}),
+      },
+      body: fd,
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      let errPayload: any = null;
+      try {
+        errPayload = text.trim() ? JSON.parse(text) : null;
+      } catch {
+        errPayload = null;
+      }
+      const detail = [errPayload?.error, errPayload?.message].filter(Boolean).join(": ");
+      throw new ApiError(detail || `Upload failed (${res.status})`, res.status, errPayload);
+    }
+    return parseJsonResponse(res, text);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /** Multipart upload for Connect chat attachments (field name `file`). */
 export async function apiUploadChatAttachment(
   threadId: string,

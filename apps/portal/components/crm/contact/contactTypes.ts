@@ -60,7 +60,8 @@ export type TimelineEventType =
   | "CONTACT_MERGED"
   | "ASSIGNED_TO_USER"
   | "SMS_SENT"
-  | "SMS_RECEIVED";
+  | "SMS_RECEIVED"
+  | "VOICEMAIL_DROP";
 
 export type TimelineEventCreatedBy = { id: string; displayName: string };
 

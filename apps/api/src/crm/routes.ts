@@ -17,6 +17,8 @@ import { registerCrmPilotReadinessRoutes } from "./pilotReadinessRoutes";
 import { registerCrmEmailRoutes } from "./emailRoutes";
 import { registerCrmBulkEmailRoutes } from "./bulkEmailRoutes";
 import { registerCrmFunderRoutes } from "./funderRoutes";
+import { registerCrmVoicemailDropRoutes } from "./voicemailDropRoutes";
+import { registerCrmDriveRoutes } from "./driveRoutes";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -364,6 +366,9 @@ export async function registerCrmRoutes(app: FastifyInstance) {
   // Register CRM script routes (Phase 2C)
   await registerCrmScriptRoutes(app);
 
+  // CRM Voicemail Drops — tenant-scoped pre-recorded PBX-safe audio
+  await registerCrmVoicemailDropRoutes(app);
+
   // Register CRM checklist routes (Phase 2C)
   await registerCrmChecklistRoutes(app);
 
@@ -390,4 +395,7 @@ export async function registerCrmRoutes(app: FastifyInstance) {
 
   // CRM Funders — separate entity workspace for funding/referral/insurance/provider records
   await registerCrmFunderRoutes(app);
+
+  // CRM Drive (Phase 1 — Google Drive folder connection + lead document foundation)
+  await registerCrmDriveRoutes(app);
 }

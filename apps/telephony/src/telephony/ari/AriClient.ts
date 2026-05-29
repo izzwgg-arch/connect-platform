@@ -159,6 +159,16 @@ export class AriClient extends EventEmitter {
     );
   }
 
+  async playSoundOnChannel(channelId: string, media: string, playbackId?: string): Promise<{ id?: string } | void> {
+    const body: Record<string, unknown> = { media };
+    if (playbackId) body["playbackId"] = playbackId;
+    return this.rest<{ id?: string } | void>(
+      "POST",
+      `/ari/channels/${encodeURIComponent(channelId)}/play`,
+      body,
+    );
+  }
+
   async rest<T>(
     method: string,
     path: string,

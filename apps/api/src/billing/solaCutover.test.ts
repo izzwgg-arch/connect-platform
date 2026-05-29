@@ -601,3 +601,274 @@ test("CUTOVER_STATUS constants are correct strings", () => {
   assert.equal(CUTOVER_STATUS.CUTOVER_COMPLETE, "CUTOVER_COMPLETE");
   assert.equal(CUTOVER_STATUS.CUTOVER_FAILED, "CUTOVER_FAILED");
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase E Tests — Sola migration double-charge regression
+// These tests prove the root cause of the May 2026 incident is fixed.
+//
+// Incident: takeOverBillingFromSola set autoBillingEnabled=true without setting
+// nextConnectChargeAt, causing the worker to immediately charge for the current
+// billing period that Sola already paid. Five customers were double-charged.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Shared helper: builds deps for a successful take-over.
+ * now = 2026-05-18 (mid-month, billing day = 1, so Sola already charged May 1).
+ */
+function makeTakeOverDeps(overrides: {
+  billingDayOfMonth?: number;
+  savedLinkData?: Record<string, unknown>[];
+  savedSettingsData?: Record<string, unknown>[];
+  now?: Date;
+} = {}): { deps: SolaCutoverDeps; linkUpdates: Record<string, unknown>[]; settingsUpserts: Record<string, unknown>[] } {
+  const linkUpdates: Record<string, unknown>[] = [];
+  const settingsUpserts: Record<string, unknown>[] = [];
+  const billingDay = overrides.billingDayOfMonth ?? 1;
+
+  const deps = makeDeps({
+    db: {
+      billingSolaExternalScheduleLink: {
+        findUnique: async () => makeLink({ linkedPaymentMethodId: "pm_1" }),
+        findMany: async () => [],
+        update: async (a) => {
+          linkUpdates.push(a.data as Record<string, unknown>);
+          return { ...makeLink(), ...(a.data as Record<string, unknown>) };
+        },
+        create: async (a) => a.data as Record<string, unknown>,
+      },
+      paymentMethod: {
+        findFirst: async () => null,
+        findUnique: async () => ({ id: "pm_1", tenantId: "tenant_1", tokenEncrypted: "enc", active: true, brand: "Visa", last4: "4242" }),
+        create: async (args) => ({ id: "pm_1", ...args.data }),
+        update: async (args) => ({ id: args.where.id, ...args.data }),
+        updateMany: async () => ({ count: 0 }),
+      },
+      tenantBillingSettings: {
+        findUnique: async () => ({ autoBillingEnabled: false, billingDayOfMonth: billingDay, metadata: null }),
+        upsert: async (args: unknown) => {
+          settingsUpserts.push(args as Record<string, unknown>);
+          return {};
+        },
+        update: async () => ({}),
+      },
+    },
+  });
+
+  if (overrides.now) {
+    deps.now = () => overrides.now!;
+  }
+
+  return { deps, linkUpdates, settingsUpserts };
+}
+
+test("E-1: takeOverBillingFromSola stores nextConnectChargeAt in the NEXT billing period", async () => {
+  // now = May 18 (billing day = 1 → Sola already charged May 1)
+  // Expected: nextConnectChargeAt = 2026-06-01 midnight NY = 2026-06-01T04:00:00.000Z
+  const now = new Date("2026-05-18T12:00:00Z");
+  const { deps, linkUpdates } = makeTakeOverDeps({ billingDayOfMonth: 1, now });
+
+  const result = await takeOverBillingFromSola(
+    {
+      tenantId: "tenant_1",
+      solaScheduleLinkId: "link_1",
+      linkedPaymentMethodId: "pm_1",
+      confirmDisableSolaSchedule: true,
+      confirmEnableConnectAutopay: true,
+      confirmNoImmediateCharge: true,
+      operatorId: "op_1",
+    },
+    deps,
+  );
+
+  assert.ok(result.ok, "take-over should succeed");
+
+  // Find the CUTOVER_COMPLETE link update
+  const cutoverUpdate = linkUpdates.find((u) => u.cutoverStatus === "CUTOVER_COMPLETE");
+  assert.ok(cutoverUpdate, "link must be updated to CUTOVER_COMPLETE");
+  assert.ok(cutoverUpdate.nextConnectChargeAt instanceof Date, "nextConnectChargeAt must be a Date");
+
+  const nextAt = cutoverUpdate.nextConnectChargeAt as Date;
+  // Must be in June 2026, not May 2026 (current Sola-paid period)
+  const isoStr = nextAt.toISOString();
+  assert.ok(isoStr.startsWith("2026-06-"), `nextConnectChargeAt must be in June 2026, got ${isoStr}`);
+
+  // Result must also expose nextConnectChargeAt
+  const okResult = result as { ok: true; nextConnectChargeAt: string };
+  assert.ok(okResult.nextConnectChargeAt, "result must include nextConnectChargeAt");
+  assert.ok(okResult.nextConnectChargeAt.startsWith("2026-06-"), `result.nextConnectChargeAt must be June, got ${okResult.nextConnectChargeAt}`);
+});
+
+test("E-2: takeOverBillingFromSola sets billingScheduleOverride.nextPaymentDate in settings metadata", async () => {
+  const now = new Date("2026-05-18T12:00:00Z");
+  const { deps, settingsUpserts } = makeTakeOverDeps({ billingDayOfMonth: 1, now });
+
+  const result = await takeOverBillingFromSola(
+    {
+      tenantId: "tenant_1",
+      solaScheduleLinkId: "link_1",
+      linkedPaymentMethodId: "pm_1",
+      confirmDisableSolaSchedule: true,
+      confirmEnableConnectAutopay: true,
+      confirmNoImmediateCharge: true,
+      operatorId: "op_1",
+    },
+    deps,
+  );
+
+  assert.ok(result.ok, "take-over should succeed");
+
+  const upsertCall = settingsUpserts[0] as {
+    update?: { metadata?: { billingScheduleOverride?: { nextPaymentDate?: string; _solaTransitionGuard?: boolean } } };
+    create?: { metadata?: { billingScheduleOverride?: { nextPaymentDate?: string } } };
+  };
+  assert.ok(upsertCall, "settings must be upserted");
+
+  const meta = upsertCall.update?.metadata ?? upsertCall.create?.metadata;
+  assert.ok(meta, "metadata must be set on upsert");
+
+  const override = meta.billingScheduleOverride;
+  assert.ok(override, "billingScheduleOverride must be set in metadata");
+  assert.ok(override.nextPaymentDate, "nextPaymentDate must be set");
+  // Must be in June 2026 — prevents the worker from charging in the current (May) period
+  assert.ok(
+    String(override.nextPaymentDate).startsWith("2026-06-"),
+    `nextPaymentDate must be June 2026, got ${override.nextPaymentDate}`,
+  );
+  assert.equal(override._solaTransitionGuard, true, "_solaTransitionGuard flag must be set");
+});
+
+test("E-3: nextConnectChargeAt is future, not current period (protects against double charge)", async () => {
+  // Simulate: billing day = 21, now = May 27 (after May 21 — Sola already ran this month)
+  const now = new Date("2026-05-27T16:00:00Z"); // 4 PM UTC = noon NY
+  const { deps, linkUpdates } = makeTakeOverDeps({ billingDayOfMonth: 21, now });
+
+  const result = await takeOverBillingFromSola(
+    {
+      tenantId: "tenant_1",
+      solaScheduleLinkId: "link_1",
+      linkedPaymentMethodId: "pm_1",
+      confirmDisableSolaSchedule: true,
+      confirmEnableConnectAutopay: true,
+      confirmNoImmediateCharge: true,
+      operatorId: "op_1",
+    },
+    deps,
+  );
+
+  assert.ok(result.ok, "take-over should succeed");
+
+  const cutoverUpdate = linkUpdates.find((u) => u.cutoverStatus === "CUTOVER_COMPLETE");
+  assert.ok(cutoverUpdate?.nextConnectChargeAt instanceof Date, "nextConnectChargeAt must be a Date");
+
+  const nextAt = cutoverUpdate.nextConnectChargeAt as Date;
+  // nextConnectChargeAt must be AFTER now — Connect cannot charge today
+  assert.ok(nextAt.getTime() > now.getTime(), `nextConnectChargeAt (${nextAt.toISOString()}) must be after now (${now.toISOString()})`);
+
+  // Must be June 21, not May 21 (already past and paid by Sola)
+  const isoStr = nextAt.toISOString();
+  assert.ok(isoStr.startsWith("2026-06-21"), `nextConnectChargeAt must be 2026-06-21, got ${isoStr}`);
+});
+
+test("E-4: takeOverBillingFromSola does not charge card and does not create invoice", async () => {
+  let chargeCalled = false;
+  let invoiceCreateCalled = false;
+
+  const { deps } = makeTakeOverDeps({ billingDayOfMonth: 1 });
+  const origLog = deps.logEvent;
+  deps.logEvent = async (input) => {
+    if ((input.type as string).toLowerCase().includes("charge") || (input.type as string).toLowerCase().includes("payment_success")) {
+      chargeCalled = true;
+    }
+    return origLog(input);
+  };
+
+  // Intercept db to detect invoice creation
+  const origDb = deps.db;
+  (deps as { db: unknown }).db = new Proxy(origDb, {
+    get(target: typeof origDb, prop: string) {
+      if (prop === "billingInvoice") {
+        return {
+          create: () => {
+            invoiceCreateCalled = true;
+            return Promise.resolve({ id: "inv_fake" });
+          },
+          findFirst: async () => null,
+          findMany: async () => [],
+          update: async () => ({}),
+        };
+      }
+      return (target as Record<string, unknown>)[prop];
+    },
+  });
+
+  const result = await takeOverBillingFromSola(
+    {
+      tenantId: "tenant_1",
+      solaScheduleLinkId: "link_1",
+      linkedPaymentMethodId: "pm_1",
+      confirmDisableSolaSchedule: true,
+      confirmEnableConnectAutopay: true,
+      confirmNoImmediateCharge: true,
+      operatorId: "op_1",
+    },
+    deps,
+  );
+
+  assert.ok(result.ok, "take-over should succeed");
+  assert.ok(!chargeCalled, "No charge must be executed during take-over");
+  assert.ok(!invoiceCreateCalled, "No invoice must be created during take-over");
+});
+
+test("E-5: takeOverBillingFromSola is idempotent — blocks if already CUTOVER_COMPLETE (no double cutover)", async () => {
+  const { deps } = makeTakeOverDeps();
+  // Simulate link already cut over
+  (deps.db as { billingSolaExternalScheduleLink: { findUnique: unknown } }).billingSolaExternalScheduleLink.findUnique =
+    async () => makeLink({ linkedPaymentMethodId: "pm_1", cutoverStatus: "CUTOVER_COMPLETE" });
+
+  const result = await takeOverBillingFromSola(
+    {
+      tenantId: "tenant_1",
+      solaScheduleLinkId: "link_1",
+      linkedPaymentMethodId: "pm_1",
+      confirmDisableSolaSchedule: true,
+      confirmEnableConnectAutopay: true,
+      confirmNoImmediateCharge: true,
+      operatorId: "op_1",
+    },
+    deps,
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal((result as { ok: false; error: string }).error, "already_cutover_complete");
+});
+
+test("E-6: takeOverBillingFromSola nextConnectChargeAt respects NY midnight boundary (America/New_York)", async () => {
+  // Billing day = 1. now = 2026-05-01T03:30:00Z = 11:30 PM April 30 in NY (before midnight NY May 1)
+  // Expected current period charge date = May 1 midnight NY = 2026-05-01T04:00:00Z
+  // So now is BEFORE the scheduled charge. But for the purpose of takeover:
+  // buildBillingSchedule for May 1 local will say periodEnd = May 31 end.
+  // Next period = June 1 midnight NY.
+  const now = new Date("2026-05-18T12:00:00Z"); // safely mid-month
+  const { deps, linkUpdates } = makeTakeOverDeps({ billingDayOfMonth: 1, now });
+
+  const result = await takeOverBillingFromSola(
+    {
+      tenantId: "tenant_1",
+      solaScheduleLinkId: "link_1",
+      linkedPaymentMethodId: "pm_1",
+      confirmDisableSolaSchedule: true,
+      confirmEnableConnectAutopay: true,
+      confirmNoImmediateCharge: true,
+      operatorId: "op_1",
+    },
+    deps,
+  );
+
+  assert.ok(result.ok, "take-over should succeed");
+  const cutoverUpdate = linkUpdates.find((u) => u.cutoverStatus === "CUTOVER_COMPLETE");
+  const nextAt = cutoverUpdate?.nextConnectChargeAt as Date | undefined;
+  assert.ok(nextAt, "nextConnectChargeAt must be set");
+  // Must be exactly midnight NY for June 1 = 2026-06-01T04:00:00.000Z (EDT, UTC-4)
+  assert.equal(nextAt.toISOString(), "2026-06-01T04:00:00.000Z",
+    "nextConnectChargeAt must be June 1 midnight America/New_York (04:00 UTC)");
+});

@@ -111,13 +111,13 @@ BUILD_START="$(deploy_common_stopwatch_start)"
 if [[ "${DEPLOY_PORTAL_BLUEGREEN:-1}" == "1" ]]; then
   log "docker build portal + portal_candidate (shared Dockerfile)"
   deploy_common_run_heavy "deploy-queue:${SERVICE}:compose-build-portal" \
-    docker compose -f "$COMPOSE" build portal
+    docker compose -f "$COMPOSE" build --build-arg BUILD_COMMIT="$NEW_HEAD" portal
   deploy_common_run_heavy "deploy-queue:${SERVICE}:compose-build-portal-candidate" \
-    docker compose -f "$COMPOSE" --profile portal_rollout build portal_candidate
+    docker compose -f "$COMPOSE" --profile portal_rollout build --build-arg BUILD_COMMIT="$NEW_HEAD" portal_candidate
 else
   log "docker build ${SERVICE} (DEPLOY_PORTAL_BLUEGREEN=0)"
   deploy_common_run_heavy "deploy-queue:${SERVICE}:compose-build" \
-    docker compose -f "$COMPOSE" build "$SERVICE"
+    docker compose -f "$COMPOSE" build --build-arg BUILD_COMMIT="$NEW_HEAD" "$SERVICE"
 fi
 deploy_common_log_timing "build" "$(deploy_common_stopwatch_elapsed_ms "$BUILD_START")"
 
@@ -145,6 +145,24 @@ if ! deploy_common_wait_http_2xx_3xx "http://127.0.0.1:3000/login" "app.connectc
   fail "portal health check failed (requested by ${REQ})"
 fi
 deploy_common_log_timing "health" "$(deploy_common_stopwatch_elapsed_ms "$HEALTH_START")"
+
+VERIFY_START="$(deploy_common_stopwatch_start)"
+deploy_common_emit_stage "verify"
+verify_ok=1
+container_commit="$(docker exec app-portal-1 sh -lc 'cat /app/.build-commit 2>/dev/null | tr -d "\r\n"' || true)"
+if [[ -z "$container_commit" || "$container_commit" != "$NEW_HEAD" ]]; then
+  log "verify: commit mismatch or missing (/app/.build-commit='${container_commit:0:12}', expected ${NEW_HEAD:0:12})"
+  verify_ok=0
+fi
+if ! docker exec app-portal-1 sh -lc "grep -R -n -F 'sync-last' /app/apps/portal/.next 2>/dev/null | head -n 1 >/dev/null"; then
+  log "verify: expected marker 'sync-last' not found in compiled bundle"
+  verify_ok=0
+fi
+deploy_common_log_timing "verify" "$(deploy_common_stopwatch_elapsed_ms "$VERIFY_START")"
+if [[ "$verify_ok" -ne 1 ]]; then
+  rollback
+  fail "portal verification failed (commit and/or marker check)"
+fi
 
 trap - ERR
 deploy_common_mark_deployed "$SERVICE" "$NEW_HEAD"

@@ -29,14 +29,13 @@ async function requireAuth(req: any, reply: any): Promise<{ sub: string; tenantI
   return user;
 }
 
-/**
- * Admins (tenant or platform) are allowed to manage TENANT-scoped shared senders.
- * `can_manage_crm` already implies these roles per packages/shared/src/portalPermissions.ts.
- */
-function canManageTenantSender(user: { role?: string }): boolean {
-  const r = String(user.role || "").toUpperCase();
-  return r === "ADMIN" || r === "TENANT_ADMIN" || r === "SUPER_ADMIN" || r === "MANAGER";
-}
+import {
+  canManageTenantSender,
+  hasReadonlyScope,
+  replyTrackingStatus,
+  GMAIL_READONLY_SCOPE,
+} from "./crmEmailHelpers.js";
+export { canManageTenantSender, hasReadonlyScope, replyTrackingStatus, GMAIL_READONLY_SCOPE } from "./crmEmailHelpers.js";
 
 /**
  * Resolve the CrmEmailConnection a caller should send from, given an optional explicit choice.
@@ -881,5 +880,61 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       select: { id: true, toEmail: true, subject: true, status: true, errorMessage: true, sentAt: true, contactId: true, gmailMessageId: true },
     });
     return { sent: rows };
+  });
+
+  // GET /crm/email/diagnostics/reply-tracking — fleet-level reply tracking health snapshot.
+  // Returns aggregate counts only — no OAuth tokens, no email bodies, no secrets.
+  app.get("/crm/email/diagnostics/reply-tracking", async (req, reply) => {
+    const user = await requireAuth(req, reply); if (!user) return;
+    const { tenantId } = user;
+
+    const [
+      trackedThreads,
+      inboundReplies,
+      connections,
+      legacyThreadsCount,
+      lastSyncAudit,
+      outboundMessages,
+    ] = await Promise.all([
+      db.crmEmailThread.count({ where: { tenantId } }),
+      db.crmEmailMessage.count({ where: { tenantId, direction: "INBOUND" } }),
+      db.crmEmailConnection.findMany({
+        where: { tenantId },
+        select: { id: true, status: true, replyTrackingEnabled: true, scopes: true, lastSyncAt: true, lastError: true },
+      }),
+      db.crmEmailThread.count({ where: { tenantId, senderConnectionId: null } }),
+      db.auditLog.findFirst({
+        where: { tenantId, action: "CRM_EMAIL_SYNC_RESULT" },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true, metadata: true },
+      }),
+      db.crmEmailMessage.count({ where: { tenantId, direction: "OUTBOUND" } }),
+    ]);
+
+    const connected = connections.filter((c) => c.status === "CONNECTED");
+    const connectionsTotal = connected.length;
+    const connectionsEnabled = connected.filter((c) => c.replyTrackingEnabled).length;
+    const connectionsMissingScope = connected.filter((c) => !hasReadonlyScope(c.scopes)).length;
+    const connectionsDisabled = connected.filter((c) => !c.replyTrackingEnabled).length;
+    const connectionsWithErrors = connected.filter((c) => c.lastError).length;
+
+    const autoSyncOn = (process.env.CRM_EMAIL_AUTO_SYNC_ENABLED || "true").toLowerCase() !== "false";
+    const autoSyncIntervalMs = Math.max(60_000, Number(process.env.CRM_EMAIL_AUTO_SYNC_INTERVAL_MS || 300_000));
+
+    return {
+      trackedThreads,
+      inboundReplies,
+      outboundMessages,
+      legacyThreadsWithNullSender: legacyThreadsCount,
+      connectionsTotal,
+      connectionsEnabled,
+      connectionsDisabled,
+      connectionsMissingScope,
+      connectionsWithErrors,
+      lastSyncAt: lastSyncAudit?.createdAt ?? null,
+      lastSyncResult: (lastSyncAudit?.metadata as any) ?? null,
+      autoSyncEnabled: autoSyncOn,
+      autoSyncIntervalMs,
+    };
   });
 }
