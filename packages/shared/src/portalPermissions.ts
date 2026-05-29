@@ -43,6 +43,7 @@ export const SIDEBAR_ITEMS = [
   { id: "crm.tasks", section: "crm", label: "Tasks", href: "/crm/tasks", permission: "can_view_crm_tasks" },
   { id: "crm.live_call", section: "crm", label: "Live Call Workspace", href: "/crm/live-call", permission: "can_view_crm_live_call" },
   { id: "crm.scripts", section: "crm", label: "Scripts", href: "/crm/scripts", permission: "can_view_crm_scripts" },
+  { id: "crm.voicemail_drops", section: "crm", label: "Voicemail Drops", href: "/crm/voicemail-drops", permission: "can_view_crm_voicemail_drops" },
   { id: "crm.checklists", section: "crm", label: "Checklists", href: "/crm/checklists", permission: "can_view_crm_checklists" },
   { id: "crm.campaigns", section: "crm", label: "Campaigns", href: "/crm/campaigns", permission: "can_view_crm_campaigns" },
   { id: "crm.queue", section: "crm", label: "My Queue", href: "/crm/queue", permission: "can_view_crm_queue" },
@@ -136,6 +137,7 @@ export const ACTION_PERMISSION_KEYS = [
   "can_view_crm_import",
   "can_view_crm_live_call",
   "can_view_crm_scripts",
+  "can_view_crm_voicemail_drops",
   "can_view_crm_checklists",
   "can_view_crm_reports",
   "can_view_crm_campaigns",
@@ -232,8 +234,8 @@ export const LEGACY_PERMISSION_EXPANSIONS: Record<string, PortalPermissionKey[]>
   ],
   can_manage_deploys: [...ADMIN_SECTION, "can_view_admin_deploy_center"],
   // CRM — expanded for role buckets; API /me strips these unless CrmUserAccess.enabled
-  can_view_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_checklists", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports", "can_view_crm_funders"],
-  can_manage_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_settings", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports", "can_view_crm_funders"],
+  can_view_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_voicemail_drops", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports", "can_view_crm_funders"],
+  can_manage_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_voicemail_drops", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_settings", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports", "can_view_crm_funders"],
 };
 
 const END_USER_ACTIONS: PortalPermissionKey[] = [
