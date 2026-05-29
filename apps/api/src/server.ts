@@ -5399,7 +5399,7 @@ app.patch("/admin/users/:id", async (req, reply) => {
   const input = z.object({
     tenantId: z.string().optional(),
     extensionId: z.string().nullable().optional(),
-    role: z.enum(USER_MANAGEMENT_ROLES).optional(),
+    role: z.union([z.enum(USER_MANAGEMENT_ROLES), z.enum(PORTAL_ROLE_BUCKETS)]).optional(),
     email: z.string().email().optional(),
     firstName: z.string().max(80).optional(),
     lastName: z.string().max(80).optional(),
@@ -5410,9 +5410,14 @@ app.patch("/admin/users/:id", async (req, reply) => {
     notes: z.string().max(2000).nullable().optional(),
     status: z.enum(["INVITED", "ACTIVE", "DISABLED"]).optional(),
   }).parse(req.body || {});
+  const rawRole = input.role ? String(input.role).toUpperCase() : undefined;
+  const isPortalBucket = rawRole && (PORTAL_ROLE_BUCKETS as readonly string[]).includes(rawRole);
+  const effectiveRole = rawRole
+    ? (isPortalBucket ? dbRoleFromPortalBucket(rawRole as PortalRoleBucket) : rawRole) as UserManagementRole
+    : undefined;
   const target = await db.user.findFirst({ where: admin.role === "SUPER_ADMIN" ? { id } : { id, tenantId: admin.tenantId } });
   if (!target) return reply.status(404).send({ error: "user_not_found" });
-  if (input.role && !canAssignRole(admin, input.role)) return reply.status(403).send({ error: "forbidden" });
+  if (effectiveRole && !canAssignRole(admin, effectiveRole)) return reply.status(403).send({ error: "forbidden" });
   const nextTenantId = admin.role === "SUPER_ADMIN" && input.tenantId ? await resolveManagedTenant(admin, input.tenantId) : target.tenantId;
   let nextExtension: any = undefined;
   if (input.extensionId !== undefined) {
@@ -5434,7 +5439,7 @@ app.patch("/admin/users/:id", async (req, reply) => {
       data: {
         tenantId: nextTenantId,
         email: input.email ? normalizeEmail(input.email) : undefined,
-        role: input.role as any,
+        role: effectiveRole as any,
         status: input.status as any,
         firstName: input.firstName?.trim(),
         lastName: input.lastName?.trim(),
@@ -5447,7 +5452,7 @@ app.patch("/admin/users/:id", async (req, reply) => {
       include: { tenant: { select: { id: true, name: true } }, ownedExtensions: { take: 1 }, passwordTokens: { take: 1, orderBy: { createdAt: "desc" } } } as any,
     });
   });
-  await audit({ tenantId: updated.tenantId, actorUserId: admin.sub, targetUserId: updated.id, action: "USER_UPDATED", entityType: "User", entityId: updated.id, metadata: { role: input.role, status: input.status } });
+  await audit({ tenantId: updated.tenantId, actorUserId: admin.sub, targetUserId: updated.id, action: "USER_UPDATED", entityType: "User", entityId: updated.id, metadata: { role: effectiveRole, status: input.status } });
   return { ok: true, user: formatAdminUser(updated) };
 });
 
