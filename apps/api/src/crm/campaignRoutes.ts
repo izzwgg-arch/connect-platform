@@ -183,7 +183,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
 
   // ── POST /crm/campaigns ────────────────────────────────────────────────────
   app.post("/crm/campaigns", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmManager(req, reply);
     if (!user) return;
     const { tenantId, sub: userId } = user;
 
@@ -294,7 +294,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
 
   // ── PATCH /crm/campaigns/:id ───────────────────────────────────────────────
   app.patch("/crm/campaigns/:id", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmManager(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id } = req.params as { id: string };
@@ -325,7 +325,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
 
   // ── DELETE /crm/campaigns/:id ─────────────────────────────────────────────
   app.delete("/crm/campaigns/:id", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmManager(req, reply);
     if (!user) return;
     const { id } = req.params as { id: string };
 
@@ -338,7 +338,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
   // ── POST /crm/campaigns/:id/members/add ──────────────────────────────────
   // Add contacts to a campaign. Skips contacts already in campaign.
   app.post("/crm/campaigns/:id/members/add", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmManager(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id: campaignId } = req.params as { id: string };
@@ -799,7 +799,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
   // Server-side search for contacts NOT already in this campaign.
   // Supports ?q= (name/phone/email search), ?limit=, ?page=
   app.get("/crm/campaigns/:id/contacts/available", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmManager(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id: campaignId } = req.params as { id: string };
@@ -870,7 +870,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
   // ── POST /crm/campaigns/:id/members/bulk-assign ───────────────────────────
   // Bulk-assign (or clear) members to a user.
   app.post("/crm/campaigns/:id/members/bulk-assign", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmManager(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id: campaignId } = req.params as { id: string };
@@ -903,7 +903,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
   // Per-agent assignment summary for a campaign. Admin/manager only.
   // Returns a row for each user who has at least one member, plus an "Unassigned" row.
   app.get("/crm/campaigns/:id/workload", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmManager(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id: campaignId } = req.params as { id: string };
@@ -972,7 +972,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
   // Round-robin distribute all unassigned PENDING/IN_PROGRESS members across
   // the provided user list. Explicit manager action — never automatic.
   app.post("/crm/campaigns/:id/members/distribute", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmManager(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id: campaignId } = req.params as { id: string };
