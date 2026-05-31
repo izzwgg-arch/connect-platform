@@ -13,7 +13,8 @@ export const crm = {
     "crm-dashboard-inner mx-auto w-full max-w-[1480px] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
   /** Phase 19D — contact relationship workspace */
   pageInnerContact:
-    "mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
+    "crm-contact-detail-inner mx-auto w-full max-w-[min(100%,1680px)] px-3 py-3 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-3 min-h-0",
+  contactDetailWorkspace: "crm-contact-detail-workspace w-full min-h-0 flex flex-col",
   /** Phase 19D.1 — contacts index relationship command center */
   pageInnerContacts:
     "crm-contacts-inner mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",

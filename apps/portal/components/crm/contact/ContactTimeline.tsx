@@ -17,6 +17,7 @@ export function ContactTimeline({
   onDeleteNote,
   isArchived,
   onStartOutreach,
+  outreachStarting,
 }: {
   events: TimelineEvent[];
   loading: boolean;
@@ -28,6 +29,7 @@ export function ContactTimeline({
   onDeleteNote: (linkedId: string) => void;
   isArchived: boolean;
   onStartOutreach?: () => void;
+  outreachStarting?: boolean;
 }) {
   const callCount = events.filter((e) => e.type.startsWith("CDR_")).length;
   const smsCount = events.filter((e) => e.type.startsWith("SMS_")).length;
@@ -61,8 +63,13 @@ export function ContactTimeline({
             }
             action={
               !isArchived && onStartOutreach ? (
-                <button type="button" onClick={onStartOutreach} className={crm.btnPrimary}>
-                  Start outreach
+                <button
+                  type="button"
+                  onClick={onStartOutreach}
+                  disabled={outreachStarting}
+                  className={crm.btnPrimary}
+                >
+                  {outreachStarting ? "Opening notes…" : "Start outreach"}
                 </button>
               ) : undefined
             }

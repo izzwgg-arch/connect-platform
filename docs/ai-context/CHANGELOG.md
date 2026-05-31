@@ -4,6 +4,43 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-05-31 — CRM campaign active workspace UX redesign
+
+**Task:** CRM / campaign workspace / UX redesign  
+**Risk:** high
+
+### Root cause
+
+The campaign contact workspace (`/crm/contacts/[id]?campaignId=&memberId=`) used a single page scroll surface, a tall header that scrolled away, and a horizontally scrolling tab strip. **Start outreach** called `scrollToNoteComposer()` while the user was on the Timeline tab, but the note composer only mounted on the Notes tab — `noteComposerRef` was null, so the click appeared to do nothing (silent failure).
+
+### What changed
+
+- **`apps/portal/app/(platform)/crm/contacts/[id]/page.tsx`:** sticky compact header, three-panel independent scroll layout (desktop), campaign prev/next navigation (+ ArrowLeft/ArrowRight), Start outreach switches to Notes with toast feedback, explicit Notes tab branch.
+- **New components:** `ContactCampaignStickyHeader`, `ContactWorkspaceTabBar` (primary tabs + More menu), `ContactCampaignLeadNav`, `ContactCollapsibleSection`, `contactWorkspaceHelpers.ts`.
+- **`ContactDocumentSummary`:** collapsible summary-first sections (verified CRM, extracted docs, phones).
+- **`ContactTimeline`:** Start outreach loading state on button.
+- **`globals.css`:** `.crm-contact-detail-workspace` scoped layout/toast styles.
+- **Tests:** `contactWorkspaceHelpers.test.ts` (tab overflow, campaign nav, start-outreach validation).
+
+### Deliberately unchanged
+
+- CRM permissions, API routes, campaign roster page, queue page, live-call workspace, telephony.
+
+### Verify
+
+- Open workspace from `/crm/campaigns/[id]` member row → sticky header stays visible while scrolling panels.
+- Desktop: left / center / right panels scroll independently; no full-page scroll.
+- Mobile/tablet: stacked layout, no horizontal tab swipe; More menu reaches overflow tabs.
+- Empty timeline → Start outreach → Notes tab + toast + focused composer.
+- Campaign context → fixed Prev/Next (bottom-right) and keyboard arrows move through roster order.
+- Document summary sections collapse/expand with summary lines visible when closed.
+
+### Deploy
+
+**Portal only.** No API/worker/DB changes.
+
+---
+
 ## 2026-05-31 — Shared tenant SMS inbox consistency (VoIP.ms / Connect Chat)
 
 **Task:** SMS / VoIP.ms / shared inbox consistency  

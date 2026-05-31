@@ -13,6 +13,15 @@ import {
   CRMCard,
   crm,
   ContactContextBar,
+  ContactCampaignStickyHeader,
+  ContactWorkspaceTabBar,
+  ContactCampaignLeadNav,
+  workspaceTabLabel,
+  buildCampaignContactHref,
+  campaignLeadNeighbors,
+  findCampaignMemberIndex,
+  sortCampaignNavMembers,
+  type CampaignNavMember,
   LiveWorkspaceScriptPanel,
   LiveWorkspaceChecklistPanel,
   ContactTimeline,
@@ -1190,8 +1199,11 @@ function CrmContactDetailInner() {
   const urlMemberId = searchParams.get("memberId");
   const urlCampaignId = searchParams.get("campaignId");
 
-  const headerSentinelRef = useRef<HTMLDivElement>(null);
-  const [stickyVisible, setStickyVisible] = useState(false);
+  const [campaignNavMembers, setCampaignNavMembers] = useState<CampaignNavMember[]>([]);
+  const [campaignNavLoading, setCampaignNavLoading] = useState(false);
+  const [outreachStarting, setOutreachStarting] = useState(false);
+  const [workspaceToast, setWorkspaceToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const workspaceToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [queueMember, setQueueMember] = useState<QueueContextMember | null>(null);
   const [campaignName, setCampaignName] = useState<string | null>(null);
 
@@ -1463,6 +1475,32 @@ function CrmContactDetailInner() {
   useEffect(() => {
     const cid = urlCampaignId ?? queueMember?.campaign?.id;
     if (!cid) {
+      setCampaignNavMembers([]);
+      return;
+    }
+    let cancelled = false;
+    setCampaignNavLoading(true);
+    (async () => {
+      try {
+        const data = await apiGet<{ members: { id: string; contactId: string; sortOrder: number }[] }>(
+          `/crm/campaigns/${cid}/members?limit=500`,
+        );
+        if (cancelled) return;
+        setCampaignNavMembers(sortCampaignNavMembers(data.members ?? []));
+      } catch {
+        if (!cancelled) setCampaignNavMembers([]);
+      } finally {
+        if (!cancelled) setCampaignNavLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [urlCampaignId, queueMember?.campaign?.id]);
+
+  useEffect(() => {
+    const cid = urlCampaignId ?? queueMember?.campaign?.id;
+    if (!cid) {
       setCampaignName(null);
       return;
     }
@@ -1480,16 +1518,60 @@ function CrmContactDetailInner() {
     };
   }, [urlCampaignId, queueMember?.campaign?.id, queueMember?.campaign?.name]);
 
+  const campaignIdForNav = urlCampaignId ?? queueMember?.campaign?.id ?? null;
+  const campaignMemberIndex = useMemo(
+    () => findCampaignMemberIndex(campaignNavMembers, { memberId: urlMemberId, contactId: id }),
+    [campaignNavMembers, urlMemberId, id],
+  );
+  const campaignNav = useMemo(
+    () => campaignLeadNeighbors(campaignNavMembers, campaignMemberIndex),
+    [campaignNavMembers, campaignMemberIndex],
+  );
+
+  const navigateCampaignLead = useCallback(
+    (target: CampaignNavMember | null) => {
+      if (!target || !campaignIdForNav) return;
+      router.push(buildCampaignContactHref(target.contactId, campaignIdForNav, target.id, returnTo));
+    },
+    [campaignIdForNav, returnTo, router],
+  );
+
+  const showWorkspaceToast = useCallback((kind: "ok" | "err", text: string) => {
+    if (workspaceToastTimer.current) clearTimeout(workspaceToastTimer.current);
+    setWorkspaceToast({ kind, text });
+    workspaceToastTimer.current = setTimeout(() => setWorkspaceToast(null), 3200);
+  }, []);
+
   useEffect(() => {
-    const el = headerSentinelRef.current;
-    if (!el) return;
-    const obs = new IntersectionObserver(
-      ([entry]) => setStickyVisible(!entry.isIntersecting),
-      { root: null, threshold: 0, rootMargin: "-64px 0px 0px 0px" },
-    );
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, [contact?.id]);
+    return () => {
+      if (workspaceToastTimer.current) clearTimeout(workspaceToastTimer.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    function onLeadNavKey(e: KeyboardEvent) {
+      const tgt = e.target as HTMLElement;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(tgt.tagName)) return;
+      if (tgt.getAttribute("contenteditable") === "true") return;
+      if (!campaignIdForNav || campaignNavMembers.length <= 1) return;
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        navigateCampaignLead(campaignNav.previous);
+      }
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        navigateCampaignLead(campaignNav.next);
+      }
+    }
+    window.addEventListener("keydown", onLeadNavKey);
+    return () => window.removeEventListener("keydown", onLeadNavKey);
+  }, [
+    campaignIdForNav,
+    campaignNavMembers.length,
+    campaignNav.previous,
+    campaignNav.next,
+    navigateCampaignLead,
+  ]);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
@@ -1835,9 +1917,33 @@ function CrmContactDetailInner() {
   const primaryPhoneRow = contact.phones.find((p) => p.isPrimary) ?? contact.phones[0] ?? null;
   const primaryEmailRow = contact.emails.find((e) => e.isPrimary) ?? contact.emails[0] ?? null;
 
-  const scrollToNoteComposer = () => {
+  const focusNoteComposer = () => {
     noteComposerRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    setTimeout(() => noteTextareaRef.current?.focus(), 300);
+    window.setTimeout(() => noteTextareaRef.current?.focus(), 200);
+  };
+
+  const handleStartOutreach = () => {
+    if (isArchived) {
+      showWorkspaceToast("err", "Archived contacts are read-only.");
+      return;
+    }
+    setOutreachStarting(true);
+    setWorkspaceTab("notes");
+    window.setTimeout(() => {
+      if (noteComposerRef.current) {
+        focusNoteComposer();
+        showWorkspaceToast("ok", "Ready to log your first outreach note.");
+        setOutreachStarting(false);
+        return;
+      }
+      showWorkspaceToast("err", "Could not open the note composer. Try the Notes tab.");
+      setOutreachStarting(false);
+    }, 0);
+  };
+
+  const scrollToNoteComposer = () => {
+    setWorkspaceTab("notes");
+    window.setTimeout(() => focusNoteComposer(), 0);
   };
 
   const scrollToTasks = () => {
@@ -1986,26 +2092,7 @@ function CrmContactDetailInner() {
   );
   const relationshipTone =
     relationshipScore >= 75 ? "High" : relationshipScore >= 50 ? "Medium" : "Low";
-  const activeSectionLabel =
-    workspaceTab === "timeline"
-      ? "Activity Timeline"
-      : workspaceTab === "sms"
-        ? "SMS Thread"
-        : workspaceTab === "email"
-          ? "Email Workspace"
-          : workspaceTab === "notes"
-            ? "Notes"
-            : workspaceTab === "files"
-              ? "Files"
-              : workspaceTab === "discoveries"
-                ? "Document Discoveries"
-                : workspaceTab === "intelligence"
-                  ? "AI Lead Intelligence"
-                  : workspaceTab === "tasks"
-                ? "Tasks"
-                : workspaceTab === "script"
-                  ? "Script"
-                  : "Checklist";
+  const activeSectionLabel = workspaceTabLabel(workspaceTab);
 
   const runNextStepAction = () => {
     if (nextStep.action === "add_phone") setAddingPhone(true);
@@ -2122,8 +2209,8 @@ function CrmContactDetailInner() {
   }
 
   return (<>
-    <CRMPageShell innerClassName={crm.pageInnerContact}>
-      <div className="space-y-4">
+    <CRMPageShell innerClassName={`${crm.pageInnerContact} ${crm.contactDetailWorkspace}`} className={crm.contactDetailWorkspace}>
+      <div className="crm-contact-workspace-frame">
         <ContactContextBar
           returnTo={returnTo}
           queueMember={queueMember}
@@ -2131,83 +2218,50 @@ function CrmContactDetailInner() {
           onBack={handleBack}
         />
 
-        {contact && (
-          <CRMCard padding="lg" className="overflow-hidden border-crm-border/70 bg-crm-surface shadow-[0_18px_48px_-34px_rgba(15,23,42,0.65)]">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex min-w-0 items-center gap-4">
-                <div className="relative flex h-16 w-16 shrink-0 items-center justify-center rounded-[1.4rem] bg-gradient-to-br from-violet-100 to-indigo-100 text-xl font-black text-violet-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
-                  {contactInitials}
-                  <span className="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 border-crm-surface bg-emerald-500" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <h1 className="truncate text-2xl font-black tracking-tight text-crm-text">
-                      {contact.displayName}
-                    </h1>
-                    <Star className="h-4 w-4 fill-blue-500 text-blue-500" />
-                    {isArchived ? (
-                      <span className="rounded-full border border-crm-danger/35 bg-crm-danger/10 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-crm-danger">
-                        Archived
-                      </span>
-                    ) : null}
-                  </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-crm-muted">
-                    {primaryEmailRow ? (
-                      <span className="inline-flex min-w-0 items-center gap-1.5">
-                        <Mail className="h-3.5 w-3.5" />
-                        <span className="truncate">{primaryEmailRow.email}</span>
-                      </span>
-                    ) : null}
-                    {primaryPhoneRow ? (
-                      <span className="inline-flex items-center gap-1.5">
-                        <Phone className="h-3.5 w-3.5" />
-                        {primaryPhoneRow.numberRaw}
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:min-w-[34rem]">
-                <HeaderMetric label="Stage" value={stageLabel(stage)} tone="violet" />
-                <HeaderMetric label="Lead Score" value={relationshipScore} sub={relationshipTone} tone="emerald" />
-                <HeaderMetric label="Last Touch" value={lastInteractionAt ? formatTimeAgo(lastInteractionAt) : "None"} tone="slate" />
-                <HeaderMetric label="Owner" value={ownerLabel} tone="slate" />
-              </div>
-            </div>
-
-            <div className="mt-5 flex flex-col gap-3 border-t border-crm-border/60 pt-4 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex flex-wrap gap-2">
-                <CommandButton icon={<Phone className="h-4 w-4" />} label="Call" onClick={() => void handleCall()} disabled={!primaryPhone || isArchived} active />
-                <CommandButton icon={<MessageSquareDot className="h-4 w-4" />} label="SMS" onClick={() => focusWorkspace("sms")} disabled={contact.doNotSms || contact.phones.length === 0 || isArchived} />
-                <CommandButton icon={<Mail className="h-4 w-4" />} label="Email" onClick={() => focusWorkspace("email")} disabled={!primaryEmailRow || isArchived} />
-                <CommandButton icon={<Voicemail className="h-4 w-4" />} label="Drop Voicemail" onClick={() => setVoicemailDropOpen(true)} disabled={isArchived || contact.doNotCall || contact.phones.length === 0} title={!activeContactCall ? "Start or select an active outbound call first" : undefined} />
-              </div>
-              <div className="flex items-center gap-2">
-                {sipNotice ? <span className="text-xs font-medium text-crm-warning">{sipNotice}</span> : null}
-                {!isArchived ? (
-                  <>
-                    <button type="button" className={crm.btnSecondary} onClick={() => setEditing(true)}>
-                      Edit
-                    </button>
-                    <button type="button" className={crm.btnGhost} onClick={handleArchiveContact} disabled={archivePosting}>
-                      {archivePosting ? "Archiving..." : "Archive"}
-                    </button>
-                  </>
-                ) : (
-                  <button type="button" className={crm.btnSecondary} onClick={handleRestoreContact} disabled={restorePosting}>
-                    {restorePosting ? "Restoring..." : "Restore"}
-                  </button>
-                )}
-                <button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-crm border border-crm-border bg-crm-surface-2 text-crm-muted hover:text-crm-text">
-                  <MoreVertical className="h-4 w-4" />
+        <ContactCampaignStickyHeader
+          displayName={contact.displayName}
+          company={contact.company ?? null}
+          phone={primaryPhoneRow?.numberRaw ?? null}
+          email={primaryEmailRow?.email ?? null}
+          stage={stage}
+          campaignName={campaignName}
+          isArchived={isArchived}
+          onCall={() => void handleCall()}
+          onSms={() => focusWorkspace("sms")}
+          onEmail={() => focusWorkspace("email")}
+          onNote={scrollToNoteComposer}
+          callDisabled={!primaryPhone || isArchived}
+          smsDisabled={contact.doNotSms || contact.phones.length === 0 || isArchived}
+          emailDisabled={!primaryEmailRow || isArchived}
+        >
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <HeaderMetric label="Stage" value={stageLabel(stage)} tone="violet" />
+            <HeaderMetric label="Lead Score" value={relationshipScore} sub={relationshipTone} tone="emerald" />
+            <HeaderMetric label="Last Touch" value={lastInteractionAt ? formatTimeAgo(lastInteractionAt) : "None"} tone="slate" />
+            <HeaderMetric label="Owner" value={ownerLabel} tone="slate" />
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {sipNotice ? <span className="text-xs font-medium text-crm-warning">{sipNotice}</span> : null}
+            {!isArchived ? (
+              <>
+                <button type="button" className={cn(crm.btnSecondary, "py-1 text-xs")} onClick={() => setVoicemailDropOpen(true)} disabled={contact.doNotCall || contact.phones.length === 0}>
+                  <Voicemail className="h-3.5 w-3.5" />
+                  Voicemail drop
                 </button>
-              </div>
-            </div>
-          </CRMCard>
-        )}
-
-        <div ref={headerSentinelRef} className="h-px w-full" aria-hidden />
+                <button type="button" className={cn(crm.btnSecondary, "py-1 text-xs")} onClick={() => setEditing(true)}>
+                  Edit
+                </button>
+                <button type="button" className={cn(crm.btnGhost, "py-1 text-xs")} onClick={handleArchiveContact} disabled={archivePosting}>
+                  {archivePosting ? "Archiving..." : "Archive"}
+                </button>
+              </>
+            ) : (
+              <button type="button" className={cn(crm.btnSecondary, "py-1 text-xs")} onClick={handleRestoreContact} disabled={restorePosting}>
+                {restorePosting ? "Restoring..." : "Restore"}
+              </button>
+            )}
+          </div>
+        </ContactCampaignStickyHeader>
 
       {editing && !isArchived && (
         <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.875rem" }}>
@@ -2242,8 +2296,8 @@ function CrmContactDetailInner() {
       )}
 
       {/* ── Three-column contact workspace ───────────────────────────────────── */}
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[16rem_minmax(0,1fr)_minmax(300px,360px)] xl:items-start">
-        <aside className="order-1 flex min-w-0 flex-col gap-3 xl:sticky xl:top-20">
+      <div className="crm-contact-workspace-body">
+        <aside className="crm-contact-workspace-panel order-1 flex min-w-0 flex-col gap-3">
           <CRMCard padding="md" className="border-crm-border/70">
             <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-crm-muted">Communicate</p>
             <div className="mt-3 flex flex-col gap-1.5">
@@ -2322,41 +2376,14 @@ function CrmContactDetailInner() {
           </CRMCard>
         </aside>
 
-        <div className="order-2 flex min-w-0 flex-col gap-4" ref={workspacePanelRef}>
+        <div className="crm-contact-workspace-panel order-2 flex min-w-0 flex-col gap-4" ref={workspacePanelRef}>
           <CRMCard padding="lg" className="overflow-hidden border-crm-border/70">
             <div className="mb-4 flex flex-col gap-3 border-b border-crm-border/60 pb-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-crm-accent">Workspace</p>
                 <h3 className="mt-1 text-xl font-bold tracking-tight text-crm-text">{activeSectionLabel}</h3>
               </div>
-              <div className="flex gap-1 overflow-x-auto rounded-2xl border border-crm-border/70 bg-crm-surface-2/55 p-1">
-                {([
-                  ["timeline", "Timeline"],
-                  ["script", "Script"],
-                  ["checklist", "Checklist"],
-                  ["email", "Email"],
-                  ["sms", "SMS"],
-                  ["notes", "Notes"],
-                  ["files", "Files"],
-                  ["discoveries", "Discoveries"],
-                  ["intelligence", "AI"],
-                  ["tasks", "Tasks"],
-                ] as const).map(([tab, label]) => (
-                  <button
-                    key={tab}
-                    type="button"
-                    onClick={() => setWorkspaceTab(tab)}
-                    className={cn(
-                      "whitespace-nowrap rounded-xl px-3 py-2 text-xs font-bold transition-colors",
-                      workspaceTab === tab
-                        ? "bg-crm-accent text-white shadow-sm"
-                        : "text-crm-muted hover:bg-crm-surface hover:text-crm-text",
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+              <ContactWorkspaceTabBar activeTab={workspaceTab} onSelect={setWorkspaceTab} />
             </div>
 
             {workspaceTab === "timeline" ? (
@@ -2370,7 +2397,8 @@ function CrmContactDetailInner() {
                 onEditNote={handleEditNote}
                 onDeleteNote={handleDeleteNote}
                 isArchived={isArchived}
-                onStartOutreach={scrollToNoteComposer}
+                onStartOutreach={handleStartOutreach}
+                outreachStarting={outreachStarting}
               />
             ) : workspaceTab === "script" ? (
               <LiveWorkspaceScriptPanel
@@ -2440,13 +2468,13 @@ function CrmContactDetailInner() {
                 </div>
                 <TaskPanelContent />
               </div>
-            ) : (
+            ) : workspaceTab === "notes" ? (
               <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.85fr)]">
                 <div ref={noteComposerRef}>
                   <CRMCard padding="md" className="border-crm-border/70 bg-crm-surface-2/45">
                     <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-crm-accent">Quick Note</p>
                     <textarea
-                    ref={noteTextareaRef}
+                      ref={noteTextareaRef}
                       value={noteText}
                       onChange={(e) => setNoteText(e.target.value)}
                       rows={7}
@@ -2484,12 +2512,16 @@ function CrmContactDetailInner() {
                   )}
                 </div>
               </div>
+            ) : (
+              <div className="rounded-[1.35rem] border border-dashed border-crm-border/70 bg-crm-surface/60 px-4 py-6 text-center text-sm text-crm-muted">
+                Select a workspace tab to get started.
+              </div>
             )}
           </CRMCard>
 
         </div>
 
-        <div className="order-3 flex flex-col gap-4 xl:sticky xl:top-20 xl:self-start">
+        <div className="crm-contact-workspace-panel crm-contact-workspace-panel-right order-3 flex flex-col gap-4">
           <CRMCard padding="md" className="border-crm-accent/25 bg-crm-accent/5">
             <p className="text-xs font-bold uppercase tracking-wide text-crm-accent">Next step</p>
             <p className="mt-1 text-base font-semibold text-crm-text">{nextStep.title}</p>
@@ -3035,7 +3067,31 @@ function CrmContactDetailInner() {
       </div>
       </div>
 
-      {/* ── Merge confirmation modal ──────────────────────────────────────────── */}
+      <ContactCampaignLeadNav
+        visible={!!campaignIdForNav}
+        position={campaignNav.position}
+        total={campaignNav.total}
+        previousLabel={null}
+        nextLabel={null}
+        onPrevious={() => navigateCampaignLead(campaignNav.previous)}
+        onNext={() => navigateCampaignLead(campaignNav.next)}
+        previousDisabled={!campaignNav.previous}
+        nextDisabled={!campaignNav.next}
+        loading={campaignNavLoading}
+      />
+
+      {workspaceToast ? (
+        <p
+          role="status"
+          className={cn(
+            "crm-contact-workspace-toast",
+            workspaceToast.kind === "ok" ? "crm-contact-workspace-toast-success" : "crm-contact-workspace-toast-error",
+          )}
+        >
+          {workspaceToast.text}
+        </p>
+      ) : null}
+    </CRMPageShell>
       {mergeTarget && (
         <div
           style={{
@@ -3083,7 +3139,6 @@ function CrmContactDetailInner() {
           </div>
         </div>
       )}
-    </CRMPageShell>
     {contact ? (
       <CrmEmailComposeDrawer
         open={composeOpen}

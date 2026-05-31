@@ -125,6 +125,17 @@ Pipeline (unchanged): Google Drive match → import (`CrmLeadDocument`) → text
 - Member status pills/selects should be compact, semantic, and consistent width. Use subtle backgrounds and borders; avoid large glossy pills or tall native controls.
 - Responsive behavior: desktop is a dense table; tablet/mobile stack each member into a compact card row with visible labels and an easy-tap workspace action. No horizontal overflow.
 
+## Campaign Active Workspace (contact detail)
+
+- Entry: `/crm/contacts/[id]?campaignId=…&memberId=…` (from campaign member **Open workspace** or queue deep-links). Presentation lives in `apps/portal/app/(platform)/crm/contacts/[id]/page.tsx` with scoped CSS `.crm-contact-detail-workspace`.
+- **Sticky header:** `ContactCampaignStickyHeader` keeps lead name, company, phone, stage, campaign chip, quick actions, and compact KPI strip visible (`position: sticky` within the workspace frame).
+- **Independent scroll (desktop ≥1280px):** left nav/disposition rail, center workspace tab content, and right summary rail each scroll inside `.crm-contact-workspace-panel`; the page body does not become one giant scroll surface.
+- **Tabs:** center panel uses `ContactWorkspaceTabBar` — five primary tabs inline, remainder under a **More** menu (no horizontal swipe).
+- **Campaign lead navigation:** when `campaignId` is present, `ContactCampaignLeadNav` loads members from `GET /crm/campaigns/:id/members` and provides fixed Prev/Next (+ `ArrowLeft` / `ArrowRight` when not typing in an input).
+- **Start outreach:** empty timeline CTA switches to **Notes**, focuses the composer, shows a toast; does not silently no-op when the composer was unmounted.
+- **Long reports:** `ContactDocumentSummary` on the right rail uses collapsible sections (summary-first). Intelligence tab content unchanged API-wise.
+- **Do not** break `assertCrmContactAllowed` scope — workspace uses existing contact/timeline/task/disposition APIs only.
+
 ## CRM Dashboard Light Mode
 
 - `/crm/dashboard` has a dedicated light-mode presentation scoped through `.crm-dashboard-shell` and `.crm-dashboard-workspace`; do not reuse these classes on other CRM routes unless the whole route adopts the same light system.

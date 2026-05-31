@@ -16924,3 +16924,93 @@ table tr:hover {
     flex-direction: column;
   }
 }
+
+/* CRM contact detail — campaign active workspace (independent panel scroll) */
+.crm-contact-detail-workspace {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.crm-contact-detail-workspace .crm-contact-workspace-frame {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.crm-contact-detail-workspace .crm-contact-sticky-header {
+  position: sticky;
+  top: 0;
+  z-index: 25;
+}
+
+.crm-contact-detail-workspace .crm-contact-workspace-body {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+@media (min-width: 1280px) {
+  .crm-contact-detail-workspace .crm-contact-workspace-frame {
+    max-height: calc(100dvh - 5.5rem);
+  }
+
+  .crm-contact-detail-workspace .crm-contact-workspace-body {
+    grid-template-columns: 14rem minmax(0, 1fr) minmax(280px, 22rem);
+    align-items: stretch;
+  }
+
+  .crm-contact-detail-workspace .crm-contact-workspace-panel {
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (max-width: 1279px) {
+  .crm-contact-detail-workspace .crm-contact-workspace-panel-right {
+    order: 3;
+  }
+}
+
+.crm-contact-detail-workspace .crm-contact-tab-bar {
+  max-width: 100%;
+}
+
+.crm-contact-detail-workspace .crm-contact-lead-nav button:disabled {
+  opacity: 0.45;
+}
+
+.crm-contact-detail-workspace .crm-contact-workspace-toast {
+  position: fixed;
+  bottom: 5.5rem;
+  left: 50%;
+  z-index: 45;
+  max-width: min(92vw, 28rem);
+  transform: translateX(-50%);
+  border-radius: 9999px;
+  border: 1px solid var(--crm-border);
+  background: color-mix(in srgb, var(--crm-surface) 92%, transparent);
+  padding: 0.55rem 1rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--crm-text);
+  box-shadow: var(--crm-shadow, 0 8px 32px -12px rgba(0, 0, 0, 0.45));
+  backdrop-filter: blur(10px);
+}
+
+.crm-contact-detail-workspace .crm-contact-workspace-toast-success {
+  border-color: color-mix(in srgb, var(--crm-success, #34c27b) 35%, transparent);
+  color: var(--crm-success, #34c27b);
+}
+
+.crm-contact-detail-workspace .crm-contact-workspace-toast-error {
+  border-color: color-mix(in srgb, var(--crm-danger, #ea6068) 35%, transparent);
+  color: var(--crm-danger, #ea6068);
+}
