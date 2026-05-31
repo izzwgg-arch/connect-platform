@@ -4,7 +4,11 @@ import {
   buildCampaignContactHref,
   campaignLeadNeighbors,
   findCampaignMemberIndex,
+  phonePickerDisplay,
+  phoneSummaryLabel,
+  phoneTypeLabel,
   resolveStartOutreach,
+  resolvePhoneAction,
   sortCampaignNavMembers,
   splitWorkspaceTabs,
   workspaceTabLabel,
@@ -63,4 +67,48 @@ test("resolveStartOutreach succeeds when composer is available", () => {
 
 test("workspaceTabLabel resolves active section title", () => {
   assert.equal(workspaceTabLabel("intelligence"), "AI Intelligence");
+});
+
+test("phoneTypeLabel formats canonical and custom labels", () => {
+  assert.equal(phoneTypeLabel("MOBILE"), "Mobile");
+  assert.equal(phoneTypeLabel("billing"), "Billing");
+  assert.equal(phoneTypeLabel("after_hours"), "After Hours");
+  assert.equal(phoneTypeLabel(null), "Phone");
+});
+
+test("phoneSummaryLabel includes primary state", () => {
+  assert.equal(
+    phoneSummaryLabel({ id: "p1", type: "DIRECT", numberRaw: "(845) 555-1111", isPrimary: true }),
+    "Direct · Primary",
+  );
+  assert.equal(
+    phoneSummaryLabel({ id: "p2", type: "OFFICE", numberRaw: "(845) 555-2222", isPrimary: false }),
+    "Office",
+  );
+});
+
+test("resolvePhoneAction executes immediately for one number", () => {
+  const result = resolvePhoneAction([
+    { id: "p1", type: "MOBILE", numberRaw: "(845) 555-1111", isPrimary: true },
+  ]);
+  assert.equal(result.kind, "execute");
+  if (result.kind === "execute") {
+    assert.equal(result.phone.id, "p1");
+  }
+});
+
+test("resolvePhoneAction opens picker for multiple numbers with primary first", () => {
+  const result = resolvePhoneAction([
+    { id: "p2", type: "OFFICE", numberRaw: "(845) 555-2222", isPrimary: false },
+    { id: "p1", type: "MOBILE", numberRaw: "(845) 555-1111", isPrimary: true },
+  ]);
+  assert.equal(result.kind, "pick");
+  if (result.kind === "pick") {
+    assert.equal(result.phones[0]?.id, "p1");
+    assert.deepEqual(phonePickerDisplay(result.phones[0]!), {
+      label: "Mobile",
+      number: "(845) 555-1111",
+      isPrimary: true,
+    });
+  }
 });

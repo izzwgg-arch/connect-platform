@@ -7,6 +7,7 @@ import { CRMCard, CRMEmptyState, CRMSection, crm } from "..";
 import { cn } from "../cn";
 import type { ContactPhone, TimelineEvent } from "./contactTypes";
 import { formatDateTime } from "./contactFormatters";
+import { phoneSummaryLabel } from "./contactWorkspaceHelpers";
 
 export const ContactSmsPanel = forwardRef<
   HTMLDivElement,
@@ -97,11 +98,12 @@ export const ContactSmsPanel = forwardRef<
                   onChange={(e) => setSmsPhone(e.target.value)}
                   className={crm.input}
                 >
-                  <option value="">Primary: {phones[0].numberRaw}</option>
+                  <option value="">
+                    {phoneSummaryLabel(phones.find((p) => p.isPrimary) ?? phones[0])} — {(phones.find((p) => p.isPrimary) ?? phones[0]).numberRaw}
+                  </option>
                   {phones.map((p) => (
                     <option key={p.id} value={p.numberRaw}>
-                      {p.numberRaw} ({p.type.toLowerCase()}
-                      {p.isPrimary ? " · primary" : ""})
+                      {phoneSummaryLabel(p)} — {p.numberRaw}
                     </option>
                   ))}
                 </select>

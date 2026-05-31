@@ -124,3 +124,78 @@ export function resolveStartOutreach(opts: {
   }
   return { ok: true, message: "Ready to log your first outreach note." };
 }
+
+export type WorkspacePhone = {
+  id: string;
+  type: string;
+  numberRaw: string;
+  isPrimary: boolean;
+};
+
+export const CRM_PHONE_TYPE_OPTIONS = [
+  "MOBILE",
+  "OFFICE",
+  "DIRECT",
+  "MAIN",
+  "BILLING",
+  "HOME",
+  "CELL",
+  "WORK",
+  "OTHER",
+] as const;
+
+const PHONE_TYPE_LABELS: Record<string, string> = {
+  MOBILE: "Mobile",
+  OFFICE: "Office",
+  DIRECT: "Direct",
+  MAIN: "Main",
+  BILLING: "Billing",
+  HOME: "Home",
+  CELL: "Cell",
+  WORK: "Work",
+  OTHER: "Other",
+};
+
+export function phoneTypeLabel(type: string | null | undefined): string {
+  if (!type) return "Phone";
+  return PHONE_TYPE_LABELS[type.toUpperCase()] ?? titleCasePhoneType(type);
+}
+
+function titleCasePhoneType(type: string): string {
+  return type
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/\b\w/g, (ch) => ch.toUpperCase()) || "Phone";
+}
+
+export function phoneSummaryLabel(phone: WorkspacePhone): string {
+  return `${phoneTypeLabel(phone.type)}${phone.isPrimary ? " · Primary" : ""}`;
+}
+
+export function phonePickerDisplay(phone: WorkspacePhone): {
+  label: string;
+  number: string;
+  isPrimary: boolean;
+} {
+  return {
+    label: phoneTypeLabel(phone.type),
+    number: phone.numberRaw,
+    isPrimary: phone.isPrimary,
+  };
+}
+
+export type PhoneActionResolution =
+  | { kind: "disabled" }
+  | { kind: "execute"; phone: WorkspacePhone }
+  | { kind: "pick"; phones: WorkspacePhone[] };
+
+export function resolvePhoneAction(phones: WorkspacePhone[]): PhoneActionResolution {
+  const available = phones.filter((phone) => phone.numberRaw.trim().length > 0);
+  if (available.length === 0) return { kind: "disabled" };
+  if (available.length === 1) return { kind: "execute", phone: available[0]! };
+  return {
+    kind: "pick",
+    phones: [...available].sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary)),
+  };
+}

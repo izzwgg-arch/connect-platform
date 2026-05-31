@@ -31,40 +31,38 @@ export function ContactCampaignLeadNav({
 
   return (
     <nav
-      className="crm-contact-lead-nav fixed bottom-4 right-4 z-40 flex flex-col items-end gap-2 sm:bottom-6 sm:right-6"
+      className="crm-contact-lead-nav fixed bottom-4 right-4 z-40 flex items-center overflow-hidden rounded-full border border-crm-border/75 bg-crm-surface/95 text-xs shadow-crm backdrop-blur-md sm:bottom-5 sm:right-5"
       aria-label="Campaign lead navigation"
     >
-      <span className="rounded-full border border-crm-border/70 bg-crm-surface/95 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-crm-muted shadow-crm backdrop-blur-md">
-        Lead {position} of {total}
+      <span className="hidden border-r border-crm-border/60 px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wide text-crm-muted sm:inline-flex">
+        {position}/{total}
       </span>
-      <div className="flex items-stretch overflow-hidden rounded-crm-lg border border-crm-border/80 bg-crm-surface/95 shadow-crm backdrop-blur-md">
-        <button
-          type="button"
-          onClick={onPrevious}
-          disabled={previousDisabled || loading}
-          title={previousLabel ? `Previous: ${previousLabel}` : "Previous lead"}
-          className={cn(
-            crm.btnGhost,
-            "min-h-[2.75rem] min-w-[2.75rem] flex-col gap-0 rounded-none border-r border-crm-border/60 px-3 py-2 sm:min-w-[5.5rem]",
-          )}
-        >
-          <ChevronLeft className="h-4 w-4" />
-          <span className="hidden text-[10px] font-bold sm:inline">Prev</span>
-        </button>
-        <button
-          type="button"
-          onClick={onNext}
-          disabled={nextDisabled || loading}
-          title={nextLabel ? `Next: ${nextLabel}` : "Next lead"}
-          className={cn(
-            crm.btnPrimary,
-            "min-h-[2.75rem] min-w-[2.75rem] flex-col gap-0 rounded-none px-3 py-2 sm:min-w-[5.5rem]",
-          )}
-        >
-          <ChevronRight className="h-4 w-4" />
-          <span className="hidden text-[10px] font-bold sm:inline">Next</span>
-        </button>
-      </div>
+      <button
+        type="button"
+        onClick={onPrevious}
+        disabled={previousDisabled || loading}
+        title={previousLabel ? `Previous: ${previousLabel}` : "Previous lead"}
+        className={cn(
+          crm.btnGhost,
+          "h-9 min-w-9 rounded-none border-r border-crm-border/60 px-2.5 py-1.5",
+        )}
+      >
+        <ChevronLeft className="h-4 w-4" />
+        <span className="sr-only">Previous lead</span>
+      </button>
+      <span className="px-2 py-1.5 text-[10px] font-bold text-crm-muted sm:hidden">
+        {position}/{total}
+      </span>
+      <button
+        type="button"
+        onClick={onNext}
+        disabled={nextDisabled || loading}
+        title={nextLabel ? `Next: ${nextLabel}` : "Next lead"}
+        className={cn(crm.btnGhost, "h-9 min-w-9 rounded-none border-l border-crm-border/60 px-2.5 py-1.5 text-crm-accent")}
+      >
+        <ChevronRight className="h-4 w-4" />
+        <span className="sr-only">Next lead</span>
+      </button>
     </nav>
   );
 }

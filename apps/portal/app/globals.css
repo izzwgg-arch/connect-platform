@@ -16968,7 +16968,7 @@ table tr:hover {
     min-height: 0;
     overflow-x: hidden;
     overflow-y: auto;
-    overscroll-behavior: contain;
+    overscroll-behavior: auto;
     -webkit-overflow-scrolling: touch;
   }
 }
@@ -16985,6 +16985,10 @@ table tr:hover {
 
 .crm-contact-detail-workspace .crm-contact-lead-nav button:disabled {
   opacity: 0.45;
+}
+
+.crm-contact-detail-workspace .crm-contact-phone-picker {
+  box-shadow: 0 24px 70px -28px rgba(0, 0, 0, 0.6);
 }
 
 .crm-contact-detail-workspace .crm-contact-workspace-toast {

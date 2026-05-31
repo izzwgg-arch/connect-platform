@@ -129,11 +129,12 @@ Pipeline (unchanged): Google Drive match → import (`CrmLeadDocument`) → text
 
 - Entry: `/crm/contacts/[id]?campaignId=…&memberId=…` (from campaign member **Open workspace** or queue deep-links). Presentation lives in `apps/portal/app/(platform)/crm/contacts/[id]/page.tsx` with scoped CSS `.crm-contact-detail-workspace`.
 - **Sticky header:** `ContactCampaignStickyHeader` keeps lead name, company, phone, stage, campaign chip, quick actions, and compact KPI strip visible (`position: sticky` within the workspace frame).
-- **Independent scroll (desktop ≥1280px):** left nav/disposition rail, center workspace tab content, and right summary rail each scroll inside `.crm-contact-workspace-panel`; the page body does not become one giant scroll surface.
+- **Independent scroll (desktop ≥1280px):** left nav/disposition rail, center workspace tab content, and right summary rail each scroll inside `.crm-contact-workspace-panel`, but wheel scroll is allowed to chain naturally when a panel reaches its top/bottom.
 - **Tabs:** center panel uses `ContactWorkspaceTabBar` — five primary tabs inline, remainder under a **More** menu (no horizontal swipe).
 - **Campaign lead navigation:** when `campaignId` is present, `ContactCampaignLeadNav` loads members from `GET /crm/campaigns/:id/members` and provides fixed Prev/Next (+ `ArrowLeft` / `ArrowRight` when not typing in an input).
 - **Start outreach:** empty timeline CTA switches to **Notes**, focuses the composer, shows a toast; does not silently no-op when the composer was unmounted.
-- **Long reports:** `ContactDocumentSummary` on the right rail uses collapsible sections (summary-first). Intelligence tab content unchanged API-wise.
+- **Long reports:** right-rail informational panels use collapsed-by-default `ContactCollapsibleSection` summaries. `ContactDocumentSummary` also uses nested summary-first sections.
+- **Phone numbers:** `ContactPhone.type` is the per-phone business label shown in the sticky header, contact info, SMS panel, and Call/SMS picker. Multi-phone Call/SMS actions open a picker; single-phone contacts continue immediately. Current API supports add/delete phones but does not expose a phone update route, so existing phone label editing is not implemented in the portal.
 - **Do not** break `assertCrmContactAllowed` scope — workspace uses existing contact/timeline/task/disposition APIs only.
 
 ## CRM Dashboard Light Mode

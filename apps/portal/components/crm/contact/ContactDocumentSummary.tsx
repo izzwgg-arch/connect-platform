@@ -179,7 +179,6 @@ export function ContactDocumentSummary({ contactId, refreshToken = 0 }: Props) {
       <ContactCollapsibleSection
         id="contact-summary-verified"
         title="Verified CRM fields"
-        defaultOpen
         summary={
           hasVerified
             ? `${verifiedCount} field${verifiedCount === 1 ? "" : "s"} on record`

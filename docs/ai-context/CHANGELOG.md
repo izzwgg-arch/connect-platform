@@ -4,6 +4,39 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-05-31 — CRM campaign active workspace UX polish
+
+**Task:** CRM / campaign workspace / UX polish  
+**Risk:** medium
+
+### Root cause
+
+The first workspace redesign still trapped wheel scroll inside desktop panels (`overscroll-behavior: contain`), only partially applied collapsible summaries, and left call/SMS actions tied to the primary phone even when contacts had multiple numbers. The existing CRM phone record already exposes a per-phone `type`, but the UI did not consistently display or use it.
+
+### What changed
+
+- **Portal only:** removed scroll trapping from campaign contact workspace panels.
+- Right-rail informational panels now use collapsed-by-default summaries.
+- Sticky contact header gets subtle CRM accent/gradient treatment while staying compact.
+- Campaign Prev/Next lead navigation is now a smaller segmented floating pill.
+- Call/SMS actions open a phone picker for multi-phone contacts; single-phone contacts execute immediately.
+- Phone `type` labels are shown in the header, contact info, SMS panel, and Call/SMS picker. Existing add-phone flow now offers Mobile, Office, Direct, Main, Billing, Home, Cell, Work, Other.
+- **Tests:** expanded `contactWorkspaceHelpers.test.ts` for phone label formatting and single vs multi-phone picker behavior.
+
+### Deliberately unchanged
+
+- No backend/API/schema changes. Existing API supports add/delete phones, but no phone update route exists for editing saved phone types.
+- CRM permissions, telephony routing, SMS send route, and campaign APIs unchanged.
+
+### Verify
+
+- Desktop scroll continues naturally when a workspace panel reaches top/bottom.
+- Right rail starts compact and expands on section header click.
+- Multi-phone contacts show picker for Call and SMS; selected number is used.
+- Single-phone contacts call/open SMS immediately.
+
+---
+
 ## 2026-05-31 — CRM campaign active workspace UX redesign
 
 **Task:** CRM / campaign workspace / UX redesign  

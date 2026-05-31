@@ -16,12 +16,18 @@ import {
   ContactCampaignStickyHeader,
   ContactWorkspaceTabBar,
   ContactCampaignLeadNav,
+  ContactCollapsibleSection,
+  CRM_PHONE_TYPE_OPTIONS,
   workspaceTabLabel,
   buildCampaignContactHref,
   campaignLeadNeighbors,
   findCampaignMemberIndex,
+  phoneSummaryLabel,
+  phoneTypeLabel,
+  resolvePhoneAction,
   sortCampaignNavMembers,
   type CampaignNavMember,
+  type WorkspacePhone,
   LiveWorkspaceScriptPanel,
   LiveWorkspaceChecklistPanel,
   ContactTimeline,
@@ -1186,6 +1192,68 @@ function ContactIntelligence({ contactId }: { contactId: string }) {
   );
 }
 
+function PhoneActionPicker({
+  intent,
+  phones,
+  onSelect,
+  onClose,
+}: {
+  intent: "call" | "sms";
+  phones: WorkspacePhone[];
+  onSelect: (phone: WorkspacePhone) => void;
+  onClose: () => void;
+}) {
+  const sortedPhones = resolvePhoneAction(phones);
+  const choices = sortedPhones.kind === "pick" ? sortedPhones.phones : phones;
+  const title = intent === "call" ? "Choose number to call" : "Choose SMS number";
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 p-3 sm:items-center"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="crm-contact-phone-picker w-full max-w-sm rounded-[1.1rem] border border-crm-border bg-crm-surface p-3">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-crm-accent">
+              {intent === "call" ? "Call" : "SMS"}
+            </p>
+            <h3 className="text-sm font-bold text-crm-text">{title}</h3>
+          </div>
+          <button type="button" onClick={onClose} className={cn(crm.btnGhost, "px-2 py-1 text-xs")}>
+            Close
+          </button>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          {choices.map((phoneChoice) => (
+            <button
+              key={phoneChoice.id}
+              type="button"
+              onClick={() => onSelect(phoneChoice)}
+              className="flex items-center justify-between gap-3 rounded-xl border border-crm-border/70 bg-crm-surface-2/45 px-3 py-2.5 text-left hover:border-crm-accent/40 hover:bg-crm-accent/8"
+            >
+              <span className="min-w-0">
+                <span className="flex items-center gap-2 text-sm font-bold text-crm-text">
+                  {phoneTypeLabel(phoneChoice.type)}
+                  {phoneChoice.isPrimary ? (
+                    <span className="rounded-full bg-crm-accent/15 px-1.5 py-0.5 text-[10px] font-bold uppercase text-crm-accent">
+                      Primary
+                    </span>
+                  ) : null}
+                </span>
+                <span className="mt-0.5 block text-sm text-crm-muted">{phoneChoice.numberRaw}</span>
+              </span>
+              <ChevronRight className="h-4 w-4 shrink-0 text-crm-muted" />
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CrmContactDetailInner() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -1292,8 +1360,9 @@ function CrmContactDetailInner() {
   // Phone add / remove
   const [addingPhone, setAddingPhone] = useState(false);
   const [newPhoneRaw, setNewPhoneRaw] = useState("");
-  const [newPhoneType, setNewPhoneType] = useState<"MOBILE" | "OFFICE" | "HOME" | "OTHER">("MOBILE");
+  const [newPhoneType, setNewPhoneType] = useState<string>("MOBILE");
   const [newPhonePosting, setNewPhonePosting] = useState(false);
+  const [phonePickerIntent, setPhonePickerIntent] = useState<"call" | "sms" | null>(null);
 
   // Email add / remove
   const [addingEmail, setAddingEmail] = useState(false);
@@ -1968,8 +2037,10 @@ function CrmContactDetailInner() {
       ? "Phone connecting — call will dial once ready"
       : "Phone not registered — open the dialer to reconnect";
 
-  const handleCall = async () => {
-    const num = primaryPhone;
+  const handleCall = async (phoneTarget?: WorkspacePhone | string | null) => {
+    const num = typeof phoneTarget === "string"
+      ? phoneTarget
+      : phoneTarget?.numberRaw ?? primaryPhone;
     if (!num) return;
     if (!callerIdChecked) {
       setCallerIdLoading(true);
@@ -1987,6 +2058,37 @@ function CrmContactDetailInner() {
       }
     }
     window.dispatchEvent(new CustomEvent("crm:dial", { detail: { target: num } }));
+  };
+
+  const beginCall = () => {
+    const resolution = resolvePhoneAction(contact.phones);
+    if (resolution.kind === "disabled") return;
+    if (resolution.kind === "execute") {
+      void handleCall(resolution.phone);
+      return;
+    }
+    setPhonePickerIntent("call");
+  };
+
+  const beginSms = () => {
+    const resolution = resolvePhoneAction(contact.phones);
+    if (resolution.kind === "disabled") return;
+    if (resolution.kind === "execute") {
+      setSmsPhone(resolution.phone.isPrimary ? "" : resolution.phone.numberRaw);
+      focusWorkspace("sms");
+      return;
+    }
+    setPhonePickerIntent("sms");
+  };
+
+  const selectPhoneForAction = (phoneChoice: WorkspacePhone) => {
+    if (phonePickerIntent === "call") {
+      void handleCall(phoneChoice);
+    } else if (phonePickerIntent === "sms") {
+      setSmsPhone(phoneChoice.isPrimary ? "" : phoneChoice.numberRaw);
+      focusWorkspace("sms");
+    }
+    setPhonePickerIntent(null);
   };
 
   const handleBack = () => {
@@ -2222,12 +2324,13 @@ function CrmContactDetailInner() {
           displayName={contact.displayName}
           company={contact.company ?? null}
           phone={primaryPhoneRow?.numberRaw ?? null}
+          phoneLabel={primaryPhoneRow ? phoneTypeLabel(primaryPhoneRow.type) : null}
           email={primaryEmailRow?.email ?? null}
           stage={stage}
           campaignName={campaignName}
           isArchived={isArchived}
-          onCall={() => void handleCall()}
-          onSms={() => focusWorkspace("sms")}
+          onCall={beginCall}
+          onSms={beginSms}
           onEmail={() => focusWorkspace("email")}
           onNote={scrollToNoteComposer}
           callDisabled={!primaryPhone || isArchived}
@@ -2533,15 +2636,26 @@ function CrmContactDetailInner() {
               </button>
             )}
           </CRMCard>
-          <ContactRelationshipHealth
-            timeline={timeline}
-            openTasks={tasks}
-            overdueTasks={overdueTasks}
-            lastTouchAt={contact.lastActivityAt ?? null}
-            daysSinceComm={daysSinceComm}
-            callbackUrgent={callbackUrgent}
-            recentActivityCount={recentActivityCount}
-          />
+          <ContactCollapsibleSection
+            id="right-rail-relationship"
+            title="Relationship health"
+            summary={`${recentActivityCount} touch${recentActivityCount === 1 ? "" : "es"} in 7d · ${tasks.length} open task${tasks.length === 1 ? "" : "s"}`}
+          >
+            <ContactRelationshipHealth
+              timeline={timeline}
+              openTasks={tasks}
+              overdueTasks={overdueTasks}
+              lastTouchAt={contact.lastActivityAt ?? null}
+              daysSinceComm={daysSinceComm}
+              callbackUrgent={callbackUrgent}
+              recentActivityCount={recentActivityCount}
+            />
+          </ContactCollapsibleSection>
+          <ContactCollapsibleSection
+            id="right-rail-activity"
+            title="Activity summary"
+            summary={lastInteractionLabel ?? "No interactions yet"}
+          >
           <CRMCard padding="md" className="border-crm-border/70">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -2573,9 +2687,15 @@ function CrmContactDetailInner() {
               </div>
             </div>
           </CRMCard>
+          </ContactCollapsibleSection>
         <div className="flex flex-col gap-4">
 
           {/* CRM fields */}
+          <ContactCollapsibleSection
+            id="right-rail-outreach-rules"
+            title="Outreach rules"
+            summary={`${stageLabel(stage)} · DNC ${contact.doNotCall ? "on" : "off"} · SMS opt-out ${contact.doNotSms ? "on" : "off"}`}
+          >
           <div className="panel rounded-crm-lg border border-crm-border/60 shadow-crm" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
             <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>
               Outreach rules &amp; signal
@@ -2674,8 +2794,14 @@ function CrmContactDetailInner() {
               )}
             </div>
           </div>
+          </ContactCollapsibleSection>
 
           {/* ── Open tasks panel ──────────────────────────────────────────── */}
+          <ContactCollapsibleSection
+            id="right-rail-open-tasks"
+            title="Open tasks"
+            summary={`${tasks.length} active follow-up${tasks.length === 1 ? "" : "s"}`}
+          >
           <div ref={tasksPanelRef} className="panel rounded-crm-lg border border-crm-border/60 shadow-crm" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>
@@ -2805,8 +2931,14 @@ function CrmContactDetailInner() {
               })
             )}
           </div>
+          </ContactCollapsibleSection>
 
           {/* Scratch notes (Contact.notes — single text field) */}
+          <ContactCollapsibleSection
+            id="right-rail-scratch-notes"
+            title="Scratch notes"
+            summary={contact.notes ? "Notes on file" : "No scratch notes"}
+          >
           <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
             <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>Scratch Notes</h3>
             {editing && !isArchived ? (
@@ -2823,10 +2955,22 @@ function CrmContactDetailInner() {
               </p>
             )}
           </div>
+          </ContactCollapsibleSection>
 
-          <ContactDocumentSummary contactId={id} refreshToken={summaryRefreshToken} />
+          <ContactCollapsibleSection
+            id="right-rail-business-profile"
+            title="Extracted business profile"
+            summary="Verified CRM fields, extracted document data, and phone discoveries"
+          >
+            <ContactDocumentSummary contactId={id} refreshToken={summaryRefreshToken} />
+          </ContactCollapsibleSection>
 
           {/* All phones & emails */}
+          <ContactCollapsibleSection
+            id="right-rail-contact-info"
+            title="Contact info"
+            summary={`${contact.phones.length} phone${contact.phones.length === 1 ? "" : "s"} · ${contact.emails.length} email${contact.emails.length === 1 ? "" : "s"}`}
+          >
           <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
             <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>Contact Info</h3>
 
@@ -2841,7 +2985,7 @@ function CrmContactDetailInner() {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: "0.875rem", fontWeight: p.isPrimary ? 600 : 400 }}>{p.numberRaw}</div>
                   <div style={{ fontSize: "0.75rem", color: "var(--text-dim)", textTransform: "capitalize" }}>
-                    {p.type.toLowerCase()}{p.isPrimary ? " · primary" : ""}
+                    {phoneSummaryLabel(p)}
                   </div>
                 </div>
                 {!isArchived && (
@@ -2870,13 +3014,12 @@ function CrmContactDetailInner() {
                   />
                   <select
                     value={newPhoneType}
-                    onChange={(e) => setNewPhoneType(e.target.value as typeof newPhoneType)}
+                    onChange={(e) => setNewPhoneType(e.target.value)}
                     style={{ ...inputStyle, width: "auto", fontSize: "0.8125rem" }}
                   >
-                    <option value="MOBILE">Mobile</option>
-                    <option value="OFFICE">Office</option>
-                    <option value="HOME">Home</option>
-                    <option value="OTHER">Other</option>
+                    {CRM_PHONE_TYPE_OPTIONS.map((type) => (
+                      <option key={type} value={type}>{phoneTypeLabel(type)}</option>
+                    ))}
                   </select>
                 </div>
                 <div style={{ display: "flex", gap: "0.375rem" }}>
@@ -3018,9 +3161,15 @@ function CrmContactDetailInner() {
               </>
             )}
           </div>
+          </ContactCollapsibleSection>
 
           {/* Possible duplicates panel — shown when the API finds matches */}
           {duplicates.length > 0 && !isArchived && (
+            <ContactCollapsibleSection
+              id="right-rail-duplicates"
+              title="Possible duplicates"
+              summary={`${duplicates.length} possible match${duplicates.length === 1 ? "" : "es"}`}
+            >
             <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem", borderLeft: "3px solid #f59e0b" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "0.375rem" }}>
                 <AlertTriangle size={13} style={{ color: "#d97706" }} />
@@ -3061,6 +3210,7 @@ function CrmContactDetailInner() {
                 </div>
               ))}
             </div>
+            </ContactCollapsibleSection>
           )}
         </div>
         </div>
@@ -3079,6 +3229,15 @@ function CrmContactDetailInner() {
         nextDisabled={!campaignNav.next}
         loading={campaignNavLoading}
       />
+
+      {phonePickerIntent ? (
+        <PhoneActionPicker
+          intent={phonePickerIntent}
+          phones={contact.phones}
+          onSelect={selectPhoneForAction}
+          onClose={() => setPhonePickerIntent(null)}
+        />
+      ) : null}
 
       {workspaceToast ? (
         <p
