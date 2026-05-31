@@ -20,15 +20,8 @@ function hmacSha256(key: string, data: string): string {
   return base64url(crypto.createHmac("sha256", key).update(data, "utf8").digest());
 }
 
-async function requireAuth(req: any, reply: any): Promise<{ sub: string; tenantId: string; email?: string; role?: string } | null> {
-  const user = req.user as { sub: string; tenantId: string; email?: string; role?: string } | undefined;
-  if (!user?.sub || !user?.tenantId) {
-    reply.code(401).send({ error: "unauthorized" });
-    return null;
-  }
-  return user;
-}
-
+import { requireCrmAccess, requireCrmEmailSettingsAccess } from "./guard.js";
+import { assertCrmContactAllowed } from "./crmContactAccess.js";
 import {
   canManageTenantSender,
   hasReadonlyScope,
@@ -111,7 +104,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
 
   // GET /crm/email/connection — backward-compat: caller's own USER connection
   app.get("/crm/email/connection", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
+    const user = await requireCrmAccess(req, reply); if (!user) return;
     const row = await db.crmEmailConnection.findFirst({
       where: { tenantId: user.tenantId, userId: user.sub, scope: "USER" },
     }).catch(() => null);
@@ -132,7 +125,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
   // GET /crm/email/connections — all senders the caller is allowed to send from
   // Returns: { senders: SenderRef[], canManageTenantSenders: boolean }
   app.get("/crm/email/connections", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
+    const user = await requireCrmAccess(req, reply); if (!user) return;
     const rows = await db.crmEmailConnection.findMany({
       where: {
         tenantId: user.tenantId,
@@ -182,7 +175,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
 
   // POST /crm/email/oauth/start — returns Google OAuth URL (send-only scope in Phase 1)
   app.post("/crm/email/oauth/start", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
+    const user = await requireCrmAccess(req, reply); if (!user) return;
     if (!cryptoReady) return reply.status(503).send({ error: "crypto_not_configured" });
 
     let clientId: string;
@@ -467,7 +460,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       }).catch(() => undefined);
 
       const portalUrl = (process.env.NEXT_PUBLIC_PORTAL_URL || "").trim();
-      const redirectTarget = portalUrl ? `${portalUrl.replace(/\/$/, "")}/crm/email/settings?connected=1` : "/crm/email/settings?connected=1";
+      const redirectTarget = portalUrl ? `${portalUrl.replace(/\/$/, "")}/crm/email?connected=1` : "/crm/email?connected=1";
       reply.redirect(redirectTarget);
     } catch (e: any) {
       app.log.error({ route: "oauth_callback", err: e?.message || e });
@@ -513,7 +506,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
 
   // DELETE /crm/email/connection — backward-compat: revoke caller's USER connection
   app.delete("/crm/email/connection", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
+    const user = await requireCrmAccess(req, reply); if (!user) return;
     const row = await db.crmEmailConnection.findFirst({
       where: { tenantId: user.tenantId, userId: user.sub, scope: "USER" },
     });
@@ -524,7 +517,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
 
   // DELETE /crm/email/connections/:id — revoke any connection caller is allowed to manage
   app.delete("/crm/email/connections/:id", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
+    const user = await requireCrmAccess(req, reply); if (!user) return;
     const { id } = req.params as { id: string };
     const row = await db.crmEmailConnection.findFirst({ where: { id, tenantId: user.tenantId } });
     if (!row) return reply.code(404).send({ error: "connection_not_found" });
@@ -538,7 +531,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
 
   // PATCH /crm/email/connections/:id — edit label / senderName / isDefaultForTenant
   app.patch("/crm/email/connections/:id", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
+    const user = await requireCrmAccess(req, reply); if (!user) return;
     const { id } = req.params as { id: string };
     const row = await db.crmEmailConnection.findFirst({ where: { id, tenantId: user.tenantId } });
     if (!row) return reply.code(404).send({ error: "connection_not_found" });
@@ -586,7 +579,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
   // POST /crm/email/connection/test — queue a test email through resolved sender
   // Body (optional): { connectionId?: string } — explicit sender; otherwise fallback chain
   app.post("/crm/email/connection/test", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
+    const user = await requireCrmAccess(req, reply); if (!user) return;
     const body = (req.body as any) || {};
     const explicitId = body?.connectionId ? String(body.connectionId) : null;
     const sender = await resolveSenderConnection({ tenantId: user.tenantId, userId: user.sub, explicitId });
@@ -616,7 +609,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
 
   // POST /crm/email/sync-now — enqueue metadata-only reply sync (opt-in connections only)
   app.post("/crm/email/sync-now", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
+    const user = await requireCrmAccess(req, reply); if (!user) return;
     const body = (req.body as any) || {};
     const explicitId = body?.connectionId ? String(body.connectionId) : null;
     const diag = body?.diag === true;
@@ -652,7 +645,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
 
   // GET /crm/email/sync-last — last sync diagnostics for a connection (admin or owner)
   app.get("/crm/email/sync-last", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
+    const user = await requireCrmAccess(req, reply); if (!user) return;
     const { connectionId } = req.query as any;
     const id = String(connectionId || "");
     if (!id) return reply.code(400).send({ error: "invalid_query" });
@@ -670,7 +663,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
 
   // GET /crm/email/replies/recent — metadata-only recent inbound messages
   app.get("/crm/email/replies/recent", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
+    const user = await requireCrmAccess(req, reply); if (!user) return;
     const limit = Math.min(50, Math.max(1, Number((req.query as any)?.limit ?? 20)));
     const isAdmin = canManageTenantSender(user);
     const rows = await db.crmEmailMessage.findMany({
@@ -711,7 +704,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
   // POST /crm/email/send — basic send (Phase 1).
   // Body: { contactId?, toEmail?, subject?, bodyText?, templateId?, connectionId? }
   app.post("/crm/email/send", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
+    const user = await requireCrmAccess(req, reply); if (!user) return;
 
     const body = (req.body as any) || {};
     const explicitConnectionId = body?.connectionId ? String(body.connectionId) : null;
@@ -749,6 +742,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     // Resolve and validate contact belongs to tenant; derive toEmail if needed
     let resolvedTo = toEmail;
     if (contactId) {
+      if (!(await assertCrmContactAllowed(user, contactId, reply))) return;
       const contact = await db.contact.findFirst({ where: { id: contactId, tenantId: user.tenantId }, select: { id: true } });
       if (!contact) return reply.status(404).send({ error: "contact_not_found" });
       if (!resolvedTo) {
@@ -779,7 +773,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
 
   // GET /crm/email/templates — list templates available to this user (shared + own private)
   app.get("/crm/email/templates", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
+    const user = await requireCrmAccess(req, reply); if (!user) return;
     const includeArchived = String((req.query as any)?.includeArchived || "") === "true";
     const rows = await db.crmEmailTemplate.findMany({
       where: {
@@ -798,7 +792,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
 
   // GET /crm/email/templates/:id
   app.get("/crm/email/templates/:id", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
+    const user = await requireCrmAccess(req, reply); if (!user) return;
     const { id } = req.params as { id: string };
     const row = await db.crmEmailTemplate.findFirst({
       where: {
@@ -816,7 +810,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
 
   // POST /crm/email/templates — create
   app.post("/crm/email/templates", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
+    const user = await requireCrmAccess(req, reply); if (!user) return;
     const body = (req.body as any) || {};
     const name = String(body?.name || "").trim();
     const subject = String(body?.subject || "").trim();
@@ -836,7 +830,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
 
   // PUT /crm/email/templates/:id — update (creator or admin only)
   app.put("/crm/email/templates/:id", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
+    const user = await requireCrmAccess(req, reply); if (!user) return;
     const { id } = req.params as { id: string };
     const existing = await db.crmEmailTemplate.findFirst({ where: { id, tenantId: user.tenantId } });
     if (!existing) return reply.code(404).send({ error: "template_not_found" });
@@ -858,7 +852,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
 
   // DELETE /crm/email/templates/:id — archive (soft)
   app.delete("/crm/email/templates/:id", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
+    const user = await requireCrmAccess(req, reply); if (!user) return;
     const { id } = req.params as { id: string };
     const existing = await db.crmEmailTemplate.findFirst({ where: { id, tenantId: user.tenantId } });
     if (!existing) return reply.code(404).send({ error: "template_not_found" });
@@ -871,7 +865,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
 
   // GET /crm/email/recent — recent sent log (for dashboard)
   app.get("/crm/email/recent", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
+    const user = await requireCrmAccess(req, reply); if (!user) return;
     const limit = Math.min(50, Math.max(1, Number((req.query as any)?.limit ?? 20)));
     const rows = await db.crmEmailSendLog.findMany({
       where: { tenantId: user.tenantId, userId: user.sub },
@@ -885,7 +879,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
   // GET /crm/email/diagnostics/reply-tracking — fleet-level reply tracking health snapshot.
   // Returns aggregate counts only — no OAuth tokens, no email bodies, no secrets.
   app.get("/crm/email/diagnostics/reply-tracking", async (req, reply) => {
-    const user = await requireAuth(req, reply); if (!user) return;
+    const user = await requireCrmEmailSettingsAccess(req, reply); if (!user) return;
     const { tenantId } = user;
 
     const [

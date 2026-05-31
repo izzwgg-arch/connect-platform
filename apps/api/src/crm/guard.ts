@@ -123,6 +123,30 @@ export async function requireCrmAccess(
 }
 
 /**
+ * CRM Email Settings guard: platform admins or CrmUserAccess.role ADMIN only.
+ * Used for tenant-wide email diagnostics and settings surfaces (not send/templates).
+ */
+export async function requireCrmEmailSettingsAccess(
+  req: any,
+  reply: any,
+): Promise<CrmAuthUser | null> {
+  const user = await requireCrmAccess(req, reply);
+  if (!user) return null;
+  if (isAdminRole(user.role)) return user;
+
+  const access = await db.crmUserAccess.findUnique({
+    where: { tenantId_userId: { tenantId: user.tenantId, userId: user.sub } },
+    select: { enabled: true, role: true },
+  });
+  if (access?.enabled && access.role === "ADMIN") return user;
+
+  reply
+    .status(403)
+    .send({ error: "crm_permission_denied", detail: "CRM email settings access required" });
+  return null;
+}
+
+/**
  * Admin-only guard: requires ADMIN / TENANT_ADMIN / SUPER_ADMIN role
  * AND tenant CRM enabled. Used for CRM management operations.
  */

@@ -4,6 +4,40 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-05-30 — CRM Email access for Agent and Manager roles
+
+**Task:** CRM / email / permissions / UI  
+**Risk:** medium
+
+### Gap
+
+CRM Email sidebar and routes required `can_view_crm_settings` (CRM Admin bucket only). CRM Agent and CRM Manager could not reach templates, send flows, or the Email nav item despite having CRM access.
+
+### What changed
+
+- **Shared permissions:** `can_view_crm_email` added to `can_view_crm` and `can_manage_crm` expansions (`packages/shared/src/portalPermissions.ts`). CRM Admin retains `can_view_crm_settings` for settings/wallboard only.
+- **Portal:** `navConfig` CRM Email → `can_view_crm_email`; `PermissionGate` on `/crm/email` and `/crm/email/templates`; `/crm/email/settings` gated by `can_view_crm_settings`; agents connect USER Gmail from landing page (OAuth redirect → `/crm/email`).
+- **API:** All `/crm/email/*` routes (except OAuth callback) use `requireCrmAccess`; `POST /crm/email/send` uses `assertCrmContactAllowed` (campaign/assignment scope); fleet diagnostics use `requireCrmEmailSettingsAccess` (platform admin or CrmUserAccess ADMIN).
+- **Shared helper:** `apps/api/src/crm/crmContactAccess.ts` (reused by inbound caller match).
+
+### Deploy
+
+Requires **`api`** and **`portal`**. No Prisma migration.
+
+### Verify
+
+```bash
+pnpm --dir packages/shared exec node --import tsx --test src/portalPermissions.crm.test.ts src/portalPermissions.crmEmail.test.ts
+pnpm --dir apps/api exec node --import tsx --test src/crm/crmContactAccess.test.ts src/crm/emailRoutes.crmAccess.test.ts src/crm/emailRoutes.test.ts
+```
+
+1. CRM Agent — sidebar **Email**, `/crm/email`, `/crm/email/templates`; no `/crm/email/settings`.
+2. CRM Manager — same; no CRM settings unless CRM Admin role.
+3. Send to contact outside agent campaign scope → API `403`.
+4. CRM Admin / tenant admin — settings + fleet diagnostics still work.
+
+---
+
 ## 2026-05-30 — Inbound CRM caller ID on dialer + telephony WS
 
 **Task:** Telephony / CRM / dialer UI  

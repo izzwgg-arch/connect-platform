@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Mail, Plus, FileText, Eye, Trash2, Loader2, AlertCircle, Save, Lock, Globe } from "lucide-react";
 import { CRMPageShell, CRMPageHeader, CRMCard, crm, cn } from "../../../../../components/crm";
+import { PermissionGate } from "../../../../../components/PermissionGate";
 import { apiGet, apiPost, apiPut, apiDelete } from "../../../../../services/apiClient";
 
 type Template = {
@@ -115,6 +116,7 @@ export default function CrmEmailTemplatesPage() {
   };
 
   return (
+    <PermissionGate permission="can_view_crm_email" fallback={<div className="state-box">You do not have CRM Email access.</div>}>
     <CRMPageShell innerClassName="space-y-4">
       <CRMPageHeader
         icon={<Mail className="h-5 w-5" />}
@@ -275,5 +277,6 @@ export default function CrmEmailTemplatesPage() {
         </CRMCard>
       </div>
     </CRMPageShell>
+    </PermissionGate>
   );
 }

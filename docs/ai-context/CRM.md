@@ -21,10 +21,21 @@ Scope: portal CRM UI/data-flow guardrails. Telephony, billing, workers, database
 - **Display:** row badge `AZ` + detail `Arizona (MST)` for Phoenix — never generic `MT` (DST-implying). Denver stays `MT` / `Mountain`. Helpers in `leadTimezoneResolver.ts` (API) and `components/crm/contact/leadTimezoneDisplay.ts` (portal).
 - UI: compact timezone badge on `/crm/contacts` rows and contact detail near address — no extra columns or noisy panels.
 
+## CRM role permissions (portal + API)
+
+| CrmUserAccess role | Portal legacy keys | CRM Email nav (`can_view_crm_email`) | CRM Email settings (`can_view_crm_settings`) |
+|--------------------|----------------------|--------------------------------------|-----------------------------------------------|
+| AGENT | `can_view_crm` | Yes — send, templates, USER OAuth from `/crm/email` | No |
+| MANAGER | `can_manage_crm` | Yes — same as agent | No |
+| ADMIN | `can_manage_crm` + `can_manage_crm_admin` | Yes | Yes — `/crm/email/settings`, fleet diagnostics API |
+
+- Permissions are merged in `resolvePortalPermissionsWithCrmUserAccess` only when tenant CRM is enabled and `CrmUserAccess.enabled`.
+- **API:** `/crm/email/*` (except OAuth callback) requires `requireCrmAccess`. `POST /crm/email/send` checks `assertCrmContactAllowed` (assignment or allowed campaign when user has campaign restrictions). Fleet diagnostics: `requireCrmEmailSettingsAccess`.
+
 ## Dashboard And Email UI
 
 - CRM dashboard modernization is UI-only. Keep existing API calls in `apps/portal/app/(platform)/crm/dashboard/page.tsx`; derive status from the values already loaded there.
-- CRM Email landing uses only `/crm/email/connection`, `/crm/email/recent`, and `/crm/email/replies/recent`.
+- CRM Email landing uses only `/crm/email/connection`, `/crm/email/recent`, and `/crm/email/replies/recent` (agents skip fleet diagnostics).
 - CRM Email Settings uses only `/crm/email/connections`, `/crm/email/oauth/start`, `/crm/email/sync-now`, `/crm/email/connection/test`, `/crm/email/connections/:id`, and `/crm/email/sync-last`.
 - Sender cards should feel like production infrastructure: connection state, reply tracking, sync health, last sync/activity, and compact diagnostics.
 - Do not invent backend fields, fake metrics, demo activity, placeholder buttons, or inbox archive behavior.

@@ -1,7 +1,7 @@
 import { db } from "@connect/db";
 import { normalizeUsCanadaToE164 } from "@connect/shared";
 import { isAdminRole } from "./guard";
-import { getCrmUserCampaignRestriction } from "./userCampaignAccess";
+import { userCanAccessCrmContact } from "./crmContactAccess";
 
 /** Optional CRM fields attached to inbound telephony call payloads (WS / snapshots). */
 export type CrmInboundCallFields = {
@@ -156,38 +156,6 @@ async function userHasCrmAccess(
   return !!access?.enabled;
 }
 
-async function userCanViewMatchedContact(
-  tenantId: string,
-  userId: string,
-  role: string | undefined,
-  contactId: string,
-): Promise<boolean> {
-  if (!(await userHasCrmAccess(tenantId, userId, role))) return false;
-  if (isAdminRole(role)) return true;
-
-  const restriction = await getCrmUserCampaignRestriction(tenantId, userId);
-  if (!restriction) return true;
-
-  const [meta, campaignMember] = await Promise.all([
-    db.crmContactMeta.findFirst({
-      where: { contactId, tenantId },
-      select: { assignedToUserId: true },
-    }),
-    db.crmCampaignMember.findFirst({
-      where: {
-        contactId,
-        tenantId,
-        campaignId: { in: restriction },
-      },
-      select: { id: true },
-    }),
-  ]);
-
-  if (meta?.assignedToUserId === userId) return true;
-  if (campaignMember) return true;
-  return false;
-}
-
 /**
  * Resolve CRM caller display fields for one viewer on an inbound/return call.
  * Returns null when CRM is off, no match, or viewer lacks access (no field leakage).
@@ -207,7 +175,9 @@ export async function resolveInboundCrmCallerForViewer(
   const base = await matchTenantContactByPhone(tenantId, phone);
   if (!base) return null;
 
-  const allowed = await userCanViewMatchedContact(
+  if (!(await userHasCrmAccess(tenantId, viewer.userId, viewer.role))) return null;
+
+  const allowed = await userCanAccessCrmContact(
     tenantId,
     viewer.userId,
     viewer.role,

@@ -25,6 +25,7 @@ import {
   WifiOff,
 } from "lucide-react";
 import { CRMPageShell, CRMPageHeader, CRMCard, crm, cn } from "../../../../../components/crm";
+import { PermissionGate } from "../../../../../components/PermissionGate";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../../services/apiClient";
 
 type Sender = {
@@ -307,6 +308,7 @@ export default function CrmEmailSettingsPage() {
   };
 
   return (
+    <PermissionGate permission="can_view_crm_settings" fallback={<div className="state-box">You do not have CRM Email settings access.</div>}>
     <CRMPageShell innerClassName={cn(crm.pageInnerWide, "gap-4")}>
       <CRMPageHeader
         icon={<Server className="h-5 w-5" />}
@@ -475,6 +477,7 @@ export default function CrmEmailSettingsPage() {
         </div>
       </CRMCard>
     </CRMPageShell>
+    </PermissionGate>
   );
 }
 

@@ -14,7 +14,7 @@ test("isCrmPortalPermissionKey matches CRM section and page keys", () => {
 });
 
 test("crmLegacyPermissionKeysForAccess grants manage for admin/manager", () => {
-  assert.deepEqual(crmLegacyPermissionKeysForAccess("ADMIN"), ["can_manage_crm"]);
+  assert.deepEqual(crmLegacyPermissionKeysForAccess("ADMIN"), ["can_manage_crm", "can_manage_crm_admin"]);
   assert.deepEqual(crmLegacyPermissionKeysForAccess("manager"), ["can_manage_crm"]);
 });
 
@@ -26,5 +26,12 @@ test("crmLegacyPermissionKeysForAccess grants view for agents", () => {
 test("can_manage_crm expands to CRM section keys", () => {
   const expanded = expandLegacyPortalPermissions(["can_manage_crm"]);
   assert.ok(expanded.includes("can_view_section_crm"));
+  assert.ok(expanded.includes("can_view_crm_email"));
   assert.ok(expanded.every(isCrmPortalPermissionKey));
+});
+
+test("can_view_crm expands to CRM email but not settings", () => {
+  const expanded = expandLegacyPortalPermissions(["can_view_crm"]);
+  assert.ok(expanded.includes("can_view_crm_email"));
+  assert.equal(expanded.includes("can_view_crm_settings"), false);
 });

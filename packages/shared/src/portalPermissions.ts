@@ -144,6 +144,7 @@ export const ACTION_PERMISSION_KEYS = [
   "can_view_crm_reports",
   "can_view_crm_campaigns",
   "can_view_crm_queue",
+  "can_view_crm_email",
   // Tenant-wide communications access (custom role grantable)
   "can_view_tenant_call_history",
   "can_view_tenant_voicemails",
@@ -239,9 +240,9 @@ export const LEGACY_PERMISSION_EXPANSIONS: Record<string, PortalPermissionKey[]>
   // AGENT  → can_view_crm  (read-only CRM access, no settings/wallboard)
   // MANAGER → can_manage_crm (manage campaigns/import, still no settings/wallboard)
   // ADMIN  → can_manage_crm + can_manage_crm_admin (full CRM access incl. settings + wallboard)
-  can_view_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_voicemail_drops", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports", "can_view_crm_funders"],
-  can_manage_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_voicemail_drops", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports", "can_view_crm_funders"],
-  can_manage_crm_admin: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_voicemail_drops", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_settings", "can_view_crm_wallboard", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports", "can_view_crm_funders"],
+  can_view_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_voicemail_drops", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports", "can_view_crm_funders", "can_view_crm_email"],
+  can_manage_crm: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_voicemail_drops", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports", "can_view_crm_funders", "can_view_crm_email"],
+  can_manage_crm_admin: [...CRM_SECTION, "can_view_crm_dashboard", "can_view_crm_contacts", "can_view_crm_tasks", "can_view_crm_live_call", "can_view_crm_scripts", "can_view_crm_voicemail_drops", "can_view_crm_checklists", "can_view_crm_import", "can_view_crm_settings", "can_view_crm_wallboard", "can_view_crm_campaigns", "can_view_crm_queue", "can_view_crm_reports", "can_view_crm_funders", "can_view_crm_email"],
 };
 
 const END_USER_ACTIONS: PortalPermissionKey[] = [

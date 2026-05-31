@@ -21,7 +21,9 @@ import {
   WifiOff,
 } from "lucide-react";
 import { CRMPageShell, CRMCard, crm, cn } from "../../../../components/crm";
-import { apiGet } from "../../../../services/apiClient";
+import { PermissionGate } from "../../../../components/PermissionGate";
+import { useAppContext } from "../../../../hooks/useAppContext";
+import { apiGet, apiPost } from "../../../../services/apiClient";
 
 type EmailConnection = {
   connected: boolean;
@@ -170,10 +172,12 @@ function ReplyTrackingHealthBanner({
   conn,
   diag,
   loading,
+  showSettingsLink,
 }: {
   conn: EmailConnection | null;
   diag: ReplyTrackingDiag | null;
   loading: boolean;
+  showSettingsLink: boolean;
 }) {
   if (loading || !conn?.connected) return null;
 
@@ -198,15 +202,20 @@ function ReplyTrackingHealthBanner({
           Replies will not be synced until reply tracking is enabled.
         </p>
       </div>
-      <Link href="/crm/email/settings" className={cn(crm.btnPrimary, "shrink-0 text-xs")}>
-        <Settings className="h-3.5 w-3.5" /> Fix in Settings
-      </Link>
+      {showSettingsLink ? (
+        <Link href="/crm/email/settings" className={cn(crm.btnPrimary, "shrink-0 text-xs")}>
+          <Settings className="h-3.5 w-3.5" /> Fix in Settings
+        </Link>
+      ) : null}
     </div>
   );
 }
 
 export default function CrmEmailLandingPage() {
+  const { can } = useAppContext();
+  const canEmailSettings = can("can_view_crm_settings");
   const [conn, setConn] = useState<EmailConnection | null>(null);
+  const [connectBusy, setConnectBusy] = useState(false);
   const [recent, setRecent] = useState<RecentSent[]>([]);
   const [replies, setReplies] = useState<RecentReply[]>([]);
   const [diag, setDiag] = useState<ReplyTrackingDiag | null>(null);
@@ -220,7 +229,9 @@ export default function CrmEmailLandingPage() {
         apiGet<EmailConnection>("/crm/email/connection").catch(() => null),
         apiGet<{ sent: RecentSent[] }>("/crm/email/recent?limit=10").catch(() => ({ sent: [] })),
         apiGet<{ replies: RecentReply[] }>("/crm/email/replies/recent?limit=5").catch(() => ({ replies: [] })),
-        apiGet<ReplyTrackingDiag>("/crm/email/diagnostics/reply-tracking").catch(() => null),
+        canEmailSettings
+          ? apiGet<ReplyTrackingDiag>("/crm/email/diagnostics/reply-tracking").catch(() => null)
+          : Promise.resolve(null),
       ]);
       setConn(c);
       setRecent(r?.sent ?? []);
@@ -229,9 +240,23 @@ export default function CrmEmailLandingPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canEmailSettings]);
 
   useEffect(() => { void load(); }, [load]);
+
+  const startUserOAuth = async () => {
+    setConnectBusy(true);
+    try {
+      const res = await apiPost<{ url: string }>("/crm/email/oauth/start", {
+        scope: "USER",
+        bodyCacheMode: "METADATA_ONLY",
+        enableReplyTracking: true,
+      });
+      if (res?.url) window.location.href = res.url;
+    } finally {
+      setConnectBusy(false);
+    }
+  };
 
   const loadMoreSent = useCallback(async () => {
     setLoadingMoreSent(true);
@@ -259,6 +284,7 @@ export default function CrmEmailLandingPage() {
         : null;
 
   return (
+    <PermissionGate permission="can_view_crm_email" fallback={<div className="state-box">You do not have CRM Email access.</div>}>
     <CRMPageShell className={crm.emailWorkspace} innerClassName={crm.pageInnerEmail}>
       <section className={crm.emailHero}>
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -277,14 +303,16 @@ export default function CrmEmailLandingPage() {
             <Link href="/crm/email/templates" className={cn(crm.btnSecondary, "crm-email-btn-secondary")}>
               <FileText className="h-4 w-4" /> Templates
             </Link>
-            <Link href="/crm/email/settings" className={cn(crm.btnPrimary, "crm-email-btn-primary")}>
-              <Settings className="h-4 w-4" /> Settings
-            </Link>
+            {canEmailSettings ? (
+              <Link href="/crm/email/settings" className={cn(crm.btnPrimary, "crm-email-btn-primary")}>
+                <Settings className="h-4 w-4" /> Settings
+              </Link>
+            ) : null}
           </div>
         </div>
       </section>
 
-      <ReplyTrackingHealthBanner conn={conn} diag={diag} loading={loading} />
+      <ReplyTrackingHealthBanner conn={conn} diag={diag} loading={loading} showSettingsLink={canEmailSettings} />
 
       <CRMCard padding="none" className={cn(crm.emailPanel, "crm-email-sender-card")}>
         <div className="crm-email-card-glow" />
@@ -377,9 +405,21 @@ export default function CrmEmailLandingPage() {
                 <Sparkles className="crm-email-mail-spark h-4 w-4" />
               </span>
             </div>
-            <Link href="/crm/email/settings" className={cn(connected ? crm.btnSecondary : crm.btnPrimary, "crm-email-manage-btn w-full")}>
-              {connected ? "Manage sender" : "Connect Google"}
-            </Link>
+            {canEmailSettings ? (
+              <Link href="/crm/email/settings" className={cn(connected ? crm.btnSecondary : crm.btnPrimary, "crm-email-manage-btn w-full")}>
+                {connected ? "Manage sender" : "Connect Google"}
+              </Link>
+            ) : (
+              <button
+                type="button"
+                disabled={connectBusy || connected}
+                onClick={() => void startUserOAuth()}
+                className={cn(connected ? crm.btnSecondary : crm.btnPrimary, "crm-email-manage-btn w-full")}
+              >
+                {connectBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {connected ? "Google connected" : "Connect Google"}
+              </button>
+            )}
           </div>
         </div>
       </CRMCard>
@@ -394,9 +434,11 @@ export default function CrmEmailLandingPage() {
                 </span>
                 Recent replies
               </h3>
-              <Link href="/crm/email/settings" className="crm-email-action-link inline-flex items-center gap-1 text-xs font-bold text-crm-accent">
-                Reply tracking <ArrowRight className="h-3 w-3" />
-              </Link>
+              {canEmailSettings ? (
+                <Link href="/crm/email/settings" className="crm-email-action-link inline-flex items-center gap-1 text-xs font-bold text-crm-accent">
+                  Reply tracking <ArrowRight className="h-3 w-3" />
+                </Link>
+              ) : null}
             </div>
             {loading ? (
               <div className="flex items-center gap-2 text-sm text-crm-muted"><Loader2 className="h-4 w-4 animate-spin" /> Loading replies...</div>
@@ -524,5 +566,6 @@ export default function CrmEmailLandingPage() {
         />
       </section>
     </CRMPageShell>
+    </PermissionGate>
   );
 }
