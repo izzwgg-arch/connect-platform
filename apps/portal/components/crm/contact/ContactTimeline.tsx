@@ -1,8 +1,9 @@
 "use client";
 
-import { Activity, Filter } from "lucide-react";
-import { CRMEmptyState, CRMSection, crm } from "..";
+import { Filter } from "lucide-react";
+import { CRMSection, crm } from "..";
 import { LoadingSkeleton } from "../../LoadingSkeleton";
+import { cn } from "../cn";
 import type { TimelineEvent } from "./contactTypes";
 import { ContactTimelineItem } from "./ContactTimelineItem";
 
@@ -53,27 +54,26 @@ export function ContactTimeline({
         {loading ? (
           <LoadingSkeleton rows={5} />
         ) : events.length === 0 ? (
-          <CRMEmptyState
-            icon={<Activity className="h-8 w-8" />}
-            title={isArchived ? "No activity on record" : "No conversations yet"}
-            description={
-              isArchived
+          <div className="py-2 text-sm">
+            <p className="font-semibold text-crm-text">
+              {isArchived ? "No activity on record" : "No conversations yet"}
+            </p>
+            <p className="mt-1 text-crm-muted">
+              {isArchived
                 ? "This archived contact has no timeline entries to show."
-                : "Start first outreach — add a note, send SMS, or open the live workspace to log a call."
-            }
-            action={
-              !isArchived && onStartOutreach ? (
-                <button
-                  type="button"
-                  onClick={onStartOutreach}
-                  disabled={outreachStarting}
-                  className={crm.btnPrimary}
-                >
-                  {outreachStarting ? "Opening notes…" : "Start outreach"}
-                </button>
-              ) : undefined
-            }
-          />
+                : "Start first outreach with a note, SMS, or workspace call."}
+            </p>
+            {!isArchived && onStartOutreach ? (
+              <button
+                type="button"
+                onClick={onStartOutreach}
+                disabled={outreachStarting}
+                className={cn(crm.btnPrimary, "mt-3")}
+              >
+                {outreachStarting ? "Opening notes…" : "Start outreach"}
+              </button>
+            ) : null}
+          </div>
         ) : (
           <div className="flex flex-col gap-1">
             {events.map((event) => (

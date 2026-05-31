@@ -354,9 +354,8 @@ function ContactDriveDocuments({ contactId }: { contactId: string }) {
 
   if (docs.length === 0) {
     return (
-      <div className="rounded-[1.35rem] border border-dashed border-crm-border/80 bg-crm-surface-2/40 p-8 text-center">
-        <Files className="mx-auto h-8 w-8 text-crm-muted" />
-        <p className="mt-3 text-sm font-semibold text-crm-text">No Drive documents attached yet.</p>
+      <div className="px-2 py-3 text-center">
+        <p className="text-sm font-semibold text-crm-text">No Drive documents attached yet.</p>
         <p className="mt-1 text-sm text-crm-muted">
           Upload a lead sheet and run Drive Match to automatically find and attach files from Google Drive.
         </p>
@@ -710,9 +709,8 @@ function ContactDiscoveries({ contactId }: { contactId: string }) {
 
   if (!hasDiscoveries) {
     return (
-      <div className="rounded-[1.35rem] border border-dashed border-crm-border/80 bg-crm-surface-2/40 p-8 text-center">
-        <ScanText className="mx-auto h-8 w-8 text-crm-muted" />
-        <p className="mt-3 text-sm font-semibold text-crm-text">No pending discoveries.</p>
+      <div className="px-2 py-3 text-center">
+        <p className="text-sm font-semibold text-crm-text">No pending discoveries.</p>
         <p className="mt-1 text-sm text-crm-muted">
           Import documents, extract their text, then click{" "}
           <strong>Run Discovery</strong> on the document to find phones and emails.
@@ -956,9 +954,8 @@ function ContactIntelligence({ contactId }: { contactId: string }) {
 
   if (!report) {
     return (
-      <div className="rounded-[1.35rem] border border-dashed border-crm-border/80 bg-crm-surface-2/40 p-8 text-center">
-        <Brain className="mx-auto h-8 w-8 text-crm-muted" />
-        <p className="mt-3 text-sm font-semibold text-crm-text">No intelligence report yet.</p>
+      <div className="px-2 py-3 text-center">
+        <p className="text-sm font-semibold text-crm-text">No intelligence report yet.</p>
         <p className="mt-1 text-sm text-crm-muted">
           Import documents, extract their text, then generate an AI advisory report.
         </p>
@@ -2301,7 +2298,7 @@ function CrmContactDetailInner() {
         {tasksLoading ? (
           <LoadingSkeleton rows={2} />
         ) : tasks.length === 0 && !addingTask ? (
-          <p className="rounded-xl border border-dashed border-crm-border/70 bg-crm-surface/60 px-4 py-6 text-center text-sm text-crm-muted">
+          <p className="px-2 py-2 text-center text-sm text-crm-muted">
             No open tasks.
           </p>
         ) : (
@@ -2598,7 +2595,7 @@ function CrmContactDetailInner() {
                 </div>
               </div>
             ) : (
-              <div className="rounded-[1.35rem] border border-dashed border-crm-border/70 bg-crm-surface/60 px-4 py-6 text-center text-sm text-crm-muted">
+              <div className="px-2 py-3 text-center text-sm text-crm-muted">
                 Select a workspace tab to get started.
               </div>
             )}
@@ -2636,8 +2633,7 @@ function CrmContactDetailInner() {
           <div className={cn(CRM_CONTACT_WORKSPACE_SCROLL_CLASSES.rightRail, "flex flex-col gap-2 pt-1")}>
           <ContactCollapsibleSection
             id="right-rail-relationship"
-            title="Relationship health"
-            summary={`${recentActivityCount} touch${recentActivityCount === 1 ? "" : "es"} in 7d · ${tasks.length} open task${tasks.length === 1 ? "" : "s"}`}
+            title="Relationship Health"
           >
             <ContactRelationshipHealth
               timeline={timeline}
@@ -2651,10 +2647,9 @@ function CrmContactDetailInner() {
           </ContactCollapsibleSection>
           <ContactCollapsibleSection
             id="right-rail-activity"
-            title="Activity summary"
-            summary={lastInteractionLabel ?? "No interactions yet"}
+            title="Activity Summary"
           >
-          <CRMCard padding="md" className="border-crm-border/70">
+          <div className="space-y-3">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-bold uppercase tracking-wide text-crm-muted">Activity summary</p>
@@ -2684,15 +2679,14 @@ function CrmContactDetailInner() {
                 <p className="mt-1 text-xs font-semibold text-crm-text">{tasks.length}</p>
               </div>
             </div>
-          </CRMCard>
+          </div>
           </ContactCollapsibleSection>
         <div className="flex flex-col gap-4">
 
           {/* CRM fields */}
           <ContactCollapsibleSection
             id="right-rail-outreach-rules"
-            title="Outreach rules"
-            summary={`${stageLabel(stage)} · DNC ${contact.doNotCall ? "on" : "off"} · SMS opt-out ${contact.doNotSms ? "on" : "off"}`}
+            title="Outreach Rules"
           >
           <div className="panel rounded-crm-lg border border-crm-border/60 shadow-crm" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
             <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>
@@ -2797,8 +2791,7 @@ function CrmContactDetailInner() {
           {/* ── Open tasks panel ──────────────────────────────────────────── */}
           <ContactCollapsibleSection
             id="right-rail-open-tasks"
-            title="Open tasks"
-            summary={`${tasks.length} active follow-up${tasks.length === 1 ? "" : "s"}`}
+            title="Tasks"
           >
           <div ref={tasksPanelRef} className="panel rounded-crm-lg border border-crm-border/60 shadow-crm" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -2934,8 +2927,7 @@ function CrmContactDetailInner() {
           {/* Scratch notes (Contact.notes — single text field) */}
           <ContactCollapsibleSection
             id="right-rail-scratch-notes"
-            title="Scratch notes"
-            summary={contact.notes ? "Notes on file" : "No scratch notes"}
+            title="Outreach Notes"
           >
           <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
             <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>Scratch Notes</h3>
@@ -2957,8 +2949,7 @@ function CrmContactDetailInner() {
 
           <ContactCollapsibleSection
             id="right-rail-business-profile"
-            title="Extracted business profile"
-            summary="Verified CRM fields, extracted document data, and phone discoveries"
+            title="Extracted Business Profile"
           >
             <ContactDocumentSummary contactId={id} refreshToken={summaryRefreshToken} />
           </ContactCollapsibleSection>
@@ -2966,8 +2957,7 @@ function CrmContactDetailInner() {
           {/* All phones & emails */}
           <ContactCollapsibleSection
             id="right-rail-contact-info"
-            title="Contact info"
-            summary={`${contact.phones.length} phone${contact.phones.length === 1 ? "" : "s"} · ${contact.emails.length} email${contact.emails.length === 1 ? "" : "s"}`}
+            title="Contact Info"
           >
           <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
             <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>Contact Info</h3>
@@ -3167,7 +3157,6 @@ function CrmContactDetailInner() {
             <ContactCollapsibleSection
               id="right-rail-duplicates"
               title="Possible duplicates"
-              summary={`${duplicates.length} possible match${duplicates.length === 1 ? "" : "es"}`}
             >
             <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem", borderLeft: "3px solid #f59e0b" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "0.375rem" }}>

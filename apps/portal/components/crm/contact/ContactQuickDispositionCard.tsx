@@ -144,10 +144,10 @@ export function ContactQuickDispositionCard({
         disabled={disabled || saving}
         onClick={() => onQuickDisposition(option.label)}
         className={cn(
-          "rounded-md border px-2 py-1 text-[11px] font-semibold leading-tight transition-colors",
+          "rounded-full border px-2.5 py-1 text-[11px] font-semibold leading-tight shadow-[0_1px_0_rgba(15,23,42,0.04)] transition-all duration-150",
           disposition === option.label
-            ? "border-crm-accent bg-crm-accent text-white"
-            : "border-crm-border/80 bg-crm-surface text-crm-text hover:border-crm-accent/40 hover:bg-crm-accent/10",
+            ? "border-crm-accent bg-crm-accent text-white shadow-[0_8px_18px_-14px_rgba(14,165,233,0.85)]"
+            : "border-crm-border/70 bg-white text-crm-text hover:-translate-y-px hover:border-crm-accent/35 hover:bg-crm-accent/6 hover:text-crm-accent",
           compact && "whitespace-nowrap",
         )}
       >
@@ -157,14 +157,14 @@ export function ContactQuickDispositionCard({
   }
 
   return (
-    <CRMCard padding="none" className="crm-contact-quick-disposition-card border-crm-accent/25 bg-crm-accent/5">
+    <CRMCard padding="none" className="crm-contact-quick-disposition-card border-crm-accent/20 bg-white/95">
       <div className="space-y-1.5">
         {phones.length > 1 ? (
           <select
             value={activePhoneId ?? ""}
             disabled={disabled}
             onChange={(e) => onPhoneChange(e.target.value)}
-            className={cn(crm.input, "py-1 text-xs")}
+            className={cn(crm.input, "border-crm-border/60 bg-white py-1 text-xs font-semibold shadow-none")}
           >
             {phones.map((phone) => (
               <option key={phone.id} value={phone.id}>
@@ -173,7 +173,7 @@ export function ContactQuickDispositionCard({
             ))}
           </select>
         ) : activePhone ? (
-          <p className="truncate text-xs font-semibold text-crm-text">
+          <p className="truncate text-xs font-bold tracking-tight text-crm-text">
             {phoneTypeLabel(activePhone.type)} · {activePhone.numberRaw}
           </p>
         ) : (
@@ -182,7 +182,7 @@ export function ContactQuickDispositionCard({
 
         <p className="text-[11px] text-crm-muted">
           Last:{" "}
-          <span className="font-semibold text-crm-text">{lastDisposition ?? "None"}</span>
+          <span className="font-bold text-crm-text">{lastDisposition ?? "None"}</span>
         </p>
 
         <div className="flex flex-wrap gap-1">
@@ -195,7 +195,7 @@ export function ContactQuickDispositionCard({
               type="button"
               disabled={disabled}
               onClick={() => setMoreOpen((open) => !open)}
-              className="inline-flex items-center gap-0.5 text-[11px] font-semibold text-crm-accent hover:underline"
+              className="inline-flex items-center gap-0.5 rounded-full px-1 text-[11px] font-bold text-crm-accent transition-colors hover:bg-crm-accent/8"
             >
               {moreOpen ? "Less" : "More…"}
               {moreOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
@@ -209,7 +209,7 @@ export function ContactQuickDispositionCard({
         {canManage ? (
           <button
             type="button"
-            className="text-[11px] font-semibold text-crm-muted hover:text-crm-accent"
+            className="rounded-full px-1 text-[11px] font-bold text-crm-muted transition-colors hover:bg-crm-surface-2 hover:text-crm-accent"
             onClick={() => {
               if (!manageOpen) syncDraftFromProps();
               setManageOpen((open) => !open);
@@ -224,14 +224,14 @@ export function ContactQuickDispositionCard({
       {error ? <p className="mt-1 text-[10px] font-semibold text-crm-danger">{error}</p> : null}
 
       {manageOpen && canManage ? (
-        <div className="mt-2 rounded-lg border border-crm-border/60 bg-crm-surface/80 p-2">
+        <div className="mt-2 rounded-xl border border-crm-border/55 bg-crm-surface/50 p-2 shadow-inner shadow-slate-950/[0.02]">
           <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Custom labels</p>
           <div className="mt-1.5 flex gap-1.5">
             <input
               value={draftLabel}
               onChange={(e) => setDraftLabel(e.target.value)}
               placeholder="Add label…"
-              className={cn(crm.input, "flex-1 py-1 text-xs")}
+              className={cn(crm.input, "flex-1 bg-white py-1 text-xs shadow-none")}
               onKeyDown={(e) => {
                 if (e.key === "Enter") void handleAddCustom();
               }}
@@ -240,7 +240,7 @@ export function ContactQuickDispositionCard({
               type="button"
               disabled={!draftLabel.trim() || savingCustom}
               onClick={() => void handleAddCustom()}
-              className={cn(crm.btnSecondary, "px-2 py-1")}
+              className={cn(crm.btnSecondary, "rounded-full px-2 py-1")}
             >
               <Plus className="h-3.5 w-3.5" />
             </button>
@@ -250,7 +250,7 @@ export function ContactQuickDispositionCard({
               <p className="text-[11px] text-crm-muted">No custom labels yet.</p>
             ) : (
               draftRows.map((row) => (
-                <div key={row.id} className="flex items-center gap-1.5 rounded-md border border-crm-border/50 bg-crm-surface px-1.5 py-1">
+                <div key={row.id} className="flex items-center gap-1.5 rounded-lg border border-crm-border/45 bg-white px-1.5 py-1">
                   <GripVertical className="h-3 w-3 text-crm-muted" />
                   <span className="min-w-0 flex-1 truncate text-xs font-medium text-crm-text">{row.label}</span>
                   <button type="button" className="px-0.5 text-[10px] text-crm-muted hover:text-crm-text" onClick={() => void moveCustom(row.id, -1)}>

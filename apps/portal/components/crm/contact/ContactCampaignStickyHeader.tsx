@@ -93,7 +93,7 @@ export function ContactCampaignStickyHeader({
               ) : null}
             </div>
           </div>
-          <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+          <div className="flex shrink-0 flex-row-reverse flex-wrap items-center justify-start gap-1.5">
             {!isArchived ? (
               <>
                 <button

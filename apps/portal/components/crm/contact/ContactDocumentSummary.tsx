@@ -148,13 +148,9 @@ export function ContactDocumentSummary({ contactId, refreshToken = 0 }: Props) {
   const extractedKeys = Object.keys(EXTRACTED_LABELS);
   const hasVerified = verifiedKeys.some((k) => summary.verified[k]?.displayValue);
   const hasExtracted = extractedKeys.some((k) => summary.extracted[k]?.displayValue);
-  const verifiedCount = verifiedKeys.filter((k) => summary.verified[k]?.displayValue).length;
-  const extractedCount = extractedKeys.filter((k) => summary.extracted[k]?.displayValue).length;
-  const primaryPhoneSummary =
-    summary.phones.find((p) => p.isPrimary)?.number ?? summary.phones[0]?.number ?? null;
 
   return (
-    <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4 flex flex-col gap-3">
+    <div className="flex flex-col gap-3">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
@@ -179,11 +175,6 @@ export function ContactDocumentSummary({ contactId, refreshToken = 0 }: Props) {
       <ContactCollapsibleSection
         id="contact-summary-verified"
         title="Verified CRM fields"
-        summary={
-          hasVerified
-            ? `${verifiedCount} field${verifiedCount === 1 ? "" : "s"} on record`
-            : "No verified fields yet"
-        }
       >
         <dl className="rounded-xl border border-crm-border/50 bg-crm-surface/40 px-3">
           {verifiedKeys.map((key) => (
@@ -202,11 +193,6 @@ export function ContactDocumentSummary({ contactId, refreshToken = 0 }: Props) {
       <ContactCollapsibleSection
         id="contact-summary-extracted"
         title="From imported documents"
-        summary={
-          hasExtracted
-            ? `${extractedCount} extracted field${extractedCount === 1 ? "" : "s"}`
-            : "Import documents to extract fields"
-        }
       >
         <dl className="rounded-xl border border-crm-border/50 bg-crm-surface/40 px-3">
           {extractedKeys.map((key) => (
@@ -233,13 +219,6 @@ export function ContactDocumentSummary({ contactId, refreshToken = 0 }: Props) {
       <ContactCollapsibleSection
         id="contact-summary-phones"
         title={`All phones (${summary.phones.length})`}
-        summary={
-          primaryPhoneSummary
-            ? primaryPhoneSummary
-            : summary.phones.length > 0
-              ? `${summary.phones.length} numbers on file`
-              : "No phones on file"
-        }
       >
         {summary.phones.length === 0 ? (
           <p className="text-xs text-crm-muted">No phone numbers on file.</p>

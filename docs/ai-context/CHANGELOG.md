@@ -4,6 +4,32 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-05-31 — CRM contact workspace visual polish
+
+**Task:** CRM / contact workspace / visual polish  
+**Risk:** medium
+
+### Root cause
+
+The compact workspace structure was correct, but remaining presentation details still felt uneven: the Quick Disposition card used older borders/button styling, collapsed right-rail sections displayed noisy summary text, card wrappers varied between sections, and empty states often rendered inside dashed/bordered containers.
+
+### What changed
+
+- **Quick Disposition:** kept the compact footprint and workflow, but updated typography, pill buttons, white card surface, hover states, and softer shadow treatment.
+- **Right rail sections:** collapsed state now shows only the section title. Section wrappers use a consistent white card surface, radius, border, and soft shadow.
+- **Empty states:** replaced bordered empty containers in contact workspace panels with simple text states.
+- **Header actions:** kept the same actions and functionality while ensuring Call remains the primary far-right action next to VM Drop, Edit, and Archive.
+
+### Deliberately unchanged
+
+- Three-column layout, workspace order, quick disposition save behavior, APIs, database schema, and permissions.
+
+### Verify
+
+- Open a campaign contact workspace and confirm the Quick Disposition card remains compact, collapsed sections show title-only rows, empty states are plain text, and header actions remain Call / VM Drop / Edit / Archive from the right-side action cluster.
+
+---
+
 ## 2026-05-31 — CRM campaign workspace UI polish
 
 **Task:** CRM / campaign workspace / UI polish  

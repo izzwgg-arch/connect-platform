@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { forwardRef } from "react";
 import { MessageSquareDot, Send } from "lucide-react";
-import { CRMCard, CRMEmptyState, CRMSection, crm } from "..";
+import { CRMCard, CRMSection, crm } from "..";
 import { cn } from "../cn";
 import type { ContactPhone, TimelineEvent } from "./contactTypes";
 import { formatDateTime } from "./contactFormatters";
@@ -60,11 +60,10 @@ export const ContactSmsPanel = forwardRef<
           {timelineLoading ? (
             <p className="text-sm text-crm-muted">Loading…</p>
           ) : smsEvents.length === 0 ? (
-            <CRMEmptyState
-              icon={<MessageSquareDot className="h-7 w-7" />}
-              title="No messages yet"
-              description="Send the first SMS below — it appears in the timeline when delivered."
-            />
+            <div className="py-2 text-sm">
+              <p className="font-semibold text-crm-text">No SMS activity yet.</p>
+              <p className="mt-1 text-crm-muted">Send the first SMS below. It appears in the timeline when delivered.</p>
+            </div>
           ) : (
             <div className="flex max-h-80 flex-col gap-2 overflow-y-auto pr-1">
               {smsEvents.map((ev) => {

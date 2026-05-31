@@ -16982,8 +16982,21 @@ table tr:hover {
 }
 
 .crm-contact-detail-workspace .crm-contact-quick-disposition-card {
-  box-shadow: 0 8px 20px -16px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 16px 36px -30px rgba(15, 23, 42, 0.45);
   padding: 0.5rem 0.625rem;
+}
+
+.crm-contact-detail-workspace .crm-contact-right-rail-scroll details,
+.crm-contact-detail-workspace .crm-contact-right-rail-scroll .panel,
+.crm-contact-detail-workspace .crm-contact-right-rail-scroll .crm-card {
+  border-radius: 1.1rem;
+}
+
+.crm-contact-detail-workspace .crm-contact-right-rail-scroll details > div > .panel {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
 }
 
 @media (min-width: 1024px) {
