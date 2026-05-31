@@ -4,6 +4,64 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-05-31 — CRM campaign workspace disposition redesign
+
+**Task:** CRM / campaign workspace / disposition redesign  
+**Risk:** high
+
+### Root cause
+
+Disposition controls lived inside the scrolling center workspace card, so agents lost quick access while reading timeline/script content. Panel scroll only activated at very wide breakpoints and the right rail had no pinned action area. Quick disposition labels were hardcoded and not tenant-configurable, and per-phone/channel dispositions needed a dedicated sticky workflow surface.
+
+### What changed
+
+- **Scroll shell:** left, center, and right panels now use dedicated inner scroll regions (`crm-contact-left-scroll`, `crm-contact-center-scroll`, `crm-contact-right-rail-scroll`) with sticky header + pinned quick disposition slot.
+- **Navigation cleanup:** removed duplicate center mini-tabs; left sidebar remains sole workspace navigation; removed Next Step card.
+- **Quick Disposition card:** sticky right-rail card (`ContactQuickDispositionCard`) with channel + phone target, one-click disposition buttons, optional note save, and manager custom label management.
+- **Quick disposition API:** `GET/PUT /crm/quick-dispositions` with tenant defaults + custom JSON on `CrmTenantSettings.quickDispositions`.
+- **Per-phone/channel dispositions:** reuses `CrmContactPhoneDisposition` + extended `POST /crm/contacts/:id/disposition`.
+- **Tests:** quick disposition merge/permissions, workspace scroll class helpers, phone disposition helpers.
+
+### Verify
+
+- Desktop: each column scrolls independently; Quick Disposition stays visible in right rail while scrolling center content.
+- One-click disposition saves immediately with phone + channel context.
+- Manager can add/reorder custom quick dispositions.
+
+---
+
+## 2026-05-31 — CRM campaign workspace disposition UX
+
+**Task:** CRM / campaign workspace / disposition UX  
+**Risk:** medium
+
+### Root cause
+
+The campaign contact workspace duplicated navigation (left sidebar + center mini-tab row), buried disposition controls in the left rail, and stored dispositions only at contact level (`CrmContactMeta.lastDisposition`) with no phone/channel metadata. The redundant right-rail “Next step” card duplicated guidance already available via tasks, notes, and timeline.
+
+### What changed
+
+- **Portal:** removed center `ContactWorkspaceTabBar` mini-tabs and the right-rail Next Step card; left sidebar remains the sole workspace navigation.
+- **Portal:** added `ContactWorkspaceDispositionBar` in the center workspace header — channel selector (Call/SMS/Email/VM Drop), active phone target, quick disposition buttons, note, and save.
+- Call/SMS picker and single-phone flows now set the active disposition phone + channel before outreach.
+- Per-phone disposition labels appear in contact info, SMS select, and Call/SMS picker.
+- **API + schema:** new `CrmContactPhoneDisposition` model and migration; `POST /crm/contacts/:id/disposition` accepts optional `phoneId` + `channel`, writes phone-level history, enriches timeline metadata (phone label/number/channel), and returns latest disposition on each phone via `GET /crm/contacts/:id`.
+- Contact-level `lastDisposition` behavior preserved for backward compatibility.
+- **Tests:** `contactPhoneDisposition.test.ts`, expanded `contactWorkspaceHelpers.test.ts`.
+
+### Deliberately unchanged
+
+- Notes, timeline, scripts, checklist, email, SMS, tasks, and intelligence tabs remain in the left sidebar.
+- CRM permission model unchanged (`requireCrmAccess` + `assertCrmContactAllowed` on disposition).
+
+### Verify
+
+- Multi-phone contact: Call → pick Mobile → save “No answer” → Mobile shows disposition; SMS → pick Office → save “Interested” → both numbers retain separate latest dispositions.
+- Timeline entries include phone type, number, channel, and disposition.
+- Center mini-tabs and Next Step card are gone; sidebar navigation still switches workspace panels.
+
+---
+
 ## 2026-05-31 — CRM campaign active workspace UX polish
 
 **Task:** CRM / campaign workspace / UX polish  

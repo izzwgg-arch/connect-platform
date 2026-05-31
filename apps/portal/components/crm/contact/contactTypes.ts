@@ -8,7 +8,15 @@ export type AssignedUser = {
   email: string;
 };
 
-export type ContactPhone = { id: string; type: string; numberRaw: string; isPrimary: boolean };
+export type ContactPhone = {
+  id: string;
+  type: string;
+  numberRaw: string;
+  isPrimary: boolean;
+  lastDisposition?: string | null;
+  lastDispositionAt?: string | null;
+  lastDispositionChannel?: string | null;
+};
 export type ContactEmail = { id: string; type: string; email: string; isPrimary: boolean };
 export type ContactAddress = {
   id: string;

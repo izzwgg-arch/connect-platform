@@ -28,6 +28,7 @@ import { registerCrmAiSettingsRoutes } from "./crmAiSettingsRoutes";
 import { registerCrmBatchPipelineRoutes } from "./batchPipelineRoutes";
 import { registerCrmBatchDiagnosticsRoutes } from "./batchDiagnosticsRoutes";
 import { registerCrmLeadTimezoneRoutes } from "./leadTimezoneRoutes";
+import { registerCrmQuickDispositionRoutes } from "./quickDispositionRoutes";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -434,4 +435,6 @@ export async function registerCrmRoutes(app: FastifyInstance) {
 
   // CRM lead timezone backfill (admin)
   await registerCrmLeadTimezoneRoutes(app);
+
+  await registerCrmQuickDispositionRoutes(app);
 }

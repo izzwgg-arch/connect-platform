@@ -711,6 +711,7 @@ model Tenant {
   crmUserAccess                   CrmUserAccess[]
   crmUserCampaignAssignments      CrmUserCampaignAssignment[]
   crmContactMeta                  CrmContactMeta[]
+  crmContactPhoneDispositions     CrmContactPhoneDisposition[]
   crmTimelineEvents               CrmTimelineEvent[]
   crmContactNotes                 CrmContactNote[]
   crmTasks                        CrmContactTask[]
@@ -807,6 +808,7 @@ model User {
   crmAccess                      CrmUserAccess[]
   crmCampaignAssignments         CrmUserCampaignAssignment[]
   crmContactsAssigned            CrmContactMeta[]                  @relation("CrmContactAssignedTo")
+  crmPhoneDispositionsCreated    CrmContactPhoneDisposition[]      @relation("CrmPhoneDispositionCreatedBy")
   crmTimelineEventsCreated       CrmTimelineEvent[]                @relation("CrmTimelineEventCreatedBy")
   crmContactNotesCreated         CrmContactNote[]                  @relation("CrmContactNoteCreatedBy")
   crmTasksAssigned               CrmContactTask[]                  @relation("CrmTaskAssignedTo")
@@ -1895,6 +1897,7 @@ model Contact {
   addresses             ContactAddress[]
   tagLinks              ContactTagAssignment[]
   crmMeta               CrmContactMeta?
+  crmPhoneDispositions  CrmContactPhoneDisposition[]
   crmTimelineEvents     CrmTimelineEvent[]
   crmNotes              CrmContactNote[]
   crmTasks              CrmContactTask[]
@@ -1926,6 +1929,7 @@ model ContactPhone {
   isPrimary        Boolean          @default(false)
   createdAt        DateTime         @default(now())
   contact          Contact          @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  crmDispositions  CrmContactPhoneDisposition[]
 
   @@unique([contactId, numberNormalized])
   @@index([numberNormalized])
@@ -3695,6 +3699,8 @@ model CrmTenantSettings {
   defaultQueueSort     String   @default("SMART")
   /// Default filter tab for the agent queue. One of: PENDING | DUE | OVERDUE | UPCOMING.
   defaultQueueFilter   String   @default("PENDING")
+  /// Tenant-defined quick disposition buttons (JSON array). Built-in defaults are merged in API.
+  quickDispositions    Json?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
@@ -3789,6 +3795,36 @@ model CrmContactMeta {
   @@index([tenantId, timezoneLabel])
   @@index([tenantId, timezoneIana])
   @@index([tenantId, timezoneResolutionStatus])
+}
+
+enum CrmDispositionChannel {
+  CALL
+  SMS
+  EMAIL
+  VOICEMAIL_DROP
+}
+
+/// Per-phone (and channel) disposition history for CRM outreach.
+/// Latest row per phoneId drives contact phone summary; contact-level lastDisposition
+/// on CrmContactMeta remains the most recent disposition across all phones.
+model CrmContactPhoneDisposition {
+  id              String                @id @default(cuid())
+  tenantId        String
+  contactId       String
+  phoneId         String?
+  channel         CrmDispositionChannel
+  disposition     String
+  note            String?
+  createdByUserId String
+  createdAt       DateTime              @default(now())
+
+  tenant    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact   Contact       @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  phone     ContactPhone? @relation(fields: [phoneId], references: [id], onDelete: SetNull)
+  createdBy User          @relation("CrmPhoneDispositionCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, contactId, phoneId, createdAt])
+  @@index([tenantId, contactId, createdAt])
 }
 
 // ─── CRM Timeline & Notes ─────────────────────────────────────────────────────

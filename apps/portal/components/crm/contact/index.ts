@@ -5,6 +5,8 @@ export { ContactWorkspaceHeader } from "./ContactWorkspaceHeader";
 export { ContactStickyActionBar } from "./ContactStickyActionBar";
 export { ContactCampaignStickyHeader } from "./ContactCampaignStickyHeader";
 export { ContactWorkspaceTabBar } from "./ContactWorkspaceTabBar";
+export { ContactQuickDispositionCard, ContactWorkspaceDispositionBar } from "./ContactQuickDispositionCard";
+export type { QuickDispositionOption, CustomQuickDispositionDraft } from "./ContactQuickDispositionCard";
 export { ContactCampaignLeadNav } from "./ContactCampaignLeadNav";
 export { ContactCollapsibleSection } from "./ContactCollapsibleSection";
 export * from "./contactWorkspaceHelpers";

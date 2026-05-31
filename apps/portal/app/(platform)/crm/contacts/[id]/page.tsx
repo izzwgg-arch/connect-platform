@@ -14,9 +14,10 @@ import {
   crm,
   ContactContextBar,
   ContactCampaignStickyHeader,
-  ContactWorkspaceTabBar,
+  ContactQuickDispositionCard,
   ContactCampaignLeadNav,
   ContactCollapsibleSection,
+  CRM_CONTACT_WORKSPACE_SCROLL_CLASSES,
   CRM_PHONE_TYPE_OPTIONS,
   workspaceTabLabel,
   buildCampaignContactHref,
@@ -24,10 +25,16 @@ import {
   findCampaignMemberIndex,
   phoneSummaryLabel,
   phoneTypeLabel,
+  phoneDispositionSummary,
   resolvePhoneAction,
+  resolveActiveDispositionPhone,
+  applyPhoneActionToDispositionTarget,
   sortCampaignNavMembers,
   type CampaignNavMember,
+  type DispositionChannel,
   type WorkspacePhone,
+  type QuickDispositionOption,
+  type CustomQuickDispositionDraft,
   LiveWorkspaceScriptPanel,
   LiveWorkspaceChecklistPanel,
   ContactTimeline,
@@ -49,11 +56,11 @@ import {
 } from "../../../../../components/crm";
 import { leadTimezoneDetailLabel, leadTimezoneBadgeTitle } from "../../../../../components/crm/contact/leadTimezoneDisplay";
 import { ContactDocumentSummary } from "../../../../../components/crm/contact/ContactDocumentSummary";
-import { DISPOSITION_OPTIONS, type Checklist, type ScriptSummary } from "../../../../../components/crm/live";
+import { type Checklist, type ScriptSummary } from "../../../../../components/crm/live";
 import { CrmEmailComposeDrawer } from "../../../../../components/crm/email/CrmEmailComposeDrawer";
 import { CrmVoicemailDropDrawer } from "../../../../../components/crm/voicemail-drops/CrmVoicemailDropDrawer";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
-import { apiGet, apiPatch, apiPost, apiDelete, apiFetchBlob } from "../../../../../services/apiClient";
+import { apiGet, apiPatch, apiPost, apiDelete, apiFetchBlob, apiPut } from "../../../../../services/apiClient";
 import { useAppContext } from "../../../../../hooks/useAppContext";
 import { useSipPhone } from "../../../../../hooks/useSipPhone";
 import { useTelephony } from "../../../../../contexts/TelephonyContext";
@@ -1244,6 +1251,11 @@ function PhoneActionPicker({
                   ) : null}
                 </span>
                 <span className="mt-0.5 block text-sm text-crm-muted">{phoneChoice.numberRaw}</span>
+                {phoneDispositionSummary(phoneChoice) ? (
+                  <span className="mt-1 block text-xs font-semibold text-crm-accent">
+                    {phoneDispositionSummary(phoneChoice)}
+                  </span>
+                ) : null}
               </span>
               <ChevronRight className="h-4 w-4 shrink-0 text-crm-muted" />
             </button>
@@ -1350,7 +1362,7 @@ function CrmContactDetailInner() {
   const [savingOutcome, setSavingOutcome] = useState(false);
   const [outcomeSaved, setOutcomeSaved] = useState(false);
   const [outcomeError, setOutcomeError] = useState("");
-  const saveOutcomeRef = useRef<() => Promise<void>>(async () => {});
+  const saveOutcomeRef = useRef<(override?: string) => Promise<void>>(async () => {});
 
   // Inline note edit
   const [editingNoteLinkedId, setEditingNoteLinkedId] = useState<string | null>(null);
@@ -1363,6 +1375,12 @@ function CrmContactDetailInner() {
   const [newPhoneType, setNewPhoneType] = useState<string>("MOBILE");
   const [newPhonePosting, setNewPhonePosting] = useState(false);
   const [phonePickerIntent, setPhonePickerIntent] = useState<"call" | "sms" | null>(null);
+  const [activeDispositionPhoneId, setActiveDispositionPhoneId] = useState<string | null>(null);
+  const [activeDispositionChannel, setActiveDispositionChannel] = useState<DispositionChannel>("CALL");
+  const [quickDispositionOptions, setQuickDispositionOptions] = useState<QuickDispositionOption[]>([]);
+  const [customQuickDispositions, setCustomQuickDispositions] = useState<CustomQuickDispositionDraft[]>([]);
+  const [canManageQuickDispositions, setCanManageQuickDispositions] = useState(false);
+  const [savingCustomQuickDispositions, setSavingCustomQuickDispositions] = useState(false);
 
   // Email add / remove
   const [addingEmail, setAddingEmail] = useState(false);
@@ -1385,7 +1403,9 @@ function CrmContactDetailInner() {
   // Outcome save ref + keyboard shortcuts — hoisted before any early return
   // so React sees a consistent hook order on every render.
   useEffect(() => {
-    saveOutcomeRef.current = saveOutcome;
+    saveOutcomeRef.current = async (override?: string) => {
+      await saveOutcome(override);
+    };
   });
 
   useEffect(() => {
@@ -1394,12 +1414,12 @@ function CrmContactDetailInner() {
       if (["INPUT", "TEXTAREA", "SELECT"].includes(tgt.tagName)) return;
       if (tgt.getAttribute("contenteditable") === "true") return;
       if (!savingOutcome && !disabledOutcome()) {
-        if (e.key >= "1" && e.key <= "6") {
+        if (e.key >= "1" && e.key <= "9") {
           const idx = parseInt(e.key, 10) - 1;
-          const d = (DISPOSITION_OPTIONS as readonly string[])[idx];
+          const d = quickDispositionOptions[idx]?.label;
           if (d) {
             e.preventDefault();
-            setDisposition(d);
+            void saveOutcomeRef.current(d);
             return;
           }
         }
@@ -1413,7 +1433,7 @@ function CrmContactDetailInner() {
     }
     window.addEventListener("keydown", onAnyKey);
     return () => window.removeEventListener("keydown", onAnyKey);
-  }, [disposition, savingOutcome]);
+  }, [disposition, savingOutcome, quickDispositionOptions]);
 
   // ── Loaders ────────────────────────────────────────────────────────────────
 
@@ -1479,12 +1499,23 @@ function CrmContactDetailInner() {
   }, [id]);
 
   const loadWorkspaceGuides = useCallback(async () => {
-    const [scriptsRes, checklistRes] = await Promise.allSettled([
+    const [scriptsRes, checklistRes, quickRes] = await Promise.allSettled([
       apiGet<{ scripts: ScriptSummary[] }>("/crm/scripts"),
       apiGet<{ checklists: Checklist[] }>("/crm/checklists"),
+      apiGet<{ items: QuickDispositionOption[]; canManage: boolean }>("/crm/quick-dispositions"),
     ]);
     if (scriptsRes.status === "fulfilled") setScriptSummaries(scriptsRes.value.scripts ?? []);
     if (checklistRes.status === "fulfilled") setChecklists(checklistRes.value.checklists ?? []);
+    if (quickRes.status === "fulfilled") {
+      const items = quickRes.value.items ?? [];
+      setQuickDispositionOptions(items);
+      setCanManageQuickDispositions(!!quickRes.value.canManage);
+      setCustomQuickDispositions(
+        items
+          .filter((item) => !item.isDefault)
+          .map((item, index) => ({ id: item.id, label: item.label, sortOrder: index })),
+      );
+    }
   }, []);
 
   useEffect(() => {
@@ -1887,65 +1918,22 @@ function CrmContactDetailInner() {
 
   // ── Memos (must come before all early returns — Rules of Hooks) ───────────
 
-  const nextStep = useMemo((): {
-    title: string;
-    detail: string;
-    actionLabel?: string;
-    action: "none" | "add_phone" | "scroll_tasks" | "scroll_notes";
-  } => {
-    if (!contact) return { title: "Loading…", detail: "", action: "none" };
-    const archived = !!(contact.archivedAt != null || contact.active === false);
-    if (archived) {
-      return {
-        title: "Archived — read-only",
-        detail:
-          "This record is out of active CRM rotation. Review the timeline below; restore from the banner when you need to edit or message again.",
-        action: "none",
-      };
+  useEffect(() => {
+    if (!contact?.phones.length) {
+      setActiveDispositionPhoneId(null);
+      return;
     }
-    if (contact.phones.length === 0) {
-      return {
-        title: "Add a phone number",
-        detail: "Voice and SMS both need a number on file. Add one under Contact info.",
-        actionLabel: "Add phone",
-        action: "add_phone",
-      };
-    }
-    const open = tasks.filter((t) => t.status !== "DONE" && t.status !== "CANCELED");
-    const sorted = [...open].sort((a, b) => {
-      const ta = a.dueAt ? new Date(a.dueAt).getTime() : Infinity;
-      const tb = b.dueAt ? new Date(b.dueAt).getTime() : Infinity;
-      return ta - tb;
+    setActiveDispositionPhoneId((current) => {
+      if (current && contact.phones.some((p) => p.id === current)) return current;
+      const resolved = resolveActiveDispositionPhone(contact.phones, null);
+      return resolved?.id ?? null;
     });
-    const dueSoon = sorted.find((t) => t.dueAt);
-    const overdue = sorted.find((t) => t.dueAt && new Date(t.dueAt) < new Date());
-    if (overdue || dueSoon) {
-      const t = overdue ?? dueSoon;
-      if (t) {
-        const late = t.dueAt && new Date(t.dueAt) < new Date();
-        return {
-          title: late ? "Overdue follow-up" : "Open task",
-          detail: `${t.title}${t.dueAt ? ` · Due ${formatDate(t.dueAt)}` : ""}`,
-          actionLabel: "View tasks",
-          action: "scroll_tasks",
-        };
-      }
-    }
-    if (contact.doNotSms) {
-      return {
-        title: "SMS opted out",
-        detail: "This contact cannot receive SMS. Use voice or email, and log updates in the timeline.",
-        actionLabel: "Add note",
-        action: "scroll_notes",
-      };
-    }
-    return {
-      title: "Keep the record current",
-      detail: "Review recent activity, add a note, or schedule a follow-up so the next touch is intentional.",
-      actionLabel: "Add note",
-      action: "scroll_notes",
-    };
-  }, [contact, tasks]);
+  }, [contact?.id, contact?.phones]);
+
+  const setDispositionTarget = useCallback((phoneId: string | null, channel: DispositionChannel) => {
+    setActiveDispositionPhoneId(phoneId);
+    setActiveDispositionChannel(channel);
+  }, []);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -2064,6 +2052,7 @@ function CrmContactDetailInner() {
     const resolution = resolvePhoneAction(contact.phones);
     if (resolution.kind === "disabled") return;
     if (resolution.kind === "execute") {
+      setDispositionTarget(resolution.phone.id, "CALL");
       void handleCall(resolution.phone);
       return;
     }
@@ -2074,6 +2063,7 @@ function CrmContactDetailInner() {
     const resolution = resolvePhoneAction(contact.phones);
     if (resolution.kind === "disabled") return;
     if (resolution.kind === "execute") {
+      setDispositionTarget(resolution.phone.id, "SMS");
       setSmsPhone(resolution.phone.isPrimary ? "" : resolution.phone.numberRaw);
       focusWorkspace("sms");
       return;
@@ -2083,8 +2073,10 @@ function CrmContactDetailInner() {
 
   const selectPhoneForAction = (phoneChoice: WorkspacePhone) => {
     if (phonePickerIntent === "call") {
+      setDispositionTarget(phoneChoice.id, "CALL");
       void handleCall(phoneChoice);
     } else if (phonePickerIntent === "sms") {
+      setDispositionTarget(phoneChoice.id, "SMS");
       setSmsPhone(phoneChoice.isPrimary ? "" : phoneChoice.numberRaw);
       focusWorkspace("sms");
     }
@@ -2100,8 +2092,10 @@ function CrmContactDetailInner() {
     return !id || !!(contact?.archivedAt != null || contact?.active === false);
   }
 
-  async function saveOutcome() {
-    if (disabledOutcome() || !disposition) return;
+  async function saveOutcome(dispositionOverride?: string) {
+    const dispositionValue = dispositionOverride ?? disposition;
+    if (disabledOutcome() || !dispositionValue || !contact) return;
+    setDisposition(dispositionValue);
     setSavingOutcome(true);
     setOutcomeError("");
 
@@ -2127,11 +2121,19 @@ function CrmContactDetailInner() {
     }
 
     try {
+      const activePhone = resolveActiveDispositionPhone(contact.phones, activeDispositionPhoneId);
       await apiPost(`/crm/contacts/${id}/disposition`, {
-        disposition,
+        disposition: dispositionValue,
         note: outcomeNote.trim() || undefined,
         followUpAt: followUpAt ?? undefined,
         nextStage: nextStage || undefined,
+        ...(activePhone && activeDispositionChannel
+          ? applyPhoneActionToDispositionTarget({
+              phones: contact.phones,
+              phone: activePhone,
+              channel: activeDispositionChannel,
+            })
+          : {}),
       });
       setOutcomeSaved(true);
       setOutcomeNote("");
@@ -2145,6 +2147,31 @@ function CrmContactDetailInner() {
       setOutcomeError("Save failed — please try again.");
     } finally {
       setSavingOutcome(false);
+    }
+  }
+
+  async function saveQuickDisposition(label: string) {
+    await saveOutcome(label);
+  }
+
+  async function handleSaveCustomQuickDispositions(rows: CustomQuickDispositionDraft[]) {
+    setSavingCustomQuickDispositions(true);
+    try {
+      const res = await apiPut<{ items: QuickDispositionOption[]; canManage: boolean }>(
+        "/crm/quick-dispositions",
+        { custom: rows },
+      );
+      setQuickDispositionOptions(res.items ?? []);
+      setCanManageQuickDispositions(!!res.canManage);
+      setCustomQuickDispositions(
+        (res.items ?? [])
+          .filter((item) => !item.isDefault)
+          .map((item, index) => ({ id: item.id, label: item.label, sortOrder: index })),
+      );
+    } catch {
+      setOutcomeError("Could not save custom quick dispositions.");
+    } finally {
+      setSavingCustomQuickDispositions(false);
     }
   }
 
@@ -2196,10 +2223,20 @@ function CrmContactDetailInner() {
     relationshipScore >= 75 ? "High" : relationshipScore >= 50 ? "Medium" : "Low";
   const activeSectionLabel = workspaceTabLabel(workspaceTab);
 
-  const runNextStepAction = () => {
-    if (nextStep.action === "add_phone") setAddingPhone(true);
-    if (nextStep.action === "scroll_tasks") scrollToTasks();
-    if (nextStep.action === "scroll_notes") scrollToNoteComposer();
+  const openEmailWorkspace = () => {
+    setActiveDispositionChannel("EMAIL");
+    focusWorkspace("email");
+  };
+
+  const openVoicemailDrop = () => {
+    const resolution = resolvePhoneAction(contact.phones);
+    if (resolution.kind === "execute") {
+      setDispositionTarget(resolution.phone.id, "VOICEMAIL_DROP");
+    } else if (resolution.kind === "pick") {
+      const primary = resolution.phones.find((p) => p.isPrimary) ?? resolution.phones[0];
+      if (primary) setDispositionTarget(primary.id, "VOICEMAIL_DROP");
+    }
+    setVoicemailDropOpen(true);
   };
 
   function TaskPanelContent() {
@@ -2331,7 +2368,7 @@ function CrmContactDetailInner() {
           isArchived={isArchived}
           onCall={beginCall}
           onSms={beginSms}
-          onEmail={() => focusWorkspace("email")}
+          onEmail={openEmailWorkspace}
           onNote={scrollToNoteComposer}
           callDisabled={!primaryPhone || isArchived}
           smsDisabled={contact.doNotSms || contact.phones.length === 0 || isArchived}
@@ -2347,7 +2384,7 @@ function CrmContactDetailInner() {
             {sipNotice ? <span className="text-xs font-medium text-crm-warning">{sipNotice}</span> : null}
             {!isArchived ? (
               <>
-                <button type="button" className={cn(crm.btnSecondary, "py-1 text-xs")} onClick={() => setVoicemailDropOpen(true)} disabled={contact.doNotCall || contact.phones.length === 0}>
+                <button type="button" className={cn(crm.btnSecondary, "py-1 text-xs")} onClick={openVoicemailDrop} disabled={contact.doNotCall || contact.phones.length === 0}>
                   <Voicemail className="h-3.5 w-3.5" />
                   Voicemail drop
                 </button>
@@ -2400,10 +2437,11 @@ function CrmContactDetailInner() {
 
       {/* ── Three-column contact workspace ───────────────────────────────────── */}
       <div className="crm-contact-workspace-body">
-        <aside className="crm-contact-workspace-panel order-1 flex min-w-0 flex-col gap-3">
-          <CRMCard padding="md" className="border-crm-border/70">
-            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-crm-muted">Communicate</p>
-            <div className="mt-3 flex flex-col gap-1.5">
+        <aside className="crm-contact-workspace-panel order-1 flex min-w-0 flex-col">
+          <div className={CRM_CONTACT_WORKSPACE_SCROLL_CLASSES.left}>
+            <CRMCard padding="md" className="border-crm-border/70">
+              <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-crm-muted">Communicate</p>
+              <div className="mt-3 flex flex-col gap-1.5">
               {([
                 ["timeline", "Timeline", Activity],
                 ["script", "Script", FileText],
@@ -2438,55 +2476,15 @@ function CrmContactDetailInner() {
               ))}
             </div>
           </CRMCard>
-
-          <CRMCard padding="md" className="border-crm-border/70 bg-crm-surface-2/35">
-            <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-crm-muted">Quick Disposition</p>
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {(DISPOSITION_OPTIONS as readonly string[]).slice(0, 6).map((option, index) => (
-                <button
-                  key={option}
-                  type="button"
-                  onClick={() => setDisposition(option)}
-                  disabled={disabledOutcome()}
-                  className={cn(
-                    "rounded-full border px-2.5 py-1 text-xs font-semibold",
-                    disposition === option
-                      ? "border-crm-accent bg-crm-accent text-white"
-                      : "border-crm-border bg-crm-surface text-crm-muted hover:text-crm-text",
-                  )}
-                >
-                  {index + 1}. {option}
-                </button>
-              ))}
-            </div>
-            <input
-              value={outcomeNote}
-              onChange={(e) => setOutcomeNote(e.target.value)}
-              disabled={disabledOutcome()}
-              placeholder="Outcome note..."
-              className={cn(crm.input, "mt-3 py-2")}
-            />
-            <button
-              type="button"
-              onClick={() => void saveOutcomeRef.current()}
-              disabled={!disposition || savingOutcome || disabledOutcome()}
-              className={cn(crm.btnPrimary, "mt-3 w-full")}
-            >
-              {savingOutcome ? "Saving..." : "Save Disposition"}
-            </button>
-            {outcomeSaved ? <p className="mt-2 text-xs font-semibold text-crm-success">Disposition saved.</p> : null}
-            {outcomeError ? <p className="mt-2 text-xs font-semibold text-crm-danger">{outcomeError}</p> : null}
-          </CRMCard>
+          </div>
         </aside>
 
-        <div className="crm-contact-workspace-panel order-2 flex min-w-0 flex-col gap-4" ref={workspacePanelRef}>
-          <CRMCard padding="lg" className="overflow-hidden border-crm-border/70">
-            <div className="mb-4 flex flex-col gap-3 border-b border-crm-border/60 pb-4 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-crm-accent">Workspace</p>
-                <h3 className="mt-1 text-xl font-bold tracking-tight text-crm-text">{activeSectionLabel}</h3>
-              </div>
-              <ContactWorkspaceTabBar activeTab={workspaceTab} onSelect={setWorkspaceTab} />
+        <div className="crm-contact-workspace-panel crm-contact-workspace-panel-center order-2 flex min-h-0 flex-col" ref={workspacePanelRef}>
+          <div className={CRM_CONTACT_WORKSPACE_SCROLL_CLASSES.center}>
+          <CRMCard padding="lg" className="border-crm-border/70">
+            <div className="mb-4 border-b border-crm-border/60 pb-4">
+              <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-crm-accent">Workspace</p>
+              <h3 className="mt-1 text-xl font-bold tracking-tight text-crm-text">{activeSectionLabel}</h3>
             </div>
 
             {workspaceTab === "timeline" ? (
@@ -2621,21 +2619,37 @@ function CrmContactDetailInner() {
               </div>
             )}
           </CRMCard>
-
+          </div>
         </div>
 
-        <div className="crm-contact-workspace-panel crm-contact-workspace-panel-right order-3 flex flex-col gap-4">
-          <CRMCard padding="md" className="border-crm-accent/25 bg-crm-accent/5">
-            <p className="text-xs font-bold uppercase tracking-wide text-crm-accent">Next step</p>
-            <p className="mt-1 text-base font-semibold text-crm-text">{nextStep.title}</p>
-            <p className="mt-1 text-sm text-crm-muted">{nextStep.detail}</p>
-            {nextStep.actionLabel && nextStep.action !== "none" && (
-              <button type="button" onClick={runNextStepAction} className={cn(crm.btnPrimary, "mt-3 w-full justify-center")}>
-                {nextStep.actionLabel}
-                <ChevronRight className="h-4 w-4" />
-              </button>
-            )}
-          </CRMCard>
+        <div className="crm-contact-workspace-panel crm-contact-workspace-panel-right order-3 flex min-h-0 flex-col">
+          {!isArchived ? (
+            <div className={CRM_CONTACT_WORKSPACE_SCROLL_CLASSES.quickDispositionSlot}>
+              <ContactQuickDispositionCard
+                dispositionOptions={quickDispositionOptions}
+                disposition={disposition}
+                onQuickDisposition={(label) => void saveQuickDisposition(label)}
+                outcomeNote={outcomeNote}
+                onOutcomeNoteChange={setOutcomeNote}
+                onSaveNoteDisposition={() => void saveOutcomeRef.current()}
+                saving={savingOutcome}
+                saved={outcomeSaved}
+                error={outcomeError}
+                disabled={disabledOutcome()}
+                activeChannel={activeDispositionChannel}
+                onChannelChange={setActiveDispositionChannel}
+                activePhoneId={activeDispositionPhoneId}
+                onPhoneChange={setActiveDispositionPhoneId}
+                phones={contact.phones}
+                contactLastDisposition={contact.lastDisposition}
+                canManage={canManageQuickDispositions}
+                customQuickDispositions={customQuickDispositions}
+                onSaveCustomQuickDispositions={handleSaveCustomQuickDispositions}
+                savingCustom={savingCustomQuickDispositions}
+              />
+            </div>
+          ) : null}
+          <div className={cn(CRM_CONTACT_WORKSPACE_SCROLL_CLASSES.rightRail, "flex flex-col gap-3 pt-3")}>
           <ContactCollapsibleSection
             id="right-rail-relationship"
             title="Relationship health"
@@ -2986,6 +3000,7 @@ function CrmContactDetailInner() {
                   <div style={{ fontSize: "0.875rem", fontWeight: p.isPrimary ? 600 : 400 }}>{p.numberRaw}</div>
                   <div style={{ fontSize: "0.75rem", color: "var(--text-dim)", textTransform: "capitalize" }}>
                     {phoneSummaryLabel(p)}
+                    {phoneDispositionSummary(p) ? ` · ${phoneDispositionSummary(p)}` : ""}
                   </div>
                 </div>
                 {!isArchived && (
@@ -3212,6 +3227,7 @@ function CrmContactDetailInner() {
             </div>
             </ContactCollapsibleSection>
           )}
+        </div>
         </div>
         </div>
       </div>

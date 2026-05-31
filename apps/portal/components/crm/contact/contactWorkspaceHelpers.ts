@@ -1,5 +1,12 @@
 /** Pure helpers for CRM contact / campaign workspace layout and navigation. */
 
+export const CRM_CONTACT_WORKSPACE_SCROLL_CLASSES = {
+  left: "crm-contact-left-scroll",
+  center: "crm-contact-center-scroll",
+  rightRail: "crm-contact-right-rail-scroll",
+  quickDispositionSlot: "crm-contact-quick-disposition-slot",
+} as const;
+
 export type ContactWorkspaceTab =
   | "timeline"
   | "script"
@@ -130,7 +137,55 @@ export type WorkspacePhone = {
   type: string;
   numberRaw: string;
   isPrimary: boolean;
+  lastDisposition?: string | null;
+  lastDispositionAt?: string | null;
+  lastDispositionChannel?: string | null;
 };
+
+export type WorkspacePhoneWithDisposition = WorkspacePhone;
+
+export type DispositionChannel = "CALL" | "SMS" | "EMAIL" | "VOICEMAIL_DROP";
+
+const DISPOSITION_CHANNEL_LABELS: Record<DispositionChannel, string> = {
+  CALL: "Call",
+  SMS: "SMS",
+  EMAIL: "Email",
+  VOICEMAIL_DROP: "VM Drop",
+};
+
+export function dispositionChannelLabel(channel: string | null | undefined): string {
+  if (!channel) return "";
+  return DISPOSITION_CHANNEL_LABELS[channel as DispositionChannel] ?? channel.replace(/_/g, " ");
+}
+
+export function phoneDispositionSummary(phone: WorkspacePhoneWithDisposition): string | null {
+  if (!phone.lastDisposition) return null;
+  const channel = dispositionChannelLabel(phone.lastDispositionChannel);
+  return channel ? `${phone.lastDisposition} · ${channel}` : phone.lastDisposition;
+}
+
+/** Auto-select sole phone; otherwise require explicit selection. */
+export function resolveActiveDispositionPhone(
+  phones: WorkspacePhone[],
+  explicitPhoneId: string | null,
+): WorkspacePhone | null {
+  const available = phones.filter((p) => p.numberRaw.trim().length > 0);
+  if (available.length === 0) return null;
+  if (explicitPhoneId) {
+    return available.find((p) => p.id === explicitPhoneId) ?? null;
+  }
+  if (available.length === 1) return available[0]!;
+  const primary = available.find((p) => p.isPrimary);
+  return primary ?? null;
+}
+
+export function applyPhoneActionToDispositionTarget(opts: {
+  phones: WorkspacePhone[];
+  phone: WorkspacePhone;
+  channel: DispositionChannel;
+}): { phoneId: string; channel: DispositionChannel } {
+  return { phoneId: opts.phone.id, channel: opts.channel };
+}
 
 export const CRM_PHONE_TYPE_OPTIONS = [
   "MOBILE",

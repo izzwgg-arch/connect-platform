@@ -7,6 +7,14 @@ import { writeTimelineEvent } from "./timelineHelper";
 import { checkAndAutoCompleteCampaign } from "./campaignAutoComplete";
 import { buildLeadTimezoneMetaFilter, shouldRecomputeLeadTimezone } from "./leadTimezoneResolver";
 import { syncLeadTimezoneForContact } from "./leadTimezoneService";
+import {
+  buildDispositionTimelineMetadata,
+  dispositionTimelineTitle,
+  isCrmDispositionChannel,
+  loadLatestPhoneDispositionsForContact,
+  formatPhoneDispositionFields,
+  type LatestPhoneDisposition,
+} from "./contactPhoneDisposition";
 
 // ── Shared include for contact queries ────────────────────────────────────────
 
@@ -510,7 +518,8 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
 
     if (!contact) return reply.status(404).send({ error: "not_found" });
     if (!(await assertCrmContactAllowed(user, id, reply))) return;
-    return formatContact(contact);
+    const latestPhoneDispositions = await loadLatestPhoneDispositionsForContact(db, tenantId, id);
+    return formatContact(contact, latestPhoneDispositions);
   });
 
   // ── DELETE /crm/contacts/:id — soft-archive (CRM admin) ────────────────────
@@ -744,6 +753,8 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
       linkedId: z.string().optional(),
       followUpAt: z.string().datetime({ offset: true }).optional().nullable(),
       nextStage: z.enum(["LEAD", "CONTACTED", "QUALIFIED", "CUSTOMER", "CLOSED_LOST"]).optional().nullable(),
+      phoneId: z.string().optional(),
+      channel: z.enum(["CALL", "SMS", "EMAIL", "VOICEMAIL_DROP"]).optional(),
       // Campaign queue integration — if provided and disposition maps to CALLBACK + followUpAt,
       // also sets callbackAt on the campaign member (non-blocking)
       memberId: z.string().optional(),
@@ -754,7 +765,7 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "invalid_payload", issues: parsed.error.issues });
     }
 
-    const { disposition, note, linkedId, followUpAt, nextStage, memberId } = parsed.data;
+    const { disposition, note, linkedId, followUpAt, nextStage, memberId, phoneId, channel } = parsed.data;
     const now = new Date();
 
     if (!(await assertCrmContactAllowed(user, contactId, reply))) return;
@@ -762,10 +773,24 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     // Load contact + current stage — verify tenant ownership
     const contact = await (db as any).contact.findFirst({
       where: { id: contactId, tenantId, active: true },
-      select: { id: true, displayName: true, crmMeta: { select: { id: true, stage: true } } },
+      select: {
+        id: true,
+        displayName: true,
+        crmMeta: { select: { id: true, stage: true } },
+        phones: { select: { id: true, type: true, numberRaw: true } },
+      },
     });
     if (!contact) return reply.status(404).send({ error: "not_found" });
     if (!contact.crmMeta) return reply.status(400).send({ error: "contact_not_in_crm" });
+
+    let phoneRow: { id: string; type: string; numberRaw: string } | null = null;
+    if (phoneId) {
+      phoneRow = contact.phones.find((p: { id: string }) => p.id === phoneId) ?? null;
+      if (!phoneRow) {
+        return reply.status(400).send({ error: "invalid_phone", detail: "Phone does not belong to this contact." });
+      }
+    }
+    const resolvedChannel = channel && isCrmDispositionChannel(channel) ? channel : null;
 
     const currentStage: string = contact.crmMeta.stage;
     const stageChanging = nextStage && nextStage !== currentStage;
@@ -817,6 +842,20 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
       return { noteRow: noteResult, taskRow: taskResult };
     });
 
+    if (phoneRow && resolvedChannel) {
+      await (db as any).crmContactPhoneDisposition.create({
+        data: {
+          tenantId,
+          contactId,
+          phoneId: phoneRow.id,
+          channel: resolvedChannel,
+          disposition,
+          note: note?.trim() ?? null,
+          createdByUserId: userId,
+        },
+      });
+    }
+
     // ── Non-blocking timeline writes ─────────────────────────────────────────
     // STAGE_CHANGED (only if stage actually changed)
     if (stageChanging) {
@@ -836,16 +875,25 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
       tenantId,
       contactId,
       type: "DISPOSITION_SET",
-      title: `Disposition: ${disposition}`,
-      body: note?.trim() ?? null,
-      metadata: {
+      title: dispositionTimelineTitle({
         disposition,
+        phoneType: phoneRow?.type ?? null,
+        channel: resolvedChannel,
+      }),
+      body: note?.trim() ?? null,
+      metadata: buildDispositionTimelineMetadata({
+        disposition,
+        phoneId: phoneRow?.id ?? null,
+        phoneType: phoneRow?.type ?? null,
+        phoneNumber: phoneRow?.numberRaw ?? null,
+        channel: resolvedChannel,
+        note: note?.trim() ?? null,
         linkedId: linkedId ?? null,
         previousStage: stageChanging ? currentStage : null,
         newStage: stageChanging ? nextStage : null,
         hasNote: !!(note?.trim()),
         hasFollowUp: !!followUpAt,
-      },
+      }),
       linkedId: linkedId ?? null,
       createdByUserId: userId,
     });
@@ -900,6 +948,8 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     return reply.status(201).send({
       ok: true,
       disposition,
+      phoneId: phoneRow?.id ?? null,
+      channel: resolvedChannel,
       stageChanged: !!stageChanging,
       noteCreated: !!noteRow,
       taskCreated: !!taskRow,
@@ -1490,7 +1540,7 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
 
 // ── Response formatter ────────────────────────────────────────────────────────
 
-function formatContact(c: any) {
+function formatContact(c: any, latestPhoneDispositions?: Map<string, LatestPhoneDisposition>) {
   const primaryPhone = c.phones?.find((p: any) => p.isPrimary) ?? c.phones?.[0] ?? null;
   const primaryEmail = c.emails?.find((e: any) => e.isPrimary) ?? c.emails?.[0] ?? null;
   return {
@@ -1503,7 +1553,10 @@ function formatContact(c: any) {
     title: c.title,
     avatarUrl: c.avatarUrl,
     notes: c.notes,
-    phones: c.phones ?? [],
+    phones: (c.phones ?? []).map((p: any) => ({
+      ...p,
+      ...formatPhoneDispositionFields(p.id, latestPhoneDispositions?.get(p.id)),
+    })),
     emails: c.emails ?? [],
     addresses: c.addresses ?? [],
     tags: c.tagLinks?.map((tl: any) => tl.tag) ?? [],

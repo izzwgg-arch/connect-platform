@@ -9,6 +9,10 @@ import {
   phoneTypeLabel,
   resolveStartOutreach,
   resolvePhoneAction,
+  resolveActiveDispositionPhone,
+  applyPhoneActionToDispositionTarget,
+  phoneDispositionSummary,
+  CRM_CONTACT_WORKSPACE_SCROLL_CLASSES,
   sortCampaignNavMembers,
   splitWorkspaceTabs,
   workspaceTabLabel,
@@ -111,4 +115,59 @@ test("resolvePhoneAction opens picker for multiple numbers with primary first", 
       isPrimary: true,
     });
   }
+});
+
+test("resolveActiveDispositionPhone auto-selects single phone", () => {
+  const phone = resolveActiveDispositionPhone(
+    [{ id: "p1", type: "MOBILE", numberRaw: "(845) 555-1111", isPrimary: true }],
+    null,
+  );
+  assert.equal(phone?.id, "p1");
+});
+
+test("resolveActiveDispositionPhone uses explicit selection for multiple phones", () => {
+  const phones = [
+    { id: "p1", type: "MOBILE", numberRaw: "(845) 555-1111", isPrimary: true },
+    { id: "p2", type: "OFFICE", numberRaw: "(845) 555-2222", isPrimary: false },
+  ];
+  assert.equal(resolveActiveDispositionPhone(phones, "p2")?.id, "p2");
+  assert.equal(resolveActiveDispositionPhone(phones, null)?.id, "p1");
+});
+
+test("applyPhoneActionToDispositionTarget sets active phone and channel", () => {
+  const target = applyPhoneActionToDispositionTarget({
+    phones: [{ id: "p2", type: "OFFICE", numberRaw: "555", isPrimary: false }],
+    phone: { id: "p2", type: "OFFICE", numberRaw: "555", isPrimary: false },
+    channel: "SMS",
+  });
+  assert.deepEqual(target, { phoneId: "p2", channel: "SMS" });
+});
+
+test("phoneDispositionSummary formats label and channel", () => {
+  assert.equal(
+    phoneDispositionSummary({
+      id: "p1",
+      type: "MOBILE",
+      numberRaw: "555",
+      isPrimary: true,
+      lastDisposition: "No answer",
+      lastDispositionChannel: "CALL",
+    }),
+    "No answer · Call",
+  );
+  assert.equal(
+    phoneDispositionSummary({
+      id: "p2",
+      type: "OFFICE",
+      numberRaw: "556",
+      isPrimary: false,
+      lastDisposition: "Interested",
+    }),
+    "Interested",
+  );
+});
+
+test("workspace scroll shell exposes independent panel scroll class names", () => {
+  assert.equal(CRM_CONTACT_WORKSPACE_SCROLL_CLASSES.center, "crm-contact-center-scroll");
+  assert.equal(CRM_CONTACT_WORKSPACE_SCROLL_CLASSES.quickDispositionSlot, "crm-contact-quick-disposition-slot");
 });

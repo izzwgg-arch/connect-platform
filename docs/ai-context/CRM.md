@@ -45,7 +45,7 @@ Scope: portal CRM UI/data-flow guardrails. Telephony, billing, workers, database
 | Contacts — list/search | `can_view_crm_contacts` → `/crm/contacts` | `GET /crm/contacts`, `GET /crm/contacts/lookup` | `requireCrmAccess` + list scope filter | In-scope only | Tenant-wide | Tenant-wide | Tenant-wide |
 | Contacts — stats | Dashboard | `GET /crm/contacts/stats` | `requireCrmAccess` + scoped meta counts | In-scope totals | Tenant-wide | Tenant-wide | Tenant-wide |
 | Dispositions — view options | Client `DISPOSITION_OPTIONS` | — | — | Yes | Yes | Yes | Yes |
-| Dispositions — set on contact | Contact profile / live workspace | `POST /crm/contacts/:id/disposition` | `requireCrmAccess` + `assertCrmContactAllowed` | Yes (in scope) | Yes (tenant) | Yes (tenant) | Yes |
+| Dispositions — set on contact | Contact profile / live workspace | `POST /crm/contacts/:id/disposition` | `requireCrmAccess` + `assertCrmContactAllowed` | Yes (in scope) | Yes (tenant) | Yes (tenant) | Yes — optional `phoneId` + `channel` write per-phone history (`CrmContactPhoneDisposition`) while still updating contact-level `lastDisposition` |
 | CRM email — compose/send | `can_view_crm_email` → `/crm/email` | `POST /crm/email/send` | `requireCrmAccess` + `assertCrmContactAllowed` | Yes (in scope) | Yes (tenant) | Yes (tenant) | Yes |
 | Email templates — view/create | `can_view_crm_email` → `/crm/email/templates` | `GET/POST /crm/email/templates` | `requireCrmAccess` | Yes | Yes | Yes | Yes |
 | Email templates — edit | same | `PUT /crm/email/templates/:id` | `requireCrmAccess` + creator or CRM Manager+ | Own + shared use | Own + shared edit | Own + shared edit | All |
@@ -129,8 +129,11 @@ Pipeline (unchanged): Google Drive match → import (`CrmLeadDocument`) → text
 
 - Entry: `/crm/contacts/[id]?campaignId=…&memberId=…` (from campaign member **Open workspace** or queue deep-links). Presentation lives in `apps/portal/app/(platform)/crm/contacts/[id]/page.tsx` with scoped CSS `.crm-contact-detail-workspace`.
 - **Sticky header:** `ContactCampaignStickyHeader` keeps lead name, company, phone, stage, campaign chip, quick actions, and compact KPI strip visible (`position: sticky` within the workspace frame).
-- **Independent scroll (desktop ≥1280px):** left nav/disposition rail, center workspace tab content, and right summary rail each scroll inside `.crm-contact-workspace-panel`, but wheel scroll is allowed to chain naturally when a panel reaches its top/bottom.
-- **Tabs:** center panel uses `ContactWorkspaceTabBar` — five primary tabs inline, remainder under a **More** menu (no horizontal swipe).
+- **Independent scroll (desktop ≥1280px):** left workspace nav rail, center workspace content, and right summary rail each scroll inside `.crm-contact-workspace-panel`, but wheel scroll is allowed to chain naturally when a panel reaches its top/bottom.
+- **Navigation:** left sidebar is the sole workspace tab switcher (Timeline, Script, Checklist, Email, SMS, Notes, Files, etc.). The center panel no longer duplicates that row.
+- **Quick Disposition (right rail):** `ContactQuickDispositionCard` is pinned at the top of the right column (`crm-contact-quick-disposition-slot`) and stays accessible while center/right-scroll content moves underneath. Supports channel (Call/SMS/Email/VM Drop), active phone target, one-click disposition buttons, optional note, and manager-managed custom quick labels via `GET/PUT /crm/quick-dispositions`.
+- **Scroll shell:** at desktop widths, left/center/right panels each scroll inside dedicated inner regions; sticky contact header remains fixed above the workspace grid.
+- **Per-phone dispositions:** `POST /crm/contacts/:id/disposition` accepts optional `phoneId` + `channel`. Latest disposition per phone is returned on `GET /crm/contacts/:id` phone rows (`lastDisposition`, `lastDispositionChannel`, `lastDispositionAt`). Timeline `DISPOSITION_SET` metadata includes phone label, number, channel, and note.
 - **Campaign lead navigation:** when `campaignId` is present, `ContactCampaignLeadNav` loads members from `GET /crm/campaigns/:id/members` and provides fixed Prev/Next (+ `ArrowLeft` / `ArrowRight` when not typing in an input).
 - **Start outreach:** empty timeline CTA switches to **Notes**, focuses the composer, shows a toast; does not silently no-op when the composer was unmounted.
 - **Long reports:** right-rail informational panels use collapsed-by-default `ContactCollapsibleSection` summaries. `ContactDocumentSummary` also uses nested summary-first sections.

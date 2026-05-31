@@ -7,7 +7,7 @@ import { CRMCard, CRMEmptyState, CRMSection, crm } from "..";
 import { cn } from "../cn";
 import type { ContactPhone, TimelineEvent } from "./contactTypes";
 import { formatDateTime } from "./contactFormatters";
-import { phoneSummaryLabel } from "./contactWorkspaceHelpers";
+import { phoneSummaryLabel, phoneDispositionSummary } from "./contactWorkspaceHelpers";
 
 export const ContactSmsPanel = forwardRef<
   HTMLDivElement,
@@ -104,6 +104,7 @@ export const ContactSmsPanel = forwardRef<
                   {phones.map((p) => (
                     <option key={p.id} value={p.numberRaw}>
                       {phoneSummaryLabel(p)} — {p.numberRaw}
+                      {phoneDispositionSummary(p) ? ` · ${phoneDispositionSummary(p)}` : ""}
                     </option>
                   ))}
                 </select>
