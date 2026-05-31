@@ -39,6 +39,11 @@ export type CrmContactDetail = {
   lastActivityAt?: string | null;
   lastDisposition?: string | null;
   lastDispositionAt?: string | null;
+  timezoneIana?: string | null;
+  timezoneLabel?: string | null;
+  timezoneOffsetMinutes?: number | null;
+  timezoneResolvedAt?: string | null;
+  timezoneResolutionStatus?: "RESOLVED" | "NEEDS_REVIEW" | "MISSING_LOCATION" | null;
   createdAt: string;
   updatedAt: string;
   active?: boolean;

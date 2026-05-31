@@ -2,6 +2,16 @@
 
 Scope: portal CRM UI/data-flow guardrails. Telephony, billing, workers, database schema, and onboarding are out of scope unless a task explicitly says otherwise.
 
+## Lead timezone (city/state → stored timezone)
+
+- Every CRM lead should have city + state on a `ContactAddress` (import or API). Timezone is **derived server-side** and stored on `CrmContactMeta` — do not compute in the portal for filtering.
+- Resolver: `apps/api/src/crm/leadTimezoneResolver.ts` (`city-timezones` dataset). Status: `RESOLVED`, `NEEDS_REVIEW`, `MISSING_LOCATION`.
+- Sync triggers: contact create, contact patch when city/state changes, CSV import row processing, admin backfill `POST /crm/admin/lead-timezone/backfill`.
+- List filters: `GET /crm/contacts?timezoneZone=eastern|central|mountain|pacific|alaska|hawaii|other` (also `timezoneIana`, `timezoneLabel`). Same params on `GET /crm/campaigns/:id/members`. Always tenant-scoped.
+- **Mountain bucket** includes both `America/Denver` (label `Mountain`) and `America/Phoenix` (label `Arizona`). Filter uses label + IANA OR so legacy Phoenix rows labeled `Mountain` still match.
+- **Display:** row badge `AZ` + detail `Arizona (MST)` for Phoenix — never generic `MT` (DST-implying). Denver stays `MT` / `Mountain`. Helpers in `leadTimezoneResolver.ts` (API) and `components/crm/contact/leadTimezoneDisplay.ts` (portal).
+- UI: compact timezone badge on `/crm/contacts` rows and contact detail near address — no extra columns or noisy panels.
+
 ## Dashboard And Email UI
 
 - CRM dashboard modernization is UI-only. Keep existing API calls in `apps/portal/app/(platform)/crm/dashboard/page.tsx`; derive status from the values already loaded there.

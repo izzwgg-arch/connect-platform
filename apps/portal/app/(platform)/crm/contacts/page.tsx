@@ -41,6 +41,10 @@ import {
   crm,
   cn,
 } from "../../../../components/crm";
+import {
+  leadTimezoneBadgeShort,
+  leadTimezoneBadgeTitle,
+} from "../../../../components/crm/contact/leadTimezoneDisplay";
 import { BulkEmailModal } from "../../../../components/crm/email/BulkEmailModal";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
@@ -81,6 +85,11 @@ type CrmContact = {
   lastActivityAt?: string | null;
   lastDisposition?: string | null;
   lastDispositionAt?: string | null;
+  timezoneIana?: string | null;
+  timezoneLabel?: string | null;
+  timezoneOffsetMinutes?: number | null;
+  timezoneResolvedAt?: string | null;
+  timezoneResolutionStatus?: "RESOLVED" | "NEEDS_REVIEW" | "MISSING_LOCATION" | null;
   active?: boolean;
   archivedAt?: string | null;
 };
@@ -109,6 +118,26 @@ const STAGE_LABELS: Record<CrmStage | "all", string> = {
   CUSTOMER: "Customer",
   CLOSED_LOST: "Closed Lost",
 };
+
+type TimezoneZoneFilter = "all" | "eastern" | "central" | "mountain" | "pacific" | "alaska" | "hawaii" | "other";
+
+const TIMEZONE_ZONE_OPTIONS: Array<{ value: TimezoneZoneFilter; label: string }> = [
+  { value: "all", label: "All timezones" },
+  { value: "eastern", label: "Eastern" },
+  { value: "central", label: "Central" },
+  { value: "mountain", label: "Mountain" },
+  { value: "pacific", label: "Pacific" },
+  { value: "alaska", label: "Alaska" },
+  { value: "hawaii", label: "Hawaii" },
+  { value: "other", label: "Other / Needs Review" },
+];
+
+function timezoneBadgeClass(contact: CrmContact): string {
+  if (contact.timezoneResolutionStatus === "RESOLVED" && (contact.timezoneLabel || contact.timezoneIana)) {
+    return "contacts-stage-qualified";
+  }
+  return "contacts-stage-muted";
+}
 
 const FILTER_TABS = ["all", "LEAD", "CONTACTED", "QUALIFIED", "CUSTOMER", "CLOSED_LOST"] as const;
 
@@ -464,6 +493,7 @@ export default function CrmContactsPage() {
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
   const [tagFilter, setTagFilter] = useState("all");
   const [assignedToMe, setAssignedToMe] = useState(false);
+  const [timezoneZone, setTimezoneZone] = useState<TimezoneZoneFilter>("all");
   const [archiveScope, setArchiveScope] = useState<ArchiveListScope>("active");
   const [page, setPage] = useState(0);
   const [showAdd, setShowAdd] = useState(false);
@@ -490,7 +520,14 @@ export default function CrmContactsPage() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(
-    async (q: string, s: CrmStage | "all", mine: boolean, scope: ArchiveListScope, pageIdx: number) => {
+    async (
+      q: string,
+      s: CrmStage | "all",
+      mine: boolean,
+      scope: ArchiveListScope,
+      pageIdx: number,
+      tz: TimezoneZoneFilter,
+    ) => {
       setLoading(true);
       setError(null);
       try {
@@ -498,6 +535,7 @@ export default function CrmContactsPage() {
         if (q) params.set("q", q);
         if (s !== "all") params.set("stage", s);
         if (mine) params.set("assignedToMe", "true");
+        if (tz !== "all") params.set("timezoneZone", tz);
         params.set("limit", String(CONTACTS_PAGE_LIMIT));
         params.set("page", String(pageIdx));
         if (isAdmin) {
@@ -527,9 +565,9 @@ export default function CrmContactsPage() {
   }, [isAdmin, archiveScope]);
 
   useEffect(() => {
-    void load(search, stage, assignedToMe, isAdmin ? archiveScope : "active", page);
+    void load(search, stage, assignedToMe, isAdmin ? archiveScope : "active", page, timezoneZone);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- search is applied via debounced handler; this effect refetches when scope/stage/assignee/page change
-  }, [stage, assignedToMe, archiveScope, page, load, isAdmin]);
+  }, [stage, assignedToMe, archiveScope, page, timezoneZone, load, isAdmin]);
 
   useEffect(() => {
     setSelectedIds(new Set());
@@ -542,7 +580,7 @@ export default function CrmContactsPage() {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       setPage(0);
-      void load(val, stage, assignedToMe, isAdmin ? archiveScope : "active", 0);
+      void load(val, stage, assignedToMe, isAdmin ? archiveScope : "active", 0, timezoneZone);
     }, 320);
   };
 
@@ -667,7 +705,7 @@ export default function CrmContactsPage() {
       );
       setSmartAssignResult({ assigned: res.assigned, remaining: res.remaining });
       // Refresh the contacts list to reflect new assignments
-      void load(search, stage, assignedToMe, isAdmin ? archiveScope : "active", page);
+      void load(search, stage, assignedToMe, isAdmin ? archiveScope : "active", page, timezoneZone);
     } catch (e: unknown) {
       setSmartAssignError((e as Error)?.message || "Smart assign failed");
     } finally {
@@ -702,6 +740,7 @@ export default function CrmContactsPage() {
     stage !== "all" ||
     quickFilter !== "all" ||
     tagFilter !== "all" ||
+    timezoneZone !== "all" ||
     assignedToMe ||
     (isAdmin && archiveScope !== "active");
 
@@ -757,9 +796,10 @@ export default function CrmContactsPage() {
     setTagFilter("all");
     setAssignedToMe(false);
     if (isAdmin) setArchiveScope("active");
+    setTimezoneZone("all");
     setPage(0);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    void load("", "all", false, "active", 0);
+    void load("", "all", false, "active", 0, "all");
   };
 
   const firstEmail = displayedRows.find((c) => c.primaryEmail)?.primaryEmail?.email;
@@ -839,7 +879,7 @@ export default function CrmContactsPage() {
                   setSearch("");
                   setPage(0);
                   if (debounceRef.current) clearTimeout(debounceRef.current);
-                  void load("", stage, assignedToMe, isAdmin ? archiveScope : "active", 0);
+                  void load("", stage, assignedToMe, isAdmin ? archiveScope : "active", 0, timezoneZone);
                 }}
                 className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1.5 text-crm-muted/80 hover:bg-crm-surface-2"
                 aria-label="Clear search"
@@ -860,6 +900,19 @@ export default function CrmContactsPage() {
             <option value="all">All tags</option>
             {pageTagOptions.map(({ tag: tagItem, count }) => (
               <option key={tagItem.id} value={tagItem.id}>{tagItem.name} ({count})</option>
+            ))}
+          </select>
+          <select
+            className="contacts-filter-select"
+            aria-label="Timezone filter"
+            value={timezoneZone}
+            onChange={(e) => {
+              setTimezoneZone(e.target.value as TimezoneZoneFilter);
+              setPage(0);
+            }}
+          >
+            {TIMEZONE_ZONE_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>
           <select
@@ -1144,6 +1197,26 @@ export default function CrmContactsPage() {
                           <div className="flex flex-wrap items-center gap-2">
                             <h2 className="truncate text-lg font-bold tracking-tight text-crm-text">{c.displayName}</h2>
                             {c.crmStage && <span className={cn("contacts-stage-pill", stageTone(c.crmStage))}>{STAGE_LABELS[c.crmStage]}</span>}
+                            {(() => {
+                              const badge = leadTimezoneBadgeShort(c);
+                              if (badge) {
+                                return (
+                                  <span
+                                    className={cn("contacts-stage-pill", timezoneBadgeClass(c))}
+                                    title={leadTimezoneBadgeTitle(c)}
+                                  >
+                                    {badge}
+                                  </span>
+                                );
+                              }
+                              if (c.timezoneResolutionStatus === "NEEDS_REVIEW") {
+                                return <span className={cn("contacts-stage-pill", "contacts-stage-muted")}>Review</span>;
+                              }
+                              if (c.timezoneResolutionStatus === "MISSING_LOCATION") {
+                                return <span className={cn("contacts-stage-pill", "contacts-stage-muted")}>No tz</span>;
+                              }
+                              return null;
+                            })()}
                             {c.doNotCall && <span className="contacts-danger-pill">DNC</span>}
                           </div>
                           <p className="mt-1 truncate text-sm font-medium text-crm-muted">

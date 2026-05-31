@@ -18,6 +18,7 @@ import {
   crmQueueFilterPendingWhere,
 } from "./crmMemberQueryFragments";
 import { checkAndAutoCompleteCampaign } from "./campaignAutoComplete";
+import { buildLeadTimezoneMetaFilter } from "./leadTimezoneResolver";
 import {
   CRM_IMPORT_MAX_FILE_BYTES,
   CRM_IMPORT_MAX_ROWS,
@@ -45,7 +46,17 @@ const MEMBER_INCLUDE = {
       archivedAt: true,
       phones: { where: { isPrimary: true }, select: { numberRaw: true }, take: 1 },
       emails: { where: { isPrimary: true }, select: { email: true }, take: 1 },
-      crmMeta: { select: { stage: true, lastActivityAt: true, lastDisposition: true, lastDispositionAt: true } },
+      crmMeta: {
+        select: {
+          stage: true,
+          lastActivityAt: true,
+          lastDisposition: true,
+          lastDispositionAt: true,
+          timezoneLabel: true,
+          timezoneIana: true,
+          timezoneResolutionStatus: true,
+        },
+      },
     },
   },
   assignedTo: { select: { id: true, displayName: true, email: true } },
@@ -136,6 +147,9 @@ function formatMember(m: any) {
           lastActivityAt: m.contact.crmMeta?.lastActivityAt ?? null,
           lastDisposition: m.contact.crmMeta?.lastDisposition ?? null,
           lastDispositionAt: m.contact.crmMeta?.lastDispositionAt ?? null,
+          timezoneLabel: m.contact.crmMeta?.timezoneLabel ?? null,
+          timezoneIana: m.contact.crmMeta?.timezoneIana ?? null,
+          timezoneResolutionStatus: m.contact.crmMeta?.timezoneResolutionStatus ?? null,
         }
       : null,
     assignedTo: m.assignedTo ?? null,
@@ -718,11 +732,25 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       assigneeWhere.assignedToUserId = user.sub;
     }
 
+    const timezoneFilter = buildLeadTimezoneMetaFilter({
+      timezoneIana: q.timezoneIana,
+      timezoneLabel: q.timezoneLabel,
+      timezoneZone: q.timezoneZone,
+    });
+
+    const contactWhere =
+      timezoneFilter != null
+        ? {
+            crmMeta: { is: { tenantId, ...timezoneFilter } },
+          }
+        : {};
+
     const baseWhere = {
       campaignId,
       tenantId,
       ...(statusFilter ? { status: { in: statusFilter } } : {}),
       ...assigneeWhere,
+      ...(timezoneFilter != null ? { contact: contactWhere } : {}),
     };
 
     const [members, total] = await Promise.all([

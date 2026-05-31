@@ -4,6 +4,8 @@ import { db } from "@connect/db";
 import { requireCrmAccess, requireCrmAdmin, isAdminRole } from "./guard";
 import { writeTimelineEvent } from "./timelineHelper";
 import { checkAndAutoCompleteCampaign } from "./campaignAutoComplete";
+import { buildLeadTimezoneMetaFilter, shouldRecomputeLeadTimezone } from "./leadTimezoneResolver";
+import { syncLeadTimezoneForContact } from "./leadTimezoneService";
 
 // ── Shared include for contact queries ────────────────────────────────────────
 
@@ -41,6 +43,14 @@ const emailSchema = z.object({
   isPrimary: z.boolean().default(false),
 });
 
+const addressSchema = z.object({
+  street: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  zip: z.string().optional(),
+  country: z.string().optional(),
+});
+
 const createContactSchema = z.object({
   firstName: z.string().optional(),
   lastName: z.string().optional(),
@@ -50,6 +60,7 @@ const createContactSchema = z.object({
   notes: z.string().optional(),
   phones: z.array(phoneSchema).default([]),
   emails: z.array(emailSchema).default([]),
+  address: addressSchema.optional(),
   // CRM overlay
   stage: z.enum(["LEAD", "CONTACTED", "QUALIFIED", "CUSTOMER", "CLOSED_LOST"]).default("LEAD"),
   assignedToUserId: z.string().optional(),
@@ -64,6 +75,7 @@ const patchContactSchema = z.object({
   company: z.string().optional(),
   title: z.string().optional(),
   notes: z.string().optional(),
+  address: addressSchema.optional(),
   // CRM overlay
   stage: z.enum(["LEAD", "CONTACTED", "QUALIFIED", "CUSTOMER", "CLOSED_LOST"]).optional(),
   assignedToUserId: z.string().nullable().optional(),
@@ -75,6 +87,53 @@ const patchContactSchema = z.object({
 
 function normalisePhone(raw: string): string {
   return raw.replace(/\D/g, "");
+}
+
+async function upsertPrimaryContactAddress(
+  contactId: string,
+  address: z.infer<typeof addressSchema>,
+): Promise<{ city: string | null; state: string | null; changed: boolean }> {
+  const existing = await db.contactAddress.findFirst({
+    where: { contactId },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, city: true, state: true, street: true, zip: true, country: true },
+  });
+
+  const nextCity = address.city?.trim() || null;
+  const nextState = address.state?.trim() || null;
+  const nextStreet = address.street?.trim() || null;
+  const nextZip = address.zip?.trim() || null;
+  const nextCountry = address.country?.trim() || null;
+
+  if (!existing) {
+    await db.contactAddress.create({
+      data: {
+        contactId,
+        street: nextStreet,
+        city: nextCity,
+        state: nextState,
+        zip: nextZip,
+        country: nextCountry,
+      },
+    });
+    return { city: nextCity, state: nextState, changed: !!(nextCity || nextState) };
+  }
+
+  const changed = shouldRecomputeLeadTimezone(existing.city, existing.state, nextCity, nextState);
+  await db.contactAddress.update({
+    where: { id: existing.id },
+    data: {
+      ...(address.street !== undefined ? { street: nextStreet } : {}),
+      ...(address.city !== undefined ? { city: nextCity } : {}),
+      ...(address.state !== undefined ? { state: nextState } : {}),
+      ...(address.zip !== undefined ? { zip: nextZip } : {}),
+      ...(address.country !== undefined ? { country: nextCountry } : {}),
+    },
+  });
+
+  const finalCity = address.city !== undefined ? nextCity : existing.city;
+  const finalState = address.state !== undefined ? nextState : existing.state;
+  return { city: finalCity, state: finalState, changed };
 }
 
 // ── Route registrar ───────────────────────────────────────────────────────────
@@ -197,6 +256,9 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
           .string()
           .optional()
           .transform((v) => v === "true"),
+        timezoneIana: z.string().optional(),
+        timezoneLabel: z.string().optional(),
+        timezoneZone: z.string().optional(),
       })
       .parse(req.query || {});
 
@@ -228,11 +290,18 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
       }
     }
 
-    // Resolve combined stage+assignment filter on crmMeta without conflicting keys
+    // Resolve combined stage+assignment/timezone filter on crmMeta without conflicting keys
+    const timezoneFilter = buildLeadTimezoneMetaFilter({
+      timezoneIana: query.timezoneIana,
+      timezoneLabel: query.timezoneLabel,
+      timezoneZone: query.timezoneZone,
+    });
+
     const baseCrmMetaFilter = {
       tenantId,
       ...(query.stage && query.stage !== "all" ? { stage: query.stage as any } : {}),
       ...(query.assignedToMe ? { assignedToUserId: userId } : {}),
+      ...(timezoneFilter ?? {}),
     };
 
     const archiveClause = !includeArchived
@@ -349,6 +418,22 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
             isPrimary: e.isPrimary || i === 0,
           })),
         },
+        ...(data.address &&
+        (data.address.street || data.address.city || data.address.state || data.address.zip || data.address.country)
+          ? {
+              addresses: {
+                create: [
+                  {
+                    street: data.address.street?.trim() || null,
+                    city: data.address.city?.trim() || null,
+                    state: data.address.state?.trim() || null,
+                    zip: data.address.zip?.trim() || null,
+                    country: data.address.country?.trim() || null,
+                  },
+                ],
+              },
+            }
+          : {}),
         crmMeta: {
           create: {
             tenantId,
@@ -371,7 +456,17 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
       createdByUserId: createdBy,
     });
 
-    reply.status(201).send(formatContact(contact));
+    await syncLeadTimezoneForContact(contact.id, tenantId, {
+      city: data.address?.city ?? null,
+      state: data.address?.state ?? null,
+    });
+
+    const freshContact = await (db as any).contact.findFirst({
+      where: { id: contact.id, tenantId },
+      include: CONTACT_WITH_CRM_INCLUDE,
+    });
+
+    reply.status(201).send(formatContact(freshContact));
   });
 
   // ── GET /crm/contacts/:id ─────────────────────────────────────────────────
@@ -467,7 +562,15 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     // Ensure contact exists and belongs to tenant; load current stage + assignedToUserId for timeline diff
     const existing = await (db as any).contact.findFirst({
       where: { id, tenantId, active: true },
-      select: { id: true, crmMeta: { select: { stage: true, assignedToUserId: true } } },
+      select: {
+        id: true,
+        crmMeta: { select: { stage: true, assignedToUserId: true } },
+        addresses: {
+          orderBy: { createdAt: "asc" },
+          take: 1,
+          select: { city: true, state: true },
+        },
+      },
     });
     if (!existing) return reply.status(404).send({ error: "not_found" });
 
@@ -524,6 +627,18 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
           })
         : Promise.resolve(),
     ]);
+
+    let timezoneLocation: { city: string | null; state: string | null } | undefined;
+    if (data.address) {
+      const addrResult = await upsertPrimaryContactAddress(id, data.address);
+      if (addrResult.changed || !existing.addresses?.length) {
+        timezoneLocation = { city: addrResult.city, state: addrResult.state };
+      }
+    }
+
+    if (timezoneLocation) {
+      await syncLeadTimezoneForContact(id, tenantId, timezoneLocation);
+    }
 
     // Write STAGE_CHANGED timeline event — only when stage actually changed
     if (stageChanged) {
@@ -1368,6 +1483,13 @@ function formatContact(c: any) {
     lastActivityAt: c.crmMeta?.lastActivityAt ?? null,
     lastDisposition: c.crmMeta?.lastDisposition ?? null,
     lastDispositionAt: c.crmMeta?.lastDispositionAt ?? null,
+    timezoneIana: c.crmMeta?.timezoneIana ?? null,
+    timezoneLabel: c.crmMeta?.timezoneLabel ?? null,
+    timezoneOffsetMinutes: c.crmMeta?.timezoneOffsetMinutes ?? null,
+    timezoneResolvedAt: c.crmMeta?.timezoneResolvedAt
+      ? new Date(c.crmMeta.timezoneResolvedAt).toISOString()
+      : null,
+    timezoneResolutionStatus: c.crmMeta?.timezoneResolutionStatus ?? null,
     active: c.active ?? true,
     archivedAt: c.archivedAt ? new Date(c.archivedAt).toISOString() : null,
     isInCrm: !!c.crmMeta,

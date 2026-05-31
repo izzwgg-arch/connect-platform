@@ -1,5 +1,6 @@
 import type { FastifyRequest } from "fastify";
 import { db } from "@connect/db";
+import { syncLeadTimezoneForContact } from "./leadTimezoneService";
 
 // ── Constants (shared with standalone + campaign import) ─────────────────────
 
@@ -614,6 +615,12 @@ export async function processImportRow(
       }
     }
 
+    await syncLeadTimezoneForContact(
+      existingContactId,
+      tenantId,
+      hasAddress ? { city: addrCity || null, state: addrState || null } : undefined,
+    );
+
     return { action: "updated", contactId: existingContactId };
   }
 
@@ -679,6 +686,11 @@ export async function processImportRow(
       },
     },
     select: { id: true },
+  });
+
+  await syncLeadTimezoneForContact(contact.id, tenantId, {
+    city: addrCity || null,
+    state: addrState || null,
   });
 
   return { action: "created", contactId: contact.id };

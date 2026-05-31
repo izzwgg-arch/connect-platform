@@ -32,6 +32,7 @@ import {
   stageLabel,
   cn,
 } from "../../../../../components/crm";
+import { leadTimezoneDetailLabel, leadTimezoneBadgeTitle } from "../../../../../components/crm/contact/leadTimezoneDisplay";
 import { DISPOSITION_OPTIONS, type Checklist, type ScriptSummary } from "../../../../../components/crm/live";
 import { CrmEmailComposeDrawer } from "../../../../../components/crm/email/CrmEmailComposeDrawer";
 import { CrmVoicemailDropDrawer } from "../../../../../components/crm/voicemail-drops/CrmVoicemailDropDrawer";
@@ -2953,6 +2954,26 @@ function CrmContactDetailInner() {
                       <div style={{ flex: 1, minWidth: 0 }}>
                         {line1 && <div style={{ fontSize: "0.875rem" }}>{line1}</div>}
                         {line2 && <div style={{ fontSize: "0.8125rem", color: "var(--text-dim)" }}>{line2}</div>}
+                        {(contact.timezoneIana || contact.timezoneLabel || contact.timezoneResolutionStatus) && (
+                          <div style={{ marginTop: "0.25rem" }}>
+                            <span
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                borderRadius: "999px",
+                                padding: "0.1rem 0.45rem",
+                                fontSize: "0.6875rem",
+                                fontWeight: 600,
+                                letterSpacing: "0.02em",
+                                background: "var(--surface-hover)",
+                                color: "var(--text-dim)",
+                              }}
+                              title={leadTimezoneBadgeTitle(contact) ?? undefined}
+                            >
+                              {leadTimezoneDetailLabel(contact)}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );

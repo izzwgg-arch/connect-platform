@@ -3655,6 +3655,12 @@ enum CrmContactStage {
   CLOSED_LOST
 }
 
+enum CrmLeadTimezoneResolutionStatus {
+  RESOLVED
+  NEEDS_REVIEW
+  MISSING_LOCATION
+}
+
 /// CRM metadata overlay on top of an existing Contact record.
 /// A Contact becomes a CRM contact when this row is created.
 /// Deleting the Contact cascades and removes the CRM meta.
@@ -3670,6 +3676,11 @@ model CrmContactMeta {
   lastActivityAt    DateTime?
   lastDisposition   String?
   lastDispositionAt DateTime?
+  timezoneIana               String?
+  timezoneLabel              String?
+  timezoneOffsetMinutes      Int?
+  timezoneResolvedAt         DateTime?
+  timezoneResolutionStatus   CrmLeadTimezoneResolutionStatus?
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @updatedAt
 
@@ -3681,6 +3692,9 @@ model CrmContactMeta {
   @@index([tenantId, assignedToUserId])
   @@index([tenantId, createdAt])
   @@index([tenantId, lastActivityAt])
+  @@index([tenantId, timezoneLabel])
+  @@index([tenantId, timezoneIana])
+  @@index([tenantId, timezoneResolutionStatus])
 }
 
 // ─── CRM Timeline & Notes ─────────────────────────────────────────────────────
