@@ -39,7 +39,7 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
     !activeNavItem || isNavItemVisibleForUser(activeNavItem, can, backendJwtRole);
   const isCrmDashboardRoute = pathname === "/crm/dashboard";
   const isCrmQueueRoute = pathname === "/crm/queue";
-  const isCrmEmailRoute = pathname === "/crm/email";
+  const isCrmEmailRoute = pathname === "/crm/email" || pathname.startsWith("/crm/email/");
   const isCrmLiveCallRoute = pathname === "/crm/live-call";
 
   useEffect(() => {

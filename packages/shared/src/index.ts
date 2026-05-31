@@ -9,6 +9,7 @@ export * from "./mohRuntimeClass";
 export * from "./canonicalTenantSlug";
 export * from "./ariBridgedSnapshot";
 export * from "./expoMobilePushFormat";
+export * from "./crmEmailTemplates";
 /* chatSignedUrl uses node:crypto — import from "@connect/shared/chatSignedUrl" in Node only */
 
 export const UserSchema = z.object({

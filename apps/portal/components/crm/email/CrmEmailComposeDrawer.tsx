@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Mail, X, Send, FileText, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
+import { htmlToCrmPlainText, renderCrmMergeTemplate } from "@connect/shared";
 import { apiGet, apiPost } from "../../../services/apiClient";
 import { crm } from "../crmClasses";
 import { cn } from "../cn";
@@ -26,6 +27,7 @@ type EmailTemplate = {
   name: string;
   subject: string;
   bodyText: string;
+  bodyHtml?: string | null;
   visibility: "SHARED" | "PRIVATE";
 };
 
@@ -38,12 +40,14 @@ type ContactMergeFields = {
 };
 
 function applyMergeFields(text: string, fields: ContactMergeFields): string {
-  return text
-    .replace(/\{\{\s*contact\.firstName\s*\}\}/g, fields.firstName || "")
-    .replace(/\{\{\s*contact\.lastName\s*\}\}/g, fields.lastName || "")
-    .replace(/\{\{\s*contact\.displayName\s*\}\}/g, fields.displayName || "")
-    .replace(/\{\{\s*contact\.company\s*\}\}/g, fields.company || "")
-    .replace(/\{\{\s*contact\.email\s*\}\}/g, fields.email || "");
+  return renderCrmMergeTemplate(text, {
+    "contact.firstName": fields.firstName || "",
+    "contact.lastName": fields.lastName || "",
+    "contact.fullName": fields.displayName || "",
+    "contact.displayName": fields.displayName || "",
+    "contact.company": fields.company || "",
+    "contact.email": fields.email || "",
+  });
 }
 
 export function CrmEmailComposeDrawer({
@@ -122,7 +126,7 @@ export function CrmEmailComposeDrawer({
     const tpl = templates.find((t) => t.id === id);
     if (!tpl) return;
     setSubject(applyMergeFields(tpl.subject, mergeFields));
-    setBodyText(applyMergeFields(tpl.bodyText, mergeFields));
+    setBodyText(applyMergeFields(tpl.bodyText || htmlToCrmPlainText(tpl.bodyHtml || ""), mergeFields));
   }, [templates, mergeFields]);
 
   const selectedSender = useMemo(() => senders.find((s) => s.id === senderId) ?? null, [senders, senderId]);

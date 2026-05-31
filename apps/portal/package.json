@@ -15,6 +15,11 @@
   "dependencies": {
     "@cardknox/react-ifields": "^2.2.86",
     "@connect/shared": "workspace:*",
+    "@tiptap/extension-image": "^3.24.0",
+    "@tiptap/extension-link": "^3.24.0",
+    "@tiptap/extension-underline": "^3.24.0",
+    "@tiptap/react": "^3.24.0",
+    "@tiptap/starter-kit": "^3.24.0",
     "jssip": "^3.10.1",
     "lucide-react": "^0.577.0",
     "next": "^14.2.32",

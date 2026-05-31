@@ -145,6 +145,7 @@ model CrmEmailSendLog {
 
   /// Which CrmEmailConnection sent this. Null = legacy/unknown.
   senderConnectionId String?
+  attachmentSnapshot Json?
 
   @@index([tenantId, userId, sentAt])
   @@index([tenantId, gmailMessageId])
@@ -160,6 +161,15 @@ model CrmEmailTemplate {
   name            String
   subject         String
   bodyText        String
+  previewText     String?
+  category        String   @default("Custom")
+  isFavorite      Boolean  @default(false)
+  isDraft         Boolean  @default(false)
+  usageCount      Int      @default(0)
+  lastUsedAt      DateTime?
+  bodyHtml        String?
+  bodyJson        Json?
+  builderVersion  Int      @default(1)
   /// SHARED across tenant or PRIVATE to creator.
   visibility      String   @default("SHARED")
   isArchived      Boolean  @default(false)
@@ -169,9 +179,88 @@ model CrmEmailTemplate {
   tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   createdBy User?             @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
   bulkJobs  CrmBulkEmailJob[]
+  attachments CrmEmailTemplateAttachment[]
 
   @@index([tenantId, isArchived, updatedAt])
+  @@index([tenantId, category, isArchived])
+  @@index([tenantId, isFavorite, updatedAt])
   @@index([tenantId, createdByUserId])
+}
+
+model CrmEmailBranding {
+  id              String   @id @default(cuid())
+  tenantId        String   @unique
+  logoUrl         String?
+  logoStorageKey  String?
+  logoMimeType    String?
+  logoFileName    String?
+  businessName    String?
+  tagline         String?
+  website         String?
+  phone           String?
+  email           String?
+  address         String?
+  facebookUrl     String?
+  instagramUrl    String?
+  linkedinUrl     String?
+  xUrl            String?
+  createdByUserId String?
+  updatedByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, updatedAt])
+}
+
+model CrmEmailSignature {
+  id              String   @id @default(cuid())
+  tenantId        String
+  userId          String
+  senderName      String?
+  senderTitle     String?
+  companyName     String?
+  phone           String?
+  email           String?
+  website         String?
+  logoUrl         String?
+  avatarUrl       String?
+  facebookUrl     String?
+  instagramUrl    String?
+  linkedinUrl     String?
+  xUrl            String?
+  legalDisclaimer String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([tenantId])
+}
+
+model CrmEmailTemplateAttachment {
+  id               String   @id @default(cuid())
+  tenantId         String
+  templateId       String
+  uploadedByUserId String?
+  originalFileName String
+  mimeType         String
+  sizeBytes        BigInt
+  storageKey       String
+  contentHash      String
+  disposition      String   @default("ATTACHMENT")
+  isOptional       Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  template CrmEmailTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  uploadedBy User?          @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, templateId])
+  @@index([tenantId, createdAt])
 }
 
 datasource db {
@@ -638,6 +727,9 @@ model Tenant {
   crmEmailMessages                CrmEmailMessage[]
   crmEmailSendLogs                CrmEmailSendLog[]
   crmEmailTemplates               CrmEmailTemplate[]
+  crmEmailBranding                CrmEmailBranding?
+  crmEmailSignatures              CrmEmailSignature[]
+  crmEmailTemplateAttachments     CrmEmailTemplateAttachment[]
   crmBulkEmailJobs                CrmBulkEmailJob[]
   crmDriveFolders                 CrmDriveFolder[]
   crmLeadDocuments                CrmLeadDocument[]
@@ -735,6 +827,8 @@ model User {
   crmEmailThreads                CrmEmailThread[]
   crmEmailSendLogs               CrmEmailSendLog[]
   crmEmailTemplates              CrmEmailTemplate[]
+  crmEmailSignatures             CrmEmailSignature[]
+  crmEmailTemplateAttachments    CrmEmailTemplateAttachment[]
   crmBulkEmailJobsCreated        CrmBulkEmailJob[]                 @relation("CrmBulkEmailJobCreator")
   customRolesCreated             CustomRole[]                      @relation("CustomRoleCreatedBy")
   customRolesUpdated             CustomRole[]                      @relation("CustomRoleUpdatedBy")

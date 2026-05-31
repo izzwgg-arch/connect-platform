@@ -1,5 +1,6 @@
 import { db } from "@connect/db";
 import { processCrmEmailSendJob } from "./crmEmailSend";
+import { plainTextToCrmHtml } from "@connect/shared";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -22,7 +23,8 @@ export function renderTemplate(
   vars: Record<string, string>,
 ): string {
   return template.replace(/\{\{(\w+(?:\.\w+)?)\}\}/g, (_match, key: string) => {
-    return vars[key] ?? vars[key.replace(".", "_")] ?? "";
+    const alias = key === "contact.fullName" || key === "contact.displayName" ? "contact.name" : key;
+    return vars[key] ?? vars[alias] ?? vars[key.replace(".", "_")] ?? "";
   });
 }
 
@@ -49,6 +51,8 @@ export function buildContactVars(contact: {
     "contact.lastName": lastName,
     name: fullName,
     "contact.name": fullName,
+    "contact.fullName": fullName,
+    "contact.displayName": fullName,
     company: contact.company ?? "",
     "contact.company": contact.company ?? "",
     title: contact.title ?? "",
@@ -82,6 +86,8 @@ export function buildFunderVars(funder: {
     "contact.lastName": lastName,
     name: funder.name,
     "contact.name": funder.name,
+    "contact.fullName": funder.name,
+    "contact.displayName": funder.name,
     company: funder.organization ?? "",
     "contact.company": funder.organization ?? "",
     email: funder.email ?? "",
@@ -269,6 +275,7 @@ export async function processCrmBulkEmailJob(jobData: {
 
         const subject = renderTemplate(template.subject, vars);
         const bodyText = renderTemplate(template.bodyText, vars);
+        const bodyHtml = renderTemplate((template as any).bodyHtml || plainTextToCrmHtml(template.bodyText), vars);
 
         try {
           await processCrmEmailSendJob({
@@ -278,7 +285,9 @@ export async function processCrmBulkEmailJob(jobData: {
             to: recipient.toEmail,
             subject,
             bodyText,
+            bodyHtml,
             contactId: recipient.contactId ?? null,
+            templateId: template.id,
           });
 
           await db.crmBulkEmailRecipient.update({

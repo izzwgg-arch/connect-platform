@@ -4,9 +4,120 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-05-31 — CRM Email Template backend completion
+
+**Task:** CRM / email templates / backend implementation
+**Risk:** high
+
+### Gap
+
+The UI had controls for branding logos and template attachments, but the backend still needed the final production path: uploaded logos must not expose storage keys, final emails need inline logo images instead of expiring links, and attachment send behavior needed tighter tenant/template scoping and allowlist coverage.
+
+### What changed
+
+- **Branding logos:** API branding responses now resolve uploaded logos to a safe preview route and never return raw `logoStorageKey`. Final server-side renders use `cid:connect-crm-business-logo` for uploaded tenant logos.
+- **Worker sends:** Gmail MIME construction now supports inline CID logo parts plus normal template attachments in the same multipart send.
+- **Attachments:** ZIP was removed from the CRM template attachment allowlist. Allowed types are PDF, DOCX, XLSX, CSV, JPG, PNG, and WEBP.
+- **Tenant isolation:** worker attachment loading now scopes selected attachment IDs by tenant and template, preventing cross-template/cross-tenant attachment injection.
+- **Tests:** added focused storage, source-safety, shared rendering, and MIME tests for logo scoping, safe preview rendering, CID logo sends, ZIP rejection, attachment inclusion, cross-tenant scoping, missing merge values, and plain-template compatibility.
+
+### Deploy
+
+Requires **`api`** and **`worker`**. No new Prisma migration.
+
+### Verify
+
+```bash
+pnpm --dir apps/api exec node --import tsx --test src/crm/emailTemplateAttachmentStorage.test.ts src/crm/emailTemplateRoutes.source.test.ts
+pnpm --dir packages/shared exec node --import tsx --test src/crmEmailTemplates.test.ts
+pnpm --dir apps/worker exec node --import tsx --test src/crmEmailSend.test.ts src/crmBulkEmail.test.ts
+pnpm --dir apps/api typecheck
+pnpm --dir apps/worker typecheck
+```
+
+Manual QA: upload branding logo, confirm API branding payload has `logoUrl` but no `logoStorageKey`; send a test email from a rich template and confirm the message includes the business logo inline; upload/send PDF/DOCX/XLSX/CSV/JPG/PNG/WEBP attachments; confirm ZIP upload is rejected; confirm another tenant/template attachment ID cannot be selected into a send.
+
+---
+
+## 2026-05-31 — CRM Email Template Builder UI polish
+
+**Task:** CRM / email templates / UI polish
+**Risk:** medium
+
+### Gap
+
+The CRM email builder had the right core feature set but still behaved like a dense first-pass implementation: one large page owned all state and panels, library cards lacked direct actions, autosave/dirty-state feedback was missing, and drag/drop/upload/preview affordances needed a more premium 2026 SaaS feel.
+
+### What changed
+
+- Split the templates page into reusable portal components under `apps/portal/components/crm/email/templates/`:
+  - `TemplateLibraryPanel`
+  - `EmailBuilderCanvas`
+  - `EmailPreviewPanel`
+  - `UtilityPanels`
+  - `StarterTemplatesStrip`
+- Polished the three-panel layout, library cards, hover states, shadows, compact filters, inline favorite/rename/duplicate/archive/restore actions, and responsive behavior.
+- Added autosave/dirty-state UI, before-unload protection for unsaved edits, drag/drop block insertion, drag/drop attachment/logo upload affordances, and upload progress feedback.
+- Improved Branding, Attachments, Merge Fields, AI Assistant, and live preview panels without changing schema or API contracts.
+
+### Deploy
+
+Requires **`portal`** only. No Prisma migration and no backend deploy required for this polish pass.
+
+### Verify
+
+```bash
+pnpm --dir apps/portal typecheck
+pnpm --dir packages/shared exec tsx --test src/crmEmailTemplates.test.ts
+pnpm --dir apps/worker exec tsx --test src/crmBulkEmail.test.ts
+```
+
+Manual QA still recommended for `/crm/email/templates`: desktop/tablet/mobile layout, create/edit, autosave, duplicate, archive/restore, send test, logo upload, attachment upload, merge insert/copy, AI actions, and live preview modes.
+
+---
+
+## 2026-05-31 — CRM Email Template Builder rebuild
+
+**Task:** CRM / email templates / UI rebuild / attachments / branding
+**Risk:** high
+
+### Gap
+
+`/crm/email/templates` was still a Phase 1 plain-text CRUD form backed by `CrmEmailTemplate.bodyText`, and CRM Gmail sending emitted `text/plain` only. There was no reusable CRM branding, visual builder content, server-side merge contract, template attachments, starter gallery, or professional HTML email rendering.
+
+### What changed
+
+- **Data model:** added backward-compatible CRM email template metadata (`category`, favorite/draft flags, preview text, usage tracking, HTML/body JSON), tenant branding, per-user signature, and tenant-scoped template attachments.
+- **API:** template routes now support rich fields, duplicate/archive/send-test, starters, branding/signature save, attachment upload/remove, merge field discovery, and real AI generation when `OPENAI_API_KEY` is configured.
+- **Rendering:** CRM sends can render server-side HTML + plain-text fallback and include template attachments in Gmail multipart MIME.
+- **Portal:** `/crm/email/templates` is now a three-panel no-code builder matching the mockup structure: template library, visual TipTap builder with block rail, live desktop/mobile preview, and bottom Branding/Attachments/Merge Fields/AI panels.
+- **Compatibility:** compose and bulk email paths remain compatible with existing plain-text templates while tolerating new rich template fields.
+
+### Migration
+
+- `packages/db/prisma/migrations/20260610120000_crm_email_builder`
+
+### Deploy
+
+Requires **`api`**, **`worker`**, and **`portal`**. Prisma migration is required and should be run by the API deploy job only.
+
+### Verify
+
+```bash
+pnpm --dir packages/shared exec tsx --test src/crmEmailTemplates.test.ts
+pnpm --dir apps/worker exec tsx --test src/crmBulkEmail.test.ts
+pnpm --dir apps/portal typecheck
+pnpm --dir apps/api typecheck
+pnpm --dir apps/worker typecheck
+```
+
+Manual QA: create blank/starter templates, save draft/template, add branding/signature, insert merge fields, upload PDF/XLSX/image attachment, preview desktop/mobile, send test email, confirm HTML email and attachment delivery, confirm Agent/Manager access and settings admin-only behavior.
+
+---
+
 ## 2026-05-30 — CRM Email access for Agent and Manager roles
 
-**Task:** CRM / email / permissions / UI  
+**Task:** CRM / email / permissions / UI
 **Risk:** medium
 
 ### Gap
@@ -40,7 +151,7 @@ pnpm --dir apps/api exec node --import tsx --test src/crm/crmContactAccess.test.
 
 ## 2026-05-30 — Inbound CRM caller ID on dialer + telephony WS
 
-**Task:** Telephony / CRM / dialer UI  
+**Task:** Telephony / CRM / dialer UI
 **Risk:** high
 
 ### Gap
@@ -73,7 +184,7 @@ pnpm --dir apps/portal exec vitest run lib/crmInboundCallDisplay.test.ts
 
 ## 2026-05-30 — CRM lead timezone: Arizona/Phoenix display polish
 
-**Task:** CRM / leads / timezone UI polish  
+**Task:** CRM / leads / timezone UI polish
 **Risk:** low
 
 ### Gap
@@ -97,7 +208,7 @@ pnpm --dir apps/api exec node --import tsx --test src/crm/leadTimezoneResolver.t
 
 ## 2026-05-30 — CRM lead timezone resolution + filtering
 
-**Task:** CRM / leads / data normalization / filtering  
+**Task:** CRM / leads / data normalization / filtering
 **Risk:** medium
 
 ### Gap

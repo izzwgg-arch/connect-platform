@@ -3,6 +3,8 @@ import { db } from "@connect/db";
 import IORedis from "ioredis";
 import { Queue } from "bullmq";
 import { encryptJson, decryptJson, hasCredentialsMasterKey } from "@connect/security";
+import { randomUUID } from "node:crypto";
+import { CRM_EMAIL_MERGE_FIELDS, plainTextToCrmHtml } from "@connect/shared";
 
 function requireEnv(name: string): string {
   const v = process.env[name];
@@ -28,6 +30,23 @@ import {
   replyTrackingStatus,
   GMAIL_READONLY_SCOPE,
 } from "./crmEmailHelpers.js";
+import { generateCrmEmailTemplateDraft, CrmEmailTemplateAiError } from "./emailTemplateAi.js";
+import {
+  normalizeCrmEmailBrandingPayload,
+  normalizeCrmEmailSignaturePayload,
+  resolveCrmEmailBranding,
+  resolveCrmEmailSignature,
+} from "./emailTemplateBranding.js";
+import {
+  normalizeCrmEmailCategory,
+  renderCrmEmailTemplate,
+} from "./emailTemplateRenderer.js";
+import {
+  assertCrmEmailFileAllowed,
+  normalizeCrmEmailMime,
+  readCrmEmailAssetFile,
+  writeCrmEmailAssetFile,
+} from "./emailTemplateAttachmentStorage.js";
 export { canManageTenantSender, hasReadonlyScope, replyTrackingStatus, GMAIL_READONLY_SCOPE } from "./crmEmailHelpers.js";
 
 /**
@@ -90,6 +109,129 @@ async function resolveSenderConnection(opts: {
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
 const emailQueue = new Queue("crm-email-send", { connection: redis });
 const emailSyncQueue = new Queue("crm-email-sync", { connection: redis });
+
+function isTemplateAdmin(user: { role?: string }) {
+  return user.role === "ADMIN" || user.role === "TENANT_ADMIN" || user.role === "SUPER_ADMIN";
+}
+
+function canEditTemplate(user: { sub: string; role?: string }, template: { createdByUserId?: string | null }) {
+  return isTemplateAdmin(user) || template.createdByUserId === user.sub;
+}
+
+function normalizeTemplatePayload(body: any, creating = false): Record<string, unknown> {
+  const data: Record<string, unknown> = {};
+  if (creating || typeof body?.name === "string") data.name = String(body?.name || "").trim().slice(0, 200);
+  if (creating || typeof body?.subject === "string") data.subject = String(body?.subject || "").trim().slice(0, 500);
+  if (creating || typeof body?.bodyText === "string") data.bodyText = String(body?.bodyText || "").slice(0, 50000);
+  if (typeof body?.previewText === "string") data.previewText = String(body.previewText).trim().slice(0, 300);
+  if (typeof body?.category === "string") data.category = normalizeCrmEmailCategory(body.category);
+  if (typeof body?.isFavorite === "boolean") data.isFavorite = body.isFavorite;
+  if (typeof body?.isDraft === "boolean") data.isDraft = body.isDraft;
+  if (typeof body?.bodyHtml === "string") data.bodyHtml = String(body.bodyHtml).slice(0, 120000);
+  if (body?.bodyJson !== undefined) data.bodyJson = body.bodyJson;
+  if (typeof body?.visibility === "string") data.visibility = body.visibility === "PRIVATE" ? "PRIVATE" : "SHARED";
+  if (typeof body?.isArchived === "boolean") data.isArchived = body.isArchived;
+  return data;
+}
+
+function formatTemplate(row: any) {
+  return {
+    ...row,
+    attachments: (row.attachments || []).map(formatAttachment),
+  };
+}
+
+function formatAttachment(row: any) {
+  return {
+    id: row.id,
+    templateId: row.templateId,
+    originalFileName: row.originalFileName,
+    mimeType: row.mimeType,
+    sizeBytes: Number(row.sizeBytes || 0),
+    disposition: row.disposition,
+    isOptional: row.isOptional,
+    createdAt: row.createdAt,
+  };
+}
+
+async function formatBrandingForResponse(tenantId: string, tenantName?: string | null) {
+  return resolveCrmEmailBranding(tenantId, tenantName, { logoMode: "preview" });
+}
+
+const STARTER_TEMPLATES = [
+  {
+    key: "welcome-new-lead",
+    name: "Welcome New Lead",
+    category: "Welcome",
+    subject: "Welcome to {{business.name}}, {{contact.firstName}}",
+    previewText: "We are excited to help you with your goals.",
+    bodyText:
+      "Hi {{contact.firstName}},\n\nThank you for reaching out to {{business.name}}. We are thrilled to have the opportunity to work with you and help you achieve your goals.\n\nHere is what you can expect next:\n\n- A member of our team will reach out shortly\n- We will create a customized plan for your needs\n- You will start seeing results\n\nIf you have any questions in the meantime, feel free to reply to this email.\n\nLooking forward to helping you succeed!\n\n{{sender.signature}}",
+  },
+  {
+    key: "missed-call-follow-up",
+    name: "Missed Call Follow-Up",
+    category: "Follow-up",
+    subject: "Sorry we missed you, {{contact.firstName}}",
+    previewText: "Following up so we can help.",
+    bodyText:
+      "Hi {{contact.firstName}},\n\nSorry we missed your call. I wanted to follow up quickly and make sure you get the help you need.\n\nYou can reply to this email or call us at {{business.phone}} when it is convenient.\n\nBest regards,\n{{sender.signature}}",
+  },
+  {
+    key: "appointment-reminder",
+    name: "Appointment Reminder",
+    category: "Appointment",
+    subject: "Appointment reminder from {{business.name}}",
+    previewText: "A quick reminder about your upcoming appointment.",
+    bodyText:
+      "Hi {{contact.firstName}},\n\nThis is a friendly reminder about your upcoming appointment with {{business.name}}.\n\nIf you need to reschedule, please reply to this email or call {{business.phone}}.\n\nThank you,\n{{sender.signature}}",
+  },
+  {
+    key: "quote-follow-up",
+    name: "Quote Follow-Up",
+    category: "Sales",
+    subject: "Following up on your quote, {{contact.firstName}}",
+    previewText: "Checking in on the quote we prepared.",
+    bodyText:
+      "Hi {{contact.firstName}},\n\nI wanted to follow up on the quote we prepared for {{contact.company}}. I am happy to answer questions or adjust anything based on your goals.\n\nWould you like to review the next steps this week?\n\nBest,\n{{sender.signature}}",
+  },
+  {
+    key: "payment-reminder",
+    name: "Payment Reminder",
+    category: "Collections",
+    subject: "Payment reminder from {{business.name}}",
+    previewText: "A friendly reminder about your account.",
+    bodyText:
+      "Hi {{contact.firstName}},\n\nThis is a friendly reminder from {{business.name}} regarding your account. Please contact us if you have already sent payment or need help with next steps.\n\nThank you,\n{{sender.signature}}",
+  },
+  {
+    key: "thank-you",
+    name: "Thank You",
+    category: "Follow-up",
+    subject: "Thank you, {{contact.firstName}}",
+    previewText: "We appreciate the opportunity to work with you.",
+    bodyText:
+      "Hi {{contact.firstName}},\n\nThank you for choosing {{business.name}}. We appreciate the opportunity to work with you and look forward to supporting your goals.\n\nBest regards,\n{{sender.signature}}",
+  },
+  {
+    key: "renewal-notice",
+    name: "Renewal Notice",
+    category: "Renewal",
+    subject: "Your renewal with {{business.name}}",
+    previewText: "Important renewal information for your account.",
+    bodyText:
+      "Hi {{contact.firstName}},\n\nYour renewal with {{business.name}} is coming up. We would be happy to review your current plan and confirm everything still fits your needs.\n\nPlease reply with any questions.\n\nBest,\n{{sender.signature}}",
+  },
+  {
+    key: "re-engagement",
+    name: "Re-engagement",
+    category: "Sales",
+    subject: "Still interested, {{contact.firstName}}?",
+    previewText: "Checking in to see if we can still help.",
+    bodyText:
+      "Hi {{contact.firstName}},\n\nI wanted to check in and see if {{business.name}} can still help with your goals. If now is not the right time, no problem. If you would like to reconnect, just reply here.\n\nBest regards,\n{{sender.signature}}",
+  },
+];
 
 export async function registerCrmEmailRoutes(app: FastifyInstance) {
   // CRM Email Phase 1 is launching — routes always register unless explicitly disabled.
@@ -701,8 +843,8 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     return { replies };
   });
 
-  // POST /crm/email/send — basic send (Phase 1).
-  // Body: { contactId?, toEmail?, subject?, bodyText?, templateId?, connectionId? }
+  // POST /crm/email/send — CRM email send with optional server-side template render.
+  // Body: { contactId?, toEmail?, subject?, bodyText?, bodyHtml?, templateId?, connectionId?, attachmentIds? }
   app.post("/crm/email/send", async (req, reply) => {
     const user = await requireCrmAccess(req, reply); if (!user) return;
 
@@ -719,10 +861,12 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     const toEmail = String(body?.toEmail || "").trim();
     let subject = String(body?.subject || "");
     let bodyText = String(body?.bodyText || "");
+    let bodyHtml = typeof body?.bodyHtml === "string" ? String(body.bodyHtml) : "";
     const templateId = body?.templateId ? String(body.templateId) : null;
+    const attachmentIds = Array.isArray(body?.attachmentIds) ? body.attachmentIds.map(String).slice(0, 20) : undefined;
 
     if (templateId) {
-      const tpl = await db.crmEmailTemplate.findFirst({
+      const tpl = await (db as any).crmEmailTemplate.findFirst({
         where: {
           id: templateId,
           tenantId: user.tenantId,
@@ -731,13 +875,29 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
         },
       });
       if (!tpl) return reply.status(404).send({ error: "template_not_found" });
-      if (!subject) subject = tpl.subject;
-      if (!bodyText) bodyText = tpl.bodyText;
+      const rendered = await renderCrmEmailTemplate({
+        template: {
+          subject: subject || tpl.subject,
+          previewText: tpl.previewText,
+          bodyText: bodyText || tpl.bodyText,
+          bodyHtml: bodyHtml || tpl.bodyHtml,
+          bodyJson: tpl.bodyJson,
+        },
+        tenantId: user.tenantId,
+        userId: user.sub,
+        contactId,
+        toEmail,
+        sender,
+      });
+      subject = rendered.subject;
+      bodyText = rendered.text;
+      bodyHtml = rendered.html;
     }
 
     if (!contactId && !toEmail) return reply.status(400).send({ error: "invalid_payload", detail: "contactId or toEmail required" });
     if (subject.length > 500) return reply.status(400).send({ error: "invalid_payload", detail: "subject too long" });
     if (bodyText.length > 50000) return reply.status(400).send({ error: "invalid_payload", detail: "body too long" });
+    if (bodyHtml.length > 150000) return reply.status(400).send({ error: "invalid_payload", detail: "html body too long" });
 
     // Resolve and validate contact belongs to tenant; derive toEmail if needed
     let resolvedTo = toEmail;
@@ -765,17 +925,131 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       to: resolvedTo,
       subject,
       bodyText,
+      bodyHtml,
       contactId,
+      templateId,
+      attachmentIds,
     }, { removeOnComplete: 100, removeOnFail: 100 });
     await db.auditLog.create({ data: { tenantId: user.tenantId, action: "CRM_EMAIL_SEND_QUEUED", entityType: "Contact", entityId: contactId || "", actorUserId: user.sub } }).catch(() => undefined);
     return { ok: true, senderId: sender.id };
+  });
+
+  app.get("/crm/email/merge-fields", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply); if (!user) return;
+    return { fields: CRM_EMAIL_MERGE_FIELDS };
+  });
+
+  app.get("/crm/email/template-starters", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply); if (!user) return;
+    return {
+      starters: STARTER_TEMPLATES.map((starter) => ({
+        ...starter,
+        bodyHtml: plainTextToCrmHtml(starter.bodyText),
+      })),
+    };
+  });
+
+  app.get("/crm/email/branding", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply); if (!user) return;
+    const tenant = await (db as any).tenant.findUnique({ where: { id: user.tenantId }, select: { name: true } }).catch(() => null);
+    const branding = await resolveCrmEmailBranding(user.tenantId, tenant?.name, { logoMode: "preview" });
+    return { branding };
+  });
+
+  app.get("/crm/email/branding/logo", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply); if (!user) return;
+    const row = await (db as any).crmEmailBranding.findUnique({
+      where: { tenantId: user.tenantId },
+      select: { logoStorageKey: true, logoMimeType: true },
+    }).catch(() => null);
+    if (!row?.logoStorageKey) return reply.code(404).send({ error: "logo_not_found" });
+    try {
+      const bytes = await readCrmEmailAssetFile(row.logoStorageKey);
+      reply.header("content-type", row.logoMimeType || "application/octet-stream");
+      reply.header("cache-control", "private, max-age=300");
+      return reply.send(bytes);
+    } catch {
+      return reply.code(404).send({ error: "logo_not_found" });
+    }
+  });
+
+  app.put("/crm/email/branding", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply); if (!user) return;
+    const data = normalizeCrmEmailBrandingPayload((req.body as any) || {});
+    await (db as any).crmEmailBranding.upsert({
+      where: { tenantId: user.tenantId },
+      create: { tenantId: user.tenantId, createdByUserId: user.sub, updatedByUserId: user.sub, ...data },
+      update: { updatedByUserId: user.sub, ...data },
+    });
+    const tenant = await (db as any).tenant.findUnique({ where: { id: user.tenantId }, select: { name: true } }).catch(() => null);
+    return { branding: await formatBrandingForResponse(user.tenantId, tenant?.name) };
+  });
+
+  app.post("/crm/email/branding/logo", async (req: any, reply) => {
+    const user = await requireCrmAccess(req, reply); if (!user) return;
+    if (!req.isMultipart?.()) return reply.code(400).send({ error: "multipart_required" });
+    const file = await req.file({ limits: { fileSize: 2 * 1024 * 1024 } });
+    if (!file) return reply.code(400).send({ error: "file_required" });
+    const buffer = await file.toBuffer();
+    const mimeType = normalizeCrmEmailMime(file.mimetype);
+    try {
+      assertCrmEmailFileAllowed({ mimeType, originalFileName: file.filename || "logo", sizeBytes: buffer.length, logo: true });
+      const fileId = randomUUID();
+      const stored = await writeCrmEmailAssetFile({
+        tenantId: user.tenantId,
+        ownerId: "branding",
+        fileId,
+        buffer,
+        mimeType,
+        originalFileName: file.filename || "logo",
+        logo: true,
+      });
+      await (db as any).crmEmailBranding.upsert({
+        where: { tenantId: user.tenantId },
+        create: {
+          tenantId: user.tenantId,
+          createdByUserId: user.sub,
+          updatedByUserId: user.sub,
+          logoStorageKey: stored.storageKey,
+          logoMimeType: mimeType,
+          logoFileName: file.filename || "logo",
+        },
+        update: {
+          updatedByUserId: user.sub,
+          logoStorageKey: stored.storageKey,
+          logoMimeType: mimeType,
+          logoFileName: file.filename || "logo",
+        },
+      });
+      const tenant = await (db as any).tenant.findUnique({ where: { id: user.tenantId }, select: { name: true } }).catch(() => null);
+      return { branding: await formatBrandingForResponse(user.tenantId, tenant?.name) };
+    } catch (err: any) {
+      return reply.code(400).send({ error: err?.message || "upload_failed" });
+    }
+  });
+
+  app.get("/crm/email/signature", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply); if (!user) return;
+    const signature = await resolveCrmEmailSignature({ tenantId: user.tenantId, userId: user.sub });
+    return { signature };
+  });
+
+  app.put("/crm/email/signature", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply); if (!user) return;
+    const data = normalizeCrmEmailSignaturePayload((req.body as any) || {});
+    const row = await (db as any).crmEmailSignature.upsert({
+      where: { tenantId_userId: { tenantId: user.tenantId, userId: user.sub } },
+      create: { tenantId: user.tenantId, userId: user.sub, ...data },
+      update: data,
+    });
+    return { signature: row };
   });
 
   // GET /crm/email/templates — list templates available to this user (shared + own private)
   app.get("/crm/email/templates", async (req, reply) => {
     const user = await requireCrmAccess(req, reply); if (!user) return;
     const includeArchived = String((req.query as any)?.includeArchived || "") === "true";
-    const rows = await db.crmEmailTemplate.findMany({
+    const rows = await (db as any).crmEmailTemplate.findMany({
       where: {
         tenantId: user.tenantId,
         ...(includeArchived ? {} : { isArchived: false }),
@@ -785,16 +1059,16 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
         ],
       },
       orderBy: [{ updatedAt: "desc" }],
-      select: { id: true, name: true, subject: true, bodyText: true, visibility: true, isArchived: true, createdByUserId: true, createdAt: true, updatedAt: true },
+      include: { attachments: true },
     });
-    return { templates: rows };
+    return { templates: rows.map(formatTemplate) };
   });
 
   // GET /crm/email/templates/:id
   app.get("/crm/email/templates/:id", async (req, reply) => {
     const user = await requireCrmAccess(req, reply); if (!user) return;
     const { id } = req.params as { id: string };
-    const row = await db.crmEmailTemplate.findFirst({
+    const row = await (db as any).crmEmailTemplate.findFirst({
       where: {
         id,
         tenantId: user.tenantId,
@@ -803,63 +1077,205 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
           { visibility: "PRIVATE", createdByUserId: user.sub },
         ],
       },
+      include: { attachments: true },
     });
     if (!row) return reply.code(404).send({ error: "template_not_found" });
-    return row;
+    return formatTemplate(row);
   });
 
   // POST /crm/email/templates — create
   app.post("/crm/email/templates", async (req, reply) => {
     const user = await requireCrmAccess(req, reply); if (!user) return;
     const body = (req.body as any) || {};
-    const name = String(body?.name || "").trim();
-    const subject = String(body?.subject || "").trim();
-    const bodyText = String(body?.bodyText || "");
-    const visibility = String(body?.visibility || "SHARED") === "PRIVATE" ? "PRIVATE" : "SHARED";
-    if (!name) return reply.code(400).send({ error: "invalid_payload", detail: "name required" });
-    if (!subject) return reply.code(400).send({ error: "invalid_payload", detail: "subject required" });
-    if (name.length > 200) return reply.code(400).send({ error: "invalid_payload", detail: "name too long" });
-    if (subject.length > 500) return reply.code(400).send({ error: "invalid_payload", detail: "subject too long" });
-    if (bodyText.length > 50000) return reply.code(400).send({ error: "invalid_payload", detail: "body too long" });
-    const row = await db.crmEmailTemplate.create({
-      data: { tenantId: user.tenantId, createdByUserId: user.sub, name, subject, bodyText, visibility },
+    const data = normalizeTemplatePayload(body, true);
+    if (!String(data.name || "").trim()) return reply.code(400).send({ error: "invalid_payload", detail: "name required" });
+    if (!String(data.subject || "").trim() && !body?.isDraft) return reply.code(400).send({ error: "invalid_payload", detail: "subject required" });
+    const row = await (db as any).crmEmailTemplate.create({
+      data: { tenantId: user.tenantId, createdByUserId: user.sub, visibility: "SHARED", category: "Custom", ...data },
     });
     await db.auditLog.create({ data: { tenantId: user.tenantId, action: "CRM_EMAIL_TEMPLATE_CREATED", entityType: "CrmEmailTemplate", entityId: row.id, actorUserId: user.sub } }).catch(() => undefined);
-    return row;
+    return formatTemplate({ ...row, attachments: [] });
   });
 
   // PUT /crm/email/templates/:id — update (creator or admin only)
   app.put("/crm/email/templates/:id", async (req, reply) => {
     const user = await requireCrmAccess(req, reply); if (!user) return;
     const { id } = req.params as { id: string };
-    const existing = await db.crmEmailTemplate.findFirst({ where: { id, tenantId: user.tenantId } });
+    const existing = await (db as any).crmEmailTemplate.findFirst({ where: { id, tenantId: user.tenantId } });
     if (!existing) return reply.code(404).send({ error: "template_not_found" });
-    const isAdmin = user.role === "ADMIN" || user.role === "TENANT_ADMIN" || user.role === "SUPER_ADMIN";
-    if (!isAdmin && existing.createdByUserId !== user.sub) return reply.code(403).send({ error: "forbidden" });
+    if (!canEditTemplate(user, existing)) return reply.code(403).send({ error: "forbidden" });
     const body = (req.body as any) || {};
-    const data: any = {};
-    if (typeof body?.name === "string") data.name = String(body.name).trim().slice(0, 200);
-    if (typeof body?.subject === "string") data.subject = String(body.subject).trim().slice(0, 500);
-    if (typeof body?.bodyText === "string") data.bodyText = String(body.bodyText).slice(0, 50000);
-    if (typeof body?.visibility === "string") data.visibility = body.visibility === "PRIVATE" ? "PRIVATE" : "SHARED";
-    if (typeof body?.isArchived === "boolean") data.isArchived = body.isArchived;
+    const data: any = normalizeTemplatePayload(body);
     if (data.name === "") return reply.code(400).send({ error: "invalid_payload", detail: "name required" });
-    if (data.subject === "") return reply.code(400).send({ error: "invalid_payload", detail: "subject required" });
-    const row = await db.crmEmailTemplate.update({ where: { id }, data });
+    if (data.subject === "" && !body?.isDraft) return reply.code(400).send({ error: "invalid_payload", detail: "subject required" });
+    const row = await (db as any).crmEmailTemplate.update({ where: { id }, data, include: { attachments: true } });
     await db.auditLog.create({ data: { tenantId: user.tenantId, action: "CRM_EMAIL_TEMPLATE_UPDATED", entityType: "CrmEmailTemplate", entityId: row.id, actorUserId: user.sub } }).catch(() => undefined);
-    return row;
+    return formatTemplate(row);
   });
 
-  // DELETE /crm/email/templates/:id — archive (soft)
+  app.post("/crm/email/templates/:id/duplicate", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply); if (!user) return;
+    const { id } = req.params as { id: string };
+    const existing = await (db as any).crmEmailTemplate.findFirst({
+      where: {
+        id,
+        tenantId: user.tenantId,
+        OR: [{ visibility: "SHARED" }, { visibility: "PRIVATE", createdByUserId: user.sub }],
+      },
+      include: { attachments: true },
+    });
+    if (!existing) return reply.code(404).send({ error: "template_not_found" });
+    const copy = await (db as any).crmEmailTemplate.create({
+      data: {
+        tenantId: user.tenantId,
+        createdByUserId: user.sub,
+        name: `${existing.name} Copy`.slice(0, 200),
+        subject: existing.subject,
+        bodyText: existing.bodyText,
+        previewText: existing.previewText,
+        category: existing.category,
+        isFavorite: false,
+        isDraft: existing.isDraft,
+        bodyHtml: existing.bodyHtml,
+        bodyJson: existing.bodyJson,
+        builderVersion: existing.builderVersion,
+        visibility: existing.visibility,
+        attachments: {
+          create: (existing.attachments || []).map((a: any) => ({
+            tenantId: user.tenantId,
+            uploadedByUserId: user.sub,
+            originalFileName: a.originalFileName,
+            mimeType: a.mimeType,
+            sizeBytes: a.sizeBytes,
+            storageKey: a.storageKey,
+            contentHash: a.contentHash,
+            disposition: a.disposition,
+            isOptional: a.isOptional,
+          })),
+        },
+      },
+      include: { attachments: true },
+    });
+    return formatTemplate(copy);
+  });
+
+  app.post("/crm/email/templates/:id/send-test", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply); if (!user) return;
+    const { id } = req.params as { id: string };
+    const body = (req.body as any) || {};
+    const toEmail = String(body?.toEmail || "").trim() || String((await (db as any).user.findFirst({ where: { id: user.sub, tenantId: user.tenantId }, select: { email: true } }).catch(() => null))?.email || "");
+    if (!toEmail) return reply.code(400).send({ error: "test_email_required" });
+    const sender = await resolveSenderConnection({ tenantId: user.tenantId, userId: user.sub, explicitId: body?.connectionId ? String(body.connectionId) : null });
+    if (!sender) return reply.status(409).send({ error: "no_sender_available" });
+    const tpl = await (db as any).crmEmailTemplate.findFirst({
+      where: { id, tenantId: user.tenantId, isArchived: false, OR: [{ visibility: "SHARED" }, { visibility: "PRIVATE", createdByUserId: user.sub }] },
+    });
+    if (!tpl) return reply.code(404).send({ error: "template_not_found" });
+    const rendered = await renderCrmEmailTemplate({ template: tpl, tenantId: user.tenantId, userId: user.sub, toEmail, sender });
+    await emailQueue.add("send", {
+      tenantId: user.tenantId,
+      userId: user.sub,
+      connectionId: sender.id,
+      to: toEmail,
+      subject: rendered.subject,
+      bodyText: rendered.text,
+      bodyHtml: rendered.html,
+      templateId: id,
+    }, { removeOnComplete: 100, removeOnFail: 100 });
+    return { ok: true, toEmail, senderId: sender.id };
+  });
+
+  app.post("/crm/email/templates/ai", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply); if (!user) return;
+    const body = (req.body as any) || {};
+    try {
+      const draft = await generateCrmEmailTemplateDraft({
+        action: String(body?.action || "generate"),
+        prompt: String(body?.prompt || "").slice(0, 4000),
+        subject: body?.subject,
+        bodyText: body?.bodyText,
+        category: body?.category,
+      });
+      return draft;
+    } catch (err: any) {
+      if (err instanceof CrmEmailTemplateAiError) {
+        return reply.code(err.code === "ai_not_configured" ? 503 : 502).send({ error: err.code, detail: err.message });
+      }
+      return reply.code(502).send({ error: "ai_failed", detail: "AI generation failed." });
+    }
+  });
+
+  app.post("/crm/email/templates/:id/attachments", async (req: any, reply) => {
+    const user = await requireCrmAccess(req, reply); if (!user) return;
+    if (!req.isMultipart?.()) return reply.code(400).send({ error: "multipart_required" });
+    const { id } = req.params as { id: string };
+    const existing = await (db as any).crmEmailTemplate.findFirst({ where: { id, tenantId: user.tenantId } });
+    if (!existing) return reply.code(404).send({ error: "template_not_found" });
+    if (!canEditTemplate(user, existing)) return reply.code(403).send({ error: "forbidden" });
+    const file = await req.file({ limits: { fileSize: Number(process.env.CRM_EMAIL_ATTACHMENT_MAX_BYTES || 15 * 1024 * 1024) } });
+    if (!file) return reply.code(400).send({ error: "file_required" });
+    const buffer = await file.toBuffer();
+    const mimeType = normalizeCrmEmailMime(file.mimetype);
+    try {
+      assertCrmEmailFileAllowed({ mimeType, originalFileName: file.filename || "attachment", sizeBytes: buffer.length });
+      const attachmentId = randomUUID();
+      const stored = await writeCrmEmailAssetFile({
+        tenantId: user.tenantId,
+        ownerId: id,
+        fileId: attachmentId,
+        buffer,
+        mimeType,
+        originalFileName: file.filename || "attachment",
+      });
+      const row = await (db as any).crmEmailTemplateAttachment.create({
+        data: {
+          id: attachmentId,
+          tenantId: user.tenantId,
+          templateId: id,
+          uploadedByUserId: user.sub,
+          originalFileName: file.filename || "attachment",
+          mimeType,
+          sizeBytes: BigInt(stored.storedBytes),
+          storageKey: stored.storageKey,
+          contentHash: stored.contentHash,
+          isOptional: Boolean((file.fields as any)?.isOptional?.value),
+        },
+      });
+      return { attachment: formatAttachment(row) };
+    } catch (err: any) {
+      return reply.code(400).send({ error: err?.message || "upload_failed" });
+    }
+  });
+
+  app.delete("/crm/email/templates/:id/attachments/:attachmentId", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply); if (!user) return;
+    const { id, attachmentId } = req.params as { id: string; attachmentId: string };
+    const existing = await (db as any).crmEmailTemplate.findFirst({ where: { id, tenantId: user.tenantId } });
+    if (!existing) return reply.code(404).send({ error: "template_not_found" });
+    if (!canEditTemplate(user, existing)) return reply.code(403).send({ error: "forbidden" });
+    await (db as any).crmEmailTemplateAttachment.deleteMany({ where: { id: attachmentId, templateId: id, tenantId: user.tenantId } });
+    return { ok: true };
+  });
+
+  app.post("/crm/email/templates/:id/archive", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply); if (!user) return;
+    const { id } = req.params as { id: string };
+    const existing = await (db as any).crmEmailTemplate.findFirst({ where: { id, tenantId: user.tenantId } });
+    if (!existing) return reply.code(404).send({ error: "template_not_found" });
+    if (!canEditTemplate(user, existing)) return reply.code(403).send({ error: "forbidden" });
+    await (db as any).crmEmailTemplate.update({ where: { id }, data: { isArchived: true } });
+    await db.auditLog.create({ data: { tenantId: user.tenantId, action: "CRM_EMAIL_TEMPLATE_ARCHIVED", entityType: "CrmEmailTemplate", entityId: id, actorUserId: user.sub } }).catch(() => undefined);
+    return { ok: true };
+  });
+
+  // DELETE remains archive-compatible for existing callers.
   app.delete("/crm/email/templates/:id", async (req, reply) => {
     const user = await requireCrmAccess(req, reply); if (!user) return;
     const { id } = req.params as { id: string };
-    const existing = await db.crmEmailTemplate.findFirst({ where: { id, tenantId: user.tenantId } });
+    const existing = await (db as any).crmEmailTemplate.findFirst({ where: { id, tenantId: user.tenantId } });
     if (!existing) return reply.code(404).send({ error: "template_not_found" });
-    const isAdmin = user.role === "ADMIN" || user.role === "TENANT_ADMIN" || user.role === "SUPER_ADMIN";
-    if (!isAdmin && existing.createdByUserId !== user.sub) return reply.code(403).send({ error: "forbidden" });
-    await db.crmEmailTemplate.update({ where: { id }, data: { isArchived: true } });
-    await db.auditLog.create({ data: { tenantId: user.tenantId, action: "CRM_EMAIL_TEMPLATE_ARCHIVED", entityType: "CrmEmailTemplate", entityId: id, actorUserId: user.sub } }).catch(() => undefined);
+    if (!canEditTemplate(user, existing)) return reply.code(403).send({ error: "forbidden" });
+    await (db as any).crmEmailTemplate.update({ where: { id }, data: { isArchived: true } });
     return { ok: true };
   });
 

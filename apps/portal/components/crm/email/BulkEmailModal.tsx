@@ -39,6 +39,9 @@ type EmailTemplate = {
   name: string;
   subject: string;
   bodyText: string;
+  bodyHtml?: string | null;
+  category?: string | null;
+  isDraft?: boolean;
   visibility: "SHARED" | "PRIVATE";
 };
 

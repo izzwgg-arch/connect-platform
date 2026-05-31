@@ -86,6 +86,16 @@ test("buildContactVars: dotted tokens match plain tokens", () => {
   assert.equal(vars["contact.firstName"], vars["firstName"]);
   assert.equal(vars["contact.lastName"], vars["lastName"]);
   assert.equal(vars["contact.name"], vars["name"]);
+  assert.equal(vars["contact.fullName"], vars["name"]);
+  assert.equal(vars["contact.displayName"], vars["name"]);
+});
+
+test("renderTemplate: new fullName/displayName aliases render safely", () => {
+  const result = renderTemplate(
+    "Hello {{contact.fullName}} / {{contact.displayName}} / {{missing.value}}",
+    { "contact.name": "Ada Lovelace" },
+  );
+  assert.equal(result, "Hello Ada Lovelace / Ada Lovelace / ");
 });
 
 test("buildContactVars: falls back to displayName split when firstName null", () => {

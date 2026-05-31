@@ -40,6 +40,28 @@ Scope: portal CRM UI/data-flow guardrails. Telephony, billing, workers, database
 - Sender cards should feel like production infrastructure: connection state, reply tracking, sync health, last sync/activity, and compact diagnostics.
 - Do not invent backend fields, fake metrics, demo activity, placeholder buttons, or inbox archive behavior.
 
+## CRM Email Template Builder
+
+- `/crm/email/templates` is a no-code builder, not a raw admin form. The layout is library rail + visual editor + live preview, with bottom panels for Branding, Attachments, Merge Fields, and AI Assistant.
+- Templates remain backward-compatible with Phase 1 `bodyText`, but new records can also store `bodyHtml`, `bodyJson`, `previewText`, `category`, favorite/draft flags, and usage metadata.
+- Merge fields are canonicalized in `packages/shared/src/crmEmailTemplates.ts`. Preserve missing-value fallback to empty strings. Do not reintroduce client-only or worker-only token lists.
+- Final sends render server-side. Portal preview can be immediate/client-side, but production email output must be rendered by API/worker logic before Gmail delivery.
+- CRM email delivery supports multipart HTML + plain-text fallback, inline CID branding logos, and tenant-scoped template attachments. Attachment storage must use persistent CRM email asset storage under the CRM document volume pattern; never ephemeral container paths or exposed raw storage keys.
+- Uploaded branding logos are tenant assets. API branding responses expose a safe preview URL only (`/api/crm/email/branding/logo`), never `logoStorageKey`. Final sent emails render uploaded logos as `cid:connect-crm-business-logo` and the worker attaches the image inline; do not replace this with short-lived signed URLs.
+- Template attachment allowlist is intentionally narrow: PDF, DOCX, XLSX, CSV, JPG, PNG, and WEBP. ZIP is not allowed. Attachment loads for sends must stay scoped by both `tenantId` and `templateId` when a template send is involved.
+- Branding is tenant-scoped (`CrmEmailBranding`) and signatures are user-scoped within tenant (`CrmEmailSignature`). Never leak branding/signatures across tenants.
+- CRM Agent and Manager can create/use templates and send test emails through `/crm/email/*` guarded by `requireCrmAccess`. Email settings/diagnostics remain admin-only through `requireCrmEmailSettingsAccess`.
+- AI Assistant uses real OpenAI-backed CRM infrastructure only. If `OPENAI_API_KEY` is absent, return a clear unavailable state (`ai_not_configured`); do not hardcode demo responses.
+- Starter templates must use merge tokens and neutral placeholders, never hardcoded tenant/company/customer data.
+- The portal builder UI is componentized under `apps/portal/components/crm/email/templates/`:
+  - `TemplateLibraryPanel` owns search, category/folder filters, compact cards, inline favorite/rename/duplicate/archive/restore actions, timestamps, and usage counts.
+  - `EmailBuilderCanvas` owns TipTap editing, toolbar controls, block rail, drag/drop block insertion, dirty/autosave status, and template actions.
+  - `EmailPreviewPanel` owns inbox preview, desktop/mobile frame, light/dark preview, footer and attachment preview.
+  - `UtilityPanels` owns Branding, Attachments, Merge Fields, and AI Assistant controls.
+  - `StarterTemplatesStrip` owns starter template selection.
+- UI polish passes must preserve existing CRM email API contracts, permissions, and database schema unless a UI action is impossible without a compatible backend fix.
+- Autosave is a portal UX layer that saves existing templates as drafts after edits settle; new unsaved templates still require the first explicit save before attachment upload or send-test.
+
 ## Visual System
 
 - Prefer `CRMPageShell`, `CRMPageHeader`, `CRMCard`, and `crm.*` class tokens.
