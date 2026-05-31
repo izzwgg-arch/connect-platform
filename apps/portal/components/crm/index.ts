@@ -1,6 +1,18 @@
 export { cn } from "./cn";
 export { crm } from "./crmClasses";
 export { CRMPageShell } from "./CRMPageShell";
+export {
+  CRMWorkspaceShell,
+  CRMWorkspaceChrome,
+  CRMWorkspaceHeader,
+  CRMWorkspaceToolbar,
+  CRMWorkspaceBody,
+  CRMWorkspaceMain,
+  CRMWorkspaceContent,
+  CRMWorkspaceScrollRegion,
+  CRMWorkspaceRightRail,
+  CRMWorkspaceFooter,
+} from "./CRMWorkspaceShell";
 export { CRMCard } from "./CRMCard";
 export { CRMPageHeader } from "./CRMPageHeader";
 export { CRMSection } from "./CRMSection";

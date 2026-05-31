@@ -3,6 +3,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CRMPageShell } from "../../../../components/crm/CRMPageShell";
+import {
+  CRMWorkspaceShell,
+  CRMWorkspaceChrome,
+  CRMWorkspaceHeader,
+  CRMWorkspaceBody,
+  CRMWorkspaceMain,
+  CRMWorkspaceRightRail,
+  CRMWorkspaceFooter,
+} from "../../../../components/crm/CRMWorkspaceShell";
 import { CRMEmptyState } from "../../../../components/crm/CRMEmptyState";
 import { crm } from "../../../../components/crm/crmClasses";
 import { cn } from "../../../../components/crm/cn";
@@ -14,6 +23,7 @@ import { ScriptEditModal } from "../../../../components/crm/scripts/ScriptEditMo
 import { SCRIPT_TEMPLATES } from "../../../../components/crm/scripts/ScriptTemplates";
 import { mergeScriptSummaries, requireSavedScript, toScriptSummary } from "../../../../components/crm/crmSaveHelpers";
 import { apiGet, apiPost } from "../../../../services/apiClient";
+import { PermissionGate } from "../../../../components/PermissionGate";
 import type { Script, ScriptSummary } from "../../../../components/crm/scripts/scriptTypes";
 
 export default function CrmScriptsPage() {
@@ -98,60 +108,85 @@ export default function CrmScriptsPage() {
   const activeCount = scripts.filter((s) => s.isActive).length;
 
   return (
+    <PermissionGate permission="can_view_crm_scripts" fallback={<div className="state-box">You do not have Scripts access.</div>}>
     <CRMPageShell innerClassName={cn(crm.pageInnerScripts, crm.scriptsWorkspace)}>
-      <>
-        <ScriptCommandHeader totalCount={scripts.length} activeCount={activeCount} onCreate={() => openCreate()} />
-
+      <CRMWorkspaceShell>
         {loading ? (
-          <div className={crm.scriptsGrid}>
-            <div className={cn(crm.scriptsLibraryCol, "gap-2.5")}>
-              {[1, 2, 3, 4].map((i) => (
-                <div key={i} className={cn(crm.scriptsPanelSupport, "h-14 animate-pulse")} />
-              ))}
+          <>
+            <CRMWorkspaceChrome>
+              <CRMWorkspaceHeader>
+                <ScriptCommandHeader totalCount={0} activeCount={0} onCreate={() => openCreate()} />
+              </CRMWorkspaceHeader>
+            </CRMWorkspaceChrome>
+            <div className={crm.scriptsGrid}>
+              <div className={cn(crm.scriptsLibraryCol, "gap-2.5")}>
+                {[1, 2, 3, 4].map((i) => (
+                  <div key={i} className={cn(crm.scriptsPanelSupport, "h-14 animate-pulse")} />
+                ))}
+              </div>
+              <div className={cn(crm.scriptsSideCol, "gap-2.5")}>
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className={cn(crm.scriptsSidePanel, "h-24 animate-pulse")} />
+                ))}
+              </div>
             </div>
-            <div className={cn(crm.scriptsSideCol, "gap-2.5")}>
-              {[1, 2, 3].map((i) => (
-                <div key={i} className={cn(crm.scriptsSidePanel, "h-24 animate-pulse")} />
-              ))}
-            </div>
-          </div>
+          </>
         ) : fetchError ? (
-          <CRMEmptyState
-            title="Could not load scripts"
-            description={fetchError}
-            action={
-              <button
-                type="button"
-                className={crm.btnSecondary}
-                onClick={() => {
-                  setLoading(true);
-                  setFetchError(null);
-                  void loadList();
-                }}
-              >
-                Retry
-              </button>
-            }
-          />
+          <>
+            <CRMWorkspaceChrome>
+              <CRMWorkspaceHeader>
+                <ScriptCommandHeader totalCount={0} activeCount={0} onCreate={() => openCreate()} />
+              </CRMWorkspaceHeader>
+            </CRMWorkspaceChrome>
+            <CRMEmptyState
+              title="Could not load scripts"
+              description={fetchError}
+              action={
+                <button
+                  type="button"
+                  className={crm.btnSecondary}
+                  onClick={() => {
+                    setLoading(true);
+                    setFetchError(null);
+                    void loadList();
+                  }}
+                >
+                  Retry
+                </button>
+              }
+            />
+          </>
         ) : (
           <>
-            <div className={crm.scriptsGrid}>
-              <ScriptLibraryPanel
-                scripts={scripts}
-                selectedId={null}
-                resetFiltersToken={libraryResetToken}
-                onSelect={(id) => router.push(`/crm/scripts/${id}`)}
-                onCreate={() => openCreate()}
-                onUseTemplate={(key) => openCreate(key)}
-              />
+            <CRMWorkspaceChrome>
+              <CRMWorkspaceHeader>
+                <ScriptCommandHeader totalCount={scripts.length} activeCount={activeCount} onCreate={() => openCreate()} />
+              </CRMWorkspaceHeader>
+            </CRMWorkspaceChrome>
 
-              <ScriptOperationalSidebar scripts={scripts} onCreate={() => openCreate()} onBrowseTemplates={scrollToTemplates} />
-            </div>
+            <CRMWorkspaceBody split>
+              <CRMWorkspaceMain className="min-h-0">
+                <ScriptLibraryPanel
+                  scripts={scripts}
+                  selectedId={null}
+                  resetFiltersToken={libraryResetToken}
+                  onSelect={(id) => router.push(`/crm/scripts/${id}`)}
+                  onCreate={() => openCreate()}
+                  onUseTemplate={(key) => openCreate(key)}
+                />
+              </CRMWorkspaceMain>
 
-            <ScriptQuickTipsStrip />
+              <CRMWorkspaceRightRail>
+                <ScriptOperationalSidebar scripts={scripts} onCreate={() => openCreate()} onBrowseTemplates={scrollToTemplates} />
+              </CRMWorkspaceRightRail>
+            </CRMWorkspaceBody>
+
+            <CRMWorkspaceFooter>
+              <ScriptQuickTipsStrip />
+            </CRMWorkspaceFooter>
           </>
         )}
-      </>
+      </CRMWorkspaceShell>
 
       {modalOpen ? (
         <ScriptEditModal
@@ -162,5 +197,6 @@ export default function CrmScriptsPage() {
         />
       ) : null}
     </CRMPageShell>
+    </PermissionGate>
   );
 }

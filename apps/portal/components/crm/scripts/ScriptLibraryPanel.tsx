@@ -95,8 +95,8 @@ export function ScriptLibraryPanel({
   const showTemplateRail = activeScripts.length === 0 || templatesOpen;
 
   return (
-    <div className={cn(crm.scriptsLibraryCol)}>
-      <div className={cn(crm.scriptsPanelSupport, "flex flex-col overflow-hidden")}>
+    <div className={cn(crm.scriptsLibraryCol, "min-h-0 flex-1")}>
+      <div className={cn(crm.scriptsPanelSupport, "flex min-h-0 flex-1 flex-col overflow-hidden")}>
         <div className={crm.scriptsLibraryHeader}>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -153,7 +153,7 @@ export function ScriptLibraryPanel({
           </div>
         </div>
 
-        <div className="flex flex-col gap-3 p-3 sm:p-4">
+        <div className={cn(crm.workspaceScrollRegion, "flex flex-col gap-3 p-3 sm:p-4")}>
           <div className="hidden grid-cols-[minmax(0,1.4fr)_minmax(8rem,0.7fr)_minmax(7rem,0.55fr)_minmax(7rem,0.5fr)_auto] gap-3 px-4 text-[11px] font-bold uppercase tracking-wider text-crm-muted lg:grid">
             <span>Script</span>
             <span>Category</span>
@@ -162,7 +162,7 @@ export function ScriptLibraryPanel({
             <span className="text-right">Actions</span>
           </div>
 
-          <div className="flex max-h-[min(68vh,44rem)] flex-col gap-2 overflow-y-auto">
+          <div className="flex flex-col gap-2">
             {filteredScripts.length === 0 ? (
               <p className="rounded-2xl border border-dashed border-crm-border px-4 py-8 text-center text-sm text-crm-muted">
                 {search ? (

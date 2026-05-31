@@ -14,6 +14,14 @@ import {
   CRMPageShell,
   CRMPageHeader,
   CRMActionBar,
+  CRMWorkspaceShell,
+  CRMWorkspaceChrome,
+  CRMWorkspaceHeader,
+  CRMWorkspaceToolbar,
+  CRMWorkspaceBody,
+  CRMWorkspaceMain,
+  CRMWorkspaceScrollRegion,
+  CRMWorkspaceRightRail,
   crm,
   cn,
   QueueOperationalRow,
@@ -1425,7 +1433,7 @@ function QueuePageInner() {
   const sessionEfficiency = callsToday > 0 ? Math.round((completedToday / callsToday) * 100) : 0;
 
   const sidePanels = (
-    <div className="crm-queue-right-rail col-span-12 flex flex-col gap-3 xl:col-span-4 2xl:col-span-4">
+    <>
       <QueueOverviewPanel
         filter={filter}
         total={total}
@@ -1442,7 +1450,7 @@ function QueuePageInner() {
         campaignId={campaignId}
         campaignName={activeCampaignName}
       />
-    </div>
+    </>
   );
 
   return (
@@ -1455,139 +1463,145 @@ function QueuePageInner() {
         />
       )}
 
-      {powerModeActive ? (
-        <QueuePowerSessionBar
-          filter={filter}
-          counts={counts}
-          paused={paused}
-          sortMode={sortMode}
-          loading={loading}
-          acting={acting}
-          sipReady={sipReady}
-          campaignId={campaignId}
-          campaigns={campaigns}
-          total={total}
-          onFilterChange={(f) => {
-            setWrapUpActive(false);
-            switchPowerFilter(f);
-          }}
-          onToggleSort={toggleSortMode}
-          onRefresh={() => load()}
-          onTogglePause={() => {
-            setPaused((p) => !p);
-            setWrapUpActive(false);
-          }}
-          onStop={() => router.push("/crm/queue")}
-        />
-      ) : null}
+      <CRMWorkspaceShell>
+        {powerModeActive ? (
+          <QueuePowerSessionBar
+            filter={filter}
+            counts={counts}
+            paused={paused}
+            sortMode={sortMode}
+            loading={loading}
+            acting={acting}
+            sipReady={sipReady}
+            campaignId={campaignId}
+            campaigns={campaigns}
+            total={total}
+            onFilterChange={(f) => {
+              setWrapUpActive(false);
+              switchPowerFilter(f);
+            }}
+            onToggleSort={toggleSortMode}
+            onRefresh={() => load()}
+            onTogglePause={() => {
+              setPaused((p) => !p);
+              setWrapUpActive(false);
+            }}
+            onStop={() => router.push("/crm/queue")}
+          />
+        ) : null}
 
-      {!powerModeActive ? (
-        <CRMPageHeader
-          className="crm-queue-hero"
-          icon={<ListOrdered className="h-7 w-7" />}
-          title="My Queue"
-          subtitle={
-            loading
-              ? "Loading your assigned work…"
-              : total === 0
-                ? "Operational workbench — switch focus with queue snapshots"
-                : `${total} lead${total !== 1 ? "s" : ""} in this view`
-          }
-          actions={
-            <div className="crm-queue-hero-actions flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={toggleSortMode}
-                disabled={loading}
-                className={cn(
-                  crm.btnSecondary,
-                  sortMode === "smart" && "border-crm-accent/40 bg-crm-accent/12 text-crm-accent",
-                )}
-              >
-                <Sparkles className="h-4 w-4" />
-                {sortMode === "smart" ? "Smart sort" : "Original sort"}
-              </button>
-              <button
-                type="button"
-                onClick={() => router.push("/crm/queue?mode=power")}
-                disabled={loading || total === 0}
-                className={crm.btnPrimary}
-              >
-                <Zap className="h-4 w-4" />
-                Power session
-              </button>
-              <button type="button" onClick={() => load()} disabled={loading || acting} className={crm.btnSecondary}>
-                <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
-                Refresh
-              </button>
-            </div>
-          }
-        />
-      ) : null}
-
-      {!powerModeActive ? (
-        <>
-          <div className="crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-3 xl:grid-cols-6">
-            <QueueCountPill label="Pending" count={counts.pending} active={filter === "pending"} icon={<Inbox className="h-4 w-4" />} accent="blue" onClick={() => switchFilter("pending")} disabled={loading} />
-            <QueueCountPill label="Due" count={counts.due} active={filter === "due"} urgent={counts.due > 0} icon={<Clock className="h-4 w-4" />} accent="violet" onClick={() => switchFilter("due")} disabled={loading} />
-            <QueueCountPill label="Overdue" count={counts.overdue} active={filter === "overdue"} urgent={counts.overdue > 0} icon={<AlertCircle className="h-4 w-4" />} accent="rose" onClick={() => switchFilter("overdue")} disabled={loading} />
-            <QueueCountPill label="Upcoming" count={counts.upcoming} active={filter === "upcoming"} icon={<CalendarClock className="h-4 w-4" />} accent="amber" onClick={() => switchFilter("upcoming")} disabled={loading} />
-            <QueueCountPill label="Completed Today" count={completedToday} active={false} icon={<CheckCheck className="h-4 w-4" />} accent="green" microcopy="0% vs yesterday" onClick={() => router.push("/crm/reports")} disabled={loading || opStatsLoading} />
-            <QueueCountPill label="Session Efficiency" count={`${sessionEfficiency}%`} active={false} icon={<BarChart3 className="h-4 w-4" />} accent="cyan" microcopy={`${sessionEfficiency}% today`} onClick={() => router.push("/crm/reports")} disabled={loading || opStatsLoading} />
-          </div>
-          <CRMActionBar className="crm-queue-filter-bar">
-          {campaigns.length > 0 ? (
-            <div className="flex w-full flex-wrap items-center gap-2">
-              <Megaphone className="h-4 w-4 shrink-0 text-crm-muted" />
-              <label htmlFor="crm-queue-campaign" className={cn(crm.label, "shrink-0")}>Campaign</label>
-              <select
-                id="crm-queue-campaign"
-                value={campaignId ?? ""}
-                onChange={(e) => switchCampaign(e.target.value || null)}
-                className={cn(crm.input, "max-w-md flex-1 min-w-[12rem] py-1.5")}
-                disabled={loading}
-              >
-                <option value="">All campaigns</option>
-                {campaigns.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-              {campaignId ? (
-                <button type="button" onClick={() => switchCampaign(null)} className="text-xs font-medium text-crm-accent hover:underline">
-                  Clear
-                </button>
-              ) : null}
-            </div>
+        <CRMWorkspaceChrome>
+          {!powerModeActive ? (
+            <>
+              <CRMWorkspaceHeader>
+                <CRMPageHeader
+                  className="crm-queue-hero"
+                  icon={<ListOrdered className="h-7 w-7" />}
+                  title="My Queue"
+                  subtitle={
+                    loading
+                      ? "Loading your assigned work…"
+                      : total === 0
+                        ? "Operational workbench — switch focus with queue snapshots"
+                        : `${total} lead${total !== 1 ? "s" : ""} in this view`
+                  }
+                  actions={
+                    <div className="crm-queue-hero-actions flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={toggleSortMode}
+                        disabled={loading}
+                        className={cn(
+                          crm.btnSecondary,
+                          sortMode === "smart" && "border-crm-accent/40 bg-crm-accent/12 text-crm-accent",
+                        )}
+                      >
+                        <Sparkles className="h-4 w-4" />
+                        {sortMode === "smart" ? "Smart sort" : "Original sort"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => router.push("/crm/queue?mode=power")}
+                        disabled={loading || total === 0}
+                        className={crm.btnPrimary}
+                      >
+                        <Zap className="h-4 w-4" />
+                        Power session
+                      </button>
+                      <button type="button" onClick={() => load()} disabled={loading || acting} className={crm.btnSecondary}>
+                        <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+                        Refresh
+                      </button>
+                    </div>
+                  }
+                />
+              </CRMWorkspaceHeader>
+              <CRMWorkspaceToolbar className="flex flex-col gap-3">
+                <div className="crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-3 xl:grid-cols-6">
+                  <QueueCountPill label="Pending" count={counts.pending} active={filter === "pending"} icon={<Inbox className="h-4 w-4" />} accent="blue" onClick={() => switchFilter("pending")} disabled={loading} />
+                  <QueueCountPill label="Due" count={counts.due} active={filter === "due"} urgent={counts.due > 0} icon={<Clock className="h-4 w-4" />} accent="violet" onClick={() => switchFilter("due")} disabled={loading} />
+                  <QueueCountPill label="Overdue" count={counts.overdue} active={filter === "overdue"} urgent={counts.overdue > 0} icon={<AlertCircle className="h-4 w-4" />} accent="rose" onClick={() => switchFilter("overdue")} disabled={loading} />
+                  <QueueCountPill label="Upcoming" count={counts.upcoming} active={filter === "upcoming"} icon={<CalendarClock className="h-4 w-4" />} accent="amber" onClick={() => switchFilter("upcoming")} disabled={loading} />
+                  <QueueCountPill label="Completed Today" count={completedToday} active={false} icon={<CheckCheck className="h-4 w-4" />} accent="green" microcopy="0% vs yesterday" onClick={() => router.push("/crm/reports")} disabled={loading || opStatsLoading} />
+                  <QueueCountPill label="Session Efficiency" count={`${sessionEfficiency}%`} active={false} icon={<BarChart3 className="h-4 w-4" />} accent="cyan" microcopy={`${sessionEfficiency}% today`} onClick={() => router.push("/crm/reports")} disabled={loading || opStatsLoading} />
+                </div>
+                <CRMActionBar className="crm-queue-filter-bar">
+                  {campaigns.length > 0 ? (
+                    <div className="flex w-full flex-wrap items-center gap-2">
+                      <Megaphone className="h-4 w-4 shrink-0 text-crm-muted" />
+                      <label htmlFor="crm-queue-campaign" className={cn(crm.label, "shrink-0")}>Campaign</label>
+                      <select
+                        id="crm-queue-campaign"
+                        value={campaignId ?? ""}
+                        onChange={(e) => switchCampaign(e.target.value || null)}
+                        className={cn(crm.input, "max-w-md flex-1 min-w-[12rem] py-1.5")}
+                        disabled={loading}
+                      >
+                        <option value="">All campaigns</option>
+                        {campaigns.map((c) => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </select>
+                      {campaignId ? (
+                        <button type="button" onClick={() => switchCampaign(null)} className="text-xs font-medium text-crm-accent hover:underline">
+                          Clear
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </CRMActionBar>
+              </CRMWorkspaceToolbar>
+            </>
+          ) : powerModeActive && campaigns.length > 0 ? (
+            <CRMWorkspaceToolbar>
+              <CRMActionBar className="crm-queue-filter-bar mb-0">
+                <Megaphone className="h-4 w-4 shrink-0 text-crm-muted" />
+                <label htmlFor="crm-queue-campaign-power" className={cn(crm.label, "shrink-0")}>Campaign</label>
+                <select
+                  id="crm-queue-campaign-power"
+                  value={campaignId ?? ""}
+                  onChange={(e) => switchCampaign(e.target.value || null)}
+                  className={cn(crm.input, "max-w-md flex-1 min-w-[10rem] py-1.5")}
+                  disabled={loading}
+                >
+                  <option value="">All campaigns</option>
+                  {campaigns.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+                {campaignId ? (
+                  <button type="button" onClick={() => switchCampaign(null)} className="text-xs font-medium text-crm-accent hover:underline">
+                    Clear
+                  </button>
+                ) : null}
+              </CRMActionBar>
+            </CRMWorkspaceToolbar>
           ) : null}
-          </CRMActionBar>
-        </>
-      ) : powerModeActive && campaigns.length > 0 ? (
-        <CRMActionBar className="crm-queue-filter-bar mb-0">
-          <Megaphone className="h-4 w-4 shrink-0 text-crm-muted" />
-          <label htmlFor="crm-queue-campaign-power" className={cn(crm.label, "shrink-0")}>Campaign</label>
-          <select
-            id="crm-queue-campaign-power"
-            value={campaignId ?? ""}
-            onChange={(e) => switchCampaign(e.target.value || null)}
-            className={cn(crm.input, "max-w-md flex-1 min-w-[10rem] py-1.5")}
-            disabled={loading}
-          >
-            <option value="">All campaigns</option>
-            {campaigns.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-          {campaignId ? (
-            <button type="button" onClick={() => switchCampaign(null)} className="text-xs font-medium text-crm-accent hover:underline">
-              Clear
-            </button>
-          ) : null}
-        </CRMActionBar>
-      ) : null}
+        </CRMWorkspaceChrome>
 
-      <div className="crm-queue-layout grid grid-cols-12 gap-4 items-start">
-        <div className="col-span-12 flex min-w-0 flex-col gap-3 xl:col-span-8 2xl:col-span-8">
-        {/* Content */}
+        <CRMWorkspaceBody split={!loading && !error}>
+          <CRMWorkspaceMain>
+            <CRMWorkspaceScrollRegion className="flex min-w-0 flex-col gap-3">
         {loading ? (
           <div className="py-24 text-center text-crm-muted/80 text-sm">Loading…</div>
         ) : error ? (
@@ -1729,10 +1743,15 @@ function QueuePageInner() {
           <ActiveCampaignStrip campaignId={campaignId} campaignName={activeCampaignName} stats={opStats} counts={counts} />
         ) : null}
         {!powerModeActive ? <PriorityFocusCards counts={counts} stats={opStats} loading={opStatsLoading} /> : null}
-      
-        </div>
-        {!loading && !error ? sidePanels : null}
-      </div>
+            </CRMWorkspaceScrollRegion>
+          </CRMWorkspaceMain>
+          {!loading && !error ? (
+            <CRMWorkspaceRightRail className="crm-queue-right-rail flex flex-col gap-3">
+              {sidePanels}
+            </CRMWorkspaceRightRail>
+          ) : null}
+        </CRMWorkspaceBody>
+      </CRMWorkspaceShell>
     </CRMPageShell>
   );
 }

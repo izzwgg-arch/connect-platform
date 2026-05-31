@@ -4,6 +4,30 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-05-31 — CRM workspace shell (fixed chrome + scroll regions)
+
+**Task:** CRM / UI shell / scrolling architecture  
+**Risk:** high
+
+### Root cause
+
+Major CRM list pages used flat vertical stacks inside `.console-content`, which scrolls the entire page. There was no shared height chain or independent scroll regions (unlike Call History `ch-shell` and contact detail workspace). Headers, filters, and right rails scrolled away on long lists.
+
+### Changes
+
+- **Shared shell:** `CRMWorkspaceShell` compound components + `.crm-workspace-*` CSS utilities in `globals.css`. When present, `.console-content` stops page-level scroll (`overflow: hidden`) and the shell fills viewport height below the topbar.
+- **Pages updated:** Queue, Funders, Tasks, Scripts, Checklists, Voicemail Drops.
+- **Pattern:** fixed chrome (header, KPIs, filters, controls) + scrollable main list/library + optional right rail with its own scroll.
+- **Responsive:** below 1280px, split layouts degrade to stacked flow with normal page scroll.
+
+### Manual QA
+
+- Desktop: open each page with a long list; confirm header/filters stay visible while only the list region scrolls.
+- Funders / Queue / Tasks / Scripts / Checklists: confirm right rail stays on screen (desktop) and scrolls independently when tall.
+- Mobile/tablet: confirm pages remain usable (stacked layout, no broken controls).
+
+---
+
 ## 2026-05-31 — CRM contact workspace right-rail section reorder
 
 **Task:** CRM / contact workspace / right rail ordering  

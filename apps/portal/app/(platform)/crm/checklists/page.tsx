@@ -20,6 +20,15 @@ import { ChecklistQuickTipsStrip } from "../../../../components/crm/checklists/C
 import { CHECKLIST_TEMPLATES } from "../../../../components/crm/checklists/ChecklistTemplates";
 import { cn } from "../../../../components/crm/cn";
 import { PermissionGate } from "../../../../components/PermissionGate";
+import {
+  CRMWorkspaceShell,
+  CRMWorkspaceChrome,
+  CRMWorkspaceBody,
+  CRMWorkspaceMain,
+  CRMWorkspaceScrollRegion,
+  CRMWorkspaceRightRail,
+  CRMWorkspaceFooter,
+} from "../../../../components/crm/CRMWorkspaceShell";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -275,76 +284,83 @@ export default function CrmChecklistsPage() {
         <span className="checklist-ambient-orb bottom-[5%] left-[30%] h-56 w-56 bg-crm-accent/6" />
       </div>
       <div className={cn(crm.pageInnerChecklist, "gap-3")}>
-        <ChecklistCommandHeader
-          activeCount={activeChecklists.length}
-          archivedCount={archivedCount}
-          avgRequiredPct={avgRequiredPct}
-          liveReadyCount={liveReadyCount}
-          tab={headerTab}
-          onTabChange={setHeaderTab}
-          onNewBlank={handleNewBlank}
-          onBrowseTemplates={handleBrowseTemplates}
-        />
-
-        {error && (
-          <div
-            className={cn(
-              crm.bannerDanger,
-              "flex items-center gap-2 rounded-crm-lg px-4 py-3"
-            )}
-            role="alert"
-          >
-            <span className="text-sm">{error}</span>
-          </div>
-        )}
-
-        <div className={crm.checklistGrid}>
-          <div className={crm.checklistMainCol}>
-            <ChecklistWorkspace
-              selected={selected}
-              checklists={checklists}
-              onSelect={handleSelect}
-              onSaveEdit={handleSaveEdit}
-              onArchive={handleArchive}
-              onRestore={handleRestore}
-              savedMsg={savedMsg}
-              creating={creating}
-              createName={createName}
-              createItems={createItems}
-              onCreateNameChange={setCreateName}
-              onCreateItemsChange={setCreateItems}
-              onConfirmCreate={handleConfirmCreate}
-              onCancelCreate={handleCancelCreate}
-              createSaving={createSaving}
-              createError={createError}
-              onPickTemplate={handleNewFromTemplate}
-              onNewBlank={handleNewBlank}
-              templatesFocus={templatesFocus}
-            />
-          </div>
-
-          <div
-            className={cn(
-              crm.checklistRailCol,
-              progressHighlight &&
-                "rounded-crm-lg ring-1 ring-crm-accent/25 transition-shadow"
-            )}
-          >
-            <ChecklistProgressPanel
-              checklist={selected}
-              checklists={checklists}
+        <CRMWorkspaceShell>
+          <CRMWorkspaceChrome>
+            <ChecklistCommandHeader
+              activeCount={activeChecklists.length}
+              archivedCount={archivedCount}
               avgRequiredPct={avgRequiredPct}
               liveReadyCount={liveReadyCount}
+              tab={headerTab}
+              onTabChange={setHeaderTab}
               onNewBlank={handleNewBlank}
               onBrowseTemplates={handleBrowseTemplates}
             />
-          </div>
-        </div>
 
-        <ChecklistQuickTipsStrip
-          onNewBlank={handleNewBlank}
-          onBrowseTemplates={handleBrowseTemplates}
-        />
+            {error && (
+              <div
+                className={cn(
+                  crm.bannerDanger,
+                  "flex items-center gap-2 rounded-crm-lg px-4 py-3"
+                )}
+                role="alert"
+              >
+                <span className="text-sm">{error}</span>
+              </div>
+            )}
+          </CRMWorkspaceChrome>
+
+          <CRMWorkspaceBody split>
+            <CRMWorkspaceMain>
+              <CRMWorkspaceScrollRegion>
+                <ChecklistWorkspace
+                  selected={selected}
+                  checklists={checklists}
+                  onSelect={handleSelect}
+                  onSaveEdit={handleSaveEdit}
+                  onArchive={handleArchive}
+                  onRestore={handleRestore}
+                  savedMsg={savedMsg}
+                  creating={creating}
+                  createName={createName}
+                  createItems={createItems}
+                  onCreateNameChange={setCreateName}
+                  onCreateItemsChange={setCreateItems}
+                  onConfirmCreate={handleConfirmCreate}
+                  onCancelCreate={handleCancelCreate}
+                  createSaving={createSaving}
+                  createError={createError}
+                  onPickTemplate={handleNewFromTemplate}
+                  onNewBlank={handleNewBlank}
+                  templatesFocus={templatesFocus}
+                />
+              </CRMWorkspaceScrollRegion>
+            </CRMWorkspaceMain>
+
+            <CRMWorkspaceRightRail
+              className={cn(
+                progressHighlight &&
+                  "rounded-crm-lg ring-1 ring-crm-accent/25 transition-shadow"
+              )}
+            >
+              <ChecklistProgressPanel
+                checklist={selected}
+                checklists={checklists}
+                avgRequiredPct={avgRequiredPct}
+                liveReadyCount={liveReadyCount}
+                onNewBlank={handleNewBlank}
+                onBrowseTemplates={handleBrowseTemplates}
+              />
+            </CRMWorkspaceRightRail>
+          </CRMWorkspaceBody>
+
+          <CRMWorkspaceFooter>
+            <ChecklistQuickTipsStrip
+              onNewBlank={handleNewBlank}
+              onBrowseTemplates={handleBrowseTemplates}
+            />
+          </CRMWorkspaceFooter>
+        </CRMWorkspaceShell>
       </div>
     </div>
     </PermissionGate>

@@ -26,6 +26,14 @@ import {
 import {
   crm,
   cn,
+  CRMPageShell,
+  CRMWorkspaceShell,
+  CRMWorkspaceChrome,
+  CRMWorkspaceHeader,
+  CRMWorkspaceToolbar,
+  CRMWorkspaceBody,
+  CRMWorkspaceMain,
+  CRMWorkspaceRightRail,
 } from "../../../../components/crm";
 import { BulkEmailModal } from "../../../../components/crm/email/BulkEmailModal";
 import { apiGet, apiPost } from "../../../../services/apiClient";
@@ -802,7 +810,7 @@ export default function FundersPage() {
   ];
 
   return (
-    <div className={cn(crm.fundersWorkspace)}>
+    <CRMPageShell className={crm.fundersWorkspace} innerClassName={crm.pageInnerFunders}>
       {showBulkEmail && (
         <BulkEmailModal
           audience={{
@@ -822,47 +830,47 @@ export default function FundersPage() {
           }}
         />
       )}
-      <div className={crm.pageInnerFunders}>
-        {/* ── Header ─────────────────────────────────────────────────────────── */}
-        <div className="funders-command-header">
-          <div>
-            <h1>Funders</h1>
-            <p>Manage funding sources, grant organizations, and financial partners.</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button onClick={() => setShowImport(true)} className="funders-btn funders-btn-secondary">
-              <FileUp size={15} /> Import CSV
-            </button>
-            <button onClick={handleExport} className="funders-btn funders-btn-secondary">
-              <Download size={15} /> Export CSV
-            </button>
-            <button onClick={() => setShowNew(true)} className="funders-btn funders-btn-primary">
-              <Plus size={15} /> Add Funder
-            </button>
-          </div>
-        </div>
-
-        {/* ── KPI Cards ──────────────────────────────────────────────────────── */}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {kpiCards.map((kpi) => (
-            <div
-              key={kpi.label}
-              className={cn("funders-kpi-card", `funders-kpi-${kpi.tone}`)}
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="funders-kpi-icon">{kpi.icon}</div>
-                <span className="funders-kpi-label">{kpi.label}</span>
+      <CRMWorkspaceShell>
+        <CRMWorkspaceChrome>
+          <CRMWorkspaceHeader>
+            <div className="funders-command-header">
+              <div>
+                <h1>Funders</h1>
+                <p>Manage funding sources, grant organizations, and financial partners.</p>
               </div>
-              <div className="funders-kpi-value">
-                {loading ? <span className="animate-pulse opacity-40">—</span> : kpi.value}
+              <div className="flex flex-wrap items-center gap-2">
+                <button onClick={() => setShowImport(true)} className="funders-btn funders-btn-secondary">
+                  <FileUp size={15} /> Import CSV
+                </button>
+                <button onClick={handleExport} className="funders-btn funders-btn-secondary">
+                  <Download size={15} /> Export CSV
+                </button>
+                <button onClick={() => setShowNew(true)} className="funders-btn funders-btn-primary">
+                  <Plus size={15} /> Add Funder
+                </button>
               </div>
-              <p className="funders-kpi-description">{kpi.description}</p>
             </div>
-          ))}
-        </div>
+          </CRMWorkspaceHeader>
 
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)] xl:items-start">
-          <div className="flex min-w-0 flex-col gap-3">
+          <CRMWorkspaceToolbar className="flex flex-col gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {kpiCards.map((kpi) => (
+                <div
+                  key={kpi.label}
+                  className={cn("funders-kpi-card", `funders-kpi-${kpi.tone}`)}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="funders-kpi-icon">{kpi.icon}</div>
+                    <span className="funders-kpi-label">{kpi.label}</span>
+                  </div>
+                  <div className="funders-kpi-value">
+                    {loading ? <span className="animate-pulse opacity-40">—</span> : kpi.value}
+                  </div>
+                  <p className="funders-kpi-description">{kpi.description}</p>
+                </div>
+              ))}
+            </div>
+
             <div className="funders-filter-card">
               <div className="funders-filter-grid">
                 <div className="relative min-w-0">
@@ -963,8 +971,12 @@ export default function FundersPage() {
                 </button>
               </div>
             </div>
+          </CRMWorkspaceToolbar>
+        </CRMWorkspaceChrome>
 
-            <section className="funders-table-shell">
+        <CRMWorkspaceBody split>
+          <CRMWorkspaceMain className="flex min-w-0 flex-col gap-3">
+            <section className="funders-table-shell min-h-0 flex-1">
               <div className="funders-table-topbar">
                 <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
                   <input
@@ -1094,9 +1106,9 @@ export default function FundersPage() {
                 </div>
               </div>
             )}
-          </div>
+          </CRMWorkspaceMain>
 
-          <aside className="funders-rail">
+          <CRMWorkspaceRightRail className="funders-rail">
             <section className="funders-rail-card">
               <div className="funders-rail-title">
                 <h3>Funder Overview</h3>
@@ -1187,9 +1199,9 @@ export default function FundersPage() {
                 </button>
               </div>
             </section>
-          </aside>
-        </div>
-      </div>
+          </CRMWorkspaceRightRail>
+        </CRMWorkspaceBody>
+      </CRMWorkspaceShell>
 
       {/* ── Modals ───────────────────────────────────────────────────────────── */}
       <NewFunderModal
@@ -1204,6 +1216,6 @@ export default function FundersPage() {
         onCreated={(t) => { setTags((prev) => [...prev, t].sort((a, b) => a.name.localeCompare(b.name))); setShowNewTag(false); }}
       />
       <ImportModal open={showImport} onClose={() => setShowImport(false)} onImported={fetchFunders} />
-    </div>
+    </CRMPageShell>
   );
 }

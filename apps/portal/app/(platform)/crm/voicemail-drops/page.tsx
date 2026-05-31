@@ -15,7 +15,16 @@ import {
   Voicemail,
   X,
 } from "lucide-react";
-import { CRMPageShell, crm, cn } from "../../../../components/crm";
+import { CRMPageShell, cn } from "../../../../components/crm";
+import {
+  CRMWorkspaceShell,
+  CRMWorkspaceChrome,
+  CRMWorkspaceHeader,
+  CRMWorkspaceToolbar,
+  CRMWorkspaceScrollRegion,
+  CRMWorkspaceFooter,
+} from "../../../../components/crm/CRMWorkspaceShell";
+import { PermissionGate } from "../../../../components/PermissionGate";
 import { apiGet, apiUploadCrmVoicemailDrop } from "../../../../services/apiClient";
 
 export type CrmVoicemailDrop = {
@@ -127,87 +136,100 @@ export default function CrmVoicemailDropsPage() {
   }, [drops, search, statusFilter]);
 
   return (
-    <CRMPageShell innerClassName="crm-voicemail-drops-workspace min-h-screen bg-[#f8f5ef] px-3 py-5 sm:px-6 lg:px-8">
-      <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-5 text-slate-900">
-        <section className="rounded-[2rem] border border-white/80 bg-white/85 p-5 shadow-[0_24px_70px_-42px_rgba(46,43,79,0.45)] backdrop-blur">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex min-w-0 items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-500/20">
-                <Voicemail className="h-6 w-6" />
+    <PermissionGate permission="can_view_crm_voicemail_drops" fallback={<div className="state-box">You do not have Voicemail Drops access.</div>}>
+    <CRMPageShell className="crm-voicemail-drops-workspace w-full min-h-0 bg-[#f8f5ef]" innerClassName="crm-voicemail-drops-inner mx-auto w-full max-w-[1320px] px-3 py-5 sm:px-6 lg:px-8 flex min-h-0 flex-1 flex-col gap-5 text-slate-900">
+      <CRMWorkspaceShell>
+        <CRMWorkspaceChrome>
+          <CRMWorkspaceHeader>
+            <section className="rounded-[2rem] border border-white/80 bg-white/85 p-5 shadow-[0_24px_70px_-42px_rgba(46,43,79,0.45)] backdrop-blur">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-500/20">
+                    <Voicemail className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-[0.22em] text-indigo-500">Voicemail Drop</p>
+                    <h1 className="text-2xl font-black tracking-tight text-slate-950 sm:text-3xl">Pre-recorded Voicemails</h1>
+                    <p className="mt-1 text-sm text-slate-500">Record, manage, and drop voicemails when calls go to voicemail.</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setModalOpen(true)}
+                  className="inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-indigo-500/25 hover:brightness-105"
+                >
+                  <Plus className="h-4 w-4" />
+                  New Voicemail
+                </button>
               </div>
-              <div>
-                <p className="text-xs font-black uppercase tracking-[0.22em] text-indigo-500">Voicemail Drop</p>
-                <h1 className="text-2xl font-black tracking-tight text-slate-950 sm:text-3xl">Pre-recorded Voicemails</h1>
-                <p className="mt-1 text-sm text-slate-500">Record, manage, and drop voicemails when calls go to voicemail.</p>
+            </section>
+          </CRMWorkspaceHeader>
+
+          <CRMWorkspaceToolbar className="flex flex-col gap-3">
+            <div className="grid gap-3 md:grid-cols-3">
+              <KpiCard icon={<Voicemail className="h-5 w-5" />} label="Total Recordings" value={String(stats.totalRecordings)} />
+              <KpiCard icon={<Play className="h-5 w-5" />} label="Total Duration" value={fmtDuration(stats.totalDurationSeconds)} />
+              <KpiCard icon={<Sparkles className="h-5 w-5" />} label="Drop Success Rate" value={`${Math.round(stats.dropSuccessRate)}%`} />
+            </div>
+
+            <section className="overflow-hidden rounded-[1.75rem] border border-white/80 bg-white/90 shadow-[0_18px_60px_-42px_rgba(46,43,79,0.5)]">
+              <div className="flex flex-col gap-3 border-b border-slate-100 p-4 lg:flex-row lg:items-center">
+                <div className="relative min-w-0 flex-1">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="Search voicemails..."
+                    className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm text-slate-900 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+                  />
+                </div>
+                <select
+                  value={statusFilter}
+                  onChange={(event) => setStatusFilter(event.target.value)}
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 outline-none focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="READY">Ready</option>
+                  <option value="PROCESSING">Processing</option>
+                  <option value="FAILED">Failed</option>
+                  <option value="ARCHIVED">Archived</option>
+                </select>
               </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setModalOpen(true)}
-              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 px-4 py-2.5 text-sm font-bold text-white shadow-lg shadow-indigo-500/25 hover:brightness-105"
-            >
-              <Plus className="h-4 w-4" />
-              New Voicemail
-            </button>
+            </section>
+          </CRMWorkspaceToolbar>
+        </CRMWorkspaceChrome>
+
+        <CRMWorkspaceScrollRegion>
+          <section className="overflow-hidden rounded-[1.75rem] border border-white/80 bg-white/90 shadow-[0_18px_60px_-42px_rgba(46,43,79,0.5)]">
+            {loading ? (
+              <div className="flex items-center justify-center gap-2 p-12 text-sm font-semibold text-slate-500">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading voicemail drops...
+              </div>
+            ) : error ? (
+              <div className="m-4 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error}</div>
+            ) : filtered.length === 0 ? (
+              <div className="p-12 text-center">
+                <FileAudio className="mx-auto h-10 w-10 text-slate-300" />
+                <h2 className="mt-3 text-lg font-bold text-slate-900">No voicemail drops yet</h2>
+                <p className="mt-1 text-sm text-slate-500">Upload your first PBX-safe voicemail recording to get started.</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {filtered.map((drop) => (
+                  <VoicemailRow key={drop.id} drop={drop} />
+                ))}
+              </div>
+            )}
+          </section>
+        </CRMWorkspaceScrollRegion>
+
+        <CRMWorkspaceFooter>
+          <div className="rounded-[1.25rem] border border-indigo-100 bg-indigo-50/80 px-4 py-3 text-center text-sm font-medium text-indigo-700">
+            Tip: Keep voicemails under 30 seconds for best results.
           </div>
-        </section>
-
-        <div className="grid gap-3 md:grid-cols-3">
-          <KpiCard icon={<Voicemail className="h-5 w-5" />} label="Total Recordings" value={String(stats.totalRecordings)} />
-          <KpiCard icon={<Play className="h-5 w-5" />} label="Total Duration" value={fmtDuration(stats.totalDurationSeconds)} />
-          <KpiCard icon={<Sparkles className="h-5 w-5" />} label="Drop Success Rate" value={`${Math.round(stats.dropSuccessRate)}%`} />
-        </div>
-
-        <section className="overflow-hidden rounded-[1.75rem] border border-white/80 bg-white/90 shadow-[0_18px_60px_-42px_rgba(46,43,79,0.5)]">
-          <div className="flex flex-col gap-3 border-b border-slate-100 p-4 lg:flex-row lg:items-center">
-            <div className="relative min-w-0 flex-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search voicemails..."
-                className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm text-slate-900 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
-              />
-            </div>
-            <select
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value)}
-              className="rounded-2xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 outline-none focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
-            >
-              <option value="all">All Statuses</option>
-              <option value="READY">Ready</option>
-              <option value="PROCESSING">Processing</option>
-              <option value="FAILED">Failed</option>
-              <option value="ARCHIVED">Archived</option>
-            </select>
-          </div>
-
-          {loading ? (
-            <div className="flex items-center justify-center gap-2 p-12 text-sm font-semibold text-slate-500">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Loading voicemail drops...
-            </div>
-          ) : error ? (
-            <div className="m-4 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error}</div>
-          ) : filtered.length === 0 ? (
-            <div className="p-12 text-center">
-              <FileAudio className="mx-auto h-10 w-10 text-slate-300" />
-              <h2 className="mt-3 text-lg font-bold text-slate-900">No voicemail drops yet</h2>
-              <p className="mt-1 text-sm text-slate-500">Upload your first PBX-safe voicemail recording to get started.</p>
-            </div>
-          ) : (
-            <div className="divide-y divide-slate-100">
-              {filtered.map((drop) => (
-                <VoicemailRow key={drop.id} drop={drop} />
-              ))}
-            </div>
-          )}
-        </section>
-
-        <div className="rounded-[1.25rem] border border-indigo-100 bg-indigo-50/80 px-4 py-3 text-center text-sm font-medium text-indigo-700">
-          Tip: Keep voicemails under 30 seconds for best results.
-        </div>
-      </div>
+        </CRMWorkspaceFooter>
+      </CRMWorkspaceShell>
 
       {modalOpen ? (
         <NewVoicemailModal
@@ -220,6 +242,7 @@ export default function CrmVoicemailDropsPage() {
         />
       ) : null}
     </CRMPageShell>
+    </PermissionGate>
   );
 }
 

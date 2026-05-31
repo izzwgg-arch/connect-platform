@@ -2,9 +2,17 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckSquare, Plus } from "lucide-react";
-import { cn } from "../cn";
-import { crm } from "../crmClasses";
 import { CRMPageHeader } from "../CRMPageHeader";
+import {
+  CRMWorkspaceShell,
+  CRMWorkspaceChrome,
+  CRMWorkspaceHeader,
+  CRMWorkspaceToolbar,
+  CRMWorkspaceBody,
+  CRMWorkspaceMain,
+  CRMWorkspaceScrollRegion,
+  CRMWorkspaceRightRail,
+} from "../CRMWorkspaceShell";
 import { apiGet, apiPatch } from "../../../services/apiClient";
 import { TaskKpiStrip, TaskTabRow } from "./TaskKpiStrip";
 import type { TaskStats, TaskTab } from "./TaskKpiStrip";
@@ -160,38 +168,34 @@ export function TaskCommandDesk({ initialTab }: { initialTab?: TaskTab }) {
   const isEmpty = !loading && tasks.length === 0;
 
   return (
-    <div className={cn(crm.tasksWorkspace, crm.pageInnerTasks)}>
-      {/* Command header */}
-      <CRMPageHeader
-        icon={<CheckSquare className="h-5 w-5" />}
-        title="Tasks"
-        subtitle="Follow-ups, callbacks, and action items across your contacts."
-        className="tasks-page-header"
-        actions={
-          <button
-            type="button"
-            onClick={triggerAdd}
-            className="tasks-primary-action"
-          >
-            <Plus className="h-4 w-4" />
-            New Task
-          </button>
-        }
-      />
+    <CRMWorkspaceShell>
+      <CRMWorkspaceChrome>
+        <CRMWorkspaceHeader>
+          <CRMPageHeader
+            icon={<CheckSquare className="h-5 w-5" />}
+            title="Tasks"
+            subtitle="Follow-ups, callbacks, and action items across your contacts."
+            className="tasks-page-header"
+            actions={
+              <button
+                type="button"
+                onClick={triggerAdd}
+                className="tasks-primary-action"
+              >
+                <Plus className="h-4 w-4" />
+                New Task
+              </button>
+            }
+          />
+        </CRMWorkspaceHeader>
 
-      {/* KPI strip */}
-      <TaskKpiStrip
-        stats={stats}
-        loading={statsLoading}
-        activeTab={activeTab}
-        onTabChange={handleTabChange}
-      />
-
-      {/* Main 2-column layout */}
-      <div className={crm.tasksGrid}>
-        {/* Feed column */}
-        <div className={crm.tasksMainCol}>
-          {/* Tab row */}
+        <CRMWorkspaceToolbar className="flex flex-col gap-3">
+          <TaskKpiStrip
+            stats={stats}
+            loading={statsLoading}
+            activeTab={activeTab}
+            onTabChange={handleTabChange}
+          />
           <TaskTabRow
             activeTab={activeTab}
             onTabChange={handleTabChange}
@@ -201,8 +205,6 @@ export function TaskCommandDesk({ initialTab }: { initialTab?: TaskTab }) {
             assignedToMe={assignedToMe}
             onAssignedToMeChange={setAssignedToMe}
           />
-
-          {/* Quick add */}
           <div ref={addRef}>
             <TaskQuickAdd
               onCreated={handleCreated}
@@ -210,34 +212,38 @@ export function TaskCommandDesk({ initialTab }: { initialTab?: TaskTab }) {
               onForceOpenConsumed={() => setForceOpenAdd(false)}
             />
           </div>
+        </CRMWorkspaceToolbar>
+      </CRMWorkspaceChrome>
 
-          {/* Task feed or empty state */}
-          {isEmpty ? (
-            <TaskEmptyState
-              tab={activeTab}
-              stats={stats}
-              onAddTask={triggerAdd}
-            />
-          ) : (
-            <TaskFeed
-              tasks={tasks}
-              loading={loading}
-              activeTab={activeTab}
-              onComplete={handleComplete}
-            />
-          )}
-        </div>
+      <CRMWorkspaceBody split>
+        <CRMWorkspaceMain>
+          <CRMWorkspaceScrollRegion>
+            {isEmpty ? (
+              <TaskEmptyState
+                tab={activeTab}
+                stats={stats}
+                onAddTask={triggerAdd}
+              />
+            ) : (
+              <TaskFeed
+                tasks={tasks}
+                loading={loading}
+                activeTab={activeTab}
+                onComplete={handleComplete}
+              />
+            )}
+          </CRMWorkspaceScrollRegion>
+        </CRMWorkspaceMain>
 
-        {/* Sidebar column */}
-        <aside className={crm.tasksSideCol}>
+        <CRMWorkspaceRightRail>
           <TaskSidebar
             stats={stats}
             statsLoading={statsLoading}
             upcomingTasks={upcomingTasks}
             onCreateTask={triggerAdd}
           />
-        </aside>
-      </div>
-    </div>
+        </CRMWorkspaceRightRail>
+      </CRMWorkspaceBody>
+    </CRMWorkspaceShell>
   );
 }

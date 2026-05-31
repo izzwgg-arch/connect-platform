@@ -173,6 +173,36 @@ Pipeline (unchanged): Google Drive match → import (`CrmLeadDocument`) → text
 - Light-mode styling is scoped by `.crm-scripts-workspace` and `.scripts-edit-modal`; dark mode continues through CRM tokens.
 - Right-rail instructions, tips, quick actions, metadata, and shortcuts must use real routes/actions only.
 
+## CRM workspace shell (list pages)
+
+Layout-only pattern for CRM desk pages (Queue, Funders, Tasks, Scripts, Checklists, Voicemail Drops). No API, permission, or data-loading changes.
+
+### Components
+
+- `apps/portal/components/crm/CRMWorkspaceShell.tsx` — compound layout:
+  - `CRMWorkspaceShell` — root; fills page inner area
+  - `CRMWorkspaceChrome` — fixed header + toolbar stack (`flex-shrink: 0`)
+  - `CRMWorkspaceHeader` / `CRMWorkspaceToolbar` / `CRMWorkspaceFooter`
+  - `CRMWorkspaceBody` — `split` prop enables main + right rail grid
+  - `CRMWorkspaceMain` / `CRMWorkspaceScrollRegion` — independent list/library scroll
+  - `CRMWorkspaceRightRail` — visible side panel with inner scroll
+
+### CSS
+
+- Class strings in `crmClasses.ts`: `workspaceShell`, `workspaceChrome`, `workspaceScrollRegion`, etc.
+- Global rules in `globals.css` under “CRM workspace shell”:
+  - `.console-content:has(.crm-workspace-shell)` → no page scroll, `padding: 0`
+  - Desktop: `max-height: calc(100dvh - var(--topbar-height))` on shell
+  - `<1280px`: split bodies stack; page scroll allowed for graceful mobile use
+
+### When adding a new CRM list page
+
+1. Wrap content in `CRMPageShell` + `CRMWorkspaceShell`.
+2. Put title, KPIs, search, filters, and bulk controls in `CRMWorkspaceChrome`.
+3. Put tables/lists in `CRMWorkspaceScrollRegion` (or a nested scroll inside a panel, e.g. Scripts library).
+4. Put summary rails in `CRMWorkspaceRightRail` when applicable.
+5. Do not duplicate height/overflow logic per page — extend shared utilities only.
+
 ## Verification
 
 - For CRM portal UI changes, run portal typecheck and portal build.

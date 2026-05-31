@@ -17093,3 +17093,169 @@ table tr:hover {
   border-color: color-mix(in srgb, var(--crm-danger, #ea6068) 35%, transparent);
   color: var(--crm-danger, #ea6068);
 }
+
+/* CRM workspace shell — HubSpot-style desk (fixed chrome, scrollable lists/rails) */
+.console-content:has(.crm-workspace-shell) {
+  height: 100%;
+  min-height: 0;
+  max-width: none;
+  padding: 0;
+  overflow: hidden;
+}
+
+.crm-page-shell:has(.crm-workspace-shell) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.crm-page-shell:has(.crm-workspace-shell) > * {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.crm-funders-workspace:has(.crm-workspace-shell),
+.crm-checklist-workspace.crm-page-shell:has(.crm-workspace-shell) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.crm-funders-workspace:has(.crm-workspace-shell) .crm-funders-inner,
+.crm-checklist-workspace:has(.crm-workspace-shell) .crm-checklist-inner {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.crm-workspace-shell {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.crm-workspace-chrome {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.crm-workspace-header,
+.crm-workspace-toolbar,
+.crm-workspace-footer {
+  flex-shrink: 0;
+}
+
+.crm-workspace-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.crm-workspace-body--split {
+  display: grid;
+  align-items: stretch;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr) minmax(17.5rem, 22rem);
+}
+
+.crm-workspace-main,
+.crm-workspace-content {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.crm-workspace-scroll-region {
+  min-height: 0;
+  flex: 1;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.crm-workspace-right-rail {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.crm-workspace-right-rail-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.crm-funders-workspace .funders-table-shell {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.crm-funders-workspace .funders-table-scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.crm-funders-workspace .funders-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+@media (min-width: 1280px) {
+  .crm-workspace-shell {
+    max-height: calc(100dvh - var(--topbar-height));
+  }
+}
+
+@media (max-width: 1279px) {
+  .crm-workspace-body--split {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    overscroll-behavior: auto;
+  }
+
+  .crm-workspace-body--split .crm-workspace-scroll-region,
+  .crm-workspace-body--split .crm-workspace-right-rail-scroll {
+    flex: none;
+    overflow-y: visible;
+  }
+
+  .crm-workspace-shell {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .console-content:has(.crm-workspace-shell) {
+    overflow-y: auto;
+  }
+}
