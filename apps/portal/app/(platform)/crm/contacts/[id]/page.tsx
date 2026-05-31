@@ -17,6 +17,7 @@ import {
   ContactQuickDispositionCard,
   ContactCampaignLeadNav,
   ContactCollapsibleSection,
+  ContactRightRailSectionList,
   CRM_CONTACT_WORKSPACE_SCROLL_CLASSES,
   CRM_PHONE_TYPE_OPTIONS,
   workspaceTabLabel,
@@ -2630,7 +2631,11 @@ function CrmContactDetailInner() {
               />
             </div>
           ) : null}
-          <div className={cn(CRM_CONTACT_WORKSPACE_SCROLL_CLASSES.rightRail, "flex flex-col gap-2 pt-1")}>
+          <div className={cn(CRM_CONTACT_WORKSPACE_SCROLL_CLASSES.rightRail, "pt-1")}>
+          <ContactRightRailSectionList
+            userId={appUser?.id}
+            sections={{
+              "right-rail-relationship": (
           <ContactCollapsibleSection
             id="right-rail-relationship"
             title="Relationship Health"
@@ -2645,6 +2650,8 @@ function CrmContactDetailInner() {
               recentActivityCount={recentActivityCount}
             />
           </ContactCollapsibleSection>
+              ),
+              "right-rail-activity": (
           <ContactCollapsibleSection
             id="right-rail-activity"
             title="Activity Summary"
@@ -2681,9 +2688,8 @@ function CrmContactDetailInner() {
             </div>
           </div>
           </ContactCollapsibleSection>
-        <div className="flex flex-col gap-4">
-
-          {/* CRM fields */}
+              ),
+              "right-rail-outreach-rules": (
           <ContactCollapsibleSection
             id="right-rail-outreach-rules"
             title="Outreach Rules"
@@ -2787,8 +2793,8 @@ function CrmContactDetailInner() {
             </div>
           </div>
           </ContactCollapsibleSection>
-
-          {/* ── Open tasks panel ──────────────────────────────────────────── */}
+              ),
+              "right-rail-open-tasks": (
           <ContactCollapsibleSection
             id="right-rail-open-tasks"
             title="Tasks"
@@ -2923,8 +2929,8 @@ function CrmContactDetailInner() {
             )}
           </div>
           </ContactCollapsibleSection>
-
-          {/* Scratch notes (Contact.notes — single text field) */}
+              ),
+              "right-rail-scratch-notes": (
           <ContactCollapsibleSection
             id="right-rail-scratch-notes"
             title="Outreach Notes"
@@ -2946,15 +2952,16 @@ function CrmContactDetailInner() {
             )}
           </div>
           </ContactCollapsibleSection>
-
+              ),
+              "right-rail-business-profile": (
           <ContactCollapsibleSection
             id="right-rail-business-profile"
             title="Extracted Business Profile"
           >
             <ContactDocumentSummary contactId={id} refreshToken={summaryRefreshToken} />
           </ContactCollapsibleSection>
-
-          {/* All phones & emails */}
+              ),
+              "right-rail-contact-info": (
           <ContactCollapsibleSection
             id="right-rail-contact-info"
             title="Contact Info"
@@ -3151,9 +3158,10 @@ function CrmContactDetailInner() {
             )}
           </div>
           </ContactCollapsibleSection>
-
-          {/* Possible duplicates panel — shown when the API finds matches */}
-          {duplicates.length > 0 && !isArchived && (
+              ),
+            }}
+            trailing={
+          duplicates.length > 0 && !isArchived ? (
             <ContactCollapsibleSection
               id="right-rail-duplicates"
               title="Possible duplicates"
@@ -3199,8 +3207,9 @@ function CrmContactDetailInner() {
               ))}
             </div>
             </ContactCollapsibleSection>
-          )}
-        </div>
+          ) : null
+            }
+          />
         </div>
         </div>
       </div>

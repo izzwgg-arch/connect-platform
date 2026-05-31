@@ -4,6 +4,33 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-05-31 — CRM contact workspace right-rail section reorder
+
+**Task:** CRM / contact workspace / right rail ordering  
+**Risk:** medium
+
+### Root cause
+
+Right-rail collapsible section order was hardcoded in the contact workspace page with no per-user persistence, so agents could not personalize panel priority.
+
+### Changes
+
+- **Portal:** `ContactRightRailSectionList` wraps the seven reorderable right-rail sections (Relationship Health through Contact Info). Drag starts from the existing section header after an 8px pointer threshold — no drag handle, icon, or “drag” copy.
+- **Persistence:** order saved to `localStorage` per signed-in user (`crm-contact-workspace-right-rail-order[:userId]`). Default order unchanged for users without a saved layout.
+- **Responsive:** drag disabled on coarse pointer and viewports ≤1279px to avoid accidental drags while scrolling on touch devices.
+- **Pinned sections:** Quick Disposition (top) and Possible duplicates (bottom, when present) remain outside the reorder list.
+- **Visual feedback:** subtle lift/shadow while dragging and inset line for drop position only during drag.
+- **Tests:** `contactRightRailOrder.test.ts` covers default order, normalization, move helper, load/save round-trip, and reset helper.
+
+### Manual QA
+
+- Drag Relationship Health below Activity Summary on desktop, refresh, confirm order persists.
+- Expand/collapse each section after reorder.
+- Confirm no visible drag handle or permanent markings.
+- On tablet/mobile, confirm scrolling works without accidental section drags.
+
+---
+
 ## 2026-05-31 — CRM Quick Disposition card utility polish
 
 **Task:** CRM / contact workspace / UI polish  

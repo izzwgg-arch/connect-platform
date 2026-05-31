@@ -9,6 +9,8 @@ export { ContactQuickDispositionCard, ContactWorkspaceDispositionBar } from "./C
 export type { QuickDispositionOption, CustomQuickDispositionDraft } from "./ContactQuickDispositionCard";
 export { ContactCampaignLeadNav } from "./ContactCampaignLeadNav";
 export { ContactCollapsibleSection } from "./ContactCollapsibleSection";
+export { ContactRightRailSectionList } from "./ContactRightRailSectionList";
+export * from "./contactRightRailOrder";
 export * from "./contactWorkspaceHelpers";
 export { ContactTimeline } from "./ContactTimeline";
 export { ContactTimelineItem } from "./ContactTimelineItem";

@@ -10,6 +10,10 @@ export function ContactCollapsibleSection({
   defaultOpen = false,
   badge,
   children,
+  dragEnabled = false,
+  dragVisual = "idle",
+  onSummaryPointerDown,
+  onSummaryClick,
 }: {
   id: string;
   title: string;
@@ -17,14 +21,30 @@ export function ContactCollapsibleSection({
   defaultOpen?: boolean;
   badge?: React.ReactNode;
   children: React.ReactNode;
+  dragEnabled?: boolean;
+  dragVisual?: "idle" | "dragging" | "drop-before" | "drop-after";
+  onSummaryPointerDown?: (event: React.PointerEvent<HTMLElement>) => void;
+  onSummaryClick?: (event: React.MouseEvent<HTMLElement>) => void;
 }) {
   return (
     <details
       id={id}
-      className="group/collapse rounded-[1.1rem] border border-crm-border/60 bg-white shadow-[0_10px_30px_-24px_rgba(15,23,42,0.35)] transition-colors open:border-crm-accent/25"
+      className={cn(
+        "group/collapse rounded-[1.1rem] border border-crm-border/60 bg-white shadow-[0_10px_30px_-24px_rgba(15,23,42,0.35)] transition-colors open:border-crm-accent/25",
+        dragVisual === "dragging" && "crm-contact-rail-section-dragging",
+        dragVisual === "drop-before" && "crm-contact-rail-section-drop-before",
+        dragVisual === "drop-after" && "crm-contact-rail-section-drop-after",
+      )}
       open={defaultOpen}
     >
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-[1.1rem] px-3 py-2.5 marker:content-none hover:bg-crm-accent/5 group-open/collapse:rounded-b-none [&::-webkit-details-marker]:hidden">
+      <summary
+        onPointerDown={onSummaryPointerDown}
+        onClick={onSummaryClick}
+        className={cn(
+          "flex cursor-pointer list-none items-center justify-between gap-3 rounded-[1.1rem] px-3 py-2.5 marker:content-none hover:bg-crm-accent/5 group-open/collapse:rounded-b-none [&::-webkit-details-marker]:hidden",
+          dragEnabled && "cursor-grab active:cursor-grabbing",
+        )}
+      >
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[11px] font-bold uppercase tracking-[0.15em] text-crm-muted group-open/collapse:text-crm-accent">{title}</span>
