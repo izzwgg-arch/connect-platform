@@ -33,6 +33,7 @@ import {
   cn,
 } from "../../../../../components/crm";
 import { leadTimezoneDetailLabel, leadTimezoneBadgeTitle } from "../../../../../components/crm/contact/leadTimezoneDisplay";
+import { ContactDocumentSummary } from "../../../../../components/crm/contact/ContactDocumentSummary";
 import { DISPOSITION_OPTIONS, type Checklist, type ScriptSummary } from "../../../../../components/crm/live";
 import { CrmEmailComposeDrawer } from "../../../../../components/crm/email/CrmEmailComposeDrawer";
 import { CrmVoicemailDropDrawer } from "../../../../../components/crm/voicemail-drops/CrmVoicemailDropDrawer";
@@ -1203,6 +1204,7 @@ function CrmContactDetailInner() {
   const [contact, setContact] = useState<CrmContactDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [summaryRefreshToken, setSummaryRefreshToken] = useState(0);
 
   // Compose email state
   const [composeOpen, setComposeOpen] = useState(false);
@@ -1340,6 +1342,7 @@ function CrmContactDetailInner() {
     try {
       const c = await apiGet<CrmContactDetail>(`/crm/contacts/${id}`);
       setContact(c);
+      setSummaryRefreshToken((token) => token + 1);
       setEditDisplayName(c.displayName);
       setEditFirstName(c.firstName ?? "");
       setEditLastName(c.lastName ?? "");
@@ -2788,6 +2791,8 @@ function CrmContactDetailInner() {
               </p>
             )}
           </div>
+
+          <ContactDocumentSummary contactId={id} refreshToken={summaryRefreshToken} />
 
           {/* All phones & emails */}
           <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>

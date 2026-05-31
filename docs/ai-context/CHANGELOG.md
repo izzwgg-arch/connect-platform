@@ -4,6 +4,39 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-05-31 — CRM lead document summary on contact profile
+
+**Task:** CRM / document import / lead profile summary
+**Risk:** high
+
+### Root cause
+
+Google Drive import, OCR/text extraction, contact discovery, and AI intelligence already ran, but the lead profile had no structured “business profile” view. Required fields (EIN, revenue, industry, credit score, addresses, phones) were neither extracted into a summary schema nor rendered on the contact workspace — only a separate AI Intelligence tab showed generic entities.
+
+### What changed
+
+- **`documentProfileExtractor.ts`:** regex/heuristic extraction from document text (EIN, revenue, credit score, dates, labeled addresses). SSN extracted only in memory for masking — never persisted.
+- **`leadDocumentSummaryService.ts`:** merges verified CRM contact fields, document extractions, and AI `documentProfile` (SSN stripped before DB persist). `GET /crm/contacts/:id/document-summary` with `assertCrmContactAllowed`.
+- **`leadIntelligenceProvider.ts`:** extended AI schema with `documentProfile` business fields (no SSN in prompt/storage).
+- **Portal:** `ContactDocumentSummary` card on contact profile — separate sections for verified CRM fields, document-extracted fields, and all phones.
+- **Tests:** extractor, summary merge/masking, route contract (24 tests).
+- **Docs:** CRM document summary fields + SSN policy in `CRM.md`.
+
+### Deploy
+
+Requires **`api`** and **`portal`**. No Prisma migration.
+
+### Verify
+
+```bash
+pnpm --dir apps/api exec node --import tsx --test src/crm/documentProfileExtractor.test.ts src/crm/leadDocumentSummaryService.test.ts src/crm/leadDocumentSummaryRoutes.test.ts
+pnpm --dir apps/portal typecheck
+```
+
+Manual QA: import/scan Drive docs → open lead profile → Extracted Business Profile card shows fields; SSN masked; all phones listed; restricted Agent blocked out-of-scope.
+
+---
+
 ## 2026-05-31 — CRM checklist create/save list refresh
 
 **Task:** CRM / checklists / permissions / save flow

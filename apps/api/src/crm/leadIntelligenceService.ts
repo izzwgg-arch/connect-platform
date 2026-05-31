@@ -28,6 +28,7 @@
 
 import { db } from "@connect/db";
 import { getLeadIntelligenceProvider } from "./leadIntelligenceProvider";
+import { stripSsnFromAiDocumentProfile } from "./documentProfileExtractor";
 
 // ── Hard server caps (override any tenant setting above these values) ──────────
 
@@ -366,13 +367,18 @@ export async function generateIntelligenceReport(
 
     const generationDurationMs = Date.now() - startMs;
 
+    const keyFindingsPayload = {
+      ...output.keyFindings,
+      documentProfile: stripSsnFromAiDocumentProfile(output.keyFindings.documentProfile ?? null),
+    };
+
     await db.crmLeadIntelligenceReport.update({
       where: { id: report.id },
       data: {
         status: "COMPLETE",
         summary: output.summary,
         businessOverview: output.businessOverview,
-        keyFindings: output.keyFindings as any,
+        keyFindings: keyFindingsPayload as any,
         discoveredEntities: output.discoveredEntities as any,
         riskFlags: output.riskFlags as any,
         missingInformation: output.missingInformation as any,

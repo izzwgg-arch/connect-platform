@@ -34,6 +34,7 @@
 
 import type { FastifyInstance } from "fastify";
 import { requireCrmAccess, isAdminRole } from "./guard";
+import { assertCrmContactAllowed } from "./crmContactAccess";
 import {
   generateIntelligenceReport,
   getIntelligenceReport,
@@ -41,6 +42,11 @@ import {
   getBatchIntelligenceStatus,
   LeadIntelligenceError,
 } from "./leadIntelligenceService";
+import {
+  getLeadDocumentSummary,
+  LeadDocumentSummaryError,
+  sanitizeSummaryForResponse,
+} from "./leadDocumentSummaryService";
 
 export async function registerCrmLeadIntelligenceRoutes(app: FastifyInstance): Promise<void> {
   // ── POST /crm/contacts/:id/intelligence ─────────────────────────────────────
@@ -73,6 +79,29 @@ export async function registerCrmLeadIntelligenceRoutes(app: FastifyInstance): P
       }
       app.log.error({ contactId: id, tenantId }, "crm_intelligence_generate_error");
       return reply.status(500).send({ error: "generation_failed" });
+    }
+  });
+
+  // ── GET /crm/contacts/:id/document-summary ────────────────────────────────────
+  // Merged verified contact fields + document-extracted profile (SSN masked only).
+  app.get("/crm/contacts/:id/document-summary", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply);
+    if (!user) return;
+    const { tenantId } = user;
+    const { id } = req.params as { id: string };
+
+    if (!(await assertCrmContactAllowed(user, id, reply))) return;
+
+    try {
+      const summary = await getLeadDocumentSummary(id, tenantId);
+      return reply.status(200).send({ summary: sanitizeSummaryForResponse(summary) });
+    } catch (err: unknown) {
+      if (err instanceof LeadDocumentSummaryError) {
+        const status = err.code === "contact_not_found" ? 404 : 422;
+        return reply.status(status).send({ error: err.code, detail: err.message });
+      }
+      app.log.error({ contactId: id, tenantId }, "crm_document_summary_error");
+      return reply.status(500).send({ error: "summary_fetch_failed" });
     }
   });
 

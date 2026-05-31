@@ -50,6 +50,8 @@ export type IntelligenceOutput = {
     namesFound: string[];
     addressesFound: string[];
     additionalNotes: string[];
+    /** Structured business profile fields (no SSN — extracted separately at summary assembly). */
+    documentProfile?: Record<string, unknown>;
   };
   discoveredEntities: {
     phones: string[];
@@ -115,6 +117,15 @@ Return a JSON object with exactly these fields:
     "addressesFound": ["<address>", ...],
     "additionalNotes": ["<note>", ...]
   },
+  "documentProfile": {
+    "ein": "<XX-XXXXXXX or empty string>",
+    "revenue": "<currency amount or range or empty string>",
+    "industry": "<industry name or empty string>",
+    "creditScore": "<300-850 or empty string>",
+    "businessStartDate": "<ISO or US date or empty string>",
+    "businessAddress": "<full business address or empty string>",
+    "homeAddress": "<full home/residential address or empty string>"
+  },
   "discoveredEntities": {
     "phones": ["<phone>", ...],
     "emails": ["<email>", ...],
@@ -146,6 +157,11 @@ Missing information codes to use (only include applicable ones):
 - "missing_financial_docs" — no financial documentation imported
 - "missing_business_description" — cannot determine what the business does
 - "missing_website" — no website found
+- "missing_ein" — no EIN found in documents
+- "missing_credit_score" — no credit score found
+
+For documentProfile: extract only from document text and contact context. Use empty string for fields not found.
+Do NOT include Social Security Numbers or SSN in the response.
 
 Set confidenceScore between 0.0 (very low data quality / few documents) and 1.0 (comprehensive data, consistent information).
 
@@ -205,6 +221,28 @@ function ensureStringArray(val: unknown): string[] {
   return val.filter((v): v is string => typeof v === "string");
 }
 
+function normalizeDocumentProfile(raw: unknown): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, unknown>;
+  const allowed = [
+    "ein",
+    "revenue",
+    "industry",
+    "creditScore",
+    "businessStartDate",
+    "businessAddress",
+    "homeAddress",
+  ] as const;
+  const out: Record<string, unknown> = {};
+  for (const key of allowed) {
+    const val = o[key];
+    if (typeof val === "string" && val.trim()) {
+      out[key] = val.trim().slice(0, 500);
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function validateAndNormalizeOutput(raw: unknown): IntelligenceOutput {
   if (typeof raw !== "object" || raw === null) {
     throw new Error("AI output is not an object.");
@@ -224,6 +262,7 @@ function validateAndNormalizeOutput(raw: unknown): IntelligenceOutput {
       namesFound: ensureStringArray(kf.namesFound),
       addressesFound: ensureStringArray(kf.addressesFound),
       additionalNotes: ensureStringArray(kf.additionalNotes),
+      documentProfile: normalizeDocumentProfile(kf.documentProfile),
     },
     discoveredEntities: {
       phones: ensureStringArray(de.phones),

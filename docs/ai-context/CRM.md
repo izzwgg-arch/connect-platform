@@ -60,8 +60,25 @@ Scope: portal CRM UI/data-flow guardrails. Telephony, billing, workers, database
 | Live call workspace | `can_view_crm_live_call` | Quick actions → disposition, checklist, email, voicemail, notes, tasks (routes above) | Mixed per action | Yes (in scope) | Yes (tenant) | Yes (tenant) | Yes |
 | CRM settings (tenant) | `can_view_crm_settings` | `GET/PUT /crm/settings` | `requireCrmAdmin` (platform JWT) | No | No | Portal yes / API platform admin | Yes |
 | Notes / tasks on contact | Live workspace / contact | `POST /crm/contacts/:id/notes`, `…/tasks` | `requireCrmAccess` + `assertCrmContactAllowed` | Yes (in scope) | Yes (tenant) | Yes (tenant) | Yes |
+| Document summary — contact profile | `/crm/contacts/[id]` card | `GET /crm/contacts/:id/document-summary` | `requireCrmAccess` + `assertCrmContactAllowed` | Yes (in scope) | Yes (tenant) | Yes (tenant) | Yes |
 
 **Scope legend:** *in scope* = assigned to agent or in an assigned campaign when `CrmUserCampaignAssignment` rows exist; *tenant* = any contact in the tenant (Managers/CRM Admins bypass campaign allow-list).
+
+## CRM document import — lead profile summary
+
+Pipeline (unchanged): Google Drive match → import (`CrmLeadDocument`) → text extraction/OCR (`CrmLeadDocumentText`) → contact discovery (phones/emails) → optional AI intelligence (`CrmLeadIntelligenceReport`).
+
+**Contact profile card:** `ContactDocumentSummary` on `/crm/contacts/[id]` calls `GET /crm/contacts/:id/document-summary`. Three sections:
+
+1. **Verified CRM fields** — company, timezone, address from `Contact` / `CrmContactMeta` (never overwritten by extraction).
+2. **From imported documents** — EIN, revenue, industry, credit score, business start date, business/home addresses from regex extraction + AI `keyFindings.documentProfile` (advisory).
+3. **All phones on file** — every `ContactPhone` plus pending/accepted discoveries (deduped).
+
+**Field priority:** CRM record → document regex → AI advisory. Conflicting values set `meta.hasConflicts` (UI badge).
+
+**SSN security:** SSN is regex-extracted only during summary assembly — **never persisted** (stripped from AI `documentProfile` before save). API returns masked display only (`***-**-1234`). No full-SSN permission exists; raw SSN must not appear in API responses, logs, or audit events.
+
+**Raw OCR text** is never returned by the summary endpoint.
 
 ## Dashboard And Email UI
 
