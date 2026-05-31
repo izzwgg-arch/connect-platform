@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
 import { requireCrmAccess, requireCrmAdmin, isAdminRole } from "./guard";
+import { assertCrmContactAllowed, buildCrmContactListScopeWhere, buildCrmContactMetaListScopeWhere, mergeAndWhereClauses, resolveCrmContactScopeContext, userCanAccessCrmContact } from "./crmContactAccess";
 import { writeTimelineEvent } from "./timelineHelper";
 import { checkAndAutoCompleteCampaign } from "./campaignAutoComplete";
 import { buildLeadTimezoneMetaFilter, shouldRecomputeLeadTimezone } from "./leadTimezoneResolver";
@@ -145,18 +146,25 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     const user = await requireCrmAccess(req, reply);
     if (!user) return;
     const { tenantId, sub: userId } = user;
+    const scopeCtx = await resolveCrmContactScopeContext(user);
+    const metaScopeWhere = buildCrmContactMetaListScopeWhere(tenantId, scopeCtx);
 
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const activeContactOnly = { contact: { is: { active: true, archivedAt: null } } };
 
+    const scopedMetaWhere = mergeAndWhereClauses(
+      { tenantId, ...activeContactOnly },
+      metaScopeWhere,
+    );
+
     const [total, leads, mine, recentlyAdded] = await Promise.all([
-      db.crmContactMeta.count({ where: { tenantId, ...activeContactOnly } }),
-      db.crmContactMeta.count({ where: { tenantId, stage: "LEAD", ...activeContactOnly } }),
+      db.crmContactMeta.count({ where: scopedMetaWhere }),
+      db.crmContactMeta.count({ where: mergeAndWhereClauses(scopedMetaWhere, { stage: "LEAD" }) }),
       db.crmContactMeta.count({
-        where: { tenantId, assignedToUserId: userId, ...activeContactOnly },
+        where: mergeAndWhereClauses(scopedMetaWhere, { assignedToUserId: userId }),
       }),
       db.crmContactMeta.count({
-        where: { tenantId, createdAt: { gte: sevenDaysAgo }, ...activeContactOnly },
+        where: mergeAndWhereClauses(scopedMetaWhere, { createdAt: { gte: sevenDaysAgo } }),
       }),
     ]);
 
@@ -177,9 +185,16 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     const normalized = normalisePhone(q.data.phone);
     const partial = normalized.slice(-10); // match on last 10 digits
 
+    const scopeCtx = await resolveCrmContactScopeContext(user);
+    const scopeWhere = buildCrmContactListScopeWhere(tenantId, scopeCtx);
+    const contactWhere = mergeAndWhereClauses(
+      { tenantId, active: true, archivedAt: null },
+      scopeWhere,
+    );
+
     const phones = await db.contactPhone.findMany({
       where: {
-        contact: { tenantId, active: true, archivedAt: null },
+        contact: contactWhere,
         OR: [
           { numberNormalized: { endsWith: partial } },
           { numberNormalized: { contains: partial } },
@@ -198,6 +213,8 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     const enriched = await Promise.all(
       phones.map(async (p) => {
         const contactId = p.contact.id;
+        const allowed = await userCanAccessCrmContact(tenantId, user.sub, user.role, contactId, scopeCtx.crmAccessRole);
+        if (!allowed) return null;
         const [openTasksCount, nextTask] = await Promise.all([
           db.crmContactTask.count({
             where: { contactId, tenantId, status: { in: ["OPEN", "IN_PROGRESS"] } },
@@ -219,7 +236,7 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
       }),
     );
 
-    return { results: enriched };
+    return { results: enriched.filter(Boolean) };
   });
 
   // ── GET /crm/contacts ──────────────────────────────────────────────────────
@@ -338,12 +355,18 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
         }
       : {};
 
-    const listWhere = {
-      tenantId,
-      ...archiveClause,
-      crmMeta: { is: baseCrmMetaFilter },
-      ...searchWhere,
-    };
+    const scopeCtx = await resolveCrmContactScopeContext(user);
+    const scopeWhere = buildCrmContactListScopeWhere(tenantId, scopeCtx);
+
+    const listWhere = mergeAndWhereClauses(
+      {
+        tenantId,
+        ...archiveClause,
+        crmMeta: { is: baseCrmMetaFilter },
+      },
+      search ? searchWhere : null,
+      scopeWhere,
+    );
 
     const [rows, total] = await Promise.all([
       (db as any).contact.findMany({
@@ -486,6 +509,7 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     });
 
     if (!contact) return reply.status(404).send({ error: "not_found" });
+    if (!(await assertCrmContactAllowed(user, id, reply))) return;
     return formatContact(contact);
   });
 
@@ -732,6 +756,8 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
 
     const { disposition, note, linkedId, followUpAt, nextStage, memberId } = parsed.data;
     const now = new Date();
+
+    if (!(await assertCrmContactAllowed(user, contactId, reply))) return;
 
     // Load contact + current stage — verify tenant ownership
     const contact = await (db as any).contact.findFirst({
@@ -1176,6 +1202,8 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     const { tenantId, role } = user;
     const { id } = req.params as { id: string };
 
+    if (!(await assertCrmContactAllowed(user, id, reply))) return;
+
     const anchorWhere = isAdminRole(role)
       ? { id, tenantId }
       : { id, tenantId, active: true };
@@ -1216,15 +1244,21 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
 
     if (orClauses.length === 0) return { duplicates: [] };
 
+    const scopeCtx = await resolveCrmContactScopeContext(user);
+    const scopeWhere = buildCrmContactListScopeWhere(tenantId, scopeCtx);
+
     const candidates = await (db as any).contact.findMany({
-      where: {
-        tenantId,
-        active: true,
-        archivedAt: null,
-        id: { not: id },
-        crmMeta: { isNot: null }, // only CRM-enrolled contacts
-        OR: orClauses,
-      },
+      where: mergeAndWhereClauses(
+        {
+          tenantId,
+          active: true,
+          archivedAt: null,
+          id: { not: id },
+          crmMeta: { isNot: null },
+          OR: orClauses,
+        },
+        scopeWhere,
+      ),
       include: {
         phones: { where: { isPrimary: true }, take: 1 },
         emails: { where: { isPrimary: true }, take: 1 },

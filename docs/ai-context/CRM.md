@@ -31,6 +31,36 @@ Scope: portal CRM UI/data-flow guardrails. Telephony, billing, workers, database
 
 - Permissions are merged in `resolvePortalPermissionsWithCrmUserAccess` only when tenant CRM is enabled and `CrmUserAccess.enabled`.
 - **API:** `/crm/email/*` (except OAuth callback) requires `requireCrmAccess`. `POST /crm/email/send` checks `assertCrmContactAllowed` (assignment or allowed campaign when user has campaign restrictions). Fleet diagnostics: `requireCrmEmailSettingsAccess`.
+- **Contact scope:** `assertCrmContactAllowed` enforces campaign assignment for AGENT users on contact-scoped mutations (disposition, checklist respond, voicemail drop, notes, tasks, email send, contact detail). **List/search** (`GET /crm/contacts`, `GET /crm/contacts/lookup`, stats, duplicate suggestions) apply the same scope at query time so restricted Agents never see out-of-scope rows or inflated totals. CRM MANAGER / CRM ADMIN bypass campaign restrictions within the tenant (still tenant-scoped via `contact.tenantId`).
+- **Voicemail drops:** list/use/drop/upload/edit/archive routes use `requireCrmAccess` (Agent + Manager + CRM Admin). PBX/system recording settings remain outside this feature (`/pbx/call-recordings`, admin-only).
+
+### CRM permission matrix (Agent / Manager / Admin)
+
+| Feature | UI route / nav permission | API route / action | Guard | Agent | Manager | CRM Admin | Platform admin |
+|---------|---------------------------|-------------------|-------|-------|---------|-----------|------------------|
+| Checklists — view | `can_view_crm_checklists` → `/crm/checklists` | `GET /crm/checklists` | `requireCrmAccess` | Yes | Yes | Yes | Yes |
+| Checklists — create/edit/archive | same page | `POST/PATCH/DELETE /crm/checklists` | `requireCrmAccess` | Yes | Yes | Yes | Yes |
+| Checklists — complete on contact | Live workspace panel | `POST /crm/checklists/:id/respond` | `requireCrmAccess` + `assertCrmContactAllowed` | Yes (in scope) | Yes (tenant) | Yes (tenant) | Yes |
+| Contacts — list/search | `can_view_crm_contacts` → `/crm/contacts` | `GET /crm/contacts`, `GET /crm/contacts/lookup` | `requireCrmAccess` + list scope filter | In-scope only | Tenant-wide | Tenant-wide | Tenant-wide |
+| Contacts — stats | Dashboard | `GET /crm/contacts/stats` | `requireCrmAccess` + scoped meta counts | In-scope totals | Tenant-wide | Tenant-wide | Tenant-wide |
+| Dispositions — view options | Client `DISPOSITION_OPTIONS` | — | — | Yes | Yes | Yes | Yes |
+| Dispositions — set on contact | Contact profile / live workspace | `POST /crm/contacts/:id/disposition` | `requireCrmAccess` + `assertCrmContactAllowed` | Yes (in scope) | Yes (tenant) | Yes (tenant) | Yes |
+| CRM email — compose/send | `can_view_crm_email` → `/crm/email` | `POST /crm/email/send` | `requireCrmAccess` + `assertCrmContactAllowed` | Yes (in scope) | Yes (tenant) | Yes (tenant) | Yes |
+| Email templates — view/create | `can_view_crm_email` → `/crm/email/templates` | `GET/POST /crm/email/templates` | `requireCrmAccess` | Yes | Yes | Yes | Yes |
+| Email templates — edit | same | `PUT /crm/email/templates/:id` | `requireCrmAccess` + creator or CRM Manager+ | Own + shared use | Own + shared edit | Own + shared edit | All |
+| Email templates — attachments/logo | Utility panels | `POST …/attachments`, `POST …/branding/logo` | `requireCrmAccess` + edit check on template | Own templates | Own + shared | Own + shared | All |
+| Email templates — send test | Builder | `POST …/templates/:id/send-test` | `requireCrmAccess` | Yes | Yes | Yes | Yes |
+| Email settings / diagnostics | `can_view_crm_settings` → `/crm/email/settings` | `GET /crm/email/diagnostics/*` | `requireCrmEmailSettingsAccess` | No | No | Yes | Yes |
+| Voicemail drops — view | `can_view_crm_voicemail_drops` | `GET /crm/voicemail-drops` | `requireCrmAccess` | Yes | Yes | Yes | Yes |
+| Voicemail drops — upload/edit/archive | `/crm/voicemail-drops` | `POST/PATCH/DELETE /crm/voicemail-drops` | `requireCrmAccess` | Yes | Yes | Yes | Yes |
+| Voicemail drops — use on call | Live workspace | `POST /crm/voicemail-drops/drop` | `requireCrmAccess` + `assertCrmContactAllowed` | Yes (in scope) | Yes (tenant) | Yes (tenant) | Yes |
+| Scripts — view/use | `can_view_crm_scripts` | `GET /crm/scripts` | `requireCrmAccess` | Yes | Yes | Yes | Yes |
+| Scripts — create/edit | `/crm/scripts` | `POST/PATCH /crm/scripts` | `requireCrmAccess` | Yes | Yes | Yes | Yes |
+| Live call workspace | `can_view_crm_live_call` | Quick actions → disposition, checklist, email, voicemail, notes, tasks (routes above) | Mixed per action | Yes (in scope) | Yes (tenant) | Yes (tenant) | Yes |
+| CRM settings (tenant) | `can_view_crm_settings` | `GET/PUT /crm/settings` | `requireCrmAdmin` (platform JWT) | No | No | Portal yes / API platform admin | Yes |
+| Notes / tasks on contact | Live workspace / contact | `POST /crm/contacts/:id/notes`, `…/tasks` | `requireCrmAccess` + `assertCrmContactAllowed` | Yes (in scope) | Yes (tenant) | Yes (tenant) | Yes |
+
+**Scope legend:** *in scope* = assigned to agent or in an assigned campaign when `CrmUserCampaignAssignment` rows exist; *tenant* = any contact in the tenant (Managers/CRM Admins bypass campaign allow-list).
 
 ## Dashboard And Email UI
 

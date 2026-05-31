@@ -1,7 +1,101 @@
 import { db } from "@connect/db";
 import type { CrmAuthUser } from "./guard";
-import { isAdminRole } from "./guard";
+import { crmRoleBypassesContactRestriction, isAdminRole, loadCrmUserAccessRole } from "./guard";
 import { getCrmUserCampaignRestriction } from "./userCampaignAccess";
+
+export type CrmContactScopeContext = {
+  userId: string;
+  platformRole?: string;
+  crmAccessRole?: string | null;
+  campaignRestriction?: string[] | null;
+};
+
+/** True when list/search queries must filter to assigned + allowed-campaign contacts only. */
+export function shouldApplyCrmContactListScope(ctx: CrmContactScopeContext): boolean {
+  if (isAdminRole(ctx.platformRole)) return false;
+  if (crmRoleBypassesContactRestriction(ctx.crmAccessRole)) return false;
+  return Array.isArray(ctx.campaignRestriction) && ctx.campaignRestriction.length > 0;
+}
+
+/** Prisma where fragment for Contact list/search (assigned OR member of allowed campaigns). */
+export function buildCrmContactListScopeWhere(
+  tenantId: string,
+  ctx: CrmContactScopeContext,
+): Record<string, unknown> | null {
+  if (!shouldApplyCrmContactListScope(ctx)) return null;
+  const restriction = ctx.campaignRestriction!;
+  return {
+    OR: [
+      { crmMeta: { is: { tenantId, assignedToUserId: ctx.userId } } },
+      {
+        crmCampaignMembers: {
+          some: {
+            tenantId,
+            campaignId: { in: restriction },
+          },
+        },
+      },
+    ],
+  };
+}
+
+/** Prisma where fragment for CrmContactMeta aggregate queries (stats). */
+export function buildCrmContactMetaListScopeWhere(
+  tenantId: string,
+  ctx: CrmContactScopeContext,
+): Record<string, unknown> | null {
+  if (!shouldApplyCrmContactListScope(ctx)) return null;
+  const restriction = ctx.campaignRestriction!;
+  return {
+    OR: [
+      { assignedToUserId: ctx.userId },
+      {
+        contact: {
+          crmCampaignMembers: {
+            some: {
+              tenantId,
+              campaignId: { in: restriction },
+            },
+          },
+        },
+      },
+    ],
+  };
+}
+
+/** Merge Prisma where clauses with AND (single clause returned as-is). */
+export function mergeAndWhereClauses(
+  ...clauses: Array<Record<string, unknown> | null | undefined>
+): Record<string, unknown> {
+  const parts = clauses.filter(Boolean) as Record<string, unknown>[];
+  if (parts.length === 0) return {};
+  if (parts.length === 1) return parts[0];
+  return { AND: parts };
+}
+
+/** Load campaign restriction + CRM role for list/search scope decisions. */
+export async function resolveCrmContactScopeContext(
+  user: Pick<CrmAuthUser, "sub" | "tenantId" | "role">,
+): Promise<CrmContactScopeContext> {
+  if (isAdminRole(user.role)) {
+    return {
+      userId: user.sub,
+      platformRole: user.role,
+      crmAccessRole: null,
+      campaignRestriction: null,
+    };
+  }
+  const [crmAccessRole, campaignRestriction] = await Promise.all([
+    loadCrmUserAccessRole(user.tenantId, user.sub),
+    getCrmUserCampaignRestriction(user.tenantId, user.sub),
+  ]);
+  return {
+    userId: user.sub,
+    platformRole: user.role,
+    crmAccessRole,
+    campaignRestriction,
+  };
+}
 
 export type CrmContactAccessResult = "ok" | "not_found" | "forbidden";
 
@@ -13,9 +107,11 @@ export function resolveCrmContactAccess(
   inAllowedCampaign: boolean,
   restriction: string[] | null,
   role: string | undefined,
+  crmAccessRole?: string | null,
 ): CrmContactAccessResult {
   if (!contactExists) return "not_found";
   if (isAdminRole(role)) return "ok";
+  if (crmRoleBypassesContactRestriction(crmAccessRole)) return "ok";
   if (!restriction) return "ok";
   if (assignedToUserId === userId) return "ok";
   if (inAllowedCampaign) return "ok";
@@ -31,8 +127,13 @@ export async function userCanAccessCrmContact(
   userId: string,
   role: string | undefined,
   contactId: string,
+  crmAccessRole?: string | null,
 ): Promise<boolean> {
   if (isAdminRole(role)) return true;
+
+  const resolvedCrmRole =
+    crmAccessRole !== undefined ? crmAccessRole : await loadCrmUserAccessRole(tenantId, userId);
+  if (crmRoleBypassesContactRestriction(resolvedCrmRole)) return true;
 
   const restriction = await getCrmUserCampaignRestriction(tenantId, userId);
   if (!restriction) return true;
@@ -59,6 +160,7 @@ export async function userCanAccessCrmContact(
     !!campaignMember,
     restriction,
     role,
+    resolvedCrmRole,
   ) === "ok";
 }
 

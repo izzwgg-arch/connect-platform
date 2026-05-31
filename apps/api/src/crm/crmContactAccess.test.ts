@@ -25,6 +25,14 @@ test("resolveCrmContactAccess: restricted agent forbidden outside scope", () => 
   assert.equal(resolveCrmContactAccess(true, "u1", "u2", false, ["camp-a"], "AGENT"), "forbidden");
 });
 
+test("resolveCrmContactAccess: CRM manager bypasses campaign restriction", () => {
+  assert.equal(resolveCrmContactAccess(true, "u1", "u2", false, ["camp-a"], "AGENT", "MANAGER"), "ok");
+});
+
+test("resolveCrmContactAccess: CRM admin bypasses campaign restriction", () => {
+  assert.equal(resolveCrmContactAccess(true, "u1", "u2", false, ["camp-a"], "AGENT", "ADMIN"), "ok");
+});
+
 test("resolveCrmContactAccess: missing contact is not_found", () => {
   assert.equal(resolveCrmContactAccess(false, "u1", null, false, null, "AGENT"), "not_found");
 });

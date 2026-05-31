@@ -4,6 +4,71 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-05-31 — CRM contact list/search scope filter
+
+**Task:** CRM / permissions / contact list scope fix
+**Risk:** high
+
+### Root cause
+
+The prior CRM permission audit scoped detail and mutation routes via `assertCrmContactAllowed`, but `GET /crm/contacts`, stats, phone lookup, and duplicate suggestions still queried all tenant contacts — restricted Agents could see names and totals for out-of-scope leads.
+
+### What changed
+
+- **`crmContactAccess.ts`:** added `resolveCrmContactScopeContext`, `buildCrmContactListScopeWhere`, `buildCrmContactMetaListScopeWhere`, and `mergeAndWhereClauses` — same assigned-or-allowed-campaign rules as single-contact access.
+- **`contactRoutes.ts`:** list, stats, lookup, and duplicate candidate queries now apply scope filters; lookup also post-filters with `userCanAccessCrmContact`.
+- **Tests:** `crmContactListScope.test.ts` (pure helpers + route contract tests).
+- **Docs:** CRM permission matrix updated for list/search/stats scope.
+
+### Deploy
+
+Requires **`api`** only. No Prisma migration.
+
+### Verify
+
+```bash
+pnpm --dir apps/api exec node --import tsx --test src/crm/crmContactListScope.test.ts src/crm/crmContactAccess.test.ts
+```
+
+Manual QA: restricted Agent — `/crm/contacts` and search show only assigned/in-campaign contacts; totals match visible rows; Manager sees full tenant list.
+
+---
+
+## 2026-05-31 — CRM Agent/Manager permission audit
+
+**Task:** CRM / permissions / access audit (checklists, dispositions, email, templates, voicemail drops, scripts, live workspace)
+**Risk:** high
+
+### Root cause
+
+Several CRM features were visible in the portal nav for Agent/Manager roles but API guards were inconsistent: voicemail drop upload/edit used platform-admin `requireCrmAdmin` instead of `requireCrmAccess`; contact-scoped actions (disposition, checklist respond, voicemail drop, notes, tasks, contact detail) did not call `assertCrmContactAllowed`; email template edit only honored platform JWT admin or creator, not CRM Manager; CRM Manager/Admin `CrmUserAccess.role` did not bypass campaign contact restrictions.
+
+### What changed
+
+- **Voicemail drops:** `POST/PATCH/DELETE /crm/voicemail-drops` now use `requireCrmAccess` so Agents/Managers can upload, rename, and archive tenant-scoped recordings. Drop-on-call still tenant-scoped; now also contact-scoped for restricted agents.
+- **Contact scope:** `assertCrmContactAllowed` added to disposition, checklist respond, voicemail drop, contact detail GET, notes, and tasks. CRM MANAGER / CRM ADMIN bypass campaign allow-list within tenant via `crmRoleBypassesContactRestriction`.
+- **Email templates:** `canEditTemplate` is async and grants edit on shared templates to CRM Manager/Admin (not only platform admins).
+- **Portal:** `PermissionGate` added on `/crm/checklists`, `/crm/scripts`, `/crm/voicemail-drops`, `/crm/live-call` matching nav permissions.
+- **Tests:** `crmPermissionAudit.test.ts`, expanded `scriptChecklistAccess.test.ts` and `crmContactAccess.test.ts`.
+- **Docs:** CRM permission matrix added to `CRM.md`.
+
+### Deploy
+
+Requires **`api`** and **`portal`**. No Prisma migration.
+
+### Verify
+
+```bash
+pnpm --dir apps/api exec node --import tsx --test src/crm/crmPermissionAudit.test.ts src/crm/scriptChecklistAccess.test.ts src/crm/crmContactAccess.test.ts src/crm/emailRoutes.crmAccess.test.ts
+pnpm --dir packages/shared exec node --import tsx --test src/portalPermissions.crm.test.ts src/portalPermissions.crmEmail.test.ts
+pnpm --dir apps/api typecheck
+pnpm --dir apps/portal typecheck
+```
+
+Manual QA: log in as CRM Agent with campaign restriction — confirm visible actions work in-scope and return 403 out-of-scope; log in as CRM Manager — confirm upload voicemail, edit shared email template, set disposition; confirm `/crm/email/settings` and fleet diagnostics remain blocked for Agent/Manager.
+
+---
+
 ## 2026-05-31 — CRM Email Template backend completion
 
 **Task:** CRM / email templates / backend implementation

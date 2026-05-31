@@ -14,6 +14,25 @@ export function isAdminRole(role: string | undefined): boolean {
   return role === "ADMIN" || role === "TENANT_ADMIN" || role === "SUPER_ADMIN";
 }
 
+/** CRM MANAGER / CRM ADMIN bypass per-contact campaign restrictions (tenant-scoped). */
+export function crmRoleBypassesContactRestriction(crmAccessRole: string | null | undefined): boolean {
+  const r = String(crmAccessRole || "").trim().toUpperCase();
+  return r === "MANAGER" || r === "ADMIN";
+}
+
+/** Load CrmUserAccess.role when CRM is enabled for the user. */
+export async function loadCrmUserAccessRole(
+  tenantId: string,
+  userId: string,
+): Promise<string | null> {
+  const access = await db.crmUserAccess.findUnique({
+    where: { tenantId_userId: { tenantId, userId } },
+    select: { enabled: true, role: true },
+  });
+  if (!access?.enabled) return null;
+  return access.role ? String(access.role) : null;
+}
+
 /** Honour portal workspace tenant selection for super-admins (x-tenant-context UUID). */
 export function resolveEffectiveCrmTenantId(req: any, user: CrmAuthUser): string {
   if (user.role !== "SUPER_ADMIN") return user.tenantId;
