@@ -17,6 +17,12 @@ export function initials(name: string): string {
   return name.trim().split(/\s+/).map((w) => w[0] ?? "").join("").slice(0, 2).toUpperCase() || "CC";
 }
 
+export function smsInboxBadge(kind?: "shared" | "personal" | null): string | null {
+  if (kind === "shared") return "Shared SMS";
+  if (kind === "personal") return "Personal SMS";
+  return null;
+}
+
 export function threadLabel(type?: ChatThreadType | string): string {
   if (type === "SMS") return "SMS";
   if (type === "TENANT_GROUP") return "Tenant";

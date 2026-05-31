@@ -30,6 +30,8 @@ export function ChatComposer({
   onRemovePending,
   onSend,
   sending,
+  disabled = false,
+  disabledHint,
 }: {
   thread: ChatThread;
   draft: string;
@@ -41,6 +43,8 @@ export function ChatComposer({
   onRemovePending: (index: number) => void;
   onSend: (options?: { type?: string; location?: { lat: number; lng: number; label?: string; address?: string } }) => void;
   sending: boolean;
+  disabled?: boolean;
+  disabledHint?: string;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -53,6 +57,14 @@ export function ChatComposer({
     const t = window.setInterval(() => setRecordSeconds((s) => s + 1), 1000);
     return () => window.clearInterval(t);
   }, [recording]);
+
+  if (disabled) {
+    return (
+      <footer className="cc-composer cc-composer-disabled">
+        <p>{disabledHint || "You do not have permission to send messages in this conversation."}</p>
+      </footer>
+    );
+  }
 
   async function startRecording() {
     // Voice notes upload through the same tenant-scoped attachment pipeline.

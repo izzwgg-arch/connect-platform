@@ -12,7 +12,7 @@ import { db } from "@connect/db";
 import { Prisma } from "@prisma/client";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import { hasEffectivePortalPermission } from "./platformRolePermissions";
-import { buildVoipMsSmsWebhookCallbackUrl, canonicalSmsPhone } from "@connect/shared";
+import { buildVoipMsSmsWebhookCallbackUrl, canonicalSmsPhone, buildSmsDedupeKey, isSharedTenantSmsInbox, resolveSmsInboxScope } from "@connect/shared";
 import {
   buildChatAttachmentIdSignedDownloadUrl,
   buildChatSignedDownloadUrl,
@@ -31,6 +31,7 @@ import {
   writeChatAttachmentFile,
 } from "./chatAttachmentStorage";
 import { fetchVoipMsMmsToChatFile, mediaKindFromMime } from "../../../packages/shared/src/voipMsInboundMms";
+import { upsertSmsThreadParticipants } from "./smsInboxParticipants";
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
 function staff(user: JwtUser): string {
@@ -46,7 +47,13 @@ function isTenantAdmin(user: JwtUser): boolean {
 }
 
 function canSendSmsRole(user: JwtUser): boolean {
-  return ["SUPER_ADMIN", "ADMIN", "MESSAGING", "USER"].includes(staff(user));
+  return ["SUPER_ADMIN", "ADMIN", "MESSAGING", "USER", "TENANT_ADMIN", "MANAGER"].includes(staff(user));
+}
+
+/** Legacy JWT roles OR portal `can_send_sms` (backward compatible union). */
+async function canSendSmsUser(user: JwtUser): Promise<boolean> {
+  if (canSendSmsRole(user)) return true;
+  return hasEffectivePortalPermission(user, "can_send_sms" as any).catch(() => false);
 }
 
 function requireCrypto(reply: any): boolean {
@@ -159,7 +166,7 @@ function normalizeDidRow(raw: any): { did: string; e164: string; sms: boolean; m
 }
 
 function smsDedupeKey(tenantId: string, tenantE164: string, externalE164: string, inboxOwnerUserId: string): string {
-  return `sms:${tenantId}:${tenantE164}:${externalE164}:${inboxOwnerUserId || ""}`;
+  return buildSmsDedupeKey(tenantId, tenantE164, externalE164, inboxOwnerUserId);
 }
 
 async function ensureDefaultTenantGroup(tenantId: string, tenantName: string, currentUserId?: string) {
@@ -407,42 +414,66 @@ async function resolveSmsInboxOwnerUserId(input: {
   assignedExtensionId?: string | null;
 }): Promise<string> {
   if (input.assignedUserId) return input.assignedUserId;
-  if (!input.assignedExtensionId) return "";
-  const extension = await db.extension.findFirst({
-    where: { id: input.assignedExtensionId, tenantId: input.tenantId },
-    select: { ownerUserId: true },
-  });
-  return extension?.ownerUserId || "";
+  let extensionOwnerUserId: string | null = null;
+  if (input.assignedExtensionId) {
+    const extension = await db.extension.findFirst({
+      where: { id: input.assignedExtensionId, tenantId: input.tenantId },
+      select: { ownerUserId: true },
+    });
+    extensionOwnerUserId = extension?.ownerUserId ?? null;
+  }
+  return resolveSmsInboxScope({ assignedUserId: input.assignedUserId, extensionOwnerUserId });
 }
 
-async function upsertSmsThreadParticipants(input: {
-  threadId: string;
+async function ensureSmsThreadParticipantForSend(input: {
+  user: JwtUser;
   tenantId: string;
-  inboxOwnerUserId: string;
-  assignedExtensionId?: string | null;
-}): Promise<void> {
-  const users = input.inboxOwnerUserId
-    ? await db.user.findMany({ where: { id: input.inboxOwnerUserId, tenantId: input.tenantId } })
-    : await db.user.findMany({ where: { tenantId: input.tenantId } });
-  for (const u of users) {
-    await db.connectChatParticipant.upsert({
-      where: { threadId_participantKey: { threadId: input.threadId, participantKey: `u:${u.id}` } },
-      create: { threadId: input.threadId, participantKey: `u:${u.id}`, userId: u.id, role: "MEMBER" },
-      update: { leftAt: null },
-    });
+  thread: { id: string; type: string; smsInboxOwnerUserId: string | null; tenantSmsE164: string | null };
+}): Promise<{ ok: true } | { ok: false; status: number; error: string; message?: string }> {
+  const existing = await db.connectChatParticipant.findFirst({
+    where: { threadId: input.thread.id, userId: input.user.sub, leftAt: null, thread: { tenantId: input.tenantId } },
+    select: { id: true },
+  });
+  if (existing) return { ok: true };
+
+  if (input.thread.type !== "SMS") {
+    return { ok: false, status: 404, error: "THREAD_NOT_FOUND" };
   }
-  if (input.assignedExtensionId) {
-    await db.connectChatParticipant.upsert({
-      where: { threadId_participantKey: { threadId: input.threadId, participantKey: `e:${input.assignedExtensionId}` } },
-      create: {
-        threadId: input.threadId,
-        participantKey: `e:${input.assignedExtensionId}`,
-        extensionId: input.assignedExtensionId,
-        role: "MEMBER",
-      },
-      update: { leftAt: null },
-    });
+
+  const shared = isSharedTenantSmsInbox(input.thread.smsInboxOwnerUserId || "");
+  if (!shared) {
+    return { ok: false, status: 404, error: "THREAD_NOT_FOUND" };
   }
+
+  const canSend = await canSendSmsUser(input.user);
+  if (!canSend) {
+    const canView = await hasEffectivePortalPermission(input.user, "can_view_tenant_chats" as any).catch(() => false);
+    if (canView) {
+      return {
+        ok: false,
+        status: 403,
+        error: "SMS_VIEW_ONLY",
+        message: "You can view this shared SMS inbox but do not have permission to send replies.",
+      };
+    }
+    return { ok: false, status: 403, error: "FORBIDDEN" };
+  }
+
+  const smsRow = input.thread.tenantSmsE164
+    ? await db.tenantSmsNumber.findFirst({
+        where: { tenantId: input.tenantId, phoneE164: input.thread.tenantSmsE164, active: true },
+        select: { assignedExtensionId: true },
+      })
+    : null;
+
+  await upsertSmsThreadParticipants({
+    threadId: input.thread.id,
+    tenantId: input.tenantId,
+    inboxOwnerUserId: "",
+    assignedExtensionId: smsRow?.assignedExtensionId ?? null,
+    ensureUserIds: [input.user.sub],
+  });
+  return { ok: true };
 }
 
 export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectChatRoutesDeps): void {
@@ -610,6 +641,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         unread,
         tenantSmsE164: t.tenantSmsE164,
         externalSmsE164: t.externalSmsE164,
+        smsInboxKind: t.type === "SMS" ? (isSharedTenantSmsInbox(t.smsInboxOwnerUserId || "") ? "shared" : "personal") : null,
         deliveryStatus: last?.deliveryStatus || null,
         deliveryError: last?.deliveryError || null,
       };
@@ -759,7 +791,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     }
 
     if (body.type === "sms") {
-      if (!canSendSmsRole(user)) return reply.status(403).send({ error: "FORBIDDEN" });
+      if (!(await canSendSmsUser(user))) return reply.status(403).send({ error: "FORBIDDEN" });
       if (!body.externalPhone) return reply.status(400).send({ error: "externalPhone required" });
       const extNorm = canonicalSmsPhone(body.externalPhone);
       if (!extNorm.ok) return reply.status(400).send({ error: "INVALID_PHONE", detail: "error" in extNorm ? extNorm.error : "invalid phone" });
@@ -775,12 +807,11 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         where: { id: fromPick.row.id, tenantId },
         select: { assignedUserId: true, assignedExtensionId: true },
       });
-      const resolvedInboxOwner = await resolveSmsInboxOwnerUserId({
+      const inboxScope = await resolveSmsInboxOwnerUserId({
         tenantId,
         assignedUserId: assign?.assignedUserId || null,
         assignedExtensionId: assign?.assignedExtensionId || null,
       });
-      const inboxScope = resolvedInboxOwner === user.sub ? user.sub : "";
 
       const dk = smsDedupeKey(tenantId, fromPick.row.phoneE164, extNorm.e164, inboxScope);
       let thread = await db.connectChatThread.findUnique({ where: { dedupeKey: dk } });
@@ -800,22 +831,14 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
             lastMessageAt: new Date(),
           },
         });
-        await db.connectChatParticipant.create({
-          data: { threadId: thread.id, participantKey: `u:${user.sub}`, userId: user.sub, role: "OWNER" },
-        });
-        if (assign?.assignedExtensionId) {
-          await db.connectChatParticipant.upsert({
-            where: { threadId_participantKey: { threadId: thread.id, participantKey: `e:${assign.assignedExtensionId}` } },
-            create: {
-              threadId: thread.id,
-              participantKey: `e:${assign.assignedExtensionId}`,
-              extensionId: assign.assignedExtensionId,
-              role: "MEMBER",
-            },
-            update: { leftAt: null },
-          });
-        }
       }
+      await upsertSmsThreadParticipants({
+        threadId: thread.id,
+        tenantId,
+        inboxOwnerUserId: inboxScope,
+        assignedExtensionId: assign?.assignedExtensionId || null,
+        ensureUserIds: [user.sub],
+      });
       return { threadId: thread.id, normalizedTo: extNorm.e164, fromNumber: fromPick.row.phoneE164 };
     }
 
@@ -1042,10 +1065,6 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     const user = req.user as JwtUser;
     const { threadId } = req.params as { threadId: string };
     const tenantId = effectiveChatTenantId(req, user);
-    const part = await db.connectChatParticipant.findFirst({
-      where: { threadId, userId: user.sub, leftAt: null, thread: { tenantId } },
-    });
-    if (!part) return reply.status(404).send({ error: "THREAD_NOT_FOUND" });
 
     const attachmentSchema = z.object({
       storageKey: z.string().min(3).max(512),
@@ -1069,8 +1088,25 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       })
       .parse(req.body || {});
 
-    const thread = await db.connectChatThread.findFirst({ where: { id: threadId, tenantId } });
+    const thread = await db.connectChatThread.findFirst({
+      where: { id: threadId, tenantId },
+      select: { id: true, type: true, smsInboxOwnerUserId: true, tenantSmsE164: true, externalSmsE164: true },
+    });
     if (!thread) return reply.status(404).send({ error: "THREAD_NOT_FOUND" });
+
+    let part = await db.connectChatParticipant.findFirst({
+      where: { threadId, userId: user.sub, leftAt: null, thread: { tenantId } },
+    });
+    if (!part) {
+      const access = await ensureSmsThreadParticipantForSend({ user, tenantId, thread });
+      if (!access.ok) {
+        return reply.status(access.status).send({ error: access.error, message: access.message });
+      }
+      part = await db.connectChatParticipant.findFirst({
+        where: { threadId, userId: user.sub, leftAt: null, thread: { tenantId } },
+      });
+      if (!part) return reply.status(404).send({ error: "THREAD_NOT_FOUND" });
+    }
     if (input.replyToMessageId) {
       const replyTo = await db.connectChatMessage.findFirst({
         where: { id: input.replyToMessageId, threadId, tenantId },
@@ -1080,7 +1116,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     }
 
     if (thread.type === "SMS") {
-      if (!canSendSmsRole(user)) return reply.status(403).send({ error: "FORBIDDEN" });
+      if (!(await canSendSmsUser(user))) return reply.status(403).send({ error: "FORBIDDEN" });
       const ext = thread.externalSmsE164;
       const tenantDid = thread.tenantSmsE164;
       if (!ext || !tenantDid) return reply.status(400).send({ error: "SMS_THREAD_INCOMPLETE" });
@@ -1814,7 +1850,11 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     }
 
     const extE164 = nf.ok ? nf.e164 : rawFrom;
-    const inboxScope = num.assignedUserId || num.assignedExtension?.ownerUserId || "";
+    const inboxScope = await resolveSmsInboxOwnerUserId({
+      tenantId: num.tenantId,
+      assignedUserId: num.assignedUserId || null,
+      assignedExtensionId: num.assignedExtensionId || null,
+    });
     const dk = smsDedupeKey(num.tenantId, nt.e164, extE164, inboxScope);
 
     let thread = await db.connectChatThread.findUnique({ where: { dedupeKey: dk } });

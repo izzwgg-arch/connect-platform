@@ -34,6 +34,13 @@ function addParticipant(threadId: string, userId: string) {
 // Dynamic permission flag for tests
 let allowTenantWideChat = false;
 
+mock.module("./smsInboxParticipants", {
+  namedExports: {
+    listSharedSmsInboxParticipantUserIds: async () => [],
+    upsertSmsThreadParticipants: async () => {},
+  },
+});
+
 mock.module("./platformRolePermissions", {
   namedExports: {
     hasEffectivePortalPermission: async (_user: any, perm: string) => {
@@ -154,6 +161,7 @@ mock.module("@connect/db", {
       tenantSmsNumber: { findMany: async () => [] },
       extension: { findMany: async () => [] },
       globalVoipMsCredential: { findUnique: async () => null },
+      $queryRaw: async () => [],
     },
   },
 });

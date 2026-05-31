@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 import { useSipPhone } from "../../hooks/useSipPhone";
 import { ChatComposer } from "./ChatComposer";
 import { MessageBubble } from "./MessageBubble";
-import { initials, threadLabel } from "./formatting";
+import { initials, smsInboxBadge, threadLabel } from "./formatting";
 import type { ChatMessage, ChatThread, PendingAttachment } from "./types";
 
 export function ChatConversation({
@@ -29,6 +29,7 @@ export function ChatConversation({
   sending,
   onBack,
   onRefresh,
+  canSendMessages = true,
 }: {
   thread: ChatThread | null;
   messages: ChatMessage[];
@@ -50,6 +51,8 @@ export function ChatConversation({
   sending: boolean;
   onBack: () => void;
   onRefresh: () => void;
+  /** When false, composer is hidden (e.g. view-only shared SMS). */
+  canSendMessages?: boolean;
 }) {
   const phone = useSipPhone();
   const endRef = useRef<HTMLDivElement>(null);
@@ -77,7 +80,13 @@ export function ChatConversation({
         <span className="cc-avatar large">{initials(thread.participantName)}</span>
         <div className="cc-conv-title">
           <h2>{thread.participantName}</h2>
-          <p>{threadLabel(thread.type)}{thread.participantExtension ? ` · Ext ${thread.participantExtension}` : thread.externalSmsE164 ? ` · ${thread.externalSmsE164}` : ""}</p>
+          <p>
+            {threadLabel(thread.type)}
+            {thread.type === "SMS" && smsInboxBadge(thread.smsInboxKind) ? (
+              <> · <span className={`cc-sms-inbox-badge cc-sms-inbox-${thread.smsInboxKind}`}>{smsInboxBadge(thread.smsInboxKind)}</span></>
+            ) : null}
+            {thread.participantExtension ? ` · Ext ${thread.participantExtension}` : thread.externalSmsE164 ? ` · ${thread.externalSmsE164}` : ""}
+          </p>
         </div>
         <button type="button" className="cc-icon-btn" onClick={onRefresh} title="Refresh"><RefreshCcw size={17} /></button>
         {thread.participantExtension ? (
@@ -116,6 +125,10 @@ export function ChatConversation({
         onRemovePending={onRemovePending}
         onSend={onSend}
         sending={sending}
+        disabled={!canSendMessages}
+        disabledHint={!canSendMessages && thread.type === "SMS" && thread.smsInboxKind === "shared"
+          ? "You can view this shared SMS inbox but do not have permission to send replies."
+          : undefined}
       />
     </main>
   );

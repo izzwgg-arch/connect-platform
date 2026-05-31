@@ -11351,6 +11351,24 @@ table tr:hover {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 .cc-channel-sms { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
+.cc-channel-row { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.cc-sms-inbox-badge {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.cc-sms-inbox-shared { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.cc-sms-inbox-personal { color: var(--text-dim); background: color-mix(in srgb, var(--text-dim) 12%, transparent); }
+.cc-composer-disabled {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+}
+.cc-composer-disabled p { margin: 0; font-size: 12px; color: var(--text-dim); line-height: 1.4; }
 .cc-channel-tenant_group,
 .cc-channel-group { color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, transparent); }
 .cc-thread-alert { color: var(--danger); flex-shrink: 0; }

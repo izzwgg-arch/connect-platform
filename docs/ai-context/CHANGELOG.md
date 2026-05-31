@@ -4,6 +4,37 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-05-31 — Shared tenant SMS inbox consistency (VoIP.ms / Connect Chat)
+
+**Task:** SMS / VoIP.ms / shared inbox consistency  
+**Risk:** high
+
+### Root cause
+
+Inbound SMS to tenant-assigned numbers with no extension used permission-blind fan-out to **all** tenant users and consistent shared `inboxScope=""`, but **outbound-first** thread creation only added the creator as participant and used a flawed `inboxScope` heuristic. Send routes checked JWT roles via `canSendSmsRole` instead of portal `can_send_sms`. Users with `can_view_tenant_chats` could read shared threads but got **404** on reply because `POST /chat/threads/:id/messages` required a participant row.
+
+### What changed
+
+- **`packages/shared/src/smsInbox.ts`:** shared inbox scope, dedupe key, permission eligibility helpers (+ unit tests).
+- **`apps/api/src/smsInboxParticipants.ts`**, **`apps/worker/src/smsInboxParticipants.ts`:** permission-based participant fan-out; batch role snapshot + custom roles.
+- **`connectChatRoutes.ts`:** outbound-first shared inbox uses same fan-out as inbound; send permission union; shared-inbox reply auto-participant or `403 SMS_VIEW_ONLY`; thread list `smsInboxKind`.
+- **`voipMsInboundSyncJob.ts`:** uses shared dedupe + participant module.
+- **Portal:** VoIP.ms “shared tenant inbox” label; chat badges; composer hidden for view-only SMS.
+- **Tests:** `smsSharedInbox.test.ts`, `smsInbox.test.ts`.
+
+### Deploy
+
+Requires **`api`**, **`worker`**, and **`portal`**. No Prisma migration.
+
+### Verify
+
+- Assign VoIP.ms DID to tenant with no extension → inbound and outbound-first threads show **Shared SMS** and same participants (users with SMS/chat permissions only).
+- User with `can_view_tenant_chats` + `can_send_sms` can reply without 404.
+- View-only user sees thread but composer hidden / `403 SMS_VIEW_ONLY` on send.
+- Personal extension/user assignment unchanged.
+
+---
+
 ## 2026-05-31 — CRM lead document summary on contact profile
 
 **Task:** CRM / document import / lead profile summary

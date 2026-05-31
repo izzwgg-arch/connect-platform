@@ -11,6 +11,9 @@ Data model (packages/db/prisma/schema.prisma)
 - `ConnectChatThread`
   - SMS fields: `tenantSmsE164`, `externalSmsE164`, `smsInboxOwnerUserId`.
   - Stable `dedupeKey`: `sms:{tenant}:{tenantE164}:{externalE164}:{inboxScope}` for SMS; DM/group-specific keys for internal threads.
+  - **Shared tenant SMS inbox:** `TenantSmsNumber` with `tenantId` set and both `assignedUserId` and `assignedExtensionId` null → `inboxScope=""` / `smsInboxOwnerUserId=""`. Inbound (worker poll + webhook) and outbound-first thread creation use the same participant fan-out.
+  - **Personal SMS inbox:** number assigned to a user **or** extension with an owner → `inboxScope=<ownerUserId>`. Only that user (+ extension participant row when applicable) is added.
+  - **Misconfigured extension:** extension assigned but `ownerUserId` is null → treated as shared tenant inbox (same as no extension). Kept for backward compatibility; assign an owner or clear the extension to make intent explicit.
   - Indexed by `(tenantId,lastMessageAt)` and `(tenantSmsE164,externalSmsE164)`.
 - `ConnectChatParticipant`
   - `participantKey` = `u:<userId>` or `e:<extensionId>`; `lastReadAt`, `typingUntil`, `muted`.
@@ -38,6 +41,13 @@ API (apps/api/src/connectChatRoutes.ts)
   - Downloads signed: `GET /chat/a/:attachmentId` and `GET /chat/attachments/download/*` (HMAC-verified).
 - Push
   - DM: payload type `dm_message` (senderName + preview); SMS inbound: `sms_message` (phone + preview). Mobile suppresses foreground banners when viewing the same thread.
+
+SMS shared inbox (2026-05-31)
+- **Participant fan-out (shared inbox only):** users with portal permission `can_send_sms` and/or `can_view_tenant_chats` (role snapshot + custom roles loaded once per upsert). Implemented in `apps/api/src/smsInboxParticipants.ts` and mirrored in `apps/worker/src/smsInboxParticipants.ts`.
+- **Send permission:** SMS send routes accept legacy JWT roles (`USER`, `ADMIN`, `MESSAGING`, …) **or** portal `can_send_sms` (union for backward compatibility).
+- **Read vs reply:** `can_view_tenant_chats` allows reading tenant-wide threads without a participant row. Replying to a **shared** SMS thread auto-adds the sender as participant when they have send permission; view-only users receive `403 SMS_VIEW_ONLY`. Personal SMS threads still require an existing participant row.
+- **Portal UI:** VoIP.ms assignment “shared tenant inbox” (no extension); chat thread list/header badges `Shared SMS` / `Personal SMS`.
+- **Pure helpers:** `packages/shared/src/smsInbox.ts` (`resolveSmsInboxScope`, `buildSmsDedupeKey`, eligibility checks).
 
 Mobile (apps/mobile)
 - `ChatTab.tsx`

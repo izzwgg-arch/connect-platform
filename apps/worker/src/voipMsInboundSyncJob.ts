@@ -1,6 +1,7 @@
 import { db } from "@connect/db";
 import { decryptJson } from "@connect/security";
-import { canonicalSmsPhone } from "@connect/shared";
+import { canonicalSmsPhone, buildSmsDedupeKey, resolveSmsInboxScope } from "@connect/shared";
+import { upsertSmsThreadParticipants } from "./smsInboxParticipants";
 import { crmInboundSmsHook } from "./crmInboundSmsHook";
 import { fetchVoipMsMmsToChatFile, mediaKindFromMime } from "../../../packages/shared/src/voipMsInboundMms";
 
@@ -261,37 +262,19 @@ async function fetchRecentSmsForDid(creds: VoipMsStoredCreds, didE164: string): 
 
 async function resolveInboxOwnerUserId(input: { tenantId: string; assignedUserId?: string | null; assignedExtensionId?: string | null }): Promise<string> {
   if (input.assignedUserId) return input.assignedUserId;
-  if (!input.assignedExtensionId) return "";
-  const ext = await db.extension.findFirst({
-    where: { id: input.assignedExtensionId, tenantId: input.tenantId },
-    select: { ownerUserId: true },
-  });
-  return ext?.ownerUserId || "";
+  let extensionOwnerUserId: string | null = null;
+  if (input.assignedExtensionId) {
+    const ext = await db.extension.findFirst({
+      where: { id: input.assignedExtensionId, tenantId: input.tenantId },
+      select: { ownerUserId: true },
+    });
+    extensionOwnerUserId = ext?.ownerUserId ?? null;
+  }
+  return resolveSmsInboxScope({ assignedUserId: input.assignedUserId, extensionOwnerUserId });
 }
 
 async function upsertParticipants(input: { threadId: string; tenantId: string; inboxOwnerUserId: string; assignedExtensionId?: string | null }) {
-  const users = input.inboxOwnerUserId
-    ? await db.user.findMany({ where: { id: input.inboxOwnerUserId, tenantId: input.tenantId } })
-    : await db.user.findMany({ where: { tenantId: input.tenantId } });
-  for (const u of users) {
-    await db.connectChatParticipant.upsert({
-      where: { threadId_participantKey: { threadId: input.threadId, participantKey: `u:${u.id}` } },
-      create: { threadId: input.threadId, participantKey: `u:${u.id}`, userId: u.id, role: "MEMBER" },
-      update: { leftAt: null },
-    });
-  }
-  if (input.assignedExtensionId) {
-    await db.connectChatParticipant.upsert({
-      where: { threadId_participantKey: { threadId: input.threadId, participantKey: `e:${input.assignedExtensionId}` } },
-      create: {
-        threadId: input.threadId,
-        participantKey: `e:${input.assignedExtensionId}`,
-        extensionId: input.assignedExtensionId,
-        role: "MEMBER",
-      },
-      update: { leftAt: null },
-    });
-  }
+  await upsertSmsThreadParticipants(input);
 }
 
 async function mirrorInboundMmsToAttachments(input: {
@@ -389,7 +372,7 @@ async function importInboundMessage(input: {
   }
 
   const inboxScope = await resolveInboxOwnerUserId(input);
-  const dedupeKey = `sms:${input.tenantId}:${input.tenantDidE164}:${input.row.from}:${inboxScope}`;
+  const dedupeKey = buildSmsDedupeKey(input.tenantId, input.tenantDidE164, input.row.from, inboxScope);
 
   // Search by number pair first (any dedupeKey variant) to avoid creating duplicate threads
   // when the existing thread was created by the webhook with a different suffix.

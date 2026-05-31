@@ -13,7 +13,7 @@ import { apiDelete, apiGet, apiPatch, apiPost, apiUploadChatAttachment } from ".
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function ChatPage() {
-  const { tenantId, adminScope } = useAppContext();
+  const { tenantId, adminScope, can } = useAppContext();
   const searchParams = useSearchParams();
   const [activeThread, setActiveThread] = useState<ChatThread | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -211,6 +211,8 @@ export default function ChatPage() {
     setThreadReload((k) => k + 1);
   }
 
+  const canSendInActiveThread = !activeThread || activeThread.type !== "SMS" || can("can_send_sms");
+
   return (
     <div className={`cc-shell ${activeThread ? "has-active" : ""}`}>
       <ChatInbox
@@ -243,6 +245,7 @@ export default function ChatPage() {
         sending={sending}
         onBack={() => setActiveThread(null)}
         onRefresh={() => { setMsgReload((k) => k + 1); setThreadReload((k) => k + 1); }}
+        canSendMessages={canSendInActiveThread}
       />
       <NewChatDialog
         open={showNewChat}

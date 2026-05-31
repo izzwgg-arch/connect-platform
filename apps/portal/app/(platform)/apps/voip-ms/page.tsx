@@ -437,7 +437,7 @@ export default function VoipMsIntegrationPage() {
                   {filteredNumbers.length !== numbers.length
                     ? `${filteredNumbers.length} of ${numbers.length} numbers`
                     : `${numbers.length} numbers`}{" "}
-                  — assign each to a tenant, and optionally pin to an extension for inbound routing.
+                  — assign each to a tenant. Leave extension as <strong>Shared tenant inbox</strong> for a tenant-wide SMS inbox, or pin to an extension for a personal inbox.
                 </p>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -629,7 +629,7 @@ function NumberAssignForm({
           searchable
           style={{ width: "100%", fontSize: 12 }}
           options={[
-            { value: "", label: "— no extension —" },
+            { value: "", label: "— shared tenant inbox —" },
             ...extensions.map((e) => ({ value: e.id, label: `Ext ${e.extNumber}${e.displayName ? ` — ${e.displayName}` : ""}` })),
           ]}
         />

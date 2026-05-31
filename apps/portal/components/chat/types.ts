@@ -10,6 +10,8 @@ export interface ChatThread {
   isDefaultTenantGroup?: boolean;
   tenantSmsE164?: string | null;
   externalSmsE164?: string | null;
+  /** Shared tenant SMS inbox vs personal extension/user inbox. */
+  smsInboxKind?: "shared" | "personal" | null;
   participantName: string;
   participantExtension: string;
   lastMessage: string;
