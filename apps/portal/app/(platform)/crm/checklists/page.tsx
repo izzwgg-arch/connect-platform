@@ -2,7 +2,12 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
-import { formatCrmSaveError, normalizeChecklist, requireSavedChecklist } from "../../../../components/crm/crmSaveHelpers";
+import {
+  formatCrmSaveError,
+  mergeChecklistSummaries,
+  normalizeChecklist,
+  requireSavedChecklist,
+} from "../../../../components/crm/crmSaveHelpers";
 import { apiGet, apiPost, apiPatch } from "../../../../services/apiClient";
 import { crm } from "../../../../components/crm/crmClasses";
 import {
@@ -14,6 +19,7 @@ import { ChecklistProgressPanel } from "../../../../components/crm/checklists/Ch
 import { ChecklistQuickTipsStrip } from "../../../../components/crm/checklists/ChecklistQuickTipsStrip";
 import { CHECKLIST_TEMPLATES } from "../../../../components/crm/checklists/ChecklistTemplates";
 import { cn } from "../../../../components/crm/cn";
+import { PermissionGate } from "../../../../components/PermissionGate";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -79,13 +85,20 @@ export default function CrmChecklistsPage() {
     return Math.round(sum / activeChecklists.length);
   }, [activeChecklists]);
 
-  async function loadList(options?: { silent?: boolean }) {
+  async function loadList(options?: { silent?: boolean; mergeLocal?: Checklist[] }) {
     if (!options?.silent) setLoading(true);
     try {
       const res = await apiGet<{ checklists: Checklist[] }>(
         "/crm/checklists?includeInactive=true"
       );
-      setChecklists((res.checklists ?? []).map((checklist) => normalizeChecklist(checklist)));
+      const fetched = (res.checklists ?? []).map((checklist) => normalizeChecklist(checklist));
+      if (options?.mergeLocal?.length) {
+        setChecklists(mergeChecklistSummaries(options.mergeLocal, fetched));
+      } else if (options?.silent) {
+        setChecklists((prev) => mergeChecklistSummaries(prev, fetched));
+      } else {
+        setChecklists(fetched);
+      }
       setError(null);
     } catch (err: unknown) {
       setError(String((err as Error)?.message ?? "Failed to load checklists"));
@@ -166,11 +179,14 @@ export default function CrmChecklistsPage() {
         items: validItems,
       });
       const checklist = normalizeChecklist(requireSavedChecklist(res));
-      await loadList({ silent: true });
+      setChecklists((prev) => mergeChecklistSummaries([checklist, ...prev], prev));
       setCreating(false);
       setSelected(checklist);
       setCreateName("");
       setCreateItems([]);
+      setSavedMsg("Saved");
+      setTimeout(() => setSavedMsg(""), 2500);
+      void loadList({ silent: true, mergeLocal: [checklist] });
     } catch (err: unknown) {
       setCreateError(formatCrmSaveError(err));
     } finally {
@@ -194,12 +210,10 @@ export default function CrmChecklistsPage() {
       );
       const checklist = normalizeChecklist(requireSavedChecklist(res));
       setSelected(checklist);
-      setChecklists((prev) =>
-        prev.map((c) => (c.id === checklist.id ? checklist : c))
-      );
-      await loadList({ silent: true });
+      setChecklists((prev) => mergeChecklistSummaries([checklist], prev));
       setSavedMsg("Saved");
       setTimeout(() => setSavedMsg(""), 2500);
+      void loadList({ silent: true, mergeLocal: [checklist] });
     },
     [selected]
   );
@@ -241,15 +255,18 @@ export default function CrmChecklistsPage() {
 
   if (loading) {
     return (
+      <PermissionGate permission="can_view_crm_checklists" fallback={<div className="state-box">You do not have Checklists access.</div>}>
       <div className={cn(crm.checklistWorkspace, "crm-page-shell")}>
         <div className={crm.pageInnerChecklist}>
           <LoadingSkeleton />
         </div>
       </div>
+      </PermissionGate>
     );
   }
 
   return (
+    <PermissionGate permission="can_view_crm_checklists" fallback={<div className="state-box">You do not have Checklists access.</div>}>
     <div className={cn(crm.checklistWorkspace, "crm-page-shell")}>
       <span className="sr-only">CRM checklist command center</span>
       <div className={crm.checklistAmbientLayer} aria-hidden>
@@ -330,5 +347,6 @@ export default function CrmChecklistsPage() {
         />
       </div>
     </div>
+    </PermissionGate>
   );
 }

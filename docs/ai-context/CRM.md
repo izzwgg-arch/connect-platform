@@ -40,6 +40,7 @@ Scope: portal CRM UI/data-flow guardrails. Telephony, billing, workers, database
 |---------|---------------------------|-------------------|-------|-------|---------|-----------|------------------|
 | Checklists — view | `can_view_crm_checklists` → `/crm/checklists` | `GET /crm/checklists` | `requireCrmAccess` | Yes | Yes | Yes | Yes |
 | Checklists — create/edit/archive | same page | `POST/PATCH/DELETE /crm/checklists` | `requireCrmAccess` | Yes | Yes | Yes | Yes |
+| Checklists — save UX | `/crm/checklists` | POST/PATCH return `{ checklist }`; page uses `mergeChecklistSummaries` + silent refetch | — | Create/edit appear in library immediately | Same | Same | Same |
 | Checklists — complete on contact | Live workspace panel | `POST /crm/checklists/:id/respond` | `requireCrmAccess` + `assertCrmContactAllowed` | Yes (in scope) | Yes (tenant) | Yes (tenant) | Yes |
 | Contacts — list/search | `can_view_crm_contacts` → `/crm/contacts` | `GET /crm/contacts`, `GET /crm/contacts/lookup` | `requireCrmAccess` + list scope filter | In-scope only | Tenant-wide | Tenant-wide | Tenant-wide |
 | Contacts — stats | Dashboard | `GET /crm/contacts/stats` | `requireCrmAccess` + scoped meta counts | In-scope totals | Tenant-wide | Tenant-wide | Tenant-wide |

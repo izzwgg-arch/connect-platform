@@ -13,6 +13,31 @@ export function toScriptSummary(script: Pick<Script, "id" | "name" | "isActive" 
   };
 }
 
+type ChecklistSummaryLike = {
+  id: string;
+  name: string;
+  isActive?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+/** Keep freshly saved rows when a refetch is briefly stale. */
+export function mergeChecklistSummaries<T extends ChecklistSummaryLike>(
+  local: T[],
+  fetched: T[],
+): T[] {
+  const byId = new Map<string, T>();
+  for (const row of fetched) byId.set(row.id, row);
+  for (const row of local) {
+    if (!byId.has(row.id)) byId.set(row.id, row);
+  }
+  return [...byId.values()].sort(
+    (a, b) =>
+      new Date(b.updatedAt ?? b.createdAt ?? 0).getTime() -
+      new Date(a.updatedAt ?? a.createdAt ?? 0).getTime(),
+  );
+}
+
 /** Keep freshly saved rows when a refetch is briefly stale. */
 export function mergeScriptSummaries(
   local: ScriptSummary[],

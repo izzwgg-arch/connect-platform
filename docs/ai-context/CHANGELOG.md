@@ -4,6 +4,37 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-05-31 — CRM checklist create/save list refresh
+
+**Task:** CRM / checklists / permissions / save flow
+**Risk:** high
+
+### Root cause
+
+Checklist create/update API routes already used `requireCrmAccess` (Agent/Manager allowed, tenant-scoped). The portal create flow only silent-refetched the list and replaced state wholesale — unlike scripts, it did not merge the saved checklist into local state, so a stale or failed refetch left the library panel empty until a full browser refresh. Create also lacked the success toast shown on edit save.
+
+### What changed
+
+- **`crmSaveHelpers.ts`:** added `mergeChecklistSummaries` (mirrors script merge helper).
+- **`checklists/page.tsx`:** optimistic merge after create/edit; silent refetch with `mergeLocal`; success toast on create; 403/save errors still via `formatCrmSaveError`.
+- **Tests:** `checklistRoutes.test.ts` (API list/create contract, tenant scoping, Agent/Manager portal permissions); `crmSaveHelpers.test.ts` (merge helper).
+- **Docs:** CRM checklist save-flow note in `CRM.md`.
+
+### Deploy
+
+Requires **`portal`** only (API unchanged). No Prisma migration.
+
+### Verify
+
+```bash
+pnpm --dir apps/api exec node --import tsx --test src/crm/checklistRoutes.test.ts src/crm/scriptChecklistAccess.test.ts
+pnpm --dir apps/portal exec node --import tsx --test components/crm/crmSaveHelpers.test.ts
+```
+
+Manual QA: CRM Agent → create checklist → save → appears in library without refresh; repeat as Manager; confirm Admin still works; user without CRM access denied on page/API.
+
+---
+
 ## 2026-05-31 — CRM contact list/search scope filter
 
 **Task:** CRM / permissions / contact list scope fix
