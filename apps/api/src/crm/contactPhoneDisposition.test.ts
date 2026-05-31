@@ -119,3 +119,13 @@ test("tenant isolation: phone disposition queries include tenantId", () => {
   const helper = readRoute("apps/api/src/crm/contactPhoneDisposition.ts");
   assert.match(helper, /where: \{ tenantId, contactId/);
 });
+
+test("GET /crm/contacts list maps formatContact without passing array index", () => {
+  const source = readRoute("apps/api/src/crm/contactRoutes.ts");
+  const block = source.slice(
+    source.indexOf('app.get("/crm/contacts"'),
+    source.indexOf('app.post("/crm/contacts"'),
+  );
+  assert.doesNotMatch(block, /rows\.map\(formatContact\)/);
+  assert.match(block, /rows\.map\(\(c\) => formatContact\(c\)\)/);
+});

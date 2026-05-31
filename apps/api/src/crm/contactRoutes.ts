@@ -388,7 +388,7 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     ]);
 
     return {
-      rows: rows.map(formatContact),
+      rows: rows.map((c) => formatContact(c)),
       total,
       page,
       limit,

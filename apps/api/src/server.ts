@@ -24112,7 +24112,7 @@ app.get("/contacts", async (req, reply) => {
       if (!search) return true;
       return [contact.displayName, contact.extension, contact.primaryEmail?.email ?? ""].some((v) => v.toLowerCase().includes(search));
     });
-  const manualContacts = query.type === "extensions" ? [] : manualRows.map(formatContact);
+  const manualContacts = query.type === "extensions" ? [] : manualRows.map((c) => formatContact(c));
   const rows = [...extensionContacts, ...manualContacts].sort((a, b) => {
     if (a.type === "internal_extension" && b.type === "internal_extension") return String(a.extension || "").localeCompare(String(b.extension || ""), undefined, { numeric: true });
     return a.displayName.localeCompare(b.displayName);
