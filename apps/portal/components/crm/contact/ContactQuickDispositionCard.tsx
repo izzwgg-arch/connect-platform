@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronDown, ChevronUp, GripVertical, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, GripVertical, Phone, Plus, Settings2, Trash2 } from "lucide-react";
 import { cn } from "../cn";
 import { CRMCard, crm } from "..";
 import {
@@ -23,6 +23,9 @@ export type CustomQuickDispositionDraft = {
 };
 
 const PRIMARY_BUTTON_COUNT = 4;
+
+const utilityActionClass =
+  "inline-flex items-center gap-0.5 border-0 bg-transparent p-0 text-[11px] font-semibold text-crm-muted transition-colors hover:text-crm-accent disabled:cursor-not-allowed disabled:opacity-50";
 
 function compactDispositionLabel(label: string): string {
   if (label === "Left Voicemail") return "VM";
@@ -158,29 +161,36 @@ export function ContactQuickDispositionCard({
 
   return (
     <CRMCard padding="none" className="crm-contact-quick-disposition-card border-crm-accent/20 bg-white/95">
-      <div className="space-y-1.5">
+      <div className="space-y-1">
         {phones.length > 1 ? (
-          <select
-            value={activePhoneId ?? ""}
-            disabled={disabled}
-            onChange={(e) => onPhoneChange(e.target.value)}
-            className={cn(crm.input, "border-crm-border/60 bg-white py-1 text-xs font-semibold shadow-none")}
-          >
-            {phones.map((phone) => (
-              <option key={phone.id} value={phone.id}>
-                {phoneTypeLabel(phone.type)} · {phone.numberRaw}
-              </option>
-            ))}
-          </select>
+          <label className="inline-flex max-w-full items-center gap-1 text-xs font-bold tracking-tight text-crm-text">
+            <Phone className="h-3 w-3 shrink-0 text-crm-muted" aria-hidden />
+            <select
+              value={activePhoneId ?? ""}
+              disabled={disabled}
+              onChange={(e) => onPhoneChange(e.target.value)}
+              className="max-w-full cursor-pointer appearance-none border-0 bg-transparent p-0 pr-3 text-xs font-bold tracking-tight text-crm-text outline-none hover:text-crm-accent disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {phones.map((phone) => (
+                <option key={phone.id} value={phone.id}>
+                  {phoneTypeLabel(phone.type)} · {phone.numberRaw}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="-ml-2 h-3 w-3 shrink-0 text-crm-muted pointer-events-none" aria-hidden />
+          </label>
         ) : activePhone ? (
-          <p className="truncate text-xs font-bold tracking-tight text-crm-text">
-            {phoneTypeLabel(activePhone.type)} · {activePhone.numberRaw}
+          <p className="inline-flex max-w-full items-center gap-1 truncate text-xs font-bold tracking-tight text-crm-text">
+            <Phone className="h-3 w-3 shrink-0 text-crm-muted" aria-hidden />
+            <span className="truncate">
+              {phoneTypeLabel(activePhone.type)} · {activePhone.numberRaw}
+            </span>
           </p>
         ) : (
           <p className="text-xs text-crm-muted">No phone on file</p>
         )}
 
-        <p className="text-[11px] text-crm-muted">
+        <p className="text-[11px] leading-tight text-crm-muted">
           Last:{" "}
           <span className="font-bold text-crm-text">{lastDisposition ?? "None"}</span>
         </p>
@@ -189,34 +199,37 @@ export function ContactQuickDispositionCard({
           {primaryOptions.map((option) => renderDispositionButton(option, true))}
         </div>
 
-        {overflowOptions.length > 0 ? (
-          <>
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => setMoreOpen((open) => !open)}
-              className="inline-flex items-center gap-0.5 rounded-full px-1 text-[11px] font-bold text-crm-accent transition-colors hover:bg-crm-accent/8"
-            >
-              {moreOpen ? "Less" : "More…"}
-              {moreOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-            </button>
-            {moreOpen ? (
-              <div className="flex flex-wrap gap-1">{overflowOptions.map((option) => renderDispositionButton(option, true))}</div>
+        {(overflowOptions.length > 0 || canManage) ? (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+            {overflowOptions.length > 0 ? (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => setMoreOpen((open) => !open)}
+                className={utilityActionClass}
+              >
+                {moreOpen ? "Less" : "More"}
+                {moreOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+              </button>
             ) : null}
-          </>
+            {canManage ? (
+              <button
+                type="button"
+                className={utilityActionClass}
+                onClick={() => {
+                  if (!manageOpen) syncDraftFromProps();
+                  setManageOpen((open) => !open);
+                }}
+              >
+                <Settings2 className="h-3 w-3" aria-hidden />
+                {manageOpen ? "Done" : "Manage"}
+              </button>
+            ) : null}
+          </div>
         ) : null}
 
-        {canManage ? (
-          <button
-            type="button"
-            className="rounded-full px-1 text-[11px] font-bold text-crm-muted transition-colors hover:bg-crm-surface-2 hover:text-crm-accent"
-            onClick={() => {
-              if (!manageOpen) syncDraftFromProps();
-              setManageOpen((open) => !open);
-            }}
-          >
-            {manageOpen ? "Done" : "Manage"}
-          </button>
+        {overflowOptions.length > 0 && moreOpen ? (
+          <div className="flex flex-wrap gap-1">{overflowOptions.map((option) => renderDispositionButton(option, true))}</div>
         ) : null}
       </div>
 

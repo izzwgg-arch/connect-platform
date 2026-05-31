@@ -4,6 +4,31 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-05-31 — CRM Quick Disposition card utility polish
+
+**Task:** CRM / contact workspace / UI polish  
+**Risk:** low
+
+### Root cause
+
+After the compact card redesign, **More** and **Manage** still used pill/hover button styling that matched disposition pills, and the multi-phone selector retained input chrome that made read-only phone context look editable.
+
+### What changed
+
+- **Utility actions:** `More` and `Manage` are now lightweight text links with optional icons and blue hover — no pill border or background.
+- **Phone display:** single and multi-phone rows render as plain text (borderless select for multi-phone switching).
+- **Spacing:** tightened vertical gaps inside the Quick Disposition card by ~4px.
+
+### Deliberately unchanged
+
+Disposition pill buttons, save behavior, manage panel functionality, card position, right rail layout, APIs, database, and permissions.
+
+### Verify
+
+Open a campaign contact workspace and confirm More/Manage look secondary, phone reads as display text, disposition pills unchanged, and all actions still work.
+
+---
+
 ## 2026-05-31 — CRM contact workspace visual polish
 
 **Task:** CRM / contact workspace / visual polish  
