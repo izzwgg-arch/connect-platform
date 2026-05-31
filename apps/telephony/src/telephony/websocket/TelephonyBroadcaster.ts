@@ -9,6 +9,7 @@ import type { TenantAliasMatcher } from "../services/SnapshotService";
 import { normalizeCallForClient } from "../normalizers/normalizeCallEvent";
 import { normalizeExtensionForClient } from "../normalizers/normalizeExtensionEvent";
 import { normalizeQueueForClient } from "../normalizers/normalizeQueueEvent";
+import type { CrmInboundCallerEnricher } from "../services/CrmInboundCallerEnricher";
 import type { NormalizedCall, NormalizedExtensionState, NormalizedQueueState } from "../types";
 
 const log = childLogger("TelephonyBroadcaster");
@@ -27,6 +28,7 @@ export class TelephonyBroadcaster {
     private readonly queues: QueueStateStore,
     private readonly health: HealthService,
     private readonly tenantAliasMatcher: TenantAliasMatcher | null = null,
+    private readonly crmEnricher: CrmInboundCallerEnricher | null = null,
   ) {
     this.bindCallStore();
     this.bindStores();
@@ -72,11 +74,7 @@ export class TelephonyBroadcaster {
         "PIPE[4/6]: broadcasting callUpsert to WS clients",
       );
 
-      this.socket.broadcast(
-        "telephony.call.upsert",
-        normalizeCallForClient(call),
-        filter,
-      );
+      void this.broadcastCallUpsert(call, filter);
     });
 
     this.callStore.on("callRemove", (callId: string) => {
@@ -133,6 +131,25 @@ export class TelephonyBroadcaster {
       if (matcher) return matcher(recordTenantId, client.tenantId);
       return false;
     };
+  }
+
+  private broadcastCallUpsert(
+    call: NormalizedCall,
+    filter: ((client: WsClient) => boolean) | undefined,
+  ): void {
+    if (!this.crmEnricher?.enabled()) {
+      this.socket.broadcast("telephony.call.upsert", normalizeCallForClient(call), filter);
+      return;
+    }
+    this.socket.forEachClient((client) => {
+      void this.crmEnricher!.enrichForClient(call, client).then((enriched) => {
+        this.socket.sendToClient(
+          client,
+          "telephony.call.upsert",
+          normalizeCallForClient(enriched),
+        );
+      });
+    }, filter);
   }
 
   private buildCallFilter(call: NormalizedCall): ((client: WsClient) => boolean) | undefined {

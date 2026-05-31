@@ -4,6 +4,39 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-05-30 — Inbound CRM caller ID on dialer + telephony WS
+
+**Task:** Telephony / CRM / dialer UI  
+**Risk:** high
+
+### Gap
+
+Inbound calls showed only PBX/SIP caller ID. CRM lead names and profile links were not on the telephony WebSocket payload, and the floating dialer had no permission-safe server match.
+
+### What changed
+
+- **API:** `apps/api/src/crm/inboundCallerMatch.ts` — tenant-scoped phone match (E.164 + exact `ContactPhone`, safe last-10 suffix), per-viewer CRM/campaign access filter; internal `POST /internal/telephony/inbound-crm-match` (CDR secret).
+- **Telephony:** `CrmInboundCallerEnricher` — per-WS-client enrichment on `telephony.call.upsert` and snapshots; optional fields `crmContactId`, `crmContactName`, `crmCompanyName`, `crmProfileUrl`, `crmMatchSource` (inbound only).
+- **Portal:** Floating dialer + `ActiveCallsPanel` prefer CRM display name; compact **Open CRM Profile** on matched inbound calls; `CrmScreenPop` uses WS fields first.
+
+### Deploy
+
+Requires **`api`** and **`telephony`** (same `CDR_INGEST_URL` / `CDR_INGEST_SECRET` as CDR ingest). No Prisma migration.
+
+### Verify
+
+```bash
+pnpm --dir apps/api exec node --import tsx --test src/crm/inboundCallerMatch.test.ts
+pnpm --filter @connect/telephony test
+pnpm --dir apps/portal exec vitest run lib/crmInboundCallDisplay.test.ts
+```
+
+1. CRM-enabled tenant, contact with primary phone matching inbound DID.
+2. Ring extension from that number — floating dialer shows contact name + **Open CRM Profile**.
+3. User without CRM access or campaign assignment — no CRM fields on WS payload, no button.
+
+---
+
 ## 2026-05-30 — CRM lead timezone: Arizona/Phoenix display polish
 
 **Task:** CRM / leads / timezone UI polish  

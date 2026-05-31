@@ -78,5 +78,14 @@ export function normalizeCallForClient(call: NormalizedCall): NormalizedCall {
     durationSec,
     billableSec: call.billableSec,
     metadata: { ...call.metadata },
+    ...(call.crmContactId
+      ? {
+          crmContactId: call.crmContactId,
+          crmContactName: call.crmContactName,
+          ...(call.crmCompanyName ? { crmCompanyName: call.crmCompanyName } : {}),
+          crmProfileUrl: call.crmProfileUrl,
+          crmMatchSource: call.crmMatchSource,
+        }
+      : {}),
   };
 }

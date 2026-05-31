@@ -115,6 +115,7 @@ import {
 import * as fs from "node:fs";
 import { registerConnectChatRoutes } from "./connectChatRoutes";
 import { registerCrmRoutes } from "./crm/routes";
+import { registerInboundCrmMatchInternalRoute } from "./crm/inboundCallerMatchRoutes";
 import { fireCrmCdrHook } from "./crm/cdrHook";
 import { registerAdminUserCrmAccessRoutes } from "./admin/userCrmAccessRoutes";
 import { resolvePortalPermissionsWithCrmUserAccess } from "./crm/portalCrmPermissions";
@@ -26879,6 +26880,8 @@ app.get("/internal/telephony/user-extensions", async (req, reply) => {
     extensions: [...new Set(rows.map((r) => String(r.extNumber || "").trim()).filter(Boolean))],
   });
 });
+
+registerInboundCrmMatchInternalRoute(app, verifyCdrSecret);
 
 // ─── Connect CDR KPI totals ───────────────────────────────────────────────────
 // Default: source=connect → ConnectCdr only (DB counts).

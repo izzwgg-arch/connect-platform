@@ -50,6 +50,7 @@ function dirClass(direction: string): string {
 }
 
 function counterpartyLabel(call: LiveCall): string {
+  if (call.direction === "inbound" && call.crmContactName) return call.crmContactName;
   if (call.fromName && call.direction === "inbound") return call.fromName;
   if (call.direction === "outbound") return call.to || call.connectedLine || "—";
   return call.from || call.connectedLine || "—";

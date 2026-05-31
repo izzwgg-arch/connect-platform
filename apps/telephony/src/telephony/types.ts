@@ -3,6 +3,17 @@
 export type CallDirection = "inbound" | "outbound" | "internal" | "unknown";
 export type CallState = "ringing" | "dialing" | "up" | "held" | "hungup" | "unknown";
 
+/** CRM inbound caller match — optional, permission-filtered per WS viewer. */
+export type CrmInboundCallMatchSource = "exact" | "secondary" | "fallback_suffix";
+
+export interface CrmInboundCallFields {
+  crmContactId: string;
+  crmContactName: string;
+  crmCompanyName?: string;
+  crmProfileUrl: string;
+  crmMatchSource: CrmInboundCallMatchSource;
+}
+
 export interface NormalizedCall {
   id: string;
   linkedId: string;
@@ -59,6 +70,12 @@ export interface NormalizedCall {
   durationSec: number;
   billableSec: number;
   metadata: Record<string, unknown>;
+  /** Present only for inbound calls when API matched a CRM contact the viewer may access. */
+  crmContactId?: string;
+  crmContactName?: string;
+  crmCompanyName?: string;
+  crmProfileUrl?: string;
+  crmMatchSource?: CrmInboundCallMatchSource;
 }
 
 // ─── Extension / device presence ─────────────────────────────────────────────

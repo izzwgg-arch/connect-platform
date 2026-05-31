@@ -1461,6 +1461,24 @@ ssh connect "docker logs app-api-1 --since 30m 2>&1 | grep pbx_tenant_sync"
 
 ## WebSocket broadcasts
 
+### Inbound CRM caller enrichment (2026-05-30)
+
+For **`direction: "inbound"`** calls only, telephony may attach optional CRM fields on
+`telephony.call.upsert` and initial snapshots (per connected user):
+
+| Field | Meaning |
+|-------|---------|
+| `crmContactId` | Connect contact id |
+| `crmContactName` | Display name for Connect UI (overrides `fromName` in portal/dialer) |
+| `crmCompanyName` | Optional company |
+| `crmProfileUrl` | e.g. `/crm/contacts/{id}` |
+| `crmMatchSource` | `exact` \| `secondary` \| `fallback_suffix` |
+
+Omitted when CRM is disabled, no phone match, or the viewer lacks CRM/campaign access.
+Resolver: `apps/api/src/crm/inboundCallerMatch.ts`; enricher:
+`apps/telephony/src/telephony/services/CrmInboundCallerEnricher.ts`. Requires
+`CDR_INGEST_URL` + `CDR_INGEST_SECRET` on telephony (derives match URL from ingest URL).
+
 - `TelephonySocketServer.ts` — accepts WSS at `/ws/telephony`, validates JWT,
   resolves user-allowed extensions for non-admin roles via
   `GET /internal/telephony/user-extensions` on api.

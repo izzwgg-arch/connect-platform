@@ -21,7 +21,9 @@ export function shouldSkipJwtVerification(path: string): boolean {
     path === "/internal/telephony/pbx-tenant-map"
     || path.endsWith("/internal/telephony/pbx-tenant-map")
     || path === "/internal/telephony/user-extensions"
-    || path.endsWith("/internal/telephony/user-extensions");
+    || path.endsWith("/internal/telephony/user-extensions")
+    || path === "/internal/telephony/inbound-crm-match"
+    || path.endsWith("/internal/telephony/inbound-crm-match");
   const isInternalVoicemailNotifyPath =
     path === "/internal/voicemail-notify" || path.endsWith("/internal/voicemail-notify");
   const isIvrPromptSyncPath =

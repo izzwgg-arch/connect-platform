@@ -20,6 +20,7 @@ import { useTelephony } from "../contexts/TelephonyContext";
 import { useAppContext } from "../hooks/useAppContext";
 import type { LiveCall } from "../types/liveCall";
 import { apiGet } from "../services/apiClient";
+import { shouldShowCrmInboundQuickAction } from "../lib/crmInboundCallDisplay";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -319,11 +320,38 @@ export function CrmScreenPop() {
         ];
       });
 
-      // Async lookup — CRM access enforced by API (403 = skip silently)
-      if (!call.from) continue;
-      const phone = call.from;
       const callLinkedId = call.linkedId;
 
+      // Server-side match on telephony WS payload (permission-filtered per viewer).
+      if (shouldShowCrmInboundQuickAction(call) && call.crmContactId) {
+        setPops((prev) =>
+          prev.map((p) =>
+            p.call.linkedId === callLinkedId
+              ? {
+                  ...p,
+                  loading: false,
+                  contact: {
+                    id: call.crmContactId!,
+                    displayName: call.crmContactName ?? "Contact",
+                    company: call.crmCompanyName ?? null,
+                    isInCrm: true,
+                    primaryPhone: call.from ? { numberRaw: call.from } : null,
+                  },
+                  openTasksCount: 0,
+                  nextDueTask: null,
+                }
+              : p,
+          ),
+        );
+        continue;
+      }
+
+      // Fallback: legacy lookup when WS enrichment unavailable (e.g. enricher disabled).
+      if (!call.from) {
+        setPops((prev) => prev.filter((p) => p.call.linkedId !== callLinkedId));
+        continue;
+      }
+      const phone = call.from;
       apiGet<{ results: Array<{ matchedPhone: string; contact: LookupContact; openTasksCount: number; nextDueTask: { title: string; dueAt: string | null } | null }> }>(
         `/crm/contacts/lookup?phone=${encodeURIComponent(phone)}`,
       )
@@ -344,7 +372,6 @@ export function CrmScreenPop() {
           );
         })
         .catch(() => {
-          // 403 (CRM disabled/no access) or network error — remove the loading pop silently
           setPops((prev) => prev.filter((p) => p.call.linkedId !== callLinkedId));
         });
     }

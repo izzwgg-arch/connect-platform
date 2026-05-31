@@ -3,6 +3,7 @@
 
 export type CallDirection = "inbound" | "outbound" | "internal" | "unknown";
 export type CallState = "ringing" | "dialing" | "up" | "held" | "hungup" | "unknown";
+export type CrmInboundCallMatchSource = "exact" | "secondary" | "fallback_suffix";
 export type ExtensionStatus = "idle" | "inuse" | "busy" | "unavailable" | "ringing" | "onhold" | "unknown";
 export type QueueMemberStatus = "idle" | "inuse" | "busy" | "unavailable" | "ringing" | "onhold" | "paused" | "unknown";
 
@@ -35,6 +36,12 @@ export interface LiveCall {
   durationSec: number;
   billableSec: number;
   metadata: Record<string, unknown>;
+  /** Inbound CRM match — omitted when viewer lacks access or no contact matched. */
+  crmContactId?: string;
+  crmContactName?: string;
+  crmCompanyName?: string;
+  crmProfileUrl?: string;
+  crmMatchSource?: CrmInboundCallMatchSource;
 }
 
 export interface LiveExtensionState {

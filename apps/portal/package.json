@@ -10,7 +10,7 @@
     "lint": "echo lint-portal",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "screenshots:crm": "node scripts/crm-visual-qa-screenshots.mjs",
-    "test": "tsx --test lib/desktopNotificationPoll.test.ts lib/billingTaxSuggestions.test.ts lib/billingOneTimeChargeIFields.test.ts lib/billingUi.test.ts"
+    "test": "tsx --test lib/desktopNotificationPoll.test.ts lib/billingTaxSuggestions.test.ts lib/billingOneTimeChargeIFields.test.ts lib/billingUi.test.ts lib/crmInboundCallDisplay.test.ts"
   },
   "dependencies": {
     "@cardknox/react-ifields": "^2.2.86",

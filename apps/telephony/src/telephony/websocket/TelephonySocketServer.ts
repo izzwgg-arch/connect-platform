@@ -5,6 +5,7 @@ import { childLogger } from "../../logging/logger";
 import { env } from "../../config/env";
 import type { TelephonyEventEnvelope } from "../types";
 import type { SnapshotService } from "../services/SnapshotService";
+import type { CrmInboundCallerEnricher } from "../services/CrmInboundCallerEnricher";
 
 const log = childLogger("TelephonySocketServer");
 
@@ -40,6 +41,7 @@ export class TelephonySocketServer {
     private readonly server: http.Server,
     private readonly snapshot: SnapshotService,
     private readonly resolveUserExtensions: UserExtensionResolver | null = null,
+    private readonly crmEnricher: CrmInboundCallerEnricher | null = null,
   ) {
     this.wss = new WebSocketServer({
       server,
@@ -53,6 +55,25 @@ export class TelephonySocketServer {
   }
 
   // Broadcast a typed event to all matching clients.
+  /** Send one event to a single connected client. */
+  sendToClient<T>(client: WsClient, eventName: string, data: T): void {
+    if (!client.isAlive || client.ws.readyState !== WebSocket.OPEN) return;
+    const envelope: TelephonyEventEnvelope<T> = {
+      event: eventName,
+      ts: new Date().toISOString(),
+      data,
+    };
+    client.ws.send(JSON.stringify(envelope));
+  }
+
+  forEachClient(fn: (client: WsClient) => void, filter?: (client: WsClient) => boolean): void {
+    for (const client of this.clients) {
+      if (!client.isAlive || client.ws.readyState !== WebSocket.OPEN) continue;
+      if (filter && !filter(client)) continue;
+      fn(client);
+    }
+  }
+
   broadcast<T>(
     eventName: string,
     data: T,
@@ -203,33 +224,39 @@ export class TelephonySocketServer {
   }
 
   private sendSnapshot(client: WsClient): void {
-    const snap = this.snapshot.getSnapshot({
-      tenantId: client.tenantId,
-      extensions: client.extensions,
+    void this.buildSnapshotForClient(client).then((snap) => {
+      const envelope: TelephonyEventEnvelope = {
+        event: "telephony.snapshot",
+        ts: new Date().toISOString(),
+        data: snap,
+      };
+      if (client.ws.readyState === WebSocket.OPEN) {
+        client.ws.send(JSON.stringify(envelope));
+      }
     });
-    const envelope: TelephonyEventEnvelope = {
-      event: "telephony.snapshot",
-      ts: new Date().toISOString(),
-      data: snap,
-    };
-    if (client.ws.readyState === WebSocket.OPEN) {
-      client.ws.send(JSON.stringify(envelope));
-    }
   }
 
   private sendCallSnapshot(client: WsClient): void {
+    void this.buildSnapshotForClient(client).then((snap) => {
+      const envelope: TelephonyEventEnvelope = {
+        event: "telephony.calls.snapshot",
+        ts: new Date().toISOString(),
+        data: { calls: snap.calls, health: snap.health },
+      };
+      if (client.ws.readyState === WebSocket.OPEN) {
+        client.ws.send(JSON.stringify(envelope));
+      }
+    });
+  }
+
+  private async buildSnapshotForClient(client: WsClient) {
     const snap = this.snapshot.getSnapshot({
       tenantId: client.tenantId,
       extensions: client.extensions,
     });
-    const envelope: TelephonyEventEnvelope = {
-      event: "telephony.calls.snapshot",
-      ts: new Date().toISOString(),
-      data: { calls: snap.calls, health: snap.health },
-    };
-    if (client.ws.readyState === WebSocket.OPEN) {
-      client.ws.send(JSON.stringify(envelope));
-    }
+    if (!this.crmEnricher?.enabled()) return snap;
+    const calls = await this.crmEnricher.enrichCallsForClient(snap.calls, client);
+    return { ...snap, calls };
   }
 
   private startHeartbeat(): void {

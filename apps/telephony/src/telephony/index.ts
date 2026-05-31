@@ -16,6 +16,7 @@ import { SnapshotService } from "./services/SnapshotService";
 import { TelephonySocketServer } from "./websocket/TelephonySocketServer";
 import { TelephonyBroadcaster } from "./websocket/TelephonyBroadcaster";
 import { CdrNotifier } from "./services/CdrNotifier";
+import { CrmInboundCallerEnricher } from "./services/CrmInboundCallerEnricher";
 import { MobilePushNotifier } from "./services/MobilePushNotifier";
 import { AriBridgedActivePoller } from "./ari/AriBridgedActivePoller";
 import { PbxTenantMapCache, derivePbxTenantMapUrl } from "./state/PbxTenantMapCache";
@@ -167,7 +168,13 @@ export function createTelephonyModule(server: http.Server) {
       return [];
     }
   };
-  const socketServer = new TelephonySocketServer(server, snapshotService, resolveUserExtensions);
+  const crmEnricher = new CrmInboundCallerEnricher();
+  const socketServer = new TelephonySocketServer(
+    server,
+    snapshotService,
+    resolveUserExtensions,
+    crmEnricher,
+  );
   // NOTE: broadcastCallSnapshots() is intentionally NOT called on every ARI poll.
   // The ARI poller's job is bridge reconciliation (callRemove for zombies) only.
   // Individual callUpsert/callRemove events from callStore handle real-time updates.
@@ -181,6 +188,7 @@ export function createTelephonyModule(server: http.Server) {
     queueStore,
     healthService,
     tenantAliasMatcher,
+    crmEnricher,
   );
   const ariActions = new AriActions(ari);
   const healingEngine = new HealingEngine(callStore, extStore, healthService, ami, ari);

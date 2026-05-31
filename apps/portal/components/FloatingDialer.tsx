@@ -15,6 +15,12 @@ import {
 } from "../hooks/telephonyAudioPreferences";
 import { loadPbxResource } from "../services/pbxData";
 import { callsForTenant as scopeLiveCallsForTenant, extensionSetsFromCalls, liveExtensionForTenant } from "../services/liveCallState";
+import {
+  findInboundLiveCallForParty,
+  inboundCallerDisplayName,
+  inboundCallerDisplayPhone,
+  shouldShowCrmInboundQuickAction,
+} from "../lib/crmInboundCallDisplay";
 
 type PresenceState = "available" | "ringing" | "on_call" | "offline";
 
@@ -454,10 +460,35 @@ export function FloatingDialer() {
   );
   const extensionRows = extState.status === "success" ? extState.data.rows : [];
 
+  const tenantScopedCalls = useMemo(
+    () => scopeLiveCallsForTenant(telephony.activeCalls, tenantId, extensionRows, tenant?.name),
+    [telephony.activeCalls, tenantId, extensionRows, tenant?.name],
+  );
+  const matchedInboundCall = useMemo(
+    () => findInboundLiveCallForParty(tenantScopedCalls, phone.remoteParty),
+    [tenantScopedCalls, phone.remoteParty],
+  );
+  const inboundCallerTitle = useMemo(() => {
+    if (matchedInboundCall) {
+      return inboundCallerDisplayName(matchedInboundCall, phone.remoteParty);
+    }
+    return phone.remoteParty ?? "Unknown caller";
+  }, [matchedInboundCall, phone.remoteParty]);
+  const inboundCallerSubtitle = useMemo(() => {
+    if (!matchedInboundCall) return null;
+    const num = inboundCallerDisplayPhone(matchedInboundCall, phone.remoteParty);
+    if (!num || num === inboundCallerTitle) return matchedInboundCall.crmCompanyName ?? null;
+    return num;
+  }, [matchedInboundCall, phone.remoteParty, inboundCallerTitle]);
+
   const isInCall = phone.callState !== "idle" && phone.callState !== "ended";
   const isActive = phone.callState === "connected";
   const isIncoming = phone.callState === "ringing" && phone.callDirection === "inbound";
   const isOutgoing = phone.callState === "dialing" || (phone.callState === "ringing" && phone.callDirection === "outbound");
+  const showCrmOpen =
+    isIncoming &&
+    matchedInboundCall != null &&
+    shouldShowCrmInboundQuickAction(matchedInboundCall);
   const canDial = phone.regState === "registered" && phone.dialpadInput.trim().length > 0;
   const status = statusFromRegistration(phone.regState, Boolean(phone.error));
   const cleanError = friendlyError(phone.error, phone.diag.micPermission, phone.regState);
@@ -750,8 +781,20 @@ export function FloatingDialer() {
             {isIncoming && (
               <div className="fd-call-state">
                 <span className="fd-eyebrow">Incoming call</span>
-                <MiniAvatar party={phone.remoteParty} />
-                <strong>{phone.remoteParty ?? "Unknown caller"}</strong>
+                <MiniAvatar party={inboundCallerTitle} />
+                <strong>{inboundCallerTitle}</strong>
+                {inboundCallerSubtitle ? (
+                  <span className="fd-caller-sub">{inboundCallerSubtitle}</span>
+                ) : null}
+                {showCrmOpen && matchedInboundCall?.crmProfileUrl ? (
+                  <button
+                    type="button"
+                    className="fd-crm-open"
+                    onClick={() => router.push(matchedInboundCall.crmProfileUrl!)}
+                  >
+                    Open CRM Profile
+                  </button>
+                ) : null}
                 <div className="fd-incoming-actions">
                   <button className="fd-hangup" type="button" onClick={phone.hangup}>Decline</button>
                   <button className="fd-answer" type="button" onClick={phone.answer}>Answer</button>
@@ -762,11 +805,28 @@ export function FloatingDialer() {
             {isActive && (
               <div className="fd-active">
                 <div className="fd-active-party">
-                  <MiniAvatar party={phone.remoteParty} />
+                  <MiniAvatar party={phone.callDirection === "inbound" ? inboundCallerTitle : phone.remoteParty} />
                   <div>
-                    <strong>{phone.remoteParty ?? "Connected"}</strong>
+                    <strong>
+                      {phone.callDirection === "inbound" ? inboundCallerTitle : (phone.remoteParty ?? "Connected")}
+                    </strong>
+                    {phone.callDirection === "inbound" && inboundCallerSubtitle ? (
+                      <span className="fd-caller-sub">{inboundCallerSubtitle}</span>
+                    ) : null}
                     <span>{phone.onHold ? "On hold" : fmt(elapsed)}</span>
                   </div>
+                  {phone.callDirection === "inbound" &&
+                  matchedInboundCall &&
+                  shouldShowCrmInboundQuickAction(matchedInboundCall) &&
+                  matchedInboundCall.crmProfileUrl ? (
+                    <button
+                      type="button"
+                      className="fd-crm-open fd-crm-open-compact"
+                      onClick={() => router.push(matchedInboundCall.crmProfileUrl!)}
+                    >
+                      Open CRM Profile
+                    </button>
+                  ) : null}
                 </div>
 
                 {showDtmf && (
@@ -915,9 +975,13 @@ const DIALER_CSS = `
 .fd-answer { background: linear-gradient(135deg, #22c55e, #059669); }
 .fd-hangup { background: linear-gradient(135deg, #ef4444, #dc2626); min-height: 38px; padding: 0 14px; box-shadow: 0 12px 28px rgba(239,68,68,.24); font-size: 12px; }
 .fd-hangup-wide { width: 100%; }
-.fd-active-party { display: flex; align-items: center; gap: 9px; }
+.fd-active-party { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
 .fd-active-party strong, .fd-active-party span { display: block; }
 .fd-active-party span { color: #22c55e; font-weight: 900; font-size: 13px; margin-top: 3px; }
+.fd-caller-sub { display: block; font-size: 12px; font-weight: 600; color: var(--fd-muted, #94a3b8); margin-top: 2px; font-family: ui-monospace, monospace; }
+.fd-crm-open { margin: 6px 0 2px; width: 100%; min-height: 32px; border-radius: 10px; border: 1px solid rgba(99, 102, 241, 0.35); background: rgba(99, 102, 241, 0.12); color: #4f46e5; font-weight: 800; font-size: 12px; cursor: pointer; }
+.fd-crm-open-compact { width: auto; margin: 0 0 0 auto; padding: 0 10px; flex-shrink: 0; }
+.fd-crm-open:hover { background: rgba(99, 102, 241, 0.2); }
 .fd-controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .fd-control { min-height: 36px; border: 1px solid var(--fd-border); border-radius: 12px; color: var(--fd-text); background: var(--fd-card-2); cursor: pointer; font-weight: 850; font-size: 11px; }
 .fd-control[data-active="true"] { color: #fff; border-color: transparent; background: linear-gradient(135deg, #6366f1, #8b5cf6); }

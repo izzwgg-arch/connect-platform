@@ -2,6 +2,15 @@
 
 Scope: portal CRM UI/data-flow guardrails. Telephony, billing, workers, database schema, and onboarding are out of scope unless a task explicitly says otherwise.
 
+## Inbound call caller ID (telephony WS)
+
+- Matching is **server-side only** (`apps/api/src/crm/inboundCallerMatch.ts`). Telephony calls `POST /internal/telephony/inbound-crm-match` with `CDR_INGEST_SECRET` (same as CDR ingest).
+- **Tenant isolation:** all `ContactPhone` queries include `contact.tenantId`.
+- **Per-user fields:** telephony enriches each WebSocket client separately; users without CRM access or campaign assignment do not receive `crmContactId` / name / profile URL.
+- **Match order:** exact normalized phone → other `ContactPhone` rows on the contact → safe last-10 suffix (NANP only).
+- **Portal:** optional WS fields on `LiveCall` — `crmContactName` overrides PBX `fromName` in Connect UI only (PBX caller ID unchanged). Floating dialer quick action: **Open CRM Profile** when `crmContactId` + `crmProfileUrl` present on inbound calls.
+- **Do not** rely on client-only `GET /crm/contacts/lookup` for live call identity when WS enrichment is enabled (`CrmScreenPop` prefers WS fields).
+
 ## Lead timezone (city/state → stored timezone)
 
 - Every CRM lead should have city + state on a `ContactAddress` (import or API). Timezone is **derived server-side** and stored on `CrmContactMeta` — do not compute in the portal for filtering.
