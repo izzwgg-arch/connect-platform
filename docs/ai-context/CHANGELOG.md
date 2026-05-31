@@ -4,6 +4,34 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-05-31 — CRM campaign workspace UI polish
+
+**Task:** CRM / campaign workspace / UI polish  
+**Risk:** medium
+
+### Root cause
+
+After the quick disposition rollout, the sticky header duplicated communication actions already available in the left workspace nav, secondary contact actions sat below the KPI strip, the Quick Disposition card consumed too much right-rail height, and timeline rows used bordered edit/delete controls with generous vertical spacing — pushing Relationship Health and other right-rail cards below the fold.
+
+### What changed
+
+- **Header:** removed SMS, Email, and Note from `ContactCampaignStickyHeader`; Call stays top-right. Voicemail Drop, Edit, and Archive moved to the header action cluster on the right.
+- **Quick Disposition card:** compact layout — active phone, last disposition, four primary one-click buttons, expandable **More…** for remaining labels, and **Manage** for custom dispositions. Removed title, subtitle, channel selector row, and note field from the card (channel still follows Call/SMS/Email/VM outreach context).
+- **Timeline:** icon-only note edit/delete (✏️ / 🗑️, no button borders); reduced event padding and inter-event gap for higher density.
+- **Right rail:** tighter spacing below the disposition slot so Relationship Health, Activity Summary, and downstream cards appear sooner.
+
+### Deliberately unchanged
+
+- Workspace three-column layout, left sidebar navigation, disposition API, permissions, and all workspace tabs (Email, SMS, Notes, etc.).
+
+### Verify
+
+- Call button remains in header; SMS/Email/Note reachable via left nav only.
+- Quick Disposition card is ~70% shorter; right-rail summary cards visible with less scroll.
+- One-click dispositions still save; timeline updates with phone/channel metadata.
+
+---
+
 ## 2026-05-31 — CRM campaign workspace disposition redesign
 
 **Task:** CRM / campaign workspace / disposition redesign  

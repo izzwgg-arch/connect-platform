@@ -75,7 +75,7 @@ export function ContactTimeline({
             }
           />
         ) : (
-          <div className="flex flex-col gap-2.5">
+          <div className="flex flex-col gap-1">
             {events.map((event) => (
               <ContactTimelineItem
                 key={event.id}

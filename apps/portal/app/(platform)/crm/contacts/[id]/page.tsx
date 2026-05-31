@@ -5,7 +5,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft, Phone, Mail, Clock, User, MessageSquareDot, Trash2,
   Circle, Plus, CheckCheck, GitMerge, AlertTriangle, Calendar,
-  ChevronRight, Sparkles, Star, MoreVertical, Voicemail, NotebookPen,
+  ChevronRight, Sparkles, Star, MoreVertical, NotebookPen,
   FileText, Files, ListTodo, ClipboardCheck, Activity, ScanText, Brain,
 } from "lucide-react";
 import {
@@ -2367,12 +2367,14 @@ function CrmContactDetailInner() {
           campaignName={campaignName}
           isArchived={isArchived}
           onCall={beginCall}
-          onSms={beginSms}
-          onEmail={openEmailWorkspace}
-          onNote={scrollToNoteComposer}
           callDisabled={!primaryPhone || isArchived}
-          smsDisabled={contact.doNotSms || contact.phones.length === 0 || isArchived}
-          emailDisabled={!primaryEmailRow || isArchived}
+          onVoicemailDrop={openVoicemailDrop}
+          voicemailDropDisabled={contact.doNotCall || contact.phones.length === 0 || isArchived}
+          onEdit={() => setEditing(true)}
+          onArchive={handleArchiveContact}
+          onRestore={handleRestoreContact}
+          archivePosting={archivePosting}
+          restorePosting={restorePosting}
         >
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <HeaderMetric label="Stage" value={stageLabel(stage)} tone="violet" />
@@ -2380,27 +2382,9 @@ function CrmContactDetailInner() {
             <HeaderMetric label="Last Touch" value={lastInteractionAt ? formatTimeAgo(lastInteractionAt) : "None"} tone="slate" />
             <HeaderMetric label="Owner" value={ownerLabel} tone="slate" />
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            {sipNotice ? <span className="text-xs font-medium text-crm-warning">{sipNotice}</span> : null}
-            {!isArchived ? (
-              <>
-                <button type="button" className={cn(crm.btnSecondary, "py-1 text-xs")} onClick={openVoicemailDrop} disabled={contact.doNotCall || contact.phones.length === 0}>
-                  <Voicemail className="h-3.5 w-3.5" />
-                  Voicemail drop
-                </button>
-                <button type="button" className={cn(crm.btnSecondary, "py-1 text-xs")} onClick={() => setEditing(true)}>
-                  Edit
-                </button>
-                <button type="button" className={cn(crm.btnGhost, "py-1 text-xs")} onClick={handleArchiveContact} disabled={archivePosting}>
-                  {archivePosting ? "Archiving..." : "Archive"}
-                </button>
-              </>
-            ) : (
-              <button type="button" className={cn(crm.btnSecondary, "py-1 text-xs")} onClick={handleRestoreContact} disabled={restorePosting}>
-                {restorePosting ? "Restoring..." : "Restore"}
-              </button>
-            )}
-          </div>
+          {sipNotice ? (
+            <p className="mt-2 text-xs font-medium text-crm-warning">{sipNotice}</p>
+          ) : null}
         </ContactCampaignStickyHeader>
 
       {editing && !isArchived && (
@@ -2649,7 +2633,7 @@ function CrmContactDetailInner() {
               />
             </div>
           ) : null}
-          <div className={cn(CRM_CONTACT_WORKSPACE_SCROLL_CLASSES.rightRail, "flex flex-col gap-3 pt-3")}>
+          <div className={cn(CRM_CONTACT_WORKSPACE_SCROLL_CLASSES.rightRail, "flex flex-col gap-2 pt-1")}>
           <ContactCollapsibleSection
             id="right-rail-relationship"
             title="Relationship health"

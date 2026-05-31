@@ -10,10 +10,8 @@ import {
   Mail,
   MessageSquare,
   MessageSquareDot,
-  Pencil,
   PhoneIncoming,
   PhoneOutgoing,
-  Trash2,
   User,
   UserPlus,
   ClipboardList,
@@ -26,8 +24,8 @@ import type { TimelineEvent } from "./contactTypes";
 import { formatDateTime } from "./contactFormatters";
 
 function TimelineIcon({ type }: { type: string }) {
-  const sz = 15;
-  const wrap = "h-4 w-4";
+  const sz = 13;
+  const wrap = "h-3.5 w-3.5";
   if (type === "NOTE_ADDED" || type === "NOTE_EDITED")
     return <MessageSquare className={cn(wrap, "text-crm-accent")} size={sz} />;
   if (type === "STAGE_CHANGED")
@@ -101,33 +99,33 @@ export function ContactTimelineItem({
   return (
     <article
       className={cn(
-        "group relative flex gap-3 rounded-2xl border px-3 py-2.5 transition-colors sm:px-4",
+        "group relative flex gap-2 rounded-xl border px-2.5 py-1.5 transition-colors sm:px-3",
         isComm
           ? "border-crm-accent/20 bg-crm-accent/6 hover:border-crm-accent/35"
           : "border-crm-border/70 bg-crm-surface/90 hover:bg-crm-surface-2/40",
       )}
     >
       <div
-        className="absolute bottom-3 left-[1.35rem] top-10 w-px bg-crm-border/60 group-last:hidden"
+        className="absolute bottom-2 left-[1.1rem] top-8 w-px bg-crm-border/60 group-last:hidden"
         aria-hidden
       />
       <TimelineIconBox type={event.type} />
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <span className="text-sm font-semibold text-crm-text">{event.title}</span>
-            {chip ? <span className={crm.chip}>{chip}</span> : null}
+        <div className="flex flex-wrap items-start justify-between gap-1.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <span className="text-sm font-semibold leading-snug text-crm-text">{event.title}</span>
+            {chip ? <span className={cn(crm.chip, "py-0 text-[10px]")}>{chip}</span> : null}
           </div>
-          <time className="shrink-0 text-xs tabular-nums text-crm-muted">
+          <time className="shrink-0 text-[11px] tabular-nums text-crm-muted">
             {formatDateTime(event.createdAt)}
           </time>
         </div>
         {isDeleted ? (
-          <p className="mt-1 text-sm italic text-crm-muted">(note deleted)</p>
+          <p className="mt-0.5 text-sm italic text-crm-muted">(note deleted)</p>
         ) : event.body ? (
           <p
             className={cn(
-              "mt-1.5 text-sm leading-relaxed text-crm-text",
+              "mt-0.5 text-sm leading-snug text-crm-text",
               isNote ? "whitespace-pre-wrap" : "",
             )}
           >
@@ -135,9 +133,9 @@ export function ContactTimelineItem({
           </p>
         ) : null}
         <EventMeta event={event} />
-        <div className="mt-2 flex flex-wrap items-center gap-2">
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
           {event.createdBy ? (
-            <span className="text-xs text-crm-muted">{event.createdBy.displayName}</span>
+            <span className="text-[11px] text-crm-muted">{event.createdBy.displayName}</span>
           ) : null}
           {allowNoteMutations &&
             isNote &&
@@ -149,17 +147,17 @@ export function ContactTimelineItem({
                   type="button"
                   onClick={() => onEditNote(event.linkedId!, event.body ?? "")}
                   title="Edit note"
-                  className="rounded p-0.5 text-crm-muted hover:bg-crm-surface-2 hover:text-crm-text"
+                  className="border-0 bg-transparent p-0 text-sm leading-none opacity-50 transition-opacity hover:opacity-100"
                 >
-                  <Pencil size={11} />
+                  ✏️
                 </button>
                 <button
                   type="button"
                   onClick={() => onDeleteNote(event.linkedId!)}
                   title="Delete note"
-                  className="rounded p-0.5 text-crm-danger hover:bg-crm-danger/10"
+                  className="border-0 bg-transparent p-0 text-sm leading-none opacity-50 transition-opacity hover:opacity-100"
                 >
-                  <Trash2 size={11} />
+                  🗑️
                 </button>
               </>
             )}
@@ -171,14 +169,14 @@ export function ContactTimelineItem({
 
 function TimelineIconBox({ type }: { type: string }) {
   return (
-    <div className="relative z-[1] flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-crm-border/70 bg-crm-surface-2 shadow-[0_10px_24px_-20px_rgba(15,23,42,0.9)]">
+    <div className="relative z-[1] flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-crm-border/60 bg-crm-surface-2">
       <TimelineIcon type={type} />
     </div>
   );
 }
 
 function MetaRow({ children }: { children: ReactNode }) {
-  return <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">{children}</div>;
+  return <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">{children}</div>;
 }
 
 function EventMeta({ event }: { event: TimelineEvent }) {
@@ -215,16 +213,16 @@ function EventMeta({ event }: { event: TimelineEvent }) {
     return (
       <MetaRow>
         {displayNumber ? (
-          <span className="font-mono text-xs text-crm-text">{displayNumber}</span>
+          <span className="font-mono text-[11px] text-crm-text">{displayNumber}</span>
         ) : null}
         {talkSec > 0 ? (
-          <span className="text-xs text-crm-muted">
+          <span className="text-[11px] text-crm-muted">
             {Math.floor(talkSec / 60)}m {talkSec % 60}s
           </span>
         ) : null}
         <span
           className={cn(
-            "rounded px-1.5 py-0.5 text-[0.6875rem] font-semibold uppercase",
+            "rounded px-1 py-0 text-[0.625rem] font-semibold uppercase",
             answered
               ? "bg-crm-success/15 text-crm-success"
               : "bg-crm-danger/15 text-crm-danger",
@@ -245,9 +243,9 @@ function EventMeta({ event }: { event: TimelineEvent }) {
     const provider = typeof m.provider === "string" ? m.provider : null;
     return (
       <MetaRow>
-        {to ? <span className="font-mono text-xs text-crm-text">→ {to}</span> : null}
-        {from ? <span className="text-xs text-crm-muted">from {from}</span> : null}
-        {provider ? <span className={crm.chip}>{provider.toLowerCase()}</span> : null}
+        {to ? <span className="font-mono text-[11px] text-crm-text">→ {to}</span> : null}
+        {from ? <span className="text-[11px] text-crm-muted">from {from}</span> : null}
+        {provider ? <span className={cn(crm.chip, "py-0 text-[10px]")}>{provider.toLowerCase()}</span> : null}
       </MetaRow>
     );
   }
@@ -256,8 +254,8 @@ function EventMeta({ event }: { event: TimelineEvent }) {
     const to = typeof m.to === "string" ? m.to : null;
     return (
       <MetaRow>
-        {to ? <span className="font-mono text-xs text-crm-text">→ {to}</span> : null}
-        <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[0.6875rem] font-semibold text-emerald-300">
+        {to ? <span className="font-mono text-[11px] text-crm-text">→ {to}</span> : null}
+        <span className="rounded bg-emerald-500/15 px-1 py-0 text-[0.625rem] font-semibold text-emerald-300">
           sent
         </span>
       </MetaRow>
@@ -269,9 +267,9 @@ function EventMeta({ event }: { event: TimelineEvent }) {
     const to = typeof m.to === "string" ? m.to : null;
     return (
       <MetaRow>
-        {from ? <span className="font-mono text-xs text-crm-text">from {from}</span> : null}
-        {to ? <span className="text-xs text-crm-muted">→ {to}</span> : null}
-        <span className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[0.6875rem] font-semibold text-violet-300">
+        {from ? <span className="font-mono text-[11px] text-crm-text">from {from}</span> : null}
+        {to ? <span className="text-[11px] text-crm-muted">→ {to}</span> : null}
+        <span className="rounded bg-violet-500/15 px-1 py-0 text-[0.625rem] font-semibold text-violet-300">
           inbound
         </span>
       </MetaRow>
@@ -283,8 +281,8 @@ function EventMeta({ event }: { event: TimelineEvent }) {
     const status = typeof m.status === "string" ? m.status : "Voicemail Dropped";
     return (
       <MetaRow>
-        {duration ? <span className="text-xs text-crm-muted">{Math.floor(duration / 60)}m {duration % 60}s</span> : null}
-        <span className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[0.6875rem] font-semibold text-violet-300">
+        {duration ? <span className="text-[11px] text-crm-muted">{Math.floor(duration / 60)}m {duration % 60}s</span> : null}
+        <span className="rounded bg-violet-500/15 px-1 py-0 text-[0.625rem] font-semibold text-violet-300">
           {status}
         </span>
       </MetaRow>

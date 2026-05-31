@@ -16978,10 +16978,12 @@ table tr:hover {
   position: sticky;
   top: 0;
   z-index: 15;
+  margin-bottom: 0.25rem;
 }
 
 .crm-contact-detail-workspace .crm-contact-quick-disposition-card {
-  box-shadow: 0 16px 40px -24px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 8px 20px -16px rgba(0, 0, 0, 0.35);
+  padding: 0.5rem 0.625rem;
 }
 
 @media (min-width: 1024px) {
