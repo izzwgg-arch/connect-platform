@@ -4,6 +4,37 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-05-31 — Connect Chat SMS reliability polish
+
+**Task:** chat / SMS / UI reliability / performance  
+**Risk:** high
+
+### Root cause
+
+The `/chat` page used a flexible two-column layout without a bounded height or inner scroll regions, so the full page became the scroll container and the conversation header/composer scrolled away. Background polling also replaced the whole message array and unconditionally scrolled to the bottom on message-count changes, causing visible refresh churn and yanking users while reading older SMS history.
+
+### Changes
+
+- **Shell:** `/chat` now uses a bounded split-pane shell: thread list scrolls independently, message list scrolls independently, and the header/composer stay pinned inside the conversation panel.
+- **Refresh stability:** message loads merge by ID and preserve existing rows where content is unchanged; active thread selection is preserved across thread refreshes.
+- **Scroll behavior:** auto-scroll only happens on initial open, user send/manual refresh, or new messages when the user is already near the bottom. Reading position is preserved during background updates.
+- **Presentation:** bubbles are more compact, outgoing messages use a branded blue treatment, URLs wrap as compact links, media thumbnails are capped, and voice notes blend into the bubble instead of rendering as neutral white boxes.
+- **Tests:** focused helper tests cover merge de-duplication, selected thread preservation, scroll decisions, bubble class selection, CRM/shared SMS badge helpers, and media/audio presentation classes.
+
+### Manual QA
+
+- Open `/chat`, select a long SMS conversation, and confirm the sidebar, header, message list, and composer behave as separate panes on desktop.
+- Scroll up, wait for background refresh, and confirm there is no blanking or forced jump to bottom.
+- Send a message and confirm it appears without a full visual reload.
+- Confirm links, photos/MMS, and voice notes remain compact and readable in both incoming and outgoing bubbles.
+- Confirm mobile still allows returning to the thread list and keeps the composer reachable.
+
+### Rollback
+
+Revert the `/chat` portal component/helper/CSS changes plus this docs entry. No backend routing, provider behavior, permissions, or database schema changed.
+
+---
+
 ## 2026-05-31 — CRM SMS unified with Connect Chat
 
 **Task:** CRM / SMS / Connect Chat integration

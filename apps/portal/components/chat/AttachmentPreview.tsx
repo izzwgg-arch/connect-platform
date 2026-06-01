@@ -2,6 +2,7 @@
 
 import { Download, FileText, Mic, Pause, Play, Video } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { attachmentToneClass } from "./chatPresentation";
 import type { ChatAttachment } from "./types";
 import { formatBytes } from "./formatting";
 
@@ -21,11 +22,9 @@ function formatDurationMs(durationMs?: number | null): string {
  */
 function ImageBubble({ attachment }: { attachment: ChatAttachment }) {
   const aspect = attachment.width && attachment.height ? attachment.width / attachment.height : 4 / 3;
-  // Capped at 70% of the message-bubble width budget (the bubble itself
-  // already maxes at ~520 px in the portal layout).
-  const maxWidth = 360;
-  const width = Math.min(maxWidth, 360);
-  const height = Math.min(width / aspect, width * 1.4);
+  const maxWidth = 260;
+  const width = attachment.width ? Math.min(maxWidth, Math.max(160, attachment.width)) : maxWidth;
+  const height = Math.min(width / aspect, 260);
   if (!attachment.downloadUrl) {
     return (
       <div
@@ -45,7 +44,7 @@ function ImageBubble({ attachment }: { attachment: ChatAttachment }) {
       <img
         src={attachment.downloadUrl}
         alt={attachment.fileName}
-        style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 18, display: "block" }}
+        style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "inherit", display: "block" }}
         loading="lazy"
       />
     </a>
@@ -79,7 +78,7 @@ function VoiceNotePlayer({ attachment }: { attachment: ChatAttachment }) {
 
   if (!attachment.downloadUrl) {
     return (
-      <div className="cc-attach cc-voicenote">
+      <div className={`cc-attach cc-voicenote ${attachmentToneClass(attachment)}`}>
         <Mic size={16} />
         <span>Voice note unavailable</span>
       </div>
@@ -87,7 +86,7 @@ function VoiceNotePlayer({ attachment }: { attachment: ChatAttachment }) {
   }
 
   return (
-    <div className="cc-attach cc-voicenote">
+    <div className={`cc-attach cc-voicenote ${attachmentToneClass(attachment)}`}>
       <button
         type="button"
         className="cc-voicenote-play"
@@ -153,14 +152,14 @@ export function AttachmentPreview({ attachment, compact = false }: { attachment:
   if (href && isImage) return <ImageBubble attachment={attachment} />;
   if (href && isVideo) {
     return (
-      <div className="cc-attach cc-attach-media">
+      <div className={`cc-attach cc-attach-media ${attachmentToneClass(attachment)}`}>
         <video src={href} controls preload="metadata" />
       </div>
     );
   }
 
   return (
-    <a href={href} target="_blank" rel="noreferrer" className={`cc-attach cc-attach-file${compact ? " compact" : ""}`}>
+    <a href={href} target="_blank" rel="noreferrer" className={`cc-attach cc-attach-file ${attachmentToneClass(attachment)}${compact ? " compact" : ""}`}>
       {mime === "application/pdf" ? <FileText size={18} /> : isVideo ? <Video size={18} /> : isAudio ? <Play size={18} /> : <Download size={18} />}
       <span className="cc-attach-file-meta">
         <strong>{attachment.fileName}</strong>

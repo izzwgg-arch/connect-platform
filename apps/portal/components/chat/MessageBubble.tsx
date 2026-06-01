@@ -1,8 +1,9 @@
 "use client";
 
 import { Check, MoreHorizontal, Pencil, Reply, Smile, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { AttachmentPreview } from "./AttachmentPreview";
+import { messageBubbleClass, messageRowClass, splitMessageBody } from "./chatPresentation";
 import { fmtChatTime, mapUrl } from "./formatting";
 import type { ChatAttachment, ChatMessage } from "./types";
 import { QUICK_REACTIONS } from "./types";
@@ -60,7 +61,7 @@ function mmsUrlToAttachment(url: string, messageId: string, index: number): Chat
   };
 }
 
-export function MessageBubble({
+export const MessageBubble = memo(function MessageBubble({
   message,
   onReact,
   onRemoveReaction,
@@ -80,6 +81,7 @@ export function MessageBubble({
   const [menuOpen, setMenuOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const deleted = Boolean(message.deletedForEveryoneAt);
+  const bodyParts = useMemo(() => splitMessageBody(message.body), [message.body]);
   /** Raw VoIP.ms MMS URLs are redundant once mirrored into `attachments` — avoid double stack + empty image cells. */
   const mmsUrlsEffective =
     (message.attachments?.length ?? 0) > 0
@@ -100,11 +102,11 @@ export function MessageBubble({
   }, [menuOpen]);
 
   return (
-    <div className={`cc-msg-row ${message.mine ? "mine" : "theirs"}`}>
+    <div className={messageRowClass(message)}>
       <div className="cc-msg-wrap" ref={wrapRef}>
         {!message.mine ? <div className="cc-msg-sender">{message.senderName}</div> : null}
         <div
-          className={`cc-bubble ${message.mine ? "mine" : "theirs"} ${deleted ? "deleted" : ""}`}
+          className={messageBubbleClass(message)}
           onContextMenu={(e) => { e.preventDefault(); setMenuOpen(true); }}
         >
           {message.replyTo ? (
@@ -118,7 +120,17 @@ export function MessageBubble({
             <em>This message was deleted</em>
           ) : (
             <>
-              {message.body ? <div className="cc-msg-body">{message.body}</div> : null}
+              {message.body ? (
+                <div className="cc-msg-body">
+                  {bodyParts.map((part, index) => part.type === "url" ? (
+                    <a key={`${part.value}-${index}`} className="cc-msg-link" href={part.value} target="_blank" rel="noreferrer">
+                      {part.value}
+                    </a>
+                  ) : (
+                    <span key={`${index}-${part.value}`}>{part.value}</span>
+                  ))}
+                </div>
+              ) : null}
               {message.location ? (
                 <a href={mapUrl(message.location.lat, message.location.lng)} target="_blank" rel="noreferrer" className="cc-location-card">
                   <strong>{message.location.label || "Shared location"}</strong>
@@ -128,7 +140,7 @@ export function MessageBubble({
               {mmsUrlsEffective.length ? (
                 <div className="cc-attach-stack">
                   {mmsUrlsEffective.map((url, idx) => (
-                    <AttachmentPreview key={url} attachment={mmsUrlToAttachment(url, message.id, idx)} />
+                    <AttachmentPreview key={`${url}-${idx}`} attachment={mmsUrlToAttachment(url, message.id, idx)} />
                   ))}
                 </div>
               ) : null}
@@ -183,4 +195,4 @@ export function MessageBubble({
       </div>
     </div>
   );
-}
+});

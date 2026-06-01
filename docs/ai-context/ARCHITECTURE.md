@@ -54,6 +54,12 @@ CRM SMS unification (2026-05-31)
 - The CRM SMS panel reads messages from the matching Connect Chat SMS thread. CRM timeline SMS events remain optional mirrors for activity history, not a second message store.
 - Chat thread list decoration is viewer-specific: `CRM SMS` badge and contact/company title are returned only when CRM is enabled and the viewer has CRM/contact access to exactly one matching contact. Ambiguous or unauthorized matches fall back to phone-only SMS labels.
 
+Portal chat shell reliability (2026-05-31)
+- `/chat` is a bounded split-pane shell: left thread list, conversation header, message list, and composer are separate layout regions. On desktop the page itself should not become the chat scroll container; `.cc-thread-list` and `.cc-message-list` own scrolling.
+- Background refreshes preserve the selected thread and merge messages by ID instead of blanking or replacing the visible message tree unnecessarily.
+- Scroll behavior is user-position aware: initial thread open, manual refresh, and user send scroll to the newest message; inbound/background messages only auto-scroll when the viewer is already near the bottom.
+- Media rendering remains on the shared signed attachment URLs. Portal presentation caps thumbnails/video size and renders audio/voice notes as compact chat media without changing attachment security or tenant scoping.
+
 Mobile (apps/mobile)
 - `ChatTab.tsx`
   - Conversation list uses server-provided `unread` values.

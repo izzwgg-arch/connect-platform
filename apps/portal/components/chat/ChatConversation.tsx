@@ -1,8 +1,9 @@
 "use client";
 
 import { ArrowLeft, Phone, RefreshCcw } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { useSipPhone } from "../../hooks/useSipPhone";
+import { isNearScrollBottom, shouldAutoScroll, shouldPreserveScrollOffset, type ChatScrollIntent } from "./chatState";
 import { ChatComposer } from "./ChatComposer";
 import { MessageBubble } from "./MessageBubble";
 import { crmSmsBadge, initials, smsInboxBadge, threadLabel } from "./formatting";
@@ -29,6 +30,7 @@ export function ChatConversation({
   sending,
   onBack,
   onRefresh,
+  scrollIntent,
   canSendMessages = true,
 }: {
   thread: ChatThread | null;
@@ -51,15 +53,49 @@ export function ChatConversation({
   sending: boolean;
   onBack: () => void;
   onRefresh: () => void;
+  scrollIntent: ChatScrollIntent;
   /** When false, composer is hidden (e.g. view-only shared SMS). */
   canSendMessages?: boolean;
 }) {
   const phone = useSipPhone();
-  const endRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLElement | null>(null);
+  const previousThreadId = useRef<string | null>(null);
+  const previousCount = useRef(0);
+  const previousScrollHeight = useRef(0);
+  const wasNearBottom = useRef(true);
 
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages.length, thread?.id]);
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list || !thread) return;
+
+    const threadChanged = previousThreadId.current !== thread.id;
+    const priorScrollHeight = previousScrollHeight.current;
+    const priorCount = previousCount.current;
+    const nearBottomBeforeUpdate = threadChanged ? true : wasNearBottom.current;
+
+    if (shouldAutoScroll({
+      reason: scrollIntent.reason,
+      threadChanged,
+      wasNearBottom: nearBottomBeforeUpdate,
+      previousCount: priorCount,
+      nextCount: messages.length,
+    })) {
+      list.scrollTop = list.scrollHeight;
+    } else if (shouldPreserveScrollOffset({
+      reason: scrollIntent.reason,
+      threadChanged,
+      wasNearBottom: nearBottomBeforeUpdate,
+      previousScrollHeight: priorScrollHeight,
+      nextScrollHeight: list.scrollHeight,
+    })) {
+      list.scrollTop += list.scrollHeight - priorScrollHeight;
+    }
+
+    previousThreadId.current = thread.id;
+    previousCount.current = messages.length;
+    previousScrollHeight.current = list.scrollHeight;
+    wasNearBottom.current = isNearScrollBottom(list);
+  }, [messages, scrollIntent, thread]);
 
   if (!thread) {
     return (
@@ -93,11 +129,18 @@ export function ChatConversation({
         </div>
         <button type="button" className="cc-icon-btn" onClick={onRefresh} title="Refresh"><RefreshCcw size={17} /></button>
         {thread.participantExtension ? (
-          <button type="button" className="cc-call-btn" onClick={() => phone.dial(thread.participantExtension)}><Phone size={16} /> Call</button>
+          <button type="button" className="cc-call-btn" onClick={() => phone.dial(thread.participantExtension)}><Phone size={16} /> <span>Call</span></button>
         ) : null}
       </header>
 
-      <section className="cc-message-list">
+      <section
+        className="cc-message-list"
+        ref={listRef}
+        onScroll={(event) => {
+          wasNearBottom.current = isNearScrollBottom(event.currentTarget);
+          previousScrollHeight.current = event.currentTarget.scrollHeight;
+        }}
+      >
         {loading && messages.length === 0 ? (
           <div className="cc-empty-mini">Loading messages...</div>
         ) : messages.length === 0 ? (
@@ -114,7 +157,6 @@ export function ChatConversation({
             onDeleteEveryone={() => onDeleteEveryone(message)}
           />
         ))}
-        <div ref={endRef} />
       </section>
 
       <ChatComposer

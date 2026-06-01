@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { ChatConversation } from "../../../components/chat/ChatConversation";
 import { ChatInbox } from "../../../components/chat/ChatInbox";
 import { NewChatDialog } from "../../../components/chat/NewChatDialog";
+import { mergeChatMessages, resolveActiveThread, type ChatScrollIntent, type ChatScrollReason } from "../../../components/chat/chatState";
 import type { ChatDirectoryUser, ChatMessage, ChatThread, PendingAttachment } from "../../../components/chat/types";
 import { apiDelete, apiGet, apiPatch, apiPost, apiUploadChatAttachment } from "../../../services/apiClient";
 
@@ -18,9 +19,7 @@ export default function ChatPage() {
   const [activeThread, setActiveThread] = useState<ChatThread | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
-  const [pendingAttachments, setPendingAttachments] = useState<
-    Array<{ storageKey: string; mimeType: string; sizeBytes: number; fileName: string }>
-  >([]);
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [sending, setSending] = useState(false);
   const [search, setSearch] = useState("");
   const [showNewChat, setShowNewChat] = useState(false);
@@ -29,8 +28,12 @@ export default function ChatPage() {
   const [pendingThreadId, setPendingThreadId] = useState<string | null>(null);
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
   const [messageLoading, setMessageLoading] = useState(false);
+  const [scrollIntent, setScrollIntent] = useState<ChatScrollIntent>({ reason: "initial", token: 0 });
   const [toast, setToast] = useState("");
   const [handledExt, setHandledExt] = useState("");
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const messageRequestSeq = useRef(0);
+  const loadedThreadId = useRef<string | null>(null);
 
   const threadsState = useAsyncResource<{ threads: ChatThread[] }>(
     () => apiGet("/chat/threads"),
@@ -38,7 +41,7 @@ export default function ChatPage() {
   );
   const directoryState = useAsyncResource<{ users: ChatDirectoryUser[] }>(
     () => apiGet("/chat/directory"),
-    [tenantId, adminScope, threadReload]
+    [tenantId, adminScope]
   );
 
   const threads: ChatThread[] = threadsState.status === "success"
@@ -57,27 +60,41 @@ export default function ChatPage() {
     );
   }, [threads, search]);
 
-  const loadMessages = useCallback(async () => {
-    if (!activeThread) return;
-    setMessageLoading(true);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  const loadMessages = useCallback(async (threadId: string, reason: ChatScrollReason = "background") => {
+    const requestId = ++messageRequestSeq.current;
+    const isThreadSwitch = loadedThreadId.current !== threadId;
+    if (isThreadSwitch || messagesRef.current.length === 0) setMessageLoading(true);
     try {
-      const res = await apiGet<{ messages: ChatMessage[] }>(`/chat/threads/${activeThread.id}/messages`);
-      setMessages(res.messages ?? []);
+      const res = await apiGet<{ messages: ChatMessage[] }>(`/chat/threads/${threadId}/messages`);
+      if (requestId !== messageRequestSeq.current) return;
+      const nextMessages = res.messages ?? [];
+      setMessages((prev) => isThreadSwitch ? nextMessages : mergeChatMessages(prev, nextMessages));
+      loadedThreadId.current = threadId;
+      setScrollIntent({ reason: isThreadSwitch ? "initial" : reason, token: Date.now() });
     } catch {
-      setMessages([]);
+      if (requestId === messageRequestSeq.current && messagesRef.current.length === 0) setMessages([]);
     } finally {
-      setMessageLoading(false);
+      if (requestId === messageRequestSeq.current) setMessageLoading(false);
     }
-  }, [activeThread]);
+  }, []);
 
   useEffect(() => {
-    loadMessages();
-  }, [loadMessages, msgReload]);
+    if (!activeThread) return;
+    loadMessages(activeThread.id, "initial");
+  }, [activeThread?.id, loadMessages]);
+
+  useEffect(() => {
+    if (!activeThread || msgReload === 0 || loadedThreadId.current !== activeThread.id) return;
+    loadMessages(activeThread.id, "background");
+  }, [msgReload, activeThread?.id, loadMessages]);
 
   useEffect(() => {
     setActiveThread((current) => {
-      if (!current) return threads[0] || null;
-      return threads.find((t) => t.id === current.id) || current;
+      return resolveActiveThread(current, threads, pendingThreadId);
     });
     if (pendingThreadId) {
       const found = threads.find((t) => t.id === pendingThreadId);
@@ -133,6 +150,7 @@ export default function ChatPage() {
       if (options?.location) payload.location = options.location;
       if (reply) payload.replyToMessageId = reply.id;
       await apiPost(`/chat/threads/${activeThread.id}/messages`, payload);
+      setScrollIntent({ reason: "send", token: Date.now() });
       setMsgReload((k) => k + 1);
       setThreadReload((k) => k + 1);
     } catch {
@@ -244,7 +262,12 @@ export default function ChatPage() {
         onSend={sendMessage}
         sending={sending}
         onBack={() => setActiveThread(null)}
-        onRefresh={() => { setMsgReload((k) => k + 1); setThreadReload((k) => k + 1); }}
+        scrollIntent={scrollIntent}
+        onRefresh={() => {
+          setScrollIntent({ reason: "manual", token: Date.now() });
+          setMsgReload((k) => k + 1);
+          setThreadReload((k) => k + 1);
+        }}
         canSendMessages={canSendInActiveThread}
       />
       <NewChatDialog
