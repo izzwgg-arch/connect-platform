@@ -721,11 +721,7 @@
 }
 
 .campaigns-table-card {
-  display: flex;
   min-width: 0;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
   overflow: hidden;
   border-radius: 1.5rem;
 }
@@ -766,8 +762,6 @@
 }
 
 .campaigns-table-scroll {
-  min-height: 0;
-  flex: 1;
   overflow-x: auto;
 }
 
@@ -1372,11 +1366,9 @@
     grid-template-columns: 1fr;
   }
   .campaigns-right-rail,
-  .campaign-detail-rail,
-  .crm-workspace-body--split .campaigns-right-rail-scroll {
+  .campaign-detail-rail {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.85rem;
   }
 }
 
@@ -1395,7 +1387,6 @@
   .campaign-detail-kpi-grid,
   .campaigns-right-rail,
   .campaign-detail-rail,
-  .crm-workspace-body--split .campaigns-right-rail-scroll,
   .campaign-detail-mini-stats {
     grid-template-columns: 1fr;
   }
@@ -17326,7 +17317,6 @@ table tr:hover {
 }
 
 .crm-funders-workspace:has(.crm-workspace-shell),
-.crm-campaign-workspace:has(.crm-workspace-shell),
 .crm-checklist-workspace.crm-page-shell:has(.crm-workspace-shell) {
   display: flex;
   flex-direction: column;
@@ -17335,7 +17325,6 @@ table tr:hover {
 }
 
 .crm-funders-workspace:has(.crm-workspace-shell) .crm-funders-inner,
-.crm-campaign-workspace:has(.crm-workspace-shell) .crm-campaign-index-inner,
 .crm-checklist-workspace:has(.crm-workspace-shell) .crm-checklist-inner {
   display: flex;
   min-height: 0;

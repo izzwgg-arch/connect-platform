@@ -28,13 +28,6 @@ import {
 import {
   CRMPageShell,
   CRMActionBar,
-  CRMWorkspaceShell,
-  CRMWorkspaceChrome,
-  CRMWorkspaceBody,
-  CRMWorkspaceMain,
-  CRMWorkspaceContent,
-  CRMWorkspaceScrollRegion,
-  CRMWorkspaceRightRail,
   CampaignGuidedEmpty,
   type CampaignListItem,
   type CampaignReportRow,
@@ -42,7 +35,6 @@ import {
 } from "../../../../components/crm";
 import { crm } from "../../../../components/crm/crmClasses";
 import { mk } from "../../../../components/crm/campaign/campaignCinemaClasses";
-import { campaignsIndexLayout } from "../../../../components/crm/campaign/campaignsIndexLayout";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../services/apiClient";
 import { CrmConfirmModal } from "../../../../components/crm/CrmConfirmModal";
 import { CrmRowActionMenu } from "../../../../components/crm/CrmRowActionMenu";
@@ -545,10 +537,7 @@ export default function CampaignsPage() {
   const listEmptyAfterFilter = !loading && !error && campaigns.length > 0 && filtered.length === 0;
 
   return (
-    <CRMPageShell
-      className={campaignsIndexLayout.pageShell}
-      innerClassName={cn(crm.pageInnerCampaign, campaignsIndexLayout.pageInner, mk.workspace)}
-    >
+    <CRMPageShell innerClassName={cn(mk.pageInner, mk.workspace)}>
       {toast ? (
         <div
           className={cn(
@@ -601,9 +590,7 @@ export default function CampaignsPage() {
         />
       )}
 
-      <CRMWorkspaceShell>
-        <CRMWorkspaceChrome>
-          <header className="campaigns-overview-hero">
+      <header className="campaigns-overview-hero">
             <div className="campaigns-hero-copy">
               <div className="campaigns-hero-icon">
                 <Megaphone className="h-7 w-7" />
@@ -735,8 +722,7 @@ export default function CampaignsPage() {
             Clear filters
           </button>
         </div>
-          </CRMActionBar>
-        </CRMWorkspaceChrome>
+      </CRMActionBar>
 
       {loading ? (
         <p className="py-16 text-center text-sm text-crm-muted">Loading campaigns…</p>
@@ -789,26 +775,24 @@ export default function CampaignsPage() {
           }
         />
       ) : (
-        <CRMWorkspaceBody split>
-          <CRMWorkspaceMain>
-            <CRMWorkspaceContent>
-              <section className={campaignsIndexLayout.tableCard} aria-label="Campaign table">
-                <div className="campaigns-table-head">
-                  <div>
-                    <h2>Campaign portfolio</h2>
-                    <p>Showing {filtered.length} of {campaigns.length} campaigns</p>
-                  </div>
-                  <label className="campaigns-sort-control">
-                    Sort
-                    <select value={sortBy} onChange={(e) => setSortBy(e.target.value as CampaignSort)}>
-                      <option value="status">Status</option>
-                      <option value="updated">Updated</option>
-                      <option value="name">Name</option>
-                    </select>
-                  </label>
-                </div>
-                <CRMWorkspaceScrollRegion className={campaignsIndexLayout.tableScroll}>
-                  <table className="campaigns-table">
+        <div className="campaigns-workspace-grid">
+          <section className="campaigns-table-card" aria-label="Campaign table">
+            <div className="campaigns-table-head">
+              <div>
+                <h2>Campaign portfolio</h2>
+                <p>Showing {filtered.length} of {campaigns.length} campaigns</p>
+              </div>
+              <label className="campaigns-sort-control">
+                Sort
+                <select value={sortBy} onChange={(e) => setSortBy(e.target.value as CampaignSort)}>
+                  <option value="status">Status</option>
+                  <option value="updated">Updated</option>
+                  <option value="name">Name</option>
+                </select>
+              </label>
+            </div>
+            <div className="campaigns-table-scroll">
+              <table className="campaigns-table">
                 <thead>
                   <tr>
                     <th>Campaign</th>
@@ -887,16 +871,11 @@ export default function CampaignsPage() {
                     );
                   })}
                 </tbody>
-                  </table>
-                </CRMWorkspaceScrollRegion>
-              </section>
-            </CRMWorkspaceContent>
-          </CRMWorkspaceMain>
+              </table>
+            </div>
+          </section>
 
-          <CRMWorkspaceRightRail
-            className="campaigns-right-rail"
-            scrollClassName={campaignsIndexLayout.rightRailScroll}
-          >
+          <aside className="campaigns-right-rail" aria-label="Campaign insights">
             <section className="campaigns-rail-card campaigns-health-card">
               <div className="campaigns-rail-heading">
                 <div>
@@ -963,10 +942,9 @@ export default function CampaignsPage() {
               </ul>
               <Link href="/crm/reports" className="campaigns-rail-link">View all activity</Link>
             </section>
-          </CRMWorkspaceRightRail>
-        </CRMWorkspaceBody>
+          </aside>
+        </div>
       )}
-      </CRMWorkspaceShell>
     </CRMPageShell>
   );
 }

@@ -1,8 +1,6 @@
-/** Layout class names for CRM campaigns index (workspace shell + scroll regions). */
+/** Campaigns index uses normal document scroll (no CRMWorkspaceShell trap). */
 export const campaignsIndexLayout = {
-  pageShell: "crm-campaign-workspace w-full min-h-0",
-  pageInner: "crm-campaign-index-inner",
+  workspaceGrid: "campaigns-workspace-grid",
   tableCard: "campaigns-table-card",
   tableScroll: "campaigns-table-scroll",
-  rightRailScroll: "campaigns-right-rail-scroll",
 } as const;
