@@ -3936,14 +3936,25 @@
   border-radius: 0.95rem;
 }
 
+.crm-contacts-workspace .contacts-export-button {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.crm-contacts-workspace .contacts-export-button:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--crm-surface-2) 65%, transparent);
+}
+
 @media (min-width: 1280px) {
   .console-content:has(.crm-contacts-workspace) {
-    overflow: hidden;
+    overflow: auto;
   }
 
   .crm-contacts-inner {
-    max-height: calc(100dvh - var(--topbar-height, 64px));
-    overflow: hidden;
+    max-height: none;
+    overflow: visible;
     padding-top: 0.75rem;
     padding-bottom: 0.75rem;
   }
@@ -3967,7 +3978,7 @@
   .crm-contacts-workspace .contacts-list-shell {
     display: flex;
     flex-direction: column;
-    max-height: min(58dvh, 760px);
+    max-height: min(64dvh, 760px);
   }
 
   .crm-contacts-workspace .contacts-row-list {
@@ -3976,7 +3987,7 @@
   }
 
   .crm-contacts-workspace .contacts-right-rail {
-    max-height: min(58dvh, 760px);
+    max-height: min(64dvh, 760px);
     overflow-y: auto;
     overscroll-behavior: contain;
     padding-right: 0.15rem;

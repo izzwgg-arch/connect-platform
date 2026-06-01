@@ -964,10 +964,9 @@ export default function CrmContactsPage() {
         className={crm.contactsHeaderPanel}
         icon={<Users className="h-6 w-6" aria-hidden />}
         title="Contacts"
-        subtitle="A warmer relationship command center for search, segmentation, live workspace handoff, and clean follow-up operations."
         actions={
           <div className="contacts-hero-actions flex flex-wrap items-center gap-2">
-            <button type="button" onClick={handleExportCsv} className={crm.btnSecondary} disabled={rows.length === 0}>
+            <button type="button" onClick={handleExportCsv} className={cn(crm.btnSecondary, "contacts-export-button")} disabled={rows.length === 0}>
               <Download className="h-4 w-4" />
               Export
             </button>
