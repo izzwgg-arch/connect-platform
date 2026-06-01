@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { BarChart3, CheckCheck, ClipboardList, ListOrdered, Megaphone, Zap } from "lucide-react";
+import { BarChart3, CheckCheck, ClipboardList, ListOrdered, Megaphone } from "lucide-react";
 import { CRMCard } from "../CRMCard";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
@@ -10,47 +10,15 @@ import type { QueueFilter } from "./queueTypes";
 
 export function QueueEmptyOperational({
   filter,
-  powerMode,
   campaignId,
   onClearCampaign,
   onSwitchPending,
-  onExitPower,
 }: {
   filter: QueueFilter;
-  powerMode: boolean;
   campaignId: string | null;
   onClearCampaign: () => void;
   onSwitchPending: () => void;
-  onExitPower?: () => void;
 }) {
-  if (powerMode) {
-    return (
-      <CRMCard padding="none" className={cn("crm-queue-empty-workspace border-crm-success/30 bg-crm-success/5")}>
-        <CompactEmpty
-          icon={<CheckCheck className="h-8 w-8 text-crm-success" />}
-          title="Power session complete"
-          description="No leads in this view. End session or change filters."
-          actions={
-            onExitPower ? (
-              <button type="button" onClick={onExitPower} className={crm.btnPrimary}>
-                Exit power session
-              </button>
-            ) : null
-          }
-        />
-      </CRMCard>
-    );
-  }
-
-  const title =
-    filter === "pending"
-      ? "Caught up on pending"
-      : filter === "due"
-        ? "No due callbacks"
-        : filter === "overdue"
-          ? "No overdue callbacks"
-          : "No upcoming callbacks";
-
   return (
     <CRMCard padding="none" className="crm-queue-empty-workspace">
       <div className="crm-queue-empty-glow" aria-hidden />
@@ -84,7 +52,6 @@ export function QueueEmptyOperational({
             <div className="crm-queue-quick-actions grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
               <QueueQuickAction href="/crm/campaigns?status=ACTIVE" icon={<Megaphone className="h-4 w-4" />} label="Open campaigns" hint="View active campaigns" accent="blue" />
               <QueueQuickAction href="/crm/campaigns" icon={<Megaphone className="h-4 w-4" />} label="Import leads" hint="Create campaign then import" accent="green" />
-              <QueueQuickAction href="/crm/queue?mode=power" icon={<Zap className="h-4 w-4" />} label="Power session" hint="Focus time mode" accent="violet" />
               <QueueQuickAction href="/crm/reports" icon={<BarChart3 className="h-4 w-4" />} label="View reports" hint="See performance" accent="cyan" />
             </div>
           </div>
@@ -101,31 +68,6 @@ export function QueueEmptyOperational({
   );
 }
 
-function CompactEmpty({
-  icon,
-  title,
-  description,
-  actions,
-}: {
-  icon: ReactNode;
-  title: string;
-  description: string;
-  actions?: ReactNode;
-}) {
-  return (
-    <div className="relative z-[1] flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:gap-4">
-      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-crm border border-crm-border/80 bg-crm-surface-2">
-        {icon}
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="text-base font-semibold text-crm-text">{title}</p>
-        <p className="mt-0.5 text-xs text-crm-muted leading-relaxed">{description}</p>
-        {actions ? <div className="mt-3 flex flex-wrap gap-2">{actions}</div> : null}
-      </div>
-    </div>
-  );
-}
-
 function EmptyActions({
   campaignId,
   filter,
@@ -137,6 +79,8 @@ function EmptyActions({
   onClearCampaign: () => void;
   onSwitchPending: () => void;
 }) {
+  if (!campaignId && filter === "pending") return null;
+
   return (
     <div className="mt-4 flex flex-wrap gap-2">
       {campaignId ? (
@@ -149,12 +93,7 @@ function EmptyActions({
           <ListOrdered className="h-4 w-4" />
           View pending
         </button>
-      ) : (
-        <Link href="/crm/queue?mode=power" className={crm.btnPrimary}>
-          <Zap className="h-4 w-4" />
-          Power session
-        </Link>
-      )}
+      ) : null}
     </div>
   );
 }

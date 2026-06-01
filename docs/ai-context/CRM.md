@@ -159,12 +159,12 @@ Pipeline (unchanged): Google Drive match → import (`CrmLeadDocument`) → text
 ## CRM Queue Light Mode
 
 - `/crm/queue` is a premium operational workspace in light mode, scoped by `.crm-queue-shell` and `.crm-queue-workspace`; do not reuse dashboard route classes directly.
-- Preserve the existing queue APIs, hooks, URL filters, power session behavior, SIP actions, campaign filter, and live-call/contact routing. The redesign is presentation and layout only.
-- Queue KPI cards use `QueueCountPill` variants for Pending, Due, Overdue, Upcoming, Completed Today, and Session Efficiency. Do not duplicate these headline counts elsewhere unless the second location adds different action context.
-- Empty state rules: `QueueEmptyOperational` should feel intentional when there is no queue work. It may link only to real routes/actions: `/crm/campaigns`, `/crm/import`, `/crm/queue?mode=power`, `/crm/reports`, clear campaign, or switch pending.
-- Right rail architecture: `QueueOverviewPanel` owns Today's Snapshot and Session; `QueueAttentionPanel` owns Queue Health and Recent Activity. Keep data honest and derived from existing queue/task/campaign stats.
-- Active campaign strip and priority cards belong below the main workspace. They should support real campaign context and queue/task counts without adding backend fields.
-- Responsive behavior: desktop 8+4 layout, tablet two-column right rail, mobile single-column stack. Avoid fixed widths that can create horizontal overflow.
+- Preserve the existing queue APIs, hooks, URL filters, SIP actions, campaign filter, and live-call/contact routing. The redesign is presentation and layout only.
+- Queue KPI cards use `QueueCountPill` variants for Pending, Due, Overdue, Upcoming, Completed Today, and Session Efficiency. Do not duplicate these headline counts in secondary snapshot cards.
+- Empty state rules: `QueueEmptyOperational` should feel intentional when there is no queue work. It may link only to real routes/actions: `/crm/campaigns`, `/crm/import`, `/crm/reports`, clear campaign, or switch pending.
+- Workbench layout: page title, sort/refresh actions, KPI row, and campaign filter live in fixed `CRMWorkspaceChrome`; the center assigned queue/list lives in `CRMWorkspaceScrollRegion` and is the only desktop work area expected to scroll.
+- Right rail architecture: keep a compact `Priority Focus` panel visible beside the list with exactly Due Today, Overdue, Follow Ups, and High Priority cards. Do not reintroduce Today's Snapshot, Session, Queue Health, or Active Campaign summary cards on My Queue.
+- Responsive behavior: desktop split layout, tablet/mobile stacked flow with normal page scroll. Avoid fixed widths that can create horizontal overflow.
 - Dark mode remains operational and token-based. Light-mode polish should stay under queue-scoped CSS so theme toggles do not remount or reset queue state.
 
 ## CRM Scripts Light Mode

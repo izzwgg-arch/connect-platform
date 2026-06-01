@@ -4,6 +4,35 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-05-31 — CRM My Queue workbench simplification
+
+**Task:** CRM / My Queue / UI workbench redesign  
+**Risk:** medium
+
+### Root cause
+
+My Queue had the right fixed-scroll shell, but the center work area still carried dashboard-style sections after the assigned list while the right rail repeated snapshot, session, queue health, and campaign context. That made the page answer "how is everything doing?" instead of "what assigned lead/task should I work next?"
+
+### Changes
+
+- **Workbench focus:** removed My Queue's Power Session, Today's Snapshot, Session, Queue Health, and Active Campaign summary widgets.
+- **Right rail:** moved Priority Focus into the right rail as compact Due Today, Overdue, Follow Ups, and High Priority cards.
+- **Center workspace:** left assigned queue rows and the caught-up empty state as the only center workspace content, inside the existing independent scroll region.
+- **Scope:** portal UI/docs only; no API, database, permissions, routing, or backend behavior changes.
+
+### Manual QA
+
+- Open `/crm/queue` with assigned queue items and confirm the rows render in the center while the header, filters, and KPI row stay visible.
+- Open `/crm/queue` with an empty queue and confirm the caught-up state renders without retired widgets.
+- Confirm the center list scrolls independently on desktop and the compact Priority Focus right rail remains visible.
+- Confirm mobile/tablet stacks remain usable with no horizontal overflow.
+
+### Rollback
+
+Revert the My Queue portal component/CSS deletions and this docs entry. No backend or schema rollback is required.
+
+---
+
 ## 2026-05-31 — Connect Chat SMS reliability polish
 
 **Task:** chat / SMS / UI reliability / performance  

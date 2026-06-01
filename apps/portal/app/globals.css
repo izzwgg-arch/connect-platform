@@ -15031,24 +15031,16 @@ table tr:hover {
 }
 
 /* CRM queue premium light workspace. Dark mode keeps the existing CRM token surfaces. */
-.crm-queue-active-campaign,
 .crm-queue-priority-section {
   min-width: 0;
 }
 
-.crm-queue-active-campaign {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-  border: 1px solid var(--crm-border);
-  border-radius: 18px;
-  background: var(--crm-surface);
-  box-shadow: var(--shadow-crm, 0 10px 30px rgba(0, 0, 0, 0.18));
-  padding: 12px;
+.crm-queue-main-workspace,
+.crm-queue-center-workspace {
+  min-width: 0;
+  min-height: 0;
 }
 
-.crm-queue-active-icon,
 .crm-queue-priority-icon,
 .crm-queue-rail-icon,
 .crm-queue-quick-action-icon {
@@ -15058,15 +15050,6 @@ table tr:hover {
   flex-shrink: 0;
 }
 
-.crm-queue-active-icon {
-  width: 42px;
-  height: 42px;
-  border-radius: 14px;
-  color: var(--crm-accent);
-  background: color-mix(in srgb, var(--crm-accent) 14%, var(--crm-surface-2));
-}
-
-.crm-queue-active-cta,
 .crm-queue-mini-link {
   display: inline-flex;
   align-items: center;
@@ -15081,17 +15064,11 @@ table tr:hover {
   transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
 }
 
-.crm-queue-active-cta {
-  margin-left: auto;
-  padding: 9px 12px;
-}
-
 .crm-queue-mini-link {
   min-width: 0;
   padding: 8px 9px;
 }
 
-.crm-queue-active-cta:hover,
 .crm-queue-mini-link:hover {
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--crm-accent) 38%, var(--crm-border));
@@ -15199,6 +15176,25 @@ table tr:hover {
 
 .crm-queue-priority-card {
   padding: 14px;
+}
+
+.crm-queue-priority-rail {
+  border: 1px solid var(--crm-border);
+  border-radius: 18px;
+  background: var(--crm-surface);
+  box-shadow: var(--shadow-crm, 0 10px 30px rgba(0, 0, 0, 0.18));
+  padding: 12px;
+}
+
+.crm-queue-priority-rail .crm-queue-priority-card {
+  padding: 10px;
+  gap: 9px;
+}
+
+.crm-queue-priority-rail .crm-queue-priority-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
 }
 
 .crm-queue-rail-card {
@@ -15314,7 +15310,6 @@ table tr:hover {
 :root[data-theme="light"] .crm-queue-kpi-card,
 :root[data-theme="light"] .crm-queue-filter-bar,
 :root[data-theme="light"] .crm-queue-empty-workspace,
-:root[data-theme="light"] .crm-queue-active-campaign,
 :root[data-theme="light"] .crm-queue-priority-section,
 :root[data-theme="light"] .crm-queue-rail-card {
   border-color: var(--crm-light-border);
@@ -15438,7 +15433,6 @@ table tr:hover {
 
 :root[data-theme="light"] .crm-queue-quick-action,
 :root[data-theme="light"] .crm-queue-priority-card,
-:root[data-theme="light"] .crm-queue-active-campaign .rounded-crm,
 :root[data-theme="light"] .crm-queue-activity-row,
 :root[data-theme="light"] .crm-queue-mini-link {
   border-color: rgba(209, 194, 174, 0.48);
@@ -15461,22 +15455,6 @@ table tr:hover {
 :root[data-theme="light"] .crm-queue-priority-rose .crm-queue-priority-icon { background: #ffe4e6; color: #e11d48; }
 :root[data-theme="light"] .crm-queue-priority-amber .crm-queue-priority-icon { background: #ffedd5; color: #c2410c; }
 :root[data-theme="light"] .crm-queue-priority-pink .crm-queue-priority-icon { background: #fce7f3; color: #db2777; }
-
-:root[data-theme="light"] .crm-queue-active-campaign {
-  border-radius: 24px;
-  padding: 14px;
-}
-
-:root[data-theme="light"] .crm-queue-active-icon {
-  background: #dbeafe;
-  color: #2563eb;
-}
-
-:root[data-theme="light"] .crm-queue-active-cta {
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.82);
-  color: #1f3b69;
-}
 
 :root[data-theme="light"] .crm-queue-priority-section {
   border: 1px solid var(--crm-light-border);
@@ -15520,16 +15498,6 @@ table tr:hover {
 }
 
 @media (max-width: 720px) {
-  .crm-queue-active-campaign {
-    align-items: stretch;
-  }
-
-  .crm-queue-active-cta {
-    width: 100%;
-    justify-content: center;
-    margin-left: 0;
-  }
-
   :root[data-theme="light"] .crm-queue-inner {
     padding-inline: 14px;
     padding-top: 18px;
