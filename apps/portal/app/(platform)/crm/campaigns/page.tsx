@@ -13,8 +13,10 @@ import {
   Filter,
   Gauge,
   Grid2X2,
+  ListOrdered,
   Megaphone,
   Pause,
+  PhoneCall,
   Plus,
   Search,
   Send,
@@ -26,7 +28,13 @@ import {
 import {
   CRMPageShell,
   CRMActionBar,
-  CampaignQuickActionStrip,
+  CRMWorkspaceShell,
+  CRMWorkspaceChrome,
+  CRMWorkspaceBody,
+  CRMWorkspaceMain,
+  CRMWorkspaceContent,
+  CRMWorkspaceScrollRegion,
+  CRMWorkspaceRightRail,
   CampaignGuidedEmpty,
   type CampaignListItem,
   type CampaignReportRow,
@@ -34,6 +42,7 @@ import {
 } from "../../../../components/crm";
 import { crm } from "../../../../components/crm/crmClasses";
 import { mk } from "../../../../components/crm/campaign/campaignCinemaClasses";
+import { campaignsIndexLayout } from "../../../../components/crm/campaign/campaignsIndexLayout";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../services/apiClient";
 import { CrmConfirmModal } from "../../../../components/crm/CrmConfirmModal";
 import { CrmRowActionMenu } from "../../../../components/crm/CrmRowActionMenu";
@@ -536,7 +545,10 @@ export default function CampaignsPage() {
   const listEmptyAfterFilter = !loading && !error && campaigns.length > 0 && filtered.length === 0;
 
   return (
-    <CRMPageShell innerClassName={cn(mk.pageInner, mk.workspace, "pb-36")}>
+    <CRMPageShell
+      className={campaignsIndexLayout.pageShell}
+      innerClassName={cn(crm.pageInnerCampaign, campaignsIndexLayout.pageInner, mk.workspace)}
+    >
       {toast ? (
         <div
           className={cn(
@@ -589,55 +601,75 @@ export default function CampaignsPage() {
         />
       )}
 
-      <header className="campaigns-overview-hero">
-        <div className="campaigns-hero-copy">
-          <div className="campaigns-hero-icon">
-            <Megaphone className="h-7 w-7" />
-          </div>
-          <div>
-            <p className="campaigns-eyebrow">CRM outreach command center</p>
-            <h1>Campaigns</h1>
-            <p>Create, manage, and analyze outbound programs with live operational context.</p>
-          </div>
-        </div>
-        <div className="campaigns-hero-actions">
-          {isAdmin && (
-            <button
-              type="button"
-              onClick={() => { setCreateForImport(true); setShowCreate(true); }}
-              className="campaigns-btn-secondary"
-            >
-              <FileUp className="h-4 w-4" />
-              Import Leads
-            </button>
-          )}
-          {canQueue && (
-            <Link href="/crm/scripts" className="campaigns-btn-secondary">
-              <Grid2X2 className="h-4 w-4" />
-              Templates
-            </Link>
-          )}
-          {isAdmin && (
-            <button type="button" onClick={() => setShowCreate(true)} className="campaigns-btn-primary">
-              <Plus className="h-4 w-4" />
-              New Campaign
-            </button>
-          )}
-        </div>
-      </header>
+      <CRMWorkspaceShell>
+        <CRMWorkspaceChrome>
+          <header className="campaigns-overview-hero">
+            <div className="campaigns-hero-copy">
+              <div className="campaigns-hero-icon">
+                <Megaphone className="h-7 w-7" />
+              </div>
+              <div>
+                <p className="campaigns-eyebrow">CRM outreach command center</p>
+                <h1>Campaigns</h1>
+                <p>Create, manage, and analyze outbound programs with live operational context.</p>
+              </div>
+            </div>
+            <div className="campaigns-hero-actions">
+              {canQueue && (
+                <>
+                  <Link href="/crm/queue?mode=power" className="campaigns-btn-secondary">
+                    <Zap className="h-4 w-4" />
+                    Power mode
+                  </Link>
+                  <Link href="/crm/queue" className="campaigns-btn-secondary">
+                    <ListOrdered className="h-4 w-4" />
+                    Queue
+                    {summary.queueWork > 0 ? ` (${summary.queueWork})` : ""}
+                  </Link>
+                  <Link href="/crm/queue?filter=overdue" className="campaigns-btn-secondary">
+                    <PhoneCall className="h-4 w-4" />
+                    Callbacks
+                    {summary.callbacks > 0 ? ` (${summary.callbacks})` : ""}
+                  </Link>
+                </>
+              )}
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => { setCreateForImport(true); setShowCreate(true); }}
+                  className="campaigns-btn-secondary"
+                >
+                  <FileUp className="h-4 w-4" />
+                  Import Leads
+                </button>
+              )}
+              {canQueue && (
+                <Link href="/crm/scripts" className="campaigns-btn-secondary">
+                  <Grid2X2 className="h-4 w-4" />
+                  Templates
+                </Link>
+              )}
+              {isAdmin && (
+                <button type="button" onClick={() => setShowCreate(true)} className="campaigns-btn-primary">
+                  <Plus className="h-4 w-4" />
+                  New Campaign
+                </button>
+              )}
+            </div>
+          </header>
 
-      {!loading && !error && campaigns.length > 0 ? (
-        <section className="campaigns-kpi-grid" aria-label="Campaign metrics">
-          <CampaignKpiTile label="Total Campaigns" value={formatNumber(campaigns.length)} trend="+ across all statuses" tone="blue" icon={<CalendarDays className="h-5 w-5" />} />
-          <CampaignKpiTile label="Active Campaigns" value={formatNumber(summary.active)} trend={summary.paused > 0 ? `${summary.paused} paused` : "All live programs clear"} tone="violet" icon={<Zap className="h-5 w-5" />} />
-          <CampaignKpiTile label="Total Contacts" value={formatNumber(summary.members)} trend="Across campaign rosters" tone="green" icon={<Users className="h-5 w-5" />} />
-          <CampaignKpiTile label="Contacted" value={formatNumber(summary.contacted)} trend={`${formatNumber(summary.attempts)} total attempts`} tone="cyan" icon={<Send className="h-5 w-5" />} />
-          <CampaignKpiTile label="Converted" value={formatNumber(summary.converted)} trend={`${summary.callbacks} callbacks waiting`} tone="orange" icon={<CheckCircle2 className="h-5 w-5" />} />
-          <CampaignKpiTile label="Conversion Rate" value={formatPercent(summary.avgConversionRate)} trend="Average by campaign" tone="red" icon={<Target className="h-5 w-5" />} />
-        </section>
-      ) : null}
+          {!loading && !error && campaigns.length > 0 ? (
+            <section className="campaigns-kpi-grid" aria-label="Campaign metrics">
+              <CampaignKpiTile label="Total Campaigns" value={formatNumber(campaigns.length)} trend="+ across all statuses" tone="blue" icon={<CalendarDays className="h-5 w-5" />} />
+              <CampaignKpiTile label="Active Campaigns" value={formatNumber(summary.active)} trend={summary.paused > 0 ? `${summary.paused} paused` : "All live programs clear"} tone="violet" icon={<Zap className="h-5 w-5" />} />
+              <CampaignKpiTile label="Total Contacts" value={formatNumber(summary.members)} trend="Across campaign rosters" tone="green" icon={<Users className="h-5 w-5" />} />
+              <CampaignKpiTile label="Contacted" value={formatNumber(summary.contacted)} trend={`${formatNumber(summary.attempts)} total attempts`} tone="cyan" icon={<Send className="h-5 w-5" />} />
+              <CampaignKpiTile label="Converted" value={formatNumber(summary.converted)} trend={`${summary.callbacks} callbacks waiting`} tone="orange" icon={<CheckCircle2 className="h-5 w-5" />} />
+              <CampaignKpiTile label="Conversion Rate" value={formatPercent(summary.avgConversionRate)} trend="Average by campaign" tone="red" icon={<Target className="h-5 w-5" />} />
+            </section>
+          ) : null}
 
-      <CRMActionBar className="campaigns-filter-panel">
+          <CRMActionBar className="campaigns-filter-panel">
         <div className="campaigns-filter-row">
           <div className="campaigns-search-wrap">
             <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-crm-muted" />
@@ -703,7 +735,8 @@ export default function CampaignsPage() {
             Clear filters
           </button>
         </div>
-      </CRMActionBar>
+          </CRMActionBar>
+        </CRMWorkspaceChrome>
 
       {loading ? (
         <p className="py-16 text-center text-sm text-crm-muted">Loading campaigns…</p>
@@ -756,24 +789,26 @@ export default function CampaignsPage() {
           }
         />
       ) : (
-        <div className="campaigns-workspace-grid">
-          <section className="campaigns-table-card" aria-label="Campaign table">
-            <div className="campaigns-table-head">
-              <div>
-                <h2>Campaign portfolio</h2>
-                <p>Showing {filtered.length} of {campaigns.length} campaigns</p>
-              </div>
-              <label className="campaigns-sort-control">
-                Sort
-                <select value={sortBy} onChange={(e) => setSortBy(e.target.value as CampaignSort)}>
-                  <option value="status">Status</option>
-                  <option value="updated">Updated</option>
-                  <option value="name">Name</option>
-                </select>
-              </label>
-            </div>
-            <div className="campaigns-table-scroll">
-              <table className="campaigns-table">
+        <CRMWorkspaceBody split>
+          <CRMWorkspaceMain>
+            <CRMWorkspaceContent>
+              <section className={campaignsIndexLayout.tableCard} aria-label="Campaign table">
+                <div className="campaigns-table-head">
+                  <div>
+                    <h2>Campaign portfolio</h2>
+                    <p>Showing {filtered.length} of {campaigns.length} campaigns</p>
+                  </div>
+                  <label className="campaigns-sort-control">
+                    Sort
+                    <select value={sortBy} onChange={(e) => setSortBy(e.target.value as CampaignSort)}>
+                      <option value="status">Status</option>
+                      <option value="updated">Updated</option>
+                      <option value="name">Name</option>
+                    </select>
+                  </label>
+                </div>
+                <CRMWorkspaceScrollRegion className={campaignsIndexLayout.tableScroll}>
+                  <table className="campaigns-table">
                 <thead>
                   <tr>
                     <th>Campaign</th>
@@ -852,11 +887,16 @@ export default function CampaignsPage() {
                     );
                   })}
                 </tbody>
-              </table>
-            </div>
-          </section>
+                  </table>
+                </CRMWorkspaceScrollRegion>
+              </section>
+            </CRMWorkspaceContent>
+          </CRMWorkspaceMain>
 
-          <aside className="campaigns-right-rail" aria-label="Campaign insights">
+          <CRMWorkspaceRightRail
+            className="campaigns-right-rail"
+            scrollClassName={campaignsIndexLayout.rightRailScroll}
+          >
             <section className="campaigns-rail-card campaigns-health-card">
               <div className="campaigns-rail-heading">
                 <div>
@@ -923,20 +963,10 @@ export default function CampaignsPage() {
               </ul>
               <Link href="/crm/reports" className="campaigns-rail-link">View all activity</Link>
             </section>
-          </aside>
-        </div>
+          </CRMWorkspaceRightRail>
+        </CRMWorkspaceBody>
       )}
-
-      {!loading && !error && campaigns.length > 0 ? (
-        <CampaignQuickActionStrip
-          variant="index"
-          canQueue={canQueue}
-          isAdmin={isAdmin}
-          queueWork={summary.queueWork}
-          callbacks={summary.callbacks}
-          onNewCampaign={() => setShowCreate(true)}
-        />
-      ) : null}
+      </CRMWorkspaceShell>
     </CRMPageShell>
   );
 }
