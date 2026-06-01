@@ -204,12 +204,7 @@ export default function CrmEmailSettingsPage() {
   };
 
   const handleConnectTenant = async () => {
-    const label = window.prompt(
-      "Optional label for this shared mailbox (e.g. 'Sales Inbox'). Leave blank to use the mailbox display name.",
-      "",
-    );
-    if (label === null) return; // user cancelled
-    await startOAuth("TENANT", label.trim() || undefined, true);
+    await startOAuth("TENANT", undefined, true, true);
   };
 
   const handleEnableReplyTracking = async (s: Sender) => {
@@ -471,8 +466,8 @@ export default function CrmEmailSettingsPage() {
         )}
 
         <p className="mt-3 text-[11px] text-crm-muted">
-          Send fallback: <strong className="text-crm-text">your sender</strong> → <strong className="text-crm-text">tenant default</strong> → <strong className="text-crm-text">single shared sender</strong>.
-          Compose lets you override per send.
+          Send fallback: <strong className="text-crm-text">tenant default</strong> → <strong className="text-crm-text">single shared sender</strong> → <strong className="text-crm-text">your sender</strong>.
+          Shared mailbox connect requests send + reply-tracking access.
         </p>
         </div>
       </CRMCard>
