@@ -67,6 +67,7 @@ export function EmailBuilderCanvas({
     saveState === "autosaving" ? "Autosaving..." :
     saveState === "dirty" ? "Unsaved changes" :
     saveState === "saved" ? "Saved" : "Ready";
+  const editorCommands = editor as any;
 
   return (
     <main className="email-builder-panel min-w-0 overflow-hidden rounded-[1.75rem] border border-slate-200/80 bg-white shadow-[0_18px_60px_-42px_rgba(15,23,42,0.8)]">
@@ -147,21 +148,21 @@ export function EmailBuilderCanvas({
         <section className="min-w-0 p-3 sm:p-4">
           <div className="overflow-hidden rounded-[1.5rem] border border-slate-200 bg-slate-100/70">
             <div className="flex flex-wrap items-center gap-1 border-b border-slate-200 bg-white/95 px-3 py-2 text-slate-600">
-              <button type="button" className="rounded-xl p-2 transition hover:bg-slate-100" onClick={() => editor?.chain().focus().undo().run()}>↶</button>
-              <button type="button" className="rounded-xl p-2 transition hover:bg-slate-100" onClick={() => editor?.chain().focus().redo().run()}>↷</button>
+              <button type="button" className="rounded-xl p-2 transition hover:bg-slate-100" onClick={() => editorCommands?.chain().focus().undo().run()}>↶</button>
+              <button type="button" className="rounded-xl p-2 transition hover:bg-slate-100" onClick={() => editorCommands?.chain().focus().redo().run()}>↷</button>
               <select className="rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-medium">
                 <option>Paragraph</option>
               </select>
-              <button type="button" className="rounded-xl p-2 transition hover:bg-slate-100" onClick={() => editor?.chain().focus().toggleBold().run()}><Bold className="h-4 w-4" /></button>
-              <button type="button" className="rounded-xl p-2 transition hover:bg-slate-100" onClick={() => editor?.chain().focus().toggleItalic().run()}><Italic className="h-4 w-4" /></button>
-              <button type="button" className="rounded-xl p-2 transition hover:bg-slate-100" onClick={() => editor?.chain().focus().toggleUnderline().run()}><UnderlineIcon className="h-4 w-4" /></button>
+              <button type="button" className="rounded-xl p-2 transition hover:bg-slate-100" onClick={() => editorCommands?.chain().focus().toggleBold().run()}><Bold className="h-4 w-4" /></button>
+              <button type="button" className="rounded-xl p-2 transition hover:bg-slate-100" onClick={() => editorCommands?.chain().focus().toggleItalic().run()}><Italic className="h-4 w-4" /></button>
+              <button type="button" className="rounded-xl p-2 transition hover:bg-slate-100" onClick={() => editorCommands?.chain().focus().toggleUnderline().run()}><UnderlineIcon className="h-4 w-4" /></button>
               <button type="button" className="rounded-xl p-2 transition hover:bg-slate-100" onClick={() => {
                 const url = prompt("Enter a URL");
-                if (url) editor?.chain().focus().setLink({ href: url }).run();
+                if (url) editorCommands?.chain().focus().setLink({ href: url }).run();
               }}><LinkIcon className="h-4 w-4" /></button>
               <button type="button" className="rounded-xl p-2 transition hover:bg-slate-100" onClick={() => {
                 const url = prompt("Enter an image URL");
-                if (url) editor?.chain().focus().setImage({ src: url }).run();
+                if (url) editorCommands?.chain().focus().setImage({ src: url }).run();
               }}><Image className="h-4 w-4" /></button>
               <button type="button" className="rounded-xl p-2 transition hover:bg-slate-100"><MoreHorizontal className="h-4 w-4" /></button>
             </div>
