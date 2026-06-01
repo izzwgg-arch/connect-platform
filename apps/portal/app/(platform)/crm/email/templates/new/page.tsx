@@ -241,6 +241,11 @@ export default function CrmEmailTemplateBuilderPage() {
 
   const save = useCallback(async (draft: boolean, silent = false) => {
     if (!editorState) return;
+    if (!draft && !editorState.subject.trim()) {
+      setRightTab("properties");
+      setError("Add a subject line before saving this template. Use Save Draft if it is not ready yet.");
+      return;
+    }
     setSaving(true);
     setSaveState(silent ? "autosaving" : saveState);
     setError(null);
@@ -262,7 +267,8 @@ export default function CrmEmailTemplateBuilderPage() {
       await load();
     } catch (e: any) {
       setSaveState("dirty");
-      if (!silent) setError(e?.message || "Failed to save template");
+      const detail = e?.body?.detail ? `: ${e.body.detail}` : "";
+      if (!silent) setError(`${e?.message || "Failed to save template"}${detail}`);
     } finally {
       setSaving(false);
     }
@@ -697,6 +703,50 @@ export default function CrmEmailTemplateBuilderPage() {
                     Primary Color
                     <input className="mt-2 h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-500 outline-none" value="Connect Blue" disabled title="Primary color is not configurable in the current branding API." />
                   </label>
+
+                  <PanelTitle title="Template Details" />
+                  <label className="block text-[11px] font-black uppercase tracking-wide text-slate-400">
+                    Subject Line
+                    <input
+                      className="mt-2 h-10 w-full rounded-2xl border border-slate-200 px-3 text-sm normal-case tracking-normal text-slate-800 outline-none focus:border-blue-300"
+                      value={editorState?.subject || ""}
+                      onChange={(event) => updateEditor({ subject: event.target.value })}
+                      placeholder="Subject recipients will see"
+                    />
+                  </label>
+                  <label className="block text-[11px] font-black uppercase tracking-wide text-slate-400">
+                    Preview Text
+                    <input
+                      className="mt-2 h-10 w-full rounded-2xl border border-slate-200 px-3 text-sm normal-case tracking-normal text-slate-800 outline-none focus:border-blue-300"
+                      value={editorState?.previewText || ""}
+                      onChange={(event) => updateEditor({ previewText: event.target.value })}
+                      placeholder="Short inbox preview"
+                    />
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="block text-[11px] font-black uppercase tracking-wide text-slate-400">
+                      Category
+                      <select
+                        className="mt-2 h-10 w-full rounded-2xl border border-slate-200 bg-white px-3 text-sm normal-case tracking-normal text-slate-800 outline-none focus:border-blue-300"
+                        value={editorState?.category || "Custom"}
+                        onChange={(event) => updateEditor({ category: event.target.value })}
+                      >
+                        {CRM_EMAIL_TEMPLATE_CATEGORIES.map((category) => <option key={category}>{category}</option>)}
+                        <option>Custom</option>
+                      </select>
+                    </label>
+                    <label className="block text-[11px] font-black uppercase tracking-wide text-slate-400">
+                      Visibility
+                      <select
+                        className="mt-2 h-10 w-full rounded-2xl border border-slate-200 bg-white px-3 text-sm normal-case tracking-normal text-slate-800 outline-none focus:border-blue-300"
+                        value={editorState?.visibility || "SHARED"}
+                        onChange={(event) => updateEditor({ visibility: event.target.value as "SHARED" | "PRIVATE" })}
+                      >
+                        <option value="SHARED">Shared</option>
+                        <option value="PRIVATE">Private</option>
+                      </select>
+                    </label>
+                  </div>
 
                   <PanelTitle title="Email Settings" />
                   <FieldGrid fields={[
