@@ -4,6 +4,35 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-01 — CRM Funders workspace layout polish
+
+**Task:** CRM / funders page / layout polish  
+**Risk:** medium
+
+### Root cause
+
+The Funders page kept an always-rendered bulk toolbar in the fixed CRM chrome, so the zero-selection state reserved a full toolbar row and pushed the search filters, main list, and right rail lower than needed.
+
+### Changes
+
+- **Bulk actions:** the Funders bulk bar now renders only when at least one row is selected, and selected actions stay in a compact one-line toolbar.
+- **Workspace layout:** Funders-scoped styles tighten chrome spacing, keep the filter row sticky/visible, and preserve independent desktop scroll regions for the funder list and right rail.
+- **Right rail:** removed the duplicate Quick Actions card; header actions remain the source for Add Funder, Import CSV, and Export CSV.
+- **Scope:** portal Funders UI/docs only; no API, database, permissions, or business logic changes.
+
+### Manual QA
+
+- Open `/crm/funders` with no selected rows and confirm no `0 selected` bulk block appears.
+- Select and deselect a funder; confirm the compact bulk bar appears only while selected.
+- Confirm the search/filter row is higher, remains visible, and the list and right rail scroll independently on desktop.
+- Confirm Add Funder, Import CSV, and Export CSV still exist in the page header.
+
+### Rollback
+
+Revert the Funders page markup/CSS changes and this docs entry. No backend or schema rollback is required.
+
+---
+
 ## 2026-06-01 — CRM contacts filters and import-to-queue assignment
 
 **Task:** CRM / contacts page / filters / queue assignment

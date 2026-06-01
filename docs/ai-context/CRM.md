@@ -207,6 +207,7 @@ Layout-only pattern for CRM desk pages (Queue, Funders, Tasks, Scripts, Checklis
   - `.console-content:has(.crm-workspace-shell)` → no page scroll, `padding: 0`
   - Desktop: `max-height: calc(100dvh - var(--topbar-height))` on shell
   - `<1280px`: split bodies stack; page scroll allowed for graceful mobile use
+- `/crm/funders` keeps search/filter controls sticky in the Funders chrome, renders the bulk action bar only for selected rows, and uses independent desktop scroll regions for the funder list and right rail.
 
 ### When adding a new CRM list page
 

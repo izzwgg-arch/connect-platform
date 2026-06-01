@@ -9,7 +9,6 @@ import {
   ChevronRight,
   CircleDollarSign,
   Download,
-  ExternalLink,
   FileUp,
   HandCoins,
   Mail,
@@ -919,58 +918,54 @@ export default function FundersPage() {
               </div>
             )}
 
-            <div className={cn("funders-bulk-toolbar", selectedCount > 0 && "funders-bulk-toolbar-active")}>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-slate-800">{selectedCount} selected</span>
-                {selectedCount > 0 && (
+            {selectedCount > 0 && (
+              <div className="funders-bulk-toolbar">
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="text-sm font-semibold text-slate-800">{selectedCount} selected</span>
                   <button onClick={clearSelection} className="rounded-full p-1 text-slate-400 transition hover:bg-white hover:text-slate-700">
                     <X size={14} />
                   </button>
-                )}
+                </div>
+                <div className="funders-bulk-actions">
+                  <button
+                    type="button"
+                    onClick={() => setShowBulkEmail(true)}
+                    className="funders-bulk-action"
+                  >
+                    <Mail size={14} /> Send Email
+                  </button>
+                  <select
+                    className="funders-bulk-select"
+                    value={bulkTagId}
+                    onChange={(e) => setBulkTagId(e.target.value)}
+                  >
+                    <option value="">Add Tag</option>
+                    {tags.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                  </select>
+                  <select
+                    className="funders-bulk-select"
+                    value={bulkAction}
+                    onChange={(e) => setBulkAction(e.target.value as any)}
+                  >
+                    <option value="assign">Assign</option>
+                    <option value="remove">Remove</option>
+                  </select>
+                  <button
+                    onClick={handleBulkTag}
+                    disabled={!bulkTagId || bulkWorking}
+                    className="funders-bulk-action"
+                  >
+                    <Tag size={14} /> {bulkWorking ? "Working..." : "Apply"}
+                  </button>
+                  <button
+                    onClick={handleExport}
+                    className="funders-bulk-action"
+                  >
+                    <Download size={14} /> Export
+                  </button>
+                </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => selectedCount > 0 && setShowBulkEmail(true)}
-                  disabled={selectedCount === 0}
-                  className="funders-bulk-action"
-                >
-                  <Mail size={14} /> Send Email
-                </button>
-                <select
-                  className="funders-bulk-select"
-                  value={bulkTagId}
-                  onChange={(e) => setBulkTagId(e.target.value)}
-                  disabled={selectedCount === 0}
-                >
-                  <option value="">Add Tag</option>
-                  {tags.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
-                <select
-                  className="funders-bulk-select"
-                  value={bulkAction}
-                  onChange={(e) => setBulkAction(e.target.value as any)}
-                  disabled={selectedCount === 0}
-                >
-                  <option value="assign">Assign</option>
-                  <option value="remove">Remove</option>
-                </select>
-                <button
-                  onClick={handleBulkTag}
-                  disabled={selectedCount === 0 || !bulkTagId || bulkWorking}
-                  className="funders-bulk-action"
-                >
-                  <Tag size={14} /> {bulkWorking ? "Working..." : "Apply"}
-                </button>
-                <button
-                  onClick={handleExport}
-                  disabled={selectedCount === 0}
-                  className="funders-bulk-action"
-                >
-                  <Download size={14} /> Export
-                </button>
-              </div>
-            </div>
+            )}
           </CRMWorkspaceToolbar>
         </CRMWorkspaceChrome>
 
@@ -1183,22 +1178,6 @@ export default function FundersPage() {
               </Link>
             </section>
 
-            <section className="funders-rail-card">
-              <div className="funders-rail-title">
-                <h3>Quick Actions</h3>
-              </div>
-              <div className="grid gap-2">
-                <button onClick={() => setShowNew(true)} className="funders-quick-action">
-                  <Plus size={15} /> Add Funder
-                </button>
-                <button onClick={() => setShowImport(true)} className="funders-quick-action">
-                  <FileUp size={15} /> Import CSV
-                </button>
-                <button onClick={handleExport} className="funders-quick-action">
-                  <ExternalLink size={15} /> Export List
-                </button>
-              </div>
-            </section>
           </CRMWorkspaceRightRail>
         </CRMWorkspaceBody>
       </CRMWorkspaceShell>
