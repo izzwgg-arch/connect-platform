@@ -22,7 +22,9 @@ import {
   crm,
   cn,
 } from "../../../../../components/crm";
-import { apiGet, apiPost, apiDelete } from "../../../../../services/apiClient";
+import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../../services/apiClient";
+import { CrmConfirmModal } from "../../../../../components/crm/CrmConfirmModal";
+import { useAppContext } from "../../../../../hooks/useAppContext";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -90,7 +92,14 @@ function formatDate(iso: string | null | undefined): string {
 export default function FunderDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const { backendJwtRole, can } = useAppContext();
   const id = params?.id as string;
+
+  const canManageCrm =
+    backendJwtRole === "ADMIN" ||
+    backendJwtRole === "TENANT_ADMIN" ||
+    backendJwtRole === "SUPER_ADMIN" ||
+    can("can_manage_crm");
 
   const [funder, setFunder] = useState<Funder | null>(null);
   const [loading, setLoading] = useState(true);
@@ -110,6 +119,7 @@ export default function FunderDetailPage() {
   // Archive / delete
   const [confirming, setConfirming] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   const fetchFunder = useCallback(async () => {
     setLoading(true);
@@ -166,9 +176,10 @@ export default function FunderDetailPage() {
       if ("notes" in form) patch.notes = form.notes || null;
       if (form.status) patch.status = form.status;
 
-      const updated = await apiPost<Funder>(`/crm/funders/${id}`, patch as any);
+      const updated = await apiPatch<Funder>(`/crm/funders/${id}`, patch);
       setFunder(updated);
       setEditing(false);
+      setToast({ kind: "ok", text: "Funder saved" });
     } catch (e: any) {
       setSaveErr(e?.message ?? "Failed to save");
     } finally {
@@ -195,9 +206,13 @@ export default function FunderDetailPage() {
     setArchiving(true);
     try {
       await apiDelete(`/crm/funders/${id}`);
+      setToast({ kind: "ok", text: "Funder archived" });
       router.push("/crm/funders");
-    } catch { /* ignore */ } finally {
-      setArchiving(false); setConfirming(false);
+    } catch (e: any) {
+      setToast({ kind: "err", text: e?.message ?? "Archive failed" });
+    } finally {
+      setArchiving(false);
+      setConfirming(false);
     }
   };
 
@@ -301,9 +316,11 @@ export default function FunderDetailPage() {
                 <button onClick={() => setShowTagPanel(!showTagPanel)} className={crm.btnSecondary}>
                   <Tag size={14} /> Tags
                 </button>
-                <button onClick={() => setConfirming(true)} className={crm.btnDanger}>
-                  <Trash2 size={14} /> Archive
-                </button>
+                {canManageCrm ? (
+                  <button onClick={() => setConfirming(true)} className={crm.btnDanger}>
+                    <Trash2 size={14} /> Archive
+                  </button>
+                ) : null}
               </>
             )}
           </div>
@@ -451,19 +468,20 @@ export default function FunderDetailPage() {
               </div>
             </CRMCard>
 
-            {/* Danger zone */}
-            {confirming && (
-              <CRMCard className={cn("border-crm-danger/30 p-4", crm.bannerDanger.replace("border", "").trim())}>
-                <p className="mb-2 text-sm font-medium">Archive this funder?</p>
-                <p className={cn(crm.muted, "mb-3 text-xs")}>This will soft-archive the record. It can be restored by an admin.</p>
-                <div className="flex gap-2">
-                  <button onClick={() => setConfirming(false)} className={crm.btnSecondary}>Cancel</button>
-                  <button onClick={handleArchive} disabled={archiving} className={crm.btnDanger}>
-                    {archiving ? "Archiving…" : "Archive"}
-                  </button>
-                </div>
-              </CRMCard>
-            )}
+            {toast ? (
+              <p className={cn("text-sm", toast.kind === "ok" ? "text-crm-success" : "text-crm-danger")}>{toast.text}</p>
+            ) : null}
+
+            <CrmConfirmModal
+              open={confirming}
+              title="Archive funder?"
+              description="This soft-archives the funder. Linked import history is preserved. A CRM manager can restore the record later."
+              confirmLabel="Archive"
+              destructive
+              loading={archiving}
+              onConfirm={() => void handleArchive()}
+              onCancel={() => setConfirming(false)}
+            />
           </div>
         </div>
       </div>

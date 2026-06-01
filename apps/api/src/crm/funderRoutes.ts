@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
-import { requireCrmAccess, requireCrmAdmin } from "./guard";
+import { requireCrmAccess, requireCrmAdmin, requireCrmManager } from "./guard";
 import { parseCsv } from "./importPipeline";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -332,9 +332,9 @@ export async function registerCrmFunderRoutes(app: FastifyInstance) {
     return formatFunder(updated);
   });
 
-  // ── DELETE /crm/funders/:id — soft-archive ─────────────────────────────────
+  // ── DELETE /crm/funders/:id — soft-archive (CRM manager+) ───────────────────
   app.delete("/crm/funders/:id", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmManager(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id } = req.params as { id: string };
@@ -353,9 +353,9 @@ export async function registerCrmFunderRoutes(app: FastifyInstance) {
     return { ok: true, funderId: id };
   });
 
-  // ── POST /crm/funders/:id/restore ─────────────────────────────────────────
+  // ── POST /crm/funders/:id/restore (CRM manager+) ───────────────────────────
   app.post("/crm/funders/:id/restore", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmManager(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id } = req.params as { id: string };

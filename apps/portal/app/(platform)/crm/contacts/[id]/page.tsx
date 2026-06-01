@@ -63,6 +63,7 @@ import { ContactEmailWorkspacePanel } from "../../../../../components/crm/email/
 import { CrmVoicemailDropDrawer } from "../../../../../components/crm/voicemail-drops/CrmVoicemailDropDrawer";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { apiGet, apiPatch, apiPost, apiDelete, apiFetchBlob, apiPut } from "../../../../../services/apiClient";
+import { CrmConfirmModal } from "../../../../../components/crm/CrmConfirmModal";
 import { useAppContext } from "../../../../../hooks/useAppContext";
 import { useSipPhone } from "../../../../../hooks/useSipPhone";
 import { useTelephony } from "../../../../../contexts/TelephonyContext";
@@ -1269,7 +1270,7 @@ function CrmContactDetailInner() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { backendJwtRole, user: appUser } = useAppContext();
+  const { backendJwtRole, user: appUser, can } = useAppContext();
   const phone = useSipPhone();
   const telephony = useTelephony();
   const sipReady = phone.regState === "registered";
@@ -1286,10 +1287,12 @@ function CrmContactDetailInner() {
   const [queueMember, setQueueMember] = useState<QueueContextMember | null>(null);
   const [campaignName, setCampaignName] = useState<string | null>(null);
 
-  const isAdmin =
+  const isPlatformAdmin =
     backendJwtRole === "ADMIN" ||
     backendJwtRole === "TENANT_ADMIN" ||
     backendJwtRole === "SUPER_ADMIN";
+  const canManageCrm = isPlatformAdmin || can("can_manage_crm");
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
 
   // ── Contact state ──────────────────────────────────────────────────────────
   const [contact, setContact] = useState<CrmContactDetail | null>(null);
@@ -1745,23 +1748,18 @@ function CrmContactDetailInner() {
   };
 
   const handleArchiveContact = async () => {
-    if (
-      !window.confirm(
-        "Archive this contact? They will be removed from active CRM lists and search. Timeline, tasks, and campaign history are preserved.",
-      )
-    ) {
-      return;
-    }
     setArchivePosting(true);
     setError(null);
     try {
       await apiDelete(`/crm/contacts/${id}`);
+      setWorkspaceToast({ kind: "ok", text: "Contact archived" });
+      setArchiveConfirmOpen(false);
       await loadContact();
       loadTimeline();
       loadTasks();
       loadDuplicates();
     } catch (e: any) {
-      setError(e?.message || "Archive failed");
+      setWorkspaceToast({ kind: "err", text: e?.message || "Archive failed" });
     } finally {
       setArchivePosting(false);
     }
@@ -2369,6 +2367,17 @@ function CrmContactDetailInner() {
           onBack={handleBack}
         />
 
+        <CrmConfirmModal
+          open={archiveConfirmOpen}
+          title="Archive contact?"
+          description="The contact is removed from active CRM lists and queue work. Timeline, documents, messages, and campaign memberships are preserved."
+          confirmLabel="Archive"
+          destructive
+          loading={archivePosting}
+          onConfirm={() => void handleArchiveContact()}
+          onCancel={() => setArchiveConfirmOpen(false)}
+        />
+
         <ContactCampaignStickyHeader
           displayName={contact.displayName}
           company={contact.company ?? null}
@@ -2383,8 +2392,9 @@ function CrmContactDetailInner() {
           onVoicemailDrop={openVoicemailDrop}
           voicemailDropDisabled={contact.doNotCall || contact.phones.length === 0 || isArchived}
           onEdit={() => setEditing(true)}
-          onArchive={handleArchiveContact}
+          onArchive={() => setArchiveConfirmOpen(true)}
           onRestore={handleRestoreContact}
+          canArchive={canManageCrm}
           archivePosting={archivePosting}
           restorePosting={restorePosting}
         >
@@ -3209,7 +3219,7 @@ function CrmContactDetailInner() {
                   >
                     View
                   </a>
-                  {isAdmin && (
+                  {isPlatformAdmin && (
                     <button
                       onClick={() => { setMergeTarget(dup); setMergeError(null); }}
                       style={{ ...btnSmall, color: "#b45309", borderColor: "#fde68a", background: "#fffbeb", fontSize: "0.75rem", display: "flex", alignItems: "center", gap: "0.2rem" }}

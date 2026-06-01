@@ -54,7 +54,10 @@ import {
 import { BulkEmailModal } from "../../../../components/crm/email/BulkEmailModal";
 import { ConnectSelect, type SelectOption } from "../../../../components/ConnectSelect";
 import { ViewportDropdown } from "../../../../components/ViewportDropdown";
-import { apiGet, apiPost } from "../../../../services/apiClient";
+import { apiGet, apiPost, apiDelete } from "../../../../services/apiClient";
+import { CrmConfirmModal } from "../../../../components/crm/CrmConfirmModal";
+import { CrmRowActionMenu } from "../../../../components/crm/CrmRowActionMenu";
+import { useRouter } from "next/navigation";
 import { useAppContext } from "../../../../hooks/useAppContext";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -488,11 +491,14 @@ function AddContactModal({
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function CrmContactsPage() {
+  const router = useRouter();
   const { backendJwtRole, can } = useAppContext();
-  const isAdmin =
+  const isPlatformAdmin =
     backendJwtRole === "ADMIN" ||
     backendJwtRole === "TENANT_ADMIN" ||
     backendJwtRole === "SUPER_ADMIN";
+  const isAdmin = isPlatformAdmin;
+  const canManageCrm = isPlatformAdmin || can("can_manage_crm");
 
   const canImport = can("can_view_crm_import");
   const canLiveWorkspace = can("can_view_crm_live_call");
@@ -524,6 +530,9 @@ export default function CrmContactsPage() {
   const [bulkSkipped, setBulkSkipped] = useState<number>(0);
   const [selfAssigning, setSelfAssigning] = useState(false);
   const [selfAssignMessage, setSelfAssignMessage] = useState<string | null>(null);
+  const [archiveTarget, setArchiveTarget] = useState<CrmContact | null>(null);
+  const [archiveWorking, setArchiveWorking] = useState(false);
+  const [actionToast, setActionToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   // Smart assign (quantity-based, unassigned-only)
   const [showSmartAssign, setShowSmartAssign] = useState(false);
@@ -794,6 +803,27 @@ export default function CrmContactsPage() {
     }
   };
 
+  const handleArchiveContact = async () => {
+    if (!archiveTarget) return;
+    setArchiveWorking(true);
+    try {
+      await apiDelete(`/crm/contacts/${archiveTarget.id}`);
+      setRows((prev) => prev.filter((c) => c.id !== archiveTarget.id));
+      setTotal((t) => Math.max(0, t - 1));
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(archiveTarget.id);
+        return next;
+      });
+      setActionToast({ kind: "ok", text: "Contact archived" });
+      setArchiveTarget(null);
+    } catch (e: unknown) {
+      setActionToast({ kind: "err", text: (e as Error)?.message ?? "Archive failed" });
+    } finally {
+      setArchiveWorking(false);
+    }
+  };
+
   const handleSmartAssign = async () => {
     const count = parseInt(smartAssignCount, 10);
     if (!count || count < 1 || !smartAssignUserId) return;
@@ -938,6 +968,28 @@ export default function CrmContactsPage() {
 
   return (
     <CRMPageShell className={crm.contactsWorkspace} innerClassName={crm.pageInnerContacts}>
+      <CrmConfirmModal
+        open={!!archiveTarget}
+        title="Archive contact?"
+        description="The contact is removed from active lists and queue work. Timeline, documents, and campaign history are preserved."
+        confirmLabel="Archive"
+        destructive
+        loading={archiveWorking}
+        onConfirm={() => void handleArchiveContact()}
+        onCancel={() => setArchiveTarget(null)}
+      />
+      {actionToast ? (
+        <div
+          className={cn(
+            "rounded-crm border px-4 py-2 text-sm font-medium",
+            actionToast.kind === "ok"
+              ? "border-crm-success/30 bg-crm-success/10 text-crm-success"
+              : "border-crm-danger/30 bg-crm-danger/10 text-crm-danger",
+          )}
+        >
+          {actionToast.text}
+        </div>
+      ) : null}
       {showAdd && <AddContactModal onClose={() => setShowAdd(false)} onCreated={handleContactCreated} />}
       {showBulkEmail && (
         <BulkEmailModal
@@ -1450,9 +1502,11 @@ export default function CrmContactsPage() {
                               <Activity className="h-4 w-4" />
                             </Link>
                           )}
-                          <Link href={`/crm/contacts/${c.id}`} className="contacts-menu-button" aria-label={`More options for ${c.displayName}`}>
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Link>
+                          <CrmRowActionMenu
+                            label={c.displayName}
+                            onEdit={!archived ? () => router.push(`/crm/contacts/${c.id}`) : undefined}
+                            onArchive={canManageCrm && !archived ? () => setArchiveTarget(c) : undefined}
+                          />
                         </div>
                       </div>
                     </li>

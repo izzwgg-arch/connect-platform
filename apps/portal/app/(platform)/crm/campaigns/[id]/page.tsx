@@ -23,7 +23,9 @@ import { crm } from "../../../../../components/crm/crmClasses";
 import { mk } from "../../../../../components/crm/campaign/campaignCinemaClasses";
 import { cn } from "../../../../../components/crm/cn";
 import { BulkEmailModal } from "../../../../../components/crm/email/BulkEmailModal";
-import { apiGet, apiPost, apiPatch } from "../../../../../services/apiClient";
+import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../../services/apiClient";
+import { CrmConfirmModal } from "../../../../../components/crm/CrmConfirmModal";
+import { EditCampaignModal } from "../../../../../components/crm/campaign/EditCampaignModal";
 import { useAppContext } from "../../../../../hooks/useAppContext";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -709,6 +711,10 @@ export default function CampaignDetailPage() {
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState("");
   const [error, setError] = useState("");
+  const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [showEditCampaign, setShowEditCampaign] = useState(false);
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
+  const [archiveWorking, setArchiveWorking] = useState(false);
 
   // Workload summary (admin — loaded automatically for health + workload strip)
   const [workload, setWorkload] = useState<WorkloadRow[]>([]);
@@ -868,7 +874,25 @@ export default function CampaignDetailPage() {
     try {
       const res = await apiPatch<{ campaign: Campaign }>(`/crm/campaigns/${campaignId}`, data, token);
       setCampaign(res.campaign);
-    } catch {}
+      setToast({ kind: "ok", text: "Campaign updated" });
+    } catch (err: unknown) {
+      setToast({ kind: "err", text: (err as Error)?.message ?? "Update failed" });
+      throw err;
+    }
+  }
+
+  async function handleArchiveCampaign() {
+    setArchiveWorking(true);
+    try {
+      await apiDelete(`/crm/campaigns/${campaignId}`, token);
+      setCampaign((prev) => (prev ? { ...prev, status: "ARCHIVED" } : prev));
+      setToast({ kind: "ok", text: "Campaign archived" });
+      setArchiveConfirmOpen(false);
+    } catch (err: unknown) {
+      setToast({ kind: "err", text: (err as Error)?.message ?? "Archive failed" });
+    } finally {
+      setArchiveWorking(false);
+    }
   }
 
   async function saveName() {
@@ -1481,6 +1505,44 @@ export default function CampaignDetailPage() {
           )}
 
 
+        {toast ? (
+          <div
+            className={cn(
+              "mb-3 rounded-crm border px-4 py-2 text-sm font-medium",
+              toast.kind === "ok"
+                ? "border-crm-success/30 bg-crm-success/10 text-crm-success"
+                : "border-crm-danger/30 bg-crm-danger/10 text-crm-danger",
+            )}
+          >
+            {toast.text}
+          </div>
+        ) : null}
+
+        {showEditCampaign && campaign ? (
+          <EditCampaignModal
+            campaign={campaign}
+            onClose={() => setShowEditCampaign(false)}
+            onSave={async (data) => {
+              await updateCampaign(data);
+            }}
+          />
+        ) : null}
+
+        <CrmConfirmModal
+          open={archiveConfirmOpen}
+          title="Archive campaign?"
+          description={
+            campaign.status === "ACTIVE"
+              ? "This campaign is active. Archiving removes it from default lists and queue work. All members and history are preserved."
+              : "Archived campaigns are hidden from default lists. Members and history are preserved."
+          }
+          confirmLabel="Archive"
+          destructive
+          loading={archiveWorking}
+          onConfirm={() => void handleArchiveCampaign()}
+          onCancel={() => setArchiveConfirmOpen(false)}
+        />
+
         <CampaignCommandHeader
           campaign={campaign}
           health={hd}
@@ -1494,6 +1556,8 @@ export default function CampaignDetailPage() {
           onSaveName={saveName}
           onCancelEditName={() => setEditingName(false)}
           onUpdateStatus={(status: CampaignStatus) => updateCampaign({ status })}
+          onRequestArchive={() => setArchiveConfirmOpen(true)}
+          onEditCampaign={isAdmin ? () => setShowEditCampaign(true) : undefined}
           onExport={exportCsv}
           onImport={() => {
             setImportOpen(true);

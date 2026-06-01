@@ -34,7 +34,10 @@ import {
 } from "../../../../components/crm";
 import { crm } from "../../../../components/crm/crmClasses";
 import { mk } from "../../../../components/crm/campaign/campaignCinemaClasses";
-import { apiGet, apiPost, apiPatch } from "../../../../services/apiClient";
+import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../services/apiClient";
+import { CrmConfirmModal } from "../../../../components/crm/CrmConfirmModal";
+import { CrmRowActionMenu } from "../../../../components/crm/CrmRowActionMenu";
+import { EditCampaignModal } from "../../../../components/crm/campaign/EditCampaignModal";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { cn } from "../../../../components/crm/cn";
 import { CAMPAIGN_PRIORITY_LABELS, CAMPAIGN_STATUS_LABELS } from "../../../../components/crm/campaign/campaignTypes";
@@ -322,6 +325,10 @@ export default function CampaignsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [createForImport, setCreateForImport] = useState(false);
   const [error, setError] = useState("");
+  const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [editingCampaign, setEditingCampaign] = useState<CampaignListItem | null>(null);
+  const [archiveTarget, setArchiveTarget] = useState<CampaignListItem | null>(null);
+  const [archiveWorking, setArchiveWorking] = useState(false);
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
 
@@ -356,8 +363,43 @@ export default function CampaignsPage() {
     try {
       await apiPatch(`/crm/campaigns/${id}`, { status }, token);
       setCampaigns((prev) => prev.map((c) => (c.id === id ? { ...c, status } : c)));
-    } catch {
+      setToast({ kind: "ok", text: "Campaign updated" });
+    } catch (err: unknown) {
+      setToast({ kind: "err", text: (err as Error)?.message ?? "Update failed" });
       void load();
+    }
+  }
+
+  async function handleSaveCampaignEdit(data: {
+    name: string;
+    description?: string | null;
+    priority: CampaignListItem["priority"];
+    status?: CampaignListItem["status"];
+  }) {
+    if (!editingCampaign) return;
+    const res = await apiPatch<{ campaign: CampaignListItem }>(
+      `/crm/campaigns/${editingCampaign.id}`,
+      data,
+      token,
+    );
+    setCampaigns((prev) => prev.map((c) => (c.id === editingCampaign.id ? { ...c, ...res.campaign } : c)));
+    setToast({ kind: "ok", text: "Campaign saved" });
+  }
+
+  async function handleArchiveCampaign() {
+    if (!archiveTarget) return;
+    setArchiveWorking(true);
+    try {
+      await apiDelete(`/crm/campaigns/${archiveTarget.id}`, token);
+      setCampaigns((prev) =>
+        prev.map((c) => (c.id === archiveTarget.id ? { ...c, status: "ARCHIVED" as const } : c)),
+      );
+      setToast({ kind: "ok", text: "Campaign archived" });
+      setArchiveTarget(null);
+    } catch (err: unknown) {
+      setToast({ kind: "err", text: (err as Error)?.message ?? "Archive failed" });
+    } finally {
+      setArchiveWorking(false);
     }
   }
 
@@ -493,6 +535,42 @@ export default function CampaignsPage() {
 
   return (
     <CRMPageShell innerClassName={cn(mk.pageInner, mk.workspace, "pb-36")}>
+      {toast ? (
+        <div
+          className={cn(
+            "rounded-crm border px-4 py-2 text-sm font-medium",
+            toast.kind === "ok"
+              ? "border-crm-success/30 bg-crm-success/10 text-crm-success"
+              : "border-crm-danger/30 bg-crm-danger/10 text-crm-danger",
+          )}
+        >
+          {toast.text}
+        </div>
+      ) : null}
+
+      {editingCampaign ? (
+        <EditCampaignModal
+          campaign={editingCampaign}
+          onClose={() => setEditingCampaign(null)}
+          onSave={handleSaveCampaignEdit}
+        />
+      ) : null}
+
+      <CrmConfirmModal
+        open={!!archiveTarget}
+        title="Archive campaign?"
+        description={
+          archiveTarget?.status === "ACTIVE"
+            ? "This campaign is active. Archiving removes it from default lists and queue work. Members, timeline, and import history are preserved."
+            : "Archived campaigns are hidden from default lists. Members and history are preserved."
+        }
+        confirmLabel="Archive"
+        destructive
+        loading={archiveWorking}
+        onConfirm={() => void handleArchiveCampaign()}
+        onCancel={() => setArchiveTarget(null)}
+      />
+
       {showCreate && (
         <CreateCampaignModal
           importAfterCreate={createForImport}
@@ -748,11 +826,23 @@ export default function CampaignsPage() {
                               <small>Updated {formatShortDate(campaign.updatedAt)}</small>
                             </div>
                           </div>
-                          <div className="campaigns-row-actions">
+                          <div className="campaigns-row-actions flex items-center gap-2">
                             <Link href={`/crm/campaigns/${campaign.id}`}>Open</Link>
                             {canQueue ? <Link href={queueHref(campaign.id)}>Queue</Link> : null}
-                            {isAdmin && campaign.status === "ACTIVE" ? (
-                              <button type="button" onClick={(e) => handleQuickStatus(campaign.id, "PAUSED", e)}>Pause</button>
+                            {isAdmin ? (
+                              <CrmRowActionMenu
+                                label={campaign.name}
+                                onEdit={
+                                  campaign.status !== "ARCHIVED"
+                                    ? () => setEditingCampaign(campaign)
+                                    : undefined
+                                }
+                                onArchive={
+                                  campaign.status !== "ARCHIVED"
+                                    ? () => setArchiveTarget(campaign)
+                                    : undefined
+                                }
+                              />
                             ) : null}
                           </div>
                         </td>

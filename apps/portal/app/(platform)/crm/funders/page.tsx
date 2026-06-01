@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Activity,
   BarChart3,
@@ -35,8 +36,10 @@ import {
   CRMWorkspaceRightRail,
 } from "../../../../components/crm";
 import { BulkEmailModal } from "../../../../components/crm/email/BulkEmailModal";
-import { apiGet, apiPost } from "../../../../services/apiClient";
+import { apiGet, apiPost, apiDelete } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
+import { CrmConfirmModal } from "../../../../components/crm/CrmConfirmModal";
+import { CrmRowActionMenu } from "../../../../components/crm/CrmRowActionMenu";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -645,8 +648,14 @@ function ImportModal({ open, onClose, onImported }: ImportModalProps) {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function FundersPage() {
-  const { can } = useAppContext();
+  const router = useRouter();
+  const { can, backendJwtRole } = useAppContext();
   const canManage = can("can_view_crm_funders");
+  const canManageCrm =
+    backendJwtRole === "ADMIN" ||
+    backendJwtRole === "TENANT_ADMIN" ||
+    backendJwtRole === "SUPER_ADMIN" ||
+    can("can_manage_crm");
 
   const [funders, setFunders] = useState<Funder[]>([]);
   const [total, setTotal] = useState(0);
@@ -668,6 +677,9 @@ export default function FundersPage() {
   const [showImport, setShowImport] = useState(false);
   const [showBulkEmail, setShowBulkEmail] = useState(false);
   const [bulkEmailToast, setBulkEmailToast] = useState<string | null>(null);
+  const [archiveTarget, setArchiveTarget] = useState<Funder | null>(null);
+  const [archiveWorking, setArchiveWorking] = useState(false);
+  const [actionToast, setActionToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
@@ -756,6 +768,27 @@ export default function FundersPage() {
     }
   };
 
+  const handleArchiveFunder = async () => {
+    if (!archiveTarget) return;
+    setArchiveWorking(true);
+    try {
+      await apiDelete(`/crm/funders/${archiveTarget.id}`);
+      setFunders((prev) => prev.filter((f) => f.id !== archiveTarget.id));
+      setTotal((t) => Math.max(0, t - 1));
+      setSelected((prev) => {
+        const next = new Set(prev);
+        next.delete(archiveTarget.id);
+        return next;
+      });
+      setActionToast({ kind: "ok", text: "Funder archived" });
+      setArchiveTarget(null);
+    } catch (e: any) {
+      setActionToast({ kind: "err", text: e?.message ?? "Archive failed" });
+    } finally {
+      setArchiveWorking(false);
+    }
+  };
+
   const handleExport = () => {
     const params = new URLSearchParams();
     if (debouncedSearch) params.set("q", debouncedSearch);
@@ -810,6 +843,17 @@ export default function FundersPage() {
 
   return (
     <CRMPageShell className={crm.fundersWorkspace} innerClassName={crm.pageInnerFunders}>
+      <CrmConfirmModal
+        open={!!archiveTarget}
+        title="Archive funder?"
+        description="This soft-archives the funder. Import and tag history are preserved."
+        confirmLabel="Archive"
+        destructive
+        loading={archiveWorking}
+        onConfirm={() => void handleArchiveFunder()}
+        onCancel={() => setArchiveTarget(null)}
+      />
+
       {showBulkEmail && (
         <BulkEmailModal
           audience={{
@@ -915,6 +959,18 @@ export default function FundersPage() {
             {bulkEmailToast && (
               <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
                 {bulkEmailToast}
+              </div>
+            )}
+            {actionToast && (
+              <div
+                className={cn(
+                  "rounded-2xl border px-4 py-3 text-sm font-semibold",
+                  actionToast.kind === "ok"
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                    : "border-red-200 bg-red-50 text-red-700",
+                )}
+              >
+                {actionToast.text}
               </div>
             )}
 
@@ -1067,9 +1123,16 @@ export default function FundersPage() {
                           {f.tags.length > 2 && <span className="funders-tag-pill">+{f.tags.length - 2}</span>}
                         </span>
                         <span className="funders-table-text whitespace-nowrap">{formatShortDate(f.createdAt)}</span>
-                        <Link href={`/crm/funders/${f.id}`} className="funders-row-action" aria-label={`Open ${f.name}`}>
-                          <MoreHorizontal size={16} />
-                        </Link>
+                        <div className="flex items-center justify-end gap-1">
+                          <Link href={`/crm/funders/${f.id}`} className="funders-row-action text-xs font-semibold">
+                            Open
+                          </Link>
+                          <CrmRowActionMenu
+                            label={f.name}
+                            onEdit={() => router.push(`/crm/funders/${f.id}`)}
+                            onArchive={canManageCrm ? () => setArchiveTarget(f) : undefined}
+                          />
+                        </div>
                       </div>
                     ))}
                   </div>

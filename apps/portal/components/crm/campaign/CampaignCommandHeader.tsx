@@ -38,10 +38,12 @@ export function CampaignCommandHeader({
   onSaveName,
   onCancelEditName,
   onUpdateStatus,
+  onRequestArchive,
   onExport,
   onImport,
   onAddContacts,
   onDistribute,
+  onEditCampaign,
 }: {
   campaign: CampaignDetail;
   health: CampaignHealth;
@@ -55,10 +57,12 @@ export function CampaignCommandHeader({
   onSaveName: () => void;
   onCancelEditName: () => void;
   onUpdateStatus: (status: CampaignDetail["status"]) => void;
+  onRequestArchive?: () => void;
   onExport: () => void;
   onImport: () => void;
   onAddContacts: () => void;
   onDistribute: () => void;
+  onEditCampaign?: () => void;
 }) {
   const lastImport = lastImportLabel(importHistory);
   const statusStyle = ROW_STATUS[campaign.status] ?? ROW_STATUS.DRAFT;
@@ -226,12 +230,10 @@ export function CampaignCommandHeader({
               <Pause className="h-3.5 w-3.5" /> Pause
             </button>
           )}
-          {(campaign.status === "ACTIVE" || campaign.status === "PAUSED") && isAdmin && (
+          {campaign.status !== "ARCHIVED" && isAdmin && (
             <button
               type="button"
-              onClick={() => {
-                if (confirm("Archive this campaign?")) onUpdateStatus("ARCHIVED");
-              }}
+              onClick={() => (onRequestArchive ? onRequestArchive() : onUpdateStatus("ARCHIVED"))}
               className="cinema-btn-archive-toolbar"
             >
               <Archive className="h-3.5 w-3.5" /> Archive

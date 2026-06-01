@@ -337,16 +337,24 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     return { campaign: formatCampaign(campaign) };
   });
 
-  // ── DELETE /crm/campaigns/:id ─────────────────────────────────────────────
+  // ── DELETE /crm/campaigns/:id — soft-archive (status ARCHIVED) ───────────
   app.delete("/crm/campaigns/:id", async (req, reply) => {
     const user = await requireCrmManager(req, reply);
     if (!user) return;
+    const { tenantId } = user;
     const { id } = req.params as { id: string };
 
     if (!(await assertCrmCampaignAllowed(user, id, reply))) return;
 
+    const existing = await db.crmCampaign.findFirst({
+      where: { id, tenantId },
+      select: { status: true },
+    });
+    if (!existing) return reply.status(404).send({ error: "not_found" });
+    if (existing.status === "ARCHIVED") return { ok: true, campaignId: id };
+
     await db.crmCampaign.update({ where: { id }, data: { status: "ARCHIVED" } });
-    return { ok: true };
+    return { ok: true, campaignId: id };
   });
 
   // ── POST /crm/campaigns/:id/members/add ──────────────────────────────────

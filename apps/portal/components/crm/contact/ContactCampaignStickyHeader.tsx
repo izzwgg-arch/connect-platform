@@ -22,6 +22,7 @@ export function ContactCampaignStickyHeader({
   onEdit,
   onArchive,
   onRestore,
+  canArchive = false,
   archivePosting,
   restorePosting,
   children,
@@ -41,6 +42,7 @@ export function ContactCampaignStickyHeader({
   onEdit: () => void;
   onArchive: () => void;
   onRestore: () => void;
+  canArchive?: boolean;
   archivePosting?: boolean;
   restorePosting?: boolean;
   children?: React.ReactNode;
@@ -119,18 +121,20 @@ export function ContactCampaignStickyHeader({
                   <Pencil className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">Edit</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={onArchive}
-                  disabled={archivePosting}
-                  className={cn(crm.btnGhost, "py-1.5 text-xs text-crm-muted hover:text-crm-danger")}
-                  title="Archive contact"
-                >
-                  <Archive className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">{archivePosting ? "Archiving…" : "Archive"}</span>
-                </button>
+                {canArchive ? (
+                  <button
+                    type="button"
+                    onClick={onArchive}
+                    disabled={archivePosting}
+                    className={cn(crm.btnGhost, "py-1.5 text-xs text-crm-muted hover:text-crm-danger")}
+                    title="Archive contact"
+                  >
+                    <Archive className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">{archivePosting ? "Archiving…" : "Archive"}</span>
+                  </button>
+                ) : null}
               </>
-            ) : (
+            ) : canArchive ? (
               <button
                 type="button"
                 onClick={onRestore}
@@ -139,7 +143,7 @@ export function ContactCampaignStickyHeader({
               >
                 {restorePosting ? "Restoring…" : "Restore"}
               </button>
-            )}
+            ) : null}
           </div>
         </div>
         {children ? <div className="border-t border-crm-border/50 pt-2">{children}</div> : null}

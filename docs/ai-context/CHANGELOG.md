@@ -4,6 +4,33 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-01 — CRM edit/archive actions (campaigns, funders, contacts)
+
+**Task:** CRM / campaigns / funders / leads / edit-delete actions  
+**Risk:** high
+
+### Root cause
+
+Soft-archive APIs already existed for campaigns (`status: ARCHIVED`), funders (`active` + `archivedAt`), and contacts (`active` + `archivedAt`), but list rows lacked consistent Edit/Archive menus, several surfaces used `window.confirm` without toasts, funder save called `POST` instead of `PATCH`, contact `PATCH` omitted `assertCrmContactAllowed`, and archive routes required platform JWT admin instead of CRM Manager.
+
+### Changes
+
+- **Portal:** shared `CrmRowActionMenu` + `CrmConfirmModal`; list/detail actions on `/crm/campaigns`, `/crm/funders`, `/crm/contacts`; campaign `EditCampaignModal`; archive confirmations label **Archive** (not hard delete).
+- **API:** contact `PATCH` enforces `assertCrmContactAllowed`; contact/funder archive+restore use `requireCrmManager`; campaign `DELETE` idempotently sets `ARCHIVED` with tenant check.
+- **Tests:** `apps/api/src/crm/crmRecordEditDelete.test.ts` guards route permissions and soft-archive behavior.
+
+### Manual QA
+
+- Manager edits/archives a campaign, funder, and contact from list + detail; archived rows disappear from default lists.
+- Agent edits in-scope contact; cannot archive; out-of-scope edit/archive blocked by API.
+- Active campaign archive shows warning copy; members/timeline/imports remain queryable on archived detail.
+
+### Rollback
+
+Revert API + portal + docs together; deploy `api` and `portal`. No migration.
+
+---
+
 ## 2026-06-01 — CRM workspace template send via tenant sender
 
 **Task:** CRM / email / workspace templates / tenant sender  

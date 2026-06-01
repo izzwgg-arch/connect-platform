@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
-import { requireCrmAccess, requireCrmAdmin, isAdminRole } from "./guard";
+import { requireCrmAccess, requireCrmAdmin, requireCrmManager, isAdminRole } from "./guard";
 import { assertCrmContactAllowed, buildCrmContactListScopeWhere, buildCrmContactMetaListScopeWhere, mergeAndWhereClauses, resolveCrmContactScopeContext, userCanAccessCrmContact } from "./crmContactAccess";
 import { assertCrmCampaignAllowed } from "./userCampaignAccess";
 import { writeTimelineEvent } from "./timelineHelper";
@@ -536,9 +536,9 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     return formatContact(contact, latestPhoneDispositions);
   });
 
-  // ── DELETE /crm/contacts/:id — soft-archive (CRM admin) ────────────────────
+  // ── DELETE /crm/contacts/:id — soft-archive (CRM manager+) ───────────────
   app.delete("/crm/contacts/:id", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmManager(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id } = req.params as { id: string };
@@ -570,9 +570,9 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     return { ok: true, contactId: id };
   });
 
-  // ── POST /crm/contacts/:id/restore — undo soft-archive (CRM admin) ──────────
+  // ── POST /crm/contacts/:id/restore — undo soft-archive (CRM manager+) ─────
   app.post("/crm/contacts/:id/restore", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmManager(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id } = req.params as { id: string };
@@ -620,6 +620,7 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
       },
     });
     if (!existing) return reply.status(404).send({ error: "not_found" });
+    if (!(await assertCrmContactAllowed(user, id, reply))) return;
 
     const data = parsed.data;
 

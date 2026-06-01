@@ -4,6 +4,7 @@ import Link from "next/link";
 import {
   Archive,
   ChevronRight,
+  Edit2,
   ListOrdered,
   Megaphone,
   MoreHorizontal,
@@ -22,12 +23,16 @@ export function CampaignIndexCard({
   canQueue,
   isAdmin,
   onQuickStatus,
+  onEdit,
+  onArchive,
 }: {
   campaign: CampaignListItem;
   metrics?: CampaignReportRow | null;
   canQueue: boolean;
   isAdmin: boolean;
   onQuickStatus: (id: string, status: CampaignListItem["status"], e: React.MouseEvent) => void;
+  onEdit?: (id: string, e: React.MouseEvent) => void;
+  onArchive?: (id: string, e: React.MouseEvent) => void;
 }) {
   const members = campaign.memberCount ?? metrics?.total ?? 0;
   const activeWork = metrics?.pending ?? 0;
@@ -127,7 +132,7 @@ export function CampaignIndexCard({
               {isDraft ? "Start" : "Resume"}
             </button>
           )}
-          {isAdmin && (isActive || isPaused) && (
+          {isAdmin && (onEdit || onArchive || isActive || isPaused) ? (
             <div className="relative group/menu">
               <button
                 type="button"
@@ -137,6 +142,15 @@ export function CampaignIndexCard({
                 <MoreHorizontal className="h-4 w-4" />
               </button>
               <div className={mk.menuPanel}>
+                {onEdit ? (
+                  <button
+                    type="button"
+                    onClick={(e) => onEdit(campaign.id, e)}
+                    className={mk.menuItem}
+                  >
+                    <Edit2 className="h-3 w-3" /> Edit
+                  </button>
+                ) : null}
                 {isActive && (
                   <button
                     type="button"
@@ -146,16 +160,18 @@ export function CampaignIndexCard({
                     <Pause className="h-3 w-3" /> Pause
                   </button>
                 )}
-                <button
-                  type="button"
-                  onClick={(e) => onQuickStatus(campaign.id, "ARCHIVED", e)}
-                  className={cn(mk.menuItem, mk.menuItemDanger)}
-                >
-                  <Archive className="h-3 w-3" /> Archive
-                </button>
+                {onArchive && campaign.status !== "ARCHIVED" ? (
+                  <button
+                    type="button"
+                    onClick={(e) => onArchive(campaign.id, e)}
+                    className={cn(mk.menuItem, mk.menuItemDanger)}
+                  >
+                    <Archive className="h-3 w-3" /> Archive
+                  </button>
+                ) : null}
               </div>
             </div>
-          )}
+          ) : null}
         </div>
       </div>
     </article>
