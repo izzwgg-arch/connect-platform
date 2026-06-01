@@ -922,6 +922,15 @@
   text-decoration: none;
 }
 
+.crm-row-action-menu-panel {
+  min-width: 9.5rem;
+  padding: 0.25rem 0;
+  border-radius: var(--crm-radius, 0.75rem);
+  border: 1px solid var(--crm-border);
+  background: var(--crm-surface);
+  box-shadow: var(--crm-shadow-lg, 0 10px 15px -3px rgb(0 0 0 / 0.1));
+}
+
 .campaigns-right-rail,
 .campaign-detail-rail {
   display: flex;

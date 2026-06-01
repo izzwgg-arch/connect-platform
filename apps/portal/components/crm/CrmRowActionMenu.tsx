@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Archive, Edit2, MoreHorizontal } from "lucide-react";
+import { ViewportDropdown } from "../ViewportDropdown";
 import { cn } from "./cn";
 import { crm } from "./crmClasses";
 
@@ -23,42 +24,33 @@ export function CrmRowActionMenu({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function onDoc(e: MouseEvent) {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const closeMenu = useCallback(() => setOpen(false), []);
 
   if (!onEdit && !onArchive) return null;
 
   return (
-    <div ref={rootRef} className={cn("relative", className)} onClick={(e) => e.stopPropagation()}>
+    <div className={cn("relative", className)} onClick={(e) => e.stopPropagation()}>
       <button
+        ref={triggerRef}
         type="button"
         className={cn(crm.btnGhost, "h-9 w-9 p-0")}
         aria-label={`Actions for ${label}`}
         aria-expanded={open}
+        aria-haspopup="menu"
         onClick={() => setOpen((v) => !v)}
       >
         <MoreHorizontal className="h-4 w-4" />
       </button>
-      {open ? (
-        <div
-          className="absolute right-0 z-20 mt-1 min-w-[9.5rem] rounded-crm border border-crm-border bg-crm-surface py-1 shadow-lg"
-          role="menu"
-        >
+      <ViewportDropdown
+        open={open}
+        triggerRef={triggerRef}
+        onClose={closeMenu}
+        width={152}
+        sideOffset={4}
+        className="crm-row-action-menu-panel"
+      >
+        <div role="menu">
           {onEdit ? (
             <button
               type="button"
@@ -66,7 +58,7 @@ export function CrmRowActionMenu({
               disabled={editDisabled}
               className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-crm-text hover:bg-crm-surface-2/80 disabled:opacity-50"
               onClick={() => {
-                setOpen(false);
+                closeMenu();
                 onEdit();
               }}
             >
@@ -81,7 +73,7 @@ export function CrmRowActionMenu({
               disabled={archiveDisabled}
               className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-crm-danger hover:bg-crm-danger/10 disabled:opacity-50"
               onClick={() => {
-                setOpen(false);
+                closeMenu();
                 onArchive();
               }}
             >
@@ -90,7 +82,7 @@ export function CrmRowActionMenu({
             </button>
           ) : null}
         </div>
-      ) : null}
+      </ViewportDropdown>
     </div>
   );
 }
