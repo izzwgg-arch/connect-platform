@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { db } from "@connect/db";
 import { requireCrmAccess } from "./guard";
+import { assertCrmCampaignAllowed } from "./userCampaignAccess";
 import {
   CRM_IMPORT_MAX_FILE_BYTES,
   CRM_IMPORT_MAX_ROWS,
@@ -33,10 +34,12 @@ export async function registerCrmImportRoutes(app: FastifyInstance) {
 
     let fileBuf: Buffer;
     let fileName: string;
+    let fields: Record<string, string>;
     try {
       const read = await readCrmImportMultipart(req);
       fileBuf = read.fileBuf;
       fileName = read.fileName;
+      fields = read.fields;
     } catch (err: any) {
       if (err?.code === "file_required") {
         return reply.status(400).send({ error: "file_required" });
@@ -82,6 +85,31 @@ export async function registerCrmImportRoutes(app: FastifyInstance) {
       });
     }
 
+    const campaignId = (fields.campaignId ?? "").trim();
+    const assignToMe = (fields.assignToMe ?? fields.assignImportedToMe ?? "").trim() === "true";
+
+    if (assignToMe && !campaignId) {
+      return reply.status(400).send({
+        error: "campaign_required",
+        detail: "Choose a destination campaign to add imported leads to My Queue.",
+      });
+    }
+
+    if (campaignId) {
+      if (!(await assertCrmCampaignAllowed(user, campaignId, reply))) return;
+      const campaign = await db.crmCampaign.findFirst({
+        where: { id: campaignId, tenantId },
+        select: { id: true, status: true },
+      });
+      if (!campaign) return reply.status(404).send({ error: "not_found" });
+      if (campaign.status !== "ACTIVE") {
+        return reply.status(400).send({
+          error: "campaign_not_active",
+          detail: "My Queue only shows leads from active campaigns.",
+        });
+      }
+    }
+
     const batch = await db.crmImportBatch.create({
       data: {
         tenantId,
@@ -98,7 +126,12 @@ export async function registerCrmImportRoutes(app: FastifyInstance) {
     let skippedCount = 0;
     let errorCount = 0;
     let auditErrorCount = 0;
+    let addedMembers = 0;
+    let assignedMembers = 0;
+    let contactAssignments = 0;
+    let skippedAssigned = 0;
     const errors: { row: number; reason: string }[] = [];
+    const importedContactIds: string[] = [];
 
     for (let i = 0; i < dataRows.length; i++) {
       const rawRow = dataRows[i];
@@ -116,6 +149,7 @@ export async function registerCrmImportRoutes(app: FastifyInstance) {
           skippedCount++;
           errors.push({ row: i + 2, reason: result.reason ?? "skipped" });
         }
+        if (result.contactId) importedContactIds.push(result.contactId);
 
         // Write per-row audit record for Drive matching. Awaited — Drive matching
         // depends on these rows. Failure is counted and surfaced in batch response.
@@ -142,6 +176,89 @@ export async function registerCrmImportRoutes(app: FastifyInstance) {
       } catch (err: any) {
         errorCount++;
         errors.push({ row: i + 2, reason: err?.message ?? "unknown_error" });
+      }
+    }
+
+    if (assignToMe && campaignId) {
+      const uniqueContactIds = [...new Set(importedContactIds)];
+      if (uniqueContactIds.length > 0) {
+        const contacts = await db.contact.findMany({
+          where: {
+            id: { in: uniqueContactIds },
+            tenantId,
+            active: true,
+            archivedAt: null,
+            crmMeta: { isNot: null },
+          },
+          select: { id: true, crmMeta: { select: { assignedToUserId: true } } },
+        });
+        const ownedByOther = new Set(
+          contacts
+            .filter((contact) => contact.crmMeta?.assignedToUserId && contact.crmMeta.assignedToUserId !== userId)
+            .map((contact) => contact.id),
+        );
+        const eligibleContactIds = contacts.map((contact) => contact.id).filter((id) => !ownedByOther.has(id));
+        skippedAssigned += ownedByOther.size;
+
+        if (eligibleContactIds.length > 0) {
+          const existingMembers = await db.crmCampaignMember.findMany({
+            where: { tenantId, campaignId, contactId: { in: eligibleContactIds } },
+            select: { id: true, contactId: true, assignedToUserId: true },
+          });
+          const existingByContactId = new Map(existingMembers.map((member) => [member.contactId, member]));
+          const memberIdsToAssign = existingMembers
+            .filter((member) => member.assignedToUserId === null || member.assignedToUserId === userId)
+            .map((member) => member.id);
+          skippedAssigned += existingMembers.filter(
+            (member) => member.assignedToUserId && member.assignedToUserId !== userId,
+          ).length;
+          const contactIdsToCreate = eligibleContactIds.filter((id) => !existingByContactId.has(id));
+
+          await db.$transaction(async (tx) => {
+            if (memberIdsToAssign.length > 0) {
+              const assigned = await tx.crmCampaignMember.updateMany({
+                where: {
+                  id: { in: memberIdsToAssign },
+                  tenantId,
+                  OR: [{ assignedToUserId: null }, { assignedToUserId: userId }],
+                },
+                data: { assignedToUserId: userId },
+              });
+              assignedMembers = assigned.count;
+            }
+
+            if (contactIdsToCreate.length > 0) {
+              const maxOrder = await tx.crmCampaignMember.aggregate({
+                where: { tenantId, campaignId },
+                _max: { sortOrder: true },
+              });
+              const baseOrder = (maxOrder._max.sortOrder ?? -1) + 1;
+              const created = await tx.crmCampaignMember.createMany({
+                data: contactIdsToCreate.map((contactId, idx) => ({
+                  tenantId,
+                  campaignId,
+                  contactId,
+                  assignedToUserId: userId,
+                  status: "PENDING" as const,
+                  attemptCount: 0,
+                  sortOrder: baseOrder + idx,
+                })),
+                skipDuplicates: true,
+              });
+              addedMembers = created.count;
+            }
+
+            const meta = await tx.crmContactMeta.updateMany({
+              where: {
+                tenantId,
+                contactId: { in: eligibleContactIds },
+                OR: [{ assignedToUserId: null }, { assignedToUserId: userId }],
+              },
+              data: { assignedToUserId: userId },
+            });
+            contactAssignments = meta.count;
+          });
+        }
       }
     }
 
@@ -177,6 +294,12 @@ export async function registerCrmImportRoutes(app: FastifyInstance) {
       skippedCount,
       errorCount,
       auditErrorCount,
+      campaignId: campaignId || null,
+      assignedToUserId: assignToMe ? userId : null,
+      addedMembers,
+      assignedMembers,
+      contactAssignments,
+      skippedAssigned,
       errors: errors.slice(0, 50),
       detectedHeaders: headers,
       mapping: colMapping,

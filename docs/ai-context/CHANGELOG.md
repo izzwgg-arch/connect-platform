@@ -4,6 +4,36 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-01 — CRM contacts filters and import-to-queue assignment
+
+**Task:** CRM / contacts page / filters / queue assignment
+**Risk:** high
+
+### Root cause
+
+The contacts filter row rendered six controls into a five-column grid and used native selects, so the Filters button wrapped and dropdowns looked browser-default. Imported contacts also did not reliably appear in My Queue because My Queue reads `CrmCampaignMember.assignedToUserId`, while standalone import created contacts only and contacts assignment wrote `CrmContactMeta.assignedToUserId`.
+
+### Changes
+
+- **Contacts filters:** search is shorter; campaign/tag/timezone/stage filters use `ConnectSelect`; quick status filters and Assigned to me moved into a compact Filters panel.
+- **Contacts shell:** desktop contacts list and right rail use bounded scroll regions under sticky filter chrome; tablet/mobile keep normal page flow.
+- **Queue assignment:** selected contacts can be assigned to self into a chosen active campaign without granting global assignment powers.
+- **Standalone import:** import now requires a destination active campaign and enrolls imported leads as campaign members assigned to the importer so they appear in My Queue.
+- **Scope:** all assignment paths remain CRM-enabled, tenant-scoped, campaign-scoped, and self-only for regular CRM users.
+
+### Manual QA
+
+- Open `/crm/contacts`; confirm filters fit on one row, Filters opens the compact panel, and list/right rail scroll independently on desktop.
+- Import a CSV from `/crm/import`, choose an active destination campaign, and confirm imported leads appear in `/crm/queue`.
+- Select contacts on `/crm/contacts`, choose a queue campaign, click Assign to me, and confirm My Queue updates.
+- Confirm a regular CRM user cannot assign selected/imported leads to another user or across an unassigned tenant/campaign.
+
+### Rollback
+
+Revert the contacts/import portal changes, the CRM import/contact route additions, and this docs entry. No schema rollback is required.
+
+---
+
 ## 2026-05-31 — CRM My Queue workbench simplification
 
 **Task:** CRM / My Queue / UI workbench redesign  

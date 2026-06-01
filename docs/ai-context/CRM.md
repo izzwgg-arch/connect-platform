@@ -21,6 +21,17 @@ Scope: portal CRM UI/data-flow guardrails. Telephony, billing, workers, database
 - **Display:** row badge `AZ` + detail `Arizona (MST)` for Phoenix — never generic `MT` (DST-implying). Denver stays `MT` / `Mountain`. Helpers in `leadTimezoneResolver.ts` (API) and `components/crm/contact/leadTimezoneDisplay.ts` (portal).
 - UI: compact timezone badge on `/crm/contacts` rows and contact detail near address — no extra columns or noisy panels.
 
+## Contacts filters and My Queue assignment
+
+- `/crm/contacts` filter chrome is a compact single-row toolbar: search, All campaigns, All tags, All timezones, All stages, then Filters. Status-style quick filters live inside the Filters panel, not in a second row.
+- Contact filter dropdowns use `ConnectSelect` / `ViewportDropdown` styling instead of native select controls. Keep campaign/tag/timezone/stage option mapping in `components/crm/contact/contactFilterOptions.ts`.
+- `GET /crm/contacts?campaignId=...` is tenant-scoped and uses existing campaign allow-list checks before filtering contacts by `CrmCampaignMember`.
+- On desktop, the contacts list and right insights rail scroll independently below sticky filter chrome. Tablet/mobile should fall back to normal page scroll.
+- My Queue is campaign-member based: `GET /crm/queue` reads `CrmCampaignMember.assignedToUserId`, not just `CrmContactMeta.assignedToUserId`.
+- Standalone `/crm/import` requires a destination active campaign for queue assignment. `POST /crm/import/upload` accepts `campaignId` + `assignToMe=true`, creates/skips campaign members for imported contacts, and assigns eligible members to the importer only.
+- Contacts bulk self-assignment uses `POST /crm/contacts/assign-to-me` with `contactIds` + `campaignId`. It requires CRM access, contact scope, campaign access, active campaign status, tenant-scoped contacts, and only writes `assignedToUserId = current user`. It must not accept arbitrary assignee IDs for regular users.
+- Admin/global contact assignment remains separate (`/crm/contacts/bulk-reassign`, `/crm/contacts/smart-assign`) and writes contact meta assignment; do not use those endpoints to grant regular users cross-user assignment.
+
 ## CRM role permissions (portal + API)
 
 | CrmUserAccess role | Portal legacy keys | CRM Email nav (`can_view_crm_email`) | CRM Email settings (`can_view_crm_settings`) |

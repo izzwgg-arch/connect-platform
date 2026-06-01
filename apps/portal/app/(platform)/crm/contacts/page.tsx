@@ -45,7 +45,15 @@ import {
   leadTimezoneBadgeShort,
   leadTimezoneBadgeTitle,
 } from "../../../../components/crm/contact/leadTimezoneDisplay";
+import {
+  buildCampaignFilterOptions,
+  buildStageFilterOptions,
+  buildTagFilterOptions,
+  buildTimezoneFilterOptions,
+} from "../../../../components/crm/contact/contactFilterOptions";
 import { BulkEmailModal } from "../../../../components/crm/email/BulkEmailModal";
+import { ConnectSelect, type SelectOption } from "../../../../components/ConnectSelect";
+import { ViewportDropdown } from "../../../../components/ViewportDropdown";
 import { apiGet, apiPost } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 
@@ -106,6 +114,12 @@ type CrmUser = {
   displayName: string;
   email: string;
   crmEnabled: boolean;
+};
+
+type CampaignFilterOption = {
+  id: string;
+  name: string;
+  status?: string;
 };
 
 // ── Stage config ──────────────────────────────────────────────────────────────
@@ -492,18 +506,24 @@ export default function CrmContactsPage() {
   const [stage, setStage] = useState<CrmStage | "all">("all");
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
   const [tagFilter, setTagFilter] = useState("all");
+  const [campaignFilter, setCampaignFilter] = useState("all");
   const [assignedToMe, setAssignedToMe] = useState(false);
   const [timezoneZone, setTimezoneZone] = useState<TimezoneZoneFilter>("all");
   const [archiveScope, setArchiveScope] = useState<ArchiveListScope>("active");
   const [page, setPage] = useState(0);
   const [showAdd, setShowAdd] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [campaigns, setCampaigns] = useState<CampaignFilterOption[]>([]);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [crmUsers, setCrmUsers] = useState<CrmUser[]>([]);
   const [bulkAssignUserId, setBulkAssignUserId] = useState<string>("");
+  const [bulkQueueCampaignId, setBulkQueueCampaignId] = useState<string>("");
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
   const [bulkSkipped, setBulkSkipped] = useState<number>(0);
+  const [selfAssigning, setSelfAssigning] = useState(false);
+  const [selfAssignMessage, setSelfAssignMessage] = useState<string | null>(null);
 
   // Smart assign (quantity-based, unassigned-only)
   const [showSmartAssign, setShowSmartAssign] = useState(false);
@@ -517,6 +537,7 @@ export default function CrmContactsPage() {
   const [bulkEmailToast, setBulkEmailToast] = useState<string | null>(null);
 
   const searchRef = useRef<HTMLInputElement>(null);
+  const filtersButtonRef = useRef<HTMLButtonElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(
@@ -527,6 +548,7 @@ export default function CrmContactsPage() {
       scope: ArchiveListScope,
       pageIdx: number,
       tz: TimezoneZoneFilter,
+      campaignId: string,
     ) => {
       setLoading(true);
       setError(null);
@@ -534,6 +556,7 @@ export default function CrmContactsPage() {
         const params = new URLSearchParams();
         if (q) params.set("q", q);
         if (s !== "all") params.set("stage", s);
+        if (campaignId !== "all") params.set("campaignId", campaignId);
         if (mine) params.set("assignedToMe", "true");
         if (tz !== "all") params.set("timezoneZone", tz);
         params.set("limit", String(CONTACTS_PAGE_LIMIT));
@@ -565,22 +588,38 @@ export default function CrmContactsPage() {
   }, [isAdmin, archiveScope]);
 
   useEffect(() => {
-    void load(search, stage, assignedToMe, isAdmin ? archiveScope : "active", page, timezoneZone);
+    void load(search, stage, assignedToMe, isAdmin ? archiveScope : "active", page, timezoneZone, campaignFilter);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- search is applied via debounced handler; this effect refetches when scope/stage/assignee/page change
-  }, [stage, assignedToMe, archiveScope, page, timezoneZone, load, isAdmin]);
+  }, [stage, assignedToMe, archiveScope, page, timezoneZone, campaignFilter, load, isAdmin]);
 
   useEffect(() => {
     setSelectedIds(new Set());
     setBulkAssignUserId("");
+    setBulkQueueCampaignId(campaignFilter !== "all" ? campaignFilter : "");
     setBulkError(null);
-  }, [archiveScope]);
+    setSelfAssignMessage(null);
+  }, [archiveScope, campaignFilter]);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiGet<{ campaigns: CampaignFilterOption[] }>("/crm/campaigns?status=ACTIVE")
+      .then((data) => {
+        if (!cancelled) setCampaigns(data.campaigns ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setCampaigns([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleSearchChange = (val: string) => {
     setSearch(val);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       setPage(0);
-      void load(val, stage, assignedToMe, isAdmin ? archiveScope : "active", 0, timezoneZone);
+      void load(val, stage, assignedToMe, isAdmin ? archiveScope : "active", 0, timezoneZone, campaignFilter);
     }, 320);
   };
 
@@ -613,6 +652,32 @@ export default function CrmContactsPage() {
     URL.revokeObjectURL(url);
   };
 
+  const handleExportSelectedCsv = () => {
+    const selectedRows = displayedRows.filter((c) => selectedIds.has(c.id));
+    if (selectedRows.length === 0) return;
+    const headers = ["Name", "Company", "Phone", "Email", "Stage", "Assigned To", "Last Activity"];
+    const csvRows = selectedRows.map((c) =>
+      [
+        c.displayName,
+        c.company ?? "",
+        c.primaryPhone?.numberRaw ?? "",
+        c.primaryEmail?.email ?? "",
+        c.crmStage ? STAGE_LABELS[c.crmStage] : "",
+        assignedLabel(c.assignedTo),
+        c.lastActivityAt ? formatShortDate(c.lastActivityAt) : "",
+      ]
+        .map((v) => `"${String(v).replaceAll('"', '""')}"`)
+        .join(","),
+    );
+    const blob = new Blob([[headers.join(","), ...csvRows].join("\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `crm-contacts-selected-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const loadCrmUsers = useCallback(async () => {
     if (crmUsers.length > 0) return;
     try {
@@ -633,7 +698,7 @@ export default function CrmContactsPage() {
   };
 
   const toggleSelectAll = () => {
-    const selectable = rows.filter((r) => !isContactArchived(r));
+    const selectable = displayedRows.filter((r) => !isContactArchived(r));
     const selectableIds = new Set(selectable.map((r) => r.id));
     const allSelectableSelected =
       selectable.length > 0 && selectable.every((r) => selectedIds.has(r.id));
@@ -648,8 +713,10 @@ export default function CrmContactsPage() {
   const clearSelection = () => {
     setSelectedIds(new Set());
     setBulkAssignUserId("");
+    setBulkQueueCampaignId(campaignFilter !== "all" ? campaignFilter : "");
     setBulkError(null);
     setBulkSkipped(0);
+    setSelfAssignMessage(null);
   };
 
   const handleBulkReassign = async (assignUserId: string | null) => {
@@ -691,6 +758,42 @@ export default function CrmContactsPage() {
     }
   };
 
+  const handleAssignSelectedToMe = async () => {
+    if (selectedIds.size === 0) return;
+    const campaignId = bulkQueueCampaignId || (campaignFilter !== "all" ? campaignFilter : "");
+    if (!campaignId) {
+      setBulkError("Choose a campaign before adding selected leads to My Queue.");
+      return;
+    }
+    setSelfAssigning(true);
+    setBulkError(null);
+    setSelfAssignMessage(null);
+    try {
+      const res = await apiPost<{
+        ok: boolean;
+        assignedMembers: number;
+        addedMembers: number;
+        contactAssignments: number;
+        skippedAssigned: number;
+      }>("/crm/contacts/assign-to-me", {
+        contactIds: Array.from(selectedIds),
+        campaignId,
+      });
+      setSelfAssignMessage(
+        `Added ${res.addedMembers + res.assignedMembers} lead${res.addedMembers + res.assignedMembers === 1 ? "" : "s"} to My Queue` +
+          (res.skippedAssigned > 0 ? ` · ${res.skippedAssigned} skipped` : ""),
+      );
+      setSelectedIds(new Set());
+      setBulkAssignUserId("");
+      setBulkSkipped(0);
+      void load(search, stage, assignedToMe, isAdmin ? archiveScope : "active", page, timezoneZone, campaignFilter);
+    } catch (e: unknown) {
+      setBulkError((e as Error)?.message || "Assign to me failed");
+    } finally {
+      setSelfAssigning(false);
+    }
+  };
+
   const handleSmartAssign = async () => {
     const count = parseInt(smartAssignCount, 10);
     if (!count || count < 1 || !smartAssignUserId) return;
@@ -705,7 +808,7 @@ export default function CrmContactsPage() {
       );
       setSmartAssignResult({ assigned: res.assigned, remaining: res.remaining });
       // Refresh the contacts list to reflect new assignments
-      void load(search, stage, assignedToMe, isAdmin ? archiveScope : "active", page, timezoneZone);
+      void load(search, stage, assignedToMe, isAdmin ? archiveScope : "active", page, timezoneZone, campaignFilter);
     } catch (e: unknown) {
       setSmartAssignError((e as Error)?.message || "Smart assign failed");
     } finally {
@@ -724,6 +827,31 @@ export default function CrmContactsPage() {
     return Array.from(counts.values()).sort((a, b) => b.count - a.count || a.tag.name.localeCompare(b.tag.name));
   }, [rows]);
 
+  const campaignOptions = useMemo<SelectOption[]>(
+    () => buildCampaignFilterOptions(campaigns),
+    [campaigns],
+  );
+
+  const queueCampaignOptions = useMemo<SelectOption[]>(
+    () => campaigns.map((campaign) => ({ value: campaign.id, label: campaign.name })),
+    [campaigns],
+  );
+
+  const tagOptions = useMemo<SelectOption[]>(
+    () => buildTagFilterOptions(pageTagOptions),
+    [pageTagOptions],
+  );
+
+  const timezoneOptions = useMemo<SelectOption[]>(
+    () => buildTimezoneFilterOptions(TIMEZONE_ZONE_OPTIONS),
+    [],
+  );
+
+  const stageOptions = useMemo<SelectOption[]>(
+    () => buildStageFilterOptions([...FILTER_TABS], STAGE_LABELS),
+    [],
+  );
+
   const displayedRows = useMemo(() => {
     return rows.filter((c) => {
       const matchesTag = tagFilter === "all" || (c.tags ?? []).some((t) => t.id === tagFilter);
@@ -737,6 +865,7 @@ export default function CrmContactsPage() {
 
   const hasListFilters =
     !!search ||
+    campaignFilter !== "all" ||
     stage !== "all" ||
     quickFilter !== "all" ||
     tagFilter !== "all" ||
@@ -794,12 +923,13 @@ export default function CrmContactsPage() {
     setStage("all");
     setQuickFilter("all");
     setTagFilter("all");
+    setCampaignFilter("all");
     setAssignedToMe(false);
     if (isAdmin) setArchiveScope("active");
     setTimezoneZone("all");
     setPage(0);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    void load("", "all", false, "active", 0, "all");
+    void load("", "all", false, "active", 0, "all", "all");
   };
 
   const firstEmail = displayedRows.find((c) => c.primaryEmail)?.primaryEmail?.email;
@@ -860,7 +990,7 @@ export default function CrmContactsPage() {
         </section>
       )}
 
-      <CRMCard className={cn(crm.contactsPanel, crm.contactsFilterBar, "p-4 sm:p-5")}>
+      <CRMCard className={cn(crm.contactsPanel, crm.contactsFilterBar, "contacts-sticky-chrome p-3 sm:p-4")}>
         <div className="contacts-filter-grid">
           <div className="contacts-search-wrap">
             <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-crm-muted/80" />
@@ -879,7 +1009,7 @@ export default function CrmContactsPage() {
                   setSearch("");
                   setPage(0);
                   if (debounceRef.current) clearTimeout(debounceRef.current);
-                  void load("", stage, assignedToMe, isAdmin ? archiveScope : "active", 0, timezoneZone);
+                  void load("", stage, assignedToMe, isAdmin ? archiveScope : "active", 0, timezoneZone, campaignFilter);
                 }}
                 className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1.5 text-crm-muted/80 hover:bg-crm-surface-2"
                 aria-label="Clear search"
@@ -888,96 +1018,128 @@ export default function CrmContactsPage() {
               </button>
             )}
           </div>
-          <select className="contacts-filter-select" aria-label="Campaign filter" disabled>
-            <option>All campaigns</option>
-          </select>
-          <select
-            className="contacts-filter-select"
-            aria-label="Tag filter"
+          <ConnectSelect
+            value={campaignFilter}
+            onChange={(value) => {
+              setCampaignFilter(value);
+              setBulkQueueCampaignId(value !== "all" ? value : "");
+              setPage(0);
+            }}
+            options={campaignOptions}
+            size="md"
+            className="contacts-modern-select"
+            dropdownWidth={260}
+          />
+          <ConnectSelect
             value={tagFilter}
-            onChange={(e) => setTagFilter(e.target.value)}
-          >
-            <option value="all">All tags</option>
-            {pageTagOptions.map(({ tag: tagItem, count }) => (
-              <option key={tagItem.id} value={tagItem.id}>{tagItem.name} ({count})</option>
-            ))}
-          </select>
-          <select
-            className="contacts-filter-select"
-            aria-label="Timezone filter"
+            onChange={(value) => {
+              setTagFilter(value);
+              setPage(0);
+            }}
+            options={tagOptions}
+            size="md"
+            className="contacts-modern-select"
+            dropdownWidth={260}
+          />
+          <ConnectSelect
             value={timezoneZone}
-            onChange={(e) => {
-              setTimezoneZone(e.target.value as TimezoneZoneFilter);
+            onChange={(value) => {
+              setTimezoneZone(value as TimezoneZoneFilter);
               setPage(0);
             }}
-          >
-            {TIMEZONE_ZONE_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-          <select
-            className="contacts-filter-select"
-            aria-label="Status filter"
+            options={timezoneOptions}
+            size="md"
+            className="contacts-modern-select"
+            dropdownWidth={240}
+          />
+          <ConnectSelect
             value={stage}
-            onChange={(e) => {
+            onChange={(value) => {
               setPage(0);
-              setStage(e.target.value as CrmStage | "all");
+              setStage(value as CrmStage | "all");
             }}
+            options={stageOptions}
+            size="md"
+            className="contacts-modern-select"
+            dropdownWidth={220}
+          />
+          <button
+            ref={filtersButtonRef}
+            type="button"
+            onClick={() => setFiltersOpen((open) => !open)}
+            className="contacts-filter-button"
+            aria-haspopup="dialog"
+            aria-expanded={filtersOpen}
           >
-            {FILTER_TABS.map((tab) => (
-              <option key={tab} value={tab}>{STAGE_LABELS[tab]}</option>
-            ))}
-          </select>
-          <button type="button" onClick={resetFilters} className="contacts-filter-button">
             <Filter className="h-4 w-4" />
             Filters
           </button>
         </div>
-
-        <div className="mt-4 flex flex-col gap-3 border-t border-crm-border/60 pt-4">
-          <div className="flex flex-wrap gap-2" role="group" aria-label="Quick filters">
-            {QUICK_FILTERS.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                onClick={() => setQuickFilter(item.key)}
-                className={quickFilter === item.key ? crm.filterPillActive : crm.filterPill}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {isAdmin && (
-              <div className={crm.filterPillGroup} role="group" aria-label="List scope">
-                <span className="pl-1 text-[10px] font-semibold uppercase tracking-wide text-crm-muted/80">List</span>
-                {(["active", "archived", "all"] as const).map((key) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => {
-                      setPage(0);
-                      setArchiveScope(key);
-                    }}
-                    className={archiveScope === key ? crm.filterPillActive : crm.filterPill}
-                  >
-                    {ARCHIVE_SCOPE_LABELS[key]}
-                  </button>
-                ))}
+        <ViewportDropdown
+          open={filtersOpen}
+          triggerRef={filtersButtonRef}
+          onClose={() => setFiltersOpen(false)}
+          width={320}
+          sideOffset={8}
+          className="contacts-filter-panel"
+        >
+          <div className="contacts-filter-panel-inner" role="dialog" aria-label="Contact filters">
+            <div className="contacts-filter-panel-head">
+              <div>
+                <p className="text-sm font-bold text-crm-text">Quick filters</p>
+                <p className="text-xs text-crm-muted">Status and ownership filters</p>
               </div>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                setPage(0);
-                setAssignedToMe((v) => !v);
-              }}
-              className={assignedToMe ? crm.filterPillActive : crm.filterPill}
-            >
-              Assigned to me
-            </button>
+              <button type="button" onClick={resetFilters} className="contacts-filter-reset">
+                Reset
+              </button>
+            </div>
+            <div className="contacts-filter-panel-grid" role="group" aria-label="Quick filters">
+              {QUICK_FILTERS.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => {
+                    setQuickFilter(item.key);
+                    setPage(0);
+                  }}
+                  className={quickFilter === item.key ? crm.filterPillActive : crm.filterPill}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+            <div className="contacts-filter-panel-section">
+              <button
+                type="button"
+                onClick={() => {
+                  setPage(0);
+                  setAssignedToMe((v) => !v);
+                }}
+                className={assignedToMe ? crm.filterPillActive : crm.filterPill}
+              >
+                Assigned to me
+              </button>
+              {isAdmin && (
+                <div className={cn(crm.filterPillGroup, "contacts-filter-panel-scope")} role="group" aria-label="List scope">
+                  <span className="pl-1 text-[10px] font-semibold uppercase tracking-wide text-crm-muted/80">List</span>
+                  {(["active", "archived", "all"] as const).map((key) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => {
+                        setPage(0);
+                        setArchiveScope(key);
+                      }}
+                      className={archiveScope === key ? crm.filterPillActive : crm.filterPill}
+                    >
+                      {ARCHIVE_SCOPE_LABELS[key]}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        </ViewportDropdown>
       </CRMCard>
 
       {/* Smart Assign panel — admin only, quantity-based, unassigned leads only */}
@@ -1048,32 +1210,72 @@ export default function CrmContactsPage() {
         </div>
       )}
 
-      {isAdmin && selectedIds.size > 0 && (
+      {(selfAssignMessage || bulkError) && selectedIds.size === 0 && (
+        <div className={cn(crm.contactsBulkBar, "border-crm-border bg-crm-surface shadow-crm")}>
+          {selfAssignMessage && <span className="text-sm font-medium text-crm-success">{selfAssignMessage}</span>}
+          {bulkError && <span className="text-sm font-medium text-crm-danger">{bulkError}</span>}
+        </div>
+      )}
+
+      {selectedIds.size > 0 && (
         <div className={cn(crm.contactsBulkBar, "border-crm-border bg-crm-surface shadow-crm")}>
             <span className="text-sm font-medium text-crm-text">{selectedIds.size} selected</span>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setShowBulkEmail(true)}
+                className={cn(crm.btnSecondary, "px-3 py-1.5 text-sm gap-1.5")}
+              >
+                <Mail className="h-3.5 w-3.5" />
+                Send Email
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => setShowBulkEmail(true)}
-              className={cn(crm.btnSecondary, "px-3 py-1.5 text-sm gap-1.5")}
+              disabled
+              className={cn(crm.btnSecondary, "px-3 py-1.5 text-sm gap-1.5 opacity-60")}
+              title="Bulk tag API is not available yet."
             >
-              <Mail className="h-3.5 w-3.5" />
-              Send Email
+              <Tag className="h-3.5 w-3.5" />
+              Add Tag
             </button>
-            <select
-              value={bulkAssignUserId}
-              onChange={(e) => {
-                setBulkAssignUserId(e.target.value);
-                void loadCrmUsers();
-              }}
-              className={crm.selectCompact}
+            <ConnectSelect
+              value={bulkQueueCampaignId}
+              onChange={setBulkQueueCampaignId}
+              options={queueCampaignOptions}
+              placeholder="Queue campaign…"
+              size="sm"
+              className="contacts-bulk-select"
+              dropdownWidth={260}
+            />
+            <button
+              type="button"
+              onClick={handleAssignSelectedToMe}
+              disabled={selfAssigning || !bulkQueueCampaignId}
+              className={cn(crm.btnSecondary, "px-3 py-1.5 text-sm disabled:opacity-50")}
             >
-              <option value="">Assign to…</option>
-              {crmUsers.map((u) => (
-                <option key={u.userId} value={u.userId}>
-                  {u.displayName}
-                </option>
-              ))}
-            </select>
+              <UserCheck className="h-3.5 w-3.5" />
+              {selfAssigning ? "Adding…" : "Assign to me"}
+            </button>
+            {isAdmin && (
+              <select
+                value={bulkAssignUserId}
+                onChange={(e) => {
+                  setBulkAssignUserId(e.target.value);
+                  void loadCrmUsers();
+                }}
+                className={crm.selectCompact}
+              >
+                <option value="">Assign to…</option>
+                {crmUsers.map((u) => (
+                  <option key={u.userId} value={u.userId}>
+                    {u.displayName}
+                  </option>
+                ))}
+              </select>
+            )}
+            {isAdmin && (
+              <>
             <button
               type="button"
               onClick={() => handleBulkReassign(bulkAssignUserId || null)}
@@ -1081,7 +1283,7 @@ export default function CrmContactsPage() {
               className={cn(crm.btnSecondary, "px-3 py-1.5 text-sm disabled:opacity-50")}
             >
               <UserCheck className="h-3.5 w-3.5" />
-              {bulkAssigning ? "Assigning…" : "Assign"}
+              {bulkAssigning ? "Applying…" : "Apply"}
             </button>
             <button
               type="button"
@@ -1090,6 +1292,16 @@ export default function CrmContactsPage() {
               className="text-sm font-medium text-crm-muted hover:text-crm-text disabled:opacity-50"
             >
               Clear assignment
+            </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={handleExportSelectedCsv}
+              className={cn(crm.btnSecondary, "px-3 py-1.5 text-sm gap-1.5")}
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export
             </button>
             {bulkSkipped > 0 && (
               <span className="text-xs text-amber-600 dark:text-amber-400">
@@ -1152,20 +1364,16 @@ export default function CrmContactsPage() {
           <div className="min-w-0">
             <CRMCard className={cn(crm.contactsPanel, crm.contactsListShell)}>
               <div className={cn(crm.contactsListSelectBar, "border-crm-border bg-crm-surface-2/40")}>
-                {isAdmin ? (
-                  <label className="flex cursor-pointer items-center gap-2.5 text-sm text-crm-muted">
-                    <input
-                      type="checkbox"
-                      checked={allSelectableSelected}
-                      onChange={toggleSelectAll}
-                      disabled={selectableRows.length === 0}
-                      className={crm.checkbox}
-                    />
-                    <span>Select active on this page</span>
-                  </label>
-                ) : (
-                  <span className="text-sm font-semibold text-crm-text">Contact directory</span>
-                )}
+                <label className="flex cursor-pointer items-center gap-2.5 text-sm text-crm-muted">
+                  <input
+                    type="checkbox"
+                    checked={allSelectableSelected}
+                    onChange={toggleSelectAll}
+                    disabled={selectableRows.length === 0}
+                    className={crm.checkbox}
+                  />
+                  <span>Select active on this page</span>
+                </label>
                 <span className="ml-auto text-xs text-crm-muted">{displayedRows.length} shown · {total} total</span>
               </div>
               <ul className="contacts-row-list">
@@ -1174,24 +1382,22 @@ export default function CrmContactsPage() {
                   return (
                     <li key={c.id} className={cn(crm.contactsListRow, "contacts-list-item", archived && "opacity-80")}>
                       <div className="contacts-row-grid">
-                        {isAdmin && (
-                          <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
-                            {!archived ? (
-                              <input
-                                type="checkbox"
-                                checked={selectedIds.has(c.id)}
-                                onChange={() => {
-                                  toggleSelect(c.id);
-                                  void loadCrmUsers();
-                                }}
-                                className={crm.checkbox}
-                                aria-label={`Select ${c.displayName}`}
-                              />
-                            ) : (
-                              <Archive className="h-4 w-4 text-crm-muted" />
-                            )}
-                          </div>
-                        )}
+                        <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+                          {!archived ? (
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(c.id)}
+                              onChange={() => {
+                                toggleSelect(c.id);
+                                void loadCrmUsers();
+                              }}
+                              className={crm.checkbox}
+                              aria-label={`Select ${c.displayName}`}
+                            />
+                          ) : (
+                            <Archive className="h-4 w-4 text-crm-muted" />
+                          )}
+                        </div>
                         <div className="contacts-avatar">{initials(c.displayName)}</div>
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">

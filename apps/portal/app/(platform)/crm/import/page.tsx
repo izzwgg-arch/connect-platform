@@ -39,6 +39,18 @@ type ImportBatch = {
 type UploadResult = ImportBatch & {
   detectedHeaders?: string[];
   mapping?: Record<string, string>;
+  campaignId?: string | null;
+  assignedToUserId?: string | null;
+  addedMembers?: number;
+  assignedMembers?: number;
+  contactAssignments?: number;
+  skippedAssigned?: number;
+};
+
+type CampaignOption = {
+  id: string;
+  name: string;
+  status: string;
 };
 
 // ── Status helpers ────────────────────────────────────────────────────────────
@@ -136,6 +148,12 @@ function BatchCard({ batch, showDetailLink }: { batch: ImportBatch; showDetailLi
           {batch.updatedCount > 0 && <span style={{ fontSize: "0.8125rem" }}><strong style={{ color: "#3b82f6" }}>{batch.updatedCount}</strong> <span style={{ color: "var(--text-dim)" }}>updated</span></span>}
           {batch.skippedCount > 0 && <span style={{ fontSize: "0.8125rem" }}><strong style={{ color: "#6b7280" }}>{batch.skippedCount}</strong> <span style={{ color: "var(--text-dim)" }}>skipped</span></span>}
           {batch.errorCount > 0 && <span style={{ fontSize: "0.8125rem" }}><strong style={{ color: "#ef4444" }}>{batch.errorCount}</strong> <span style={{ color: "var(--text-dim)" }}>errors</span></span>}
+          {typeof (batch as UploadResult).addedMembers === "number" && (
+            <span style={{ fontSize: "0.8125rem" }}>
+              <strong style={{ color: "#10b981" }}>{((batch as UploadResult).addedMembers ?? 0) + ((batch as UploadResult).assignedMembers ?? 0)}</strong>{" "}
+              <span style={{ color: "var(--text-dim)" }}>added to My Queue</span>
+            </span>
+          )}
         </div>
       )}
 
@@ -177,6 +195,14 @@ function BatchCard({ batch, showDetailLink }: { batch: ImportBatch; showDetailLi
             style={{ fontSize: "0.8125rem", color: "var(--accent)", fontWeight: 600, textDecoration: "none" }}
           >
             View imported contacts →
+          </Link>
+        )}
+        {(batch.status === "DONE" || batch.status === "PARTIAL") && ((batch as UploadResult).addedMembers ?? 0) + ((batch as UploadResult).assignedMembers ?? 0) > 0 && (
+          <Link
+            href="/crm/queue"
+            style={{ fontSize: "0.8125rem", color: "var(--accent)", fontWeight: 600, textDecoration: "none" }}
+          >
+            Open My Queue →
           </Link>
         )}
         {/* Drive document matching */}
@@ -395,6 +421,8 @@ function CrmImportPageInner() {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<UploadResult | null>(null);
+  const [campaigns, setCampaigns] = useState<CampaignOption[]>([]);
+  const [selectedCampaignId, setSelectedCampaignId] = useState("");
 
   // History state
   const [history, setHistory] = useState<ImportBatch[]>([]);
@@ -419,6 +447,20 @@ function CrmImportPageInner() {
   }, []);
 
   useEffect(() => { loadHistory(); }, [loadHistory]);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiGet<{ campaigns: CampaignOption[] }>("/crm/campaigns?status=ACTIVE")
+      .then((data) => {
+        if (!cancelled) setCampaigns(data.campaigns ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setCampaigns([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!batchFromQuery?.trim()) {
@@ -493,6 +535,8 @@ function CrmImportPageInner() {
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
+      formData.append("assignToMe", "true");
+      formData.append("campaignId", selectedCampaignId);
 
       // Use fetch directly — apiPost doesn't handle multipart FormData.
       // Replicate the same token + base-url logic as apiClient.ts.
@@ -631,14 +675,40 @@ function CrmImportPageInner() {
           </div>
         )}
 
+        <div style={{ display: "grid", gap: "0.4rem", maxWidth: "32rem" }}>
+          <label htmlFor="crm-import-campaign" style={{ fontSize: "0.8125rem", fontWeight: 700, color: "var(--text)" }}>
+            Destination campaign for My Queue
+          </label>
+          <select
+            id="crm-import-campaign"
+            value={selectedCampaignId}
+            onChange={(e) => setSelectedCampaignId(e.target.value)}
+            style={{
+              ...btnBase,
+              width: "100%",
+              textAlign: "left",
+              background: "var(--surface-hover)",
+              color: "var(--text)",
+            }}
+          >
+            <option value="">Choose active campaign…</option>
+            {campaigns.map((campaign) => (
+              <option key={campaign.id} value={campaign.id}>{campaign.name}</option>
+            ))}
+          </select>
+          <p style={{ margin: 0, fontSize: "0.8125rem", color: "var(--text-dim)" }}>
+            Imported leads will be enrolled in this campaign and assigned to you so they appear in My Queue.
+          </p>
+        </div>
+
         {/* Actions row */}
         <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
           <button
             onClick={handleUpload}
-            disabled={!selectedFile || uploading}
-            style={{ ...btnBase, background: "var(--accent)", color: "#fff", borderColor: "var(--accent)", opacity: (!selectedFile || uploading) ? 0.5 : 1 }}
+            disabled={!selectedFile || uploading || !selectedCampaignId}
+            style={{ ...btnBase, background: "var(--accent)", color: "#fff", borderColor: "var(--accent)", opacity: (!selectedFile || uploading || !selectedCampaignId) ? 0.5 : 1 }}
           >
-            {uploading ? "Importing…" : "Import CSV"}
+            {uploading ? "Importing…" : "Import CSV and add to My Queue"}
           </button>
           {!selectedFile && (
             <button

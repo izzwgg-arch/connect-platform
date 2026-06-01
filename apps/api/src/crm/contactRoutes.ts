@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "@connect/db";
 import { requireCrmAccess, requireCrmAdmin, isAdminRole } from "./guard";
 import { assertCrmContactAllowed, buildCrmContactListScopeWhere, buildCrmContactMetaListScopeWhere, mergeAndWhereClauses, resolveCrmContactScopeContext, userCanAccessCrmContact } from "./crmContactAccess";
+import { assertCrmCampaignAllowed } from "./userCampaignAccess";
 import { writeTimelineEvent } from "./timelineHelper";
 import { checkAndAutoCompleteCampaign } from "./campaignAutoComplete";
 import { buildLeadTimezoneMetaFilter, shouldRecomputeLeadTimezone } from "./leadTimezoneResolver";
@@ -284,6 +285,7 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
         timezoneIana: z.string().optional(),
         timezoneLabel: z.string().optional(),
         timezoneZone: z.string().optional(),
+        campaignId: z.string().optional(),
       })
       .parse(req.query || {});
 
@@ -292,6 +294,7 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     const search = (query.q || "").trim().toLowerCase();
     const includeArchived = query.includeArchived === true;
     const archivedOnly = query.archivedOnly === true;
+    const campaignId = query.campaignId?.trim() || "";
 
     if (includeArchived && !isAdminRole(user.role)) {
       return reply.status(403).send({
@@ -365,11 +368,22 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
 
     const scopeCtx = await resolveCrmContactScopeContext(user);
     const scopeWhere = buildCrmContactListScopeWhere(tenantId, scopeCtx);
+    if (campaignId && !(await assertCrmCampaignAllowed(user, campaignId, reply))) return;
 
     const listWhere = mergeAndWhereClauses(
       {
         tenantId,
         ...archiveClause,
+        ...(campaignId
+          ? {
+              crmCampaignMembers: {
+                some: {
+                  tenantId,
+                  campaignId,
+                },
+              },
+            }
+          : {}),
         crmMeta: { is: baseCrmMetaFilter },
       },
       search ? searchWhere : null,
@@ -388,7 +402,7 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     ]);
 
     return {
-      rows: rows.map((c) => formatContact(c)),
+      rows: rows.map((c: any) => formatContact(c)),
       total,
       page,
       limit,
@@ -1168,6 +1182,152 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     const skipped = skipAssigned && assignedToUserId ? contactIds.length - result.count : 0;
 
     return { ok: true, updated: result.count, skipped };
+  });
+
+  // Self-service assignment: enroll selected, in-scope contacts into a caller-accessible
+  // active campaign and assign those queue members to the caller only.
+  app.post("/crm/contacts/assign-to-me", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply);
+    if (!user) return;
+    const { tenantId, sub: userId } = user;
+
+    const schema = z.object({
+      contactIds: z.array(z.string().min(1)).min(1).max(500),
+      campaignId: z.string().min(1),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "invalid_payload", detail: parsed.error.format() });
+    }
+    const contactIds = [...new Set(parsed.data.contactIds)];
+    const { campaignId } = parsed.data;
+
+    if (!(await assertCrmCampaignAllowed(user, campaignId, reply))) return;
+
+    const campaign = await db.crmCampaign.findFirst({
+      where: { id: campaignId, tenantId },
+      select: { id: true, status: true },
+    });
+    if (!campaign) return reply.status(404).send({ error: "not_found" });
+    if (campaign.status !== "ACTIVE") {
+      return reply.status(400).send({
+        error: "campaign_not_active",
+        detail: "My Queue only shows leads from active campaigns.",
+      });
+    }
+
+    const contacts = await db.contact.findMany({
+      where: {
+        id: { in: contactIds },
+        tenantId,
+        active: true,
+        archivedAt: null,
+        crmMeta: { isNot: null },
+      },
+      select: {
+        id: true,
+        crmMeta: { select: { assignedToUserId: true } },
+      },
+    });
+    if (contacts.length !== contactIds.length) {
+      return reply.status(404).send({ error: "contact_not_found" });
+    }
+
+    const allowed = await Promise.all(
+      contacts.map((contact) => userCanAccessCrmContact(tenantId, userId, user.role, contact.id)),
+    );
+    if (allowed.some((ok) => !ok)) {
+      return reply.status(403).send({ error: "forbidden", detail: "Contact not in your CRM scope." });
+    }
+
+    const contactIdsOwnedByOther = new Set(
+      contacts
+        .filter((contact) => contact.crmMeta?.assignedToUserId && contact.crmMeta.assignedToUserId !== userId)
+        .map((contact) => contact.id),
+    );
+    const eligibleContactIds = contacts
+      .map((contact) => contact.id)
+      .filter((contactId) => !contactIdsOwnedByOther.has(contactId));
+
+    if (eligibleContactIds.length === 0) {
+      return {
+        ok: true,
+        addedMembers: 0,
+        assignedMembers: 0,
+        contactAssignments: 0,
+        skippedAssigned: contactIdsOwnedByOther.size,
+      };
+    }
+
+    const existingMembers = await db.crmCampaignMember.findMany({
+      where: { tenantId, campaignId, contactId: { in: eligibleContactIds } },
+      select: { id: true, contactId: true, assignedToUserId: true },
+    });
+    const existingByContactId = new Map(existingMembers.map((member) => [member.contactId, member]));
+    const memberIdsToAssign = existingMembers
+      .filter((member) => member.assignedToUserId === null || member.assignedToUserId === userId)
+      .map((member) => member.id);
+    const existingAssignedToOther = existingMembers.filter(
+      (member) => member.assignedToUserId && member.assignedToUserId !== userId,
+    ).length;
+    const contactIdsToCreate = eligibleContactIds.filter((contactId) => !existingByContactId.has(contactId));
+
+    let addedMembers = 0;
+    let assignedMembers = 0;
+    let contactAssignments = 0;
+
+    await db.$transaction(async (tx) => {
+      if (memberIdsToAssign.length > 0) {
+        const assigned = await tx.crmCampaignMember.updateMany({
+          where: {
+            id: { in: memberIdsToAssign },
+            tenantId,
+            OR: [{ assignedToUserId: null }, { assignedToUserId: userId }],
+          },
+          data: { assignedToUserId: userId },
+        });
+        assignedMembers = assigned.count;
+      }
+
+      if (contactIdsToCreate.length > 0) {
+        const maxOrder = await tx.crmCampaignMember.aggregate({
+          where: { tenantId, campaignId },
+          _max: { sortOrder: true },
+        });
+        const baseOrder = (maxOrder._max.sortOrder ?? -1) + 1;
+        const created = await tx.crmCampaignMember.createMany({
+          data: contactIdsToCreate.map((contactId, idx) => ({
+            tenantId,
+            campaignId,
+            contactId,
+            assignedToUserId: userId,
+            status: "PENDING" as const,
+            attemptCount: 0,
+            sortOrder: baseOrder + idx,
+          })),
+          skipDuplicates: true,
+        });
+        addedMembers = created.count;
+      }
+
+      const meta = await tx.crmContactMeta.updateMany({
+        where: {
+          tenantId,
+          contactId: { in: eligibleContactIds },
+          OR: [{ assignedToUserId: null }, { assignedToUserId: userId }],
+        },
+        data: { assignedToUserId: userId },
+      });
+      contactAssignments = meta.count;
+    });
+
+    return {
+      ok: true,
+      addedMembers,
+      assignedMembers,
+      contactAssignments,
+      skippedAssigned: contactIdsOwnedByOther.size + existingAssignedToOther,
+    };
   });
 
   // ── POST /crm/contacts/smart-assign ──────────────────────────────────────
