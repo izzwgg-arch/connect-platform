@@ -243,6 +243,10 @@
   border-radius: 26px;
 }
 
+:root[data-theme="light"] .crm-email-sender-compact {
+  border-radius: 20px;
+}
+
 :root[data-theme="light"] .crm-email-section-label,
 :root[data-theme="light"] .crm-email-kpi-label {
   color: #7a8494;
@@ -299,10 +303,7 @@
 }
 
 :root[data-theme="light"] .crm-email-empty {
-  border-color: rgba(202, 189, 172, 0.46);
-  background:
-    radial-gradient(circle at 50% 18%, rgba(124, 58, 237, 0.08), transparent 32%),
-    rgba(255, 255, 255, 0.4);
+  background: transparent;
 }
 
 :root[data-theme="light"] .crm-email-action-link,
@@ -332,6 +333,19 @@
 :root[data-theme="light"] .crm-email-status-failed {
   border-color: rgba(220, 74, 95, 0.22);
   background: rgba(255, 228, 230, 0.76);
+}
+
+.crm-email-activity-panel {
+  height: clamp(20rem, 42dvh, 28rem);
+}
+
+.crm-email-panel-scroll {
+  overscroll-behavior: contain;
+}
+
+:root[data-theme="light"] .crm-email-dismiss-btn {
+  border-color: rgba(202, 189, 172, 0.46);
+  background: rgba(255, 255, 255, 0.66);
 }
 
 :root[data-theme="light"] .crm-email-kpi-card {

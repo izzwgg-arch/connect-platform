@@ -98,6 +98,8 @@ Pipeline (unchanged): Google Drive match → import (`CrmLeadDocument`) → text
 - CRM dashboard modernization is UI-only. Keep existing API calls in `apps/portal/app/(platform)/crm/dashboard/page.tsx`; derive status from the values already loaded there.
 - CRM Email landing uses only `/crm/email/connection`, `/crm/email/recent`, and `/crm/email/replies/recent` (agents skip fleet diagnostics).
 - CRM Email Settings uses only `/crm/email/connections`, `/crm/email/oauth/start`, `/crm/email/sync-now`, `/crm/email/connection/test`, `/crm/email/connections/:id`, and `/crm/email/sync-last`.
+- CRM Email landing keeps Sent, Delivered, Replies, and Reply Rate directly under the header/top health banner; the Google sender/connect card lives lower on the page and can be hidden per tenant/user in local storage. When hidden, keep a compact Connect Google/Manage affordance available.
+- CRM Email Recent Replies and Recent Sent panels use bounded independent scroll regions with visible panel headers. Empty states should be simple text/icon states, not dashed or bordered empty containers.
 - Sender cards should feel like production infrastructure: connection state, reply tracking, sync health, last sync/activity, and compact diagnostics.
 - Do not invent backend fields, fake metrics, demo activity, placeholder buttons, or inbox archive behavior.
 

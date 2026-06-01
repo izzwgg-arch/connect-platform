@@ -4,6 +4,38 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-01 — CRM Email layout polish
+
+**Task:** CRM / email page / layout polish  
+**Risk:** medium
+
+### Root cause
+
+The CRM Email landing page rendered the large sender/connect card before the KPI strip and activity panels, so the Sent, Delivered, Replies, and Reply Rate cards were pushed below the most prominent card. Recent Replies and Recent Sent also lived in normal content flow instead of bounded panel scroll regions, and the no-data states used dashed bordered containers that added visual clutter.
+
+### Changes
+
+- **KPI placement:** Sent, Delivered, Replies, and Reply Rate now render directly below the CRM Email header and reply-tracking health banner.
+- **Sender card:** the Google sender/connect card moved lower on the page and can be hidden per tenant/user in local storage; a compact sender status row remains with Connect Google/Manage and Show details actions.
+- **Activity panels:** Recent Replies and Recent Sent use bounded independent scroll areas with their headers fixed inside each card.
+- **Empty states:** removed dashed/bordered empty-state containers while preserving the No replies synced and No outbound sends messages.
+- **Scope:** portal CRM Email UI/docs only; no API, database, permission, OAuth, send, or reply-tracking logic changes.
+
+### Manual QA
+
+- Open `/crm/email` and confirm Sent, Delivered, Replies, and Reply Rate are directly under the header.
+- Confirm the Connect Google / sender card is lower on the page and no longer dominates the top.
+- Hide the sender card, refresh, and confirm the hidden state persists while compact Connect Google/Manage access remains.
+- Confirm Recent Replies and Recent Sent scroll independently with headers visible.
+- Confirm No outbound sends and No replies synced show as simple text states without bordered outlines.
+- Confirm Sync now, Templates, Connect Google/Manage, reply tracking, recent replies, recent sent, and existing permission behavior still work.
+
+### Rollback
+
+Revert the CRM Email page/CSS changes and this docs entry. No backend, schema, permission, OAuth, or email sending rollback is required.
+
+---
+
 ## 2026-06-01 — CRM Funders workspace layout polish
 
 **Task:** CRM / funders page / layout polish  
