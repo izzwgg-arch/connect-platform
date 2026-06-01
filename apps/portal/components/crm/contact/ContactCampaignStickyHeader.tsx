@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Mail, Megaphone, Pencil, Phone, Star, Voicemail } from "lucide-react";
+import { Mail, Megaphone, Pencil, Phone, Star, Trash2, Voicemail } from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
 import { stageLabel } from "./contactFormatters";
@@ -20,9 +20,9 @@ export function ContactCampaignStickyHeader({
   onVoicemailDrop,
   voicemailDropDisabled,
   onEdit,
-  onArchive,
+  onDelete,
   onRestore,
-  canArchive = false,
+  canDelete = true,
   archivePosting,
   restorePosting,
   children,
@@ -40,9 +40,9 @@ export function ContactCampaignStickyHeader({
   onVoicemailDrop: () => void;
   voicemailDropDisabled?: boolean;
   onEdit: () => void;
-  onArchive: () => void;
+  onDelete: () => void;
   onRestore: () => void;
-  canArchive?: boolean;
+  canDelete?: boolean;
   archivePosting?: boolean;
   restorePosting?: boolean;
   children?: React.ReactNode;
@@ -121,20 +121,20 @@ export function ContactCampaignStickyHeader({
                   <Pencil className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">Edit</span>
                 </button>
-                {canArchive ? (
+                {canDelete ? (
                   <button
                     type="button"
-                    onClick={onArchive}
+                    onClick={onDelete}
                     disabled={archivePosting}
                     className={cn(crm.btnGhost, "py-1.5 text-xs text-crm-muted hover:text-crm-danger")}
-                    title="Archive contact"
+                    title="Delete contact"
                   >
-                    <Archive className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">{archivePosting ? "Archiving…" : "Archive"}</span>
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">{archivePosting ? "Deleting…" : "Delete"}</span>
                   </button>
                 ) : null}
               </>
-            ) : canArchive ? (
+            ) : canDelete ? (
               <button
                 type="button"
                 onClick={onRestore}

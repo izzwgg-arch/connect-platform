@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import { Archive, Edit2, MoreHorizontal } from "lucide-react";
+import { Edit2, MoreHorizontal, Trash2 } from "lucide-react";
 import { ViewportDropdown } from "../ViewportDropdown";
 import { cn } from "./cn";
 import { crm } from "./crmClasses";
@@ -9,25 +9,25 @@ import { crm } from "./crmClasses";
 export function CrmRowActionMenu({
   label,
   onEdit,
-  onArchive,
-  archiveLabel = "Archive",
+  onDelete,
+  deleteLabel = "Delete",
   editDisabled = false,
-  archiveDisabled = false,
+  deleteDisabled = false,
   className,
 }: {
   label: string;
   onEdit?: () => void;
-  onArchive?: () => void;
-  archiveLabel?: string;
+  onDelete?: () => void;
+  deleteLabel?: string;
   editDisabled?: boolean;
-  archiveDisabled?: boolean;
+  deleteDisabled?: boolean;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeMenu = useCallback(() => setOpen(false), []);
 
-  if (!onEdit && !onArchive) return null;
+  if (!onEdit && !onDelete) return null;
 
   return (
     <div className={cn("relative", className)} onClick={(e) => e.stopPropagation()}>
@@ -66,19 +66,19 @@ export function CrmRowActionMenu({
               Edit
             </button>
           ) : null}
-          {onArchive ? (
+          {onDelete ? (
             <button
               type="button"
               role="menuitem"
-              disabled={archiveDisabled}
+              disabled={deleteDisabled}
               className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-crm-danger hover:bg-crm-danger/10 disabled:opacity-50"
               onClick={() => {
                 closeMenu();
-                onArchive();
+                onDelete();
               }}
             >
-              <Archive className="h-3.5 w-3.5" />
-              {archiveLabel}
+              <Trash2 className="h-3.5 w-3.5" />
+              {deleteLabel}
             </button>
           ) : null}
         </div>

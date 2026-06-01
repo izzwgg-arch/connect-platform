@@ -1291,8 +1291,8 @@ function CrmContactDetailInner() {
     backendJwtRole === "ADMIN" ||
     backendJwtRole === "TENANT_ADMIN" ||
     backendJwtRole === "SUPER_ADMIN";
-  const canManageCrm = isPlatformAdmin || can("can_manage_crm");
-  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
+  const canManageContacts = can("can_view_crm_contacts");
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
   // ── Contact state ──────────────────────────────────────────────────────────
   const [contact, setContact] = useState<CrmContactDetail | null>(null);
@@ -1545,6 +1545,12 @@ function CrmContactDetailInner() {
   }, [loadContact, loadTimeline, loadTasks, loadDuplicates, loadWorkspaceGuides]);
 
   useEffect(() => {
+    if (searchParams.get("edit") !== "1" || !contact) return;
+    if (contact.archivedAt != null || contact.active === false) return;
+    setEditing(true);
+  }, [searchParams, contact]);
+
+  useEffect(() => {
     loadSmsThread();
   }, [loadSmsThread]);
 
@@ -1752,14 +1758,14 @@ function CrmContactDetailInner() {
     setError(null);
     try {
       await apiDelete(`/crm/contacts/${id}`);
-      setWorkspaceToast({ kind: "ok", text: "Contact archived" });
-      setArchiveConfirmOpen(false);
+      setWorkspaceToast({ kind: "ok", text: "Contact deleted" });
+      setDeleteConfirmOpen(false);
       await loadContact();
       loadTimeline();
       loadTasks();
       loadDuplicates();
     } catch (e: any) {
-      setWorkspaceToast({ kind: "err", text: e?.message || "Archive failed" });
+      setWorkspaceToast({ kind: "err", text: e?.message || "Delete failed" });
     } finally {
       setArchivePosting(false);
     }
@@ -2368,14 +2374,14 @@ function CrmContactDetailInner() {
         />
 
         <CrmConfirmModal
-          open={archiveConfirmOpen}
-          title="Archive contact?"
+          open={deleteConfirmOpen}
+          title="Delete contact?"
           description="The contact is removed from active CRM lists and queue work. Timeline, documents, messages, and campaign memberships are preserved."
-          confirmLabel="Archive"
+          confirmLabel="Delete"
           destructive
           loading={archivePosting}
           onConfirm={() => void handleArchiveContact()}
-          onCancel={() => setArchiveConfirmOpen(false)}
+          onCancel={() => setDeleteConfirmOpen(false)}
         />
 
         <ContactCampaignStickyHeader
@@ -2392,9 +2398,9 @@ function CrmContactDetailInner() {
           onVoicemailDrop={openVoicemailDrop}
           voicemailDropDisabled={contact.doNotCall || contact.phones.length === 0 || isArchived}
           onEdit={() => setEditing(true)}
-          onArchive={() => setArchiveConfirmOpen(true)}
+          onDelete={() => setDeleteConfirmOpen(true)}
           onRestore={handleRestoreContact}
-          canArchive={canManageCrm}
+          canDelete={canManageContacts}
           archivePosting={archivePosting}
           restorePosting={restorePosting}
         >

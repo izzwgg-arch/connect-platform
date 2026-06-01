@@ -498,7 +498,7 @@ export default function CrmContactsPage() {
     backendJwtRole === "TENANT_ADMIN" ||
     backendJwtRole === "SUPER_ADMIN";
   const isAdmin = isPlatformAdmin;
-  const canManageCrm = isPlatformAdmin || can("can_manage_crm");
+  const canManageContacts = can("can_view_crm_contacts");
 
   const canImport = can("can_view_crm_import");
   const canLiveWorkspace = can("can_view_crm_live_call");
@@ -530,8 +530,8 @@ export default function CrmContactsPage() {
   const [bulkSkipped, setBulkSkipped] = useState<number>(0);
   const [selfAssigning, setSelfAssigning] = useState(false);
   const [selfAssignMessage, setSelfAssignMessage] = useState<string | null>(null);
-  const [archiveTarget, setArchiveTarget] = useState<CrmContact | null>(null);
-  const [archiveWorking, setArchiveWorking] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<CrmContact | null>(null);
+  const [deleteWorking, setDeleteWorking] = useState(false);
   const [actionToast, setActionToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   // Smart assign (quantity-based, unassigned-only)
@@ -803,24 +803,24 @@ export default function CrmContactsPage() {
     }
   };
 
-  const handleArchiveContact = async () => {
-    if (!archiveTarget) return;
-    setArchiveWorking(true);
+  const handleDeleteContact = async () => {
+    if (!deleteTarget) return;
+    setDeleteWorking(true);
     try {
-      await apiDelete(`/crm/contacts/${archiveTarget.id}`);
-      setRows((prev) => prev.filter((c) => c.id !== archiveTarget.id));
+      await apiDelete(`/crm/contacts/${deleteTarget.id}`);
+      setRows((prev) => prev.filter((c) => c.id !== deleteTarget.id));
       setTotal((t) => Math.max(0, t - 1));
       setSelectedIds((prev) => {
         const next = new Set(prev);
-        next.delete(archiveTarget.id);
+        next.delete(deleteTarget.id);
         return next;
       });
-      setActionToast({ kind: "ok", text: "Contact archived" });
-      setArchiveTarget(null);
+      setActionToast({ kind: "ok", text: "Contact deleted" });
+      setDeleteTarget(null);
     } catch (e: unknown) {
-      setActionToast({ kind: "err", text: (e as Error)?.message ?? "Archive failed" });
+      setActionToast({ kind: "err", text: (e as Error)?.message ?? "Delete failed" });
     } finally {
-      setArchiveWorking(false);
+      setDeleteWorking(false);
     }
   };
 
@@ -969,14 +969,14 @@ export default function CrmContactsPage() {
   return (
     <CRMPageShell className={crm.contactsWorkspace} innerClassName={crm.pageInnerContacts}>
       <CrmConfirmModal
-        open={!!archiveTarget}
-        title="Archive contact?"
+        open={!!deleteTarget}
+        title="Delete contact?"
         description="The contact is removed from active lists and queue work. Timeline, documents, and campaign history are preserved."
-        confirmLabel="Archive"
+        confirmLabel="Delete"
         destructive
-        loading={archiveWorking}
-        onConfirm={() => void handleArchiveContact()}
-        onCancel={() => setArchiveTarget(null)}
+        loading={deleteWorking}
+        onConfirm={() => void handleDeleteContact()}
+        onCancel={() => setDeleteTarget(null)}
       />
       {actionToast ? (
         <div
@@ -1504,8 +1504,8 @@ export default function CrmContactsPage() {
                           )}
                           <CrmRowActionMenu
                             label={c.displayName}
-                            onEdit={!archived ? () => router.push(`/crm/contacts/${c.id}`) : undefined}
-                            onArchive={canManageCrm && !archived ? () => setArchiveTarget(c) : undefined}
+                            onEdit={!archived ? () => router.push(`/crm/contacts/${c.id}?edit=1`) : undefined}
+                            onDelete={canManageContacts && !archived ? () => setDeleteTarget(c) : undefined}
                           />
                         </div>
                       </div>

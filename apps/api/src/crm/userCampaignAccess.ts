@@ -1,6 +1,6 @@
 ﻿import { db } from "@connect/db";
 import type { CrmAuthUser } from "./guard";
-import { isAdminRole } from "./guard";
+import { crmRoleBypassesContactRestriction, isAdminRole, loadCrmUserAccessRole } from "./guard";
 
 /**
  * Returns assigned campaign ids when the user has explicit campaign restrictions.
@@ -23,8 +23,10 @@ export function isCrmCampaignIdAllowed(
   campaignId: string,
   restriction: string[] | null,
   role: string | undefined,
+  crmAccessRole?: string | null,
 ): boolean {
   if (isAdminRole(role)) return true;
+  if (crmRoleBypassesContactRestriction(crmAccessRole)) return true;
   if (!restriction) return true;
   return restriction.includes(campaignId);
 }
@@ -37,9 +39,10 @@ export function resolveCrmCampaignAccess(
   campaignId: string,
   restriction: string[] | null,
   role: string | undefined,
+  crmAccessRole?: string | null,
 ): CrmCampaignAccessResult {
   if (!campaignExists) return "not_found";
-  if (!isCrmCampaignIdAllowed(campaignId, restriction, role)) return "forbidden";
+  if (!isCrmCampaignIdAllowed(campaignId, restriction, role, crmAccessRole)) return "forbidden";
   return "ok";
 }
 
@@ -73,11 +76,15 @@ export async function assertCrmCampaignAllowed(
     select: { id: true },
   });
 
-  const restriction = isAdminRole(user.role)
+  const crmAccessRole = isAdminRole(user.role)
     ? null
-    : await getCrmUserCampaignRestriction(user.tenantId, user.sub);
+    : await loadCrmUserAccessRole(user.tenantId, user.sub);
+  const restriction =
+    isAdminRole(user.role) || crmRoleBypassesContactRestriction(crmAccessRole)
+      ? null
+      : await getCrmUserCampaignRestriction(user.tenantId, user.sub);
 
-  const access = resolveCrmCampaignAccess(!!campaign, campaignId, restriction, user.role);
+  const access = resolveCrmCampaignAccess(!!campaign, campaignId, restriction, user.role, crmAccessRole);
   if (access === "not_found") {
     reply.code(404).send({ error: "not_found" });
     return false;

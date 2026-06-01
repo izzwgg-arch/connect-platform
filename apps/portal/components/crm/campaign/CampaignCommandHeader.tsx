@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import {
-  Archive,
+  Trash2,
   ChevronDown,
   Download,
   Edit2,
@@ -38,7 +38,8 @@ export function CampaignCommandHeader({
   onSaveName,
   onCancelEditName,
   onUpdateStatus,
-  onRequestArchive,
+  onRequestDelete,
+  canEditCampaign = false,
   onExport,
   onImport,
   onAddContacts,
@@ -57,7 +58,7 @@ export function CampaignCommandHeader({
   onSaveName: () => void;
   onCancelEditName: () => void;
   onUpdateStatus: (status: CampaignDetail["status"]) => void;
-  onRequestArchive?: () => void;
+  onRequestDelete?: () => void;
   onExport: () => void;
   onImport: () => void;
   onAddContacts: () => void;
@@ -198,6 +199,11 @@ export function CampaignCommandHeader({
         </dl>
 
         <div className="cinema-detail-toolbar">
+          {onEditCampaign ? (
+            <button type="button" onClick={onEditCampaign} className={mk.btnSecondary}>
+              <Edit2 className="h-4 w-4" /> Edit campaign
+            </button>
+          ) : null}
           {campaign.status === "DRAFT" && isAdmin && (
             <button type="button" onClick={() => onUpdateStatus("ACTIVE")} className={mk.btnPrimary}>
               <Play className="h-4 w-4" /> Start campaign
@@ -230,13 +236,13 @@ export function CampaignCommandHeader({
               <Pause className="h-3.5 w-3.5" /> Pause
             </button>
           )}
-          {campaign.status !== "ARCHIVED" && isAdmin && (
+          {campaign.status !== "ARCHIVED" && canEditCampaign && (
             <button
               type="button"
-              onClick={() => (onRequestArchive ? onRequestArchive() : onUpdateStatus("ARCHIVED"))}
+              onClick={() => (onRequestDelete ? onRequestDelete() : onUpdateStatus("ARCHIVED"))}
               className="cinema-btn-archive-toolbar"
             >
-              <Archive className="h-3.5 w-3.5" /> Archive
+              <Trash2 className="h-3.5 w-3.5" /> Delete
             </button>
           )}
           <button type="button" onClick={onExport} className={mk.btnSecondary}>

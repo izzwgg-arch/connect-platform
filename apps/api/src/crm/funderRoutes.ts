@@ -332,9 +332,9 @@ export async function registerCrmFunderRoutes(app: FastifyInstance) {
     return formatFunder(updated);
   });
 
-  // ── DELETE /crm/funders/:id — soft-archive (CRM manager+) ───────────────────
+  // ── DELETE /crm/funders/:id — soft-delete (CRM access) ───────────────────────
   app.delete("/crm/funders/:id", async (req, reply) => {
-    const user = await requireCrmManager(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id } = req.params as { id: string };
@@ -355,7 +355,7 @@ export async function registerCrmFunderRoutes(app: FastifyInstance) {
 
   // ── POST /crm/funders/:id/restore (CRM manager+) ───────────────────────────
   app.post("/crm/funders/:id/restore", async (req, reply) => {
-    const user = await requireCrmManager(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id } = req.params as { id: string };

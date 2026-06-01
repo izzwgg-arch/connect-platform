@@ -695,6 +695,8 @@ export default function CampaignDetailPage() {
     backendJwtRole === "SUPER_ADMIN" ||
     can("can_manage_crm");
 
+  const canManageCampaigns = can("can_view_crm_campaigns");
+
   const [campaign, setCampaign] = useState<CampaignDetail | null>(null);
   const [members, setMembers] = useState<CampaignMember[]>([]);
   const [membersTotal, setMembersTotal] = useState(0);
@@ -713,8 +715,8 @@ export default function CampaignDetailPage() {
   const [error, setError] = useState("");
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [showEditCampaign, setShowEditCampaign] = useState(false);
-  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
-  const [archiveWorking, setArchiveWorking] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteWorking, setDeleteWorking] = useState(false);
 
   // Workload summary (admin — loaded automatically for health + workload strip)
   const [workload, setWorkload] = useState<WorkloadRow[]>([]);
@@ -881,17 +883,17 @@ export default function CampaignDetailPage() {
     }
   }
 
-  async function handleArchiveCampaign() {
-    setArchiveWorking(true);
+  async function handleDeleteCampaign() {
+    setDeleteWorking(true);
     try {
       await apiDelete(`/crm/campaigns/${campaignId}`, token);
       setCampaign((prev) => (prev ? { ...prev, status: "ARCHIVED" } : prev));
-      setToast({ kind: "ok", text: "Campaign archived" });
-      setArchiveConfirmOpen(false);
+      setToast({ kind: "ok", text: "Campaign deleted" });
+      setDeleteConfirmOpen(false);
     } catch (err: unknown) {
-      setToast({ kind: "err", text: (err as Error)?.message ?? "Archive failed" });
+      setToast({ kind: "err", text: (err as Error)?.message ?? "Delete failed" });
     } finally {
-      setArchiveWorking(false);
+      setDeleteWorking(false);
     }
   }
 
@@ -1529,18 +1531,18 @@ export default function CampaignDetailPage() {
         ) : null}
 
         <CrmConfirmModal
-          open={archiveConfirmOpen}
-          title="Archive campaign?"
+          open={deleteConfirmOpen}
+          title="Delete campaign?"
           description={
             campaign.status === "ACTIVE"
-              ? "This campaign is active. Archiving removes it from default lists and queue work. All members and history are preserved."
-              : "Archived campaigns are hidden from default lists. Members and history are preserved."
+              ? "This campaign is active. Deleting removes it from default lists and queue work. All members and history are preserved."
+              : "Deleted campaigns are hidden from default lists. Members and history are preserved."
           }
-          confirmLabel="Archive"
+          confirmLabel="Delete"
           destructive
-          loading={archiveWorking}
-          onConfirm={() => void handleArchiveCampaign()}
-          onCancel={() => setArchiveConfirmOpen(false)}
+          loading={deleteWorking}
+          onConfirm={() => void handleDeleteCampaign()}
+          onCancel={() => setDeleteConfirmOpen(false)}
         />
 
         <CampaignCommandHeader
@@ -1556,8 +1558,9 @@ export default function CampaignDetailPage() {
           onSaveName={saveName}
           onCancelEditName={() => setEditingName(false)}
           onUpdateStatus={(status: CampaignStatus) => updateCampaign({ status })}
-          onRequestArchive={() => setArchiveConfirmOpen(true)}
-          onEditCampaign={isAdmin ? () => setShowEditCampaign(true) : undefined}
+          onRequestDelete={() => setDeleteConfirmOpen(true)}
+          onEditCampaign={canManageCampaigns ? () => setShowEditCampaign(true) : undefined}
+          canEditCampaign={canManageCampaigns}
           onExport={exportCsv}
           onImport={() => {
             setImportOpen(true);

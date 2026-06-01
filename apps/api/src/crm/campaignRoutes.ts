@@ -308,7 +308,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
 
   // ── PATCH /crm/campaigns/:id ───────────────────────────────────────────────
   app.patch("/crm/campaigns/:id", async (req, reply) => {
-    const user = await requireCrmManager(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id } = req.params as { id: string };
@@ -337,9 +337,9 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     return { campaign: formatCampaign(campaign) };
   });
 
-  // ── DELETE /crm/campaigns/:id — soft-archive (status ARCHIVED) ───────────
+  // ── DELETE /crm/campaigns/:id — soft-delete (status ARCHIVED) ──────────────
   app.delete("/crm/campaigns/:id", async (req, reply) => {
-    const user = await requireCrmManager(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id } = req.params as { id: string };

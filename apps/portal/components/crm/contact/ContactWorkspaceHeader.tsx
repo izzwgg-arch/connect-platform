@@ -51,7 +51,7 @@ export function ContactWorkspaceHeader({
   onRestore,
   archivePosting,
   restorePosting,
-  canManageCrm,
+  canDeleteContact = true,
   editing,
   saving,
   onSave,
@@ -79,7 +79,7 @@ export function ContactWorkspaceHeader({
   onRestore: () => void;
   archivePosting: boolean;
   restorePosting: boolean;
-  canManageCrm: boolean;
+  canDeleteContact: boolean;
   editing: boolean;
   saving: boolean;
   onSave: () => void;
@@ -229,7 +229,7 @@ export function ContactWorkspaceHeader({
           />
           <SecondaryActions
             isArchived={isArchived}
-            canManageCrm={canManageCrm}
+            canDeleteContact={canDeleteContact}
             editing={editing}
             saving={saving}
             archivePosting={archivePosting}
@@ -355,7 +355,7 @@ function PrimaryActions({
 
 function SecondaryActions({
   isArchived,
-  canManageCrm,
+  canDeleteContact = true,
   editing,
   saving,
   archivePosting,
@@ -367,7 +367,7 @@ function SecondaryActions({
   onRestore,
 }: {
   isArchived: boolean;
-  canManageCrm: boolean;
+  canDeleteContact: boolean;
   editing: boolean;
   saving: boolean;
   archivePosting: boolean;
@@ -395,18 +395,17 @@ function SecondaryActions({
           </button>
         </>
       ) : null}
-      {canManageCrm && !isArchived ? (
+      {canDeleteContact && !isArchived ? (
         <button
           type="button"
           onClick={onArchive}
           disabled={archivePosting}
           className={cn(crm.btnDanger, "text-xs")}
         >
-          <Archive className="h-3.5 w-3.5" />
-          {archivePosting ? "…" : "Archive"}
+          {archivePosting ? "…" : "Delete"}
         </button>
       ) : null}
-      {canManageCrm && isArchived ? (
+      {canDeleteContact && isArchived ? (
         <button type="button" onClick={onRestore} disabled={restorePosting} className={cn(crm.btnSecondary, "text-xs")}>
           {restorePosting ? "…" : "Restore"}
         </button>

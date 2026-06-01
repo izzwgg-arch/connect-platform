@@ -74,29 +74,29 @@ Scope: portal CRM UI/data-flow guardrails. Telephony, billing, workers, database
 | CRM settings (tenant) | `can_view_crm_settings` | `GET/PUT /crm/settings` | `requireCrmAdmin` (platform JWT) | No | No | Portal yes / API platform admin | Yes |
 | Notes / tasks on contact | Live workspace / contact | `POST /crm/contacts/:id/notes`, `…/tasks` | `requireCrmAccess` + `assertCrmContactAllowed` | Yes (in scope) | Yes (tenant) | Yes (tenant) | Yes |
 | Document summary — contact profile | `/crm/contacts/[id]` card | `GET /crm/contacts/:id/document-summary` | `requireCrmAccess` + `assertCrmContactAllowed` | Yes (in scope) | Yes (tenant) | Yes (tenant) | Yes |
-| Campaigns — edit | `/crm/campaigns` row menu + detail | `PATCH /crm/campaigns/:id` | `requireCrmManager` + `assertCrmCampaignAllowed` | No | Yes (assigned campaigns if restricted) | Yes | Yes |
-| Campaigns — archive | same | `DELETE /crm/campaigns/:id` → `status: ARCHIVED` | `requireCrmManager` + campaign scope | No | Yes | Yes | Yes |
+| Campaigns — edit | `/crm/campaigns` row menu + detail | `PATCH /crm/campaigns/:id` | `requireCrmAccess` + `assertCrmCampaignAllowed` | Yes (assigned) | Yes (tenant) | Yes (tenant) | Yes |
+| Campaigns — delete | same (UI label **Delete**) | `DELETE /crm/campaigns/:id` → `status: ARCHIVED` | `requireCrmAccess` + campaign scope | Yes (assigned) | Yes (tenant) | Yes (tenant) | Yes |
 | Funders — edit | `/crm/funders` row menu + detail | `PATCH /crm/funders/:id` | `requireCrmAccess` + `tenantId` | Yes | Yes | Yes | Yes |
-| Funders — archive | same | `DELETE /crm/funders/:id` → `active: false`, `archivedAt` | `requireCrmManager` | No | Yes | Yes | Yes |
+| Funders — delete | same (UI label **Delete**) | `DELETE /crm/funders/:id` → soft-delete | `requireCrmAccess` | Yes | Yes | Yes | Yes |
 | Contacts — edit | `/crm/contacts` row menu + workspace | `PATCH /crm/contacts/:id` | `requireCrmAccess` + `assertCrmContactAllowed` | Yes (in scope) | Yes (tenant) | Yes (tenant) | Yes |
-| Contacts — archive | same | `DELETE /crm/contacts/:id` → soft-archive | `requireCrmManager` | No | Yes (tenant) | Yes | Yes |
-| Contacts — restore | archived detail | `POST /crm/contacts/:id/restore` | `requireCrmManager` | No | Yes | Yes | Yes |
+| Contacts — delete | same (UI label **Delete**) | `DELETE /crm/contacts/:id` → soft-delete | `requireCrmAccess` + contact scope | Yes (in scope) | Yes (tenant) | Yes (tenant) | Yes |
+| Contacts — restore | archived detail | `POST /crm/contacts/:id/restore` | `requireCrmAccess` + contact scope | Yes (in scope) | Yes (tenant) | Yes (tenant) | Yes |
 
 **Scope legend:** *in scope* = assigned to agent or in an assigned campaign when `CrmUserCampaignAssignment` rows exist; *tenant* = any contact in the tenant (Managers/CRM Admins bypass campaign allow-list).
 
-## Edit / archive behavior (campaigns, funders, contacts)
+## Edit / delete behavior (campaigns, funders, contacts)
 
-All three entities use **soft archive** — no hard delete of timeline, imports, campaign members, chat/SMS, or documents.
+All three entities use **soft delete** on the API. The portal labels the action **Delete** (not hard-delete of history).
 
-| Entity | Edit API | Archive API | Default list behavior | UI label |
-|--------|----------|-------------|----------------------|----------|
-| Campaign | `PATCH /crm/campaigns/:id` (name, description, priority, status, script/checklist) | `DELETE /crm/campaigns/:id` sets `status: ARCHIVED` | `GET /crm/campaigns` excludes `ARCHIVED` unless filtered | **Archive** |
-| Funder | `PATCH /crm/funders/:id` | `DELETE /crm/funders/:id` sets `active: false`, `archivedAt` | `GET /crm/funders` excludes archived unless `includeArchived=true` | **Archive** |
-| Contact | `PATCH /crm/contacts/:id` (scoped) | `DELETE /crm/contacts/:id` sets `active: false`, `archivedAt` | `GET /crm/contacts` active-only; admins may use `includeArchived` / `archivedOnly` | **Archive** |
+| Entity | Edit API | Delete API | Default list behavior |
+|--------|----------|------------|----------------------|
+| Campaign | `PATCH /crm/campaigns/:id` | `DELETE` → `status: ARCHIVED` | Excludes archived unless filtered |
+| Funder | `PATCH /crm/funders/:id` | `DELETE` → `active: false`, `archivedAt` | Active funders only |
+| Contact | `PATCH /crm/contacts/:id` (scoped) | `DELETE` → soft-delete | Active contacts; admins can list archived |
 
-**Portal components:** `CrmRowActionMenu` (Edit + Archive on list rows), `CrmConfirmModal` (destructive confirm), `EditCampaignModal` (campaign edit). Archive is shown only when `can_manage_crm` or platform admin (`canManageCrm` in pages).
+**Portal:** `CrmRowActionMenu` (Edit + Delete), `CrmConfirmModal`, `EditCampaignModal`. Menus visible to anyone with the page nav permission (`can_view_crm_campaigns` / `funders` / `contacts`). List **Edit** opens detail with `?edit=1`.
 
-**Active campaigns:** archiving an `ACTIVE` campaign is allowed but the confirm copy warns that queue work stops; prefer pausing first when agents are dialing. Members and history remain in the database.
+**Active campaigns:** delete shows a warning that queue work stops; data is retained.
 
 ## CRM document import — lead profile summary
 

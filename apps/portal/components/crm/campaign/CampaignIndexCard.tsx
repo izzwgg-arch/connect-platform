@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import {
-  Archive,
+  Trash2,
   ChevronRight,
   Edit2,
   ListOrdered,
@@ -22,17 +22,19 @@ export function CampaignIndexCard({
   metrics,
   canQueue,
   isAdmin,
+  canManageCampaigns = false,
   onQuickStatus,
   onEdit,
-  onArchive,
+  onDelete,
 }: {
   campaign: CampaignListItem;
   metrics?: CampaignReportRow | null;
   canQueue: boolean;
   isAdmin: boolean;
+  canManageCampaigns?: boolean;
   onQuickStatus: (id: string, status: CampaignListItem["status"], e: React.MouseEvent) => void;
   onEdit?: (id: string, e: React.MouseEvent) => void;
-  onArchive?: (id: string, e: React.MouseEvent) => void;
+  onDelete?: (id: string, e: React.MouseEvent) => void;
 }) {
   const members = campaign.memberCount ?? metrics?.total ?? 0;
   const activeWork = metrics?.pending ?? 0;
@@ -132,7 +134,7 @@ export function CampaignIndexCard({
               {isDraft ? "Start" : "Resume"}
             </button>
           )}
-          {isAdmin && (onEdit || onArchive || isActive || isPaused) ? (
+          {canManageCampaigns && (onEdit || onDelete || (isAdmin && (isActive || isPaused))) ? (
             <div className="relative group/menu">
               <button
                 type="button"
@@ -160,13 +162,13 @@ export function CampaignIndexCard({
                     <Pause className="h-3 w-3" /> Pause
                   </button>
                 )}
-                {onArchive && campaign.status !== "ARCHIVED" ? (
+                {onDelete && campaign.status !== "ARCHIVED" ? (
                   <button
                     type="button"
-                    onClick={(e) => onArchive(campaign.id, e)}
+                    onClick={(e) => onDelete(campaign.id, e)}
                     className={cn(mk.menuItem, mk.menuItemDanger)}
                   >
-                    <Archive className="h-3 w-3" /> Archive
+                    <Trash2 className="h-3 w-3" /> Delete
                   </button>
                 ) : null}
               </div>

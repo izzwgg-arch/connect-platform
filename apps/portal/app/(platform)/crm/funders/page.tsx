@@ -651,11 +651,7 @@ export default function FundersPage() {
   const router = useRouter();
   const { can, backendJwtRole } = useAppContext();
   const canManage = can("can_view_crm_funders");
-  const canManageCrm =
-    backendJwtRole === "ADMIN" ||
-    backendJwtRole === "TENANT_ADMIN" ||
-    backendJwtRole === "SUPER_ADMIN" ||
-    can("can_manage_crm");
+  const canManageFunders = can("can_view_crm_funders");
 
   const [funders, setFunders] = useState<Funder[]>([]);
   const [total, setTotal] = useState(0);
@@ -677,8 +673,8 @@ export default function FundersPage() {
   const [showImport, setShowImport] = useState(false);
   const [showBulkEmail, setShowBulkEmail] = useState(false);
   const [bulkEmailToast, setBulkEmailToast] = useState<string | null>(null);
-  const [archiveTarget, setArchiveTarget] = useState<Funder | null>(null);
-  const [archiveWorking, setArchiveWorking] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Funder | null>(null);
+  const [deleteWorking, setDeleteWorking] = useState(false);
   const [actionToast, setActionToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
@@ -768,24 +764,24 @@ export default function FundersPage() {
     }
   };
 
-  const handleArchiveFunder = async () => {
-    if (!archiveTarget) return;
-    setArchiveWorking(true);
+  const handleDeleteFunder = async () => {
+    if (!deleteTarget) return;
+    setDeleteWorking(true);
     try {
-      await apiDelete(`/crm/funders/${archiveTarget.id}`);
-      setFunders((prev) => prev.filter((f) => f.id !== archiveTarget.id));
+      await apiDelete(`/crm/funders/${deleteTarget.id}`);
+      setFunders((prev) => prev.filter((f) => f.id !== deleteTarget.id));
       setTotal((t) => Math.max(0, t - 1));
       setSelected((prev) => {
         const next = new Set(prev);
-        next.delete(archiveTarget.id);
+        next.delete(deleteTarget.id);
         return next;
       });
-      setActionToast({ kind: "ok", text: "Funder archived" });
-      setArchiveTarget(null);
+      setActionToast({ kind: "ok", text: "Funder deleted" });
+      setDeleteTarget(null);
     } catch (e: any) {
-      setActionToast({ kind: "err", text: e?.message ?? "Archive failed" });
+      setActionToast({ kind: "err", text: e?.message ?? "Delete failed" });
     } finally {
-      setArchiveWorking(false);
+      setDeleteWorking(false);
     }
   };
 
@@ -844,14 +840,14 @@ export default function FundersPage() {
   return (
     <CRMPageShell className={crm.fundersWorkspace} innerClassName={crm.pageInnerFunders}>
       <CrmConfirmModal
-        open={!!archiveTarget}
-        title="Archive funder?"
-        description="This soft-archives the funder. Import and tag history are preserved."
-        confirmLabel="Archive"
+        open={!!deleteTarget}
+        title="Delete funder?"
+        description="This removes the funder from active lists. Import and tag history are preserved."
+        confirmLabel="Delete"
         destructive
-        loading={archiveWorking}
-        onConfirm={() => void handleArchiveFunder()}
-        onCancel={() => setArchiveTarget(null)}
+        loading={deleteWorking}
+        onConfirm={() => void handleDeleteFunder()}
+        onCancel={() => setDeleteTarget(null)}
       />
 
       {showBulkEmail && (
@@ -1129,8 +1125,8 @@ export default function FundersPage() {
                           </Link>
                           <CrmRowActionMenu
                             label={f.name}
-                            onEdit={() => router.push(`/crm/funders/${f.id}`)}
-                            onArchive={canManageCrm ? () => setArchiveTarget(f) : undefined}
+                            onEdit={() => router.push(`/crm/funders/${f.id}?edit=1`)}
+                            onDelete={canManageFunders ? () => setDeleteTarget(f) : undefined}
                           />
                         </div>
                       </div>

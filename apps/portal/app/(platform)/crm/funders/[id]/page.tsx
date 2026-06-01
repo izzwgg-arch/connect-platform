@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -95,11 +95,7 @@ export default function FunderDetailPage() {
   const { backendJwtRole, can } = useAppContext();
   const id = params?.id as string;
 
-  const canManageCrm =
-    backendJwtRole === "ADMIN" ||
-    backendJwtRole === "TENANT_ADMIN" ||
-    backendJwtRole === "SUPER_ADMIN" ||
-    can("can_manage_crm");
+  const canManageFunders = can("can_view_crm_funders");
 
   const [funder, setFunder] = useState<Funder | null>(null);
   const [loading, setLoading] = useState(true);
@@ -142,6 +138,8 @@ export default function FunderDetailPage() {
 
   useEffect(() => { fetchFunder(); fetchAllTags(); }, [fetchFunder, fetchAllTags]);
 
+  const searchParams = useSearchParams();
+
   const startEdit = () => {
     if (!funder) return;
     setForm({
@@ -159,6 +157,12 @@ export default function FunderDetailPage() {
     setSaveErr(null);
     setEditing(true);
   };
+
+  useEffect(() => {
+    if (searchParams.get("edit") === "1" && funder && !editing) {
+      startEdit();
+    }
+  }, [searchParams, funder?.id, editing]);
 
   const handleSave = async () => {
     if (!form.name?.trim()) { setSaveErr("Name is required"); return; }
@@ -202,14 +206,14 @@ export default function FunderDetailPage() {
     }
   };
 
-  const handleArchive = async () => {
+  const handleDelete = async () => {
     setArchiving(true);
     try {
       await apiDelete(`/crm/funders/${id}`);
-      setToast({ kind: "ok", text: "Funder archived" });
+      setToast({ kind: "ok", text: "Funder deleted" });
       router.push("/crm/funders");
     } catch (e: any) {
-      setToast({ kind: "err", text: e?.message ?? "Archive failed" });
+      setToast({ kind: "err", text: e?.message ?? "Delete failed" });
     } finally {
       setArchiving(false);
       setConfirming(false);
@@ -316,9 +320,9 @@ export default function FunderDetailPage() {
                 <button onClick={() => setShowTagPanel(!showTagPanel)} className={crm.btnSecondary}>
                   <Tag size={14} /> Tags
                 </button>
-                {canManageCrm ? (
+                {canManageFunders ? (
                   <button onClick={() => setConfirming(true)} className={crm.btnDanger}>
-                    <Trash2 size={14} /> Archive
+                    <Trash2 size={14} /> Delete
                   </button>
                 ) : null}
               </>
@@ -474,12 +478,12 @@ export default function FunderDetailPage() {
 
             <CrmConfirmModal
               open={confirming}
-              title="Archive funder?"
-              description="This soft-archives the funder. Linked import history is preserved. A CRM manager can restore the record later."
-              confirmLabel="Archive"
+              title="Delete funder?"
+              description="This removes the funder from active lists. Import history is preserved."
+              confirmLabel="Delete"
               destructive
               loading={archiving}
-              onConfirm={() => void handleArchive()}
+              onConfirm={() => void handleDelete()}
               onCancel={() => setConfirming(false)}
             />
           </div>

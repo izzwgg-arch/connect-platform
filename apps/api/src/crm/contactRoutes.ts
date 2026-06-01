@@ -536,12 +536,14 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     return formatContact(contact, latestPhoneDispositions);
   });
 
-  // ── DELETE /crm/contacts/:id — soft-archive (CRM manager+) ───────────────
+  // ── DELETE /crm/contacts/:id — soft-delete (scoped CRM access) ─────────────
   app.delete("/crm/contacts/:id", async (req, reply) => {
-    const user = await requireCrmManager(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id } = req.params as { id: string };
+
+    if (!(await assertCrmContactAllowed(user, id, reply))) return;
 
     const row = await (db as any).contact.findFirst({
       where: { id, tenantId },
@@ -570,12 +572,13 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
     return { ok: true, contactId: id };
   });
 
-  // ── POST /crm/contacts/:id/restore — undo soft-archive (CRM manager+) ─────
+  // ── POST /crm/contacts/:id/restore — undo soft-delete (scoped CRM access) ──
   app.post("/crm/contacts/:id/restore", async (req, reply) => {
-    const user = await requireCrmManager(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
     const { tenantId } = user;
     const { id } = req.params as { id: string };
+    if (!(await assertCrmContactAllowed(user, id, reply))) return;
 
     const row = await (db as any).contact.findFirst({
       where: { id, tenantId },

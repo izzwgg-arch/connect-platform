@@ -311,6 +311,8 @@ export default function CampaignsPage() {
     backendJwtRole === "SUPER_ADMIN" ||
     can("can_manage_crm");
 
+  const canManageCampaigns = can("can_view_crm_campaigns");
+
   const canQueue = can("can_view_crm_queue");
 
   const [campaigns, setCampaigns] = useState<CampaignListItem[]>([]);
@@ -327,8 +329,8 @@ export default function CampaignsPage() {
   const [error, setError] = useState("");
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [editingCampaign, setEditingCampaign] = useState<CampaignListItem | null>(null);
-  const [archiveTarget, setArchiveTarget] = useState<CampaignListItem | null>(null);
-  const [archiveWorking, setArchiveWorking] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<CampaignListItem | null>(null);
+  const [deleteWorking, setDeleteWorking] = useState(false);
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
 
@@ -386,20 +388,20 @@ export default function CampaignsPage() {
     setToast({ kind: "ok", text: "Campaign saved" });
   }
 
-  async function handleArchiveCampaign() {
-    if (!archiveTarget) return;
-    setArchiveWorking(true);
+  async function handleDeleteCampaign() {
+    if (!deleteTarget) return;
+    setDeleteWorking(true);
     try {
-      await apiDelete(`/crm/campaigns/${archiveTarget.id}`, token);
+      await apiDelete(`/crm/campaigns/${deleteTarget.id}`, token);
       setCampaigns((prev) =>
-        prev.map((c) => (c.id === archiveTarget.id ? { ...c, status: "ARCHIVED" as const } : c)),
+        prev.map((c) => (c.id === deleteTarget.id ? { ...c, status: "ARCHIVED" as const } : c)),
       );
-      setToast({ kind: "ok", text: "Campaign archived" });
-      setArchiveTarget(null);
+      setToast({ kind: "ok", text: "Campaign deleted" });
+      setDeleteTarget(null);
     } catch (err: unknown) {
-      setToast({ kind: "err", text: (err as Error)?.message ?? "Archive failed" });
+      setToast({ kind: "err", text: (err as Error)?.message ?? "Delete failed" });
     } finally {
-      setArchiveWorking(false);
+      setDeleteWorking(false);
     }
   }
 
@@ -557,18 +559,18 @@ export default function CampaignsPage() {
       ) : null}
 
       <CrmConfirmModal
-        open={!!archiveTarget}
-        title="Archive campaign?"
+        open={!!deleteTarget}
+        title="Delete campaign?"
         description={
-          archiveTarget?.status === "ACTIVE"
-            ? "This campaign is active. Archiving removes it from default lists and queue work. Members, timeline, and import history are preserved."
-            : "Archived campaigns are hidden from default lists. Members and history are preserved."
+          deleteTarget?.status === "ACTIVE"
+            ? "This campaign is active. Deleting removes it from default lists and queue work. Members, timeline, and import history are preserved."
+            : "Deleted campaigns are hidden from default lists. Members and history are preserved."
         }
-        confirmLabel="Archive"
+        confirmLabel="Delete"
         destructive
-        loading={archiveWorking}
-        onConfirm={() => void handleArchiveCampaign()}
-        onCancel={() => setArchiveTarget(null)}
+        loading={deleteWorking}
+        onConfirm={() => void handleDeleteCampaign()}
+        onCancel={() => setDeleteTarget(null)}
       />
 
       {showCreate && (
@@ -829,7 +831,7 @@ export default function CampaignsPage() {
                           <div className="campaigns-row-actions flex items-center gap-2">
                             <Link href={`/crm/campaigns/${campaign.id}`}>Open</Link>
                             {canQueue ? <Link href={queueHref(campaign.id)}>Queue</Link> : null}
-                            {isAdmin ? (
+                            {canManageCampaigns ? (
                               <CrmRowActionMenu
                                 label={campaign.name}
                                 onEdit={
@@ -837,9 +839,9 @@ export default function CampaignsPage() {
                                     ? () => setEditingCampaign(campaign)
                                     : undefined
                                 }
-                                onArchive={
+                                onDelete={
                                   campaign.status !== "ARCHIVED"
-                                    ? () => setArchiveTarget(campaign)
+                                    ? () => setDeleteTarget(campaign)
                                     : undefined
                                 }
                               />

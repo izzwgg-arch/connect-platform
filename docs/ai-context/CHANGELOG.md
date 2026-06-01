@@ -4,6 +4,33 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-01 — CRM edit/delete: all CRM users, Delete labels (fix)
+
+**Task:** Correct edit/delete rollout — reps could not edit; UI showed Archive instead of Delete  
+**Risk:** high
+
+### Root cause
+
+Edit/Delete menus were gated on `can_manage_crm` (managers only). Campaign detail had no **Edit campaign** toolbar button (`onEditCampaign` unused). Funder list delete modal referenced removed `archiveTarget` state. Funder detail used undefined `canManageCrm`, hiding delete for everyone.
+
+### Changes
+
+- **API:** campaign/contact/funder PATCH and DELETE use `requireCrmAccess` plus existing scope checks (not `requireCrmManager`).
+- **Portal:** **Delete** labels everywhere; Edit/Delete for users with `can_view_crm_campaigns` / `funders` / `contacts`; campaign detail **Edit campaign** button; funder delete modal wired to `deleteTarget`; list **Edit** opens detail with `?edit=1`.
+- **Docs:** `CRM.md` edit/delete section updated.
+
+### Manual QA
+
+- Agent with campaign assignment: Edit + Delete on assigned campaign; 403 on unassigned.
+- Agent: Edit + Delete contact in scope; funder edit/delete on `/crm/funders`.
+- Funder list Delete confirm works (no runtime error).
+
+### Rollback
+
+Revert API + portal + docs; deploy `api` and `portal`.
+
+---
+
 ## 2026-06-01 — CRM edit/archive actions (campaigns, funders, contacts)
 
 **Task:** CRM / campaigns / funders / leads / edit-delete actions  
