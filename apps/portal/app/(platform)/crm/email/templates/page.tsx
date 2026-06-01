@@ -252,7 +252,7 @@ export default function CrmEmailTemplatesPage() {
   };
 
   const newTemplate = () => {
-    openComposer(emptyEditor());
+    window.location.href = "/crm/email/templates/new";
   };
 
   const applyStarter = (starter: StarterTemplate) => {
