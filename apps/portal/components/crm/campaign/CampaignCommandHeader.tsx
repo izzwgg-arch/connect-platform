@@ -59,6 +59,7 @@ export function CampaignCommandHeader({
   onCancelEditName: () => void;
   onUpdateStatus: (status: CampaignDetail["status"]) => void;
   onRequestDelete?: () => void;
+  canEditCampaign?: boolean;
   onExport: () => void;
   onImport: () => void;
   onAddContacts: () => void;
