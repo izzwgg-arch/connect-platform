@@ -45,10 +45,11 @@ async function refreshAccessToken(refreshToken: string): Promise<{ accessToken: 
   return { accessToken, expiresAt: expiresInSec ? new Date(Date.now() + expiresInSec * 1000) : null, scope, tokenType };
 }
 
-function buildPlainTextMime(fromHeader: string, to: string, subject: string, bodyText: string): string {
+function buildPlainTextMime(fromHeader: string, to: string, subject: string, bodyText: string, ccEmail?: string | null): string {
   const headers = [
     `From: ${fromHeader}`,
     `To: <${escapeHeader(to)}>`,
+    ...(ccEmail ? [`Cc: <${escapeHeader(ccEmail)}>`] : []),
     `Subject: ${encodeMimeHeader(subject)}`,
     "MIME-Version: 1.0",
     "Content-Type: text/plain; charset=UTF-8",
@@ -132,6 +133,7 @@ async function loadInlineLogoAttachment(tenantId: string, bodyHtml?: string | nu
 export async function buildRichMime(input: {
   fromHeader: string;
   to: string;
+  ccEmail?: string | null;
   subject: string;
   bodyText: string;
   bodyHtml?: string | null;
@@ -147,6 +149,7 @@ export async function buildRichMime(input: {
   const headers = [
     `From: ${input.fromHeader}`,
     `To: <${escapeHeader(input.to)}>`,
+    ...(input.ccEmail ? [`Cc: <${escapeHeader(input.ccEmail)}>`] : []),
     `Subject: ${encodeMimeHeader(input.subject)}`,
     "MIME-Version: 1.0",
     `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`,
@@ -212,8 +215,7 @@ function formatFromHeader(senderName: string | null | undefined, displayName: st
  *
  * Resolves the sender CrmEmailConnection in this order:
  *  1. job.connectionId (set by new API send/test paths)
- *  2. Legacy fallback: any CONNECTED USER-scope row for (tenantId, userId)
- *     — supports jobs queued before the Phase 1.5 worker deploy.
+ *  2. Legacy fallback: tenant default TENANT sender, lone TENANT sender, then caller USER sender.
  */
 export async function processCrmEmailSendJob(job: {
   tenantId: string;
@@ -226,13 +228,25 @@ export async function processCrmEmailSendJob(job: {
   contactId?: string | null;
   templateId?: string | null;
   attachmentIds?: string[] | null;
+  ccEmail?: string | null;
+  ccSelf?: boolean;
 }) {
   let conn = job.connectionId
     ? await db.crmEmailConnection.findFirst({ where: { id: job.connectionId, tenantId: job.tenantId } })
     : null;
   if (!conn) {
-    // Legacy queued job (no connectionId) — resolve caller's own USER sender by tenant+userId.
-    conn = await db.crmEmailConnection.findFirst({ where: { tenantId: job.tenantId, userId: job.userId, scope: "USER" } });
+    const def = await db.crmEmailConnection.findFirst({
+      where: { tenantId: job.tenantId, scope: "TENANT", isDefaultForTenant: true, status: "CONNECTED" },
+    });
+    const tenantRows = def
+      ? []
+      : await db.crmEmailConnection.findMany({
+          where: { tenantId: job.tenantId, scope: "TENANT", status: "CONNECTED" },
+          take: 2,
+        });
+    conn = def
+      || (tenantRows.length === 1 ? tenantRows[0] : null)
+      || await db.crmEmailConnection.findFirst({ where: { tenantId: job.tenantId, userId: job.userId, scope: "USER", status: "CONNECTED" } });
   }
   if (!conn || conn.status !== "CONNECTED") throw new Error("not_connected");
 
@@ -284,9 +298,10 @@ export async function processCrmEmailSendJob(job: {
         subject: job.subject || "",
         bodyText: job.bodyText || "",
         bodyHtml: job.bodyHtml || "",
+        ccEmail: job.ccEmail || null,
         attachments: allAttachments,
       })
-    : buildPlainTextMime(fromHeader, job.to, job.subject || "", job.bodyText || "");
+    : buildPlainTextMime(fromHeader, job.to, job.subject || "", job.bodyText || "", job.ccEmail || null);
   const rawB64 = base64url(Buffer.from(rawMime, "utf8"));
 
   const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
@@ -385,7 +400,15 @@ export async function processCrmEmailSendJob(job: {
           type: "EMAIL_SENT",
           title: "Email sent",
           body: job.subject || "Email sent",
-          metadata: { to: job.to, senderEmail: fromEmail, scope: conn.scope },
+          metadata: {
+            to: job.to,
+            senderEmail: fromEmail,
+            senderConnectionId,
+            scope: conn.scope,
+            templateId: job.templateId || null,
+            ccSelf: Boolean(job.ccSelf && job.ccEmail),
+            ccEmail: job.ccEmail || null,
+          },
           createdByUserId: job.userId,
         },
       });

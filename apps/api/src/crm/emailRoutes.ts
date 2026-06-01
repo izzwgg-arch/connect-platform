@@ -22,13 +22,14 @@ function hmacSha256(key: string, data: string): string {
   return base64url(crypto.createHmac("sha256", key).update(data, "utf8").digest());
 }
 
-import { requireCrmAccess, requireCrmEmailSettingsAccess } from "./guard.js";
+import { requireCrmAccess, requireCrmEmailSettingsAccess, crmRoleBypassesContactRestriction, loadCrmUserAccessRole, isAdminRole } from "./guard.js";
 import { assertCrmContactAllowed } from "./crmContactAccess.js";
 import {
   canManageTenantSender,
   hasReadonlyScope,
   replyTrackingStatus,
   GMAIL_READONLY_SCOPE,
+  resolveImplicitSenderConnectionOrder,
 } from "./crmEmailHelpers.js";
 import { generateCrmEmailTemplateDraft, CrmEmailTemplateAiError } from "./emailTemplateAi.js";
 import {
@@ -55,9 +56,9 @@ export { canManageTenantSender, hasReadonlyScope, replyTrackingStatus, GMAIL_REA
  *
  * Fallback order:
  *   1. explicit connectionId (caller-chosen) — must be allowed (own USER row OR any TENANT row in tenant)
- *   2. caller's own USER connection (CONNECTED)
- *   3. tenant default TENANT connection (CONNECTED)
- *   4. lone TENANT connection (CONNECTED) when exactly one exists
+ *   2. tenant default TENANT connection (CONNECTED)
+ *   3. lone TENANT connection (CONNECTED) when exactly one exists
+ *   4. caller's own USER connection (CONNECTED)
  *   5. null
  */
 async function resolveSenderConnection(opts: {
@@ -84,26 +85,31 @@ async function resolveSenderConnection(opts: {
     return null;
   }
 
-  const mine = await db.crmEmailConnection.findFirst({
-    where: { tenantId, userId, scope: "USER", status: "CONNECTED" },
-    select: { id: true, emailAddress: true, senderName: true, displayName: true, scope: true },
+  const rows = await db.crmEmailConnection.findMany({
+    where: {
+      tenantId,
+      status: "CONNECTED",
+      OR: [
+        { scope: "TENANT" },
+        { scope: "USER", userId },
+      ],
+    },
+    select: { id: true, emailAddress: true, senderName: true, displayName: true, scope: true, userId: true, isDefaultForTenant: true },
   });
-  if (mine) return mine as any;
-
-  const def = await db.crmEmailConnection.findFirst({
-    where: { tenantId, scope: "TENANT", isDefaultForTenant: true, status: "CONNECTED" },
-    select: { id: true, emailAddress: true, senderName: true, displayName: true, scope: true },
-  });
-  if (def) return def as any;
-
-  const tenantRows = await db.crmEmailConnection.findMany({
-    where: { tenantId, scope: "TENANT", status: "CONNECTED" },
-    select: { id: true, emailAddress: true, senderName: true, displayName: true, scope: true },
-    take: 2,
-  });
-  if (tenantRows.length === 1) return tenantRows[0] as any;
+  const selected = resolveImplicitSenderConnectionOrder(rows as any, userId);
+  if (selected) return selected as any;
 
   return null;
+}
+
+async function canManageTenantSenderForUser(user: { tenantId: string; sub: string; role?: string }): Promise<boolean> {
+  if (canManageTenantSender(user)) return true;
+  const crmRole = await loadCrmUserAccessRole(user.tenantId, user.sub);
+  return canManageTenantSender(user, crmRole);
+}
+
+function isValidEmailAddress(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
@@ -111,11 +117,17 @@ const emailQueue = new Queue("crm-email-send", { connection: redis });
 const emailSyncQueue = new Queue("crm-email-sync", { connection: redis });
 
 function isTemplateAdmin(user: { role?: string }) {
-  return user.role === "ADMIN" || user.role === "TENANT_ADMIN" || user.role === "SUPER_ADMIN";
+  return isAdminRole(user.role);
 }
 
-function canEditTemplate(user: { sub: string; role?: string }, template: { createdByUserId?: string | null }) {
-  return isTemplateAdmin(user) || template.createdByUserId === user.sub;
+async function canEditTemplate(
+  user: { sub: string; tenantId: string; role?: string },
+  template: { createdByUserId?: string | null },
+) {
+  if (isTemplateAdmin(user)) return true;
+  if (template.createdByUserId === user.sub) return true;
+  const crmRole = await loadCrmUserAccessRole(user.tenantId, user.sub);
+  return crmRoleBypassesContactRestriction(crmRole);
 }
 
 function normalizeTemplatePayload(body: any, creating = false): Record<string, unknown> {
@@ -294,7 +306,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
         lastError: true,
       },
     });
-    const isAdmin = canManageTenantSender(user);
+    const isAdmin = await canManageTenantSenderForUser(user);
     const senders = rows.map((r) => ({
       id: r.id,
       scope: r.scope,
@@ -335,7 +347,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
 
     // scope = USER (default) or TENANT (admins only). label/isDefaultForTenant apply to TENANT.
     const scopeChoice: "USER" | "TENANT" = body?.scope === "TENANT" ? "TENANT" : "USER";
-    if (scopeChoice === "TENANT" && !canManageTenantSender(user)) {
+    if (scopeChoice === "TENANT" && !(await canManageTenantSenderForUser(user))) {
       return reply.status(403).send({ error: "forbidden", detail: "tenant_sender_requires_admin" });
     }
     const wantsDefault = scopeChoice === "TENANT" ? Boolean(body?.isDefaultForTenant) : false;
@@ -665,7 +677,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     if (!row) return reply.code(404).send({ error: "connection_not_found" });
     const allowed =
       (row.scope === "USER" && row.userId === user.sub) ||
-      (row.scope === "TENANT" && canManageTenantSender(user));
+      (row.scope === "TENANT" && await canManageTenantSenderForUser(user));
     if (!allowed) return reply.code(403).send({ error: "forbidden" });
     await softDisconnect(row.id, user.sub, user.tenantId, row.encryptedRefreshToken);
     return { ok: true };
@@ -679,7 +691,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     if (!row) return reply.code(404).send({ error: "connection_not_found" });
     const allowed =
       (row.scope === "USER" && row.userId === user.sub) ||
-      (row.scope === "TENANT" && canManageTenantSender(user));
+      (row.scope === "TENANT" && await canManageTenantSenderForUser(user));
     if (!allowed) return reply.code(403).send({ error: "forbidden" });
 
     const body = (req.body as any) || {};
@@ -759,7 +771,8 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     if (explicitId) {
       const r = await db.crmEmailConnection.findFirst({ where: { id: explicitId, tenantId: user.tenantId }, select: { id: true, scope: true, userId: true, replyTrackingEnabled: true, status: true } });
       if (!r) return reply.code(404).send({ error: "connection_not_found" });
-      const allowed = (r.scope === "USER" && r.userId === user.sub) || (r.scope === "TENANT" && canManageTenantSender(user));
+      const canManageTenant = await canManageTenantSenderForUser(user);
+      const allowed = (r.scope === "USER" && r.userId === user.sub) || (r.scope === "TENANT" && canManageTenant);
       if (!allowed) return reply.code(403).send({ error: "forbidden" });
       if (!r.replyTrackingEnabled || r.status !== "CONNECTED") return reply.code(400).send({ error: "not_enabled" });
       targets = [{ id: r.id, scope: r.scope as any, userId: r.userId }];
@@ -771,7 +784,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
           status: "CONNECTED",
           OR: [
             { scope: "USER", userId: user.sub },
-            ...(canManageTenantSender(user) ? [{ scope: "TENANT" as const }] : []),
+            ...((await canManageTenantSenderForUser(user)) ? [{ scope: "TENANT" as const }] : []),
           ],
         },
         select: { id: true, scope: true, userId: true },
@@ -793,7 +806,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     if (!id) return reply.code(400).send({ error: "invalid_query" });
     const row = await db.crmEmailConnection.findFirst({ where: { id, tenantId: user.tenantId }, select: { id: true, scope: true, userId: true } });
     if (!row) return reply.code(404).send({ error: "connection_not_found" });
-    const allowed = (row.scope === "USER" && row.userId === user.sub) || (row.scope === "TENANT" && canManageTenantSender(user));
+    const allowed = (row.scope === "USER" && row.userId === user.sub) || (row.scope === "TENANT" && await canManageTenantSenderForUser(user));
     if (!allowed) return reply.code(403).send({ error: "forbidden" });
     const audit = await db.auditLog.findFirst({
       where: { tenantId: user.tenantId, entityType: "CrmEmailConnection", entityId: id, action: "CRM_EMAIL_SYNC_RESULT" },
@@ -807,7 +820,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
   app.get("/crm/email/replies/recent", async (req, reply) => {
     const user = await requireCrmAccess(req, reply); if (!user) return;
     const limit = Math.min(50, Math.max(1, Number((req.query as any)?.limit ?? 20)));
-    const isAdmin = canManageTenantSender(user);
+    const isAdmin = await canManageTenantSenderForUser(user);
     const rows = await db.crmEmailMessage.findMany({
       where: {
         tenantId: user.tenantId,
@@ -844,7 +857,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
   });
 
   // POST /crm/email/send — CRM email send with optional server-side template render.
-  // Body: { contactId?, toEmail?, subject?, bodyText?, bodyHtml?, templateId?, connectionId?, attachmentIds? }
+  // Body: { contactId?, toEmail?, subject?, bodyText?, bodyHtml?, templateId?, connectionId?, attachmentIds?, ccSelf? }
   app.post("/crm/email/send", async (req, reply) => {
     const user = await requireCrmAccess(req, reply); if (!user) return;
 
@@ -859,11 +872,27 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
 
     const contactId = body?.contactId ? String(body.contactId) : null;
     const toEmail = String(body?.toEmail || "").trim();
+    const hasBodyTextOverride = typeof body?.bodyText === "string";
+    const hasBodyHtmlOverride = typeof body?.bodyHtml === "string";
     let subject = String(body?.subject || "");
     let bodyText = String(body?.bodyText || "");
-    let bodyHtml = typeof body?.bodyHtml === "string" ? String(body.bodyHtml) : "";
+    let bodyHtml = hasBodyHtmlOverride ? String(body.bodyHtml) : "";
     const templateId = body?.templateId ? String(body.templateId) : null;
     const attachmentIds = Array.isArray(body?.attachmentIds) ? body.attachmentIds.map(String).slice(0, 20) : undefined;
+    const ccSelf = body?.ccSelf === true;
+    let ccEmail: string | null = null;
+
+    if (ccSelf) {
+      const row = await db.user.findFirst({
+        where: { id: user.sub, tenantId: user.tenantId },
+        select: { email: true },
+      });
+      const candidate = String(row?.email || "").trim();
+      if (!candidate || !isValidEmailAddress(candidate)) {
+        return reply.status(400).send({ error: "invalid_payload", detail: "user email required for ccSelf" });
+      }
+      ccEmail = candidate;
+    }
 
     if (templateId) {
       const tpl = await (db as any).crmEmailTemplate.findFirst({
@@ -879,8 +908,8 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
         template: {
           subject: subject || tpl.subject,
           previewText: tpl.previewText,
-          bodyText: bodyText || tpl.bodyText,
-          bodyHtml: bodyHtml || tpl.bodyHtml,
+          bodyText: hasBodyTextOverride ? bodyText : tpl.bodyText,
+          bodyHtml: hasBodyHtmlOverride ? bodyHtml : (hasBodyTextOverride ? null : tpl.bodyHtml),
           bodyJson: tpl.bodyJson,
         },
         tenantId: user.tenantId,
@@ -929,6 +958,8 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       contactId,
       templateId,
       attachmentIds,
+      ccEmail,
+      ccSelf,
     }, { removeOnComplete: 100, removeOnFail: 100 });
     await db.auditLog.create({ data: { tenantId: user.tenantId, action: "CRM_EMAIL_SEND_QUEUED", entityType: "Contact", entityId: contactId || "", actorUserId: user.sub } }).catch(() => undefined);
     return { ok: true, senderId: sender.id };
@@ -1103,7 +1134,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const existing = await (db as any).crmEmailTemplate.findFirst({ where: { id, tenantId: user.tenantId } });
     if (!existing) return reply.code(404).send({ error: "template_not_found" });
-    if (!canEditTemplate(user, existing)) return reply.code(403).send({ error: "forbidden" });
+    if (!(await canEditTemplate(user, existing))) return reply.code(403).send({ error: "forbidden" });
     const body = (req.body as any) || {};
     const data: any = normalizeTemplatePayload(body);
     if (data.name === "") return reply.code(400).send({ error: "invalid_payload", detail: "name required" });
@@ -1211,7 +1242,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const existing = await (db as any).crmEmailTemplate.findFirst({ where: { id, tenantId: user.tenantId } });
     if (!existing) return reply.code(404).send({ error: "template_not_found" });
-    if (!canEditTemplate(user, existing)) return reply.code(403).send({ error: "forbidden" });
+    if (!(await canEditTemplate(user, existing))) return reply.code(403).send({ error: "forbidden" });
     const file = await req.file({ limits: { fileSize: Number(process.env.CRM_EMAIL_ATTACHMENT_MAX_BYTES || 15 * 1024 * 1024) } });
     if (!file) return reply.code(400).send({ error: "file_required" });
     const buffer = await file.toBuffer();
@@ -1252,7 +1283,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     const { id, attachmentId } = req.params as { id: string; attachmentId: string };
     const existing = await (db as any).crmEmailTemplate.findFirst({ where: { id, tenantId: user.tenantId } });
     if (!existing) return reply.code(404).send({ error: "template_not_found" });
-    if (!canEditTemplate(user, existing)) return reply.code(403).send({ error: "forbidden" });
+    if (!(await canEditTemplate(user, existing))) return reply.code(403).send({ error: "forbidden" });
     await (db as any).crmEmailTemplateAttachment.deleteMany({ where: { id: attachmentId, templateId: id, tenantId: user.tenantId } });
     return { ok: true };
   });
@@ -1262,7 +1293,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const existing = await (db as any).crmEmailTemplate.findFirst({ where: { id, tenantId: user.tenantId } });
     if (!existing) return reply.code(404).send({ error: "template_not_found" });
-    if (!canEditTemplate(user, existing)) return reply.code(403).send({ error: "forbidden" });
+    if (!(await canEditTemplate(user, existing))) return reply.code(403).send({ error: "forbidden" });
     await (db as any).crmEmailTemplate.update({ where: { id }, data: { isArchived: true } });
     await db.auditLog.create({ data: { tenantId: user.tenantId, action: "CRM_EMAIL_TEMPLATE_ARCHIVED", entityType: "CrmEmailTemplate", entityId: id, actorUserId: user.sub } }).catch(() => undefined);
     return { ok: true };
@@ -1274,7 +1305,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const existing = await (db as any).crmEmailTemplate.findFirst({ where: { id, tenantId: user.tenantId } });
     if (!existing) return reply.code(404).send({ error: "template_not_found" });
-    if (!canEditTemplate(user, existing)) return reply.code(403).send({ error: "forbidden" });
+    if (!(await canEditTemplate(user, existing))) return reply.code(403).send({ error: "forbidden" });
     await (db as any).crmEmailTemplate.update({ where: { id }, data: { isArchived: true } });
     return { ok: true };
   });

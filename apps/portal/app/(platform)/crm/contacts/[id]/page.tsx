@@ -59,7 +59,7 @@ import {
 import { leadTimezoneDetailLabel, leadTimezoneBadgeTitle } from "../../../../../components/crm/contact/leadTimezoneDisplay";
 import { ContactDocumentSummary } from "../../../../../components/crm/contact/ContactDocumentSummary";
 import { type Checklist, type ScriptSummary } from "../../../../../components/crm/live";
-import { CrmEmailComposeDrawer } from "../../../../../components/crm/email/CrmEmailComposeDrawer";
+import { ContactEmailWorkspacePanel } from "../../../../../components/crm/email/ContactEmailWorkspacePanel";
 import { CrmVoicemailDropDrawer } from "../../../../../components/crm/voicemail-drops/CrmVoicemailDropDrawer";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { apiGet, apiPatch, apiPost, apiDelete, apiFetchBlob, apiPut } from "../../../../../services/apiClient";
@@ -1297,8 +1297,7 @@ function CrmContactDetailInner() {
   const [error, setError] = useState<string | null>(null);
   const [summaryRefreshToken, setSummaryRefreshToken] = useState(0);
 
-  // Compose email state
-  const [composeOpen, setComposeOpen] = useState(false);
+  // Outreach drawer state
   const [voicemailDropOpen, setVoicemailDropOpen] = useState(false);
 
   // Edit state
@@ -2529,21 +2528,21 @@ function CrmContactDetailInner() {
                 onSend={handleSendSms}
               />
             ) : workspaceTab === "email" ? (
-              <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-5">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-crm-accent">Email</p>
-                    <h3 className="mt-1 text-lg font-bold text-crm-text">Compose without leaving context</h3>
-                    <p className="mt-1 max-w-xl text-sm text-crm-muted">
-                      Uses the existing CRM email composer and records sent mail back into the contact timeline.
-                    </p>
-                  </div>
-                  <button type="button" onClick={() => setComposeOpen(true)} disabled={!primaryEmailRow || isArchived} className={crm.btnPrimary}>
-                    <Mail className="h-4 w-4" />
-                    Compose
-                  </button>
-                </div>
-              </div>
+              <ContactEmailWorkspacePanel
+                contactId={contact.id}
+                contactName={contact.displayName}
+                contactEmail={primaryEmailRow?.email ?? null}
+                currentUserEmail={appUser?.email ?? null}
+                disabled={isArchived}
+                mergeFields={{
+                  firstName: contact.firstName ?? null,
+                  lastName: contact.lastName ?? null,
+                  displayName: contact.displayName,
+                  company: contact.company ?? null,
+                  email: primaryEmailRow?.email ?? null,
+                }}
+                onSent={() => { void loadTimeline(); }}
+              />
             ) : workspaceTab === "files" ? (
               <ContactDriveDocuments contactId={id} />
             ) : workspaceTab === "discoveries" ? (
@@ -3311,23 +3310,6 @@ function CrmContactDetailInner() {
           </div>
         </div>
       )}
-    {contact ? (
-      <CrmEmailComposeDrawer
-        open={composeOpen}
-        onClose={() => setComposeOpen(false)}
-        contactId={contact.id}
-        contactName={contact.displayName}
-        contactEmail={(contact.emails.find((e) => e.isPrimary) ?? contact.emails[0])?.email ?? null}
-        mergeFields={{
-          firstName: contact.firstName ?? null,
-          lastName: contact.lastName ?? null,
-          displayName: contact.displayName,
-          company: contact.company ?? null,
-          email: (contact.emails.find((e) => e.isPrimary) ?? contact.emails[0])?.email ?? null,
-        }}
-        onSent={() => { void loadTimeline(); }}
-      />
-    ) : null}
     {contact ? (
       <CrmVoicemailDropDrawer
         open={voicemailDropOpen}

@@ -108,9 +108,9 @@ export function buildFunderVars(funder: {
  * Resolve the sender CrmEmailConnection for a bulk job.
  * Uses the same fallback chain as the API's resolveSenderConnection:
  *  1. job.connectionId (if set)
- *  2. createdBy user's own USER connection
- *  3. tenant default TENANT connection
- *  4. lone TENANT connection
+ *  2. tenant default TENANT connection
+ *  3. lone TENANT connection
+ *  4. createdBy user's own USER connection
  */
 async function resolveBulkSender(
   tenantId: string,
@@ -125,14 +125,6 @@ async function resolveBulkSender(
     if (row) return row as any;
   }
 
-  if (userId) {
-    const mine = await db.crmEmailConnection.findFirst({
-      where: { tenantId, userId, scope: "USER", status: "CONNECTED" },
-      select: { id: true, emailAddress: true, senderName: true, displayName: true, scope: true },
-    });
-    if (mine) return mine as any;
-  }
-
   const def = await db.crmEmailConnection.findFirst({
     where: { tenantId, scope: "TENANT", isDefaultForTenant: true, status: "CONNECTED" },
     select: { id: true, emailAddress: true, senderName: true, displayName: true, scope: true },
@@ -145,6 +137,14 @@ async function resolveBulkSender(
     take: 2,
   });
   if (tenantRows.length === 1) return tenantRows[0] as any;
+
+  if (userId) {
+    const mine = await db.crmEmailConnection.findFirst({
+      where: { tenantId, userId, scope: "USER", status: "CONNECTED" },
+      select: { id: true, emailAddress: true, senderName: true, displayName: true, scope: true },
+    });
+    if (mine) return mine as any;
+  }
 
   return null;
 }

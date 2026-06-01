@@ -36,12 +36,12 @@ Scope: portal CRM UI/data-flow guardrails. Telephony, billing, workers, database
 
 | CrmUserAccess role | Portal legacy keys | CRM Email nav (`can_view_crm_email`) | CRM Email settings (`can_view_crm_settings`) |
 |--------------------|----------------------|--------------------------------------|-----------------------------------------------|
-| AGENT | `can_view_crm` | Yes — send, templates, USER OAuth from `/crm/email` | No |
+| AGENT | `can_view_crm` | Yes — send/use templates through tenant sender when configured | No |
 | MANAGER | `can_manage_crm` | Yes — same as agent | No |
 | ADMIN | `can_manage_crm` + `can_manage_crm_admin` | Yes | Yes — `/crm/email/settings`, fleet diagnostics API |
 
 - Permissions are merged in `resolvePortalPermissionsWithCrmUserAccess` only when tenant CRM is enabled and `CrmUserAccess.enabled`.
-- **API:** `/crm/email/*` (except OAuth callback) requires `requireCrmAccess`. `POST /crm/email/send` checks `assertCrmContactAllowed` (assignment or allowed campaign when user has campaign restrictions). Fleet diagnostics: `requireCrmEmailSettingsAccess`.
+- **API:** `/crm/email/*` (except OAuth callback) requires `requireCrmAccess`. `POST /crm/email/send` checks `assertCrmContactAllowed` (assignment or allowed campaign when user has campaign restrictions). Fleet diagnostics and tenant sender management are admin-only (`requireCrmEmailSettingsAccess` semantics: platform admin or CRM ADMIN).
 - **Contact scope:** `assertCrmContactAllowed` enforces campaign assignment for AGENT users on contact-scoped mutations (disposition, checklist respond, voicemail drop, notes, tasks, email send, contact detail). **List/search** (`GET /crm/contacts`, `GET /crm/contacts/lookup`, stats, duplicate suggestions) apply the same scope at query time so restricted Agents never see out-of-scope rows or inflated totals. CRM MANAGER / CRM ADMIN bypass campaign restrictions within the tenant (still tenant-scoped via `contact.tenantId`).
 - **Voicemail drops:** list/use/drop/upload/edit/archive routes use `requireCrmAccess` (Agent + Manager + CRM Admin). PBX/system recording settings remain outside this feature (`/pbx/call-recordings`, admin-only).
 - **CRM SMS:** `/crm/contacts/:id/sms` uses regular Connect Chat SMS as the source of truth. The route requires `requireCrmAccess`, `assertCrmContactAllowed`, and `can_send_sms`, then creates/reuses the normal `ConnectChatThread` and queues a `ConnectChatMessage` through the existing Connect Chat SMS send path. The CRM contact SMS panel reads `ConnectChatMessage` rows from that thread; timeline `SMS_SENT` / `SMS_RECEIVED` rows are supplemental activity feed mirrors only.
@@ -98,6 +98,10 @@ Pipeline (unchanged): Google Drive match → import (`CrmLeadDocument`) → text
 - CRM dashboard modernization is UI-only. Keep existing API calls in `apps/portal/app/(platform)/crm/dashboard/page.tsx`; derive status from the values already loaded there.
 - CRM Email landing uses only `/crm/email/connection`, `/crm/email/recent`, and `/crm/email/replies/recent` (agents skip fleet diagnostics).
 - CRM Email Settings uses only `/crm/email/connections`, `/crm/email/oauth/start`, `/crm/email/sync-now`, `/crm/email/connection/test`, `/crm/email/connections/:id`, and `/crm/email/sync-last`.
+- CRM email sender resolution is tenant-first for implicit sends: explicit `connectionId` wins; otherwise use tenant default TENANT sender, lone connected TENANT sender, caller USER sender, then no sender. This keeps normal CRM sends on the tenant-connected Gmail account when one exists.
+- Contact workspace Email tab is template-first: agents see saved templates directly, select one, preview merged subject/body for the current contact, optionally make small edits, optionally CC themselves, and send one email to the current contact. It must not add bulk email or expose Google connection controls to agents.
+- CC myself uses only the logged-in user's email. Do not add arbitrary CC fields in the workspace flow unless a separate reviewed permission model exists.
+- Reply tracking uses the existing Gmail thread sync on the sender connection. Contact replies to the tenant sender are tracked when reply tracking is enabled. Agent self-CC is for visibility; personal inbox replies are only tracked if the tenant sender remains in the Gmail thread/recipient chain. Do not invent a fake CRM tracking/BCC address.
 - CRM Email landing keeps Sent, Delivered, Replies, and Reply Rate directly under the header/top health banner; the Google sender/connect card lives lower on the page and can be hidden per tenant/user in local storage. When hidden, keep a compact Connect Google/Manage affordance available.
 - CRM Email Recent Replies and Recent Sent panels use bounded independent scroll regions with visible panel headers. Empty states should be simple text/icon states, not dashed or bordered empty containers.
 - Sender cards should feel like production infrastructure: connection state, reply tracking, sync health, last sync/activity, and compact diagnostics.

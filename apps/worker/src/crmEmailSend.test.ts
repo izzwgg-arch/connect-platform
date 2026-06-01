@@ -40,6 +40,22 @@ test("CRM email send: rich MIME includes template attachments", async () => {
   }
 });
 
+test("CRM email send: rich MIME includes CC header when ccSelf is requested", async () => {
+  const mime = await buildRichMime({
+    fromHeader: "Sender <sender@example.com>",
+    to: "recipient@example.com",
+    ccEmail: "agent@example.com",
+    subject: "Proposal",
+    bodyText: "Plain fallback",
+    bodyHtml: "<p>HTML body</p>",
+    attachments: [],
+  });
+
+  assert.match(mime, /^Cc: <agent@example\.com>$/m);
+  assert.match(mime, /^To: <recipient@example\.com>$/m);
+  assert.match(mime, /^From: Sender <sender@example\.com>$/m);
+});
+
 test("CRM email send: rich MIME supports inline CID logo", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "crm-email-logo-"));
   const previous = process.env.CRM_EMAIL_ASSET_STORAGE_DIR;

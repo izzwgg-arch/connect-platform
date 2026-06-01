@@ -13,6 +13,7 @@ import {
   hasReadonlyScope,
   canManageTenantSender,
   replyTrackingStatus,
+  resolveImplicitSenderConnectionOrder,
 } from "./crmEmailHelpers.js";
 
 // ── hasReadonlyScope ───────────────────────────────────────────────────────────
@@ -50,8 +51,16 @@ test("canManageTenantSender: SUPER_ADMIN can manage", () => {
   assert.equal(canManageTenantSender({ role: "SUPER_ADMIN" }), true);
 });
 
-test("canManageTenantSender: MANAGER can manage", () => {
-  assert.equal(canManageTenantSender({ role: "MANAGER" }), true);
+test("canManageTenantSender: platform MANAGER cannot manage", () => {
+  assert.equal(canManageTenantSender({ role: "MANAGER" }), false);
+});
+
+test("canManageTenantSender: CRM ADMIN can manage", () => {
+  assert.equal(canManageTenantSender({ role: "USER" }, "ADMIN"), true);
+});
+
+test("canManageTenantSender: CRM MANAGER cannot manage", () => {
+  assert.equal(canManageTenantSender({ role: "USER" }, "MANAGER"), false);
 });
 
 test("canManageTenantSender: TENANT_ADMIN can manage", () => {
@@ -110,4 +119,31 @@ test("replyTrackingStatus: no_scope on empty scopes with tracking off", () => {
     replyTrackingStatus({ replyTrackingEnabled: false, scopes: [] }),
     "no_scope",
   );
+});
+
+// ── resolveImplicitSenderConnectionOrder ─────────────────────────────────────
+
+test("resolveImplicitSenderConnectionOrder: tenant default wins over user sender", () => {
+  const selected = resolveImplicitSenderConnectionOrder([
+    { id: "user", scope: "USER", userId: "agent-1" },
+    { id: "tenant-default", scope: "TENANT", isDefaultForTenant: true },
+  ], "agent-1");
+  assert.equal(selected?.id, "tenant-default");
+});
+
+test("resolveImplicitSenderConnectionOrder: lone tenant wins over user sender", () => {
+  const selected = resolveImplicitSenderConnectionOrder([
+    { id: "user", scope: "USER", userId: "agent-1" },
+    { id: "tenant-lone", scope: "TENANT", isDefaultForTenant: false },
+  ], "agent-1");
+  assert.equal(selected?.id, "tenant-lone");
+});
+
+test("resolveImplicitSenderConnectionOrder: ambiguous tenants fall back to user sender", () => {
+  const selected = resolveImplicitSenderConnectionOrder([
+    { id: "user", scope: "USER", userId: "agent-1" },
+    { id: "tenant-a", scope: "TENANT", isDefaultForTenant: false },
+    { id: "tenant-b", scope: "TENANT", isDefaultForTenant: false },
+  ], "agent-1");
+  assert.equal(selected?.id, "user");
 });

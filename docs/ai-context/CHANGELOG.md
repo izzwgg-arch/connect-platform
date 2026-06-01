@@ -4,6 +4,37 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-01 — CRM workspace template send via tenant sender
+
+**Task:** CRM / email / workspace templates / tenant sender  
+**Risk:** high
+
+### Root cause
+
+CRM email already had TENANT-scoped Google sender connections, but normal send resolution preferred a caller's USER sender before the tenant sender. The contact workspace Email tab also hid templates behind a compose drawer, lacked CC-self, and did not record enough send metadata for template/sender audit.
+
+### Changes
+
+- **Tenant-first sending:** implicit CRM sends now resolve explicit `connectionId` first, then tenant default TENANT sender, lone TENANT sender, caller USER sender, then no sender.
+- **Workspace templates:** the contact workspace Email tab now shows saved templates directly, supports search, preview, small subject/body edits, template attachments, and one-at-a-time sends.
+- **CC myself:** workspace sends can CC the logged-in user's email only; missing/invalid user email is rejected safely.
+- **Permissions:** tenant Google sender management is limited to platform admins or CRM ADMIN users. CRM Agents/Managers can send with the tenant sender but cannot manage connection settings.
+- **Reply tracking:** no fake reply-tracking address was added. Contact replies to the tenant sender remain tracked by the existing Gmail thread sync when reply tracking is enabled; agent self-CC is for visibility, and personal inbox replies are only tracked if the tenant sender remains in the Gmail thread/recipient chain.
+- **Timeline:** sent email timeline metadata now includes template, sender connection, sender account, and CC-self details.
+
+### Manual QA
+
+- Admin connects the tenant Google sender with reply tracking.
+- Agent without personal Google opens a contact workspace Email tab, selects a template, confirms merge fields, checks CC myself, and sends.
+- Confirm the email sends from the tenant Gmail account, the agent receives the CC, and contact replies sync back after Gmail reply sync.
+- Confirm an out-of-scope Agent is blocked, Agents cannot open/manage email settings, and CRM Admin can still manage the tenant sender.
+
+### Rollback
+
+Revert the API, worker, portal, test, and docs changes together, then deploy `api`, `worker`, and `portal`. No Prisma rollback is required.
+
+---
+
 ## 2026-06-01 — CRM Email layout polish
 
 **Task:** CRM / email page / layout polish  

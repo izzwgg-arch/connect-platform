@@ -3,13 +3,40 @@
  * Kept in a separate file so unit tests can import without pulling in DB/Redis/BullMQ.
  */
 
-/**
- * Admins (tenant or platform) can manage TENANT-scoped shared senders.
- * Mirrors the `isAdminRole` pattern in guard.ts for CRM email access.
- */
-export function canManageTenantSender(user: { role?: string }): boolean {
+/** Platform admins can manage TENANT-scoped shared senders. */
+export function isPlatformTenantSenderAdmin(user: { role?: string }): boolean {
   const r = String(user.role || "").toUpperCase();
-  return r === "ADMIN" || r === "TENANT_ADMIN" || r === "SUPER_ADMIN" || r === "MANAGER";
+  return r === "ADMIN" || r === "TENANT_ADMIN" || r === "SUPER_ADMIN";
+}
+
+/**
+ * Platform admins or CRM ADMIN users can manage TENANT-scoped shared senders.
+ * CRM MANAGER can send with a tenant sender, but cannot manage Google connection settings.
+ */
+export function canManageTenantSender(user: { role?: string }, crmAccessRole?: string | null): boolean {
+  if (isPlatformTenantSenderAdmin(user)) return true;
+  return String(crmAccessRole || "").toUpperCase() === "ADMIN";
+}
+
+export type CrmSenderRef = {
+  id: string;
+  scope: "USER" | "TENANT";
+  userId?: string | null;
+  isDefaultForTenant?: boolean;
+};
+
+/**
+ * Pure implicit sender order for CRM sends. Explicit connectionId is handled by the caller.
+ * CRM defaults to the tenant sender when present, then falls back to the caller's USER sender.
+ */
+export function resolveImplicitSenderConnectionOrder<T extends CrmSenderRef>(rows: T[], userId: string): T | null {
+  const connectedTenantDefault = rows.find((r) => r.scope === "TENANT" && r.isDefaultForTenant);
+  if (connectedTenantDefault) return connectedTenantDefault;
+
+  const tenantRows = rows.filter((r) => r.scope === "TENANT");
+  if (tenantRows.length === 1) return tenantRows[0];
+
+  return rows.find((r) => r.scope === "USER" && r.userId === userId) || null;
 }
 
 /** The OAuth scope required for reply tracking (reading inbox metadata). */
