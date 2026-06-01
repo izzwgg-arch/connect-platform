@@ -31903,7 +31903,7 @@ const port = Number(process.env.PORT || 3001);
     },
   });
   registerConnectChatRoutes(app, { smsQueue, sendPushToUserDevices });
-  await registerCrmRoutes(app);
+  await registerCrmRoutes(app, { smsQueue });
   await app.listen({ host: "0.0.0.0", port });
   markListeningComplete();
 

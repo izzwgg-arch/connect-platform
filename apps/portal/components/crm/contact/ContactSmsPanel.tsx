@@ -5,16 +5,26 @@ import { forwardRef } from "react";
 import { MessageSquareDot, Send } from "lucide-react";
 import { CRMCard, CRMSection, crm } from "..";
 import { cn } from "../cn";
-import type { ContactPhone, TimelineEvent } from "./contactTypes";
+import type { ContactPhone } from "./contactTypes";
 import { formatDateTime } from "./contactFormatters";
 import { phoneSummaryLabel, phoneDispositionSummary } from "./contactWorkspaceHelpers";
+
+export type ContactSmsPanelMessage = {
+  id: string;
+  body: string;
+  sentAt: string;
+  mine: boolean;
+  direction?: "INBOUND" | "OUTBOUND" | "INTERNAL";
+  deliveryStatus?: string | null;
+  deliveryError?: string | null;
+};
 
 export const ContactSmsPanel = forwardRef<
   HTMLDivElement,
   {
     phones: ContactPhone[];
-    smsEvents: TimelineEvent[];
-    timelineLoading: boolean;
+    messages: ContactSmsPanelMessage[];
+    loading: boolean;
     isArchived: boolean;
     doNotSms: boolean;
     smsPhone: string;
@@ -29,8 +39,8 @@ export const ContactSmsPanel = forwardRef<
 >(function ContactSmsPanel(
   {
     phones,
-    smsEvents,
-    timelineLoading,
+    messages,
+    loading,
     isArchived,
     doNotSms,
     smsPhone,
@@ -52,30 +62,26 @@ export const ContactSmsPanel = forwardRef<
         <CRMSection
           title="SMS"
           description={
-            smsEvents.length > 0
-              ? `${smsEvents.length} recent message${smsEvents.length !== 1 ? "s" : ""}`
-              : "Text thread from timeline — no extra API"
+            messages.length > 0
+              ? `${messages.length} message${messages.length !== 1 ? "s" : ""} from Connect Chat`
+              : "Connect Chat SMS thread"
           }
         >
-          {timelineLoading ? (
+          {loading ? (
             <p className="text-sm text-crm-muted">Loading…</p>
-          ) : smsEvents.length === 0 ? (
+          ) : messages.length === 0 ? (
             <div className="py-2 text-sm">
               <p className="font-semibold text-crm-text">No SMS activity yet.</p>
-              <p className="mt-1 text-crm-muted">Send the first SMS below. It appears in the timeline when delivered.</p>
+              <p className="mt-1 text-crm-muted">Send the first SMS below. It appears in Connect Chat and here.</p>
             </div>
           ) : (
             <div className="flex max-h-80 flex-col gap-2 overflow-y-auto pr-1">
-              {smsEvents.map((ev) => {
-                const isSent = ev.type === "SMS_SENT";
-                const m = ev.metadata as Record<string, unknown> | null;
-                const phone = isSent
-                  ? (typeof m?.to === "string" ? m.to : null)
-                  : (typeof m?.from === "string" ? m.from : null);
+              {messages.map((message) => {
+                const isSent = message.mine || message.direction === "OUTBOUND";
                 return (
-                  <BubbleRow key={ev.id} isSent={isSent}>
-                    <SmsBubble isSent={isSent} body={ev.body} />
-                    <BubbleMeta phone={phone} createdAt={ev.createdAt} />
+                  <BubbleRow key={message.id} isSent={isSent}>
+                    <SmsBubble isSent={isSent} body={message.body} />
+                    <BubbleMeta deliveryStatus={message.deliveryStatus} deliveryError={message.deliveryError} createdAt={message.sentAt} />
                   </BubbleRow>
                 );
               })}
@@ -163,10 +169,10 @@ function SmsBubble({ isSent, body }: { isSent: boolean; body?: string | null }) 
   );
 }
 
-function BubbleMeta({ phone, createdAt }: { phone: string | null; createdAt: string }) {
+function BubbleMeta({ deliveryStatus, deliveryError, createdAt }: { deliveryStatus?: string | null; deliveryError?: string | null; createdAt: string }) {
   return (
     <div className="mt-0.5 flex items-center gap-1.5">
-      {phone ? <span className="font-mono text-[0.6875rem] text-crm-muted">{phone}</span> : null}
+      {deliveryStatus ? <span className="text-[0.6875rem] text-crm-muted">{deliveryError ? "Failed" : deliveryStatus}</span> : null}
       <span className="text-[0.6875rem] text-crm-muted">{formatDateTime(createdAt)}</span>
     </div>
   );

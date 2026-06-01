@@ -23,6 +23,10 @@ export function smsInboxBadge(kind?: "shared" | "personal" | null): string | nul
   return null;
 }
 
+export function crmSmsBadge(enabled?: boolean): string | null {
+  return enabled ? "CRM SMS" : null;
+}
+
 export function threadLabel(type?: ChatThreadType | string): string {
   if (type === "SMS") return "SMS";
   if (type === "TENANT_GROUP") return "Tenant";

@@ -12,6 +12,11 @@ export interface ChatThread {
   externalSmsE164?: string | null;
   /** Shared tenant SMS inbox vs personal extension/user inbox. */
   smsInboxKind?: "shared" | "personal" | null;
+  /** Present only when the API has verified this viewer can access the CRM contact. */
+  crmSms?: boolean;
+  crmContactId?: string | null;
+  crmContactName?: string | null;
+  crmAmbiguous?: boolean;
   participantName: string;
   participantExtension: string;
   lastMessage: string;

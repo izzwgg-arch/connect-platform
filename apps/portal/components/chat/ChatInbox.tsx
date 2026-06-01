@@ -2,7 +2,7 @@
 
 import { AlertCircle, MessageCircle, Search } from "lucide-react";
 import type { ChatThread } from "./types";
-import { fmtChatTime, initials, smsInboxBadge, threadLabel } from "./formatting";
+import { crmSmsBadge, fmtChatTime, initials, smsInboxBadge, threadLabel } from "./formatting";
 
 export function ChatInbox({
   threads,
@@ -60,6 +60,9 @@ export function ChatInbox({
               <span className="cc-thread-bottom">
                 <span className="cc-channel-row">
                   <span className={`cc-channel cc-channel-${thread.type.toLowerCase()}`}>{threadLabel(thread.type)}</span>
+                  {thread.type === "SMS" && crmSmsBadge(thread.crmSms) ? (
+                    <span className="cc-sms-inbox-badge cc-sms-inbox-shared">{crmSmsBadge(thread.crmSms)}</span>
+                  ) : null}
                   {thread.type === "SMS" && smsInboxBadge(thread.smsInboxKind) ? (
                     <span className={`cc-sms-inbox-badge cc-sms-inbox-${thread.smsInboxKind}`}>{smsInboxBadge(thread.smsInboxKind)}</span>
                   ) : null}

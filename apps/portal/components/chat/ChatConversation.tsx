@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 import { useSipPhone } from "../../hooks/useSipPhone";
 import { ChatComposer } from "./ChatComposer";
 import { MessageBubble } from "./MessageBubble";
-import { initials, smsInboxBadge, threadLabel } from "./formatting";
+import { crmSmsBadge, initials, smsInboxBadge, threadLabel } from "./formatting";
 import type { ChatMessage, ChatThread, PendingAttachment } from "./types";
 
 export function ChatConversation({
@@ -82,6 +82,9 @@ export function ChatConversation({
           <h2>{thread.participantName}</h2>
           <p>
             {threadLabel(thread.type)}
+            {thread.type === "SMS" && crmSmsBadge(thread.crmSms) ? (
+              <> · <span className="cc-sms-inbox-badge cc-sms-inbox-shared">{crmSmsBadge(thread.crmSms)}</span></>
+            ) : null}
             {thread.type === "SMS" && smsInboxBadge(thread.smsInboxKind) ? (
               <> · <span className={`cc-sms-inbox-badge cc-sms-inbox-${thread.smsInboxKind}`}>{smsInboxBadge(thread.smsInboxKind)}</span></>
             ) : null}

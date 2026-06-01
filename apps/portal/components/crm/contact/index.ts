@@ -15,4 +15,5 @@ export * from "./contactWorkspaceHelpers";
 export { ContactTimeline } from "./ContactTimeline";
 export { ContactTimelineItem } from "./ContactTimelineItem";
 export { ContactSmsPanel } from "./ContactSmsPanel";
+export type { ContactSmsPanelMessage } from "./ContactSmsPanel";
 export { ContactRelationshipHealth } from "./ContactRelationshipHealth";

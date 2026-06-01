@@ -41,6 +41,7 @@ import {
   ContactTimeline,
   ContactSmsPanel,
   ContactRelationshipHealth,
+  type ContactSmsPanelMessage,
   type CrmContactDetail,
   type CrmStage,
   type CrmTask,
@@ -1390,6 +1391,8 @@ function CrmContactDetailInner() {
   const [smsPhone, setSmsPhone] = useState<string>("");
   const [smsMessage, setSmsMessage] = useState("");
   const [smsSending, setSmsSending] = useState(false);
+  const [smsThreadLoading, setSmsThreadLoading] = useState(false);
+  const [smsThreadMessages, setSmsThreadMessages] = useState<ContactSmsPanelMessage[]>([]);
   const [smsError, setSmsError] = useState<string | null>(null);
   const [smsSuccess, setSmsSuccess] = useState(false);
 
@@ -1482,6 +1485,21 @@ function CrmContactDetailInner() {
     }
   }, [id]);
 
+  const loadSmsThread = useCallback(async () => {
+    setSmsThreadLoading(true);
+    try {
+      const qs = new URLSearchParams();
+      if (smsPhone) qs.set("phone", smsPhone);
+      const suffix = qs.toString() ? `?${qs.toString()}` : "";
+      const data = await apiGet<{ messages: ContactSmsPanelMessage[] }>(`/crm/contacts/${id}/sms${suffix}`);
+      setSmsThreadMessages(data.messages ?? []);
+    } catch {
+      setSmsThreadMessages([]);
+    } finally {
+      setSmsThreadLoading(false);
+    }
+  }, [id, smsPhone]);
+
   const loadTasks = useCallback(async () => {
     setTasksLoading(true);
     try {
@@ -1523,6 +1541,10 @@ function CrmContactDetailInner() {
     loadDuplicates();
     void loadWorkspaceGuides();
   }, [loadContact, loadTimeline, loadTasks, loadDuplicates, loadWorkspaceGuides]);
+
+  useEffect(() => {
+    loadSmsThread();
+  }, [loadSmsThread]);
 
   // Draft note autosave keyed by contact id (shared UX with live workspace)
   useEffect(() => {
@@ -1905,7 +1927,7 @@ function CrmContactDetailInner() {
       });
       setSmsSuccess(true);
       setSmsMessage("");
-      await loadTimeline();
+      await Promise.all([loadSmsThread(), loadTimeline()]);
       setTimeout(() => setSmsSuccess(false), 3000);
     } catch (e: any) {
       setSmsError(e?.message || "Failed to send SMS");
@@ -1960,14 +1982,7 @@ function CrmContactDetailInner() {
   const stage = contact.crmStage ?? "LEAD";
   const isArchived = !!(contact.archivedAt != null || contact.active === false);
 
-  // Derive SMS conversation from timeline — newest-first, capped at 25.
-  // No new API call; reuses the timeline already loaded for the Activity feed.
-  const smsEvents = timeline
-    .filter((e) => e.type === "SMS_SENT" || e.type === "SMS_RECEIVED")
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    .slice(0, 25);
-
-  const lastSmsIn = smsEvents.find((e) => e.type === "SMS_RECEIVED") ?? null;
+  const lastSmsIn = [...smsThreadMessages].reverse().find((m) => m.direction === "INBOUND") ?? null;
 
   const primaryPhoneRow = contact.phones.find((p) => p.isPrimary) ?? contact.phones[0] ?? null;
   const primaryEmailRow = contact.emails.find((e) => e.isPrimary) ?? contact.emails[0] ?? null;
@@ -2500,8 +2515,8 @@ function CrmContactDetailInner() {
               <ContactSmsPanel
                 ref={smsPanelRef}
                 phones={contact.phones}
-                smsEvents={smsEvents}
-                timelineLoading={timelineLoading}
+                messages={smsThreadMessages}
+                loading={smsThreadLoading}
                 isArchived={isArchived}
                 doNotSms={contact.doNotSms}
                 smsPhone={smsPhone}
@@ -2787,7 +2802,7 @@ function CrmContactDetailInner() {
               {lastSmsIn && (
                 <span style={{ display: "flex", alignItems: "center", gap: "0.3rem", color: "#7c3aed" }}>
                   <MessageSquareDot size={12} />
-                  Last SMS in: {formatTimeAgo(lastSmsIn.createdAt)}
+                  Last SMS in: {formatTimeAgo(lastSmsIn.sentAt)}
                 </span>
               )}
             </div>

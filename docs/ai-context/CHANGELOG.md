@@ -4,6 +4,30 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-05-31 — CRM SMS unified with Connect Chat
+
+**Task:** CRM / SMS / Connect Chat integration
+**Risk:** high
+
+### Root cause
+
+CRM contact SMS used a CRM-specific provider-send route that called SMS providers directly, then mirrored a timeline event. That bypassed the regular `ConnectChatThread` / `ConnectChatMessage` SMS source of truth, so CRM and main Chat could diverge.
+
+### Changes
+
+- **Outbound CRM SMS:** `/crm/contacts/:id/sms` now requires CRM access, contact scope, and `can_send_sms`, then creates/reuses the regular Connect Chat SMS thread and queues the normal Connect Chat SMS message.
+- **CRM SMS panel:** contact workspace SMS reads from the matching Connect Chat SMS thread/messages instead of timeline-only SMS events.
+- **Main Chat:** the same thread/message appears in `/chat`; CRM SMS labels/contact titles are returned only when the viewer has CRM/contact access. Ambiguous phone matches are marked safely without choosing a random contact name.
+- **Timeline mirroring:** CRM timeline `SMS_SENT` / inbound hook mirroring remains supplemental, not the SMS source of truth.
+
+### Verify
+
+- Send one SMS from a CRM contact workspace; confirm the same message appears in `/chat`.
+- Simulate/receive an inbound reply; confirm it appears in the same Chat thread and the CRM SMS panel after refresh.
+- Check a non-CRM chat viewer sees phone-based SMS title only, without CRM contact name or CRM badge.
+
+---
+
 ## 2026-05-31 — CRM workspace shell (fixed chrome + scroll regions)
 
 **Task:** CRM / UI shell / scrolling architecture  

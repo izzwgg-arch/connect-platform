@@ -49,6 +49,11 @@ SMS shared inbox (2026-05-31)
 - **Portal UI:** VoIP.ms assignment “shared tenant inbox” (no extension); chat thread list/header badges `Shared SMS` / `Personal SMS`.
 - **Pure helpers:** `packages/shared/src/smsInbox.ts` (`resolveSmsInboxScope`, `buildSmsDedupeKey`, eligibility checks).
 
+CRM SMS unification (2026-05-31)
+- CRM contact workspace SMS uses the same `ConnectChatThread` / `ConnectChatMessage` runtime path as regular SMS. `/crm/contacts/:id/sms` is a CRM-guarded wrapper that resolves the contact phone, creates/reuses the normal SMS thread, and queues the normal Connect Chat SMS message; it does not call Twilio/VoIP.ms directly.
+- The CRM SMS panel reads messages from the matching Connect Chat SMS thread. CRM timeline SMS events remain optional mirrors for activity history, not a second message store.
+- Chat thread list decoration is viewer-specific: `CRM SMS` badge and contact/company title are returned only when CRM is enabled and the viewer has CRM/contact access to exactly one matching contact. Ambiguous or unauthorized matches fall back to phone-only SMS labels.
+
 Mobile (apps/mobile)
 - `ChatTab.tsx`
   - Conversation list uses server-provided `unread` values.

@@ -21,6 +21,8 @@ import {
   verifyChatSignedDownload,
 } from "@connect/shared/chatSignedUrl";
 import { validateVoipMsCredentials, VoipMsSmsProvider } from "@connect/integrations";
+import { userCanAccessCrmContact } from "./crm/crmContactAccess";
+import { isAdminRole, loadCrmUserAccessRole } from "./crm/guard";
 import { crmInboundSmsHook } from "./crm/inboundSmsHook";
 import {
   assertStorageKeyForThread,
@@ -32,7 +34,7 @@ import {
 } from "./chatAttachmentStorage";
 import { fetchVoipMsMmsToChatFile, mediaKindFromMime } from "../../../packages/shared/src/voipMsInboundMms";
 import { upsertSmsThreadParticipants } from "./smsInboxParticipants";
-type JwtUser = { sub: string; tenantId: string; email: string; role: string };
+export type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
 function staff(user: JwtUser): string {
   return String(user.role || "USER");
@@ -51,7 +53,7 @@ function canSendSmsRole(user: JwtUser): boolean {
 }
 
 /** Legacy JWT roles OR portal `can_send_sms` (backward compatible union). */
-async function canSendSmsUser(user: JwtUser): Promise<boolean> {
+export async function canSendSmsUser(user: JwtUser): Promise<boolean> {
   if (canSendSmsRole(user)) return true;
   return hasEffectivePortalPermission(user, "can_send_sms" as any).catch(() => false);
 }
@@ -476,6 +478,244 @@ async function ensureSmsThreadParticipantForSend(input: {
   return { ok: true };
 }
 
+export type ConnectChatSmsSendResult =
+  | { ok: true; messageId: string; deliveryStatus: "queued" }
+  | { ok: false; status: number; error: string; message?: string };
+
+export async function findOrCreateConnectChatSmsThread(input: {
+  tenantId: string;
+  userId: string;
+  externalPhone: string;
+  title?: string | null;
+}): Promise<
+  | { ok: true; threadId: string; normalizedTo: string; fromNumber: string }
+  | { ok: false; status: number; error: string; message?: string }
+> {
+  const extNorm = canonicalSmsPhone(input.externalPhone);
+  if (!extNorm.ok) {
+    return { ok: false, status: 400, error: "INVALID_PHONE", message: "error" in extNorm ? extNorm.error : "invalid phone" };
+  }
+
+  const extLink = await db.extension.findFirst({
+    where: { tenantId: input.tenantId, ownerUserId: input.userId, status: "ACTIVE" },
+    select: { id: true },
+  });
+  const fromPick = await resolveOutboundSmsNumber(input.tenantId, input.userId, extLink?.id ?? null);
+  if ("error" in fromPick) return { ok: false, status: 400, error: "NO_SMS_NUMBER", message: fromPick.error };
+
+  const assign = await db.tenantSmsNumber.findFirst({
+    where: { id: fromPick.row.id, tenantId: input.tenantId },
+    select: { assignedUserId: true, assignedExtensionId: true },
+  });
+  const inboxScope = await resolveSmsInboxOwnerUserId({
+    tenantId: input.tenantId,
+    assignedUserId: assign?.assignedUserId || null,
+    assignedExtensionId: assign?.assignedExtensionId || null,
+  });
+
+  const dk = smsDedupeKey(input.tenantId, fromPick.row.phoneE164, extNorm.e164, inboxScope);
+  let thread = await db.connectChatThread.findUnique({ where: { dedupeKey: dk } });
+  if (!thread) {
+    thread = await db.connectChatThread.create({
+      data: {
+        tenantId: input.tenantId,
+        type: "SMS",
+        title: (input.title || `SMS ${extNorm.e164}`).slice(0, 120),
+        dedupeKey: dk,
+        tenantSmsE164: fromPick.row.phoneE164,
+        tenantSmsRaw: input.externalPhone,
+        externalSmsE164: extNorm.e164,
+        externalSmsRaw: input.externalPhone,
+        smsInboxOwnerUserId: inboxScope,
+        createdByUserId: input.userId,
+        lastMessageAt: new Date(),
+      },
+    });
+  }
+
+  await upsertSmsThreadParticipants({
+    threadId: thread.id,
+    tenantId: input.tenantId,
+    inboxOwnerUserId: inboxScope,
+    assignedExtensionId: assign?.assignedExtensionId || null,
+    ensureUserIds: [input.userId],
+  });
+  return { ok: true, threadId: thread.id, normalizedTo: extNorm.e164, fromNumber: fromPick.row.phoneE164 };
+}
+
+export async function sendConnectChatSmsMessage(input: {
+  deps: Pick<ConnectChatRoutesDeps, "smsQueue">;
+  user: JwtUser;
+  tenantId: string;
+  threadId: string;
+  body: string;
+  type?: "TEXT" | "VOICE_NOTE" | "IMAGE" | "VIDEO" | "AUDIO" | "FILE" | "LOCATION";
+  replyToMessageId?: string;
+  location?: { lat: number; lng: number; label?: string; address?: string };
+  attachments?: ChatAttachmentInput[];
+}): Promise<ConnectChatSmsSendResult> {
+  const thread = await db.connectChatThread.findFirst({
+    where: { id: input.threadId, tenantId: input.tenantId },
+    select: { id: true, type: true, smsInboxOwnerUserId: true, tenantSmsE164: true, externalSmsE164: true },
+  });
+  if (!thread) return { ok: false, status: 404, error: "THREAD_NOT_FOUND" };
+
+  let part = await db.connectChatParticipant.findFirst({
+    where: { threadId: input.threadId, userId: input.user.sub, leftAt: null, thread: { tenantId: input.tenantId } },
+  });
+  if (!part) {
+    const access = await ensureSmsThreadParticipantForSend({ user: input.user, tenantId: input.tenantId, thread });
+    if (!access.ok) return access;
+    part = await db.connectChatParticipant.findFirst({
+      where: { threadId: input.threadId, userId: input.user.sub, leftAt: null, thread: { tenantId: input.tenantId } },
+    });
+    if (!part) return { ok: false, status: 404, error: "THREAD_NOT_FOUND" };
+  }
+
+  if (input.replyToMessageId) {
+    const replyTo = await db.connectChatMessage.findFirst({
+      where: { id: input.replyToMessageId, threadId: input.threadId, tenantId: input.tenantId },
+      select: { id: true },
+    });
+    if (!replyTo) return { ok: false, status: 400, error: "INVALID_REPLY_TO" };
+  }
+
+  if (thread.type !== "SMS") return { ok: false, status: 400, error: "NOT_SMS_THREAD" };
+  if (!(await canSendSmsUser(input.user))) return { ok: false, status: 403, error: "FORBIDDEN" };
+  const ext = thread.externalSmsE164;
+  const tenantDid = thread.tenantSmsE164;
+  if (!ext || !tenantDid) return { ok: false, status: 400, error: "SMS_THREAD_INCOMPLETE" };
+
+  const creds = await loadVoipMsCreds();
+  if (!creds) return { ok: false, status: 503, error: "VOIPMS_NOT_CONFIGURED" };
+  const cfg = await getOrCreateGlobalVoipConfig();
+  const atts = (input.attachments || []) as ChatAttachmentInput[];
+  let smsLinkFallback = false;
+  if (atts.length > 0) {
+    const smsRow = await db.tenantSmsNumber.findFirst({ where: { phoneE164: tenantDid, tenantId: input.tenantId } });
+    const mmsOk = cfg.mmsEnabled && smsRow?.mmsCapable;
+    if (!mmsOk) {
+      if (!publicChatDownloadBase()) {
+        return {
+          ok: false,
+          status: 400,
+          error: "MEDIA_LINK_BASE_UNAVAILABLE",
+          message: "Set PUBLIC_API_BASE_URL or PORTAL_PUBLIC_URL to send secure media links by SMS.",
+        };
+      }
+      smsLinkFallback = true;
+    }
+  }
+
+  const msgType =
+    smsLinkFallback ? "TEXT" : atts.length > 0 ? inferAttachmentMessageType(atts) : ((input.type as any) || "TEXT");
+
+  const msg = await db.connectChatMessage.create({
+    data: {
+      tenantId: input.tenantId,
+      threadId: input.threadId,
+      senderUserId: input.user.sub,
+      direction: "OUTBOUND",
+      type: msgType,
+      body: input.body,
+      replyToMessageId: input.replyToMessageId,
+      metadata: input.location ? { location: input.location } : smsLinkFallback ? { smsLinkFallback: true } : undefined,
+      deliveryStatus: "queued",
+      deliveryError: null,
+    },
+  });
+  try {
+    if (atts.length) await persistMessageAttachments(input.tenantId, input.threadId, msg.id, atts);
+  } catch (e: any) {
+    const code = String(e?.message || e);
+    await db.connectChatMessage.delete({ where: { id: msg.id } }).catch(() => {});
+    if (code === "ATTACHMENT_NOT_FOUND" || code === "INVALID_STORAGE_KEY" || code === "SIZE_MISMATCH") {
+      return { ok: false, status: 400, error: code };
+    }
+    throw e;
+  }
+  if (smsLinkFallback && atts.length) {
+    const base = publicChatDownloadBase();
+    const persistedAttachments = await db.connectChatMessageAttachment.findMany({
+      where: { messageId: msg.id, tenantId: input.tenantId },
+      select: { id: true, fileName: true },
+      orderBy: { createdAt: "asc" },
+    });
+    const links = persistedAttachments.map((a) => buildChatAttachmentIdSignedDownloadUrl(base, a.id, 86400, a.fileName));
+    const fallbackBody = [input.body.trim(), ...links.map((link) => `Media: ${link}`)].filter(Boolean).join("\n");
+    await db.connectChatMessage.update({
+      where: { id: msg.id },
+      data: {
+        body: fallbackBody,
+        metadata: { ...(input.location ? { location: input.location } : {}), smsLinkFallback: true, smsMediaLinks: links },
+      },
+    });
+  }
+
+  await db.connectChatThread.update({
+    where: { id: input.threadId },
+    data: { lastMessageAt: new Date(), updatedAt: new Date() },
+  });
+
+  await input.deps.smsQueue.add(
+    "send",
+    { kind: "CONNECT_CHAT" as const, connectChatMessageId: msg.id, tenantId: input.tenantId },
+    { removeOnComplete: true, attempts: 12, backoff: { type: "exponential", delay: 5000 } },
+  );
+
+  return { ok: true, messageId: msg.id, deliveryStatus: "queued" };
+}
+
+async function resolveCrmSmsThreadDecoration(
+  user: JwtUser,
+  thread: { tenantId: string; type: string; externalSmsE164: string | null },
+): Promise<{ crmSms: boolean; crmContactId: string | null; crmContactName: string | null; crmAmbiguous: boolean } | null> {
+  if (thread.type !== "SMS" || !thread.externalSmsE164) return null;
+
+  const settings = await db.crmTenantSettings.findUnique({
+    where: { tenantId: thread.tenantId },
+    select: { enabled: true },
+  });
+  if (!settings?.enabled) return null;
+
+  const crmRole = isAdminRole(user.role) ? null : await loadCrmUserAccessRole(thread.tenantId, user.sub);
+  if (!isAdminRole(user.role) && !crmRole) return null;
+
+  const digits = thread.externalSmsE164.replace(/\D/g, "");
+  if (digits.length < 7) return null;
+  const last10 = digits.slice(-10);
+  const matches = await db.contactPhone.findMany({
+    where: {
+      numberNormalized: { endsWith: last10 },
+      contact: { tenantId: thread.tenantId, active: true, archivedAt: null },
+    },
+    select: {
+      contactId: true,
+      contact: { select: { id: true, displayName: true, company: true } },
+    },
+    orderBy: { isPrimary: "desc" },
+    take: 5,
+  });
+  if (!matches.length) return null;
+
+  const accessible: Array<{ id: string; displayName: string; company: string | null }> = [];
+  const seen = new Set<string>();
+  for (const row of matches) {
+    if (!row.contact || seen.has(row.contactId)) continue;
+    seen.add(row.contactId);
+    if (await userCanAccessCrmContact(thread.tenantId, user.sub, user.role, row.contactId, crmRole)) {
+      accessible.push(row.contact);
+    }
+  }
+  if (accessible.length === 0) return null;
+  if (accessible.length > 1) {
+    return { crmSms: true, crmContactId: null, crmContactName: null, crmAmbiguous: true };
+  }
+  const contact = accessible[0];
+  const name = [contact.displayName, contact.company].filter(Boolean).join(" · ");
+  return { crmSms: true, crmContactId: contact.id, crmContactName: name || contact.displayName, crmAmbiguous: false };
+}
+
 export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectChatRoutesDeps): void {
   // Self-heal once at boot: if VoIP.ms credentials are configured but the
   // legacy `smsEnabled`/`mmsEnabled` flags are still false (default from the
@@ -617,8 +857,13 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       const unread = canViewTenant ? 0 : (unreadMap.get(t.id) || 0);
       let participantName = t.title || "Chat";
       let participantExtension = "";
+      const crmSms = await resolveCrmSmsThreadDecoration(user, {
+        tenantId,
+        type: t.type,
+        externalSmsE164: t.externalSmsE164,
+      });
       if (t.type === "SMS") {
-        participantName = t.externalSmsE164 || "SMS";
+        participantName = crmSms?.crmContactName || t.externalSmsE164 || "SMS";
         participantExtension = t.tenantSmsE164 || "";
       } else if (t.type === "TENANT_GROUP") {
         participantName = t.title || "Tenant Group";
@@ -632,7 +877,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       return {
         id: t.id,
         type: t.type,
-        title: t.title,
+        title: t.type === "SMS" ? (crmSms?.crmContactName ? t.title : null) : t.title,
         isDefaultTenantGroup: t.isDefaultTenantGroup,
         participantName,
         participantExtension,
@@ -642,6 +887,10 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         tenantSmsE164: t.tenantSmsE164,
         externalSmsE164: t.externalSmsE164,
         smsInboxKind: t.type === "SMS" ? (isSharedTenantSmsInbox(t.smsInboxOwnerUserId || "") ? "shared" : "personal") : null,
+        crmSms: crmSms?.crmSms || false,
+        crmContactId: crmSms?.crmContactId || null,
+        crmContactName: crmSms?.crmContactName || null,
+        crmAmbiguous: crmSms?.crmAmbiguous || false,
         deliveryStatus: last?.deliveryStatus || null,
         deliveryError: last?.deliveryError || null,
       };
@@ -793,53 +1042,14 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     if (body.type === "sms") {
       if (!(await canSendSmsUser(user))) return reply.status(403).send({ error: "FORBIDDEN" });
       if (!body.externalPhone) return reply.status(400).send({ error: "externalPhone required" });
-      const extNorm = canonicalSmsPhone(body.externalPhone);
-      if (!extNorm.ok) return reply.status(400).send({ error: "INVALID_PHONE", detail: "error" in extNorm ? extNorm.error : "invalid phone" });
-
-      const extLink = await db.extension.findFirst({
-        where: { tenantId, ownerUserId: user.sub, status: "ACTIVE" },
-        select: { id: true },
-      });
-      const fromPick = await resolveOutboundSmsNumber(tenantId, user.sub, extLink?.id ?? null);
-      if ("error" in fromPick) return reply.status(400).send({ error: "NO_SMS_NUMBER", message: fromPick.error });
-
-      const assign = await db.tenantSmsNumber.findFirst({
-        where: { id: fromPick.row.id, tenantId },
-        select: { assignedUserId: true, assignedExtensionId: true },
-      });
-      const inboxScope = await resolveSmsInboxOwnerUserId({
+      const result = await findOrCreateConnectChatSmsThread({
         tenantId,
-        assignedUserId: assign?.assignedUserId || null,
-        assignedExtensionId: assign?.assignedExtensionId || null,
+        userId: user.sub,
+        externalPhone: body.externalPhone,
+        title: body.title,
       });
-
-      const dk = smsDedupeKey(tenantId, fromPick.row.phoneE164, extNorm.e164, inboxScope);
-      let thread = await db.connectChatThread.findUnique({ where: { dedupeKey: dk } });
-      if (!thread) {
-        thread = await db.connectChatThread.create({
-          data: {
-            tenantId,
-            type: "SMS",
-            title: `SMS ${extNorm.e164}`,
-            dedupeKey: dk,
-            tenantSmsE164: fromPick.row.phoneE164,
-            tenantSmsRaw: body.externalPhone,
-            externalSmsE164: extNorm.e164,
-            externalSmsRaw: body.externalPhone,
-            smsInboxOwnerUserId: inboxScope,
-            createdByUserId: user.sub,
-            lastMessageAt: new Date(),
-          },
-        });
-      }
-      await upsertSmsThreadParticipants({
-        threadId: thread.id,
-        tenantId,
-        inboxOwnerUserId: inboxScope,
-        assignedExtensionId: assign?.assignedExtensionId || null,
-        ensureUserIds: [user.sub],
-      });
-      return { threadId: thread.id, normalizedTo: extNorm.e164, fromNumber: fromPick.row.phoneE164 };
+      if (!result.ok) return reply.status(result.status).send({ error: result.error, message: result.message });
+      return { threadId: result.threadId, normalizedTo: result.normalizedTo, fromNumber: result.fromNumber };
     }
 
     return reply.status(400).send({ error: "UNSUPPORTED_TYPE" });
@@ -1116,92 +1326,19 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     }
 
     if (thread.type === "SMS") {
-      if (!(await canSendSmsUser(user))) return reply.status(403).send({ error: "FORBIDDEN" });
-      const ext = thread.externalSmsE164;
-      const tenantDid = thread.tenantSmsE164;
-      if (!ext || !tenantDid) return reply.status(400).send({ error: "SMS_THREAD_INCOMPLETE" });
-
-      const creds = await loadVoipMsCreds();
-      if (!creds) return reply.status(503).send({ error: "VOIPMS_NOT_CONFIGURED" });
-      const cfg = await getOrCreateGlobalVoipConfig();
-      // Treat connected VoIP.ms credentials + an assigned tenant DID as
-      // authority that SMS is available. The legacy `smsEnabled` boolean
-      // remains as an admin override; only honour it when explicitly false.
-      // Same for MMS — handled later via the per-number `mmsCapable` check.
-
-      const atts = (input.attachments || []) as ChatAttachmentInput[];
-      let smsLinkFallback = false;
-      if (atts.length > 0) {
-        const smsRow = await db.tenantSmsNumber.findFirst({ where: { phoneE164: tenantDid, tenantId } });
-        const mmsOk = cfg.mmsEnabled && smsRow?.mmsCapable;
-        // Only fall back before enqueue when the DID cannot send MMS at all.
-        // Audio/voice notes must reach the worker so it can convert to a
-        // carrier-friendly m4a and attempt true VoIP.ms MMS first.
-        if (!mmsOk) {
-          if (!publicChatDownloadBase()) {
-            return reply.status(400).send({ error: "MEDIA_LINK_BASE_UNAVAILABLE", message: "Set PUBLIC_API_BASE_URL or PORTAL_PUBLIC_URL to send secure media links by SMS." });
-          }
-          smsLinkFallback = true;
-        }
-      }
-
-      const msgType =
-        smsLinkFallback ? "TEXT" : atts.length > 0 ? inferAttachmentMessageType(atts) : ((input.type as any) || "TEXT");
-
-      const msg = await db.connectChatMessage.create({
-        data: {
-          tenantId,
-          threadId,
-          senderUserId: user.sub,
-          direction: "OUTBOUND",
-          type: msgType,
-          body: input.body,
-          replyToMessageId: input.replyToMessageId,
-          metadata: input.location ? { location: input.location } : smsLinkFallback ? { smsLinkFallback: true } : undefined,
-          deliveryStatus: "queued",
-          deliveryError: null,
-        },
+      const result = await sendConnectChatSmsMessage({
+        deps,
+        user,
+        tenantId,
+        threadId,
+        body: input.body,
+        type: input.type as any,
+        replyToMessageId: input.replyToMessageId,
+        location: input.location,
+        attachments: input.attachments as ChatAttachmentInput[] | undefined,
       });
-      try {
-        if (atts.length) await persistMessageAttachments(tenantId, threadId, msg.id, atts);
-      } catch (e: any) {
-        const code = String(e?.message || e);
-        await db.connectChatMessage.delete({ where: { id: msg.id } }).catch(() => {});
-        if (code === "ATTACHMENT_NOT_FOUND" || code === "INVALID_STORAGE_KEY" || code === "SIZE_MISMATCH") {
-          return reply.status(400).send({ error: code });
-        }
-        throw e;
-      }
-      if (smsLinkFallback && atts.length) {
-        const base = publicChatDownloadBase();
-        const persistedAttachments = await db.connectChatMessageAttachment.findMany({
-          where: { messageId: msg.id, tenantId },
-          select: { id: true, fileName: true },
-          orderBy: { createdAt: "asc" },
-        });
-        const links = persistedAttachments.map((a) => buildChatAttachmentIdSignedDownloadUrl(base, a.id, 86400, a.fileName));
-        const fallbackBody = [input.body.trim(), ...links.map((link) => `Media: ${link}`)].filter(Boolean).join("\n");
-        await db.connectChatMessage.update({
-          where: { id: msg.id },
-          data: {
-            body: fallbackBody,
-            metadata: { ...(input.location ? { location: input.location } : {}), smsLinkFallback: true, smsMediaLinks: links },
-          },
-        });
-      }
-
-      await db.connectChatThread.update({
-        where: { id: threadId },
-        data: { lastMessageAt: new Date(), updatedAt: new Date() },
-      });
-
-      await deps.smsQueue.add(
-        "send",
-        { kind: "CONNECT_CHAT" as const, connectChatMessageId: msg.id, tenantId },
-        { removeOnComplete: true, attempts: 12, backoff: { type: "exponential", delay: 5000 } },
-      );
-
-      return { ok: true, messageId: msg.id, deliveryStatus: "queued" };
+      if (!result.ok) return reply.status(result.status).send({ error: result.error, message: result.message });
+      return { ok: true, messageId: result.messageId, deliveryStatus: result.deliveryStatus };
     }
 
     const internalAttachments = (input.attachments || []) as ChatAttachmentInput[];

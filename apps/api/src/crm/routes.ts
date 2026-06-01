@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
+import type { ConnectChatRoutesDeps } from "../connectChatRoutes";
 import { isAdminRole } from "./guard";
 import { registerCrmContactRoutes } from "./contactRoutes";
 import { registerCrmTimelineRoutes } from "./timelineRoutes";
@@ -110,7 +111,7 @@ const updateUserAccessSchema = z.object({
 
 // ── Route registrar ───────────────────────────────────────────────────────────
 
-export async function registerCrmRoutes(app: FastifyInstance) {
+export async function registerCrmRoutes(app: FastifyInstance, deps?: Pick<ConnectChatRoutesDeps, "smsQueue">) {
   // ── GET /crm/settings ──────────────────────────────────────────────────────
   // Returns the tenant's CRM settings. Accessible to any authenticated user so
   // the portal can check `enabled` to decide whether to show the CRM section.
@@ -392,7 +393,7 @@ export async function registerCrmRoutes(app: FastifyInstance) {
   await registerCrmCallerIdPoolRoutes(app);
 
   // Register CRM SMS routes (Phase 11A — SMS from contact)
-  await registerCrmSmsRoutes(app);
+  await registerCrmSmsRoutes(app, deps);
 
   await registerCrmDiagnosticsRoutes(app);
   await registerCrmPilotReadinessRoutes(app);
