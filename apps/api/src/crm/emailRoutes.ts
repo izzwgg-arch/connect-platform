@@ -732,7 +732,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
   });
 
   // POST /crm/email/connection/test — queue a test email through resolved sender
-  // Body (optional): { connectionId?: string } — explicit sender; otherwise fallback chain
+  // Body (optional): { connectionId?: string, toEmail?: string } — explicit sender; otherwise fallback chain
   app.post("/crm/email/connection/test", async (req, reply) => {
     const user = await requireCrmAccess(req, reply); if (!user) return;
     const body = (req.body as any) || {};
@@ -740,9 +740,17 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     const sender = await resolveSenderConnection({ tenantId: user.tenantId, userId: user.sub, explicitId });
     if (!sender) return reply.status(400).send({ error: "not_connected" });
 
-    const to = sender.emailAddress;
+    const requestedTo = typeof body?.toEmail === "string" ? String(body.toEmail).trim() : "";
+    if (requestedTo && !isValidEmailAddress(requestedTo)) {
+      return reply.status(400).send({ error: "invalid_payload", detail: "valid toEmail required" });
+    }
+    const to = requestedTo || sender.emailAddress;
     const subject = "Connect CRM test email";
-    const bodyText = "This is a test email from Connect CRM.";
+    const bodyText = [
+      "This is a test email from Connect CRM.",
+      "",
+      "Reply directly to this message to verify CRM reply tracking for this sender.",
+    ].join("\n");
 
     await emailQueue.add("send", {
       tenantId: user.tenantId,
@@ -757,6 +765,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
         entityType: "CrmEmailConnection",
         entityId: sender.id,
         actorUserId: user.sub,
+        metadata: { sentTo: to },
       },
     }).catch(() => undefined);
     return { ok: true, senderId: sender.id, sentTo: to };

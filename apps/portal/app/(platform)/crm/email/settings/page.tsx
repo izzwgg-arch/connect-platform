@@ -62,6 +62,10 @@ function hasReadonlyScope(scopes?: string[]): boolean {
   return Array.isArray(scopes) && scopes.includes(GMAIL_READONLY_SCOPE);
 }
 
+function isValidEmailAddress(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
 /** Returns "healthy" | "no_scope" | "disabled" | "off" mirroring the API helper. */
 function replyTrackingState(s: Sender): "healthy" | "no_scope" | "disabled" | "off" {
   if (!isConnected(s)) return "off";
@@ -248,11 +252,21 @@ export default function CrmEmailSettingsPage() {
   };
 
   const handleTest = async (s: Sender) => {
+    const entered = window.prompt(
+      "Send test email to which address? Reply from that inbox to verify reply tracking.",
+      "",
+    );
+    if (entered === null) return;
+    const toEmail = entered.trim();
+    if (!isValidEmailAddress(toEmail)) {
+      setError("Enter a valid test recipient email address.");
+      return;
+    }
     setBusyId(s.id);
     setError(null);
     try {
-      await apiPost<{ ok: boolean }>("/crm/email/connection/test", { connectionId: s.id });
-      alert(`Test email queued. Check ${s.emailAddress}.`);
+      const res = await apiPost<{ ok: boolean; sentTo?: string }>("/crm/email/connection/test", { connectionId: s.id, toEmail });
+      alert(`Test email queued. Check ${res.sentTo || toEmail}, then reply to the message to test CRM reply sync.`);
     } catch (e: any) {
       setError(e?.message || "Failed to queue test email");
     } finally {
