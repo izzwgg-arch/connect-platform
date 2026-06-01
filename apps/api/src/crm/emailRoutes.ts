@@ -319,10 +319,11 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       isMine: r.scope === "USER" && r.userId === user.sub,
       canManage: r.scope === "USER" ? r.userId === user.sub : isAdmin,
       replyTrackingEnabled: r.replyTrackingEnabled,
+      scopes: r.scopes,
       lastSyncAt: r.lastSyncAt,
       lastError: r.lastError,
     }));
-    const autoSyncEnabled = (process.env.CRM_EMAIL_AUTO_SYNC_ENABLED || "false").toLowerCase() === "true";
+    const autoSyncEnabled = (process.env.CRM_EMAIL_AUTO_SYNC_ENABLED || "true").toLowerCase() !== "false";
     const autoSyncIntervalMs = Math.max(60_000, Number(process.env.CRM_EMAIL_AUTO_SYNC_INTERVAL_MS || 300_000));
     return { senders, canManageTenantSenders: isAdmin, autoSyncEnabled, autoSyncIntervalMs };
   });
