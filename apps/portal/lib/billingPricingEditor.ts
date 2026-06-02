@@ -5,6 +5,7 @@ import {
 
 export type TenantPricingSaveDraft = {
   extensionPriceCents: number;
+  virtualExtensionPriceCents: number;
   additionalPhoneNumberPriceCents: number;
   smsPriceCents: number;
   firstPhoneNumberFree: boolean;
@@ -17,9 +18,15 @@ export type TenantPricingSaveDraft = {
 
 export type BillingUnitPriceKey =
   | "extensionPriceCents"
+  | "virtualExtensionPriceCents"
   | "additionalPhoneNumberPriceCents"
   | "smsPriceCents"
   | "tollFreeDidPriceCents";
+
+const METADATA_OVERRIDE_PRICE_KEYS = new Set<BillingUnitPriceKey>([
+  "tollFreeDidPriceCents",
+  "virtualExtensionPriceCents",
+]);
 
 /** Whether a billing item card unit price field accepts edits in the current pricing mode. */
 export function isBillingUnitPriceEditable(
@@ -27,14 +34,14 @@ export function isBillingUnitPriceEditable(
   catalogLocked: boolean,
 ): boolean {
   if (!priceKey) return false;
-  if (catalogLocked && priceKey !== "tollFreeDidPriceCents") return false;
+  if (catalogLocked && !METADATA_OVERRIDE_PRICE_KEYS.has(priceKey)) return false;
   return true;
 }
 
-/** Maps billing item card keys to draft price fields (virtual extensions share extension price). */
+/** Maps billing item card keys to draft price fields. */
 export const BILLING_ITEM_PRICE_KEYS: Record<string, BillingUnitPriceKey | null> = {
   extensions: "extensionPriceCents",
-  virtual: "extensionPriceCents",
+  virtual: "virtualExtensionPriceCents",
   local_phone_numbers: "additionalPhoneNumberPriceCents",
   toll_free_phone_numbers: "tollFreeDidPriceCents",
   sms: "smsPriceCents",
@@ -58,6 +65,7 @@ export function buildTenantPricingSavePayload(
           amountCents: draft.flatRateAmountCents,
           appliesTo: "extensions",
         },
+    virtualExtensionPriceCents: draft.virtualExtensionPriceCents,
   };
   if (!catalogLocked) {
     payload.extensionPriceCents = draft.extensionPriceCents;

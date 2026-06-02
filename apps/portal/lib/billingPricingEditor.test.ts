@@ -19,6 +19,7 @@ const workspacePath = join(
 function baseDraft(overrides: Partial<TenantPricingSaveDraft> = {}): TenantPricingSaveDraft {
   return {
     extensionPriceCents: 2500,
+    virtualExtensionPriceCents: 1800,
     additionalPhoneNumberPriceCents: 500,
     smsPriceCents: 1000,
     firstPhoneNumberFree: true,
@@ -37,78 +38,48 @@ function baseDraft(overrides: Partial<TenantPricingSaveDraft> = {}): TenantPrici
   };
 }
 
-test("virtual extensions share extension price and are editable in custom pricing mode", () => {
-  assert.equal(BILLING_ITEM_PRICE_KEYS.virtual, "extensionPriceCents");
-  assert.equal(isBillingUnitPriceEditable("extensionPriceCents", false), true);
-  assert.equal(isBillingUnitPriceEditable("extensionPriceCents", true), false);
-  assert.equal(isBillingUnitPriceEditable("tollFreeDidPriceCents", true), true);
+test("virtual extensions use independent price field", () => {
+  assert.equal(BILLING_ITEM_PRICE_KEYS.virtual, "virtualExtensionPriceCents");
+  assert.equal(BILLING_ITEM_PRICE_KEYS.extensions, "extensionPriceCents");
+  assert.notEqual(BILLING_ITEM_PRICE_KEYS.virtual, BILLING_ITEM_PRICE_KEYS.extensions);
 });
 
-test("buildTenantPricingSavePayload persists edited extension and virtual manual quantity", () => {
+test("virtual extension price is editable in catalog mode via metadata override", () => {
+  assert.equal(isBillingUnitPriceEditable("virtualExtensionPriceCents", true), true);
+  assert.equal(isBillingUnitPriceEditable("extensionPriceCents", true), false);
+});
+
+test("save payload persists independent extension and virtual extension prices", () => {
   const draft = baseDraft({
     extensionPriceCents: 3200,
-    quantityOverrides: {
-      extensions: { mode: "auto", quantity: 3 },
-      virtualExtensions: { mode: "manual", quantity: 4 },
-      phoneNumbers: { mode: "auto", quantity: 1 },
-      tollFreeNumbers: { mode: "auto", quantity: 0 },
-      smsPackages: { mode: "auto", quantity: 1 },
-    },
+    virtualExtensionPriceCents: 1400,
   });
   const payload = buildTenantPricingSavePayload(draft, false);
 
   assert.equal(payload.extensionPriceCents, 3200);
-  assert.equal(payload.billingPricingMode, "custom");
-  assert.deepEqual(payload.billingQuantityOverrides, {
-    extensions: { mode: "auto", quantity: null },
-    virtualExtensions: { mode: "manual", quantity: 4 },
-    phoneNumbers: { mode: "auto", quantity: null },
-    tollFreeNumbers: { mode: "auto", quantity: null },
-    smsPackages: { mode: "auto", quantity: null },
-  });
+  assert.equal(payload.virtualExtensionPriceCents, 1400);
+  assert.notEqual(payload.extensionPriceCents, payload.virtualExtensionPriceCents);
 });
 
-test("save payload includes all billable unit prices in custom mode", () => {
-  const draft = baseDraft({
-    extensionPriceCents: 2100,
-    additionalPhoneNumberPriceCents: 600,
-    tollFreeDidPriceCents: 1800,
-    smsPriceCents: 900,
-  });
-  const payload = buildTenantPricingSavePayload(draft, false);
-
-  assert.equal(payload.extensionPriceCents, 2100);
-  assert.equal(payload.additionalPhoneNumberPriceCents, 600);
-  assert.equal(payload.tollFreeDidPriceCents, 1800);
-  assert.equal(payload.smsPriceCents, 900);
-});
-
-test("catalog mode only sends toll-free override plus quantity overrides", () => {
-  const draft = baseDraft({ extensionPriceCents: 9999, tollFreeDidPriceCents: 2200 });
+test("catalog mode sends virtual extension metadata override without extension price", () => {
+  const draft = baseDraft({ extensionPriceCents: 9999, virtualExtensionPriceCents: 1200 });
   const payload = buildTenantPricingSavePayload(draft, true);
 
   assert.equal(payload.extensionPriceCents, undefined);
-  assert.equal(payload.tollFreeDidPriceCents, 2200);
-  assert.equal(
-    (payload.billingQuantityOverrides as { virtualExtensions: { mode: string; quantity: number } }).virtualExtensions
-      .quantity,
-    2,
-  );
+  assert.equal(payload.virtualExtensionPriceCents, 1200);
 });
 
-test("AdminPricingWorkspace uses focus-aware money inputs and editable virtual extension price", () => {
+test("AdminPricingWorkspace wires virtual extensions to virtualExtensionPriceCents", () => {
   const src = readFileSync(workspacePath, "utf8");
-  assert.match(src, /BillingMoneyInput/);
-  assert.match(src, /BillingQuantityInput/);
-  assert.match(src, /priceKey: "extensionPriceCents" as const/);
-  assert.match(src, /billing-price-input-\$\{item\.key\}/);
-  assert.match(src, /buildTenantPricingSavePayload/);
-  assert.doesNotMatch(src, /priceKey: null,\s*\n\s*chip: resolvedQuantities\.modes\.virtualExtensions/);
+  assert.match(src, /virtualExtensionPriceCents/);
+  assert.match(src, /priceKey: "virtualExtensionPriceCents" as const/);
+  assert.doesNotMatch(src, /priceKey: "extensionPriceCents" as const,\s*\n\s*chip:\s*\n\s*parseVirtualExtensionPriceCentsFromMetadata/);
 });
 
 test("edit extensions, virtual extensions, local, toll-free, and SMS prices then save", () => {
   const draft = baseDraft({
     extensionPriceCents: 2750,
+    virtualExtensionPriceCents: 1950,
     additionalPhoneNumberPriceCents: 550,
     tollFreeDidPriceCents: 1650,
     smsPriceCents: 1150,
@@ -121,25 +92,29 @@ test("edit extensions, virtual extensions, local, toll-free, and SMS prices then
     },
   });
   const saved = buildTenantPricingSavePayload(draft, false);
-  const reloaded = {
-    extensionPriceCents: saved.extensionPriceCents,
-    additionalPhoneNumberPriceCents: saved.additionalPhoneNumberPriceCents,
-    tollFreeDidPriceCents: saved.tollFreeDidPriceCents,
-    smsPriceCents: saved.smsPriceCents,
-    overrides: saved.billingQuantityOverrides,
-  };
 
-  assert.deepEqual(reloaded, {
-    extensionPriceCents: 2750,
-    additionalPhoneNumberPriceCents: 550,
-    tollFreeDidPriceCents: 1650,
-    smsPriceCents: 1150,
-    overrides: {
-      extensions: { mode: "manual", quantity: 5 },
-      virtualExtensions: { mode: "manual", quantity: 3 },
-      phoneNumbers: { mode: "manual", quantity: 2 },
-      tollFreeNumbers: { mode: "manual", quantity: 1 },
-      smsPackages: { mode: "manual", quantity: 1 },
+  assert.deepEqual(
+    {
+      extensionPriceCents: saved.extensionPriceCents,
+      virtualExtensionPriceCents: saved.virtualExtensionPriceCents,
+      additionalPhoneNumberPriceCents: saved.additionalPhoneNumberPriceCents,
+      tollFreeDidPriceCents: saved.tollFreeDidPriceCents,
+      smsPriceCents: saved.smsPriceCents,
+      overrides: saved.billingQuantityOverrides,
     },
-  });
+    {
+      extensionPriceCents: 2750,
+      virtualExtensionPriceCents: 1950,
+      additionalPhoneNumberPriceCents: 550,
+      tollFreeDidPriceCents: 1650,
+      smsPriceCents: 1150,
+      overrides: {
+        extensions: { mode: "manual", quantity: 5 },
+        virtualExtensions: { mode: "manual", quantity: 3 },
+        phoneNumbers: { mode: "manual", quantity: 2 },
+        tollFreeNumbers: { mode: "manual", quantity: 1 },
+        smsPackages: { mode: "manual", quantity: 1 },
+      },
+    },
+  );
 });

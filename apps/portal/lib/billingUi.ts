@@ -347,10 +347,28 @@ export function parseTollFreeDidPriceCentsFromMetadata(metadata: unknown): numbe
   return n;
 }
 
+export function parseVirtualExtensionPriceCentsFromMetadata(metadata: unknown): number | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const raw = (metadata as Record<string, unknown>).billingVirtualExtensionPriceCents;
+  if (raw === null || raw === undefined) return null;
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
+}
+
 export function resolveTollFreeDidPriceCentsForPortal(metadata: unknown, localDidPriceCents: number): number {
   const stored = parseTollFreeDidPriceCentsFromMetadata(metadata);
   if (stored !== null) return stored;
   return Math.max(0, Number(localDidPriceCents) || 1500);
+}
+
+export function resolveVirtualExtensionPriceCentsForPortal(
+  metadata: unknown,
+  extensionPriceCents: number,
+): number {
+  const stored = parseVirtualExtensionPriceCentsFromMetadata(metadata);
+  if (stored !== null) return stored;
+  return Math.max(0, Number(extensionPriceCents) || 0);
 }
 
 export function parseBillingQuantityOverridesFromMetadata(metadata: unknown): BillingQuantityOverridesConfig | null {
@@ -509,6 +527,8 @@ export function computeTenantMonthlyEstimate(input: {
   extensionPriceCents: number;
   additionalPhoneNumberPriceCents: number;
   smsPriceCents: number;
+  /** Virtual extension unit price (independent from physical extensions). */
+  virtualExtensionPriceCents?: number;
   /** Billing quantities (after manual overrides). */
   billingExtensionCount?: number;
   billingVirtualExtensionCount?: number;
@@ -535,6 +555,7 @@ export function computeTenantMonthlyEstimate(input: {
   const tollFreeQty = input.billingTollFreePhoneNumberCount ?? 0;
   const smsQty = input.billingSmsPackageCount ?? (input.smsEnabled ? 1 : 0);
   const tollFreeUnit = input.tollFreeDidPriceCents ?? input.additionalPhoneNumberPriceCents;
+  const virtualUnit = input.virtualExtensionPriceCents ?? input.extensionPriceCents;
 
   const lines: TenantBillingEstimateLine[] = [];
   if (extQty > 0) {
@@ -557,8 +578,8 @@ export function computeTenantMonthlyEstimate(input: {
       key: "virtual_extensions",
       label: "Virtual extensions",
       quantity: virtQty,
-      unitCents: input.extensionPriceCents,
-      subtotalCents: virtQty * input.extensionPriceCents,
+      unitCents: virtualUnit,
+      subtotalCents: virtQty * virtualUnit,
       autoQuantity: false,
     });
   }

@@ -750,6 +750,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         extensionPriceCents: z.number().int().nonnegative().optional(),
         additionalPhoneNumberPriceCents: z.number().int().nonnegative().optional(),
         tollFreeDidPriceCents: z.number().int().nonnegative().nullable().optional(),
+        virtualExtensionPriceCents: z.number().int().nonnegative().nullable().optional(),
         pbxDidPriceCents: z.number().int().nonnegative().optional(),
         smsPriceCents: z.number().int().nonnegative().optional(),
         firstPhoneNumberFree: z.boolean().optional(),
@@ -832,6 +833,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       billingFlatRate,
       billingQuantityOverrides,
       tollFreeDidPriceCents,
+      virtualExtensionPriceCents,
       billingTelecomFees,
       billingScheduleOverride,
       ...pricing
@@ -884,6 +886,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
       billingFlatRate !== undefined ||
       billingQuantityOverrides !== undefined ||
       tollFreeDidPriceCents !== undefined ||
+      virtualExtensionPriceCents !== undefined ||
       billingTelecomFees !== undefined ||
       billingScheduleOverride !== undefined
     ) {
@@ -898,6 +901,7 @@ export async function registerBillingRoutes(app: FastifyInstance) {
         ...(flatRatePatch?.ok ? { billingFlatRate: flatRatePatch.value } : {}),
         ...(quantityOverridesPatch?.ok ? { billingQuantityOverrides: quantityOverridesPatch.value } : {}),
         ...(tollFreeDidPriceCents !== undefined ? { tollFreeDidPriceCents } : {}),
+        ...(virtualExtensionPriceCents !== undefined ? { virtualExtensionPriceCents } : {}),
         ...(telecomFeesPatch?.ok ? { billingTelecomFees: telecomFeesPatch.value } : {}),
         ...(scheduleOverridePatch?.ok ? { billingScheduleOverride: scheduleOverridePatch.value } : {}),
       });

@@ -3,6 +3,7 @@ import { mergeBillingFlatRateIntoMetadata } from "./billingFlatRate";
 import type { BillingQuantityOverridesConfig } from "./billingQuantityOverrides";
 import { mergeBillingQuantityOverridesIntoMetadata } from "./billingQuantityOverrides";
 import { mergeTollFreeDidPriceIntoMetadata } from "./billingTollFreePricing";
+import { mergeVirtualExtensionPriceIntoMetadata } from "./billingVirtualExtensionPricing";
 import type { BillingTelecomFeesConfig } from "./billingTelecomFees";
 import { mergeBillingTelecomFeesIntoMetadata } from "./billingTelecomFees";
 import { BILLING_PRICING_MODE_METADATA_KEY } from "./billingPricingResolution";
@@ -94,6 +95,8 @@ export type TenantBillingMetaPatchInput = {
   billingQuantityOverrides?: BillingQuantityOverridesConfig | null;
   /** Omit = leave toll-free DID unit price untouched; null = remove from metadata */
   tollFreeDidPriceCents?: number | null;
+  /** Omit = leave virtual extension unit price untouched; null = remove from metadata */
+  virtualExtensionPriceCents?: number | null;
   /** Omit = leave telecom fee config untouched; null = remove */
   billingTelecomFees?: BillingTelecomFeesConfig | null;
   /** Omit = leave schedule override untouched; null = remove */
@@ -122,6 +125,9 @@ export function mergeTenantBillingSettingsMetadata(prev: unknown, input: TenantB
   }
   if (input.tollFreeDidPriceCents !== undefined) {
     merged = mergeTollFreeDidPriceIntoMetadata(merged, input.tollFreeDidPriceCents);
+  }
+  if (input.virtualExtensionPriceCents !== undefined) {
+    merged = mergeVirtualExtensionPriceIntoMetadata(merged, input.virtualExtensionPriceCents);
   }
   if (input.billingTelecomFees !== undefined) {
     merged = mergeBillingTelecomFeesIntoMetadata(merged, input.billingTelecomFees);

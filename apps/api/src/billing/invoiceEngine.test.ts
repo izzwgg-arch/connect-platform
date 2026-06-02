@@ -493,6 +493,22 @@ test("invoiceEngine preview + create: tax audit, provider routing, persisted met
   assert.equal(physExt?.quantity, 5);
   assert.equal(virtExt?.quantity, 2);
   assert.equal(virtExt?.description, "Virtual extensions");
+  assert.equal(virtExt?.unitPriceCents, 3000);
+
+  state.settings.metadata = {
+    ...(state.settings.metadata as object),
+    billingVirtualExtensionPriceCents: 1200,
+  };
+  const virtPricePreview = await buildBillingInvoicePreview({ tenantId: "tenant-z" });
+  const virtPriced = virtPricePreview.lineItems.find(
+    (l) => (l.metadata as Record<string, unknown>)?.lineItemKind === "virtual_extensions",
+  );
+  assert.equal(virtPriced?.unitPriceCents, 1200);
+  const physAfterVirtPrice = virtPricePreview.lineItems.find(
+    (l) => l.type === "EXTENSION" && !(l.metadata as Record<string, unknown>)?.lineItemKind,
+  );
+  assert.equal(physAfterVirtPrice?.unitPriceCents, 3000);
+
   const localPhoneLine = qtyPreview.lineItems.find(
     (l) => l.type === "PHONE_NUMBER" && (l.metadata as Record<string, unknown>)?.lineItemKind === "local_phone_numbers",
   );

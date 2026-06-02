@@ -25,8 +25,10 @@ import {
   parseBillingFlatRateFromMetadata,
   previewServiceSubtotalCents,
   parseTollFreeDidPriceCentsFromMetadata,
+  parseVirtualExtensionPriceCentsFromMetadata,
   resolveBillingQuantitiesForPortal,
   resolveTollFreeDidPriceCentsForPortal,
+  resolveVirtualExtensionPriceCentsForPortal,
   worstNonTerminalInvoiceStatus,
   type BillingQuantityOverrideKey,
 } from "../../../../../lib/billingUi";
@@ -71,6 +73,7 @@ const PRICING_ROWS: { key: PricingFieldKey; label: string; type: "money" | "bool
 
 type DraftPricing = {
   extensionPriceCents: number;
+  virtualExtensionPriceCents: number;
   additionalPhoneNumberPriceCents: number;
   smsPriceCents: number;
   firstPhoneNumberFree: boolean;
@@ -116,8 +119,11 @@ function draftFromDetail(detail: TenantDetail, catalogLocked: boolean): DraftPri
   };
   const localDidPrice =
     Number(catalogLocked && pr ? pr.additionalPhoneNumberPriceCents : settings.additionalPhoneNumberPriceCents) || 0;
+  const extensionPriceCents =
+    Number(catalogLocked && pr ? pr.extensionPriceCents : settings.extensionPriceCents) || 0;
   return {
-    extensionPriceCents: Number(catalogLocked && pr ? pr.extensionPriceCents : settings.extensionPriceCents) || 0,
+    extensionPriceCents,
+    virtualExtensionPriceCents: resolveVirtualExtensionPriceCentsForPortal(settings.metadata, extensionPriceCents),
     additionalPhoneNumberPriceCents: localDidPrice,
     tollFreeDidPriceCents: resolveTollFreeDidPriceCentsForPortal(settings.metadata, localDidPrice),
     smsPriceCents: Number(catalogLocked && pr ? pr.smsPriceCents : settings.smsPriceCents) || 0,
@@ -329,12 +335,14 @@ export function AdminPricingWorkspace({
     const flatDirty =
       draft.flatRateEnabled !== savedDraft.flatRateEnabled ||
       draft.flatRateAmountCents !== savedDraft.flatRateAmountCents ||
-      draft.tollFreeDidPriceCents !== savedDraft.tollFreeDidPriceCents;
+      draft.tollFreeDidPriceCents !== savedDraft.tollFreeDidPriceCents ||
+      draft.virtualExtensionPriceCents !== savedDraft.virtualExtensionPriceCents;
     if (catalogLocked) {
       return draft.smsBillingEnabled !== savedDraft.smsBillingEnabled || flatDirty || quantityOverridesDirty;
     }
     return (
       draft.extensionPriceCents !== savedDraft.extensionPriceCents ||
+      draft.virtualExtensionPriceCents !== savedDraft.virtualExtensionPriceCents ||
       draft.additionalPhoneNumberPriceCents !== savedDraft.additionalPhoneNumberPriceCents ||
       draft.tollFreeDidPriceCents !== savedDraft.tollFreeDidPriceCents ||
       draft.smsPriceCents !== savedDraft.smsPriceCents ||
@@ -351,6 +359,7 @@ export function AdminPricingWorkspace({
       additionalPhoneNumberCount: localBillableSuggested,
       smsEnabled: draft.smsBillingEnabled,
       extensionPriceCents: draft.extensionPriceCents,
+      virtualExtensionPriceCents: draft.virtualExtensionPriceCents,
       additionalPhoneNumberPriceCents: draft.additionalPhoneNumberPriceCents,
       tollFreeDidPriceCents: draft.tollFreeDidPriceCents,
       smsPriceCents: draft.smsPriceCents,
@@ -443,7 +452,7 @@ export function AdminPricingWorkspace({
       });
     };
     add("extensions", "Extensions", extensionCount, billingExtensionCount, extensionsFlatActive ? draft.flatRateAmountCents : draft.extensionPriceCents);
-    add("virtualExtensions", "Virtual extensions", 0, billingVirtualCount, draft.extensionPriceCents);
+    add("virtualExtensions", "Virtual extensions", 0, billingVirtualCount, draft.virtualExtensionPriceCents);
     add("phoneNumbers", "Local phone numbers", resolvedQuantities.suggested.phoneNumbersBillable, billingLocalPhoneCount, draft.additionalPhoneNumberPriceCents);
     add("tollFreeNumbers", "Toll-free phone numbers", resolvedQuantities.suggested.tollFreeNumbersBillable, billingTollFreeCount, draft.tollFreeDidPriceCents);
     add("smsPackages", "SMS packages", resolvedQuantities.suggested.smsPackages, billingSmsCount, draft.smsPriceCents);
@@ -554,9 +563,13 @@ export function AdminPricingWorkspace({
       billingQty: billingVirtualCount,
       qtyOverrideKey: "virtualExtensions" as const,
       suggestedLabel: "0 tracked in system · not auto-counted",
-      unitCents: draft.extensionPriceCents,
-      priceKey: "extensionPriceCents" as const,
-      chip: resolvedQuantities.modes.virtualExtensions === "manual" ? ("custom" as const) : ("default" as const),
+      unitCents: draft.virtualExtensionPriceCents,
+      priceKey: "virtualExtensionPriceCents" as const,
+      chip:
+        parseVirtualExtensionPriceCentsFromMetadata(settings.metadata) != null ||
+        resolvedQuantities.modes.virtualExtensions === "manual"
+          ? ("custom" as const)
+          : ("default" as const),
     },
     {
       key: "local_phone_numbers",

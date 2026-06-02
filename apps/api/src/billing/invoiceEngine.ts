@@ -9,6 +9,7 @@ import { activeBillingPlanRowForPeriod, parseBillingPricingMode, resolveTenantBi
 import { buildExtensionInvoiceLine } from "./billingFlatRate";
 import { resolveBillingQuantities, type BillingResolvedQuantities } from "./billingQuantityOverrides";
 import { resolveTollFreeDidPriceCents } from "./billingTollFreePricing";
+import { resolveVirtualExtensionPriceCents } from "./billingVirtualExtensionPricing";
 import { buildPricingPreviewExplanation, type PricingPreviewExplanation } from "./billingPricingExplanation";
 import { addBillingDays, billingMonthBounds, billingYearMonth } from "./billingTime";
 import { buildBillingTelecomFeeLines, parseBillingTelecomFees } from "./billingTelecomFees";
@@ -272,8 +273,8 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
       type: "EXTENSION",
       description: "Virtual extensions",
       quantity: qty,
-      unitPriceCents: extensionPrice,
-      amountCents: qty * extensionPrice,
+      unitPriceCents: virtualExtensionPrice,
+      amountCents: qty * virtualExtensionPrice,
       taxable: true,
       metadata: {
         lineItemKind: "virtual_extensions",
