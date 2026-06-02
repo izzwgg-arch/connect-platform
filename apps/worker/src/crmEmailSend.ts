@@ -27,7 +27,12 @@ function encodeMimeHeader(raw: string): string {
   return /^[\x20-\x7E]*$/.test(s) ? s : `=?UTF-8?B?${Buffer.from(s, "utf8").toString("base64")}?=`;
 }
 
-async function refreshAccessToken(refreshToken: string): Promise<{ accessToken: string; expiresAt: Date | null; scope: string[]; tokenType: string } | null> {
+async function refreshAccessToken(refreshToken: string): Promise<{
+  accessToken: string;
+  expiresAt: Date | null;
+  scope: string[];
+  tokenType: string;
+} | { errorMessage: string; authRejected: boolean } | null> {
   const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID || "";
   const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET || "";
   if (!clientId || !clientSecret) return null;
@@ -37,12 +42,34 @@ async function refreshAccessToken(refreshToken: string): Promise<{ accessToken: 
     body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: clientId, client_secret: clientSecret }),
   });
   const json: any = await res.json().catch(() => ({}));
-  if (!res.ok) return null;
+  if (!res.ok) {
+    const errorMessage = String(json?.error_description || json?.error?.message || json?.error || json?.message || `refresh_failed_${res.status}`);
+    return { errorMessage, authRejected: isGoogleAuthRejection(errorMessage) };
+  }
   const accessToken = String(json.access_token || "");
   const expiresInSec = Number(json.expires_in || 0);
   const tokenType = String(json.token_type || "Bearer");
   const scope = String(json.scope || "").split(/\s+/).filter(Boolean);
   return { accessToken, expiresAt: expiresInSec ? new Date(Date.now() + expiresInSec * 1000) : null, scope, tokenType };
+}
+
+export function isGoogleAuthRejection(input: unknown): boolean {
+  const s = String(input || "").toLowerCase();
+  return s.includes("invalid_grant")
+    || s.includes("invalid authentication credentials")
+    || s.includes("expected oauth 2 access token")
+    || s.includes("token has been expired or revoked");
+}
+
+async function markSenderReconnectRequired(senderConnectionId: string, errorMessage: string): Promise<void> {
+  await db.crmEmailConnection.update({
+    where: { id: senderConnectionId },
+    data: {
+      status: "RECONNECT_REQUIRED",
+      lastError: errorMessage.slice(0, 500),
+      tokenExpiresAt: null,
+    },
+  }).catch(() => undefined);
 }
 
 function buildPlainTextMime(fromHeader: string, to: string, subject: string, bodyText: string, ccEmail?: string | null): string {
@@ -271,7 +298,7 @@ export async function processCrmEmailSendJob(job: {
     const rt = String(refreshPayload?.refreshToken || "");
     if (rt) {
       const refreshed = await refreshAccessToken(rt);
-      if (refreshed) {
+      if (refreshed && "accessToken" in refreshed) {
         accessToken = refreshed.accessToken;
         await db.crmEmailConnection.update({
           where: { id: senderConnectionId },
@@ -282,10 +309,16 @@ export async function processCrmEmailSendJob(job: {
           },
         });
       }
+      if (refreshed && "authRejected" in refreshed && refreshed.authRejected) {
+        await markSenderReconnectRequired(senderConnectionId, refreshed.errorMessage);
+      }
     }
   }
 
-  if (!accessToken) throw new Error("no_access_token");
+  if (!accessToken) {
+    await markSenderReconnectRequired(senderConnectionId, "Google authorization is missing. Reconnect this sender.");
+    throw new Error("no_access_token");
+  }
 
   const fromEmail = conn.emailAddress;
   const fromHeader = formatFromHeader(conn.senderName, conn.displayName, fromEmail);
@@ -322,6 +355,10 @@ export async function processCrmEmailSendJob(job: {
   });
   const json: any = await res.json().catch(() => ({}));
   if (!res.ok) {
+    const errorMessage = String(json?.error?.message || json?.error_description || json?.message || `send_failed_${res.status}`);
+    if (isGoogleAuthRejection(`${json?.error?.status || ""} ${json?.error?.reason || ""} ${json?.error || ""} ${errorMessage}`)) {
+      await markSenderReconnectRequired(senderConnectionId, errorMessage);
+    }
     await (db as any).crmEmailSendLog.create({
       data: {
         tenantId: job.tenantId,
@@ -332,7 +369,7 @@ export async function processCrmEmailSendJob(job: {
         toEmail: job.to,
         subject: job.subject || null,
         status: "FAILED",
-        errorMessage: String(json?.error?.message || json?.message || `send_failed_${res.status}`),
+        errorMessage,
         attachmentSnapshot: attachmentSnapshot.length ? attachmentSnapshot : undefined,
       },
     });

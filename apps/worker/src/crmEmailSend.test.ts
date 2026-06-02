@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildRichMime, CRM_EMAIL_LOGO_CID } from "./crmEmailSend";
+import { buildRichMime, CRM_EMAIL_LOGO_CID, isGoogleAuthRejection } from "./crmEmailSend";
 
 test("CRM email send: rich MIME includes template attachments", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "crm-email-send-"));
@@ -38,6 +38,12 @@ test("CRM email send: rich MIME includes template attachments", async () => {
     else process.env.CRM_EMAIL_ASSET_STORAGE_DIR = previous;
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("CRM email send: detects Google auth rejection errors", () => {
+  assert.equal(isGoogleAuthRejection("invalid_grant: Token has been expired or revoked."), true);
+  assert.equal(isGoogleAuthRejection("Request had invalid authentication credentials. Expected OAuth 2 access token."), true);
+  assert.equal(isGoogleAuthRejection("rate_limit_exceeded"), false);
 });
 
 test("CRM email send: rich MIME includes CC header when ccSelf is requested", async () => {

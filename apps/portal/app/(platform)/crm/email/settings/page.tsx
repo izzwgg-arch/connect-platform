@@ -51,6 +51,10 @@ function isConnected(s: Sender): boolean {
   return s.status === "CONNECTED";
 }
 
+function needsReconnect(s: Sender): boolean {
+  return s.status === "RECONNECT_REQUIRED";
+}
+
 function formatWhen(iso?: string | null): string {
   if (!iso) return "Never";
   try { return new Date(iso).toLocaleString(); } catch { return iso; }
@@ -97,7 +101,7 @@ function ReplyTrackingStatePill({ state }: { state: "healthy" | "no_scope" | "di
   return null;
 }
 
-function ConnectionBadge({ connected, busy }: { connected: boolean; busy?: boolean }) {
+function ConnectionBadge({ connected, reconnectRequired, busy }: { connected: boolean; reconnectRequired?: boolean; busy?: boolean }) {
   return (
     <span
       className={cn(
@@ -105,13 +109,15 @@ function ConnectionBadge({ connected, busy }: { connected: boolean; busy?: boole
         "text-[10px] uppercase tracking-wide",
         busy
           ? "border-crm-accent/35 bg-crm-accent/10 text-crm-accent"
+          : reconnectRequired
+            ? "border-crm-danger/35 bg-crm-danger/10 text-crm-danger"
           : connected
             ? "border-crm-success/35 bg-crm-success/10 text-crm-success"
             : "border-crm-danger/35 bg-crm-danger/10 text-crm-danger",
       )}
     >
       {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <span className={connected ? crm.statusDotLive : crm.statusDotDanger} />}
-      {busy ? "Working" : connected ? "Connected" : "Disconnected"}
+      {busy ? "Working" : reconnectRequired ? "Reconnect required" : connected ? "Connected" : "Disconnected"}
     </span>
   );
 }
@@ -531,6 +537,7 @@ function SenderRow({
   const busy = busyId === sender.id;
   const isUser = sender.scope === "USER";
   const connected = isConnected(sender);
+  const reconnectRequired = needsReconnect(sender);
 
   // Diagnostics state (visible for any connected sender the user can see)
   const [diag, setDiag] = useState<{
@@ -602,7 +609,7 @@ function SenderRow({
               </p>
               <p className="mt-0.5 truncate font-mono text-xs text-crm-muted">{sender.emailAddress}</p>
             </div>
-            <ConnectionBadge connected={connected} busy={busy} />
+            <ConnectionBadge connected={connected} reconnectRequired={reconnectRequired} busy={busy} />
             {isUser ? (
               <span className={cn(crm.chip, "text-[10px]")}><UserIcon className="h-3 w-3" /> My email</span>
             ) : (
@@ -613,9 +620,14 @@ function SenderRow({
                 <Star className="h-3 w-3" /> Default
               </span>
             )}
-            {!connected && (
+            {!connected && !reconnectRequired && (
               <span className={cn(crm.chip, "text-[10px] text-crm-danger")} title={sender.lastError || undefined}>
                 <WifiOff className="h-3 w-3" /> Disconnected
+              </span>
+            )}
+            {reconnectRequired && (
+              <span className={cn(crm.chip, "text-[10px] border-crm-danger/35 bg-crm-danger/10 text-crm-danger")} title={sender.lastError || undefined}>
+                <AlertCircle className="h-3 w-3" /> Google rejected token
               </span>
             )}
           </div>
@@ -642,6 +654,18 @@ function SenderRow({
             {connected && sender.replyTrackingEnabled && (
               <button type="button" className={cn(crm.btnGhost, "text-xs")} onClick={() => onSyncNow(sender)} disabled={busy} title="Sync replies now">
                 {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />} Sync now
+              </button>
+            )}
+            {sender.canManage && reconnectRequired && (
+              <button
+                type="button"
+                className={cn(crm.btnGhost, "text-xs border-crm-danger/35 text-crm-danger")}
+                onClick={() => onEnableReplyTracking(sender)}
+                disabled={busy}
+                title="Google rejected this sender token — reconnect the mailbox"
+              >
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <AlertCircle className="h-3.5 w-3.5" />}
+                Reconnect Google
               </button>
             )}
             {sender.canManage && connected && (
@@ -693,8 +717,17 @@ function SenderRow({
         )}
       </div>
 
-      {connected && (
+      {(connected || reconnectRequired) && (
         <div className={cn(crm.opInset, "mt-3 px-3 py-2.5")}>
+          {reconnectRequired && (
+            <div className="mb-2.5 flex items-start gap-2 rounded-crm border border-crm-danger/35 bg-crm-danger/10 px-3 py-2 text-xs text-crm-danger">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <div>
+                <strong>Reconnect required.</strong> Google rejected this mailbox token, so CRM sends from this sender will fail until it is reconnected.
+                {sender.lastError ? <span className="mt-1 block text-crm-danger/90">Last error: {sender.lastError}</span> : null}
+              </div>
+            </div>
+          )}
           {rtState === "no_scope" && (
             <div className="mb-2.5 flex items-start gap-2 rounded-crm border border-crm-danger/35 bg-crm-danger/10 px-3 py-2 text-xs text-crm-danger">
               <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />

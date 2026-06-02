@@ -18,6 +18,7 @@ type Sender = {
   isDefaultForTenant: boolean;
   status: string;
   isMine: boolean;
+  lastError?: string | null;
 };
 
 type ConnectionsResp = { senders: Sender[]; canManageTenantSenders: boolean };
@@ -111,6 +112,10 @@ function chooseImplicitSender(senders: Sender[]): Sender | null {
   return connected.find((s) => s.scope === "USER" && s.isMine) || null;
 }
 
+function hasReconnectRequiredSender(senders: Sender[]): boolean {
+  return senders.some((s) => s.status === "RECONNECT_REQUIRED");
+}
+
 export function ContactEmailWorkspacePanel({
   contactId,
   contactName,
@@ -184,6 +189,7 @@ export function ContactEmailWorkspacePanel({
   }, [load]);
 
   const selectedSender = useMemo(() => chooseImplicitSender(senders), [senders]);
+  const reconnectRequired = useMemo(() => hasReconnectRequiredSender(senders), [senders]);
   const selectedTemplate = useMemo(
     () => templates.find((tpl) => tpl.id === selectedTemplateId) || null,
     [templates, selectedTemplateId],
@@ -212,7 +218,7 @@ export function ContactEmailWorkspacePanel({
   const sendBlocker =
     disabled ? "Archived contacts are read-only."
     : !recipientEmail ? "No recipient email"
-      : !selectedSender ? "Connect sender account"
+      : !selectedSender ? reconnectRequired ? "Reconnect sender account" : "Connect sender account"
         : !selectedTemplate ? "Select a template"
           : !subject.trim() ? "Subject is required"
             : !bodyText.trim() ? "Message body is required"
@@ -418,7 +424,14 @@ export function ContactEmailWorkspacePanel({
         {sendBlocker && selectedTemplate ? (
           <div className="mt-3 flex items-start gap-2 rounded-crm border border-crm-warning/35 bg-crm-warning/10 px-3 py-2 text-xs text-crm-warning">
             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span>{sendBlocker}</span>
+            <span>
+              {sendBlocker}
+              {sendBlocker === "Reconnect sender account" ? (
+                <span className="mt-1 block text-crm-text/80">
+                  Google rejected the connected mailbox token. Ask an admin to reconnect the Gmail sender.
+                </span>
+              ) : null}
+            </span>
             {!selectedSender && canManageTenantSenders ? (
               <Link href="/crm/email/settings" className="ml-auto font-semibold text-crm-accent hover:underline">
                 Settings
