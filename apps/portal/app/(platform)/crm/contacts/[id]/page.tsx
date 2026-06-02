@@ -1989,6 +1989,7 @@ function CrmContactDetailInner() {
 
   const primaryPhoneRow = contact.phones.find((p) => p.isPrimary) ?? contact.phones[0] ?? null;
   const primaryEmailRow = contact.emails.find((e) => e.isPrimary) ?? contact.emails[0] ?? null;
+  const primaryAddressRow = contact.addresses?.[0] ?? null;
 
   const focusNoteComposer = () => {
     noteComposerRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -2556,6 +2557,9 @@ function CrmContactDetailInner() {
                   displayName: contact.displayName,
                   company: contact.company ?? null,
                   email: primaryEmailRow?.email ?? null,
+                  phone: primaryPhoneRow?.numberRaw ?? null,
+                  city: primaryAddressRow?.city ?? null,
+                  state: primaryAddressRow?.state ?? null,
                 }}
                 onSent={() => { void loadTimeline(); }}
               />

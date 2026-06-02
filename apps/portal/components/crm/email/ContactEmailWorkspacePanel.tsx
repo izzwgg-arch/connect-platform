@@ -22,6 +22,9 @@ type Sender = {
 
 type ConnectionsResp = { senders: Sender[]; canManageTenantSenders: boolean };
 
+const TEMPLATE_REFRESH_EVENT = "crm:email-templates:changed";
+const TEMPLATE_REFRESH_STORAGE_KEY = "crm.emailTemplates.changedAt";
+
 type EmailTemplate = {
   id: string;
   name: string;
@@ -32,6 +35,8 @@ type EmailTemplate = {
   category?: string | null;
   visibility: "SHARED" | "PRIVATE";
   isDraft?: boolean;
+  isArchived?: boolean;
+  updatedAt?: string | null;
   attachments?: Array<{ id: string; originalFileName: string; sizeBytes: number }>;
 };
 
@@ -41,6 +46,9 @@ export type ContactEmailMergeFields = {
   displayName?: string | null;
   company?: string | null;
   email?: string | null;
+  phone?: string | null;
+  city?: string | null;
+  state?: string | null;
 };
 
 function applyMergeFields(text: string, fields: ContactEmailMergeFields): string {
@@ -51,7 +59,41 @@ function applyMergeFields(text: string, fields: ContactEmailMergeFields): string
     "contact.displayName": fields.displayName || "",
     "contact.company": fields.company || "",
     "contact.email": fields.email || "",
+    "contact.phone": fields.phone || "",
+    "contact.city": fields.city || "",
+    "contact.state": fields.state || "",
   });
+}
+
+const SUPPORTED_CONTACT_FIELDS: Array<{ key: keyof ContactEmailMergeFields; labels: string[]; display: string }> = [
+  { key: "firstName", labels: ["contact.firstName", "firstName"], display: "first name" },
+  { key: "lastName", labels: ["contact.lastName", "lastName"], display: "last name" },
+  { key: "displayName", labels: ["contact.fullName", "contact.displayName", "fullName", "name"], display: "display name" },
+  { key: "company", labels: ["contact.company", "company"], display: "company" },
+  { key: "email", labels: ["contact.email", "email"], display: "email" },
+  { key: "phone", labels: ["contact.phone", "phone"], display: "phone" },
+  { key: "city", labels: ["contact.city", "city"], display: "city" },
+  { key: "state", labels: ["contact.state", "state"], display: "state" },
+];
+
+function missingMergeFieldWarnings(text: string, fields: ContactEmailMergeFields): string[] {
+  const found = new Set(Array.from(String(text || "").matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)).map((match) => match[1]));
+  return SUPPORTED_CONTACT_FIELDS
+    .filter((field) => field.labels.some((label) => found.has(label)) && !String(fields[field.key] || "").trim())
+    .map((field) => `Missing ${field.display}`);
+}
+
+function unresolvedMergeTokens(text: string): string[] {
+  return Array.from(new Set(Array.from(String(text || "").matchAll(/\{\{\s*([\w.]+)\s*\}\}/g)).map((match) => match[1])));
+}
+
+function formatTemplateDate(value?: string | null): string {
+  if (!value) return "Updated recently";
+  try {
+    return `Updated ${new Date(value).toLocaleDateString()}`;
+  } catch {
+    return "Updated recently";
+  }
 }
 
 function senderLabel(sender: Sender | null): string {
@@ -109,7 +151,7 @@ export function ContactEmailWorkspacePanel({
       ]);
       setSenders(connResp?.senders ?? []);
       setCanManageTenantSenders(Boolean(connResp?.canManageTenantSenders));
-      setTemplates((tplResp?.templates ?? []).filter((tpl) => !tpl.isDraft));
+      setTemplates((tplResp?.templates ?? []).filter((tpl) => !tpl.isDraft && !tpl.isArchived));
     } catch (e: any) {
       setError(e?.body?.detail || e?.message || "Failed to load email templates");
     } finally {
@@ -121,6 +163,26 @@ export function ContactEmailWorkspacePanel({
     void load();
   }, [load]);
 
+  useEffect(() => {
+    const refresh = () => { void load(); };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === TEMPLATE_REFRESH_STORAGE_KEY) refresh();
+    };
+    window.addEventListener("focus", refresh);
+    window.addEventListener(TEMPLATE_REFRESH_EVENT, refresh);
+    window.addEventListener("storage", onStorage);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener(TEMPLATE_REFRESH_EVENT, refresh);
+      window.removeEventListener("storage", onStorage);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [load]);
+
   const selectedSender = useMemo(() => chooseImplicitSender(senders), [senders]);
   const selectedTemplate = useMemo(
     () => templates.find((tpl) => tpl.id === selectedTemplateId) || null,
@@ -130,11 +192,31 @@ export function ContactEmailWorkspacePanel({
     const q = query.trim().toLowerCase();
     if (!q) return templates;
     return templates.filter((tpl) =>
-      [tpl.name, tpl.subject, tpl.category || ""].some((value) => String(value || "").toLowerCase().includes(q)),
+      [tpl.name, tpl.subject, tpl.category || "", tpl.previewText || "", tpl.bodyText || ""].some((value) => String(value || "").toLowerCase().includes(q)),
     );
   }, [query, templates]);
   const ccEmail = String(currentUserEmail || "").trim();
   const ccSelfAvailable = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ccEmail);
+  const selectedTemplateRawText = selectedTemplate
+    ? [selectedTemplate.subject || "", selectedTemplate.bodyText || htmlToCrmPlainText(selectedTemplate.bodyHtml || "")].join("\n")
+    : "";
+  const mergeWarnings = useMemo(
+    () => selectedTemplate ? missingMergeFieldWarnings(selectedTemplateRawText, mergeFields) : [],
+    [selectedTemplate, selectedTemplateRawText, mergeFields],
+  );
+  const unresolvedTokens = useMemo(
+    () => selectedTemplate ? unresolvedMergeTokens(`${subject}\n${bodyText}`) : [],
+    [selectedTemplate, subject, bodyText],
+  );
+  const recipientEmail = String(contactEmail || "").trim();
+  const sendBlocker =
+    disabled ? "Archived contacts are read-only."
+    : !recipientEmail ? "No recipient email"
+      : !selectedSender ? "Connect sender account"
+        : !selectedTemplate ? "Select a template"
+          : !subject.trim() ? "Subject is required"
+            : !bodyText.trim() ? "Message body is required"
+              : null;
 
   const selectTemplate = (tpl: EmailTemplate) => {
     setSelectedTemplateId(tpl.id);
@@ -144,18 +226,13 @@ export function ContactEmailWorkspacePanel({
     setBodyText(applyMergeFields(tpl.bodyText || htmlToCrmPlainText(tpl.bodyHtml || ""), mergeFields));
   };
 
-  const canSend = Boolean(
-    selectedSender &&
-      contactEmail &&
-      selectedTemplate &&
-      subject.trim() &&
-      bodyText.trim() &&
-      !sending &&
-      !disabled,
-  );
+  const canSend = !sendBlocker && !sending;
 
   const handleSend = async () => {
-    if (!canSend || !selectedTemplate) return;
+    if (!canSend || !selectedTemplate) {
+      if (sendBlocker) setError(sendBlocker);
+      return;
+    }
     if (ccSelf && !ccSelfAvailable) {
       setError("Your user email is missing or invalid, so CC myself cannot be used.");
       return;
@@ -180,53 +257,6 @@ export function ContactEmailWorkspacePanel({
     }
   };
 
-  if (loading) {
-    return (
-      <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-5">
-        <div className="flex items-center gap-2 text-sm text-crm-muted">
-          <Loader2 className="h-4 w-4 animate-spin" /> Loading templates and sender...
-        </div>
-      </div>
-    );
-  }
-
-  if (!contactEmail) {
-    return (
-      <div className="rounded-[1.35rem] border border-crm-warning/35 bg-crm-warning/10 p-5">
-        <div className="flex gap-3 text-sm text-crm-warning">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <div>
-            <p className="font-semibold">No email on this contact</p>
-            <p className="mt-1 text-crm-text/80">Add an email address to {contactName} before sending a template.</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (!selectedSender) {
-    return (
-      <div className="rounded-[1.35rem] border border-crm-warning/35 bg-crm-warning/10 p-5">
-        <div className="flex gap-3 text-sm text-crm-warning">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <div>
-            <p className="font-semibold">Email sender not configured</p>
-            <p className="mt-1 text-crm-text/80">
-              {canManageTenantSenders
-                ? "Connect Google in CRM Email Settings to send from the tenant sender."
-                : "Ask an admin to connect Google."}
-            </p>
-            {canManageTenantSenders ? (
-              <Link href="/crm/email/settings" className={cn(crm.btnPrimary, "mt-3 inline-flex text-xs")}>
-                Connect Google
-              </Link>
-            ) : null}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(15rem,0.85fr)_minmax(0,1.35fr)]">
       <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
@@ -235,7 +265,12 @@ export function ContactEmailWorkspacePanel({
             <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-crm-accent">Email Templates</p>
             <h3 className="mt-1 text-lg font-bold text-crm-text">Select a template</h3>
           </div>
-          <Mail className="h-5 w-5 text-crm-accent" />
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => void load()} disabled={loading} className="text-xs font-semibold text-crm-accent hover:underline disabled:opacity-50">
+              Refresh
+            </button>
+            <Mail className="h-5 w-5 text-crm-accent" />
+          </div>
         </div>
 
         <label className="relative block">
@@ -249,17 +284,24 @@ export function ContactEmailWorkspacePanel({
         </label>
 
         <div className="mt-3 flex max-h-[23rem] flex-col gap-2 overflow-y-auto pr-1">
-          {filteredTemplates.length === 0 ? (
+          {loading ? (
+            <div className="flex items-center gap-2 rounded-crm border border-crm-border/70 bg-crm-surface/60 p-4 text-sm text-crm-muted">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading templates...
+            </div>
+          ) : filteredTemplates.length === 0 ? (
             <div className="rounded-crm border border-dashed border-crm-border/70 p-4 text-sm text-crm-muted">
-              <p className="font-semibold text-crm-text">No templates yet</p>
-              <p className="mt-1">Create a saved template to send from the contact workspace.</p>
-              <Link href="/crm/email/templates" className="mt-3 inline-flex text-xs font-semibold text-crm-accent hover:underline">
-                Open templates
-              </Link>
+              <p className="font-semibold text-crm-text">{query.trim() ? "No matching templates" : "No active templates yet"}</p>
+              <p className="mt-1">
+                {query.trim()
+                  ? "Try a different template name, subject, or category."
+                  : "Create and save a non-draft template in Email Templates, then refresh this workspace."}
+              </p>
             </div>
           ) : (
             filteredTemplates.map((tpl) => {
               const active = tpl.id === selectedTemplateId;
+              const renderedSubject = applyMergeFields(tpl.subject || "", mergeFields);
+              const snippet = applyMergeFields(tpl.previewText || tpl.bodyText || htmlToCrmPlainText(tpl.bodyHtml || ""), mergeFields);
               return (
                 <button
                   key={tpl.id}
@@ -274,8 +316,17 @@ export function ContactEmailWorkspacePanel({
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-crm-text">{tpl.name}</p>
-                      <p className="mt-1 line-clamp-2 text-xs text-crm-muted">{applyMergeFields(tpl.subject || "", mergeFields) || "No subject"}</p>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <p className="truncate text-sm font-semibold text-crm-text">{tpl.name}</p>
+                        {tpl.category ? (
+                          <span className="rounded-full border border-crm-border/70 bg-crm-surface-2/70 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">
+                            {tpl.category}
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="mt-1 line-clamp-1 text-xs font-medium text-crm-text/80">{renderedSubject || "No subject"}</p>
+                      <p className="mt-1 line-clamp-2 text-xs text-crm-muted">{snippet || "No preview available"}</p>
+                      <p className="mt-2 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">{formatTemplateDate(tpl.updatedAt)}</p>
                     </div>
                     {tpl.attachments?.length ? <Paperclip className="h-3.5 w-3.5 shrink-0 text-crm-muted" /> : null}
                   </div>
@@ -291,9 +342,10 @@ export function ContactEmailWorkspacePanel({
           <div>
             <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-crm-accent">Preview & Send</p>
             <h3 className="mt-1 text-lg font-bold text-crm-text">To {contactName}</h3>
+            <p className="mt-1 text-xs text-crm-muted">Recipient {recipientEmail || "No recipient email"}</p>
             <p className="mt-1 text-xs text-crm-muted">From {senderLabel(selectedSender)}</p>
           </div>
-          {selectedSender.scope === "TENANT" ? (
+          {selectedSender?.scope === "TENANT" ? (
             <span className="rounded-full border border-crm-success/35 bg-crm-success/10 px-2.5 py-1 text-[11px] font-semibold text-crm-success">
               Tenant sender
             </span>
@@ -332,6 +384,13 @@ export function ContactEmailWorkspacePanel({
                 ))}
               </div>
             ) : null}
+            {mergeWarnings.length || unresolvedTokens.length ? (
+              <div className="rounded-crm border border-crm-warning/35 bg-crm-warning/10 p-3 text-xs text-crm-warning">
+                <p className="font-semibold">Merge field warning</p>
+                {mergeWarnings.length ? <p className="mt-1">{mergeWarnings.join(", ")}.</p> : null}
+                {unresolvedTokens.length ? <p className="mt-1">Unresolved fields: {unresolvedTokens.join(", ")}.</p> : null}
+              </div>
+            ) : null}
             <label className="flex items-start gap-2 rounded-crm border border-crm-border/70 bg-crm-surface/60 p-3 text-sm text-crm-text">
               <input
                 type="checkbox"
@@ -354,6 +413,17 @@ export function ContactEmailWorkspacePanel({
         {success ? (
           <div className="mt-3 flex items-center gap-2 rounded-crm border border-crm-success/40 bg-crm-success/10 px-3 py-2 text-xs text-crm-success">
             <CheckCircle2 className="h-3.5 w-3.5" /> {success}
+          </div>
+        ) : null}
+        {sendBlocker && selectedTemplate ? (
+          <div className="mt-3 flex items-start gap-2 rounded-crm border border-crm-warning/35 bg-crm-warning/10 px-3 py-2 text-xs text-crm-warning">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>{sendBlocker}</span>
+            {!selectedSender && canManageTenantSenders ? (
+              <Link href="/crm/email/settings" className="ml-auto font-semibold text-crm-accent hover:underline">
+                Settings
+              </Link>
+            ) : null}
           </div>
         ) : null}
 

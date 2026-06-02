@@ -63,6 +63,18 @@ const FEATURED_TABS = [
   "More",
 ] as const;
 
+const TEMPLATE_REFRESH_EVENT = "crm:email-templates:changed";
+const TEMPLATE_REFRESH_STORAGE_KEY = "crm.emailTemplates.changedAt";
+
+function notifyTemplateWorkspaceRefresh() {
+  window.dispatchEvent(new Event(TEMPLATE_REFRESH_EVENT));
+  try {
+    window.localStorage.setItem(TEMPLATE_REFRESH_STORAGE_KEY, String(Date.now()));
+  } catch {
+    // Storage may be unavailable in private contexts; same-tab listeners still receive the event.
+  }
+}
+
 const CATEGORY_ACCENTS = [
   "from-blue-500 to-indigo-500",
   "from-violet-500 to-fuchsia-500",
@@ -289,6 +301,7 @@ export default function CrmEmailTemplatesPage() {
       setComposerState(null);
       setNotice(draft ? "Draft saved" : "Template saved");
       await load();
+      notifyTemplateWorkspaceRefresh();
     } catch (e: any) {
       setError(e?.message || "Failed to save template");
     } finally {
@@ -302,6 +315,7 @@ export default function CrmEmailTemplatesPage() {
     setNotice("Template duplicated");
     setSelectedId(copy.id);
     await load();
+    notifyTemplateWorkspaceRefresh();
   };
 
   const archive = async (template = selectedTemplate) => {
@@ -311,17 +325,20 @@ export default function CrmEmailTemplatesPage() {
     setNotice("Template archived");
     if (selectedId === template.id) setSelectedId(null);
     await load();
+    notifyTemplateWorkspaceRefresh();
   };
 
   const restore = async (template: Template) => {
     await apiPut(`/crm/email/templates/${template.id}`, { isArchived: false });
     setNotice("Template restored");
     await load();
+    notifyTemplateWorkspaceRefresh();
   };
 
   const favorite = async (template: Template) => {
     await apiPut<Template>(`/crm/email/templates/${template.id}`, { isFavorite: !template.isFavorite });
     await load();
+    notifyTemplateWorkspaceRefresh();
   };
 
   return (

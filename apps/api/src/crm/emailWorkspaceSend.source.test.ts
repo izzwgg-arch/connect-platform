@@ -8,6 +8,7 @@ const dir = dirname(fileURLToPath(import.meta.url));
 const emailRoutesSource = readFileSync(join(dir, "emailRoutes.ts"), "utf8");
 const workerSendSource = readFileSync(resolve(dir, "../../../worker/src/crmEmailSend.ts"), "utf8");
 const contactWorkspaceSource = readFileSync(resolve(dir, "../../../portal/components/crm/email/ContactEmailWorkspacePanel.tsx"), "utf8");
+const templateLibrarySource = readFileSync(resolve(dir, "../../../portal/app/(platform)/crm/email/templates/page.tsx"), "utf8");
 
 const sendBlock = emailRoutesSource.slice(
   emailRoutesSource.indexOf('app.post("/crm/email/send"'),
@@ -46,4 +47,28 @@ test("workspace email send: template attachments and timeline metadata are prese
 test("workspace email send: no fake reply-tracking BCC address is added", () => {
   assert.doesNotMatch(workerSendSource, /^Bcc:/m);
   assert.doesNotMatch(workerSendSource, /tracking.*address/i);
+});
+
+test("workspace email panel: templates remain visible when send prerequisites are missing", () => {
+  assert.match(contactWorkspaceSource, /sendBlocker/);
+  assert.match(contactWorkspaceSource, /No recipient email/);
+  assert.match(contactWorkspaceSource, /Connect sender account/);
+  assert.doesNotMatch(contactWorkspaceSource, /if \(!contactEmail\)\s*\{\s*return/);
+  assert.doesNotMatch(contactWorkspaceSource, /if \(!selectedSender\)\s*\{\s*return/);
+});
+
+test("workspace email panel: archived templates stay hidden and merge preview includes contact fields", () => {
+  assert.match(contactWorkspaceSource, /!tpl\.isDraft && !tpl\.isArchived/);
+  assert.match(contactWorkspaceSource, /contact\.phone/);
+  assert.match(contactWorkspaceSource, /contact\.city/);
+  assert.match(contactWorkspaceSource, /contact\.state/);
+  assert.match(contactWorkspaceSource, /missingMergeFieldWarnings/);
+});
+
+test("workspace email panel: template library changes can refresh the workspace without reload", () => {
+  assert.match(contactWorkspaceSource, /crm:email-templates:changed/);
+  assert.match(contactWorkspaceSource, /crm\.emailTemplates\.changedAt/);
+  assert.match(contactWorkspaceSource, /window\.addEventListener\("focus", refresh\)/);
+  assert.match(templateLibrarySource, /notifyTemplateWorkspaceRefresh/);
+  assert.match(templateLibrarySource, /window\.localStorage\.setItem\(TEMPLATE_REFRESH_STORAGE_KEY/);
 });
