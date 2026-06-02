@@ -177,7 +177,18 @@ export async function buildRichMime(input: {
   }
   parts.push(`--${altBoundary}--`);
   for (const attachment of inlineAttachments) {
-    const bytes = await fs.promises.readFile(resolveCrmEmailAssetStoragePath(attachment.storageKey));
+    let bytes: Buffer;
+    try {
+      bytes = await fs.promises.readFile(resolveCrmEmailAssetStoragePath(attachment.storageKey));
+    } catch (err: any) {
+      if (attachment.id === "branding-logo" && attachment.contentId === CRM_EMAIL_LOGO_CID) {
+        console.warn(
+          `crm-email-send: missing branding logo asset skipped (${String(err?.code || err?.message || err).slice(0, 120)})`,
+        );
+        continue;
+      }
+      throw err;
+    }
     const safeName = escapeHeader(attachment.originalFileName || "attachment");
     parts.push(`--${relatedBoundary}`);
     parts.push(`Content-Type: ${attachment.mimeType || "application/octet-stream"}; name="${safeName}"`);

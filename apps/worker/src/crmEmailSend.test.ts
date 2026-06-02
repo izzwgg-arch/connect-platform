@@ -93,3 +93,36 @@ test("CRM email send: rich MIME supports inline CID logo", async () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("CRM email send: missing inline branding logo does not block delivery", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "crm-email-missing-logo-"));
+  const previous = process.env.CRM_EMAIL_ASSET_STORAGE_DIR;
+  process.env.CRM_EMAIL_ASSET_STORAGE_DIR = root;
+  try {
+    const mime = await buildRichMime({
+      fromHeader: "Sender <sender@example.com>",
+      to: "recipient@example.com",
+      subject: "Welcome",
+      bodyText: "Plain fallback",
+      bodyHtml: `<img src="cid:${CRM_EMAIL_LOGO_CID}" alt="Logo" /><p>Hello</p>`,
+      attachments: [{
+        id: "branding-logo",
+        originalFileName: "logo.png",
+        mimeType: "image/png",
+        sizeBytes: 10,
+        storageKey: "tenants/tenant-a/branding/branding/missing-logo.png",
+        contentId: CRM_EMAIL_LOGO_CID,
+        inline: true,
+      }],
+    });
+
+    assert.match(mime, /multipart\/mixed/);
+    assert.match(mime, /Content-Type: text\/html; charset=UTF-8/);
+    assert.doesNotMatch(mime, new RegExp(`Content-ID: <${CRM_EMAIL_LOGO_CID}>`));
+    assert.doesNotMatch(mime, /Content-Disposition: inline; filename="logo.png"/);
+  } finally {
+    if (previous === undefined) delete process.env.CRM_EMAIL_ASSET_STORAGE_DIR;
+    else process.env.CRM_EMAIL_ASSET_STORAGE_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
