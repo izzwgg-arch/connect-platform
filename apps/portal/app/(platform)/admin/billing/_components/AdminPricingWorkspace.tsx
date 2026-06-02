@@ -5,6 +5,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiPost, apiPut } from "../../../../../services/apiClient";
 import { BillingActionToast, billingErrorMessage } from "../../../../../components/BillingActionToast";
 import { BillingActionPanel } from "../../../../../components/billing/BillingActionPanel";
+import { BillingMoneyInput } from "../../../../../components/billing/BillingMoneyInput";
+import { BillingQuantityInput } from "../../../../../components/billing/BillingQuantityInput";
+import {
+  buildTenantPricingSavePayload,
+  isBillingUnitPriceEditable,
+  type BillingUnitPriceKey,
+} from "../../../../../lib/billingPricingEditor";
 import {
   activeExtensionsFlatRateFromMetadata,
   adminTenantStandingHeadline,
@@ -73,15 +80,6 @@ type DraftPricing = {
   quantityOverrides: Record<BillingQuantityOverrideKey, { mode: "auto" | "manual"; quantity: number }>;
   tollFreeDidPriceCents: number;
 };
-
-function toDollars(cents: number | undefined | null) {
-  return (Number(cents || 0) / 100).toFixed(2);
-}
-
-function parseDollarsInput(value: string) {
-  const n = Number(String(value || "0").replace(/[^0-9. -]/g, ""));
-  return Number.isFinite(n) ? Math.round(n * 100) : 0;
-}
 
 function badgeFromFieldBadges(key: string, badges: Record<string, string> | undefined): "default" | "custom" {
   const b = String(badges?.[key] || "");
@@ -173,14 +171,12 @@ function BillingQuantityOverrideControl({
       </div>
       <label className="billing-qty-override__billing">
         <span className="billing-item-card__field-label">Billing quantity</span>
-        <input
-          type="number"
-          min={0}
-          max={100000}
+        <BillingQuantityInput
           className="billing-qty-override__input"
           disabled={mode === "auto"}
           value={billingQuantity}
-          onChange={(e) => onQuantityChange(Math.max(0, Math.min(100000, Math.round(Number(e.target.value) || 0))))}
+          onChange={onQuantityChange}
+          testId={testId ? `${testId}-quantity` : undefined}
         />
       </label>
       <p className="billing-qty-override__hint">
@@ -492,31 +488,7 @@ export function AdminPricingWorkspace({
     setPriceSaving(true);
     setToast(null);
     try {
-      const payload: Record<string, unknown> = {
-        smsBillingEnabled: draft.smsBillingEnabled,
-        billingQuantityOverrides: buildBillingQuantityOverridesPayload(draft.quantityOverrides),
-        billingFlatRate: draft.flatRateEnabled
-          ? {
-              enabled: true,
-              amountCents: draft.flatRateAmountCents,
-              appliesTo: "extensions",
-            }
-          : {
-              enabled: false,
-              amountCents: draft.flatRateAmountCents,
-              appliesTo: "extensions",
-            },
-      };
-      if (!catalogLocked) {
-        payload.extensionPriceCents = draft.extensionPriceCents;
-        payload.additionalPhoneNumberPriceCents = draft.additionalPhoneNumberPriceCents;
-        payload.tollFreeDidPriceCents = draft.tollFreeDidPriceCents;
-        payload.smsPriceCents = draft.smsPriceCents;
-        payload.firstPhoneNumberFree = draft.firstPhoneNumberFree;
-        payload.billingPricingMode = "custom";
-      } else {
-        payload.tollFreeDidPriceCents = draft.tollFreeDidPriceCents;
-      }
+      const payload = buildTenantPricingSavePayload(draft, catalogLocked);
       await apiPut(`/admin/billing/tenants/${detail.tenant.id}/settings`, payload);
       onSaved();
       void loadDiag();
@@ -583,7 +555,7 @@ export function AdminPricingWorkspace({
       qtyOverrideKey: "virtualExtensions" as const,
       suggestedLabel: "0 tracked in system · not auto-counted",
       unitCents: draft.extensionPriceCents,
-      priceKey: null,
+      priceKey: "extensionPriceCents" as const,
       chip: resolvedQuantities.modes.virtualExtensions === "manual" ? ("custom" as const) : ("default" as const),
     },
     {
@@ -739,13 +711,12 @@ export function AdminPricingWorkspace({
             <span>Monthly flat rate</span>
             <div className="billing-item-card__price-input-wrap">
               <span className="billing-item-card__currency">$</span>
-              <input
-                type="text"
-                inputMode="decimal"
+              <BillingMoneyInput
                 className="billing-item-card__price-input"
                 disabled={!draft.flatRateEnabled}
-                value={toDollars(draft.flatRateAmountCents)}
-                onChange={(e) => setDraft((d) => ({ ...d, flatRateAmountCents: parseDollarsInput(e.target.value) }))}
+                cents={draft.flatRateAmountCents}
+                onCentsChange={(flatRateAmountCents) => setDraft((d) => ({ ...d, flatRateAmountCents }))}
+                testId="billing-flat-rate-amount"
               />
             </div>
           </label>
@@ -855,17 +826,15 @@ export function AdminPricingWorkspace({
                 <span className="billing-item-card__field-label">Unit price</span>
                 <div className="billing-item-card__price-input-wrap">
                   <span className="billing-item-card__currency">$</span>
-                  <input
-                    type="text"
-                    inputMode="decimal"
+                  <BillingMoneyInput
                     className="billing-item-card__price-input"
-                    readOnly={!item.priceKey || (catalogLocked && item.priceKey !== "tollFreeDidPriceCents")}
-                    value={toDollars(item.unitCents)}
-                    onChange={(e) => {
-                      if (!item.priceKey || catalogLocked) return;
-                      const cents = parseDollarsInput(e.target.value);
-                      setDraft((d) => ({ ...d, [item.priceKey!]: cents }));
+                    readOnly={!isBillingUnitPriceEditable(item.priceKey, catalogLocked)}
+                    cents={item.unitCents}
+                    onCentsChange={(cents) => {
+                      if (!item.priceKey) return;
+                      setDraft((d) => ({ ...d, [item.priceKey as BillingUnitPriceKey]: cents }));
                     }}
+                    testId={`billing-price-input-${item.key}`}
                   />
                 </div>
               </label>
