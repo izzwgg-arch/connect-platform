@@ -19,6 +19,9 @@
       "@connect/shared/chatAttachmentStorage": [
         "packages/shared/src/chatAttachmentStorage.ts"
       ],
+      "@connect/shared/smsText": [
+        "packages/shared/src/smsText.ts"
+      ],
       "@connect/db": [
         "packages/db/src"
       ],

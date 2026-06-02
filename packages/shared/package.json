@@ -40,6 +40,10 @@
     "./crmEmailTemplates": {
       "types": "./src/crmEmailTemplates.ts",
       "default": "./src/crmEmailTemplates.ts"
+    },
+    "./smsText": {
+      "types": "./src/smsText.ts",
+      "default": "./src/smsText.ts"
     }
   },
   "scripts": {

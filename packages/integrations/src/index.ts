@@ -1,3 +1,9 @@
+import {
+  formatVoipMsProviderRejection,
+  validateVoipMsSendSmsPart,
+  voipMsSmsPayloadLogFields,
+} from "@connect/shared/smsText";
+
 export interface NumberSearchInput {
   type: "local" | "tollfree";
   areaCode?: string;
@@ -335,6 +341,23 @@ export class VoipMsSmsProvider implements SmsProvider {
       };
     }
 
+    const payloadCheck = validateVoipMsSendSmsPart(input.body);
+    if (!payloadCheck.ok) {
+      const err: any = new Error(payloadCheck.message);
+      err.provider = "VOIPMS";
+      err.code = payloadCheck.code;
+      err.smsAnalysis = payloadCheck.analysis;
+      throw err;
+    }
+    const outboundBody = payloadCheck.body;
+    console.info(JSON.stringify({
+      event: "voipms_sms_send_payload",
+      tenantId: input.tenantId,
+      to: voipMsPhoneDigits(input.to),
+      from: voipMsPhoneDigits(this.credentials.fromNumber || input.from),
+      ...voipMsSmsPayloadLogFields(outboundBody),
+    }));
+
     const base = this.credentials.apiBaseUrl || VOIPMS_DEFAULT_BASE;
     const url = new URL(base);
     url.searchParams.set("api_username", this.credentials.username);
@@ -342,19 +365,20 @@ export class VoipMsSmsProvider implements SmsProvider {
     url.searchParams.set("method", "sendSMS");
     url.searchParams.set("did", voipMsPhoneDigits(this.credentials.fromNumber || input.from));
     url.searchParams.set("dst", voipMsPhoneDigits(input.to));
-    url.searchParams.set("message", input.body);
+    url.searchParams.set("message", outboundBody);
 
     try {
       const res = await fetch(url.toString(), { method: "GET" });
       const json: any = await res.json().catch(() => ({}));
       const status = String(json.status || "").toLowerCase();
       if (!res.ok || status !== "success") {
-        const voipStatus = json.status || "unknown_error";
-        const err: any = new Error(`VoIP.ms sendSMS rejected: ${voipStatus}`);
+        const voipStatus = String(json.status || "unknown_error");
+        const err: any = new Error(formatVoipMsProviderRejection(voipStatus, outboundBody));
         err.provider = "VOIPMS";
         err.httpStatus = res.status;
         err.code = voipStatus;
         err.voipMsResponse = json;
+        err.smsAnalysis = payloadCheck.analysis;
         throw err;
       }
       return {

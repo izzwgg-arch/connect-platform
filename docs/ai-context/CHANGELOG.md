@@ -4,6 +4,37 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-02 — VoIP.ms `sms_toolong` fix (160-char API limit + auto-split)
+
+**Task:** telephony / API / SMS — VoIP.ms rejects short-looking messages with `sms_toolong`  
+**Risk:** medium
+
+### Root cause
+
+VoIP.ms REST **`sendSMS` accepts max 160 characters per API call** and does **not** auto-concatenate longer SMS ([VoIP.ms wiki](https://wiki.voip.ms/article/SMS-MMS)). The prior Connect fix validated against **1600 chars / 10 logical segments**, so messages between 161–1600 chars (or ≤160 **visible** chars with **>160 GSM septets** from `{}[]|€` symbols) were queued and sent as **one** API payload. VoIP.ms returned generic `sms_toolong`. Connect Chat does **not** append STOP/campaign footers — campaign `normalizeSmsWithStop` is a separate path. Smart apostrophes/Unicode could also diverge from what users counted in the textbox.
+
+### Changes
+
+- **`@connect/shared/smsText`:** VoIP.ms limit **`VOIPMS_SENDSMS_MAX_CHARS=160`**; smart-punct → GSM normalization; payload char/byte/septet analysis; `splitVoipMsSendSmsParts`; precise `formatVoipMsSmsTooLongMessage` / `formatVoipMsProviderRejection`.
+- **`VoipMsSmsProvider`:** preflight single-part validation; structured `voipms_sms_send_payload` log (counts only); map `sms_toolong` to detailed error with encoding + bytes.
+- **Worker:** all Connect Chat SMS sends auto-split into ≤160-char / ≤160-septet parts (`voipms_sms_part_send` logs per part).
+- **Portal counter:** shows chars, UTF-8 bytes, encoding, VoIP.ms part count.
+- **Tests:** 13 cases including 95 pipes (140 visible), smart apostrophes, hidden chars, 159/160/161 chars, no STOP append.
+
+### Manual QA
+
+- Send 120 plain ASCII chars — 1 VoIP.ms SMS, delivers.
+- Send 161 chars — delivers as 2 SMS; counter shows `2 VoIP.ms SMS`.
+- Send 95 `|` symbols — delivers as 2 SMS (160+30 septets); no `sms_toolong`.
+- Paste iOS smart apostrophes — normalizes to GSM; single SMS under 160.
+- Worker logs show `voipms_sms_send_payload` / `voipms_sms_part_send` with char + byte counts.
+
+### Rollback
+
+Revert shared + integrations + worker changes; redeploy `api`, `worker`, `portal`.
+
+---
+
 ## 2026-06-02 — Connect SMS encoding-aware length validation
 
 **Task:** telephony / UI / API — SMS compose validation for Connect Chat + CRM  

@@ -2,7 +2,7 @@ import { db } from "@connect/db";
 import { decryptJson } from "@connect/security";
 import { VoipMsSmsProvider } from "@connect/integrations";
 import { buildChatAttachmentIdSignedDownloadUrl, buildChatDbSignedDownloadUrl } from "@connect/shared/chatSignedUrl";
-import { splitSmsTextForMultipart } from "@connect/shared";
+import { splitVoipMsSendSmsParts, voipMsSmsPayloadLogFields } from "@connect/shared";
 import { convertAudioAttachmentsForMms } from "./mmsAudioConvert";
 
 type VoipMsStoredCreds = { username: string; password: string; apiBaseUrl?: string };
@@ -37,7 +37,31 @@ function isMmsConvertedVoiceArtifact(attachment: { fileName: string; mimeType: s
 function smsSegmentsForBody(body: string | null | undefined): string[] {
   const clean = bodyWithoutMediaLinks(body);
   if (!clean) return [];
-  return splitSmsTextForMultipart(clean);
+  return splitVoipMsSendSmsParts(clean);
+}
+
+async function sendVoipMsSmsParts(
+  provider: VoipMsSmsProvider,
+  input: { tenantId: string; to: string; from: string; body: string },
+  logContext: { threadId: string; messageId: string },
+): Promise<{ providerMessageId?: string }> {
+  const parts = splitVoipMsSendSmsParts(input.body);
+  if (!parts.length) throw new Error("SMS_EMPTY");
+  let last: { providerMessageId?: string } = {};
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i]!;
+    console.info(JSON.stringify({
+      event: "voipms_sms_part_send",
+      tenantId: input.tenantId,
+      threadId: logContext.threadId,
+      messageId: logContext.messageId,
+      partIndex: i + 1,
+      partCount: parts.length,
+      ...voipMsSmsPayloadLogFields(part),
+    }));
+    last = await provider.sendMessage({ ...input, body: part });
+  }
+  return last;
 }
 
 async function loadVoipMsCredsWorker(): Promise<VoipMsStoredCreds | null> {
@@ -190,24 +214,22 @@ export async function processConnectChatSmsJob(data: { connectChatMessageId: str
         });
         let fallbackResult: { providerMessageId?: string } | null = null;
         for (const fallbackBody of fallbackMessages) {
-          fallbackResult = await provider.sendMessage({
-            tenantId: data.tenantId,
-            to: ext,
-            from: tenantDid,
-            body: fallbackBody,
-          });
+          fallbackResult = await sendVoipMsSmsParts(
+            provider,
+            { tenantId: data.tenantId, to: ext, from: tenantDid, body: fallbackBody },
+            { threadId: msg.threadId, messageId: msg.id },
+          );
         }
         if (!fallbackResult) throw new Error("MMS_FALLBACK_EMPTY");
         r = fallbackResult;
         console.info(JSON.stringify({ event: "chat_link_fallback_sent", tenantId: data.tenantId, threadId: msg.threadId, messageId: msg.id, mediaCount: links.length, segmentCount: fallbackMessages.length, providerMessageId: r.providerMessageId ?? null }));
       }
     } else {
-      r = await provider.sendMessage({
-        tenantId: data.tenantId,
-        to: ext,
-        from: tenantDid,
-        body: msg.body || "",
-      });
+      r = await sendVoipMsSmsParts(
+        provider,
+        { tenantId: data.tenantId, to: ext, from: tenantDid, body: msg.body || "" },
+        { threadId: msg.threadId, messageId: msg.id },
+      );
     }
     await db.connectChatMessage.update({
       where: { id: msg.id },

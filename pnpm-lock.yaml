@@ -483,6 +483,9 @@ importers:
 
   packages/integrations:
     dependencies:
+      '@connect/shared':
+        specifier: workspace:*
+        version: link:../shared
       twilio:
         specifier: ^5.8.0
         version: 5.12.2

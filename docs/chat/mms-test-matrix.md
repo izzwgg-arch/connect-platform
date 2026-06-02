@@ -40,25 +40,31 @@ the carrier-reject -> link-fallback path, and validation rejections.
 
 ### SMS text length (Connect Chat + CRM)
 
-VoIP.ms accepts up to **1600 characters** and **10 concatenated segments**.
+VoIP.ms REST **`sendSMS` is limited to 160 characters per API call** — there is **no
+auto-concatenation**. Longer Connect Chat messages are split into multiple API calls
+(max **10** parts / **1600** total chars). Use **`sendMMS`** for longer single payloads
+(up to 2048 chars).
+
 Encoding-aware validation lives in `@connect/shared/smsText`:
 
-| Encoding | Single segment | Multi-segment part |
-|----------|----------------|--------------------|
-| GSM-7    | 160 septets    | 153 septets        |
-| UCS-2    | 70 chars       | 67 chars           |
+| Check | Limit |
+|-------|-------|
+| VoIP.ms `sendSMS` per call | **160 chars** and **160 GSM septets** |
+| GSM extended `{}[]\|€` | 2 septets each (can exceed 160 septets while visible length < 160) |
+| Smart apostrophes/quotes | Normalized to GSM ASCII before send |
+| Total auto-split cap | 10 parts (1600 chars) |
 
-Portal composers show live `units/limit` under the textbox. API returns
-`400 SMS_TOO_LONG` with explicit counts before queueing text-only SMS.
-Invisible paste characters (zero-width space, BOM) are stripped for counting
-and send — they must not block an otherwise short message.
+Portal composers show **chars · UTF-8 bytes · encoding · VoIP.ms part count**.
+Worker logs: `voipms_sms_send_payload`, `voipms_sms_part_send`.
+Provider maps `sms_toolong` → detailed encoding/byte/char error.
 
 | Case | Expected |
 |------|----------|
-| 80 GSM chars | Sends; counter `80/160` |
-| 160 GSM chars | Sends; counter `160/160` |
-| Text + emoji | Unicode mode; counter shows `70/segment` hint |
-| >1600 chars | UI blocks send; API `SMS_TOO_LONG` |
+| 120 plain ASCII chars | 1 VoIP.ms SMS, delivers |
+| 161 chars | 2 VoIP.ms SMS parts, delivers |
+| 95 `\|` symbols (190 septets) | 2 parts (80+15 chars), delivers — not `sms_toolong` |
+| Smart apostrophe in "I'll" | Normalized to GSM `'`, single part |
+| >1600 chars total | Blocked in UI + API `SMS_TOO_LONG` |
 
 ---
 
