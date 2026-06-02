@@ -254,6 +254,7 @@ async function buildBillingInvoicePreviewWithLoadedSettings(input: {
   });
 
   const extensionPrice = pricingResolution.extensionPriceCents;
+  const virtualExtensionPrice = resolveVirtualExtensionPriceCents(settings.metadata, extensionPrice);
   const localDidPrice = pricingResolution.additionalPhoneNumberPriceCents;
   const tollFreeDidPrice = resolveTollFreeDidPriceCents(settings.metadata, localDidPrice);
   const smsPrice = pricingResolution.smsPriceCents;
