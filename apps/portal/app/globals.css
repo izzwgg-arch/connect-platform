@@ -11870,6 +11870,17 @@ table tr:hover {
   align-items: center;
   justify-content: center;
 }
+.cc-sms-counter {
+  margin-top: 6px;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-dim);
+}
+.cc-sms-counter .text-crm-danger,
+.cc-sms-counter span:first-child {
+  font-variant-numeric: tabular-nums;
+}
 .cc-composer-reply,
 .cc-pending,
 .cc-recording {

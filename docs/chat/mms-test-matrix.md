@@ -38,6 +38,28 @@ the carrier-reject -> link-fallback path, and validation rejections.
 - [ ] You have a real cell number to send MMS to (the worker actually
   hits VoIP.ms; loopback isn't a substitute).
 
+### SMS text length (Connect Chat + CRM)
+
+VoIP.ms accepts up to **1600 characters** and **10 concatenated segments**.
+Encoding-aware validation lives in `@connect/shared/smsText`:
+
+| Encoding | Single segment | Multi-segment part |
+|----------|----------------|--------------------|
+| GSM-7    | 160 septets    | 153 septets        |
+| UCS-2    | 70 chars       | 67 chars           |
+
+Portal composers show live `units/limit` under the textbox. API returns
+`400 SMS_TOO_LONG` with explicit counts before queueing text-only SMS.
+Invisible paste characters (zero-width space, BOM) are stripped for counting
+and send — they must not block an otherwise short message.
+
+| Case | Expected |
+|------|----------|
+| 80 GSM chars | Sends; counter `80/160` |
+| 160 GSM chars | Sends; counter `160/160` |
+| Text + emoji | Unicode mode; counter shows `70/segment` hint |
+| >1600 chars | UI blocks send; API `SMS_TOO_LONG` |
+
 ---
 
 ## 1. DM (internal) — image bubbles

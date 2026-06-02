@@ -12,7 +12,7 @@ import { db } from "@connect/db";
 import { Prisma } from "@prisma/client";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import { hasEffectivePortalPermission } from "./platformRolePermissions";
-import { buildVoipMsSmsWebhookCallbackUrl, canonicalSmsPhone, buildSmsDedupeKey, isSharedTenantSmsInbox, resolveSmsInboxScope } from "@connect/shared";
+import { buildVoipMsSmsWebhookCallbackUrl, canonicalSmsPhone, buildSmsDedupeKey, isSharedTenantSmsInbox, resolveSmsInboxScope, validateOutboundSmsText } from "@connect/shared";
 import {
   buildChatAttachmentIdSignedDownloadUrl,
   buildChatSignedDownloadUrl,
@@ -607,6 +607,15 @@ export async function sendConnectChatSmsMessage(input: {
     }
   }
 
+  let outboundBody = input.body;
+  if (atts.length === 0) {
+    const smsValidation = validateOutboundSmsText(input.body);
+    if (!smsValidation.ok) {
+      return { ok: false, status: 400, error: smsValidation.code, message: smsValidation.message };
+    }
+    outboundBody = smsValidation.body;
+  }
+
   const msgType =
     smsLinkFallback ? "TEXT" : atts.length > 0 ? inferAttachmentMessageType(atts) : ((input.type as any) || "TEXT");
 
@@ -617,7 +626,7 @@ export async function sendConnectChatSmsMessage(input: {
       senderUserId: input.user.sub,
       direction: "OUTBOUND",
       type: msgType,
-      body: input.body,
+      body: outboundBody,
       replyToMessageId: input.replyToMessageId,
       metadata: input.location ? { location: input.location } : smsLinkFallback ? { smsLinkFallback: true } : undefined,
       deliveryStatus: "queued",
@@ -642,7 +651,7 @@ export async function sendConnectChatSmsMessage(input: {
       orderBy: { createdAt: "asc" },
     });
     const links = persistedAttachments.map((a) => buildChatAttachmentIdSignedDownloadUrl(base, a.id, 86400, a.fileName));
-    const fallbackBody = [input.body.trim(), ...links.map((link) => `Media: ${link}`)].filter(Boolean).join("\n");
+    const fallbackBody = [outboundBody.trim(), ...links.map((link) => `Media: ${link}`)].filter(Boolean).join("\n");
     await db.connectChatMessage.update({
       where: { id: msg.id },
       data: {

@@ -5,6 +5,7 @@ export * from "./voicemailIngest";
 export * from "./voicemailSyncFair";
 export * from "./portalPermissions";
 export * from "./smsInbox";
+export * from "./smsText";
 export * from "./voipMsWebhook";
 export * from "./mohRuntimeClass";
 export * from "./canonicalTenantSlug";

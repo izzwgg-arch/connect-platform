@@ -621,7 +621,7 @@ All routes registered via `registerCrmRoutes(app)` in `server.ts`.
 ### SMS from Contact (Phase 11A)
 | Method | Path | Notes |
 |--------|------|-------|
-| POST | `/crm/contacts/:id/sms` | **Phase 11A** — Send a real SMS to a CRM contact. Body: `{ message: string, phone?: string }`. Resolves tenant SMS provider (Twilio or VoIP.ms) via `ProviderCredential`. Checks `CrmContactMeta.doNotSms` (→ 400 `do_not_sms`). Checks contact has a phone (→ 400 `no_phone`). Sends via provider; on success writes `SMS_SENT` `CrmTimelineEvent` with `metadata: { to, from, provider, providerMessageId }`. Returns `{ ok, to, from, provider, providerMessageId }`. Errors: 404 contact not found, 503 `sms_not_configured` (no credentials), 502 `sms_send_failed` (provider error). File: `apps/api/src/crm/smsRoutes.ts`. |
+| POST | `/crm/contacts/:id/sms` | Send SMS via Connect Chat queue. Body: `{ message: string (max 1600), phone?: string }`. Pre-send validation uses `@connect/shared/smsText` (GSM-7 vs UCS-2 segment counting; strips zero-width/BOM paste artifacts). Errors: `400 SMS_TOO_LONG` (message includes current count + limit), `400 SMS_EMPTY`, `400 do_not_sms`, `400 no_phone`, `403 FORBIDDEN`, `503 VOIPMS_NOT_CONFIGURED`. File: `apps/api/src/crm/smsRoutes.ts` → `sendConnectChatSmsMessage`. |
 
 ### Tasks (Phase 1D)
 | Method | Path | Notes |

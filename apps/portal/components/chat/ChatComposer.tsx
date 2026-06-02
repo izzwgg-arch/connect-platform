@@ -4,6 +4,7 @@ import { FilePlus2, LocateFixed, Mic, Send, Smile, Square, Trash2, X } from "luc
 import { useEffect, useRef, useState } from "react";
 import type { ChatMessage, ChatThread, PendingAttachment } from "./types";
 import { formatBytes } from "./formatting";
+import { isSmsTextOverLimit, SmsCharCounter } from "./SmsCharCounter";
 
 const ACCEPT = [
   "image/*",
@@ -187,10 +188,22 @@ export function ChatComposer({
             }
           }}
         />
-        <button type="button" className="cc-send-btn" disabled={sending || (!draft.trim() && pendingAttachments.length === 0)} onClick={() => onSend()}>
+        <button
+          type="button"
+          className="cc-send-btn"
+          disabled={
+            sending ||
+            (!draft.trim() && pendingAttachments.length === 0) ||
+            (thread.type === "SMS" && Boolean(draft.trim()) && isSmsTextOverLimit(draft))
+          }
+          onClick={() => onSend()}
+        >
           <Send size={17} />
         </button>
       </div>
+      {thread.type === "SMS" && draft.trim() ? (
+        <SmsCharCounter text={draft} className="cc-sms-counter" />
+      ) : null}
     </footer>
   );
 }

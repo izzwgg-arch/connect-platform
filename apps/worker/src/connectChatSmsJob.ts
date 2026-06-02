@@ -2,6 +2,7 @@ import { db } from "@connect/db";
 import { decryptJson } from "@connect/security";
 import { VoipMsSmsProvider } from "@connect/integrations";
 import { buildChatAttachmentIdSignedDownloadUrl, buildChatDbSignedDownloadUrl } from "@connect/shared/chatSignedUrl";
+import { splitSmsTextForMultipart } from "@connect/shared";
 import { convertAudioAttachmentsForMms } from "./mmsAudioConvert";
 
 type VoipMsStoredCreds = { username: string; password: string; apiBaseUrl?: string };
@@ -36,12 +37,7 @@ function isMmsConvertedVoiceArtifact(attachment: { fileName: string; mimeType: s
 function smsSegmentsForBody(body: string | null | undefined): string[] {
   const clean = bodyWithoutMediaLinks(body);
   if (!clean) return [];
-  const segments: string[] = [];
-  for (let i = 0; i < clean.length; i += 150) {
-    const segment = clean.slice(i, i + 150).trim();
-    if (segment) segments.push(segment);
-  }
-  return segments;
+  return splitSmsTextForMultipart(clean);
 }
 
 async function loadVoipMsCredsWorker(): Promise<VoipMsStoredCreds | null> {

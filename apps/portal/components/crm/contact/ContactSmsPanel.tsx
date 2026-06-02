@@ -8,6 +8,7 @@ import { cn } from "../cn";
 import type { ContactPhone } from "./contactTypes";
 import { formatDateTime } from "./contactFormatters";
 import { phoneSummaryLabel, phoneDispositionSummary } from "./contactWorkspaceHelpers";
+import { isSmsTextOverLimit, SmsCharCounter } from "../../chat/SmsCharCounter";
 
 export type ContactSmsPanelMessage = {
   id: string;
@@ -120,7 +121,6 @@ export const ContactSmsPanel = forwardRef<
                   onChange={(e) => setSmsMessage(e.target.value)}
                   rows={3}
                   placeholder="Type SMS reply…"
-                  maxLength={1600}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                       e.preventDefault();
@@ -132,14 +132,14 @@ export const ContactSmsPanel = forwardRef<
                 <button
                   type="button"
                   onClick={onSend}
-                  disabled={smsSending || !smsMessage.trim()}
+                  disabled={smsSending || !smsMessage.trim() || isSmsTextOverLimit(smsMessage)}
                   title="Send SMS (⌘↵)"
                   className={cn(crm.btnPrimary, "self-end px-3")}
                 >
                   <Send className="h-4 w-4" />
                 </button>
               </div>
-              <SmsFooter smsMessage={smsMessage} smsSuccess={smsSuccess} smsError={smsError} />
+              <ContactSmsFooter smsMessage={smsMessage} smsSuccess={smsSuccess} smsError={smsError} />
             </div>
           )}
         </CRMSection>
@@ -178,7 +178,7 @@ function BubbleMeta({ deliveryStatus, deliveryError, createdAt }: { deliveryStat
   );
 }
 
-function SmsFooter({
+function ContactSmsFooter({
   smsMessage,
   smsSuccess,
   smsError,
@@ -188,10 +188,17 @@ function SmsFooter({
   smsError: string | null;
 }) {
   return (
-    <div className="flex items-center gap-2 text-xs text-crm-muted">
-      <span>{smsMessage.length > 0 ? `${smsMessage.length}/1600` : "⌘↵ to send"}</span>
-      {smsSuccess ? <span className="font-semibold text-crm-success">✓ Sent</span> : null}
-      {smsError ? <span className="text-crm-danger">{smsError}</span> : null}
+    <div className="flex flex-col gap-1">
+      {smsMessage.trim() ? (
+        <div className="text-xs text-crm-muted">
+          <SmsCharCounter text={smsMessage} />
+        </div>
+      ) : null}
+      <div className="flex items-center gap-2 text-xs text-crm-muted">
+        {!smsMessage.trim() ? <span>⌘↵ to send</span> : null}
+        {smsSuccess ? <span className="font-semibold text-crm-success">✓ Sent</span> : null}
+        {smsError ? <span className="text-crm-danger">{smsError}</span> : null}
+      </div>
     </div>
   );
 }

@@ -4,6 +4,37 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-02 — Connect SMS encoding-aware length validation
+
+**Task:** telephony / UI / API — SMS compose validation for Connect Chat + CRM  
+**Risk:** medium
+
+### Root cause
+
+Connect SMS composers (Chat + CRM contact panel) used raw JavaScript `String.length` or no counter at all. That diverges from carrier SMS units: GSM-7 septets (160 single / 153 multi-segment, extended chars = 2 septets) vs UCS-2 (70 / 67 per segment when emojis, smart quotes, or other non-GSM characters appear). Invisible paste characters (zero-width spaces, BOM) could also inflate counts. The Connect Chat send path had **no backend pre-send validation** — messages queued and failed asynchronously with opaque VoIP.ms errors instead of clear `SMS_TOO_LONG` responses.
+
+### Changes
+
+- **`@connect/shared/smsText`:** normalize invisible characters safely, analyze GSM vs Unicode encoding, segment counts, VoIP.ms max (1600 chars / 10 segments), and `validateOutboundSmsText`.
+- **API:** `sendConnectChatSmsMessage` validates text-only outbound SMS before queueing; returns `400 SMS_TOO_LONG` or `SMS_EMPTY` with explicit counts/limits.
+- **Worker:** MMS→SMS link fallback splitting uses encoding-aware multipart helper (replaces naive 150-char slices).
+- **Portal:** live counter under Chat SMS composer and CRM `ContactSmsPanel`; send disabled only when over VoIP.ms limits; chat send toast surfaces API validation message.
+- **Tests:** eight unit tests in `packages/shared/src/smsText.test.ts`.
+
+### Manual QA
+
+- Send GSM text under 160 chars from `/chat` and CRM contact SMS — succeeds, counter shows `N/160`.
+- Send exactly 160 GSM chars — succeeds.
+- Paste text with zero-width characters — counter strips invisibles; short message still sends.
+- Add emoji — counter switches to Unicode (`70/segment` hint); message under limit still sends.
+- Exceed 1600 chars — send blocked in UI; API returns `SMS_TOO_LONG` with counts.
+
+### Rollback
+
+Revert shared + api + worker + portal changes; deploy `api`, `worker`, and `portal`.
+
+---
+
 ## 2026-06-01 — CRM edit/delete: all CRM users, Delete labels (fix)
 
 **Task:** Correct edit/delete rollout — reps could not edit; UI showed Archive instead of Delete  

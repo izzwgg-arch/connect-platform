@@ -9,7 +9,7 @@ import { ChatInbox } from "../../../components/chat/ChatInbox";
 import { NewChatDialog } from "../../../components/chat/NewChatDialog";
 import { mergeChatMessages, resolveActiveThread, type ChatScrollIntent, type ChatScrollReason } from "../../../components/chat/chatState";
 import type { ChatDirectoryUser, ChatMessage, ChatThread, PendingAttachment } from "../../../components/chat/types";
-import { apiDelete, apiGet, apiPatch, apiPost, apiUploadChatAttachment } from "../../../services/apiClient";
+import { apiDelete, apiGet, apiPatch, apiPost, apiUploadChatAttachment, ApiError } from "../../../services/apiClient";
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
@@ -153,11 +153,12 @@ export default function ChatPage() {
       setScrollIntent({ reason: "send", token: Date.now() });
       setMsgReload((k) => k + 1);
       setThreadReload((k) => k + 1);
-    } catch {
+    } catch (err) {
       setDraft(body);
       setPendingAttachments(atts);
       setReplyingTo(reply);
-      showToast("Message failed to send");
+      const message = err instanceof ApiError ? err.message : "Message failed to send";
+      showToast(message);
     } finally {
       setSending(false);
     }
