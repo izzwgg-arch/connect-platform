@@ -904,11 +904,12 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
   });
 
   // ── POST /crm/campaigns/:id/members/bulk-assign ───────────────────────────
-  // Bulk-assign (or clear) members to a user.
+  // Bulk-assign members to a CRM-enabled user. Assigning to self is allowed for
+  // CRM agents; assigning to others or clearing ownership is manager/admin only.
   app.post("/crm/campaigns/:id/members/bulk-assign", async (req, reply) => {
-    const user = await requireCrmManager(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
-    const { tenantId } = user;
+    const { tenantId, sub: userId } = user;
     const { id: campaignId } = req.params as { id: string };
 
     if (!(await assertCrmCampaignAllowed(user, campaignId, reply))) return;
@@ -922,12 +923,57 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues });
 
     const { memberIds, assignedToUserId } = parsed.data;
+    const callerCrmAccess = isAdminRole(user.role)
+      ? { role: "ADMIN", enabled: true }
+      : await db.crmUserAccess.findUnique({
+          where: { tenantId_userId: { tenantId, userId } },
+          select: { role: true, enabled: true },
+        });
+    const callerCanAssignOthers =
+      isAdminRole(user.role) ||
+      (callerCrmAccess?.enabled && (callerCrmAccess.role === "MANAGER" || callerCrmAccess.role === "ADMIN"));
+    const assigningSelf = assignedToUserId === userId;
+
+    if (!assignedToUserId) {
+      if (!callerCanAssignOthers) {
+        return reply.code(403).send({
+          error: "crm_permission_denied",
+          detail: "CRM manager access required to clear campaign member assignments.",
+        });
+      }
+    } else {
+      if (!assigningSelf && !callerCanAssignOthers) {
+        return reply.code(403).send({
+          error: "crm_permission_denied",
+          detail: "CRM manager access required to assign leads to another agent.",
+        });
+      }
+
+      const [assignee, assigneeCrmAccess] = await Promise.all([
+        db.user.findFirst({
+          where: { id: assignedToUserId, tenantId, status: { not: "DISABLED" as any } },
+          select: { id: true },
+        }),
+        db.crmUserAccess.findUnique({
+          where: { tenantId_userId: { tenantId, userId: assignedToUserId } },
+          select: { enabled: true },
+        }),
+      ]);
+      if (!assignee || !assigneeCrmAccess?.enabled) {
+        return reply.code(400).send({
+          error: "invalid_assignee",
+          detail: "Assignee must be a CRM-enabled user in this tenant.",
+        });
+      }
+    }
 
     const updated = await db.crmCampaignMember.updateMany({
       where: {
         id: { in: memberIds },
         campaignId,
         tenantId,
+        ...(!callerCanAssignOthers ? { OR: [{ assignedToUserId: null }, { assignedToUserId: userId }] } : {}),
+        ...crmCampaignMemberQueueLiveContactWhere,
       },
       data: { assignedToUserId },
     });

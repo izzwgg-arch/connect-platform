@@ -6,7 +6,7 @@ import {
   ChevronDown,
   Download,
   Edit2,
-  ListOrdered,
+  Mail,
   Megaphone,
   Pause,
   Play,
@@ -15,7 +15,6 @@ import {
   Shuffle,
   Upload,
   X,
-  Zap,
 } from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
@@ -23,14 +22,13 @@ import { mk, ROW_STATUS } from "./campaignCinemaClasses";
 import type { CampaignDetail, CampaignImportHistoryRow } from "./campaignTypes";
 import { CAMPAIGN_PRIORITY_LABELS, CAMPAIGN_STATUS_LABELS } from "./campaignTypes";
 import type { CampaignHealth } from "./campaignUtils";
-import { lastImportLabel, powerQueueHref, queueHref } from "./campaignUtils";
+import { lastImportLabel } from "./campaignUtils";
 
 export function CampaignCommandHeader({
   campaign,
   health,
   importHistory,
   isAdmin,
-  canQueue,
   editingName,
   nameInput,
   onNameInput,
@@ -45,12 +43,12 @@ export function CampaignCommandHeader({
   onAddContacts,
   onDistribute,
   onEditCampaign,
+  onBulkEmail,
 }: {
   campaign: CampaignDetail;
   health: CampaignHealth;
   importHistory: CampaignImportHistoryRow[];
   isAdmin: boolean;
-  canQueue: boolean;
   editingName: boolean;
   nameInput: string;
   onNameInput: (v: string) => void;
@@ -65,10 +63,13 @@ export function CampaignCommandHeader({
   onAddContacts: () => void;
   onDistribute: () => void;
   onEditCampaign?: () => void;
+  onBulkEmail?: () => void;
 }) {
   const lastImport = lastImportLabel(importHistory);
   const statusStyle = ROW_STATUS[campaign.status] ?? ROW_STATUS.DRAFT;
   const isActive = campaign.status === "ACTIVE";
+  const canPauseCampaign = isActive && isAdmin;
+  const canDeleteCampaign = canEditCampaign && campaign.status !== "ARCHIVED";
   const objective =
     campaign.description?.trim() ||
     `${CAMPAIGN_STATUS_LABELS[campaign.status]} program · ${CAMPAIGN_PRIORITY_LABELS[campaign.priority ?? "NORMAL"]} priority`;
@@ -159,28 +160,9 @@ export function CampaignCommandHeader({
           </div>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center lg:justify-end">
-            {canQueue && isActive && (
-              <Link href={powerQueueHref(campaign.id)} className={mk.btnGreen}>
-                <Zap className="h-4 w-4 shrink-0" />
-                Open in dialer
-              </Link>
-            )}
-            {canQueue && (
-              <Link href={queueHref(campaign.id)} className={mk.btnSecondary}>
-                <ListOrdered className="h-4 w-4 shrink-0" />
-                Queue
-                <ChevronDown className="h-3.5 w-3.5 opacity-60" aria-hidden />
-              </Link>
-            )}
-            {canQueue && isActive && (
-              <Link
-                href={powerQueueHref(campaign.id)}
-                className={mk.btnPowerOrange}
-              >
-                <Zap className="h-4 w-4" />
-                Power mode
-              </Link>
-            )}
+            <span className={cn(mk.pill, isActive ? mk.statusPillActive : mk.statusPillPaused)}>
+              {CAMPAIGN_PRIORITY_LABELS[campaign.priority ?? "NORMAL"]} priority
+            </span>
           </div>
         </div>
 
@@ -228,27 +210,42 @@ export function CampaignCommandHeader({
               <Shuffle className="h-4 w-4" /> Distribute
             </button>
           )}
-          {campaign.status === "ACTIVE" && isAdmin && (
-            <button
-              type="button"
-              onClick={() => onUpdateStatus("PAUSED")}
-              className="cinema-btn-pause-toolbar"
-            >
-              <Pause className="h-3.5 w-3.5" /> Pause
-            </button>
-          )}
-          {campaign.status !== "ARCHIVED" && canEditCampaign && (
-            <button
-              type="button"
-              onClick={() => (onRequestDelete ? onRequestDelete() : onUpdateStatus("ARCHIVED"))}
-              className="cinema-btn-archive-toolbar"
-            >
-              <Trash2 className="h-3.5 w-3.5" /> Delete
+          {onBulkEmail && (
+            <button type="button" onClick={onBulkEmail} className={mk.btnSecondary}>
+              <Mail className="h-4 w-4" /> Bulk Email
             </button>
           )}
           <button type="button" onClick={onExport} className={mk.btnSecondary}>
             <Download className="h-4 w-4" /> Export
           </button>
+          {canPauseCampaign || canDeleteCampaign ? (
+            <details className="relative">
+              <summary className={cn(mk.btnSecondary, "cursor-pointer list-none [&::-webkit-details-marker]:hidden")}>
+                More
+                <ChevronDown className="h-3.5 w-3.5 opacity-70" />
+              </summary>
+              <div className={cn(mk.menuPanel, "absolute right-0 top-[calc(100%+0.5rem)] z-30 min-w-40 p-1")}>
+                {canPauseCampaign ? (
+                  <button
+                    type="button"
+                    onClick={() => onUpdateStatus("PAUSED")}
+                    className={mk.menuItem}
+                  >
+                    <Pause className="h-3.5 w-3.5" /> Pause
+                  </button>
+                ) : null}
+                {canDeleteCampaign ? (
+                  <button
+                    type="button"
+                    onClick={() => (onRequestDelete ? onRequestDelete() : onUpdateStatus("ARCHIVED"))}
+                    className={mk.menuItemDanger}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Delete
+                  </button>
+                ) : null}
+              </div>
+            </details>
+          ) : null}
           <p className="ml-auto w-full cinema-detail-meta sm:w-auto">
             {lastImport ? (
               <>

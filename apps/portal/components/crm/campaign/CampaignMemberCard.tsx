@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarClock, Edit2, ExternalLink, X } from "lucide-react";
+import { CalendarClock, Edit2, ExternalLink, Mail, MessageSquare, MoreHorizontal, PhoneCall, X } from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
 import { mk } from "./campaignCinemaClasses";
@@ -54,7 +54,11 @@ export function CampaignMemberCard({
       member.contact?.primaryPhone,
       member.contact?.company,
     ].filter((value): value is string => Boolean(value && value.trim()));
-    const workspaceHref = `/crm/contacts/${member.contactId}?campaignId=${encodeURIComponent(campaignId)}&memberId=${encodeURIComponent(member.id)}`;
+    const workspaceParams = `campaignId=${encodeURIComponent(campaignId)}&memberId=${encodeURIComponent(member.id)}`;
+    const workspaceHref = `/crm/contacts/${member.contactId}?${workspaceParams}`;
+    const callHref = `${workspaceHref}&action=call`;
+    const smsHref = `${workspaceHref}&workspace=sms`;
+    const emailHref = `${workspaceHref}&workspace=email`;
 
     return (
       <article
@@ -111,11 +115,6 @@ export function CampaignMemberCard({
           </div>
         </div>
 
-        <div className="hidden text-xs min-w-0 lg:block">
-          <span className="cinema-member-col-label lg:hidden">Agent</span>
-          <p className="truncate cinema-member-agent">{member.assignedTo?.displayName ?? "Unassigned"}</p>
-        </div>
-
         <div className="flex min-w-0 flex-row items-center justify-between gap-2 lg:flex-col lg:items-start lg:justify-center lg:gap-1">
           <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Status</span>
           {readOnly ? (
@@ -147,9 +146,9 @@ export function CampaignMemberCard({
           ) : null}
         </div>
 
-        <div className="hidden lg:block">
-          <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Attempts</span>
-          <p className="cinema-member-attempts">{member.attemptCount}</p>
+        <div className="hidden text-xs min-w-0 lg:block">
+          <span className="cinema-member-col-label lg:hidden">Agent</span>
+          <p className="truncate cinema-member-agent">{member.assignedTo?.displayName ?? "Unassigned"}</p>
         </div>
 
         <div className="hidden lg:block">
@@ -158,18 +157,61 @@ export function CampaignMemberCard({
         </div>
 
         <div>
-          <span className="cinema-member-col-label lg:hidden">Next</span>
-          <p className="cinema-member-next">{nextAction}</p>
+          <span className="cinema-member-col-label lg:hidden">Channel / Attempts</span>
+          <p className="cinema-member-next">{member.attemptCount} attempt{member.attemptCount === 1 ? "" : "s"}</p>
+          <p className="hidden text-[10px] text-crm-muted lg:block">{nextAction}</p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5 lg:justify-end">
+        <div className="flex flex-wrap items-center gap-1 lg:justify-end">
+          <button
+            type="button"
+            onClick={() => router.push(callHref)}
+            className="cinema-member-icon-action"
+            aria-label={`Call ${displayName}`}
+            title="Call"
+            disabled={readOnly || !member.contact?.primaryPhone}
+          >
+            <PhoneCall className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push(smsHref)}
+            className="cinema-member-icon-action"
+            aria-label={`SMS ${displayName}`}
+            title="SMS"
+            disabled={readOnly || !member.contact?.primaryPhone}
+          >
+            <MessageSquare className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push(emailHref)}
+            className="cinema-member-icon-action"
+            aria-label={`Email ${displayName}`}
+            title="Email"
+            disabled={readOnly || !member.contact?.primaryEmail}
+          >
+            <Mail className="h-3.5 w-3.5" />
+          </button>
           <button
             type="button"
             onClick={() => router.push(workspaceHref)}
-            className="cinema-member-workspace-btn"
+            className="cinema-member-icon-action"
+            aria-label={`Open workspace for ${displayName}`}
+            title="Workspace"
+            disabled={readOnly}
           >
             <ExternalLink className="h-3.5 w-3.5" />
-            <span>Open workspace</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push(workspaceHref)}
+            className="cinema-member-icon-action"
+            aria-label={`More actions for ${displayName}`}
+            title="More"
+            disabled={readOnly}
+          >
+            <MoreHorizontal className="h-3.5 w-3.5" />
           </button>
         </div>
       </article>
@@ -299,7 +341,7 @@ export function CampaignMemberCard({
             className={cn(crm.btnPrimary, "text-xs py-2 justify-center disabled:opacity-40")}
           >
             <ExternalLink className="h-3.5 w-3.5" />
-            Open workspace
+            Workspace
           </button>
           <button
             type="button"

@@ -4,17 +4,15 @@ import { useEffect, useState, useCallback, useRef, useMemo, type CSSProperties, 
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  Play, Pause, Archive, Users, Plus, Search,
-  PhoneCall, X, Edit2, Save, Download, UserPlus, CheckSquare2, Square,
-  Shuffle, Upload, History, ListOrdered, DollarSign, Mail, MessageSquare, Target,
+  Users, Plus, Search,
+  PhoneCall, X, Download, UserPlus, CheckSquare2, Square,
+  Shuffle, Upload, History, ListOrdered, Mail, MessageSquare, Target,
 } from "lucide-react";
 import {
   CRMPageShell,
   CampaignGuidedEmpty,
   CampaignCommandHeader,
   CampaignMemberCard,
-  CampaignDetailCommandPanel,
-  CampaignQuickActionStrip,
   deriveCampaignHealth,
   type CampaignDetail,
   type CampaignMember,
@@ -362,23 +360,28 @@ function CampaignDetailTabs() {
 function CampaignPerformanceWorkspace({
   health,
   workload,
+  members,
 }: {
   health: ReturnType<typeof deriveCampaignHealth>;
   workload: WorkloadRow[];
+  members: CampaignMember[];
 }) {
   const total = Math.max(health.total, 1);
-  const funnel = [
-    { label: "Contacts", value: health.total, color: "#93c5fd" },
-    { label: "Contacted", value: health.contactedProgress, color: "#38bdf8" },
-    { label: "Engaged", value: health.callback + health.converted, color: "#34d399" },
-    { label: "Converted", value: health.converted, color: "#f59e0b" },
+  const visibleAttempts = members.reduce((sum, member) => sum + member.attemptCount, 0);
+  const attemptsAreComplete = members.length >= health.total;
+  const statusRows = [
+    { label: "Pending", value: health.pending, color: "#60a5fa" },
+    { label: "In progress", value: health.inProgress, color: "#38bdf8" },
+    { label: "Callbacks", value: health.callback, color: "#f59e0b" },
+    { label: "Contacted", value: health.contactedOnly, color: "#8b5cf6" },
+    { label: "Converted", value: health.converted, color: "#10b981" },
   ];
   const maxWorkload = Math.max(...workload.map((row) => row.total), health.total, 1);
   const channelRows = [
-    { label: "Calls", value: health.contactedProgress, pct: Math.round((health.contactedProgress / total) * 100), color: "#2563eb" },
-    { label: "Emails", value: health.callback, pct: Math.round((health.callback / total) * 100), color: "#7c3aed" },
-    { label: "SMS", value: health.inProgress, pct: Math.round((health.inProgress / total) * 100), color: "#10b981" },
-    { label: "Voicemails", value: health.pending, pct: Math.round((health.pending / total) * 100), color: "#f59e0b" },
+    { label: "Calls", value: attemptsAreComplete ? formatMetricNumber(visibleAttempts) : "Partial", hint: attemptsAreComplete ? "Member attempt count" : `${formatMetricNumber(visibleAttempts)} visible attempts`, color: "#2563eb" },
+    { label: "Emails", value: "Not tracked", hint: "No campaign channel count", color: "#7c3aed" },
+    { label: "SMS", value: "Not tracked", hint: "No campaign channel count", color: "#10b981" },
+    { label: "Voicemail drops", value: "Not tracked", hint: "No campaign channel count", color: "#f59e0b" },
   ];
 
   return (
@@ -387,22 +390,15 @@ function CampaignPerformanceWorkspace({
         <div className="campaign-detail-card-head">
           <div>
             <h2>Performance Over Time</h2>
-            <p>Current campaign progression</p>
+            <p>Trend chart appears when time-series campaign stats are available.</p>
           </div>
-          <span>This campaign</span>
+          <span>Real-time snapshot</span>
         </div>
-        <svg viewBox="0 0 420 180" className="campaign-detail-line-chart" aria-hidden>
-          <defs>
-            <linearGradient id="campaignLineFill" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0%" stopColor="#2563eb" stopOpacity="0.22" />
-              <stop offset="100%" stopColor="#2563eb" stopOpacity="0" />
-            </linearGradient>
-          </defs>
-          <path d="M20 145 C80 120, 92 95, 145 88 S235 66, 292 52 S355 44, 400 30" fill="none" stroke="#2563eb" strokeWidth="4" strokeLinecap="round" />
-          <path d="M20 160 C82 145, 112 130, 160 120 S250 96, 306 86 S365 72, 400 64" fill="none" stroke="#10b981" strokeWidth="3" strokeLinecap="round" />
-          <path d="M20 172 C86 160, 125 154, 170 142 S258 132, 314 118 S365 108, 400 96" fill="none" stroke="#8b5cf6" strokeWidth="3" strokeLinecap="round" />
-          <path d="M20 145 C80 120, 92 95, 145 88 S235 66, 292 52 S355 44, 400 30 L400 180 L20 180 Z" fill="url(#campaignLineFill)" />
-        </svg>
+        <div className="campaign-detail-empty-chart">
+          <History className="h-6 w-6" />
+          <strong>Time-series metrics are not tracked yet</strong>
+          <span>Showing current contacted, converted, and callback totals below.</span>
+        </div>
         <div className="campaign-detail-mini-stats">
           <span><strong>{formatMetricNumber(health.contactedProgress)}</strong> Contacted</span>
           <span><strong>{formatMetricNumber(health.converted)}</strong> Converted</span>
@@ -413,22 +409,22 @@ function CampaignPerformanceWorkspace({
       <article className="campaign-detail-chart-card">
         <div className="campaign-detail-card-head">
           <div>
-            <h2>Engagement Funnel</h2>
-            <p>Roster progression by status</p>
+            <h2>Operational Progress</h2>
+            <p>Roster progression by real member status</p>
           </div>
         </div>
         <div className="campaign-detail-funnel">
-          {funnel.map((stage, index) => (
+          {statusRows.map((stage) => (
             <div key={stage.label} className="campaign-detail-funnel-row">
               <div
                 style={{
-                  width: `${52 + Math.round((stage.value / total) * 42)}%`,
+                  width: `${Math.max(8, Math.round((stage.value / total) * 100))}%`,
                   background: `linear-gradient(90deg, ${stage.color}66, ${stage.color})`,
                 }}
               />
               <span>{stage.label}</span>
               <strong>{formatMetricNumber(stage.value)}</strong>
-              <small>{index === 0 ? "100%" : `${Math.round((stage.value / total) * 100)}%`}</small>
+              <small>{`${Math.round((stage.value / total) * 100)}%`}</small>
             </div>
           ))}
         </div>
@@ -438,7 +434,7 @@ function CampaignPerformanceWorkspace({
         <div className="campaign-detail-card-head">
           <div>
             <h2>Channel Performance</h2>
-            <p>Activity distribution snapshot</p>
+            <p>Only channel counts backed by campaign data are shown.</p>
           </div>
         </div>
         <div className="campaign-detail-channel-list">
@@ -449,10 +445,10 @@ function CampaignPerformanceWorkspace({
                 <strong>{row.label}</strong>
               </div>
               <div className="campaign-detail-channel-track">
-                <div style={{ width: `${Math.min(100, row.pct)}%`, background: row.color }} />
+                <div style={{ width: row.label === "Calls" && attemptsAreComplete ? `${Math.min(100, Math.round((visibleAttempts / total) * 100))}%` : "0%", background: row.color }} />
               </div>
-              <span>{formatMetricNumber(row.value)}</span>
-              <small>{row.pct}%</small>
+              <span>{row.value}</span>
+              <small>{row.hint}</small>
             </div>
           ))}
         </div>
@@ -481,53 +477,138 @@ function CampaignDetailRightRail({
   importHistory: CampaignImportHistoryRow[];
   canQueue: boolean;
 }) {
-  const runningPct = health.total > 0 ? Math.round((health.contactedProgress / health.total) * 100) : 0;
-  const topWorkload = [...workload].sort((a, b) => b.total - a.total).slice(0, 3);
+  const healthScore = health.total > 0
+    ? Math.round(((health.contactedProgress + health.converted + Math.max(0, health.total - health.unassignedMembers)) / (health.total * 3)) * 100)
+    : 0;
+  const topWorkload = [...workload].filter((row) => row.userId).sort((a, b) => b.total - a.total).slice(0, 3);
   return (
     <aside className="campaign-detail-rail" aria-label="Campaign operations">
       <section className="campaign-detail-rail-card">
         <div className="campaign-detail-rail-heading">
-          <p>Campaign Status</p>
-          <strong>{campaign.status}</strong>
+          <p>Campaign Health</p>
+          <strong>{healthScore}/100</strong>
         </div>
-        <div className="campaign-detail-progress-ring" style={{ "--progress": `${runningPct * 3.6}deg` } as CSSProperties}>
-          <span>{runningPct}%</span>
+        <div className="campaign-detail-progress-ring" style={{ "--progress": `${healthScore * 3.6}deg` } as CSSProperties}>
+          <span>{healthScore}</span>
         </div>
         <div className="campaign-detail-status-meta">
-          <span>Started {new Date(campaign.createdAt).toLocaleDateString()}</span>
-          <span>Updated {new Date(campaign.updatedAt).toLocaleDateString()}</span>
-          <span>{health.activeAgents} active agent{health.activeAgents === 1 ? "" : "s"}</span>
+          <span>{formatMetricNumber(health.total)} total members</span>
+          <span>{formatMetricNumber(health.activeQueueWork)} in queue</span>
+          <span>{formatMetricNumber(health.contactedProgress)} contacted</span>
+          <span>{formatMetricNumber(health.converted)} converted</span>
+          <span>{formatMetricNumber(health.callback)} callbacks</span>
+          <span>{formatMetricNumber(health.unassignedMembers)} unassigned</span>
         </div>
       </section>
 
       <section className="campaign-detail-rail-card">
         <div className="campaign-detail-rail-heading">
-          <p>Next Actions</p>
-          <strong>{health.activeQueueWork + health.callback}</strong>
+          <p>Queue Ownership</p>
+          <strong>{health.activeAgents}</strong>
         </div>
         <div className="campaign-detail-action-list">
-          {health.callback > 0 ? <span><i className="bg-orange-400" /> Work {health.callback} callbacks</span> : null}
-          {health.unassignedMembers > 0 ? <span><i className="bg-violet-400" /> Assign {health.unassignedMembers} unowned leads</span> : null}
+          {topWorkload.map((row) => (
+            <span key={row.userId}><i className="bg-blue-500" /> {row.displayName} owns {row.total}</span>
+          ))}
+          {health.callback > 0 ? <span><i className="bg-orange-400" /> {health.callback} callbacks need attention</span> : null}
+          {health.unassignedMembers > 0 ? <span><i className="bg-violet-400" /> {health.unassignedMembers} unassigned leads</span> : null}
           {canQueue && health.activeQueueWork > 0 ? <Link href={`/crm/queue?campaignId=${encodeURIComponent(campaign.id)}`}><i className="bg-blue-500" /> Open queue ({health.activeQueueWork})</Link> : null}
-          {health.callback === 0 && health.unassignedMembers === 0 && health.activeQueueWork === 0 ? <span><i className="bg-emerald-500" /> No urgent actions</span> : null}
+          {topWorkload.length === 0 && health.callback === 0 && health.unassignedMembers === 0 ? <span><i className="bg-emerald-500" /> Ownership looks balanced</span> : null}
+        </div>
+      </section>
+
+      <section className="campaign-detail-rail-card">
+        <div className="campaign-detail-rail-heading">
+          <p>Activity Feed</p>
+          <strong>{importHistory.length}</strong>
+        </div>
+        <div className="campaign-detail-activity-feed">
+          <div className="campaign-detail-activity-item">
+            <span className="campaign-detail-activity-dot bg-blue-500" />
+            <div>
+              <strong>Campaign created</strong>
+              <p>{formatImportTimestamp(campaign.createdAt)}</p>
+            </div>
+          </div>
+          {importHistory.length > 0 ? importHistory.slice(0, 4).map((row) => (
+            <div className="campaign-detail-activity-item" key={row.id}>
+              <span className="campaign-detail-activity-dot bg-emerald-500" />
+              <div>
+                <strong>CSV imported · {row.fileName}</strong>
+                <p>
+                  {row.totalRows} rows · {row.createdCount} created · {row.updatedCount} updated · {row.skippedCount} skipped
+                </p>
+                <small>{formatImportTimestamp(row.completedAt ?? row.createdAt)}</small>
+              </div>
+            </div>
+          )) : (
+            <p className="campaign-detail-note">No imports or bulk activity recorded yet.</p>
+          )}
         </div>
       </section>
 
       <section className="campaign-detail-rail-card">
         <div className="campaign-detail-rail-heading">
           <p>Notes</p>
-          <strong>{importHistory.length}</strong>
+          <strong>{campaign.description?.trim() ? "1" : "0"}</strong>
         </div>
-        <p className="campaign-detail-note">{campaign.description?.trim() || "No campaign notes yet. The roster and script context remain available below."}</p>
-        {topWorkload.length > 0 ? (
-          <div className="campaign-detail-owner-stack">
-            {topWorkload.map((row) => (
-              <span key={row.userId ?? "unassigned"}>{row.displayName}<strong>{row.total}</strong></span>
-            ))}
-          </div>
-        ) : null}
+        <p className="campaign-detail-note">{campaign.description?.trim() || "No campaign notes yet. Add notes from campaign settings when context is needed."}</p>
       </section>
     </aside>
+  );
+}
+
+function CampaignOverviewQuickActions({
+  isAdmin,
+  onImport,
+  onAddContacts,
+  onDistribute,
+  onBulkEmail,
+  onExport,
+}: {
+  isAdmin: boolean;
+  onImport: () => void;
+  onAddContacts: () => void;
+  onDistribute: () => void;
+  onBulkEmail: () => void;
+  onExport: () => void;
+}) {
+  const actions = [
+    { label: "Import Contacts", hint: "CSV preview and import", icon: Upload, onClick: onImport, disabled: !isAdmin },
+    { label: "Add Contacts", hint: "Add existing CRM leads", icon: Plus, onClick: onAddContacts, disabled: false },
+    { label: "Distribute Leads", hint: "Assign unowned leads", icon: Shuffle, onClick: onDistribute, disabled: !isAdmin },
+    { label: "Bulk Email", hint: "Use existing bulk email flow", icon: Mail, onClick: onBulkEmail, disabled: !isAdmin },
+    { label: "Voicemail Drop", hint: "Use per-contact workspace", icon: PhoneCall, onClick: undefined, disabled: true },
+    { label: "Export Campaign", hint: "Download member CSV", icon: Download, onClick: onExport, disabled: false },
+  ];
+
+  return (
+    <section className="campaign-detail-chart-card">
+      <div className="campaign-detail-card-head">
+        <div>
+          <h2>Quick Actions</h2>
+          <p>Campaign management actions for this lead group.</p>
+        </div>
+      </div>
+      <div className="campaign-detail-action-card-grid">
+        {actions.map((action) => {
+          const Icon = action.icon;
+          return (
+            <button
+              type="button"
+              key={action.label}
+              onClick={action.onClick}
+              disabled={action.disabled || !action.onClick}
+              className="campaign-detail-action-card"
+            >
+              <span><Icon className="h-4 w-4" /></span>
+              <strong>{action.label}</strong>
+              <small>{action.hint}</small>
+            </button>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -686,7 +767,7 @@ export default function CampaignDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const campaignId = params.id;
-  const { backendJwtRole, can } = useAppContext();
+  const { backendJwtRole, can, user: appUser } = useAppContext();
   const canQueue = can("can_view_crm_queue");
 
   const isAdmin =
@@ -720,7 +801,7 @@ export default function CampaignDetailPage() {
 
   // Workload summary (admin — loaded automatically for health + workload strip)
   const [workload, setWorkload] = useState<WorkloadRow[]>([]);
-  const [workloadLoading, setWorkloadLoading] = useState(false);
+  const [, setWorkloadLoading] = useState(false);
 
   // Distribute modal
   const [distributeOpen, setDistributeOpen] = useState(false);
@@ -759,7 +840,7 @@ export default function CampaignDetailPage() {
   const [bulkEmailToast, setBulkEmailToast] = useState<string | null>(null);
 
   const [importHistory, setImportHistory] = useState<CampaignImportHistoryRow[]>([]);
-  const [importHistoryLoading, setImportHistoryLoading] = useState(false);
+  const [, setImportHistoryLoading] = useState(false);
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
 
@@ -1015,22 +1096,48 @@ export default function CampaignDetailPage() {
     setImportPreviewing(false);
   }
 
-  async function handleBulkAssign() {
+  async function handleBulkAssign(targetUserId: string | null, targetLabel?: string) {
     if (selected.size === 0) return;
     setBulkAssigning(true);
     setBulkMsg("");
+    const selectedIds = Array.from(selected);
     try {
       const res = await apiPost<{ updated: number }>(
         `/crm/campaigns/${campaignId}/members/bulk-assign`,
-        { memberIds: Array.from(selected), assignedToUserId: bulkAssignUserId || null },
+        { memberIds: selectedIds, assignedToUserId: targetUserId },
         token
       );
-      setBulkMsg(`${res.updated} member${res.updated !== 1 ? "s" : ""} updated`);
+      const assignee = targetUserId
+        ? crmUsers.find((u) => u.userId === targetUserId) ?? (
+            targetUserId === appUser.id
+              ? { userId: appUser.id, displayName: appUser.name, email: appUser.email, crmRole: null, crmEnabled: true }
+              : null
+          )
+        : null;
+      setMembers((prev) => prev.map((member) => (
+        selectedIds.includes(member.id)
+          ? {
+              ...member,
+              assignedToUserId: targetUserId,
+              assignedTo: assignee
+                ? { id: assignee.userId, displayName: assignee.displayName || assignee.email, email: assignee.email }
+                : null,
+            }
+          : member
+      )));
+      const successText = targetUserId === appUser.id
+        ? `Assigned ${res.updated} lead${res.updated === 1 ? "" : "s"} to you and added ${res.updated === 1 ? "it" : "them"} to your queue.`
+        : targetUserId
+          ? `Assigned ${res.updated} lead${res.updated === 1 ? "" : "s"} to ${targetLabel ?? assignee?.displayName ?? "agent"}.`
+          : `${res.updated} lead${res.updated === 1 ? "" : "s"} unassigned.`;
+      setBulkMsg(successText);
+      setToast({ kind: "ok", text: successText });
       setSelected(new Set());
-      await loadMembers();
+      await Promise.all([loadMembers(), loadCampaign(), loadWorkload()]);
       setTimeout(() => setBulkMsg(""), 3000);
     } catch {
       setBulkMsg("Failed to update assignment");
+      setToast({ kind: "err", text: "Failed to update assignment" });
     }
     setBulkAssigning(false);
   }
@@ -1550,7 +1657,6 @@ export default function CampaignDetailPage() {
           health={hd}
           importHistory={importHistory}
           isAdmin={isAdmin}
-          canQueue={canQueue}
           editingName={editingName}
           nameInput={nameInput}
           onNameInput={setNameInput}
@@ -1574,22 +1680,40 @@ export default function CampaignDetailPage() {
           }}
           onAddContacts={() => setShowAddContacts(true)}
           onDistribute={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
+          onBulkEmail={isAdmin ? () => { setSelected(new Set()); setShowBulkEmail(true); } : undefined}
         />
 
         <CampaignDetailTabs />
 
         <section id="overview" className="campaign-detail-kpi-grid" aria-label="Campaign overview metrics">
-          <DetailKpiTile label="Contacts" value={formatMetricNumber(hd.total)} hint="Total in campaign" tone="blue" icon={<Users className="h-5 w-5" />} />
+          <DetailKpiTile label="Members" value={formatMetricNumber(hd.total)} hint="Total in campaign" tone="blue" icon={<Users className="h-5 w-5" />} />
+          <DetailKpiTile label="In Queue" value={formatMetricNumber(hd.activeQueueWork)} hint="Pending + in progress" tone="orange" icon={<ListOrdered className="h-5 w-5" />} />
           <DetailKpiTile label="Contacted" value={formatMetricNumber(hd.contactedProgress)} hint={`${hd.total > 0 ? Math.round((hd.contactedProgress / hd.total) * 100) : 0}% of total`} tone="green" icon={<PhoneCall className="h-5 w-5" />} />
           <DetailKpiTile label="Converted" value={formatMetricNumber(hd.converted)} hint={`${hd.conversionPct}% conversion rate`} tone="violet" icon={<Target className="h-5 w-5" />} />
-          <DetailKpiTile label="Revenue" value="Not tracked" hint="No campaign revenue API" tone="orange" icon={<DollarSign className="h-5 w-5" />} />
-          <DetailKpiTile label="Open Rate" value={`${hd.total > 0 ? Math.round((hd.contactedProgress / hd.total) * 100) : 0}%`} hint="Reached or replied" tone="red" icon={<Mail className="h-5 w-5" />} />
+          <DetailKpiTile label="Open Rate" value="Not tracked" hint="No campaign open API" tone="red" icon={<Mail className="h-5 w-5" />} />
           <DetailKpiTile label="Response Rate" value={`${hd.total > 0 ? Math.round(((hd.callback + hd.converted) / hd.total) * 100) : 0}%`} hint="Callbacks + conversions" tone="cyan" icon={<MessageSquare className="h-5 w-5" />} />
         </section>
 
         <div className="campaign-detail-overview-grid">
           <div className="campaign-detail-main-flow">
-            <CampaignPerformanceWorkspace health={hd} workload={workload} />
+            <CampaignPerformanceWorkspace health={hd} workload={workload} members={members} />
+            <CampaignOverviewQuickActions
+              isAdmin={isAdmin}
+              onImport={() => {
+                setImportOpen(true);
+                setImportErr("");
+                setImportSummary(null);
+                setImportFile(null);
+                setImportAssigneeId("");
+                setImportPreview(null);
+                setImportPreviewContextKeyState(null);
+                setImportCompareBaseline(null);
+              }}
+              onAddContacts={() => setShowAddContacts(true)}
+              onDistribute={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
+              onBulkEmail={() => { setSelected(new Set()); setShowBulkEmail(true); }}
+              onExport={exportCsv}
+            />
           </div>
           <CampaignDetailRightRail
             campaign={campaign}
@@ -1599,32 +1723,6 @@ export default function CampaignDetailPage() {
             canQueue={canQueue}
           />
         </div>
-
-        <CampaignDetailCommandPanel
-          campaign={campaign}
-          health={hd}
-          workload={workload}
-          workloadLoading={workloadLoading}
-          importHistory={importHistory}
-          importHistoryLoading={importHistoryLoading}
-          isAdmin={isAdmin}
-          canQueue={canQueue}
-          scripts={scripts}
-          checklists={checklists}
-          onUpdateCampaign={updateCampaign}
-          onDistribute={() => { setDistributeOpen(true); setDistributeMsg(""); setDistributeUserIds(new Set()); }}
-          onImport={() => {
-            setImportOpen(true);
-            setImportErr("");
-            setImportSummary(null);
-            setImportFile(null);
-            setImportAssigneeId("");
-            setImportPreview(null);
-            setImportPreviewContextKeyState(null);
-            setImportCompareBaseline(null);
-          }}
-          onFilterUnassigned={() => { setAssigneeFilter("UNASSIGNED"); loadMembers("UNASSIGNED"); }}
-        />
 
         <div className="flex w-full min-w-0 flex-col gap-5">
 
@@ -1690,8 +1788,42 @@ export default function CampaignDetailPage() {
 
           {/* Bulk action bar */}
           {selected.size > 0 && (
-            <div className="mb-4 flex items-center gap-3 p-3 bg-crm-accent/10 border border-crm-accent/30 rounded-crm flex-wrap">
+            <div className="mb-4 flex items-center gap-3 p-3 bg-crm-accent/10 border border-crm-accent/30 rounded-crm flex-wrap shadow-crm">
               <span className="text-sm font-medium text-crm-text">{selected.size} selected</span>
+              <button
+                type="button"
+                onClick={() => void handleBulkAssign(appUser.id, appUser.name || appUser.email)}
+                disabled={bulkAssigning}
+                className={cn(crm.btnPrimary, "text-sm py-1.5 px-3 gap-1.5 shrink-0")}
+              >
+                <UserPlus className="h-3.5 w-3.5" />
+                Assign Me
+              </button>
+              <div className="flex items-center gap-2 min-w-[16rem]">
+                <UserPlus className="h-4 w-4 text-crm-accent shrink-0" />
+                <select
+                  value={bulkAssignUserId}
+                  onChange={(e) => setBulkAssignUserId(e.target.value)}
+                  className={cn(crm.select, "flex-1 min-w-0 border-crm-accent/40")}
+                  aria-label="Assign selected members to agent"
+                >
+                  <option value="">Select agent…</option>
+                  {crmUsers.filter((u) => u.crmEnabled).map((u) => (
+                    <option key={u.userId} value={u.userId}>{u.displayName || u.email}</option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const agent = crmUsers.find((u) => u.userId === bulkAssignUserId);
+                  void handleBulkAssign(bulkAssignUserId || null, agent?.displayName || agent?.email);
+                }}
+                disabled={bulkAssigning || !bulkAssignUserId}
+                className={cn(crm.btnSecondary, "text-sm py-1.5 px-3 shrink-0 disabled:opacity-50")}
+              >
+                {bulkAssigning ? "Assigning…" : "Assign Agent"}
+              </button>
               {isAdmin && (
                 <button
                   type="button"
@@ -1702,25 +1834,13 @@ export default function CampaignDetailPage() {
                   Send Email
                 </button>
               )}
-              <div className="flex items-center gap-2 flex-1 min-w-0">
-                <UserPlus className="h-4 w-4 text-crm-accent shrink-0" />
-                <select
-                  value={bulkAssignUserId}
-                  onChange={(e) => setBulkAssignUserId(e.target.value)}
-                  className={cn(crm.select, "flex-1 min-w-0 border-crm-accent/40")}
-                >
-                  <option value="">— Clear assignment —</option>
-                  {crmUsers.filter((u) => u.crmEnabled).map((u) => (
-                    <option key={u.userId} value={u.userId}>{u.displayName || u.email}</option>
-                  ))}
-                </select>
-              </div>
               <button
-                onClick={handleBulkAssign}
-                disabled={bulkAssigning}
-                className={cn(crm.btnPrimary, "text-sm py-1.5 px-3 shrink-0")}
+                type="button"
+                onClick={exportCsv}
+                className={cn(crm.btnSecondary, "text-sm py-1.5 px-3 gap-1.5 shrink-0")}
               >
-                {bulkAssigning ? "Assigning…" : "Apply"}
+                <Download className="h-3.5 w-3.5" />
+                Export
               </button>
               <button onClick={() => setSelected(new Set())} className="p-1 text-crm-muted hover:text-crm-accent shrink-0">
                 <X className="h-4 w-4" />
@@ -1792,12 +1912,11 @@ export default function CampaignDetailPage() {
             <div className={crm.campaignRosterBody}>
               <div className={mk.rosterTableHead}>
                 <span>Contact</span>
-                <span>Agent</span>
                 <span>Status</span>
-                <span>Attempts</span>
-                <span>Last touch</span>
-                <span>Next</span>
-                <span className="text-right">Workspace</span>
+                <span>Agent</span>
+                <span>Last activity</span>
+                <span>Channel / Attempts</span>
+                <span className="text-right">Actions</span>
 </div>
               <div className="flex items-center gap-2 px-3 py-1.5 lg:px-4">
                 <button type="button" onClick={toggleSelectAll} className="p-1 rounded border border-transparent hover:border-crm-border hover:bg-crm-surface-2" aria-label="Select all visible members">
@@ -1835,14 +1954,55 @@ export default function CampaignDetailPage() {
             </section>
         </div>
 
-        <CampaignQuickActionStrip
-          variant="detail"
-          campaignId={campaignId}
-          canQueue={canQueue}
-          isAdmin={isAdmin}
-          queueWork={hd.activeQueueWork}
-          callbacks={hd.callback}
-        />
+        <section id="settings" className="campaign-detail-chart-card">
+          <div className="campaign-detail-card-head">
+            <div>
+              <h2>Campaign Settings</h2>
+              <p>Script, checklist, and priority controls for this campaign.</p>
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-crm-muted">Call script</span>
+              <select
+                value={campaign.scriptId ?? ""}
+                onChange={(e) => updateCampaign({ scriptId: e.target.value || null })}
+                className={crm.select}
+              >
+                <option value="">None</option>
+                {scripts.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-crm-muted">Checklist</span>
+              <select
+                value={campaign.checklistId ?? ""}
+                onChange={(e) => updateCampaign({ checklistId: e.target.value || null })}
+                className={crm.select}
+              >
+                <option value="">None</option>
+                {checklists.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-crm-muted">Priority</span>
+              <select
+                value={campaign.priority ?? "NORMAL"}
+                onChange={(e) => updateCampaign({ priority: e.target.value })}
+                className={crm.select}
+              >
+                <option value="LOW">Low</option>
+                <option value="NORMAL">Normal</option>
+                <option value="HIGH">High</option>
+                <option value="URGENT">Urgent</option>
+              </select>
+            </label>
+          </div>
+        </section>
     </CRMPageShell>
   );
 }

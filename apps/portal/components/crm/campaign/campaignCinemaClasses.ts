@@ -88,9 +88,9 @@ export const mk = {
   rosterToolbar:
     "flex flex-wrap items-center gap-2 border-b border-[color:var(--cinema-border-subtle)] px-3 py-2.5 sm:px-4 lg:px-5",
   rosterTableHead:
-    "crm-cinema-roster-thead hidden lg:grid lg:grid-cols-[minmax(0,1.85fr)_minmax(0,0.7fr)_minmax(0,0.74fr)_minmax(0,0.42fr)_minmax(0,0.6fr)_minmax(0,0.78fr)_auto] lg:gap-2.5 lg:px-4 lg:py-2 text-[10px] font-bold uppercase tracking-wider text-[var(--cinema-text-dim)]",
+    "crm-cinema-roster-thead hidden lg:grid lg:grid-cols-[minmax(0,1.9fr)_minmax(0,0.78fr)_minmax(0,0.72fr)_minmax(0,0.7fr)_minmax(0,0.74fr)_auto] lg:gap-2.5 lg:px-4 lg:py-2 text-[10px] font-bold uppercase tracking-wider text-[var(--cinema-text-dim)]",
   memberRow:
-    "crm-cinema-member-row grid grid-cols-1 gap-2 border-b border-[color:var(--cinema-border-subtle)] px-3 py-2.5 transition-[background,box-shadow] last:border-b-0 sm:px-4 lg:min-h-[48px] lg:grid-cols-[minmax(0,1.85fr)_minmax(0,0.7fr)_minmax(0,0.74fr)_minmax(0,0.42fr)_minmax(0,0.6fr)_minmax(0,0.78fr)_auto] lg:items-center lg:gap-2.5 lg:px-4 lg:py-1.5",
+    "crm-cinema-member-row grid grid-cols-1 gap-2 border-b border-[color:var(--cinema-border-subtle)] px-3 py-2.5 transition-[background,box-shadow] last:border-b-0 sm:px-4 lg:min-h-[48px] lg:grid-cols-[minmax(0,1.9fr)_minmax(0,0.78fr)_minmax(0,0.72fr)_minmax(0,0.7fr)_minmax(0,0.74fr)_auto] lg:items-center lg:gap-2.5 lg:px-4 lg:py-1.5",
   memberAvatar:
     "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[11px] font-bold cinema-member-avatar",
   pill:

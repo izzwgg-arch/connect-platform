@@ -1342,6 +1342,7 @@ function CrmContactDetailInner() {
   const [checklists, setChecklists] = useState<Checklist[]>([]);
   const [workspaceTab, setWorkspaceTab] = useState<ContactWorkspaceTab>("timeline");
   const workspacePanelRef = useRef<HTMLDivElement>(null);
+  const campaignDeepLinkHandledRef = useRef<string | null>(null);
 
   // Note composer
   const [noteText, setNoteText] = useState("");
@@ -1549,6 +1550,34 @@ function CrmContactDetailInner() {
     if (contact.archivedAt != null || contact.active === false) return;
     setEditing(true);
   }, [searchParams, contact]);
+
+  useEffect(() => {
+    if (!contact || contact.archivedAt != null || contact.active === false) return;
+    const workspace = searchParams.get("workspace");
+    const action = searchParams.get("action");
+    const key = `${id}:${workspace ?? ""}:${action ?? ""}`;
+    if (campaignDeepLinkHandledRef.current === key) return;
+
+    if (workspace === "sms" || workspace === "email") {
+      campaignDeepLinkHandledRef.current = key;
+      setWorkspaceTab(workspace);
+      window.setTimeout(() => workspacePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+      return;
+    }
+
+    if (action === "call") {
+      const primaryPhone = contact.phones.find((p) => p.isPrimary) ?? contact.phones[0] ?? null;
+      if (!primaryPhone?.numberRaw) return;
+      campaignDeepLinkHandledRef.current = key;
+      setActiveDispositionPhoneId(primaryPhone.id);
+      setActiveDispositionChannel("CALL");
+      void apiPost<{ callerId: string | null }>(`/crm/calls/originate`, {
+        destination: primaryPhone.numberRaw,
+        contactId: id,
+      }).catch(() => null);
+      window.dispatchEvent(new CustomEvent("crm:dial", { detail: { target: primaryPhone.numberRaw } }));
+    }
+  }, [contact, id, searchParams]);
 
   useEffect(() => {
     loadSmsThread();

@@ -1331,6 +1331,113 @@
   color: var(--crm-text);
 }
 
+.campaign-detail-empty-chart {
+  min-height: 11rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  border-radius: 1.25rem;
+  border: 1px dashed color-mix(in srgb, var(--crm-border) 76%, transparent);
+  color: var(--crm-muted);
+  background: color-mix(in srgb, var(--crm-surface-2) 78%, transparent);
+  text-align: center;
+}
+
+.campaign-detail-empty-chart strong {
+  color: var(--crm-text);
+}
+
+.campaign-detail-empty-chart span {
+  max-width: 24rem;
+  font-size: 0.8125rem;
+}
+
+.campaign-detail-action-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.campaign-detail-action-card {
+  min-height: 6.25rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  border-radius: 1rem;
+  border: 1px solid color-mix(in srgb, var(--crm-border) 82%, transparent);
+  padding: 0.875rem;
+  color: var(--crm-text);
+  background: color-mix(in srgb, var(--crm-surface) 88%, transparent);
+  text-align: left;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.campaign-detail-action-card span {
+  display: inline-flex;
+  height: 2rem;
+  width: 2rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.75rem;
+  color: var(--crm-accent);
+  background: color-mix(in srgb, var(--crm-accent) 12%, transparent);
+}
+
+.campaign-detail-action-card strong {
+  font-size: 0.875rem;
+}
+
+.campaign-detail-action-card small {
+  color: var(--crm-muted);
+}
+
+.campaign-detail-action-card:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--crm-accent) 35%, transparent);
+  box-shadow: var(--crm-shadow);
+  transform: translateY(-1px);
+}
+
+.campaign-detail-action-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.campaign-detail-activity-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.campaign-detail-activity-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.65rem;
+  font-size: 0.8125rem;
+}
+
+.campaign-detail-activity-dot {
+  margin-top: 0.35rem;
+  height: 0.6rem;
+  width: 0.6rem;
+  border-radius: 999px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 13%, transparent);
+}
+
+.campaign-detail-activity-item strong {
+  display: block;
+  color: var(--crm-text);
+}
+
+.campaign-detail-activity-item p,
+.campaign-detail-activity-item small {
+  display: block;
+  margin-top: 0.1rem;
+  color: var(--crm-muted);
+}
+
 :root[data-theme="light"] .crm-campaign-cinema {
   --crm-surface: rgba(255, 255, 255, 0.88);
   --crm-surface-2: rgba(248, 250, 252, 0.92);
@@ -2279,6 +2386,29 @@
 }
 .cinema-member-workspace-btn:active {
   transform: translateY(0);
+}
+.cinema-member-icon-action {
+  display: inline-flex;
+  height: 2rem;
+  width: 2rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--cinema-border) 82%, transparent);
+  color: var(--cinema-text-muted);
+  background: color-mix(in srgb, var(--cinema-surface-soft) 86%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  transition: color 0.16s ease, border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+.cinema-member-icon-action:hover:not(:disabled) {
+  color: var(--cinema-accent-blue);
+  border-color: color-mix(in srgb, var(--cinema-accent-blue) 42%, transparent);
+  background: color-mix(in srgb, var(--cinema-accent-blue) 12%, var(--cinema-surface));
+  transform: translateY(-1px);
+}
+.cinema-member-icon-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
 }
 @media (max-width: 1023px) {
   .crm-cinema-member-row {
