@@ -132,3 +132,41 @@ test("CRM email send: missing inline branding logo does not block delivery", asy
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("CRM email send: branded HTML keeps multipart text/plain fallback", async () => {
+  const { buildCrmEmailHtmlDocument, htmlToCrmPlainText } = await import("@connect/shared");
+  const html = buildCrmEmailHtmlDocument({
+    subject: "Welcome",
+    previewText: "Preview",
+    contentHtml: "<p>Hello {{contact.firstName}}</p>",
+    branding: { businessName: "Acme", logoUrl: "cid:connect-crm-business-logo", address: "123 Main" },
+    signature: { senderName: "Jordan", companyName: "Acme" },
+  });
+  const text = htmlToCrmPlainText(html);
+  const mime = await buildRichMime({
+    fromHeader: "Sender <sender@example.com>",
+    to: "recipient@example.com",
+    subject: "Welcome",
+    bodyText: text,
+    bodyHtml: html,
+    attachments: [],
+  });
+
+  assert.match(mime, /multipart\/alternative/);
+  assert.match(mime, /Content-Type: text\/plain; charset=UTF-8/);
+  assert.match(mime, /Content-Type: text\/html; charset=UTF-8/);
+
+  const htmlPartMatch = mime.match(/Content-Type: text\/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--connect_alt/);
+  assert.ok(htmlPartMatch, "expected base64 html part");
+  const decodedHtml = Buffer.from(htmlPartMatch![1].replace(/\r\n/g, ""), "base64").toString("utf8");
+  assert.match(decodedHtml, /Acme/);
+  assert.match(decodedHtml, /Unsubscribe/);
+  assert.match(decodedHtml, /Jordan/);
+  assert.match(decodedHtml, /cid:connect-crm-business-logo/);
+
+  const plainPartMatch = mime.match(/Content-Type: text\/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--connect_alt/);
+  assert.ok(plainPartMatch, "expected base64 plain part");
+  const decodedPlain = Buffer.from(plainPartMatch![1].replace(/\r\n/g, ""), "base64").toString("utf8");
+  assert.match(decodedPlain, /Acme/);
+  assert.match(decodedPlain, /Unsubscribe/);
+});

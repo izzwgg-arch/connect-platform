@@ -1,6 +1,6 @@
 import { db } from "@connect/db";
+import { renderCrmEmailTemplate } from "../../api/src/crm/emailTemplateRenderer";
 import { processCrmEmailSendJob } from "./crmEmailSend";
-import { plainTextToCrmHtml } from "@connect/shared";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -240,42 +240,28 @@ export async function processCrmBulkEmailJob(jobData: {
         });
         if (!current || current.status !== "QUEUED") continue;
 
-        // Resolve contact/funder data for template rendering
-        let vars: Record<string, string> = {};
-
-        if (recipient.contactId) {
-          const contact = await db.contact.findFirst({
-            where: { id: recipient.contactId, tenantId },
-            select: {
-              firstName: true,
-              lastName: true,
-              displayName: true,
-              company: true,
-              title: true,
-              emails: { where: { isPrimary: true }, select: { email: true }, take: 1 },
-              phones: { where: { isPrimary: true }, select: { numberRaw: true }, take: 1 },
-            },
-          });
-          if (contact) {
-            vars = buildContactVars({
-              ...contact,
-              primaryEmail: contact.emails[0] ? { email: contact.emails[0].email } : null,
-              primaryPhone: contact.phones[0] ? { numberRaw: contact.phones[0].numberRaw } : null,
-            });
-          }
-        } else if (recipient.funderId) {
+        let mergeVars: Record<string, string> | undefined;
+        if (recipient.funderId) {
           const funder = await db.funder.findFirst({
             where: { id: recipient.funderId, tenantId },
             select: { name: true, organization: true, email: true, phone: true, city: true, state: true },
           });
-          if (funder) {
-            vars = buildFunderVars(funder);
-          }
+          if (funder) mergeVars = buildFunderVars(funder);
         }
 
-        const subject = renderTemplate(template.subject, vars);
-        const bodyText = renderTemplate(template.bodyText, vars);
-        const bodyHtml = renderTemplate((template as any).bodyHtml || plainTextToCrmHtml(template.bodyText), vars);
+        const rendered = await renderCrmEmailTemplate({
+          template,
+          tenantId,
+          userId: job.createdByUserId ?? "",
+          contactId: recipient.contactId ?? null,
+          toEmail: recipient.toEmail,
+          sender: {
+            emailAddress: sender.emailAddress,
+            senderName: sender.senderName,
+            displayName: sender.displayName,
+          },
+          mergeVars,
+        });
 
         try {
           await processCrmEmailSendJob({
@@ -283,9 +269,9 @@ export async function processCrmBulkEmailJob(jobData: {
             userId: job.createdByUserId ?? "",
             connectionId: sender.id,
             to: recipient.toEmail,
-            subject,
-            bodyText,
-            bodyHtml,
+            subject: rendered.subject,
+            bodyText: rendered.text,
+            bodyHtml: rendered.html,
             contactId: recipient.contactId ?? null,
             templateId: template.id,
           });

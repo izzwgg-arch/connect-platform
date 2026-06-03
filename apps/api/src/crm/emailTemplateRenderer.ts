@@ -53,6 +53,21 @@ export function resolveTemplateContentHtml(template: CrmEmailTemplateLike): stri
   return plainTextToCrmHtml(template.bodyText || "");
 }
 
+/** Compose-surface overrides: text edits must not discard saved template HTML unless bodyHtml is explicitly overridden. */
+export function resolveCrmSendTemplateBody(input: {
+  templateBodyText?: string | null;
+  templateBodyHtml?: string | null;
+  bodyTextOverride?: string | null;
+  bodyHtmlOverride?: string | null;
+}): { bodyText: string; bodyHtml: string | null } {
+  const hasTextOverride = typeof input.bodyTextOverride === "string";
+  const hasHtmlOverride = typeof input.bodyHtmlOverride === "string";
+  return {
+    bodyText: hasTextOverride ? String(input.bodyTextOverride) : String(input.templateBodyText || ""),
+    bodyHtml: hasHtmlOverride ? String(input.bodyHtmlOverride) : (input.templateBodyHtml ?? null),
+  };
+}
+
 export async function buildCrmEmailMergeVars(input: {
   tenantId: string;
   userId: string;
@@ -167,6 +182,8 @@ export async function renderCrmEmailTemplate(input: {
   sender?: { emailAddress?: string | null; senderName?: string | null; displayName?: string | null } | null;
   branding?: CrmEmailBrandingInput | null;
   signature?: CrmEmailSignatureInput | null;
+  /** Optional merge vars layered on top of DB-resolved values (e.g. bulk funder sends). */
+  mergeVars?: Record<string, string> | null;
 }): Promise<RenderedCrmEmailTemplate> {
   const tenant = await (db as any).tenant.findUnique({ where: { id: input.tenantId }, select: { name: true } }).catch(() => null);
   const branding = input.branding || await resolveCrmEmailBranding(input.tenantId, tenant?.name, { logoMode: "cid" });
@@ -177,15 +194,18 @@ export async function renderCrmEmailTemplate(input: {
     fallbackEmail: input.sender?.emailAddress,
     fallbackCompany: branding.businessName || tenant?.name,
   });
-  const vars = await buildCrmEmailMergeVars({
-    tenantId: input.tenantId,
-    userId: input.userId,
-    contactId: input.contactId,
-    toEmail: input.toEmail,
-    sender: input.sender,
-    branding,
-    signature,
-  });
+  const vars = {
+    ...(await buildCrmEmailMergeVars({
+      tenantId: input.tenantId,
+      userId: input.userId,
+      contactId: input.contactId,
+      toEmail: input.toEmail,
+      sender: input.sender,
+      branding,
+      signature,
+    })),
+    ...(input.mergeVars || {}),
+  };
   const subject = renderCrmMergeTemplate(input.template.subject || "", vars);
   const previewText = renderCrmMergeTemplate(input.template.previewText || "", vars);
   const contentHtml = renderCrmMergeTemplate(resolveTemplateContentHtml(input.template), vars);

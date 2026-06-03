@@ -41,6 +41,7 @@ import {
 import {
   normalizeCrmEmailCategory,
   renderCrmEmailTemplate,
+  resolveCrmSendTemplateBody,
 } from "./emailTemplateRenderer.js";
 import {
   assertCrmEmailFileAllowed,
@@ -914,12 +915,18 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
         },
       });
       if (!tpl) return reply.status(404).send({ error: "template_not_found" });
+      const resolvedBody = resolveCrmSendTemplateBody({
+        templateBodyText: tpl.bodyText,
+        templateBodyHtml: tpl.bodyHtml,
+        bodyTextOverride: hasBodyTextOverride ? bodyText : null,
+        bodyHtmlOverride: hasBodyHtmlOverride ? bodyHtml : null,
+      });
       const rendered = await renderCrmEmailTemplate({
         template: {
           subject: subject || tpl.subject,
           previewText: tpl.previewText,
-          bodyText: hasBodyTextOverride ? bodyText : tpl.bodyText,
-          bodyHtml: hasBodyHtmlOverride ? bodyHtml : (hasBodyTextOverride ? null : tpl.bodyHtml),
+          bodyText: resolvedBody.bodyText,
+          bodyHtml: resolvedBody.bodyHtml,
           bodyJson: tpl.bodyJson,
         },
         tenantId: user.tenantId,
