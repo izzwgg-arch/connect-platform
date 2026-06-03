@@ -144,6 +144,14 @@
 - Browser softphone: `apps/portal/contexts/TelephonyContext.tsx` +
   `hooks/useTelephonyAudio.ts`. Uses `jssip`.
 - Mobile softphone: `apps/mobile/src/sip/jssip.ts` + `react-native-webrtc`.
+- Mobile WebRTC audio constraints: `apps/mobile/src/sip/voiceAudioConstraints.ts`
+  — **`buildVoiceAudioConstraints()`** (AEC/NS/AGC only; no strict
+  `channelCount` / `sampleRate`). Strict constraints caused Asterisk **488
+  Incompatible SDP** on outbound mobile (2026-06-03 telemetry).
+- Mobile inbound answer order: register → **`waitForIncomingInvite`** → backend
+  ACCEPT → **`answerIncomingInvite`**. UI **`ANSWERING…`** during handoff;
+  CONNECTED only after JsSIP confirms (see `MOBILE_CALL_TIMELINE.md` § Mobile
+  SIP reliability 2026-06-03 post-APK).
 - ICE: STUN default `stun:stun.l.google.com:19302`. TURN configured via
   `TURN_SERVER` + either `TURN_AUTH_SECRET` (HMAC time-limited) or
   `TURN_USERNAME`/`TURN_PASSWORD`.

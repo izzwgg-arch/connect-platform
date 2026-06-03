@@ -22,6 +22,7 @@ import {
   classifyOutboundSipFailure,
   normalizeMobileDialTarget,
 } from "../sip/mobileOutboundDial";
+import { shouldForceRestartOnWake } from "../sip/mobileWakeRegistration";
 
 const PROVISION_KEY = "cc_mobile_provision";
 const LAST_DIALED_KEY = "cc_mobile_last_dialed";
@@ -51,6 +52,10 @@ type SipState = {
     match: { inviteId?: string | null; fromNumber?: string | null; toExtension?: string | null; pbxCallId?: string | null; sipCallTarget?: string | null },
     timeoutMs?: number,
     onTrace?: (event: SipAnswerTraceEvent) => void,
+    deadlineHandle?: SipAnswerDeadlineHandle,
+  ) => Promise<boolean>;
+  waitForIncomingInvite: (
+    match: { inviteId?: string | null; fromNumber?: string | null; toExtension?: string | null; pbxCallId?: string | null; sipCallTarget?: string | null },
     deadlineHandle?: SipAnswerDeadlineHandle,
   ) => Promise<boolean>;
   rejectIncomingInvite: (match?: {
@@ -507,10 +512,21 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
             dialedNumber: event.dialedNumber ?? null,
             normalizedNumber: event.normalizedNumber ?? null,
             registrationAgeMs: event.registrationAgeMs ?? null,
-            sipCode: event.sipCode ?? null,
-            sipReason: event.sipReason ?? null,
-            sipCause: event.sipCause ?? null,
+            sipCode: diagnosis?.sipCode ?? event.sipCode ?? null,
+            sipReason: diagnosis?.sipReason ?? event.sipReason ?? null,
+            sipCause: diagnosis?.sipCause ?? event.sipCause ?? null,
             diagnosisCategory: diagnosis?.category ?? null,
+          },
+        });
+      },
+
+      onIncomingInviteReceived: (info) => {
+        flightRecord("SIP", "SIP_INVITE_RECEIVED", {
+          payload: {
+            sessionId: info.sessionId,
+            from: info.from,
+            to: info.to,
+            callerName: info.callerName,
           },
         });
       },
@@ -852,14 +868,8 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       }
 
       // Stage B — DEVICE_REGISTER_TRIGGERED.
-      // For VM-greeting recording wakes: skip forceRestart only when the JsSIP
-      // stack is *actually* connected + registered. React's registrationStateRef
-      // can say "registered" while the WebSocket is dead (no DISCONNECTED event),
-      // which would make us skip restart and leave Asterisk with no contact.
-      // When the stack is healthy, skipping restart avoids a race where Dial()
-      // runs before a fresh 200 OK after a needless UA teardown.
-      // For all other wakes (normal incoming PSTN): always forceRestart.
-      const isVmGreetingWake = fromNumber === "vm-greeting";
+      // Only forceRestart when the JsSIP stack is not actually connected+registered.
+      // Tearing down a healthy UA during PSTN wake drops PBX INVITEs mid-flight.
       const prevRegState = registrationStateRef.current;
       let sipConnected = false;
       let sipRegistered = false;
@@ -871,7 +881,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         sipRegistered = false;
       }
       const sipStackHealthy = sipConnected && sipRegistered;
-      const needsForceRestart = !(isVmGreetingWake && sipStackHealthy);
+      const needsForceRestart = shouldForceRestartOnWake({ sipConnected, sipRegistered });
       const triggeredAt = Date.now();
       await postWakeEvent(authToken, {
         pbxCallId,
@@ -1289,6 +1299,10 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       answerIncomingInvite: async (match, timeoutMs = 5000, onTrace, deadlineHandle) => {
         setCallDirection("inbound");
         return clientRef.current.answerIncoming(match, timeoutMs, onTrace, deadlineHandle);
+      },
+
+      waitForIncomingInvite: async (match, deadlineHandle) => {
+        return clientRef.current.waitForIncomingInvite(match, deadlineHandle);
       },
 
       rejectIncomingInvite: async (match) => {

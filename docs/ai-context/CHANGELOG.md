@@ -4,6 +4,33 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-03 — Mobile SIP call reliability (SDP rejection + answer pipeline)
+
+**Task:** mobile / telephony / SIP call reliability  
+**Risk:** extreme
+
+### Root cause (production APK telemetry)
+
+**Outbound:** Registration and `OUTBOUND_INVITE_SENT` succeeded; ~473ms later JsSIP failed with **`Incompatible SDP`** — Asterisk rejected the WebRTC offer (strict `channelCount` / `sampleRate` constraints), not stale registration or dial normalization.
+
+**Inbound:** Wake/requeue worked and PBX created mobile PJSIP legs, but healthy PSTN wake still **`forceRestart`**'d the UA (tearing down during INVITE delivery). UI showed **CONNECTED** from `answerHandoffInviteIdRef` before JsSIP confirmed; backend **ACCEPT** / **INVITE_CLAIMED** ran before a real incoming session was found — no **`SIP_ANSWER_SENT`** / **`SIP_CONNECTED`**.
+
+### Changes
+
+- **`mobileWakeRegistration.ts`:** `shouldForceRestartOnWake()` — skip restart when connected + registered.
+- **`SipContext` wake:** uses healthy-stack guard; records **`SIP_INVITE_RECEIVED`** on `newRTCSession`.
+- **`NotificationsContext` answer pipeline:** register → wait for JsSIP session → backend ACCEPT → `answerIncomingInvite`; requeue path ACCEPT only after initial invite-wait expires; **`ANSWER_HANDOFF_STARTED`** / **`SIP_INVITE_WAIT_TIMEOUT`** flight events.
+- **`ActiveCallScreen`:** **`ANSWERING…`** during handoff; **CONNECTED** only on real SIP `connected` state (`activeCallStatusLabel.ts`).
+- **`voiceAudioConstraints.ts`:** relaxed Asterisk-compatible audio (AEC/NS/AGC only; no strict channelCount/sampleRate).
+- **`mobileOutboundDial.ts`:** **`OUTBOUND_MEDIA_SDP_REJECTED`** for 488 / Incompatible SDP; flight payload includes `sipCode`, `sipCause`, `sipReason`, `diagnosisCategory`.
+- **Tests:** wake restart guard, UI status label, audio constraints, outbound SDP classification, answer timing (unchanged).
+
+### Manual QA
+
+See `MOBILE_CALL_TIMELINE.md` § Mobile SIP reliability (2026-06-03, post-APK telemetry).
+
+---
+
 ## 2026-06-03 — Mobile outbound call reliability (stale SIP reg + flight recorder)
 
 **Task:** mobile / telephony / outbound call reliability  

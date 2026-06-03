@@ -18,6 +18,7 @@ export type OutboundSipFailureDiagnosis = {
     | "OUTBOUND_BAD_NUMBER"
     | "OUTBOUND_UNAVAILABLE"
     | "OUTBOUND_MEDIA_FAILED"
+    | "OUTBOUND_MEDIA_SDP_REJECTED"
     | "OUTBOUND_TRUNK_FAILED"
     | "OUTBOUND_NOT_REGISTERED"
     | "OUTBOUND_PERMISSION_DENIED"
@@ -87,8 +88,19 @@ export function classifyOutboundSipFailure(input: {
     return { category: "OUTBOUND_UNAVAILABLE", sipCode: code, sipReason: reason, sipCause: cause };
   }
 
-  if (code === 488 || code === 606) {
-    return { category: "OUTBOUND_MEDIA_FAILED", sipCode: code, sipReason: reason, sipCause: cause };
+  if (
+    code === 488 ||
+    code === 606 ||
+    causeLower.includes("incompatible sdp") ||
+    reasonLower.includes("incompatible sdp") ||
+    reasonLower.includes("not acceptable here")
+  ) {
+    return {
+      category: "OUTBOUND_MEDIA_SDP_REJECTED",
+      sipCode: code,
+      sipReason: reason,
+      sipCause: cause,
+    };
   }
 
   if (code === 503 || code === 502 || code === 504) {

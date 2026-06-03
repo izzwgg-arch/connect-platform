@@ -18,6 +18,7 @@ import { playDtmfTone, stopAllTelephonyAudio } from '../../audio/telephonyAudio'
 import { useSip } from '../../context/SipContext';
 import { useIncomingNotifications } from '../../context/NotificationsContext';
 import { useCallSessions } from '../../context/CallSessionManager';
+import { activeCallStatusLabel } from './activeCallStatusLabel';
 import { logCallFlow } from '../../debug/callFlowDebug';
 import { markCallLatency, summarizeCallLatency } from '../../debug/callLatency';
 import { useTheme } from '../../context/ThemeContext';
@@ -131,14 +132,9 @@ export function ActiveCallScreen() {
   const isConnected = callState === 'connected';
   const isDialing = callState === 'dialing';
   const isRinging = callState === 'ringing';
-  // When the user just tapped Answer on the heads-up / lock screen notification,
-  // `answerHandoffInviteIdRef` is set until SIP confirms. During that window we
-  // render the active call as CONNECTED so the UI feels instantaneous — phone
-  // apps universally do this (the transient "Connecting → Ringing → Connected"
-  // micro-states are confusing when you just accepted an inbound call).
-  // Once SIP actually confirms, the ref clears and `isConnected` takes over
-  // naturally; if SIP fails, the call transitions to ended and CALL ENDED is
-  // shown (still gated by hasBeenActiveRef below).
+  // When the user just tapped Answer, `answerHandoffInviteIdRef` is set until
+  // SIP confirms. During that window show ANSWERING — not CONNECTED — so the
+  // UI reflects real JsSIP state rather than backend claim alone.
   const isAnswerInFlight =
     incomingNotif.answerHandoffInviteIdRef.current !== null && !isConnected;
   // Only show "ended" UI once the call has actually been *confirmed* by SIP.
@@ -294,18 +290,16 @@ export function ActiveCallScreen() {
   const showingHeldOnly = !activeSession && !!topHeldSession;
   const isHoldState = sip.onHold || showingHeldOnly;
 
-  const statusLabel = (() => {
-    if (isEnded) return 'CALL ENDED';
-    if (isHoldState) return 'ON HOLD';
-    if (isAnswerInFlight || callState === 'connected') return 'CONNECTED';
-    if (callState === 'dialing') return 'CALLING…';
-    if (callState === 'ringing') return 'RINGING…';
-    return 'CONNECTING…';
-  })();
+  const statusLabel = activeCallStatusLabel({
+    isEnded,
+    isHoldState,
+    isAnswerInFlight,
+    callState,
+  });
 
   const statusColor = isEnded
     ? 'rgba(239,68,68,0.8)'
-    : (isConnected || isAnswerInFlight) && !isHoldState
+    : isConnected && !isHoldState
     ? 'rgba(52,211,153,0.8)'
     : 'rgba(136,153,187,0.8)';
 

@@ -60,6 +60,13 @@ export type SipEvents = {
   onSessionRemoved?: (sessionId: string) => void;
   /** Structured outbound dial milestones for Call Flight Recorder. */
   onOutboundTrace?: (event: OutboundTraceEvent) => void;
+  /** Fires when JsSIP receives a remote INVITE (newRTCSession). */
+  onIncomingInviteReceived?: (info: {
+    sessionId: string;
+    from: string;
+    to: string | null;
+    callerName: string | null;
+  }) => void;
 };
 
 export type OutboundTraceEvent = {
@@ -122,6 +129,11 @@ export type SipClient = {
     match?: SipMatch,
     timeoutMs?: number,
     onTrace?: (event: SipAnswerTraceEvent) => void,
+    deadlineHandle?: import("./mobileAnswerTiming").SipAnswerDeadlineHandle,
+  ) => Promise<boolean>;
+  /** Poll until a matching incoming session exists or the deadline expires. */
+  waitForIncomingInvite: (
+    match?: SipMatch,
     deadlineHandle?: import("./mobileAnswerTiming").SipAnswerDeadlineHandle,
   ) => Promise<boolean>;
   rejectIncoming: (match?: SipMatch) => Promise<boolean>;

@@ -60,7 +60,11 @@ test("classifyOutboundSipFailure maps common SIP codes", () => {
   );
   assert.equal(
     classifyOutboundSipFailure({ sipCode: 488, sipReason: "Not Acceptable Here", sipCause: "Incompatible SDP" }).category,
-    "OUTBOUND_MEDIA_FAILED",
+    "OUTBOUND_MEDIA_SDP_REJECTED",
+  );
+  assert.equal(
+    classifyOutboundSipFailure({ sipCause: "Incompatible SDP" }).category,
+    "OUTBOUND_MEDIA_SDP_REJECTED",
   );
   assert.equal(
     classifyOutboundSipFailure({ sipCode: 503, sipReason: "Service Unavailable", sipCause: "Unavailable" }).category,

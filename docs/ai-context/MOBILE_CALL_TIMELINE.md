@@ -562,6 +562,72 @@ Push, ringtone, and incoming UI succeed; user taps **Answer**; call fails with
 
 ---
 
+## Mobile SIP reliability (2026-06-03, post-APK telemetry)
+
+### Symptom (outbound)
+
+`OUTBOUND_REGISTERED` → `OUTBOUND_INVITE_SENT` → **`OUTBOUND_FAILED`** ~473ms, **`sipCause: Incompatible SDP`**.
+
+### Symptom (inbound)
+
+Wake push + AMI requeue succeed; PBX creates **`PJSIP/T*_ext_1`** legs. Mobile never reaches **`SIP_ANSWER_SENT`** / **`SIP_CONNECTED`**. Flight shows **`INVITE_CLAIMED`** while UI already says CONNECTED.
+
+### Root cause
+
+| Path | Issue |
+|---|---|
+| Outbound | Strict WebRTC **`channelCount: 1`** / **`sampleRate: 48000`** in mobile offer → Asterisk **488 Incompatible SDP** |
+| Inbound wake | **`forceRestart: true`** even when **`sipConnected && sipRegistered && sipStackHealthy`** → UA torn down as INVITE arrives |
+| Inbound answer | Backend **ACCEPT** + UI handoff treated as connected before **`findIncoming()`** / **`newRTCSession`** |
+
+### Fix summary
+
+| Layer | Change |
+|---|---|
+| Mobile wake | `shouldForceRestartOnWake()` — no restart on healthy stack |
+| Mobile answer | Wait for JsSIP session first; ACCEPT then answer; requeue path only after initial wait |
+| Mobile UI | **`ANSWERING…`** during handoff; CONNECTED only on SIP `connected` |
+| Mobile outbound | `buildVoiceAudioConstraints()` — broad AEC/NS/AGC only |
+| Flight recorder | **`SIP_INVITE_RECEIVED`**, **`ANSWER_HANDOFF_STARTED`**, **`OUTBOUND_MEDIA_SDP_REJECTED`** |
+
+### Answer pipeline order (after fix)
+
+```
+ANSWER_TAPPED → SIP register (no unnecessary restart)
+  → waitForIncomingInvite (8s initial)
+  → [if no session] backend ACCEPT → extend +16s → wait again
+  → [if session found first] backend ACCEPT
+  → answerIncomingInvite → SIP_ANSWER_SENT → SIP_CONNECTED
+```
+
+UI handoff (**`ANSWER_HANDOFF_STARTED`**) is **not** SIP connected.
+
+### Outbound flight diagnosis
+
+488 / **Incompatible SDP** → **`OUTBOUND_MEDIA_SDP_REJECTED`** with `sipCode`, `sipCause`, `sipReason` in flight payload.
+
+### Manual QA checklist (Relax Tires T25, before next APK)
+
+**Outbound**
+
+1. Call known-good PSTN — ringback, CONNECTED, two-way audio.
+2. Flight: `OUTBOUND_INVITE_SENT` → `OUTBOUND_RINGING` → `OUTBOUND_CONNECTED`.
+
+**Inbound**
+
+1. App background/cold; ring ext **101**.
+2. Healthy wake must **not** log `forceRestart: true` when stack healthy.
+3. Flight: `SIP_INVITE_RECEIVED` → `SIP_ANSWER_SENT` → `SIP_CONNECTED`.
+4. UI shows **ANSWERING…** until SIP confirms; no false CONNECTED on handoff alone.
+5. Caller cancel → no false CONNECTED; diagnosis `ended_before_confirmed`.
+
+**Regression**
+
+6. No duplicate mobile PJSIP legs; no infinite requeue loop.
+7. ext **101** forward to **8455129339** is separate VitalPBX config — verify independently.
+
+---
+
 11. Confirm existing successful inbound calls still work after outbound fix.
 
 ---

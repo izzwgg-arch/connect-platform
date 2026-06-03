@@ -23,6 +23,7 @@ import {
   linkCallLatencyIds,
 } from "../debug/callLatency";
 import {
+  MOBILE_SIP_ANSWER_INITIAL_WAIT_MS,
   MOBILE_SIP_ANSWER_POLL_MS,
   createSipAnswerDeadline,
   type SipAnswerDeadlineHandle,
@@ -31,18 +32,9 @@ import {
   ensureOutboundSipRegistration,
   normalizeMobileDialTarget,
 } from "./mobileOutboundDial";
+import { buildVoiceAudioConstraints } from "./voiceAudioConstraints";
 
-// Voice-optimised audio constraints — same profile as the browser softphone.
-const VOICE_AUDIO_CONSTRAINTS = {
-  audio: {
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
-    channelCount: 1,
-    sampleRate: { ideal: 48_000 },
-  } as MediaTrackConstraints,
-  video: false,
-};
+const VOICE_AUDIO_CONSTRAINTS = buildVoiceAudioConstraints();
 
 /** Best-effort InCallManager helper — silently no-ops if the native module is absent. */
 const ICM = {
@@ -335,6 +327,12 @@ export class JsSipClient implements SipClient {
           ts: inviteArrivedAt,
         }));
         this.incomingSessions.push(e.session);
+        this.events.onIncomingInviteReceived?.({
+          sessionId: sipSessionId,
+          from: callerNumber,
+          to: toUser,
+          callerName,
+        });
         // JsSIP automatically sends 100 Trying + 180 Ringing after newRTCSession fires.
         // No manual call needed — the PBX will see 180 Ringing within milliseconds.
 
@@ -1526,6 +1524,37 @@ export class JsSipClient implements SipClient {
     // — the previous unconditional `routeToEarpiece` ignored Bluetooth.
     setTimeout(() => audioRouteManager.noteCallConnected(), 150);
     this.session?.answer?.({ mediaConstraints: VOICE_AUDIO_CONSTRAINTS });
+  }
+
+  async waitForIncomingInvite(
+    match?: SipMatch,
+    deadlineHandle?: SipAnswerDeadlineHandle,
+  ): Promise<boolean> {
+    const waitStartAt = Date.now();
+    const deadline =
+      deadlineHandle ??
+      createSipAnswerDeadline(waitStartAt, MOBILE_SIP_ANSWER_INITIAL_WAIT_MS).handle;
+    const getUntil = () => deadline.getUntilMs();
+    this.lastAnswerMatch = match;
+    console.log(
+      "[CALL_EVENT] wait_for_incoming_invite start until=" + getUntil(),
+    );
+    while (Date.now() < getUntil()) {
+      const session = this.findIncoming(match);
+      if (session) {
+        console.log(
+          "[CALL_EVENT] wait_for_incoming_invite found waitedMs=" +
+            (Date.now() - waitStartAt),
+        );
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, MOBILE_SIP_ANSWER_POLL_MS));
+    }
+    console.warn(
+      "[CALL_EVENT] wait_for_incoming_invite timeout waitedMs=" +
+        (Date.now() - waitStartAt),
+    );
+    return false;
   }
 
   async answerIncoming(

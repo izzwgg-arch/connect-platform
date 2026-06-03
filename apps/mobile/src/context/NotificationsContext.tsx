@@ -84,6 +84,7 @@ import {
   MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS,
   createSipAnswerDeadline,
 } from "../sip/mobileAnswerTiming";
+import type { SipAnswerTraceEvent } from "../sip/types";
 import { shouldSuppressForegroundPush } from "../notifications/notificationRouting";
 /**
  * Reads native ringtone timing data from the Android bridge and records
@@ -1790,99 +1791,70 @@ export function NotificationsProvider({
           return registered;
         })();
 
-        // Launch SIP answer as soon as register resolves. This is the
-        // moment the SIP 200 OK begins travelling — constructing this
-        // promise synchronously (without `await`) means JsSIP is queued on
-        // the JS microtask queue BEFORE any of the non-critical
-        // pre-answer work below has a chance to run. The result: all of
-        // dismiss/log/render/native-bridge work now runs in parallel with
-        // the SIP answer rather than gating it.
-        const sipAnswerPromise: Promise<boolean> = sipRegisterPromise.then(async (registered) => {
-          if (!registered) return false;
-          const t4_sipAnswerStart = Date.now();
-          console.log('[ANSWER_PIPELINE] SIP_ANSWER_START (parallel with claim)', JSON.stringify({
-            inviteId: invite.id, sinceAnswerMs: t4_sipAnswerStart - answerTappedAt,
-            sipReg: sip.registrationState, callState: sip.callState,
-          }));
-          emitAnswerFlowEvent("SIP_ANSWER_REQUESTED", invite);
-          flightRecord('SIP', 'SIP_ANSWER_START', { inviteId: invite.id, pbxCallId: invite.pbxCallId ?? null, payload: { sinceAnswerMs: t4_sipAnswerStart - answerTappedAt } });
-          // Latency: this is the moment the JS SIP layer is asked to send
-          // the SIP 200 OK. Gap from ANSWER_TAPPED→here now only includes
-          // register() cost (near-zero when already registered) — the
-          // dismiss, logging, state updates, and foreground bring-up all
-          // run in parallel instead of blocking this step.
-          markCallLatency(invite.id, "SESSION_ACCEPT_START", {
-            sipRegState: sip.registrationState,
-            sinceAnswerMs: t4_sipAnswerStart - answerTappedAt,
+        const inviteMatch = {
+          inviteId: invite.id,
+          fromNumber: invite.fromNumber,
+          toExtension: invite.toExtension,
+          pbxCallId: invite.pbxCallId,
+          sipCallTarget: invite.sipCallTarget,
+        };
+
+        const recordSipAnswerTrace = (event: SipAnswerTraceEvent) => {
+          if (event.phase === "sent") {
+            const sentMs = event.timestamp - answerTappedAt;
+            console.log('[ANSWER_PIPELINE] SIP_200OK_SENT +' + sentMs + 'ms');
+            emitAnswerFlowEvent("SIP_ANSWER_SENT", invite, {
+              traceAt: new Date(event.timestamp).toISOString(),
+              sinceAnswerMs: sentMs,
+            });
+            flightRecord('SIP', 'SIP_ANSWER_SENT', { inviteId: invite.id, payload: { sinceAnswerMs: sentMs } });
+            markCallLatency(invite.id, "SESSION_ACCEPT_SIGNAL_SENT", {
+              sinceAnswerMs: sentMs,
+            });
+            return;
+          }
+          if (event.phase === "confirmed") {
+            const confirmedMs = event.timestamp - answerTappedAt;
+            console.log('[ANSWER_PIPELINE] SIP_CONFIRMED +' + confirmedMs + 'ms');
+            emitAnswerFlowEvent("SIP_ANSWER_CONFIRMED", invite, {
+              traceAt: new Date(event.timestamp).toISOString(),
+              sinceAnswerMs: confirmedMs,
+            });
+            flightRecord('SIP', 'SIP_CONNECTED', {
+              inviteId: invite.id,
+              pbxCallId: invite.pbxCallId ?? null,
+              payload: { traceAt: new Date(event.timestamp).toISOString(), sinceAnswerMs: confirmedMs },
+            });
+            markCallLatency(invite.id, "SESSION_ESTABLISHED_SIGNAL", {
+              sinceAnswerMs: confirmedMs,
+            });
+            return;
+          }
+          const failedMs = event.timestamp - answerTappedAt;
+          console.warn('[ANSWER_PIPELINE] SIP_FAILED +' + failedMs + 'ms reason=' + event.reason + ' code=' + event.code);
+          emitAnswerFlowEvent("SIP_ANSWER_FAILED", invite, {
+            traceAt: new Date(event.timestamp).toISOString(),
+            code: event.code ?? null,
+            reason: event.reason ?? null,
+            message: event.message ?? null,
+            sinceAnswerMs: failedMs,
           });
-          return sip
-            .answerIncomingInvite(
-              {
-                inviteId: invite.id,
-                fromNumber: invite.fromNumber,
-                toExtension: invite.toExtension,
-                pbxCallId: invite.pbxCallId,
-                sipCallTarget: invite.sipCallTarget,
-              },
-              MOBILE_SIP_ANSWER_INITIAL_WAIT_MS,
-              (event) => {
-                if (event.phase === "sent") {
-                  const sentMs = event.timestamp - answerTappedAt;
-                  console.log('[ANSWER_PIPELINE] SIP_200OK_SENT +' + sentMs + 'ms');
-                  emitAnswerFlowEvent("SIP_ANSWER_SENT", invite, {
-                    traceAt: new Date(event.timestamp).toISOString(),
-                    sinceAnswerMs: sentMs,
-                  });
-                  flightRecord('SIP', 'SIP_ANSWER_SENT', { inviteId: invite.id, payload: { sinceAnswerMs: sentMs } });
-                  markCallLatency(invite.id, "SESSION_ACCEPT_SIGNAL_SENT", {
-                    sinceAnswerMs: sentMs,
-                  });
-                  return;
-                }
-                if (event.phase === "confirmed") {
-                  const confirmedMs = event.timestamp - answerTappedAt;
-                  console.log('[ANSWER_PIPELINE] SIP_CONFIRMED +' + confirmedMs + 'ms');
-                  emitAnswerFlowEvent("SIP_ANSWER_CONFIRMED", invite, {
-                    traceAt: new Date(event.timestamp).toISOString(),
-                    sinceAnswerMs: confirmedMs,
-                  });
-                  flightRecord('SIP', 'SIP_CONNECTED', { inviteId: invite.id, pbxCallId: invite.pbxCallId ?? null, payload: { traceAt: new Date(event.timestamp).toISOString(), sinceAnswerMs: confirmedMs } });
-                  markCallLatency(invite.id, "SESSION_ESTABLISHED_SIGNAL", {
-                    sinceAnswerMs: confirmedMs,
-                  });
-                  return;
-                }
-                const failedMs = event.timestamp - answerTappedAt;
-                console.warn('[ANSWER_PIPELINE] SIP_FAILED +' + failedMs + 'ms reason=' + event.reason + ' code=' + event.code);
-                emitAnswerFlowEvent("SIP_ANSWER_FAILED", invite, {
-                  traceAt: new Date(event.timestamp).toISOString(),
-                  code: event.code ?? null,
-                  reason: event.reason ?? null,
-                  message: event.message ?? null,
-                  sinceAnswerMs: failedMs,
-                });
-                flightRecord('SIP', 'SIP_ANSWER_FAILED', {
-                  inviteId: invite.id,
-                  severity: 'error',
-                  payload: {
-                    code: event.code,
-                    reason: event.reason,
-                    message: event.message,
-                    sinceAnswerMs: failedMs,
-                  },
-                });
-              },
-              answerDeadline.handle,
-            )
-            .catch(() => false);
-        });
+          flightRecord('SIP', 'SIP_ANSWER_FAILED', {
+            inviteId: invite.id,
+            severity: 'error',
+            payload: {
+              code: event.code,
+              reason: event.reason,
+              message: event.message,
+              sinceAnswerMs: failedMs,
+            },
+          });
+        };
 
         // ══════════════════════════════════════════════════════════════════
-        // PARALLEL PATH — everything below now runs in parallel with SIP
-        // 200 OK transmission. None of this gates the answer. Order is
-        // preserved where observable (e.g. UI re-renders still fire after
-        // native dismiss so the handoff feels smooth), but nothing here
-        // blocks JsSIP.
+        // PARALLEL PATH — UI dismiss / logging runs while register proceeds.
+        // Backend ACCEPT is deferred until findIncoming() finds a session, or
+        // until the initial invite-wait window expires (AMI requeue path).
         // ══════════════════════════════════════════════════════════════════
 
         // NetInfo context was previously gathered here, but the package
@@ -2023,6 +1995,11 @@ export function NotificationsProvider({
         suppressedIncomingInviteIdsRef.current.add(invite.id);
         answerInviteRef.current = invite;   // caller info fallback for ActiveCallScreen
         setAnswerHandoffTick((n) => n + 1);
+        flightRecord('UI', 'ANSWER_HANDOFF_STARTED', {
+          inviteId: invite.id,
+          pbxCallId: invite.pbxCallId ?? null,
+          payload: { sinceAnswerMs: Date.now() - answerTappedAt },
+        });
         safeSetInvite(null);
 
         // Bring app to foreground (if needed) — does NOT gate SIP answer.
@@ -2035,9 +2012,6 @@ export function NotificationsProvider({
           bringAppToForeground();
         }
 
-        // Now await register — if it failed, SIP answer never fired and
-        // we must surface that as a user-visible error. On success, SIP
-        // 200 OK is already in flight via sipAnswerPromise.
         const registered = await sipRegisterPromise;
         if (!registered) {
           console.warn("[Notif] All SIP register attempts failed for invite:", invite.id);
@@ -2048,87 +2022,206 @@ export function NotificationsProvider({
           showEndedState(invite, "Call ended", { reason: "sip_register_failed" });
           void flightEndCall('failed');
           endNativeCall(callId);
-          // Latency: capture the "couldn't even register" case so the
-          // timeline still produces a summary (useful if the bottleneck
-          // is the SIP register loop itself).
           markCallLatency(invite.id, "CALL_FAILED", { reason: "sip_register_failed" });
           summarizeCallLatency(invite.id, "failed");
           resetCallLatency(invite.id);
           return;
         }
 
-        // pbxAnswerPromise runs concurrently with the backend claim below.
         const pbxAnswerPromise = waitForPbxAnswer(invite, 6_000);
 
-        // === BACKEND CLAIM (parallel with SIP answer) ===========================
-        // SIP 200 OK is already in flight. Now claim the invite on the backend.
-        const t2_claimStart = Date.now();
-        console.log('[ANSWER_PIPELINE] CLAIM_START (parallel)', JSON.stringify({
-          inviteId: invite.id, pbxCallId: invite.pbxCallId, sinceAnswerMs: t2_claimStart - answerTappedAt,
+        const t4_waitStart = Date.now();
+        console.log('[ANSWER_PIPELINE] SIP_INVITE_WAIT_START', JSON.stringify({
+          inviteId: invite.id,
+          sinceAnswerMs: t4_waitStart - answerTappedAt,
+          sipReg: sip.registrationState,
+          callState: sip.callState,
         }));
-        const resp = await respondInvite(
-          authToken,
-          invite.id,
-          "ACCEPT",
-          deviceIdRef.current || undefined,
-        ).catch(() => null);
-        const t3_claimDone = Date.now();
-        console.log('[ANSWER_PIPELINE] CLAIM_DONE', JSON.stringify({
-          code: resp?.code, status: resp?.status,
-          tookMs: t3_claimDone - t2_claimStart, sinceAnswerMs: t3_claimDone - answerTappedAt,
-        }));
+        flightRecord('SIP', 'SIP_ANSWER_START', {
+          inviteId: invite.id,
+          pbxCallId: invite.pbxCallId ?? null,
+          payload: { sinceAnswerMs: t4_waitStart - answerTappedAt, phase: 'invite_wait' },
+        });
+        markCallLatency(invite.id, "SESSION_ACCEPT_START", {
+          sipRegState: sip.registrationState,
+          sinceAnswerMs: t4_waitStart - answerTappedAt,
+        });
 
-        if (!resp || resp.code !== "INVITE_CLAIMED_OK") {
-          const reason = resp?.code || "unknown";
+        let inviteReady = await sip
+          .waitForIncomingInvite(inviteMatch, answerDeadline.handle)
+          .catch(() => false);
 
-          // Another handler (e.g. IncomingCallScreen) already claimed this
-          // invite — do NOT clear the invite state or the active screen.
-          if (reason === "INVITE_ALREADY_HANDLED" && resp?.status === "ACCEPTED") {
-            console.log("[Notif] Invite already claimed by another handler, leaving screen active");
-            answerHandoffInviteIdRef.current = null;
-            setAnswerHandoffTick((n) => n + 1);
-            answerFlowCommitted = true;
+        let backendClaimed = false;
+        if (!inviteReady) {
+          const t2_claimStart = Date.now();
+          console.log('[ANSWER_PIPELINE] CLAIM_START (requeue path)', JSON.stringify({
+            inviteId: invite.id,
+            pbxCallId: invite.pbxCallId,
+            sinceAnswerMs: t2_claimStart - answerTappedAt,
+            reason: 'no_invite_before_initial_wait',
+          }));
+          const resp = await respondInvite(
+            authToken,
+            invite.id,
+            "ACCEPT",
+            deviceIdRef.current || undefined,
+          ).catch(() => null);
+          const t3_claimDone = Date.now();
+          console.log('[ANSWER_PIPELINE] CLAIM_DONE', JSON.stringify({
+            code: resp?.code,
+            status: resp?.status,
+            tookMs: t3_claimDone - t2_claimStart,
+            sinceAnswerMs: t3_claimDone - answerTappedAt,
+          }));
+
+          if (!resp || resp.code !== "INVITE_CLAIMED_OK") {
+            const reason = resp?.code || "unknown";
+            if (reason === "INVITE_ALREADY_HANDLED" && resp?.status === "ACCEPTED") {
+              console.log("[Notif] Invite already claimed by another handler, leaving screen active");
+              answerHandoffInviteIdRef.current = null;
+              setAnswerHandoffTick((n) => n + 1);
+              answerFlowCommitted = true;
+              return;
+            }
+            if (reason === "TURN_REQUIRED_NOT_VERIFIED" || reason === "MEDIA_TEST_REQUIRED_NOT_PASSED") {
+              await respondInvite(authToken, invite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
+            }
+            showEndedState(
+              invite,
+              "Call ended",
+              { reason: `respond_invite_failed:${reason}` },
+              1200,
+            );
+            endNativeCall(callId);
+            AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
             return;
           }
 
-          // Backend rejected — hang up the SIP call we already sent 200 OK for.
-          sip.hangup().catch(() => {});
-          if (reason === "TURN_REQUIRED_NOT_VERIFIED") {
-            await respondInvite(authToken, invite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
-          } else if (reason === "MEDIA_TEST_REQUIRED_NOT_PASSED") {
-            await respondInvite(authToken, invite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
+          backendClaimed = true;
+          answerDeadline.handle.extend(MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS);
+          flightRecord('BACKEND', 'INVITE_CLAIMED', {
+            inviteId: invite.id,
+            pbxCallId: invite.pbxCallId ?? null,
+            payload: {
+              sinceAnswerMs: t3_claimDone - answerTappedAt,
+              answerWaitExtendedMs: MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS,
+              answerWaitUntilMs: answerDeadline.handle.getUntilMs(),
+              path: 'requeue_after_initial_wait',
+            },
+          });
+          consumedInviteActionRef.current.add(acceptKey);
+
+          inviteReady = await sip
+            .waitForIncomingInvite(inviteMatch, answerDeadline.handle)
+            .catch(() => false);
+        }
+
+        if (!inviteReady) {
+          setCallFlowLastError("sip_invite_not_received");
+          emitAnswerFlowEvent("SIP_ANSWER_FAILED", invite, {
+            reason: "sip_invite_not_received",
+          });
+          flightRecord('SIP', 'SIP_INVITE_WAIT_TIMEOUT', {
+            inviteId: invite.id,
+            severity: 'error',
+            payload: { sinceAnswerMs: Date.now() - answerTappedAt },
+          });
+          if (backendClaimed) {
+            sip.rejectIncomingInvite({
+              inviteId: invite.id,
+              fromNumber: invite.fromNumber,
+              toExtension: invite.toExtension,
+              pbxCallId: invite.pbxCallId,
+              sipCallTarget: invite.sipCallTarget,
+            }).catch(() => undefined);
           }
-          showEndedState(
-            invite,
-            "Call ended",
-            { reason: `respond_invite_failed:${reason}` },
-            1200,
-          );
+          showEndedState(invite, "Call ended", { reason: "sip_invite_not_received" });
+          void flightEndCall('failed');
           endNativeCall(callId);
-          AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
+          markCallLatency(invite.id, "CALL_FAILED", { reason: "sip_invite_not_received" });
+          summarizeCallLatency(invite.id, "failed");
+          resetCallLatency(invite.id);
           return;
         }
 
-        // Once the backend has claimed this invite, extend the SIP INVITE poll
-        // window — telephony AMI requeue typically follows ACCEPT on ring-group
-        // paths and the fresh PJSIP leg may arrive several seconds later.
-        answerDeadline.handle.extend(MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS);
-        flightRecord('BACKEND', 'INVITE_CLAIMED', {
-          inviteId: invite.id,
-          pbxCallId: invite.pbxCallId ?? null,
-          payload: {
+        if (!backendClaimed) {
+          const t2_claimStart = Date.now();
+          console.log('[ANSWER_PIPELINE] CLAIM_START (invite ready)', JSON.stringify({
+            inviteId: invite.id,
+            pbxCallId: invite.pbxCallId,
+            sinceAnswerMs: t2_claimStart - answerTappedAt,
+          }));
+          const resp = await respondInvite(
+            authToken,
+            invite.id,
+            "ACCEPT",
+            deviceIdRef.current || undefined,
+          ).catch(() => null);
+          const t3_claimDone = Date.now();
+          console.log('[ANSWER_PIPELINE] CLAIM_DONE', JSON.stringify({
+            code: resp?.code,
+            status: resp?.status,
+            tookMs: t3_claimDone - t2_claimStart,
             sinceAnswerMs: t3_claimDone - answerTappedAt,
-            answerWaitExtendedMs: MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS,
-            answerWaitUntilMs: answerDeadline.handle.getUntilMs(),
-          },
+          }));
+
+          if (!resp || resp.code !== "INVITE_CLAIMED_OK") {
+            const reason = resp?.code || "unknown";
+            if (reason === "INVITE_ALREADY_HANDLED" && resp?.status === "ACCEPTED") {
+              console.log("[Notif] Invite already claimed by another handler, leaving screen active");
+              answerHandoffInviteIdRef.current = null;
+              setAnswerHandoffTick((n) => n + 1);
+              answerFlowCommitted = true;
+              return;
+            }
+            sip.rejectIncomingInvite({
+              inviteId: invite.id,
+              fromNumber: invite.fromNumber,
+              toExtension: invite.toExtension,
+              pbxCallId: invite.pbxCallId,
+              sipCallTarget: invite.sipCallTarget,
+            }).catch(() => undefined);
+            if (reason === "TURN_REQUIRED_NOT_VERIFIED" || reason === "MEDIA_TEST_REQUIRED_NOT_PASSED") {
+              await respondInvite(authToken, invite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
+            }
+            showEndedState(
+              invite,
+              "Call ended",
+              { reason: `respond_invite_failed:${reason}` },
+              1200,
+            );
+            endNativeCall(callId);
+            AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
+            return;
+          }
+
+          backendClaimed = true;
+          answerDeadline.handle.extend(MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS);
+          flightRecord('BACKEND', 'INVITE_CLAIMED', {
+            inviteId: invite.id,
+            pbxCallId: invite.pbxCallId ?? null,
+            payload: {
+              sinceAnswerMs: t3_claimDone - answerTappedAt,
+              answerWaitExtendedMs: MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS,
+              answerWaitUntilMs: answerDeadline.handle.getUntilMs(),
+              path: 'after_invite_found',
+            },
+          });
+          consumedInviteActionRef.current.add(acceptKey);
+        }
+
+        emitAnswerFlowEvent("SIP_ANSWER_REQUESTED", invite, {
+          sinceAnswerMs: Date.now() - answerTappedAt,
         });
 
-        // Once the backend has claimed this invite, ignore any repeated answer
-        // events from deep links or native callbacks for the same call.
-        consumedInviteActionRef.current.add(acceptKey);
-
-        // === AWAIT SIP CONFIRMATION =============================================
-        const answered = await sipAnswerPromise;
+        const answered = await sip
+          .answerIncomingInvite(
+            inviteMatch,
+            MOBILE_SIP_ANSWER_INITIAL_WAIT_MS,
+            recordSipAnswerTrace,
+            answerDeadline.handle,
+          )
+          .catch(() => false);
 
         if (!answered) {
           setCallFlowLastError("sip_answer_not_confirmed");
