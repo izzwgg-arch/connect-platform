@@ -12,12 +12,12 @@ import { apiGet, apiPost, apiPatch } from "../../../../services/apiClient";
 import { crm } from "../../../../components/crm/crmClasses";
 import {
   ChecklistCommandHeader,
+  type ChecklistSortMode,
   type ChecklistHeaderTab,
+  type ChecklistViewMode,
 } from "../../../../components/crm/checklists/ChecklistCommandHeader";
 import { ChecklistWorkspace } from "../../../../components/crm/checklists/ChecklistWorkspace";
 import { ChecklistProgressPanel } from "../../../../components/crm/checklists/ChecklistProgressPanel";
-import { ChecklistQuickTipsStrip } from "../../../../components/crm/checklists/ChecklistQuickTipsStrip";
-import { CHECKLIST_TEMPLATES } from "../../../../components/crm/checklists/ChecklistTemplates";
 import { cn } from "../../../../components/crm/cn";
 import { PermissionGate } from "../../../../components/PermissionGate";
 import {
@@ -27,7 +27,6 @@ import {
   CRMWorkspaceMain,
   CRMWorkspaceScrollRegion,
   CRMWorkspaceRightRail,
-  CRMWorkspaceFooter,
 } from "../../../../components/crm/CRMWorkspaceShell";
 import { CRMPageShell } from "../../../../components/crm/CRMPageShell";
 
@@ -50,6 +49,11 @@ type Checklist = {
 };
 
 type EditItem = { label: string; required: boolean; sortOrder: number };
+const CHECKLIST_VIEW_STORAGE_KEY = "crm-checklists-view-mode";
+
+function isDraftChecklist(checklist: Checklist) {
+  return checklist.isActive && checklist.items.length === 0;
+}
 
 function isLiveReady(c: Checklist) {
   return c.isActive && c.items.length > 0 && c.items.some((i) => i.required);
@@ -68,7 +72,10 @@ export default function CrmChecklistsPage() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Checklist | null>(null);
   const [savedMsg, setSavedMsg] = useState("");
-  const [headerTab, setHeaderTab] = useState<ChecklistHeaderTab>("active");
+  const [headerTab, setHeaderTab] = useState<ChecklistHeaderTab>("all");
+  const [search, setSearch] = useState("");
+  const [sortMode, setSortMode] = useState<ChecklistSortMode>("updated");
+  const [viewMode, setViewMode] = useState<ChecklistViewMode>("card");
 
   // Create state
   const [creating, setCreating] = useState(false);
@@ -78,7 +85,11 @@ export default function CrmChecklistsPage() {
   const [createError, setCreateError] = useState<string | null>(null);
 
   const activeChecklists = useMemo(
-    () => checklists.filter((c) => c.isActive),
+    () => checklists.filter((c) => c.isActive && !isDraftChecklist(c)),
+    [checklists]
+  );
+  const draftCount = useMemo(
+    () => checklists.filter(isDraftChecklist).length,
     [checklists]
   );
   const archivedCount = useMemo(
@@ -94,6 +105,26 @@ export default function CrmChecklistsPage() {
     const sum = activeChecklists.reduce((acc, c) => acc + requiredRatio(c), 0);
     return Math.round(sum / activeChecklists.length);
   }, [activeChecklists]);
+
+  const filteredChecklists = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return checklists
+      .filter((checklist) => {
+        if (headerTab === "active") return checklist.isActive && !isDraftChecklist(checklist);
+        if (headerTab === "draft") return isDraftChecklist(checklist);
+        if (headerTab === "archived") return !checklist.isActive;
+        return true;
+      })
+      .filter((checklist) => {
+        if (!needle) return true;
+        return checklist.name.toLowerCase().includes(needle);
+      })
+      .sort((a, b) => {
+        if (sortMode === "name") return a.name.localeCompare(b.name);
+        if (sortMode === "steps") return b.items.length - a.items.length || a.name.localeCompare(b.name);
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+      });
+  }, [checklists, headerTab, search, sortMode]);
 
   async function loadList(options?: { silent?: boolean; mergeLocal?: Checklist[] }) {
     if (!options?.silent) setLoading(true);
@@ -121,19 +152,23 @@ export default function CrmChecklistsPage() {
     loadList();
   }, []);
 
+  useEffect(() => {
+    const saved = window.localStorage.getItem(CHECKLIST_VIEW_STORAGE_KEY);
+    if (saved === "card" || saved === "list") setViewMode(saved);
+  }, []);
+
+  const handleViewModeChange = useCallback((mode: ChecklistViewMode) => {
+    setViewMode(mode);
+    window.localStorage.setItem(CHECKLIST_VIEW_STORAGE_KEY, mode);
+  }, []);
+
   function handleNewBlank() {
     setCreating(true);
     setSelected(null);
     setCreateName("");
     setCreateItems([{ label: "", required: false, sortOrder: 0 }]);
     setCreateError(null);
-    setHeaderTab("active");
-  }
-
-  function handleBrowseTemplates() {
-    setSelected(null);
-    setCreating(false);
-    setHeaderTab("templates");
+    setHeaderTab("all");
   }
 
   useEffect(() => {
@@ -155,25 +190,7 @@ export default function CrmChecklistsPage() {
     const found = checklists.find((c) => c.id === id) ?? null;
     setSelected(found);
     setCreating(false);
-    setHeaderTab("active");
-  }
-
-  // Start from template
-  function handleNewFromTemplate(templateId: string) {
-    const tpl = CHECKLIST_TEMPLATES.find((t) => t.id === templateId);
-    if (!tpl) return;
-    setCreating(true);
-    setSelected(null);
-    setCreateName(tpl.name);
-    setCreateItems(
-      tpl.items.map((item, idx) => ({
-        label: item.label,
-        required: item.required,
-        sortOrder: idx,
-      }))
-    );
-    setCreateError(null);
-    setHeaderTab("active");
+    setHeaderTab("all");
   }
 
   const handleConfirmCreate = useCallback(async () => {
@@ -260,9 +277,6 @@ export default function CrmChecklistsPage() {
     }
   }, [checklists, selected]);
 
-  const templatesFocus = headerTab === "templates";
-  const progressHighlight = headerTab === "progress";
-
   if (loading) {
     return (
       <PermissionGate permission="can_view_crm_checklists" fallback={<div className="state-box">You do not have Checklists access.</div>}>
@@ -282,12 +296,20 @@ export default function CrmChecklistsPage() {
             <ChecklistCommandHeader
               activeCount={activeChecklists.length}
               archivedCount={archivedCount}
+              draftCount={draftCount}
+              totalCount={checklists.length}
               avgRequiredPct={avgRequiredPct}
               liveReadyCount={liveReadyCount}
               tab={headerTab}
               onTabChange={setHeaderTab}
+              search={search}
+              onSearchChange={setSearch}
+              sortMode={sortMode}
+              onSortModeChange={setSortMode}
+              viewMode={viewMode}
+              onViewModeChange={handleViewModeChange}
+              shownCount={filteredChecklists.length}
               onNewBlank={handleNewBlank}
-              onBrowseTemplates={handleBrowseTemplates}
             />
 
             {error && (
@@ -308,7 +330,11 @@ export default function CrmChecklistsPage() {
               <CRMWorkspaceScrollRegion>
                 <ChecklistWorkspace
                   selected={selected}
-                  checklists={checklists}
+                  checklists={filteredChecklists}
+                  totalCount={checklists.length}
+                  viewMode={viewMode}
+                  activeFilter={headerTab}
+                  search={search}
                   onSelect={handleSelect}
                   onSaveEdit={handleSaveEdit}
                   onArchive={handleArchive}
@@ -323,36 +349,21 @@ export default function CrmChecklistsPage() {
                   onCancelCreate={handleCancelCreate}
                   createSaving={createSaving}
                   createError={createError}
-                  onPickTemplate={handleNewFromTemplate}
                   onNewBlank={handleNewBlank}
-                  templatesFocus={templatesFocus}
                 />
               </CRMWorkspaceScrollRegion>
             </CRMWorkspaceMain>
 
-            <CRMWorkspaceRightRail
-              className={cn(
-                progressHighlight &&
-                  "rounded-crm-lg ring-1 ring-crm-accent/25 transition-shadow"
-              )}
-            >
+            <CRMWorkspaceRightRail>
               <ChecklistProgressPanel
                 checklist={selected}
                 checklists={checklists}
                 avgRequiredPct={avgRequiredPct}
                 liveReadyCount={liveReadyCount}
                 onNewBlank={handleNewBlank}
-                onBrowseTemplates={handleBrowseTemplates}
               />
             </CRMWorkspaceRightRail>
           </CRMWorkspaceBody>
-
-          <CRMWorkspaceFooter>
-            <ChecklistQuickTipsStrip
-              onNewBlank={handleNewBlank}
-              onBrowseTemplates={handleBrowseTemplates}
-            />
-          </CRMWorkspaceFooter>
         </CRMWorkspaceShell>
     </CRMPageShell>
     </PermissionGate>

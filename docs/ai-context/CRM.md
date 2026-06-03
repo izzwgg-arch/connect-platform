@@ -254,6 +254,14 @@ Layout-only pattern for CRM desk pages (Queue, Funders, Tasks, Scripts, Checklis
 4. Put summary rails in `CRMWorkspaceRightRail` when applicable.
 5. Do not duplicate height/overflow logic per page — extend shared utilities only.
 
+### Tasks Layout Standard
+
+- `/crm/tasks` is the visual standard for CRM desk pages: `CRMPageShell` + `CRMWorkspaceShell`, fixed `CRMWorkspaceChrome`, KPI row, single horizontal filter card, scrollable main list/content, and a compact right summary rail.
+- `/crm/checklists` follows the Tasks layout system. It keeps real checklist create/edit/archive/restore behavior, removes instructional cards and seeded/template playbooks from the page surface, starts from a clean empty state, and uses persisted Card/List view preference under local storage.
+- `/crm/scripts` follows the Tasks layout system. It keeps the existing scripts list/create/detail navigation flow, removes starter templates/tutorial content/duplicate create buttons from the page surface, starts from a clean empty state, and uses persisted Card/List view preference under local storage.
+- Checklist and Script filters live in the page chrome, not inside nested library cards. They include All, Active, Draft, Archived, Search, Sort, and View. Filters must change the actual rendered collection, not only the visual active pill.
+- Empty states should use the Tasks-style centered empty-state surface: professional copy, no tutorials, no demo examples, and no seeded content.
+
 ## Verification
 
 - For CRM portal UI changes, run portal typecheck and portal build.

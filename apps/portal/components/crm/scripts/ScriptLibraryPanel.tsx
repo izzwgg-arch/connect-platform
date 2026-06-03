@@ -1,35 +1,28 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import {
   Archive,
-  ChevronDown,
+  ChevronRight,
   Clock,
   FileText,
-  Filter,
-  Grid2X2,
-  ListFilter,
-  Plus,
   RotateCcw,
-  Search,
-  SlidersHorizontal,
 } from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
-import {
-  SCRIPT_TEMPLATES,
-  SCRIPT_TEMPLATE_ACCENT_CLASSES,
-} from "./ScriptTemplates";
+import type { ScriptStatusFilter, ScriptViewMode } from "./ScriptCommandHeader";
 import type { ScriptSummary } from "./scriptTypes";
 
 interface ScriptLibraryPanelProps {
   scripts: ScriptSummary[];
+  totalCount: number;
   selectedId: string | null;
   /** Increment after a successful create so search/status filters reset. */
   resetFiltersToken?: number;
+  viewMode: ScriptViewMode;
+  activeFilter: ScriptStatusFilter;
+  search: string;
   onSelect: (id: string) => void;
   onCreate: () => void;
-  onUseTemplate: (templateKey: string) => void;
 }
 
 function relativeTime(iso: string): string {
@@ -43,211 +36,177 @@ function relativeTime(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-type StatusFilter = "all" | "active" | "archived";
-
-const CATEGORY_TONES = [
-  "scripts-category-pill--blue",
-  "scripts-category-pill--violet",
-  "scripts-category-pill--green",
-  "scripts-category-pill--amber",
-  "scripts-category-pill--rose",
-] as const;
-
-function categoryFor(script: ScriptSummary): { label: string; tone: string } {
-  const match = SCRIPT_TEMPLATES.find((tpl) =>
-    script.name.toLowerCase().includes(tpl.label.toLowerCase().split(" ")[0] ?? ""),
-  );
-  const label = match?.label ?? "General";
-  const tone = CATEGORY_TONES[Math.abs(script.name.length) % CATEGORY_TONES.length];
-  return { label, tone };
+function scriptStatus(script: ScriptSummary) {
+  return script.isActive ? "Active" : "Archived";
 }
 
 export function ScriptLibraryPanel({
   scripts,
+  totalCount,
   selectedId,
-  resetFiltersToken = 0,
+  viewMode,
+  activeFilter,
+  search,
   onSelect,
   onCreate,
-  onUseTemplate,
 }: ScriptLibraryPanelProps) {
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState<StatusFilter>("all");
-  const [templatesOpen, setTemplatesOpen] = useState(true);
-
-  useEffect(() => {
-    if (resetFiltersToken > 0) {
-      setSearch("");
-      setStatus("all");
-    }
-  }, [resetFiltersToken]);
-
-  const activeScripts = scripts.filter((s) => s.isActive);
-
-  const filteredScripts = scripts
-    .filter((s) => {
-      if (status === "active") return s.isActive;
-      if (status === "archived") return !s.isActive;
-      return true;
-    })
-    .filter((s) => s.name.toLowerCase().includes(search.toLowerCase()))
-    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-
-  const showTemplateRail = activeScripts.length === 0 || templatesOpen;
-
   return (
     <div className={cn(crm.scriptsLibraryCol, "min-h-0 flex-1")}>
       <div className={cn(crm.scriptsPanelSupport, "flex min-h-0 flex-1 flex-col overflow-hidden")}>
-        <div className={crm.scriptsLibraryHeader}>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="scripts-mini-icon scripts-mini-icon--blue">
-                <FileText className="h-4 w-4" />
-              </span>
-              <span className="text-lg font-bold tracking-tight text-crm-text">All Scripts</span>
-              <span className={crm.scriptsLibraryCount}>{scripts.length}</span>
-            </div>
-            <p className="mt-1 text-sm text-crm-muted">Search, organize, and open real call playbooks.</p>
-          </div>
-          <button
-            type="button"
-            onClick={onCreate}
-            className={cn(crm.btnPrimary, "h-10 gap-1.5 px-4 text-sm")}
-          >
-            <Plus className="h-4 w-4" />
-            New Script
-          </button>
-        </div>
-
-        <div className="scripts-toolbar border-b border-crm-border/40 p-3 sm:p-4">
-          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto]">
-            <div className="relative min-w-0">
-              <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-crm-muted" />
-              <input
-                type="search"
-                placeholder="Search scripts…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className={cn(crm.input, crm.inputWithIcon, "h-11 rounded-2xl py-2.5 text-sm")}
-              />
-            </div>
-            <label className="relative">
-              <Filter className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-crm-muted" />
-              <select
-                value={status}
-                onChange={(e) => setStatus(e.target.value as StatusFilter)}
-                className={cn(crm.select, "h-11 min-w-[10rem] rounded-2xl pl-9 text-sm")}
-              >
-                <option value="all">All Status</option>
-                <option value="active">Active</option>
-                <option value="archived">Archived</option>
-              </select>
-            </label>
-            <div className="hidden items-center gap-1 rounded-2xl border border-crm-border bg-crm-surface-2/70 p-1 md:flex">
-              <span className="rounded-xl bg-crm-surface px-2.5 py-2 text-crm-accent shadow-sm">
-                <ListFilter className="h-4 w-4" />
-              </span>
-              <span className="px-2 py-2 text-crm-muted">
-                <Grid2X2 className="h-4 w-4" />
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className={cn(crm.workspaceScrollRegion, "flex flex-col gap-3 p-3 sm:p-4")}>
-          <div className="hidden grid-cols-[minmax(0,1.4fr)_minmax(8rem,0.7fr)_minmax(7rem,0.55fr)_minmax(7rem,0.5fr)_auto] gap-3 px-4 text-[11px] font-bold uppercase tracking-wider text-crm-muted lg:grid">
-            <span>Script</span>
-            <span>Category</span>
-            <span>Status</span>
-            <span>Updated</span>
-            <span className="text-right">Actions</span>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            {filteredScripts.length === 0 ? (
-              <p className="rounded-2xl border border-dashed border-crm-border px-4 py-8 text-center text-sm text-crm-muted">
-                {search ? (
-                  <>
-                  No results for &ldquo;{search}&rdquo;
-                  </>
-                ) : (
-                  "No scripts in this view yet."
-                )}
-              </p>
-            ) : (
-              filteredScripts.map((s) => (
-                <ScriptListItem
-                  key={s.id}
-                  script={s}
-                  isSelected={selectedId === s.id}
-                  onSelect={onSelect}
-                />
-              ))
-            )}
-          </div>
-
-          <div id="script-templates" className="rounded-[1.25rem] border border-crm-border/45 bg-crm-surface-2/35 p-3">
-            <button
-              type="button"
-              onClick={() => setTemplatesOpen((v) => !v)}
-              className="flex w-full items-center gap-2 text-left"
-            >
-              <span className="scripts-mini-icon scripts-mini-icon--violet">
-                <SlidersHorizontal className="h-4 w-4" />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-bold text-crm-text">Starter Templates</span>
-                <span className="text-xs text-crm-muted">Launch from existing playbook patterns.</span>
-              </span>
-              <ChevronDown
-                className={cn(
-                  "h-4 w-4 text-crm-muted transition-transform",
-                  templatesOpen && "rotate-180",
-                )}
-              />
-            </button>
-
-            {showTemplateRail ? (
-              <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                {SCRIPT_TEMPLATES.map((tpl) => {
-                  const accent = SCRIPT_TEMPLATE_ACCENT_CLASSES[tpl.accent];
-                  return (
-                    <button
-                      key={tpl.key}
-                      type="button"
-                      onClick={() => onUseTemplate(tpl.key)}
-                      className={cn(crm.scriptTplCard, "min-h-[5.75rem]", accent.card)}
-                    >
-                      <span className={cn(crm.scriptTplStrip, accent.strip)} aria-hidden />
-                      <span className={cn(crm.scriptTplIcon, accent.iconBox)} aria-hidden>
-                        {tpl.icon}
-                      </span>
-                      <div className="min-w-0 flex-1 pr-1">
-                        <span className="block text-sm font-bold text-crm-text">{tpl.label}</span>
-                        <span className="mt-1 block text-xs leading-snug text-crm-muted">
-                          {tpl.description}
-                        </span>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : null}
-          </div>
-
-          <button
-            type="button"
-            onClick={onCreate}
-            className={cn(
-              crm.btnSecondary,
-              "w-full justify-center gap-2 rounded-2xl border-dashed py-3 text-sm",
-            )}
-          >
-            <Plus className="h-4 w-4" />
-            Start from scratch
-          </button>
-        </div>
+        <ScriptCollection
+          scripts={scripts}
+          totalCount={totalCount}
+          selectedId={selectedId}
+          viewMode={viewMode}
+          activeFilter={activeFilter}
+          search={search}
+          onSelect={onSelect}
+          onCreate={onCreate}
+        />
       </div>
     </div>
+  );
+}
+
+function ScriptEmptyState({
+  activeFilter,
+  search,
+}: {
+  activeFilter: ScriptStatusFilter;
+  search: string;
+}) {
+  const filtered = activeFilter !== "all" || search.trim().length > 0;
+
+  return (
+    <div className="tasks-empty-state">
+      <div className="tasks-empty-icon text-crm-accent">
+        <FileText className="h-9 w-9" />
+      </div>
+      <p className="text-lg font-semibold tracking-tight text-crm-text">
+        {filtered ? "No scripts match" : "No scripts yet"}
+      </p>
+      <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-crm-muted">
+        {filtered
+          ? "Adjust the filters or search to see more scripts."
+          : "Create a script from the New Script button when you are ready."}
+      </p>
+    </div>
+  );
+}
+
+function ScriptCollection({
+  scripts,
+  totalCount,
+  selectedId,
+  viewMode,
+  activeFilter,
+  search,
+  onSelect,
+}: {
+  scripts: ScriptSummary[];
+  totalCount: number;
+  selectedId: string | null;
+  viewMode: ScriptViewMode;
+  activeFilter: ScriptStatusFilter;
+  search: string;
+  onSelect: (id: string) => void;
+  onCreate: () => void;
+}) {
+  if (scripts.length === 0) {
+    return <ScriptEmptyState activeFilter={activeFilter} search={search} />;
+  }
+
+  return (
+    <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="tasks-list-card-header flex items-center justify-between gap-3 px-4 py-4 sm:px-5">
+        <div className="flex items-center gap-2">
+          <FileText className="h-4 w-4 text-crm-muted" />
+          <h2 className="text-xs font-bold uppercase tracking-[0.14em] text-crm-text">
+            Scripts ({scripts.length})
+          </h2>
+        </div>
+        <span className="text-xs font-medium text-crm-muted tabular-nums">
+          {totalCount} total
+        </span>
+      </div>
+
+      <div className={cn(crm.workspaceScrollRegion, viewMode === "card" ? "p-3 sm:p-4" : "")}>
+        {viewMode === "list" ? (
+          <>
+            <div className="hidden border-b border-crm-border/55 px-5 py-2.5 text-[10px] font-bold uppercase tracking-[0.14em] text-crm-muted md:grid md:grid-cols-[minmax(0,1fr)_auto_auto_auto] md:items-center md:gap-4">
+              <span>Script</span>
+              <span>Status</span>
+              <span>Updated</span>
+              <span>Action</span>
+            </div>
+            <div className="divide-y divide-crm-border/55">
+              {scripts.map((script) => (
+                <ScriptListItem
+                  key={script.id}
+                  script={script}
+                  isSelected={selectedId === script.id}
+                  onSelect={onSelect}
+                />
+              ))}
+            </div>
+          </>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {scripts.map((script) => (
+              <ScriptCard
+                key={script.id}
+                script={script}
+                isSelected={selectedId === script.id}
+                onSelect={onSelect}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ScriptCard({
+  script,
+  isSelected,
+  onSelect,
+}: {
+  script: ScriptSummary;
+  isSelected: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const status = scriptStatus(script);
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(script.id)}
+      className={cn(
+        "tasks-list-row rounded-crm border border-crm-border/60 p-4 text-left transition-colors",
+        isSelected && "border-crm-accent/45 bg-crm-accent/10 ring-1 ring-crm-accent/25",
+        !script.isActive && "opacity-70"
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className={cn("tasks-kpi-icon", script.isActive ? "tasks-icon-scheduled" : "tasks-icon-neutral")}>
+            {script.isActive ? <FileText className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-semibold text-crm-text">
+              {script.name}
+            </span>
+            <span className="mt-1 block text-xs text-crm-muted">
+              Updated {relativeTime(script.updatedAt)}
+            </span>
+          </span>
+        </div>
+        <span className={cn("tasks-status-pill", script.isActive ? "tasks-status-completed" : "tasks-status-muted")}>
+          {status}
+        </span>
+      </div>
+    </button>
   );
 }
 
@@ -260,63 +219,44 @@ function ScriptListItem({
   isSelected: boolean;
   onSelect: (id: string) => void;
 }) {
-  const category = categoryFor(script);
+  const status = scriptStatus(script);
 
   return (
     <button
       type="button"
       onClick={() => onSelect(script.id)}
       className={cn(
-        crm.scriptCard,
-        "w-full text-left",
+        "tasks-list-row grid w-full grid-cols-1 gap-2 px-4 py-4 text-left md:grid-cols-[minmax(0,1fr)_auto_auto_auto] md:items-center md:gap-4 sm:px-5",
         isSelected && crm.scriptCardActive,
         !script.isActive && crm.scriptCardArchived,
       )}
     >
+      <span className="flex min-w-0 items-center gap-3">
+        <span className={cn("tasks-kpi-icon", script.isActive ? "tasks-icon-scheduled" : "tasks-icon-neutral")}>
+          {script.isActive ? <FileText className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
+        </span>
+        <span className="min-w-0">
+          <span className={cn("block truncate text-sm font-semibold", isSelected ? "text-crm-accent" : "text-crm-text")}>
+            {script.name}
+          </span>
+          <span className="mt-1 flex items-center gap-1.5 text-xs text-crm-muted">
+            <Clock className="h-3.5 w-3.5" />
+            Updated {relativeTime(script.updatedAt)}
+          </span>
+        </span>
+      </span>
       <span
         className={cn(
-          crm.scriptStatusStrip,
-          "my-3 ml-2",
-          isSelected ? "bg-crm-accent" : script.isActive ? "bg-crm-success" : "bg-crm-border/50",
+          "tasks-status-pill w-fit",
+          script.isActive ? "tasks-status-completed" : "tasks-status-muted"
         )}
-      />
-      <div className="grid min-w-0 flex-1 gap-3 px-3 py-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(8rem,0.7fr)_minmax(7rem,0.55fr)_minmax(7rem,0.5fr)_auto] lg:items-center">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className={cn("scripts-mini-icon", script.isActive ? "scripts-mini-icon--rose" : "scripts-mini-icon--muted")}>
-            {script.isActive ? <FileText className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
-          </span>
-          <span className="min-w-0">
-            <span
-              className={cn(
-                "block truncate text-base font-bold tracking-tight",
-                isSelected ? "text-crm-accent" : "text-crm-text",
-                !script.isActive && "line-through",
-              )}
-            >
-              {script.name}
-            </span>
-            <span className="mt-1 flex items-center gap-1.5 text-xs text-crm-muted">
-              <Clock className="h-3.5 w-3.5" />
-              Last updated {relativeTime(script.updatedAt)}
-            </span>
-          </span>
-        </div>
-        <span className={cn("scripts-category-pill w-fit", category.tone)}>
-          {category.label}
-        </span>
-        <span
-          className={cn(
-            "scripts-status-pill w-fit",
-            script.isActive ? "scripts-status-pill--active" : "scripts-status-pill--archived",
-          )}
-        >
-          {script.isActive ? "Active" : "Archived"}
-        </span>
-        <span className="text-sm font-medium text-crm-muted">{relativeTime(script.updatedAt)}</span>
-        <span className="flex items-center justify-end pr-1 text-crm-muted">
-          {script.isActive ? <ChevronDown className="-rotate-90 h-4 w-4" /> : <RotateCcw className="h-4 w-4" />}
-        </span>
-      </div>
+      >
+        {status}
+      </span>
+      <span className="text-sm font-medium text-crm-muted">{relativeTime(script.updatedAt)}</span>
+      <span className="flex items-center justify-end pr-1 text-crm-muted">
+        {script.isActive ? <ChevronRight className="h-4 w-4" /> : <RotateCcw className="h-4 w-4" />}
+      </span>
     </button>
   );
 }

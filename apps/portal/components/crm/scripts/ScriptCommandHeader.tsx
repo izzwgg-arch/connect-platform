@@ -1,23 +1,63 @@
 "use client";
 
-import { FileText, Layers3, LibraryBig, PlayCircle, Plus, Zap } from "lucide-react";
+import {
+  Archive,
+  FileText,
+  LayoutGrid,
+  LibraryBig,
+  List,
+  PlayCircle,
+  Plus,
+  Search,
+  SortAsc,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "../cn";
 import { CRMPageHeader } from "../CRMPageHeader";
 import { CRMWorkspaceHeader, CRMWorkspaceToolbar } from "../CRMWorkspaceShell";
-import { SCRIPT_TEMPLATES } from "./ScriptTemplates";
+
+export type ScriptStatusFilter = "all" | "active" | "draft" | "archived";
+export type ScriptSortMode = "updated" | "created" | "name";
+export type ScriptViewMode = "card" | "list";
+
+const TABS: { id: ScriptStatusFilter; label: string }[] = [
+  { id: "all", label: "All Scripts" },
+  { id: "active", label: "Active" },
+  { id: "draft", label: "Draft" },
+  { id: "archived", label: "Archived" },
+];
 
 export function ScriptCommandHeader({
   totalCount,
   activeCount,
+  draftCount,
+  archivedCount,
+  statusFilter,
+  onStatusFilterChange,
+  search,
+  onSearchChange,
+  sortMode,
+  onSortModeChange,
+  viewMode,
+  onViewModeChange,
+  shownCount,
   onCreate,
 }: {
   totalCount: number;
   activeCount: number;
+  draftCount: number;
+  archivedCount: number;
+  statusFilter: ScriptStatusFilter;
+  onStatusFilterChange: (filter: ScriptStatusFilter) => void;
+  search: string;
+  onSearchChange: (value: string) => void;
+  sortMode: ScriptSortMode;
+  onSortModeChange: (mode: ScriptSortMode) => void;
+  viewMode: ScriptViewMode;
+  onViewModeChange: (mode: ScriptViewMode) => void;
+  shownCount: number;
   onCreate: () => void;
 }) {
-  const templateCount = SCRIPT_TEMPLATES.length;
-
   return (
     <>
       <CRMWorkspaceHeader>
@@ -39,7 +79,7 @@ export function ScriptCommandHeader({
         <div className="tasks-kpi-grid grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <KpiTile
             icon={<LibraryBig className="h-5 w-5" />}
-            label="Total scripts"
+            label="Total"
             value={totalCount}
             sub="Script library"
             tone="neutral"
@@ -52,19 +92,85 @@ export function ScriptCommandHeader({
             tone="success"
           />
           <KpiTile
-            icon={<Layers3 className="h-5 w-5" />}
-            label="Starter templates"
-            value={templateCount}
-            sub="Built-in flows"
-            tone="scheduled"
-          />
-          <KpiTile
-            icon={<Zap className="h-5 w-5" />}
-            label="Quick start flows"
-            value={SCRIPT_TEMPLATES.length}
-            sub="One-click starters"
+            icon={<FileText className="h-5 w-5" />}
+            label="Draft"
+            value={draftCount}
+            sub="Pending publish"
             tone="warning"
           />
+          <KpiTile
+            icon={<Archive className="h-5 w-5" />}
+            label="Archived"
+            value={archivedCount}
+            sub="Hidden from use"
+            tone="scheduled"
+          />
+        </div>
+
+        <div className="tasks-filter-bar flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            {TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => onStatusFilterChange(tab.id)}
+                className={cn(
+                  "tasks-filter-pill",
+                  statusFilter === tab.id && "tasks-filter-pill-active"
+                )}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+            <label className="relative min-w-0 sm:w-56">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-crm-muted" />
+              <input
+                type="search"
+                value={search}
+                onChange={(event) => onSearchChange(event.target.value)}
+                placeholder="Search scripts"
+                className="h-8 w-full rounded-full border border-crm-border bg-crm-surface-2 pl-8 pr-3 text-xs font-medium text-crm-text outline-none placeholder:text-crm-muted"
+              />
+            </label>
+            <label className="tasks-sort-pill h-8">
+              <SortAsc className="h-3.5 w-3.5" />
+              <span className="sr-only">Sort</span>
+              <select
+                value={sortMode}
+                onChange={(event) => onSortModeChange(event.target.value as ScriptSortMode)}
+                className="bg-transparent text-xs font-bold text-inherit outline-none [color-scheme:dark]"
+              >
+                <option value="updated">Sort: Updated</option>
+                <option value="created">Sort: Created</option>
+                <option value="name">Sort: Name</option>
+              </select>
+            </label>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => onViewModeChange("card")}
+                className={cn("tasks-filter-icon-button", viewMode === "card" && "tasks-filter-icon-button-active")}
+                title="Card View"
+              >
+                <LayoutGrid className="h-4 w-4" />
+                <span className="sr-only">Card View</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onViewModeChange("list")}
+                className={cn("tasks-filter-icon-button", viewMode === "list" && "tasks-filter-icon-button-active")}
+                title="List View"
+              >
+                <List className="h-4 w-4" />
+                <span className="sr-only">List View</span>
+              </button>
+            </div>
+            <span className="text-xs font-medium text-crm-muted tabular-nums">
+              {shownCount} shown
+            </span>
+          </div>
         </div>
       </CRMWorkspaceToolbar>
     </>
