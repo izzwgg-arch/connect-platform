@@ -20,11 +20,11 @@ test("resolveSmsInboxScope: user assignment is personal", () => {
 });
 
 test("resolveSmsInboxScope: extension owner is personal", () => {
-  assert.equal(resolveSmsInboxScope({ assignedExtensionId: "e1", extensionOwnerUserId: "u2" }), "u2");
+  assert.equal(resolveSmsInboxScope({ extensionOwnerUserId: "u2" }), "u2");
 });
 
 test("resolveSmsInboxScope: extension without owner falls back to tenant-wide", () => {
-  assert.equal(resolveSmsInboxScope({ assignedExtensionId: "e1", extensionOwnerUserId: null }), "");
+  assert.equal(resolveSmsInboxScope({ extensionOwnerUserId: null }), "");
   assert.ok(isExtensionWithoutOwnerFallback({ assignedExtensionId: "e1", extensionOwnerUserId: null }));
 });
 

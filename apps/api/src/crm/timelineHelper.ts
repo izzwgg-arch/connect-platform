@@ -16,7 +16,16 @@ export type TimelineEventType =
   | "DISPOSITION_SET"
   | "CONTACT_MERGED"
   | "ASSIGNED_TO_USER"
-  | "VOICEMAIL_DROP";
+  | "SMS_SENT"
+  | "SMS_RECEIVED"
+  | "EMAIL_SENT"
+  | "EMAIL_RECEIVED"
+  | "EMAIL_REPLY"
+  | "VOICEMAIL_DROP"
+  | "FORM_SENT"
+  | "FORM_OPENED"
+  | "FORM_COMPLETED"
+  | "FORM_REVOKED";
 
 export type WriteTimelineEventInput = {
   tenantId: string;

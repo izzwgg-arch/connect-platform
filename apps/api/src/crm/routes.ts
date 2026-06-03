@@ -30,6 +30,7 @@ import { registerCrmBatchPipelineRoutes } from "./batchPipelineRoutes";
 import { registerCrmBatchDiagnosticsRoutes } from "./batchDiagnosticsRoutes";
 import { registerCrmLeadTimezoneRoutes } from "./leadTimezoneRoutes";
 import { registerCrmQuickDispositionRoutes } from "./quickDispositionRoutes";
+import { registerCrmFormRoutes } from "./formRoutes";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -379,6 +380,9 @@ export async function registerCrmRoutes(app: FastifyInstance, deps?: Pick<Connec
 
   // CRM Voicemail Drops — tenant-scoped pre-recorded PBX-safe audio
   await registerCrmVoicemailDropRoutes(app);
+
+  // CRM Forms — tenant-scoped reusable PDF forms + token-scoped public signing
+  await registerCrmFormRoutes(app);
 
   // Register CRM checklist routes (Phase 2C)
   await registerCrmChecklistRoutes(app);

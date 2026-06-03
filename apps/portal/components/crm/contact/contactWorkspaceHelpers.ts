@@ -15,6 +15,7 @@ export type ContactWorkspaceTab =
   | "sms"
   | "notes"
   | "files"
+  | "forms"
   | "discoveries"
   | "intelligence"
   | "tasks";
@@ -33,6 +34,7 @@ export const WORKSPACE_TABS: WorkspaceTabDef[] = [
   { id: "sms", label: "SMS", shortLabel: "SMS" },
   { id: "notes", label: "Notes", shortLabel: "Notes" },
   { id: "files", label: "Files", shortLabel: "Files" },
+  { id: "forms", label: "Forms", shortLabel: "Forms" },
   { id: "discoveries", label: "Discoveries", shortLabel: "Docs" },
   { id: "intelligence", label: "AI Intelligence", shortLabel: "AI" },
   { id: "tasks", label: "Tasks", shortLabel: "Tasks" },

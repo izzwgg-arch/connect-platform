@@ -719,7 +719,7 @@ test("E-2: takeOverBillingFromSola sets billingScheduleOverride.nextPaymentDate 
 
   const upsertCall = settingsUpserts[0] as {
     update?: { metadata?: { billingScheduleOverride?: { nextPaymentDate?: string; _solaTransitionGuard?: boolean } } };
-    create?: { metadata?: { billingScheduleOverride?: { nextPaymentDate?: string } } };
+    create?: { metadata?: { billingScheduleOverride?: { nextPaymentDate?: string; _solaTransitionGuard?: boolean } } };
   };
   assert.ok(upsertCall, "settings must be upserted");
 

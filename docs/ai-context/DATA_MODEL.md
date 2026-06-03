@@ -875,6 +875,40 @@ To keep this file short and useful, the following lower-traffic models are
 When in doubt, **grep `schema.prisma` for the model name before
 touching it.**
 
+---
+
+## CRM Forms Foundation (Phase 1)
+
+Added in migration `20260603104500_crm_forms_foundation`. Additive, tenant-scoped CRM form signing foundation.
+
+### `CrmFormTemplate`
+- Reusable PDF form template per tenant.
+- Fields: `tenantId`, `name`, `description`, `category`, `originalFileName`, `storageKey`, `mimeType`, `sizeBytes`, `status` (`DRAFT | ACTIVE | ARCHIVED`), `pageCount`, `pdfMetadata`, `createdByUserId`.
+- Storage keys are tenant-scoped and never returned to public callers.
+
+### `CrmFormField`
+- Manual/detected form field definitions for a template.
+- Types: `TEXT | DATE | CHECKBOX | SIGNATURE | INITIALS`.
+- Coordinates: `pageNumber`, `x`, `y`, `width`, `height`, plus `sortOrder`.
+- Phase 1 uses structured field lists; coordinates are preserved for a later drag/drop overlay editor.
+
+### `CrmFormRequest`
+- One secure public link request for one contact/template.
+- Stores only `tokenHash` (SHA-256 of high-entropy random token), never the raw token.
+- Status: `SENT | OPENED | COMPLETED | EXPIRED | REVOKED`.
+- Scoped by `tenantId`, `contactId`, `formTemplateId`, `recipientEmail`, and expiry/revoke timestamps.
+
+### `CrmFormSubmission`
+- Completed public submission for a request.
+- Stores `submittedData` JSON, optional `completedPdfStorageKey`, `ipAddressHash`, `userAgent`, and `submittedAt`.
+- `completedPdfStorageKey` is nullable in Phase 1; completed PDF generation is deferred.
+
+### Security
+- CRM routes use `requireCrmAccess` and tenant-scoped queries.
+- Contact routes also use existing contact-scope checks.
+- Public routes lookup by token hash, enforce expiry/revocation, and expose only the specific request/template/fields.
+- Timeline events added: `FORM_SENT`, `FORM_OPENED`, `FORM_COMPLETED`, `FORM_REVOKED`.
+
 ## Manual invoice + external payment fields (migration 20260605000000_billing_manual_external)
 
 ### New enum `ExternalPaymentMethod`

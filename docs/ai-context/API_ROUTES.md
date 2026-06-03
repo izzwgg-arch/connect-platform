@@ -962,6 +962,37 @@ Registered via `registerCrmDocTextExtractionRoutes(app)` in `apps/api/src/crm/do
 | `scanned_or_image_ocr_not_configured` | (in error field) | PDF has no text layer — OCR not yet available |
 | `unsupported_file_type` | (in error field) | File format not supported by any extractor |
 
+### CRM Forms Foundation _(Phase 1)_
+
+Registered via `registerCrmFormRoutes(app)` in `apps/api/src/crm/formRoutes.ts`.
+CRM routes require `requireCrmAccess`; contact-bound routes also use `assertCrmContactAllowed`.
+Public routes are JWT-bypassed only for `/public/forms/*` and are scoped by hashed random token.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/crm/forms` | List templates with counts. Filters: `?search=`, `?status=DRAFT|ACTIVE|ARCHIVED`. No storage keys. |
+| POST | `/crm/forms/upload` | Multipart `file` PDF plus optional `name`, `description`, `category`. Stores tenant-scoped PDF and metadata. |
+| GET | `/crm/forms/:id` | Template detail + fields. Tenant-scoped. |
+| PUT | `/crm/forms/:id` | Update name/description/category/status. |
+| POST | `/crm/forms/:id/archive` | Sets status `ARCHIVED`. |
+| GET | `/crm/forms/:id/fields` | List structured/manual fields. |
+| PUT | `/crm/forms/:id/fields` | Replace fields atomically. Supports `TEXT`, `DATE`, `CHECKBOX`, `SIGNATURE`, `INITIALS`. |
+| GET | `/crm/forms/:id/preview` | Authenticated PDF stream for CRM users; no storage key exposure. |
+| GET | `/crm/contacts/:id/forms` | Contact Forms section data: sent requests + active templates. |
+| POST | `/crm/contacts/:id/forms/send` | Creates request, hashes token, queues existing `crm-email-send` job with secure portal link, writes timeline. |
+| POST | `/crm/forms/requests/:id/resend` | Rotates token, extends expiry, queues existing CRM email sender path. |
+| POST | `/crm/forms/requests/:id/revoke` | Revokes non-completed request and writes timeline. |
+| GET | `/public/forms/:token` | Token-scoped public form payload. Marks first open as `OPENED`. Completed requests return completion state without field definitions. |
+| GET | `/public/forms/:token/pdf` | Token-scoped PDF preview stream for an active request only; completed/revoked/expired requests are blocked. |
+| POST | `/public/forms/:token/submit` | Validates required fields, stores `CrmFormSubmission`, marks request `COMPLETED`. |
+
+Security rules:
+- Raw tokens and storage keys are never returned or logged.
+- Production form storage requires `CRM_FORM_STORAGE_DIR` or `CRM_DOC_STORAGE_DIR`; missing persistent storage fails closed.
+- Expired/revoked tokens are blocked.
+- Public responses expose only the requested form template metadata and fields, not tenant/contact internals.
+- Completed PDF generation is pending in Phase 1; structured submission data is the durable source of truth.
+
 ### CRM Contact Discovery _(Phase 6)_
 
 **Auth:** `requireCrmAccess` on all routes. Strict tenant isolation — tenant B cannot read or act on tenant A discoveries.

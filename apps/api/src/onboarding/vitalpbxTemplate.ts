@@ -115,7 +115,7 @@ export function generateVitalPbxCsv(rows: CsvExtensionRow[]): { filename: string
       max_contacts:               5,
       email:                      email,
       vm_enabled:                 "yes",
-      vm_password:                (r.vmPassword || "").trim() || undefined,
+      vm_password:                (r.vmPassword || "").trim(),
       outgoing_rec:               "yes",
       incoming_rec:               "yes",
     }));

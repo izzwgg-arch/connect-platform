@@ -738,6 +738,10 @@ model Tenant {
   crmLeadDiscoveredPhones         CrmLeadDiscoveredPhone[]
   crmLeadDiscoveredEmails         CrmLeadDiscoveredEmail[]
   crmLeadIntelligenceReports      CrmLeadIntelligenceReport[]
+  crmFormTemplates                CrmFormTemplate[]
+  crmFormFields                   CrmFormField[]
+  crmFormRequests                 CrmFormRequest[]
+  crmFormSubmissions              CrmFormSubmission[]
   crmAiSettings                   CrmAiSettings?
   crmImportBatchRows              CrmImportBatchRow[]
   crmImportBatchPipelineRuns      CrmImportBatchPipelineRun[]
@@ -839,6 +843,8 @@ model User {
   whatsAppAccounts               WhatsAppAccount[]
   /// CRM Drive match Phase 2
   crmLeadDocumentsReviewed       CrmLeadDocument[] @relation("CrmLeadDocumentReviewedBy")
+  crmFormTemplatesCreated        CrmFormTemplate[] @relation("CrmFormTemplateCreatedBy")
+  crmFormRequestsCreated         CrmFormRequest[]  @relation("CrmFormRequestCreatedBy")
 }
 
 enum UserRole {
@@ -1908,6 +1914,8 @@ model Contact {
   crmEmailMessages      CrmEmailMessage[]
   crmEmailSendLogs      CrmEmailSendLog[]
   leadDocuments         CrmLeadDocument[]
+  crmFormRequests       CrmFormRequest[]
+  crmFormSubmissions    CrmFormSubmission[]
   importBatchRows       CrmImportBatchRow[]
   discoveredPhones      CrmLeadDiscoveredPhone[]
   discoveredEmails      CrmLeadDiscoveredEmail[]
@@ -3874,6 +3882,10 @@ enum CrmTimelineEventType {
   EMAIL_RECEIVED
   EMAIL_REPLY
   VOICEMAIL_DROP
+  FORM_SENT
+  FORM_OPENED
+  FORM_COMPLETED
+  FORM_REVOKED
 }
 
 /// Immutable audit-style record of CRM activity for a contact.
@@ -4562,6 +4574,28 @@ enum CrmLeadDocumentStatus {
   REJECTED
 }
 
+enum CrmFormTemplateStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum CrmFormFieldType {
+  TEXT
+  DATE
+  CHECKBOX
+  SIGNATURE
+  INITIALS
+}
+
+enum CrmFormRequestStatus {
+  SENT
+  OPENED
+  COMPLETED
+  EXPIRED
+  REVOKED
+}
+
 /// Tenant-scoped Google Drive folder configuration.
 /// Each row links a tenant to a specific Drive folder for a given purpose.
 /// The googleConnection (CrmEmailConnection) must have the Drive readonly scope.
@@ -4656,6 +4690,114 @@ model CrmLeadDocument {
   // This replaced the over-broad Phase 1 (tenantId, googleDriveFileId) constraint.
   // Enables the same Drive file to appear in separate import batches for the same tenant.
   @@unique([tenantId, importBatchId, googleDriveFileId])
+}
+
+/// Tenant-scoped reusable PDF form template.
+/// File contents are stored outside the DB using a tenant-scoped storage key.
+model CrmFormTemplate {
+  id                String                @id @default(cuid())
+  tenantId          String
+  name              String
+  description       String?
+  category          String?
+  originalFileName  String
+  storageKey        String
+  mimeType          String
+  sizeBytes         BigInt
+  status            CrmFormTemplateStatus @default(DRAFT)
+  pageCount         Int?
+  pdfMetadata       Json?
+  createdByUserId   String?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy     User?             @relation("CrmFormTemplateCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  fields        CrmFormField[]
+  requests      CrmFormRequest[]
+  submissions   CrmFormSubmission[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, category])
+  @@index([tenantId, updatedAt])
+}
+
+/// Manual or detected fields for a reusable CRM form template.
+/// Coordinates are normalized PDF-space values saved for future overlay editors.
+model CrmFormField {
+  id             String           @id @default(cuid())
+  tenantId       String
+  formTemplateId String
+  fieldType      CrmFormFieldType
+  label          String
+  required       Boolean          @default(false)
+  pageNumber     Int
+  x              Float
+  y              Float
+  width          Float
+  height         Float
+  sortOrder      Int              @default(0)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  tenant       Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  formTemplate CrmFormTemplate @relation(fields: [formTemplateId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, formTemplateId])
+  @@index([formTemplateId, sortOrder])
+}
+
+/// One secure public-link request for a contact to complete a form.
+/// tokenHash stores the SHA-256 hash of the random token; the raw token is never persisted.
+model CrmFormRequest {
+  id               String               @id @default(cuid())
+  tenantId         String
+  contactId        String
+  formTemplateId   String
+  status           CrmFormRequestStatus @default(SENT)
+  recipientEmail   String
+  tokenHash        String               @unique
+  message          String?
+  expiresAt        DateTime
+  sentAt           DateTime             @default(now())
+  openedAt         DateTime?
+  completedAt      DateTime?
+  revokedAt        DateTime?
+  createdByUserId  String?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact      Contact             @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  formTemplate CrmFormTemplate     @relation(fields: [formTemplateId], references: [id], onDelete: Restrict)
+  createdBy    User?               @relation("CrmFormRequestCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  submission   CrmFormSubmission?
+
+  @@index([tenantId, contactId, createdAt])
+  @@index([tenantId, formTemplateId, createdAt])
+  @@index([tenantId, status, expiresAt])
+}
+
+/// Completed public form submission. Stores structured field values and optional completed PDF key.
+model CrmFormSubmission {
+  id                     String   @id @default(cuid())
+  tenantId               String
+  formRequestId          String   @unique
+  contactId              String
+  formTemplateId         String
+  submittedData          Json
+  completedPdfStorageKey String?
+  ipAddressHash          String?
+  userAgent              String?
+  submittedAt            DateTime @default(now())
+
+  tenant       Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  formRequest  CrmFormRequest  @relation(fields: [formRequestId], references: [id], onDelete: Cascade)
+  contact      Contact         @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  formTemplate CrmFormTemplate @relation(fields: [formTemplateId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, contactId, submittedAt])
+  @@index([tenantId, formTemplateId, submittedAt])
 }
 
 // ─── CRM Document Text Extraction (Phase 5) ──────────────────────────────────

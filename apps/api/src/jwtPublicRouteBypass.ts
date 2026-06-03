@@ -5,6 +5,7 @@
  * Keep this aligned verbatim with production behavior — tested in publicReadyJwtBypass.test.ts.
  */
 export function shouldSkipJwtVerification(path: string): boolean {
+  const pathWithoutApiPrefix = path.startsWith("/api/") ? path.slice(4) : path;
   // Reverse proxies often mount the API under a prefix (e.g. /api/...); req.url keeps that prefix.
   const isDevObserveTokenPath =
     path === "/admin/dev/generate-observe-token" || path.endsWith("/admin/dev/generate-observe-token");
@@ -39,6 +40,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || path === "/voice/moh/upload"
     || path.endsWith("/voice/moh/upload");
   const isOnboardingPublicPath = path.startsWith("/onboarding/");
+  const isPublicCrmFormPath = pathWithoutApiPrefix.startsWith("/public/forms/");
   // CRM Email OAuth callback: Google redirects the user's browser here with code+state.
   // The browser cannot carry our Bearer token. Auth is performed inside the handler via
   // HMAC-signed `state` (tenantId, userId, scope, ts) — see emailRoutes.ts.
@@ -58,6 +60,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || isIvrPromptSyncPath
     || isMohSyncPath
     || isOnboardingPublicPath
+    || isPublicCrmFormPath
     || isCrmEmailOauthCallbackPath
     || [
       "/health",

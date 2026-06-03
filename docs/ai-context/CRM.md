@@ -114,6 +114,19 @@ Pipeline (unchanged): Google Drive match → import (`CrmLeadDocument`) → text
 
 **Raw OCR text** is never returned by the summary endpoint.
 
+## CRM Forms (Phase 1)
+
+- `/crm/forms` is the reusable form library. It uses the CRM Tasks visual shell and lists template name, category, status, created/updated dates, sent count, completed count, and actions.
+- Upload accepts PDF only. Files are stored under tenant-scoped CRM form storage; API responses never expose storage keys.
+- Production requires `CRM_FORM_STORAGE_DIR` or `CRM_DOC_STORAGE_DIR`; without one, form storage fails closed instead of writing to ephemeral container data.
+- Manual field editor is a structured field list in Phase 1 (`TEXT`, `DATE`, `CHECKBOX`, `SIGNATURE`, `INITIALS`) with required flags and PDF coordinates. Drag/drop overlay editing is intentionally deferred.
+- Contact workspace has a Forms tab. It lists requests for the contact and supports Send Form, Resend, and Revoke.
+- Send Form uses the existing CRM email queue (`crm-email-send`) and sender resolution. Do not add a second outbound email path.
+- Public signing uses `/forms/sign/:token` in the portal and `/public/forms/:token` in the API. Tokens are random, stored hashed, expire, and can be revoked.
+- Completed public links show a completion state and no longer serve field definitions or the PDF preview.
+- Completed submissions are saved as `CrmFormSubmission.submittedData`; completed PDF generation remains pending in Phase 1.
+- Timeline events: `FORM_SENT`, `FORM_OPENED`, `FORM_COMPLETED`, `FORM_REVOKED`.
+
 ## Dashboard And Email UI
 
 - CRM dashboard modernization is UI-only. Keep existing API calls in `apps/portal/app/(platform)/crm/dashboard/page.tsx`; derive status from the values already loaded there.

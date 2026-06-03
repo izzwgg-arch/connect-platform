@@ -6,7 +6,7 @@ import {
   ArrowLeft, Phone, Mail, Clock, User, MessageSquareDot, Trash2,
   Circle, Plus, CheckCheck, GitMerge, AlertTriangle, Calendar,
   ChevronRight, Sparkles, Star, MoreVertical, NotebookPen,
-  FileText, Files, ListTodo, ClipboardCheck, Activity, ScanText, Brain,
+  FileText, Files, ListTodo, ClipboardCheck, Activity, ScanText, Brain, FileSignature,
 } from "lucide-react";
 import {
   CRMPageShell,
@@ -110,6 +110,7 @@ type ContactWorkspaceTab =
   | "sms"
   | "notes"
   | "files"
+  | "forms"
   | "discoveries"
   | "intelligence"
   | "tasks";
@@ -1262,6 +1263,187 @@ function PhoneActionPicker({
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+type ContactFormTemplateOption = {
+  id: string;
+  name: string;
+  category: string | null;
+};
+
+type ContactFormRequest = {
+  id: string;
+  formName: string | null;
+  status: "SENT" | "OPENED" | "COMPLETED" | "EXPIRED" | "REVOKED";
+  recipientEmail: string;
+  sentAt: string | null;
+  openedAt: string | null;
+  completedAt: string | null;
+  expiresAt: string | null;
+  completedPdfAvailable: boolean;
+};
+
+function ContactFormsPanel({
+  contactId,
+  defaultEmail,
+  disabled,
+  onActivity,
+}: {
+  contactId: string;
+  defaultEmail: string | null;
+  disabled: boolean;
+  onActivity: () => void;
+}) {
+  const [requests, setRequests] = useState<ContactFormRequest[]>([]);
+  const [templates, setTemplates] = useState<ContactFormTemplateOption[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [sendingOpen, setSendingOpen] = useState(false);
+  const [templateId, setTemplateId] = useState("");
+  const [recipientEmail, setRecipientEmail] = useState(defaultEmail || "");
+  const [message, setMessage] = useState("");
+  const [working, setWorking] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await apiGet<{ requests: ContactFormRequest[]; templates: ContactFormTemplateOption[] }>(`/crm/contacts/${contactId}/forms`);
+      setRequests(data.requests || []);
+      setTemplates(data.templates || []);
+      setTemplateId((current) => current || data.templates?.[0]?.id || "");
+      setRecipientEmail((current) => current || defaultEmail || "");
+    } catch (err: any) {
+      setError(err?.message || "Failed to load forms.");
+    } finally {
+      setLoading(false);
+    }
+  }, [contactId, defaultEmail]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const sendForm = async () => {
+    if (!templateId) {
+      setError("Choose a form template before sending.");
+      return;
+    }
+    if (!recipientEmail.trim()) {
+      setError("Recipient email is required before sending a form.");
+      return;
+    }
+    setWorking("send");
+    setError(null);
+    try {
+      await apiPost(`/crm/contacts/${contactId}/forms/send`, {
+        formTemplateId: templateId,
+        recipientEmail: recipientEmail.trim(),
+        message: message.trim() || undefined,
+      });
+      setSendingOpen(false);
+      setMessage("");
+      await load();
+      onActivity();
+    } catch (err: any) {
+      setError(err?.message || "Failed to send form.");
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  const action = async (requestId: string, kind: "resend" | "revoke") => {
+    setWorking(`${kind}:${requestId}`);
+    setError(null);
+    try {
+      await apiPost(`/crm/forms/requests/${requestId}/${kind}`, {});
+      await load();
+      onActivity();
+    } catch (err: any) {
+      setError(err?.message || `Failed to ${kind} form.`);
+    } finally {
+      setWorking(null);
+    }
+  };
+
+  return (
+    <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-crm-accent">Forms</p>
+          <h3 className="text-lg font-bold text-crm-text">{requests.length} form request{requests.length === 1 ? "" : "s"}</h3>
+        </div>
+        {!disabled ? (
+          <button type="button" onClick={() => setSendingOpen((v) => !v)} className={crm.btnSecondary}>
+            <Plus className="h-4 w-4" />
+            Send Form
+          </button>
+        ) : null}
+      </div>
+
+      {error ? <div className="mb-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-200">{error}</div> : null}
+
+      {sendingOpen ? (
+        <div className="mb-4 rounded-xl border border-crm-border/70 bg-crm-surface p-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="text-xs font-semibold uppercase tracking-wide text-crm-muted">
+              Form
+              <select value={templateId} onChange={(e) => setTemplateId(e.target.value)} className={cn(crm.input, "mt-1")}>
+                {templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+              </select>
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-crm-muted">
+              Recipient email
+              <input value={recipientEmail} onChange={(e) => setRecipientEmail(e.target.value)} className={cn(crm.input, "mt-1")} />
+            </label>
+          </div>
+          <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3} placeholder="Optional message" className={cn(crm.input, "mt-3 min-h-[5rem] resize-none")} />
+          <div className="mt-3 flex justify-end gap-2">
+            <button type="button" onClick={() => setSendingOpen(false)} className={crm.btnSecondary}>Cancel</button>
+            <button type="button" onClick={sendForm} disabled={working === "send" || !templates.length} className={crm.btnPrimary}>
+              {working === "send" ? "Sending…" : "Send secure link"}
+            </button>
+          </div>
+          {!templates.length ? <p className="mt-2 text-xs text-crm-muted">Create and activate a form template from CRM Forms first.</p> : null}
+        </div>
+      ) : null}
+
+      {loading ? (
+        <LoadingSkeleton rows={2} />
+      ) : requests.length === 0 ? (
+        <p className="px-2 py-3 text-center text-sm text-crm-muted">No forms have been sent to this contact yet.</p>
+      ) : (
+        <div className="space-y-3">
+          {requests.map((request) => (
+            <div key={request.id} className="rounded-xl border border-crm-border/70 bg-crm-surface px-3 py-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="font-semibold text-crm-text">{request.formName || "Form"}</p>
+                  <p className="text-xs text-crm-muted">To {request.recipientEmail} · Sent {request.sentAt ? formatDate(request.sentAt) : "—"}</p>
+                </div>
+                <span className="rounded-full bg-crm-accent/10 px-2 py-1 text-xs font-semibold text-crm-accent">{request.status}</span>
+              </div>
+              <div className="mt-2 grid gap-2 text-xs text-crm-muted md:grid-cols-3">
+                <span>Opened: {request.openedAt ? formatDate(request.openedAt) : "—"}</span>
+                <span>Completed: {request.completedAt ? formatDate(request.completedAt) : "—"}</span>
+                <span>Expires: {request.expiresAt ? formatDate(request.expiresAt) : "—"}</span>
+              </div>
+              {request.status !== "COMPLETED" && request.status !== "REVOKED" ? (
+                <div className="mt-3 flex gap-2">
+                  <button type="button" onClick={() => action(request.id, "resend")} disabled={working === `resend:${request.id}`} className={crm.btnSecondary}>
+                    Resend
+                  </button>
+                  <button type="button" onClick={() => action(request.id, "revoke")} disabled={working === `revoke:${request.id}`} className={crm.btnSecondary}>
+                    Revoke
+                  </button>
+                </div>
+              ) : request.status === "COMPLETED" ? (
+                <p className="mt-3 text-xs text-crm-muted">Submission stored in CRM. Completed PDF generation pending.</p>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -2492,6 +2674,7 @@ function CrmContactDetailInner() {
                 ["sms", "SMS", MessageSquareDot],
                 ["notes", "Notes", NotebookPen],
                 ["files", "Files", Files],
+                ["forms", "Forms", FileSignature],
                 ["discoveries", "Discoveries", ScanText],
                 ["intelligence", "AI Intelligence", Brain],
                 ["tasks", "Tasks", ListTodo],
@@ -2594,6 +2777,13 @@ function CrmContactDetailInner() {
               />
             ) : workspaceTab === "files" ? (
               <ContactDriveDocuments contactId={id} />
+            ) : workspaceTab === "forms" ? (
+              <ContactFormsPanel
+                contactId={id}
+                defaultEmail={primaryEmailRow?.email ?? null}
+                disabled={isArchived}
+                onActivity={() => { void loadTimeline(); }}
+              />
             ) : workspaceTab === "discoveries" ? (
               <ContactDiscoveries contactId={id} />
             ) : workspaceTab === "intelligence" ? (

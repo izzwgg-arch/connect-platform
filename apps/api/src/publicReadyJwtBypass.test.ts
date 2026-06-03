@@ -21,6 +21,13 @@ test("shouldSkipJwtVerification: arbitrary protected API path does not skip", ()
   assert.equal(shouldSkipJwtVerification("/tenants/foo"), false);
 });
 
+test("shouldSkipJwtVerification: public CRM form links skip only exact public prefix", () => {
+  assert.equal(shouldSkipJwtVerification("/public/forms/token"), true);
+  assert.equal(shouldSkipJwtVerification("/api/public/forms/token/pdf"), true);
+  assert.equal(shouldSkipJwtVerification("/crm/public/forms/token"), false);
+  assert.equal(shouldSkipJwtVerification("/internal/proxy/public/forms/token"), false);
+});
+
 test("minimal app: GET /ready and /api/ready and /health without Authorization are not 401", async () => {
   const app = Fastify();
   await app.register(jwt, { secret: "test-secret-key-for-jwt-bypass-tests-only!!" });
