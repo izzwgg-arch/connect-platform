@@ -4,12 +4,7 @@ import Link from "next/link";
 import {
   ArrowRight,
   CalendarDays,
-  ChevronRight,
   Clock,
-  FileText,
-  ListPlus,
-  Plus,
-  Search,
 } from "lucide-react";
 import { cn } from "../cn";
 import type { TaskStats } from "./TaskKpiStrip";
@@ -75,12 +70,10 @@ export function TaskSidebar({
   stats,
   statsLoading,
   upcomingTasks,
-  onCreateTask,
 }: {
   stats: TaskStats | null;
   statsLoading: boolean;
   upcomingTasks: CrmTask[];
-  onCreateTask: () => void;
 }) {
   const overdue = stats?.overdue ?? 0;
   const dueToday = stats?.dueToday ?? 0;
@@ -148,32 +141,6 @@ export function TaskSidebar({
           View full report
           <ArrowRight className="h-3.5 w-3.5" />
         </Link>
-      </SidebarCard>
-
-      <SidebarCard>
-        <SidebarHeader title="Quick Actions" />
-        <div className="flex flex-col divide-y divide-crm-border/55">
-          <button type="button" onClick={onCreateTask} className="tasks-quick-action">
-            <Plus className="h-4 w-4" />
-            <span>Create New Task</span>
-            <ChevronRight className="ml-auto h-4 w-4" />
-          </button>
-          <button type="button" onClick={onCreateTask} className="tasks-quick-action">
-            <ListPlus className="h-4 w-4" />
-            <span>Schedule Follow-up</span>
-            <ChevronRight className="ml-auto h-4 w-4" />
-          </button>
-          <Link href="/crm/contacts" className="tasks-quick-action">
-            <Search className="h-4 w-4" />
-            <span>Add from Contact</span>
-            <ChevronRight className="ml-auto h-4 w-4" />
-          </Link>
-          <span className="tasks-quick-action tasks-quick-action-disabled" aria-disabled="true">
-            <FileText className="h-4 w-4" />
-            <span>Task Templates</span>
-            <span className="ml-auto text-[10px] font-semibold uppercase tracking-wide">No route</span>
-          </span>
-        </div>
       </SidebarCard>
     </div>
   );

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Plus, X, ChevronDown } from "lucide-react";
+import { X, ChevronDown } from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
 import { apiGet, apiPost } from "../../../services/apiClient";
@@ -103,21 +103,7 @@ export function TaskQuickAdd({
     }
   };
 
-  if (!open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        className={cn(crm.taskQuickAddRow, "w-full cursor-pointer text-left")}
-        type="button"
-      >
-        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-crm-border/70 text-crm-muted">
-          <Plus className="h-3.5 w-3.5" />
-        </div>
-        <span className="text-sm text-crm-muted">Add a task…</span>
-        <span className="ml-auto text-xs text-crm-muted/50">click or press N</span>
-      </button>
-    );
-  }
+  if (!open) return null;
 
   return (
     <div className={cn(crm.card, "flex flex-col gap-3 p-4")}>

@@ -240,7 +240,6 @@ export function TaskCommandDesk({ initialTab }: { initialTab?: TaskTab }) {
             stats={stats}
             statsLoading={statsLoading}
             upcomingTasks={upcomingTasks}
-            onCreateTask={triggerAdd}
           />
         </CRMWorkspaceRightRail>
       </CRMWorkspaceBody>
