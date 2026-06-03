@@ -325,7 +325,7 @@ export const crm = {
 
   /** Phase 19J — checklist operational workspace */
   pageInnerChecklist:
-    "crm-checklist-inner relative mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0 z-[1]",
+    "crm-checklist-inner mx-auto w-full max-w-[min(100%,1540px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-4 min-h-0",
   /** Phase 19J — checklist operational workspace; theme tokens via globals `.crm-checklist-workspace` */
   checklistWorkspace: "crm-checklist-workspace relative min-h-full w-full min-h-0",
   checklistAmbientLayer:
@@ -372,13 +372,13 @@ export const crm = {
   checklistMainCol: "flex min-w-0 flex-col gap-4",
   checklistRailCol: "flex min-w-0 flex-col gap-3",
   checklistTemplateWorkspace:
-    "checklist-template-workspace relative overflow-hidden rounded-[1.65rem] border border-crm-border/40 p-4 shadow-crm sm:p-5",
+    "tasks-list-card relative overflow-hidden p-4 sm:p-5",
   checklistTemplateGrid:
     "grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3",
   checklistScratchCard:
-    "checklist-scratch-card group flex w-full items-center gap-3 rounded-[1.35rem] border border-crm-border/45 p-4 text-left transition-all duration-200 hover:-translate-y-px",
+    "tasks-list-card group flex w-full items-center gap-3 p-4 text-left transition-all duration-200 hover:-translate-y-px",
   checklistRailCard:
-    "checklist-rail-card rounded-[1.35rem] border border-crm-border/35 p-4 shadow-crm",
+    "tasks-sidebar-card",
   checklistLibraryCol:
     "lg:col-span-3 xl:col-span-3 flex flex-col min-w-0 opacity-[0.92] lg:pt-1",
   checklistWorkspaceCol:
@@ -390,11 +390,11 @@ export const crm = {
     "checklist-side-panel checklist-panel-support rounded-2xl border border-crm-border/30 backdrop-blur-md",
   /** Primary center workspace — cinematic hero elevation */
   checklistPanelPrimary:
-    "checklist-panel-cinematic checklist-panel-primary relative overflow-hidden rounded-2xl border border-crm-accent/20",
+    "tasks-list-card relative overflow-hidden",
   checklistPanelPrimaryGlow:
     "checklist-panel-primary-glow pointer-events-none absolute inset-0",
   checklistWorkspaceHeader:
-    "border-b border-crm-border/50 bg-gradient-to-r from-crm-surface-2/40 via-transparent to-transparent px-4 py-3",
+    "tasks-list-card-header border-b border-crm-border/55 px-4 py-3",
   checklistHeroBand:
     "checklist-hero-band relative overflow-hidden rounded-crm-lg border border-crm-border/50 px-4 py-4 sm:px-5",
   checklistHeroGlow:
@@ -419,7 +419,7 @@ export const crm = {
     "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-crm-warning/50 bg-crm-warning/15 text-[11px] font-bold tabular-nums text-crm-warning shadow-[0_0_10px_-4px_rgba(245,158,11,0.35)]",
   /** Template card base (accent via TEMPLATE_ACCENT_CLASSES) */
   checklistTemplateCard:
-    "checklist-template-card group relative w-full overflow-hidden rounded-2xl border text-left cursor-pointer",
+    "tasks-list-row group relative w-full overflow-hidden rounded-crm border text-left cursor-pointer",
   checklistTemplateCardInner:
     "relative z-[2] flex flex-col gap-3 p-4 sm:p-[1.125rem]",
   checklistTemplateStrip:
@@ -435,13 +435,13 @@ export const crm = {
   checklistMetricChip:
     "checklist-metric-chip inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-medium tabular-nums backdrop-blur-sm",
   checklistProgressCard:
-    "checklist-side-panel checklist-progress-card rounded-2xl border border-crm-border/30 p-4 backdrop-blur-md",
+    "tasks-sidebar-card",
   checklistInsetSurface:
     "checklist-inset-surface rounded-crm border border-crm-border/40",
 
   /** Phase 19I / 19I.1 / 19I.2 — scripts premium playbook (theme-aware via globals `.crm-scripts-workspace`) */
   pageInnerScripts:
-    "mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-5 min-h-0",
+    "mx-auto w-full max-w-[min(100%,1540px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-4 min-h-0",
   scriptsWorkspace: "crm-scripts-workspace w-full min-h-0",
   scriptsHero:
     "scripts-command-hero relative overflow-hidden rounded-[1.75rem] border px-4 py-5 sm:px-6 sm:py-6 lg:px-7",
@@ -452,25 +452,25 @@ export const crm = {
   scriptsKpiTile:
     "scripts-kpi-tile flex min-h-[6.75rem] min-w-0 flex-col justify-between gap-2 rounded-[1.35rem] border px-4 py-3.5 backdrop-blur-[2px]",
   scriptsGrid:
-    "grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)] xl:gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,24rem)]",
+    "grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)] xl:grid-cols-[minmax(0,1fr)_minmax(20rem,24rem)]",
   scriptsLibraryCol: "flex flex-col gap-2.5 min-w-0",
   scriptsWorkspaceCol: "flex flex-col gap-2.5 min-w-0 min-h-[30rem]",
   scriptsSideCol: "flex flex-col gap-2.5 min-w-0",
   scriptsPanelSupport:
-    "scripts-panel-support rounded-[1.5rem] border backdrop-blur-[2px]",
+    "tasks-list-card",
   scriptsPanelPrimary:
-    "scripts-panel-primary relative overflow-hidden rounded-[1.6rem] border",
+    "tasks-list-card relative overflow-hidden",
   scriptsPanelPrimaryGlow:
     "scripts-panel-primary-glow pointer-events-none absolute inset-0",
-  scriptsSidePanel: "scripts-side-panel rounded-[1.35rem] border p-4",
+  scriptsSidePanel: "tasks-sidebar-card",
   scriptCard:
-    "group relative flex items-stretch rounded-[1.1rem] border border-crm-border/60 bg-crm-surface-2/40 transition-all duration-200 hover:border-crm-border/90 hover:bg-crm-surface-2/70 cursor-pointer scripts-script-card",
+    "tasks-list-row group relative flex items-stretch rounded-crm border border-crm-border/60 transition-all duration-200 cursor-pointer",
   scriptCardActive:
     "border-crm-accent/45 bg-crm-accent/10 ring-1 ring-crm-accent/25 scripts-script-card-active",
   scriptCardArchived: "opacity-50",
   scriptStatusStrip: "w-1 shrink-0 rounded-l-crm",
   scriptTplCard:
-    "script-template-card group relative flex w-full items-center gap-2.5 overflow-hidden rounded-crm-lg border p-3 text-left transition-all duration-200 hover:-translate-y-px cursor-pointer",
+    "tasks-list-row group relative flex w-full items-center gap-2.5 overflow-hidden rounded-crm border p-3 text-left transition-all duration-200 hover:-translate-y-px cursor-pointer",
   scriptTplStrip: "absolute left-0 top-0 bottom-0 w-1 rounded-l-crm-lg",
   scriptTplIcon:
     "script-tpl-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border text-base transition-transform duration-200 group-hover:scale-105",
@@ -488,13 +488,13 @@ export const crm = {
   scriptModeTab: "scripts-mode-tab",
   scriptModeTabActive: "scripts-mode-tab-active",
   scriptsTipsStrip:
-    "scripts-tips-strip flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[1.35rem] border px-4 py-3 text-[11px] text-crm-muted",
+    "tasks-filter-bar flex flex-wrap items-center gap-x-4 gap-y-2 text-[11px] text-crm-muted",
   scriptsFeatureCard:
     "scripts-feature-card flex flex-col gap-1 rounded-crm border px-3 py-2.5 transition-colors",
   scriptsLiveCta:
     "scripts-live-cta flex w-full items-center justify-center gap-2 rounded-crm border px-4 py-3 text-sm font-semibold transition-all",
   scriptsLibraryHeader:
-    "scripts-library-header flex flex-col gap-3 border-b px-4 py-4 sm:flex-row sm:items-center sm:justify-between",
+    "tasks-list-card-header flex flex-col gap-3 border-b border-crm-border/55 px-4 py-4 sm:flex-row sm:items-center sm:justify-between",
   scriptsLibraryCount:
     "scripts-library-count rounded-full border px-2 py-0.5 text-[10px] font-bold tabular-nums text-crm-muted",
   scriptsInsetPanel: "scripts-inset-panel rounded-crm-lg border px-4 py-3",

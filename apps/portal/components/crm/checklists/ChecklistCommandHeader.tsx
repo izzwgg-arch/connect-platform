@@ -1,5 +1,4 @@
 "use client";
-
 import { useEffect, useState } from "react";
 import {
   BarChart3,
@@ -7,12 +6,11 @@ import {
   Layers,
   type LucideIcon,
   Plus,
-  Radio,
   ShieldCheck,
-  Sparkles,
 } from "lucide-react";
 import { cn } from "../cn";
-import { crm } from "../crmClasses";
+import { CRMPageHeader } from "../CRMPageHeader";
+import { CRMWorkspaceHeader, CRMWorkspaceToolbar } from "../CRMWorkspaceShell";
 import { CHECKLIST_TEMPLATES } from "./ChecklistTemplates";
 
 export type ChecklistHeaderTab = "active" | "templates" | "progress";
@@ -49,36 +47,38 @@ function KpiTile({
 }) {
   const toneClass =
     tone === "accent"
-      ? "checklist-kpi-blue"
+      ? "tasks-icon-scheduled"
       : tone === "success"
-        ? "checklist-kpi-green"
+        ? "tasks-icon-success"
         : tone === "warning"
-          ? "checklist-kpi-amber"
-          : "checklist-kpi-violet";
+          ? "tasks-icon-warning"
+          : "tasks-icon-neutral";
+  const valueClass =
+    tone === "success"
+      ? "text-crm-success"
+      : tone === "warning"
+        ? "text-crm-warning"
+        : "text-crm-text";
 
   return (
-    <div
-      className={cn(
-        crm.checklistKpiTile,
-        toneClass,
-        "relative flex min-h-[7.25rem] min-w-0 flex-col justify-between gap-3 overflow-hidden p-4"
-      )}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <span className="checklist-kpi-icon flex h-10 w-10 items-center justify-center rounded-xl border">
-          <Icon size={17} />
-        </span>
-        <span className="checklist-kpi-sparkline mt-2 h-5 w-14" aria-hidden />
-      </div>
-      <div>
-        <span className="block text-[11px] font-bold tracking-tight text-crm-text">
+    <div className="tasks-kpi-card">
+      <div className="flex min-w-0 flex-col gap-2">
+        <span className="text-[11px] font-semibold leading-none text-crm-muted">
           {label}
         </span>
-        <span className="mt-1 block text-2xl font-bold tabular-nums leading-none text-crm-text">
+        <span
+          className={cn(
+            "text-3xl font-semibold leading-none tracking-tight tabular-nums",
+            valueClass
+          )}
+        >
           {value}
         </span>
-        <span className="mt-1 block text-[10px] text-crm-muted">{hint}</span>
+        <span className="text-xs font-medium text-crm-muted/90">{hint}</span>
       </div>
+      <span className={cn("tasks-kpi-icon", toneClass)}>
+        <Icon size={17} />
+      </span>
     </div>
   );
 }
@@ -86,8 +86,8 @@ function KpiTile({
 function formatUpdatedAgo(seconds: number) {
   if (seconds < 5) return "just now";
   if (seconds < 60) return `${seconds}s ago`;
-  const m = Math.floor(seconds / 60);
-  return `${m}m ago`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ago`;
 }
 
 export function ChecklistCommandHeader({
@@ -102,71 +102,47 @@ export function ChecklistCommandHeader({
 }: Props) {
   const [, setTick] = useState(0);
   const [mountedAt] = useState(() => Date.now());
+  const checklistModeOn = liveReadyCount > 0;
+  const updatedSec = Math.floor((Date.now() - mountedAt) / 1000);
 
   useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    const id = setInterval(() => setTick((tick) => tick + 1), 1000);
     return () => clearInterval(id);
   }, []);
 
-  const updatedSec = Math.floor((Date.now() - mountedAt) / 1000);
-  const checklistModeOn = liveReadyCount > 0;
-
   return (
-    <div className={crm.checklistCommandHeader}>
-      <div className={crm.checklistCommandHeaderGlow} aria-hidden />
+    <>
+      <CRMWorkspaceHeader>
+        <CRMPageHeader
+          icon={<ClipboardList className="h-5 w-5" />}
+          title="Checklists"
+          subtitle="Workflow checklists for agents, live calls, and campaign outreach."
+          className="tasks-page-header"
+          actions={
+            <>
+              <button type="button" onClick={onBrowseTemplates} className="tasks-secondary-action">
+                <Layers size={15} />
+                Browse templates
+              </button>
+              <button type="button" onClick={onNewBlank} className="tasks-primary-action">
+                <Plus size={15} />
+                New checklist
+              </button>
+            </>
+          }
+        />
+      </CRMWorkspaceHeader>
 
-      <div className="relative z-[1] flex flex-col gap-5 p-4 sm:p-5 lg:p-6">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="flex min-w-0 gap-4">
-            <span className={crm.checklistCommandIcon}>
-              <ClipboardList size={24} />
-            </span>
-            <div className="min-w-0">
-              <h1 className="text-2xl font-bold tracking-tight text-crm-text sm:text-3xl">
-                Checklists
-              </h1>
-              <p className="mt-1 max-w-2xl text-sm leading-relaxed text-crm-muted">
-                Workflow checklists for agents — used during live calls and
-                campaign outreach.
-              </p>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-1.5 rounded-full border border-crm-success/35 bg-crm-success/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-crm-success">
-                  <Radio size={10} className="checklist-live-dot" />
-                  Live
-                </span>
-                <span className="text-[11px] text-crm-muted tabular-nums">
-                  Updated {formatUpdatedAgo(updatedSec)}
-                </span>
-                {archivedCount > 0 && (
-                  <span className="text-[11px] text-crm-muted">
-                    · {archivedCount} archived
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={onBrowseTemplates}
-              className={cn(crm.btnSecondary, "shrink-0")}
-            >
-              <Layers size={15} />
-              Browse templates
-            </button>
-            <button type="button" onClick={onNewBlank} className={cn(crm.btnPrimary, "shrink-0")}>
-              <Plus size={15} />
-              New checklist
-            </button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <CRMWorkspaceToolbar className="flex flex-col gap-3">
+        <div className="tasks-kpi-grid grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <KpiTile
             label="Active Checklists"
             value={String(activeCount)}
-            hint={activeCount === 1 ? "1 in use right now" : `${activeCount} in use right now`}
+            hint={
+              activeCount === 1
+                ? "1 in use right now"
+                : `${activeCount} in use right now`
+            }
             icon={ClipboardList}
             tone="accent"
           />
@@ -196,26 +172,28 @@ export function ChecklistCommandHeader({
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 border-t border-crm-border/40 pt-3">
-          <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-crm-muted">
-            <Sparkles size={12} className="text-crm-accent" />
-            Command center
+        <div className="tasks-filter-bar flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-2">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => onTabChange(t.id)}
+                className={cn(
+                  "tasks-filter-pill",
+                  tab === t.id && "tasks-filter-pill-active"
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <span className="text-xs font-medium text-crm-muted tabular-nums">
+            Live · Updated {formatUpdatedAgo(updatedSec)}
+            {archivedCount > 0 ? ` · ${archivedCount} archived` : ""}
           </span>
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => onTabChange(t.id)}
-              className={cn(
-                crm.checklistTab,
-                tab === t.id && crm.checklistTabActive
-              )}
-            >
-              {t.label}
-            </button>
-          ))}
         </div>
-      </div>
-    </div>
+      </CRMWorkspaceToolbar>
+    </>
   );
 }

@@ -6,7 +6,6 @@ import { CRMPageShell } from "../../../../components/crm/CRMPageShell";
 import {
   CRMWorkspaceShell,
   CRMWorkspaceChrome,
-  CRMWorkspaceHeader,
   CRMWorkspaceBody,
   CRMWorkspaceMain,
   CRMWorkspaceRightRail,
@@ -109,14 +108,12 @@ export default function CrmScriptsPage() {
 
   return (
     <PermissionGate permission="can_view_crm_scripts" fallback={<div className="state-box">You do not have Scripts access.</div>}>
-    <CRMPageShell innerClassName={cn(crm.pageInnerScripts, crm.scriptsWorkspace)}>
+    <CRMPageShell className={crm.tasksWorkspace} innerClassName={crm.pageInnerTasks}>
       <CRMWorkspaceShell>
         {loading ? (
           <>
             <CRMWorkspaceChrome>
-              <CRMWorkspaceHeader>
-                <ScriptCommandHeader totalCount={0} activeCount={0} onCreate={() => openCreate()} />
-              </CRMWorkspaceHeader>
+              <ScriptCommandHeader totalCount={0} activeCount={0} onCreate={() => openCreate()} />
             </CRMWorkspaceChrome>
             <div className={crm.scriptsGrid}>
               <div className={cn(crm.scriptsLibraryCol, "gap-2.5")}>
@@ -134,9 +131,7 @@ export default function CrmScriptsPage() {
         ) : fetchError ? (
           <>
             <CRMWorkspaceChrome>
-              <CRMWorkspaceHeader>
-                <ScriptCommandHeader totalCount={0} activeCount={0} onCreate={() => openCreate()} />
-              </CRMWorkspaceHeader>
+              <ScriptCommandHeader totalCount={0} activeCount={0} onCreate={() => openCreate()} />
             </CRMWorkspaceChrome>
             <CRMEmptyState
               title="Could not load scripts"
@@ -159,9 +154,7 @@ export default function CrmScriptsPage() {
         ) : (
           <>
             <CRMWorkspaceChrome>
-              <CRMWorkspaceHeader>
-                <ScriptCommandHeader totalCount={scripts.length} activeCount={activeCount} onCreate={() => openCreate()} />
-              </CRMWorkspaceHeader>
+              <ScriptCommandHeader totalCount={scripts.length} activeCount={activeCount} onCreate={() => openCreate()} />
             </CRMWorkspaceChrome>
 
             <CRMWorkspaceBody split>

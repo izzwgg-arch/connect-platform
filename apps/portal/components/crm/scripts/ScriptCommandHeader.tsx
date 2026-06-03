@@ -3,7 +3,8 @@
 import { FileText, Layers3, LibraryBig, PlayCircle, Plus, Zap } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "../cn";
-import { crm } from "../crmClasses";
+import { CRMPageHeader } from "../CRMPageHeader";
+import { CRMWorkspaceHeader, CRMWorkspaceToolbar } from "../CRMWorkspaceShell";
 import { SCRIPT_TEMPLATES } from "./ScriptTemplates";
 
 export function ScriptCommandHeader({
@@ -18,46 +19,55 @@ export function ScriptCommandHeader({
   const templateCount = SCRIPT_TEMPLATES.length;
 
   return (
-    <header className={crm.scriptsHero}>
-      <div className={cn(crm.scriptsHeroGlow, "motion-reduce:hidden")} aria-hidden />
-      <div
-        className="pointer-events-none absolute left-8 top-8 h-24 w-24 rounded-full bg-violet-500/8 blur-2xl motion-reduce:hidden"
-        aria-hidden
-      />
+    <>
+      <CRMWorkspaceHeader>
+        <CRMPageHeader
+          icon={<FileText className="h-5 w-5" />}
+          title="Call Scripts"
+          subtitle="Sales playbooks and cold-call scripts for your outbound team."
+          className="tasks-page-header"
+          actions={
+            <button type="button" onClick={onCreate} className="tasks-primary-action">
+              <Plus className="h-4 w-4" />
+              New Script
+            </button>
+          }
+        />
+      </CRMWorkspaceHeader>
 
-      <div className="relative z-[1] flex flex-col gap-5">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="flex min-w-0 items-start gap-3 sm:gap-4">
-          <div className={crm.scriptsHeroIcon}>
-            <FileText className="h-6 w-6" aria-hidden />
-          </div>
-          <div className="min-w-0">
-            <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.22em] text-crm-accent">
-              Sales enablement
-            </p>
-            <h1 className="text-3xl font-bold tracking-tight text-crm-text sm:text-4xl">
-              Call Scripts
-            </h1>
-            <p className="mt-2 max-w-2xl text-base leading-relaxed text-crm-muted">
-              Sales playbooks and cold-call scripts for your outbound team.
-            </p>
-          </div>
+      <CRMWorkspaceToolbar className="flex flex-col gap-3">
+        <div className="tasks-kpi-grid grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <KpiTile
+            icon={<LibraryBig className="h-5 w-5" />}
+            label="Total scripts"
+            value={totalCount}
+            sub="Script library"
+            tone="neutral"
+          />
+          <KpiTile
+            icon={<PlayCircle className="h-5 w-5" />}
+            label="Active playbooks"
+            value={activeCount}
+            sub="Ready to dial"
+            tone="success"
+          />
+          <KpiTile
+            icon={<Layers3 className="h-5 w-5" />}
+            label="Starter templates"
+            value={templateCount}
+            sub="Built-in flows"
+            tone="scheduled"
+          />
+          <KpiTile
+            icon={<Zap className="h-5 w-5" />}
+            label="Quick start flows"
+            value={SCRIPT_TEMPLATES.length}
+            sub="One-click starters"
+            tone="warning"
+          />
         </div>
-
-          <button type="button" onClick={onCreate} className={cn(crm.btnPrimary, "h-11 px-5 shadow-[0_14px_28px_-16px_rgba(2,132,199,0.55)]")}>
-            <Plus className="h-4 w-4" />
-            New Script
-          </button>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <KpiTile icon={<LibraryBig className="h-5 w-5" />} label="Total scripts" value={totalCount} sub="Script library" tone="blue" />
-          <KpiTile icon={<PlayCircle className="h-5 w-5" />} label="Active playbooks" value={activeCount} sub="Ready to dial" tone="green" />
-          <KpiTile icon={<Layers3 className="h-5 w-5" />} label="Starter templates" value={templateCount} sub="Built-in flows" tone="violet" />
-          <KpiTile icon={<Zap className="h-5 w-5" />} label="Quick start flows" value={SCRIPT_TEMPLATES.length} sub="One-click starters" tone="amber" />
-        </div>
-      </div>
-    </header>
+      </CRMWorkspaceToolbar>
+    </>
   );
 }
 
@@ -72,24 +82,40 @@ function KpiTile({
   label: string;
   value: number;
   sub: string;
-  tone: "blue" | "green" | "violet" | "amber";
+  tone: "neutral" | "success" | "scheduled" | "warning";
 }) {
+  const iconClass =
+    tone === "success"
+      ? "tasks-icon-success"
+      : tone === "scheduled"
+        ? "tasks-icon-scheduled"
+        : tone === "warning"
+          ? "tasks-icon-warning"
+          : "tasks-icon-neutral";
+  const valueClass =
+    tone === "success"
+      ? "text-crm-success"
+      : tone === "warning"
+        ? "text-crm-warning"
+        : "text-crm-text";
+
   return (
-    <div className={cn(crm.scriptsKpiTile, `scripts-kpi-tile--${tone}`)}>
-      <div className="flex items-start justify-between gap-3">
-        <span className="text-[11px] font-bold uppercase tracking-wider text-crm-muted">
+    <div className="tasks-kpi-card">
+      <div className="flex min-w-0 flex-col gap-2">
+        <span className="text-[11px] font-semibold leading-none text-crm-muted">
           {label}
         </span>
-        <span className="scripts-kpi-icon flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl">
-          {icon}
-        </span>
-      </div>
-      <div>
-        <span className="block text-3xl font-bold tabular-nums leading-none text-crm-text sm:text-4xl">
+        <span
+          className={cn(
+            "text-3xl font-semibold leading-none tracking-tight tabular-nums",
+            valueClass
+          )}
+        >
           {value}
         </span>
-        <span className="mt-1 block text-xs font-medium text-crm-muted/90">{sub}</span>
+        <span className="text-xs font-medium text-crm-muted/90">{sub}</span>
       </div>
+      <span className={cn("tasks-kpi-icon", iconClass)}>{icon}</span>
     </div>
   );
 }

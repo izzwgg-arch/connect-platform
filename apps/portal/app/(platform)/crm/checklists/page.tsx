@@ -29,6 +29,7 @@ import {
   CRMWorkspaceRightRail,
   CRMWorkspaceFooter,
 } from "../../../../components/crm/CRMWorkspaceShell";
+import { CRMPageShell } from "../../../../components/crm/CRMPageShell";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -265,25 +266,17 @@ export default function CrmChecklistsPage() {
   if (loading) {
     return (
       <PermissionGate permission="can_view_crm_checklists" fallback={<div className="state-box">You do not have Checklists access.</div>}>
-      <div className={cn(crm.checklistWorkspace, "crm-page-shell")}>
-        <div className={crm.pageInnerChecklist}>
+      <CRMPageShell className={crm.tasksWorkspace} innerClassName={crm.pageInnerTasks}>
           <LoadingSkeleton />
-        </div>
-      </div>
+      </CRMPageShell>
       </PermissionGate>
     );
   }
 
   return (
     <PermissionGate permission="can_view_crm_checklists" fallback={<div className="state-box">You do not have Checklists access.</div>}>
-    <div className={cn(crm.checklistWorkspace, "crm-page-shell")}>
+    <CRMPageShell className={crm.tasksWorkspace} innerClassName={crm.pageInnerTasks}>
       <span className="sr-only">CRM checklist command center</span>
-      <div className={crm.checklistAmbientLayer} aria-hidden>
-        <span className="checklist-ambient-orb left-[-8%] top-[8%] h-64 w-64 bg-crm-accent/10" />
-        <span className="checklist-ambient-orb right-[-5%] top-[35%] h-48 w-48 bg-indigo-500/8" />
-        <span className="checklist-ambient-orb bottom-[5%] left-[30%] h-56 w-56 bg-crm-accent/6" />
-      </div>
-      <div className={cn(crm.pageInnerChecklist, "gap-3")}>
         <CRMWorkspaceShell>
           <CRMWorkspaceChrome>
             <ChecklistCommandHeader
@@ -361,8 +354,7 @@ export default function CrmChecklistsPage() {
             />
           </CRMWorkspaceFooter>
         </CRMWorkspaceShell>
-      </div>
-    </div>
+    </CRMPageShell>
     </PermissionGate>
   );
 }
