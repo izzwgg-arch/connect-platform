@@ -10781,6 +10781,120 @@ app.post("/admin/call-flight/sessions/:id/explain", async (req, reply) => {
       if (blankScreen) timeline.push("⚠ Blank screen detected");
       if (appRestart) timeline.push("⚠ App restarted/remounted after call");
 
+      const outboundStart = byStage("OUTBOUND_CALL_START");
+      if (outboundStart || hasStage("OUTBOUND_INVITE_SENT")) {
+        const outboundFailed = byStage("OUTBOUND_FAILED");
+        const outboundConnected = byStage("OUTBOUND_CONNECTED");
+        const outboundRinging = byStage("OUTBOUND_RINGING");
+        const permCheck = byStage("OUTBOUND_PERMISSION_CHECK");
+        const failedPayload =
+          outboundFailed?.payload && typeof outboundFailed.payload === "object"
+            ? (outboundFailed.payload as Record<string, unknown>)
+            : null;
+        const outboundCategory =
+          failedPayload?.diagnosisCategory != null ? String(failedPayload.diagnosisCategory) : null;
+        const outboundCode =
+          typeof failedPayload?.sipCode === "number"
+            ? failedPayload.sipCode
+            : typeof failedPayload?.code === "number"
+              ? failedPayload.code
+              : null;
+        const outboundReason =
+          failedPayload?.sipReason != null
+            ? String(failedPayload.sipReason)
+            : failedPayload?.message != null
+              ? String(failedPayload.message)
+              : null;
+        const outboundTimeline: string[] = [];
+        if (outboundStart) outboundTimeline.push("Outbound dial started");
+        if (permCheck) outboundTimeline.push(permCheck.severity === "error" ? "Mic permission denied" : "Mic permission OK");
+        if (hasStage("OUTBOUND_REGISTER_START")) outboundTimeline.push("SIP re-register before dial");
+        if (hasStage("OUTBOUND_INVITE_SENT")) outboundTimeline.push("SIP INVITE sent");
+        if (outboundRinging) outboundTimeline.push("Remote ringing");
+        if (outboundConnected) outboundTimeline.push("SIP connected");
+        if (outboundFailed) outboundTimeline.push("Outbound failed");
+
+        if (outboundConnected) {
+          return {
+            summary: "Outbound call connected",
+            whatHappened: "The mobile app registered (or refreshed registration), sent an outbound INVITE, and reached SIP confirmed.",
+            likelyCause: warnings.length > 0 ? `Minor warnings: ${warnings.join(", ")}` : "Normal outbound flow.",
+            suggestedFix: "None — outbound call succeeded.",
+            confidence: "HIGH",
+            grade: "good",
+            warnings,
+            timeline: outboundTimeline.join(" → "),
+            diagnosisCategory: "OUTBOUND_CONNECTED",
+            sipFailureReason: null,
+            sipFailureCode: null,
+            sipRegistered: !!byStage("OUTBOUND_REGISTERED") || !!sipRegisteredEv,
+            sipInviteObserved: true,
+          };
+        }
+
+        if (permCheck && String(permCheck.severity) === "error") {
+          return {
+            summary: "Outbound blocked — microphone permission denied",
+            whatHappened: "The user attempted an outbound call but RECORD_AUDIO permission was not granted.",
+            likelyCause: "Android/iOS mic permission denied or not yet requested.",
+            suggestedFix: "Grant microphone permission in OS settings, then retry from the keypad.",
+            confidence: "HIGH",
+            grade: "poor",
+            warnings,
+            timeline: outboundTimeline.join(" → "),
+            diagnosisCategory: "OUTBOUND_PERMISSION_DENIED",
+            sipFailureReason: "permission_denied",
+            sipFailureCode: null,
+            sipRegistered: !!byStage("OUTBOUND_REGISTERED"),
+            sipInviteObserved: false,
+          };
+        }
+
+        if (outboundFailed) {
+          const category = outboundCategory || "OUTBOUND_FAILED_OTHER";
+          const fixByCategory: Record<string, string> = {
+            OUTBOUND_NOT_REGISTERED: "Force SIP re-register before dial; verify WebSocket URL and credentials in provisioning bundle.",
+            OUTBOUND_AUTH_FAILED: "Check PJSIP auth username/password in provisioning; reset SIP password if needed.",
+            OUTBOUND_BAD_NUMBER: "Verify dialed number normalization and outbound route prefix rules.",
+            OUTBOUND_UNAVAILABLE: "Remote party busy/unavailable — not necessarily an app defect.",
+            OUTBOUND_MEDIA_FAILED: "Inspect WebRTC/SDP (488/606). Verify mic permission and ICE/TURN config.",
+            OUTBOUND_TRUNK_FAILED: "Check PBX outbound route/trunk health (503).",
+            OUTBOUND_WEBRTC_FAILED: "Verify ICE servers in provisioning and RECORD_AUDIO permission.",
+          };
+          return {
+            summary: "Outbound call failed before or during setup",
+            whatHappened: `Outbound dial started but did not reach SIP connected.${outboundReason ? ` Reason: ${outboundReason}${outboundCode != null ? ` (${outboundCode})` : ""}.` : ""}`,
+            likelyCause: category.replace(/^OUTBOUND_/, "").replace(/_/g, " ").toLowerCase(),
+            suggestedFix: fixByCategory[category] || "Inspect OUTBOUND_* events in the flight timeline and Asterisk logs for the extension.",
+            confidence: outboundCode != null ? "HIGH" : "MEDIUM",
+            grade: "poor",
+            warnings,
+            timeline: outboundTimeline.join(" → "),
+            diagnosisCategory: category,
+            sipFailureReason: outboundReason,
+            sipFailureCode: outboundCode,
+            sipRegistered: !!byStage("OUTBOUND_REGISTERED") || !!sipRegisteredEv,
+            sipInviteObserved: hasStage("OUTBOUND_INVITE_SENT"),
+          };
+        }
+
+        return {
+          summary: "Outbound call ended without connecting",
+          whatHappened: "Outbound dial events were recorded but no OUTBOUND_CONNECTED milestone appeared.",
+          likelyCause: "Early hangup, PBX reject before 180, or missing flight events.",
+          suggestedFix: "Retry with Call Flight Recorder open; check Asterisk for the mobile PJSIP channel.",
+          confidence: "MEDIUM",
+          grade: "poor",
+          warnings,
+          timeline: outboundTimeline.join(" → "),
+          diagnosisCategory: "OUTBOUND_NO_CONNECT",
+          sipFailureReason: null,
+          sipFailureCode: null,
+          sipRegistered: !!byStage("OUTBOUND_REGISTERED"),
+          sipInviteObserved: hasStage("OUTBOUND_INVITE_SENT"),
+        };
+      }
+
       // Result-specific explanation
       if (result === "answered" && sipConnected) {
         const grade = answerDelayMs !== null && answerDelayMs < 2000 ? "good"

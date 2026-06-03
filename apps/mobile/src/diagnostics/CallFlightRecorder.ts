@@ -82,6 +82,10 @@ export interface FlightSessionMeta {
   deviceId?: string | null;
   extension?: string | null;
   fromNumber?: string | null;
+  /** outbound when placed from keypad/recent; inbound for push-invite calls */
+  callDirection?: "inbound" | "outbound" | null;
+  /** Normalized PSTN/extension target for outbound dials */
+  dialedNumber?: string | null;
   platform: string;
   appVersion?: string | null;
   networkType?: string | null;
@@ -180,6 +184,26 @@ function computeStats(session: FlightSession): TimingStats {
 
   if (byStage('SIP_REGISTER_FAILED')) {
     stats.warningFlags.push('SIP_REGISTER_FAILED');
+  }
+
+  const outboundFailed = byStage('OUTBOUND_FAILED');
+  if (outboundFailed) {
+    stats.warningFlags.push('OUTBOUND_FAILED');
+    const payload = outboundFailed.payload as Record<string, unknown> | undefined;
+    const category = payload?.diagnosisCategory;
+    if (typeof category === 'string') stats.warningFlags.push(category);
+  }
+
+  if (byStage('OUTBOUND_PERMISSION_CHECK')?.severity === 'error') {
+    stats.warningFlags.push('OUTBOUND_MIC_DENIED');
+  }
+
+  if (session.meta.callDirection === 'outbound') {
+    const outboundStart = byStage('OUTBOUND_CALL_START');
+    const outboundConnected = byStage('OUTBOUND_CONNECTED');
+    if (outboundStart && !outboundConnected && session.result !== 'answered') {
+      if (!outboundFailed) stats.warningFlags.push('OUTBOUND_NO_CONNECT');
+    }
   }
 
   const sipAnswerFailed = byStage('SIP_ANSWER_FAILED');

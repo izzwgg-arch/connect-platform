@@ -27,6 +27,10 @@ import {
   createSipAnswerDeadline,
   type SipAnswerDeadlineHandle,
 } from "./mobileAnswerTiming";
+import {
+  ensureOutboundSipRegistration,
+  normalizeMobileDialTarget,
+} from "./mobileOutboundDial";
 
 // Voice-optimised audio constraints — same profile as the browser softphone.
 const VOICE_AUDIO_CONSTRAINTS = {
@@ -117,7 +121,11 @@ export class JsSipClient implements SipClient {
    */
   private static readonly MAX_CONCURRENT_SESSIONS = 5;
   private registerPromise: Promise<void> | null = null;
+  /** Epoch ms of the most recent successful SIP REGISTER. */
+  private registeredAtMs: number | null = null;
   private callStartedAt: number | null = null;
+  /** Last outbound dial target (normalized) for flight-recorder correlation. */
+  private lastOutboundDialTarget: string | null = null;
   private callDirection: "outbound" | "inbound" = "outbound";
   private livePingInterval: ReturnType<typeof setInterval> | null = null;
   /** Timestamp when the session's `confirmed` event fired — used by ghost-dialog detection. */
@@ -176,8 +184,8 @@ export class JsSipClient implements SipClient {
     // listener in SipContext triggers forceRestart when the user answers from
     // the lock screen (bringing the app to foreground), which would otherwise
     // kill the INVITE that just arrived.
-    if (this.ua && this.incomingSessions.length > 0) {
-      console.log('[SIP] Skipping re-register — active incoming session protects UA' + (forceRestart ? ' (force-restart suppressed)' : ''));
+    if (this.ua && this.countLiveIncomingSessions() > 0) {
+      console.log('[SIP] Skipping re-register — live incoming session protects UA' + (forceRestart ? ' (force-restart suppressed)' : ''));
       return;
     }
 
@@ -264,6 +272,7 @@ export class JsSipClient implements SipClient {
 
       this.ua.on("registered", () => {
         console.log('[SIP] Registered successfully');
+        this.registeredAtMs = Date.now();
         this.events.onRegistrationState?.("registered");
         settle(() => resolve());
       });
@@ -433,10 +442,46 @@ export class JsSipClient implements SipClient {
     }
   }
 
+  getRegistrationAgeMs(): number | null {
+    if (!this.registeredAtMs || !this.isRegistered()) return null;
+    return Math.max(0, Date.now() - this.registeredAtMs);
+  }
+
+  private isSessionLive(session: any): boolean {
+    const status = (session as any)?._status;
+    return status !== 8;
+  }
+
+  private countLiveIncomingSessions(): number {
+    return this.incomingSessions.filter((s) => this.isSessionLive(s)).length;
+  }
+
+  private emitOutboundTrace(
+    stage: "OUTBOUND_INVITE_SENT" | "OUTBOUND_RINGING" | "OUTBOUND_CONNECTED" | "OUTBOUND_FAILED" | "OUTBOUND_ENDED",
+    extra?: {
+      sipCode?: number | null;
+      sipReason?: string | null;
+      sipCause?: string | null;
+    },
+  ): void {
+    this.events.onOutboundTrace?.({
+      stage,
+      timestamp: Date.now(),
+      dialedNumber: this.lastOutboundDialTarget,
+      normalizedNumber: this.lastOutboundDialTarget,
+      registrationAgeMs: this.getRegistrationAgeMs(),
+      sipCode: extra?.sipCode ?? null,
+      sipReason: extra?.sipReason ?? null,
+      sipCause: extra?.sipCause ?? null,
+    });
+  }
+
   hasActiveSession(): boolean {
     try {
-      if (this.incomingSessions.length > 0) return true;
-      if (this.sessionsById.size > 0) return true;
+      if (this.countLiveIncomingSessions() > 0) return true;
+      for (const s of this.sessionsById.values()) {
+        if (this.isSessionLive(s)) return true;
+      }
       return false;
     } catch {
       return false;
@@ -453,6 +498,8 @@ export class JsSipClient implements SipClient {
   private static readonly GHOST_WINDOW_MS = 2000;
 
   private bindSession(session: any) {
+    const isOutboundSession = !this.incomingSessions.includes(session);
+
     session.on("progress", (e: any) => {
       const code = e?.response?.status_code;
       console.log('[CALL_EVENT] progress status=' + code);
@@ -460,6 +507,13 @@ export class JsSipClient implements SipClient {
       // "dialing" to "ringing" once the remote side is alerting (180).
       if (this.callDirection === "outbound") {
         this.setSessionState(session, "ringing");
+      }
+      if (isOutboundSession && (code === 180 || code === 183)) {
+        this.emitOutboundTrace("OUTBOUND_RINGING", {
+          sipCode: typeof code === "number" ? code : null,
+          sipReason: e?.response?.reason_phrase ?? null,
+          sipCause: e?.cause ?? null,
+        });
       }
       this.events.onCallState?.("ringing");
     });
@@ -484,6 +538,9 @@ export class JsSipClient implements SipClient {
       if (!this.callStartedAt) this.callStartedAt = Date.now();
       this.setSessionState(session, "connected");
       this.events.onCallState?.("connected");
+      if (isOutboundSession) {
+        this.emitOutboundTrace("OUTBOUND_CONNECTED");
+      }
       this.startLivePing(session);
       // Any ghost-retry waiter is now satisfied.
       this.flushGhostRetryCallbacks("confirmed");
@@ -546,6 +603,9 @@ export class JsSipClient implements SipClient {
       if (this.incomingSessions.length === 0) this.lastAnswerMatch = undefined;
       this.setSessionState(session, "ended");
       this.removeSession(session);
+      if (isOutboundSession) {
+        this.emitOutboundTrace("OUTBOUND_ENDED", { sipCause: cause });
+      }
       if (isLastLiveSession) {
         this.events.onCallState?.("ended");
       }
@@ -587,6 +647,13 @@ export class JsSipClient implements SipClient {
       if (this.incomingSessions.length === 0) this.lastAnswerMatch = undefined;
       this.setSessionState(session, "ended");
       this.removeSession(session);
+      if (isOutboundSession) {
+        this.emitOutboundTrace("OUTBOUND_FAILED", {
+          sipCode: typeof code === "number" ? code : null,
+          sipReason: e?.response?.reason_phrase ?? null,
+          sipCause: cause,
+        });
+      }
       if (isLastLiveSession) {
         this.events.onCallState?.("ended");
       }
@@ -1393,9 +1460,24 @@ export class JsSipClient implements SipClient {
   }
 
   async dial(target: string) {
-    if (!this.ua || !this.bundle) throw new Error("SIP UA not registered");
-    const dest = `sip:${target}@${this.bundle.sipDomain}`;
-    console.log('[SIP] Dialing:', dest);
+    if (!this.bundle) throw new Error("Missing provisioning bundle");
+
+    const normalized = normalizeMobileDialTarget(target);
+    if (!normalized) throw new Error("Invalid dial target");
+
+    const reg = await ensureOutboundSipRegistration({
+      isConnected: () => this.isConnected(),
+      isRegistered: () => this.isRegistered(),
+      register: (options) => this.register(options),
+    });
+    if (!reg.ok) {
+      throw new Error(reg.error || "sip_registration_timeout");
+    }
+    if (!this.ua) throw new Error("SIP UA not registered");
+
+    this.lastOutboundDialTarget = normalized;
+    const dest = `sip:${normalized}@${this.bundle.sipDomain}`;
+    console.log('[SIP] Dialing:', dest, 'regAgeMs=' + (this.getRegistrationAgeMs() ?? 'unknown'));
     this.callDirection = "outbound";
     this.callStartedAt = Date.now();
     this.events.onCallState?.("dialing");
@@ -1420,13 +1502,18 @@ export class JsSipClient implements SipClient {
       // would double-attach all event listeners, causing confirmed/ended/failed
       // to fire twice and every state update to run twice.
       console.log('[SIP] INVITE sent');
+      this.emitOutboundTrace("OUTBOUND_INVITE_SENT");
     } catch (e: any) {
       stopAllTelephonyAudio().catch(() => undefined);
       ICM.stop();
       const msg = e?.message || "dial failed";
       console.error('[SIP] Dial error:', msg);
+      this.emitOutboundTrace("OUTBOUND_FAILED", {
+        sipCause: msg,
+      });
       this.events.onError?.(`Dial error: ${msg}`);
       this.events.onCallState?.("ended");
+      throw e;
     }
   }
 

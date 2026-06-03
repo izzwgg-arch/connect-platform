@@ -6,12 +6,22 @@ import { postCallQualityReport, postCallQualityPing, clearCallQualityPing } from
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { appendCallRecord } from "../storage/callHistory";
 import type { CallDirection, CallState, CallRecord, ProvisioningBundle, SipRegistrationState } from "../types";
-import type { SipAnswerTraceEvent, SipSessionInfo, SipAnswerDeadlineHandle } from "../sip/types";
+import type { SipAnswerTraceEvent, SipSessionInfo, SipAnswerDeadlineHandle, OutboundTraceEvent } from "../sip/types";
 import { useAuth } from "./AuthContext";
 import { logCallFlow, setCallFlowLastError } from "../debug/callFlowDebug";
 import { rememberVmGreetingWake } from "../voicemail/vmGreetingWakeBridge";
 import { audioRouteManager, getAudioDevicesSnapshot } from "../audio/audioRouteManager";
-import { flightRecord } from "../diagnostics/CallFlightRecorder";
+import {
+  flightBeginCall,
+  flightEndCall,
+  flightRecord,
+  flightSetSipState,
+} from "../diagnostics/CallFlightRecorder";
+import { ensureMicPermissionOrAlert } from "../sip/permissions";
+import {
+  classifyOutboundSipFailure,
+  normalizeMobileDialTarget,
+} from "../sip/mobileOutboundDial";
 
 const PROVISION_KEY = "cc_mobile_provision";
 const LAST_DIALED_KEY = "cc_mobile_last_dialed";
@@ -158,6 +168,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // the UI can show a graceful ended state without feeling like a restart.
   useEffect(() => {
     if (callState === "ended") {
+      const wasOutbound = callDirection === "outbound";
       setCallDirection(null);
       setOnHold(false);
       setMuted(false);
@@ -169,6 +180,9 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
 
       // Save call record locally — this is the reliable path for call history
       const info = callInfoRef.current;
+      if (wasOutbound && info.startMs) {
+        void flightEndCall(info.answered ? "answered" : "failed");
+      }
       if (info.startMs) {
         const durationSec = info.answered
           ? Math.max(0, Math.round((Date.now() - info.startMs) / 1000))
@@ -202,7 +216,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       const t = setTimeout(() => setCallState("idle"), 1200);
       return () => clearTimeout(t);
     }
-  }, [callState]);
+  }, [callState, callDirection]);
 
   // Wire the quality report callback — fires at end of each call
   // Wire the live ping callback — fires every ~10 s during a call
@@ -473,6 +487,32 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       onError: (msg) => {
         setLastError(msg);
         setCallFlowLastError(msg);
+      },
+
+      onOutboundTrace: (event: OutboundTraceEvent) => {
+        const severity =
+          event.stage === "OUTBOUND_FAILED" ? "error" :
+          event.stage === "OUTBOUND_ENDED" ? "info" : "info";
+        const diagnosis =
+          event.stage === "OUTBOUND_FAILED"
+            ? classifyOutboundSipFailure({
+                sipCode: event.sipCode,
+                sipReason: event.sipReason,
+                sipCause: event.sipCause,
+              })
+            : null;
+        flightRecord("SIP", event.stage, {
+          severity,
+          payload: {
+            dialedNumber: event.dialedNumber ?? null,
+            normalizedNumber: event.normalizedNumber ?? null,
+            registrationAgeMs: event.registrationAgeMs ?? null,
+            sipCode: event.sipCode ?? null,
+            sipReason: event.sipReason ?? null,
+            sipCause: event.sipCause ?? null,
+            diagnosisCategory: diagnosis?.category ?? null,
+          },
+        });
       },
 
       // ---- Multi-call event bridge ----
@@ -1151,13 +1191,62 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
 
       dial: async (target, options) => {
         const displayTarget = options?.displayTarget || target;
+        const normalizedTarget = normalizeMobileDialTarget(target);
+        if (!normalizedTarget) {
+          throw new Error("Invalid dial target");
+        }
+
+        const micOk = await ensureMicPermissionOrAlert();
+        if (!micOk) {
+          void flightBeginCall({
+            callDirection: "outbound",
+            dialedNumber: normalizedTarget,
+            fromNumber: normalizedTarget,
+          });
+          flightRecord("USER", "OUTBOUND_PERMISSION_CHECK", {
+            severity: "error",
+            payload: { granted: false },
+          });
+          await flightEndCall("failed");
+          throw new Error("Microphone permission required");
+        }
+
+        await ensureProvisioningLoaded();
+        flightSetSipState(registrationStateRef.current);
+
+        void flightBeginCall({
+          callDirection: "outbound",
+          dialedNumber: normalizedTarget,
+          fromNumber: displayTarget,
+        });
+        flightRecord("USER", "OUTBOUND_CALL_START", {
+          payload: {
+            displayTarget,
+            normalizedTarget,
+            registrationState: registrationStateRef.current,
+          },
+        });
+        flightRecord("USER", "OUTBOUND_PERMISSION_CHECK", {
+          payload: { granted: true },
+        });
+
+        const client = clientRef.current as any;
+        const connected = typeof client.isConnected === "function" ? client.isConnected() : false;
+        const registered = typeof client.isRegistered === "function" ? client.isRegistered() : false;
+        const registrationAgeMs =
+          typeof client.getRegistrationAgeMs === "function" ? client.getRegistrationAgeMs() : null;
+
+        if (!connected || !registered) {
+          flightRecord("SIP", "OUTBOUND_REGISTER_START", {
+            payload: { connected, registered, registrationAgeMs },
+          });
+        }
+
         setCallDirection("outbound");
         setRemoteParty(displayTarget);
         setLastError(null);
-        // Persist last dialed number for "redial" feature
         setLastDialed(displayTarget);
         SecureStore.setItemAsync(LAST_DIALED_KEY, displayTarget).catch(() => {});
-        // Track call info for local history
         callInfoRef.current = {
           direction: "outbound",
           answered: false,
@@ -1165,12 +1254,32 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           remoteParty: displayTarget,
           remotePartyName: null,
         };
-        // Initial UI hint — the audio route manager (called from JsSipClient)
-        // will overwrite this with the real route (Bluetooth if available)
-        // before the first ringback tone is heard.
         const snapshot = getAudioDevicesSnapshot();
         setAudioRoute(snapshot.bluetoothConnected ? "bluetooth" : "earpiece");
-        await clientRef.current.dial(target);
+
+        try {
+          await clientRef.current.dial(normalizedTarget);
+          if (typeof client.getRegistrationAgeMs === "function") {
+            flightRecord("SIP", "OUTBOUND_REGISTERED", {
+              payload: {
+                registrationAgeMs: client.getRegistrationAgeMs(),
+                registrationState: registrationStateRef.current,
+              },
+            });
+          }
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          const diagnosis = classifyOutboundSipFailure({ localReason: msg });
+          flightRecord("SIP", "OUTBOUND_FAILED", {
+            severity: "error",
+            payload: {
+              message: msg,
+              diagnosisCategory: diagnosis.category,
+            },
+          });
+          await flightEndCall("failed");
+          throw e instanceof Error ? e : new Error(msg);
+        }
       },
 
       answer: async () => {

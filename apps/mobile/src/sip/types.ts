@@ -58,6 +58,24 @@ export type SipEvents = {
   onSessionStateChanged?: (info: SipSessionInfo) => void;
   /** Fires when a session has been fully terminated and removed. */
   onSessionRemoved?: (sessionId: string) => void;
+  /** Structured outbound dial milestones for Call Flight Recorder. */
+  onOutboundTrace?: (event: OutboundTraceEvent) => void;
+};
+
+export type OutboundTraceEvent = {
+  stage:
+    | "OUTBOUND_INVITE_SENT"
+    | "OUTBOUND_RINGING"
+    | "OUTBOUND_CONNECTED"
+    | "OUTBOUND_FAILED"
+    | "OUTBOUND_ENDED";
+  timestamp: number;
+  dialedNumber?: string | null;
+  normalizedNumber?: string | null;
+  sipCode?: number | null;
+  sipReason?: string | null;
+  sipCause?: string | null;
+  registrationAgeMs?: number | null;
 };
 
 export type SipMatch = {
@@ -90,6 +108,8 @@ export type SipClient = {
    */
   isConnected: () => boolean;
   isRegistered: () => boolean;
+  /** Milliseconds since last successful SIP REGISTER, or null if unknown. */
+  getRegistrationAgeMs: () => number | null;
   /**
    * True iff the UA currently owns at least one live SIP session
    * (ringing, dialing, connected, held). Reconnect must NOT force

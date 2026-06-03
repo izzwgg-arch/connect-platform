@@ -562,9 +562,61 @@ Push, ringtone, and incoming UI succeed; user taps **Answer**; call fails with
 
 ---
 
+11. Confirm existing successful inbound calls still work after outbound fix.
+
+---
+
+## Mobile outbound reliability (2026-06-03)
+
+### Symptom
+
+User taps Dial from keypad/recent/contacts; ActiveCall flashes briefly; call
+ends immediately with no audio. Call Flight Recorder showed **no outbound events**
+before this fix.
+
+### Root cause
+
+1. **`JsSipClient.dial()`** only checked `this.ua` — not **`isConnected() &&
+   isRegistered()`**. Stale WebSocket after background → INVITE fails instantly.
+2. **`hasActiveSession()`** treated **terminated** zombie sessions as active →
+   keep-alive reconnect skipped → registration stayed stale.
+3. Mic permission was enforced only on **KeypadTab**; other tabs could start a
+   dial that failed at WebRTC `getUserMedia`.
+4. No **`flightBeginCall`** on outbound → diagnostics blind.
+
+### Fix summary
+
+| Layer | Change |
+|---|---|
+| Mobile | `ensureOutboundSipRegistration` before `ua.call()` (15s, force refresh) |
+| Mobile | `normalizeMobileDialTarget` in `SipContext.dial` (all entry points) |
+| Mobile | Mic preflight in `SipContext.dial` (centralized) |
+| Mobile | Live-session `hasActiveSession` / register guard |
+| Flight recorder | `OUTBOUND_*` stages + SIP code/reason + diagnosis categories |
+| API explain | Outbound-specific AI diagnosis in `/admin/call-flight/.../explain` |
+
+### Outbound flight stages
+
+`OUTBOUND_CALL_START` → `OUTBOUND_PERMISSION_CHECK` → `OUTBOUND_REGISTER_START`
+(optional) → `OUTBOUND_REGISTERED` → `OUTBOUND_INVITE_SENT` → `OUTBOUND_RINGING`
+→ `OUTBOUND_CONNECTED` | `OUTBOUND_FAILED` → `OUTBOUND_ENDED`
+
+### Manual QA checklist (before APK)
+
+1. Fresh install / cold start; login; confirm SIP registered.
+2. Outbound to known-good PSTN — hear ringback, two-way audio.
+3. Flight recorder shows connected path with `inviteId`-free outbound meta
+   (`dialedNumber`, `callDirection=outbound`).
+4. Bad number → clean `OUTBOUND_BAD_NUMBER` (or trunk) diagnosis — not silent drop.
+5. Deny mic → `OUTBOUND_PERMISSION_CHECK` error + Alert; no broken call UI.
+6. Re-run inbound ext **101** ring-group answer checklist (inbound fix must still pass).
+
+---
+
 ## What this doc deliberately does NOT cover
 
-- Outbound calls (covered tangentially by `SipContext`/`useSipPhone`).
+- ~~Outbound calls (covered tangentially by `SipContext`/`useSipPhone`).~~
+  **Outbound mobile dial reliability:** see § Mobile outbound reliability (2026-06-03).
 - WebRTC media negotiation details.
 - Voicemail playback.
 - Push notifications for SMS, chat, voicemail (different code paths;

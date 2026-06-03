@@ -4,6 +4,29 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-03 — Mobile outbound call reliability (stale SIP reg + flight recorder)
+
+**Task:** mobile / telephony / outbound call reliability  
+**Risk:** extreme
+
+### Root cause
+
+Outbound mobile dials checked React **`registrationState === "registered"`** (UI tabs) or only **`this.ua` existence** (`JsSipClient.dial`) — not **`isConnected() && isRegistered()`**. After cold start / background, the UI could show registered while the WebSocket was stale; **`ua.call()`** then failed immediately (403/408/local error). **`hasActiveSession()`** counted **terminated** zombie sessions, blocking keep-alive reconnect. Outbound calls had **no Call Flight Recorder timeline** (`flightRecord` no-ops without `flightBeginCall`).
+
+### Changes
+
+- **`mobileOutboundDial.ts`:** normalize dial target; **`ensureOutboundSipRegistration`** (15s wait, force refresh); SIP failure → diagnosis category.
+- **`jssip.ts`:** live-session **`hasActiveSession`** / register guard; **`dial()`** awaits healthy registration; **`OUTBOUND_*` trace** events with SIP code/reason.
+- **`SipContext.dial`:** centralized mic preflight, flight session, registration-age logging (all dial entry points).
+- **Call Flight Recorder + API explain:** `OUTBOUND_*` stages, warning flags, AI diagnosis categories.
+- **Inbound answer reliability (same day)** unchanged — separate commit `0f86e753`.
+
+### Manual QA
+
+See `MOBILE_CALL_TIMELINE.md` § Mobile outbound reliability (2026-06-03).
+
+---
+
 ## 2026-06-03 — Mobile answer reliability (late SIP INVITE / ring-group requeue)
 
 **Task:** telephony / mobile / call-answer reliability  

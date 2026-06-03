@@ -3858,8 +3858,14 @@ export function NotificationsProvider({
       if (sip.callState === "ended") postVoiceDiagEvent(token, { sessionId: sid, type: "CALL_ENDED", payload: { callState: sip.callState } }).catch(() => undefined);
       if (sip.callState === "ringing") postVoiceDiagEvent(token, { sessionId: sid, type: "INCOMING_INVITE", payload: { source: "sip_state" } }).catch(() => undefined);
       lastCallStateRef.current = sip.callState;
-      // Mirror into flight recorder
-      if (sip.callState === "ended") {
+      // Outbound flight sessions are opened/closed in SipContext.dial().
+      const inboundCtx =
+        answerInviteRef.current?.id ||
+        answerHandoffInviteIdRef.current ||
+        shownInviteIdRef.current ||
+        incomingInvite?.id ||
+        null;
+      if (sip.callState === "ended" && inboundCtx) {
         flightRecord('SIP', 'CALL_ENDED', { severity: 'info', payload: { sipCallState: 'ended' } });
         flightRecordNativeRingtone();
         void flightEndCall('ended');

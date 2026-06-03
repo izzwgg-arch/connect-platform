@@ -1585,6 +1585,12 @@ Resolver: `apps/api/src/crm/inboundCallerMatch.ts`; enricher:
   This addresses ring-group failures where push/UI worked but
   `PJSIP/T*_ext_1` arrived only after backend ACCEPT — see
   `CHANGELOG.md` 2026-06-03.
+  **Mobile outbound dial preflight (2026-06-03):** `JsSipClient.dial()` now
+  awaits **`isConnected() && isRegistered()`** via `ensureOutboundSipRegistration`
+  before `ua.call()`; `SipContext.dial` centralizes mic permission + number
+  normalization + Call Flight Recorder **`OUTBOUND_*`** stages. Fixes immediate
+  hangup when React `registrationState` lagged behind a stale WebSocket. See
+  `MOBILE_CALL_TIMELINE.md` § Mobile outbound reliability.
   **Voicemail stop-ring (2026-05-12):** when AMI already showed a ring push
   for `linkedId`, a later upsert that adds voicemail-class channels or an
   `app-voicemail` dialplan context triggers a **one-shot** POST to
