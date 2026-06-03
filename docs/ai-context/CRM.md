@@ -161,9 +161,19 @@ Pipeline (unchanged): Google Drive match → import (`CrmLeadDocument`) → text
 
 - `/crm/campaigns/[id]` member rosters are operational tables, not card feeds. Desktop rows should stay near 44-52px with compact avatars, tight cell padding, aligned columns, and readable 11-13px support text.
 - Contact identity is mandatory in-row: full name on the primary line, then email, phone, and company on a subtle secondary line. Do not move these fields into hover-only panels.
-- Row actions must be single-purpose: one premium Connect-blue `Open workspace` button that opens the CRM contact workspace with campaign/member context. Do not add duplicate Workspace, Contact, callback, or icon-only action clusters to member rows.
+- Row actions must stay compact and single-purpose: Call, SMS, Email, and Workspace actions open the CRM contact workspace with campaign/member context and optional deep-link query params. Do not add duplicate text Workspace/Contact/callback action clusters to member rows.
 - Member status pills/selects should be compact, semantic, and consistent width. Use subtle backgrounds and borders; avoid large glossy pills or tall native controls.
 - Responsive behavior: desktop is a dense table; tablet/mobile stack each member into a compact card row with visible labels and an easy-tap workspace action. No horizontal overflow.
+
+## Campaign Detail Operational Layout
+
+- `/crm/campaigns/[id]` is an operational contact workspace, not a dashboard. Keep the top compact: campaign identity only (name, status, priority, created/start date, existing owner if available). Do not put KPI cards, overview widgets, quick-action grids, or duplicate button rows in the top area.
+- Campaign-level actions live in one top-right **Actions** dropdown: edit/rename, import CSV, add contacts, distribute, bulk email, export, status/archive/delete actions, and any other real existing campaign action. Do not duplicate those actions in a second hero toolbar.
+- The old section tabs (`Overview`, `Contacts`, `Sequences`, `Templates`, `Reports`, `Settings`) are removed. Campaign information lives in a left rail and the roster is the main content.
+- Left rail structure: Campaign Health, Queue Ownership / Operational Progress, Performance, Channel/Import statistics, Recent Activity, Notes, and backed campaign settings controls. Cards must be contained (`min-width: 0`, no chart bleed), use CRM surfaces/shadows, and avoid fixed widths that cause overflow.
+- Contact workspace scrolling model: desktop uses a two-column workbench. The left rail participates in normal page flow; the roster becomes the independent scroll workspace once the campaign information column has ended. Tablet/mobile fall back to normal stacked page scroll.
+- Filters sit directly above the roster in one compact row. They are sticky only inside the contact section (`Contact Section -> Filters -> Contact List`) and must not become a global floating filter bar.
+- Roster table columns are dense and operational: Name, Phone, Email, Company, Status, Assigned Agent, Last Activity, Actions. Preserve bulk selection, Assign Me, Assign Agent, Bulk Email, Export, and per-row Call/SMS/Email/Workspace actions.
 
 ## Campaign Active Workspace (contact detail)
 

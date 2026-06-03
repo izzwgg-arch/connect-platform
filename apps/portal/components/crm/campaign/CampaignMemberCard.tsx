@@ -49,11 +49,6 @@ export function CampaignMemberCard({
   if (rowMode) {
     const displayName = member.contact?.displayName ?? "Unknown";
     const avatarInitial = displayName.charAt(0).toUpperCase();
-    const contactMeta = [
-      member.contact?.primaryEmail,
-      member.contact?.primaryPhone,
-      member.contact?.company,
-    ].filter((value): value is string => Boolean(value && value.trim()));
     const workspaceParams = `campaignId=${encodeURIComponent(campaignId)}&memberId=${encodeURIComponent(member.id)}`;
     const workspaceHref = `/crm/contacts/${member.contactId}?${workspaceParams}`;
     const callHref = `${workspaceHref}&action=call`;
@@ -97,15 +92,10 @@ export function CampaignMemberCard({
                 </span>
               )}
             </div>
-            <p className="cinema-member-contact-line">
-              {contactMeta.length > 0
-                ? contactMeta.map((item, index) => (
-                    <span key={`${item}-${index}`} className="min-w-0 truncate">
-                      {index > 0 ? <span className="cinema-member-meta-dot" aria-hidden>•</span> : null}
-                      {item}
-                    </span>
-                  ))
-                : <span>Missing email, phone, and company</span>}
+            <p className="cinema-member-contact-line lg:hidden">
+              {[member.contact?.primaryPhone, member.contact?.primaryEmail, member.contact?.company]
+                .filter((value): value is string => Boolean(value && value.trim()))
+                .join(" • ") || "Missing phone, email, and company"}
             </p>
             <div className="cinema-member-mobile-ops lg:hidden">
               <span>{member.assignedTo?.displayName ?? "Unassigned"}</span>
@@ -113,6 +103,21 @@ export function CampaignMemberCard({
               <span>{lastTouch}</span>
             </div>
           </div>
+        </div>
+
+        <div className="hidden min-w-0 text-xs lg:block">
+          <span className="cinema-member-col-label lg:hidden">Phone</span>
+          <p className="truncate cinema-member-touch">{member.contact?.primaryPhone ?? "No phone"}</p>
+        </div>
+
+        <div className="hidden min-w-0 text-xs lg:block">
+          <span className="cinema-member-col-label lg:hidden">Email</span>
+          <p className="truncate cinema-member-touch">{member.contact?.primaryEmail ?? "No email"}</p>
+        </div>
+
+        <div className="hidden min-w-0 text-xs lg:block">
+          <span className="cinema-member-col-label lg:hidden">Company</span>
+          <p className="truncate cinema-member-touch">{member.contact?.company ?? "—"}</p>
         </div>
 
         <div className="flex min-w-0 flex-row items-center justify-between gap-2 lg:flex-col lg:items-start lg:justify-center lg:gap-1">
@@ -154,12 +159,6 @@ export function CampaignMemberCard({
         <div className="hidden lg:block">
           <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Last touch</span>
           <p className="cinema-member-touch">{lastTouch}</p>
-        </div>
-
-        <div>
-          <span className="cinema-member-col-label lg:hidden">Channel / Attempts</span>
-          <p className="cinema-member-next">{member.attemptCount} attempt{member.attemptCount === 1 ? "" : "s"}</p>
-          <p className="hidden text-[10px] text-crm-muted lg:block">{nextAction}</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-1 lg:justify-end">
