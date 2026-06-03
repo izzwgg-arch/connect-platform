@@ -178,6 +178,31 @@ function computeStats(session: FlightSession): TimingStats {
     stats.warningFlags.push('SIP_CONNECT_SLOW');
   }
 
+  if (byStage('SIP_REGISTER_FAILED')) {
+    stats.warningFlags.push('SIP_REGISTER_FAILED');
+  }
+
+  const sipAnswerFailed = byStage('SIP_ANSWER_FAILED');
+  if (sipAnswerFailed?.payload && typeof sipAnswerFailed.payload === 'object') {
+    const reason = String((sipAnswerFailed.payload as Record<string, unknown>).reason || '');
+    if (reason === 'session_not_found_timeout') {
+      stats.warningFlags.push('SIP_INVITE_TIMEOUT');
+    }
+    if (reason === 'ended_before_confirmed') {
+      stats.warningFlags.push('SIP_ENDED_BEFORE_CONFIRMED');
+    }
+  }
+
+  if (
+    answerTapped &&
+    !byStage('SIP_REGISTERED') &&
+    !byStage('SIP_REGISTER_FAILED') &&
+    !byStage('SIP_ANSWER_START') &&
+    session.result !== 'declined'
+  ) {
+    stats.warningFlags.push('NO_SIP_AFTER_ANSWER');
+  }
+
   if (stats.hadBlankScreen) {
     stats.warningFlags.push('BLANK_SCREEN_DETECTED');
   }

@@ -22,6 +22,11 @@ import {
   markCallLatency,
   linkCallLatencyIds,
 } from "../debug/callLatency";
+import {
+  MOBILE_SIP_ANSWER_POLL_MS,
+  createSipAnswerDeadline,
+  type SipAnswerDeadlineHandle,
+} from "./mobileAnswerTiming";
 
 // Voice-optimised audio constraints — same profile as the browser softphone.
 const VOICE_AUDIO_CONSTRAINTS = {
@@ -142,6 +147,8 @@ export class JsSipClient implements SipClient {
   private lastAnswerMatch: SipMatch | undefined;
   /** Callback(s) fired when a ghost session auto-retries onto a new session. */
   private ghostRetryCallbacks: Array<(result: "confirmed" | "failed") => void> = [];
+  /** Incremented on each answerIncoming() — stale pipelines bail without side effects. */
+  private activeAnswerEpoch = 0;
   /** Callback for submitting quality reports — injected by the context layer. */
   onCallQualityReport?: (report: Record<string, unknown>) => void;
   /** Callback for sending live mid-call pings — injected by the context layer. */
@@ -1438,11 +1445,15 @@ export class JsSipClient implements SipClient {
     match?: SipMatch,
     timeoutMs = 5000,
     onTrace?: (event: SipAnswerTraceEvent) => void,
+    deadlineHandle?: SipAnswerDeadlineHandle,
   ): Promise<boolean> {
     const answerStartAt = Date.now();
-    const until = answerStartAt + Math.max(500, timeoutMs);
+    const deadline =
+      deadlineHandle ?? createSipAnswerDeadline(answerStartAt, timeoutMs).handle;
+    const getUntil = () => deadline.getUntilMs();
     const MAX_ATTEMPTS = 3;
     let attempt = 0;
+    const epoch = ++this.activeAnswerEpoch;
     this.lastAnswerMatch = match;
     console.log('[CALL_EVENT] answer_pipeline_start at=' + answerStartAt + ' timeoutMs=' + timeoutMs);
 
@@ -1450,22 +1461,14 @@ export class JsSipClient implements SipClient {
     // A poll iteration that finds no incoming session yet (cold-start race where
     // SIP is registered but the INVITE hasn't arrived) must NOT consume an
     // attempt slot — we just wait inside the overall time budget.
-    // PERF: poll interval lowered from 50ms → 15ms. On cold-start answers
-    // the PBX sends SIP INVITE ~300–450 ms after our REGISTER completes;
-    // during that window this loop was idle-sleeping in 50 ms chunks,
-    // stretching total answer latency by up to an extra ~50 ms per call.
-    // 15 ms still costs ≤ 0.1 % CPU and shaves tail latency off every
-    // inbound call.
-    const POLL_MS = 15;
-    // Fine-grained sub-phase split of SESSION_ACCEPT_START → MEDIA_SETUP_START.
-    // Fired once per pipeline invocation on the FIRST time findIncoming returns
-    // a usable session — i.e. the moment the PBX's INVITE has actually arrived
-    // at our UA. Gap SESSION_ACCEPT_START→SIP_INVITE_FOUND is pure poll-wait
-    // for the PBX; gap SIP_ANSWER_INVOKED→MEDIA_SETUP_START is JsSIP+WebRTC
-    // native work (getUserMedia, PC construction, SDP).
+    const POLL_MS = MOBILE_SIP_ANSWER_POLL_MS;
     let inviteFoundMarked = false;
     const inviteIdForLatency = match?.inviteId ?? null;
-    while (Date.now() < until) {
+    while (Date.now() < getUntil()) {
+      if (epoch !== this.activeAnswerEpoch) {
+        console.warn('[CALL_EVENT] answer_pipeline_superseded epoch=' + epoch);
+        return false;
+      }
       const session = this.findIncoming(match);
       if (!session) {
         await new Promise((resolve) => setTimeout(resolve, POLL_MS));
@@ -1478,8 +1481,6 @@ export class JsSipClient implements SipClient {
         });
       }
       if (this.answerAttemptedSessions.has(session)) {
-        // Already tried this one. Wait for ghost-retry to complete or a newer
-        // session to arrive. Do not consume an attempt slot here.
         await new Promise((resolve) => setTimeout(resolve, POLL_MS));
         continue;
       }
@@ -1497,7 +1498,7 @@ export class JsSipClient implements SipClient {
       setTimeout(() => ICM.routeToEarpiece(), 150);
 
       const outcome = await new Promise<"confirmed" | "ghost" | "failed">((resolve) => {
-        const ANSWER_TIMEOUT_MS = Math.max(500, until - Date.now());
+        const ANSWER_TIMEOUT_MS = Math.max(500, getUntil() - Date.now());
         let settled = false;
         const answerTimer = setTimeout(() => {
           if (settled) return;
@@ -1508,15 +1509,19 @@ export class JsSipClient implements SipClient {
 
         const finalize = (v: "confirmed" | "ghost" | "failed") => {
           if (settled) return;
+          if (epoch !== this.activeAnswerEpoch) {
+            settled = true;
+            clearTimeout(answerTimer);
+            resolve("failed");
+            return;
+          }
           settled = true;
           clearTimeout(answerTimer);
           resolve(v);
         };
 
         const awaitGhostRetry = () => {
-          // bindSession's handleGhostOrEnded may have queued an auto-retry on a
-          // newer session. Wait for its outcome before we decide to fail.
-          const remaining = Math.max(500, until - Date.now());
+          const remaining = Math.max(500, getUntil() - Date.now());
           const waitTimer = setTimeout(() => finalize("failed"), remaining);
           this.ghostRetryCallbacks.push((result) => {
             clearTimeout(waitTimer);
@@ -1556,7 +1561,6 @@ export class JsSipClient implements SipClient {
         });
         session.once?.("ended", () => {
           if (settled) return;
-          // If bindSession identified this as a ghost dialog, wait for the retry.
           if (this.ghostSessions.has(session)) {
             console.warn('[CALL_EVENT] answer_ended_as_ghost attempt=' + attempt + ' — awaiting retry');
             awaitGhostRetry();
@@ -1575,18 +1579,9 @@ export class JsSipClient implements SipClient {
         try {
           console.log('[CALL_NATIVE] answer_invoked attempt=' + attempt);
           this.answerInvokedAt.set(session, Date.now());
-          // Stitch the inviteId (from the caller) to the SIP session
-          // id so every mark emitted from `bindLatencyProbes` lands on
-          // the same timeline the UI layer opened under `invite.id`.
           const sid = this.getSessionIdSafe(session);
           const inviteId = match?.inviteId;
           if (inviteId && sid) linkCallLatencyIds(inviteId, sid);
-          // Sub-phase: we are about to enter session.answer() which runs
-          // synchronously on the JS thread but does heavy native work
-          // (RTCPeerConnection construction, getUserMedia for mic,
-          // applyRemoteDescription, createAnswer, setLocalDescription).
-          // Gap SIP_ANSWER_INVOKED → MEDIA_SETUP_START tells us whether
-          // peer-connection prewarm would actually help.
           const answerInvokedAt = Date.now();
           markCallLatency(inviteId ?? sid, "SIP_ANSWER_INVOKED", {
             sinceAnswerStartMs: answerInvokedAt - answerStartAt,
@@ -1609,16 +1604,22 @@ export class JsSipClient implements SipClient {
         }
       });
 
+      if (epoch !== this.activeAnswerEpoch) {
+        console.warn('[CALL_EVENT] answer_pipeline_superseded_post_attempt epoch=' + epoch);
+        return false;
+      }
       if (outcome === "confirmed") {
         console.log('[CALL_EVENT] answer_pipeline_success attempts=' + attempt);
         return true;
       }
       if (outcome === "ghost") {
-        // ghost-retry already happened inside bindSession; loop to re-check state.
         continue;
       }
-      // failed — try next iteration if the loop still has time budget.
       await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+
+    if (epoch !== this.activeAnswerEpoch) {
+      return false;
     }
 
     console.warn('[CALL_EVENT] answer_pipeline_exhausted attempts=' + attempt);

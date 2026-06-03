@@ -6,11 +6,12 @@ import { postCallQualityReport, postCallQualityPing, clearCallQualityPing } from
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { appendCallRecord } from "../storage/callHistory";
 import type { CallDirection, CallState, CallRecord, ProvisioningBundle, SipRegistrationState } from "../types";
-import type { SipAnswerTraceEvent, SipSessionInfo } from "../sip/types";
+import type { SipAnswerTraceEvent, SipSessionInfo, SipAnswerDeadlineHandle } from "../sip/types";
 import { useAuth } from "./AuthContext";
 import { logCallFlow, setCallFlowLastError } from "../debug/callFlowDebug";
 import { rememberVmGreetingWake } from "../voicemail/vmGreetingWakeBridge";
 import { audioRouteManager, getAudioDevicesSnapshot } from "../audio/audioRouteManager";
+import { flightRecord } from "../diagnostics/CallFlightRecorder";
 
 const PROVISION_KEY = "cc_mobile_provision";
 const LAST_DIALED_KEY = "cc_mobile_last_dialed";
@@ -40,6 +41,7 @@ type SipState = {
     match: { inviteId?: string | null; fromNumber?: string | null; toExtension?: string | null; pbxCallId?: string | null; sipCallTarget?: string | null },
     timeoutMs?: number,
     onTrace?: (event: SipAnswerTraceEvent) => void,
+    deadlineHandle?: SipAnswerDeadlineHandle,
   ) => Promise<boolean>;
   rejectIncomingInvite: (match?: {
     inviteId?: string | null;
@@ -781,6 +783,10 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           jsBootedAtMs: t0,
         },
       });
+      flightRecord("PUSH", "WAKE_PUSH_RECEIVED", {
+        pbxCallId,
+        payload: { toExtension, fromNumber, appState },
+      });
 
       // Ensure provisioning is loaded — we may have been dead-cold and JS
       // only just started. ensureProvisioningLoaded is idempotent.
@@ -840,6 +846,10 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           latencySinceWakeMs: triggeredAt - t0,
         },
       });
+      flightRecord("SIP", "WAKE_REGISTER_TRIGGERED", {
+        pbxCallId,
+        payload: { forceRestart: needsForceRestart, previousRegState: prevRegState },
+      });
 
       try {
         await clientRef.current.register({ forceRestart: needsForceRestart });
@@ -862,12 +872,25 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
             regState: registrationStateRef.current,
           },
         });
+        flightRecord("SIP", "WAKE_REGISTER_COMPLETE", {
+          pbxCallId,
+          payload: {
+            registerLatencyMs: completedAt - triggeredAt,
+            totalLatencyMs: completedAt - t0,
+            regState: registrationStateRef.current,
+          },
+        });
       } catch (e: any) {
         console.warn("[CALL_WAKE] register({forceRestart:" + needsForceRestart + "}) threw:", e?.message);
         await postWakeEvent(authToken, {
           pbxCallId,
           stage: "DEVICE_REGISTER_FAILED",
           details: { error: e?.message, regState: registrationStateRef.current },
+        });
+        flightRecord("SIP", "WAKE_REGISTER_FAILED", {
+          pbxCallId,
+          severity: "error",
+          payload: { error: e?.message, regState: registrationStateRef.current },
         });
       }
     });
@@ -1154,9 +1177,9 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         await clientRef.current.answer();
       },
 
-      answerIncomingInvite: async (match, timeoutMs = 5000, onTrace) => {
+      answerIncomingInvite: async (match, timeoutMs = 5000, onTrace, deadlineHandle) => {
         setCallDirection("inbound");
-        return clientRef.current.answerIncoming(match, timeoutMs, onTrace);
+        return clientRef.current.answerIncoming(match, timeoutMs, onTrace, deadlineHandle);
       },
 
       rejectIncomingInvite: async (match) => {

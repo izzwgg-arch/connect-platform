@@ -61,6 +61,11 @@ interface FlightExplain {
   grade: string | null;
   warnings: string[];
   timeline: string;
+  diagnosisCategory?: string | null;
+  sipFailureReason?: string | null;
+  sipFailureCode?: number | null;
+  sipRegistered?: boolean;
+  sipInviteObserved?: boolean;
 }
 
 interface StatsData {
@@ -115,6 +120,11 @@ const STAGE_ICONS: Record<string, string> = {
   SIP_ANSWER_SENT: "➡️",
   SIP_CONNECTED: "🟢",
   SIP_ANSWER_FAILED: "🔴",
+  WAKE_PUSH_RECEIVED: "📨",
+  WAKE_REGISTER_TRIGGERED: "🔐",
+  WAKE_REGISTER_COMPLETE: "✅",
+  WAKE_REGISTER_FAILED: "🔴",
+  INVITE_CLAIMED: "✅",
   CALL_ENDED: "📵",
   ACTIVE_CALL_SCREEN_SHOWN: "🎤",
   CALL_ENDED_SCREEN_SHOWN: "⏹",
@@ -355,6 +365,33 @@ function AiPanel({ session }: { session: FlightSession }) {
               </div>
             ))}
           </div>
+
+          {(explain.diagnosisCategory || explain.sipFailureReason) && (
+            <div style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(4, 1fr)",
+              gap: 8,
+              fontSize: 11,
+              color: "#94a3b8",
+            }}>
+              {explain.diagnosisCategory && (
+                <div><span style={{ color: "#64748b" }}>Category:</span> {explain.diagnosisCategory}</div>
+              )}
+              {explain.sipFailureReason && (
+                <div><span style={{ color: "#64748b" }}>SIP reason:</span> {explain.sipFailureReason}</div>
+              )}
+              {explain.sipFailureCode != null && (
+                <div><span style={{ color: "#64748b" }}>SIP code:</span> {explain.sipFailureCode}</div>
+              )}
+              <div>
+                <span style={{ color: "#64748b" }}>Registered:</span>{" "}
+                {explain.sipRegistered ? "yes" : "no"}
+                {" · "}
+                <span style={{ color: "#64748b" }}>INVITE seen:</span>{" "}
+                {explain.sipInviteObserved ? "yes" : "no"}
+              </div>
+            </div>
+          )}
 
           {explain.warnings.length > 0 && (
             <div>

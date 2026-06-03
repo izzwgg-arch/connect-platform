@@ -76,6 +76,8 @@ export type SipAnswerTraceEvent = {
   message?: string | null;
 };
 
+export type { SipAnswerDeadlineHandle } from "./mobileAnswerTiming";
+
 export type SipClient = {
   configure: (bundle: ProvisioningBundle) => void;
   register: (options?: { forceRestart?: boolean }) => Promise<void>;
@@ -100,6 +102,7 @@ export type SipClient = {
     match?: SipMatch,
     timeoutMs?: number,
     onTrace?: (event: SipAnswerTraceEvent) => void,
+    deadlineHandle?: import("./mobileAnswerTiming").SipAnswerDeadlineHandle,
   ) => Promise<boolean>;
   rejectIncoming: (match?: SipMatch) => Promise<boolean>;
   hangup: () => Promise<void>;

@@ -1575,6 +1575,16 @@ Resolver: `apps/api/src/crm/inboundCallerMatch.ts`; enricher:
   desk-outbound shapes and **`inbound` mislabeled** phantoms) and asserts the
   decision is tenant-, DID-, and extension-number-agnostic.
   See `TEST_INVENTORY.md` for detail.
+  **Ring-group wake + requeue (2026-06-03):** `/internal/mobile-ring-notify`
+  now sends **`INCOMING_CALL_WAKE` before `INCOMING_CALL`** so Android
+  pre-registers via `SipContext` before the user taps Answer. When the
+  device posts **`DEVICE_REGISTER_COMPLETE`** to `/mobile/wake/event`, the
+  API idempotently calls **`/telephony/internal/mobile-invites/requeue`**
+  for any **PENDING** `CallInvite` on that `pbxCallId` (same path as
+  mobile **ACCEPT**, guarded by `apps/api/src/mobileInviteRequeue.ts`).
+  This addresses ring-group failures where push/UI worked but
+  `PJSIP/T*_ext_1` arrived only after backend ACCEPT — see
+  `CHANGELOG.md` 2026-06-03.
   **Voicemail stop-ring (2026-05-12):** when AMI already showed a ring push
   for `linkedId`, a later upsert that adds voicemail-class channels or an
   `app-voicemail` dialplan context triggers a **one-shot** POST to

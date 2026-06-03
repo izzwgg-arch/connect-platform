@@ -35,6 +35,14 @@ import { shouldSkipJwtVerification } from "./jwtPublicRouteBypass";
 import { fetchAriSliceForPbxLiveFromRedisOrAri } from "./pbxLiveAriSlice";
 import { buildVoiceProvisioningBundleFromIdentity, resolveWebrtcSipIdentity } from "./voiceProvisioningBundle";
 import {
+  canAttemptMobileInviteRequeue,
+  isPendingMobileInviteEligible,
+  markMobileInviteRequeueAttempt,
+  requeueTriggerLabel,
+  resolveFlightUploadSessionIds,
+  type RequeueTrigger,
+} from "./mobileInviteRequeue";
+import {
   acknowledgeVoicemailIngestIncident,
   classifyHelperFailure,
   db,
@@ -2600,6 +2608,50 @@ async function requestTelephonyInviteRequeue(input: {
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`telephony requeue failed (${res.status}): ${body || "no body"}`);
+  }
+}
+
+async function tryRequeuePendingMobileInvite(input: {
+  linkedId: string;
+  exten?: string | null;
+  inviteId?: string | null;
+  trigger: RequeueTrigger;
+  logContext?: Record<string, unknown>;
+}): Promise<{ attempted: boolean; skipped?: string }> {
+  const linkedId = String(input.linkedId || "").trim();
+  if (!linkedId) return { attempted: false, skipped: "missing_linked_id" };
+  if (!canAttemptMobileInviteRequeue(linkedId)) {
+    return { attempted: false, skipped: "rate_limited" };
+  }
+  markMobileInviteRequeueAttempt(linkedId);
+  try {
+    await requestTelephonyInviteRequeue({
+      inviteId: input.inviteId || "",
+      linkedId,
+      exten: input.exten,
+    });
+    app.log.info(
+      {
+        linkedId,
+        inviteId: input.inviteId,
+        trigger: requeueTriggerLabel(input.trigger),
+        ...(input.logContext || {}),
+      },
+      "mobile-invite: telephony requeue sent",
+    );
+    return { attempted: true };
+  } catch (err) {
+    app.log.warn(
+      {
+        linkedId,
+        inviteId: input.inviteId,
+        trigger: requeueTriggerLabel(input.trigger),
+        err: err instanceof Error ? err.message : String(err),
+        ...(input.logContext || {}),
+      },
+      "mobile-invite: telephony requeue failed",
+    );
+    return { attempted: false, skipped: "telephony_error" };
   }
 }
 
@@ -10471,9 +10523,7 @@ app.post("/mobile/flight-recorder/upload", async (req, reply) => {
   const sessionId = String(session.id || "").slice(0, 64);
   if (!sessionId) return reply.status(400).send({ error: "Missing session.id" });
 
-  const inviteId = session.inviteId ? String(session.inviteId).slice(0, 128) : null;
-  const pbxCallId = session.pbxCallId ? String(session.pbxCallId).slice(0, 128) : null;
-  const linkedId = session.linkedId ? String(session.linkedId).slice(0, 128) : null;
+  const { inviteId, pbxCallId, linkedId } = resolveFlightUploadSessionIds(session);
   const meta = (session.meta ?? {}) as Record<string, unknown>;
   const events = Array.isArray(session.events) ? session.events.slice(0, 200) : [];
 
@@ -10690,11 +10740,35 @@ app.post("/admin/call-flight/sessions/:id/explain", async (req, reply) => {
       grade: string | null;
       warnings: string[];
       timeline: string;
+      diagnosisCategory?: string | null;
+      sipFailureReason?: string | null;
+      sipFailureCode?: number | null;
+      sipRegistered?: boolean;
+      sipInviteObserved?: boolean;
     };
 
     function buildExplain(): FlightExplain {
       const warnings = warningFlags.map((f: unknown) => String(f));
       const timeline: string[] = [];
+
+      const sipFailed = byStage("SIP_ANSWER_FAILED");
+      const sipRegisterFailed = byStage("SIP_REGISTER_FAILED");
+      const sipRegisteredEv = byStage("SIP_REGISTERED");
+      const inviteClaimed = byStage("INVITE_CLAIMED");
+      const sipAnswerSent = byStage("SIP_ANSWER_SENT");
+      const failurePayload =
+        sipFailed?.payload && typeof sipFailed.payload === "object"
+          ? (sipFailed.payload as Record<string, unknown>)
+          : null;
+      const failureReason = failurePayload?.reason != null ? String(failurePayload.reason) : null;
+      const failureCode =
+        typeof failurePayload?.code === "number" ? failurePayload.code : null;
+      const sipDiagBase = {
+        sipFailureReason: failureReason,
+        sipFailureCode: failureCode,
+        sipRegistered: !!sipRegisteredEv,
+        sipInviteObserved: !!sipAnswerSent || !!sipConnected,
+      };
 
       if (pushReceived) timeline.push(`Push received (BG=${pushReceived.category === 'PUSH' ? 'yes' : 'no'})`);
       if (incomingShown) timeline.push(`Incoming UI shown ${pushToUiMs !== null ? `(${fmtMs(pushToUiMs)} after push)` : ""}`);
@@ -10764,17 +10838,99 @@ app.post("/admin/call-flight/sessions/:id/explain", async (req, reply) => {
       }
 
       if (!sipConnected && answerTapped) {
+        if (!sipStart && !sipRegisteredEv && !sipRegisterFailed) {
+          return {
+            summary: "Answer tapped but SIP pipeline never started",
+            whatHappened:
+              "Push/UI worked and the user tapped Answer, but no SIP registration or answer attempt was recorded before the call failed.",
+            likelyCause:
+              "The answer handler may have exited early (auth/token race) or the flight session ended before SIP events were captured.",
+            suggestedFix:
+              "Check mobile logs for ACCEPT_GUARD early returns. Verify auth token is ready on cold-start answer.",
+            confidence: "MEDIUM",
+            grade: "poor",
+            warnings,
+            timeline: timeline.join(" → "),
+            diagnosisCategory: "NO_SIP_PIPELINE",
+            ...sipDiagBase,
+          };
+        }
+
+        if (sipRegisterFailed || warnings.includes("SIP_REGISTER_FAILED")) {
+          return {
+            summary: "SIP registration failed after answer",
+            whatHappened:
+              "The user tapped Answer but SIP registration failed before an INVITE could be answered.",
+            likelyCause:
+              "Missing provisioning bundle, invalid credentials, or SIP WebSocket unreachable at answer time.",
+            suggestedFix:
+              "Check Voice Diagnostics for SIP_REGISTER_FAILED. Re-provision the device and verify wss:// SIP URL from the tenant bundle.",
+            confidence: "HIGH",
+            grade: "poor",
+            warnings,
+            timeline: timeline.join(" → "),
+            diagnosisCategory: "SIP_REGISTER_FAILED",
+            ...sipDiagBase,
+          };
+        }
+
+        if (
+          failureReason === "session_not_found_timeout" ||
+          warnings.includes("SIP_INVITE_TIMEOUT")
+        ) {
+          return {
+            summary: "Answer accepted but no SIP INVITE reached the app in time",
+            whatHappened: `User tapped Answer, SIP ${sipRegisteredEv ? "registered" : "registration unclear"}, backend ${inviteClaimed ? "accepted the invite" : "claim unclear"}, but no incoming JsSIP session arrived before the answer wait expired.`,
+            likelyCause:
+              "The PBX mobile PJSIP leg was delayed or only requeued after ACCEPT. Common on ring-group paths where the hard phone is dialed first.",
+            suggestedFix:
+              "Check telephony logs for AMI mobile invite requeue timing relative to SIP_ANSWER_FAILED. Verify INCOMING_CALL_WAKE pre-register and DEVICE_REGISTER_COMPLETE requeue for this pbxCallId.",
+            confidence: "HIGH",
+            grade: "poor",
+            warnings,
+            timeline: timeline.join(" → "),
+            diagnosisCategory: "SIP_INVITE_TIMEOUT",
+            ...sipDiagBase,
+          };
+        }
+
+        if (
+          failureReason === "ended_before_confirmed" ||
+          failureCode === 487 ||
+          warnings.includes("SIP_ENDED_BEFORE_CONFIRMED")
+        ) {
+          return {
+            summary: "Caller cancelled or SIP dialog ended before confirmed",
+            whatHappened:
+              "An incoming SIP session was found and answer was attempted, but the dialog ended before SIP confirmed (often caller hangup or CANCEL).",
+            likelyCause:
+              failureCode === 487
+                ? "SIP 487 Request Terminated — remote party hung up during answer."
+                : "Remote BYE/CANCEL or ghost-dialog race before ACK.",
+            suggestedFix:
+              "Usually not an app bug. If frequent, check PBX for premature CANCEL on parallel ring-group legs.",
+            confidence: "HIGH",
+            grade: "poor",
+            warnings,
+            timeline: timeline.join(" → "),
+            diagnosisCategory: "CALLER_CANCELLED",
+            ...sipDiagBase,
+          };
+        }
+
         return {
           summary: "Call answered but SIP did not connect",
-          whatHappened: `Answer was tapped but SIP ${sipStart ? "answer was initiated yet" : "answer was never started"} and never reached the connected state.${warnings.includes("SIP_REGISTER_FAILED") ? " SIP registration failed." : ""}`,
-          likelyCause: warnings.includes("SIP_REGISTER_FAILED")
-            ? "SIP registration failed when attempting to answer. This may indicate the SIP provisioning bundle is missing or the SIP domain is unreachable."
-            : "SIP answer timed out or failed. The SIP session may have ended before the 200 OK was sent.",
-          suggestedFix: "Check SIP registration logs. Ensure the SIP WS URL is reachable and credentials are valid. Look for SIP 4xx/5xx error codes in the timeline.",
-          confidence: "HIGH",
+          whatHappened: `Answer was tapped but SIP ${sipStart ? "answer was initiated yet" : "answer was never started"} and never reached the connected state.${failureReason ? ` Failure: ${failureReason}${failureCode != null ? ` (${failureCode})` : ""}.` : ""}`,
+          likelyCause:
+            "SIP answer failed for an uncommon reason — inspect SIP_ANSWER_FAILED payload in the timeline.",
+          suggestedFix:
+            "Expand SIP_ANSWER_FAILED in the event timeline. Cross-check Voice Diagnostics and Asterisk logs for this pbxCallId.",
+          confidence: "MEDIUM",
           grade: "poor",
           warnings,
           timeline: timeline.join(" → "),
+          diagnosisCategory: "SIP_ANSWER_FAILED_OTHER",
+          ...sipDiagBase,
         };
       }
 
@@ -12834,15 +12990,13 @@ app.post("/mobile/call-invites/:id/respond", async (req, reply) => {
     }
 
     try {
-      await requestTelephonyInviteRequeue({
-        inviteId: existing.id,
-        linkedId: existing.pbxCallId,
+      await tryRequeuePendingMobileInvite({
+        linkedId: existing.pbxCallId ?? "",
         exten: existing.toExtension,
+        inviteId: existing.id,
+        trigger: "accept",
+        logContext: { toExtension: existing.toExtension },
       });
-      app.log.info(
-        { inviteId: existing.id, linkedId: existing.pbxCallId, toExtension: existing.toExtension },
-        "mobile-call-invite: telephony requeue requested",
-      );
     } catch (err) {
       app.log.warn(
         {
@@ -26118,6 +26272,39 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
       });
 
   // ── Send Expo push to all registered devices for this user ───────────────────
+  const wakeRequestedAt = new Date().toISOString();
+  try {
+    await sendPushToUserDevices({
+      tenantId: target.tenantId,
+      userId: target.userId,
+      payload: {
+        type: "INCOMING_CALL_WAKE",
+        pbxCallId: invite.pbxCallId ?? input.linkedId,
+        fromNumber: invite.fromNumber,
+        fromDisplay: invite.fromDisplay,
+        toExtension: invite.toExtension,
+        tenantId: target.tenantId,
+        pbxVitalTenantId: input.pbxVitalTenantId,
+        timestamp: wakeRequestedAt,
+        wakeRequestedAt,
+      },
+    });
+    await recordWakeEvent({
+      tenantId: target.tenantId,
+      pbxCallId: invite.pbxCallId ?? input.linkedId,
+      stage: "WAKE_PUSH_QUEUED",
+      source: "api",
+      userId: target.userId,
+      extensionId: target.extensionId,
+      details: { path: "mobile_ring_notify" },
+    });
+  } catch (err: any) {
+    app.log.warn(
+      { err: err?.message, inviteId: invite.id, pbxCallId: invite.pbxCallId },
+      "mobile-ring-notify: INCOMING_CALL_WAKE failed (non-fatal)",
+    );
+  }
+
   const push = await sendPushToUserDevices({
     tenantId: target.tenantId,
     userId: target.userId,
@@ -26711,6 +26898,33 @@ app.post("/mobile/wake/event", async (req, reply) => {
     deviceId: resolvedDeviceId,
     details: body.details || null,
   });
+
+  if (body.stage === "DEVICE_REGISTER_COMPLETE") {
+    const pendingInvite = await db.callInvite.findFirst({
+      where: {
+        tenantId: user.tenantId,
+        userId: user.sub,
+        pbxCallId: body.pbxCallId,
+        status: "PENDING",
+        expiresAt: { gte: new Date() },
+      },
+      select: {
+        id: true,
+        pbxCallId: true,
+        toExtension: true,
+        status: true,
+      },
+    });
+    if (isPendingMobileInviteEligible(pendingInvite)) {
+      await tryRequeuePendingMobileInvite({
+        linkedId: pendingInvite.pbxCallId ?? body.pbxCallId,
+        exten: pendingInvite.toExtension,
+        inviteId: pendingInvite.id,
+        trigger: "register_complete",
+        logContext: { pbxCallId: body.pbxCallId, deviceId: resolvedDeviceId },
+      });
+    }
+  }
 
   return reply.send({ ok: true });
 });

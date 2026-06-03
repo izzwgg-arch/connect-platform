@@ -520,6 +520,48 @@ JS filter: `adb logcat ReactNativeJS:V *:S` then grep `CONNECT_CALL_UI`.
 
 ---
 
+## Mobile answer reliability (2026-06-03)
+
+### Symptom
+
+Push, ringtone, and incoming UI succeed; user taps **Answer**; call fails with
+`SIP_ANSWER_FAILED` / `session_not_found_timeout` in Call Flight Recorder.
+
+### Root cause (ring-group path)
+
+1. **`mobile-ring-notify`** historically sent **`INCOMING_CALL` only** — no wake
+   pre-register.
+2. PBX ring group dials hard phone + mobile; mobile may not be registered yet.
+3. Backend **ACCEPT** triggers AMI requeue; fresh **`PJSIP/T*_ext_1`** can arrive
+   **after** the old **8s** JsSIP poll expired.
+
+### Fix summary
+
+| Layer | Change |
+|---|---|
+| API | `INCOMING_CALL_WAKE` before `INCOMING_CALL` on ring notify |
+| API | Requeue on `DEVICE_REGISTER_COMPLETE` + idempotent guard on ACCEPT |
+| Mobile | Answer wait: **8s initial**, **+16s after ACCEPT**, **30s hard cap** (`apps/mobile/src/sip/mobileAnswerTiming.ts`) |
+| Mobile | Reject/hangup on failure; answer epoch prevents double-answer |
+| Flight recorder | `meta.inviteId` upload fix; diagnosis categories |
+
+### Timing knobs
+
+- `MOBILE_SIP_ANSWER_INITIAL_WAIT_MS` = 8000
+- `MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS` = 16000
+- `MOBILE_SIP_ANSWER_MAX_WAIT_MS` = 30000
+
+### Manual QA checklist (Relax Tires / ext 101)
+
+1. Cold/background app; inbound ring-group call to ext 101.
+2. Confirm **`INCOMING_CALL_WAKE`** in wake timeline → `DEVICE_REGISTER_COMPLETE`.
+3. Tap Answer; confirm **`PJSIP/T25_101_1`** in telephony logs **before** app timeout.
+4. Confirm **`SIP_CONNECTED`** in flight recorder; `inviteId` populated in session list.
+5. Repeat with hard phone also ringing — mobile should still connect when answered on app.
+6. Caller-cancel case should diagnose as **`CALLER_CANCELLED`** / `ended_before_confirmed`, not invite timeout.
+
+---
+
 ## What this doc deliberately does NOT cover
 
 - Outbound calls (covered tangentially by `SipContext`/`useSipPhone`).

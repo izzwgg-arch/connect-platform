@@ -4,6 +4,30 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-03 — Mobile answer reliability (late SIP INVITE / ring-group requeue)
+
+**Task:** telephony / mobile / call-answer reliability  
+**Risk:** extreme
+
+### Root cause
+
+Ring-group inbound calls used `/internal/mobile-ring-notify`, which sent **`INCOMING_CALL` only** (UI push) — not **`INCOMING_CALL_WAKE`** (SIP pre-register). The PBX dialed hard phone + mobile PJSIP via the ring group; mobile was often **not registered** when the leg started. On Answer, mobile cold-registered, backend **ACCEPT** triggered AMI requeue, but **`PJSIP/T*_ext_1` arrived ~10–17s** after call start — after JsSIP’s **8s** `session_not_found_timeout`.
+
+### Changes
+
+- **API `mobile-ring-notify`:** also sends **`INCOMING_CALL_WAKE`** before `INCOMING_CALL`; records `WAKE_PUSH_QUEUED`.
+- **API `/mobile/wake/event`:** on **`DEVICE_REGISTER_COMPLETE`**, idempotently requeues pending invite via telephony (`device_register_complete` trigger).
+- **API accept path:** requeue uses shared idempotent guard (`mobileInviteRequeue.ts`, max 4 attempts / 120s).
+- **Mobile answer pipeline:** centralized timing (`mobileAnswerTiming.ts`); **extends** SIP INVITE poll **+16s after backend ACCEPT** (hard cap 30s); rejects stale sessions on failure; epoch guard against double-answer.
+- **SipContext wake:** flight-recorder events for wake register stages.
+- **Flight recorder upload:** resolves `inviteId` / `pbxCallId` from **`session.meta.*`**; warning flags for `SIP_INVITE_TIMEOUT`, `SIP_REGISTER_FAILED`, etc.; differentiated AI diagnosis categories in `/admin/call-flight/.../explain` + portal UI.
+
+### Manual QA
+
+See `MOBILE_CALL_TIMELINE.md` § Mobile answer reliability (2026-06-03).
+
+---
+
 ## 2026-06-02 — VoIP.ms `sms_toolong` fix (160-char API limit + auto-split)
 
 **Task:** telephony / API / SMS — VoIP.ms rejects short-looking messages with `sms_toolong`  

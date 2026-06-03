@@ -79,6 +79,11 @@ import {
   flightEndCall,
   flightRecord,
 } from "../diagnostics/CallFlightRecorder";
+import {
+  MOBILE_SIP_ANSWER_INITIAL_WAIT_MS,
+  MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS,
+  createSipAnswerDeadline,
+} from "../sip/mobileAnswerTiming";
 import { shouldSuppressForegroundPush } from "../notifications/notificationRouting";
 /**
  * Reads native ringtone timing data from the Android bridge and records
@@ -1749,6 +1754,10 @@ export function NotificationsProvider({
         // (state ≠ "registered" ∧ ≠ "registering"). This mirrors the
         // SipContext AppState handler.
         const t0_sipReg = Date.now();
+        const answerDeadline = createSipAnswerDeadline(
+          answerTappedAt,
+          MOBILE_SIP_ANSWER_INITIAL_WAIT_MS,
+        );
         const sipRegisterPromise: Promise<boolean> = (async () => {
           let registered = false;
           for (let attempt = 1; attempt <= maxAttempts && !registered; attempt++) {
@@ -1815,7 +1824,7 @@ export function NotificationsProvider({
                 pbxCallId: invite.pbxCallId,
                 sipCallTarget: invite.sipCallTarget,
               },
-              8000,
+              MOBILE_SIP_ANSWER_INITIAL_WAIT_MS,
               (event) => {
                 if (event.phase === "sent") {
                   const sentMs = event.timestamp - answerTappedAt;
@@ -1825,8 +1834,6 @@ export function NotificationsProvider({
                     sinceAnswerMs: sentMs,
                   });
                   flightRecord('SIP', 'SIP_ANSWER_SENT', { inviteId: invite.id, payload: { sinceAnswerMs: sentMs } });
-                  // Latency: 200 OK has been handed to the transport —
-                  // this captures the JsSIP internal "accept → send" cost.
                   markCallLatency(invite.id, "SESSION_ACCEPT_SIGNAL_SENT", {
                     sinceAnswerMs: sentMs,
                   });
@@ -1840,9 +1847,6 @@ export function NotificationsProvider({
                     sinceAnswerMs: confirmedMs,
                   });
                   flightRecord('SIP', 'SIP_CONNECTED', { inviteId: invite.id, pbxCallId: invite.pbxCallId ?? null, payload: { traceAt: new Date(event.timestamp).toISOString(), sinceAnswerMs: confirmedMs } });
-                  // Latency: ACK received. This is the dialog-confirmed
-                  // signaling milestone; gap to ICE_CONNECTED is almost
-                  // always network-bound.
                   markCallLatency(invite.id, "SESSION_ESTABLISHED_SIGNAL", {
                     sinceAnswerMs: confirmedMs,
                   });
@@ -1857,8 +1861,18 @@ export function NotificationsProvider({
                   message: event.message ?? null,
                   sinceAnswerMs: failedMs,
                 });
-                flightRecord('SIP', 'SIP_ANSWER_FAILED', { inviteId: invite.id, severity: 'error', payload: { code: event.code, reason: event.reason, sinceAnswerMs: failedMs } });
+                flightRecord('SIP', 'SIP_ANSWER_FAILED', {
+                  inviteId: invite.id,
+                  severity: 'error',
+                  payload: {
+                    code: event.code,
+                    reason: event.reason,
+                    message: event.message,
+                    sinceAnswerMs: failedMs,
+                  },
+                });
               },
+              answerDeadline.handle,
             )
             .catch(() => false);
         });
@@ -2095,6 +2109,20 @@ export function NotificationsProvider({
           return;
         }
 
+        // Once the backend has claimed this invite, extend the SIP INVITE poll
+        // window — telephony AMI requeue typically follows ACCEPT on ring-group
+        // paths and the fresh PJSIP leg may arrive several seconds later.
+        answerDeadline.handle.extend(MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS);
+        flightRecord('BACKEND', 'INVITE_CLAIMED', {
+          inviteId: invite.id,
+          pbxCallId: invite.pbxCallId ?? null,
+          payload: {
+            sinceAnswerMs: t3_claimDone - answerTappedAt,
+            answerWaitExtendedMs: MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS,
+            answerWaitUntilMs: answerDeadline.handle.getUntilMs(),
+          },
+        });
+
         // Once the backend has claimed this invite, ignore any repeated answer
         // events from deep links or native callbacks for the same call.
         consumedInviteActionRef.current.add(acceptKey);
@@ -2104,6 +2132,14 @@ export function NotificationsProvider({
 
         if (!answered) {
           setCallFlowLastError("sip_answer_not_confirmed");
+          sip.rejectIncomingInvite({
+            inviteId: invite.id,
+            fromNumber: invite.fromNumber,
+            toExtension: invite.toExtension,
+            pbxCallId: invite.pbxCallId,
+            sipCallTarget: invite.sipCallTarget,
+          }).catch(() => undefined);
+          sip.hangup().catch(() => undefined);
           showEndedState(invite, "Call ended", {
             reason: "sip_answer_not_confirmed",
           });
