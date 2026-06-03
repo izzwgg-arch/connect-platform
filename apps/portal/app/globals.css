@@ -1152,11 +1152,14 @@
 
 .campaign-detail-page {
   padding-bottom: 1.25rem;
+  overflow: visible;
+  scroll-behavior: smooth;
 }
 
 .campaign-detail-identity-card {
   position: relative;
   overflow: visible;
+  z-index: 30;
   border: 1px solid var(--crm-border);
   border-radius: 1.25rem;
   background: var(--crm-surface);
@@ -1204,89 +1207,50 @@
 
 .campaign-detail-actions-menu {
   position: relative;
-  z-index: 10;
+  z-index: 80;
   flex: 0 0 auto;
+}
+
+.campaign-detail-actions-menu .crm-cinema-overflow-menu {
+  z-index: 120;
+  max-height: min(70vh, 28rem);
+  overflow-y: auto;
+}
+
+.campaign-detail-actions-menu[open] .crm-cinema-overflow-menu {
+  display: flex;
 }
 
 .campaign-detail-workbench {
   display: grid;
-  grid-template-columns: minmax(18rem, 23rem) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 22rem);
   gap: 1rem;
   align-items: start;
 }
 
-.campaign-detail-left-rail {
+.campaign-detail-rail {
   display: flex;
   min-width: 0;
   flex-direction: column;
   gap: 0.9rem;
 }
 
-.campaign-detail-left-rail .campaign-detail-rail,
-.campaign-detail-left-rail .campaign-detail-analytics {
-  display: contents;
-}
-
-.campaign-detail-left-rail .campaign-detail-chart-card,
-.campaign-detail-left-rail .campaign-detail-rail-card {
+.campaign-detail-rail-card {
   min-width: 0;
   overflow: hidden;
   border-radius: 1.2rem;
 }
 
-.campaign-detail-left-rail .campaign-detail-chart-card {
-  min-height: 0;
-  padding: 0.9rem;
+.campaign-detail-workbench > .campaign-detail-rail {
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+  scrollbar-gutter: stable;
 }
 
-.campaign-detail-left-rail .campaign-detail-funnel,
-.campaign-detail-left-rail .campaign-detail-channel-list {
-  min-height: 0;
-}
-
-.campaign-detail-left-rail .campaign-detail-funnel-row {
-  grid-template-columns: minmax(0, 1fr) 4.75rem 2.4rem;
-}
-
-.campaign-detail-left-rail .campaign-detail-funnel-row small {
-  display: none;
-}
-
-.campaign-detail-left-rail .campaign-detail-channel-row {
-  grid-template-columns: minmax(5.5rem, 0.9fr) minmax(0, 1fr) minmax(3rem, auto);
-}
-
-.campaign-detail-left-rail .campaign-detail-channel-row small {
-  grid-column: 1 / -1;
-  min-width: 0;
-}
-
-.campaign-detail-left-rail .campaign-detail-progress-ring {
-  width: 6.75rem;
-  height: 6.75rem;
-}
-
-.campaign-detail-left-rail .campaign-detail-progress-ring span {
-  width: 4.75rem;
-  height: 4.75rem;
-  font-size: 1.35rem;
-}
-
-.campaign-detail-settings-stack {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.campaign-detail-settings-stack label {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 0.35rem;
-}
-
-.campaign-detail-settings-stack label > span,
 .campaign-detail-filter-row label > span {
   color: var(--crm-text-muted);
   font-size: 0.66rem;
@@ -1301,15 +1265,17 @@
 
 .campaign-detail-roster-shell {
   display: flex;
-  min-height: min(44rem, calc(100vh - 9.5rem));
-  max-height: calc(100vh - 1.5rem);
+  min-height: min(42rem, calc(100dvh - 11rem));
+  max-height: calc(100dvh - 7.5rem);
   flex-direction: column;
+  scroll-behavior: smooth;
 }
 
 .campaign-detail-roster-sticky {
-  position: sticky;
+  position: relative;
   top: 0;
   z-index: 6;
+  flex: 0 0 auto;
   border-bottom: 1px solid var(--cinema-border-subtle);
   background: color-mix(in srgb, var(--crm-surface) 94%, transparent);
   backdrop-filter: blur(14px);
@@ -1369,11 +1335,22 @@
   flex-wrap: wrap;
 }
 
+.campaign-detail-bulk-assignee {
+  flex: 1 1 18rem;
+  min-width: min(100%, 18rem);
+}
+
 .campaign-detail-roster-scroll {
   min-height: 0;
   flex: 1 1 auto;
   overflow-y: auto;
   overscroll-behavior: contain;
+  scroll-behavior: smooth;
+  scrollbar-gutter: stable;
+}
+
+.campaign-detail-page > .campaign-detail-analytics {
+  grid-template-columns: minmax(0, 1.12fr) minmax(18rem, 0.92fr) minmax(18rem, 0.92fr);
 }
 
 .campaign-detail-overview-grid {
@@ -1394,7 +1371,7 @@
 .campaign-detail-chart-card {
   position: relative;
   overflow: hidden;
-  min-height: 21rem;
+  min-height: 16rem;
   border-radius: 1.4rem;
   padding: 1.05rem;
 }
@@ -1416,7 +1393,7 @@
 
 .campaign-detail-line-chart {
   width: 100%;
-  height: 12rem;
+  height: 10rem;
   margin-top: 1rem;
 }
 
@@ -1445,7 +1422,7 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  min-height: 15rem;
+  min-height: 10.75rem;
   gap: 0.7rem;
   margin-top: 1rem;
 }
@@ -1508,8 +1485,8 @@
 }
 
 .campaign-detail-progress-ring {
-  width: 8.3rem;
-  height: 8.3rem;
+  width: 7rem;
+  height: 7rem;
   margin: 1rem auto;
   background: conic-gradient(#2563eb 0 var(--progress), color-mix(in srgb, var(--crm-border) 65%, transparent) var(--progress) 360deg);
 }
@@ -1522,12 +1499,12 @@
 .campaign-detail-progress-ring span {
   display: grid;
   place-items: center;
-  width: 5.7rem;
-  height: 5.7rem;
+  width: 4.9rem;
+  height: 4.9rem;
   border-radius: 999px;
   background: var(--crm-surface);
   color: var(--crm-text);
-  font-size: 1.65rem;
+  font-size: 1.4rem;
   font-weight: 900;
 }
 
@@ -1558,7 +1535,7 @@
 }
 
 .campaign-detail-empty-chart {
-  min-height: 11rem;
+  min-height: 8rem;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1689,7 +1666,7 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
   .campaign-detail-workbench {
-    grid-template-columns: minmax(16rem, 20rem) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) minmax(16rem, 20rem);
   }
   .campaign-detail-analytics {
     grid-template-columns: 1fr;
@@ -1705,10 +1682,16 @@
     max-height: none;
   }
   .campaign-detail-roster-sticky {
-    position: sticky;
+    position: relative;
     top: 0;
   }
   .campaign-detail-roster-scroll {
+    max-height: none;
+    overflow: visible;
+  }
+  .campaign-detail-workbench > .campaign-detail-rail {
+    position: relative;
+    top: auto;
     max-height: none;
     overflow: visible;
   }

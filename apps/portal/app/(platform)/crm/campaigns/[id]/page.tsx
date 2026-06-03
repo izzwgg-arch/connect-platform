@@ -300,9 +300,6 @@ type WorkloadRow = {
   total: number;
 };
 
-type Script = { id: string; name: string };
-type Checklist = { id: string; name: string };
-
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const MEMBER_STATUS_LABELS: Record<MemberStatus, string> = {
@@ -685,8 +682,6 @@ export default function CampaignDetailPage() {
   const [members, setMembers] = useState<CampaignMember[]>([]);
   const [membersTotal, setMembersTotal] = useState(0);
   const [crmUsers, setCrmUsers] = useState<CrmUser[]>([]);
-  const [scripts, setScripts] = useState<Script[]>([]);
-  const [checklists, setChecklists] = useState<Checklist[]>([]);
   const [loading, setLoading] = useState(true);
   const [membersLoading, setMembersLoading] = useState(false);
   const [showAddContacts, setShowAddContacts] = useState(false);
@@ -838,8 +833,6 @@ export default function CampaignDetailPage() {
       await Promise.all([
         loadCampaign(),
         apiGet<{ users: CrmUser[] }>("/crm/users", token).then((r) => setCrmUsers(r.users ?? [])).catch(() => {}),
-        apiGet<{ scripts: Script[] }>("/crm/scripts", token).then((res) => setScripts(res.scripts)).catch(() => {}),
-        apiGet<{ checklists: Checklist[] }>("/crm/checklists", token).then((res) => setChecklists(res.checklists)).catch(() => {}),
       ]);
       setLoading(false);
     }
@@ -1596,65 +1589,9 @@ export default function CampaignDetailPage() {
           onBulkEmail={isAdmin ? openBulkEmailAll : undefined}
         />
 
-        <div className="campaign-detail-workbench">
-          <aside className="campaign-detail-left-rail" aria-label="Campaign information">
-            <CampaignDetailRightRail
-              campaign={campaign}
-              health={hd}
-              workload={workload}
-              importHistory={importHistory}
-              canQueue={canQueue}
-            />
-            <CampaignPerformanceWorkspace health={hd} workload={workload} members={members} />
-            <section className="campaign-detail-rail-card campaign-detail-settings-card">
-              <div className="campaign-detail-rail-heading">
-                <p>Campaign Settings</p>
-                <strong>Controls</strong>
-              </div>
-              <div className="campaign-detail-settings-stack">
-                <label>
-                  <span>Call script</span>
-                  <select
-                    value={campaign.scriptId ?? ""}
-                    onChange={(e) => updateCampaign({ scriptId: e.target.value || null })}
-                    className={crm.select}
-                  >
-                    <option value="">None</option>
-                    {scripts.map((s) => (
-                      <option key={s.id} value={s.id}>{s.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  <span>Checklist</span>
-                  <select
-                    value={campaign.checklistId ?? ""}
-                    onChange={(e) => updateCampaign({ checklistId: e.target.value || null })}
-                    className={crm.select}
-                  >
-                    <option value="">None</option>
-                    {checklists.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  <span>Priority</span>
-                  <select
-                    value={campaign.priority ?? "NORMAL"}
-                    onChange={(e) => updateCampaign({ priority: e.target.value })}
-                    className={crm.select}
-                  >
-                    <option value="LOW">Low</option>
-                    <option value="NORMAL">Normal</option>
-                    <option value="HIGH">High</option>
-                    <option value="URGENT">Urgent</option>
-                  </select>
-                </label>
-              </div>
-            </section>
-          </aside>
+        <CampaignPerformanceWorkspace health={hd} workload={workload} members={members} />
 
+        <div className="campaign-detail-workbench">
           <main className="campaign-detail-contact-workspace">
             <section id="campaign-roster" className={cn(mk.rosterShell, "campaign-detail-roster-shell")} aria-label={`Members (${membersTotal})`}>
               <div className={mk.rosterHead}>
@@ -1729,12 +1666,12 @@ export default function CampaignDetailPage() {
                       <UserPlus className="h-3.5 w-3.5" />
                       Assign Me
                     </button>
-                    <div className="flex min-w-[13rem] items-center gap-2">
+                    <div className="campaign-detail-bulk-assignee flex items-center gap-2">
                       <UserPlus className="h-4 w-4 shrink-0 text-crm-accent" />
                       <select
                         value={bulkAssignUserId}
                         onChange={(e) => setBulkAssignUserId(e.target.value)}
-                        className={cn(crm.select, "h-8 min-w-0 flex-1 border-crm-accent/40 text-xs")}
+                        className={cn(crm.select, "h-9 min-w-0 flex-1 border-crm-accent/40 text-xs")}
                         aria-label="Assign selected members to agent"
                       >
                         <option value="">Select agent…</option>
@@ -1867,6 +1804,13 @@ export default function CampaignDetailPage() {
               </div>
             </section>
           </main>
+          <CampaignDetailRightRail
+            campaign={campaign}
+            health={hd}
+            workload={workload}
+            importHistory={importHistory}
+            canQueue={canQueue}
+          />
         </div>
     </CRMPageShell>
   );
