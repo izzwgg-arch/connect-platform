@@ -401,8 +401,10 @@ function CampaignPerformanceWorkspace({
               <div className="campaign-detail-channel-track">
                 <div style={{ width: row.label === "Calls" && attemptsAreComplete ? `${Math.min(100, Math.round((visibleAttempts / total) * 100))}%` : "0%", background: row.color }} />
               </div>
-              <span>{row.value}</span>
-              <small>{row.hint}</small>
+              <div className="campaign-detail-channel-metric">
+                <strong>{row.value}</strong>
+                <small>{row.hint}</small>
+              </div>
             </div>
           ))}
         </div>
