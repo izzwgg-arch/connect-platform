@@ -1391,15 +1391,29 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     pc.addEventListener("track", (e: RTCTrackEvent) => {
       if (e.track.kind !== "audio") return;
       const stream = e.streams[0] ?? new MediaStream([e.track]);
-      console.log("[SipPhone] remote_track_received id=" + e.track.id + " state=" + e.track.readyState);
-      if (callDirectionRef.current === "outbound" && localRingbackActiveRef.current) {
+      const preAnswerOutbound =
+        callDirectionRef.current === "outbound" && !callStartedAtRef.current;
+      console.log(
+        "[SipPhone] remote_track_received id="
+          + e.track.id
+          + " state="
+          + e.track.readyState
+          + " pre_answer="
+          + preAnswerOutbound,
+      );
+      if (preAnswerOutbound && localRingbackActiveRef.current) {
+        // PBX early media with ringback — hand off from UK synth to carrier audio.
         stopLocalRingback();
         localRingbackActiveRef.current = false;
         resumeOutputAfterRingback();
         console.log("[SipPhone] local_ringback_stopped reason=early_media");
         patchDiag({ localRingback: "remote" });
+        attachRemoteStream(stream);
+      } else if (!preAnswerOutbound) {
+        attachRemoteStream(stream);
+      } else {
+        console.log("[SipPhone] remote_track_ignored_pre_answer (keep UK ringback)");
       }
-      attachRemoteStream(stream);
 
       // Monitor remote track lifecycle for mid-call audio drops
       e.track.addEventListener("mute", () => {
@@ -1675,21 +1689,15 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       setCallState((prev) => (prev === "dialing" ? "ringing" : prev));
       patchSessionMeta(mcId, { state: "ringing" });
       const sipCode = e?.response?.status_code;
-      // Keep UK local ringback on 100 Trying; stop on 180+ when PBX is ringing.
-      if (
-        callDirectionRef.current === "outbound"
-        && !session.isEstablished?.()
-        && localRingbackActiveRef.current
-        && (sipCode === undefined || sipCode >= 180)
-      ) {
-        stopLocalRingback();
-        localRingbackActiveRef.current = false;
-        resumeOutputAfterRingback();
+      // Keep UK local ringback through 180/183 unless the PBX sends audible early
+      // media (handled on track). Many trunks signal ringing without SDP audio —
+      // stopping local ringback here causes silence until 200 OK.
+      if (callDirectionRef.current === "outbound" && !session.isEstablished?.()) {
         console.log(
-          "[SipPhone] local_ringback_stopped reason=remote_ringing"
-            + (sipCode ? " sip=" + sipCode : ""),
+          "[SipPhone] progress sip="
+            + (sipCode ?? "?")
+            + " local_ringback=continuing",
         );
-        patchDiag({ localRingback: "remote" });
       }
     });
     const onCallAnswered = (label: string) => {
