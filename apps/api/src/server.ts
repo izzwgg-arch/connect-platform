@@ -9231,6 +9231,84 @@ app.post("/voice/diag/call-quality-report", async (req, reply) => {
 });
 
 
+// ── WebRTC SDP debug capture (temporary, for 488/Incompatible-SDP investigation) ─
+// Authenticated portal users POST the REDACTED outbound offer + SIP status when a
+// WebRTC call fails. The SDP is already redacted client-side (ICE creds + IPs
+// stripped; DTLS fingerprint is public). We log it (so it can be tailed live via
+// `docker logs app-api-1`) and persist it in VoiceDiagEvent for correlation.
+// Remove this endpoint once the rejected attribute is proven.
+app.post("/voice/diag/webrtc-sdp-debug", async (req, reply) => {
+  const user = getUser(req);
+  if (!checkBillingRateLimit(`wsd:${user.sub}`, 30, 60 * 60 * 1000)) {
+    return reply.status(429).send({ error: "RATE_LIMITED" });
+  }
+  const input = z.object({
+    target: z.string().max(64).optional().nullable(),
+    sipTarget: z.string().max(128).optional().nullable(),
+    route: z.string().max(64).optional().nullable(),
+    sessionId: z.string().max(80).optional().nullable(),
+    flushReason: z.string().max(32).optional().nullable(),
+    failedCause: z.string().max(96).optional().nullable(),
+    failedOriginator: z.string().max(32).optional().nullable(),
+    sipStatusCode: z.number().int().min(100).max(699).optional().nullable(),
+    sipReasonPhrase: z.string().max(128).optional().nullable(),
+    sipMethod: z.string().max(16).optional().nullable(),
+    sessionReturned: z.boolean().optional().nullable(),
+    offerSdpSource: z.string().max(24).optional().nullable(),
+    offerSummary: z.any().optional(),
+    offerCompatibilityIssues: z.array(z.string().max(200)).max(40).optional(),
+    offerSdpRedacted: z.string().max(20_000).optional().nullable(),
+    callInvokedAt: z.string().max(40).optional().nullable(),
+    failedAt: z.string().max(40).optional().nullable(),
+  }).parse(req.body);
+
+  // Live-tailable log line (no secrets — SDP is pre-redacted by the client).
+  app.log.warn({
+    evt: "webrtc_sdp_debug",
+    userId: user.sub,
+    tenantId: user.tenantId,
+    target: input.target ?? null,
+    sessionId: input.sessionId ?? null,
+    flushReason: input.flushReason ?? null,
+    failedCause: input.failedCause ?? null,
+    sipStatusCode: input.sipStatusCode ?? null,
+    sipReasonPhrase: input.sipReasonPhrase ?? null,
+    offerSdpSource: input.offerSdpSource ?? null,
+    offerSummary: input.offerSummary ?? null,
+    offerCompatibilityIssues: input.offerCompatibilityIssues ?? null,
+    offerSdpRedacted: input.offerSdpRedacted ?? null,
+  }, "webrtc_sdp_debug_capture");
+
+  let eventId: string | null = null;
+  try {
+    const session = await db.voiceClientSession.findFirst({
+      where: { userId: user.sub, lastSeenAt: { gte: new Date(Date.now() - 30 * 60 * 1000) } },
+      orderBy: { lastSeenAt: "desc" },
+      select: { id: true },
+    });
+    const sessionId = session?.id
+      ?? (await db.voiceClientSession.create({
+        data: { tenantId: user.tenantId, userId: user.sub, platform: "WEB" },
+        select: { id: true },
+      })).id;
+    const event = await db.voiceDiagEvent.create({
+      data: {
+        tenantId: user.tenantId,
+        userId: user.sub,
+        sessionId,
+        type: "CALL_QUALITY_REPORT" as any,
+        payload: { kind: "WEBRTC_SDP_DEBUG", ...input } as any,
+      },
+    });
+    eventId = event.id;
+  } catch (err) {
+    app.log.error({ err, userId: user.sub }, "webrtc_sdp_debug_persist_failed");
+  }
+
+  return { ok: true, eventId };
+});
+
+
 // ── Live Call Ping — mid-call telemetry ───────────────────────────────────────
 // Clients POST this every ~10 s during an active call. Stored in memory only.
 app.post("/voice/diag/call-quality-ping", async (req, reply) => {

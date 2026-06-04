@@ -1471,6 +1471,29 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         // eslint-disable-next-line no-console
         console.log("[WEBRTC_SDP_DEBUG] saved to window.__ccWebrtcDebug — run __ccDownloadWebrtcDebug() to download.");
       }
+      // Ship the redacted record server-side so it can be tailed/correlated live
+      // during the 488 investigation. SDP is already redacted; best-effort only.
+      try {
+        void apiPost("/voice/diag/webrtc-sdp-debug", {
+          target: typeof rec.target === "string" ? rec.target : null,
+          sipTarget: typeof rec.sipTarget === "string" ? rec.sipTarget : null,
+          route: typeof rec.route === "string" ? rec.route : null,
+          sessionId: typeof rec.sessionId === "string" ? rec.sessionId : null,
+          flushReason: typeof rec.flushReason === "string" ? rec.flushReason : null,
+          failedCause: typeof rec.failedCause === "string" ? rec.failedCause : null,
+          failedOriginator: typeof rec.failedOriginator === "string" ? rec.failedOriginator : null,
+          sipStatusCode: typeof rec.sipStatusCode === "number" ? rec.sipStatusCode : null,
+          sipReasonPhrase: typeof rec.sipReasonPhrase === "string" ? rec.sipReasonPhrase : null,
+          sipMethod: typeof rec.sipMethod === "string" ? rec.sipMethod : null,
+          sessionReturned: typeof rec.sessionReturned === "boolean" ? rec.sessionReturned : null,
+          offerSdpSource: typeof rec.offerSdpSource === "string" ? rec.offerSdpSource : null,
+          offerSummary: rec.offerSummary ?? null,
+          offerCompatibilityIssues: Array.isArray(rec.offerCompatibilityIssues) ? rec.offerCompatibilityIssues : undefined,
+          offerSdpRedacted: typeof rec.offerSdpRedacted === "string" ? rec.offerSdpRedacted : null,
+          callInvokedAt: typeof rec.callInvokedAt === "string" ? rec.callInvokedAt : null,
+          failedAt: typeof rec.failedAt === "string" ? rec.failedAt : null,
+        }).catch(() => {});
+      } catch { /* best-effort */ }
     } catch { /* never break call path */ }
   }
 
@@ -1651,6 +1674,24 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
             direction: "outbound",
             endReason: label,
             qualityGrade: "failed",
+          }).catch(() => {});
+        } catch { /* best-effort */ }
+        // Ship the redacted offer + SIP status server-side UNCONDITIONALLY (not
+        // gated by the debug flag) so a WebRTC SDP rejection is always captured
+        // for live tailing/correlation during this P0 investigation.
+        try {
+          void apiPost("/voice/diag/webrtc-sdp-debug", {
+            target: party,
+            sessionId: typeof mcId === "string" ? mcId : null,
+            flushReason: "sdp_reject",
+            failedCause: e.cause ?? null,
+            failedOriginator: e.originator ?? null,
+            sipStatusCode: sipCode,
+            sipReasonPhrase: reasonPhrase,
+            sipMethod: e.message?.method ?? null,
+            offerSummary: offer ? summarizeOfferSdp(offer) : null,
+            offerCompatibilityIssues: offer ? checkOfferCompatibility(summarizeOfferSdp(offer)) : undefined,
+            offerSdpRedacted: offer ? redactSdpForDebug(offer) : null,
           }).catch(() => {});
         } catch { /* best-effort */ }
       }
