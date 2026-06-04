@@ -332,7 +332,7 @@ function DiagnosticsPanel({
   const onCall = phone.callState === "connected" || phone.callState === "ringing" || phone.callState === "dialing";
   const ringLabel =
     phone.diag.localRingback === "local"
-      ? "Local (EU)"
+      ? "Local (UK)"
       : phone.diag.localRingback === "remote"
         ? "PBX / early media"
         : "Off";

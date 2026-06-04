@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { Suspense, useEffect, useState, useCallback } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   AlertCircle,
   ArrowRight,
@@ -1170,8 +1170,18 @@ function IntelligenceTab({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-export default function ReportsPage() {
-  const [tab, setTab] = useState<ReportTab>("operations");
+function parseReportTab(raw: string | null): ReportTab {
+  if (raw === "daily") return "operations";
+  if (raw === "campaigns" || raw === "agents" || raw === "follow-ups" || raw === "intelligence" || raw === "operations") {
+    return raw;
+  }
+  return "operations";
+}
+
+function ReportsPageContent() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const [tab, setTab] = useState<ReportTab>(() => parseReportTab(searchParams.get("tab")));
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
 
   const [dailyData, setDailyData] = useState<DailyReport | null>(null);
@@ -1256,19 +1266,9 @@ export default function ReportsPage() {
     loadFollowUps();
   }, [loadDaily, loadCampaigns, loadAgents, loadFollowUps, campaignStatusFilter, agentDays]);
 
-  // Initial tab load + URL deep-link
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const t = params.get("tab");
-    // Backwards compat: old "daily" deep-links map to "operations"
-    const mapped: ReportTab =
-      t === "daily"
-        ? "operations"
-        : t === "campaigns" || t === "agents" || t === "follow-ups" || t === "intelligence"
-          ? (t as ReportTab)
-          : "operations";
-    setTab(mapped);
-  }, []);
+    setTab(parseReportTab(searchParams.get("tab")));
+  }, [searchParams]);
 
   // Load data when tab changes
   useEffect(() => {
@@ -1292,9 +1292,9 @@ export default function ReportsPage() {
 
   function handleTabChange(next: ReportTab) {
     setTab(next);
-    const url = new URL(window.location.href);
-    url.searchParams.set("tab", next);
-    window.history.replaceState({}, "", url.toString());
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("tab", next);
+    router.replace(`/crm/reports?${params.toString()}`, { scroll: false });
   }
 
   function handleRefresh() {
@@ -1366,7 +1366,7 @@ export default function ReportsPage() {
     dailyLoading || campaignsLoading || agentsLoading || followUpsLoading;
 
   return (
-    <div className={cn("crm-page-shell min-h-screen", crm.reportsWorkspace)}>
+    <div className={cn("crm-page-shell min-h-full", crm.reportsWorkspace)}>
       <ReportsCommandHeader
         activeTab={tab}
         onTabChange={handleTabChange}
@@ -1417,5 +1417,28 @@ export default function ReportsPage() {
         )}
       </div>
     </div>
+  );
+}
+
+function ReportsPageFallback() {
+  return (
+    <div className={cn("crm-page-shell min-h-full", crm.reportsWorkspace)}>
+      <div className={crm.pageInnerReports}>
+        <div className="h-24 animate-pulse rounded-crm-lg border border-crm-border bg-crm-surface" />
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="h-36 animate-pulse rounded-crm-lg border border-crm-border bg-crm-surface" />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function ReportsPage() {
+  return (
+    <Suspense fallback={<ReportsPageFallback />}>
+      <ReportsPageContent />
+    </Suspense>
   );
 }

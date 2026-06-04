@@ -17,10 +17,10 @@ export type ActivityItem = {
 
 export function RecentActivityPanel({ items }: { items: ActivityItem[] }) {
   return (
-    <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border/80")}>
+    <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border")}>
       <div className={crm.opCardGlow} />
       <div className="relative z-[1]">
-      <DashboardSectionHeader title="Recent activity" action={{ label: "View activity", href: "/crm/reports?tab=operations" }} />
+      <DashboardSectionHeader title="Recent activity" action={{ label: "View activity", href: "/crm/reports" }} />
       {items.length === 0 ? (
         <div className="crm-dashboard-empty-soft rounded-crm border border-dashed border-crm-border/70 bg-crm-surface-2/25 px-3 py-4">
           <div className="mb-2 flex items-center gap-2">

@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useState } from "react";
-import { apiPost } from "../../services/apiClient";
+import { ApiError, apiPost } from "../../services/apiClient";
 import { writeAuthToken } from "../../services/session";
 
 export default function LoginPage() {
@@ -26,9 +26,53 @@ export default function LoginPage() {
       }
       writeAuthToken(token);
       const next = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("next") : null;
-      router.replace(next ? decodeURIComponent(next) : "/dashboard");
-    } catch (e: any) {
-      setError(e?.message || "Login failed");
+      const dest = next ? decodeURIComponent(next) : "/dashboard";
+      router.replace(dest);
+      // Embedded browsers (e.g. Cursor Simple Browser) sometimes ignore client-side routing.
+      window.setTimeout(() => {
+        if (typeof window !== "undefined" && window.location.pathname === "/login") {
+          window.location.assign(dest);
+        }
+      }, 400);
+    } catch (e: unknown) {
+      if (e instanceof ApiError) {
+        if (e.status === 401) {
+          const onLocalhost =
+            typeof window !== "undefined" &&
+            /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(window.location.host);
+          setError(
+            onLocalhost
+              ? "Invalid email or password on localhost. This is not production — use the local dev account (see terminal output from pnpm bootstrap:local). Default: imwog@gmail.com or imwogg@gmail.com with password LocalDev2026!"
+              : "Invalid email or password.",
+          );
+          return;
+        }
+        if (e.status === 429) {
+          setError(
+            "Too many login attempts. Wait 15 minutes, restart the API dev server, or use the local dev password (LocalDev2026!) after pnpm bootstrap:local.",
+          );
+          return;
+        }
+        if (e.status >= 500) {
+          const detail = String((e.body as { message?: string } | null)?.message || e.message || "").trim();
+          setError(
+            detail
+              ? `Server error: ${detail}`
+              : "Server error (500). Check the API terminal: Postgres running, apps/api/.env has DATABASE_URL, migrations applied.",
+          );
+          return;
+        }
+        const code = String((e.body as { error?: string } | null)?.error || e.message || "Login failed");
+        setError(code);
+        return;
+      }
+      const raw = String((e as Error)?.message || "Login failed");
+      const looksLikeHtml = /<!DOCTYPE|Expected JSON from API/i.test(raw);
+      setError(
+        looksLikeHtml
+          ? "Cannot reach the API. Start it on port 3001 (e.g. pnpm --filter @connect/api dev) and restart the portal dev server."
+          : raw,
+      );
     } finally {
       setLoading(false);
     }

@@ -495,11 +495,6 @@ export default function CrmDashboardPage() {
             <span className={cn(crm.chip, crm.chipActive)}>
               <Radio size={12} className="animate-pulse" /> Live
             </span>
-            {can("can_view_crm_reports") ? (
-              <Link href="/crm/reports?tab=operations" className={cn(crm.btnSecondary, "crm-dashboard-header-action text-xs")}>
-                <BarChart3 size={14} /> Operations Report
-              </Link>
-            ) : null}
             {can("can_view_crm_settings") ? (
               <Link href="/crm/settings" className={cn(crm.btnSecondary, "crm-dashboard-header-action text-xs")}>
                 <Settings size={14} /> Customize
@@ -556,7 +551,7 @@ export default function CrmDashboardPage() {
           <DashboardKpiTile
             label="Calls today"
             value={callsTodayCount}
-            href={can("can_view_crm_reports") ? "/crm/reports?tab=operations" : undefined}
+            href={can("can_view_crm_reports") ? "/crm/reports" : undefined}
             icon={<PhoneCall size={17} />}
             loading={loading}
             series={Array.from({ length: 12 }, () => (Number.isFinite(Number(callsTodayCount)) ? Number(callsTodayCount) : 0))}
@@ -614,7 +609,7 @@ export default function CrmDashboardPage() {
           <div className="grid gap-4 md:grid-cols-2">
 
             {/* Pipeline Snapshot — merges Contact Pipeline + Contact Growth */}
-            <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border/80")}>
+            <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border")}>
               <div className={crm.opCardGlow} />
               <div className="relative z-[1]">
               <DashboardSectionHeader
@@ -649,7 +644,7 @@ export default function CrmDashboardPage() {
 
             {/* Campaign Health — replaces Campaign Status donut + list */}
             {can("can_view_crm_campaigns") ? (
-              <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border/80")}>
+              <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border")}>
                 <div className={crm.opCardGlow} />
                 <div className="relative z-[1]">
                 <DashboardSectionHeader
@@ -697,7 +692,7 @@ export default function CrmDashboardPage() {
 
         {/* Right — action column */}
         <aside className="crm-dashboard-right-rail flex flex-col gap-4 lg:col-span-4">
-          <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border/80")}>
+          <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border")}>
             <div className={crm.opCardGlow} />
             <div className="relative z-[1]">
               <DashboardSectionHeader title="Upcoming reminders" action={can("can_view_crm_tasks") ? { label: "View all", href: "/crm/tasks" } : undefined} />
@@ -728,7 +723,7 @@ export default function CrmDashboardPage() {
           <RecentActivityPanel items={[]} />
 
           {/* Action Required — merges Needs Attention + Tasks (no ring chart) */}
-          <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border/80")}>
+          <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border")}>
             <div className={crm.opCardGlow} />
             <div className="relative z-[1]">
             <DashboardSectionHeader title="Action required" action={{ label: "Tasks", href: "/crm/tasks" }} />
@@ -801,7 +796,7 @@ export default function CrmDashboardPage() {
 
           {/* Compact Shortcuts */}
           {shortcuts.length > 0 ? (
-            <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border/80")}>
+            <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border")}>
               <div className={crm.opCardGlow} />
               <div className="relative z-[1]">
               <DashboardSectionHeader title="Shortcuts" />
@@ -812,7 +807,7 @@ export default function CrmDashboardPage() {
 
           {/* Recent imports — compact, sidebar-weight */}
           {can("can_view_crm_import") ? (
-            <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border/80")}>
+            <CRMCard className={cn("crm-dashboard-panel p-5", crm.opCard, "border-crm-border")}>
               <div className={crm.opCardGlow} />
               <div className="relative z-[1]">
               <DashboardSectionHeader

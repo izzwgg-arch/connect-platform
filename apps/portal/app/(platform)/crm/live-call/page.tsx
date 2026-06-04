@@ -18,6 +18,7 @@ import { DISPOSITION_OPTIONS } from "../../../../components/crm/live";
 import type { QueueCounts, QueueMember, QueueOperationalStats } from "../../../../components/crm/queue/queueTypes";
 import { apiGet, apiPatch, apiPost } from "../../../../services/apiClient";
 import { useSipPhone } from "../../../../hooks/useSipPhone";
+import { PermissionGate } from "../../../../components/PermissionGate";
 
 const TIMELINE_LIMIT = 25;
 
@@ -35,9 +36,11 @@ function LiveCallPageFallback() {
 
 export default function LiveCallWorkspacePage() {
   return (
-    <Suspense fallback={<LiveCallPageFallback />}>
-      <LiveCallWorkspaceInner />
-    </Suspense>
+    <PermissionGate permission="can_view_crm_live_call" fallback={<div className="state-box">You do not have Live Call Workspace access.</div>}>
+      <Suspense fallback={<LiveCallPageFallback />}>
+        <LiveCallWorkspaceInner />
+      </Suspense>
+    </PermissionGate>
   );
 }
 

@@ -5,7 +5,7 @@
  * No audio files required — tones are generated from pure oscillators.
  *
  * Provides:
- *  - European local ringback (ETSI 425 Hz, 1s on / 4s off) until PBX remote ringback
+ *  - UK local ringback (400 + 450 Hz, 400/200/400/2000 ms cadence) until PBX remote ringback
  *  - US ringback tone  (440 + 480 Hz, 2s on / 4s off cadence) — legacy helper
  *  - Incoming ringtone (480 + 440 Hz double-ring, NANP cadence)
  *  - DTMF keypad tones (standard ITU-T frequencies, 120 ms)
@@ -167,6 +167,69 @@ function startIncomingRingtone(ctx: AudioContext): ToneHandle {
   };
 }
 
+/**
+ * UK ringback (BT-style): 400 Hz + 450 Hz,
+ * cadence 400 ms on / 200 ms off / 400 ms on / 2000 ms off (repeating).
+ */
+function startUkRingbackTone(ctx: AudioContext): ToneHandle {
+  let stopped = false;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const volume = 0.12;
+  const activeOscillators: OscillatorNode[] = [];
+  const activeGains: GainNode[] = [];
+
+  function playBurst(durationMs: number) {
+    if (stopped) return;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(volume, ctx.currentTime);
+    gain.gain.setTargetAtTime(0, ctx.currentTime + durationMs / 1000 - 0.02, 0.008);
+    gain.connect(ctx.destination);
+    activeGains.push(gain);
+    [400, 450].forEach((freq) => {
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
+      osc.connect(gain);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + durationMs / 1000 + 0.05);
+      activeOscillators.push(osc);
+    });
+  }
+
+  function cycle() {
+    if (stopped) return;
+    playBurst(400);
+    timeoutId = setTimeout(() => {
+      if (stopped) return;
+      playBurst(400);
+      timeoutId = setTimeout(() => {
+        if (!stopped) cycle();
+      }, 2000);
+    }, 600);
+  }
+
+  cycle();
+
+  return {
+    stop() {
+      stopped = true;
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      const t = ctx.currentTime;
+      activeGains.forEach((g) => {
+        try {
+          g.gain.cancelScheduledValues(t);
+          g.gain.setValueAtTime(0, t);
+        } catch { /* ignore */ }
+      });
+      activeOscillators.forEach((o) => {
+        try { o.stop(t); } catch { /* ignore */ }
+      });
+      activeGains.length = 0;
+      activeOscillators.length = 0;
+    },
+  };
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useTelephonyAudio() {
@@ -276,10 +339,19 @@ export function useTelephonyAudio() {
     };
   }, [stopAll]);
 
+  const resumeOutputAfterRingback = useCallback(() => {
+    const ctx = ctxRef.current;
+    if (ctx && ctx.state === "suspended") {
+      ctx.resume().catch(() => undefined);
+    }
+  }, []);
+
   return {
     startRingback,
+    startUkLocalRingback,
     startEuropeanLocalRingback,
     stopLocalRingback,
+    resumeOutputAfterRingback,
     startRingtone,
     playDtmfTone,
     stopAll,

@@ -494,8 +494,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const [selectedOutboundRouteId, setSelectedOutboundRouteId] = useState("");
 
   const {
-    startEuropeanLocalRingback,
+    startUkLocalRingback,
     stopLocalRingback,
+    resumeOutputAfterRingback,
     startRingtone,
     playDtmfTone,
     stopAll: stopAllAudio,
@@ -631,6 +632,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const wiredPeerConnectionsRef = useRef<WeakSet<RTCPeerConnection>>(new WeakSet());
   const statsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const callStartedAtRef = useRef<number | null>(null);
+  /** Blocks duplicate dial() until the outbound attempt ends (separate from answered-at). */
+  const dialGuardRef = useRef<number | null>(null);
+  /** True while UK local ringback synth is playing (outbound). */
+  const localRingbackActiveRef = useRef(false);
   const callDirectionRef = useRef<"outbound" | "inbound">("outbound");
   /** Local microphone stream — stopped explicitly on call end to release the mic indicator. */
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -1340,12 +1345,22 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     }
   }
 
+  function stopOutboundRingbackImmediate(reason: string) {
+    if (!localRingbackActiveRef.current) return;
+    stopLocalRingback();
+    localRingbackActiveRef.current = false;
+    resumeOutputAfterRingback();
+    patchDiag({ localRingback: "off" });
+    console.log("[SipPhone] local_ringback_stopped reason=" + reason);
+  }
+
   function attachRemoteStream(stream: MediaStream) {
     const el = audioRef.current;
     if (!el) {
       console.warn("[SipPhone] audioRef missing — cannot play remote audio");
       return;
     }
+    resumeOutputAfterRingback();
     el.srcObject = stream;
     const tracks = stream.getAudioTracks();
     patchDiag({ remoteAudioReceiving: tracks.some((t) => t.readyState === "live") });
@@ -1377,8 +1392,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       if (e.track.kind !== "audio") return;
       const stream = e.streams[0] ?? new MediaStream([e.track]);
       console.log("[SipPhone] remote_track_received id=" + e.track.id + " state=" + e.track.readyState);
-      if (callDirectionRef.current === "outbound" && !callStartedAtRef.current) {
+      if (callDirectionRef.current === "outbound" && localRingbackActiveRef.current) {
         stopLocalRingback();
+        localRingbackActiveRef.current = false;
+        resumeOutputAfterRingback();
         console.log("[SipPhone] local_ringback_stopped reason=early_media");
         patchDiag({ localRingback: "remote" });
       }
@@ -1417,6 +1434,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       if (iceState === "connected" || iceState === "completed") {
         // Fallback: if SIP confirmed/accepted didn't fire (some PBX configs),
         // ICE media path succeeding is a reliable signal that the call is live.
+        if (localRingbackActiveRef.current) {
+          stopOutboundRingbackImmediate("ice_connected");
+        }
         setCallState((prev) => (prev === "ringing" || prev === "dialing") ? "connected" : prev);
         syncReceiversToAudio(pc);
         // Kick off stats polling and do an immediate first poll for candidate type.
@@ -1654,10 +1674,17 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       // the call transitions back to the ringing/outgoing screen after connecting.
       setCallState((prev) => (prev === "dialing" ? "ringing" : prev));
       patchSessionMeta(mcId, { state: "ringing" });
-      // Outbound: PBX/remote ringback — stop European local synth immediately.
-      if (callDirectionRef.current === "outbound" && !session.isEstablished?.()) {
+      const sipCode = e?.response?.status_code;
+      // Keep UK local ringback on 100 Trying; stop on 180+ when PBX is ringing.
+      if (
+        callDirectionRef.current === "outbound"
+        && !session.isEstablished?.()
+        && localRingbackActiveRef.current
+        && (sipCode === undefined || sipCode >= 180)
+      ) {
         stopLocalRingback();
-        const sipCode = e?.response?.status_code;
+        localRingbackActiveRef.current = false;
+        resumeOutputAfterRingback();
         console.log(
           "[SipPhone] local_ringback_stopped reason=remote_ringing"
             + (sipCode ? " sip=" + sipCode : ""),
@@ -1665,30 +1692,25 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         patchDiag({ localRingback: "remote" });
       }
     });
-    session.on("accepted", () => {
+    const onCallAnswered = (label: string) => {
+      stopOutboundRingbackImmediate("answered");
       stopAllAudio();
-      patchDiag({ localRingback: "off" });
       if (!callStartedAtRef.current) {
         callStartedAtRef.current = Date.now();
         finalReportSentRef.current = false;
       }
-      console.log("[SIP] CALL_ACCEPTED");
+      console.log(label);
       setCallState("connected");
       patchSessionMeta(mcId, { state: "connected", onHold: false, isActive: true });
-      if (session.connection) syncReceiversToAudio(session.connection);
-    });
-    session.on("confirmed", () => {
-      stopAllAudio();
-      patchDiag({ localRingback: "off" });
-      if (!callStartedAtRef.current) {
-        callStartedAtRef.current = Date.now();
-        finalReportSentRef.current = false;
+      const pc = session.connection;
+      if (pc) {
+        syncReceiversToAudio(pc);
+        window.setTimeout(() => syncReceiversToAudio(pc), 120);
+        window.setTimeout(() => syncReceiversToAudio(pc), 450);
       }
-      console.log("[SIP] CALL_ACCEPTED (confirmed)");
-      setCallState("connected");
-      patchSessionMeta(mcId, { state: "connected", onHold: false, isActive: true });
-      if (session.connection) syncReceiversToAudio(session.connection);
-    });
+    };
+    session.on("accepted", () => onCallAnswered("[SIP] CALL_ACCEPTED"));
+    session.on("confirmed", () => onCallAnswered("[SIP] CALL_ACCEPTED (confirmed)"));
     session.on("hold", () => {
       console.log(`[MULTICALL_HOLD] web session=${mcId} hold_event`);
       patchSessionMeta(mcId, { onHold: true, state: "held", isActive: false });
@@ -1717,6 +1739,8 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       teardownRemoteAudioPlayback();
       clearCallDiag();
       callStartedAtRef.current = null;
+      dialGuardRef.current = null;
+      localRingbackActiveRef.current = false;
       packetsReceivedRef.current = null;
       lastStatsRef.current = null;
       prevBytesReceivedRef.current = null;
@@ -1817,6 +1841,8 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       patchDiag({ lastCallError: msg });
       clearCallDiag();
       callStartedAtRef.current = null;
+      dialGuardRef.current = null;
+      localRingbackActiveRef.current = false;
       packetsReceivedRef.current = null;
       lastStatsRef.current = null;
       prevBytesReceivedRef.current = null;
@@ -1875,10 +1901,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         setError("Not registered. Wait for SIP registration before dialling.");
         return;
       }
-      // Guard: callStartedAtRef is set synchronously at the start of this function
-      // before any async work. A second rapid invocation (double-click, Enter+click)
-      // will see it already set and bail out before placing a second SIP INVITE.
-      if (callStartedAtRef.current !== null) {
+      // Guard: dialGuardRef is set synchronously before async work so double-click
+      // cannot place a second SIP INVITE.
+      if (dialGuardRef.current !== null) {
         console.warn("[SipPhone] dial() suppressed — call already in progress");
         return;
       }
@@ -1913,14 +1938,14 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
 
       callDirectionRef.current = "outbound";
       setCallDirection("outbound");
-      callStartedAtRef.current = Date.now();
+      dialGuardRef.current = Date.now();
       finalReportSentRef.current = false;
       setCallState("dialing");
       setError(null);
       setOnHold(false);
       console.log("[SIP] CALL_INITIATED target:", normalised, "route:", selectedOutboundRoute?.name || "none");
-      // European local ringback until SIP progress / early media from PBX
-      startEuropeanLocalRingback();
+      startUkLocalRingback();
+      localRingbackActiveRef.current = true;
       patchDiag({ localRingback: "local" });
 
       const resolveDialTarget = selectedOutboundRoute
@@ -1988,6 +2013,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
             flushWebrtcDebug("call_throw");
             localStream.getTracks().forEach((t) => t.stop());
             localStreamRef.current = null;
+            stopOutboundRingbackImmediate("call_throw");
+            stopAllAudio();
+            dialGuardRef.current = null;
             setCallState("idle");
             setSelectedOutboundRouteId("");
             const msg = e instanceof Error ? e.message : "Call failed";
@@ -2005,6 +2033,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
             channelNotCreated: true,
             mediaMeta: { permissionGranted: false, errorName: err?.name ?? null },
           }));
+          stopOutboundRingbackImmediate("mic_error");
+          stopAllAudio();
+          dialGuardRef.current = null;
           setCallState("idle");
           setSelectedOutboundRouteId("");
           if (err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError") {
@@ -2018,12 +2049,14 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         });
         })
         .catch((err) => {
+          stopOutboundRingbackImmediate("route_resolve_error");
+          stopAllAudio();
+          dialGuardRef.current = null;
           setCallState("idle");
           setSelectedOutboundRouteId("");
           const msg = err instanceof Error ? err.message : "Could not resolve outbound route";
           setError(msg);
           patchDiag({ lastCallError: msg });
-          stopAllAudio();
         });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps

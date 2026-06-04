@@ -4,35 +4,28 @@ import { TrendingUp, TrendingDown, Minus } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "../cn";
 import { CRMCard } from "../CRMCard";
+import { crm } from "../crmClasses";
 import type { HeroTone } from "./reportsTypes";
 
 const toneConfig: Record<
   HeroTone,
-  { border: string; value: string; badge: string; glow: string }
+  { value: string; badge: string }
 > = {
   healthy: {
-    border: "border-crm-success/35",
     value: "text-crm-success",
     badge: "border-crm-success/30 bg-crm-success/10 text-crm-success",
-    glow: "shadow-[0_0_28px_-8px_rgba(52,211,153,0.20)]",
   },
   warn: {
-    border: "border-crm-warning/40",
     value: "text-crm-warning",
     badge: "border-crm-warning/30 bg-crm-warning/10 text-crm-warning",
-    glow: "shadow-[0_0_28px_-8px_rgba(251,191,36,0.20)]",
   },
   danger: {
-    border: "border-crm-danger/40",
     value: "text-crm-danger",
     badge: "border-crm-danger/30 bg-crm-danger/10 text-crm-danger",
-    glow: "shadow-[0_0_28px_-8px_rgba(234,96,104,0.22)]",
   },
   neutral: {
-    border: "border-crm-border",
     value: "text-crm-text",
     badge: "border-crm-border/70 bg-crm-surface-2 text-crm-muted",
-    glow: "",
   },
 };
 
@@ -62,7 +55,10 @@ export function ReportsHeroCard({
   return (
     <CRMCard
       padding="none"
-      className={cn("flex flex-col gap-0 overflow-hidden", t.border, t.glow)}
+      className={cn(
+        "crm-reports-hero-card flex flex-col gap-0 overflow-hidden border-crm-border shadow-crm",
+        crm.opCard,
+      )}
     >
       <div className="flex items-start justify-between gap-2 px-4 pt-4 pb-1">
         <span className="text-[0.65rem] font-bold uppercase tracking-wider text-crm-muted">

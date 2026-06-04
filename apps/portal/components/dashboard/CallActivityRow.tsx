@@ -42,7 +42,7 @@ export function CallActivityRow({ totals, loading = false }: Props) {
         {TILE_DEFS.map((def) => {
           const value = totals[def.key];
           return (
-            <div key={def.key} className={`dash-v2-kpi-card tone-${def.tone}`}>
+            <div key={def.key} className={`dash-v2-card dash-v2-kpi-card tone-${def.tone}`}>
               <div className="dash-v2-kpi-card-head">
                 <span className={`dash-v2-kpi-icon tone-${def.tone}`} aria-hidden>{def.icon}</span>
                 <span className="dash-v2-kpi-label">{def.label}</span>

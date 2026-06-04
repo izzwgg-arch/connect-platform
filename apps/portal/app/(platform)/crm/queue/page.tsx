@@ -1,12 +1,11 @@
 "use client";
 
 import { Suspense, useEffect, useState, useCallback, useRef, useMemo } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  ListOrdered, PhoneCall, SkipForward, Clock, Ban,
-  RefreshCw, CheckCheck, CalendarClock, UserCheck, X, Edit2,
-  AlertCircle, Sparkles, Megaphone, Inbox, BarChart3, Flag,
+  ListOrdered, Clock, CheckCheck,
+  RefreshCw, CalendarClock, X,
+  AlertCircle, Sparkles, Megaphone, Inbox, BarChart3, Globe,
 } from "lucide-react";
 import {
   CRMPageShell,
@@ -25,9 +24,16 @@ import {
   QueueOperationalRow,
   QueueEmptyOperational,
   QueueCountPill,
+  QueueLeadDetailPanel,
+  QueueLeadDetailPlaceholder,
+  buildQueueContactWorkspaceHref,
   type QueueOperationalStats,
 } from "../../../../components/crm";
-import { MEMBER_STATUS_COLORS, MEMBER_STATUS_LABELS } from "../../../../components/crm/queue/queueUtils";
+import {
+  QUEUE_TIMEZONE_FILTER_KEY,
+  QUEUE_TIMEZONE_ZONE_OPTIONS,
+  type TimezoneZoneFilter,
+} from "../../../../components/crm/queue/queueTimezone";
 import { apiGet, apiPatch } from "../../../../services/apiClient";
 import { useSipPhone } from "../../../../hooks/useSipPhone";
 
@@ -78,58 +84,6 @@ const CAMPAIGN_FILTER_KEY = "crm_queue_campaign_id";
 type SortMode = "smart" | "original";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
-
-/** Queue list is filtered server-side; this is a safety net if a stale row appears */
-function isQueueMemberActionable(m: QueueMember): boolean {
-  return m.queueWorkEligible !== false;
-}
-
-function relativeTime(iso: string): string {
-  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-}
-
-function callbackTimeLabel(iso: string): { label: string; urgent: boolean } {
-  const d = new Date(iso);
-  const now = new Date();
-  const diff = d.getTime() - now.getTime();
-  const absDiff = Math.abs(diff) / 1000;
-
-  if (diff < -86400) return { label: `Overdue ${Math.floor(absDiff / 86400)}d`, urgent: true };
-  if (diff < 0) return { label: `Overdue ${Math.floor(absDiff / 3600)}h ${Math.floor((absDiff % 3600) / 60)}m`, urgent: true };
-  if (diff < 3600) return { label: `Due in ${Math.floor(diff / 1000 / 60)}m`, urgent: false };
-  if (diff < 86400) return { label: `Due in ${Math.floor(diff / 1000 / 3600)}h`, urgent: false };
-  const dStr = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  const tStr = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  return { label: `${dStr} at ${tStr}`, urgent: false };
-}
-
-function priorityReason(member: QueueMember): string | null {
-  if (member.status === "CALLBACK" && member.callbackAt) {
-    const diff = new Date(member.callbackAt).getTime() - Date.now();
-    if (diff < 0) return "Overdue callback";
-    const hours = diff / 3600_000;
-    if (hours <= 24) return "Due today";
-    return "Scheduled callback";
-  }
-  const cp = member.campaign?.priority ?? "NORMAL";
-  if (member.attemptCount === 0) {
-    if (cp === "URGENT") return "Urgent campaign · fresh lead";
-    if (cp === "HIGH") return "High priority · fresh lead";
-    return "Fresh lead, no attempts";
-  }
-  if (member.attemptCount <= 3) {
-    if (cp === "URGENT") return "Urgent campaign · fewer attempts";
-    if (cp === "HIGH") return "High priority · fewer attempts";
-    return "Fewer attempts";
-  }
-  if (cp === "URGENT") return "Urgent campaign";
-  if (cp === "HIGH") return "High priority campaign";
-  return null;
-}
 
 // ── Set Callback Modal ─────────────────────────────────────────────────────────
 
@@ -212,198 +166,6 @@ function SetCallbackModal({ member, onClose, onSaved }: {
   );
 }
 
-// ── Member Card (manual mode) ──────────────────────────────────────────────────
-
-function MemberCard({
-  member,
-  isTop,
-  filter,
-  onAction,
-  acting,
-  sipReady,
-  onDial,
-  queueReturnTo,
-}: {
-  member: QueueMember;
-  isTop: boolean;
-  filter: QueueFilter;
-  onAction: (action: string, extra?: Record<string, unknown>) => void;
-  acting: boolean;
-  sipReady?: boolean;
-  onDial?: () => void;
-  queueReturnTo: string;
-}) {
-  const router = useRouter();
-  const contact = member.contact;
-  const isCallback = member.status === "CALLBACK";
-  const actionable = isQueueMemberActionable(member);
-
-  const cb = member.callbackAt ? callbackTimeLabel(member.callbackAt) : null;
-
-  function openWorkspace() {
-    const params = new URLSearchParams({ contactId: member.contactId, returnTo: queueReturnTo });
-    if (member.campaign) params.set("campaignId", member.campaign.id);
-    params.set("memberId", member.id);
-    router.push(`/crm/live-call?${params}`);
-  }
-
-  return (
-    <div className={`bg-crm-surface rounded-crm-lg border border-crm-border p-5 mb-4 ${isTop ? "border-2 border-crm-accent shadow-md" : "border border-crm-border shadow-crm"} ${!actionable ? "opacity-75 border-crm-warning/35 bg-crm-warning/10" : ""}`}>
-      {!actionable && (
-        <div className="mb-3 flex items-center gap-2 text-crm-warning bg-crm-warning/15 border border-crm-warning/35 rounded-lg px-3 py-2 text-xs">
-          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-          Archived / inactive lead — not actionable. Refresh if this looks wrong.
-        </div>
-      )}
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div className="min-w-0">
-          {isTop ? (
-            <p className="text-xs font-bold text-crm-accent uppercase tracking-wider mb-1">Next best lead</p>
-          ) : null}
-          <div className="flex items-center gap-2 flex-wrap">
-            <h2 className={`font-bold text-crm-text truncate ${isTop ? "text-xl" : "text-base"}`}>{contact?.displayName ?? "Unknown"}</h2>
-            {member.campaign && (
-              <span className="text-xs text-crm-muted bg-crm-surface-2 px-2 py-0.5 rounded shrink-0">{member.campaign.name}</span>
-            )}
-          </div>
-          {isTop && priorityReason(member) && (
-            <p className="text-xs text-slate-600 mt-1 flex items-center gap-1">
-              <Sparkles className="h-3 w-3 text-indigo-500 shrink-0" />
-              {priorityReason(member)}
-            </p>
-          )}
-          {contact?.primaryPhone && (
-            <p className="text-sm text-crm-muted mt-0.5">{contact.primaryPhone}</p>
-          )}
-        </div>
-        <div className="shrink-0 text-right">
-          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${MEMBER_STATUS_COLORS[member.status]}`}>
-            {MEMBER_STATUS_LABELS[member.status]}
-          </span>
-          {member.attemptCount > 0 && (
-            <p className="text-xs text-crm-muted/80 mt-1">{member.attemptCount} attempt{member.attemptCount !== 1 ? "s" : ""}</p>
-          )}
-        </div>
-      </div>
-
-      <div className="flex flex-wrap gap-1.5 mb-4 text-xs">
-        {contact?.crmStage && (
-          <span className="bg-crm-accent/12 text-crm-accent px-2 py-0.5 rounded-full">{contact.crmStage}</span>
-        )}
-        {contact?.lastDisposition && (
-          <span className="bg-crm-accent/10 text-crm-accent px-2 py-0.5 rounded-full flex items-center gap-1">
-            <CheckCheck className="h-3 w-3" />Last: {contact.lastDisposition}
-          </span>
-        )}
-        {contact?.lastActivityAt && (
-          <span className="bg-crm-surface-2 text-crm-muted px-2 py-0.5 rounded-full">Active {relativeTime(contact.lastActivityAt)}</span>
-        )}
-        {cb && (
-          <span className={`px-2 py-0.5 rounded-full flex items-center gap-1 ${cb.urgent ? "bg-crm-danger/15 text-crm-danger font-semibold" : "bg-crm-warning/15 text-crm-warning"}`}>
-            {cb.urgent && <AlertCircle className="h-3 w-3" />}
-            <CalendarClock className="h-3 w-3" />
-            {cb.label}
-          </span>
-        )}
-        {member.callbackNote && (
-          <span className="bg-crm-warning/15 text-crm-warning px-2 py-0.5 rounded-full italic">&ldquo;{member.callbackNote.slice(0, 60)}{member.callbackNote.length > 60 ? "…" : ""}&rdquo;</span>
-        )}
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        <button onClick={openWorkspace} disabled={acting || !actionable} className="flex items-center gap-1.5 px-3 py-2 bg-crm-accent text-white rounded-crm text-sm font-semibold hover:brightness-110 disabled:opacity-50 shadow-crm">
-          <PhoneCall className="h-4 w-4" />Open workspace
-        </button>
-        {isTop && onDial && contact?.primaryPhone && (
-          <button
-            type="button"
-            onClick={onDial}
-            disabled={acting || !actionable || !sipReady}
-            className="flex items-center gap-1.5 px-3 py-2 bg-crm-success text-white rounded-crm text-sm font-semibold hover:brightness-110 disabled:opacity-50 shadow-crm"
-            title={!sipReady ? "Register your softphone to place calls" : undefined}
-          >
-            <PhoneCall className="h-4 w-4" />Call
-          </button>
-        )}
-        <button onClick={() => router.push(`/crm/contacts/${member.contactId}`)} disabled={acting} className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-success/40 text-crm-success rounded-crm text-sm hover:bg-crm-success/10">
-          <CheckCheck className="h-3.5 w-3.5" />Log outcome
-        </button>
-        {!isCallback && (
-          <button onClick={() => onAction("set-callback-modal")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-warning/40 text-crm-warning rounded-crm text-sm hover:bg-crm-warning/10">
-            <CalendarClock className="h-3.5 w-3.5" />Set Callback
-          </button>
-        )}
-        {isCallback && (
-          <button onClick={() => onAction("set-callback-modal")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-warning/40 text-crm-warning rounded-crm text-sm hover:bg-crm-warning/10">
-            <Edit2 className="h-3.5 w-3.5" />Edit Callback
-          </button>
-        )}
-        {isCallback && (
-          <button onClick={() => onAction("clear-callback")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-border text-crm-muted rounded-crm text-sm hover:bg-crm-bg">
-            <X className="h-3.5 w-3.5" />Clear Callback
-          </button>
-        )}
-        <button onClick={() => onAction("assign-to-me")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-border text-crm-text rounded-crm text-sm hover:bg-crm-bg">
-          <UserCheck className="h-3.5 w-3.5" />Assign to Me
-        </button>
-        {!isCallback && (
-          <button onClick={() => onAction("skip")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-border text-crm-text rounded-crm text-sm hover:bg-crm-bg">
-            <SkipForward className="h-3.5 w-3.5" />Skip
-          </button>
-        )}
-        {!isCallback && (
-          <button onClick={() => onAction("defer")} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-border text-crm-text rounded-crm text-sm hover:bg-crm-bg">
-            <Clock className="h-3.5 w-3.5" />Defer
-          </button>
-        )}
-        <button onClick={() => { if (confirm(`Mark ${contact?.displayName ?? "this contact"} as Do Not Call?`)) onAction("dnc"); }} disabled={acting || !actionable} className="flex items-center gap-1.5 px-2.5 py-2 border border-crm-danger/35 text-crm-danger rounded-crm text-sm hover:bg-crm-danger/15">
-          <Ban className="h-3.5 w-3.5" />DNC
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function PriorityFocusCards({
-  counts,
-  stats,
-  loading,
-}: {
-  counts: QueueCounts;
-  stats: QueueOperationalStats | null;
-  loading: boolean;
-}) {
-  const highPriority = counts.overdue + (stats?.myTasksOverdue ?? 0);
-  const items = [
-    { label: "Due Today", value: counts.due + (stats?.myTasksDueToday ?? 0), sub: "Tasks", href: "/crm/queue?filter=due", icon: <CalendarClock className="h-4 w-4" />, accent: "violet" },
-    { label: "Overdue", value: counts.overdue + (stats?.myTasksOverdue ?? 0), sub: "Tasks", href: "/crm/queue?filter=overdue", icon: <AlertCircle className="h-4 w-4" />, accent: "rose" },
-    { label: "Follow Ups", value: (stats?.myCallbacksDueToday ?? 0) + (stats?.myOverdueCallbacks ?? 0), sub: "Tasks", href: "/crm/tasks", icon: <PhoneCall className="h-4 w-4" />, accent: "amber" },
-    { label: "High Priority", value: highPriority, sub: "Tasks", href: highPriority > 0 ? "/crm/queue?filter=overdue" : "/crm/tasks", icon: <Flag className="h-4 w-4" />, accent: "pink" },
-  ] as const;
-
-  return (
-    <section className="crm-queue-priority-section crm-queue-priority-rail">
-      <div className="mb-3">
-        <h2 className="text-sm font-bold text-crm-text">Priority Focus</h2>
-        <p className="mt-0.5 text-[11px] text-crm-muted">Next work signals for your assigned queue</p>
-      </div>
-      <div className="grid gap-2">
-        {items.map((item) => (
-          <Link key={item.label} href={item.href} className={cn("crm-queue-priority-card", `crm-queue-priority-${item.accent}`)}>
-            <span className="crm-queue-priority-icon">{item.icon}</span>
-            <span className="min-w-0 flex-1">
-              <span className="block text-xs font-bold text-crm-text">{item.label}</span>
-              <span className="mt-1 block text-xl font-bold tabular-nums leading-none text-crm-text">{loading ? "-" : item.value}</span>
-              <span className="mt-0.5 block text-[10px] text-crm-muted">{item.sub}</span>
-            </span>
-            <span className="text-[10px] font-bold text-crm-accent">Open</span>
-          </Link>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 // ── Inner page component (needs useSearchParams) ───────────────────────────────
 
 function QueuePageInner() {
@@ -445,6 +207,13 @@ function QueuePageInner() {
     return localStorage.getItem(CAMPAIGN_FILTER_KEY) ?? null;
   });
 
+  const [timezoneZone, setTimezoneZone] = useState<TimezoneZoneFilter>(() => {
+    if (typeof window === "undefined") return "all";
+    const stored = localStorage.getItem(QUEUE_TIMEZONE_FILTER_KEY) as TimezoneZoneFilter | null;
+    if (stored && QUEUE_TIMEZONE_ZONE_OPTIONS.some((o) => o.value === stored)) return stored;
+    return "all";
+  });
+
   // Sort mode — precedence: URL > localStorage > tenant default > hardcoded fallback.
   // Tenant default is applied after settings load if no URL/LS preference.
   const urlSort = searchParams.get("sort");
@@ -458,6 +227,7 @@ function QueuePageInner() {
   const sortModeSetFromTenantDefault = useRef(false);
 
   const [callbackModalMember, setCallbackModalMember] = useState<QueueMember | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
 
   // Persist sort mode
   useEffect(() => {
@@ -470,6 +240,12 @@ function QueuePageInner() {
     if (campaignId) localStorage.setItem(CAMPAIGN_FILTER_KEY, campaignId);
     else localStorage.removeItem(CAMPAIGN_FILTER_KEY);
   }, [campaignId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (timezoneZone === "all") localStorage.removeItem(QUEUE_TIMEZONE_FILTER_KEY);
+    else localStorage.setItem(QUEUE_TIMEZONE_FILTER_KEY, timezoneZone);
+  }, [timezoneZone]);
 
   // Load active campaigns for the dropdown (non-blocking, silent on error)
   useEffect(() => {
@@ -519,16 +295,23 @@ function QueuePageInner() {
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
 
-  const load = useCallback(async (f?: QueueFilter, s?: SortMode, cid?: string | null) => {
+  const load = useCallback(async (
+    f?: QueueFilter,
+    s?: SortMode,
+    cid?: string | null,
+    tz?: TimezoneZoneFilter,
+  ) => {
     const activeFilter = f ?? filter;
     const activeSort = s ?? sortMode;
     // cid=undefined means "use current state", cid=null means "clear", cid=string means "use it"
     const activeCampaignId = cid !== undefined ? cid : campaignId;
+    const activeTz = tz ?? timezoneZone;
     setLoading(true);
     setError("");
     try {
       const params = new URLSearchParams({ filter: activeFilter, sort: activeSort });
       if (activeCampaignId) params.set("campaignId", activeCampaignId);
+      if (activeTz !== "all") params.set("timezoneZone", activeTz);
       const res = await apiGet<{ queue: QueueMember[]; total: number; counts: QueueCounts; sort?: string }>(
         `/crm/queue?${params.toString()}`,
         token
@@ -541,9 +324,16 @@ function QueuePageInner() {
     }
     setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, sortMode, campaignId, token]);
+  }, [filter, sortMode, campaignId, timezoneZone, token]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    setActiveIndex((idx) => {
+      if (queue.length === 0) return 0;
+      return Math.min(idx, queue.length - 1);
+    });
+  }, [queue]);
 
   function switchFilter(f: QueueFilter) {
     setFilter(f);
@@ -564,6 +354,11 @@ function QueuePageInner() {
     else params.delete("campaignId");
     router.replace(`/crm/queue?${params.toString()}`);
     load(undefined, undefined, newCampaignId);
+  }
+
+  function switchTimezoneZone(zone: TimezoneZoneFilter) {
+    setTimezoneZone(zone);
+    load(undefined, undefined, undefined, zone);
   }
 
   async function handleAction(memberId: string, action: string, extra?: Record<string, unknown>) {
@@ -594,8 +389,7 @@ function QueuePageInner() {
     return q ? `/crm/queue?${q}` : "/crm/queue";
   }, [searchParams]);
 
-  const next = queue[0] ?? null;
-  const rest = queue.slice(1);
+  const activeMember = queue[activeIndex] ?? null;
   const completedToday = opStats?.dispositionsToday ?? 0;
   const callsToday = opStats?.callsLinkedToday ?? 0;
   const sessionEfficiency = callsToday > 0 ? Math.round((completedToday / callsToday) * 100) : 0;
@@ -614,8 +408,9 @@ function QueuePageInner() {
         <CRMWorkspaceChrome>
           <CRMWorkspaceHeader>
             <CRMPageHeader
-              className="crm-queue-hero"
-              icon={<ListOrdered className="h-7 w-7" />}
+              compact
+              className={crm.contactsHeaderPanel}
+              icon={<ListOrdered className="h-6 w-6" aria-hidden />}
               title="My Queue"
               subtitle={
                 loading
@@ -625,7 +420,7 @@ function QueuePageInner() {
                     : `${total} lead${total !== 1 ? "s" : ""} in this view`
               }
               actions={
-                <div className="crm-queue-hero-actions flex flex-wrap items-center gap-2">
+                <div className="contacts-hero-actions flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     onClick={toggleSortMode}
@@ -656,29 +451,55 @@ function QueuePageInner() {
               <QueueCountPill label="Session Efficiency" count={`${sessionEfficiency}%`} active={false} icon={<BarChart3 className="h-4 w-4" />} accent="cyan" microcopy={`${sessionEfficiency}% today`} onClick={() => router.push("/crm/reports")} disabled={loading || opStatsLoading} />
             </div>
             <CRMActionBar className="crm-queue-filter-bar">
-              {campaigns.length > 0 ? (
-                <div className="flex w-full flex-wrap items-center gap-2">
-                  <Megaphone className="h-4 w-4 shrink-0 text-crm-muted" />
-                  <label htmlFor="crm-queue-campaign" className={cn(crm.label, "shrink-0")}>Campaign</label>
+              <div className="crm-queue-filter-grid">
+                {campaigns.length > 0 ? (
+                  <div className="crm-queue-filter-field">
+                    <Megaphone className="h-4 w-4 shrink-0 text-crm-muted" />
+                    <label htmlFor="crm-queue-campaign" className={cn(crm.label, "shrink-0")}>Campaign</label>
+                    <select
+                      id="crm-queue-campaign"
+                      value={campaignId ?? ""}
+                      onChange={(e) => switchCampaign(e.target.value || null)}
+                      className={cn(crm.input, "min-w-[10rem] flex-1 py-1.5")}
+                      disabled={loading}
+                    >
+                      <option value="">All campaigns</option>
+                      {campaigns.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                    {campaignId ? (
+                      <button type="button" onClick={() => switchCampaign(null)} className="text-xs font-medium text-crm-accent hover:underline">
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="crm-queue-filter-field">
+                  <Globe className="h-4 w-4 shrink-0 text-crm-muted" />
+                  <label htmlFor="crm-queue-timezone" className={cn(crm.label, "shrink-0")}>Timezone</label>
                   <select
-                    id="crm-queue-campaign"
-                    value={campaignId ?? ""}
-                    onChange={(e) => switchCampaign(e.target.value || null)}
-                    className={cn(crm.input, "max-w-md flex-1 min-w-[12rem] py-1.5")}
+                    id="crm-queue-timezone"
+                    value={timezoneZone}
+                    onChange={(e) => switchTimezoneZone(e.target.value as TimezoneZoneFilter)}
+                    className={cn(crm.input, "min-w-[10rem] flex-1 py-1.5")}
                     disabled={loading}
                   >
-                    <option value="">All campaigns</option>
-                    {campaigns.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
+                    {QUEUE_TIMEZONE_ZONE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
                     ))}
                   </select>
-                  {campaignId ? (
-                    <button type="button" onClick={() => switchCampaign(null)} className="text-xs font-medium text-crm-accent hover:underline">
+                  {timezoneZone !== "all" ? (
+                    <button
+                      type="button"
+                      onClick={() => switchTimezoneZone("all")}
+                      className="text-xs font-medium text-crm-accent hover:underline"
+                    >
                       Clear
                     </button>
                   ) : null}
                 </div>
-              ) : null}
+              </div>
             </CRMActionBar>
           </CRMWorkspaceToolbar>
         </CRMWorkspaceChrome>
@@ -690,70 +511,72 @@ function QueuePageInner() {
           <div className="py-24 text-center text-crm-muted/80 text-sm">Loading…</div>
         ) : error ? (
           <div className="py-24 text-center text-red-500 text-sm">{error}</div>
-        ) : !next ? (
-          <>
-            <QueueEmptyOperational
-              filter={filter}
-              campaignId={campaignId}
-              onClearCampaign={() => switchCampaign(null)}
-              onSwitchPending={() => switchFilter("pending")}
-            />
-          </>
+        ) : queue.length === 0 ? (
+          <QueueEmptyOperational
+            filter={filter}
+            campaignId={campaignId}
+            onClearCampaign={() => switchCampaign(null)}
+            onSwitchPending={() => switchFilter("pending")}
+          />
         ) : (
-          <>
-            <MemberCard
-              member={next}
-              isTop={true}
-              filter={filter}
-              acting={acting}
-              sipReady={sipReady}
-              queueReturnTo={queueReturnTo}
-              onDial={() => handleDial(next)}
-              onAction={(action, extra) => handleAction(next.id, action, extra)}
-            />
-
-            {rest.length > 0 && (
-              <div className="rounded-crm-lg border border-crm-border bg-crm-surface/80 p-3 sm:p-4 shadow-crm">
-                <h2 className="text-xs font-bold text-crm-muted uppercase tracking-wide mb-3 px-1">
-                  {filter === "pending" ? `More in queue (${rest.length + 1} shown)` :
-                   filter === "overdue" ? `Also overdue (${rest.length + 1} shown)` :
-                   filter === "due" ? `Also due today (${rest.length + 1} shown)` :
-                   `Upcoming (${rest.length + 1} shown)`}
-                </h2>
-                <div className="space-y-0">
-                  {rest.map((m, i) => (
-                    <QueueOperationalRow
-                      key={m.id}
-                      member={m}
-                      rank={i + 2}
-                      compact
-                      returnTo={queueReturnTo}
-                      acting={acting}
-                      sipReady={sipReady}
-                      onOpenWorkspace={() => {
-                        const params = new URLSearchParams({ contactId: m.contactId, memberId: m.id, returnTo: queueReturnTo });
-                        if (m.campaign) params.set("campaignId", m.campaign.id);
-                        router.push(`/crm/live-call?${params}`);
-                      }}
-                      onQuickCall={m.contact?.primaryPhone ? () => handleDial(m) : undefined}
-                      onSkip={() => void handleAction(m.id, "skip")}
-                    />
-                  ))}
-                </div>
-                {total > queue.length && (
-                  <p className="text-center text-xs text-crm-muted/80 mt-3 px-1">
-                    + {total - queue.length} more in queue (open filters or refresh)
-                  </p>
-                )}
-              </div>
+          <div className="crm-queue-list-panel">
+            <div className="crm-queue-list-head">
+              <h2>
+                {filter === "pending"
+                  ? `Queue · ${queue.length} shown`
+                  : filter === "overdue"
+                    ? `Overdue · ${queue.length} shown`
+                    : filter === "due"
+                      ? `Due today · ${queue.length} shown`
+                      : `Upcoming · ${queue.length} shown`}
+              </h2>
+              {timezoneZone !== "all" ? (
+                <span className="text-[10px] font-semibold text-crm-accent">
+                  {QUEUE_TIMEZONE_ZONE_OPTIONS.find((o) => o.value === timezoneZone)?.label}
+                </span>
+              ) : null}
+            </div>
+            <div className="crm-queue-row-list">
+              {queue.map((m, i) => (
+                <QueueOperationalRow
+                  key={m.id}
+                  member={m}
+                  rank={i + 1}
+                  isTop={i === 0}
+                  isSelected={activeIndex === i}
+                  onSelect={() => setActiveIndex(i)}
+                />
+              ))}
+            </div>
+            {total > queue.length && (
+              <p className="border-t border-crm-border/60 py-2.5 text-center text-xs text-crm-muted/80">
+                + {total - queue.length} more in queue (adjust filters or refresh)
+              </p>
             )}
-          </>
+          </div>
         )}
             </CRMWorkspaceScrollRegion>
           </CRMWorkspaceMain>
           {!loading && !error ? (
-            <CRMWorkspaceRightRail className="crm-queue-right-rail flex flex-col gap-3">
-              <PriorityFocusCards counts={counts} stats={opStats} loading={opStatsLoading} />
+            <CRMWorkspaceRightRail className="crm-queue-right-rail crm-queue-detail-rail flex flex-col min-h-0">
+              {activeMember ? (
+                <QueueLeadDetailPanel
+                  member={activeMember}
+                  rank={activeIndex + 1}
+                  total={queue.length}
+                  queueReturnTo={queueReturnTo}
+                  acting={acting}
+                  sipReady={sipReady}
+                  canGoPrevious={activeIndex > 0}
+                  canGoNext={activeIndex < queue.length - 1}
+                  onPrevious={() => setActiveIndex((i) => Math.max(0, i - 1))}
+                  onNext={() => setActiveIndex((i) => Math.min(queue.length - 1, i + 1))}
+                  onAction={(action, extra) => handleAction(activeMember.id, action, extra)}
+                  onDial={() => handleDial(activeMember)}
+                />
+              ) : (
+                <QueueLeadDetailPlaceholder />
+              )}
             </CRMWorkspaceRightRail>
           ) : null}
         </CRMWorkspaceBody>

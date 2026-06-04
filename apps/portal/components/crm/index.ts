@@ -22,6 +22,13 @@ export { CRMActionBar } from "./CRMActionBar";
 export * from "./charts";
 export * from "./dashboard";
 export * from "./contact";
+export {
+  ContactOperationalRow,
+  ContactListDetailPanel,
+  ContactListDetailPlaceholder,
+  buildContactWorkspaceHref,
+  type ContactListRow,
+} from "./contact";
 export type {
   MemberStatus as QueueMemberStatus,
   QueueMember,
@@ -35,6 +42,9 @@ export {
   QueueOperationalRow,
   QueueEmptyOperational,
   QueueCountPill,
+  QueueLeadDetailPanel,
+  QueueLeadDetailPlaceholder,
+  buildQueueContactWorkspaceHref,
 } from "./queue";
 export * from "./campaign";
 export * from "./live";

@@ -22,6 +22,10 @@ export type QueueMember = {
     lastActivityAt: string | null;
     lastDisposition: string | null;
     lastDispositionAt: string | null;
+    timezoneLabel?: string | null;
+    timezoneIana?: string | null;
+    timezoneResolutionStatus?: "RESOLVED" | "NEEDS_REVIEW" | "MISSING_LOCATION" | null;
+    company?: string | null;
   } | null;
   campaign: {
     id: string;

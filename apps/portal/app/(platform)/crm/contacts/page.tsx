@@ -3,18 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  Activity,
   Archive,
-  ArrowUpRight,
-  AtSign,
-  BarChart3,
   CalendarClock,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Clock,
   Download,
-  ExternalLink,
   FileUp,
   Filter,
   Mail,
@@ -22,10 +17,8 @@ import {
   MoreHorizontal,
   Phone,
   PhoneOff,
-  PieChart,
   Plus,
   Search,
-  Send,
   Sparkles,
   Tag,
   UserCheck,
@@ -38,13 +31,23 @@ import {
   CRMPageShell,
   CRMPageHeader,
   CRMCard,
+  CRMActionBar,
+  CRMWorkspaceShell,
+  CRMWorkspaceChrome,
+  CRMWorkspaceHeader,
+  CRMWorkspaceToolbar,
+  CRMWorkspaceBody,
+  CRMWorkspaceMain,
+  CRMWorkspaceScrollRegion,
+  CRMWorkspaceRightRail,
+  ContactOperationalRow,
+  ContactListDetailPanel,
+  ContactListDetailPlaceholder,
   crm,
   cn,
 } from "../../../../components/crm";
-import {
-  leadTimezoneBadgeShort,
-  leadTimezoneBadgeTitle,
-} from "../../../../components/crm/contact/leadTimezoneDisplay";
+import { QUEUE_TIMEZONE_ZONE_OPTIONS } from "../../../../components/crm/queue/queueTimezone";
+import { useSipPhone } from "../../../../hooks/useSipPhone";
 import {
   buildCampaignFilterOptions,
   buildStageFilterOptions,
@@ -56,7 +59,6 @@ import { ConnectSelect, type SelectOption } from "../../../../components/Connect
 import { ViewportDropdown } from "../../../../components/ViewportDropdown";
 import { apiGet, apiPost, apiDelete } from "../../../../services/apiClient";
 import { CrmConfirmModal } from "../../../../components/crm/CrmConfirmModal";
-import { CrmRowActionMenu } from "../../../../components/crm/CrmRowActionMenu";
 import { useRouter } from "next/navigation";
 import { useAppContext } from "../../../../hooks/useAppContext";
 
@@ -149,13 +151,6 @@ const TIMEZONE_ZONE_OPTIONS: Array<{ value: TimezoneZoneFilter; label: string }>
   { value: "other", label: "Other / Needs Review" },
 ];
 
-function timezoneBadgeClass(contact: CrmContact): string {
-  if (contact.timezoneResolutionStatus === "RESOLVED" && (contact.timezoneLabel || contact.timezoneIana)) {
-    return "contacts-stage-qualified";
-  }
-  return "contacts-stage-muted";
-}
-
 const FILTER_TABS = ["all", "LEAD", "CONTACTED", "QUALIFIED", "CUSTOMER", "CLOSED_LOST"] as const;
 
 type QuickFilter = "all" | "new" | "contacted" | "engaged" | "follow-up" | "unreachable" | "customer" | "lead";
@@ -190,16 +185,6 @@ function isContactArchived(c: CrmContact): boolean {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function initials(name: string): string {
-  return name
-    .split(" ")
-    .map((p) => p[0])
-    .filter(Boolean)
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
-}
-
 function assignedLabel(u: AssignedUser | null | undefined): string {
   if (!u) return "—";
   return u.displayName || `${u.firstName || ""} ${u.lastName || ""}`.trim() || u.email;
@@ -216,20 +201,6 @@ function formatShortDate(iso: string | null | undefined): string {
   } catch {
     return "—";
   }
-}
-
-function relativeDate(iso: string | null | undefined): string {
-  if (!iso) return "No activity";
-  const ts = new Date(iso).getTime();
-  if (!Number.isFinite(ts)) return "No activity";
-  const diff = Math.max(0, Date.now() - ts);
-  const minutes = Math.floor(diff / 60_000);
-  if (minutes < 60) return minutes <= 1 ? "just now" : `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 14) return `${days}d ago`;
-  return formatShortDate(iso);
 }
 
 function isNewThisMonth(c: CrmContact): boolean {
@@ -257,23 +228,6 @@ function matchesQuickFilter(c: CrmContact, quickFilter: QuickFilter): boolean {
   }
 }
 
-function stageTone(stage: CrmStage | null | undefined): string {
-  switch (stage) {
-    case "LEAD":
-      return "contacts-stage-lead";
-    case "CONTACTED":
-      return "contacts-stage-contacted";
-    case "QUALIFIED":
-      return "contacts-stage-qualified";
-    case "CUSTOMER":
-      return "contacts-stage-customer";
-    case "CLOSED_LOST":
-      return "contacts-stage-lost";
-    default:
-      return "contacts-stage-muted";
-  }
-}
-
 function ContactKpiTile({
   label,
   value,
@@ -288,13 +242,25 @@ function ContactKpiTile({
   accent: "blue" | "violet" | "green" | "amber" | "rose" | "cyan";
 }) {
   return (
-    <div className={cn(crm.contactsKpiTile, `contacts-kpi-${accent}`)}>
-      <div className="flex items-start justify-between gap-3">
-        <span className="contacts-kpi-label">{label}</span>
-        <span className={crm.contactsKpiIcon}>{icon}</span>
-      </div>
-      <p className="contacts-kpi-value">{value}</p>
-      <p className="contacts-kpi-micro">{micro}</p>
+    <div
+      className={cn(
+        crm.queueCountPill,
+        `crm-queue-kpi-${accent}`,
+        "relative overflow-hidden bg-crm-surface-2",
+      )}
+    >
+      <span className="flex w-full items-start justify-between gap-3">
+        <span className="min-w-0">
+          <span className="crm-queue-kpi-label block text-[10px] font-bold uppercase tracking-wide text-crm-muted">{label}</span>
+          <span className="crm-queue-kpi-value mt-1 block text-2xl font-bold tabular-nums leading-none tracking-tight text-crm-text">
+            {value}
+          </span>
+        </span>
+        <span className="crm-queue-kpi-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface/70 text-crm-accent">
+          {icon}
+        </span>
+      </span>
+      <span className="crm-queue-kpi-micro text-[10px] font-medium text-crm-muted">{micro}</span>
     </div>
   );
 }
@@ -501,8 +467,6 @@ export default function CrmContactsPage() {
   const canManageContacts = can("can_view_crm_contacts");
 
   const canImport = can("can_view_crm_import");
-  const canLiveWorkspace = can("can_view_crm_live_call");
-
   const [rows, setRows] = useState<CrmContact[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -544,6 +508,10 @@ export default function CrmContactsPage() {
 
   const [showBulkEmail, setShowBulkEmail] = useState(false);
   const [bulkEmailToast, setBulkEmailToast] = useState<string | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  const phone = useSipPhone();
+  const sipReady = phone?.regState === "registered";
 
   const searchRef = useRef<HTMLInputElement>(null);
   const filtersButtonRef = useRef<HTMLButtonElement>(null);
@@ -925,24 +893,6 @@ export default function CrmContactsPage() {
     return { missingPhone, missingEmail, archivedOnPage, activeOnPage, contacted, engaged, newThisMonth, needsFollowUp };
   }, [rows]);
 
-  const stageDistribution = useMemo(() => {
-    const counts = new Map<CrmStage, number>();
-    for (const row of rows) {
-      if (row.crmStage) counts.set(row.crmStage, (counts.get(row.crmStage) ?? 0) + 1);
-    }
-    return (Object.keys(STAGE_LABELS) as Array<CrmStage | "all">)
-      .filter((key): key is CrmStage => key !== "all")
-      .map((key) => ({ key, label: STAGE_LABELS[key], count: counts.get(key) ?? 0 }))
-      .filter((item) => item.count > 0);
-  }, [rows]);
-
-  const recentActivity = useMemo(() => {
-    return [...rows]
-      .filter((c) => c.lastActivityAt || c.lastDispositionAt || c.updatedAt)
-      .sort((a, b) => new Date(b.lastActivityAt ?? b.lastDispositionAt ?? b.updatedAt ?? 0).getTime() - new Date(a.lastActivityAt ?? a.lastDispositionAt ?? a.updatedAt ?? 0).getTime())
-      .slice(0, 4);
-  }, [rows]);
-
   const sliceFrom = total === 0 ? 0 : page * CONTACTS_PAGE_LIMIT + 1;
   const sliceTo = Math.min((page + 1) * CONTACTS_PAGE_LIMIT, total);
   const canPrev = page > 0;
@@ -962,12 +912,29 @@ export default function CrmContactsPage() {
     void load("", "all", false, "active", 0, "all", "all");
   };
 
-  const firstEmail = displayedRows.find((c) => c.primaryEmail)?.primaryEmail?.email;
   const engagementRate = rows.length > 0 ? Math.round((summary.engaged / rows.length) * 100) : 0;
-  const reachableTotal = rows.filter((c) => c.primaryPhone && !c.doNotCall).length;
+
+  useEffect(() => {
+    setActiveIndex((idx) => {
+      if (displayedRows.length === 0) return 0;
+      return Math.min(idx, displayedRows.length - 1);
+    });
+  }, [displayedRows]);
+
+  const activeContact = displayedRows[activeIndex] ?? null;
+  const contactsReturnTo = "/crm/contacts";
+
+  function handleDialContact(contact: CrmContact) {
+    const phoneNumber = contact.primaryPhone?.numberRaw;
+    if (!phoneNumber || contact.doNotCall) return;
+    if (!sipReady) return;
+    window.dispatchEvent(new CustomEvent("crm:dial", { detail: { target: phoneNumber } }));
+  }
+
+  const showSplit = !loading && !error && displayedRows.length > 0;
 
   return (
-    <CRMPageShell className={crm.contactsWorkspace} innerClassName={crm.pageInnerContacts}>
+    <CRMPageShell className={cn(crm.queueWorkspace, crm.contactsWorkspace)} innerClassName={crm.pageInnerQueue}>
       <CrmConfirmModal
         open={!!deleteTarget}
         title="Delete contact?"
@@ -1012,26 +979,31 @@ export default function CrmContactsPage() {
         />
       )}
 
-      <CRMPageHeader
-        className={crm.contactsHeaderPanel}
-        icon={<Users className="h-6 w-6" aria-hidden />}
-        title="Contacts"
-        actions={
-          <div className="contacts-hero-actions flex flex-wrap items-center gap-2">
-            <button type="button" onClick={handleExportCsv} className={cn(crm.btnSecondary, "contacts-export-button")} disabled={rows.length === 0}>
-              <Download className="h-4 w-4" />
-              Export
-            </button>
-            <button type="button" onClick={() => setShowAdd(true)} className={cn(crm.btnPrimary, "contacts-new-contact-cta")}>
-              <Plus className="h-4 w-4" />
-              New contact
-            </button>
-          </div>
-        }
-      />
-
+      <CRMWorkspaceShell>
+        <CRMWorkspaceChrome>
+          <CRMWorkspaceHeader>
+            <CRMPageHeader
+              compact
+              className={crm.contactsHeaderPanel}
+              icon={<Users className="h-6 w-6" aria-hidden />}
+              title="Contacts"
+              actions={
+                <div className="contacts-hero-actions flex flex-wrap items-center gap-2">
+                  <button type="button" onClick={handleExportCsv} className={cn(crm.btnSecondary, "contacts-export-button")} disabled={rows.length === 0}>
+                    <Download className="h-4 w-4" />
+                    Export
+                  </button>
+                  <button type="button" onClick={() => setShowAdd(true)} className={cn(crm.btnPrimary, "contacts-new-contact-cta")}>
+                    <Plus className="h-4 w-4" />
+                    New contact
+                  </button>
+                </div>
+              }
+            />
+          </CRMWorkspaceHeader>
+          <CRMWorkspaceToolbar className="flex flex-col gap-3">
       {!loading && !error && (rows.length > 0 || total > 0) && (
-        <section className="contacts-kpi-strip grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <section className="crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-3 xl:grid-cols-6">
           <ContactKpiTile label="Total Contacts" value={total} micro={`${sliceFrom}-${sliceTo} showing`} icon={<Users className="h-4 w-4" />} accent="blue" />
           <ContactKpiTile label="New This 30 Days" value={summary.newThisMonth} micro="recently created" icon={<Sparkles className="h-4 w-4" />} accent="violet" />
           <ContactKpiTile label="Contacted" value={summary.contacted} micro="stage matched" icon={<Phone className="h-4 w-4" />} accent="cyan" />
@@ -1041,91 +1013,124 @@ export default function CrmContactsPage() {
         </section>
       )}
 
-      <CRMCard className={cn(crm.contactsPanel, crm.contactsFilterBar, "contacts-sticky-chrome p-3 sm:p-4")}>
-        <div className="contacts-filter-grid">
-          <div className="contacts-search-wrap">
-            <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-crm-muted/80" />
-            <input
-              ref={searchRef}
-              value={search}
-              onChange={(e) => handleSearchChange(e.target.value)}
-              placeholder="Search name, phone, email, or company..."
-              className="contacts-search-input"
-              aria-label="Search contacts"
-            />
-            {search && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearch("");
-                  setPage(0);
-                  if (debounceRef.current) clearTimeout(debounceRef.current);
-                  void load("", stage, assignedToMe, isAdmin ? archiveScope : "active", 0, timezoneZone, campaignFilter);
-                }}
-                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1.5 text-crm-muted/80 hover:bg-crm-surface-2"
-                aria-label="Clear search"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-          <ConnectSelect
-            value={campaignFilter}
-            onChange={(value) => {
-              setCampaignFilter(value);
-              setBulkQueueCampaignId(value !== "all" ? value : "");
-              setPage(0);
-            }}
-            options={campaignOptions}
-            size="md"
-            className="contacts-modern-select"
-            dropdownWidth={260}
-          />
-          <ConnectSelect
-            value={tagFilter}
-            onChange={(value) => {
-              setTagFilter(value);
-              setPage(0);
-            }}
-            options={tagOptions}
-            size="md"
-            className="contacts-modern-select"
-            dropdownWidth={260}
-          />
-          <ConnectSelect
-            value={timezoneZone}
-            onChange={(value) => {
-              setTimezoneZone(value as TimezoneZoneFilter);
-              setPage(0);
-            }}
-            options={timezoneOptions}
-            size="md"
-            className="contacts-modern-select"
-            dropdownWidth={240}
-          />
-          <ConnectSelect
-            value={stage}
-            onChange={(value) => {
-              setPage(0);
-              setStage(value as CrmStage | "all");
-            }}
-            options={stageOptions}
-            size="md"
-            className="contacts-modern-select"
-            dropdownWidth={220}
-          />
-          <button
-            ref={filtersButtonRef}
-            type="button"
-            onClick={() => setFiltersOpen((open) => !open)}
-            className="contacts-filter-button"
-            aria-haspopup="dialog"
-            aria-expanded={filtersOpen}
-          >
-            <Filter className="h-4 w-4" />
-            Filters
-          </button>
-        </div>
+            <CRMActionBar className="crm-queue-filter-bar">
+              <div className="crm-queue-filter-grid w-full">
+                <div className="crm-queue-filter-field min-w-[min(100%,14rem)] flex-[2]">
+                  <Search className="h-4 w-4 shrink-0 text-crm-muted" />
+                  <label htmlFor="crm-contacts-search" className={cn(crm.label, "shrink-0")}>Search</label>
+                  <input
+                    ref={searchRef}
+                    id="crm-contacts-search"
+                    value={search}
+                    onChange={(e) => handleSearchChange(e.target.value)}
+                    placeholder="Name, phone, email, company…"
+                    className={cn(crm.input, "min-w-[10rem] flex-1 py-1.5")}
+                    aria-label="Search contacts"
+                  />
+                  {search ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearch("");
+                        setPage(0);
+                        if (debounceRef.current) clearTimeout(debounceRef.current);
+                        void load("", stage, assignedToMe, isAdmin ? archiveScope : "active", 0, timezoneZone, campaignFilter);
+                      }}
+                      className="text-xs font-medium text-crm-accent hover:underline"
+                    >
+                      Clear
+                    </button>
+                  ) : null}
+                </div>
+                <div className="crm-queue-filter-field">
+                  <Megaphone className="h-4 w-4 shrink-0 text-crm-muted" />
+                  <label htmlFor="crm-contacts-campaign" className={cn(crm.label, "shrink-0")}>Campaign</label>
+                  <select
+                    id="crm-contacts-campaign"
+                    value={campaignFilter}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setCampaignFilter(value);
+                      setBulkQueueCampaignId(value !== "all" ? value : "");
+                      setPage(0);
+                    }}
+                    className={cn(crm.input, "min-w-[10rem] flex-1 py-1.5")}
+                  >
+                    {campaignOptions.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="crm-queue-filter-field">
+                  <Tag className="h-4 w-4 shrink-0 text-crm-muted" />
+                  <label htmlFor="crm-contacts-tag" className={cn(crm.label, "shrink-0")}>Tag</label>
+                  <select
+                    id="crm-contacts-tag"
+                    value={tagFilter}
+                    onChange={(e) => {
+                      setTagFilter(e.target.value);
+                      setPage(0);
+                    }}
+                    className={cn(crm.input, "min-w-[10rem] flex-1 py-1.5")}
+                  >
+                    {tagOptions.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="crm-queue-filter-field">
+                  <Clock className="h-4 w-4 shrink-0 text-crm-muted" />
+                  <label htmlFor="crm-contacts-timezone" className={cn(crm.label, "shrink-0")}>Timezone</label>
+                  <select
+                    id="crm-contacts-timezone"
+                    value={timezoneZone}
+                    onChange={(e) => {
+                      setTimezoneZone(e.target.value as TimezoneZoneFilter);
+                      setPage(0);
+                    }}
+                    className={cn(crm.input, "min-w-[10rem] flex-1 py-1.5")}
+                  >
+                    {QUEUE_TIMEZONE_ZONE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                  {timezoneZone !== "all" ? (
+                    <button type="button" onClick={() => { setTimezoneZone("all"); setPage(0); }} className="text-xs font-medium text-crm-accent hover:underline">
+                      Clear
+                    </button>
+                  ) : null}
+                </div>
+                <div className="crm-queue-filter-field">
+                  <label htmlFor="crm-contacts-stage" className={cn(crm.label, "shrink-0")}>Stage</label>
+                  <select
+                    id="crm-contacts-stage"
+                    value={stage}
+                    onChange={(e) => {
+                      setPage(0);
+                      setStage(e.target.value as CrmStage | "all");
+                    }}
+                    className={cn(crm.input, "min-w-[10rem] flex-1 py-1.5")}
+                  >
+                    {stageOptions.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="crm-queue-filter-field">
+                  <button
+                    ref={filtersButtonRef}
+                    type="button"
+                    onClick={() => setFiltersOpen((open) => !open)}
+                    className={cn(crm.btnSecondary, "min-h-[2.25rem] gap-1.5")}
+                    aria-haspopup="dialog"
+                    aria-expanded={filtersOpen}
+                  >
+                    <Filter className="h-4 w-4" />
+                    More filters
+                  </button>
+                </div>
+              </div>
+            </CRMActionBar>
         <ViewportDropdown
           open={filtersOpen}
           triggerRef={filtersButtonRef}
@@ -1191,11 +1196,10 @@ export default function CrmContactsPage() {
             </div>
           </div>
         </ViewportDropdown>
-      </CRMCard>
 
       {/* Smart Assign panel — admin only, quantity-based, unassigned leads only */}
       {isAdmin && (
-        <div className={cn(crm.contactsBulkBar, "border-crm-border bg-crm-surface shadow-crm flex-wrap gap-y-2")}>
+        <CRMActionBar className="crm-queue-filter-bar flex-wrap gap-y-2">
           <button
             type="button"
             onClick={() => {
@@ -1252,7 +1256,7 @@ export default function CrmContactsPage() {
               {smartAssignError && <span className="text-xs text-crm-danger">{smartAssignError}</span>}
             </>
           )}
-        </div>
+        </CRMActionBar>
       )}
 
       {bulkEmailToast && (
@@ -1262,14 +1266,14 @@ export default function CrmContactsPage() {
       )}
 
       {(selfAssignMessage || bulkError) && selectedIds.size === 0 && (
-        <div className={cn(crm.contactsBulkBar, "border-crm-border bg-crm-surface shadow-crm")}>
+        <CRMActionBar className="crm-queue-filter-bar">
           {selfAssignMessage && <span className="text-sm font-medium text-crm-success">{selfAssignMessage}</span>}
           {bulkError && <span className="text-sm font-medium text-crm-danger">{bulkError}</span>}
-        </div>
+        </CRMActionBar>
       )}
 
       {selectedIds.size > 0 && (
-        <div className={cn(crm.contactsBulkBar, "border-crm-border bg-crm-surface shadow-crm")}>
+        <CRMActionBar className="crm-queue-filter-bar">
             <span className="text-sm font-medium text-crm-text">{selectedIds.size} selected</span>
             {isAdmin && (
               <button
@@ -1367,285 +1371,147 @@ export default function CrmContactsPage() {
             >
               Dismiss
             </button>
-        </div>
+        </CRMActionBar>
       )}
 
-      {loading && (
-        <div className="space-y-3 py-6" aria-busy="true" aria-label="Loading contacts">
-          {[0, 1, 2].map((i) => (
-            <div key={i} className="h-28 animate-pulse rounded-crm-lg border border-crm-border bg-crm-surface-2/80" />
-          ))}
-        </div>
-      )}
+          </CRMWorkspaceToolbar>
+        </CRMWorkspaceChrome>
 
-      {!loading && error && <div className="rounded-crm border border-crm-danger/35 bg-crm-danger/15 px-4 py-3 text-sm text-crm-danger">{error}</div>}
-
-      {!loading && !error && (rows.length === 0 || displayedRows.length === 0) && (
-        <div className={cn(crm.contactsEmpty, "border-crm-border bg-crm-surface")}>
-          <UserRound className="mx-auto mb-3 h-10 w-10 text-crm-border" aria-hidden />
-          <p className="text-lg font-semibold text-crm-text">
-            {hasListFilters ? "No contacts match these filters" : "No contacts yet"}
-          </p>
-          <p className="mx-auto mt-2 max-w-md text-sm text-crm-muted">
-            {hasListFilters
-              ? "Adjust search, status, tag, assignment, or list scope to broaden this workspace."
-              : "Add a person manually or import via a Campaign. Records stay in this tenant only."}
-          </p>
-          <div className="mt-6 flex flex-wrap justify-center gap-2">
-            {hasListFilters ? (
-              <button type="button" onClick={resetFilters} className={crm.btnSecondary}>Reset filters</button>
-            ) : (
-              <button type="button" onClick={() => setShowAdd(true)} className={crm.btnPrimary}>
-                <Plus className="h-4 w-4" />
-                New contact
-              </button>
-            )}
-            {canImport && (
-              <Link href="/crm/campaigns" className={crm.btnSecondary}>
-                <FileUp className="h-4 w-4" />
-                Import via Campaign
-              </Link>
-            )}
-          </div>
-        </div>
-      )}
-
-      {!loading && !error && displayedRows.length > 0 && (
-        <div className="contacts-main-grid grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(19rem,24rem)]">
-          <div className="min-w-0">
-            <CRMCard className={cn(crm.contactsPanel, crm.contactsListShell)}>
-              <div className={cn(crm.contactsListSelectBar, "border-crm-border bg-crm-surface-2/40")}>
-                <label className="flex cursor-pointer items-center gap-2.5 text-sm text-crm-muted">
-                  <input
-                    type="checkbox"
-                    checked={allSelectableSelected}
-                    onChange={toggleSelectAll}
-                    disabled={selectableRows.length === 0}
-                    className={crm.checkbox}
-                  />
-                  <span>Select active on this page</span>
-                </label>
-                <span className="ml-auto text-xs text-crm-muted">{displayedRows.length} shown · {total} total</span>
-              </div>
-              <ul className="contacts-row-list">
-                {displayedRows.map((c) => {
-                  const archived = isContactArchived(c);
-                  return (
-                    <li key={c.id} className={cn(crm.contactsListRow, "contacts-list-item", archived && "opacity-80")}>
-                      <div className="contacts-row-grid">
-                        <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
-                          {!archived ? (
-                            <input
-                              type="checkbox"
-                              checked={selectedIds.has(c.id)}
-                              onChange={() => {
-                                toggleSelect(c.id);
-                                void loadCrmUsers();
-                              }}
-                              className={crm.checkbox}
-                              aria-label={`Select ${c.displayName}`}
-                            />
-                          ) : (
-                            <Archive className="h-4 w-4 text-crm-muted" />
-                          )}
-                        </div>
-                        <div className="contacts-avatar">{initials(c.displayName)}</div>
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h2 className="truncate text-lg font-bold tracking-tight text-crm-text">{c.displayName}</h2>
-                            {c.crmStage && <span className={cn("contacts-stage-pill", stageTone(c.crmStage))}>{STAGE_LABELS[c.crmStage]}</span>}
-                            {(() => {
-                              const badge = leadTimezoneBadgeShort(c);
-                              if (badge) {
-                                return (
-                                  <span
-                                    className={cn("contacts-stage-pill", timezoneBadgeClass(c))}
-                                    title={leadTimezoneBadgeTitle(c)}
-                                  >
-                                    {badge}
-                                  </span>
-                                );
-                              }
-                              if (c.timezoneResolutionStatus === "NEEDS_REVIEW") {
-                                return <span className={cn("contacts-stage-pill", "contacts-stage-muted")}>Review</span>;
-                              }
-                              if (c.timezoneResolutionStatus === "MISSING_LOCATION") {
-                                return <span className={cn("contacts-stage-pill", "contacts-stage-muted")}>No tz</span>;
-                              }
-                              return null;
-                            })()}
-                            {c.doNotCall && <span className="contacts-danger-pill">DNC</span>}
-                          </div>
-                          <p className="mt-1 truncate text-sm font-medium text-crm-muted">
-                            {c.title || c.company || assignedLabel(c.assignedTo)}
-                          </p>
-                        </div>
-                        <div className="contacts-data-cell">
-                          <Phone className="h-4 w-4" />
-                          <span className="truncate">{c.primaryPhone?.numberRaw ?? "No phone"}</span>
-                        </div>
-                        <div className="contacts-data-cell">
-                          <Mail className="h-4 w-4" />
-                          <span className="truncate">{c.primaryEmail?.email ?? "No email"}</span>
-                        </div>
-                        <div className="contacts-data-cell">
-                          <Clock className="h-4 w-4" />
-                          <span>{relativeDate(c.lastActivityAt ?? c.lastDispositionAt ?? c.updatedAt)}</span>
-                        </div>
-                        <div className="flex items-center justify-end gap-2">
-                          <Link href={`/crm/contacts/${c.id}`} className={cn(crm.btnPrimary, "contacts-open-button")}>
-                            Open
-                            <ExternalLink className="h-3.5 w-3.5" />
-                          </Link>
-                          {canLiveWorkspace && !archived && (
-                            <Link href={`/crm/live-call?contactId=${encodeURIComponent(c.id)}`} className="contacts-menu-button" aria-label={`Open ${c.displayName} live workspace`}>
-                              <Activity className="h-4 w-4" />
-                            </Link>
-                          )}
-                          <CrmRowActionMenu
-                            label={c.displayName}
-                            onEdit={!archived ? () => router.push(`/crm/contacts/${c.id}?edit=1`) : undefined}
-                            onDelete={canManageContacts && !archived ? () => setDeleteTarget(c) : undefined}
-                          />
-                        </div>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            </CRMCard>
-          </div>
-
-          <aside className="contacts-right-rail flex min-w-0 flex-col gap-3">
-            <RailCard title="Contact Insights" subtitle="Current page relationship mix" icon={<PieChart className="h-4 w-4" />}>
-              <div className="contacts-donut-wrap">
-                <div className="contacts-donut" style={{ "--engaged": `${engagementRate}%` } as React.CSSProperties}>
-                  <span>{engagementRate}%</span>
+        <CRMWorkspaceBody split={showSplit}>
+          <CRMWorkspaceMain className="crm-queue-main-workspace">
+            <CRMWorkspaceScrollRegion className="crm-queue-center-workspace flex min-w-0 flex-col gap-3">
+              {loading ? (
+                <div className="py-24 text-center text-crm-muted/80 text-sm" aria-busy="true">
+                  Loading contacts…
                 </div>
-                <div className="min-w-0 flex-1 space-y-2">
-                  {stageDistribution.slice(0, 4).map((item) => (
-                    <div key={item.key} className="contacts-legend-row">
-                      <span className={cn("contacts-legend-dot", stageTone(item.key))} />
-                      <span>{item.label}</span>
-                      <strong>{item.count}</strong>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </RailCard>
-
-            <RailCard title="Top Contact Sources" subtitle="Live availability segments" icon={<BarChart3 className="h-4 w-4" />}>
-              {[
-                { label: "Reachable by phone", value: reachableTotal, icon: <Phone className="h-3.5 w-3.5" /> },
-                { label: "Email ready", value: rows.length - summary.missingEmail, icon: <AtSign className="h-3.5 w-3.5" /> },
-                { label: "Assigned records", value: rows.filter((c) => !!c.assignedTo).length, icon: <UserCheck className="h-3.5 w-3.5" /> },
-              ].map((item) => (
-                <div key={item.label} className="contacts-source-row">
-                  <div className="flex items-center gap-2 text-sm font-semibold text-crm-text">
-                    <span className="contacts-source-icon">{item.icon}</span>
-                    {item.label}
-                  </div>
-                  <span className="text-xs font-bold tabular-nums text-crm-muted">{progressPercent(item.value, rows.length)}%</span>
-                  <div className="contacts-progress-track">
-                    <span style={{ width: `${progressPercent(item.value, rows.length)}%` }} />
+              ) : error ? (
+                <div className="py-24 text-center text-sm text-crm-danger">{error}</div>
+              ) : displayedRows.length === 0 ? (
+                <div className="crm-queue-list-panel px-6 py-14 text-center">
+                  <UserRound className="mx-auto mb-3 h-10 w-10 text-crm-border" aria-hidden />
+                  <p className="text-lg font-semibold text-crm-text">
+                    {hasListFilters ? "No contacts match these filters" : "No contacts yet"}
+                  </p>
+                  <p className="mx-auto mt-2 max-w-md text-sm text-crm-muted">
+                    {hasListFilters
+                      ? "Adjust search, status, tag, assignment, or list scope to broaden this workspace."
+                      : "Add a person manually or import via a Campaign. Records stay in this tenant only."}
+                  </p>
+                  <div className="mt-6 flex flex-wrap justify-center gap-2">
+                    {hasListFilters ? (
+                      <button type="button" onClick={resetFilters} className={crm.btnSecondary}>Reset filters</button>
+                    ) : (
+                      <button type="button" onClick={() => setShowAdd(true)} className={crm.btnPrimary}>
+                        <Plus className="h-4 w-4" />
+                        New contact
+                      </button>
+                    )}
+                    {canImport && (
+                      <Link href="/crm/campaigns" className={crm.btnSecondary}>
+                        <FileUp className="h-4 w-4" />
+                        Import via Campaign
+                      </Link>
+                    )}
                   </div>
                 </div>
-              ))}
-            </RailCard>
-
-            <RailCard title="Recent Activity" subtitle="Newest contact movement" icon={<Activity className="h-4 w-4" />}>
-              <div className="space-y-2">
-                {recentActivity.map((item) => (
-                  <Link key={item.id} href={`/crm/contacts/${item.id}`} className="contacts-activity-row">
-                    <span className="contacts-activity-icon"><ArrowUpRight className="h-3.5 w-3.5" /></span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold text-crm-text">{item.displayName}</span>
-                      <span className="block text-xs text-crm-muted">{relativeDate(item.lastActivityAt ?? item.lastDispositionAt ?? item.updatedAt)}</span>
+              ) : (
+                <div className="crm-queue-list-panel">
+                  <div className="crm-queue-list-head">
+                    <label className="flex cursor-pointer items-center gap-2 text-xs text-crm-muted">
+                      <input
+                        type="checkbox"
+                        checked={allSelectableSelected}
+                        onChange={toggleSelectAll}
+                        disabled={selectableRows.length === 0}
+                        className={crm.checkbox}
+                      />
+                      <span>Select active on this page</span>
+                    </label>
+                    <span className="text-[10px] font-semibold text-crm-muted tabular-nums">
+                      {displayedRows.length} shown · {total} total
+                      {timezoneZone !== "all" ? (
+                        <span className="ml-2 text-crm-accent">
+                          {QUEUE_TIMEZONE_ZONE_OPTIONS.find((o) => o.value === timezoneZone)?.label}
+                        </span>
+                      ) : null}
                     </span>
-                  </Link>
-                ))}
-              </div>
-            </RailCard>
-          </aside>
-        </div>
-      )}
-
-      {!loading && !error && displayedRows.length > 0 && (
-        <div className="contacts-bottom-grid grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,28rem)]">
-          <CRMCard className={cn(crm.contactsPanel, "p-4 sm:p-5")}>
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-base font-bold text-crm-text">Quick Actions</p>
-                <p className="mt-1 text-xs text-crm-muted">Operational shortcuts for the current contact set.</p>
-              </div>
-              <Sparkles className="h-5 w-5 text-crm-accent" />
-            </div>
-            <div className="contacts-quick-actions">
-              <button type="button" onClick={() => setShowAdd(true)} className="contacts-quick-action contacts-quick-blue"><UserPlus className="h-4 w-4" />Add Contact</button>
-              {canImport && <Link href="/crm/campaigns" className="contacts-quick-action contacts-quick-violet"><FileUp className="h-4 w-4" />Import via Campaign</Link>}
-              <Link href="/crm/tasks" className="contacts-quick-action contacts-quick-green"><CalendarClock className="h-4 w-4" />Create Task</Link>
-              <a href={firstEmail ? `mailto:${firstEmail}` : undefined} aria-disabled={!firstEmail} className={cn("contacts-quick-action contacts-quick-amber", !firstEmail && "pointer-events-none opacity-50")}><Send className="h-4 w-4" />Send Email</a>
-              <Link href="/crm/campaigns" className="contacts-quick-action contacts-quick-rose"><Megaphone className="h-4 w-4" />Start Campaign</Link>
-            </div>
-          </CRMCard>
-
-          <CRMCard className={cn(crm.contactsPanel, "p-4 sm:p-5")}>
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-base font-bold text-crm-text">Popular Tags</p>
-                <p className="mt-1 text-xs text-crm-muted">Top tags found in this live result set.</p>
-              </div>
-              <Tag className="h-5 w-5 text-crm-accent" />
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {pageTagOptions.length > 0 ? pageTagOptions.slice(0, 10).map(({ tag: tagItem, count }) => (
-                <button key={tagItem.id} type="button" onClick={() => setTagFilter(tagItem.id)} className={tagFilter === tagItem.id ? crm.filterPillActive : crm.filterPill}>
-                  {tagItem.name}
-                  <span className="ml-1 tabular-nums opacity-75">{count}</span>
-                </button>
-              )) : (
-                <span className="rounded-full border border-crm-border bg-crm-surface-2 px-3 py-1.5 text-xs font-medium text-crm-muted">No tags on this page</span>
+                  </div>
+                  <div className="crm-queue-row-list">
+                    {displayedRows.map((c, i) => (
+                      <ContactOperationalRow
+                        key={c.id}
+                        contact={c}
+                        rank={page * CONTACTS_PAGE_LIMIT + i + 1}
+                        isSelected={activeIndex === i}
+                        assignedLabel={assignedLabel(c.assignedTo)}
+                        onSelect={() => setActiveIndex(i)}
+                      />
+                    ))}
+                  </div>
+                  {total > 0 && (canPrev || canNext) ? (
+                    <nav
+                      className="flex flex-col items-stretch gap-2 border-t border-crm-border/60 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between"
+                      aria-label="Contacts pagination"
+                    >
+                      <p className="text-center text-xs text-crm-muted sm:text-left">
+                        Page{" "}
+                        <span className="font-medium tabular-nums text-crm-text">{page + 1}</span> of{" "}
+                        <span className="font-medium tabular-nums text-crm-text">
+                          {Math.max(1, Math.ceil(total / CONTACTS_PAGE_LIMIT))}
+                        </span>
+                      </p>
+                      <div className="flex justify-center gap-2">
+                        <button
+                          type="button"
+                          disabled={!canPrev}
+                          onClick={() => setPage((p) => Math.max(0, p - 1))}
+                          className={cn(crm.btnSecondary, "h-8 px-2.5 text-xs disabled:opacity-40")}
+                        >
+                          <ChevronLeft className="h-3.5 w-3.5" />
+                          Previous
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!canNext}
+                          onClick={() => setPage((p) => p + 1)}
+                          className={cn(crm.btnSecondary, "h-8 px-2.5 text-xs disabled:opacity-40")}
+                        >
+                          Next
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </nav>
+                  ) : null}
+                </div>
               )}
-              <button type="button" disabled className={cn(crm.filterPill, "cursor-not-allowed opacity-60")}>Add tag</button>
-            </div>
-          </CRMCard>
-        </div>
-      )}
+            </CRMWorkspaceScrollRegion>
+          </CRMWorkspaceMain>
 
-      {!loading && !error && total > 0 && (canPrev || canNext) && (
-          <nav
-            className={cn(crm.contactsPagination, "border-crm-border bg-crm-surface shadow-crm")}
-            aria-label="Contacts pagination"
-          >
-            <p className="text-center text-sm text-crm-muted sm:text-left">
-              Page{" "}
-              <span className="font-medium tabular-nums text-crm-text">{page + 1}</span> of{" "}
-              <span className="font-medium tabular-nums text-crm-text">
-                {Math.max(1, Math.ceil(total / CONTACTS_PAGE_LIMIT))}
-              </span>
-            </p>
-            <div className="flex justify-center gap-2 sm:justify-end">
-              <button
-                type="button"
-                disabled={!canPrev}
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
-                className={cn(crm.btnSecondary, "disabled:cursor-not-allowed disabled:opacity-40")}
-              >
-                <ChevronLeft className="h-4 w-4" aria-hidden />
-                Previous
-              </button>
-              <button
-                type="button"
-                disabled={!canNext}
-                onClick={() => setPage((p) => p + 1)}
-                className={cn(crm.btnSecondary, "disabled:cursor-not-allowed disabled:opacity-40")}
-              >
-                Next
-                <ChevronRight className="h-4 w-4" aria-hidden />
-              </button>
-            </div>
-          </nav>
-      )}
+          {!loading && !error ? (
+            <CRMWorkspaceRightRail className="crm-queue-right-rail crm-queue-detail-rail flex flex-col min-h-0">
+              {activeContact ? (
+                <ContactListDetailPanel
+                  contact={activeContact}
+                  rank={activeIndex + 1}
+                  total={displayedRows.length}
+                  contactsReturnTo={contactsReturnTo}
+                  sipReady={sipReady}
+                  canGoPrevious={activeIndex > 0}
+                  canGoNext={activeIndex < displayedRows.length - 1}
+                  onPrevious={() => setActiveIndex((i) => Math.max(0, i - 1))}
+                  onNext={() => setActiveIndex((i) => Math.min(displayedRows.length - 1, i + 1))}
+                  onDial={() => handleDialContact(activeContact)}
+                  assignedLabel={assignedLabel(activeContact.assignedTo)}
+                  onEdit={!isContactArchived(activeContact) ? () => router.push(`/crm/contacts/${activeContact.id}?edit=1`) : undefined}
+                  onDelete={canManageContacts && !isContactArchived(activeContact) ? () => setDeleteTarget(activeContact) : undefined}
+                />
+              ) : (
+                <ContactListDetailPlaceholder />
+              )}
+            </CRMWorkspaceRightRail>
+          ) : null}
+        </CRMWorkspaceBody>
+      </CRMWorkspaceShell>
     </CRMPageShell>
   );
 }

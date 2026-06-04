@@ -37,12 +37,12 @@ export function DashboardKpiTile({
 }) {
   const border =
     tone === "danger"
-      ? "border-crm-danger/45 bg-crm-danger/5"
+      ? "border-crm-border bg-crm-danger/5"
       : tone === "warn"
-        ? "border-crm-warning/45 bg-crm-warning/5"
+        ? "border-crm-border bg-crm-warning/5"
         : tone === "positive"
-          ? "border-crm-success/40 bg-crm-success/5"
-          : "border-crm-border/80";
+          ? "border-crm-border bg-crm-success/5"
+          : "border-crm-border";
 
   const valueClass =
     tone === "danger"

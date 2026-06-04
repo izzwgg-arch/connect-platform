@@ -48,7 +48,7 @@ export function ReportsCommandHeader({
         : `${Math.floor(secondsAgo / 60)}m ago`;
 
   return (
-    <div className="sticky top-0 z-20 border-b border-crm-border/80 bg-[--bg-soft]">
+    <div className="sticky top-0 z-20 border-b border-crm-border/80 bg-[var(--bg-soft)]">
       <div className="mx-auto w-full max-w-[min(100%,1680px)] px-3 sm:px-5 lg:px-6 xl:px-7">
         {/* Title row */}
         <div className="flex items-center gap-3 border-b border-crm-border/40 py-3">

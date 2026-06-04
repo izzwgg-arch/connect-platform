@@ -188,7 +188,7 @@ export const crm = {
   /** Phase 19G — live wallboard; theme tokens via globals `.crm-wallboard-workspace` */
   wallboardWorkspace: "crm-wallboard-workspace w-full min-h-0",
   /** Phase 19K — CRM Intelligence reports; theme tokens via globals `.crm-reports-workspace` */
-  reportsWorkspace: "crm-reports-workspace w-full min-h-0",
+  reportsWorkspace: "crm-reports-workspace w-full min-h-full",
   pageInnerReports:
     "mx-auto w-full max-w-[min(100%,1680px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-4 min-h-0",
   reportsHeroGrid:
@@ -205,7 +205,7 @@ export const crm = {
   cardPadLg: "p-6",
   cardHover: "transition-colors hover:border-crm-border/90",
   opCard:
-    "relative overflow-hidden rounded-crm-lg border border-crm-border/80 bg-crm-surface shadow-[0_10px_36px_-18px_rgba(0,0,0,0.65)]",
+    "relative overflow-hidden rounded-crm-lg border border-crm-border bg-crm-surface shadow-[0_10px_36px_-18px_rgba(0,0,0,0.65)]",
   opCardHover:
     "transition-[border-color,box-shadow,transform,background-color] duration-200 hover:-translate-y-px hover:border-crm-border hover:shadow-[0_16px_44px_-22px_rgba(0,0,0,0.7)]",
   opCardGlow:
@@ -222,6 +222,10 @@ export const crm = {
 
   title: "text-xl font-semibold tracking-tight text-crm-text sm:text-2xl",
   subtitle: "mt-1 text-sm text-crm-muted leading-relaxed max-w-xl",
+  /** Shared with Contacts / My Queue command headers (compact CRMPageHeader). */
+  commandHeaderTitle: "text-lg font-bold tracking-tight text-crm-text sm:text-xl",
+  commandHeaderSubtitle: "mt-0.5 text-xs text-crm-muted leading-snug max-w-xl sm:text-sm",
+  commandHeaderIcon: "!h-9 !w-9 rounded-crm",
   label: "text-[0.6875rem] font-bold uppercase tracking-wider text-crm-muted",
   body: "text-sm text-crm-text",
   muted: "text-sm text-crm-muted",
@@ -264,7 +268,7 @@ export const crm = {
     "crm-queue-kpi-card flex h-full min-h-[6.25rem] w-full min-w-0 flex-col items-start justify-between rounded-crm-lg border border-crm-border bg-crm-surface-2 px-3.5 py-3 text-left transition-all duration-200 hover:border-crm-border/90 hover:bg-crm-surface",
   queueCountPillActive:
     "crm-queue-kpi-active border-crm-accent/45 bg-crm-accent/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] ring-1 ring-crm-accent/25",
-  queueCountPillUrgent: "border-crm-danger/35 bg-crm-danger/8",
+  queueCountPillUrgent: "crm-queue-kpi-urgent border-crm-danger/35 bg-crm-danger/8",
 
   bannerSuccess: "border border-crm-success/35 bg-crm-success/10 text-crm-success",
   bannerWarning: "border border-crm-warning/35 bg-crm-warning/10 text-crm-warning",

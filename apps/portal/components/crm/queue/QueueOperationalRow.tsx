@@ -1,23 +1,23 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import {
   AlertCircle,
   CalendarClock,
   CheckCheck,
   ChevronRight,
-  ExternalLink,
   Mail,
   Megaphone,
   Phone,
-  PhoneCall,
-  SkipForward,
 } from "lucide-react";
 import { cn } from "../cn";
-import { crm } from "../crmClasses";
+import { initials, stageColor, stageLabel } from "../contact/contactFormatters";
+import {
+  leadTimezoneBadgeShort,
+  leadTimezoneBadgeTitle,
+} from "../contact/leadTimezoneDisplay";
+import type { CrmStage } from "../contact/contactTypes";
 import type { QueueMember } from "./queueTypes";
 import {
-  assignedAgeLabel,
   callbackTimeLabel,
   isQueueMemberActionable,
   memberPriorityTier,
@@ -27,247 +27,169 @@ import {
   relativeTime,
 } from "./queueUtils";
 
+function timezonePillClass(contact: NonNullable<QueueMember["contact"]>): string {
+  if (contact.timezoneResolutionStatus === "RESOLVED" && (contact.timezoneLabel || contact.timezoneIana)) {
+    return "crm-queue-pill-tz-resolved";
+  }
+  return "crm-queue-pill-tz-muted";
+}
+
 export function QueueOperationalRow({
   member,
   rank,
   isTop,
-  compact,
-  returnTo,
-  onOpenWorkspace,
-  onQuickCall,
-  onSkip,
-  sipReady,
-  acting,
+  isSelected,
+  onSelect,
 }: {
   member: QueueMember;
   rank: number;
   isTop?: boolean;
-  compact?: boolean;
-  returnTo: string;
+  isSelected?: boolean;
+  returnTo?: string;
+  onSelect?: () => void;
   onOpenWorkspace?: () => void;
   onQuickCall?: () => void;
   onSkip?: () => void;
   sipReady?: boolean;
   acting?: boolean;
+  compact?: boolean;
 }) {
-  const router = useRouter();
   const contact = member.contact;
   const actionable = isQueueMemberActionable(member);
   const cb = member.callbackAt ? callbackTimeLabel(member.callbackAt) : null;
   const pr = priorityReason(member);
   const tier = memberPriorityTier(member);
-  const assignedAge = assignedAgeLabel(member);
+  const stage = (contact?.crmStage ?? "LEAD") as CrmStage;
+  const tzBadge = contact ? leadTimezoneBadgeShort(contact) : null;
 
-  function openWorkspace(e: React.MouseEvent) {
-    e.stopPropagation();
-    if (onOpenWorkspace) {
-      onOpenWorkspace();
-      return;
-    }
-    const params = new URLSearchParams({
-      contactId: member.contactId,
-      memberId: member.id,
-      returnTo,
-    });
-    if (member.campaign) params.set("campaignId", member.campaign.id);
-    router.push(`/crm/live-call?${params}`);
+  function handleRowActivate() {
+    onSelect?.();
   }
 
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={() => router.push(`/crm/contacts/${member.contactId}`)}
+      onClick={handleRowActivate}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          router.push(`/crm/contacts/${member.contactId}`);
+          handleRowActivate();
         }
       }}
       className={cn(
-        "group relative w-full text-left rounded-crm-lg border transition-all",
-        "mb-2",
-        compact ? "px-3 py-2.5" : "px-3 py-3 sm:px-4",
-        isTop && actionable && "ring-1 ring-crm-accent/35 shadow-[0_0_0_1px_rgba(99,102,241,0.12)]",
-        tier === "high" && actionable && "border-crm-danger/40 bg-crm-danger/5",
-        tier === "medium" && actionable && !isTop && "border-crm-warning/25 bg-crm-surface",
-        tier === "low" && actionable && "border-crm-border bg-crm-surface hover:border-crm-accent/30 hover:bg-crm-accent/5",
-        !actionable && "border-crm-warning/35 bg-crm-warning/10 opacity-90",
-        isTop && actionable && "border-crm-accent/50 bg-crm-accent/8",
+        "crm-queue-row group",
+        isSelected && "crm-queue-row-selected",
+        isTop && actionable && "crm-queue-row-top",
+        tier === "high" && actionable && !isSelected && "crm-queue-row-urgent",
+        !actionable && "crm-queue-row-readonly",
       )}
     >
-      <div className="flex items-start gap-3">
-        <span
-          className={cn(
-            "shrink-0 font-mono tabular-nums text-crm-muted/80 pt-0.5",
-            isTop ? "text-xs font-bold text-crm-accent w-7" : "text-[11px] w-6 text-right",
-          )}
+      <div className="crm-queue-row-grid">
+        <span className="crm-queue-row-rank tabular-nums">{rank}</span>
+
+        <div
+          className="crm-queue-row-avatar"
+          style={{
+            background: `linear-gradient(135deg, ${stageColor(stage)}, color-mix(in srgb, ${stageColor(stage)} 42%, #6366f1))`,
+          }}
+          aria-hidden
         >
-          {rank}
-        </span>
+          {initials(contact?.displayName ?? "")}
+        </div>
 
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              {isTop ? (
-                <p className="text-[10px] font-bold uppercase tracking-wider text-crm-accent mb-0.5">
-                  Next best lead
-                </p>
-              ) : null}
-              <div className="flex items-center gap-2 flex-wrap">
-                <span
-                  className={cn(
-                    "font-semibold text-crm-text truncate",
-                    isTop ? "text-base sm:text-lg" : "text-sm",
-                  )}
-                >
-                  {contact?.displayName ?? "Unknown"}
-                </span>
-                {!actionable ? (
-                  <span className="text-[10px] font-bold uppercase tracking-wide text-crm-warning bg-crm-warning/15 px-1.5 py-0.5 rounded">
-                    Read-only
-                  </span>
-                ) : null}
-              </div>
-              {member.campaign ? (
-                <p className="text-xs text-crm-muted mt-0.5 truncate flex items-center gap-1">
-                  <Megaphone className="h-3 w-3 shrink-0 opacity-80" />
-                  {member.campaign.name}
-                  {member.campaign.priority !== "NORMAL" ? (
-                    <span className="text-[10px] uppercase font-semibold text-crm-muted/90">
-                      · {member.campaign.priority}
-                    </span>
-                  ) : null}
-                </p>
-              ) : null}
-            </div>
-            <span
-              className={cn(
-                "inline-flex shrink-0 items-center px-2 py-0.5 rounded-full text-[11px] font-medium",
-                MEMBER_STATUS_COLORS[member.status],
-              )}
-            >
-              {MEMBER_STATUS_LABELS[member.status]}
-            </span>
-          </div>
-
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-crm-muted">
-            {contact?.primaryPhone ? (
-              <span className="inline-flex items-center gap-1 font-mono text-crm-text/90">
-                <Phone className="h-3 w-3 text-crm-muted" />
-                {contact.primaryPhone}
-              </span>
-            ) : (
-              <span className="italic text-crm-muted/70">No phone</span>
-            )}
-            {contact?.primaryEmail ? (
-              <span className="inline-flex items-center gap-1 truncate max-w-[12rem]">
-                <Mail className="h-3 w-3 shrink-0" />
-                <span className="truncate">{contact.primaryEmail}</span>
-              </span>
-            ) : null}
-          </div>
-
-          <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
+        <div className="crm-queue-row-main min-w-0">
+          <div className="crm-queue-row-title-line">
+            {isTop ? <span className="crm-queue-row-ribbon">Next</span> : null}
+            <span className="crm-queue-row-name truncate">{contact?.displayName ?? "Unknown"}</span>
             {contact?.crmStage ? (
-              <span className="bg-crm-accent/12 text-crm-accent px-2 py-0.5 rounded-full font-medium">
-                {contact.crmStage}
-              </span>
+              <span className="crm-queue-pill crm-queue-pill-stage">{stageLabel(stage)}</span>
             ) : null}
-            {pr ? (
+            {tzBadge ? (
+              <span
+                className={cn("crm-queue-pill", timezonePillClass(contact!))}
+                title={leadTimezoneBadgeTitle(contact!)}
+              >
+                {tzBadge}
+              </span>
+            ) : contact?.timezoneResolutionStatus === "NEEDS_REVIEW" ? (
+              <span className="crm-queue-pill crm-queue-pill-tz-muted">Review</span>
+            ) : null}
+            {!actionable ? (
+              <span className="crm-queue-pill crm-queue-pill-warning">Read-only</span>
+            ) : null}
+            {pr && tier !== "low" ? (
               <span
                 className={cn(
-                  "px-2 py-0.5 rounded-full font-medium",
-                  tier === "high"
-                    ? "bg-crm-danger/15 text-crm-danger"
-                    : tier === "medium"
-                      ? "bg-crm-warning/15 text-crm-warning"
-                      : "bg-crm-accent/12 text-crm-accent",
+                  "crm-queue-pill hidden sm:inline-flex",
+                  tier === "high" ? "crm-queue-pill-danger" : "crm-queue-pill-accent",
                 )}
               >
                 {pr}
               </span>
             ) : null}
-            {cb ? (
-              <span
-                className={cn(
-                  "px-2 py-0.5 rounded-full inline-flex items-center gap-1",
-                  cb.urgent
-                    ? "bg-crm-danger/15 text-crm-danger font-semibold"
-                    : "bg-crm-warning/15 text-crm-warning",
-                )}
-              >
-                {cb.urgent ? <AlertCircle className="h-3 w-3" /> : <CalendarClock className="h-3 w-3" />}
-                {cb.label}
-              </span>
-            ) : null}
-            {contact?.lastDisposition ? (
-              <span className="bg-crm-surface-2 text-crm-muted px-2 py-0.5 rounded-full inline-flex items-center gap-1">
-                <CheckCheck className="h-3 w-3" />
-                {contact.lastDisposition}
-                {contact.lastDispositionAt ? ` · ${relativeTime(contact.lastDispositionAt)}` : ""}
-              </span>
-            ) : null}
-            {member.attemptCount > 0 ? (
-              <span className="bg-crm-surface-2 text-crm-muted px-2 py-0.5 rounded-full">
-                {member.attemptCount} attempt{member.attemptCount !== 1 ? "s" : ""}
-                {member.lastAttemptAt ? ` · ${relativeTime(member.lastAttemptAt)}` : ""}
-              </span>
-            ) : null}
-            {assignedAge ? (
-              <span className="text-crm-muted/80 px-1">{assignedAge}</span>
-            ) : null}
           </div>
+          <p className="crm-queue-row-sub truncate">
+            {member.campaign ? (
+              <>
+                <Megaphone className="inline h-3 w-3 shrink-0 opacity-70" />
+                <span className="ml-0.5">{member.campaign.name}</span>
+              </>
+            ) : null}
+            {contact?.company ? (
+              <span className="text-crm-muted/80">
+                {member.campaign ? " · " : ""}
+                {contact.company}
+              </span>
+            ) : null}
+          </p>
+        </div>
 
-          {member.callbackNote ? (
-            <p className="mt-1.5 text-[11px] text-crm-warning/90 italic line-clamp-1">
-              &ldquo;{member.callbackNote}&rdquo;
-            </p>
+        <div className="crm-queue-row-phone hidden md:flex">
+          <Phone className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate font-mono text-[12px]">
+            {contact?.primaryPhone ?? "—"}
+          </span>
+        </div>
+
+        <div className="crm-queue-row-email hidden lg:flex">
+          <Mail className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">{contact?.primaryEmail ?? "—"}</span>
+        </div>
+
+        <div className="crm-queue-row-meta hidden xl:flex flex-wrap gap-1">
+          {cb ? (
+            <span
+              className={cn(
+                "crm-queue-pill text-[10px]",
+                cb.urgent ? "crm-queue-pill-danger" : "crm-queue-pill-warning",
+              )}
+            >
+              {cb.urgent ? <AlertCircle className="h-3 w-3" /> : <CalendarClock className="h-3 w-3" />}
+              {cb.label}
+            </span>
+          ) : null}
+          {contact?.lastDisposition ? (
+            <span className="crm-queue-pill crm-queue-pill-muted inline-flex items-center gap-0.5">
+              <CheckCheck className="h-3 w-3" />
+              {contact.lastDisposition}
+            </span>
+          ) : null}
+          {member.attemptCount > 0 && member.lastAttemptAt ? (
+            <span className="crm-queue-pill crm-queue-pill-muted">{relativeTime(member.lastAttemptAt)}</span>
           ) : null}
         </div>
 
-        <ChevronRight className="h-4 w-4 text-crm-border group-hover:text-crm-muted shrink-0 mt-1 transition-colors" />
-      </div>
-
-      <div
-        className={cn(
-          "mt-2 flex flex-wrap gap-1.5 border-t border-crm-border/50 pt-2",
-          compact ? "opacity-100" : "sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100",
-        )}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <button
-          type="button"
-          onClick={openWorkspace}
-          disabled={acting || !actionable}
-          className={cn(crm.btnPrimary, "h-8 px-2.5 py-1 text-xs")}
+        <span
+          className={cn(
+            "crm-queue-row-status shrink-0",
+            MEMBER_STATUS_COLORS[member.status],
+          )}
         >
-          <ExternalLink className="h-3.5 w-3.5" />
-          Workspace
-        </button>
-        {isTop && onQuickCall && contact?.primaryPhone ? (
-          <button
-            type="button"
-            onClick={() => onQuickCall()}
-            disabled={acting || !actionable || !sipReady}
-            className="inline-flex h-8 items-center gap-1 rounded-crm bg-crm-success px-2.5 text-xs font-semibold text-white hover:brightness-110 disabled:opacity-50"
-            title={!sipReady ? "Register softphone to call" : undefined}
-          >
-            <PhoneCall className="h-3.5 w-3.5" />
-            Call
-          </button>
-        ) : null}
-        {onSkip && !compact ? (
-          <button
-            type="button"
-            onClick={() => onSkip()}
-            disabled={acting || !actionable}
-            className={cn(crm.btnGhost, "h-8 px-2 text-xs")}
-          >
-            <SkipForward className="h-3.5 w-3.5" />
-            Skip
-          </button>
-        ) : null}
+          {MEMBER_STATUS_LABELS[member.status]}
+        </span>
+
+        <ChevronRight className="crm-queue-row-chevron h-4 w-4 shrink-0" />
       </div>
     </div>
   );

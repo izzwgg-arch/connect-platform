@@ -93,3 +93,23 @@ export const MEMBER_STATUS_LABELS: Record<MemberStatus, string> = {
   SKIPPED: "Skipped",
   DO_NOT_CALL: "DNC",
 };
+
+export type QueueWorkspaceDeepLink = {
+  workspace?: "email" | "sms";
+  action?: "call";
+};
+
+export function buildQueueContactWorkspaceHref(
+  member: QueueMember,
+  returnTo: string,
+  deepLink?: QueueWorkspaceDeepLink,
+): string {
+  const params = new URLSearchParams({
+    memberId: member.id,
+    returnTo,
+  });
+  if (member.campaign) params.set("campaignId", member.campaign.id);
+  if (deepLink?.workspace) params.set("workspace", deepLink.workspace);
+  if (deepLink?.action) params.set("action", deepLink.action);
+  return `/crm/contacts/${member.contactId}?${params}`;
+}

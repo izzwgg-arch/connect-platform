@@ -38,7 +38,9 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
   const routeAllowed =
     !activeNavItem || isNavItemVisibleForUser(activeNavItem, can, backendJwtRole);
   const isCrmDashboardRoute = pathname === "/crm/dashboard";
-  const isCrmQueueRoute = pathname === "/crm/queue";
+  const isCrmReportsRoute = pathname === "/crm/reports" || pathname.startsWith("/crm/reports/");
+  const isCrmQueueRoute =
+    pathname === "/crm/queue" || pathname === "/crm/contacts" || pathname.startsWith("/crm/contacts/");
   const isCrmEmailRoute = pathname === "/crm/email" || pathname.startsWith("/crm/email/");
   const isCrmLiveCallRoute = pathname === "/crm/live-call";
 
@@ -56,7 +58,9 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
       className={
         isCrmDashboardRoute
           ? "console-shell crm-dashboard-shell"
-          : isCrmQueueRoute
+          : isCrmReportsRoute
+            ? "console-shell crm-reports-shell"
+            : isCrmQueueRoute
             ? "console-shell crm-queue-shell"
             : isCrmEmailRoute
               ? "console-shell crm-email-shell"

@@ -115,7 +115,7 @@ export function LiveCrmOperationsPanel({
   const queueStatus = overdueCallbacks > 0 ? "Degraded" : dueTodayCallbacks > 0 ? "Watch" : qNum > 0 ? "Live" : "Clear";
 
   return (
-    <div className={cn("crm-dashboard-ops-panel", crm.opCard, "border-crm-border/85")}>
+    <div className={cn("crm-dashboard-ops-panel", crm.opCard, "border-crm-border")}>
       {/* Ambient glow overlay */}
       <div className={crm.opCardGlow} />
 
