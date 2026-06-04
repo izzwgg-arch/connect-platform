@@ -72,13 +72,38 @@ curl -s -X POST https://app.connectcomunications.com/api/internal/deploy/auto \
 
 ---
 
+## Direct deploy (default for api + portal)
+
+**Preferred after local testing and `git push`:** bypass the queue and run the same
+per-service scripts the worker invokes.
+
+| Step | Command |
+|------|---------|
+| Local test | `pnpm --filter @connect/api test` / portal `tsc`; `bash scripts/build-changed.sh` |
+| Dry-run on server | `bash scripts/deploy-direct.sh api --branch main --dry-run` |
+| Direct API | `bash scripts/deploy-direct.sh api --branch main` (on app host) |
+| Direct portal | `bash scripts/deploy-direct.sh portal --branch main` |
+| From workstation | `pwsh -File scripts/release/deploy-direct.ps1 -Service api -Branch main` |
+| Verify SHA | `docker exec app-api-1 grep -n '<unique line>' /app/...` (see post-deploy checks below) |
+
+Direct deploy sets `DEPLOY_QUEUE_ACK=1`, sources `/opt/connectcomms/env/.env.deploy-queue`
+for blue/green nginx vars, and runs `scripts/deploy-api.sh` or `scripts/deploy-portal.sh`
+unchanged (migrations, BuildKit, `/ready` gates, rollback traps).
+
+**Refuses to start** when the deploy queue reports `runningCount > 0` (unless
+`--skip-queue-check`). Logs to `/var/log/connect-deploys/direct-<service>-<timestamp>.log`.
+
+---
+
 ## Hard rules
 
-1. **NEVER deploy manually** via SSH commands, `git pull`, `npm/pnpm build`,
-   `docker compose up --build`, `pm2 restart`, or `scripts/release/deploy-tag.sh`
-   on the server. No exceptions for "just this once".
-2. **ALL deployments MUST go through the deploy queue API.** Use Path A (direct
-   localhost call) or Path B (`/internal/deploy/auto`) above.
+1. **NEVER ad-hoc deploy** via raw `git pull`, `npm/pnpm build` on the server outside
+   the scripted paths, `docker compose up --build` by hand, `pm2 restart`, or untagged
+   `scripts/release/deploy-tag.sh`. No exceptions for "just this once".
+2. **Routine `api` / `portal` production deploys** use **`scripts/deploy-direct.sh`**
+   (or `scripts/release/deploy-direct.ps1` over SSH). **Deploy queue** (Path A/B below)
+   is **fallback / safe mode** — other services (`telephony`, `worker`, `realtime`,
+   `full-stack`), Deploy Center audit UI, or when direct path is blocked.
 3. Enqueue with:
    ```
    POST /ops/deploy/enqueue        (no token needed from localhost)
@@ -91,27 +116,35 @@ curl -s -X POST https://app.connectcomunications.com/api/internal/deploy/auto \
    - `requestedBy` — e.g. `cursor:<session-id>` or `human:<name>`
    - `reason` — one-line free-form note for the log
    - `source` — `"auto"` for agent triggers; `"manual"` for human UI (inferred if omitted)
-5. Check status:
+5. Queue fallback helper (on server): `bash scripts/ops/_deploy-queue-fallback.sh api`
+6. Check status:
    ```
    GET /ops/deploy/jobs/:id
    GET /ops/deploy/jobs/:id/log?lines=200
    GET /ops/deploy/status
    ```
-6. **NEVER run database migrations directly.** Only the `api` deploy job runs
+8. **NEVER run database migrations directly** (outside `scripts/deploy-api.sh` / direct deploy). Only the `api` deploy path runs
    `prisma migrate deploy`, and only when `packages/db/prisma/**` actually
    changed between the deployed commit and the target commit.
-7. **NEVER restart all PM2 processes.** Only the target service's container
+9. **NEVER restart all PM2 processes.** Only the target service's container
    (`docker compose up -d <service>`) is restarted. Leave every other service
    alone — especially `connect-deploy-worker`, Postgres, Redis, and nginx.
-8. **NEVER modify server infrastructure.** Hands off: firewall rules, port 22,
+10. **NEVER modify server infrastructure.** Hands off: firewall rules, port 22,
    nginx config, Postgres schema (outside a reviewed Prisma migration),
    QuickBooks integration logic, and anything under `/etc/` or `/opt/connectcomms/env/`.
-9. **If unsure what to deploy → DO NOT GUESS.** Stop, ask the human, and prefer
-   a `dryRun: true` enqueue before the real one.
-10. **API deploys MUST use blue/green.** Keep **`DEPLOY_API_BLUEGREEN=1`** enabled on **`connect-deploy-worker`** (typically via **`set -a; source /opt/connectcomms/env/.env.deploy-queue`** before **`pm2 start …`** — see **`ops/deploy-queue/ecosystem.config.cjs`** if env sourcing for PM2 is unclear). The **routine** **`api`** path is **`scripts/lib/deploy-api-rollout.sh`**: **`api_candidate`** on **`:3004`**, **`GET /ready`** (no JWT), nginx include flips (**`DEPLOY_NGINX_API_UPSTREAM_ACTIVE_FILE`**), stable **`api`** on **`:3001`**, flip back — final include **must read `server 127.0.0.1:3001;`** after success. **`DEPLOY_API_BLUEGREEN=0`** / **`deploy_common_compose_up` + `docker compose rm -sf`** for **`api`** is **not** permitted for normal production rollout: it destroys the listening container before nginx has a candidate to talk to (**historic `/api/*` `502`**). Only a **human-written** emergency runbook may override (**break-glass**).
-11. **Portal deploys MUST use blue/green for routine production.** Keep **`DEPLOY_PORTAL_BLUEGREEN=1`** (default in **`scripts/deploy-portal.sh`**). Routine path: **`portal_candidate`** on **`:3005`**, **`GET /ready`** on **`apps/portal`** (**no auth**), nginx include (**`DEPLOY_NGINX_PORTAL_UPSTREAM_ACTIVE_FILE`** → **`docs/nginx/connect-portal-upstream-active.snippet`**), **`docker compose` `--profile portal_rollout`**, **`scripts/lib/deploy-portal-rollout.sh`**. **`DEPLOY_PORTAL_BLUEGREEN=0`** / **`deploy_common_compose_up`** for **`portal`** (**`rm -sf portal` before replacement healthy**) is **break-glass only** — same **`502`** class as legacy API (**`/`** upstream **`127.0.0.1:3000`**). Rollback: **`docs/ai-context/DEPLOYMENT_PORTAL_ROLLBACK.md`**.
+11. **If unsure what to deploy → DO NOT GUESS.** Stop, ask the human, and prefer
+   `--dry-run` on direct deploy or `dryRun: true` on queue enqueue before the real one.
+12. **API deploys MUST use blue/green.** Keep **`DEPLOY_API_BLUEGREEN=1`** enabled (in **`/opt/connectcomms/env/.env.deploy-queue`** — sourced by direct deploy and the queue worker). The **routine** **`api`** path is **`scripts/lib/deploy-api-rollout.sh`**: **`api_candidate`** on **`:3004`**, **`GET /ready`** (no JWT), nginx include flips (**`DEPLOY_NGINX_API_UPSTREAM_ACTIVE_FILE`**), stable **`api`** on **`:3001`**, flip back — final include **must read `server 127.0.0.1:3001;`** after success. **`DEPLOY_API_BLUEGREEN=0`** / **`deploy_common_compose_up` + `docker compose rm -sf`** for **`api`** is **not** permitted for normal production rollout: it destroys the listening container before nginx has a candidate to talk to (**historic `/api/*` `502`**). Only a **human-written** emergency runbook may override (**break-glass**).
+13. **Portal deploys MUST use blue/green for routine production.** Keep **`DEPLOY_PORTAL_BLUEGREEN=1`** (default in **`scripts/deploy-portal.sh`**). Routine path: **`portal_candidate`** on **`:3005`**, **`GET /ready`** on **`apps/portal`** (**no auth**), nginx include (**`DEPLOY_NGINX_PORTAL_UPSTREAM_ACTIVE_FILE`** → **`docs/nginx/connect-portal-upstream-active.snippet`**), **`docker compose` `--profile portal_rollout`**, **`scripts/lib/deploy-portal-rollout.sh`**. **`DEPLOY_PORTAL_BLUEGREEN=0`** / **`deploy_common_compose_up`** for **`portal`** (**`rm -sf portal` before replacement healthy**) is **break-glass only** — same **`502`** class as legacy API (**`/`** upstream **`127.0.0.1:3000`**). Rollback: **`docs/ai-context/DEPLOYMENT_PORTAL_ROLLBACK.md`**.
 
-## Required preflight before any enqueue
+## Required preflight before direct deploy
+
+- `git push` your branch/commit to `origin` before SSH direct deploy.
+- On server: `GET /ops/deploy/status` → prefer `runningCount: 0` (direct deploy refuses when a queue job is running).
+- Dry-run first: `bash scripts/deploy-direct.sh api --branch main --dry-run`.
+- After success: confirm `[deploy-api] done <sha>` or `[deploy-portal] done <sha>` in the log **and** `docker exec` grep for a unique line (`AGENTS.md` post-deploy verification).
+
+## Required preflight before any enqueue (queue fallback)
 
 - Run `GET /ops/deploy/status` — confirm `runningCount` is `0` or the
  currently-running job is expected.

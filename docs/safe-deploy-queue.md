@@ -1,12 +1,17 @@
 # Safe deploy queue (serialized production deploys)
 
-All routine production deploys **must** go through **`ops/deploy-queue`** so there are **no parallel** `docker compose` builds, **no concurrent** `deploy-tag.sh` runs, and **no accidental** cross-agent races.
+**Routine `api` / `portal`:** use **`scripts/deploy-direct.sh`** first (see `AGENTS.md`,
+`docs/ai-context/DEPLOYMENT.md` § Direct deploy). This document describes the **queue
+fallback** and **non-api/portal** targets.
+
+The queue exists so there are **no parallel** `docker compose` builds, **no concurrent**
+`deploy-tag.sh` runs, and **no accidental** cross-agent races when multiple operators deploy.
 
 | Who | Rule |
 |-----|------|
-| **Cursor agents** | Only `curl` the queue (`POST /ops/deploy/enqueue`). Never SSH in to run `docker compose … --build`, `pnpm prisma migrate deploy`, or `deploy-tag.sh` unless it is **documented emergency** work. |
-| **Humans** | Same: use the queue on the server (`127.0.0.1:3910` + token). |
-| **Emergency** | Direct `deploy-tag.sh` / `docker compose` is allowed for **break-glass recovery** only. You will see **warnings**; set `DEPLOY_QUEUE_ACK=1` to acknowledge and silence them. |
+| **Cursor agents / humans (api, portal)** | **`scripts/deploy-direct.sh`** or `scripts/release/deploy-direct.ps1` after `git push`. Queue only when direct path is unsuitable. |
+| **telephony / worker / realtime / full-stack** | Queue (`POST /ops/deploy/enqueue`) or internal auto-enqueue. |
+| **Emergency** | Direct `deploy-tag.sh` / raw `docker compose` is **break-glass** only. Set `DEPLOY_QUEUE_ACK=1` to silence bypass warnings. |
 
 **What this does *not* change:** port 22, firewall rules, nginx, Postgres **application** schema (queue uses **SQLite** on disk), or existing Docker service names.
 

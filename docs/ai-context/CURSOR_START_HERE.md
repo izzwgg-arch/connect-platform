@@ -57,8 +57,12 @@ Your job is to be **narrow, surgical, and conservative**. The platform is in pro
 
 ## 2. Hard "do not" rules (skim every chat)
 
-- **Do not deploy manually.** All deploys go through the queue (`POST /ops/deploy/enqueue`
-  or `POST /internal/deploy/auto`). See `AGENTS.md`.
+- **Do not ad-hoc deploy on the server** (`git pull`, raw `docker compose up --build`,
+  `pm2 restart`, untagged `deploy-tag.sh`). **Routine api/portal:** use **direct deploy**
+  (`scripts/deploy-direct.sh` on the app host, or `scripts/release/deploy-direct.ps1` from
+  your workstation after `git push`). **Queue** (`POST /ops/deploy/enqueue` or
+  `POST /internal/deploy/auto`) is **fallback only** — telephony/worker/realtime/full-stack,
+  audit UI, or when direct path is blocked. See `AGENTS.md` and `DEPLOYMENT.md` § Direct deploy.
 - **Do not run `prisma migrate` directly.** Only the `api` deploy job runs migrations.
 - **Do not edit `/etc/nginx`, `/etc/ssh`, firewall rules, or env files under
   `/opt/connectcomms/env/`** — server infra is out of bounds.
@@ -93,7 +97,7 @@ Your job is to be **narrow, surgical, and conservative**. The platform is in pro
 | AstDB / IVR / MOH publish | `ASTDB_KEYS.md` first, then `docs/pbx/option-a-runtime-keys.md` |
 | Worker / cron / SMS / billing | `SERVICES.md` (worker), `ARCHITECTURE.md` |
 | Database / schema | `DATA_MODEL.md` first (cheat sheet), then `ARCHITECTURE.md` (data flow), then `packages/db/prisma/schema.prisma` |
-| Deployment / Docker / CI | `DEPLOYMENT.md`, `AGENTS.md`, `docs/safe-deploy-queue.md` (for slow deploys, use structured `[phase]` timings + `queue_wait` + `build_diag` before changing scripts) |
+| Deployment / Docker / CI | `DEPLOYMENT.md` (§ Direct deploy first), `AGENTS.md`, `docs/safe-deploy-queue.md` (queue fallback) |
 | WebSockets / realtime | `ARCHITECTURE.md`, `TELEPHONY.md` (broadcast section) |
 | Test coverage questions | `TEST_INVENTORY.md` |
 | Repo navigation / why-is-this-file-so-big | `TOKEN_COST_HOTSPOTS.md`, `REPO_HYGIENE.md` |
@@ -130,7 +134,9 @@ stop and ask the user to scope.
     - `ops/deploy-queue` — local SQLite-backed deploy queue.
 - **External services**: VitalPBX (Asterisk) on `209.145.60.79`, AMI :5038, ARI :8088,
   WSS WebRTC on :8089. Postgres + Redis are infra-side.
-- **Deploys**: queue-only. Compose file is `docker-compose.app.yml`.
+- **Deploys**: **direct-first** for `api` / `portal` (`scripts/deploy-direct.sh` → same
+  blue/green scripts as the queue). Deploy queue remains for fallback and other services.
+  Compose file is `docker-compose.app.yml`.
 
 ---
 
@@ -142,7 +148,7 @@ stop and ask the user to scope.
 - For Cardknox/SOLA billing changes, use the shared resolver (`resolveBillingGatewayConfig`)
   and preserve effective-source precedence (`tenant override -> main tenant -> env/global -> missing`);
   do not add a second resolver in worker or route handlers.
-- Prefer `dryRun: true` for any deploy enqueue.
+- Prefer `--dry-run` on direct deploy (or `dryRun: true` on queue enqueue) before production.
 - Prefer reading 5 small files over 1 huge one. `apps/api/src/server.ts` is ~30k LOC —
   use `Grep` with the exact route, do not read it whole.
 - See `TOKEN_COST_HOTSPOTS.md` for a per-file load-risk table and "do not load" rules.

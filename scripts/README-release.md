@@ -2,6 +2,26 @@
 
 Safe tagged release deployment/rollback scripts.
 
+## Direct deploy (api / portal — preferred)
+
+After local tests and `git push`, deploy without queue enqueue/poll overhead:
+
+```powershell
+# From workstation (Windows)
+pwsh -File scripts/release/deploy-direct.ps1 -Service api -Branch main
+pwsh -File scripts/release/deploy-direct.ps1 -Service portal -Branch main -DryRun
+```
+
+```bash
+# From workstation (bash) or on app host
+bash scripts/release/deploy-direct.sh api --branch main
+bash scripts/deploy-direct.sh api --branch main --dry-run   # on server only
+```
+
+Queue fallback: `bash scripts/ops/_deploy-queue-fallback.sh api --branch main`
+
+See `docs/ai-context/DEPLOYMENT.md` § Direct deploy and `AGENTS.md`.
+
 ## Git deploy key
 
 The server uses a **read-only deploy key** for `git fetch`/`git pull` from GitHub:

@@ -937,8 +937,9 @@ When you find a new fragile area, add it here.
 
 ## Deployment
 
-- **Deploy queue is the only path.** See `AGENTS.md` and `docs/safe-deploy-queue.md`.
-  Manual deploys are explicitly forbidden.
+- **Routine api/portal: direct deploy first** (`scripts/deploy-direct.sh`). Deploy queue is
+  fallback / other services. See `AGENTS.md` and `docs/ai-context/DEPLOYMENT.md`.
+  Ad-hoc `docker compose` / `git pull` on the server remain forbidden.
 - **`api` is the ONLY service that runs migrations.** A migration file checked in
   but not deployed via `api` will silently miss production.
 - **Deploy slowness diagnosis used to be low-signal (partially fixed 2026-05-20).**

@@ -1,16 +1,92 @@
 # DEPLOYMENT
 
 > Read `CURSOR_START_HERE.md` and `AGENTS.md` first. This document **only describes
-> what is discoverable from repo files**. It does NOT prescribe new deploy steps.
-> All production deploys go through the deploy queue. Anything not directly
-> verifiable is marked **UNKNOWN — verify before changing.**
+> what is discoverable from repo files**. Routine **`api`** / **`portal`** deploys use
+> **direct deploy** (`scripts/deploy-direct.sh`). The deploy queue remains for fallback
+> and other services. Anything not directly verifiable is marked **UNKNOWN — verify before changing.**
+
+---
+
+## Direct deploy (default for api + portal)
+
+**Root cause of queue slowness:** the queue adds overhead on top of the real rollout work.
+Even with an empty queue, enqueue → SQLite job → worker pickup → log polling adds latency;
+**global serialization** forces back-to-back services (e.g. portal after api) to wait;
+agent/human poll scripts (`scripts/ops/_dq-wait-single.sh`) sleep **5 s** between status
+checks. The **build / blue/green / health** phases are identical whether queued or direct —
+those scripts (`scripts/deploy-api.sh`, `scripts/deploy-portal.sh`) were always the actual work.
+
+**Direct deploy** runs those scripts immediately on the app host, sourcing the same
+`/opt/connectcomms/env/.env.deploy-queue` blue/green nginx variables.
+
+### Workflow (recommended)
+
+| Step | Command |
+|------|---------|
+| **1. Local test** | `pnpm --filter @connect/api test` (or portal `tsc`); `bash scripts/build-changed.sh` |
+| **2. Push** | `git push origin <branch>` |
+| **3. Dry-run (server)** | `bash scripts/deploy-direct.sh api --branch main --dry-run` |
+| **4. Direct API** | `bash scripts/deploy-direct.sh api --branch main` |
+| **5. Direct portal** | `bash scripts/deploy-direct.sh portal --branch main` |
+| **6. Verify** | Log ends `[deploy-*] done <sha>`; `docker exec app-api-1 grep …` (`AGENTS.md`) |
+
+**From workstation (SSH):**
+
+```powershell
+pwsh -File scripts/release/deploy-direct.ps1 -Service api -Branch main
+pwsh -File scripts/release/deploy-direct.ps1 -Service portal -Branch main -DryRun
+```
+
+```bash
+bash scripts/release/deploy-direct.sh api --branch main
+```
+
+**On app host:**
+
+```bash
+cd /opt/connectcomms/app
+bash scripts/deploy-direct.sh api --branch main
+bash scripts/deploy-direct.sh portal --commit <sha>
+```
+
+Logs: `/var/log/connect-deploys/direct-<service>-<timestamp>.log`
+
+### Queue deploy (fallback / safe mode)
+
+Use when you need Deploy Center audit rows, global serialization, or direct path is blocked
+(`runningCount > 0` on another job — wait or use queue after it finishes).
+
+```bash
+# On app host — enqueue + poll to completion:
+bash scripts/ops/_deploy-queue-fallback.sh api --branch main
+bash scripts/ops/_deploy-queue-fallback.sh portal --dry-run
+
+# Or curl (see docs/safe-deploy-queue.md):
+curl -sS -X POST http://127.0.0.1:3910/ops/deploy/enqueue \
+  -H "Content-Type: application/json" \
+  -d '{"service":"api","branch":"main","requestedBy":"human:ops","dryRun":false}'
+```
+
+### Rollback
+
+| Service | Doc |
+|---------|-----|
+| **api** | `docs/ai-context/DEPLOYMENT_API_ROLLBACK.md` — nginx include back to `:3001`, candidate drain |
+| **portal** | `docs/ai-context/DEPLOYMENT_PORTAL_ROLLBACK.md` — include back to `:3000` |
+| **Code rollback** | Re-run direct deploy pinned to previous SHA: `bash scripts/deploy-direct.sh api --commit <prev-sha>` |
+| **Queue rollback** | Enqueue same service with `commitHash` set to previous known-good SHA |
+
+**Risks (direct vs queue):** no SQLite job row / Deploy Center badge; operator must keep the
+log file; concurrent direct + queue deploy of the same service is blocked when queue
+`runningCount > 0` but not when only queued — cancel stale queue jobs if needed.
 
 ---
 
 ## Hard deploy rules (re-stated for safety)
 
-- **No manual deploys.** No SSH `git pull`, no `pnpm build`, no `docker compose ... --build`,
-  no `pm2 restart`, no `bash scripts/release/deploy-tag.sh`. See `AGENTS.md`.
+- **No ad-hoc deploys.** No raw SSH `git pull`, no hand-run `pnpm build`, no `docker compose ... --build`,
+  no `pm2 restart`, no untagged `bash scripts/release/deploy-tag.sh`. Use **`scripts/deploy-direct.sh`**
+  for routine api/portal. See `AGENTS.md`.
 - **Correlate integration regressions with deploy timestamps.** Voicemail ingestion,
   VitalPBX REST polling, and telephony push paths do not always ship in the same image.
   When symptoms start after a specific time, pull `GET /ops/deploy/jobs?limit=30` (queue)
