@@ -3,6 +3,14 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { apiGet, apiPost, ApiError } from "../services/apiClient";
 import { useTelephonyAudio } from "./useTelephonyAudio";
+import {
+  summarizeOfferSdp,
+  isWebrtcSdpRejection,
+  sdpRejectionLabel,
+  checkOfferCompatibility,
+  webrtcSdpDebugEnabled,
+  redactSdpForDebug,
+} from "../lib/webrtcSdpDiagnostics";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -628,6 +636,13 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   /** Guard: prevents duplicate CALL_QUALITY_REPORT when both user_hangup and the
    *  subsequent SIP "ended" event fire submitCallQualityReport for the same call. */
   const finalReportSentRef = useRef<boolean>(false);
+  /** Last LOCAL SDP offer for the active outbound session — read-only capture for
+   *  the "488 / Incompatible SDP" WebRTC outbound investigation. Never munged. */
+  const lastOfferSdpRef = useRef<string | null>(null);
+  /** Structured per-call WebRTC debug record (gated by webrtcSdpDebugEnabled()).
+   *  Captures the full outbound lifecycle so the failed offer + SIP status can be
+   *  inspected without chrome://webrtc-internals. ICE creds are redacted. */
+  const webrtcDebugRef = useRef<Record<string, unknown>>({});
 
   function patchDiag(patchOrFn: Partial<SipDiagnostics> | ((prev: SipDiagnostics) => SipDiagnostics)) {
     if (typeof patchOrFn === "function") {
@@ -1419,11 +1434,107 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // ── WebRTC debug record helpers (gated; ICE creds redacted) ────────────────
+  function recordWebrtcDebug(patch: Record<string, unknown>) {
+    if (!webrtcSdpDebugEnabled()) return;
+    try { Object.assign(webrtcDebugRef.current, patch); } catch { /* never break call path */ }
+  }
+  /** Finalize the per-call record: log a [WEBRTC_SDP_DEBUG] block and expose it on
+   *  window for copy/download. Only runs when debug is enabled. */
+  function flushWebrtcDebug(reason: string) {
+    if (!webrtcSdpDebugEnabled()) return;
+    try {
+      const rec: Record<string, unknown> = {
+        ...webrtcDebugRef.current,
+        flushedAt: new Date().toISOString(),
+        flushReason: reason,
+      };
+      // eslint-disable-next-line no-console
+      console.log("[WEBRTC_SDP_DEBUG] outbound call diagnostic record:", rec);
+      if (typeof rec.offerSdpRedacted === "string") {
+        // eslint-disable-next-line no-console
+        console.log("[WEBRTC_SDP_DEBUG] offer SDP (ICE creds redacted):\n" + rec.offerSdpRedacted);
+      }
+      if (typeof window !== "undefined") {
+        (window as unknown as Record<string, unknown>).__ccWebrtcDebug = rec;
+        (window as unknown as Record<string, unknown>).__ccDownloadWebrtcDebug = () => {
+          try {
+            const blob = new Blob([JSON.stringify(rec, null, 2)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `webrtc-debug-${Date.now()}.json`;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 2000);
+          } catch { /* noop */ }
+        };
+        // eslint-disable-next-line no-console
+        console.log("[WEBRTC_SDP_DEBUG] saved to window.__ccWebrtcDebug — run __ccDownloadWebrtcDebug() to download.");
+      }
+    } catch { /* never break call path */ }
+  }
+
   function bindSession(session: any, party: string) {
     sessionRef.current = session;
     setRemoteParty(party);
     const mcId = getOrAssignSessionId(session);
     patchSessionMeta(mcId, { remoteParty: party, isActive: true });
+
+    // ── WebRTC SDP diagnostics (READ-ONLY) ──────────────────────────────────
+    // JsSIP emits "sdp" for every local/remote offer/answer. We only READ the
+    // local outbound offer to prove the exact attribute Asterisk rejects with
+    // 488 / Incompatible SDP. We never mutate data.sdp (no munging).
+    session.on("sdp", (data: { originator?: string; type?: string; sdp?: string }) => {
+      try {
+        if (data?.originator !== "local" || data?.type !== "offer" || !data?.sdp) return;
+        lastOfferSdpRef.current = data.sdp;
+        const summary = summarizeOfferSdp(data.sdp);
+        const issues = checkOfferCompatibility(summary);
+        recordWebrtcDebug({
+          offerSdpAt: new Date().toISOString(),
+          offerSummary: summary,
+          offerCompatibilityIssues: issues,
+          offerSdpRedacted: redactSdpForDebug(data.sdp),
+        });
+        if (webrtcSdpDebugEnabled()) {
+          console.log("[WEBRTC_SDP] local offer summary", {
+            profiles: summary.profiles,
+            audioCodecs: summary.audioCodecs,
+            rtcpMux: summary.hasRtcpMux,
+            bundle: summary.hasBundle,
+            dtls: summary.hasDtlsFingerprint,
+            setup: summary.dtlsSetup,
+            ice: summary.hasIceUfrag && summary.hasIcePwd,
+            compatibilityIssues: issues,
+          });
+          if (issues.length) {
+            console.warn("[WEBRTC_SDP] offer may be incompatible with Asterisk webrtc endpoint:", issues);
+          }
+          console.log("[WEBRTC_SDP] full local offer (ICE creds redacted):\n" + redactSdpForDebug(data.sdp));
+        }
+      } catch {
+        /* diagnostics must never break the call path */
+      }
+    });
+
+    // Capture the RTCPeerConnection when JsSIP creates it (outbound), as a
+    // fallback source for the local offer if the "sdp" event is missed.
+    session.on("peerconnection", (pcData: { peerconnection?: RTCPeerConnection }) => {
+      try {
+        recordWebrtcDebug({ peerconnectionEventAt: new Date().toISOString() });
+        const pc = pcData?.peerconnection;
+        if (!pc) return;
+        pc.addEventListener("signalingstatechange", () => {
+          try {
+            const local = pc.localDescription?.sdp;
+            if (local && !lastOfferSdpRef.current) {
+              lastOfferSdpRef.current = local;
+              recordWebrtcDebug({ offerSdpRedacted: redactSdpForDebug(local), offerSdpSource: "peerconnection" });
+            }
+          } catch { /* noop */ }
+        });
+      } catch { /* noop */ }
+    });
 
     session.on("progress", () => {
       // Guard: never regress from "connected" → "ringing". A late SIP 180 Ringing
@@ -1496,9 +1607,54 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       setTimeout(() => setCallState("idle"), 2000);
     });
 
-    session.on("failed", (e: { cause: string }) => {
+    session.on("failed", (e: { cause: string; message?: { status_code?: number; reason_phrase?: string; method?: string }; originator?: string }) => {
       stopAllAudio();
       console.log("[SIP] CALL_FAILED cause:", e.cause);
+      // ── WebRTC SDP rejection capture ────────────────────────────────────────
+      // 488 / 606 (JsSIP cause "Incompatible SDP") means Asterisk rejected the
+      // client offer during media negotiation, BEFORE any channel/dialplan. This
+      // is the P0 outbound failure signature — always capture it (the normal
+      // call-quality report drops sub-1s failures), labeled and de-ambiguated.
+      const sipCode = typeof e.message?.status_code === "number" ? e.message.status_code : null;
+      const reasonPhrase = typeof e.message?.reason_phrase === "string" ? e.message.reason_phrase : null;
+      // Fallback offer source: the live peerconnection localDescription.
+      let offer = lastOfferSdpRef.current;
+      if (!offer) {
+        try { offer = session.connection?.localDescription?.sdp ?? null; } catch { offer = null; }
+      }
+      recordWebrtcDebug({
+        failedAt: new Date().toISOString(),
+        failedCause: e.cause,
+        failedOriginator: e.originator ?? null,
+        sipStatusCode: sipCode,
+        sipReasonPhrase: reasonPhrase,
+        sipMethod: e.message?.method ?? null,
+        offerSdpRedacted: offer ? redactSdpForDebug(offer) : (webrtcDebugRef.current["offerSdpRedacted"] ?? null),
+      });
+      if (isWebrtcSdpRejection({ sipCode, cause: e.cause })) {
+        const label = sdpRejectionLabel(sipCode);
+        console.error(
+          `[WEBRTC_SDP_REJECT] Asterisk rejected WebRTC outbound offer — ` +
+            `sipCode=${sipCode ?? "?"} reason="${reasonPhrase ?? ""}" cause="${e.cause}" (${label}). ` +
+            `This is a media/SDP rejection, NOT a route/trunk/dialplan failure.`,
+        );
+        if (offer) {
+          console.error("[WEBRTC_SDP_REJECT] rejected offer summary", summarizeOfferSdp(offer));
+          console.error("[WEBRTC_SDP_REJECT] rejected offer SDP (ICE creds redacted):\n" + redactSdpForDebug(offer));
+        } else {
+          console.error("[WEBRTC_SDP_REJECT] offer SDP not captured (no local 'sdp' event seen)");
+        }
+        // Server-side proof, NOT gated by the sub-1s quality-report guard.
+        try {
+          void apiPost("/voice/diag/call-quality-report", {
+            platform: "WEB",
+            direction: "outbound",
+            endReason: label,
+            qualityGrade: "failed",
+          }).catch(() => {});
+        } catch { /* best-effort */ }
+      }
+      flushWebrtcDebug("call_failed");
       // Cancel stale-hangup timer — call failed cleanly at SIP level
       if (staleHangupTimerRef.current) { clearTimeout(staleHangupTimerRef.current); staleHangupTimerRef.current = null; }
       submitCallQualityReport(e.cause || "failed");
@@ -1633,13 +1789,25 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         .getUserMedia({ audio: voiceAudioConstraints(currentMicDeviceIdRef.current), video: false })
         .then((localStream) => {
           localStreamRef.current = localStream;
+          webrtcDebugRef.current = {
+            target: normalised,
+            sipTarget: `sip:${pbxDialTarget}@${domain}`,
+            route: selectedOutboundRoute?.name || "none",
+            callInvokedAt: new Date().toISOString(),
+          };
           try {
             const session = uaRef.current!.call(`sip:${pbxDialTarget}@${domain}`, {
               mediaStream: localStream,
               pcConfig: uaRef.current!._configuration?.pcConfig ?? {},
             });
+            recordWebrtcDebug({
+              sessionReturned: !!session,
+              sessionId: (() => { try { return getOrAssignSessionId(session); } catch { return null; } })(),
+            });
             bindSession(session, normalised);
           } catch (e: unknown) {
+            recordWebrtcDebug({ sessionReturned: false, callError: e instanceof Error ? e.message : String(e) });
+            flushWebrtcDebug("call_throw");
             localStream.getTracks().forEach((t) => t.stop());
             localStreamRef.current = null;
             setCallState("idle");

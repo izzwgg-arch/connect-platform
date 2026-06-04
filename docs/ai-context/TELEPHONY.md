@@ -8,6 +8,18 @@
 
 ---
 
+> **WebRTC outbound 488 / Incompatible SDP (open incident, 2026-06-03/04):** outbound
+> WebRTC calls (portal + mobile) are rejected by Asterisk with **488** during SDP
+> negotiation — **no channel, pre-dialplan** — while hard-phone and inbound work. Root
+> cause is localized to the **outbound client offer**; the exact rejected attribute is
+> **not yet proven**. Portal now self-captures the offer + reject
+> (`apps/portal/hooks/useSipPhone.ts` + `apps/portal/lib/webrtcSdpDiagnostics.ts`,
+> `[WEBRTC_SDP_REJECT]`). **No media-config fix / deploy / APK until the captured SDP
+> proves the mismatch.** See `WEBRTC_DIAGNOSTICS.md` and the mandatory
+> `WEBRTC_RELEASE_GATE.md` before any WebRTC/SIP deploy.
+
+---
+
 ## Hard rules (must-read for any telephony / PBX edit)
 
 1. **Do NOT count `Local/...` / helper / `Down` channels as active calls.** The truth is

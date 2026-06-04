@@ -4,6 +4,154 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-04 — Portal WebRTC SDP debug capture (gated, redacted) — webrtc-internals failed
+
+**Task:** telephony / WebRTC / portal call-path diagnostics  
+**Risk:** extreme — instrumentation only; gated; **no media fix, no deploy yet, no APK**
+
+### Why
+
+Live portal capture showed `chrome://webrtc-internals` exposing **only `getUserMedia`** — no
+`RTCPeerConnection` / no `setLocalDescription` SDP — while Console showed ICE
+`gathering → complete` then `[SIP] CALL_FAILED cause: Incompatible SDP`. So webrtc-internals
+can't give us the offer; we must capture it in-app.
+
+### What shipped (code, gated + redacted)
+
+- `apps/portal/lib/webrtcSdpDiagnostics.ts` — added `redactSdpForDebug()` (strips
+  `a=ice-ufrag`/`a=ice-pwd` + masks candidate/connection IPs; keeps codecs/fmtp/profile/DTLS
+  fingerprint); strengthened `webrtcSdpDebugEnabled()` (dev build **or** `?webrtcDebug=1` **or**
+  `localStorage cc_webrtc_sdp_debug=1`).
+- `apps/portal/hooks/useSipPhone.ts` — full outbound lifecycle record (`webrtcDebugRef`):
+  target, `ua.call()` invoked/returned, sessionId, `peerconnection` event, local offer SDP
+  (redacted; from JsSIP `sdp` event with peerconnection `localDescription` fallback), failed
+  cause, SIP `status_code`/`reason_phrase`/method. On failure emits a `[WEBRTC_SDP_DEBUG]`
+  console block + `window.__ccWebrtcDebug` + `__ccDownloadWebrtcDebug()` download. All capture
+  is gated; ICE creds never logged.
+- `apps/portal/lib/webrtcSdpDiagnostics.test.ts` — +1 test for redaction (9 total, green).
+
+### Not done (still gated on the captured offer)
+
+No media/codec fix, no deploy, no APK. To capture in production this needs a **gated portal
+diagnostics deploy** (blue/green) since webrtc-internals can't surface the offer. See
+`WEBRTC_DIAGNOSTICS.md` §4b.
+
+---
+
+## 2026-06-04 — WebRTC 488: endpoint config identical + codec-runtime DISPROVEN
+
+**Task:** telephony / WebRTC / codec runtime verification  
+**Risk:** extreme (read-only diagnostics; no code/deploy/PBX change)
+
+### Evidence captured (live, read-only AMI)
+
+- **Endpoint config comparison** `T2_103_1` (failing portal) vs `T30_102_1` (reference) via
+  `PJSIPShowEndpoint`: **identical and WebRTC-correct** across every focus field — `webrtc`,
+  `use_avpf`, `media_encryption=dtls`, `dtls_setup=actpass`, `ice_support`, `rtcp_mux`,
+  `allow` (incl. opus+ulaw), `transport=wss`, `rtp_symmetric`, `direct_media=false`. Static
+  endpoint config is **not** the cause. Artifact: `_latency_logs/webrtc_endpoint_live.txt`.
+- **Codec runtime** via AMI `ModuleCheck`: `codec_opus.so`, `res_format_attr_opus.so`,
+  `codec_g729.so`, `res_format_attr_g729.so`, `codec_ulaw/alaw`, `res_srtp`, `res_pjsip` all
+  **LOADED**. Asterisk **20.18.2**. The "opus module unloaded" hypothesis is **DISPROVEN**.
+  Artifact + reusable probe: `_latency_logs/ami_codec_runtime.js`.
+
+### AMI capabilities established for `pbx_audit`
+
+Permitted (read): `GetConfig`, `PJSIPShowEndpoint`, `ModuleCheck`, `CoreSettings`,
+`CoreStatus`. Blocked: `Command` (arbitrary CLI). `/var/log/asterisk` is **not** mounted in
+the app containers, so Asterisk SDP/488 logs require full PBX shell.
+
+### Net root-cause status
+
+Ruled out: recent server deploys (CRM/mobile-only in the break window), static endpoint
+config, runtime codec modules. Remaining: the **client offer SDP** (decisive artifact, still
+uncaptured) or an **Asterisk-20.18.2 / global media** change on the PBX. See
+`WEBRTC_DIAGNOSTICS.md` §9–§10.
+
+---
+
+## 2026-06-04 — WebRTC outbound SDP instrumentation + release gate (portal)
+
+**Task:** telephony / WebRTC / P0 outage fix and hardening  
+**Risk:** extreme (STOP THE LINE) — instrumentation only this turn; **no media fix, no deploy, no APK**
+
+### What shipped (code, safe/additive)
+
+To get the one missing artifact (the failed client **offer SDP**) without guessing a fix:
+
+- **`apps/portal/lib/webrtcSdpDiagnostics.ts`** *(new, pure)* — `summarizeOfferSdp()`
+  (non-secret offer summary: profiles, codecs, rtcp-mux, BUNDLE, DTLS, ICE, extmap),
+  `isWebrtcSdpRejection()` (SIP **488/606** = JsSIP `INCOMPATIBLE_SDP`),
+  `sdpRejectionLabel()`, `checkOfferCompatibility()` (regression guard),
+  `webrtcSdpDebugEnabled()`.
+- **`apps/portal/lib/webrtcSdpDiagnostics.test.ts`** *(new)* — 8 tests, added to portal `test`
+  script. All green.
+- **`apps/portal/hooks/useSipPhone.ts`** — read-only `session.on("sdp")` capture of the local
+  outbound offer (**never munged**) with a safe console summary; on `failed`, extract the SIP
+  status code, and for 488/606 emit a clearly-labeled **`[WEBRTC_SDP_REJECT]`** console group
+  (offer summary + full SDP) plus an **ungated** server diag event (the normal call-quality
+  report drops sub-1s failures, which is why fast SDP rejects were invisible). Full-SDP console
+  dump is opt-in via `localStorage cc_webrtc_sdp_debug=1`.
+
+### Why (root cause status)
+
+Proven: Asterisk returns **488** to the WebRTC outbound INVITE → **no channel, pre-dialplan**.
+The exact rejected SDP attribute is still **unproven**, so no media/codec/constraint change was
+made. The previously-suspected "strict `channelCount`/`sampleRate`" theory **cannot** produce a
+488 (capture constraints don't change the SDP codec list); this instrumentation will prove the
+real attribute on the next failed portal call.
+
+### Hardening
+
+- New **`docs/ai-context/WEBRTC_RELEASE_GATE.md`** — manual smoke check + rollback + known-good
+  config; any deploy touching WebRTC/SIP/provisioning/media must pass it before publish.
+- `checkOfferCompatibility()` gives a regression guard against shipping an offer missing
+  DTLS/opus/SAVPF/rtcp-mux.
+
+### Not done (gated on SDP proof)
+
+Media-config fix, deploy, and APK are **deliberately withheld** until the captured offer proves
+the exact mismatch.
+
+---
+
+## 2026-06-04 — WebRTC outbound 488/Incompatible SDP incident (diagnostics doc)
+
+**Task:** telephony / WebRTC / diagnostics documentation  
+**Risk:** low (docs only — no code, no deploy)
+
+### Summary
+
+Documented the **WebRTC outbound call failure** incident and the exact SDP evidence
+required before any fix. Read-only investigation (mobile flight recorder, PBX `pjsip show`
+/ AMI `GetConfig`, telephony AMI stream, deploy logs) **localized** the fault to
+**outbound WebRTC SDP offer/answer negotiation** (client creates the offer → Asterisk
+rejects with **488 / "Incompatible SDP"** before any channel/dialplan/trunk).
+
+### Proven healthy (so NOT the cause)
+
+Registration/WSS `:8089`, SIP auth, outbound route + VoIP.ms trunk, dialplan/trunk path
+(hard-phone outbound `T2_105` → PSTN connected), PBX WebRTC endpoint media config
+(`T25_101_1` == known-good `T30_102_1`), and **inbound** WebRTC (Asterisk offers). Failed
+WebRTC outbound INVITEs create **no Asterisk channel** — rejection is pre-dialplan.
+
+### Stop-the-line
+
+**No deploy, no APK, no PBX media change** until a client SDP offer from a failed outbound
+call (portal `chrome://webrtc-internals`, or mobile `adb logcat`) proves the exact
+rejected attribute/codec. Note: the prior 2026-06-03 "relaxed audio constraints" fix
+(`5a63561b`) is **undeployed** and the failure **still reproduces** (incl. portal) — its
+root cause is **unverified**.
+
+### Docs
+
+- **`WEBRTC_DIAGNOSTICS.md`:** new section *"Incident: WebRTC OUTBOUND fails — 488 /
+  Incompatible SDP (2026-06-03/04)"* — incident summary, proven-healthy table, missing
+  decisive artifact, portal + mobile SDP capture steps, what-to-look-for, stop-the-line
+  rule, next-action ladder, entity/access reference.
+
+---
+
 ## 2026-06-03 — Mobile SIP call reliability (SDP rejection + answer pipeline)
 
 **Task:** mobile / telephony / SIP call reliability  
