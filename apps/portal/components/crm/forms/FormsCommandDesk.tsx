@@ -164,7 +164,7 @@ export function FormsCommandDesk() {
         </CRMWorkspaceHeader>
 
         <CRMWorkspaceToolbar className="flex flex-col gap-3">
-          <div className="grid gap-3 md:grid-cols-5">
+          <div className="tasks-kpi-grid grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
             {[
               ["Templates", totals.all],
               ["Active", totals.active],
@@ -172,13 +172,15 @@ export function FormsCommandDesk() {
               ["Times sent", totals.sent],
               ["Completed", totals.completed],
             ].map(([label, value]) => (
-              <div key={label} className="tasks-kpi-card rounded-2xl px-4 py-3">
-                <div className="text-xs uppercase tracking-[0.18em] text-crm-muted">{label}</div>
-                <div className="mt-1 text-2xl font-semibold text-crm-text">{value}</div>
+              <div key={label} className="tasks-kpi-card">
+                <div className="flex min-w-0 flex-col gap-2">
+                  <span className="text-[11px] font-semibold leading-none text-crm-muted">{label}</span>
+                  <span className="text-3xl font-semibold leading-none tracking-tight tabular-nums text-crm-text">{value}</span>
+                </div>
               </div>
             ))}
           </div>
-          <div className="tasks-filter-bar flex flex-col gap-2 rounded-2xl p-3 md:flex-row md:items-center">
+          <div className="tasks-filter-bar flex flex-col gap-3 md:flex-row md:items-center">
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
@@ -203,7 +205,7 @@ export function FormsCommandDesk() {
       <CRMWorkspaceBody split>
         <CRMWorkspaceMain>
           <CRMWorkspaceScrollRegion>
-            <div className="tasks-list-card overflow-hidden rounded-2xl">
+            <div className="tasks-list-card overflow-hidden">
               {loading ? (
                 <div className="p-6 text-sm text-crm-muted">Loading forms…</div>
               ) : forms.length === 0 ? (
@@ -246,9 +248,11 @@ export function FormsCommandDesk() {
           </CRMWorkspaceScrollRegion>
         </CRMWorkspaceMain>
         <CRMWorkspaceRightRail>
-          <div className="tasks-sidebar-card rounded-2xl p-4">
-            <h3 className="font-semibold text-crm-text">Phase 1 editor</h3>
-            <p className="mt-2 text-sm text-crm-muted">Add fields as a structured list now. Coordinates are stored so a drag/drop PDF overlay can be added later without a data migration.</p>
+          <div className="flex flex-col gap-4">
+            <section className="tasks-sidebar-card">
+              <h3 className="text-xs font-bold uppercase tracking-[0.14em] text-crm-text">Phase 1 editor</h3>
+              <p className="mt-2 text-sm leading-relaxed text-crm-muted">Add fields as a structured list now. Coordinates are stored so a drag/drop PDF overlay can be added later without a data migration.</p>
+            </section>
           </div>
         </CRMWorkspaceRightRail>
       </CRMWorkspaceBody>
