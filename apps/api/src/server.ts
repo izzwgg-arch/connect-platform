@@ -4697,6 +4697,13 @@ app.addHook("preHandler", async (req, reply) => {
         (req.headers as any).authorization = `Bearer ${tokenParam}`;
       }
     }
+    const headerTenant = String((req.headers as any)["x-tenant-context"] || "").trim();
+    if (!headerTenant) {
+      const tenantContextParam = (req.query as Record<string, string | undefined>)?.tenantContext;
+      if (tenantContextParam && typeof tenantContextParam === "string") {
+        (req.headers as any)["x-tenant-context"] = tenantContextParam;
+      }
+    }
   } catch {
     /* ignore — jwtVerify below will handle missing/bad token */
   }

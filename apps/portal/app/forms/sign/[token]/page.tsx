@@ -130,6 +130,16 @@ export default function PublicFormSigningPage() {
         ) : form ? (
           <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
             <section className="min-h-[520px] overflow-hidden rounded-3xl border border-white/10 bg-white/[0.04]">
+              <div className="flex items-center justify-end border-b border-white/10 px-4 py-2">
+                <a
+                  href={`${getPortalApiBaseUrl()}/public/forms/${encodeURIComponent(token)}/pdf`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm font-medium text-cyan-200 underline"
+                >
+                  Open PDF in new tab
+                </a>
+              </div>
               <iframe
                 title="PDF form preview"
                 src={`${getPortalApiBaseUrl()}/public/forms/${encodeURIComponent(token)}/pdf`}
