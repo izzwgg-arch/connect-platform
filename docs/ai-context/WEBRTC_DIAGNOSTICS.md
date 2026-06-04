@@ -10,70 +10,133 @@
 
 ---
 
-## Incident: WebRTC OUTBOUND fails — 488 / "Incompatible SDP" (2026-06-03/04)
+## Incident: Full WebRTC calling outage — inbound + outbound (2026-06-02/04)
 
-> **Status: ROOT CAUSE LOCALIZED, NOT YET PROVEN. STOP-THE-LINE.**
-> No deploy, no APK, no PBX media change until a client SDP offer from a failed
-> outbound call confirms the exact mismatch. See **§ Stop-the-line rule** below.
+> **Status: PARTIALLY PROVEN (2026-06-04 extended forensics pass).**
+> **Failure mechanisms** for outbound 488 and inbound `session_not_found_timeout` are proven
+> with DB/CDR/code correlation. **Exact rejected SDP attribute** and **recovery trigger** remain
+> **BLOCKED** (no PBX SIP trace; 6.5 h call-attempt gap before recovery). New instrumentation
+> ships in this pass to capture missing proof on next occurrence. See **§13 Evidence table**,
+> **§14 Root cause**, **§15 Prevention / instrumentation**.
 
-### 1. Incident summary
+### 1. What is proven vs blocked
 
-- **Mobile and portal WebRTC outbound calls fail.** Mobile (Android) and portal both
-  fail to place outbound calls. Mobile clients report JsSIP cause **`Incompatible SDP`**.
-- **Hard-phone / trunk outbound works.** A non-WebRTC endpoint dialed out to PSTN
-  successfully (channel created → outbound route → trunk → connected).
-- **Failed WebRTC outbound INVITEs never create an Asterisk channel.** The dialed
-  number from a failed WebRTC outbound call has **zero** entries in the telephony/AMI
-  event stream — no `Newchannel`, no dialplan, no trunk leg.
-- **Failure occurs before dialplan / trunk.** Because no channel is created, the INVITE
-  is rejected at PJSIP media negotiation **before** the dialplan, outbound route, or
-  trunk are ever reached.
-- **Current evidence** points to **Asterisk rejecting the client SDP offer with
-  488 / Incompatible SDP** (media/offer-answer negotiation), OR the client rejecting
-  Asterisk's answer SDP. The exact rejected attribute/codec is **not yet captured.**
+> **Instrumentation (2026-06-04):** Black-box recorder **schema v2** ships in API + portal +
+> mobile (pending EAS build). See **`WEBRTC_BLACKBOX_SCHEMA.md`** for full field list,
+> redaction rules, alert specs, and `grep WEBRTC_CALL_DEBUG` forensics.
 
-> **Caveat on the prior "fix":** `CHANGELOG.md` 2026-06-03 ("Mobile SIP call reliability")
-> attributes this to strict `channelCount`/`sampleRate` audio constraints and claims a fix
-> in `voiceAudioConstraints.ts` (commit `5a63561b`). That commit is **NOT deployed**
-> (authored after the last `api` deploy `9e61f7f` @ 19:05 UTC) and the failure **still
-> reproduces in production**, including on **portal** (which never used those mobile
-> constraints). Treat that root cause as **unverified** until the SDP below is captured.
+| Question | Status |
+|----------|--------|
+| WebRTC outbound failed with `Incompatible SDP` | **PROVEN** (DB) |
+| 488 source is Asterisk/upstream SIP (not browser self-reject) | **PROVEN** (JsSIP semantics + cause; see §13) |
+| Outbound failure had **no** `PJSIP/T*_ext_1` in CDR at fail timestamps | **PROVEN** (CDR ±30 s queries) |
+| Outbound recovery created `PJSIP/T2_103_1` channel | **PROVEN** (`1780569827.58271`) |
+| Inbound: PBX created `PJSIP/T*_ext_1` while mobile never got JsSIP INVITE | **PROVEN** (CDR + flight; see §13) |
+| Inbound `session_not_found_timeout` emitted by mobile `answerIncoming()` poll exhaust | **PROVEN** (code + 8612 ms ≈ `MOBILE_SIP_ANSWER_INITIAL_WAIT_MS`) |
+| Exact rejected SDP attribute / Asterisk log line | **BLOCKED** (0 `WEBRTC_SDP_DEBUG` rows; no PBX `full` log) |
+| Recovery trigger at ~10:44 UTC | **BLOCKED** (0 VoiceDiag/CallFlight rows 04:00–10:44; reload at 10:46 **after** recovery) |
+| Asterisk full restart in window | **DISPROVEN** (`CoreStartupDate: 2025-05-12`, AMI) |
+| App deploy caused onset or recovery | **DISPROVEN** (timestamps vs deploy jobs) |
+| Static endpoint config / codec modules caused 488 | **DISPROVEN** (§9–§11) |
 
-### 2. Proven healthy layers (read-only evidence, 2026-06-03/04)
+### 2. Combined timeline (UTC, proof-level from DB)
 
-| Layer | Status | Proof |
-|-------|--------|-------|
-| Registration / WSS `:8089` | ✅ works | Mobile `OUTBOUND_REGISTERED`; PBX contact `T30_102_1` `Avail` |
-| Auth / credentials | ✅ not the cause | Would be 401/403; registration succeeds |
-| Outbound route + VoIP.ms trunk | ✅ works | Non-WebRTC `PJSIP/T2_105` → `trk-18-dial` → trunk `PJSIP/355362_apluscenter` → PSTN `3472286660` connected (14:40 UTC) |
-| Dialplan / trunk path (hard phone) | ✅ works | Same outbound call above created a channel and bridged |
-| PBX WebRTC endpoint media config | ✅ healthy | `T25_101_1` config byte-identical to known-good `T30_102_1`: `webrtc=yes`, `media_encryption=dtls`, `dtls_setup=actpass`, `use_avpf=yes`, `rtcp_mux=yes`, `ice_support=yes`, `allow=!all,ulaw,alaw,gsm,g729,opus,vp8,vp9,h264,...` |
-| **Inbound** WebRTC (Asterisk *offers* SDP) | ✅ works | `T2_103_1` bridged + answered; T25 ext 101 inbound answered (`SIP_CONNECTED`, `PBX_CALL_ANSWERED`) |
-| **Outbound** WebRTC (client *creates the offer*) | ❌ **fails (488 / Incompatible SDP)** | Mobile flight rows below + zero PBX channel for dialed number |
+| UTC | Event | Evidence |
+|-----|-------|----------|
+| **2026-06-02 19:51:48** | Last known good **portal outbound** | `VoiceDiagEvent` WEB outbound 233 s, `endReason: normal` |
+| **2026-06-02 21:01–21:43** | Last known good **mobile inbound** | `CallFlightSession` ext 101: full `SIP_ANSWER_SENT → SIP_CONNECTED → PBX_CALL_ANSWERED` |
+| **2026-06-03 15:38:40** | First known **mobile inbound** failure | `cfs_mpy8e90o_w4jcs` ext 101: `SIP_ANSWER_FAILED` / `session_not_found_timeout` |
+| **2026-06-03 15:58:17** | Mobile inbound fail ext 102 | `cfs_mpy93h0e_plt6v` — same pattern |
+| **2026-06-03 18:23:47** | First known **mobile outbound** failure | `cfs_mpyealjz_45pq8`: `OUTBOUND_MEDIA_SDP_REJECTED`, Incompatible SDP |
+| **2026-06-03 18:25–18:33** | Mobile inbound `INVITE_CLAIMED` drops | `cfs_mpyedf6m_as7rm`, `cfs_mpyem66j_sfw8n` — answer tapped, no SIP answer |
+| **2026-06-04 01:08:57** | First known **portal outbound** failure | `VoiceDiagEvent` `endReason: Incompatible SDP`, 1.2 s |
+| **2026-06-04 02:54:15** | Mobile inbound fail ext 102 | `cfs_mpywj2dq_73oi0` — `session_not_found_timeout` |
+| **2026-06-04 04:00:18** | Last known **portal outbound** failure | `VoiceDiagEvent` Incompatible SDP, 1.5 s |
+| **2026-06-04 04:23–05:17** | Diagnostics-only deploys (portal `c2aa5ae5`, api/portal `2fffba59`) | Deploy queue — **no media fix** |
+| **2026-06-04 10:44:36** | **Recovery** — portal outbound 53 s | `VoiceDiagEvent` `endReason: user_hangup` |
+| **2026-06-04 10:46:04** | Recovery — mobile outbound | `cfs_mpzddtvd_4s3nl` `OUTBOUND_CONNECTED` |
+| **2026-06-04 10:46:53** | Recovery — portal inbound 2.8 s | `VoiceDiagEvent` WEB inbound `user_hangup` |
 
-**Key asymmetry:** Inbound (Asterisk builds the offer, client answers) works; outbound
-(client builds the offer, Asterisk answers) fails. The fault is isolated to **outbound
-WebRTC SDP offer/answer negotiation** where the **browser/mobile creates the offer.**
+**Onset order:** inbound mobile (15:38) → mobile outbound (18:23) → portal outbound (01:08
+Jun 4). ~22 h gap between last good portal outbound and first portal failure.
 
-**Mobile flight-recorder evidence** (`CallFlightSession`, tenant Relax Tires `T25`/ext 101):
+Forensic script: `_latency_logs/webrtc_full_outage_forensics.js`. Inbound detail dump:
+`_latency_logs/dump_inbound_failures.js`.
 
-| Session | UTC | dir | result | warningFlags / sipCause |
-|---------|-----|-----|--------|--------------------------|
-| `cfs_mpyt5zfz_5b4me` | 2026-06-04 01:20:07 | OUTBOUND | failed | `OUTBOUND_MEDIA_SDP_REJECTED`, `sipCause="Incompatible SDP"` |
-| `cfs_mpyrt0oc_0ozjw` | 2026-06-04 00:42:03 | OUTBOUND | failed | `OUTBOUND_FAILED_OTHER`, `sipCause="Incompatible SDP"` |
-| `cfs_mpyealjz_45pq8` | 2026-06-03 18:23:48 | OUTBOUND | failed | `sipCause="Incompatible SDP"` |
+### 3. Client-visible failure evidence (DB only)
 
-Stages every time: `OUTBOUND_CALL_START → OUTBOUND_PERMISSION_CHECK(granted) →
-OUTBOUND_INVITE_SENT(registered) → OUTBOUND_REGISTERED → OUTBOUND_FAILED` (~400–600 ms).
+| Direction | Source | Proven terminal state |
+|-----------|--------|------------------------|
+| Portal outbound | `VoiceDiagEvent` `type=CALL_QUALITY_REPORT` | `endReason: "Incompatible SDP"` (10 rows); last at `2026-06-04T04:00:18.596Z` |
+| Portal outbound recovery | same | `endReason: "user_hangup"`, `durationMs: 53447` at `2026-06-04T10:44:36.598Z` |
+| Mobile outbound | `CallFlightSession` | `OUTBOUND_FAILED` / `sdpReject: true`; flag `OUTBOUND_MEDIA_SDP_REJECTED` on `cfs_mpyt5zfz_5b4me` |
+| Mobile outbound recovery | `CallFlightSession` `cfs_mpzddtvd_4s3nl` | stages include `OUTBOUND_CONNECTED` at `2026-06-04T10:46:04.921Z` |
+| Mobile inbound fail A | `CallFlightSession` events | `SIP_ANSWER_FAILED` payload `{"reason":"session_not_found_timeout"}` (3 sessions) |
+| Mobile inbound fail B | `CallFlightSession` events | `INVITE_CLAIMED` → `CALL_ENDED` without `SIP_ANSWER_SENT` (2 sessions) |
+| Mobile inbound recovery | — | **No inbound success row in window before** portal inbound `VoiceDiagEvent` at `10:46:53` |
+| Portal inbound in window | `VoiceDiagEvent` | 1 row total — post-recovery only |
 
-**Portal note:** Tested as tenant `T2` / ext 103 — different tenant + client from the
-mobile test, confirming the failure is **not tenant- or client-specific.** Portal showed
-no explicit error string. Portal fast failures (<1 s) **do not** post
-`/voice/diag/call-quality-report` (`durationMs < 1000` early-return in `useSipPhone.ts`),
-so they leave **no server-side trace** — they only appear in the browser console as
-`[SIP] CALL_FAILED cause: …` and in `chrome://webrtc-internals`.
+**Inbound vs outbound signatures — PROVEN different in DB:**
 
-### 3. Missing decisive artifact
+| Field | Outbound rows | Inbound rows |
+|-------|---------------|--------------|
+| `endReason: Incompatible SDP` | 10 portal `VoiceDiagEvent` | 0 |
+| `sdpReject: true` in flight | 3 mobile outbound sessions | 0 inbound sessions |
+| `SIP_ANSWER_FAILED` / `session_not_found_timeout` | 0 | 3 |
+| `INVITE_CLAIMED` without `SIP_ANSWER_SENT` | 0 | 2 |
+
+Whether both share a single PBX root cause: **STILL_UNPROVEN** (requires PBX SIP logs).
+
+**Outbound evidence tables:**
+
+Portal `VoiceDiagEvent` (tenant T2 `cmnlgnumi…` unless noted):
+
+| UTC | endReason | durationMs |
+|-----|-----------|------------|
+| 2026-06-04 01:08:57 | Incompatible SDP | 1172 |
+| 2026-06-04 01:57–04:00 | Incompatible SDP (×9) | 1071–3275 |
+| 2026-06-04 10:44:36 | user_hangup | 53447 ✅ |
+
+Mobile `CallFlightSession` outbound (T25 `cmnlgryme…`):
+
+| Session | UTC | result | flags |
+|---------|-----|--------|-------|
+| `cfs_mpyealjz_45pq8` | 2026-06-03 18:23:48 | failed | Incompatible SDP |
+| `cfs_mpyrt0oc_0ozjw` | 2026-06-04 00:42:03 | failed | Incompatible SDP |
+| `cfs_mpyt5zfz_5b4me` | 2026-06-04 01:20:07 | failed | `OUTBOUND_MEDIA_SDP_REJECTED` |
+| `cfs_mpzddtvd_4s3nl` | 2026-06-04 10:46:04 | answered ✅ | `OUTBOUND_CONNECTED` |
+
+**Inbound evidence (5 immediate-drop sessions):**
+
+| Session | UTC | ext | tenant | terminal stage | reason |
+|---------|-----|-----|--------|----------------|--------|
+| `cfs_mpy8e90o_w4jcs` | 2026-06-03 15:38:40 | 101 | T25 | `SIP_ANSWER_FAILED` | `session_not_found_timeout` |
+| `cfs_mpy93h0e_plt6v` | 2026-06-03 15:58:17 | 102 | T7 | `SIP_ANSWER_FAILED` | `session_not_found_timeout` |
+| `cfs_mpyedf6m_as7rm` | 2026-06-03 18:25:59 | 101 | T25 | `CALL_ENDED` | after `INVITE_CLAIMED`, no SIP answer |
+| `cfs_mpyem66j_sfw8n` | 2026-06-03 18:32:47 | 101 | T25 | `CALL_ENDED` | same |
+| `cfs_mpywj2dq_73oi0` | 2026-06-04 02:54:15 | 102 | T7 | `SIP_ANSWER_FAILED` | `session_not_found_timeout` |
+
+Linked `CallInvite` rows show `status: ACCEPTED` for several failures — backend accept path
+ran even when SIP answer never completed.
+
+### 3b. Recovery window facts (2026-06-04 04:00 → 10:44 UTC)
+
+| UTC | Source | Evidence |
+|-----|--------|----------|
+| 04:00:18.596 | `VoiceDiagEvent` | Last failure: `endReason: Incompatible SDP` |
+| 04:23:48 | Deploy job `61a61d1f` | portal dryRun `c2aa5ae5` |
+| 04:40:56 | Deploy job `0ffaf736` | portal live `c2aa5ae5` (diagnostics only — file list has no provisioning) |
+| 05:00:25 | `docker inspect app-api-1` | Container `StartedAt: 2026-06-04T05:00:25.499603601Z` |
+| 05:02:34 | Deploy job `fc4030ec` | api live `2fffba59`; log: `[deploy-api] done 2fffba5` |
+| 05:16:50 | `docker inspect app-portal-1` | Container `StartedAt: 2026-06-04T05:16:50.332404962Z` |
+| 05:17:41 | Deploy job `358ae696` | portal live `2fffba59`; log: `[deploy-portal] done 2fffba5` |
+| 05:00–10:44 | `VoiceDiagEvent` + `CallFlightSession` | **Zero WebRTC attempt rows** between last failure and recovery |
+| 10:44:36.598 | `VoiceDiagEvent` | First recovery row: outbound `user_hangup` 53447 ms |
+| — | `app-telephony-1` | `StartedAt: 2026-05-31T04:16:49Z` — **no restart** in recovery window |
+
+**Recovery trigger:** **BLOCKED**. First success timestamp is proven; causal event is not.
+
+### 4. Missing decisive artifact
 
 We need **one client-side SDP offer from a failed outbound call**. This is the only piece
 that proves whether the offer (client) or the answer/488 (Asterisk) is the problem.
@@ -86,7 +149,7 @@ that proves whether the offer (client) or the answer/488 (Asterisk) is the probl
 > logger`, per-endpoint `show`, log file reads, and AMI `Command` are all **denied**, so a
 > server-side SIP/SDP trace requires elevated PBX SSH (out of scope here).
 
-### 4. Portal capture steps (chrome://webrtc-internals)
+### 5. Portal capture steps (chrome://webrtc-internals)
 
 1. Open Chrome.
 2. Open **`chrome://webrtc-internals`** in a **separate tab** (must be open *before* the call).
@@ -103,7 +166,7 @@ that proves whether the offer (client) or the answer/488 (Asterisk) is the probl
 8. Save as a text file:
    `webrtc-outbound-failed-<tenant>-<extension>-<timestamp>.txt`
 
-### 4b. Portal in-app capture (instrumented 2026-06-04) — USE THIS, not webrtc-internals
+### 5b. Portal in-app capture (instrumented 2026-06-04) — USE THIS, not webrtc-internals
 
 ⚠️ **`chrome://webrtc-internals` is unreliable for this portal:** in a live 2026-06-04 capture
 it showed **only `getUserMedia`/`getDisplayMedia`** entries and **no `RTCPeerConnection`
@@ -138,7 +201,7 @@ codec/fmtp/profile lines are kept.
 > call-quality report drops sub-1s failures — so the fast 488 reject produced **no** capturable
 > artifact. This path makes the offer + SIP status visible and unambiguously labeled.
 
-### 5. Mobile capture steps (adb logcat)
+### 6. Mobile capture steps (adb logcat)
 
 1. Connect the phone via `adb`.
 2. Run:
@@ -149,7 +212,7 @@ codec/fmtp/profile lines are kept.
 4. Save output as:
    `mobile-outbound-failed-<tenant>-<extension>-<timestamp>.log`
 
-### 6. What to look for in the SDP
+### 7. What to look for in the SDP
 
 - `m=audio` line (port, transport profile `UDP/TLS/RTP/SAVPF`)
 - Codecs offered (payload type list on the `m=audio` line)
@@ -162,13 +225,13 @@ codec/fmtp/profile lines are kept.
 - Unsupported constraints / codecs (e.g. an offer with **no** codec Asterisk's `allow` accepts)
 - Missing required WebRTC/Asterisk attributes (no fingerprint, no ufrag, wrong profile)
 
-### 7. Stop-the-line rule
+### 8. Stop-the-line rule
 
 **No deploy, no APK, no PBX media changes** until the captured SDP proves the exact
 mismatch. The failure is localized but the specific rejected attribute/codec/offer shape
 is **not yet proven** — shipping a change now risks fixing the wrong layer.
 
-### 8. Next action once SDP is captured
+### 9. Next action once SDP is captured
 
 1. Compare the **portal** failed SDP and the **mobile** failed SDP.
 2. Compare against a **known-good** portal/mobile SDP if one is available (e.g. a prior
@@ -212,7 +275,7 @@ endpoint config is **not** the cause. (`rewrite_contact=false` is atypical for N
 but is identical on the working reference and is not an SDP-negotiation field.)
 Artifact: `_latency_logs/webrtc_endpoint_live.txt`.
 
-### 10. Codec runtime verification — hypothesis **DISPROVEN** (2026-06-04, live AMI)
+### 11. Codec runtime verification — hypothesis **DISPROVEN** (2026-06-04, live AMI)
 
 Hypothesis: opus is listed in `allow` but `codec_opus.so` isn't loaded at runtime, so an
 opus-leaning WebRTC offer would 488 before channel creation. Tested via read-only AMI
@@ -231,14 +294,111 @@ opus-leaning WebRTC offer would 488 before channel creation. Tested via read-onl
 negotiable. A missing/unloaded codec module is **not** the cause of the 488.
 Artifact + reusable probe: `_latency_logs/ami_codec_runtime.js`.
 
-> **Where that leaves root cause:** both static endpoint config (§9) and runtime codec
-> availability (§10) are now ruled out. The remaining candidates are (a) the **client offer
-> SDP** itself (still the missing decisive artifact — capture per §4/§4b), or (b) an
-> **Asterisk-20.18.2 / global media** behavior change on the PBX (e.g. a minor-version
-> upgrade tightening SDP acceptance) — unprovable without full PBX shell (`/var/log/asterisk`
-> is **not** mounted in the app containers). AMI read actions confirmed available to
-> `pbx_audit`: `GetConfig`, `PJSIPShowEndpoint`, `ModuleCheck`, `CoreSettings`, `CoreStatus`.
-> AMI `Command` (arbitrary CLI) remains **blocked**.
+> **Where that leaves root cause:** static config (§10) and codecs (§11) ruled out.
+> Outbound = **488 pre-dialplan** (proven). Inbound = **answer/INVITE delivery** (proven
+> signature, PBX hangup cause missing). Unified PBX runtime fault is **likely but blocked**.
+> Classification: **C — HIGH-CONFIDENCE BUT BLOCKED** (failure mechanisms partially differ →
+> not classification A). See §12.
+
+### 12. Proof status (updated 2026-06-04)
+
+**Classification: MECHANISMS_PROVEN — UNIFIED PBX ROOT CAUSE BLOCKED**
+
+### 13. Evidence table (extended forensics pass)
+
+| # | UTC / window | Source | Query / command / file | Conclusion |
+|---|--------------|--------|------------------------|------------|
+| E1 | 2026-06-04 01:08:57 | `VoiceDiagEvent` | `_latency_logs/query_portal_fail_payloads.js` | Portal outbound `endReason: Incompatible SDP`, 1172 ms; payload has **no** `sipStatusCode` (pre-instrumentation) |
+| E2 | 2026-06-04 01:08:57 ±30 s | `ConnectCdr` | `_latency_logs/query_outbound_mobile_488.js` | **0** rows with `T2_103` — no PBX WebRTC leg persisted |
+| E3 | 2026-06-03 18:23:48 | `CallFlightSession` `cfs_mpyealjz_45pq8` | `_latency_logs/query_outbound_mobile_488.js` | `OUTBOUND_INVITE_SENT` → `OUTBOUND_FAILED` 473 ms; `sipCause: Incompatible SDP`; **`sipCode: null`** (mobile read `e.response` not `e.message` — **capture bug**, fixed in this PR) |
+| E4 | 2026-06-04 10:46:04 | `CallFlightSession` `cfs_mpzddtvd_4s3nl` | same | Recovery: `OUTBOUND_RINGING` sipCode **180** → `OUTBOUND_CONNECTED` — proves Asterisk accepted offer |
+| E5 | — | JsSIP + `@connect/shared/webrtcCallDiagnostics` | `inferSipRejectionSource()` | Cause **`Incompatible SDP`** is JsSIP's mapping for remote **488/606** only → source **`asterisk_or_upstream`** when not `originator: local` |
+| E6 | 2026-06-03 15:38:24 | `ConnectCdr` `1780501104.55724` | `_latency_logs/dump_inbound_failures.js` | PBX created **`PJSIP/T25_101_1-00007ba8`** |
+| E7 | 2026-06-03 15:38:40 | `CallFlightSession` `cfs_mpy8e90o_w4jcs` | same | User answered **16 s after** E6; stages: `SIP_REGISTERED` → `SIP_ANSWER_START` → `SIP_ANSWER_FAILED` **`session_not_found_timeout`** at **8612 ms**; **no** `SIP_INVITE_RECEIVED` |
+| E8 | — | `apps/mobile/src/sip/jssip.ts:1741–1748` | code | `session_not_found_timeout` when `answerIncoming()` poll exhausts deadline with **`attempt < 3`** and **`findIncoming()` never returned a session** |
+| E9 | 2026-06-03 15:38:41 | `CallInvite` `cmpy8e4ta01cfo9130a5yh7a2` | DB | `status: ACCEPTED` — backend accept ran; SIP answer never completed |
+| E10 | 2026-06-03 18:26:00 | `cfs_mpyedf6m_as7rm` | flight dump | `INVITE_CLAIMED` + 16 s extended wait → `CALL_ENDED` without `SIP_ANSWER_SENT` (requeue path; PBX still no usable INVITE at mobile) |
+| E11 | 2026-06-03 18:32:40 | CDR `1780511560.56597` | `_latency_logs/query_portal_fail_payloads.js` | **3×** `PJSIP/T25_101_1` retries; `hangupCause: 26` |
+| E12 | 2026-06-04 04:00–10:44 | `VoiceDiagEvent` + `CallFlightSession` | `_latency_logs/query_recovery_window.js` | **0** call attempts — cannot correlate recovery to registration/reload/deploy |
+| E13 | 2026-06-04 10:44:36 | `VoiceDiagEvent` | recovery query | First success: portal outbound 53447 ms `user_hangup` |
+| E14 | 2026-06-04 10:46:44 | AMI `CoreStatus` | `_latency_logs/ami_corestatus_only.js` | Asterisk reload **after** E13/E4 — **DISPROVEN** as recovery cause |
+
+### 14. Root cause statements (evidence-backed only)
+
+**Outbound (portal + mobile) — PROVEN mechanism, BLOCKED SDP attribute**
+
+1. **What happened:** Client sent WebRTC outbound INVITE; call failed in **~0.5–3 s** with JsSIP cause **`Incompatible SDP`**; Connect CDR shows **no** `PJSIP/T{tenant}_{ext}_1` channel at failure time.
+2. **Why:** Asterisk PJSIP rejected the client's SDP offer with SIP **488/606** before creating a persisted WebRTC channel. Proof chain: JsSIP cause semantics (E5) + sub-second fail + zero CDR `_1` leg (E1–E2) + recovery success with `_1` in CDR (E4). **Not** browser ICE-only failure (SIP layer failed first). **Exact rejected SDP field** still unknown (E1 — no offer captured).
+3. **Prevention (this PR):** Fix mobile `sipCode` extraction; extend `POST /voice/diag/webrtc-sdp-debug` with `sipRejectionSource`, `peerConnectionSnapshot`, redacted offer; alert specs in §15.
+
+**Inbound mobile — PROVEN mechanism**
+
+1. **What happened:** PBX dialed WebRTC endpoint (`PJSIP/T*_ext_1` in CDR); user answered via push/UI; call ended without `SIP_CONNECTED`.
+2. **Why:** Mobile JsSIP **`incomingSessions` never received a matching INVITE** during the answer window. `session_not_found_timeout` is **app-generated** when `answerIncoming()` exhausts **`MOBILE_SIP_ANSWER_INITIAL_WAIT_MS` (8000 ms)** without `findIncoming()` success (E7–E8). Example E7: PBX leg at **15:38:24**, answer at **15:38:40** — original INVITE likely **expired/CANCELled** before UA registered; no `SIP_INVITE_RECEIVED` flight stage. INVITE_CLAIMED path (E10) shows backend requeue also failed to deliver a bindable INVITE within extended wait.
+3. **Prevention (this PR):** On `session_not_found_timeout`, post `WEBRTC_INBOUND_ANSWER_FAIL` with `incomingSessionSnapshot` (session counts, candidates, match, poll iterations) to API.
+
+**Recovery — BLOCKED**
+
+- **DISPROVEN:** deploy (05:17 finished), Asterisk reload (10:46), full restart.
+- **PROVEN:** First post-gap success at **10:44:36** after **6 h 44 min** with zero call attempts (E12).
+- **Missing evidence:** PBX contact/WSS registration history, NAT binding, scheduled job, or client re-register event in the gap. Next occurrence: compare `incomingSessionSnapshot` + `VoiceClientSession` heartbeats + AMI contact diff.
+
+### 15. Prevention — instrumentation, alerts, runbook
+
+#### Implemented (this PR — deploy required to activate)
+
+| Layer | File | Captures |
+|-------|------|----------|
+| Shared | `packages/shared/src/webrtcCallDiagnostics.ts` | `extractJsSipFailureFields`, `inferSipRejectionSource`, `snapshotPeerConnection` |
+| Portal | `apps/portal/hooks/useSipPhone.ts` | 488: originator, `sipRejectionSource`, PC ICE/DTLS state, redacted offer → API |
+| Mobile | `apps/mobile/src/sip/jssip.ts` | Fix `message.status_code`; outbound SDP reject + inbound answer fail snapshots → API |
+| API | `POST /voice/diag/webrtc-sdp-debug` | Persists `kind: WEBRTC_CALL_DEBUG` with `debugKind` |
+| API | `apps/api/src/voice/webrtcCallDiagnostics.ts` | Zod schema + `webrtcAlertQuerySpec()` |
+| Tests | `*.test.ts` in shared, api, mobile | Extraction + payload normalization |
+
+#### Alert specs (wire in worker/cron — not auto-deployed)
+
+| Alert | Window | Threshold | Detection |
+|-------|--------|-----------|-----------|
+| `webrtc_outbound_488_spike` | 15 min | ≥2 | `VoiceDiagEvent` `Incompatible SDP` or `WEBRTC_SDP_REJECT_*` |
+| `outbound_no_pbx_channel` | 30 min | ≥1 | Outbound flight/`VoiceDiag` success without `ConnectCdr` `*_ext_1` ±60 s |
+| `inbound_claimed_no_sip_connect` | 30 min | ≥1 | Flight: `INVITE_CLAIMED` without `SIP_CONNECTED` within 30 s |
+| `session_not_found_timeout_spike` | 15 min | ≥2 | Flight: `SIP_ANSWER_FAILED` reason `session_not_found_timeout` |
+| `webrtc_contact_registration_loss` | 60 min | ≥1 | `SIP_REGISTER_FAILED` / `WS_DISCONNECTED` spike per tenant vs 7d baseline |
+
+Use `webrtcAlertQuerySpec(kind)` from `apps/api/src/voice/webrtcCallDiagnostics.ts`.
+
+#### WebRTC outage investigation runbook (ordered)
+
+1. Read **§13 evidence table** — confirm mechanism (outbound 488 vs inbound session timeout).
+2. Run `_latency_logs/webrtc_full_outage_forensics.js` on `app-api-1` for timeline.
+3. For outbound fails: query CDR ±30 s — expect **no** `T*_ext_1` if 488 pre-channel (E2).
+4. For inbound fails: dump flights `_latency_logs/dump_inbound_failures.js` — check for **`SIP_INVITE_RECEIVED`** absence.
+5. Tail API: `docker logs app-api-1 2>&1 | grep webrtc_call_debug` after deploy of this PR.
+6. If still blocked on SDP attribute: portal `?webrtcDebug=1` + one repro call, or `WEBRTC_LIVE_REPRO_RUNBOOK.md`.
+7. **Do not** ship media/PBX fixes until `offerSdpRedacted` + `offerCompatibilityIssues` captured from a live fail.
+
+#### Self-healing (NOT implemented — insufficient evidence)
+
+No automatic UA restart or PBX reload — recovery trigger unproven. Revisit only if `WEBRTC_INBOUND_ANSWER_FAIL` snapshots show **registered UA + zero sessions** while CDR proves simultaneous `_1` dial (would suggest WSS delivery bug).
+
+---
+
+### 12 (legacy). AMI / deploy blockers
+
+**AMI evidence (2026-06-04 probe from `app-api-1`):**
+```
+CoreStartupDate: 2026-05-12
+CoreStartupTime: 23:16:21
+CoreReloadDate: 2026-06-04
+CoreReloadTime: 06:46:44  → 10:46:44 UTC (America/New_York)
+```
+
+**DB counts:** `WEBRTC_SDP_DEBUG` / `WEBRTC_CALL_DEBUG` rows during incident: **0** (instrumentation deployed 05:17; no failures after).
+
+**Blocked PBX commands** (require elevated SSH): `grep 488 /var/log/asterisk/full`, `pjsip set logger on`, per-endpoint history.
+
+**Prior safeguard table (§12 old):** superseded by §15 implemented instrumentation + alert specs.
 
 ### Entity / access reference
 
@@ -544,6 +704,8 @@ AMI from API container uses `PBX_HOST` / `AMI_USERNAME` / `AMI_PASSWORD` env var
 | Area | Path |
 |------|------|
 | **Live repro runbook** | `docs/ai-context/WEBRTC_LIVE_REPRO_RUNBOOK.md` |
+| **WebRTC call debug helpers** | `packages/shared/src/webrtcCallDiagnostics.ts`, `packages/shared/src/webrtcBlackbox.ts`, `apps/api/src/voice/webrtcCallDiagnostics.ts` |
+| **Black-box schema doc** | `docs/ai-context/WEBRTC_BLACKBOX_SCHEMA.md` |
 | Provisioning API | `apps/api/src/server.ts` (`issueOneTimeProvisioningForUser`, `buildVoiceProvisioningBundle`) |
 | Sync SIP | `apps/api/src/userExtensionProvisioning.ts`, `apps/api/src/pbxExtensionSync.ts` |
 | Mobile JsSIP | `apps/mobile/src/sip/jssip.ts` |

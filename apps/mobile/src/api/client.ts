@@ -995,6 +995,15 @@ export async function postCallQualityReport(token: string, report: Record<string
   return json;
 }
 
+export async function postWebrtcCallDebug(token: string, payload: Record<string, unknown>) {
+  const res = await fetch(`${API_BASE}/voice/diag/webrtc-sdp-debug`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return res.ok;
+}
+
 export async function postCallQualityPing(token: string, snapshot: Record<string, unknown>) {
   const res = await fetch(`${API_BASE}/voice/diag/call-quality-ping`, {
     method: "POST",

@@ -1962,6 +1962,21 @@ export function NotificationsProvider({
           pushToAnswerMs: answerTappedAt - pushReceivedAt,
           ts: answerTappedAt,
         }));
+        sip.beginInboundBlackbox(invite.id, {
+          push_received: {
+            pushReceivedAt,
+            answerTappedAt,
+            pushToAnswerMs: answerTappedAt - pushReceivedAt,
+            wakeReceived: pushReceivedAt > 0,
+          },
+          incoming_screen_shown: { appWasBackgrounded, answerPath },
+          answer_tapped: { answerTappedAt, answerPath },
+          uiState: {
+            appState: AppState.currentState,
+            sipRegState: sip.registrationState,
+            callState: sip.callState,
+          },
+        });
         flightRecordNativeRingtone(invite.id);
         emitAnswerFlowEvent("RINGTONE_STOPPED", invite, {
           reason: "answer_tapped",
@@ -2125,6 +2140,26 @@ export function NotificationsProvider({
             inviteId: invite.id,
             severity: 'error',
             payload: { sinceAnswerMs: Date.now() - answerTappedAt },
+          });
+          sip.finalizeInboundBlackboxFailure({
+            inviteId: invite.id,
+            pbxCallId: invite.pbxCallId ?? null,
+            callerNumber: invite.fromNumber ?? null,
+            calleeExtension: invite.toExtension ?? null,
+            failureReason: "sip_invite_not_received",
+            pushMeta: {
+              pushReceivedAt,
+              answerTappedAt,
+              pushToAnswerMs: answerTappedAt - pushReceivedAt,
+            },
+            backendAccept: backendClaimed
+              ? { requested: true, responseCode: "INVITE_CLAIMED_OK" }
+              : { requested: false },
+            uiState: {
+              appState: AppState.currentState,
+              sipRegState: sip.registrationState,
+              sinceAnswerMs: Date.now() - answerTappedAt,
+            },
           });
           if (backendClaimed) {
             sip.rejectIncomingInvite({

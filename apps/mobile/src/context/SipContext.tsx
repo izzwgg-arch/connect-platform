@@ -1,8 +1,10 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, DeviceEventEmitter, NativeModules, PermissionsAndroid, Platform } from "react-native";
 import * as SecureStore from "expo-secure-store";
+import Constants from "expo-constants";
+import * as Device from "expo-device";
 import { createSipClient } from "../sip";
-import { postCallQualityReport, postCallQualityPing, clearCallQualityPing } from "../api/client";
+import { postCallQualityReport, postCallQualityPing, clearCallQualityPing, postWebrtcCallDebug } from "../api/client";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { appendCallRecord } from "../storage/callHistory";
 import type { CallDirection, CallState, CallRecord, ProvisioningBundle, SipRegistrationState } from "../types";
@@ -102,6 +104,20 @@ type SipState = {
     timeoutMs?: number,
     onTrace?: (event: SipAnswerTraceEvent) => void,
   ) => Promise<boolean>;
+  /** Begin inbound WebRTC black-box capture at answer-tap. */
+  beginInboundBlackbox: (inviteId: string | null | undefined, meta?: Record<string, unknown>) => void;
+  /** Emit inbound black-box failure when pipeline aborts before SIP answer. */
+  finalizeInboundBlackboxFailure: (input: {
+    inviteId?: string | null;
+    pbxCallId?: string | null;
+    callerNumber?: string | null;
+    calleeExtension?: string | null;
+    failureReason: string;
+    backendAccept?: Record<string, unknown> | null;
+    uiState?: Record<string, unknown> | null;
+    pushMeta?: Record<string, unknown> | null;
+    forceRestart?: { decided?: boolean; reason?: string | null };
+  }) => void;
   /** Repoint legacy single-session methods (hold/hangup/setMute) at a session. */
   setActiveSipSession: (sessionId: string) => boolean;
 };
@@ -161,6 +177,18 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     try {
       const parsed = JSON.parse(raw) as ProvisioningBundle;
       clientRef.current.configure(parsed);
+      if ("setBlackboxContext" in clientRef.current) {
+        clientRef.current.setBlackboxContext({
+          authUsername: parsed.authUsername ?? parsed.sipUsername ?? null,
+          sipUsername: parsed.sipUsername ?? null,
+          extensionNumber: parsed.sipUsername?.replace(/_\d+$/, "") ?? null,
+          client: {
+            appVersion: Constants.expoConfig?.version ?? null,
+            nativeBuild: Constants.nativeBuildVersion ?? null,
+            deviceModel: Device.modelName ?? null,
+          },
+        });
+      }
       setHasProvisioning(true);
       return true;
     } catch (e) {
@@ -243,6 +271,12 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         } else {
           postCallQualityPing(authToken, snapshot).catch(() => {});
         }
+      };
+    }
+    if ("onWebrtcCallDebug" in client || typeof client.onWebrtcCallDebug !== "undefined") {
+      client.onWebrtcCallDebug = (payload: Record<string, unknown>) => {
+        if (!authToken) return;
+        postWebrtcCallDebug(authToken, payload).catch(() => {});
       };
     }
   }, [authToken]);
@@ -515,6 +549,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
             sipCode: diagnosis?.sipCode ?? event.sipCode ?? null,
             sipReason: diagnosis?.sipReason ?? event.sipReason ?? null,
             sipCause: diagnosis?.sipCause ?? event.sipCause ?? null,
+            failedOriginator: event.failedOriginator ?? null,
             diagnosisCategory: diagnosis?.category ?? null,
           },
         });
@@ -1299,6 +1334,20 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       answerIncomingInvite: async (match, timeoutMs = 5000, onTrace, deadlineHandle) => {
         setCallDirection("inbound");
         return clientRef.current.answerIncoming(match, timeoutMs, onTrace, deadlineHandle);
+      },
+
+      beginInboundBlackbox: (inviteId, meta) => {
+        const client = clientRef.current as { beginInboundBlackbox?: typeof clientRef.current.answerIncoming };
+        if (typeof client.beginInboundBlackbox === "function") {
+          client.beginInboundBlackbox(inviteId, meta);
+        }
+      },
+
+      finalizeInboundBlackboxFailure: (input) => {
+        const client = clientRef.current as { finalizeInboundBlackboxFailure?: (i: typeof input) => void };
+        if (typeof client.finalizeInboundBlackboxFailure === "function") {
+          client.finalizeInboundBlackboxFailure(input);
+        }
       },
 
       waitForIncomingInvite: async (match, deadlineHandle) => {

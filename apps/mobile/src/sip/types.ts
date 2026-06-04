@@ -82,6 +82,7 @@ export type OutboundTraceEvent = {
   sipCode?: number | null;
   sipReason?: string | null;
   sipCause?: string | null;
+  failedOriginator?: string | null;
   registrationAgeMs?: number | null;
 };
 
@@ -105,6 +106,19 @@ export type { SipAnswerDeadlineHandle } from "./mobileAnswerTiming";
 
 export type SipClient = {
   configure: (bundle: ProvisioningBundle) => void;
+  setBlackboxContext?: (ctx: Record<string, unknown>) => void;
+  beginInboundBlackbox?: (inviteId: string | null | undefined, meta?: Record<string, unknown>) => void;
+  finalizeInboundBlackboxFailure?: (input: {
+    inviteId?: string | null;
+    pbxCallId?: string | null;
+    callerNumber?: string | null;
+    calleeExtension?: string | null;
+    failureReason: string;
+    backendAccept?: Record<string, unknown> | null;
+    uiState?: Record<string, unknown> | null;
+    pushMeta?: Record<string, unknown> | null;
+    forceRestart?: { decided?: boolean; reason?: string | null };
+  }) => void;
   register: (options?: { forceRestart?: boolean }) => Promise<void>;
   unregister: () => Promise<void>;
   /**

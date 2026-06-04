@@ -43,6 +43,11 @@ import {
   type RequeueTrigger,
 } from "./mobileInviteRequeue";
 import {
+  normalizeWebrtcCallDebugPayload,
+  parseWebrtcCallDebugBody,
+  buildCompactWebrtcDebugLog,
+} from "./voice/webrtcCallDiagnostics";
+import {
   acknowledgeVoicemailIngestIncident,
   classifyHelperFailure,
   db,
@@ -9232,52 +9237,30 @@ app.post("/voice/diag/call-quality-report", async (req, reply) => {
 
 
 // ── WebRTC SDP debug capture (temporary, for 488/Incompatible-SDP investigation) ─
-// Authenticated portal users POST the REDACTED outbound offer + SIP status when a
-// WebRTC call fails. The SDP is already redacted client-side (ICE creds + IPs
-// stripped; DTLS fingerprint is public). We log it (so it can be tailed live via
-// `docker logs app-api-1`) and persist it in VoiceDiagEvent for correlation.
-// Remove this endpoint once the rejected attribute is proven.
+// Authenticated portal/mobile users POST redacted WebRTC/SIP failure artifacts.
+// Persists VoiceDiagEvent payload kind WEBRTC_CALL_DEBUG (legacy rows: WEBRTC_SDP_DEBUG).
 app.post("/voice/diag/webrtc-sdp-debug", async (req, reply) => {
   const user = getUser(req);
-  if (!checkBillingRateLimit(`wsd:${user.sub}`, 30, 60 * 60 * 1000)) {
+  if (!checkBillingRateLimit(`wsd:${user.sub}`, 60, 60 * 60 * 1000)) {
     return reply.status(429).send({ error: "RATE_LIMITED" });
   }
-  const input = z.object({
-    target: z.string().max(64).optional().nullable(),
-    sipTarget: z.string().max(128).optional().nullable(),
-    route: z.string().max(64).optional().nullable(),
-    sessionId: z.string().max(80).optional().nullable(),
-    flushReason: z.string().max(32).optional().nullable(),
-    failedCause: z.string().max(96).optional().nullable(),
-    failedOriginator: z.string().max(32).optional().nullable(),
-    sipStatusCode: z.number().int().min(100).max(699).optional().nullable(),
-    sipReasonPhrase: z.string().max(128).optional().nullable(),
-    sipMethod: z.string().max(16).optional().nullable(),
-    sessionReturned: z.boolean().optional().nullable(),
-    offerSdpSource: z.string().max(24).optional().nullable(),
-    offerSummary: z.any().optional(),
-    offerCompatibilityIssues: z.array(z.string().max(200)).max(40).optional(),
-    offerSdpRedacted: z.string().max(20_000).optional().nullable(),
-    callInvokedAt: z.string().max(40).optional().nullable(),
-    failedAt: z.string().max(40).optional().nullable(),
-  }).parse(req.body);
+  let input;
+  try {
+    input = parseWebrtcCallDebugBody(req.body);
+  } catch (err) {
+    app.log.warn({ err, userId: user.sub }, "webrtc_call_debug_invalid_payload");
+    return reply.status(400).send({ error: "INVALID_WEBRTC_DEBUG_PAYLOAD" });
+  }
+  let persisted: Record<string, unknown>;
+  try {
+    persisted = normalizeWebrtcCallDebugPayload(input);
+  } catch (err) {
+    app.log.error({ err, userId: user.sub }, "webrtc_call_debug_normalize_failed");
+    return reply.status(400).send({ error: "WEBRTC_DEBUG_NORMALIZE_FAILED" });
+  }
 
-  // Live-tailable log line (no secrets — SDP is pre-redacted by the client).
-  app.log.warn({
-    evt: "webrtc_sdp_debug",
-    userId: user.sub,
-    tenantId: user.tenantId,
-    target: input.target ?? null,
-    sessionId: input.sessionId ?? null,
-    flushReason: input.flushReason ?? null,
-    failedCause: input.failedCause ?? null,
-    sipStatusCode: input.sipStatusCode ?? null,
-    sipReasonPhrase: input.sipReasonPhrase ?? null,
-    offerSdpSource: input.offerSdpSource ?? null,
-    offerSummary: input.offerSummary ?? null,
-    offerCompatibilityIssues: input.offerCompatibilityIssues ?? null,
-    offerSdpRedacted: input.offerSdpRedacted ?? null,
-  }, "webrtc_sdp_debug_capture");
+  const compactLog = buildCompactWebrtcDebugLog(persisted);
+  app.log.warn(`WEBRTC_CALL_DEBUG ${compactLog}`);
 
   let eventId: string | null = null;
   try {
@@ -9288,7 +9271,7 @@ app.post("/voice/diag/webrtc-sdp-debug", async (req, reply) => {
     });
     const sessionId = session?.id
       ?? (await db.voiceClientSession.create({
-        data: { tenantId: user.tenantId, userId: user.sub, platform: "WEB" },
+        data: { tenantId: user.tenantId, userId: user.sub, platform: input.platform === "MOBILE" ? "ANDROID" : "WEB" },
         select: { id: true },
       })).id;
     const event = await db.voiceDiagEvent.create({
@@ -9297,15 +9280,15 @@ app.post("/voice/diag/webrtc-sdp-debug", async (req, reply) => {
         userId: user.sub,
         sessionId,
         type: "CALL_QUALITY_REPORT" as any,
-        payload: { kind: "WEBRTC_SDP_DEBUG", ...input } as any,
+        payload: persisted as any,
       },
     });
     eventId = event.id;
   } catch (err) {
-    app.log.error({ err, userId: user.sub }, "webrtc_sdp_debug_persist_failed");
+    app.log.error({ err, userId: user.sub }, "webrtc_call_debug_persist_failed");
   }
 
-  return { ok: true, eventId };
+  return { ok: true, eventId, schemaVersion: persisted.schemaVersion ?? null };
 });
 
 

@@ -4,6 +4,71 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-04 — WebRTC black-box diagnostics hardening (schema v2)
+
+**Task:** telephony / WebRTC / black-box diagnostics  
+**Risk:** extreme — instrumentation only; no PBX/media fix
+
+### Shipped
+
+- **`packages/shared/src/webrtcBlackbox.ts`** — schema v2, extended SDP summary, timeline,
+  redaction, truncation (48 KB), alert specs, diagnosis classification.
+- **API** — `POST /voice/diag/webrtc-sdp-debug` accepts outbound/inbound/summary payloads;
+  Zod validation (400 on malformed); `WEBRTC_CALL_DEBUG` compact log line for grep.
+- **Portal** — `PortalWebrtcBlackboxRecorder` wired on outbound dial + all failure paths.
+- **Mobile** — `MobileWebrtcBlackboxRecorder`, inbound timeline at answer-tap,
+  `session_not_found_timeout` / `sip_invite_not_received` black-box posts.
+
+### Docs
+
+- `WEBRTC_BLACKBOX_SCHEMA.md` — full field reference
+- `WEBRTC_DIAGNOSTICS.md`, `CURSOR_START_HERE.md` — routing updated
+
+### Mobile build
+
+**Pending EAS build** — mobile black-box hooks require a new APK; API + portal active immediately.
+
+---
+
+## 2026-06-04 — WebRTC outage proof-only pass (BLOCKED_BY_PBX_ACCESS)
+
+**Task:** telephony / WebRTC / P0 proof-only investigation  
+**Risk:** extreme — read-only; no code/deploy/PBX changes
+
+### Classification
+
+**BLOCKED_BY_PBX_ACCESS** — failure/recovery timestamps and distinct failure signatures are
+**proven in DB**; outage cause and recovery trigger are **not proven** (PBX SSH denied).
+
+### Proven (DB / deploy / container / AMI)
+
+- Portal outbound: 10× `VoiceDiagEvent.endReason = "Incompatible SDP"`; recovery at
+  `2026-06-04T10:44:36.598Z` (`user_hangup`, 53447 ms).
+- Mobile outbound: 3 failed + 1 recovered (`cfs_mpzddtvd_4s3nl`, `OUTBOUND_CONNECTED`).
+- Mobile inbound: 5 failed sessions; 3× `session_not_found_timeout`, 2× `INVITE_CLAIMED` →
+  `CALL_ENDED` without `SIP_ANSWER_SENT`. Zero inbound rows with `sdpReject: true`.
+- First failure `2026-06-03T15:38:40.296Z` predates deploy `0f86e753` (api `16:35:17Z`).
+- Diagnostics deploys `c2aa5ae5`/`2fffba59` finished `05:17:41Z`; recovery `10:44:36Z`.
+- `WEBRTC_SDP_DEBUG` count = 0.
+- AMI: `CoreStartupDate: 2026-05-12`; `CoreReloadDate: 2026-06-04`, `CoreReloadTime: 06:46:44`.
+- `app-telephony-1` not restarted in recovery window (`StartedAt: 2026-05-31`).
+
+### Blocked
+
+- PBX logs, timezone, reload actor/scope, config mtimes, package/cron history.
+- Outbound rejected SDP attribute.
+- Single shared root cause for inbound + outbound.
+
+### Docs
+
+- `WEBRTC_DIAGNOSTICS.md` — proof/blocker status only (speculation removed)
+- `TELEPHONY.md` — banner updated
+- `MOBILE_CALL_TIMELINE.md` — DB evidence rows cited
+
+---
+
+## 2026-06-04 — Full WebRTC calling outage forensics (inbound + outbound)
+
 ## 2026-06-04 — Portal WebRTC SDP debug capture (gated, redacted) — webrtc-internals failed
 
 **Task:** telephony / WebRTC / portal call-path diagnostics  

@@ -32,6 +32,10 @@ import {
   ensureOutboundSipRegistration,
   normalizeMobileDialTarget,
 } from "./mobileOutboundDial";
+import {
+  extractJsSipFailureFields,
+  isWebrtcSdpRejection,
+} from "@connect/shared/webrtcBlackbox";
 import { buildVoiceAudioConstraints } from "./voiceAudioConstraints";
 
 const VOICE_AUDIO_CONSTRAINTS = buildVoiceAudioConstraints();
@@ -153,9 +157,92 @@ export class JsSipClient implements SipClient {
   onCallQualityReport?: (report: Record<string, unknown>) => void;
   /** Callback for sending live mid-call pings — injected by the context layer. */
   onCallQualityPing?: (snapshot: Record<string, unknown>) => void;
+  /** Redacted WebRTC/SIP failure capture — posts to /voice/diag/webrtc-sdp-debug. */
+  onWebrtcCallDebug?: (payload: Record<string, unknown>) => void;
+  private outboundBlackbox: MobileWebrtcBlackboxRecorder | null = null;
+  private inboundBlackbox: MobileWebrtcBlackboxRecorder | null = null;
+  private blackboxIdentity: Record<string, unknown> = {};
 
   configure(bundle: ProvisioningBundle) {
     this.bundle = bundle;
+    this.blackboxIdentity = {
+      sipUsername: bundle.sipUsername ?? null,
+      authUsername: bundle.authUsername ?? null,
+      extensionNumber: bundle.sipUsername?.replace(/_\d+$/, "") ?? null,
+    };
+  }
+
+  setBlackboxContext(ctx: Record<string, unknown>) {
+    this.blackboxIdentity = { ...this.blackboxIdentity, ...ctx };
+  }
+
+  /** Start inbound black-box at answer-tap (before SIP poll) with push/UI timeline. */
+  beginInboundBlackbox(inviteId: string | null | undefined, meta?: Record<string, unknown>) {
+    const key = inviteId ?? undefined;
+    if (!this.inboundBlackbox || this.inboundBlackbox.correlationId !== key) {
+      this.inboundBlackbox = new MobileWebrtcBlackboxRecorder(key);
+      this.inboundBlackbox.setIdentity(this.blackboxIdentity as any);
+      this.inboundBlackbox.setClient(this.buildBlackboxClient());
+      this.inboundBlackbox.setRegistration({
+        registrationState: this.isRegistered() ? "registered" : "not_registered",
+        registrationAgeMs: this.registeredAtMs ? Date.now() - this.registeredAtMs : null,
+        wssConnected: this.isConnected(),
+        sipStackHealthy: this.isConnected() && this.isRegistered(),
+      });
+    }
+    if (meta && Object.keys(meta).length > 0) {
+      this.inboundBlackbox.setInboundMeta(meta);
+    }
+  }
+
+  /** Emit inbound failure when answer pipeline aborts outside answerIncoming(). */
+  finalizeInboundBlackboxFailure(input: {
+    inviteId?: string | null;
+    pbxCallId?: string | null;
+    callerNumber?: string | null;
+    calleeExtension?: string | null;
+    failureReason: string;
+    backendAccept?: Record<string, unknown> | null;
+    uiState?: Record<string, unknown> | null;
+    pushMeta?: Record<string, unknown> | null;
+    forceRestart?: { decided?: boolean; reason?: string | null };
+  }) {
+    this.beginInboundBlackbox(input.inviteId, {
+      pushMeta: input.pushMeta ?? undefined,
+      uiState: input.uiState ?? undefined,
+      backendAccept: input.backendAccept ?? undefined,
+      forceRestart: input.forceRestart ?? undefined,
+      answer_failure: { reason: input.failureReason, tsMs: Date.now() },
+    });
+    const payload = this.inboundBlackbox!.buildInboundFailurePayload({
+      inviteId: input.inviteId ?? null,
+      pbxCallId: input.pbxCallId ?? null,
+      callerNumber: input.callerNumber ?? null,
+      calleeExtension: input.calleeExtension ?? null,
+      failureReason: input.failureReason,
+      backendAccept: input.backendAccept ?? null,
+      uiState: input.uiState ?? null,
+      pushMeta: input.pushMeta ?? null,
+      forceRestart: input.forceRestart ?? null,
+      incomingSessionSnapshot: this.buildIncomingSessionSnapshot(
+        {
+          inviteId: input.inviteId,
+          fromNumber: input.callerNumber,
+          toExtension: input.calleeExtension,
+          pbxCallId: input.pbxCallId,
+        },
+        { failureReason: input.failureReason },
+      ),
+      sipAnswer: { attempted: false, sent: false, confirmed: false },
+    });
+    this.emitWebrtcCallDebug(payload);
+  }
+
+  private buildBlackboxClient(): Record<string, unknown> {
+    return {
+      platform: Platform.OS,
+      ...(this.blackboxIdentity.client as Record<string, unknown> | undefined),
+    };
   }
 
   setEvents(events: SipEvents) {
@@ -460,6 +547,7 @@ export class JsSipClient implements SipClient {
       sipCode?: number | null;
       sipReason?: string | null;
       sipCause?: string | null;
+      failedOriginator?: string | null;
     },
   ): void {
     this.events.onOutboundTrace?.({
@@ -471,6 +559,7 @@ export class JsSipClient implements SipClient {
       sipCode: extra?.sipCode ?? null,
       sipReason: extra?.sipReason ?? null,
       sipCause: extra?.sipCause ?? null,
+      failedOriginator: extra?.failedOriginator ?? null,
     });
   }
 
@@ -611,8 +700,9 @@ export class JsSipClient implements SipClient {
     });
 
     session.on("failed", (e: any) => {
-      const cause = e?.cause || "unknown";
-      const code = e?.response?.status_code;
+      const fields = extractJsSipFailureFields(e);
+      const cause = fields.failedCause || "unknown";
+      const code = fields.sipStatusCode;
       const msg = code ? `Call failed (${code}): ${cause}` : `Call failed: ${cause}`;
       console.warn('[CALL_EVENT] session_failed', msg);
       this.incomingSessions = this.incomingSessions.filter((x) => x !== session);
@@ -648,9 +738,28 @@ export class JsSipClient implements SipClient {
       if (isOutboundSession) {
         this.emitOutboundTrace("OUTBOUND_FAILED", {
           sipCode: typeof code === "number" ? code : null,
-          sipReason: e?.response?.reason_phrase ?? null,
+          sipReason: fields.sipReasonPhrase,
           sipCause: cause,
+          failedOriginator: fields.failedOriginator,
         });
+        const payload = this.outboundBlackbox?.buildOutboundFailurePayload({
+          targetRaw: this.lastOutboundDialTarget,
+          targetNormalized: this.lastOutboundDialTarget,
+          session,
+          failedEvent: e,
+          offerSdp: (() => {
+            try { return session.connection?.localDescription?.sdp ?? null; } catch { return null; }
+          })(),
+          dialMeta: {
+            uaCallInvoked: true,
+            sessionReturned: true,
+            sessionId: this.getSessionIdSafe(session),
+          },
+          mediaMeta: { constraints: VOICE_AUDIO_CONSTRAINTS },
+          wssConnected: this.isConnected(),
+          channelNotCreated: true,
+        });
+        if (payload) this.emitWebrtcCallDebug(payload);
       }
       if (isLastLiveSession) {
         this.events.onCallState?.("ended");
@@ -1348,6 +1457,47 @@ export class JsSipClient implements SipClient {
     };
   }
 
+  private buildIncomingSessionSnapshot(
+    match: SipMatch | undefined,
+    input: { pollIterations?: number; answerAttempts?: number; failureReason?: string },
+  ) {
+    const sessions = [...this.incomingSessions];
+    if (this.session && !sessions.includes(this.session)) {
+      sessions.push(this.session);
+    }
+    const answerable = sessions.filter((session) => this.isAnswerableIncoming(session));
+    return {
+      incomingSessionCount: sessions.length,
+      answerableSessionCount: answerable.length,
+      uaConnected: this.isConnected(),
+      uaRegistered: this.isRegistered(),
+      sipStackHealthy: this.isConnected() && this.isRegistered(),
+      pollIterations: input.pollIterations ?? null,
+      answerAttempts: input.answerAttempts ?? null,
+      failureReason: input.failureReason ?? null,
+      newRtcsessionObserved: sessions.length > 0,
+      sessionIds: sessions.map((s) => this.getSessionIdSafe(s)).filter(Boolean),
+      jssipCallIds: sessions.map((s) => (s as { id?: string })?.id ?? null).filter(Boolean),
+      match: match
+        ? {
+            inviteId: match.inviteId ?? null,
+            fromNumber: match.fromNumber ?? null,
+            toExtension: match.toExtension ?? null,
+            pbxCallId: match.pbxCallId ?? null,
+          }
+        : null,
+      candidates: answerable.map((session) => this.describeIncomingSession(session)),
+    };
+  }
+
+  private emitWebrtcCallDebug(payload: Record<string, unknown>) {
+    try {
+      this.onWebrtcCallDebug?.(payload);
+    } catch {
+      /* best-effort */
+    }
+  }
+
   private isAnswerableIncoming(session: any): boolean {
     const status = session?._status;
     // JsSIP incoming sessions are answerable while waiting for answer (4) and
@@ -1475,6 +1625,16 @@ export class JsSipClient implements SipClient {
 
     this.lastOutboundDialTarget = normalized;
     const dest = `sip:${normalized}@${this.bundle.sipDomain}`;
+    this.outboundBlackbox = new MobileWebrtcBlackboxRecorder();
+    this.outboundBlackbox.setIdentity(this.blackboxIdentity as any);
+    this.outboundBlackbox.setClient(this.buildBlackboxClient());
+    this.outboundBlackbox.setRegistration({
+      registrationState: this.isRegistered() ? "registered" : "not_registered",
+      registrationAgeMs: this.getRegistrationAgeMs(),
+      wssConnected: this.isConnected(),
+      uaStarted: !!this.ua,
+    });
+    this.outboundBlackbox.mark("dial_start", { dest, normalized });
     console.log('[SIP] Dialing:', dest, 'regAgeMs=' + (this.getRegistrationAgeMs() ?? 'unknown'));
     this.callDirection = "outbound";
     this.callStartedAt = Date.now();
@@ -1491,9 +1651,17 @@ export class JsSipClient implements SipClient {
     audioRouteManager.noteCallConnected();
     initAudioSession().then(() => startRingback()).catch(() => undefined);
     try {
+      this.outboundBlackbox.mark("ua_call_invoked");
       this.session = this.ua.call(dest, {
         mediaConstraints: VOICE_AUDIO_CONSTRAINTS,
         pcConfig: this.ua._configuration?.pcConfig ?? {},
+      });
+      this.outboundBlackbox.setDial({
+        uaCallInvoked: true,
+        sessionReturned: !!this.session,
+        sessionId: this.getSessionIdSafe(this.session),
+        jssipCallId: (this.session as { id?: string })?.id ?? null,
+        dialedNumber: normalized,
       });
       // NOTE: do NOT call bindSession here — ua.call() fires newRTCSession
       // synchronously, which already calls bindSession. Calling it again here
@@ -1571,7 +1739,21 @@ export class JsSipClient implements SipClient {
     let attempt = 0;
     const epoch = ++this.activeAnswerEpoch;
     this.lastAnswerMatch = match;
-    console.log('[CALL_EVENT] answer_pipeline_start at=' + answerStartAt + ' timeoutMs=' + timeoutMs);
+    const inviteKey = match?.inviteId ?? undefined;
+    if (!this.inboundBlackbox || this.inboundBlackbox.correlationId !== inviteKey) {
+      this.inboundBlackbox = new MobileWebrtcBlackboxRecorder(inviteKey);
+      this.inboundBlackbox.setIdentity(this.blackboxIdentity as any);
+      this.inboundBlackbox.setClient(this.buildBlackboxClient());
+    }
+    this.inboundBlackbox.setRegistration({
+      registrationState: this.isRegistered() ? "registered" : "not_registered",
+      registrationAgeMs: this.registeredAtMs ? Date.now() - this.registeredAtMs : null,
+      wssConnected: this.isConnected(),
+    });
+    this.inboundBlackbox.mark("answer_pipeline_start", {
+      inviteId: match?.inviteId ?? null,
+      pbxCallId: match?.pbxCallId ?? null,
+    });
 
     // IMPORTANT: `attempt` counts real `session.answer()` invocations only.
     // A poll iteration that finds no incoming session yet (cold-start race where
@@ -1579,12 +1761,14 @@ export class JsSipClient implements SipClient {
     // attempt slot — we just wait inside the overall time budget.
     const POLL_MS = MOBILE_SIP_ANSWER_POLL_MS;
     let inviteFoundMarked = false;
+    let pollIterations = 0;
     const inviteIdForLatency = match?.inviteId ?? null;
     while (Date.now() < getUntil()) {
       if (epoch !== this.activeAnswerEpoch) {
         console.warn('[CALL_EVENT] answer_pipeline_superseded epoch=' + epoch);
         return false;
       }
+      pollIterations += 1;
       const session = this.findIncoming(match);
       if (!session) {
         await new Promise((resolve) => setTimeout(resolve, POLL_MS));
@@ -1739,11 +1923,31 @@ export class JsSipClient implements SipClient {
     }
 
     console.warn('[CALL_EVENT] answer_pipeline_exhausted attempts=' + attempt);
+    const failureReason = attempt >= MAX_ATTEMPTS ? "max_attempts" : "session_not_found_timeout";
+    this.emitWebrtcCallDebug(
+      this.inboundBlackbox.buildInboundFailurePayload({
+        inviteId: match?.inviteId ?? null,
+        pbxCallId: match?.pbxCallId ?? null,
+        callerNumber: match?.fromNumber ?? null,
+        calleeExtension: match?.toExtension ?? null,
+        failureReason,
+        incomingSessionSnapshot: this.buildIncomingSessionSnapshot(match, {
+          pollIterations,
+          answerAttempts: attempt,
+          failureReason,
+        }),
+        sipAnswer: {
+          attempted: attempt > 0,
+          sent: inviteFoundMarked,
+          confirmed: false,
+        },
+      }),
+    );
     onTrace?.({
       phase: "failed",
       timestamp: Date.now(),
-      reason: attempt >= MAX_ATTEMPTS ? "max_attempts" : "session_not_found_timeout",
-      message: attempt >= MAX_ATTEMPTS ? "max_attempts" : "session_not_found_timeout",
+      reason: failureReason,
+      message: failureReason,
     });
     return false;
   }

@@ -44,6 +44,7 @@ Your job is to be **narrow, surgical, and conservative**. The platform is in pro
     - `GET /forensic`, `GET /diagnostics`, `GET /telephony/calls`
     - Mobile logcat / structured `[CALL_TIMELINE]` log lines
     - Wake/diag DB rows (`mobileDeviceCallWakeDiagnostics`)
+    - **WebRTC outages:** `WEBRTC_DIAGNOSTICS.md` evidence table + `_latency_logs/webrtc_full_outage_forensics.js` + `grep WEBRTC_CALL_DEBUG` / `WEBRTC_BLACKBOX_SCHEMA.md`
     Without evidence, **stop and ask**, do not guess.
 10. **For production-impacting changes**, include a rollback plan in your write-up.
 11. **At the end of the change**, summarize:
@@ -85,6 +86,7 @@ Your job is to be **narrow, surgical, and conservative**. The platform is in pro
 | Backend route lookup (any `app.<verb>(...)`) | `API_ROUTES.md` (jump table for `apps/api/src/server.ts`) |
 | Mobile (React Native) | `SERVICES.md` (mobile), `TELEPHONY.md` (mobile call section), `MOBILE_CALL_TIMELINE.md`, `KNOWN_ISSUES.md` (Mobile calling) |
 | Mobile call bug (push / wake / ring / answer) | `MOBILE_CALL_TIMELINE.md` first, then `docs/ai-templates/mobile-call-debug.md` |
+| **WebRTC outage / 488 / inbound answer fail** | **`WEBRTC_DIAGNOSTICS.md` first**, then **`WEBRTC_BLACKBOX_SCHEMA.md`**, `WEBRTC_LIVE_REPRO_RUNBOOK.md`, `TELEPHONY.md` |
 | Telephony / live calls / KPI | `TELEPHONY.md`, `DEBUGGING.md`, `KNOWN_ISSUES.md` |
 | Voicemail fleet stale-risk / audit gap | `VOICEMAIL_FLEET_STALE_RISK.md`, then `DEBUGGING.md` § voicemail **9b** |
 | PBX / VitalPBX / dialplan | `TELEPHONY.md`, `RULES.md`, `KNOWN_ISSUES.md`, plus `docs/pbx/*` and `docs/VITALPBX_ARI_SETUP.md` |

@@ -11,6 +11,12 @@ import {
   webrtcSdpDebugEnabled,
   redactSdpForDebug,
 } from "../lib/webrtcSdpDiagnostics";
+import { PortalWebrtcBlackboxRecorder } from "../lib/webrtcBlackboxRecorder";
+import {
+  extractJsSipFailureFields,
+  inferSipRejectionSource,
+  snapshotPeerConnection,
+} from "@connect/shared/webrtcCallDiagnostics";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -38,6 +44,7 @@ export interface SipDiagnostics {
   sipDomain: string | null;
   extensionNumber: string | null;
   sipUsername: string | null;
+  authUsername: string | null;
   hasTurn: boolean;
   hasStun: boolean;
   micPermission: MicPermission;
@@ -427,6 +434,7 @@ const DEFAULT_DIAG: SipDiagnostics = {
   sipDomain: null,
   extensionNumber: null,
   sipUsername: null,
+  authUsername: null,
   hasTurn: false,
   hasStun: false,
   micPermission: "unknown",
@@ -643,6 +651,35 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
    *  Captures the full outbound lifecycle so the failed offer + SIP status can be
    *  inspected without chrome://webrtc-internals. ICE creds are redacted. */
   const webrtcDebugRef = useRef<Record<string, unknown>>({});
+  const blackboxRecorderRef = useRef<PortalWebrtcBlackboxRecorder | null>(null);
+
+  function postWebrtcBlackbox(payload: Record<string, unknown>) {
+    try {
+      void apiPost("/voice/diag/webrtc-sdp-debug", payload).catch(() => undefined);
+    } catch {
+      /* never break call path */
+    }
+  }
+
+  function beginOutboundBlackbox(targetRaw: string, sipTarget: string, route: string) {
+    const rec = new PortalWebrtcBlackboxRecorder();
+    rec.setDirection("outbound");
+    rec.setClient({ userAgent: typeof navigator !== "undefined" ? navigator.userAgent : null });
+    rec.setIdentity({
+      extensionNumber: diagRef.current.extensionNumber,
+      sipUsername: diagRef.current.sipUsername,
+      authUsername: diagRef.current.authUsername,
+    });
+    rec.setRegistration({
+      registrationState: regState,
+      registrationAgeMs: null,
+      wssConnected: regState === "registered" || regState === "registering",
+      uaStarted: !!uaRef.current,
+    });
+    rec.mark("call_initiated", { targetRaw, sipTarget, route });
+    blackboxRecorderRef.current = rec;
+    return rec;
+  }
 
   function patchDiag(patchOrFn: Partial<SipDiagnostics> | ((prev: SipDiagnostics) => SipDiagnostics)) {
     if (typeof patchOrFn === "function") {
@@ -936,6 +973,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         sipDomain,
         extensionNumber: ext.extensionNumber,
         sipUsername: ext.sipUsername,
+        authUsername: ext.authUsername ?? ext.sipUsername,
         hasTurn: hasTurnServer(ext.iceServers),
         hasStun: hasStunServer(ext.iceServers),
         webrtcEnabled: ext.webrtcEnabled,
@@ -1630,16 +1668,20 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       setTimeout(() => setCallState("idle"), 2000);
     });
 
-    session.on("failed", (e: { cause: string; message?: { status_code?: number; reason_phrase?: string; method?: string }; originator?: string }) => {
+    session.on("failed", (e: { cause: string; message?: { status_code?: number; reason_phrase?: string; method?: string }; originator?: string; response?: { status_code?: number; reason_phrase?: string; method?: string } }) => {
       stopAllAudio();
-      console.log("[SIP] CALL_FAILED cause:", e.cause);
+      const fields = extractJsSipFailureFields(e);
+      const cause = fields.failedCause || e.cause || "unknown";
+      console.log("[SIP] CALL_FAILED cause:", cause);
       // ── WebRTC SDP rejection capture ────────────────────────────────────────
       // 488 / 606 (JsSIP cause "Incompatible SDP") means Asterisk rejected the
       // client offer during media negotiation, BEFORE any channel/dialplan. This
       // is the P0 outbound failure signature — always capture it (the normal
       // call-quality report drops sub-1s failures), labeled and de-ambiguated.
-      const sipCode = typeof e.message?.status_code === "number" ? e.message.status_code : null;
-      const reasonPhrase = typeof e.message?.reason_phrase === "string" ? e.message.reason_phrase : null;
+      const sipCode = fields.sipStatusCode;
+      const reasonPhrase = fields.sipReasonPhrase;
+      const sipRejectionSource = inferSipRejectionSource(fields);
+      const peerConnectionSnapshot = snapshotPeerConnection(session.connection);
       // Fallback offer source: the live peerconnection localDescription.
       let offer = lastOfferSdpRef.current;
       if (!offer) {
@@ -1647,11 +1689,13 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       }
       recordWebrtcDebug({
         failedAt: new Date().toISOString(),
-        failedCause: e.cause,
-        failedOriginator: e.originator ?? null,
+        failedCause: cause,
+        failedOriginator: fields.failedOriginator,
         sipStatusCode: sipCode,
         sipReasonPhrase: reasonPhrase,
-        sipMethod: e.message?.method ?? null,
+        sipMethod: fields.sipMethod,
+        sipRejectionSource,
+        peerConnectionSnapshot,
         offerSdpRedacted: offer ? redactSdpForDebug(offer) : (webrtcDebugRef.current["offerSdpRedacted"] ?? null),
       });
       if (isWebrtcSdpRejection({ sipCode, cause: e.cause })) {
@@ -1676,25 +1720,24 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
             qualityGrade: "failed",
           }).catch(() => {});
         } catch { /* best-effort */ }
-        // Ship the redacted offer + SIP status server-side UNCONDITIONALLY (not
-        // gated by the debug flag) so a WebRTC SDP rejection is always captured
-        // for live tailing/correlation during this P0 investigation.
-        try {
-          void apiPost("/voice/diag/webrtc-sdp-debug", {
-            target: party,
-            sessionId: typeof mcId === "string" ? mcId : null,
-            flushReason: "sdp_reject",
-            failedCause: e.cause ?? null,
-            failedOriginator: e.originator ?? null,
-            sipStatusCode: sipCode,
-            sipReasonPhrase: reasonPhrase,
-            sipMethod: e.message?.method ?? null,
-            offerSummary: offer ? summarizeOfferSdp(offer) : null,
-            offerCompatibilityIssues: offer ? checkOfferCompatibility(summarizeOfferSdp(offer)) : undefined,
-            offerSdpRedacted: offer ? redactSdpForDebug(offer) : null,
-          }).catch(() => {});
-        } catch { /* best-effort */ }
       }
+      blackboxRecorderRef.current?.mark("session_failed", {
+        cause,
+        sipCode,
+        sipRejectionSource,
+      });
+      const blackboxPayload = blackboxRecorderRef.current?.buildOutboundFailurePayload({
+        targetRaw: party,
+        targetNormalized: party,
+        sipTarget: typeof webrtcDebugRef.current.sipTarget === "string" ? webrtcDebugRef.current.sipTarget : null,
+        session,
+        failedEvent: e,
+        offerSdp: offer,
+        wssConnected: regState === "registered",
+        uaStarted: !!uaRef.current,
+        channelNotCreated: true,
+      });
+      if (blackboxPayload) postWebrtcBlackbox(blackboxPayload);
       flushWebrtcDebug("call_failed");
       // Cancel stale-hangup timer — call failed cleanly at SIP level
       if (staleHangupTimerRef.current) { clearTimeout(staleHangupTimerRef.current); staleHangupTimerRef.current = null; }
@@ -1826,27 +1869,59 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         : Promise.resolve(normalised);
 
       resolveDialTarget
-        .then((pbxDialTarget) => navigator.mediaDevices
-        .getUserMedia({ audio: voiceAudioConstraints(currentMicDeviceIdRef.current), video: false })
-        .then((localStream) => {
+        .then((pbxDialTarget) => {
+          const sipTarget = `sip:${pbxDialTarget}@${domain}`;
+          const bb = beginOutboundBlackbox(normalised, sipTarget, selectedOutboundRoute?.name || "none");
+          const mediaConstraints = voiceAudioConstraints(currentMicDeviceIdRef.current);
+          bb.setMedia({ constraints: mediaConstraints, inputDeviceId: currentMicDeviceIdRef.current ?? null });
+          return navigator.mediaDevices
+            .getUserMedia({ audio: mediaConstraints, video: false })
+            .then((localStream) => {
           localStreamRef.current = localStream;
+          bb.mark("getusermedia_granted");
+          bb.setMedia({
+            constraints: mediaConstraints,
+            permissionGranted: true,
+            inputDeviceLabel: localStream.getAudioTracks()[0]?.label ?? null,
+          });
           webrtcDebugRef.current = {
             target: normalised,
-            sipTarget: `sip:${pbxDialTarget}@${domain}`,
+            sipTarget,
             route: selectedOutboundRoute?.name || "none",
             callInvokedAt: new Date().toISOString(),
           };
           try {
-            const session = uaRef.current!.call(`sip:${pbxDialTarget}@${domain}`, {
+            bb.mark("ua_call_invoked");
+            const session = uaRef.current!.call(sipTarget, {
               mediaStream: localStream,
               pcConfig: uaRef.current!._configuration?.pcConfig ?? {},
             });
+            const sessionId = (() => { try { return getOrAssignSessionId(session); } catch { return null; } })();
+            bb.setDial({
+              uaCallInvoked: true,
+              sessionReturned: !!session,
+              sessionId,
+              jssipCallId: (session as { id?: string })?.id ?? null,
+            });
+            bb.mark("ua_call_returned", { sessionReturned: !!session, sessionId });
             recordWebrtcDebug({
               sessionReturned: !!session,
-              sessionId: (() => { try { return getOrAssignSessionId(session); } catch { return null; } })(),
+              sessionId,
             });
             bindSession(session, normalised);
           } catch (e: unknown) {
+            bb.mark("ua_call_throw", { error: e instanceof Error ? e.message : String(e) });
+            postWebrtcBlackbox(bb.buildOutboundFailurePayload({
+              targetRaw: normalised,
+              targetNormalized: normalised,
+              sipTarget,
+              failedEvent: { cause: e instanceof Error ? e.message : String(e), originator: "local" },
+              channelNotCreated: true,
+              wssConnected: regState === "registered",
+              uaStarted: !!uaRef.current,
+              mediaMeta: { permissionGranted: true },
+              dialMeta: { uaCallInvoked: true, sessionReturned: false },
+            }));
             recordWebrtcDebug({ sessionReturned: false, callError: e instanceof Error ? e.message : String(e) });
             flushWebrtcDebug("call_throw");
             localStream.getTracks().forEach((t) => t.stop());
@@ -1859,6 +1934,15 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
           }
         })
         .catch((err) => {
+          bb.mark("getusermedia_denied", { name: err?.name ?? "unknown" });
+          postWebrtcBlackbox(bb.buildOutboundFailurePayload({
+            targetRaw: normalised,
+            targetNormalized: normalised,
+            sipTarget,
+            failedEvent: { cause: err?.name ?? "mic_error", originator: "local" },
+            channelNotCreated: true,
+            mediaMeta: { permissionGranted: false, errorName: err?.name ?? null },
+          }));
           setCallState("idle");
           setSelectedOutboundRouteId("");
           if (err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError") {
@@ -1869,7 +1953,8 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
             setError(`Microphone error: ${err?.message ?? err}`);
           }
           patchDiag({ lastCallError: `mic_error: ${err?.name}`, micPermission: "denied" });
-        }))
+        });
+        })
         .catch((err) => {
           setCallState("idle");
           setSelectedOutboundRouteId("");
