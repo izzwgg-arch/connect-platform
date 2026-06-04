@@ -350,6 +350,7 @@ async function pollCallStats(pc: RTCPeerConnection): Promise<FullStatSnapshot> {
   const result: FullStatSnapshot = {
     packetsLost: null,
     jitterMs: null,
+    jitterBufferMs: null,
     rttMs: null,
     packetsReceived: null,
     packetsSent: null,
