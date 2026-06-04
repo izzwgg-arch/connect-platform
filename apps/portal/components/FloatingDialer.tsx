@@ -329,7 +329,14 @@ function DiagnosticsPanel({
 }: {
   phone: ReturnType<typeof useSipPhone>;
 }) {
-  const rows = [
+  const onCall = phone.callState === "connected" || phone.callState === "ringing" || phone.callState === "dialing";
+  const ringLabel =
+    phone.diag.localRingback === "local"
+      ? "Local (EU)"
+      : phone.diag.localRingback === "remote"
+        ? "PBX / early media"
+        : "Off";
+  const rows: [string, string][] = [
     ["TURN", phone.diag.hasTurn ? "Configured" : "Not configured"],
     ["Microphone", phone.diag.micPermission],
     ["Extension", phone.diag.extensionNumber ?? "Not assigned"],
@@ -337,6 +344,22 @@ function DiagnosticsPanel({
     ["ICE", phone.diag.iceConnectionState ?? "Not connected"],
     ["Audio", phone.diag.remoteAudioReceiving ? "Receiving" : "Idle"],
   ];
+  if (onCall && phone.callDirection === "outbound") {
+    rows.push(["Ringback", ringLabel]);
+  }
+  if (phone.callState === "connected") {
+    if (phone.diag.qualityGrade) rows.push(["Quality", phone.diag.qualityGrade]);
+    if (phone.diag.rttMs != null) rows.push(["RTT", `${phone.diag.rttMs} ms`]);
+    if (phone.diag.jitterMs != null) rows.push(["Jitter", `${phone.diag.jitterMs} ms`]);
+    if (phone.diag.jitterBufferMs != null) rows.push(["Jitter buf", `${phone.diag.jitterBufferMs} ms`]);
+    if (phone.diag.packetsLost != null) rows.push(["Pkt lost", String(phone.diag.packetsLost)]);
+    if (phone.diag.audioCodec) rows.push(["Codec", phone.diag.audioCodec]);
+    if (phone.diag.bitrateKbps != null) rows.push(["Bitrate", `${phone.diag.bitrateKbps} kbps`]);
+  }
+  const recentJitter = phone.diag.rawSamples
+    .slice(-5)
+    .map((s) => s.jitterMs)
+    .filter((v): v is number => v != null);
   return (
     <div className="fd-diagnostics">
       {rows.map(([label, value]) => (
@@ -345,6 +368,18 @@ function DiagnosticsPanel({
           <strong>{value}</strong>
         </div>
       ))}
+      {phone.callState === "connected" && recentJitter.length > 0 && (
+        <div>
+          <span>Jitter trend</span>
+          <strong>{recentJitter.join(" → ")} ms</strong>
+        </div>
+      )}
+      {phone.callState === "connected" && (
+        <div className="fd-diag-hint">
+          Live: open DevTools console and filter <code>SipPhone] live_stats</code>, or run{" "}
+          <code>copy(__CONNECT_CALL_DIAG__)</code>
+        </div>
+      )}
     </div>
   );
 }
@@ -991,6 +1026,8 @@ const DIALER_CSS = `
 .fd-diagnostics { margin: 9px 10px 0; padding: 9px; border: 1px solid var(--fd-border); border-radius: 14px; background: var(--fd-card-2); display: grid; gap: 6px; }
 .fd-diagnostics div { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; color: var(--fd-muted); }
 .fd-diagnostics strong { color: var(--fd-text); text-align: right; }
+.fd-diag-hint { display: block !important; font-size: 10px !important; line-height: 1.35; color: var(--fd-muted) !important; }
+.fd-diag-hint code { font-size: 9px; color: var(--fd-text); }
 .fd-blf { width: 350px; max-width: calc(100vw - 20px); max-height: calc(100vh - 70px); border-radius: 20px; overflow: hidden; transform: translateX(18px) translateY(4px) scale(.985); opacity: 0; pointer-events: none; transition: opacity .2s ease-in-out, transform .2s ease-in-out; }
 .fd-blf[data-open="true"] { opacity: 1; transform: translateX(0) translateY(0) scale(1); pointer-events: auto; }
 .fd-blf-head { padding: 11px 12px 8px; }

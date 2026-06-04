@@ -60,6 +60,8 @@ export interface SipDiagnostics {
   packetsSent: number | null;
   /** Inbound audio jitter in milliseconds. */
   jitterMs: number | null;
+  /** Inbound jitter buffer delay (WebRTC getStats), milliseconds. */
+  jitterBufferMs: number | null;
   /** Round-trip time for the selected ICE candidate pair in milliseconds. */
   rttMs: number | null;
   /** Inbound bytes received total. */
@@ -78,6 +80,8 @@ export interface SipDiagnostics {
   qualityGrade: "excellent" | "good" | "fair" | "poor" | "failed" | null;
   /** Raw last-10 stat snapshots for debug mode. */
   rawSamples: RawStatSample[];
+  /** Outbound ringback phase: local synth until PBX/early-media takes over. */
+  localRingback: "local" | "remote" | "off";
   lastRegError: string | null;
   lastCallError: string | null;
   webrtcEnabled: boolean;
@@ -103,6 +107,7 @@ export interface RawStatSample {
   packetsSent: number | null;
   jitterMs: number | null;
   rttMs: number | null;
+  jitterBufferMs: number | null;
   bytesReceived: number | null;
   bytesSent: number | null;
   bitrateKbps: number | null;
@@ -330,6 +335,7 @@ interface FullStatSnapshot {
   packetsLost: number | null;
   jitterMs: number | null;
   rttMs: number | null;
+  jitterBufferMs: number | null;
   packetsReceived: number | null;
   packetsSent: number | null;
   audioCodec: string | null;
@@ -371,6 +377,9 @@ async function pollCallStats(pc: RTCPeerConnection): Promise<FullStatSnapshot> {
         if (typeof ir.packetsLost === "number") result.packetsLost = ir.packetsLost;
         if (typeof ir.packetsReceived === "number") result.packetsReceived = ir.packetsReceived;
         if (typeof ir.jitter === "number") result.jitterMs = Math.round(ir.jitter * 1000);
+        if (typeof ir.jitterBufferDelay === "number") {
+          result.jitterBufferMs = Math.round(ir.jitterBufferDelay * 1000);
+        }
         if (typeof ir.bytesReceived === "number") result.bytesReceived = ir.bytesReceived;
         if (ir.codecId && codecMap.has(ir.codecId)) {
           result.audioCodec = codecMap.get(ir.codecId)!.replace("audio/", "");
@@ -445,6 +454,7 @@ const DEFAULT_DIAG: SipDiagnostics = {
   packetsLost: null,
   packetsSent: null,
   jitterMs: null,
+  jitterBufferMs: null,
   rttMs: null,
   bytesReceived: null,
   bytesSent: null,
@@ -454,6 +464,7 @@ const DEFAULT_DIAG: SipDiagnostics = {
   audioCodec: null,
   qualityGrade: null,
   rawSamples: [],
+  localRingback: "off",
   lastRegError: null,
   lastCallError: null,
   webrtcEnabled: false,
@@ -481,7 +492,13 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const [outboundRoutes, setOutboundRoutes] = useState<OutboundDialRoute[]>([]);
   const [selectedOutboundRouteId, setSelectedOutboundRouteId] = useState("");
 
-  const { startRingback, startRingtone, playDtmfTone, stopAll: stopAllAudio } = useTelephonyAudio();
+  const {
+    startEuropeanLocalRingback,
+    stopLocalRingback,
+    startRingtone,
+    playDtmfTone,
+    stopAll: stopAllAudio,
+  } = useTelephonyAudio();
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const uaRef = useRef<any>(null);
@@ -753,6 +770,11 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       }
 
       const grade = computeQualityGrade(s.rttMs, s.jitterMs, s.packetsLost, s.packetsReceived);
+      const lossPct =
+        s.packetsLost != null && s.packetsReceived != null && s.packetsReceived > 0
+          ? Math.round((s.packetsLost / (s.packetsLost + s.packetsReceived)) * 1000) / 10
+          : null;
+
       const newSample: RawStatSample = {
         ts: now,
         packetsLost: s.packetsLost,
@@ -760,6 +782,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         packetsSent: s.packetsSent,
         jitterMs: s.jitterMs,
         rttMs: s.rttMs,
+        jitterBufferMs: s.jitterBufferMs,
         bytesReceived: s.bytesReceived,
         bytesSent: s.bytesSent,
         bitrateKbps,
@@ -768,11 +791,31 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         qualityGrade: grade,
       };
 
+      const livePayload = {
+        at: new Date(now).toISOString(),
+        grade,
+        rttMs: s.rttMs,
+        jitterMs: s.jitterMs,
+        jitterBufferMs: s.jitterBufferMs,
+        lossPct,
+        packetsLost: s.packetsLost,
+        packetsReceived: s.packetsReceived,
+        bitrateKbps,
+        codec: s.audioCodec,
+        candidateType: s.selectedCandidateType,
+        relay: s.selectedCandidateType === "relay",
+      };
+      console.log("[SipPhone] live_stats", JSON.stringify(livePayload));
+      if (typeof window !== "undefined") {
+        (window as unknown as { __CONNECT_CALL_DIAG__?: unknown }).__CONNECT_CALL_DIAG__ = livePayload;
+      }
+
       patchDiag((prev) => ({
         ...prev,
         packetsLost: s.packetsLost,
         packetsSent: s.packetsSent,
         jitterMs: s.jitterMs,
+        jitterBufferMs: s.jitterBufferMs,
         rttMs: s.rttMs,
         bytesReceived: s.bytesReceived,
         bytesSent: s.bytesSent,
@@ -1270,7 +1313,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       isUsingRelay: false,
       packetsLost: null,
       jitterMs: null,
+      jitterBufferMs: null,
       rttMs: null,
+      localRingback: "off",
       remoteAudioReceiving: false,
       audioCodec: null,
       qualityGrade: null,
@@ -1331,6 +1376,11 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       if (e.track.kind !== "audio") return;
       const stream = e.streams[0] ?? new MediaStream([e.track]);
       console.log("[SipPhone] remote_track_received id=" + e.track.id + " state=" + e.track.readyState);
+      if (callDirectionRef.current === "outbound" && !callStartedAtRef.current) {
+        stopLocalRingback();
+        console.log("[SipPhone] local_ringback_stopped reason=early_media");
+        patchDiag({ localRingback: "remote" });
+      }
       attachRemoteStream(stream);
 
       // Monitor remote track lifecycle for mid-call audio drops
@@ -1597,17 +1647,26 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       } catch { /* noop */ }
     });
 
-    session.on("progress", () => {
+    session.on("progress", (e?: { response?: { status_code?: number } }) => {
       // Guard: never regress from "connected" → "ringing". A late SIP 180 Ringing
       // can arrive after 200 OK on some VitalPBX proxy setups; without this guard
       // the call transitions back to the ringing/outgoing screen after connecting.
       setCallState((prev) => (prev === "dialing" ? "ringing" : prev));
       patchSessionMeta(mcId, { state: "ringing" });
-      // Outbound: play US ringback — skip if session already established (late 180)
-      if (callDirectionRef.current === "outbound" && !session.isEstablished?.()) startRingback();
+      // Outbound: PBX/remote ringback — stop European local synth immediately.
+      if (callDirectionRef.current === "outbound" && !session.isEstablished?.()) {
+        stopLocalRingback();
+        const sipCode = e?.response?.status_code;
+        console.log(
+          "[SipPhone] local_ringback_stopped reason=remote_ringing"
+            + (sipCode ? " sip=" + sipCode : ""),
+        );
+        patchDiag({ localRingback: "remote" });
+      }
     });
     session.on("accepted", () => {
       stopAllAudio();
+      patchDiag({ localRingback: "off" });
       if (!callStartedAtRef.current) {
         callStartedAtRef.current = Date.now();
         finalReportSentRef.current = false;
@@ -1619,6 +1678,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     });
     session.on("confirmed", () => {
       stopAllAudio();
+      patchDiag({ localRingback: "off" });
       if (!callStartedAtRef.current) {
         callStartedAtRef.current = Date.now();
         finalReportSentRef.current = false;
@@ -1858,8 +1918,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       setError(null);
       setOnHold(false);
       console.log("[SIP] CALL_INITIATED target:", normalised, "route:", selectedOutboundRoute?.name || "none");
-      // Start ringback immediately on dial (before "progress" from PBX)
-      startRingback();
+      // European local ringback until SIP progress / early media from PBX
+      startEuropeanLocalRingback();
+      patchDiag({ localRingback: "local" });
 
       const resolveDialTarget = selectedOutboundRoute
         ? apiPost<{ finalNumber: string }>("/me/outbound-routes/resolve-dial", {

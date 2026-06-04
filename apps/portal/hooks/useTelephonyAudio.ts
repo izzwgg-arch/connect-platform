@@ -5,7 +5,8 @@
  * No audio files required — tones are generated from pure oscillators.
  *
  * Provides:
- *  - US ringback tone  (440 + 480 Hz, 2s on / 4s off cadence)
+ *  - European local ringback (ETSI 425 Hz, 1s on / 4s off) until PBX remote ringback
+ *  - US ringback tone  (440 + 480 Hz, 2s on / 4s off cadence) — legacy helper
  *  - Incoming ringtone (480 + 440 Hz double-ring, NANP cadence)
  *  - DTMF keypad tones (standard ITU-T frequencies, 120 ms)
  */
@@ -112,11 +113,16 @@ function startCadenceTone(
       clearTimeout(timeoutId);
       const t = ctx.currentTime;
       activeGains.forEach((g) => {
-        try { g.gain.cancelScheduledValues(t); g.gain.setTargetAtTime(0, t, 0.005); } catch { /* ignore */ }
+        try {
+          g.gain.cancelScheduledValues(t);
+          g.gain.setValueAtTime(0, t);
+        } catch { /* ignore */ }
       });
       activeOscillators.forEach((o) => {
-        try { o.stop(t + 0.02); } catch { /* ignore */ }
+        try { o.stop(t); } catch { /* ignore */ }
       });
+      activeGains.length = 0;
+      activeOscillators.length = 0;
     },
   };
 }
@@ -192,6 +198,23 @@ export function useTelephonyAudio() {
     }
   }, []);
 
+  /** Stop synthesized local ringback only (incoming ringtone untouched). */
+  const stopLocalRingback = useCallback(() => {
+    ringbackRef.current?.stop();
+    ringbackRef.current = null;
+  }, []);
+
+  /**
+   * European local ringback (ETSI-style 425 Hz, 1s on / 4s off).
+   * Plays until SIP progress / early media — then stopLocalRingback().
+   */
+  const startEuropeanLocalRingback = useCallback(() => {
+    stopLocalRingback();
+    const ctx = ensureCtx();
+    if (!ctx) return;
+    ringbackRef.current = startCadenceTone(ctx, 425, 425, 1000, 4000, 0.12);
+  }, [stopLocalRingback]);
+
   /** US ringback: 440+480 Hz, 2s on / 4s off. */
   const startRingback = useCallback(() => {
     stopAll();
@@ -253,5 +276,12 @@ export function useTelephonyAudio() {
     };
   }, [stopAll]);
 
-  return { startRingback, startRingtone, playDtmfTone, stopAll };
+  return {
+    startRingback,
+    startEuropeanLocalRingback,
+    stopLocalRingback,
+    startRingtone,
+    playDtmfTone,
+    stopAll,
+  };
 }
