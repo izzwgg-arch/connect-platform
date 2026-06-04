@@ -1446,13 +1446,17 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       patchDiag({ iceConnectionState: iceState });
 
       if (iceState === "connected" || iceState === "completed") {
-        // Fallback: if SIP confirmed/accepted didn't fire (some PBX configs),
-        // ICE media path succeeding is a reliable signal that the call is live.
-        if (localRingbackActiveRef.current) {
-          stopOutboundRingbackImmediate("ice_connected");
+        // ICE often connects before 200 OK while UK ringback should continue.
+        const answered = callStartedAtRef.current !== null;
+        if (answered) {
+          if (localRingbackActiveRef.current) {
+            stopOutboundRingbackImmediate("ice_connected");
+          }
+          setCallState((prev) => (prev === "ringing" || prev === "dialing") ? "connected" : prev);
+          syncReceiversToAudio(pc);
+        } else {
+          console.log("[SipPhone] ICE_CONNECTED pre_answer — keep UK ringback, defer remote audio");
         }
-        setCallState((prev) => (prev === "ringing" || prev === "dialing") ? "connected" : prev);
-        syncReceiversToAudio(pc);
         // Kick off stats polling and do an immediate first poll for candidate type.
         startStatsPolling(pc);
         pollCallStats(pc).then((s) => {
@@ -1548,7 +1552,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     pc.addEventListener("connectionstatechange", () => {
       const connState = pc.connectionState;
       console.log("[SipPhone] PeerConnection →", connState);
-      if (connState === "connected") syncReceiversToAudio(pc);
+      if (connState === "connected" && callStartedAtRef.current !== null) {
+        syncReceiversToAudio(pc);
+      }
       if (connState === "failed") {
         console.error("[SipPhone] PeerConnection_FAILED — media path is dead");
         patchDiag({ lastCallError: "Peer connection failed — media path is dead" });
@@ -1862,8 +1868,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       if (iceRestartTimerRef.current) { clearTimeout(iceRestartTimerRef.current); iceRestartTimerRef.current = null; }
     });
 
-    // Sync any already-live tracks if peerconnection was created before this binding.
-    if (session.connection) syncReceiversToAudio(session.connection);
+    // Defer receiver sync until answer — pre-answer tracks are often silent SDP placeholders.
+    if (session.connection && callStartedAtRef.current !== null) {
+      syncReceiversToAudio(session.connection);
+    }
   }
 
   /**
