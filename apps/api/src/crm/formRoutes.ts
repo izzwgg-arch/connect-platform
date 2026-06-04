@@ -199,7 +199,12 @@ export async function registerCrmFormRoutes(app: FastifyInstance) {
     const row = await (db as any).crmFormTemplate.findFirst({ where: { id, tenantId: user.tenantId }, select: { storageKey: true, originalFileName: true } });
     if (!row) return reply.code(404).send({ error: "form_not_found" });
     const buffer = await readCrmFormFile(row.storageKey);
-    return reply.header("Cache-Control", "private, no-store").type("application/pdf").send(buffer);
+    const filename = String(row.originalFileName || "form.pdf").replace(/[^\w.-]+/g, "_");
+    return reply
+      .header("Cache-Control", "private, no-store")
+      .header("Content-Disposition", `inline; filename="${filename}"`)
+      .type("application/pdf")
+      .send(buffer);
   });
 
   app.get("/crm/contacts/:id/forms", async (req, reply) => {
@@ -281,7 +286,12 @@ export async function registerCrmFormRoutes(app: FastifyInstance) {
         return reply.code(409).send({ error: "already_completed" });
       }
       const buffer = await readCrmFormFile(request.formTemplate.storageKey);
-      return reply.header("Cache-Control", "private, no-store").type("application/pdf").send(buffer);
+      const filename = String(request.formTemplate.originalFileName || "form.pdf").replace(/[^\w.-]+/g, "_");
+      return reply
+        .header("Cache-Control", "private, no-store")
+        .header("Content-Disposition", `inline; filename="${filename}"`)
+        .type("application/pdf")
+        .send(buffer);
     } catch (err: any) {
       return sendPublicError(reply, err);
     }

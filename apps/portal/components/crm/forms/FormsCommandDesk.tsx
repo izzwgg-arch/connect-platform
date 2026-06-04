@@ -13,7 +13,7 @@ import {
   CRMWorkspaceShell,
   CRMWorkspaceToolbar,
 } from "../CRMWorkspaceShell";
-import { ApiError, apiGet, apiPost, apiPut, getPortalApiBaseUrl } from "../../../services/apiClient";
+import { ApiError, apiFetchBlob, apiGet, apiPost, apiPut, getPortalApiBaseUrl } from "../../../services/apiClient";
 
 type FormStatus = "DRAFT" | "ACTIVE" | "ARCHIVED";
 type FieldType = "TEXT" | "DATE" | "CHECKBOX" | "SIGNATURE" | "INITIALS";
@@ -79,6 +79,18 @@ function statusClass(status: FormStatus) {
   if (status === "ACTIVE") return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-200";
   if (status === "ARCHIVED") return "bg-slate-500/10 text-slate-600 dark:text-slate-300";
   return "bg-amber-500/10 text-amber-700 dark:text-amber-200";
+}
+
+async function openFormPreview(formId: string) {
+  const url = `${getPortalApiBaseUrl()}/crm/forms/${encodeURIComponent(formId)}/preview`;
+  try {
+    const blob = await apiFetchBlob(url);
+    const blobUrl = URL.createObjectURL(blob);
+    window.open(blobUrl, "_blank", "noopener,noreferrer");
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
+  } catch (err) {
+    window.alert(err instanceof ApiError ? err.message : "Unable to open PDF preview.");
+  }
 }
 
 function emptyField(index: number): FormField {
@@ -217,9 +229,9 @@ export function FormsCommandDesk() {
                         <button type="button" onClick={() => setEditingId(form.id)} className="rounded-lg border border-crm-border px-2 py-1 text-xs text-crm-text">
                           <Pencil className="mr-1 inline h-3.5 w-3.5" /> Edit
                         </button>
-                        <a href={`${getPortalApiBaseUrl()}/crm/forms/${form.id}/preview`} target="_blank" rel="noreferrer" className="rounded-lg border border-crm-border px-2 py-1 text-xs text-crm-text">
+                        <button type="button" onClick={() => { void openFormPreview(form.id); }} className="rounded-lg border border-crm-border px-2 py-1 text-xs text-crm-text">
                           <Eye className="mr-1 inline h-3.5 w-3.5" /> View
-                        </a>
+                        </button>
                         {form.status !== "ARCHIVED" ? (
                           <button type="button" onClick={async () => { await apiPost(`/crm/forms/${form.id}/archive`); loadForms(); }} className="rounded-lg border border-crm-border px-2 py-1 text-xs text-crm-text">
                             <Archive className="mr-1 inline h-3.5 w-3.5" /> Archive
@@ -345,7 +357,7 @@ function FormEditorDrawer({ formId, onClose, onSaved }: { formId: string; onClos
         <div className="flex-1 overflow-y-auto p-5">
           {error ? <div className="mb-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700">{error}</div> : null}
           <div className="mb-4 rounded-2xl border border-crm-border p-3">
-            <a href={`${getPortalApiBaseUrl()}/crm/forms/${formId}/preview`} target="_blank" rel="noreferrer" className="text-sm font-medium text-crm-accent">Open PDF preview</a>
+            <button type="button" onClick={() => { void openFormPreview(formId); }} className="text-sm font-medium text-crm-accent">Open PDF preview</button>
             <p className="mt-1 text-xs text-crm-muted">Full drag/drop overlay is deferred; use page and coordinate fields below for Phase 1.</p>
           </div>
           <div className="space-y-3">
