@@ -4,6 +4,36 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-04 — Platform-wide WebRTC outage detection
+
+**Task:** telephony / WebRTC / outage prevention  
+**Risk:** extreme — incident system only; no PBX/media fix
+
+### Shipped
+
+- **`GLOBAL_WEBRTC_OUTAGE`** incident type with warning/critical severity.
+- **Global triggers (15 min):** 3+ tenant failures, 10+ SDP/488 cluster, 10+ inbound
+  answer failures, success-rate collapse (min 10 attempts), mixed-direction outage.
+- **`WebrtcPlatformOutage`** + per-admin dismissals; dedupe by 15-minute bucket.
+- **API:** `GET /admin/webrtc-platform/outage/active`, `POST …/dismiss`,
+  `GET /admin/webrtc-platform/health` (super-admin / `can_manage_global_settings`).
+- **Portal:** `WebrtcGlobalOutageBanner`, `WebrtcPlatformHealthCard` on `/admin`;
+  global outage merged into Incident Center and Ops Center.
+- **Tests:** shared evaluator, db dismiss/reopen/dedupe, API route + aggregation checks.
+
+### Prevention coverage
+
+Before this pass, the Jun 2026 multi-tenant outage (T2/T25/T7, portal + mobile,
+inbound + outbound) would only surface as isolated per-tenant alerts. Global
+correlation now fires a platform incident when multiple tenants degrade simultaneously.
+
+### Docs
+
+- `WEBRTC_DIAGNOSTICS.md` — § Platform-wide WebRTC outage detection
+- `TELEPHONY.md` — global outage subsection
+
+---
+
 ## 2026-06-04 — WebRTC black-box diagnostics hardening (schema v2)
 
 **Task:** telephony / WebRTC / black-box diagnostics  
@@ -18,6 +48,8 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 - **Portal** — `PortalWebrtcBlackboxRecorder` wired on outbound dial + all failure paths.
 - **Mobile** — `MobileWebrtcBlackboxRecorder`, inbound timeline at answer-tap,
   `session_not_found_timeout` / `sip_invite_not_received` black-box posts.
+- **Admin incidents** — `WebrtcCallingIncident` + dismissible `/admin` banner; threshold
+  evaluation on diag ingest; Incident Center / Ops Center integration.
 
 ### Docs
 

@@ -707,6 +707,7 @@ model Tenant {
   connectChatThreads              ConnectChatThread[]
   smsRoutingLogs                  SmsRoutingLog[]
   voicemailIngestIncidents        VoicemailIngestIncident[]
+  webrtcCallingIncidents           WebrtcCallingIncident[]
   crmSettings                     CrmTenantSettings?
   crmUserAccess                   CrmUserAccess[]
   crmUserCampaignAssignments      CrmUserCampaignAssignment[]
@@ -845,6 +846,8 @@ model User {
   crmLeadDocumentsReviewed       CrmLeadDocument[] @relation("CrmLeadDocumentReviewedBy")
   crmFormTemplatesCreated        CrmFormTemplate[] @relation("CrmFormTemplateCreatedBy")
   crmFormRequestsCreated         CrmFormRequest[]  @relation("CrmFormRequestCreatedBy")
+  webrtcCallingIncidentDismissals WebrtcCallingIncidentDismissal[]
+  webrtcPlatformOutageDismissals   WebrtcPlatformOutageDismissal[]
 }
 
 enum UserRole {
@@ -2249,6 +2252,88 @@ model VoicemailIngestIncident {
   @@index([tenantId])
   @@index([scenario, status])
   @@index([createdAt])
+}
+
+/// Platform admin alerts when WebRTC/SIP calling degrades (schema v2 black-box triggers).
+model WebrtcCallingIncident {
+  id               String    @id @default(cuid())
+  fingerprint      String
+  tenantId         String
+  failureType      String
+  severity         String
+  status           String    @default("OPEN")
+  direction        String
+  firstSeenAt      DateTime  @default(now())
+  lastSeenAt       DateTime  @updatedAt
+  occurrenceCount  Int       @default(1)
+  title            String
+  actionText       String
+  latestSipCode    Int?
+  latestSipReason  String?
+  metadata         Json?
+  resolvedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  dismissals       WebrtcCallingIncidentDismissal[]
+
+  @@index([fingerprint, status])
+  @@index([tenantId, status])
+  @@index([status, severity])
+  @@index([lastSeenAt])
+}
+
+/// Per-admin dismiss — hides banner without deleting incident history.
+model WebrtcCallingIncidentDismissal {
+  id          String                @id @default(cuid())
+  incidentId  String
+  userId      String
+  dismissedAt DateTime              @default(now())
+  incident    WebrtcCallingIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([incidentId, userId])
+  @@index([userId, dismissedAt])
+}
+
+/// Platform-wide WebRTC outage (cross-tenant) — GLOBAL_WEBRTC_OUTAGE.
+model WebrtcPlatformOutage {
+  id                      String    @id @default(cuid())
+  fingerprint             String
+  failureType             String    @default("GLOBAL_WEBRTC_OUTAGE")
+  severity                String
+  status                  String    @default("OPEN")
+  firstSeenAt             DateTime  @default(now())
+  lastSeenAt              DateTime  @updatedAt
+  occurrenceCount         Int       @default(1)
+  title                   String
+  actionText              String
+  diagnosisSummary        String?
+  latestDiagnosisCategory String?
+  latestSipCode           Int?
+  latestSipReason         String?
+  metadata                Json?
+  resolvedAt              DateTime?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+  dismissals              WebrtcPlatformOutageDismissal[]
+
+  @@index([fingerprint, status])
+  @@index([status, severity])
+  @@index([lastSeenAt])
+}
+
+/// Per-admin dismiss for platform WebRTC outage banner.
+model WebrtcPlatformOutageDismissal {
+  id          String               @id @default(cuid())
+  outageId    String
+  userId      String
+  dismissedAt DateTime             @default(now())
+  outage      WebrtcPlatformOutage @relation(fields: [outageId], references: [id], onDelete: Cascade)
+  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([outageId, userId])
+  @@index([userId, dismissedAt])
 }
 
 model Extension {

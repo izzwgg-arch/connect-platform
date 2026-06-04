@@ -84,6 +84,23 @@
 | `webrtc_diag_ingest_failure` | 60 min | 1 |
 | `webrtc_contact_registration_loss` | 60 min | 1 |
 
+## Admin dashboard notifications
+
+When triggers fire, the API upserts `WebrtcCallingIncident` rows and shows a **dismissible banner** on `/admin` (and Incident Center) for users with `can_view_admin`. **SUPER_ADMIN** sees all tenants; **TENANT_ADMIN** sees own tenant only.
+
+| Trigger | Window | Threshold | Severity |
+|---------|--------|-----------|----------|
+| Outbound fail cluster | 5 min | 3 failures | critical |
+| SDP 488 / Incompatible SDP | 15 min | ≥2 critical; 1 warning | critical / warning |
+| Inbound answer fail cluster | 5 min | 2 failures | critical |
+| Outbound drought | 30 min | ≥5 failures, 0 successes | critical |
+| Success rate low | 15 min | ≥5 attempts, &lt;20% or &lt;50% success | critical / warning |
+| Diag ingest failure | 60 min bucket | parse/persist errors | warning |
+
+- **Dedupe:** `webrtc:{tenantId}:{failureType}:{5minBucket}`
+- **Dismiss:** `POST /admin/webrtc-incidents/:id/dismiss` (per-user, 30 min cooldown)
+- **List:** `GET /admin/webrtc-incidents/active`
+
 ## Code map
 
 | Layer | Path |

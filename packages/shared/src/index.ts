@@ -14,6 +14,8 @@ export * from "./expoMobilePushFormat";
 export * from "./crmEmailTemplates";
 export * from "./webrtcCallDiagnostics";
 export * from "./webrtcBlackbox";
+export * from "./webrtcIncidentAlerts";
+export * from "./webrtcGlobalOutageAlerts";
 /* chatSignedUrl uses node:crypto — import from "@connect/shared/chatSignedUrl" in Node only */
 
 export const UserSchema = z.object({

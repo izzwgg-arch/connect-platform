@@ -8,15 +8,10 @@
 
 ---
 
-> **WebRTC outbound 488 / Incompatible SDP (open incident, 2026-06-03/04):** outbound
-> WebRTC calls (portal + mobile) are rejected by Asterisk with **488** during SDP
-> negotiation — **no channel, pre-dialplan** — while hard-phone and inbound work. Root
-> cause is localized to the **outbound client offer**; the exact rejected attribute is
-> **not yet proven**. Portal now self-captures the offer + reject
-> (`apps/portal/hooks/useSipPhone.ts` + `apps/portal/lib/webrtcSdpDiagnostics.ts`,
-> `[WEBRTC_SDP_REJECT]`). **No media-config fix / deploy / APK until the captured SDP
-> proves the mismatch.** See `WEBRTC_DIAGNOSTICS.md` and the mandatory
-> `WEBRTC_RELEASE_GATE.md` before any WebRTC/SIP deploy.
+> **WebRTC outage (2026-06-02/04): BLOCKED_BY_PBX_ACCESS.** DB proves outbound
+> `Incompatible SDP` failures and inbound answer failures with **different signatures**;
+> recovery at `2026-06-04T10:44:36Z`. Outage cause and recovery trigger **not proven**
+> (PBX logs/audit denied). See `WEBRTC_DIAGNOSTICS.md` § incident + §12.
 
 ---
 
@@ -173,6 +168,25 @@
 - SBC mode: `apps/api` exposes `/admin/sbc/status` and `/voice/sbc/status` to
   switch between LOCAL Kamailio (`infra/sbc/kamailio/`) and a REMOTE upstream.
   UNKNOWN current production mode.
+
+### WebRTC admin incident notifications (2026-06-04)
+
+When black-box diagnostics cross thresholds, the API creates **`WebrtcCallingIncident`**
+rows and surfaces a **dismissible banner** on the Admin Console (`/admin`) for platform/
+tenant admins (`can_view_admin`). Evaluation runs after each `POST /voice/diag/webrtc-sdp-debug`
+ingest. Open incidents also appear in **Incident Center** and **Ops Center**. Dismissal is
+per-admin (does not delete history); alerts can reappear after a 30-minute cooldown if failures
+continue. See `WEBRTC_BLACKBOX_SCHEMA.md` § Admin dashboard notifications.
+
+### Platform-wide WebRTC outage detection (2026-06-04)
+
+When cross-tenant diagnostics cross global thresholds, the API creates
+**`WebrtcPlatformOutage`** rows with type **`GLOBAL_WEBRTC_OUTAGE`**. Super-admins
+see a large dismissible banner on `/admin` and `/admin/incidents`, plus a **WebRTC
+Platform Health** card (Healthy / Degraded / Critical). Evaluation aggregates existing
+schema v2 diag rows and open per-tenant incidents — no new client diagnostics required.
+Dismiss is per-admin with 30-minute cooldown reopen. See `WEBRTC_DIAGNOSTICS.md`
+§ Platform-wide WebRTC outage detection.
 
 ### Incident: Relax Tires T25 / ext 101 / `T25_101_1` — SIP not registered (2026-05-29)
 

@@ -1,6 +1,9 @@
 "use client";
 
 import { AdminModuleCard } from "../../../components/AdminModuleCard";
+import { WebrtcIncidentBanner } from "../../../components/admin/WebrtcIncidentBanner";
+import { WebrtcGlobalOutageBanner } from "../../../components/admin/WebrtcGlobalOutageBanner";
+import { WebrtcPlatformHealthCard } from "../../../components/admin/WebrtcPlatformHealthCard";
 import { IntegrationCard } from "../../../components/IntegrationCard";
 import { PageHeader } from "../../../components/PageHeader";
 import { PermissionGate } from "../../../components/PermissionGate";
@@ -15,6 +18,12 @@ export default function AdminPage() {
           subtitle="Tenant and platform administration with role-gated controls."
         />
 
+        <RoleGate allow={["SUPER_ADMIN"]}>
+          <WebrtcGlobalOutageBanner />
+        </RoleGate>
+
+        <WebrtcIncidentBanner />
+
         <section className="grid three">
           <AdminModuleCard title="Users" summary="Create users, assign tenant extensions, send invites, and manage access." href="/admin/users" />
           <AdminModuleCard title="Extensions" summary="Manage PBX extensions, SIP credentials, and softphone assignment." href="/pbx/extensions" />
@@ -24,6 +33,9 @@ export default function AdminPage() {
         </section>
 
         <RoleGate allow={["SUPER_ADMIN"]}>
+          <section className="grid three" style={{ marginBottom: 0 }}>
+            <WebrtcPlatformHealthCard />
+          </section>
           <section className="grid three">
             <AdminModuleCard title="Deploy Center" summary="Enqueue, monitor, and manage production deployments through the safe deploy queue. View logs and cancel jobs." href="/admin/deploy-center" />
             <AdminModuleCard title="Global Tenant Management" summary="Create, suspend, and impersonate tenants with safe context switching." href="/admin/tenants" />

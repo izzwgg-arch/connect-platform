@@ -23,7 +23,9 @@
 
 > **Instrumentation (2026-06-04):** Black-box recorder **schema v2** ships in API + portal +
 > mobile (pending EAS build). See **`WEBRTC_BLACKBOX_SCHEMA.md`** for full field list,
-> redaction rules, alert specs, and `grep WEBRTC_CALL_DEBUG` forensics.
+> redaction rules, alert specs, and `grep WEBRTC_CALL_DEBUG` forensics. **Admin dashboard
+> notifications:** dismissible banner on `/admin` when incident thresholds fire — see
+> `WEBRTC_BLACKBOX_SCHEMA.md` § Admin dashboard notifications.
 
 | Question | Status |
 |----------|--------|
@@ -696,6 +698,61 @@ Reusable Prisma scripts (run inside `app-api-1` container):
 | `deep_dive_may29.js` | VoiceDiag timeline for May 29 |
 
 AMI from API container uses `PBX_HOST` / `AMI_USERNAME` / `AMI_PASSWORD` env vars.
+
+---
+
+## Platform-wide WebRTC outage detection (2026-06-04)
+
+> **Motivation:** The 2026-06-03/04 outage hit T2, T25, T7, portal, and mobile
+> (inbound + outbound) before per-tenant alerts made the scope obvious. This layer
+> correlates **cross-tenant** schema v2 diagnostics and open tenant incidents to
+> surface **`GLOBAL_WEBRTC_OUTAGE`** before customer complaints.
+
+### Triggers (rolling 15 minutes)
+
+| Trigger | Threshold | Severity |
+|---------|-----------|----------|
+| Multi-tenant failures | 3+ tenants with failures **or** 3+ tenants with open `WebrtcCallingIncident` | critical |
+| SDP failure cluster | 10+ `Incompatible SDP` / 488 / 606 (warning at 5+) | critical / warning |
+| Inbound answer cluster | 10+ `WEBRTC_INBOUND_ANSWER_FAIL` (warning at 5+) | critical / warning |
+| Success-rate collapse | &lt;25% critical, &lt;40% warning; min 10 attempts | critical / warning |
+| Mixed-direction outage | 2+ outbound **and** 2+ inbound failures across 2+ tenants | critical |
+
+Evaluation runs after each `POST /voice/diag/webrtc-sdp-debug` ingest (same hook as
+per-tenant incidents). No new diagnostic types required — aggregates existing
+`WEBRTC_CALL_DEBUG`, `WEBRTC_SDP_DEBUG`, and `WEBRTC_INBOUND_ANSWER_FAIL` payloads.
+
+### Persistence
+
+- **`WebrtcPlatformOutage`** — `createdAt`, `updatedAt`, `firstSeenAt`, `lastSeenAt`,
+  `severity`, counts, affected tenants/users, sample diag ids, diagnosis summary.
+- Dedupe fingerprint: `webrtc:platform:GLOBAL_WEBRTC_OUTAGE:{15minBucket}` — one open row
+  per bucket; occurrence count increments on continued failures.
+
+### Admin surfaces (super-admin only)
+
+| Surface | Path / endpoint |
+|---------|-----------------|
+| Large dismissible banner | `/admin`, `/admin/incidents` — `WebrtcGlobalOutageBanner` |
+| Platform health widget | `/admin` — `WebrtcPlatformHealthCard` |
+| Active outage API | `GET /admin/webrtc-platform/outage/active` |
+| Dismiss (per-admin) | `POST /admin/webrtc-platform/outage/:id/dismiss` |
+| Health snapshot | `GET /admin/webrtc-platform/health` |
+| Incident Center / Ops Center | Merged into `/admin/incidents` and `/admin/ops-center` |
+
+**Dismiss behavior:** Hides banner for **that admin only**; does not delete the outage row.
+Reopens automatically when `lastSeenAt` advances more than **30 minutes** after dismiss
+(cooldown). Agents and tenant admins **never** see the global banner.
+
+### Code
+
+| Area | Path |
+|------|------|
+| Evaluator (pure) | `packages/shared/src/webrtcGlobalOutageAlerts.ts` |
+| DB service | `packages/db/src/webrtcPlatformOutageService.ts` |
+| Migration | `packages/db/prisma/migrations/20260604160000_webrtc_platform_outage/` |
+| Portal banner | `apps/portal/components/admin/WebrtcGlobalOutageBanner.tsx` |
+| Portal health card | `apps/portal/components/admin/WebrtcPlatformHealthCard.tsx` |
 
 ---
 

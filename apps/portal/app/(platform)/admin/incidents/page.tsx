@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
+import { WebrtcIncidentBanner } from "../../../../components/admin/WebrtcIncidentBanner";
+import { WebrtcGlobalOutageBanner } from "../../../../components/admin/WebrtcGlobalOutageBanner";
+import { RoleGate } from "../../../../components/RoleGate";
 import { apiGet } from "../../../../services/apiClient";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -426,6 +429,10 @@ export default function IncidentCenterPage() {
 
         {data && (
           <>
+            <RoleGate allow={["SUPER_ADMIN"]}>
+              <WebrtcGlobalOutageBanner pollMs={45_000} />
+            </RoleGate>
+            <WebrtcIncidentBanner pollMs={45_000} />
             <StatusBanner summary={data.summary} health={data.health} />
             <HealthGrid health={data.health} summary={data.summary} />
 

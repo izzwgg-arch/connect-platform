@@ -60,6 +60,16 @@ import {
   resolveHelperIncidentsForPbx,
   resolveNotifyUpsertZeroIfRecovered,
   resolveRestVsSpoolDiverge,
+  evaluateWebrtcCallingIncidentsForTenant,
+  recordWebrtcDiagIngestFailure,
+  listActiveWebrtcIncidentsForAdmin,
+  dismissWebrtcCallingIncident,
+  loadOpenWebrtcIncidentsForOps,
+  evaluateWebrtcPlatformOutage,
+  listActiveGlobalWebrtcOutageForAdmin,
+  dismissWebrtcPlatformOutage,
+  getWebrtcPlatformHealthSnapshot,
+  loadOpenWebrtcPlatformOutageForOps,
 } from "@connect/db";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import {
@@ -2313,6 +2323,8 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/admin/ops", permission: "can_view_admin_ops_center" },
   { prefix: "/admin/deploy", permission: "can_view_admin_deploy_center" },
   { prefix: "/admin/incidents", permission: "can_view_admin_incidents" },
+  { prefix: "/admin/webrtc-incidents", permission: "can_view_admin" },
+  { prefix: "/admin/webrtc-platform", permission: "can_manage_global_settings" },
   { prefix: "/admin/audio", permission: "can_view_admin_audio_intelligence" },
   { prefix: "/admin/call-timeline", permission: "can_view_admin_call_timeline" },
   { prefix: "/admin/call-flight", permission: "can_view_admin_call_flight" },
@@ -9284,11 +9296,74 @@ app.post("/voice/diag/webrtc-sdp-debug", async (req, reply) => {
       },
     });
     eventId = event.id;
+    void evaluateWebrtcCallingIncidentsForTenant(db, user.tenantId, event.id)
+      .then(() => evaluateWebrtcPlatformOutage(db))
+      .catch((err) => {
+      app.log.error({ err, tenantId: user.tenantId }, "webrtc_incident_eval_failed");
+    });
   } catch (err) {
     app.log.error({ err, userId: user.sub }, "webrtc_call_debug_persist_failed");
+    void recordWebrtcDiagIngestFailure(db, {
+      tenantId: user.tenantId,
+      reason: String((err as Error)?.message ?? err).slice(0, 200),
+    }).catch(() => undefined);
   }
 
   return { ok: true, eventId, schemaVersion: persisted.schemaVersion ?? null };
+});
+
+// ── WebRTC calling admin incidents (platform / tenant admin dashboard alerts) ─
+app.get("/admin/webrtc-incidents/active", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const incidents = await listActiveWebrtcIncidentsForAdmin(db, {
+    adminUserId: admin.sub,
+    adminTenantId: admin.tenantId,
+    isSuperAdmin: isRole(admin, ["SUPER_ADMIN"]),
+  });
+  return { incidents, timestamp: new Date().toISOString() };
+});
+
+app.post("/admin/webrtc-incidents/:id/dismiss", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  const id = String((req.params as { id?: string }).id ?? "");
+  if (!id) return reply.status(400).send({ error: "MISSING_INCIDENT_ID" });
+  const result = await dismissWebrtcCallingIncident(db, {
+    incidentId: id,
+    userId: admin.sub,
+    adminTenantId: admin.tenantId,
+    isSuperAdmin: isRole(admin, ["SUPER_ADMIN"]),
+  });
+  if (!result.ok) {
+    return reply.status(result.reason === "tenant_isolation" ? 403 : 404).send({ error: result.reason });
+  }
+  return { ok: true };
+});
+
+// ── Platform-wide WebRTC outage (super-admin / global settings) ───────────────
+app.get("/admin/webrtc-platform/outage/active", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const outage = await listActiveGlobalWebrtcOutageForAdmin(db, admin.sub);
+  return { outage, timestamp: new Date().toISOString() };
+});
+
+app.post("/admin/webrtc-platform/outage/:id/dismiss", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const id = String((req.params as { id?: string }).id ?? "");
+  if (!id) return reply.status(400).send({ error: "MISSING_OUTAGE_ID" });
+  const result = await dismissWebrtcPlatformOutage(db, { outageId: id, userId: admin.sub });
+  if (!result.ok) return reply.status(404).send({ error: result.reason });
+  return { ok: true };
+});
+
+app.get("/admin/webrtc-platform/health", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  const health = await getWebrtcPlatformHealthSnapshot(db);
+  return { health, timestamp: new Date().toISOString() };
 });
 
 
@@ -11919,6 +11994,54 @@ app.get("/admin/ops-center", async (req, reply) => {
     });
   }
 
+  const webrtcOpsRows = await loadOpenWebrtcIncidentsForOps(db, 15);
+  for (const w of webrtcOpsRows) {
+    const meta = (w.metadata ?? {}) as Record<string, unknown>;
+    const extensions = Array.isArray(meta.affectedExtensions) ? (meta.affectedExtensions as string[]).join(", ") : null;
+    incidents.push({
+      id: `webrtc-${w.id}`,
+      title: w.title,
+      severity: w.severity === "critical" ? "critical" : "warning",
+      tenantId: w.tenantId,
+      tenantName: w.tenant?.name ?? w.tenantId,
+      affectedExtension: extensions,
+      affectedUser: null,
+      firstSeen: w.firstSeenAt.toISOString(),
+      lastSeen: w.lastSeenAt.toISOString(),
+      status: "active",
+      healingStatus: "none",
+      likelyCause: w.latestSipReason
+        ? `SIP ${w.latestSipCode ?? "?"} ${w.latestSipReason} · ${String(meta.diagnosisSummary ?? w.failureType)}`
+        : String(meta.diagnosisSummary ?? w.failureType),
+      suggestedAction: w.actionText,
+      callCount: w.occurrenceCount,
+      category: "calls",
+    });
+  }
+
+  const platformOutageRows = await loadOpenWebrtcPlatformOutageForOps(db, 3);
+  for (const p of platformOutageRows) {
+    incidents.push({
+      id: `platform-webrtc-${p.id}`,
+      title: p.title,
+      severity: p.severity === "critical" ? "critical" : "warning",
+      tenantId: null,
+      tenantName: "Platform-wide",
+      affectedExtension: null,
+      affectedUser: null,
+      firstSeen: p.firstSeenAt.toISOString(),
+      lastSeen: p.lastSeenAt.toISOString(),
+      status: "active",
+      healingStatus: "none",
+      likelyCause: p.latestSipReason
+        ? `SIP ${p.latestSipCode ?? "?"} ${p.latestSipReason} · ${String(p.diagnosisSummary ?? p.failureType)}`
+        : String(p.diagnosisSummary ?? p.failureType),
+      suggestedAction: p.actionText,
+      callCount: p.occurrenceCount,
+      category: "calls",
+    });
+  }
+
   // Add healing actions as "resolved" incidents
   if (healingLog) {
     for (const action of (healingLog as any[]).filter((a: any) => a.status === "succeeded").slice(0, 3)) {
@@ -12393,6 +12516,50 @@ app.get("/admin/incidents", async (req, reply) => {
       startedAt: v.firstSeenAt.toISOString(),
       callCount: v.occurrenceCount,
       drillDownPath: `/admin/voicemail-ingest/incidents/${v.id}`,
+    });
+  }
+
+  const webrtcIncidentRows = await loadOpenWebrtcIncidentsForOps(db, 20);
+  for (const w of webrtcIncidentRows) {
+    const meta = (w.metadata ?? {}) as Record<string, unknown>;
+    incidents.push({
+      id: `webrtc-${w.id}`,
+      severity: w.severity === "critical" ? "critical" : "warning",
+      category: "connectivity",
+      title: w.title,
+      description: String(meta.diagnosisSummary ?? w.title),
+      affectedTenant: w.tenant?.name ?? w.tenantId,
+      affectedUsers: Array.isArray(meta.affectedUserIds) ? (meta.affectedUserIds as string[]).length : 0,
+      likelyCause: w.latestSipReason
+        ? `Latest SIP: ${w.latestSipCode ?? "?"} ${w.latestSipReason}`
+        : String(meta.diagnosisSummary ?? w.failureType),
+      suggestedAction: w.actionText,
+      startedAt: w.firstSeenAt.toISOString(),
+      callCount: w.occurrenceCount,
+      drillDownPath: String(meta.drillDownPath ?? "/admin/call-timeline"),
+    });
+  }
+
+  const platformOutageIncidentRows = await loadOpenWebrtcPlatformOutageForOps(db, 3);
+  for (const p of platformOutageIncidentRows) {
+    const meta = (p.metadata ?? {}) as Record<string, unknown>;
+    const tenantIds = Array.isArray(meta.affectedTenantIds) ? (meta.affectedTenantIds as string[]) : [];
+    const userIds = Array.isArray(meta.affectedUserIds) ? (meta.affectedUserIds as string[]) : [];
+    incidents.push({
+      id: `platform-webrtc-${p.id}`,
+      severity: p.severity === "critical" ? "critical" : "warning",
+      category: "connectivity",
+      title: p.title,
+      description: String(p.diagnosisSummary ?? p.title),
+      affectedTenant: `Platform (${tenantIds.length} tenants)`,
+      affectedUsers: userIds.length,
+      likelyCause: p.latestSipReason
+        ? `Latest SIP: ${p.latestSipCode ?? "?"} ${p.latestSipReason}`
+        : String(p.diagnosisSummary ?? p.failureType),
+      suggestedAction: p.actionText,
+      startedAt: p.firstSeenAt.toISOString(),
+      callCount: p.occurrenceCount,
+      drillDownPath: "/admin/call-timeline",
     });
   }
 
