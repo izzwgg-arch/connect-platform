@@ -268,6 +268,17 @@ export function useTelephonyAudio() {
   }, []);
 
   /**
+   * UK local ringback (BT-style 400+450 Hz, 400/200/400/2000 ms).
+   * Plays until SIP progress / early media — then stopLocalRingback().
+   */
+  const startUkLocalRingback = useCallback(() => {
+    stopLocalRingback();
+    const ctx = ensureCtx();
+    if (!ctx) return;
+    ringbackRef.current = startUkRingbackTone(ctx);
+  }, [stopLocalRingback]);
+
+  /**
    * European local ringback (ETSI-style 425 Hz, 1s on / 4s off).
    * Plays until SIP progress / early media — then stopLocalRingback().
    */
