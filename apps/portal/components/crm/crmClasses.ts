@@ -44,7 +44,7 @@ export const crm = {
   emailPanel: "crm-email-panel relative overflow-hidden rounded-crm-lg border border-crm-border bg-crm-surface shadow-crm",
   emailIconWell: "crm-email-icon-well flex shrink-0 items-center justify-center rounded-crm border",
   emailKpiCard:
-    "crm-email-kpi-card relative min-h-[7rem] overflow-hidden rounded-crm-lg border border-crm-border bg-crm-surface p-4 shadow-crm",
+    "crm-email-kpi-card relative min-h-[6.375rem] overflow-hidden rounded-crm-lg border border-crm-border bg-crm-surface px-3.5 py-3 shadow-crm",
   /** Phase 19E / 19E.1 — campaign command center (wide desk, compact rhythm) */
   pageInnerCampaign:
     "mx-auto w-full max-w-[min(100%,1680px)] px-3 py-4 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-3 min-h-0",
@@ -59,7 +59,7 @@ export const crm = {
     "crm-funders-inner mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
   contactsHeaderPanel: "contacts-header-panel",
   contactsPanel: "contacts-panel",
-  contactsKpiTile: "contacts-kpi-tile relative flex min-h-[7.75rem] min-w-0 flex-col gap-2 overflow-hidden rounded-crm-lg border px-4 py-3.5 transition-all duration-200 sm:min-w-0",
+  contactsKpiTile: "contacts-kpi-tile relative flex min-h-[6.375rem] min-w-0 flex-col gap-2 overflow-hidden rounded-crm-lg border px-3.5 py-3 transition-all duration-200 sm:min-w-0",
   contactsKpiIcon: "contacts-kpi-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-crm",
   contactsFilterBar: "contacts-filter-bar",
   contactsBulkBar: "contacts-bulk-bar mb-4 flex flex-wrap items-center gap-3 rounded-crm border px-4 py-3",
@@ -454,7 +454,7 @@ export const crm = {
   scriptsHeroIcon:
     "scripts-command-hero-icon flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border",
   scriptsKpiTile:
-    "scripts-kpi-tile flex min-h-[6.75rem] min-w-0 flex-col justify-between gap-2 rounded-[1.35rem] border px-4 py-3.5 backdrop-blur-[2px]",
+    "scripts-kpi-tile flex min-h-[6.375rem] min-w-0 flex-col justify-between gap-2 rounded-[1.35rem] border px-3.5 py-3 backdrop-blur-[2px]",
   scriptsGrid:
     "grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)] xl:grid-cols-[minmax(0,1fr)_minmax(20rem,24rem)]",
   scriptsLibraryCol: "flex flex-col gap-2.5 min-w-0",

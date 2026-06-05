@@ -19,7 +19,7 @@ type State =
   | { phase: "ready" };
 
 export default function CrmLayout({ children }: { children: ReactNode }) {
-  const { can, backendJwtRole } = useAppContext();
+  const { can, backendJwtRole, permissionsHydrated } = useAppContext();
   const router = useRouter();
   const [state, setState] = useState<State>({ phase: "loading" });
   const [enabling, setEnabling] = useState(false);
@@ -29,10 +29,10 @@ export default function CrmLayout({ children }: { children: ReactNode }) {
     backendJwtRole === "TENANT_ADMIN" ||
     backendJwtRole === "SUPER_ADMIN";
 
-  // If the user doesn't have the CRM section permission at all, redirect to dashboard immediately.
   const hasCrmPermission = can("can_view_section_crm");
 
   useEffect(() => {
+    if (!permissionsHydrated) return;
     if (!hasCrmPermission) {
       router.replace("/dashboard");
       return;
@@ -54,9 +54,15 @@ export default function CrmLayout({ children }: { children: ReactNode }) {
         setState({ phase: "not_enabled", isAdmin });
       });
     return () => { active = false; };
-  }, [hasCrmPermission, isAdmin, router]);
+  }, [hasCrmPermission, isAdmin, permissionsHydrated, router]);
 
-  if (!hasCrmPermission) return null;
+  if (!permissionsHydrated) {
+    return <>{children}</>;
+  }
+
+  if (!hasCrmPermission) {
+    return null;
+  }
 
   if (state.phase === "loading") {
     return (

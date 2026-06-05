@@ -10,6 +10,7 @@ export function CRMPageHeader({
   title,
   subtitle,
   actions,
+  art,
   className,
   compact = false,
 }: {
@@ -17,13 +18,25 @@ export function CRMPageHeader({
   title: string;
   subtitle?: string;
   actions?: ReactNode;
+  /** Optional decorative artwork rendered absolutely behind the header content. */
+  art?: ReactNode;
   className?: string;
   /** Matches CRM Contacts command header — tighter padding and type scale. */
   compact?: boolean;
 }) {
   return (
-    <CRMCard className={cn("mb-0", className)} padding={compact ? "md" : "lg"}>
+    <CRMCard className={cn("mb-0", Boolean(art) && "relative overflow-hidden", className)} padding={compact ? "md" : "lg"}>
+      {art ? (
+        <div
+          className="pointer-events-none"
+          style={{ position: "absolute", inset: 0, zIndex: 0 }}
+          aria-hidden
+        >
+          {art}
+        </div>
+      ) : null}
       <div
+        style={{ position: "relative", zIndex: 1 }}
         className={cn(
           "flex flex-col lg:flex-row lg:justify-between",
           compact ? "gap-2.5 lg:items-center" : "gap-4 lg:items-start",

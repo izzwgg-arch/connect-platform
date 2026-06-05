@@ -46,6 +46,11 @@ export {
   QueueLeadDetailPlaceholder,
   buildQueueContactWorkspaceHref,
 } from "./queue";
+export {
+  FunderListDetailPanel,
+  FunderListDetailPlaceholder,
+  type FunderListRow,
+} from "./funder";
 export * from "./campaign";
 export * from "./live";
 export * from "./tasks";

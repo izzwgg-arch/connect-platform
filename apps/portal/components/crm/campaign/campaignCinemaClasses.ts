@@ -21,13 +21,13 @@ export const mk = {
   btnQueueRow: "cinema-btn-queue",
   kpiGrid: "grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5",
   kpiCard:
-    "crm-cinema-kpi-card relative flex min-h-[7.5rem] flex-col overflow-hidden rounded-2xl p-4",
+    "crm-cinema-kpi-card relative flex min-h-[6.375rem] flex-col overflow-hidden rounded-2xl px-3.5 py-3",
   kpiLabel:
     "text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--cinema-text-muted)]",
   kpiValue:
-    "mt-1 text-[1.75rem] font-bold tabular-nums leading-none text-[var(--cinema-text)] sm:text-[2rem]",
+    "mt-1 text-[1.65rem] font-bold tabular-nums leading-none text-[var(--cinema-text)] sm:text-[1.875rem]",
   kpiSub: "mt-1 text-[11px] font-medium",
-  kpiSpark: "mt-auto h-9 w-full opacity-90",
+  kpiSpark: "mt-auto h-7 w-full opacity-90",
   rowList: "m-0 flex list-none flex-col gap-3 p-0",
   rowShell:
     "crm-cinema-row group relative flex min-h-[7.25rem] w-full min-w-0 flex-col overflow-hidden rounded-2xl transition-[border-color,box-shadow] duration-300 lg:min-h-[6.5rem] lg:flex-row lg:items-stretch",
