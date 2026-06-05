@@ -11,6 +11,8 @@
     "format": "prettier -w .",
     "db:generate": "pnpm --filter @connect/db prisma:generate",
     "db:migrate": "pnpm --filter @connect/db prisma:migrate",
+    "db:push": "pnpm --filter @connect/db exec prisma db push",
+    "bootstrap:local": "pnpm exec tsx --env-file=apps/api/.env scripts/bootstrap-local-dev.ts",
     "smoke:pbx:v1.1.0": "node scripts/smoke-v1.1.0.mjs",
     "smoke:pbx": "node scripts/smoke-v1.1.0.mjs",
     "audit-pbx": "node scripts/pbx-live-observe.mjs",

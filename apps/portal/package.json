@@ -23,6 +23,7 @@
     "jssip": "^3.10.1",
     "lucide-react": "^0.577.0",
     "next": "^14.2.32",
+    "pdfjs-dist": "^4.10.38",
     "qrcode.react": "^4.2.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
