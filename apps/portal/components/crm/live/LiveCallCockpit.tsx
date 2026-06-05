@@ -6,7 +6,6 @@ import {
   Activity,
   BarChart3,
   CheckCheck,
-  ChevronDown,
   Clock,
   FileText,
   Headphones,
@@ -30,6 +29,7 @@ import {
   Users,
 } from "lucide-react";
 import { apiGet } from "../../../services/apiClient";
+import { ConnectSelect } from "../../ConnectSelect";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
 import { initials, ownerLabel, stageColor, stageLabel, formatTimeAgo } from "../contact/contactFormatters";
@@ -746,17 +746,14 @@ function CallScriptCard({
       </div>
 
       {scriptSummaries.length > 0 ? (
-        <div className="relative">
-          <select value={selectedScriptId} onChange={(event) => setSelectedScriptId(event.target.value)} className="crm-live-select">
-            <option value="">Select script</option>
-            {scriptSummaries.map((summary) => (
-              <option key={summary.id} value={summary.id}>
-                {summary.name}
-              </option>
-            ))}
-          </select>
-          <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-crm-muted" />
-        </div>
+        <ConnectSelect
+          value={selectedScriptId}
+          onChange={(value) => setSelectedScriptId(value)}
+          className="w-full"
+          size="sm"
+          placeholder="Select script"
+          options={scriptSummaries.map((summary) => ({ value: summary.id, label: summary.name }))}
+        />
       ) : (
         <p className="rounded-xl border border-dashed border-crm-border px-3 py-3 text-sm text-crm-muted">
           No active scripts are available. Create one in Scripts to show guided talk tracks here.
@@ -778,14 +775,15 @@ function CallScriptCard({
 
       <div className="crm-live-disposition-box">
         <p className="crm-live-section-label">Disposition</p>
-        <select value={disposition} onChange={(event) => setDisposition(event.target.value)} disabled={disabled} className="crm-live-select">
-          <option value="">Select disposition</option>
-          {DISPOSITION_OPTIONS.map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </select>
+        <ConnectSelect
+          value={disposition}
+          onChange={(value) => setDisposition(value)}
+          disabled={disabled}
+          className="w-full"
+          size="sm"
+          placeholder="Select disposition"
+          options={DISPOSITION_OPTIONS.map((option) => ({ value: option, label: option }))}
+        />
         <textarea
           value={outcomeNote}
           onChange={(event) => setOutcomeNote(event.target.value)}
@@ -795,21 +793,31 @@ function CallScriptCard({
           className="crm-live-textarea"
         />
         <div className="grid grid-cols-2 gap-2">
-          <select value={followUpOption} onChange={(event) => setFollowUpOption(event.target.value as "" | "today" | "tomorrow" | "nextweek" | "custom")} disabled={disabled} className="crm-live-select">
-            <option value="">No follow-up</option>
-            <option value="today">Today</option>
-            <option value="tomorrow">Tomorrow</option>
-            <option value="nextweek">Next week</option>
-            <option value="custom">Custom</option>
-          </select>
-          <select value={nextStage} onChange={(event) => setNextStage(event.target.value as CrmStage | "")} disabled={disabled} className="crm-live-select">
-            <option value="">No stage change</option>
-            {STAGE_OPTIONS.map((stage) => (
-              <option key={stage.value} value={stage.value}>
-                {stage.label}
-              </option>
-            ))}
-          </select>
+          <ConnectSelect
+            value={followUpOption}
+            onChange={(value) => setFollowUpOption(value as "" | "today" | "tomorrow" | "nextweek" | "custom")}
+            disabled={disabled}
+            className="w-full"
+            size="sm"
+            options={[
+              { value: "", label: "No follow-up" },
+              { value: "today", label: "Today" },
+              { value: "tomorrow", label: "Tomorrow" },
+              { value: "nextweek", label: "Next week" },
+              { value: "custom", label: "Custom" },
+            ]}
+          />
+          <ConnectSelect
+            value={nextStage}
+            onChange={(value) => setNextStage(value as CrmStage | "")}
+            disabled={disabled}
+            className="w-full"
+            size="sm"
+            options={[
+              { value: "", label: "No stage change" },
+              ...STAGE_OPTIONS.map((stage) => ({ value: stage.value, label: stage.label })),
+            ]}
+          />
         </div>
         {followUpOption === "custom" ? (
           <input type="datetime-local" value={followUpCustom} onChange={(event) => setFollowUpCustom(event.target.value)} disabled={disabled} className="crm-live-input" />
@@ -905,12 +913,17 @@ function RecentActivityCard({ timeline, activityFilter, setActivityFilter }: { t
     <article className="crm-live-card">
       <div className="crm-live-card-head">
         <span className="crm-live-section-title">Recent Activity</span>
-        <select value={activityFilter} onChange={(event) => setActivityFilter(event.target.value)} className="crm-live-filter-select">
-          <option value="all">All Activity</option>
-          <option value="notes">Notes</option>
-          <option value="calls">Calls</option>
-          <option value="messages">Messages</option>
-        </select>
+        <ConnectSelect
+          value={activityFilter}
+          onChange={(value) => setActivityFilter(value)}
+          size="sm"
+          options={[
+            { value: "all", label: "All Activity" },
+            { value: "notes", label: "Notes" },
+            { value: "calls", label: "Calls" },
+            { value: "messages", label: "Messages" },
+          ]}
+        />
       </div>
       <ActivityRows events={timeline.slice(0, 5)} empty="No recent activity." />
       <Link href="/crm/reports" className="crm-live-card-link">

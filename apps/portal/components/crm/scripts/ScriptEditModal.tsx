@@ -5,6 +5,7 @@ import { CheckCircle2, FileText, GripVertical, Lightbulb, Plus, Sparkles, Trash2
 import { formatCrmSaveError } from "../crmSaveHelpers";
 import { crm } from "../crmClasses";
 import { cn } from "../cn";
+import { ConnectSelect } from "../../ConnectSelect";
 import { parseScriptSections, SCRIPT_TEMPLATES, serializeScriptSections } from "./ScriptTemplates";
 import type { Script } from "./scriptTypes";
 
@@ -140,16 +141,15 @@ export function ScriptEditModal({ script, templateBody, onSave, onClose }: Scrip
             {isCreate ? (
               <div className="mb-5">
                 <label className={cn(crm.label, "mb-2 block")}>Template (optional)</label>
-                <select
+                <ConnectSelect
                   value={selectedTemplate}
-                  onChange={(e) => applyTemplate(e.target.value)}
-                  className={cn(crm.select, "h-12 rounded-2xl text-sm")}
-                >
-                  <option value="">Start from scratch</option>
-                  {SCRIPT_TEMPLATES.map((tpl) => (
-                    <option key={tpl.key} value={tpl.key}>{tpl.label}</option>
-                  ))}
-                </select>
+                  onChange={(value) => applyTemplate(value)}
+                  className="w-full"
+                  options={[
+                    { value: "", label: "Start from scratch" },
+                    ...SCRIPT_TEMPLATES.map((tpl) => ({ value: tpl.key, label: tpl.label })),
+                  ]}
+                />
               </div>
             ) : null}
 

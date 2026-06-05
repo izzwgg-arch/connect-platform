@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ChevronDown, FileText } from "lucide-react";
 import { apiGet } from "../../../services/apiClient";
 import { CRMCard } from "../CRMCard";
-import { crm } from "../crmClasses";
+import { ConnectSelect } from "../../ConnectSelect";
 import type { Script, ScriptSummary } from "./liveTypes";
 
 export function LiveWorkspaceScriptPanel({
@@ -74,14 +74,13 @@ export function LiveWorkspaceScriptPanel({
               </Link>
             </p>
           ) : (
-            <select value={selectedId} onChange={(e) => handleSelect(e.target.value)} className={crm.input}>
-              <option value="">— Select script —</option>
-              {scriptSummaries.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
+            <ConnectSelect
+              value={selectedId}
+              onChange={(value) => handleSelect(value)}
+              className="w-full"
+              placeholder="— Select script —"
+              options={scriptSummaries.map((s) => ({ value: s.id, label: s.name }))}
+            />
           )}
           {loading ? <p className="text-sm text-crm-muted">Loading…</p> : null}
           {!loading && script ? (

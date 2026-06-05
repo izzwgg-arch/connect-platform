@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "../cn";
+import { ConnectSelect } from "../../ConnectSelect";
 import { CRMPageHeader } from "../CRMPageHeader";
 import { CRMWorkspaceHeader, CRMWorkspaceToolbar } from "../CRMWorkspaceShell";
 
@@ -137,15 +138,16 @@ export function ScriptCommandHeader({
             <label className="tasks-sort-pill h-8">
               <SortAsc className="h-3.5 w-3.5" />
               <span className="sr-only">Sort</span>
-              <select
+              <ConnectSelect
                 value={sortMode}
-                onChange={(event) => onSortModeChange(event.target.value as ScriptSortMode)}
-                className="bg-transparent text-xs font-bold text-inherit outline-none [color-scheme:dark]"
-              >
-                <option value="updated">Sort: Updated</option>
-                <option value="created">Sort: Created</option>
-                <option value="name">Sort: Name</option>
-              </select>
+                onChange={(value) => onSortModeChange(value as ScriptSortMode)}
+                options={[
+                  { value: "updated", label: "Sort: Updated" },
+                  { value: "created", label: "Sort: Created" },
+                  { value: "name", label: "Sort: Name" },
+                ]}
+                size="sm"
+              />
             </label>
             <div className="flex items-center gap-1">
               <button

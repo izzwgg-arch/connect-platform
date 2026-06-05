@@ -11,6 +11,7 @@ import {
   SortAsc,
 } from "lucide-react";
 import { cn } from "../cn";
+import { ConnectSelect } from "../../ConnectSelect";
 import { CRMPageHeader } from "../CRMPageHeader";
 import { CRMWorkspaceHeader, CRMWorkspaceToolbar } from "../CRMWorkspaceShell";
 
@@ -191,15 +192,16 @@ export function ChecklistCommandHeader({
             <label className="tasks-sort-pill h-8">
               <SortAsc className="h-3.5 w-3.5" />
               <span className="sr-only">Sort</span>
-              <select
+              <ConnectSelect
                 value={sortMode}
-                onChange={(event) => onSortModeChange(event.target.value as ChecklistSortMode)}
-                className="bg-transparent text-xs font-bold text-inherit outline-none [color-scheme:dark]"
-              >
-                <option value="updated">Sort: Updated</option>
-                <option value="name">Sort: Name</option>
-                <option value="steps">Sort: Steps</option>
-              </select>
+                onChange={(value) => onSortModeChange(value as ChecklistSortMode)}
+                options={[
+                  { value: "updated", label: "Sort: Updated" },
+                  { value: "name", label: "Sort: Name" },
+                  { value: "steps", label: "Sort: Steps" },
+                ]}
+                size="sm"
+              />
             </label>
             <div className="flex items-center gap-1">
               <button

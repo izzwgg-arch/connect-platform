@@ -7,6 +7,7 @@ import { apiPost } from "../../../services/apiClient";
 import { CRMCard } from "../CRMCard";
 import { crm } from "../crmClasses";
 import { cn } from "../cn";
+import { ConnectSelect } from "../../ConnectSelect";
 import type { Checklist } from "./liveTypes";
 
 export function LiveWorkspaceChecklistPanel({
@@ -115,14 +116,13 @@ export function LiveWorkspaceChecklistPanel({
               </Link>
             </p>
           ) : (
-            <select value={selectedId} onChange={(e) => handleSelectChecklist(e.target.value)} className={crm.input}>
-              <option value="">— Select checklist —</option>
-              {checklists.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+            <ConnectSelect
+              value={selectedId}
+              onChange={(value) => handleSelectChecklist(value)}
+              className="w-full"
+              placeholder="— Select checklist —"
+              options={checklists.map((c) => ({ value: c.id, label: c.name }))}
+            />
           )}
           {checklist ? (
             <div className="space-y-2">

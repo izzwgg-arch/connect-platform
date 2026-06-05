@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { X, ChevronDown } from "lucide-react";
+import { X } from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
+import { ConnectSelect } from "../../ConnectSelect";
 import { apiGet, apiPost } from "../../../services/apiClient";
 
 type TaskPriority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
@@ -182,20 +183,17 @@ export function TaskQuickAdd({
           className={cn(crm.input, "flex-1")}
           style={{ colorScheme: "dark" }}
         />
-        <div className="relative">
-          <select
-            value={priority}
-            onChange={(e) => setPriority(e.target.value as TaskPriority)}
-            className={cn(crm.select, "pr-8")}
-            style={{ minWidth: "7rem" }}
-          >
-            <option value="LOW">Low</option>
-            <option value="MEDIUM">Medium</option>
-            <option value="HIGH">High</option>
-            <option value="URGENT">Urgent</option>
-          </select>
-          <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-crm-muted" />
-        </div>
+        <ConnectSelect
+          value={priority}
+          onChange={(value) => setPriority(value as TaskPriority)}
+          style={{ minWidth: "7rem" }}
+          options={[
+            { value: "LOW", label: "Low" },
+            { value: "MEDIUM", label: "Medium" },
+            { value: "HIGH", label: "High" },
+            { value: "URGENT", label: "Urgent" },
+          ]}
+        />
       </div>
 
       {error && <p className="text-xs text-crm-danger">{error}</p>}
