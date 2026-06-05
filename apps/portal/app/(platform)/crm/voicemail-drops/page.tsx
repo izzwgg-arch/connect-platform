@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { CRMPageShell, cn } from "../../../../components/crm";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import {
   CRMWorkspaceShell,
   CRMWorkspaceChrome,
@@ -183,17 +184,18 @@ export default function CrmVoicemailDropsPage() {
                     className="w-full rounded-2xl border border-slate-200 bg-white py-2.5 pl-10 pr-3 text-sm text-slate-900 outline-none transition focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
                   />
                 </div>
-                <select
+                <ConnectSelect
                   value={statusFilter}
-                  onChange={(event) => setStatusFilter(event.target.value)}
-                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 outline-none focus:border-indigo-300 focus:ring-4 focus:ring-indigo-100"
-                >
-                  <option value="all">All Statuses</option>
-                  <option value="READY">Ready</option>
-                  <option value="PROCESSING">Processing</option>
-                  <option value="FAILED">Failed</option>
-                  <option value="ARCHIVED">Archived</option>
-                </select>
+                  onChange={(value) => setStatusFilter(value)}
+                  size="sm"
+                  options={[
+                    { value: "all", label: "All Statuses" },
+                    { value: "READY", label: "Ready" },
+                    { value: "PROCESSING", label: "Processing" },
+                    { value: "FAILED", label: "Failed" },
+                    { value: "ARCHIVED", label: "Archived" },
+                  ]}
+                />
               </div>
             </section>
           </CRMWorkspaceToolbar>

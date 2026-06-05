@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useAppContext } from "../../../../hooks/useAppContext";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
 import { PageHeader } from "../../../../components/PageHeader";
 import { apiGet, apiPut, apiPost, apiPatch, apiDelete } from "../../../../services/apiClient";
@@ -549,22 +550,20 @@ export default function CrmSettingsPage() {
             <div style={{ padding: "1rem", borderRadius: "0.5rem", background: "var(--surface-hover)", marginBottom: "1rem", display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "flex-end" }}>
               <div>
                 <label style={{ display: "block", fontSize: "0.75rem", fontWeight: 600, color: "var(--text-dim)", marginBottom: 4 }}>Phone Number</label>
-                <select
+                <ConnectSelect
                   value={addPhoneId}
-                  onChange={(e) => {
-                    setAddPhoneId(e.target.value);
-                    const n = availableNumbers.find((x) => x.id === e.target.value);
+                  onChange={(value) => {
+                    setAddPhoneId(value);
+                    const n = availableNumbers.find((x) => x.id === value);
                     if (n?.areaCode) setAddAreaCode(n.areaCode.replace(/\D/g, "").slice(0, 3));
                   }}
-                  style={{ padding: "0.375rem 0.5rem", border: "1px solid var(--border)", borderRadius: "0.375rem", fontSize: "0.875rem", background: "var(--surface)", color: "var(--text)", minWidth: 200 }}
-                >
-                  <option value="">— select number —</option>
-                  {availableNumbers.map((n) => (
-                    <option key={n.id} value={n.id}>
-                      {n.phoneNumber}{n.friendlyName ? ` (${n.friendlyName})` : ""}
-                    </option>
-                  ))}
-                </select>
+                  placeholder="— select number —"
+                  style={{ minWidth: 200 }}
+                  options={availableNumbers.map((n) => ({
+                    value: n.id,
+                    label: `${n.phoneNumber}${n.friendlyName ? ` (${n.friendlyName})` : ""}`,
+                  }))}
+                />
               </div>
               <div>
                 <label style={{ display: "block", fontSize: "0.75rem", fontWeight: 600, color: "var(--text-dim)", marginBottom: 4 }}>Area Code (3 digits)</label>
@@ -768,27 +767,15 @@ export default function CrmSettingsPage() {
                       </td>
                       <td style={{ padding: "0.625rem 1rem" }}>
                         {u.hasAccess ? (
-                          <select
+                          <ConnectSelect
                             value={u.crmRole ?? "AGENT"}
                             disabled={saving || !u.crmEnabled || !settings?.enabled}
-                            onChange={(e) =>
-                              updateUserAccess(u.userId, { role: e.target.value, enabled: u.crmEnabled })
+                            onChange={(value) =>
+                              updateUserAccess(u.userId, { role: value, enabled: u.crmEnabled })
                             }
-                            style={{
-                              padding: "0.3rem 0.5rem",
-                              borderRadius: "0.375rem",
-                              border: "1px solid var(--border)",
-                              background: "var(--surface)",
-                              color: "var(--text)",
-                              fontSize: "0.8125rem",
-                              cursor: saving || !u.crmEnabled ? "not-allowed" : "pointer",
-                              opacity: !u.crmEnabled || !settings?.enabled ? 0.45 : 1,
-                            }}
-                          >
-                            {Object.entries(ROLE_LABELS).map(([val, label]) => (
-                              <option key={val} value={val}>{label}</option>
-                            ))}
-                          </select>
+                            size="sm"
+                            options={Object.entries(ROLE_LABELS).map(([val, label]) => ({ value: val, label }))}
+                          />
                         ) : (
                           <span style={{ fontSize: "0.8125rem", color: "var(--text-dim)" }}>—</span>
                         )}

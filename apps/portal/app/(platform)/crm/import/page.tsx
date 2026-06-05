@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { FileUp, CheckCircle, AlertCircle, Clock, ChevronDown, ChevronUp, X } from "lucide-react";
 import { PageHeader } from "../../../../components/PageHeader";
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { apiGet, ApiError } from "../../../../services/apiClient";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -679,23 +680,14 @@ function CrmImportPageInner() {
           <label htmlFor="crm-import-campaign" style={{ fontSize: "0.8125rem", fontWeight: 700, color: "var(--text)" }}>
             Destination campaign for My Queue
           </label>
-          <select
+          <ConnectSelect
             id="crm-import-campaign"
             value={selectedCampaignId}
-            onChange={(e) => setSelectedCampaignId(e.target.value)}
-            style={{
-              ...btnBase,
-              width: "100%",
-              textAlign: "left",
-              background: "var(--surface-hover)",
-              color: "var(--text)",
-            }}
-          >
-            <option value="">Choose active campaign…</option>
-            {campaigns.map((campaign) => (
-              <option key={campaign.id} value={campaign.id}>{campaign.name}</option>
-            ))}
-          </select>
+            onChange={(value) => setSelectedCampaignId(value)}
+            placeholder="Choose active campaign…"
+            style={{ width: "100%" }}
+            options={campaigns.map((campaign) => ({ value: campaign.id, label: campaign.name }))}
+          />
           <p style={{ margin: 0, fontSize: "0.8125rem", color: "var(--text-dim)" }}>
             Imported leads will be enrolled in this campaign and assigned to you so they appear in My Queue.
           </p>
