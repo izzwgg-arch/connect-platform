@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
 import { requireCrmAccess, isAdminRole } from "./guard";
+import { assertCrmContactAllowed } from "./crmContactAccess";
 import { writeTimelineEvent } from "./timelineHelper";
 import { todayBounds } from "./crmAggregateBounds";
 import {
@@ -283,6 +284,8 @@ export async function registerCrmTaskRoutes(app: FastifyInstance) {
     const { tenantId, role } = user;
     const { id: contactId } = req.params as { id: string };
 
+    if (!(await assertCrmContactAllowed(user, contactId, reply))) return;
+
     const contact = await resolveContact(contactId, tenantId, "read", role);
     if (!contact) return reply.status(404).send({ error: "not_found" });
 
@@ -309,6 +312,8 @@ export async function registerCrmTaskRoutes(app: FastifyInstance) {
     if (!user) return;
     const { tenantId, sub: userId } = user;
     const { id: contactId } = req.params as { id: string };
+
+    if (!(await assertCrmContactAllowed(user, contactId, reply))) return;
 
     const contact = await resolveContact(contactId, tenantId, "mutate", user.role);
     if (!contact) return reply.status(404).send({ error: "not_found" });
@@ -368,6 +373,8 @@ export async function registerCrmTaskRoutes(app: FastifyInstance) {
     if (!user) return;
     const { tenantId, sub: userId } = user;
     const { id: contactId, taskId } = req.params as { id: string; taskId: string };
+
+    if (!(await assertCrmContactAllowed(user, contactId, reply))) return;
 
     const contact = await resolveContact(contactId, tenantId, "mutate", user.role);
     if (!contact) return reply.status(404).send({ error: "not_found" });
@@ -450,6 +457,8 @@ export async function registerCrmTaskRoutes(app: FastifyInstance) {
     if (!user) return;
     const { tenantId, sub: userId } = user;
     const { id: contactId, taskId } = req.params as { id: string; taskId: string };
+
+    if (!(await assertCrmContactAllowed(user, contactId, reply))) return;
 
     const contact = await resolveContact(contactId, tenantId, "mutate", user.role);
     if (!contact) return reply.status(404).send({ error: "not_found" });

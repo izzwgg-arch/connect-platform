@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
 import { requireCrmAccess, isAdminRole } from "./guard";
+import { assertCrmContactAllowed } from "./crmContactAccess";
 import { writeTimelineEvent, updateLinkedTimelineBody } from "./timelineHelper";
 
 // ── Schemas ────────────────────────────────────────────────────────────────────
@@ -46,6 +47,8 @@ export async function registerCrmTimelineRoutes(app: FastifyInstance) {
     const { tenantId, role } = user;
     const { id } = req.params as { id: string };
 
+    if (!(await assertCrmContactAllowed(user, id, reply))) return;
+
     const contact = await resolveContact(id, tenantId, "read", role);
     if (!contact) return reply.status(404).send({ error: "not_found" });
 
@@ -72,6 +75,8 @@ export async function registerCrmTimelineRoutes(app: FastifyInstance) {
     if (!user) return;
     const { tenantId, sub: userId } = user;
     const { id: contactId } = req.params as { id: string };
+
+    if (!(await assertCrmContactAllowed(user, contactId, reply))) return;
 
     const contact = await resolveContact(contactId, tenantId, "mutate", user.role);
     if (!contact) return reply.status(404).send({ error: "not_found" });
@@ -117,6 +122,8 @@ export async function registerCrmTimelineRoutes(app: FastifyInstance) {
     const { tenantId, role } = user;
     const { id: contactId } = req.params as { id: string };
 
+    if (!(await assertCrmContactAllowed(user, contactId, reply))) return;
+
     const contact = await resolveContact(contactId, tenantId, "read", role);
     if (!contact) return reply.status(404).send({ error: "not_found" });
 
@@ -139,6 +146,8 @@ export async function registerCrmTimelineRoutes(app: FastifyInstance) {
     if (!user) return;
     const { tenantId, sub: userId } = user;
     const { id: contactId, noteId } = req.params as { id: string; noteId: string };
+
+    if (!(await assertCrmContactAllowed(user, contactId, reply))) return;
 
     const contact = await resolveContact(contactId, tenantId, "mutate", user.role);
     if (!contact) return reply.status(404).send({ error: "not_found" });
@@ -193,6 +202,8 @@ export async function registerCrmTimelineRoutes(app: FastifyInstance) {
     if (!user) return;
     const { tenantId } = user;
     const { id: contactId, noteId } = req.params as { id: string; noteId: string };
+
+    if (!(await assertCrmContactAllowed(user, contactId, reply))) return;
 
     const contact = await resolveContact(contactId, tenantId, "mutate", user.role);
     if (!contact) return reply.status(404).send({ error: "not_found" });

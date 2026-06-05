@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
 import { requireCrmAccess } from "./guard";
+import { assertCrmContactAllowed } from "./crmContactAccess";
 import { writeTimelineEvent } from "./timelineHelper";
 
 const itemSchema = z.object({
@@ -161,6 +162,8 @@ export async function registerCrmChecklistRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues });
 
     const { contactId, linkedId, answers } = parsed.data;
+
+    if (!(await assertCrmContactAllowed(user, contactId, reply))) return;
 
     // Verify checklist belongs to tenant
     const checklist = await db.crmChecklist.findFirst({

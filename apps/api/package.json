@@ -5,7 +5,7 @@
   "main": "dist/server.js",
   "types": "dist/server.d.ts",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "tsx watch --env-file=.env src/server.ts",
     "start": "tsx src/server.ts",
     "pbx:diagnose": "tsx scripts/run-pbx-diagnostics.ts",
     "pbx:enable-instances": "tsx scripts/enable-pbx-instances.ts",

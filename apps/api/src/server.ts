@@ -230,6 +230,21 @@ app.register(rateLimit, { max: 200, timeWindow: "1 minute" });
 app.register(fastifyRawBody as any, { field: "rawBody", global: false, encoding: false, runFirst: true });
 app.register(jwt, { secret: process.env.JWT_SECRET || "change-me" });
 app.register(formbody);
+
+app.setErrorHandler((error, _req, reply) => {
+  const status = Number((error as { statusCode?: number }).statusCode) || 500;
+  const message = String((error as Error).message || "internal_error");
+  if (status >= 500) {
+    app.log.error({ err: error, status }, "request_failed");
+  }
+  if (process.env.NODE_ENV === "production") {
+    return reply.status(status).send({ error: status >= 500 ? "internal_error" : message });
+  }
+  return reply.status(status).send({
+    error: status >= 500 ? "internal_error" : message,
+    message: status >= 500 ? message : undefined,
+  });
+});
 // File-upload support for MOH asset uploads. 50 MB cap per file covers
 // typical 10-30 min AAC/MP3/WAV hold-music tracks with generous headroom.
 // One file per request keeps the UI simple and the server-side validation
@@ -4402,7 +4417,12 @@ app.post("/auth/signup", async (req, reply) => {
 app.post("/auth/login", async (req, reply) => {
   const input = z.object({ email: z.string().email(), password: z.string().min(8) }).parse(req.body);
   const emailKey = input.email.toLowerCase();
-  if (!checkBillingRateLimit(`login:${emailKey}`, 10, 15 * 60 * 1000)) {
+  const loginRateLimitEnabled = process.env.NODE_ENV === "production"
+    || (process.env.LOGIN_RATE_LIMIT_DEV || "").toLowerCase() === "1";
+  if (
+    loginRateLimitEnabled
+    && !checkBillingRateLimit(`login:${emailKey}`, 10, 15 * 60 * 1000)
+  ) {
     app.log.warn({ email: emailKey, ip: req.ip, endpoint: "/auth/login" }, "rate_limit_login");
     loginFailuresTotal.labels("rate_limit").inc();
     return reply.status(429).send({ error: "RATE_LIMITED" });
@@ -4442,7 +4462,15 @@ app.post("/auth/login", async (req, reply) => {
     role: user.role,
     name: displayNameForUser(user as any),
   });
-  return { token };
+  const portalPermissionSet = await resolvePortalPermissionsWithCrmUserAccess(
+    user.role,
+    user.id,
+    user.tenantId,
+  );
+  return {
+    token,
+    ...(portalPermissionSet ? { portalPermissionSet } : {}),
+  };
 });
 
 app.get("/auth/invite/validate", async (req, reply) => {

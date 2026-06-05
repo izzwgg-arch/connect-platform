@@ -11,7 +11,8 @@ import {
   verifySignedCrmVoicemailDropUrl,
   writeCrmVoicemailDropAudio,
 } from "../crmVoicemailDropStorage";
-import { requireCrmAccess, requireCrmAdmin } from "./guard";
+import { requireCrmAccess } from "./guard";
+import { assertCrmContactAllowed } from "./crmContactAccess";
 import { writeTimelineEvent } from "./timelineHelper";
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
@@ -190,7 +191,7 @@ export async function registerCrmVoicemailDropRoutes(app: FastifyInstance) {
   });
 
   app.post("/crm/voicemail-drops", async (req: any, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
     if (!req.isMultipart?.()) return reply.code(400).send({ error: "multipart_required" });
 
@@ -270,6 +271,8 @@ export async function registerCrmVoicemailDropRoutes(app: FastifyInstance) {
     const parsed = dropSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues });
     const { activeCallId, contactId, voicemailDropId } = parsed.data;
+
+    if (!(await assertCrmContactAllowed(user, contactId, reply))) return;
 
     const [contact, drop] = await Promise.all([
       (db as any).contact.findFirst({
@@ -375,7 +378,7 @@ export async function registerCrmVoicemailDropRoutes(app: FastifyInstance) {
   });
 
   app.patch("/crm/voicemail-drops/:id", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
     const { id } = req.params as { id: string };
     const existing = await model().findFirst({ where: { id, tenantId: user.tenantId }, select: { id: true } });
@@ -401,7 +404,7 @@ export async function registerCrmVoicemailDropRoutes(app: FastifyInstance) {
   });
 
   app.delete("/crm/voicemail-drops/:id", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
     const { id } = req.params as { id: string };
     const existing = await model().findFirst({ where: { id, tenantId: user.tenantId }, select: { id: true } });

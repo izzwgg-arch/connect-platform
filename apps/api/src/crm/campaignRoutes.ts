@@ -125,6 +125,30 @@ function formatCampaign(c: any, includeCounts = false) {
   return base;
 }
 
+/** Optional `?timezoneZone=` (and iana/label) on GET /crm/queue — same bands as contacts index. */
+function withQueueTimezoneContactFilter(
+  where: Record<string, unknown>,
+  tenantId: string,
+  q: Record<string, string>,
+): Record<string, unknown> {
+  const timezoneFilter = buildLeadTimezoneMetaFilter({
+    timezoneIana: q.timezoneIana,
+    timezoneLabel: q.timezoneLabel,
+    timezoneZone: q.timezoneZone,
+  });
+  if (timezoneFilter == null) return where;
+  return {
+    ...where,
+    contact: {
+      is: {
+        active: true,
+        archivedAt: null,
+        crmMeta: { is: { tenantId, ...timezoneFilter } },
+      },
+    },
+  };
+}
+
 function formatMember(m: any) {
   const phone = m.contact?.phones?.[0]?.numberRaw ?? null;
   const email = m.contact?.emails?.[0]?.email ?? null;
@@ -1278,6 +1302,15 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       };
     }
 
+    whereClause = withQueueTimezoneContactFilter(whereClause, tenantId, q);
+
+    const queueCountWhere = (extra: Record<string, unknown>) =>
+      withQueueTimezoneContactFilter(
+        { tenantId, assignedToUserId: userId, ...crmCampaignMemberQueueLiveContactWhere, ...extra },
+        tenantId,
+        q,
+      );
+
     // ── Smart in-process ranking ──────────────────────────────────────────────
     // Composite score (lower = higher priority):
     //   Callback tiers (never overridden by campaign priority):
@@ -1345,37 +1378,11 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       }));
 
       const [pendingCount, dueCount, overdueCount, upcomingCount] = await Promise.all([
+        db.crmCampaignMember.count({ where: queueCountWhere(crmMemberPendingOrInProgressWhere(campaignFilter)) }),
+        db.crmCampaignMember.count({ where: queueCountWhere(crmCallbackDueLteDayEndWhere(endOfToday, campaignFilter)) }),
+        db.crmCampaignMember.count({ where: queueCountWhere(crmCallbackOverdueWhere(startOfToday, campaignFilter)) }),
         db.crmCampaignMember.count({
-          where: {
-            tenantId,
-            assignedToUserId: userId,
-            ...crmCampaignMemberQueueLiveContactWhere,
-            ...crmMemberPendingOrInProgressWhere(campaignFilter),
-          },
-        }),
-        db.crmCampaignMember.count({
-          where: {
-            tenantId,
-            assignedToUserId: userId,
-            ...crmCampaignMemberQueueLiveContactWhere,
-            ...crmCallbackDueLteDayEndWhere(endOfToday, campaignFilter),
-          },
-        }),
-        db.crmCampaignMember.count({
-          where: {
-            tenantId,
-            assignedToUserId: userId,
-            ...crmCampaignMemberQueueLiveContactWhere,
-            ...crmCallbackOverdueWhere(startOfToday, campaignFilter),
-          },
-        }),
-        db.crmCampaignMember.count({
-          where: {
-            tenantId,
-            assignedToUserId: userId,
-            ...crmCampaignMemberQueueLiveContactWhere,
-            ...crmCallbackUpcomingOrUnsetWhere(startOfTomorrow, campaignFilter),
-          },
+          where: queueCountWhere(crmCallbackUpcomingOrUnsetWhere(startOfTomorrow, campaignFilter)),
         }),
       ]);
 
@@ -1418,39 +1425,13 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       } : null,
     }));
 
-    // Per-tab counts respect the campaign filter so badge counts are scoped correctly
+    // Per-tab counts respect campaign + timezone filters so badge counts match the list
     const [pendingCount, dueCount, overdueCount, upcomingCount] = await Promise.all([
+      db.crmCampaignMember.count({ where: queueCountWhere(crmMemberPendingOrInProgressWhere(campaignFilter)) }),
+      db.crmCampaignMember.count({ where: queueCountWhere(crmCallbackDueLteDayEndWhere(endOfToday, campaignFilter)) }),
+      db.crmCampaignMember.count({ where: queueCountWhere(crmCallbackOverdueWhere(startOfToday, campaignFilter)) }),
       db.crmCampaignMember.count({
-        where: {
-          tenantId,
-          assignedToUserId: userId,
-          ...crmCampaignMemberQueueLiveContactWhere,
-          ...crmMemberPendingOrInProgressWhere(campaignFilter),
-        },
-      }),
-      db.crmCampaignMember.count({
-        where: {
-          tenantId,
-          assignedToUserId: userId,
-          ...crmCampaignMemberQueueLiveContactWhere,
-          ...crmCallbackDueLteDayEndWhere(endOfToday, campaignFilter),
-        },
-      }),
-      db.crmCampaignMember.count({
-        where: {
-          tenantId,
-          assignedToUserId: userId,
-          ...crmCampaignMemberQueueLiveContactWhere,
-          ...crmCallbackOverdueWhere(startOfToday, campaignFilter),
-        },
-      }),
-      db.crmCampaignMember.count({
-        where: {
-          tenantId,
-          assignedToUserId: userId,
-          ...crmCampaignMemberQueueLiveContactWhere,
-          ...crmCallbackUpcomingOrUnsetWhere(startOfTomorrow, campaignFilter),
-        },
+        where: queueCountWhere(crmCallbackUpcomingOrUnsetWhere(startOfTomorrow, campaignFilter)),
       }),
     ]);
 
