@@ -87,7 +87,7 @@ export function QueueLeadDetailPanel({
   }
 
   return (
-    <aside className="crm-queue-detail-panel custom-scrollbar" aria-label="Lead details">
+    <aside className="crm-queue-detail-panel crm-lead-detail-panel custom-scrollbar" aria-label="Lead details">
       <div className="crm-queue-detail-glow" aria-hidden />
 
       <header className="crm-queue-detail-header">
@@ -186,6 +186,7 @@ export function QueueLeadDetailPanel({
                 }}
                 className={cn(
                   "crm-queue-detail-channel",
+                  `crm-queue-detail-channel-${key}`,
                   key === "call" && "crm-queue-detail-channel-call",
                 )}
                 title={
@@ -355,7 +356,7 @@ export function QueueLeadDetailPanel({
 
 export function QueueLeadDetailPlaceholder() {
   return (
-    <aside className="crm-queue-detail-panel crm-queue-detail-placeholder custom-scrollbar" aria-label="Lead details">
+    <aside className="crm-queue-detail-panel crm-lead-detail-panel crm-queue-detail-placeholder custom-scrollbar" aria-label="Lead details">
       <div className="crm-queue-detail-glow" aria-hidden />
       <div className="crm-queue-detail-placeholder-icon">
         <ListOrdered size={22} />

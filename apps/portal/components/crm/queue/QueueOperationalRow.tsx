@@ -147,7 +147,7 @@ export function QueueOperationalRow({
 
         <div className="crm-queue-row-phone hidden md:flex">
           <Phone className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate font-mono text-[12px]">
+          <span className="truncate font-mono">
             {contact?.primaryPhone ?? "—"}
           </span>
         </div>
@@ -161,7 +161,7 @@ export function QueueOperationalRow({
           {cb ? (
             <span
               className={cn(
-                "crm-queue-pill text-[10px]",
+                "crm-queue-pill",
                 cb.urgent ? "crm-queue-pill-danger" : "crm-queue-pill-warning",
               )}
             >

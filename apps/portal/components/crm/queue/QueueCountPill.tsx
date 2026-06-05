@@ -43,11 +43,6 @@ export function QueueCountPill({
         disabled && "opacity-50",
       )}
     >
-      {active ? (
-        <span className="absolute inset-y-0 left-0 w-0.5 bg-crm-accent" aria-hidden />
-      ) : showUrgent ? (
-        <span className="absolute inset-y-0 left-0 w-0.5 bg-crm-danger" aria-hidden />
-      ) : null}
       <span className="flex w-full items-start justify-between gap-3">
         <span className="min-w-0">
           <span className="crm-queue-kpi-label block text-[10px] font-bold uppercase tracking-wide text-crm-muted">{label}</span>

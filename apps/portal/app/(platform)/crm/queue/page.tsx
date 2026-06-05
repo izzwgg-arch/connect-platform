@@ -34,6 +34,7 @@ import {
   QUEUE_TIMEZONE_ZONE_OPTIONS,
   type TimezoneZoneFilter,
 } from "../../../../components/crm/queue/queueTimezone";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { apiGet, apiPatch } from "../../../../services/apiClient";
 import { useSipPhone } from "../../../../hooks/useSipPhone";
 
@@ -80,10 +81,17 @@ type CrmSettingsDefaults = { defaultQueueSort: string; defaultQueueFilter: strin
 
 const SORT_MODE_KEY = "crm_queue_sort_mode";
 const CAMPAIGN_FILTER_KEY = "crm_queue_campaign_id";
+const DEV_ROW_PREVIEW_COUNT = 18;
 
 type SortMode = "smart" | "original";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
+function expandRowsForDevPreview<T>(rows: T[], minRows = DEV_ROW_PREVIEW_COUNT): T[] {
+  if (process.env.NODE_ENV !== "development") return rows;
+  if (rows.length === 0 || rows.length >= minRows) return rows;
+  return Array.from({ length: minRows }, (_, index) => rows[index % rows.length]);
+}
 
 // ── Set Callback Modal ─────────────────────────────────────────────────────────
 
@@ -328,12 +336,14 @@ function QueuePageInner() {
 
   useEffect(() => { load(); }, [load]);
 
+  const previewQueue = useMemo(() => expandRowsForDevPreview(queue), [queue]);
+
   useEffect(() => {
     setActiveIndex((idx) => {
-      if (queue.length === 0) return 0;
-      return Math.min(idx, queue.length - 1);
+      if (previewQueue.length === 0) return 0;
+      return Math.min(idx, previewQueue.length - 1);
     });
-  }, [queue]);
+  }, [previewQueue]);
 
   function switchFilter(f: QueueFilter) {
     setFilter(f);
@@ -389,7 +399,7 @@ function QueuePageInner() {
     return q ? `/crm/queue?${q}` : "/crm/queue";
   }, [searchParams]);
 
-  const activeMember = queue[activeIndex] ?? null;
+  const activeMember = previewQueue[activeIndex] ?? null;
   const completedToday = opStats?.dispositionsToday ?? 0;
   const callsToday = opStats?.callsLinkedToday ?? 0;
   const sessionEfficiency = callsToday > 0 ? Math.round((completedToday / callsToday) * 100) : 0;
@@ -456,18 +466,18 @@ function QueuePageInner() {
                   <div className="crm-queue-filter-field">
                     <Megaphone className="h-4 w-4 shrink-0 text-crm-muted" />
                     <label htmlFor="crm-queue-campaign" className={cn(crm.label, "shrink-0")}>Campaign</label>
-                    <select
+                    <ConnectSelect
                       id="crm-queue-campaign"
+                      size="sm"
                       value={campaignId ?? ""}
-                      onChange={(e) => switchCampaign(e.target.value || null)}
-                      className={cn(crm.input, "min-w-[10rem] flex-1 py-1.5")}
+                      onChange={(value) => switchCampaign(value || null)}
+                      className={cn("min-w-[10rem] flex-1")}
                       disabled={loading}
-                    >
-                      <option value="">All campaigns</option>
-                      {campaigns.map((c) => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
-                      ))}
-                    </select>
+                      options={[
+                        { value: "", label: "All campaigns" },
+                        ...campaigns.map((c) => ({ value: c.id, label: c.name })),
+                      ]}
+                    />
                     {campaignId ? (
                       <button type="button" onClick={() => switchCampaign(null)} className="text-xs font-medium text-crm-accent hover:underline">
                         Clear
@@ -478,17 +488,15 @@ function QueuePageInner() {
                 <div className="crm-queue-filter-field">
                   <Globe className="h-4 w-4 shrink-0 text-crm-muted" />
                   <label htmlFor="crm-queue-timezone" className={cn(crm.label, "shrink-0")}>Timezone</label>
-                  <select
+                  <ConnectSelect
                     id="crm-queue-timezone"
+                    size="sm"
                     value={timezoneZone}
-                    onChange={(e) => switchTimezoneZone(e.target.value as TimezoneZoneFilter)}
-                    className={cn(crm.input, "min-w-[10rem] flex-1 py-1.5")}
+                    onChange={(value) => switchTimezoneZone(value as TimezoneZoneFilter)}
+                    className={cn("min-w-[10rem] flex-1")}
                     disabled={loading}
-                  >
-                    {QUEUE_TIMEZONE_ZONE_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
-                    ))}
-                  </select>
+                    options={QUEUE_TIMEZONE_ZONE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                  />
                   {timezoneZone !== "all" ? (
                     <button
                       type="button"
@@ -537,9 +545,9 @@ function QueuePageInner() {
               ) : null}
             </div>
             <div className="crm-queue-row-list">
-              {queue.map((m, i) => (
+              {previewQueue.map((m, i) => (
                 <QueueOperationalRow
-                  key={m.id}
+                  key={`${m.id}-${i}`}
                   member={m}
                   rank={i + 1}
                   isTop={i === 0}
@@ -563,14 +571,14 @@ function QueuePageInner() {
                 <QueueLeadDetailPanel
                   member={activeMember}
                   rank={activeIndex + 1}
-                  total={queue.length}
+                  total={previewQueue.length}
                   queueReturnTo={queueReturnTo}
                   acting={acting}
                   sipReady={sipReady}
                   canGoPrevious={activeIndex > 0}
-                  canGoNext={activeIndex < queue.length - 1}
+                  canGoNext={activeIndex < previewQueue.length - 1}
                   onPrevious={() => setActiveIndex((i) => Math.max(0, i - 1))}
-                  onNext={() => setActiveIndex((i) => Math.min(queue.length - 1, i + 1))}
+                  onNext={() => setActiveIndex((i) => Math.min(previewQueue.length - 1, i + 1))}
                   onAction={(action, extra) => handleAction(activeMember.id, action, extra)}
                   onDial={() => handleDial(activeMember)}
                 />
