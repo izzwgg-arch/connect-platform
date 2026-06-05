@@ -134,6 +134,7 @@ export async function replaceFormFields(tenantId: string, formTemplateId: string
           formTemplateId,
           fieldType: field.fieldType,
           label: field.label,
+          autoFillToken: (field as any).autoFillToken ?? null,
           required: Boolean(field.required),
           pageNumber: field.pageNumber,
           x: field.x,
@@ -169,13 +170,20 @@ export async function createAndSendFormRequest(input: {
   message?: string | null;
   expiresInDays?: number;
 }) {
-  const template = await (db as any).crmFormTemplate.findFirst({
-    where: { id: input.formTemplateId, tenantId: input.tenantId, status: "ACTIVE" },
+  let template = await (db as any).crmFormTemplate.findFirst({
+    where: { id: input.formTemplateId, tenantId: input.tenantId, status: { in: ["ACTIVE", "DRAFT"] } },
     include: { fields: true },
   });
   if (!template) throw Object.assign(new Error("form_not_found"), { code: "form_not_found" });
+  // Auto-activate DRAFT templates on first send
+  if (template.status === "DRAFT") {
+    await (db as any).crmFormTemplate.updateMany({
+      where: { id: template.id, tenantId: input.tenantId },
+      data: { status: "ACTIVE" },
+    });
+    template = { ...template, status: "ACTIVE" };
+  }
   const sender = await resolveSenderConnection(input.tenantId, input.userId);
-  if (!sender) throw Object.assign(new Error("no_sender_available"), { code: "no_sender_available" });
   const { token, tokenHash } = generateFormToken();
   const expiresDays = Math.max(1, Math.min(60, Number(input.expiresInDays || DEFAULT_EXPIRES_DAYS)));
   const request = await (db as any).crmFormRequest.create({
@@ -193,39 +201,47 @@ export async function createAndSendFormRequest(input: {
     include: { formTemplate: true, submission: true },
   });
   const publicUrl = buildPublicFormUrl(token);
-  const bodyText = [
-    input.message?.trim() || `Please complete and sign ${template.name}.`,
-    "",
-    `Open secure form link: ${publicUrl}`,
-    "",
-    `This link expires on ${request.expiresAt.toISOString()}.`,
-  ].join("\n");
-  const bodyHtml = [
-    `<p>${escapeHtml(input.message?.trim() || `Please complete and sign ${template.name}.`)}</p>`,
-    `<p><a href="${escapeHtml(publicUrl)}">Open secure form</a></p>`,
-    `<p style="color:#64748b;font-size:13px">This link expires on ${escapeHtml(request.expiresAt.toISOString())}.</p>`,
-  ].join("");
-  await queueCrmEmailSend({
-    tenantId: input.tenantId,
-    userId: input.userId,
-    connectionId: sender.id,
-    to: input.recipientEmail,
-    subject: `Please complete: ${template.name}`,
-    bodyText,
-    bodyHtml,
-    contactId: input.contactId,
-  });
+  let emailSent = false;
+  if (sender) {
+    const bodyText = [
+      input.message?.trim() || `Please complete and sign ${template.name}.`,
+      "",
+      `Open secure form link: ${publicUrl}`,
+      "",
+      `This link expires on ${request.expiresAt.toISOString()}.`,
+    ].join("\n");
+    const bodyHtml = [
+      `<p>${escapeHtml(input.message?.trim() || `Please complete and sign ${template.name}.`)}</p>`,
+      `<p><a href="${escapeHtml(publicUrl)}">Open secure form</a></p>`,
+      `<p style="color:#64748b;font-size:13px">This link expires on ${escapeHtml(request.expiresAt.toISOString())}.</p>`,
+    ].join("");
+    try {
+      await queueCrmEmailSend({
+        tenantId: input.tenantId,
+        userId: input.userId,
+        connectionId: sender.id,
+        to: input.recipientEmail,
+        subject: `Please complete: ${template.name}`,
+        bodyText,
+        bodyHtml,
+        contactId: input.contactId,
+      });
+      emailSent = true;
+    } catch {
+      // Email queuing failed — request is still created; caller can share the link manually
+    }
+  }
   await writeTimelineEvent({
     tenantId: input.tenantId,
     contactId: input.contactId,
     type: "FORM_SENT",
     title: `Form sent: ${template.name}`,
-    body: `Sent to ${input.recipientEmail}.`,
+    body: emailSent ? `Sent to ${input.recipientEmail}.` : `Link generated for ${input.recipientEmail} (no email sender configured).`,
     linkedId: request.id,
     createdByUserId: input.userId,
-    metadata: { formTemplateId: template.id, formRequestId: request.id },
+    metadata: { formTemplateId: template.id, formRequestId: request.id, emailSent },
   });
-  return { request, publicUrl };
+  return { request, publicUrl, emailSent };
 }
 
 export async function resendFormRequest(input: { tenantId: string; userId: string; requestId: string }) {
@@ -237,7 +253,6 @@ export async function resendFormRequest(input: { tenantId: string; userId: strin
   if (existing.status === "COMPLETED") throw Object.assign(new Error("already_completed"), { code: "already_completed" });
   if (existing.status === "REVOKED") throw Object.assign(new Error("revoked"), { code: "revoked" });
   const sender = await resolveSenderConnection(input.tenantId, input.userId);
-  if (!sender) throw Object.assign(new Error("no_sender_available"), { code: "no_sender_available" });
   const { token, tokenHash } = generateFormToken();
   const expiresAt = new Date(Date.now() + DEFAULT_EXPIRES_DAYS * 24 * 60 * 60 * 1000);
   const request = await (db as any).crmFormRequest.update({
@@ -252,37 +267,41 @@ export async function resendFormRequest(input: { tenantId: string; userId: strin
     include: { formTemplate: true, submission: true },
   });
   const publicUrl = buildPublicFormUrl(token);
-  await queueCrmEmailSend({
-    tenantId: input.tenantId,
-    userId: input.userId,
-    connectionId: sender.id,
-    to: existing.recipientEmail,
-    subject: `Reminder: please complete ${existing.formTemplate.name}`,
-    bodyText: [
-      `Reminder: please complete and sign ${existing.formTemplate.name}.`,
-      "",
-      `Open secure form link: ${publicUrl}`,
-      "",
-      `This link expires on ${expiresAt.toISOString()}.`,
-    ].join("\n"),
-    bodyHtml: [
-      `<p>Reminder: please complete and sign ${escapeHtml(existing.formTemplate.name)}.</p>`,
-      `<p><a href="${escapeHtml(publicUrl)}">Open secure form</a></p>`,
-      `<p style="color:#64748b;font-size:13px">This link expires on ${escapeHtml(expiresAt.toISOString())}.</p>`,
-    ].join(""),
-    contactId: existing.contactId,
-  });
+  let emailSent = false;
+  if (sender) {
+    await queueCrmEmailSend({
+      tenantId: input.tenantId,
+      userId: input.userId,
+      connectionId: sender.id,
+      to: existing.recipientEmail,
+      subject: `Reminder: please complete ${existing.formTemplate.name}`,
+      bodyText: [
+        `Reminder: please complete and sign ${existing.formTemplate.name}.`,
+        "",
+        `Open secure form link: ${publicUrl}`,
+        "",
+        `This link expires on ${expiresAt.toISOString()}.`,
+      ].join("\n"),
+      bodyHtml: [
+        `<p>Reminder: please complete and sign ${escapeHtml(existing.formTemplate.name)}.</p>`,
+        `<p><a href="${escapeHtml(publicUrl)}">Open secure form</a></p>`,
+        `<p style="color:#64748b;font-size:13px">This link expires on ${escapeHtml(expiresAt.toISOString())}.</p>`,
+      ].join(""),
+      contactId: existing.contactId,
+    });
+    emailSent = true;
+  }
   await writeTimelineEvent({
     tenantId: input.tenantId,
     contactId: existing.contactId,
     type: "FORM_SENT",
     title: `Form resent: ${existing.formTemplate.name}`,
-    body: `Resent to ${existing.recipientEmail}.`,
+    body: emailSent ? `Resent to ${existing.recipientEmail}.` : `Link regenerated for ${existing.recipientEmail} (no email sender configured).`,
     linkedId: existing.id,
     createdByUserId: input.userId,
     metadata: { formTemplateId: existing.formTemplateId, formRequestId: existing.id, resent: true },
   });
-  return { request, publicUrl };
+  return { request, publicUrl, emailSent };
 }
 
 export async function revokeFormRequest(input: { tenantId: string; userId: string; requestId: string }) {
@@ -319,11 +338,48 @@ function escapeHtml(value: string): string {
 
 export async function loadPublicFormRequest(token: string, markOpened = false) {
   const tokenHash = hashFormToken(token);
+
   const request = await (db as any).crmFormRequest.findUnique({
     where: { tokenHash },
     include: {
-      formTemplate: { include: { fields: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] } } },
-      contact: { select: { id: true, displayName: true, company: true } },
+      formTemplate: {
+        include: {
+          fields: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          tenant: { select: { name: true } },
+        },
+      },
+      contact: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          displayName: true,
+          company: true,
+          title: true,
+          phones: {
+            select: { numberRaw: true, type: true, isPrimary: true },
+            orderBy: { isPrimary: "desc" },
+          },
+          emails: {
+            select: { email: true, isPrimary: true },
+            orderBy: { isPrimary: "desc" },
+          },
+          addresses: {
+            select: { street: true, city: true, state: true, zip: true, country: true },
+            orderBy: { createdAt: "asc" },
+            take: 1,
+          },
+          crmMeta: {
+            select: {
+              stage: true,
+              assignedTo: { select: { id: true, displayName: true, firstName: true, lastName: true, email: true } },
+            },
+          },
+          intelligenceReport: {
+            select: { discoveredEntities: true, keyFindings: true },
+          },
+        },
+      },
       submission: true,
     },
   });

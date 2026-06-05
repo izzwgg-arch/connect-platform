@@ -60,7 +60,7 @@ async function readMultipartUpload(req: FastifyRequest): Promise<{
 function sendRouteError(reply: any, err: any) {
   const code = String(err?.code || err?.message || "error");
   if (code === "form_not_found" || code === "request_not_found") return reply.code(404).send({ error: code });
-  if (code === "no_sender_available") return reply.code(409).send({ error: code });
+  // no_sender_available is no longer thrown — link is always generated even without an email sender
   if (code === "already_completed" || code === "revoked") return reply.code(409).send({ error: code });
   if (code === "file_too_large") return reply.code(413).send({ error: code });
   if (code === "pdf_required" || code.startsWith("invalid_")) return reply.code(400).send({ error: code });
@@ -74,6 +74,7 @@ function sendPublicError(reply: any, err: any) {
   if (code === "revoked") return reply.code(410).send({ error: "revoked" });
   if (code === "already_completed") return reply.code(409).send({ error: "already_completed" });
   if (code === "validation_failed") return reply.code(400).send({ error: "validation_failed", fields: err.errors || {} });
+  if (code !== "invalid_token") console.error("[CRM][public-form] unexpected error:", code, err?.message);
   return reply.code(404).send({ error: "invalid_token" });
 }
 
@@ -219,9 +220,9 @@ export async function registerCrmFormRoutes(app: FastifyInstance) {
         take: 100,
       }),
       (db as any).crmFormTemplate.findMany({
-        where: { tenantId: user.tenantId, status: "ACTIVE" },
-        orderBy: { name: "asc" },
-        select: { id: true, name: true, category: true },
+        where: { tenantId: user.tenantId, status: { in: ["ACTIVE", "DRAFT"] } },
+        orderBy: [{ status: "asc" }, { name: "asc" }],
+        select: { id: true, name: true, category: true, status: true },
       }),
     ]);
     return { requests: requests.map(formatFormRequest), templates };
@@ -240,7 +241,7 @@ export async function registerCrmFormRoutes(app: FastifyInstance) {
         contactId: id,
         ...parsed.data,
       });
-      return reply.code(201).send({ request: formatFormRequest(result.request) });
+      return reply.code(201).send({ request: formatFormRequest(result.request), publicUrl: result.publicUrl, emailSent: result.emailSent });
     } catch (err: any) {
       return sendRouteError(reply, err);
     }
@@ -252,7 +253,7 @@ export async function registerCrmFormRoutes(app: FastifyInstance) {
     if (!(await assertFormRequestContactAllowed(user, requestId, reply))) return;
     try {
       const result = await resendFormRequest({ tenantId: user.tenantId, userId: user.sub, requestId });
-      return { request: formatFormRequest(result.request) };
+      return { request: formatFormRequest(result.request), publicUrl: result.publicUrl, emailSent: result.emailSent };
     } catch (err: any) {
       return sendRouteError(reply, err);
     }
