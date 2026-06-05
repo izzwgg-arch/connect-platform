@@ -3,7 +3,11 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { readAuthToken } from "../services/session";
-import { bootstrapVisualQaSession, isVisualQaModeEnabled } from "../services/visualQaMode";
+import {
+  bootstrapVisualQaSession,
+  clearStaleVisualQaSession,
+  isVisualQaModeEnabled,
+} from "../services/visualQaMode";
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const router = useRouter();
@@ -14,6 +18,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
     if (isVisualQaModeEnabled()) {
       bootstrapVisualQaSession();
       setReady(true);
+      return undefined;
+    }
+
+    if (clearStaleVisualQaSession()) {
+      const next = encodeURIComponent(pathname || "/dashboard");
+      router.replace(`/login?next=${next}`);
       return undefined;
     }
 

@@ -6,8 +6,43 @@ import { mapBackendRole, readJwtPayload } from "../services/session";
 import { ApiError, apiGet, apiPost } from "../services/apiClient";
 import { loadTenantOptions } from "../services/tenantData";
 import { PBX_TENANTS_REFRESHED_EVENT, PBX_SYNC_COMPLETE_EVENT } from "./useTenantOptions";
-import { bootstrapVisualQaSession, isVisualQaModeEnabled } from "../services/visualQaMode";
+import {
+  PORTAL_PERMISSIONS_HYDRATED_EVENT,
+  clearCachedPortalPermissions,
+  notifyPortalPermissionsHydrated,
+  readCachedPortalPermissions,
+  writeCachedPortalPermissions,
+} from "../services/portalPermissionHydration";
+import {
+  bootstrapVisualQaSession,
+  clearStaleVisualQaSession,
+  isVisualQaModeEnabled,
+} from "../services/visualQaMode";
 import type { AdminScope, Permission, Role, Tenant, User } from "../types/app";
+
+function readInitialRole(): Role {
+  if (typeof window === "undefined") return "END_USER";
+  const jwt = readJwtPayload();
+  return jwt?.role ? mapBackendRole(jwt.role) : "END_USER";
+}
+
+function readInitialBackendJwtRole(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  const jwt = readJwtPayload();
+  return jwt?.role ? String(jwt.role) : undefined;
+}
+
+function readInitialPortalPermissionOverride(): Permission[] | null | undefined {
+  if (typeof window === "undefined") return undefined;
+  return readCachedPortalPermissions() ?? undefined;
+}
+
+/** True when we can render routes optimistically (cached perms or signed-in JWT). */
+function readInitialPermissionsHydrated(): boolean {
+  if (typeof window === "undefined") return false;
+  if (readCachedPortalPermissions()) return true;
+  return Boolean(readJwtPayload()?.sub);
+}
 
 type ThemeMode = "dark" | "light";
 
@@ -22,6 +57,8 @@ type AppContextType = {
   tenants: Tenant[];
   adminScope: AdminScope;
   can: (permission: Permission) => boolean;
+  /** False until GET /me (or login) has resolved portal permissions — gates nav deny flashes. */
+  permissionsHydrated: boolean;
   setTheme: (theme: ThemeMode) => void;
   setTenantId: (tenantId: string) => void;
   setRole: (role: Role) => void;
@@ -39,18 +76,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<ThemeMode>("light");
   const [themeHydrated, setThemeHydrated] = useState(false);
   /** Proven only from JWT `role` or GET `/me` — never assume SUPER_ADMIN without either. */
-  const [role, setRole] = useState<Role>("END_USER");
-  const [backendJwtRole, setBackendJwtRole] = useState<string | undefined>(undefined);
+  const [role, setRole] = useState<Role>(readInitialRole);
+  const [backendJwtRole, setBackendJwtRole] = useState<string | undefined>(readInitialBackendJwtRole);
+  const [permissionsHydrated, setPermissionsHydrated] = useState(readInitialPermissionsHydrated);
   const [tenantId, setTenantId] = useState<string>("local");
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [adminScope, setAdminScopeState] = useState<AdminScope>("TENANT");
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(null);
   const [tenantRefreshPending, setTenantRefreshPending] = useState(false);
   /** When set, `can()` uses this list from the API instead of the bundled role map (platform permission overrides). */
-  const [portalPermissionOverride, setPortalPermissionOverride] = useState<Permission[] | null | undefined>(undefined);
+  const [portalPermissionOverride, setPortalPermissionOverride] = useState<Permission[] | null | undefined>(
+    readInitialPortalPermissionOverride,
+  );
 
   useEffect(() => {
+    clearStaleVisualQaSession();
     if (isVisualQaModeEnabled()) bootstrapVisualQaSession();
+
+    const cached = readCachedPortalPermissions();
+    if (cached) {
+      setPortalPermissionOverride(cached);
+      setPermissionsHydrated(true);
+    }
 
     const stored = typeof window !== "undefined" ? localStorage.getItem("cc-theme") : null;
     if (stored === "dark" || stored === "light") setThemeState(stored);
@@ -86,7 +133,55 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (typeof window === "undefined") return;
     let active = true;
+    const applyMe = (me: {
+      portalPermissionSet?: string[] | null;
+      tenantId?: string | null;
+      tenantName?: string | null;
+      avatarUrl?: string | null;
+      role?: string | null;
+    }) => {
+      if (!active) return;
+      if (Array.isArray(me.portalPermissionSet)) {
+        const perms = me.portalPermissionSet as Permission[];
+        setPortalPermissionOverride(perms);
+        writeCachedPortalPermissions(perms);
+      } else {
+        // Keep login/cached permissions when /me omits portalPermissionSet (older API builds).
+        const cached = readCachedPortalPermissions();
+        if (cached) {
+          setPortalPermissionOverride(cached);
+        }
+      }
+      if (me.role != null && String(me.role).trim() !== "") {
+        setRole(mapBackendRole(me.role));
+        setBackendJwtRole(String(me.role));
+      }
+      if (me.tenantId) {
+        setMeTenant({
+          id: me.tenantId,
+          name: me.tenantName ?? null,
+        });
+      }
+      if (me.avatarUrl) setUserAvatarUrl(me.avatarUrl);
+      setPermissionsHydrated(true);
+      if (Array.isArray(me.portalPermissionSet)) {
+        notifyPortalPermissionsHydrated(me.portalPermissionSet as Permission[]);
+      } else {
+        notifyPortalPermissionsHydrated();
+      }
+    };
+
     const load = () => {
+      if (!readJwtPayload()?.sub) {
+        setPortalPermissionOverride(null);
+        clearCachedPortalPermissions();
+        setPermissionsHydrated(true);
+        return;
+      }
+      const hydrateTimeout = window.setTimeout(() => {
+        if (!active) return;
+        setPermissionsHydrated(true);
+      }, 3500);
       apiGet<{
         portalPermissionSet?: string[] | null;
         tenantId?: string | null;
@@ -95,35 +190,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
         role?: string | null;
       }>("/me")
         .then((me) => {
-          if (!active) return;
-          if (Array.isArray(me.portalPermissionSet)) {
-            setPortalPermissionOverride(me.portalPermissionSet as Permission[]);
-          } else {
-            setPortalPermissionOverride(null);
-          }
-          if (me.role != null && String(me.role).trim() !== "") {
-            setRole(mapBackendRole(me.role));
-            setBackendJwtRole(String(me.role));
-          }
-          if (me.tenantId) {
-            setMeTenant({
-              id: me.tenantId,
-              name: me.tenantName ?? null,
-            });
-          }
-          if (me.avatarUrl) setUserAvatarUrl(me.avatarUrl);
+          window.clearTimeout(hydrateTimeout);
+          applyMe(me);
         })
         .catch(() => {
+          window.clearTimeout(hydrateTimeout);
           if (!active) return;
-          setPortalPermissionOverride(null);
+          const cached = readCachedPortalPermissions();
+          if (cached) {
+            setPortalPermissionOverride(cached);
+          }
+          setPermissionsHydrated(true);
         });
     };
     load();
     const onSaved = () => load();
+    const onHydrated = (event: Event) => {
+      const detail = (event as CustomEvent<Permission[] | null>).detail;
+      if (!active) return;
+      if (Array.isArray(detail)) {
+        setPortalPermissionOverride(detail);
+        writeCachedPortalPermissions(detail);
+      }
+      setPermissionsHydrated(true);
+    };
     window.addEventListener("cc-portal-permissions-saved", onSaved);
+    window.addEventListener(PORTAL_PERMISSIONS_HYDRATED_EVENT, onHydrated);
     return () => {
       active = false;
       window.removeEventListener("cc-portal-permissions-saved", onSaved);
+      window.removeEventListener(PORTAL_PERMISSIONS_HYDRATED_EVENT, onHydrated);
     };
   }, []);
 
@@ -292,6 +388,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       tenants,
       adminScope,
       can: canPermission,
+      permissionsHydrated,
       setTheme: setThemeState,
       setTenantId,
       setRole,
@@ -306,6 +403,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       adminScope,
       backendJwtRole,
       canPermission,
+      permissionsHydrated,
       meTenant,
       refreshPbxTenants,
       role,

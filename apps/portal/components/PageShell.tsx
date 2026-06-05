@@ -19,9 +19,16 @@ function titleFromPath(pathname: string): string {
   return fallback.charAt(0).toUpperCase() + fallback.slice(1).replace(/-/g, " ");
 }
 
+function isLocalhostDev(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(window.location.host)
+  );
+}
+
 export function PageShell({ children, banners }: { children: ReactNode; banners?: ReactNode }) {
   const pathname = usePathname();
-  const { can, backendJwtRole } = useAppContext();
+  const { can, backendJwtRole, permissionsHydrated } = useAppContext();
   const isMobile = useMediaQuery("(max-width: 1080px)");
   const { railMode, toggleRail } = useSidebarRail();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -85,11 +92,19 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
         <div className="console-workspace">
           {banners ? <div className="workspace-banners">{banners}</div> : null}
           <main className="console-content custom-scrollbar">
-            {routeAllowed ? children : (
+            {permissionsHydrated && !routeAllowed ? (
               <div className="state-box" style={{ padding: 32 }}>
                 <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>Access denied</div>
                 <div className="muted">You do not have permission to access {activeNavItem?.label || "this page"}.</div>
+                {isLocalhostDev() && activeNavItem?.section === "crm" ? (
+                  <p className="muted" style={{ marginTop: 12, fontSize: 13 }}>
+                    Local dev: click <strong>Local dev sign-in</strong> on the login page, or run{" "}
+                    <code>pnpm bootstrap:local</code> then sign in again.
+                  </p>
+                ) : null}
               </div>
+            ) : (
+              children
             )}
           </main>
         </div>
