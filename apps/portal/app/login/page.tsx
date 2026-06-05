@@ -2,9 +2,22 @@
 
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ApiError, apiPost } from "../../services/apiClient";
+import { applyPortalPermissionsFromLogin } from "../../services/portalPermissionHydration";
 import { writeAuthToken } from "../../services/session";
+import { clearStaleVisualQaSession } from "../../services/visualQaMode";
+import type { Permission } from "../../types/app";
+
+const LOCAL_DEV_EMAIL = "imwog@gmail.com";
+const LOCAL_DEV_PASSWORD = "LocalDev2026!";
+
+function isLocalhostDev(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(window.location.host)
+  );
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -12,19 +25,35 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showLocalDevSignIn, setShowLocalDevSignIn] = useState(false);
 
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
+  useEffect(() => {
+    clearStaleVisualQaSession();
+    if (isLocalhostDev()) setShowLocalDevSignIn(true);
+  }, []);
+
+  async function loginWithCredentials(loginEmail: string, loginPassword: string) {
     setError("");
     setLoading(true);
     try {
-      const res = await apiPost<{ token?: string; error?: string }>("/auth/login", { email, password });
+      const res = await apiPost<{
+        token?: string;
+        error?: string;
+        portalPermissionSet?: string[];
+      }>("/auth/login", {
+        email: loginEmail,
+        password: loginPassword,
+      });
       const token = String(res?.token || "");
       if (!token) {
         setError(String(res?.error || "Login failed"));
         return;
       }
       writeAuthToken(token);
+      applyPortalPermissionsFromLogin(res.portalPermissionSet as Permission[] | undefined);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("cc-portal-permissions-saved"));
+      }
       const next = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("next") : null;
       const dest = next ? decodeURIComponent(next) : "/dashboard";
       router.replace(dest);
@@ -37,11 +66,8 @@ export default function LoginPage() {
     } catch (e: unknown) {
       if (e instanceof ApiError) {
         if (e.status === 401) {
-          const onLocalhost =
-            typeof window !== "undefined" &&
-            /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(window.location.host);
           setError(
-            onLocalhost
+            isLocalhostDev()
               ? "Invalid email or password on localhost. This is not production — use the local dev account (see terminal output from pnpm bootstrap:local). Default: imwog@gmail.com or imwogg@gmail.com with password LocalDev2026!"
               : "Invalid email or password.",
           );
@@ -78,6 +104,17 @@ export default function LoginPage() {
     }
   }
 
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    await loginWithCredentials(email, password);
+  }
+
+  async function devQuickSignIn() {
+    setEmail(LOCAL_DEV_EMAIL);
+    setPassword(LOCAL_DEV_PASSWORD);
+    await loginWithCredentials(LOCAL_DEV_EMAIL, LOCAL_DEV_PASSWORD);
+  }
+
   return (
     <main className="stack" style={{ minHeight: "100vh", alignItems: "center", justifyContent: "center", padding: "24px" }}>
       <form className="panel stack" onSubmit={submit} style={{ width: "min(440px, 92vw)" }}>
@@ -93,6 +130,16 @@ export default function LoginPage() {
         </label>
         {error ? <div className="chip danger">{error}</div> : null}
         <button className="btn" type="submit" disabled={loading}>{loading ? "Signing in..." : "Sign in"}</button>
+        {showLocalDevSignIn ? (
+          <button
+            className="btn ghost"
+            type="button"
+            disabled={loading}
+            onClick={() => void devQuickSignIn()}
+          >
+            {loading ? "Signing in..." : "Local dev sign-in"}
+          </button>
+        ) : null}
         <Link className="muted" href="/auth/password/forgot" style={{ textAlign: "center" }}>Forgot password?</Link>
       </form>
     </main>
