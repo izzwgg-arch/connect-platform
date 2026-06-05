@@ -1,25 +1,54 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { CheckCircle2, FileSignature, Loader2 } from "lucide-react";
+import {
+  CheckCircle2,
+  ExternalLink,
+  FileSignature,
+  Loader2,
+  PenLine,
+  RotateCcw,
+  Shield,
+} from "lucide-react";
 import { ApiError, getPortalApiBaseUrl } from "../../../../services/apiClient";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type FieldType = "TEXT" | "DATE" | "CHECKBOX" | "SIGNATURE" | "INITIALS";
 
 type PublicField = {
   id: string;
-  fieldType: "TEXT" | "DATE" | "CHECKBOX" | "SIGNATURE" | "INITIALS";
+  fieldType: FieldType;
   label: string;
+  autoFillToken?: string | null;
+  /** Server-resolved value for the autoFillToken — pre-populates the field. */
+  defaultValue?: string;
   required: boolean;
   pageNumber: number;
 };
 
 type PublicForm = {
+  tenantName: string | null;
   request: { id: string; status: string; expiresAt: string | null; completedAt: string | null };
-  contact: { displayName: string | null; company: string | null };
-  template: { id: string; name: string; description: string | null; category: string | null; pageCount: number | null };
+  contact: {
+    displayName: string | null;
+    company: string | null;
+    primaryPhone: string | null;
+    primaryEmail: string | null;
+  };
+  template: {
+    id: string;
+    name: string;
+    description: string | null;
+    category: string | null;
+    pageCount: number | null;
+  };
   fields: PublicField[];
   submission: { submittedAt: string } | null;
 };
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function publicJson<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${getPortalApiBaseUrl()}${path}`, {
@@ -33,6 +62,330 @@ async function publicJson<T>(path: string, body?: unknown): Promise<T> {
   return json as T;
 }
 
+// ─── Demo / preview data (token === "demo") ────────────────────────────────
+
+const DEMO_FORM: PublicForm = {
+  tenantName: "Ribbit Capital",
+  request: {
+    id: "demo",
+    status: "SENT",
+    expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+    completedAt: null,
+  },
+  contact: {
+    displayName: "Jordan Rivera",
+    company: "Connect Demo Co",
+    primaryPhone: "(555) 010-9881",
+    primaryEmail: "demo.user@example.com",
+  },
+  template: {
+    id: "demo",
+    name: "Client Agreement & Authorization",
+    description: "Please review and sign this agreement before we proceed with your account setup.",
+    category: "Agreements",
+    pageCount: 2,
+  },
+  fields: [
+    { id: "f1", fieldType: "TEXT",      label: "Full legal name",    autoFillToken: "contact.fullName",  defaultValue: "Jordan Rivera",          required: true,  pageNumber: 1 },
+    { id: "f2", fieldType: "TEXT",      label: "Business / DBA name", autoFillToken: "business.dba",     defaultValue: "Connect Demo Services",  required: false, pageNumber: 1 },
+    { id: "f3", fieldType: "TEXT",      label: "Entity type",         autoFillToken: "business.entityType", defaultValue: "LLC",                required: false, pageNumber: 1 },
+    { id: "f4", fieldType: "TEXT",      label: "Email address",       autoFillToken: "contact.email",    defaultValue: "demo.user@example.com",  required: true,  pageNumber: 1 },
+    { id: "f5", fieldType: "TEXT",      label: "Phone number",        autoFillToken: "contact.phone",    defaultValue: "(555) 010-9881",         required: false, pageNumber: 1 },
+    { id: "f6", fieldType: "TEXT",      label: "EIN / Tax ID",        autoFillToken: "business.ein",     defaultValue: "",                       required: false, pageNumber: 1 },
+    { id: "f7", fieldType: "DATE",      label: "Effective date",      autoFillToken: "form.date",        defaultValue: new Date().toISOString().slice(0, 10), required: false, pageNumber: 1 },
+    { id: "f8", fieldType: "CHECKBOX",  label: "I have read and agree to the terms and conditions", required: true, pageNumber: 2 },
+    { id: "f9", fieldType: "INITIALS",  label: "Initials — page 1",   required: true, pageNumber: 1 },
+    { id: "f10", fieldType: "SIGNATURE", label: "Authorized signature", required: true, pageNumber: 2 },
+  ],
+  submission: null,
+};
+
+function fmtDate(iso: string | null | undefined) {
+  if (!iso) return "—";
+  return new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric", year: "numeric" }).format(new Date(iso));
+}
+
+// ─── Signature Canvas ─────────────────────────────────────────────────────────
+
+function SignatureCanvas({
+  value,
+  onChange,
+  small = false,
+  error,
+}: {
+  value: string;
+  onChange: (dataUrl: string) => void;
+  small?: boolean;
+  error?: string;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const drawing = useRef(false);
+  const lastPt = useRef<{ x: number; y: number } | null>(null);
+  const [hasStrokes, setHasStrokes] = useState(!!value);
+
+  // Restore saved image on mount
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !value) return;
+    const img = new Image();
+    img.onload = () => {
+      const ctx = canvas.getContext("2d");
+      if (ctx) ctx.drawImage(img, 0, 0);
+    };
+    img.src = value;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function getPoint(e: React.MouseEvent | React.TouchEvent) {
+    const canvas = canvasRef.current!;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    if ("touches" in e) {
+      const t = e.touches[0];
+      return { x: (t.clientX - rect.left) * scaleX, y: (t.clientY - rect.top) * scaleY };
+    }
+    return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
+  }
+
+  function startDraw(e: React.MouseEvent | React.TouchEvent) {
+    e.preventDefault();
+    drawing.current = true;
+    lastPt.current = getPoint(e);
+    const ctx = canvasRef.current?.getContext("2d");
+    if (ctx) {
+      ctx.beginPath();
+      ctx.moveTo(lastPt.current.x, lastPt.current.y);
+    }
+  }
+
+  function draw(e: React.MouseEvent | React.TouchEvent) {
+    if (!drawing.current) return;
+    e.preventDefault();
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!ctx || !canvas) return;
+    const pt = getPoint(e);
+    ctx.lineWidth = small ? 1.5 : 2;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "#1e293b";
+    ctx.lineTo(pt.x, pt.y);
+    ctx.stroke();
+    lastPt.current = pt;
+    setHasStrokes(true);
+  }
+
+  function stopDraw() {
+    if (!drawing.current) return;
+    drawing.current = false;
+    const canvas = canvasRef.current;
+    if (canvas) onChange(canvas.toDataURL("image/png"));
+  }
+
+  function clear() {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!ctx || !canvas) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    setHasStrokes(false);
+    onChange("");
+  }
+
+  const h = small ? 60 : 110;
+  const w = small ? 200 : 420;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div
+        className={`relative overflow-hidden rounded-xl border-2 bg-white ${
+          error ? "border-red-400" : hasStrokes ? "border-indigo-400" : "border-slate-200"
+        }`}
+        style={{ height: h, touchAction: "none" }}
+      >
+        <canvas
+          ref={canvasRef}
+          width={w}
+          height={h}
+          className="h-full w-full cursor-crosshair"
+          onMouseDown={startDraw}
+          onMouseMove={draw}
+          onMouseUp={stopDraw}
+          onMouseLeave={stopDraw}
+          onTouchStart={startDraw}
+          onTouchMove={draw}
+          onTouchEnd={stopDraw}
+        />
+        {!hasStrokes && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 text-slate-300">
+            <PenLine className="h-4 w-4" />
+            <span className="text-sm">{small ? "Initials" : "Sign here"}</span>
+          </div>
+        )}
+        {hasStrokes && (
+          <button
+            type="button"
+            onClick={clear}
+            className="absolute bottom-1.5 right-1.5 flex items-center gap-1 rounded-lg bg-white/90 px-2 py-1 text-xs font-medium text-slate-500 shadow hover:bg-white hover:text-red-500"
+          >
+            <RotateCcw className="h-3 w-3" />
+            Clear
+          </button>
+        )}
+      </div>
+      {error ? <p className="text-xs font-medium text-red-500">{error}</p> : null}
+    </div>
+  );
+}
+
+// ─── Individual field ─────────────────────────────────────────────────────────
+
+function FieldInput({
+  field,
+  value,
+  onChange,
+  error,
+  prefilled,
+}: {
+  field: PublicField;
+  value: unknown;
+  onChange: (v: unknown) => void;
+  error?: string;
+  /** Whether this field was auto-filled from the contact profile */
+  prefilled?: boolean;
+}) {
+  const base =
+    "w-full rounded-xl border bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition-colors focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100";
+
+  if (field.fieldType === "CHECKBOX") {
+    return (
+      <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-white p-3 hover:border-indigo-300">
+        <input
+          type="checkbox"
+          checked={value === true}
+          onChange={(e) => onChange(e.target.checked)}
+          className="mt-0.5 h-4 w-4 accent-indigo-600"
+        />
+        <span className="text-sm text-slate-700">I confirm and agree</span>
+        {error ? <span className="ml-auto text-xs text-red-500">{error}</span> : null}
+      </label>
+    );
+  }
+
+  if (field.fieldType === "SIGNATURE") {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white p-3">
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Draw your signature below
+        </p>
+        <SignatureCanvas
+          value={String(value ?? "")}
+          onChange={onChange}
+          error={error}
+        />
+        <p className="mt-2 text-[11px] text-slate-400">
+          By drawing above you are providing your electronic signature.
+        </p>
+      </div>
+    );
+  }
+
+  if (field.fieldType === "INITIALS") {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white p-3">
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Draw your initials
+        </p>
+        <SignatureCanvas
+          value={String(value ?? "")}
+          onChange={onChange}
+          small
+          error={error}
+        />
+      </div>
+    );
+  }
+
+  if (field.fieldType === "DATE") {
+    return (
+      <div className="relative">
+        <input
+          type="date"
+          value={String(value ?? "")}
+          onChange={(e) => onChange(e.target.value)}
+          className={`${base} ${error ? "border-red-400" : prefilled ? "border-indigo-200 bg-indigo-50/30" : "border-slate-200"}`}
+        />
+        {prefilled ? (
+          <span className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-600">
+            pre-filled
+          </span>
+        ) : null}
+        {error ? <p className="mt-1 text-xs font-medium text-red-500">{error}</p> : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        value={String(value ?? "")}
+        onChange={(e) => onChange(e.target.value)}
+        className={`${base} pr-20 ${error ? "border-red-400" : prefilled ? "border-indigo-200 bg-indigo-50/30" : "border-slate-200"}`}
+      />
+      {prefilled && String(value ?? "") ? (
+        <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-600">
+          pre-filled
+        </span>
+      ) : null}
+      {error ? <p className="mt-1 text-xs font-medium text-red-500">{error}</p> : null}
+    </div>
+  );
+}
+
+// ─── Step indicator ───────────────────────────────────────────────────────────
+
+function StepBar({ step }: { step: 1 | 2 | 3 }) {
+  const steps = ["Review document", "Complete & sign", "Submitted"];
+  return (
+    <div className="flex items-center gap-0">
+      {steps.map((label, i) => {
+        const n = i + 1;
+        const done = n < step;
+        const active = n === step;
+        return (
+          <div key={n} className="flex items-center">
+            <div className="flex flex-col items-center gap-1">
+              <div
+                className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold transition-colors ${
+                  done
+                    ? "bg-indigo-600 text-white"
+                    : active
+                    ? "bg-indigo-600 text-white shadow-lg shadow-indigo-200"
+                    : "bg-slate-100 text-slate-400"
+                }`}
+              >
+                {done ? "✓" : n}
+              </div>
+              <span
+                className={`hidden text-[11px] font-medium sm:block ${
+                  active ? "text-indigo-700" : done ? "text-indigo-400" : "text-slate-400"
+                }`}
+              >
+                {label}
+              </span>
+            </div>
+            {i < steps.length - 1 && (
+              <div className={`mx-2 mb-4 h-px w-12 sm:w-20 ${done ? "bg-indigo-400" : "bg-slate-200"}`} />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
+
 export default function PublicFormSigningPage() {
   const { token } = useParams<{ token: string }>();
   const [form, setForm] = useState<PublicForm | null>(null);
@@ -41,15 +394,66 @@ export default function PublicFormSigningPage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [complete, setComplete] = useState(false);
+  const [step, setStep] = useState<1 | 2 | 3>(2);
+
+  const pdfUrl = `${getPortalApiBaseUrl()}/public/forms/${encodeURIComponent(token ?? "")}/pdf`;
+
+  const isDemo = token === "demo";
+
+  // The global CRM shell sets overflow:hidden on html+body. Override it for
+  // this public page so the signing flow can scroll normally.
+  useEffect(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    const prevHtml = html.style.overflow;
+    const prevBody = body.style.overflow;
+    html.style.overflow = "auto";
+    body.style.overflow = "auto";
+    return () => {
+      html.style.overflow = prevHtml;
+      body.style.overflow = prevBody;
+    };
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await publicJson<PublicForm>(`/public/forms/${encodeURIComponent(token)}`);
+      const data: PublicForm = isDemo
+        ? DEMO_FORM
+        : await publicJson<PublicForm>(`/public/forms/${encodeURIComponent(token)}`);
       setForm(data);
-      setComplete(data.request.status === "COMPLETED" || Boolean(data.submission));
+      if (data.request.status === "COMPLETED" || Boolean(data.submission)) {
+        setStep(3);
+      } else {
+        setStep(2);
+      }
+      // Pre-fill fields using server-resolved defaultValue (from autoFillToken),
+      // falling back to label-keyword matching for any field without a token.
+      if (data.fields.length) {
+        const { displayName, company, primaryPhone, primaryEmail } = data.contact ?? {};
+        const prefill: Record<string, unknown> = {};
+        for (const field of data.fields) {
+          if (field.fieldType === "SIGNATURE" || field.fieldType === "INITIALS" || field.fieldType === "CHECKBOX") continue;
+          // 1️⃣ Token-resolved default from API
+          if (field.defaultValue !== undefined && field.defaultValue !== "") {
+            prefill[field.id] = field.defaultValue;
+            continue;
+          }
+          // 2️⃣ Fuzzy fallback for fields with no token
+          const lbl = field.label.toLowerCase();
+          if (displayName && (lbl.includes("name") || lbl.includes("full name") || lbl.includes("client name"))) {
+            prefill[field.id] = displayName;
+          } else if (company && (lbl.includes("company") || lbl.includes("business") || lbl.includes("organization"))) {
+            prefill[field.id] = company;
+          } else if (primaryEmail && lbl.includes("email")) {
+            prefill[field.id] = primaryEmail;
+          } else if (primaryPhone && (lbl.includes("phone") || lbl.includes("mobile") || lbl.includes("cell"))) {
+            prefill[field.id] = primaryPhone;
+          }
+        }
+        if (Object.keys(prefill).length) setValues(prefill);
+      }
     } catch (err) {
       const apiError = err as ApiError;
       if (apiError.message === "expired") setError("This form link has expired.");
@@ -80,111 +484,334 @@ export default function PublicFormSigningPage() {
     const missing = requiredMissing;
     if (Object.keys(missing).length) {
       setFieldErrors(missing);
+      const firstId = form.fields.find((f) => missing[f.id])?.id;
+      if (firstId) {
+        document.getElementById(`field-${firstId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
       return;
     }
     setSubmitting(true);
     setFieldErrors({});
     setError(null);
     try {
-      await publicJson(`/public/forms/${encodeURIComponent(token)}/submit`, { submittedData: values });
-      setComplete(true);
+      if (!isDemo) {
+        await publicJson(`/public/forms/${encodeURIComponent(token)}/submit`, { submittedData: values });
+      } else {
+        // Demo mode — simulate a short network delay then show success
+        await new Promise((r) => setTimeout(r, 900));
+      }
+      setStep(3);
     } catch (err) {
       const apiError = err as ApiError;
       const body = apiError.body as { fields?: Record<string, string>; error?: string } | null;
       if (body?.fields) setFieldErrors(body.fields);
-      setError(body?.error === "validation_failed" ? "Please complete all required fields." : "Unable to submit this form.");
+      setError(body?.error === "validation_failed" ? "Please complete all required fields." : "Unable to submit this form. Please try again.");
     } finally {
       setSubmitting(false);
     }
   };
 
+  const completedCount = useMemo(() => {
+    if (!form) return 0;
+    return form.fields.filter((f) => {
+      if (f.fieldType === "CHECKBOX") return values[f.id] === true;
+      return String(values[f.id] ?? "").trim().length > 0;
+    }).length;
+  }, [form, values]);
+
+  const totalRequired = useMemo(() => form?.fields.filter((f) => f.required).length ?? 0, [form]);
+
   return (
-    <main className="min-h-screen bg-slate-950 px-4 py-6 text-slate-100">
-      <div className="mx-auto max-w-5xl">
-        <header className="mb-6 rounded-3xl border border-white/10 bg-white/[0.04] p-5 shadow-2xl">
-          <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-cyan-400/15 text-cyan-200">
-              <FileSignature className="h-6 w-6" />
+    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-indigo-50/30 to-slate-100 px-4 pb-12 pt-6">
+      <div className="mx-auto max-w-6xl">
+
+        {/* Demo banner */}
+        {isDemo ? (
+          <div className="mb-4 flex items-center justify-center gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-700">
+            <span className="rounded-full bg-amber-200 px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-amber-800">Preview</span>
+            This is a demo — form submission will not be saved
+          </div>
+        ) : null}
+
+        {/* Header */}
+        <header className="mb-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-600 shadow-lg shadow-indigo-200">
+                <FileSignature className="h-6 w-6 text-white" />
+              </div>
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-indigo-500">
+                  {form?.tenantName ?? "Secure Document Signing"}
+                </p>
+                <h1 className="text-xl font-bold text-slate-900">{form?.template.name || "Document"}</h1>
+                {form?.contact?.displayName ? (
+                  <p className="mt-0.5 text-sm text-slate-500">
+                    For <span className="font-semibold text-slate-700">{form.contact.displayName}</span>
+                    {form.contact.company ? <span className="text-slate-400"> · {form.contact.company}</span> : null}
+                  </p>
+                ) : null}
+              </div>
             </div>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-cyan-200">Connect CRM</p>
-              <h1 className="text-2xl font-semibold">{form?.template.name || "Secure Form"}</h1>
+            <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2">
+              <Shield className="h-4 w-4 text-emerald-600" />
+              <span className="text-xs font-semibold text-emerald-700">SSL Encrypted · Tamper-evident</span>
             </div>
           </div>
-          {form?.template.description ? <p className="mt-3 text-sm text-slate-300">{form.template.description}</p> : null}
+
+          {step < 3 && !loading && form ? (
+            <div className="mt-3 flex flex-wrap items-center justify-end gap-4">
+              {form.request.expiresAt ? (
+                <p className="text-xs text-slate-400">Expires {fmtDate(form.request.expiresAt)}</p>
+              ) : null}
+            </div>
+          ) : null}
         </header>
 
+        {/* Body */}
         {loading ? (
-          <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-10 text-center">
-            <Loader2 className="mx-auto h-8 w-8 animate-spin text-cyan-200" />
-            <p className="mt-3 text-sm text-slate-300">Loading secure form…</p>
+          <div className="flex flex-col items-center gap-3 rounded-3xl border border-slate-200 bg-white p-16 shadow-sm">
+            <Loader2 className="h-9 w-9 animate-spin text-indigo-400" />
+            <p className="text-sm text-slate-500">Loading secure form…</p>
           </div>
         ) : error && !form ? (
-          <div className="rounded-3xl border border-red-400/20 bg-red-500/10 p-8 text-center text-red-100">{error}</div>
-        ) : complete ? (
-          <div className="rounded-3xl border border-emerald-400/20 bg-emerald-500/10 p-10 text-center">
-            <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-200" />
-            <h2 className="mt-4 text-xl font-semibold">Form submitted</h2>
-            <p className="mt-2 text-sm text-emerald-100/80">Thank you. Your completed form has been securely saved back to the CRM.</p>
+          <div className="rounded-3xl border border-red-200 bg-red-50 p-10 text-center shadow-sm">
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-red-100">
+              <FileSignature className="h-7 w-7 text-red-400" />
+            </div>
+            <h2 className="text-lg font-semibold text-red-800">Unable to load form</h2>
+            <p className="mt-2 text-sm text-red-600">{error}</p>
+          </div>
+        ) : step === 3 ? (
+          // ── Submitted ──────────────────────────────────────────────────────
+          <div className="rounded-3xl border border-emerald-200 bg-white p-12 text-center shadow-sm">
+            <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-emerald-100">
+              <CheckCircle2 className="h-10 w-10 text-emerald-500" />
+            </div>
+            <h2 className="text-2xl font-bold text-slate-900">All done — thank you!</h2>
+            <p className="mx-auto mt-3 max-w-md text-sm text-slate-500">
+              Your completed form has been securely submitted and saved. The company will be notified and may follow up with you shortly.
+            </p>
+            <div className="mt-6 flex flex-wrap justify-center gap-3">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{form?.tenantName ?? "Document"}</p>
+                <p className="mt-0.5 text-sm font-semibold text-slate-700">{form?.template.name}</p>
+              </div>
+              {form?.contact?.displayName ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Signed by</p>
+                  <p className="mt-0.5 text-sm font-semibold text-slate-700">{form.contact.displayName}</p>
+                </div>
+              ) : null}
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Submitted</p>
+                <p className="mt-0.5 text-sm font-semibold text-slate-700">
+                  {new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date())}
+                </p>
+              </div>
+            </div>
           </div>
         ) : form ? (
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
-            <section className="min-h-[520px] overflow-hidden rounded-3xl border border-white/10 bg-white/[0.04]">
-              <div className="flex items-center justify-end border-b border-white/10 px-4 py-2">
-                <a
-                  href={`${getPortalApiBaseUrl()}/public/forms/${encodeURIComponent(token)}/pdf`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-sm font-medium text-cyan-200 underline"
-                >
-                  Open PDF in new tab
-                </a>
+          // ── Step 1: Review / Step 2: Complete & Sign ───────────────────────
+          <div className="grid gap-5 lg:grid-cols-[1fr_420px]">
+
+            {/* Left — PDF viewer */}
+            <div className="flex flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                <p className="text-sm font-semibold text-slate-700">
+                  {form.template.name}
+                  {form.template.pageCount ? (
+                    <span className="ml-2 text-xs font-normal text-slate-400">· {form.template.pageCount} {form.template.pageCount === 1 ? "page" : "pages"}</span>
+                  ) : null}
+                </p>
+                {!isDemo ? (
+                  <a
+                    href={pdfUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:border-indigo-300 hover:text-indigo-600"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    Open full screen
+                  </a>
+                ) : (
+                  <span className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-600">
+                    Demo — mock document
+                  </span>
+                )}
               </div>
-              <iframe
-                title="PDF form preview"
-                src={`${getPortalApiBaseUrl()}/public/forms/${encodeURIComponent(token)}/pdf`}
-                className="h-[70vh] min-h-[520px] w-full bg-white"
-              />
-            </section>
-            <aside className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
-              <div className="mb-4">
-                <h2 className="text-lg font-semibold">Complete fields</h2>
-                <p className="mt-1 text-sm text-slate-300">Required fields are marked. Signatures and initials are captured as typed consent in Phase 1.</p>
-              </div>
-              <div className="space-y-4">
-                {form.fields.map((field) => (
-                  <label key={field.id} className="block">
-                    <span className="mb-1 block text-sm font-medium text-slate-200">
-                      {field.label} {field.required ? <span className="text-red-300">*</span> : null}
+              {isDemo ? (
+                <div className="flex h-[72vh] min-h-[500px] w-full flex-col items-center justify-center gap-6 bg-slate-50 px-8">
+                  {/* Simulated document pages */}
+                  <div className="w-full max-w-md space-y-4">
+                    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                      <div className="mb-4 flex items-center justify-between">
+                        <div className="h-2 w-2/3 rounded-full bg-slate-200" />
+                        <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Page 1 of 2</span>
+                      </div>
+                      <div className="space-y-2">
+                        <div className="h-2 w-full rounded-full bg-slate-100" />
+                        <div className="h-2 w-5/6 rounded-full bg-slate-100" />
+                        <div className="h-2 w-full rounded-full bg-slate-100" />
+                        <div className="h-2 w-4/5 rounded-full bg-slate-100" />
+                        <div className="mt-4 h-2 w-full rounded-full bg-slate-100" />
+                        <div className="h-2 w-3/4 rounded-full bg-slate-100" />
+                        <div className="h-2 w-full rounded-full bg-slate-100" />
+                      </div>
+                      <div className="mt-5 rounded-xl border border-dashed border-indigo-200 bg-indigo-50/50 px-4 py-3">
+                        <p className="text-xs font-medium text-indigo-500">§ 1. Authorization</p>
+                        <div className="mt-2 space-y-1.5">
+                          <div className="h-2 w-full rounded-full bg-indigo-100/60" />
+                          <div className="h-2 w-5/6 rounded-full bg-indigo-100/60" />
+                          <div className="h-2 w-full rounded-full bg-indigo-100/60" />
+                        </div>
+                      </div>
+                      <div className="mt-4 space-y-2">
+                        <div className="h-2 w-full rounded-full bg-slate-100" />
+                        <div className="h-2 w-2/3 rounded-full bg-slate-100" />
+                      </div>
+                      <div className="mt-5 grid grid-cols-2 gap-3">
+                        <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-2">
+                          <p className="text-[10px] text-slate-400">Initials</p>
+                          <div className="mt-1 h-7 rounded bg-slate-100" />
+                        </div>
+                        <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-2">
+                          <p className="text-[10px] text-slate-400">Date</p>
+                          <div className="mt-1 h-7 rounded bg-slate-100" />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                      <div className="mb-4 flex items-center justify-between">
+                        <div className="h-2 w-1/2 rounded-full bg-slate-200" />
+                        <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Page 2 of 2</span>
+                      </div>
+                      <div className="space-y-2">
+                        <div className="h-2 w-full rounded-full bg-slate-100" />
+                        <div className="h-2 w-4/5 rounded-full bg-slate-100" />
+                        <div className="h-2 w-full rounded-full bg-slate-100" />
+                      </div>
+                      <div className="mt-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3">
+                        <p className="text-[10px] text-slate-400">Authorized signature</p>
+                        <div className="mt-2 h-10 rounded bg-slate-100" />
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    Demo preview — upload a real PDF in{" "}
+                    <a href="/crm/forms" className="text-indigo-500 underline underline-offset-2">CRM → Forms</a>{" "}
+                    to see your actual document here
+                  </p>
+                </div>
+              ) : (
+                <iframe
+                  title="Document preview"
+                  src={pdfUrl}
+                  className="h-[72vh] min-h-[500px] w-full bg-slate-100"
+                />
+              )}
+            </div>
+
+            {/* Right — Fields */}
+            <aside className="flex flex-col gap-4">
+
+              {/* Progress pill */}
+              {form.fields.length > 0 ? (
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-semibold text-slate-700">
+                      {step === 1 ? "Fields to complete" : "Complete all fields"}
+                    </p>
+                    <span className="rounded-full bg-indigo-100 px-2.5 py-0.5 text-xs font-bold text-indigo-700">
+                      {completedCount} / {form.fields.length} done
                     </span>
-                    {field.fieldType === "CHECKBOX" ? (
-                      <input
-                        type="checkbox"
-                        checked={values[field.id] === true}
-                        onChange={(event) => setValues((prev) => ({ ...prev, [field.id]: event.target.checked }))}
+                  </div>
+                  <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full rounded-full bg-indigo-500 transition-all"
+                      style={{ width: `${form.fields.length ? (completedCount / form.fields.length) * 100 : 0}%` }}
+                    />
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Fields */}
+              <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="divide-y divide-slate-100">
+                  {form.fields.map((field, idx) => (
+                    <div
+                      key={field.id}
+                      id={`field-${field.id}`}
+                      className="p-4"
+                    >
+                      <label className="mb-2 flex items-center gap-2">
+                        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-100 text-[10px] font-bold text-indigo-600">
+                          {idx + 1}
+                        </span>
+                        <span className="text-sm font-semibold text-slate-800">
+                          {field.label}
+                          {field.required ? <span className="ml-1 text-red-400">*</span> : <span className="ml-1 text-xs font-normal text-slate-400">(optional)</span>}
+                        </span>
+                      </label>
+                      <FieldInput
+                        field={field}
+                        value={values[field.id]}
+                        onChange={(v) => setValues((prev) => ({ ...prev, [field.id]: v }))}
+                        error={fieldErrors[field.id]}
+                        prefilled={Boolean(
+                          field.autoFillToken &&
+                          field.defaultValue !== undefined &&
+                          field.defaultValue !== "" &&
+                          String(values[field.id] ?? "") === field.defaultValue,
+                        )}
                       />
-                    ) : (
-                      <input
-                        type={field.fieldType === "DATE" ? "date" : "text"}
-                        value={String(values[field.id] ?? "")}
-                        onChange={(event) => setValues((prev) => ({ ...prev, [field.id]: event.target.value }))}
-                        placeholder={field.fieldType === "SIGNATURE" ? "Type full legal signature" : field.fieldType === "INITIALS" ? "Type initials" : ""}
-                        className="w-full rounded-xl border border-white/10 bg-slate-900/80 px-3 py-2 text-sm text-white outline-none focus:border-cyan-300"
-                      />
-                    )}
-                    {fieldErrors[field.id] ? <span className="mt-1 block text-xs text-red-300">{fieldErrors[field.id]}</span> : null}
-                  </label>
-                ))}
+                    </div>
+                  ))}
+                </div>
               </div>
-              {error ? <div className="mt-4 rounded-xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-100">{error}</div> : null}
-              <button
-                type="button"
-                onClick={submit}
-                disabled={submitting}
-                className="mt-5 w-full rounded-2xl bg-cyan-300 px-4 py-3 text-sm font-semibold text-slate-950 disabled:opacity-60"
-              >
-                {submitting ? "Submitting…" : "Submit completed form"}
-              </button>
+
+              {/* Legal consent + submit */}
+              {step === 2 ? (
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <p className="text-xs leading-relaxed text-slate-500">
+                    By clicking <strong>Submit</strong> below, you agree that your electronic signature and initials constitute your legal binding agreement, having the same legal force as a handwritten signature under applicable electronic signature laws.
+                  </p>
+                  {error ? (
+                    <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
+                  ) : null}
+                  {totalRequired > 0 && Object.keys(requiredMissing).length > 0 ? (
+                    <p className="mt-2 text-xs text-amber-600">
+                      {Object.keys(requiredMissing).length} required {Object.keys(requiredMissing).length === 1 ? "field" : "fields"} still need{Object.keys(requiredMissing).length === 1 ? "s" : ""} to be completed.
+                    </p>
+                  ) : null}
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={submit}
+                      disabled={submitting}
+                      className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow shadow-indigo-200 hover:bg-indigo-700 disabled:opacity-60"
+                    >
+                      {submitting ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Submitting…
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="h-4 w-4" />
+                          Submit signed form
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Trust footer */}
+              <div className="flex items-center justify-center gap-2 pb-2 text-xs text-slate-400">
+                <Shield className="h-3.5 w-3.5 text-slate-300" />
+                Powered by Connect CRM · All submissions are encrypted and timestamped
+              </div>
             </aside>
           </div>
         ) : null}
