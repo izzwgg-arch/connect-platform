@@ -5,6 +5,7 @@ import { forwardRef } from "react";
 import { MessageSquareDot, Send } from "lucide-react";
 import { CRMCard, CRMSection, crm } from "..";
 import { cn } from "../cn";
+import { ConnectSelect } from "../../ConnectSelect";
 import type { ContactPhone } from "./contactTypes";
 import { formatDateTime } from "./contactFormatters";
 import { phoneSummaryLabel, phoneDispositionSummary } from "./contactWorkspaceHelpers";
@@ -99,21 +100,21 @@ export const ContactSmsPanel = forwardRef<
           ) : (
             <div className="mt-3 flex flex-col gap-2">
               {phones.length > 1 ? (
-                <select
+                <ConnectSelect
                   value={smsPhone}
-                  onChange={(e) => setSmsPhone(e.target.value)}
-                  className={crm.input}
-                >
-                  <option value="">
-                    {phoneSummaryLabel(phones.find((p) => p.isPrimary) ?? phones[0])} — {(phones.find((p) => p.isPrimary) ?? phones[0]).numberRaw}
-                  </option>
-                  {phones.map((p) => (
-                    <option key={p.id} value={p.numberRaw}>
-                      {phoneSummaryLabel(p)} — {p.numberRaw}
-                      {phoneDispositionSummary(p) ? ` · ${phoneDispositionSummary(p)}` : ""}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(value) => setSmsPhone(value)}
+                  className="w-full"
+                  options={[
+                    {
+                      value: "",
+                      label: `${phoneSummaryLabel(phones.find((p) => p.isPrimary) ?? phones[0])} — ${(phones.find((p) => p.isPrimary) ?? phones[0]).numberRaw}`,
+                    },
+                    ...phones.map((p) => ({
+                      value: p.numberRaw,
+                      label: `${phoneSummaryLabel(p)} — ${p.numberRaw}${phoneDispositionSummary(p) ? ` · ${phoneDispositionSummary(p)}` : ""}`,
+                    })),
+                  ]}
+                />
               ) : null}
               <div className="flex gap-2">
                 <textarea

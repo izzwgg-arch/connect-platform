@@ -170,6 +170,7 @@ const QUICK_FILTERS: Array<{ key: QuickFilter; label: string }> = [
 type ArchiveListScope = "active" | "archived" | "all";
 
 const CONTACTS_PAGE_LIMIT = 50;
+const DEV_ROW_PREVIEW_COUNT = 18;
 
 const ARCHIVE_SCOPE_LABELS: Record<ArchiveListScope, string> = {
   active: "Active",
@@ -205,6 +206,12 @@ function formatShortDate(iso: string | null | undefined): string {
 
 function isNewThisMonth(c: CrmContact): boolean {
   return Date.now() - new Date(c.createdAt).getTime() <= 30 * 24 * 60 * 60 * 1000;
+}
+
+function expandRowsForDevPreview<T>(rows: T[], minRows = DEV_ROW_PREVIEW_COUNT): T[] {
+  if (process.env.NODE_ENV !== "development") return rows;
+  if (rows.length === 0 || rows.length >= minRows) return rows;
+  return Array.from({ length: minRows }, (_, index) => rows[index % rows.length]);
 }
 
 function matchesQuickFilter(c: CrmContact, quickFilter: QuickFilter): boolean {
@@ -400,19 +407,13 @@ function AddContactModal({
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-crm-text">Stage</label>
-              <select
+              <ConnectSelect
                 value={form.stage}
-                onChange={(e) => setForm((f) => ({ ...f, stage: e.target.value as CrmStage }))}
-                className={crm.select}
-              >
-                {(Object.keys(STAGE_LABELS) as Array<CrmStage | "all">)
+                onChange={(value) => setForm((f) => ({ ...f, stage: value as CrmStage }))}
+                options={(Object.keys(STAGE_LABELS) as Array<CrmStage | "all">)
                   .filter((k) => k !== "all")
-                  .map((k) => (
-                    <option key={k} value={k}>
-                      {STAGE_LABELS[k]}
-                    </option>
-                  ))}
-              </select>
+                  .map((k) => ({ value: k, label: STAGE_LABELS[k] }))}
+              />
             </div>
           </div>
 
@@ -856,6 +857,7 @@ export default function CrmContactsPage() {
       return matchesTag && matchesQuickFilter(c, quickFilter);
     });
   }, [quickFilter, rows, tagFilter]);
+  const previewRows = useMemo(() => expandRowsForDevPreview(displayedRows), [displayedRows]);
 
   const selectableRows = useMemo(() => displayedRows.filter((r) => !isContactArchived(r)), [displayedRows]);
   const allSelectableSelected =
@@ -916,12 +918,12 @@ export default function CrmContactsPage() {
 
   useEffect(() => {
     setActiveIndex((idx) => {
-      if (displayedRows.length === 0) return 0;
-      return Math.min(idx, displayedRows.length - 1);
+      if (previewRows.length === 0) return 0;
+      return Math.min(idx, previewRows.length - 1);
     });
-  }, [displayedRows]);
+  }, [previewRows]);
 
-  const activeContact = displayedRows[activeIndex] ?? null;
+  const activeContact = previewRows[activeIndex] ?? null;
   const contactsReturnTo = "/crm/contacts";
 
   function handleDialContact(contact: CrmContact) {
@@ -931,7 +933,7 @@ export default function CrmContactsPage() {
     window.dispatchEvent(new CustomEvent("crm:dial", { detail: { target: phoneNumber } }));
   }
 
-  const showSplit = !loading && !error && displayedRows.length > 0;
+  const showSplit = !loading && !error && previewRows.length > 0;
 
   return (
     <CRMPageShell className={cn(crm.queueWorkspace, crm.contactsWorkspace)} innerClassName={crm.pageInnerQueue}>
@@ -1015,8 +1017,8 @@ export default function CrmContactsPage() {
 
             <CRMActionBar className="crm-queue-filter-bar">
               <div className="crm-queue-filter-grid w-full">
-                <div className="crm-queue-filter-field min-w-[min(100%,14rem)] flex-[2]">
-                  <Search className="h-4 w-4 shrink-0 text-crm-muted" />
+                <div className="crm-queue-filter-field crm-queue-filter-field-search min-w-[min(100%,14rem)] flex-[2]">
+                  <Search className="crm-queue-filter-icon h-4 w-4 shrink-0 text-crm-muted" />
                   <label htmlFor="crm-contacts-search" className={cn(crm.label, "shrink-0")}>Search</label>
                   <input
                     ref={searchRef}
@@ -1024,7 +1026,7 @@ export default function CrmContactsPage() {
                     value={search}
                     onChange={(e) => handleSearchChange(e.target.value)}
                     placeholder="Name, phone, email, company…"
-                    className={cn(crm.input, "min-w-[10rem] flex-1 py-1.5")}
+                    className={cn(crm.input, "crm-queue-filter-control min-w-[10rem] flex-1 py-1.5")}
                     aria-label="Search contacts"
                   />
                   {search ? (
@@ -1045,55 +1047,48 @@ export default function CrmContactsPage() {
                 <div className="crm-queue-filter-field">
                   <Megaphone className="h-4 w-4 shrink-0 text-crm-muted" />
                   <label htmlFor="crm-contacts-campaign" className={cn(crm.label, "shrink-0")}>Campaign</label>
-                  <select
+                  <ConnectSelect
                     id="crm-contacts-campaign"
+                    size="sm"
                     value={campaignFilter}
-                    onChange={(e) => {
-                      const value = e.target.value;
+                    onChange={(value) => {
                       setCampaignFilter(value);
                       setBulkQueueCampaignId(value !== "all" ? value : "");
                       setPage(0);
                     }}
-                    className={cn(crm.input, "min-w-[10rem] flex-1 py-1.5")}
-                  >
-                    {campaignOptions.map((o) => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
-                    ))}
-                  </select>
+                    className={cn("min-w-[10rem] flex-1")}
+                    options={campaignOptions.map((o) => ({ value: o.value, label: o.label }))}
+                  />
                 </div>
                 <div className="crm-queue-filter-field">
                   <Tag className="h-4 w-4 shrink-0 text-crm-muted" />
                   <label htmlFor="crm-contacts-tag" className={cn(crm.label, "shrink-0")}>Tag</label>
-                  <select
+                  <ConnectSelect
                     id="crm-contacts-tag"
+                    size="sm"
                     value={tagFilter}
-                    onChange={(e) => {
-                      setTagFilter(e.target.value);
+                    onChange={(value) => {
+                      setTagFilter(value);
                       setPage(0);
                     }}
-                    className={cn(crm.input, "min-w-[10rem] flex-1 py-1.5")}
-                  >
-                    {tagOptions.map((o) => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
-                    ))}
-                  </select>
+                    className={cn("min-w-[10rem] flex-1")}
+                    options={tagOptions.map((o) => ({ value: o.value, label: o.label }))}
+                  />
                 </div>
                 <div className="crm-queue-filter-field">
                   <Clock className="h-4 w-4 shrink-0 text-crm-muted" />
                   <label htmlFor="crm-contacts-timezone" className={cn(crm.label, "shrink-0")}>Timezone</label>
-                  <select
+                  <ConnectSelect
                     id="crm-contacts-timezone"
+                    size="sm"
                     value={timezoneZone}
-                    onChange={(e) => {
-                      setTimezoneZone(e.target.value as TimezoneZoneFilter);
+                    onChange={(value) => {
+                      setTimezoneZone(value as TimezoneZoneFilter);
                       setPage(0);
                     }}
-                    className={cn(crm.input, "min-w-[10rem] flex-1 py-1.5")}
-                  >
-                    {QUEUE_TIMEZONE_ZONE_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
-                    ))}
-                  </select>
+                    className={cn("min-w-[10rem] flex-1")}
+                    options={QUEUE_TIMEZONE_ZONE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+                  />
                   {timezoneZone !== "all" ? (
                     <button type="button" onClick={() => { setTimezoneZone("all"); setPage(0); }} className="text-xs font-medium text-crm-accent hover:underline">
                       Clear
@@ -1102,19 +1097,17 @@ export default function CrmContactsPage() {
                 </div>
                 <div className="crm-queue-filter-field">
                   <label htmlFor="crm-contacts-stage" className={cn(crm.label, "shrink-0")}>Stage</label>
-                  <select
+                  <ConnectSelect
                     id="crm-contacts-stage"
+                    size="sm"
                     value={stage}
-                    onChange={(e) => {
+                    onChange={(value) => {
                       setPage(0);
-                      setStage(e.target.value as CrmStage | "all");
+                      setStage(value as CrmStage | "all");
                     }}
-                    className={cn(crm.input, "min-w-[10rem] flex-1 py-1.5")}
-                  >
-                    {stageOptions.map((o) => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
-                    ))}
-                  </select>
+                    className={cn("min-w-[10rem] flex-1")}
+                    options={stageOptions.map((o) => ({ value: o.value, label: o.label }))}
+                  />
                 </div>
                 <div className="crm-queue-filter-field">
                   <button
@@ -1197,68 +1190,6 @@ export default function CrmContactsPage() {
           </div>
         </ViewportDropdown>
 
-      {/* Smart Assign panel — admin only, quantity-based, unassigned leads only */}
-      {isAdmin && (
-        <CRMActionBar className="crm-queue-filter-bar flex-wrap gap-y-2">
-          <button
-            type="button"
-            onClick={() => {
-              setShowSmartAssign((v) => !v);
-              setSmartAssignResult(null);
-              setSmartAssignError(null);
-              void loadCrmUsers();
-            }}
-            className={cn(crm.btnSecondary, "px-3 py-1.5 text-sm gap-1.5")}
-          >
-            <UserPlus className="h-3.5 w-3.5" />
-            Smart Assign
-          </button>
-          {showSmartAssign && (
-            <>
-              <input
-                type="number"
-                min={1}
-                max={500}
-                value={smartAssignCount}
-                onChange={(e) => { setSmartAssignCount(e.target.value); setSmartAssignResult(null); }}
-                className={cn(crm.selectCompact, "w-20 text-center")}
-                aria-label="Number of leads to assign"
-                placeholder="25"
-              />
-              <span className="text-sm text-crm-muted">unassigned leads to</span>
-              <select
-                value={smartAssignUserId}
-                onChange={(e) => { setSmartAssignUserId(e.target.value); setSmartAssignResult(null); }}
-                className={crm.selectCompact}
-                aria-label="Assign to agent"
-              >
-                <option value="">Pick agent…</option>
-                {crmUsers.map((u) => (
-                  <option key={u.userId} value={u.userId}>{u.displayName}</option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={handleSmartAssign}
-                disabled={smartAssigning || !smartAssignUserId || !smartAssignCount || parseInt(smartAssignCount, 10) < 1}
-                className={cn(crm.btnSecondary, "px-3 py-1.5 text-sm disabled:opacity-50")}
-              >
-                <UserCheck className="h-3.5 w-3.5" />
-                {smartAssigning ? "Assigning…" : "Assign"}
-              </button>
-              {smartAssignResult && (
-                <span className={cn("text-xs font-medium", smartAssignResult.assigned === 0 ? "text-crm-muted" : "text-crm-success")}>
-                  {smartAssignResult.assigned === 0
-                    ? "No unassigned leads available"
-                    : `✓ ${smartAssignResult.assigned} assigned · ${smartAssignResult.remaining} unassigned remain`}
-                </span>
-              )}
-              {smartAssignError && <span className="text-xs text-crm-danger">{smartAssignError}</span>}
-            </>
-          )}
-        </CRMActionBar>
-      )}
-
       {bulkEmailToast && (
         <div className="rounded-crm border border-crm-success/40 bg-crm-success/10 px-4 py-2.5 text-sm font-medium text-crm-success">
           {bulkEmailToast}
@@ -1275,6 +1206,62 @@ export default function CrmContactsPage() {
       {selectedIds.size > 0 && (
         <CRMActionBar className="crm-queue-filter-bar">
             <span className="text-sm font-medium text-crm-text">{selectedIds.size} selected</span>
+            {isAdmin && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSmartAssign((v) => !v);
+                    setSmartAssignResult(null);
+                    setSmartAssignError(null);
+                    void loadCrmUsers();
+                  }}
+                  className={cn(crm.btnSecondary, "px-3 py-1.5 text-sm gap-1.5")}
+                >
+                  <UserPlus className="h-3.5 w-3.5" />
+                  Smart Assign
+                </button>
+                {showSmartAssign && (
+                  <>
+                    <input
+                      type="number"
+                      min={1}
+                      max={500}
+                      value={smartAssignCount}
+                      onChange={(e) => { setSmartAssignCount(e.target.value); setSmartAssignResult(null); }}
+                      className={cn(crm.selectCompact, "w-20 text-center")}
+                      aria-label="Number of leads to assign"
+                      placeholder="25"
+                    />
+                    <span className="text-sm text-crm-muted">unassigned leads to</span>
+                    <ConnectSelect
+                      value={smartAssignUserId}
+                      onChange={(value) => { setSmartAssignUserId(value); setSmartAssignResult(null); }}
+                      size="sm"
+                      placeholder="Pick agent…"
+                      options={crmUsers.map((u) => ({ value: u.userId, label: u.displayName }))}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSmartAssign}
+                      disabled={smartAssigning || !smartAssignUserId || !smartAssignCount || parseInt(smartAssignCount, 10) < 1}
+                      className={cn(crm.btnSecondary, "px-3 py-1.5 text-sm disabled:opacity-50")}
+                    >
+                      <UserCheck className="h-3.5 w-3.5" />
+                      {smartAssigning ? "Assigning…" : "Assign"}
+                    </button>
+                    {smartAssignResult && (
+                      <span className={cn("text-xs font-medium", smartAssignResult.assigned === 0 ? "text-crm-muted" : "text-crm-success")}>
+                        {smartAssignResult.assigned === 0
+                          ? "No unassigned leads available"
+                          : `✓ ${smartAssignResult.assigned} assigned · ${smartAssignResult.remaining} unassigned remain`}
+                      </span>
+                    )}
+                    {smartAssignError && <span className="text-xs text-crm-danger">{smartAssignError}</span>}
+                  </>
+                )}
+              </>
+            )}
             {isAdmin && (
               <button
                 type="button"
@@ -1313,21 +1300,16 @@ export default function CrmContactsPage() {
               {selfAssigning ? "Adding…" : "Assign to me"}
             </button>
             {isAdmin && (
-              <select
+              <ConnectSelect
                 value={bulkAssignUserId}
-                onChange={(e) => {
-                  setBulkAssignUserId(e.target.value);
+                onChange={(value) => {
+                  setBulkAssignUserId(value);
                   void loadCrmUsers();
                 }}
-                className={crm.selectCompact}
-              >
-                <option value="">Assign to…</option>
-                {crmUsers.map((u) => (
-                  <option key={u.userId} value={u.userId}>
-                    {u.displayName}
-                  </option>
-                ))}
-              </select>
+                size="sm"
+                placeholder="Assign to…"
+                options={crmUsers.map((u) => ({ value: u.userId, label: u.displayName }))}
+              />
             )}
             {isAdmin && (
               <>
@@ -1385,7 +1367,30 @@ export default function CrmContactsPage() {
                   Loading contacts…
                 </div>
               ) : error ? (
-                <div className="py-24 text-center text-sm text-crm-danger">{error}</div>
+                <div className="crm-queue-list-panel px-6 py-14 text-center">
+                  <p className="text-sm font-medium text-crm-danger">{error}</p>
+                  <p className="mx-auto mt-2 max-w-md text-sm text-crm-muted">
+                    Confirm the API is running on port 3001, then retry. On localhost use{" "}
+                    <strong>Local dev sign-in</strong> after <code>pnpm bootstrap:local</code>.
+                  </p>
+                  <button
+                    type="button"
+                    className={cn(crm.btnPrimary, "mt-6")}
+                    onClick={() =>
+                      void load(
+                        search,
+                        stage,
+                        assignedToMe,
+                        isAdmin ? archiveScope : "active",
+                        page,
+                        timezoneZone,
+                        campaignFilter,
+                      )
+                    }
+                  >
+                    Retry
+                  </button>
+                </div>
               ) : displayedRows.length === 0 ? (
                 <div className="crm-queue-list-panel px-6 py-14 text-center">
                   <UserRound className="mx-auto mb-3 h-10 w-10 text-crm-border" aria-hidden />
@@ -1437,13 +1442,15 @@ export default function CrmContactsPage() {
                     </span>
                   </div>
                   <div className="crm-queue-row-list">
-                    {displayedRows.map((c, i) => (
+                    {previewRows.map((c, i) => (
                       <ContactOperationalRow
-                        key={c.id}
+                        key={`${c.id}-${i}`}
                         contact={c}
                         rank={page * CONTACTS_PAGE_LIMIT + i + 1}
                         isSelected={activeIndex === i}
+                        isChecked={selectedIds.has(c.id)}
                         assignedLabel={assignedLabel(c.assignedTo)}
+                        onToggleChecked={() => toggleSelect(c.id)}
                         onSelect={() => setActiveIndex(i)}
                       />
                     ))}
@@ -1493,13 +1500,13 @@ export default function CrmContactsPage() {
                 <ContactListDetailPanel
                   contact={activeContact}
                   rank={activeIndex + 1}
-                  total={displayedRows.length}
+                  total={previewRows.length}
                   contactsReturnTo={contactsReturnTo}
                   sipReady={sipReady}
                   canGoPrevious={activeIndex > 0}
-                  canGoNext={activeIndex < displayedRows.length - 1}
+                  canGoNext={activeIndex < previewRows.length - 1}
                   onPrevious={() => setActiveIndex((i) => Math.max(0, i - 1))}
-                  onNext={() => setActiveIndex((i) => Math.min(displayedRows.length - 1, i + 1))}
+                  onNext={() => setActiveIndex((i) => Math.min(previewRows.length - 1, i + 1))}
                   onDial={() => handleDialContact(activeContact)}
                   assignedLabel={assignedLabel(activeContact.assignedTo)}
                   onEdit={!isContactArchived(activeContact) ? () => router.push(`/crm/contacts/${activeContact.id}?edit=1`) : undefined}

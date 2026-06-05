@@ -53,13 +53,17 @@ export function ContactOperationalRow({
   contact,
   rank,
   isSelected,
+  isChecked,
   onSelect,
+  onToggleChecked,
   assignedLabel,
 }: {
   contact: ContactListRow;
   rank: number;
   isSelected?: boolean;
+  isChecked?: boolean;
   onSelect?: () => void;
+  onToggleChecked?: () => void;
   assignedLabel?: string | null;
 }) {
   const archived = !!(contact.archivedAt || contact.active === false);
@@ -83,12 +87,24 @@ export function ContactOperationalRow({
         }
       }}
       className={cn(
-        "crm-queue-row group",
+        "crm-queue-row crm-contact-row group",
         isSelected && "crm-queue-row-selected",
         archived && "crm-queue-row-readonly opacity-90",
       )}
     >
       <div className="crm-queue-row-grid">
+        <label
+          className="crm-contact-row-check"
+          onClick={(e) => e.stopPropagation()}
+          aria-label={`Select ${contact.displayName}`}
+        >
+          <input
+            type="checkbox"
+            checked={!!isChecked}
+            disabled={archived}
+            onChange={onToggleChecked}
+          />
+        </label>
         <span className="crm-queue-row-rank tabular-nums">{rank}</span>
 
         <div
@@ -132,7 +148,7 @@ export function ContactOperationalRow({
 
         <div className="crm-queue-row-phone hidden md:flex">
           <Phone className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate font-mono text-[12px]">
+          <span className="truncate font-mono">
             {contact.primaryPhone?.numberRaw ?? "—"}
           </span>
         </div>

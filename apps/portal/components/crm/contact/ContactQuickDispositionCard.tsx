@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, GripVertical, Phone, Plus, Settings2, Trash2 } from "lucide-react";
+import { ConnectSelect } from "../../ConnectSelect";
 import { cn } from "../cn";
 import { CRMCard, crm } from "..";
 import {
@@ -165,19 +166,17 @@ export function ContactQuickDispositionCard({
         {phones.length > 1 ? (
           <label className="inline-flex max-w-full items-center gap-1 text-xs font-bold tracking-tight text-crm-text">
             <Phone className="h-3 w-3 shrink-0 text-crm-muted" aria-hidden />
-            <select
+            <ConnectSelect
               value={activePhoneId ?? ""}
               disabled={disabled}
-              onChange={(e) => onPhoneChange(e.target.value)}
-              className="max-w-full cursor-pointer appearance-none border-0 bg-transparent p-0 pr-3 text-xs font-bold tracking-tight text-crm-text outline-none hover:text-crm-accent disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {phones.map((phone) => (
-                <option key={phone.id} value={phone.id}>
-                  {phoneTypeLabel(phone.type)} · {phone.numberRaw}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="-ml-2 h-3 w-3 shrink-0 text-crm-muted pointer-events-none" aria-hidden />
+              onChange={(value) => onPhoneChange(value)}
+              size="sm"
+              className="max-w-full"
+              options={phones.map((phone) => ({
+                value: phone.id,
+                label: `${phoneTypeLabel(phone.type)} · ${phone.numberRaw}`,
+              }))}
+            />
           </label>
         ) : activePhone ? (
           <p className="inline-flex max-w-full items-center gap-1 truncate text-xs font-bold tracking-tight text-crm-text">

@@ -72,7 +72,7 @@ export function ContactListDetailPanel({
   }
 
   return (
-    <aside className="crm-queue-detail-panel custom-scrollbar" aria-label="Contact details">
+    <aside className="crm-queue-detail-panel crm-contact-detail-panel custom-scrollbar" aria-label="Contact details">
       <div className="crm-queue-detail-glow" aria-hidden />
 
       <header className="crm-queue-detail-header">
@@ -159,6 +159,7 @@ export function ContactListDetailPanel({
                 }}
                 className={cn(
                   "crm-queue-detail-channel",
+                  `crm-queue-detail-channel-${key}`,
                   key === "call" && "crm-queue-detail-channel-call",
                 )}
                 title={
@@ -251,7 +252,7 @@ export function ContactListDetailPanel({
 
 export function ContactListDetailPlaceholder() {
   return (
-    <aside className="crm-queue-detail-panel crm-queue-detail-placeholder custom-scrollbar" aria-label="Contact details">
+    <aside className="crm-queue-detail-panel crm-contact-detail-panel crm-queue-detail-placeholder custom-scrollbar" aria-label="Contact details">
       <div className="crm-queue-detail-glow" aria-hidden />
       <div className="crm-queue-detail-placeholder-icon">
         <ListOrdered size={22} />
