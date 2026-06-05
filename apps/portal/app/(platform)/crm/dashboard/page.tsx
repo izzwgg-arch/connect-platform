@@ -156,6 +156,134 @@ function greetingLabel(hour: number): string {
   return "Good evening";
 }
 
+function greetingScene(hour: number): "morning" | "afternoon" | "evening" {
+  if (hour < 12) return "morning";
+  if (hour < 17) return "afternoon";
+  return "evening";
+}
+
+type HeroPalette = {
+  sun: string;
+  sunEdge: string;
+  glow: string;
+  farTop: string;
+  farBot: string;
+  midTop: string;
+  midBot: string;
+  nearTop: string;
+  nearBot: string;
+  snow: string;
+  tree: string;
+};
+
+const HERO_SCENE_PALETTE: Record<"morning" | "afternoon" | "evening", HeroPalette> = {
+  morning: {
+    sun: "#ffd479", sunEdge: "#ffb24d", glow: "#ffe7b0",
+    farTop: "#dbe5fb", farBot: "#c4d3f4",
+    midTop: "#b3c4ef", midBot: "#94a9e4",
+    nearTop: "#8194d6", nearBot: "#6678c6",
+    snow: "#ffffff", tree: "#41509a",
+  },
+  afternoon: {
+    sun: "#ffe08a", sunEdge: "#ffc94f", glow: "#fff1c4",
+    farTop: "#d4e4fb", farBot: "#bcd5f8",
+    midTop: "#a6c4f4", midBot: "#84acee",
+    nearTop: "#6c95e6", nearBot: "#5180dc",
+    snow: "#ffffff", tree: "#2f5bb0",
+  },
+  evening: {
+    sun: "#ff9d5a", sunEdge: "#ff6f3d", glow: "#ffc79a",
+    farTop: "#e2d3f3", farBot: "#cdb9ec",
+    midTop: "#bfa3e4", midBot: "#a585d8",
+    nearTop: "#8e72cc", nearBot: "#735bbd",
+    snow: "#fdeffb", tree: "#4b3a8c",
+  },
+};
+
+/** Layered low-poly mountain + sun motif that shifts palette by time of day. */
+function HeroScene({ scene }: { scene: "morning" | "afternoon" | "evening" }) {
+  const p = HERO_SCENE_PALETTE[scene];
+  const trees = [
+    { x: 300, y: 97 },
+    { x: 320, y: 103 },
+    { x: 340, y: 107 },
+    { x: 360, y: 104 },
+    { x: 375, y: 108 },
+  ];
+  const treePath = (x: number, y: number) =>
+    `M${x - 5},${y} L${x},${y - 12} L${x + 5},${y} Z M${x - 4},${y - 5} L${x},${y - 15} L${x + 4},${y - 5} Z`;
+  return (
+    <svg
+      className="crm-dashboard-hero-scene"
+      viewBox="0 0 380 120"
+      preserveAspectRatio="xMaxYMax meet"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden
+    >
+      <defs>
+        <linearGradient id="hs-fade" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stopColor="white" stopOpacity="0" />
+          <stop offset="0.26" stopColor="white" stopOpacity="0.7" />
+          <stop offset="0.52" stopColor="white" stopOpacity="1" />
+          <stop offset="1" stopColor="white" stopOpacity="1" />
+        </linearGradient>
+        <mask id="hs-mask">
+          <rect x="0" y="0" width="380" height="120" fill="url(#hs-fade)" />
+        </mask>
+        <radialGradient id="hs-sun" cx="50%" cy="45%" r="55%">
+          <stop offset="0" stopColor={p.sun} />
+          <stop offset="1" stopColor={p.sunEdge} />
+        </radialGradient>
+        <radialGradient id="hs-glow" cx="50%" cy="50%" r="50%">
+          <stop offset="0" stopColor={p.glow} stopOpacity="0.9" />
+          <stop offset="1" stopColor={p.glow} stopOpacity="0" />
+        </radialGradient>
+        <linearGradient id="hs-far" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor={p.farTop} />
+          <stop offset="1" stopColor={p.farBot} />
+        </linearGradient>
+        <linearGradient id="hs-mid" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor={p.midTop} />
+          <stop offset="1" stopColor={p.midBot} />
+        </linearGradient>
+        <linearGradient id="hs-near" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor={p.nearTop} />
+          <stop offset="1" stopColor={p.nearBot} />
+        </linearGradient>
+      </defs>
+      <g mask="url(#hs-mask)">
+        {/* Sun low on the horizon, in the valley between the central peaks */}
+        <circle className="crm-hero-sun-glow" cx="196" cy="82" r="52" fill="url(#hs-glow)" />
+        <circle cx="196" cy="80" r="18" fill="url(#hs-sun)" />
+        {/* Far range — gentle rolling peaks, low on the right */}
+        <path
+          d="M30,90 L80,74 L130,84 L172,58 L214,80 L262,66 L310,82 L356,74 L380,80 L380,120 L30,120 Z"
+          fill="url(#hs-far)"
+          opacity="0.9"
+        />
+        {/* Mid range — tall snow-capped peaks left of centre, descending right */}
+        <path
+          d="M10,104 L60,90 L104,98 L150,50 L192,86 L228,60 L280,88 L330,98 L380,92 L380,120 L10,120 Z"
+          fill="url(#hs-mid)"
+        />
+        {/* Snow caps */}
+        <path d="M150,50 L138,69 L145,65 L150,71 L156,64 L163,69 Z" fill={p.snow} opacity="0.95" />
+        <path d="M228,60 L219,75 L224,71 L228,77 L233,70 L239,75 Z" fill={p.snow} opacity="0.85" />
+        {/* Near range — darker foothills */}
+        <path
+          d="M0,114 L58,102 L120,110 L182,92 L236,106 L292,96 L344,110 L380,106 L380,120 L0,120 Z"
+          fill="url(#hs-near)"
+        />
+        {/* Pine trees clustered on the right foothills */}
+        {trees.map((t) => (
+          <path key={`${t.x}-${t.y}`} d={treePath(t.x, t.y)} fill={p.tree} opacity="0.92" />
+        ))}
+      </g>
+    </svg>
+  );
+}
+
 function formatShortDate(iso: string): string {
   try {
     const d = new Date(iso);
@@ -396,6 +524,7 @@ export default function CrmDashboardPage() {
 
   const hourly = typeof window !== "undefined" ? new Date().getHours() : 12;
   const greet = greetingLabel(hourly);
+  const scene = greetingScene(hourly);
   const firstName = user?.name?.split(/\s+/)[0] ?? "there";
 
   const activeCampaignsCount = daily?.activeCampaigns ?? taskStats?.activeCampaigns ?? 0;
@@ -488,8 +617,9 @@ export default function CrmDashboardPage() {
       <CRMPageHeader
         icon={<LayoutDashboard size={22} strokeWidth={1.75} />}
         title={`${greet}, ${firstName}`}
-        subtitle="Here's what's happening with your communications operations."
-        className="crm-dashboard-hero"
+        subtitle="Here's what's happening in your CRM today."
+        className={cn("crm-dashboard-hero", `crm-dashboard-hero-${scene}`)}
+        art={<HeroScene scene={scene} />}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <span className={cn(crm.chip, crm.chipActive)}>
