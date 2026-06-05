@@ -1,5 +1,72 @@
 export type CrmEmailMergeGroup = "Contact" | "Company" | "CRM" | "Business" | "User/Sender";
 
+// ─── Form-specific merge fields ───────────────────────────────────────────────
+// These extend the email token set with fields relevant to document signing:
+// business entity info, financial identifiers, and form metadata.
+
+export type CrmFormMergeGroup =
+  | "Contact"
+  | "Business / Entity"
+  | "Address"
+  | "Financial"
+  | "CRM"
+  | "Agent"
+  | "Form / Date";
+
+export type CrmFormMergeField = {
+  token: string;       // e.g. "contact.fullName"
+  label: string;       // Human label shown in picker
+  group: CrmFormMergeGroup;
+  sample: string;      // Preview value shown when no contact loaded
+  hint?: string;       // Extra description
+};
+
+export const CRM_FORM_MERGE_FIELDS: CrmFormMergeField[] = [
+  // ── Contact ─────────────────────────────────────────────────────────────────
+  { group: "Contact", token: "contact.fullName",    label: "Full Name",           sample: "Alex Morgan" },
+  { group: "Contact", token: "contact.firstName",   label: "First Name",          sample: "Alex" },
+  { group: "Contact", token: "contact.lastName",    label: "Last Name",           sample: "Morgan" },
+  { group: "Contact", token: "contact.email",       label: "Email Address",       sample: "alex@example.com" },
+  { group: "Contact", token: "contact.phone",       label: "Phone Number",        sample: "(555) 123-4567" },
+  { group: "Contact", token: "contact.mobile",      label: "Mobile Number",       sample: "(555) 987-6543" },
+  { group: "Contact", token: "contact.title",       label: "Title / Position",    sample: "CEO" },
+  { group: "Contact", token: "contact.company",     label: "Company Name",        sample: "Acme Corp" },
+  { group: "Contact", token: "contact.dob",         label: "Date of Birth",       sample: "01/15/1985",  hint: "From contact profile" },
+  { group: "Contact", token: "contact.ssn",         label: "SSN (last 4)",        sample: "****-1234",   hint: "Masked — last 4 digits only" },
+  // ── Business / Entity ────────────────────────────────────────────────────────
+  { group: "Business / Entity", token: "business.legalName",    label: "Legal Business Name",   sample: "Acme Corp LLC" },
+  { group: "Business / Entity", token: "business.dba",          label: "DBA (Doing Business As)", sample: "Acme Services" },
+  { group: "Business / Entity", token: "business.entityType",   label: "Entity Type",           sample: "LLC" },
+  { group: "Business / Entity", token: "business.stateOfIncorp", label: "State of Incorporation", sample: "Delaware" },
+  { group: "Business / Entity", token: "business.yearsInBiz",   label: "Years in Business",     sample: "5" },
+  { group: "Business / Entity", token: "business.industry",     label: "Industry",              sample: "Healthcare" },
+  { group: "Business / Entity", token: "business.ownerName",    label: "Owner Name",            sample: "Alex Morgan" },
+  { group: "Business / Entity", token: "business.ownerTitle",   label: "Owner Title",           sample: "Managing Member" },
+  // ── Address ──────────────────────────────────────────────────────────────────
+  { group: "Address", token: "contact.address",     label: "Street Address",      sample: "123 Main St" },
+  { group: "Address", token: "contact.city",        label: "City",                sample: "New York" },
+  { group: "Address", token: "contact.state",       label: "State",               sample: "NY" },
+  { group: "Address", token: "contact.zip",         label: "Zip Code",            sample: "10001" },
+  { group: "Address", token: "contact.fullAddress", label: "Full Address",        sample: "123 Main St, New York, NY 10001" },
+  // ── Financial ────────────────────────────────────────────────────────────────
+  { group: "Financial", token: "business.ein",          label: "EIN / Tax ID",        sample: "XX-XXXXXXX",   hint: "From scanned documents or manual entry" },
+  { group: "Financial", token: "business.bankName",     label: "Bank Name",           sample: "Chase Bank" },
+  { group: "Financial", token: "business.accountType",  label: "Account Type",        sample: "Checking" },
+  // ── CRM ──────────────────────────────────────────────────────────────────────
+  { group: "CRM", token: "crm.stage",            label: "Lead Stage",          sample: "Active" },
+  { group: "CRM", token: "crm.assignedAgent",    label: "Assigned Agent",      sample: "Jordan Smith" },
+  // ── Agent ────────────────────────────────────────────────────────────────────
+  { group: "Agent", token: "agent.name",          label: "Agent Name",          sample: "Jordan Smith" },
+  { group: "Agent", token: "agent.email",         label: "Agent Email",         sample: "jordan@yourco.com" },
+  { group: "Agent", token: "agent.phone",         label: "Agent Phone",         sample: "(845) 723-1213" },
+  { group: "Agent", token: "agent.company",       label: "Company Name",        sample: "Your Company" },
+  // ── Form / Date ──────────────────────────────────────────────────────────────
+  { group: "Form / Date", token: "form.date",         label: "Today's Date",        sample: "June 5, 2026" },
+  { group: "Form / Date", token: "form.sentDate",     label: "Date Form Was Sent",  sample: "June 5, 2026" },
+  { group: "Form / Date", token: "form.expiryDate",   label: "Form Expiry Date",    sample: "June 19, 2026" },
+  { group: "Form / Date", token: "form.year",         label: "Current Year",        sample: "2026" },
+];
+
 export type CrmEmailMergeField = {
   token: string;
   label: string;
