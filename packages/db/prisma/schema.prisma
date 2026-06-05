@@ -4815,6 +4815,9 @@ model CrmFormField {
   formTemplateId String
   fieldType      CrmFormFieldType
   label          String
+  /// Optional merge token (e.g. "contact.fullName") — resolved from the contact
+  /// profile when the form is loaded by the signer. Matches CRM_FORM_MERGE_FIELDS.
+  autoFillToken  String?
   required       Boolean          @default(false)
   pageNumber     Int
   x              Float

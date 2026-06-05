@@ -14,6 +14,9 @@ BEGIN
 END $$;
 
 ALTER TABLE "User"
+  ALTER COLUMN "role" DROP DEFAULT;
+
+ALTER TABLE "User"
   ALTER COLUMN "role" TYPE "UserRole"
   USING (
     CASE
