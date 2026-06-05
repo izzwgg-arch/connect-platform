@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
+import { ConnectSelect } from "../../ConnectSelect";
 import type { CampaignListItem } from "./campaignTypes";
 
 export function EditCampaignModal({
@@ -98,13 +99,15 @@ export function EditCampaignModal({
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-crm-text">Status</label>
-            <select value={status} onChange={(e) => setStatus(e.target.value as CampaignListItem["status"])} className={crm.input}>
-              {(["DRAFT", "ACTIVE", "PAUSED", "COMPLETED", "ARCHIVED"] as const).map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
+            <ConnectSelect
+              value={status}
+              onChange={(value) => setStatus(value as CampaignListItem["status"])}
+              className="w-full"
+              options={(["DRAFT", "ACTIVE", "PAUSED", "COMPLETED", "ARCHIVED"] as const).map((s) => ({
+                value: s,
+                label: s,
+              }))}
+            />
           </div>
           {error ? <p className="text-sm text-crm-danger">{error}</p> : null}
           <div className="flex justify-end gap-2 pt-2">

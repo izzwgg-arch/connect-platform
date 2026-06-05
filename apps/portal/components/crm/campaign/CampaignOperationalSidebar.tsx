@@ -4,6 +4,7 @@ import Link from "next/link";
 import { BarChart2, ChevronDown, History, ListOrdered, Shuffle, Upload } from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
+import { ConnectSelect } from "../../ConnectSelect";
 import { CRMCard } from "../CRMCard";
 import type { CampaignDetail, CampaignImportHistoryRow, CampaignPriority, WorkloadRow } from "./campaignTypes";
 import { CAMPAIGN_PRIORITY_LABELS } from "./campaignTypes";
@@ -196,33 +197,27 @@ export function CampaignOperationalSidebar({
         <div className="border-t border-crm-border/60 px-4 pb-4 pt-3 space-y-4">
           <div>
             <label className="block text-xs text-crm-muted mb-1">Call script</label>
-            <select
+            <ConnectSelect
               value={campaign.scriptId ?? ""}
-              onChange={(e) => onUpdateCampaign({ scriptId: e.target.value || null })}
-              className={crm.select}
-            >
-              <option value="">None</option>
-              {scripts.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
+              onChange={(value) => onUpdateCampaign({ scriptId: value || null })}
+              className="w-full"
+              options={[
+                { value: "", label: "None" },
+                ...scripts.map((s) => ({ value: s.id, label: s.name })),
+              ]}
+            />
           </div>
           <div>
             <label className="block text-xs text-crm-muted mb-1">Checklist</label>
-            <select
+            <ConnectSelect
               value={campaign.checklistId ?? ""}
-              onChange={(e) => onUpdateCampaign({ checklistId: e.target.value || null })}
-              className={crm.select}
-            >
-              <option value="">None</option>
-              {checklists.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
+              onChange={(value) => onUpdateCampaign({ checklistId: value || null })}
+              className="w-full"
+              options={[
+                { value: "", label: "None" },
+                ...checklists.map((c) => ({ value: c.id, label: c.name })),
+              ]}
+            />
           </div>
           <div>
             <label className="block text-xs text-crm-muted mb-2">Smart queue priority</label>

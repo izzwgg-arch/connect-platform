@@ -18,6 +18,7 @@ import {
   type CampaignMember,
 } from "../../../../../components/crm";
 import { crm } from "../../../../../components/crm/crmClasses";
+import { ConnectSelect } from "../../../../../components/ConnectSelect";
 import { mk } from "../../../../../components/crm/campaign/campaignCinemaClasses";
 import { cn } from "../../../../../components/crm/cn";
 import { BulkEmailModal } from "../../../../../components/crm/email/BulkEmailModal";
@@ -1267,16 +1268,15 @@ export default function CampaignDetailPage() {
                 </div>
                 <div className="mb-4">
                   <label className="block text-xs font-medium text-crm-muted mb-1">Assign new members to (optional)</label>
-                  <select
+                  <ConnectSelect
                     value={importAssigneeId}
-                    onChange={(e) => setImportAssigneeId(e.target.value)}
-                    className="w-full border border-crm-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crm-accent/30"
-                  >
-                    <option value="">— Unassigned —</option>
-                    {crmUsers.filter((u) => u.crmEnabled).map((u) => (
-                      <option key={u.userId} value={u.userId}>{u.displayName || u.email}</option>
-                    ))}
-                  </select>
+                    onChange={(value) => setImportAssigneeId(value)}
+                    className="w-full"
+                    options={[
+                      { value: "", label: "— Unassigned —" },
+                      ...crmUsers.filter((u) => u.crmEnabled).map((u) => ({ value: u.userId, label: u.displayName || u.email })),
+                    ]}
+                  />
                   <p className="text-xs text-crm-muted/80 mt-1">Changing the assignee clears the preview — run Preview import again.</p>
                 </div>
                 <div className="mb-4 flex flex-wrap gap-2">
@@ -1616,34 +1616,33 @@ export default function CampaignDetailPage() {
                   </label>
                   <label>
                     <span>Status</span>
-                    <select
+                    <ConnectSelect
                       value={statusFilter}
-                      onChange={(e) => setStatusFilter(e.target.value)}
-                      className={cn(crm.select, "h-9 min-w-[8.25rem] text-xs")}
-                    >
-                      <option value="">All statuses</option>
-                      {(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => (
-                        <option key={s} value={s}>{MEMBER_STATUS_LABELS[s]}</option>
-                      ))}
-                    </select>
+                      onChange={(value) => setStatusFilter(value)}
+                      size="sm"
+                      className={cn("min-w-[8.25rem]")}
+                      options={[
+                        { value: "", label: "All statuses" },
+                        ...(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => ({ value: s, label: MEMBER_STATUS_LABELS[s] })),
+                      ]}
+                    />
                   </label>
                   <label>
                     <span>Agent</span>
-                    <select
+                    <ConnectSelect
                       value={assigneeFilter}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setAssigneeFilter(v);
-                        loadMembers(v);
+                      onChange={(value) => {
+                        setAssigneeFilter(value);
+                        loadMembers(value);
                       }}
-                      className={cn(crm.select, "h-9 min-w-[8.25rem] text-xs")}
-                    >
-                      <option value="">All agents</option>
-                      <option value="UNASSIGNED">Unassigned</option>
-                      {crmUsers.filter((u) => u.crmEnabled).map((u) => (
-                        <option key={u.userId} value={u.userId}>{u.displayName || u.email}</option>
-                      ))}
-                    </select>
+                      size="sm"
+                      className={cn("min-w-[8.25rem]")}
+                      options={[
+                        { value: "", label: "All agents" },
+                        { value: "UNASSIGNED", label: "Unassigned" },
+                        ...crmUsers.filter((u) => u.crmEnabled).map((u) => ({ value: u.userId, label: u.displayName || u.email })),
+                      ]}
+                    />
                   </label>
                   <span className="campaign-detail-filter-count">
                     {filteredMembers.length} shown · {membersTotal} total
@@ -1670,17 +1669,14 @@ export default function CampaignDetailPage() {
                     </button>
                     <div className="campaign-detail-bulk-assignee flex items-center gap-2">
                       <UserPlus className="h-4 w-4 shrink-0 text-crm-accent" />
-                      <select
+                      <ConnectSelect
                         value={bulkAssignUserId}
-                        onChange={(e) => setBulkAssignUserId(e.target.value)}
-                        className={cn(crm.select, "h-9 min-w-0 flex-1 border-crm-accent/40 text-xs")}
-                        aria-label="Assign selected members to agent"
-                      >
-                        <option value="">Select agent…</option>
-                        {crmUsers.filter((u) => u.crmEnabled).map((u) => (
-                          <option key={u.userId} value={u.userId}>{u.displayName || u.email}</option>
-                        ))}
-                      </select>
+                        onChange={(value) => setBulkAssignUserId(value)}
+                        size="sm"
+                        placeholder="Select agent…"
+                        className={cn("min-w-0 flex-1")}
+                        options={crmUsers.filter((u) => u.crmEnabled).map((u) => ({ value: u.userId, label: u.displayName || u.email }))}
+                      />
                     </div>
                     <button
                       type="button"

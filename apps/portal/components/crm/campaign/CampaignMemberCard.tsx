@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { CalendarClock, Edit2, ExternalLink, Mail, MessageSquare, MoreHorizontal, PhoneCall, X } from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
+import { ConnectSelect } from "../../ConnectSelect";
 import { mk } from "./campaignCinemaClasses";
 import { apiPatch } from "../../../services/apiClient";
 import type { CampaignMember, MemberStatus } from "./campaignTypes";
@@ -127,17 +128,16 @@ export function CampaignMemberCard({
               {MEMBER_STATUS_LABELS[member.status]}
             </span>
           ) : (
-            <select
+            <ConnectSelect
               value={member.status}
-              onChange={(e) => onStatusChange(member.id, e.target.value as MemberStatus)}
+              onChange={(value) => onStatusChange(member.id, value as MemberStatus)}
+              size="sm"
               className={cn("cinema-member-status-select", MEMBER_STATUS_CHIP[member.status])}
-            >
-              {(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => (
-                <option key={s} value={s}>
-                  {MEMBER_STATUS_LABELS[s]}
-                </option>
-              ))}
-            </select>
+              options={(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => ({
+                value: s,
+                label: MEMBER_STATUS_LABELS[s],
+              }))}
+            />
           )}
           {member.status === "CALLBACK" && member.callbackAt ? (
             <span
@@ -308,17 +308,16 @@ export function CampaignMemberCard({
               {MEMBER_STATUS_LABELS[member.status]}
             </span>
           ) : (
-            <select
+            <ConnectSelect
               value={member.status}
-              onChange={(e) => onStatusChange(member.id, e.target.value as MemberStatus)}
-              className={cn(crm.input, "text-xs py-1.5", MEMBER_STATUS_CHIP[member.status])}
-            >
-              {(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => (
-                <option key={s} value={s}>
-                  {MEMBER_STATUS_LABELS[s]}
-                </option>
-              ))}
-            </select>
+              onChange={(value) => onStatusChange(member.id, value as MemberStatus)}
+              size="sm"
+              className={cn("w-full", MEMBER_STATUS_CHIP[member.status])}
+              options={(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => ({
+                value: s,
+                label: MEMBER_STATUS_LABELS[s],
+              }))}
+            />
           )}
 
           <MemberCallbackEditor

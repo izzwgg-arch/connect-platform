@@ -34,6 +34,7 @@ import {
   type CampaignStatus,
 } from "../../../../components/crm";
 import { crm } from "../../../../components/crm/crmClasses";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { mk } from "../../../../components/crm/campaign/campaignCinemaClasses";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../services/apiClient";
 import { CrmConfirmModal } from "../../../../components/crm/CrmConfirmModal";
@@ -668,29 +669,45 @@ export default function CampaignsPage() {
               aria-label="Search campaigns"
             />
           </div>
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as CampaignQuickFilter)} className="campaigns-select" aria-label="Status filter">
-            {STATUS_FILTER_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-            <option value="SCHEDULED">Scheduled</option>
-          </select>
-          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as CampaignTypeFilter)} className="campaigns-select" aria-label="Type filter">
-            {TYPE_FILTER_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-          <select value={ownerFilter} onChange={(e) => setOwnerFilter(e.target.value)} className="campaigns-select" aria-label="Owner filter">
-            <option value="all">All owners</option>
-            {ownerOptions.map((owner) => (
-              <option key={owner} value={owner}>{owner}</option>
-            ))}
-          </select>
-          <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} className="campaigns-select" aria-label="Date range">
-            <option value="all">Date range</option>
-            <option value="7d">Last 7 days</option>
-            <option value="30d">Last 30 days</option>
-            <option value="90d">Last 90 days</option>
-          </select>
+          <ConnectSelect
+            value={statusFilter}
+            onChange={(value) => setStatusFilter(value as CampaignQuickFilter)}
+            className="campaigns-select"
+            size="sm"
+            options={[
+              ...STATUS_FILTER_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label })),
+              { value: "SCHEDULED", label: "Scheduled" },
+            ]}
+          />
+          <ConnectSelect
+            value={typeFilter}
+            onChange={(value) => setTypeFilter(value as CampaignTypeFilter)}
+            className="campaigns-select"
+            size="sm"
+            options={TYPE_FILTER_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label }))}
+          />
+          <ConnectSelect
+            value={ownerFilter}
+            onChange={(value) => setOwnerFilter(value)}
+            className="campaigns-select"
+            size="sm"
+            options={[
+              { value: "all", label: "All owners" },
+              ...ownerOptions.map((owner) => ({ value: owner, label: owner })),
+            ]}
+          />
+          <ConnectSelect
+            value={dateFilter}
+            onChange={(value) => setDateFilter(value)}
+            className="campaigns-select"
+            size="sm"
+            options={[
+              { value: "all", label: "Date range" },
+              { value: "7d", label: "Last 7 days" },
+              { value: "30d", label: "Last 30 days" },
+              { value: "90d", label: "Last 90 days" },
+            ]}
+          />
           <button type="button" className="campaigns-filter-button" aria-label="Open filters">
             <Filter className="h-4 w-4" />
             Filters
@@ -784,11 +801,16 @@ export default function CampaignsPage() {
               </div>
               <label className="campaigns-sort-control">
                 Sort
-                <select value={sortBy} onChange={(e) => setSortBy(e.target.value as CampaignSort)}>
-                  <option value="status">Status</option>
-                  <option value="updated">Updated</option>
-                  <option value="name">Name</option>
-                </select>
+                <ConnectSelect
+                  value={sortBy}
+                  onChange={(value) => setSortBy(value as CampaignSort)}
+                  size="sm"
+                  options={[
+                    { value: "status", label: "Status" },
+                    { value: "updated", label: "Updated" },
+                    { value: "name", label: "Name" },
+                  ]}
+                />
               </label>
             </div>
             <div className="campaigns-table-scroll">
