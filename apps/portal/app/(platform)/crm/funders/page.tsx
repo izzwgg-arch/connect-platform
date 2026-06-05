@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Activity,
@@ -9,12 +8,12 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleDollarSign,
+  Clock,
   Download,
   FileUp,
   HandCoins,
   Mail,
-  MapPin,
-  MoreHorizontal,
+  Phone,
   Plus,
   Search,
   SlidersHorizontal,
@@ -27,19 +26,24 @@ import {
   crm,
   cn,
   CRMPageShell,
+  CRMPageHeader,
   CRMWorkspaceShell,
   CRMWorkspaceChrome,
   CRMWorkspaceHeader,
   CRMWorkspaceToolbar,
   CRMWorkspaceBody,
   CRMWorkspaceMain,
+  CRMWorkspaceScrollRegion,
   CRMWorkspaceRightRail,
+  FunderListDetailPanel,
+  FunderListDetailPlaceholder,
 } from "../../../../components/crm";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
+import { ViewportDropdown } from "../../../../components/ViewportDropdown";
 import { BulkEmailModal } from "../../../../components/crm/email/BulkEmailModal";
 import { apiGet, apiPost, apiDelete } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { CrmConfirmModal } from "../../../../components/crm/CrmConfirmModal";
-import { CrmRowActionMenu } from "../../../../components/crm/CrmRowActionMenu";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -103,6 +107,136 @@ const STATUS_COLORS: Record<FunderStatus, string> = {
   PROSPECT: "bg-blue-500/15 text-blue-600 border-blue-400/30",
   PENDING: "bg-amber-500/15 text-amber-600 border-amber-400/30",
 };
+
+const DEV_FUNDER_ROWS: Funder[] = [
+  {
+    id: "dev-funder-1",
+    tenantId: "local-dev",
+    name: "SW Sun Wellness Foundation",
+    organization: "Foundation",
+    email: "grants@swsunwellness.org",
+    phone: "(555) 204-1180",
+    phone2: "(555) 204-1181",
+    city: "Austin",
+    state: "TX",
+    zip: "78701",
+    notes: "Supports community health, wellness, and outreach programs.",
+    status: "ACTIVE",
+    active: true,
+    archivedAt: null,
+    tags: [
+      { id: "dev-tag-health", name: "Health", color: "#10b981" },
+      { id: "dev-tag-community", name: "Community", color: "#f97316" },
+    ],
+    createdAt: "2026-06-01T14:30:00.000Z",
+    updatedAt: "2026-06-04T16:45:00.000Z",
+  },
+  {
+    id: "dev-funder-2",
+    tenantId: "local-dev",
+    name: "Bright Path Grantmakers",
+    organization: "Grantmaker",
+    email: "programs@brightpath.org",
+    phone: "(555) 310-9021",
+    city: "Phoenix",
+    state: "AZ",
+    zip: "85004",
+    notes: "Priority funder for workforce and family stability initiatives.",
+    status: "PROSPECT",
+    active: true,
+    archivedAt: null,
+    tags: [
+      { id: "dev-tag-grants", name: "Grants", color: "#8b5cf6" },
+      { id: "dev-tag-workforce", name: "Workforce", color: "#2563eb" },
+    ],
+    createdAt: "2026-05-28T10:15:00.000Z",
+    updatedAt: "2026-06-03T18:10:00.000Z",
+  },
+  {
+    id: "dev-funder-3",
+    tenantId: "local-dev",
+    name: "Lakeside Community Fund",
+    organization: "Nonprofit",
+    email: "partners@lakesidefund.org",
+    phone: "(555) 618-4400",
+    city: "Chicago",
+    state: "IL",
+    zip: "60601",
+    notes: "Interested in regional community benefit campaigns.",
+    status: "PENDING",
+    active: true,
+    archivedAt: null,
+    tags: [
+      { id: "dev-tag-community", name: "Community", color: "#f97316" },
+      { id: "dev-tag-regional", name: "Regional", color: "#0ea5e9" },
+    ],
+    createdAt: "2026-05-22T12:00:00.000Z",
+    updatedAt: "2026-06-02T13:25:00.000Z",
+  },
+  {
+    id: "dev-funder-4",
+    tenantId: "local-dev",
+    name: "Civic Bridge Capital",
+    organization: "Financial Partner",
+    email: "hello@civicbridge.capital",
+    phone: "(555) 455-7712",
+    city: "Denver",
+    state: "CO",
+    zip: "80202",
+    notes: "Potential partner for matched funding and sponsored programs.",
+    status: "ACTIVE",
+    active: true,
+    archivedAt: null,
+    tags: [
+      { id: "dev-tag-finance", name: "Finance", color: "#64748b" },
+      { id: "dev-tag-sponsor", name: "Sponsor", color: "#d97706" },
+    ],
+    createdAt: "2026-05-18T09:45:00.000Z",
+    updatedAt: "2026-06-01T15:00:00.000Z",
+  },
+  {
+    id: "dev-funder-5",
+    tenantId: "local-dev",
+    name: "North Star Family Trust",
+    organization: "Foundation",
+    email: "giving@northstartrust.org",
+    phone: "(555) 772-6314",
+    city: "Minneapolis",
+    state: "MN",
+    zip: "55401",
+    notes: "Family foundation focused on youth, family services, and local care access.",
+    status: "PROSPECT",
+    active: true,
+    archivedAt: null,
+    tags: [
+      { id: "dev-tag-family", name: "Family", color: "#ec4899" },
+      { id: "dev-tag-health", name: "Health", color: "#10b981" },
+    ],
+    createdAt: "2026-05-12T11:20:00.000Z",
+    updatedAt: "2026-05-30T17:35:00.000Z",
+  },
+  {
+    id: "dev-funder-6",
+    tenantId: "local-dev",
+    name: "Greenline Corporate Giving",
+    organization: "Corporation",
+    email: "csr@greenline.example",
+    phone: "(555) 890-2219",
+    city: "Seattle",
+    state: "WA",
+    zip: "98101",
+    notes: "Corporate social responsibility team for quarterly sponsorship opportunities.",
+    status: "ACTIVE",
+    active: true,
+    archivedAt: null,
+    tags: [
+      { id: "dev-tag-corporate", name: "Corporate", color: "#16a34a" },
+      { id: "dev-tag-sponsor", name: "Sponsor", color: "#d97706" },
+    ],
+    createdAt: "2026-05-06T08:10:00.000Z",
+    updatedAt: "2026-05-29T12:40:00.000Z",
+  },
+];
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -253,15 +387,20 @@ function NewFunderModal({ open, tags, onClose, onCreated }: NewFunderModalProps)
                 </div>
                 <div>
                   <label className="funders-field-label">Organization Type</label>
-                  <select className="funders-field mt-1" value={form.organization} onChange={field("organization")}>
-                    <option value="">Select type</option>
-                    <option value="Foundation">Foundation</option>
-                    <option value="Grantmaker">Grantmaker</option>
-                    <option value="Nonprofit">Nonprofit</option>
-                    <option value="Corporation">Corporation</option>
-                    <option value="Government">Government</option>
-                    <option value="Financial Partner">Financial Partner</option>
-                  </select>
+                  <ConnectSelect
+                    className="funders-field mt-1"
+                    value={form.organization}
+                    onChange={(value) => setForm((f) => ({ ...f, organization: value }))}
+                    placeholder="Select type"
+                    options={[
+                      { value: "Foundation", label: "Foundation" },
+                      { value: "Grantmaker", label: "Grantmaker" },
+                      { value: "Nonprofit", label: "Nonprofit" },
+                      { value: "Corporation", label: "Corporation" },
+                      { value: "Government", label: "Government" },
+                      { value: "Financial Partner", label: "Financial Partner" },
+                    ]}
+                  />
                 </div>
                 <div className="sm:col-span-2">
                   <label className="funders-field-label">Website</label>
@@ -324,11 +463,15 @@ function NewFunderModal({ open, tags, onClose, onCreated }: NewFunderModalProps)
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <label className="funders-field-label">Status</label>
-                  <select className="funders-field mt-1" value={form.status} onChange={field("status")}>
-                    {(["ACTIVE", "INACTIVE", "PROSPECT", "PENDING"] as FunderStatus[]).map((s) => (
-                      <option key={s} value={s}>{STATUS_LABELS[s]}</option>
-                    ))}
-                  </select>
+                  <ConnectSelect
+                    className="funders-field mt-1"
+                    value={form.status}
+                    onChange={(value) => setForm((f) => ({ ...f, status: value as FunderStatus }))}
+                    options={(["ACTIVE", "INACTIVE", "PROSPECT", "PENDING"] as FunderStatus[]).map((s) => ({
+                      value: s,
+                      label: STATUS_LABELS[s],
+                    }))}
+                  />
                 </div>
                 {tags.length > 0 && (
                   <div>
@@ -665,6 +808,7 @@ export default function FundersPage() {
   const [tags, setTags] = useState<FunderTag[]>([]);
   const [stats, setStats] = useState<FunderStats | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [activeIndex, setActiveIndex] = useState(0);
   const [bulkTagId, setBulkTagId] = useState("");
   const [bulkAction, setBulkAction] = useState<"assign" | "remove">("assign");
   const [bulkWorking, setBulkWorking] = useState(false);
@@ -676,8 +820,10 @@ export default function FundersPage() {
   const [deleteTarget, setDeleteTarget] = useState<Funder | null>(null);
   const [deleteWorking, setDeleteWorking] = useState(false);
   const [actionToast, setActionToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const filtersButtonRef = useRef<HTMLButtonElement>(null);
 
   const fetchFunders = useCallback(async () => {
     setLoading(true);
@@ -727,8 +873,6 @@ export default function FundersPage() {
     return () => clearTimeout(debounceRef.current);
   }, [search]);
 
-  const totalPages = Math.ceil(total / PAGE_LIMIT);
-
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -738,12 +882,41 @@ export default function FundersPage() {
     });
   };
 
+  const shouldUsePreviewFunders = process.env.NODE_ENV === "development" && funders.length === 0;
+  const showLoadingState = loading && !shouldUsePreviewFunders;
+  const sourceFunders = shouldUsePreviewFunders
+    ? DEV_FUNDER_ROWS.filter((funder) => {
+        const q = debouncedSearch.trim().toLowerCase();
+        const matchesSearch = !q || [
+          funder.name,
+          funder.organization,
+          funder.email,
+          funder.phone,
+          funder.city,
+          funder.state,
+        ].some((value) => value?.toLowerCase().includes(q));
+        const matchesStatus = statusFilter === "all" || funder.status === statusFilter;
+        const matchesTag = !tagFilter || funder.tags.some((tag) => tag.id === tagFilter);
+        return matchesSearch && matchesStatus && matchesTag;
+      })
+    : funders;
+  const displayTotal = shouldUsePreviewFunders ? sourceFunders.length : total;
+  const totalPages = Math.ceil(displayTotal / PAGE_LIMIT);
+
   const typeOptions = Array.from(
-    new Set(funders.map((f) => f.organization).filter((value): value is string => Boolean(value))),
+    new Set(sourceFunders.map((f) => f.organization).filter((value): value is string => Boolean(value))),
   ).sort((a, b) => a.localeCompare(b));
   const visibleFunders = typeFilter === "all"
-    ? funders
-    : funders.filter((f) => (f.organization || "Other") === typeFilter);
+    ? sourceFunders
+    : sourceFunders.filter((f) => (f.organization || "Other") === typeFilter);
+  const activeFunder = visibleFunders[activeIndex] ?? null;
+
+  useEffect(() => {
+    setActiveIndex((index) => {
+      if (visibleFunders.length === 0) return 0;
+      return Math.min(index, visibleFunders.length - 1);
+    });
+  }, [visibleFunders.length]);
 
   const selectAll = () => setSelected(new Set(visibleFunders.map((f) => f.id)));
   const clearSelection = () => setSelected(new Set());
@@ -794,41 +967,41 @@ export default function FundersPage() {
     window.open(`/api/crm/funders/export?${params.toString()}`, "_blank");
   };
 
-  const totalFunders = stats?.total ?? total;
-  const activeFunders = stats?.active ?? 0;
-  const prospectFunders = stats?.prospects ?? 0;
+  const totalFunders = shouldUsePreviewFunders ? sourceFunders.length : stats?.total ?? total;
+  const activeFunders = shouldUsePreviewFunders ? sourceFunders.filter((f) => f.status === "ACTIVE").length : stats?.active ?? 0;
+  const prospectFunders = shouldUsePreviewFunders ? sourceFunders.filter((f) => f.status === "PROSPECT").length : stats?.prospects ?? 0;
   const inactiveFunders = Math.max(totalFunders - activeFunders - prospectFunders, 0);
   const selectedCount = selected.size;
-  const topTags = [...tags]
+  const insightTags = shouldUsePreviewFunders
+    ? Array.from(
+        new Map(
+          sourceFunders.flatMap((funder) => funder.tags).map((tag) => [tag.id, tag]),
+        ).values(),
+      )
+    : tags;
+  const topTags = [...insightTags]
     .map((tag) => ({
       ...tag,
-      count: funders.filter((f) => f.tags.some((funderTag) => funderTag.id === tag.id)).length,
+      count: sourceFunders.filter((f) => f.tags.some((funderTag) => funderTag.id === tag.id)).length,
     }))
     .sort((a, b) => b.count - a.count)
     .slice(0, 5);
-  const recentActivity = [...funders]
-    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-    .slice(0, 3);
   const statusBreakdown = (["ACTIVE", "INACTIVE", "PROSPECT"] as FunderStatus[]).map((status) => ({
     status,
     label: STATUS_LABELS[status],
     count: status === "ACTIVE" ? activeFunders : status === "PROSPECT" ? prospectFunders : inactiveFunders,
   }));
-  const donutTotal = Math.max(statusBreakdown.reduce((sum, item) => sum + item.count, 0), 1);
-  let donutCursor = 0;
   const donutColors: Record<string, string> = {
     ACTIVE: "#10b981",
     INACTIVE: "#cbd5e1",
     PROSPECT: "#f59e0b",
   };
-  const donutGradient = statusBreakdown
-    .map((item) => {
-      const start = donutCursor;
-      const end = donutCursor + (item.count / donutTotal) * 100;
-      donutCursor = end;
-      return `${donutColors[item.status]} ${start}% ${end}%`;
-    })
-    .join(", ");
+
+  const resetInsightFilters = () => {
+    setStatusFilter("all");
+    setTagFilter(null);
+    setPage(0);
+  };
 
   const kpiCards = [
     { label: "Total Funders", value: totalFunders, description: "All funders in your CRM", icon: <Users size={18} />, tone: "violet" },
@@ -838,7 +1011,7 @@ export default function FundersPage() {
   ];
 
   return (
-    <CRMPageShell className={crm.fundersWorkspace} innerClassName={crm.pageInnerFunders}>
+    <CRMPageShell className={cn(crm.queueWorkspace, crm.fundersWorkspace)} innerClassName={crm.pageInnerQueue}>
       <CrmConfirmModal
         open={!!deleteTarget}
         title="Delete funder?"
@@ -872,23 +1045,26 @@ export default function FundersPage() {
       <CRMWorkspaceShell>
         <CRMWorkspaceChrome>
           <CRMWorkspaceHeader>
-            <div className="funders-command-header">
-              <div>
-                <h1>Funders</h1>
-                <p>Manage funding sources, grant organizations, and financial partners.</p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <button onClick={() => setShowImport(true)} className="funders-btn funders-btn-secondary">
+            <CRMPageHeader
+              compact
+              className={crm.contactsHeaderPanel}
+              icon={<HandCoins className="h-6 w-6" aria-hidden />}
+              title="Funders"
+              subtitle="Manage funding sources, grant organizations, and financial partners."
+              actions={
+                <div className="contacts-hero-actions flex flex-wrap items-center gap-2">
+                <button onClick={() => setShowImport(true)} className={cn(crm.btnSecondary, "funders-command-ghost")}>
                   <FileUp size={15} /> Import CSV
                 </button>
-                <button onClick={handleExport} className="funders-btn funders-btn-secondary">
+                <button onClick={handleExport} className={cn(crm.btnSecondary, "funders-command-ghost")}>
                   <Download size={15} /> Export CSV
                 </button>
                 <button onClick={() => setShowNew(true)} className="funders-btn funders-btn-primary">
                   <Plus size={15} /> Add Funder
                 </button>
               </div>
-            </div>
+              }
+            />
           </CRMWorkspaceHeader>
 
           <CRMWorkspaceToolbar className="flex flex-col gap-3">
@@ -896,61 +1072,148 @@ export default function FundersPage() {
               {kpiCards.map((kpi) => (
                 <div
                   key={kpi.label}
-                  className={cn("funders-kpi-card", `funders-kpi-${kpi.tone}`)}
+                  className={cn("funders-kpi-card crm-queue-kpi-card", `funders-kpi-${kpi.tone}`)}
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <div className="funders-kpi-icon">{kpi.icon}</div>
-                    <span className="funders-kpi-label">{kpi.label}</span>
+                    <div className="funders-kpi-icon crm-queue-kpi-icon">{kpi.icon}</div>
+                    <span className="funders-kpi-label crm-queue-kpi-label">{kpi.label}</span>
                   </div>
-                  <div className="funders-kpi-value">
-                    {loading ? <span className="animate-pulse opacity-40">—</span> : kpi.value}
+                  <div className="funders-kpi-value crm-queue-kpi-value">
+                    {showLoadingState ? <span className="animate-pulse opacity-40">—</span> : kpi.value}
                   </div>
                   <p className="funders-kpi-description">{kpi.description}</p>
                 </div>
               ))}
             </div>
 
-            <div className="funders-filter-card">
+            <div className="funders-filter-card crm-queue-filter-bar">
               <div className="funders-filter-grid">
-                <div className="relative min-w-0">
-                  <Search size={16} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <div className="funders-search-field relative min-w-0">
+                  <Search size={16} className="funders-search-icon pointer-events-none absolute text-slate-400" />
                   <input
-                    className="funders-control pl-10"
+                    className="funders-control funders-control-search"
                     placeholder="Search funders..."
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                   />
                 </div>
-                <select
+                <ConnectSelect
                   className="funders-control"
+                  size="sm"
                   value={statusFilter}
-                  onChange={(e) => { setStatusFilter(e.target.value as any); setPage(0); }}
-                >
-                  {(["all", "ACTIVE", "INACTIVE", "PROSPECT", "PENDING"] as const).map((s) => (
-                    <option key={s} value={s}>{s === "all" ? "All Status" : STATUS_LABELS[s]}</option>
-                  ))}
-                </select>
-                <select
+                  onChange={(value) => { setStatusFilter(value as any); setPage(0); }}
+                  options={(["all", "ACTIVE", "INACTIVE", "PROSPECT", "PENDING"] as const).map((s) => ({
+                    value: s,
+                    label: s === "all" ? "All Status" : STATUS_LABELS[s],
+                  }))}
+                />
+                <ConnectSelect
                   className="funders-control"
+                  size="sm"
                   value={typeFilter}
-                  onChange={(e) => { setTypeFilter(e.target.value); setPage(0); }}
-                >
-                  <option value="all">All Types</option>
-                  {typeOptions.map((type) => <option key={type} value={type}>{type}</option>)}
-                </select>
-                <select
+                  onChange={(value) => { setTypeFilter(value); setPage(0); }}
+                  options={[
+                    { value: "all", label: "All Types" },
+                    ...typeOptions.map((type) => ({ value: type, label: type })),
+                  ]}
+                />
+                <ConnectSelect
                   className="funders-control"
+                  size="sm"
                   value={tagFilter ?? ""}
-                  onChange={(e) => { setTagFilter(e.target.value || null); setPage(0); }}
+                  onChange={(value) => { setTagFilter(value || null); setPage(0); }}
+                  options={[
+                    { value: "", label: "All Tags" },
+                    ...tags.map((t) => ({ value: t.id, label: t.name })),
+                  ]}
+                />
+                <button
+                  ref={filtersButtonRef}
+                  type="button"
+                  onClick={() => setFiltersOpen((open) => !open)}
+                  className={cn(
+                    "funders-btn funders-btn-filter",
+                    (statusFilter !== "all" || tagFilter) && "funders-filter-chip-active",
+                  )}
+                  aria-haspopup="dialog"
+                  aria-expanded={filtersOpen}
                 >
-                  <option value="">All Tags</option>
-                  {tags.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
-                <button type="button" className="funders-btn funders-btn-filter">
                   <SlidersHorizontal size={15} /> Filters
                 </button>
               </div>
             </div>
+
+            <ViewportDropdown
+              open={filtersOpen}
+              triggerRef={filtersButtonRef}
+              onClose={() => setFiltersOpen(false)}
+              width={360}
+              sideOffset={8}
+              className="funders-filter-panel contacts-filter-panel"
+            >
+              <div className="contacts-filter-panel-inner" role="dialog" aria-label="Funder filters">
+                <div className="contacts-filter-panel-head">
+                  <div>
+                    <p className="text-sm font-bold text-crm-text">Filters</p>
+                    <p className="text-xs text-crm-muted">Status mix and top tags</p>
+                  </div>
+                  <button type="button" onClick={resetInsightFilters} className="contacts-filter-reset">
+                    Reset
+                  </button>
+                </div>
+                <div className="funders-filter-insight-group">
+                  <span className="funders-filter-insight-label">Status Mix</span>
+                  <div className="funders-filter-chip-row">
+                    {statusBreakdown.map((item) => (
+                      <button
+                        type="button"
+                        key={item.status}
+                        onClick={() => { setStatusFilter(statusFilter === item.status ? "all" : item.status); setPage(0); }}
+                        className={cn("funders-filter-chip", statusFilter === item.status && "funders-filter-chip-active")}
+                      >
+                        <span className="funders-filter-chip-dot" style={{ background: donutColors[item.status] }} />
+                        {item.label}
+                        <strong>{item.count}</strong>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="funders-filter-insight-group funders-filter-insight-group-tags">
+                  <span className="funders-filter-insight-label">Top Tags</span>
+                  <div className="funders-filter-chip-row">
+                    {topTags.length === 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => { setShowNewTag(true); setFiltersOpen(false); }}
+                        className="funders-filter-chip"
+                      >
+                        <Plus size={13} /> New tag
+                      </button>
+                    ) : topTags.map((tag) => (
+                      <button
+                        key={tag.id}
+                        type="button"
+                        onClick={() => { setTagFilter(tagFilter === tag.id ? null : tag.id); setPage(0); }}
+                        className={cn("funders-filter-chip", tagFilter === tag.id && "funders-filter-chip-active")}
+                      >
+                        <span className="funders-filter-chip-dot" style={{ background: tag.color || "#7c3aed" }} />
+                        {tag.name}
+                        <strong>{tag.count}</strong>
+                      </button>
+                    ))}
+                    {topTags.length > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => { setShowNewTag(true); setFiltersOpen(false); }}
+                        className="funders-filter-chip funders-filter-chip-ghost"
+                      >
+                        <Plus size={13} /> New tag
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            </ViewportDropdown>
 
             {bulkEmailToast && (
               <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
@@ -986,22 +1249,24 @@ export default function FundersPage() {
                   >
                     <Mail size={14} /> Send Email
                   </button>
-                  <select
+                  <ConnectSelect
                     className="funders-bulk-select"
+                    size="sm"
                     value={bulkTagId}
-                    onChange={(e) => setBulkTagId(e.target.value)}
-                  >
-                    <option value="">Add Tag</option>
-                    {tags.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                  </select>
-                  <select
+                    onChange={(value) => setBulkTagId(value)}
+                    placeholder="Add Tag"
+                    options={tags.map((t) => ({ value: t.id, label: t.name }))}
+                  />
+                  <ConnectSelect
                     className="funders-bulk-select"
+                    size="sm"
                     value={bulkAction}
-                    onChange={(e) => setBulkAction(e.target.value as any)}
-                  >
-                    <option value="assign">Assign</option>
-                    <option value="remove">Remove</option>
-                  </select>
+                    onChange={(value) => setBulkAction(value as any)}
+                    options={[
+                      { value: "assign", label: "Assign" },
+                      { value: "remove", label: "Remove" },
+                    ]}
+                  />
                   <button
                     onClick={handleBulkTag}
                     disabled={!bulkTagId || bulkWorking}
@@ -1021,125 +1286,142 @@ export default function FundersPage() {
           </CRMWorkspaceToolbar>
         </CRMWorkspaceChrome>
 
-        <CRMWorkspaceBody split>
-          <CRMWorkspaceMain className="flex min-w-0 flex-col gap-3">
-            <section className="funders-table-shell min-h-0 flex-1">
-              <div className="funders-table-topbar">
-                <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                  <input
-                    type="checkbox"
-                    className="funders-checkbox"
-                    checked={visibleFunders.length > 0 && visibleFunders.every((f) => selected.has(f.id))}
-                    onChange={() => visibleFunders.length > 0 && visibleFunders.every((f) => selected.has(f.id)) ? clearSelection() : selectAll()}
-                    title="Select all visible funders"
-                  />
-                  {visibleFunders.length} shown
-                </label>
-                <button type="button" onClick={() => setShowNewTag(true)} className="funders-mini-action">
-                  <Plus size={13} /> New Tag
-                </button>
-              </div>
-
-              <div className="funders-table-scroll">
-                <div className="funders-table-head">
-                  <span></span>
-                  <span>Funder</span>
-                  <span>Type</span>
-                  <span>Email</span>
-                  <span>Phone</span>
-                  <span>Status</span>
-                  <span>Tags</span>
-                  <span>Added</span>
-                  <span></span>
+        <CRMWorkspaceBody split={visibleFunders.length > 0}>
+          <CRMWorkspaceMain className="crm-queue-main-workspace">
+            <CRMWorkspaceScrollRegion className="crm-queue-center-workspace flex min-w-0 flex-col gap-3">
+              {showLoadingState ? (
+                <div className="py-24 text-center text-sm text-crm-muted/80" aria-busy="true">
+                  Loading funders...
                 </div>
-
-                {loading ? (
-                  <div className="px-5 py-12 text-center text-sm font-medium text-slate-500">Loading funders...</div>
-                ) : visibleFunders.length === 0 ? (
-                  <div className="m-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 px-6 py-12 text-center">
-                    <HandCoins size={34} className="mx-auto mb-3 text-slate-300" />
-                    <p className="text-base font-semibold text-slate-900">No funders found</p>
-                    <p className="mt-1 text-sm text-slate-500">
-                      {search || statusFilter !== "all" || tagFilter || typeFilter !== "all"
-                        ? "Try adjusting your filters."
-                        : "Add your first funder to get started."}
-                    </p>
-                    {!search && statusFilter === "all" && !tagFilter && typeFilter === "all" && (
-                      <button onClick={() => setShowNew(true)} className="funders-btn funders-btn-primary mx-auto mt-4">
-                        <Plus size={14} /> Add Funder
+              ) : visibleFunders.length === 0 ? (
+                <div className="crm-queue-list-panel px-6 py-14 text-center">
+                  <HandCoins className="mx-auto mb-3 h-10 w-10 text-crm-border" aria-hidden />
+                  <p className="text-lg font-semibold text-crm-text">No funders found</p>
+                  <p className="mx-auto mt-2 max-w-md text-sm text-crm-muted">
+                    {search || statusFilter !== "all" || tagFilter || typeFilter !== "all"
+                      ? "Try adjusting your filters."
+                      : "Add your first funder to get started."}
+                  </p>
+                  {!search && statusFilter === "all" && !tagFilter && typeFilter === "all" ? (
+                    <button onClick={() => setShowNew(true)} className="funders-btn funders-btn-primary mx-auto mt-6">
+                      <Plus size={14} /> Add Funder
+                    </button>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="crm-queue-list-panel">
+                  <div className="crm-queue-list-head">
+                    <label className="flex cursor-pointer items-center gap-2 text-xs text-crm-muted">
+                      <input
+                        type="checkbox"
+                        className={crm.checkbox}
+                        checked={visibleFunders.length > 0 && visibleFunders.every((f) => selected.has(f.id))}
+                        onChange={() => visibleFunders.length > 0 && visibleFunders.every((f) => selected.has(f.id)) ? clearSelection() : selectAll()}
+                        title="Select all visible funders"
+                      />
+                      <span>Select active on this page</span>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-semibold text-crm-muted tabular-nums">
+                        {visibleFunders.length} shown · {displayTotal} total
+                      </span>
+                      <button type="button" onClick={() => setShowNewTag(true)} className="funders-mini-action">
+                        <Plus size={13} /> New Tag
                       </button>
-                    )}
+                    </div>
                   </div>
-                ) : (
-                  <div className="funders-table-body">
-                    {visibleFunders.map((f) => (
-                      <div key={f.id} className="funders-table-row">
-                        <div>
-                          <input
-                            type="checkbox"
-                            className="funders-checkbox"
-                            checked={selected.has(f.id)}
-                            onChange={() => toggleSelect(f.id)}
-                          />
-                        </div>
-                        <Link href={`/crm/funders/${f.id}`} className="funders-funder-cell hover:no-underline">
-                          <span className="funders-avatar">{initials(f.name)}</span>
-                          <span className="min-w-0">
-                            <span className="block truncate font-semibold text-slate-950">{f.name}</span>
-                            <span className="mt-0.5 flex items-center gap-1 truncate text-xs text-slate-500">
-                              <MapPin size={11} />
-                              {[f.city, f.state].filter(Boolean).join(", ") || "Location not set"}
-                            </span>
-                          </span>
-                        </Link>
-                        <span className="funders-table-text">{f.organization || "Other"}</span>
-                        <span className="funders-table-text truncate">{f.email || "No email"}</span>
-                        <span className="funders-table-text">{f.phone || "No phone"}</span>
-                        <span>
-                          <button
-                            type="button"
-                            onClick={() => { setStatusFilter(f.status); setPage(0); }}
-                            className={cn("funders-status-pill", `funders-status-${f.status.toLowerCase()}`)}
-                          >
-                            {STATUS_LABELS[f.status]}
-                          </button>
-                        </span>
-                        <span className="flex min-w-0 flex-wrap gap-1">
-                          {f.tags.length > 0 ? f.tags.slice(0, 2).map((tag) => (
-                            <button
-                              type="button"
-                              key={tag.id}
-                              onClick={() => { setTagFilter(tagFilter === tag.id ? null : tag.id); setPage(0); }}
-                              className="funders-tag-pill"
-                              style={tag.color ? { borderColor: `${tag.color}40`, color: tag.color, background: `${tag.color}12` } : undefined}
+                  <div className="crm-queue-row-list">
+                    {visibleFunders.map((f, index) => {
+                      const location = [f.city, f.state].filter(Boolean).join(", ");
+                      return (
+                        <div
+                          key={f.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setActiveIndex(index)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              setActiveIndex(index);
+                            }
+                          }}
+                          className={cn("crm-queue-row crm-contact-row crm-funder-row group", activeFunder?.id === f.id && "crm-queue-row-selected")}
+                        >
+                          <div className="crm-queue-row-grid">
+                            <label
+                              className="crm-contact-row-check"
+                              onClick={(e) => e.stopPropagation()}
+                              aria-label={`Select ${f.name}`}
                             >
-                              {tag.name}
-                            </button>
-                          )) : <span className="text-xs text-slate-400">No tags</span>}
-                          {f.tags.length > 2 && <span className="funders-tag-pill">+{f.tags.length - 2}</span>}
-                        </span>
-                        <span className="funders-table-text whitespace-nowrap">{formatShortDate(f.createdAt)}</span>
-                        <div className="flex items-center justify-end gap-1">
-                          <Link href={`/crm/funders/${f.id}`} className="funders-row-action text-xs font-semibold">
-                            Open
-                          </Link>
-                          <CrmRowActionMenu
-                            label={f.name}
-                            onEdit={() => router.push(`/crm/funders/${f.id}?edit=1`)}
-                            onDelete={canManageFunders ? () => setDeleteTarget(f) : undefined}
-                          />
+                              <input
+                                type="checkbox"
+                                checked={selected.has(f.id)}
+                                onChange={() => toggleSelect(f.id)}
+                              />
+                            </label>
+                            <span className="crm-queue-row-rank tabular-nums">{page * PAGE_LIMIT + index + 1}</span>
+                            <div className="crm-queue-row-avatar funders-avatar" aria-hidden>
+                              {initials(f.name)}
+                            </div>
+                            <div className="crm-queue-row-main min-w-0">
+                              <div className="crm-queue-row-title-line">
+                                <span className="crm-queue-row-name truncate">{f.name}</span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); setStatusFilter(f.status); setPage(0); }}
+                                  className={cn("funders-status-pill", `funders-status-${f.status.toLowerCase()}`)}
+                                >
+                                  {STATUS_LABELS[f.status]}
+                                </button>
+                                {f.tags.slice(0, 2).map((tag) => (
+                                  <button
+                                    type="button"
+                                    key={tag.id}
+                                    onClick={(e) => { e.stopPropagation(); setTagFilter(tagFilter === tag.id ? null : tag.id); setPage(0); }}
+                                    className="funders-tag-pill"
+                                    style={tag.color ? { borderColor: `${tag.color}40`, color: tag.color, background: `${tag.color}12` } : undefined}
+                                  >
+                                    {tag.name}
+                                  </button>
+                                ))}
+                                {f.tags.length > 2 ? <span className="funders-tag-pill">+{f.tags.length - 2}</span> : null}
+                              </div>
+                              <p className="crm-queue-row-sub truncate">
+                                {f.organization || "Other"}
+                                {location ? ` · ${location}` : ""}
+                              </p>
+                            </div>
+                            <div className="crm-queue-row-phone hidden md:flex">
+                              <Phone className="h-3.5 w-3.5 shrink-0" />
+                              <span className="truncate font-mono">{f.phone || "No phone"}</span>
+                            </div>
+                            <div className="crm-queue-row-email hidden lg:flex">
+                              <Mail className="h-3.5 w-3.5 shrink-0" />
+                              <span className="truncate">{f.email || "No email"}</span>
+                            </div>
+                            <div className="crm-queue-row-meta hidden xl:flex">
+                              <span className="crm-queue-pill crm-queue-pill-muted inline-flex items-center gap-0.5">
+                                <Clock className="h-3 w-3" />
+                                {formatShortDate(f.createdAt)}
+                              </span>
+                            </div>
+                            <span className={cn("crm-queue-row-status funders-status-pill shrink-0", `funders-status-${f.status.toLowerCase()}`)}>
+                              {STATUS_LABELS[f.status]}
+                            </span>
+                            <ChevronRight className="crm-queue-row-chevron h-4 w-4 shrink-0" />
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
-                )}
-              </div>
-            </section>
+                </div>
+              )}
+            </CRMWorkspaceScrollRegion>
 
             {totalPages > 1 && (
               <div className="funders-pagination">
                 <span>
-                  Showing {page * PAGE_LIMIT + 1} to {Math.min((page + 1) * PAGE_LIMIT, total)} of {total} funders
+                  Showing {page * PAGE_LIMIT + 1} to {Math.min((page + 1) * PAGE_LIMIT, displayTotal)} of {displayTotal} funders
                 </span>
                 <div className="flex items-center gap-1.5">
                   <button
@@ -1161,83 +1443,26 @@ export default function FundersPage() {
               </div>
             )}
           </CRMWorkspaceMain>
-
-          <CRMWorkspaceRightRail className="funders-rail">
-            <section className="funders-rail-card">
-              <div className="funders-rail-title">
-                <h3>Funder Overview</h3>
-              </div>
-              <div className="funders-donut-wrap">
-                <div
-                  className="funders-donut"
-                  style={{ background: `conic-gradient(${donutGradient})` }}
-                >
-                  <span>{totalFunders}</span>
-                  <small>Total</small>
-                </div>
-                <div className="flex flex-1 flex-col gap-2">
-                  {statusBreakdown.map((item) => (
-                    <button
-                      type="button"
-                      key={item.status}
-                      onClick={() => { setStatusFilter(statusFilter === item.status ? "all" : item.status); setPage(0); }}
-                      className="funders-legend-row"
-                    >
-                      <span className="funders-legend-dot" style={{ background: donutColors[item.status] }} />
-                      <span>{item.label}</span>
-                      <strong>{item.count}</strong>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </section>
-
-            <section className="funders-rail-card">
-              <div className="funders-rail-title">
-                <h3>Top Tags</h3>
-                <button type="button" onClick={() => setShowNewTag(true)}>New</button>
-              </div>
-              <div className="flex flex-col gap-2">
-                {topTags.length === 0 ? (
-                  <p className="text-sm text-slate-500">No tags yet.</p>
-                ) : topTags.map((tag) => (
-                  <button
-                    key={tag.id}
-                    type="button"
-                    onClick={() => { setTagFilter(tagFilter === tag.id ? null : tag.id); setPage(0); }}
-                    className="funders-tag-stat"
-                  >
-                    <span className="funders-legend-dot" style={{ background: tag.color || "#f97316" }} />
-                    <span>{tag.name}</span>
-                    <strong>{tag.count}</strong>
-                  </button>
-                ))}
-              </div>
-            </section>
-
-            <section className="funders-rail-card">
-              <div className="funders-rail-title">
-                <h3>Recent Activity</h3>
-              </div>
-              <div className="flex flex-col gap-2">
-                {recentActivity.length === 0 ? (
-                  <p className="text-sm text-slate-500">No recent funder activity.</p>
-                ) : recentActivity.map((funder) => (
-                  <Link key={funder.id} href={`/crm/funders/${funder.id}`} className="funders-activity-row hover:no-underline">
-                    <span className="funders-activity-avatar">{initials(funder.name)}</span>
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm font-semibold text-slate-900">{funder.name}</span>
-                      <span className="block text-xs text-slate-500">Updated {formatShortDate(funder.updatedAt)}</span>
-                    </span>
-                  </Link>
-                ))}
-              </div>
-              <Link href="/crm/funders" className="mt-2 inline-flex text-xs font-semibold text-orange-600 hover:text-orange-700">
-                View all activity
-              </Link>
-            </section>
-
-          </CRMWorkspaceRightRail>
+          {visibleFunders.length > 0 ? (
+            <CRMWorkspaceRightRail className="crm-queue-right-rail crm-queue-detail-rail flex flex-col min-h-0">
+              {activeFunder ? (
+                <FunderListDetailPanel
+                  funder={activeFunder}
+                  rank={activeIndex + 1}
+                  total={visibleFunders.length}
+                  canGoPrevious={activeIndex > 0}
+                  canGoNext={activeIndex < visibleFunders.length - 1}
+                  onPrevious={() => setActiveIndex((i) => Math.max(0, i - 1))}
+                  onNext={() => setActiveIndex((i) => Math.min(visibleFunders.length - 1, i + 1))}
+                  onOpen={() => router.push(`/crm/funders/${activeFunder.id}`)}
+                  onEdit={!activeFunder.archivedAt && activeFunder.active !== false ? () => router.push(`/crm/funders/${activeFunder.id}?edit=1`) : undefined}
+                  onDelete={canManageFunders && !activeFunder.archivedAt && activeFunder.active !== false ? () => setDeleteTarget(activeFunder) : undefined}
+                />
+              ) : (
+                <FunderListDetailPlaceholder />
+              )}
+            </CRMWorkspaceRightRail>
+          ) : null}
         </CRMWorkspaceBody>
       </CRMWorkspaceShell>
 

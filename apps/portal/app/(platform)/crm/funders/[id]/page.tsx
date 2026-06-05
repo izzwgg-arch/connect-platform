@@ -22,6 +22,7 @@ import {
   crm,
   cn,
 } from "../../../../../components/crm";
+import { ConnectSelect } from "../../../../../components/ConnectSelect";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../../services/apiClient";
 import { CrmConfirmModal } from "../../../../../components/crm/CrmConfirmModal";
 import { useAppContext } from "../../../../../hooks/useAppContext";
@@ -344,15 +345,15 @@ export default function FunderDetailPage() {
                     {fieldEl("Name *", "name")}
                     <div>
                       <label className={crm.label}>Status</label>
-                      <select
-                        className={cn(crm.select, "mt-1")}
-                        value={form.status}
-                        onChange={(e) => setForm((f) => ({ ...f, status: e.target.value as FunderStatus }))}
-                      >
-                        {(["ACTIVE", "INACTIVE", "PROSPECT", "PENDING"] as FunderStatus[]).map((s) => (
-                          <option key={s} value={s}>{STATUS_LABELS[s]}</option>
-                        ))}
-                      </select>
+                      <ConnectSelect
+                        className={cn("mt-1")}
+                        value={form.status ?? ""}
+                        onChange={(value) => setForm((f) => ({ ...f, status: value as FunderStatus }))}
+                        options={(["ACTIVE", "INACTIVE", "PROSPECT", "PENDING"] as FunderStatus[]).map((s) => ({
+                          value: s,
+                          label: STATUS_LABELS[s],
+                        }))}
+                      />
                     </div>
                   </div>
                   {fieldEl("Organization", "organization")}
