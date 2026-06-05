@@ -9,6 +9,7 @@
  *  - US ringback tone  (440 + 480 Hz, 2s on / 4s off cadence) — legacy helper
  *  - Incoming ringtone (480 + 440 Hz double-ring, NANP cadence)
  *  - DTMF keypad tones (standard ITU-T frequencies, 120 ms)
+ *  - Call-end chime (short descending three-note disconnect cue)
  */
 
 import { useCallback, useEffect, useRef } from "react";
@@ -230,6 +231,35 @@ function startUkRingbackTone(ctx: AudioContext): ToneHandle {
   };
 }
 
+/**
+ * Connect call-end signature: three quick descending tone pairs (~550 ms total).
+ * Distinct from ringback, ringtone, and DTMF.
+ */
+function playCallEndChimePattern(ctx: AudioContext, volume = 0.13): void {
+  const steps: Array<{ delayMs: number; freqA: number; freqB: number; durMs: number; vol: number }> = [
+    { delayMs: 0, freqA: 620, freqB: 740, durMs: 110, vol: volume },
+    { delayMs: 130, freqA: 480, freqB: 560, durMs: 130, vol: volume * 0.88 },
+    { delayMs: 300, freqA: 300, freqB: 360, durMs: 200, vol: volume * 0.75 },
+  ];
+  const t0 = ctx.currentTime;
+  for (const step of steps) {
+    const t = t0 + step.delayMs / 1000;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(step.vol, t + 0.008);
+    gain.gain.setTargetAtTime(0, t + step.durMs / 1000 - 0.015, 0.012);
+    gain.connect(ctx.destination);
+    [step.freqA, step.freqB].forEach((freq) => {
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, t);
+      osc.connect(gain);
+      osc.start(t);
+      osc.stop(t + step.durMs / 1000 + 0.04);
+    });
+  }
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useTelephonyAudio() {
@@ -341,6 +371,13 @@ export function useTelephonyAudio() {
     playToneBurst(ctx, freqs[0], freqs[1], 120, 0.15);
   }, []);
 
+  /** Short disconnect chime when a call ends (user hangup or remote BYE). */
+  const playCallEndChime = useCallback(() => {
+    const ctx = ensureCtx();
+    if (!ctx) return;
+    playCallEndChimePattern(ctx);
+  }, []);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -365,6 +402,7 @@ export function useTelephonyAudio() {
     resumeOutputAfterRingback,
     startRingtone,
     playDtmfTone,
+    playCallEndChime,
     stopAll,
   };
 }

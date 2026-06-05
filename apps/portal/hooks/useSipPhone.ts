@@ -499,6 +499,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     resumeOutputAfterRingback,
     startRingtone,
     playDtmfTone,
+    playCallEndChime,
     stopAll: stopAllAudio,
   } = useTelephonyAudio();
 
@@ -667,6 +668,8 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   /** Guard: prevents duplicate CALL_QUALITY_REPORT when both user_hangup and the
    *  subsequent SIP "ended" event fire submitCallQualityReport for the same call. */
   const finalReportSentRef = useRef<boolean>(false);
+  /** Set when local hangup() plays the end chime — skip duplicate on SIP "ended". */
+  const userInitiatedHangupRef = useRef(false);
   /** Last LOCAL SDP offer for the active outbound session — read-only capture for
    *  the "488 / Incompatible SDP" WebRTC outbound investigation. Never munged. */
   const lastOfferSdpRef = useRef<string | null>(null);
@@ -1736,6 +1739,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
 
     session.on("ended", () => {
       stopAllAudio();
+      if (!userInitiatedHangupRef.current) {
+        playCallEndChime();
+      }
+      userInitiatedHangupRef.current = false;
       console.log("[SIP] CALL_ENDED");
       // Cancel stale-hangup timer — call ended normally via SIP, no need for force cleanup
       if (staleHangupTimerRef.current) { clearTimeout(staleHangupTimerRef.current); staleHangupTimerRef.current = null; }
@@ -1898,6 +1905,10 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       patchSessionMeta(mcId, { onHold: false, state: "connected", isActive: true });
     });
     session.on("ended", () => {
+      if (!userInitiatedHangupRef.current) {
+        playCallEndChime();
+      }
+      userInitiatedHangupRef.current = false;
       console.log(`[MULTICALL] web side_session_ended=${mcId}`);
       removeSessionMeta(mcId);
     });
@@ -1956,6 +1967,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
       setCallDirection("outbound");
       dialGuardRef.current = Date.now();
       finalReportSentRef.current = false;
+      userInitiatedHangupRef.current = false;
       setCallState("dialing");
       setError(null);
       setOnHold(false);
@@ -2110,6 +2122,8 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
 
   const hangup = useCallback(() => {
     stopAllAudio();
+    userInitiatedHangupRef.current = true;
+    playCallEndChime();
     console.log("[SIP] user hangup");
 
     // Capture extension and hangup time before clearing state
@@ -2175,7 +2189,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
           .catch(() => { /* non-fatal — server may not have the endpoint yet */ });
       }, 10_000);
     }
-  }, [teardownRemoteAudioPlayback, clearCallDiag]);
+  }, [teardownRemoteAudioPlayback, clearCallDiag, playCallEndChime, stopAllAudio]);
 
   const toggleHold = useCallback(() => {
     if (!sessionRef.current || callState !== "connected") return;
@@ -2418,9 +2432,11 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
     const s = sessionsByIdRef.current.get(id);
     if (!s) return;
     console.log(`[MULTICALL] web hangup session=${id}`);
+    userInitiatedHangupRef.current = true;
+    playCallEndChime();
     try { s.terminate(); } catch { /* already ended */ }
     // removeSessionMeta will fire via session.on("ended") handler.
-  }, []);
+  }, [playCallEndChime]);
 
   const swapToSession = useCallback((id: string) => {
     resumeSession(id);
