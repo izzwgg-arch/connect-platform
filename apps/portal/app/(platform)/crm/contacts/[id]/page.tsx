@@ -56,6 +56,7 @@ import {
   stageLabel,
   cn,
 } from "../../../../../components/crm";
+import { ConnectSelect } from "../../../../../components/ConnectSelect";
 import { leadTimezoneDetailLabel, leadTimezoneBadgeTitle } from "../../../../../components/crm/contact/leadTimezoneDisplay";
 import { ContactDocumentSummary } from "../../../../../components/crm/contact/ContactDocumentSummary";
 import { type Checklist, type ScriptSummary } from "../../../../../components/crm/live";
@@ -1271,6 +1272,7 @@ type ContactFormTemplateOption = {
   id: string;
   name: string;
   category: string | null;
+  status?: "DRAFT" | "ACTIVE";
 };
 
 type ContactFormRequest = {
@@ -1290,11 +1292,13 @@ function ContactFormsPanel({
   defaultEmail,
   disabled,
   onActivity,
+  onToast,
 }: {
   contactId: string;
   defaultEmail: string | null;
   disabled: boolean;
   onActivity: () => void;
+  onToast?: (kind: "ok" | "err", text: string) => void;
 }) {
   const [requests, setRequests] = useState<ContactFormRequest[]>([]);
   const [templates, setTemplates] = useState<ContactFormTemplateOption[]>([]);
@@ -1305,6 +1309,8 @@ function ContactFormsPanel({
   const [message, setMessage] = useState("");
   const [working, setWorking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [sentLink, setSentLink] = useState<{ url: string; emailSent: boolean } | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1324,6 +1330,47 @@ function ContactFormsPanel({
 
   useEffect(() => { void load(); }, [load]);
 
+  // Poll every 30 seconds while the panel is mounted; fire toast if a form becomes COMPLETED
+  const lastSeenStatusRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    const poll = setInterval(async () => {
+      try {
+        const data = await apiGet<{ requests: ContactFormRequest[]; templates: ContactFormTemplateOption[] }>(`/crm/contacts/${contactId}/forms`);
+        for (const req of (data.requests || [])) {
+          const prev = lastSeenStatusRef.current[req.id];
+          if (prev && prev !== "COMPLETED" && req.status === "COMPLETED") {
+            onToast?.("ok", `Form completed: "${req.formName || "Form"}" was signed and submitted.`);
+          }
+          lastSeenStatusRef.current[req.id] = req.status;
+        }
+        setRequests(data.requests || []);
+        setTemplates(data.templates || []);
+      } catch { /* silent — polling errors should not interrupt the UI */ }
+    }, 30_000);
+    return () => clearInterval(poll);
+  }, [contactId, onToast]);
+
+  // Seed lastSeenStatus after initial load so we don't false-fire on mount
+  useEffect(() => {
+    for (const req of requests) {
+      if (!lastSeenStatusRef.current[req.id]) {
+        lastSeenStatusRef.current[req.id] = req.status;
+      }
+    }
+  }, [requests]);
+
+  // Rewrite the signing URL's origin to match the portal's current origin so it
+  // works on localhost in dev (API falls back to the production domain otherwise).
+  const localiseFormUrl = (url: string) => {
+    if (!url || typeof window === "undefined") return url;
+    try {
+      const parsed = new URL(url);
+      parsed.protocol = window.location.protocol;
+      parsed.host = window.location.host;
+      return parsed.toString();
+    } catch { return url; }
+  };
+
   const sendForm = async () => {
     if (!templateId) {
       setError("Choose a form template before sending.");
@@ -1336,13 +1383,19 @@ function ContactFormsPanel({
     setWorking("send");
     setError(null);
     try {
-      await apiPost(`/crm/contacts/${contactId}/forms/send`, {
+      const result = await apiPost<{ publicUrl?: string; emailSent?: boolean }>(`/crm/contacts/${contactId}/forms/send`, {
         formTemplateId: templateId,
         recipientEmail: recipientEmail.trim(),
         message: message.trim() || undefined,
       });
-      setSendingOpen(false);
       setMessage("");
+      setSentLink({ url: localiseFormUrl(result.publicUrl || ""), emailSent: result.emailSent !== false });
+      setSendingOpen(false);
+      if (result.emailSent !== false) {
+        onToast?.("ok", "Form sent — email delivered to recipient.");
+      } else {
+        onToast?.("ok", "Form link generated — copy the link below to share manually (no email sender configured).");
+      }
       await load();
       onActivity();
     } catch (err: any) {
@@ -1352,13 +1405,33 @@ function ContactFormsPanel({
     }
   };
 
+  const copyLink = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      setError("Unable to copy — please copy the link manually.");
+    }
+  };
+
   const action = async (requestId: string, kind: "resend" | "revoke") => {
     setWorking(`${kind}:${requestId}`);
     setError(null);
     try {
-      await apiPost(`/crm/forms/requests/${requestId}/${kind}`, {});
+      const result = await apiPost<{ publicUrl?: string; emailSent?: boolean }>(`/crm/forms/requests/${requestId}/${kind}`, {});
       await load();
       onActivity();
+      if (kind === "resend") {
+        if (result?.publicUrl) {
+          setSentLink({ url: localiseFormUrl(result.publicUrl), emailSent: result.emailSent !== false });
+          if (result.emailSent !== false) {
+            onToast?.("ok", "Reminder sent — email delivered to recipient.");
+          } else {
+            onToast?.("ok", "Link regenerated — copy it below to share manually (no email sender configured).");
+          }
+        }
+      }
     } catch (err: any) {
       setError(err?.message || `Failed to ${kind} form.`);
     } finally {
@@ -1383,14 +1456,37 @@ function ContactFormsPanel({
 
       {error ? <div className="mb-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-200">{error}</div> : null}
 
+      {sentLink ? (
+        <div className="mb-4 rounded-xl border border-crm-border/70 bg-crm-surface p-3">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-crm-muted">
+            {sentLink.emailSent ? "Form sent — copy link to share again" : "No email sender configured — copy link to share manually"}
+          </p>
+          <div className="flex items-center gap-2">
+            <input readOnly value={sentLink.url} className={cn(crm.input, "flex-1 truncate text-xs")} onFocus={(e) => e.target.select()} />
+            <button type="button" onClick={() => copyLink(sentLink.url)} className={crm.btnSecondary}>
+              {linkCopied ? "Copied!" : "Copy"}
+            </button>
+          </div>
+          <button type="button" onClick={() => { setSentLink(null); setSendingOpen(true); }} className="mt-2 text-xs text-crm-accent underline underline-offset-2">
+            Send another form
+          </button>
+        </div>
+      ) : null}
+
       {sendingOpen ? (
         <div className="mb-4 rounded-xl border border-crm-border/70 bg-crm-surface p-3">
           <div className="grid gap-3 md:grid-cols-2">
             <label className="text-xs font-semibold uppercase tracking-wide text-crm-muted">
               Form
-              <select value={templateId} onChange={(e) => setTemplateId(e.target.value)} className={cn(crm.input, "mt-1")}>
-                {templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
-              </select>
+              <ConnectSelect
+                value={templateId}
+                onChange={(value) => setTemplateId(value)}
+                className={cn("mt-1")}
+                options={templates.map((t) => ({
+                  value: t.id,
+                  label: t.status === "DRAFT" ? `${t.name} (Draft — will activate on send)` : t.name,
+                }))}
+              />
             </label>
             <label className="text-xs font-semibold uppercase tracking-wide text-crm-muted">
               Recipient email
@@ -1404,14 +1500,32 @@ function ContactFormsPanel({
               {working === "send" ? "Sending…" : "Send secure link"}
             </button>
           </div>
-          {!templates.length ? <p className="mt-2 text-xs text-crm-muted">Create and activate a form template from CRM Forms first.</p> : null}
+          {!templates.length ? (
+            <p className="mt-2 text-xs text-crm-muted">
+              No form templates found.{" "}
+              <a href="/crm/forms" className="text-crm-accent underline underline-offset-2">Upload one in CRM → Forms</a>.
+            </p>
+          ) : null}
         </div>
       ) : null}
 
       {loading ? (
         <LoadingSkeleton rows={2} />
       ) : requests.length === 0 ? (
-        <p className="px-2 py-3 text-center text-sm text-crm-muted">No forms have been sent to this contact yet.</p>
+        <div className="px-2 py-3 text-center">
+          <p className="text-sm text-crm-muted">No forms have been sent to this contact yet.</p>
+          {!loading && templates.length === 0 ? (
+            <p className="mt-1 text-xs text-crm-muted">
+              No active form templates found.{" "}
+              <a href="/crm/forms" className="text-crm-accent underline underline-offset-2">
+                Go to CRM → Forms
+              </a>{" "}
+              to upload and activate a template first.
+            </p>
+          ) : templates.length > 0 && !disabled ? (
+            <p className="mt-1 text-xs text-crm-muted">Click <strong>Send Form</strong> above to send a form to this contact.</p>
+          ) : null}
+        </div>
       ) : (
         <div className="space-y-3">
           {requests.map((request) => (
@@ -2783,6 +2897,7 @@ function CrmContactDetailInner() {
                 defaultEmail={primaryEmailRow?.email ?? null}
                 disabled={isArchived}
                 onActivity={() => { void loadTimeline(); }}
+                onToast={showWorkspaceToast}
               />
             ) : workspaceTab === "discoveries" ? (
               <ContactDiscoveries contactId={id} />
@@ -2955,15 +3070,12 @@ function CrmContactDetailInner() {
             <div>
               <label style={labelStyle}>Stage</label>
               {editing ? (
-                <select
+                <ConnectSelect
                   value={editStage}
-                  onChange={(e) => setEditStage(e.target.value as CrmStage)}
-                  style={inputStyle}
-                >
-                  {STAGE_OPTIONS.map((s) => (
-                    <option key={s.value} value={s.value}>{s.label}</option>
-                  ))}
-                </select>
+                  onChange={(value) => setEditStage(value as CrmStage)}
+                  style={{ width: "100%" }}
+                  options={STAGE_OPTIONS.map((s) => ({ value: s.value, label: s.label }))}
+                />
               ) : (
                 <span style={{
                   display: "inline-block",
@@ -3261,15 +3373,12 @@ function CrmContactDetailInner() {
                     onKeyDown={(e) => { if (e.key === "Enter") handleAddPhone(); if (e.key === "Escape") { setAddingPhone(false); setNewPhoneRaw(""); } }}
                     style={{ ...inputStyle, flex: 1, fontSize: "0.8125rem" }}
                   />
-                  <select
+                  <ConnectSelect
                     value={newPhoneType}
-                    onChange={(e) => setNewPhoneType(e.target.value)}
-                    style={{ ...inputStyle, width: "auto", fontSize: "0.8125rem" }}
-                  >
-                    {CRM_PHONE_TYPE_OPTIONS.map((type) => (
-                      <option key={type} value={type}>{phoneTypeLabel(type)}</option>
-                    ))}
-                  </select>
+                    onChange={(value) => setNewPhoneType(value)}
+                    size="sm"
+                    options={CRM_PHONE_TYPE_OPTIONS.map((type) => ({ value: type, label: phoneTypeLabel(type) }))}
+                  />
                 </div>
                 <div style={{ display: "flex", gap: "0.375rem" }}>
                   <button
@@ -3334,15 +3443,16 @@ function CrmContactDetailInner() {
                     onKeyDown={(e) => { if (e.key === "Enter") handleAddEmail(); if (e.key === "Escape") { setAddingEmail(false); setNewEmailAddress(""); } }}
                     style={{ ...inputStyle, flex: 1, fontSize: "0.8125rem" }}
                   />
-                  <select
+                  <ConnectSelect
                     value={newEmailType}
-                    onChange={(e) => setNewEmailType(e.target.value as typeof newEmailType)}
-                    style={{ ...inputStyle, width: "auto", fontSize: "0.8125rem" }}
-                  >
-                    <option value="WORK">Work</option>
-                    <option value="PERSONAL">Personal</option>
-                    <option value="OTHER">Other</option>
-                  </select>
+                    onChange={(value) => setNewEmailType(value as typeof newEmailType)}
+                    size="sm"
+                    options={[
+                      { value: "WORK", label: "Work" },
+                      { value: "PERSONAL", label: "Personal" },
+                      { value: "OTHER", label: "Other" },
+                    ]}
+                  />
                 </div>
                 <div style={{ display: "flex", gap: "0.375rem" }}>
                   <button
