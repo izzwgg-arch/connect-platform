@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { CRM_EMAIL_MERGE_FIELDS, CRM_EMAIL_TEMPLATE_CATEGORIES } from "@connect/shared";
 import { crm, cn } from "../..";
+import { ConnectSelect } from "../../../ConnectSelect";
 import type { BuilderBlock, BuilderEditor, EditorState, SaveState } from "./types";
 
 export function EmailBuilderCanvas({
@@ -101,24 +102,24 @@ export function EmailBuilderCanvas({
           </label>
           <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
             Category
-            <select
-              className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2.5 text-sm normal-case tracking-normal text-slate-900 outline-none transition focus:border-blue-300"
+            <ConnectSelect
+              className="mt-1 w-full"
               value={editorState.category}
-              onChange={(e) => onChange({ category: e.target.value })}
-            >
-              {CRM_EMAIL_TEMPLATE_CATEGORIES.map((cat) => <option key={cat}>{cat}</option>)}
-            </select>
+              onChange={(value) => onChange({ category: value })}
+              options={CRM_EMAIL_TEMPLATE_CATEGORIES.map((cat) => ({ value: cat, label: cat }))}
+            />
           </label>
           <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
             Visibility
-            <select
-              className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2.5 text-sm normal-case tracking-normal text-slate-900 outline-none"
+            <ConnectSelect
+              className="mt-1 w-full"
               value={editorState.visibility}
-              onChange={(e) => onChange({ visibility: e.target.value as "SHARED" | "PRIVATE" })}
-            >
-              <option value="SHARED">Shared</option>
-              <option value="PRIVATE">Private</option>
-            </select>
+              onChange={(value) => onChange({ visibility: value as "SHARED" | "PRIVATE" })}
+              options={[
+                { value: "SHARED", label: "Shared" },
+                { value: "PRIVATE", label: "Private" },
+              ]}
+            />
           </label>
           <label className="lg:col-span-3 text-xs font-bold uppercase tracking-wide text-slate-500">
             Subject Line

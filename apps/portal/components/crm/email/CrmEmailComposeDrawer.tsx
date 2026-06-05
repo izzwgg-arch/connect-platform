@@ -7,6 +7,7 @@ import { htmlToCrmPlainText, renderCrmMergeTemplate } from "@connect/shared";
 import { apiGet, apiPost } from "../../../services/apiClient";
 import { crm } from "../crmClasses";
 import { cn } from "../cn";
+import { ConnectSelect } from "../../ConnectSelect";
 
 type Sender = {
   id: string;
@@ -218,21 +219,16 @@ export function CrmEmailComposeDrawer({
               {senders.length > 1 ? (
                 <div>
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-crm-muted">Send from</label>
-                  <select
+                  <ConnectSelect
                     value={senderId}
-                    onChange={(e) => setSenderId(e.target.value)}
-                    className={crm.select}
-                  >
-                    {senders.map((s) => {
+                    onChange={(value) => setSenderId(value)}
+                    className="w-full"
+                    options={senders.map((s) => {
                       const display = s.label || s.senderName || s.displayName || s.emailAddress;
                       const tag = s.scope === "USER" ? "My email" : s.isDefaultForTenant ? "Shared (default)" : "Shared";
-                      return (
-                        <option key={s.id} value={s.id}>
-                          {tag} — {display} &lt;{s.emailAddress}&gt;
-                        </option>
-                      );
+                      return { value: s.id, label: `${tag} — ${display} <${s.emailAddress}>` };
                     })}
-                  </select>
+                  />
                 </div>
               ) : (
                 <div className="rounded-crm border border-crm-border/70 bg-crm-surface-2/40 px-3 py-2 text-xs text-crm-muted">
@@ -250,19 +246,19 @@ export function CrmEmailComposeDrawer({
                 <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-crm-muted">
                   Template
                 </label>
-                <select
+                <ConnectSelect
                   value={templateId}
-                  onChange={(e) => applyTemplate(e.target.value)}
+                  onChange={(value) => applyTemplate(value)}
                   disabled={templatesLoading}
-                  className={crm.select}
-                >
-                  <option value="">— None —</option>
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}{t.visibility === "PRIVATE" ? " (private)" : ""}
-                    </option>
-                  ))}
-                </select>
+                  className="w-full"
+                  options={[
+                    { value: "", label: "— None —" },
+                    ...templates.map((t) => ({
+                      value: t.id,
+                      label: `${t.name}${t.visibility === "PRIVATE" ? " (private)" : ""}`,
+                    })),
+                  ]}
+                />
                 <p className="mt-1 text-[11px] text-crm-muted">
                   <FileText className="mr-1 inline h-3 w-3" />
                   <Link href="/crm/email/templates" className="text-crm-accent hover:underline" onClick={onClose}>

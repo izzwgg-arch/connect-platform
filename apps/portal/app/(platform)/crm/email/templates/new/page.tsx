@@ -60,6 +60,7 @@ import {
 } from "@connect/shared";
 import { CRMPageShell, cn } from "../../../../../../components/crm";
 import { PermissionGate } from "../../../../../../components/PermissionGate";
+import { ConnectSelect } from "../../../../../../components/ConnectSelect";
 import {
   apiDelete,
   apiGet,
@@ -726,25 +727,27 @@ export default function CrmEmailTemplateBuilderPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <label className="block text-[11px] font-black uppercase tracking-wide text-slate-400">
                       Category
-                      <select
-                        className="mt-2 h-10 w-full rounded-2xl border border-slate-200 bg-white px-3 text-sm normal-case tracking-normal text-slate-800 outline-none focus:border-blue-300"
+                      <ConnectSelect
+                        className="mt-2 w-full normal-case tracking-normal"
                         value={editorState?.category || "Custom"}
-                        onChange={(event) => updateEditor({ category: event.target.value })}
-                      >
-                        {CRM_EMAIL_TEMPLATE_CATEGORIES.map((category) => <option key={category}>{category}</option>)}
-                        <option>Custom</option>
-                      </select>
+                        onChange={(value) => updateEditor({ category: value })}
+                        options={[
+                          ...CRM_EMAIL_TEMPLATE_CATEGORIES.map((category) => ({ value: category, label: category })),
+                          { value: "Custom", label: "Custom" },
+                        ]}
+                      />
                     </label>
                     <label className="block text-[11px] font-black uppercase tracking-wide text-slate-400">
                       Visibility
-                      <select
-                        className="mt-2 h-10 w-full rounded-2xl border border-slate-200 bg-white px-3 text-sm normal-case tracking-normal text-slate-800 outline-none focus:border-blue-300"
+                      <ConnectSelect
+                        className="mt-2 w-full normal-case tracking-normal"
                         value={editorState?.visibility || "SHARED"}
-                        onChange={(event) => updateEditor({ visibility: event.target.value as "SHARED" | "PRIVATE" })}
-                      >
-                        <option value="SHARED">Shared</option>
-                        <option value="PRIVATE">Private</option>
-                      </select>
+                        onChange={(value) => updateEditor({ visibility: value as "SHARED" | "PRIVATE" })}
+                        options={[
+                          { value: "SHARED", label: "Shared" },
+                          { value: "PRIVATE", label: "Private" },
+                        ]}
+                      />
                     </label>
                   </div>
 

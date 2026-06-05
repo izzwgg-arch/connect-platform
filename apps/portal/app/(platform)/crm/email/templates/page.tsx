@@ -5,7 +5,6 @@ import {
   Archive,
   BarChart3,
   CalendarClock,
-  ChevronDown,
   Copy,
   Edit3,
   Eye,
@@ -34,6 +33,7 @@ import {
 } from "@connect/shared";
 import { CRMPageShell, cn } from "../../../../../components/crm";
 import { PermissionGate } from "../../../../../components/PermissionGate";
+import { ConnectSelect } from "../../../../../components/ConnectSelect";
 import { apiGet, apiPost, apiPut } from "../../../../../services/apiClient";
 import {
   editorFromTemplate,
@@ -425,21 +425,29 @@ export default function CrmEmailTemplatesPage() {
               />
             </label>
             <label className="relative block">
-              <select className="h-11 w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50 px-3 pr-9 text-sm font-bold text-slate-700 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-100" value={category} onChange={(event) => setCategory(event.target.value)}>
-                <option value="All">All categories</option>
-                {CRM_EMAIL_TEMPLATE_CATEGORIES.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
-                <option value="Marketing">Marketing</option>
-                <option value="More">More</option>
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <ConnectSelect
+                className="w-full"
+                value={category}
+                onChange={(value) => setCategory(value)}
+                options={[
+                  { value: "All", label: "All categories" },
+                  ...CRM_EMAIL_TEMPLATE_CATEGORIES.map((cat) => ({ value: cat, label: cat })),
+                  { value: "Marketing", label: "Marketing" },
+                  { value: "More", label: "More" },
+                ]}
+              />
             </label>
             <label className="relative block">
-              <select className="h-11 w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50 px-3 pr-9 text-sm font-bold text-slate-700 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-100" value={sortKey} onChange={(event) => setSortKey(event.target.value as SortKey)}>
-                <option value="updated">Last Modified</option>
-                <option value="name">Name A-Z</option>
-                <option value="usage">Most Used</option>
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <ConnectSelect
+                className="w-full"
+                value={sortKey}
+                onChange={(value) => setSortKey(value as SortKey)}
+                options={[
+                  { value: "updated", label: "Last Modified" },
+                  { value: "name", label: "Name A-Z" },
+                  { value: "usage", label: "Most Used" },
+                ]}
+              />
             </label>
             <div className="flex rounded-2xl border border-slate-200 bg-slate-50 p-1">
               <button type="button" className={cn("rounded-xl px-3 py-2 text-slate-500", viewMode === "grid" && "bg-white text-blue-700 shadow-sm")} onClick={() => setViewMode("grid")} title="Grid view">
@@ -721,10 +729,15 @@ export default function CrmEmailTemplatesPage() {
                 </label>
                 <label className="block">
                   <span className="text-xs font-black uppercase tracking-wide text-slate-400">Category</span>
-                  <select className="mt-2 h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-800 outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-100" value={composerState.category} onChange={(event) => setComposerState((cur) => cur ? { ...cur, category: event.target.value } : cur)}>
-                    {CRM_EMAIL_TEMPLATE_CATEGORIES.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
-                    <option value="Marketing">Marketing</option>
-                  </select>
+                  <ConnectSelect
+                    className="mt-2 w-full"
+                    value={composerState.category}
+                    onChange={(value) => setComposerState((cur) => cur ? { ...cur, category: value } : cur)}
+                    options={[
+                      ...CRM_EMAIL_TEMPLATE_CATEGORIES.map((cat) => ({ value: cat, label: cat })),
+                      { value: "Marketing", label: "Marketing" },
+                    ]}
+                  />
                 </label>
                 <label className="block sm:col-span-2">
                   <span className="text-xs font-black uppercase tracking-wide text-slate-400">Subject</span>

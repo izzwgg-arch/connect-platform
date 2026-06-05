@@ -14,6 +14,7 @@ import {
 import { apiGet, apiPost } from "../../../services/apiClient";
 import { crm } from "../crmClasses";
 import { cn } from "../cn";
+import { ConnectSelect } from "../../ConnectSelect";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -352,19 +353,18 @@ export function BulkEmailModal({
               ) : tags.length === 0 ? (
                 <p className="text-xs text-crm-muted">No tags found for this tenant.</p>
               ) : (
-                <select
+                <ConnectSelect
                   value={localTagId}
-                  onChange={(e) => {
-                    setLocalTagId(e.target.value);
-                    if (!e.target.value) setSendToAllWithTag(false);
+                  onChange={(value) => {
+                    setLocalTagId(value);
+                    if (!value) setSendToAllWithTag(false);
                   }}
-                  className={crm.select}
-                >
-                  <option value="">No tag filter — all recipients</option>
-                  {tags.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
-                  ))}
-                </select>
+                  className="w-full"
+                  options={[
+                    { value: "", label: "No tag filter — all recipients" },
+                    ...tags.map((t) => ({ value: t.id, label: t.name })),
+                  ]}
+                />
               )}
 
               {/* Scope toggle — only for CONTACTS and FUNDERS where "all with tag" makes sense */}
@@ -405,18 +405,13 @@ export function BulkEmailModal({
                 first.
               </p>
             ) : (
-              <select
+              <ConnectSelect
                 value={templateId}
-                onChange={(e) => setTemplateId(e.target.value)}
-                className={crm.select}
-              >
-                <option value="">Choose template…</option>
-                {templates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name} — {t.subject}
-                  </option>
-                ))}
-              </select>
+                onChange={(value) => setTemplateId(value)}
+                className="w-full"
+                placeholder="Choose template…"
+                options={templates.map((t) => ({ value: t.id, label: `${t.name} — ${t.subject}` }))}
+              />
             )}
 
             {selectedTemplate && (
@@ -454,21 +449,16 @@ export function BulkEmailModal({
                 .
               </div>
             ) : (
-              <select
+              <ConnectSelect
                 value={senderId}
-                onChange={(e) => setSenderId(e.target.value)}
-                className={crm.select}
-              >
-                <option value="">Choose sender…</option>
-                {connectedSenders.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.label || s.displayName || s.emailAddress}
-                    {s.scope === "TENANT" ? " (shared)" : ""}
-                    {" — "}
-                    {s.emailAddress}
-                  </option>
-                ))}
-              </select>
+                onChange={(value) => setSenderId(value)}
+                className="w-full"
+                placeholder="Choose sender…"
+                options={connectedSenders.map((s) => ({
+                  value: s.id,
+                  label: `${s.label || s.displayName || s.emailAddress}${s.scope === "TENANT" ? " (shared)" : ""} — ${s.emailAddress}`,
+                }))}
+              />
             )}
             {selectedSender && selectedSender.status !== "CONNECTED" && (
               <p className="mt-1 text-xs text-crm-danger">
