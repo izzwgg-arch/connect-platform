@@ -520,6 +520,49 @@ JS filter: `adb logcat ReactNativeJS:V *:S` then grep `CONNECT_CALL_UI`.
 
 ---
 
+---
+
+## P0 full WebRTC outage — inbound + outbound (2026-06-03/04)
+
+> Read-only forensics. See `WEBRTC_DIAGNOSTICS.md` for full tables. **Classification C.**
+
+### Symptom (inbound during outage)
+
+Push + ringtone + incoming UI succeed. User taps **Answer**. Call **never bridges**:
+
+| Pattern | Sessions | Terminal stage | Meaning |
+|---------|----------|----------------|---------|
+| A | `cfs_mpy8e90o_w4jcs`, `cfs_mpy93h0e_plt6v`, `cfs_mpywj2dq_73oi0` | `SIP_ANSWER_FAILED` / `session_not_found_timeout` | JsSIP poll exhausted (~8 s) — **no INVITE bound to UA session** (`apps/mobile/src/sip/jssip.ts` answer pipeline) |
+| B | `cfs_mpyedf6m_as7rm`, `cfs_mpyem66j_sfw8n` | `INVITE_CLAIMED` → `CALL_ENDED` | Backend accept succeeded; SIP answer never sent; call ended ~15 s later |
+
+**Not** the same as outbound `Incompatible SDP` / 488 — no `sdpReject` flag in flight data.
+
+Healthy baseline (pre-outage): `cfs_mpx4hgk7_armef`, `cfs_mpx5wsha_fxde2` (2026-06-02) show
+`SIP_ANSWER_SENT → SIP_CONNECTED → PBX_CALL_ANSWERED`.
+
+### Symptom (outbound during same window)
+
+`OUTBOUND_INVITE_SENT → OUTBOUND_FAILED` ~500 ms, `sipCause: Incompatible SDP` / flight flag
+`OUTBOUND_MEDIA_SDP_REJECTED`. Portal: `VoiceDiagEvent.endReason: Incompatible SDP`.
+
+### Onset vs deploys
+
+First inbound fail **2026-06-03 15:38 UTC** — **before** portal deploy `0f86e753` (16:40) and
+api deploy `9e61f7f2` (17:05). Deploys did **not** start the outage.
+
+### Recovery (2026-06-04 ~10:44 UTC)
+
+Mobile outbound `cfs_mpzddtvd_4s3nl` (`OUTBOUND_CONNECTED`); portal outbound/inbound
+`VoiceDiagEvent` success. No APK/media deploy. Diagnostics deploys at 04:23–05:17 did not fix.
+
+### Inbound diagnostics gap
+
+Outbound 488 now posts to `/voice/diag/webrtc-sdp-debug`. **Inbound** answer failures still
+need: SIP answer status, PBX bridge/hangup cause, guard against false CONNECTED UI — **not yet
+shipped**.
+
+---
+
 ## Mobile answer reliability (2026-06-03)
 
 ### Symptom
