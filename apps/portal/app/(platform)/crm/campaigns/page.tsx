@@ -1,33 +1,42 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo, type ReactNode } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Activity,
   Archive,
   CalendarDays,
+  ChevronLeft,
+  ChevronRight,
   CheckCircle2,
   Clock3,
+  ExternalLink,
   FileUp,
   Filter,
-  Gauge,
   Grid2X2,
   ListOrdered,
   Megaphone,
-  Pause,
   PhoneCall,
   Plus,
   Search,
   Send,
   Target,
-  TrendingUp,
   Users,
   Zap,
 } from "lucide-react";
 import {
   CRMPageShell,
+  CRMPageHeader,
   CRMActionBar,
+  CRMWorkspaceShell,
+  CRMWorkspaceChrome,
+  CRMWorkspaceHeader,
+  CRMWorkspaceToolbar,
+  CRMWorkspaceBody,
+  CRMWorkspaceMain,
+  CRMWorkspaceScrollRegion,
+  CRMWorkspaceRightRail,
   CampaignGuidedEmpty,
   type CampaignListItem,
   type CampaignReportRow,
@@ -35,6 +44,7 @@ import {
 } from "../../../../components/crm";
 import { crm } from "../../../../components/crm/crmClasses";
 import { ConnectSelect } from "../../../../components/ConnectSelect";
+import { ViewportDropdown } from "../../../../components/ViewportDropdown";
 import { mk } from "../../../../components/crm/campaign/campaignCinemaClasses";
 import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../services/apiClient";
 import { CrmConfirmModal } from "../../../../components/crm/CrmConfirmModal";
@@ -44,15 +54,6 @@ import { useAppContext } from "../../../../hooks/useAppContext";
 import { cn } from "../../../../components/crm/cn";
 import { CAMPAIGN_PRIORITY_LABELS, CAMPAIGN_STATUS_LABELS } from "../../../../components/crm/campaign/campaignTypes";
 import { formatShortDate, queueHref } from "../../../../components/crm/campaign/campaignUtils";
-
-const STATUS_FILTER_OPTIONS: { value: string; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "ACTIVE", label: CAMPAIGN_STATUS_LABELS.ACTIVE },
-  { value: "PAUSED", label: CAMPAIGN_STATUS_LABELS.PAUSED },
-  { value: "DRAFT", label: CAMPAIGN_STATUS_LABELS.DRAFT },
-  { value: "COMPLETED", label: CAMPAIGN_STATUS_LABELS.COMPLETED },
-  { value: "ARCHIVED", label: CAMPAIGN_STATUS_LABELS.ARCHIVED },
-];
 
 type CampaignSort = "status" | "updated" | "name";
 type CampaignQuickFilter = "all" | CampaignStatus | "SCHEDULED";
@@ -147,13 +148,29 @@ function CampaignKpiTile({
   icon: ReactNode;
   tone: "blue" | "green" | "violet" | "orange" | "red" | "cyan";
 }) {
+  const accent = tone === "orange" ? "amber" : tone === "red" ? "rose" : tone;
+
   return (
-    <article className={cn("campaigns-kpi-card", `campaigns-kpi-${tone}`)}>
-      <div className="campaigns-kpi-icon">{icon}</div>
-      <p className="campaigns-kpi-label">{label}</p>
-      <p className="campaigns-kpi-value">{value}</p>
-      <p className="campaigns-kpi-trend">{trend}</p>
-    </article>
+    <div
+      className={cn(
+        crm.queueCountPill,
+        `crm-queue-kpi-${accent}`,
+        "relative overflow-hidden bg-crm-surface-2",
+      )}
+    >
+      <span className="flex w-full items-start justify-between gap-3">
+        <span className="min-w-0">
+          <span className="crm-queue-kpi-label block text-[10px] font-bold uppercase tracking-wide text-crm-muted">{label}</span>
+          <span className="crm-queue-kpi-value mt-1 block text-2xl font-bold tabular-nums leading-none tracking-tight text-crm-text">
+            {value}
+          </span>
+        </span>
+        <span className="crm-queue-kpi-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface/70 text-crm-accent">
+          {icon}
+        </span>
+      </span>
+      <span className="crm-queue-kpi-micro text-[10px] font-medium text-crm-muted">{trend}</span>
+    </div>
   );
 }
 
@@ -166,32 +183,201 @@ function CampaignStatusPill({ status }: { status: CampaignStatus }) {
   );
 }
 
-function CampaignHealthDonut({
-  healthy,
-  warning,
-  problem,
-}: {
-  healthy: number;
-  warning: number;
-  problem: number;
-}) {
-  const total = Math.max(healthy + warning + problem, 1);
-  const healthyPct = Math.round((healthy / total) * 100);
-  const warningPct = Math.round((warning / total) * 100);
+function CampaignDetailMetric({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="campaigns-health-donut-wrap">
-      <div
-        className="campaigns-health-donut"
-        style={{
-          background: `conic-gradient(#10b981 0 ${healthyPct}%, #f59e0b ${healthyPct}% ${healthyPct + warningPct}%, #ef4444 ${healthyPct + warningPct}% 100%)`,
-        }}
-      >
-        <div className="campaigns-health-donut-core">
-          <span>{healthyPct}%</span>
-          <small>healthy</small>
-        </div>
-      </div>
+    <div className="campaigns-detail-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {hint ? <small>{hint}</small> : null}
     </div>
+  );
+}
+
+function CampaignListDetailPanel({
+  campaign,
+  metrics,
+  rank,
+  total,
+  canQueue,
+  canManageCampaigns,
+  canGoPrevious,
+  canGoNext,
+  onPrevious,
+  onNext,
+  onOpen,
+  onEdit,
+  onDelete,
+}: {
+  campaign: CampaignListItem;
+  metrics?: CampaignReportRow | null;
+  rank: number;
+  total: number;
+  canQueue: boolean;
+  canManageCampaigns: boolean;
+  canGoPrevious: boolean;
+  canGoNext: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
+  onOpen: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const contacts = campaign.memberCount ?? metrics?.total ?? 0;
+  const contacted = metrics?.contacted ?? 0;
+  const converted = metrics?.converted ?? 0;
+  const callbacks = metrics?.callbacks ?? 0;
+  const pending = metrics?.pending ?? 0;
+  const dnc = metrics?.dnc ?? 0;
+  const totalAttempts = metrics?.totalAttempts ?? 0;
+  const conversionRate = metrics?.conversionRate ?? 0;
+  const campaignType = campaignTypeLabel(campaign);
+  const owner = campaignOwnerLabel(campaign);
+  const sparkTone = conversionRate >= 15 ? "green" : conversionRate >= 8 ? "blue" : campaign.status === "PAUSED" ? "orange" : "violet";
+
+  return (
+    <aside className="crm-queue-detail-panel crm-contact-detail-panel campaigns-detail-panel custom-scrollbar" aria-label="Campaign details">
+      <div className="crm-queue-detail-glow" aria-hidden />
+
+      <header className="crm-queue-detail-header">
+        <div className="flex flex-wrap items-center gap-2">
+          <CampaignStatusPill status={campaign.status} />
+          {campaign.status === "ARCHIVED" ? (
+            <span className="crm-queue-pill crm-queue-pill-warning inline-flex items-center gap-1">
+              <Archive className="h-3 w-3" />
+              Archived
+            </span>
+          ) : null}
+        </div>
+        <span className="crm-queue-detail-position tabular-nums">
+          {rank} <span className="text-crm-muted/60">/</span> {total}
+        </span>
+      </header>
+
+      <section className="crm-queue-detail-identity">
+        <div className={cn("crm-queue-detail-avatar campaigns-detail-icon", CAMPAIGN_STATUS_TONE[campaign.status])}>
+          <Megaphone className="h-5 w-5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 className="crm-queue-detail-name truncate">{campaign.name}</h2>
+          <p className="crm-queue-detail-sub truncate">
+            {campaignType} · {owner}
+          </p>
+        </div>
+      </section>
+
+      <section className="crm-queue-detail-contact-strip campaigns-detail-summary">
+        <p>{campaign.description?.trim() || "No campaign description yet."}</p>
+        <div className="crm-queue-detail-lines">
+          <div className="crm-queue-detail-line">
+            <CalendarDays className="h-3.5 w-3.5 shrink-0 text-crm-accent" />
+            <span>Updated {formatShortDate(campaign.updatedAt)}</span>
+          </div>
+          <div className="crm-queue-detail-line">
+            <Clock3 className="h-3.5 w-3.5 shrink-0 text-crm-accent" />
+            <span>Created {formatShortDate(campaign.createdAt)}</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="crm-queue-detail-actions-card">
+        <p className="crm-queue-detail-section-label">Campaign actions</p>
+        <button
+          type="button"
+          onClick={onOpen}
+          className={cn(crm.btnPrimary, "crm-queue-detail-primary-action w-full justify-center gap-2")}
+        >
+          <ExternalLink className="h-4 w-4" />
+          Open campaign
+        </button>
+        <div className="crm-queue-detail-action-grid">
+          {canQueue ? (
+            <Link href={queueHref(campaign.id)} className="crm-queue-detail-secondary-action">
+              <PhoneCall className="h-4 w-4" />
+              Queue
+            </Link>
+          ) : null}
+          {canManageCampaigns && campaign.status !== "ARCHIVED" ? (
+            <button type="button" onClick={onEdit} className="crm-queue-detail-secondary-action">
+              <Activity className="h-4 w-4" />
+              Edit
+            </button>
+          ) : null}
+          {canManageCampaigns && campaign.status !== "ARCHIVED" ? (
+            <button type="button" onClick={onDelete} className="crm-queue-detail-secondary-action crm-queue-detail-danger-action">
+              <Archive className="h-4 w-4" />
+              Delete
+            </button>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="crm-queue-detail-actions-card campaigns-detail-analytics">
+        <div className="campaigns-detail-section-head">
+          <p className="crm-queue-detail-section-label">Analytics</p>
+          <Sparkline seed={`${campaign.id}-${totalAttempts}`} tone={sparkTone} />
+        </div>
+        <div className="campaigns-detail-metric-grid">
+          <CampaignDetailMetric label="Contacts" value={formatNumber(contacts)} hint="Roster size" />
+          <CampaignDetailMetric label="Contacted" value={formatNumber(contacted)} hint={`${formatNumber(totalAttempts)} attempts`} />
+          <CampaignDetailMetric label="Converted" value={formatNumber(converted)} hint={`${formatPercent(conversionRate)} rate`} />
+          <CampaignDetailMetric label="Callbacks" value={formatNumber(callbacks)} hint="Waiting" />
+          <CampaignDetailMetric label="Queue" value={formatNumber(pending)} hint="Pending" />
+          <CampaignDetailMetric label="DNC" value={formatNumber(dnc)} hint="Do not call" />
+        </div>
+      </section>
+
+      <section className="crm-queue-detail-actions-card campaigns-detail-meta-card">
+        <p className="crm-queue-detail-section-label">Setup</p>
+        <dl>
+          <div>
+            <dt>Priority</dt>
+            <dd>{CAMPAIGN_PRIORITY_LABELS[campaign.priority]}</dd>
+          </div>
+          <div>
+            <dt>Script</dt>
+            <dd>{campaign.script?.name ?? "None assigned"}</dd>
+          </div>
+          <div>
+            <dt>Checklist</dt>
+            <dd>{campaign.checklist?.name ?? "None assigned"}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <footer className="crm-queue-detail-footer">
+        <button
+          type="button"
+          onClick={onPrevious}
+          disabled={!canGoPrevious}
+          className={cn(crm.btnSecondary, "crm-queue-detail-nav flex-1 justify-center gap-1.5")}
+        >
+          <ChevronLeft className="h-4 w-4" />
+          Previous
+        </button>
+        <button
+          type="button"
+          onClick={onNext}
+          disabled={!canGoNext}
+          className={cn(crm.btnSecondary, "crm-queue-detail-nav flex-1 justify-center gap-1.5")}
+        >
+          Next
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      </footer>
+    </aside>
+  );
+}
+
+function CampaignListDetailPlaceholder() {
+  return (
+    <aside className="crm-queue-detail-panel crm-contact-detail-panel crm-queue-detail-placeholder campaigns-detail-panel custom-scrollbar" aria-label="Campaign details">
+      <div className="crm-queue-detail-glow" aria-hidden />
+      <div className="crm-queue-detail-placeholder-icon">
+        <Megaphone size={22} />
+      </div>
+      <h2>Select a campaign</h2>
+      <p>Choose a campaign row to review analytics, setup details, and campaign actions.</p>
+    </aside>
   );
 }
 
@@ -333,6 +519,9 @@ export default function CampaignsPage() {
   const [editingCampaign, setEditingCampaign] = useState<CampaignListItem | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CampaignListItem | null>(null);
   const [deleteWorking, setDeleteWorking] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
+  const filtersButtonRef = useRef<HTMLButtonElement>(null);
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
 
@@ -360,19 +549,6 @@ export default function CampaignsPage() {
   useEffect(() => {
     void load();
   }, [load]);
-
-  async function handleQuickStatus(id: string, status: CampaignStatus, e: React.MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    try {
-      await apiPatch(`/crm/campaigns/${id}`, { status }, token);
-      setCampaigns((prev) => prev.map((c) => (c.id === id ? { ...c, status } : c)));
-      setToast({ kind: "ok", text: "Campaign updated" });
-    } catch (err: unknown) {
-      setToast({ kind: "err", text: (err as Error)?.message ?? "Update failed" });
-      void load();
-    }
-  }
 
   async function handleSaveCampaignEdit(data: {
     name: string;
@@ -518,27 +694,41 @@ export default function CampaignsPage() {
     return Array.from(owners).sort((a, b) => a.localeCompare(b));
   }, [campaigns]);
 
-  const topCampaigns = useMemo(() => {
-    return campaigns
-      .map((campaign) => ({
-        campaign,
-        metrics: reportById.get(campaign.id),
-      }))
-      .sort((a, b) => (b.metrics?.conversionRate ?? 0) - (a.metrics?.conversionRate ?? 0))
-      .slice(0, 5);
-  }, [campaigns, reportById]);
-
-  const recentActivity = useMemo(() => {
-    return [...campaigns]
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-      .slice(0, 4);
-  }, [campaigns]);
-
   const listEmptyNoCampaigns = !loading && !error && campaigns.length === 0;
   const listEmptyAfterFilter = !loading && !error && campaigns.length > 0 && filtered.length === 0;
+  const hasActiveFilters = search !== "" || statusFilter !== "all" || typeFilter !== "all" || ownerFilter !== "all" || dateFilter !== "all";
+
+  useEffect(() => {
+    if (filtered.length === 0) {
+      if (selectedCampaignId !== null) setSelectedCampaignId(null);
+      return;
+    }
+    if (!selectedCampaignId || !filtered.some((campaign) => campaign.id === selectedCampaignId)) {
+      setSelectedCampaignId(filtered[0].id);
+    }
+  }, [filtered, selectedCampaignId]);
+
+  const activeCampaignIndex = useMemo(() => {
+    if (!selectedCampaignId) return -1;
+    return filtered.findIndex((campaign) => campaign.id === selectedCampaignId);
+  }, [filtered, selectedCampaignId]);
+
+  const activeCampaign = activeCampaignIndex >= 0 ? filtered[activeCampaignIndex] : null;
+
+  function resetFilters() {
+    setSearch("");
+    setStatusFilter("all");
+    setTypeFilter("all");
+    setOwnerFilter("all");
+    setDateFilter("all");
+    setFiltersOpen(false);
+  }
 
   return (
-    <CRMPageShell innerClassName={cn(mk.pageInner, mk.workspace)}>
+    <CRMPageShell
+      className={cn("campaigns-page-shell", crm.queueWorkspace)}
+      innerClassName={cn(crm.pageInnerQueue, mk.workspace, "campaigns-page-inner")}
+    >
       {toast ? (
         <div
           className={cn(
@@ -591,24 +781,19 @@ export default function CampaignsPage() {
         />
       )}
 
-      <header className="campaigns-overview-hero">
-            <div className="campaigns-hero-copy">
-              <div className="campaigns-hero-icon">
-                <Megaphone className="h-7 w-7" />
-              </div>
-              <div>
-                <p className="campaigns-eyebrow">CRM outreach command center</p>
-                <h1>Campaigns</h1>
-                <p>Create, manage, and analyze outbound programs with live operational context.</p>
-              </div>
-            </div>
-            <div className="campaigns-hero-actions">
+      <CRMWorkspaceShell className="campaigns-workspace-shell">
+        <CRMWorkspaceChrome>
+          <CRMWorkspaceHeader>
+            <CRMPageHeader
+              compact
+              className={cn(crm.contactsHeaderPanel, "campaigns-command-header")}
+              icon={<Megaphone className="h-6 w-6" aria-hidden />}
+              title="Campaigns"
+              subtitle="Create, manage, and analyze outbound programs with live operational context."
+              actions={
+                <div className="campaigns-hero-actions">
               {canQueue && (
                 <>
-                  <Link href="/crm/queue?mode=power" className="campaigns-btn-secondary">
-                    <Zap className="h-4 w-4" />
-                    Power mode
-                  </Link>
                   <Link href="/crm/queue" className="campaigns-btn-secondary">
                     <ListOrdered className="h-4 w-4" />
                     Queue
@@ -643,17 +828,21 @@ export default function CampaignsPage() {
                   New Campaign
                 </button>
               )}
-            </div>
-          </header>
+                </div>
+              }
+            />
+          </CRMWorkspaceHeader>
+
+          <CRMWorkspaceToolbar className="flex flex-col gap-3">
 
           {!loading && !error && campaigns.length > 0 ? (
-            <section className="campaigns-kpi-grid" aria-label="Campaign metrics">
-              <CampaignKpiTile label="Total Campaigns" value={formatNumber(campaigns.length)} trend="+ across all statuses" tone="blue" icon={<CalendarDays className="h-5 w-5" />} />
-              <CampaignKpiTile label="Active Campaigns" value={formatNumber(summary.active)} trend={summary.paused > 0 ? `${summary.paused} paused` : "All live programs clear"} tone="violet" icon={<Zap className="h-5 w-5" />} />
-              <CampaignKpiTile label="Total Contacts" value={formatNumber(summary.members)} trend="Across campaign rosters" tone="green" icon={<Users className="h-5 w-5" />} />
-              <CampaignKpiTile label="Contacted" value={formatNumber(summary.contacted)} trend={`${formatNumber(summary.attempts)} total attempts`} tone="cyan" icon={<Send className="h-5 w-5" />} />
-              <CampaignKpiTile label="Converted" value={formatNumber(summary.converted)} trend={`${summary.callbacks} callbacks waiting`} tone="orange" icon={<CheckCircle2 className="h-5 w-5" />} />
-              <CampaignKpiTile label="Conversion Rate" value={formatPercent(summary.avgConversionRate)} trend="Average by campaign" tone="red" icon={<Target className="h-5 w-5" />} />
+            <section className="crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-3 xl:grid-cols-6" aria-label="Campaign metrics">
+              <CampaignKpiTile label="Total Campaigns" value={formatNumber(campaigns.length)} trend="+ across all statuses" tone="blue" icon={<CalendarDays className="h-4 w-4" />} />
+              <CampaignKpiTile label="Active Campaigns" value={formatNumber(summary.active)} trend={summary.paused > 0 ? `${summary.paused} paused` : "All live programs clear"} tone="violet" icon={<Zap className="h-4 w-4" />} />
+              <CampaignKpiTile label="Total Contacts" value={formatNumber(summary.members)} trend="Across campaign rosters" tone="green" icon={<Users className="h-4 w-4" />} />
+              <CampaignKpiTile label="Contacted" value={formatNumber(summary.contacted)} trend={`${formatNumber(summary.attempts)} total attempts`} tone="cyan" icon={<Send className="h-4 w-4" />} />
+              <CampaignKpiTile label="Converted" value={formatNumber(summary.converted)} trend={`${summary.callbacks} callbacks waiting`} tone="orange" icon={<CheckCircle2 className="h-4 w-4" />} />
+              <CampaignKpiTile label="Conversion Rate" value={formatPercent(summary.avgConversionRate)} trend="Average by campaign" tone="red" icon={<Target className="h-4 w-4" />} />
             </section>
           ) : null}
 
@@ -669,16 +858,6 @@ export default function CampaignsPage() {
               aria-label="Search campaigns"
             />
           </div>
-          <ConnectSelect
-            value={statusFilter}
-            onChange={(value) => setStatusFilter(value as CampaignQuickFilter)}
-            className="campaigns-select"
-            size="sm"
-            options={[
-              ...STATUS_FILTER_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label })),
-              { value: "SCHEDULED", label: "Scheduled" },
-            ]}
-          />
           <ConnectSelect
             value={typeFilter}
             onChange={(value) => setTypeFilter(value as CampaignTypeFilter)}
@@ -696,51 +875,79 @@ export default function CampaignsPage() {
               ...ownerOptions.map((owner) => ({ value: owner, label: owner })),
             ]}
           />
-          <ConnectSelect
-            value={dateFilter}
-            onChange={(value) => setDateFilter(value)}
-            className="campaigns-select"
-            size="sm"
-            options={[
-              { value: "all", label: "Date range" },
-              { value: "7d", label: "Last 7 days" },
-              { value: "30d", label: "Last 30 days" },
-              { value: "90d", label: "Last 90 days" },
-            ]}
-          />
-          <button type="button" className="campaigns-filter-button" aria-label="Open filters">
+          <button
+            ref={filtersButtonRef}
+            type="button"
+            onClick={() => setFiltersOpen((open) => !open)}
+            className={cn("campaigns-filter-button campaigns-filter-button-selectlike", statusFilter !== "all" && "campaigns-filter-button-active")}
+            aria-label="Open campaign filters"
+            aria-haspopup="dialog"
+            aria-expanded={filtersOpen}
+          >
             <Filter className="h-4 w-4" />
             Filters
           </button>
         </div>
-        <div className="campaigns-quick-pills" role="group" aria-label="Quick campaign filters">
-          {QUICK_FILTER_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => setStatusFilter(opt.value)}
-              className={cn("campaigns-quick-pill", statusFilter === opt.value && "campaigns-quick-pill-active")}
-            >
-              {opt.label}
-              <span>{campaignCountForFilter(campaigns, opt.value)}</span>
-            </button>
-          ))}
-          <button
-            type="button"
-            className="campaigns-clear-filters"
-            onClick={() => {
-              setSearch("");
-              setStatusFilter("all");
-              setTypeFilter("all");
-              setOwnerFilter("all");
-              setDateFilter("all");
-            }}
-          >
-            Clear filters
-          </button>
-        </div>
       </CRMActionBar>
+      <ViewportDropdown
+        open={filtersOpen}
+        triggerRef={filtersButtonRef}
+        onClose={() => setFiltersOpen(false)}
+        width={340}
+        sideOffset={8}
+        className="campaigns-filter-dropdown contacts-filter-panel"
+      >
+        <div className="contacts-filter-panel-inner" role="dialog" aria-label="Campaign filters">
+          <div className="contacts-filter-panel-head">
+            <div>
+              <p className="text-sm font-bold text-crm-text">Filters</p>
+              <p className="text-xs text-crm-muted">Campaign status and saved views</p>
+            </div>
+            <button type="button" onClick={resetFilters} className="contacts-filter-reset" disabled={!hasActiveFilters}>
+              Reset
+            </button>
+          </div>
+          <div className="campaigns-filter-panel-section">
+            <span className="campaigns-filter-panel-label">Date range</span>
+            <ConnectSelect
+              value={dateFilter}
+              onChange={(value) => setDateFilter(value)}
+              className="campaigns-filter-date-select"
+              size="sm"
+              options={[
+                { value: "all", label: "Any time" },
+                { value: "7d", label: "Last 7 days" },
+                { value: "30d", label: "Last 30 days" },
+                { value: "90d", label: "Last 90 days" },
+              ]}
+            />
+          </div>
+          <div className="campaigns-filter-panel-section">
+            <span className="campaigns-filter-panel-label">Status</span>
+            <div className="contacts-filter-panel-grid" role="group" aria-label="Campaign status filters">
+              {QUICK_FILTER_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => {
+                    setStatusFilter(opt.value);
+                    setFiltersOpen(false);
+                  }}
+                  className={cn("campaigns-filter-option", statusFilter === opt.value && "campaigns-filter-option-active")}
+                >
+                  <span>{opt.label}</span>
+                  <strong>{campaignCountForFilter(campaigns, opt.value)}</strong>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </ViewportDropdown>
 
+          </CRMWorkspaceToolbar>
+        </CRMWorkspaceChrome>
+
+        <CRMWorkspaceBody split={!loading && !error && !listEmptyNoCampaigns && !listEmptyAfterFilter}>
       {loading ? (
         <p className="py-16 text-center text-sm text-crm-muted">Loading campaigns…</p>
       ) : error ? (
@@ -792,8 +999,10 @@ export default function CampaignsPage() {
           }
         />
       ) : (
-        <div className="campaigns-workspace-grid">
-          <section className="campaigns-table-card" aria-label="Campaign table">
+        <>
+          <CRMWorkspaceMain className="crm-queue-main-workspace">
+            <CRMWorkspaceScrollRegion className="crm-queue-center-workspace campaigns-list-scroll-region flex min-w-0 flex-col gap-3">
+              <section className="campaigns-table-card campaigns-list-card crm-queue-list-panel" aria-label="Campaign list">
             <div className="campaigns-table-head">
               <div>
                 <h2>Campaign portfolio</h2>
@@ -813,160 +1022,102 @@ export default function CampaignsPage() {
                 />
               </label>
             </div>
-            <div className="campaigns-table-scroll">
-              <table className="campaigns-table">
-                <thead>
-                  <tr>
-                    <th>Campaign</th>
-                    <th>Type</th>
-                    <th>Status</th>
-                    <th>Contacts</th>
-                    <th>Contacted</th>
-                    <th>Converted</th>
-                    <th>Conversion Rate</th>
-                    <th>Activity</th>
-                    <th>Owner</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.map((campaign) => {
-                    const metrics = reportById.get(campaign.id);
-                    const contacts = campaign.memberCount ?? metrics?.total ?? 0;
-                    const contacted = metrics?.contacted ?? 0;
-                    const converted = metrics?.converted ?? 0;
-                    const conversionRate = metrics?.conversionRate ?? 0;
-                    const sparkTone = conversionRate >= 15 ? "green" : conversionRate >= 8 ? "blue" : campaign.status === "PAUSED" ? "orange" : "violet";
-                    return (
-                      <tr key={campaign.id}>
-                        <td>
-                          <div className="campaigns-campaign-cell">
-                            <span className={cn("campaigns-row-icon", CAMPAIGN_STATUS_TONE[campaign.status])}>
-                              <Megaphone className="h-4 w-4" />
-                            </span>
-                            <div>
-                              <Link href={`/crm/campaigns/${campaign.id}`} className="campaigns-row-title">{campaign.name}</Link>
-                              <p>{campaign.description?.trim() || `Updated ${formatShortDate(campaign.updatedAt)}`}</p>
-                            </div>
-                          </div>
-                        </td>
-                        <td><span className="campaigns-type-pill">{campaignTypeLabel(campaign)}</span></td>
-                        <td><CampaignStatusPill status={campaign.status} /></td>
-                        <td className="campaigns-metric-cell">{formatNumber(contacts)}</td>
-                        <td className="campaigns-metric-cell">{formatNumber(contacted)}</td>
-                        <td className="campaigns-metric-cell">{formatNumber(converted)}</td>
-                        <td>
-                          <div className="campaigns-rate-cell">
-                            <strong>{formatPercent(conversionRate)}</strong>
-                            <span>{metrics?.callbacks ?? 0} callbacks</span>
-                          </div>
-                        </td>
-                        <td><Sparkline seed={`${campaign.id}-${metrics?.totalAttempts ?? 0}`} tone={sparkTone} /></td>
-                        <td>
-                          <div className="campaigns-owner-cell">
-                            <span>{campaignOwnerLabel(campaign).slice(0, 2).toUpperCase()}</span>
-                            <div>
-                              <strong>{campaignOwnerLabel(campaign)}</strong>
-                              <small>Updated {formatShortDate(campaign.updatedAt)}</small>
-                            </div>
-                          </div>
-                          <div className="campaigns-row-actions flex items-center gap-2">
-                            <Link href={`/crm/campaigns/${campaign.id}`}>Open</Link>
-                            {canQueue ? <Link href={queueHref(campaign.id)}>Queue</Link> : null}
-                            {canManageCampaigns ? (
-                              <CrmRowActionMenu
-                                label={campaign.name}
-                                onEdit={
-                                  campaign.status !== "ARCHIVED"
-                                    ? () => setEditingCampaign(campaign)
-                                    : undefined
-                                }
-                                onDelete={
-                                  campaign.status !== "ARCHIVED"
-                                    ? () => setDeleteTarget(campaign)
-                                    : undefined
-                                }
-                              />
-                            ) : null}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <aside className="campaigns-right-rail" aria-label="Campaign insights">
-            <section className="campaigns-rail-card campaigns-health-card">
-              <div className="campaigns-rail-heading">
-                <div>
-                  <p>Campaign Health</p>
-                  <h3>Portfolio mix</h3>
-                </div>
-                <Gauge className="h-5 w-5" />
-              </div>
-              <CampaignHealthDonut healthy={summary.active + summary.completed} warning={summary.paused + summary.draft} problem={summary.archived} />
-              <div className="campaigns-health-legend">
-                <span><i className="bg-emerald-500" />Healthy <strong>{summary.active + summary.completed}</strong></span>
-                <span><i className="bg-amber-500" />Needs attention <strong>{summary.paused + summary.draft}</strong></span>
-                <span><i className="bg-red-500" />Inactive <strong>{summary.archived}</strong></span>
-              </div>
-            </section>
-
-            <section className="campaigns-rail-card">
-              <div className="campaigns-rail-heading">
-                <div>
-                  <p>Top Performing Campaigns</p>
-                  <h3>This portfolio</h3>
-                </div>
-                <TrendingUp className="h-5 w-5" />
-              </div>
-              <ul className="campaigns-top-list">
-                {topCampaigns.map(({ campaign, metrics }, index) => {
-                  const pct = Math.min(100, metrics?.conversionRate ?? 0);
+            <div className="campaigns-list-scroll">
+              <div className="crm-queue-row-list campaigns-row-list">
+                {filtered.map((campaign, index) => {
+                  const isSelected = activeCampaign?.id === campaign.id;
                   return (
-                    <li key={campaign.id}>
-                      <div className="campaigns-top-row">
-                        <span>{campaign.name}</span>
-                        <strong>{formatPercent(metrics?.conversionRate ?? 0)}</strong>
+                    <div
+                      key={campaign.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedCampaignId(campaign.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setSelectedCampaignId(campaign.id);
+                        }
+                      }}
+                      className={cn("crm-queue-row campaigns-list-row group", isSelected && "crm-queue-row-selected")}
+                    >
+                      <div className="crm-queue-row-grid">
+                        <span className="crm-queue-row-rank tabular-nums">{index + 1}</span>
+                        <span className={cn("campaigns-row-icon", CAMPAIGN_STATUS_TONE[campaign.status])} aria-hidden>
+                          <Megaphone className="h-4 w-4" />
+                        </span>
+                        <div className="crm-queue-row-main min-w-0">
+                          <div className="crm-queue-row-title-line">
+                            <Link
+                              href={`/crm/campaigns/${campaign.id}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="crm-queue-row-name campaigns-row-title truncate"
+                            >
+                              {campaign.name}
+                            </Link>
+                            <CampaignStatusPill status={campaign.status} />
+                            <span className="campaigns-type-pill">{campaignTypeLabel(campaign)}</span>
+                          </div>
+                          <p className="crm-queue-row-sub truncate">
+                            {campaign.description?.trim() || `${campaignOwnerLabel(campaign)} · updated ${formatShortDate(campaign.updatedAt)}`}
+                          </p>
+                        </div>
+                        <div className="campaigns-row-actions flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                          {canQueue ? <Link href={queueHref(campaign.id)}>Queue</Link> : null}
+                          {canManageCampaigns ? (
+                            <CrmRowActionMenu
+                              label={campaign.name}
+                              onEdit={
+                                campaign.status !== "ARCHIVED"
+                                  ? () => setEditingCampaign(campaign)
+                                  : undefined
+                              }
+                              onDelete={
+                                campaign.status !== "ARCHIVED"
+                                  ? () => setDeleteTarget(campaign)
+                                  : undefined
+                              }
+                            />
+                          ) : null}
+                        </div>
+                        <ChevronRight className="crm-queue-row-chevron h-4 w-4 shrink-0" />
                       </div>
-                      <div className="campaigns-progress-track">
-                        <div style={{ width: `${pct}%` }} className={`campaigns-progress-${index % 5}`} />
-                      </div>
-                    </li>
+                    </div>
                   );
                 })}
-              </ul>
-              <Link href="/crm/reports" className="campaigns-rail-link">View all performance</Link>
-            </section>
-
-            <section className="campaigns-rail-card">
-              <div className="campaigns-rail-heading">
-                <div>
-                  <p>Recent Activity</p>
-                  <h3>Latest campaign movement</h3>
-                </div>
-                <Activity className="h-5 w-5" />
               </div>
-              <ul className="campaigns-activity-list">
-                {recentActivity.map((campaign) => (
-                  <li key={campaign.id}>
-                    <span className={cn("campaigns-activity-icon", CAMPAIGN_STATUS_TONE[campaign.status])}>
-                      {campaign.status === "ACTIVE" ? <Zap className="h-4 w-4" /> : campaign.status === "PAUSED" ? <Pause className="h-4 w-4" /> : campaign.status === "ARCHIVED" ? <Archive className="h-4 w-4" /> : <Clock3 className="h-4 w-4" />}
-                    </span>
-                    <div>
-                      <strong>{campaign.name}</strong>
-                      <p>{CAMPAIGN_STATUS_LABELS[campaign.status]} · updated {formatShortDate(campaign.updatedAt)}</p>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-              <Link href="/crm/reports" className="campaigns-rail-link">View all activity</Link>
-            </section>
-          </aside>
-        </div>
+            </div>
+              </section>
+            </CRMWorkspaceScrollRegion>
+          </CRMWorkspaceMain>
+
+          <CRMWorkspaceRightRail
+            className="campaigns-right-rail crm-queue-detail-rail flex flex-col min-h-0"
+            scrollClassName="campaigns-right-rail-scroll"
+          >
+            {activeCampaign ? (
+              <CampaignListDetailPanel
+                campaign={activeCampaign}
+                metrics={reportById.get(activeCampaign.id)}
+                rank={activeCampaignIndex + 1}
+                total={filtered.length}
+                canQueue={canQueue}
+                canManageCampaigns={canManageCampaigns}
+                canGoPrevious={activeCampaignIndex > 0}
+                canGoNext={activeCampaignIndex < filtered.length - 1}
+                onPrevious={() => setSelectedCampaignId(filtered[Math.max(0, activeCampaignIndex - 1)]?.id ?? activeCampaign.id)}
+                onNext={() => setSelectedCampaignId(filtered[Math.min(filtered.length - 1, activeCampaignIndex + 1)]?.id ?? activeCampaign.id)}
+                onOpen={() => router.push(`/crm/campaigns/${activeCampaign.id}`)}
+                onEdit={() => setEditingCampaign(activeCampaign)}
+                onDelete={() => setDeleteTarget(activeCampaign)}
+              />
+            ) : (
+              <CampaignListDetailPlaceholder />
+            )}
+          </CRMWorkspaceRightRail>
+        </>
       )}
+        </CRMWorkspaceBody>
+      </CRMWorkspaceShell>
     </CRMPageShell>
   );
 }

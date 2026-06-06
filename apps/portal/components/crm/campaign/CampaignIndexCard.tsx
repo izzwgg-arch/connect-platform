@@ -124,7 +124,7 @@ export function CampaignIndexCard({
               Queue
             </Link>
           )}
-          {isAdmin && (isDraft || isPaused) && (
+          {canManageCampaigns && (isDraft || isPaused) && (
             <button
               type="button"
               onClick={(e) => onQuickStatus(campaign.id, "ACTIVE", e)}
@@ -134,7 +134,7 @@ export function CampaignIndexCard({
               {isDraft ? "Start" : "Resume"}
             </button>
           )}
-          {canManageCampaigns && (onEdit || onDelete || (isAdmin && (isActive || isPaused))) ? (
+          {canManageCampaigns && (onEdit || onDelete || isActive || isPaused) ? (
             <div className="relative group/menu">
               <button
                 type="button"

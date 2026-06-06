@@ -1142,7 +1142,10 @@ export default function CampaignDetailPage() {
   };
 
   return (
-    <CRMPageShell innerClassName={cn(mk.pageInner, mk.workspace, "campaign-detail-page")}>
+    <CRMPageShell
+      className="campaign-detail-shell"
+      innerClassName={cn(mk.pageInner, mk.workspace, "campaign-detail-page")}
+    >
       {showAddContacts && (
         <AddContactsModal
           campaignId={campaignId}
@@ -1588,7 +1591,7 @@ export default function CampaignDetailPage() {
           onImport={openImportModal}
           onAddContacts={() => setShowAddContacts(true)}
           onDistribute={openDistributeModal}
-          onBulkEmail={isAdmin ? openBulkEmailAll : undefined}
+          onBulkEmail={canManageCampaigns ? openBulkEmailAll : undefined}
         />
 
         <CampaignPerformanceWorkspace health={hd} workload={workload} members={members} />

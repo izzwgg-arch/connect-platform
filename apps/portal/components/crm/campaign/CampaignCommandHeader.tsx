@@ -68,7 +68,8 @@ export function CampaignCommandHeader({
   const lastImport = lastImportLabel(importHistory);
   const statusStyle = ROW_STATUS[campaign.status] ?? ROW_STATUS.DRAFT;
   const isActive = campaign.status === "ACTIVE";
-  const canPauseCampaign = isActive && isAdmin;
+  const canManageCampaignActions = canEditCampaign || isAdmin;
+  const canPauseCampaign = isActive && canManageCampaignActions;
   const canDeleteCampaign = canEditCampaign && campaign.status !== "ARCHIVED";
   const createdDate = new Date(campaign.createdAt).toLocaleDateString(undefined, {
     month: "short",
@@ -152,12 +153,12 @@ export function CampaignCommandHeader({
               <button type="button" onClick={onStartEditName} className={mk.menuItem}>
                 <Edit2 className="h-3.5 w-3.5" /> Rename
               </button>
-              {campaign.status === "DRAFT" && isAdmin ? (
+              {campaign.status === "DRAFT" && canManageCampaignActions ? (
                 <button type="button" onClick={() => onUpdateStatus("ACTIVE")} className={mk.menuItem}>
                   <Play className="h-3.5 w-3.5" /> Start campaign
                 </button>
               ) : null}
-              {campaign.status === "PAUSED" && isAdmin ? (
+              {campaign.status === "PAUSED" && canManageCampaignActions ? (
                 <button type="button" onClick={() => onUpdateStatus("ACTIVE")} className={mk.menuItem}>
                   <Play className="h-3.5 w-3.5" /> Resume
                 </button>
@@ -167,7 +168,7 @@ export function CampaignCommandHeader({
                   <Pause className="h-3.5 w-3.5" /> Pause
                 </button>
               ) : null}
-              {isAdmin ? (
+              {canManageCampaignActions ? (
                 <button type="button" onClick={onImport} className={mk.menuItem}>
                   <Upload className="h-3.5 w-3.5" /> Import CSV
                 </button>
@@ -175,7 +176,7 @@ export function CampaignCommandHeader({
               <button type="button" onClick={onAddContacts} className={mk.menuItem}>
                 <Plus className="h-3.5 w-3.5" /> Add contacts
               </button>
-              {isAdmin ? (
+              {canManageCampaignActions ? (
                 <button type="button" onClick={onDistribute} className={mk.menuItem}>
                   <Shuffle className="h-3.5 w-3.5" /> Distribute
                 </button>
