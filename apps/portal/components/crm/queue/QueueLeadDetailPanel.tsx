@@ -195,7 +195,7 @@ export function QueueLeadDetailPanel({
                       ? "No email on file"
                       : "No phone on file"
                     : key === "call" && !sipReady
-                      ? "Fill dialer — register softphone to place calls"
+                      ? "Fill dialer — reconnect softphone to place calls"
                       : `Open ${label.toLowerCase()} workspace`
                 }
               >

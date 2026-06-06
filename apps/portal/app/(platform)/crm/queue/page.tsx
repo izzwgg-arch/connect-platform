@@ -390,7 +390,6 @@ function QueuePageInner() {
   function handleDial(member: QueueMember) {
     const phoneNumber = member.contact?.primaryPhone;
     if (!phoneNumber) return;
-    if (!sipReady) return;
     window.dispatchEvent(new CustomEvent("crm:dial", { detail: { target: phoneNumber } }));
   }
 
