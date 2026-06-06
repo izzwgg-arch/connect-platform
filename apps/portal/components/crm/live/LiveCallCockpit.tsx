@@ -104,6 +104,7 @@ export function LiveCallCockpit({
   callerIdLoading,
   onCall,
   onOpenContact,
+  onOpenEmail,
 }: {
   contact: LiveContact;
   isArchived: boolean;
@@ -150,6 +151,7 @@ export function LiveCallCockpit({
   callerIdLoading: boolean;
   onCall: () => void;
   onOpenContact: () => void;
+  onOpenEmail: () => void;
 }) {
   const [noteTab, setNoteTab] = useState<"notes" | "activity" | "history">("notes");
   const [queueTab, setQueueTab] = useState<"all" | "waiting" | "my" | "parked">("all");
@@ -351,6 +353,7 @@ export function LiveCallCockpit({
             owner={owner}
             isArchived={isArchived}
             onOpenContact={onOpenContact}
+            onOpenEmail={onOpenEmail}
           />
         </div>
 
@@ -877,7 +880,7 @@ function LiveQueueCard({
   );
 }
 
-function ContactSnapshotCard({ contact, stage, email, primaryPhone, location, leadScore, lastContact, owner, isArchived, onOpenContact }: { contact: LiveContact; stage: CrmStage; email: string | null; primaryPhone: string | null; location: string | null; leadScore: string | number | null; lastContact: string; owner: string; isArchived: boolean; onOpenContact: () => void }) {
+function ContactSnapshotCard({ contact, stage, email, primaryPhone, location, leadScore, lastContact, owner, isArchived, onOpenContact, onOpenEmail }: { contact: LiveContact; stage: CrmStage; email: string | null; primaryPhone: string | null; location: string | null; leadScore: string | number | null; lastContact: string; owner: string; isArchived: boolean; onOpenContact: () => void; onOpenEmail: () => void }) {
   return (
     <article className="crm-live-card">
       <div className="crm-live-card-head">
@@ -893,7 +896,7 @@ function ContactSnapshotCard({ contact, stage, email, primaryPhone, location, le
         </div>
       </div>
       <div className="crm-live-quick-actions">
-        {email ? <a href={`mailto:${email}`} className="crm-live-icon-mini"><Mail className="h-4 w-4" /><span>Email</span></a> : null}
+        {email ? <button type="button" onClick={onOpenEmail} className="crm-live-icon-mini"><Mail className="h-4 w-4" /><span>Email</span></button> : null}
         <button type="button" onClick={onOpenContact} className="crm-live-icon-mini"><UserRound className="h-4 w-4" /><span>Profile</span></button>
         {isArchived ? <span className="crm-live-icon-mini is-disabled"><ShieldCheck className="h-4 w-4" /><span>Archived</span></span> : null}
       </div>

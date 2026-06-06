@@ -259,6 +259,11 @@ function CallFeedItem({
         ? formatPhone(row.toNumber)
         : formatPhone(row.fromNumber);
 
+  function dialBack() {
+    window.dispatchEvent(new CustomEvent("crm:dial", { detail: { target: contactNumber } }));
+    setMenuOpen(false);
+  }
+
   useEffect(() => {
     if (!menuOpen) return;
     const close = (e: MouseEvent) => {
@@ -327,15 +332,15 @@ function CallFeedItem({
             </button>
             {menuOpen ? (
               <div className="ch-menu" role="menu">
-                <a
+                <button
+                  type="button"
                   className="ch-menu-item"
-                  href={`tel:${contactNumber}`}
-                  onClick={(e) => e.stopPropagation()}
+                  onClick={(e) => { e.stopPropagation(); dialBack(); }}
                   role="menuitem"
                 >
                   <PhoneCall size={14} />
                   Call back
-                </a>
+                </button>
                 <button
                   className="ch-menu-item"
                   role="menuitem"
@@ -389,6 +394,10 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
     }).catch(() => {});
   }
 
+  function dialBack() {
+    window.dispatchEvent(new CustomEvent("crm:dial", { detail: { target: contactNumber } }));
+  }
+
   const initials = heroInitials();
 
   return (
@@ -419,10 +428,10 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
             <div className="cdp-hero-number">{formatPhone(contactNumber)}</div>
             <div className="cdp-hero-time">{formatAbsTime(row.startedAt)}</div>
             <div className="cdp-hero-actions">
-              <a className="cdp-hero-action-btn" href={`tel:${contactNumber}`}>
+              <button type="button" className="cdp-hero-action-btn" onClick={dialBack}>
                 <PhoneCall size={13} />
                 Call back
-              </a>
+              </button>
               <button className="cdp-hero-action-btn" onClick={copyNumber}>
                 <Copy size={13} />
                 {copied ? "Copied!" : "Copy number"}

@@ -45,6 +45,7 @@ export function LiveWorkspaceContactHeader({
   const owner = ownerLabel(contactAny.assignedTo) ?? "Unassigned";
   const location = contactAny.location ?? ([contactAny.city, contactAny.state].filter(Boolean).join(", ") || "Local time unknown");
   const lastTouch = contactAny.lastActivityAt ? formatTimeAgo(contactAny.lastActivityAt) : "No activity yet";
+  const emailHref = `${profileHref}${profileHref.includes("?") ? "&" : "?"}workspace=email`;
 
   return (
     <CRMCard padding="lg" className="relative overflow-hidden border-crm-border/70 shadow-[0_22px_60px_-42px_rgba(15,23,42,0.75)]">
@@ -103,10 +104,10 @@ export function LiveWorkspaceContactHeader({
                 <span className="inline-flex items-center rounded-full border border-crm-warning/40 bg-crm-warning/10 px-2.5 py-1 text-crm-warning">No phone on file</span>
               )}
               {email ? (
-                <a href={`mailto:${email}`} className="inline-flex items-center gap-1.5 rounded-full border border-crm-border/70 bg-crm-surface-2/60 px-2.5 py-1 text-crm-accent hover:underline">
+                <Link href={emailHref} className="inline-flex items-center gap-1.5 rounded-full border border-crm-border/70 bg-crm-surface-2/60 px-2.5 py-1 text-crm-accent hover:underline">
                   <Mail className="h-3.5 w-3.5" />
                   {email}
-                </a>
+                </Link>
               ) : null}
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-crm-muted sm:grid-cols-4">

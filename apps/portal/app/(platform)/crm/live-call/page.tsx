@@ -462,6 +462,7 @@ function LiveCallWorkspaceInner() {
           callerIdLoading={callerIdLoading}
           onCall={() => void handleCall()}
           onOpenContact={() => router.push(`/crm/contacts/${contact.id}`)}
+          onOpenEmail={() => router.push(`/crm/contacts/${contact.id}?workspace=email&returnTo=/crm/live-call`)}
         />
       ) : null}
 
