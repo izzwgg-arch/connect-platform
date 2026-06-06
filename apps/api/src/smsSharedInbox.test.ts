@@ -258,6 +258,7 @@ mock.module("@connect/db", {
       $queryRaw: async () => [],
       smsRoutingLog: { create: async () => ({}) },
       globalVoipMsCredential: { findUnique: async () => null },
+      crmTenantSettings: { findUnique: async () => null },
       platformRolePermissionSnapshot: { findUnique: async () => null },
       userCustomRole: { findMany: async () => [] },
     },
