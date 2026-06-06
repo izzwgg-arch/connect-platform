@@ -940,6 +940,37 @@ If a dry-run log shows `DRY RUN checkout safety: BLOCKED`, read the listed
 paths and do not enqueue the real deploy until those production-clone edits are
 reviewed, committed/ported, or explicitly restored.
 
+**Direct deploy dry-run skip trap (observed 2026-06-06):** `scripts/deploy-direct.sh`
+dry-runs can advance the shared checkout at `/opt/connectcomms/app` to the target SHA.
+If service deploy metadata also says that SHA is already deployed, the immediate real
+deploy may print `skip=no_changes` and skip build/restart even when the running container
+is stale. Treat this as unverified until container proof passes.
+
+Read-only proof:
+
+```bash
+ssh connect "docker exec app-api-1 grep -n '<unique new API line>' /app/apps/api/src/..."
+ssh connect "docker exec app-portal-1 sh -c 'cat .build-commit'"
+curl -fsS http://127.0.0.1:3000/ready
+```
+
+If the proof fails, do **not** use raw `docker compose` or hand restarts. Use the normal
+scripted direct deploy path and make change detection see the real pre-service SHA. One
+safe recovery used on 2026-06-06 was a temporary state dir:
+
+```bash
+cd /opt/connectcomms/app
+mkdir -p /tmp/connect-direct-force-api/last-deployed
+printf '%s' '<pre-change-sha>' > /tmp/connect-direct-force-api/last-deployed/api.sha
+DEPLOY_QUEUE_STATE_DIR=/tmp/connect-direct-force-api \
+  bash scripts/deploy-direct.sh api --branch main
+```
+
+Use `portal.sha` and `service=portal` for portal. This keeps blue/green, readiness gates,
+and migration gating inside the approved deploy scripts while avoiding stale skip metadata.
+Afterward, verify `[deploy-<service>] done <expected-sha>` and grep/read the running
+container again.
+
 **API health timeout (`DEPLOY_API_BLUEGREEN=1` default):** The **`api`** compose service no longer runs **`prisma migrate deploy`** at container boot; **`prisma migrate deploy`** runs in **`scripts/deploy-api.sh`** before **`api_candidate`** starts when schema changed. Stable boot is **`pnpm --filter @connect/api start`**. **`[timing] restart=`** captures the full blue/green sequence (candidate start ? nginx cutovers ? stable recreate ? drain). If **`[deploy-api] FAIL`** references **`candidate /ready`** or **`stable /ready`**, read **`deploy-api-rollout`** log lines plus **`docker logs app-api-candidate-1`** or **`app-api-1`**. If logs show **`GET /ready`** ? **`401`**, the rollout cannot succeed until **`/ready`** is exempt from JWT (same allowlist as **`/health`**). Rollout/recovery procedures: **`docs/ai-context/DEPLOYMENT_API_ROLLBACK.md`**.
 
 Legacy **`DEPLOY_API_BLUEGREEN=0`:** queue still polls loopback **`http://127.0.0.1:3001/health`** after **`deploy_common_compose_up`**.

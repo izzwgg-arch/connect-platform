@@ -1,3 +1,56 @@
+# Tests Run
+
+Newest entries first.
+
+---
+
+## CRM page rollout and backend support (2026-06-06)
+
+### Portal typecheck
+
+```bash
+pnpm --filter @connect/portal typecheck
+```
+
+**Result:** passed after `ChecklistWorkspace` stale `viewMode` prop type was removed.
+
+### Focused CRM/API tests
+
+```bash
+node --experimental-test-module-mocks --import tsx --test \
+  "apps/api/src/crmFormService.test.ts" \
+  "apps/api/src/crm/bulkEmail.test.ts" \
+  "apps/api/src/crm/crmPermissionAudit.test.ts" \
+  "apps/api/src/smsSharedInbox.test.ts"
+```
+
+**Result:** 37/37 passed.
+
+### API full suite
+
+```bash
+pnpm --filter @connect/api test
+```
+
+**Result:** failed with two remaining `cdrDirection.test.ts` assertions:
+
+- `7-digit 'to': ambiguous local PSTN, not counted as external -> keep stored`
+- `9-digit 'to': not in external range -> keep stored`
+
+The earlier `smsSharedInbox.test.ts` failure was fixed by adding a `crmTenantSettings`
+mock for the CRM SMS decoration lookup.
+
+### API typecheck
+
+```bash
+pnpm --filter @connect/api typecheck
+```
+
+**Result:** failed on pre-existing WebRTC/shared module-resolution issues and related
+implicit-any test parameters outside the CRM rollout files.
+
+---
+
 # Tests run — VoIP.ms sms_toolong fix (2026-06-02)
 
 ## Shared SMS text unit tests

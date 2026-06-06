@@ -4,6 +4,42 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-06 — CRM page rollout + backend support deploy
+
+**Task:** CRM portal pages / API support / production deploy  
+**Risk:** high — multi-page CRM UI, Prisma migrations, API + portal blue/green deploy
+
+### Shipped
+
+- Independent CRM page commits for shared shell/styles, campaigns, checklists, contacts,
+  email/signing, funders, live call, queue, scripts, tasks, and voicemail drops.
+- API/DB support for CRM SMS templates, funder timeline events, CRM form autofill/public
+  signing behavior, CRM contact SMS decoration, and worker email sync support.
+- Prisma migrations applied in production:
+  `20260606001000_crm_sms_templates` and `20260606002000_funder_timeline_events`.
+- API and portal deployed via scripted blue/green direct deploy at `0102aa45`.
+
+### Verification
+
+- `pnpm --filter @connect/portal typecheck` passed.
+- Focused CRM/API tests passed: `crmFormService.test.ts`, `crm/bulkEmail.test.ts`,
+  `crm/crmPermissionAudit.test.ts`, and `smsSharedInbox.test.ts` (37/37).
+- Full API suite still has two unrelated `cdrDirection.test.ts` failures for local
+  ambiguous PSTN direction expectations.
+- Container verification:
+  - API `app-api-1` contains `createSmsTemplateBodySchema`.
+  - Portal `app-portal-1` `.build-commit` is `0102aa45bd50fff83c8de7366f4ba72f5bb8f07e`.
+  - Portal `/ready` returns `{ "ok": true }`.
+
+### Deploy note
+
+The direct deploy dry-run advanced the shared server checkout and an immediate real deploy
+reported `skip=no_changes` despite the running API image being stale. The real rollout was
+completed using the normal scripted deploy path with a temporary service state pointing to
+the pre-CRM SHA so change detection rebuilt and ran migrations. See `DEBUGGING.md`.
+
+---
+
 ## 2026-06-04 — Platform-wide WebRTC outage detection
 
 **Task:** telephony / WebRTC / outage prevention  

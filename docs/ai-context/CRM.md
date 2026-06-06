@@ -45,6 +45,7 @@ Scope: portal CRM UI/data-flow guardrails. Telephony, billing, workers, database
 - **Contact scope:** `assertCrmContactAllowed` enforces campaign assignment for AGENT users on contact-scoped mutations (disposition, checklist respond, voicemail drop, notes, tasks, email send, contact detail). **List/search** (`GET /crm/contacts`, `GET /crm/contacts/lookup`, stats, duplicate suggestions) apply the same scope at query time so restricted Agents never see out-of-scope rows or inflated totals. CRM MANAGER / CRM ADMIN bypass campaign restrictions within the tenant (still tenant-scoped via `contact.tenantId`).
 - **Voicemail drops:** list/use/drop/upload/edit/archive routes use `requireCrmAccess` (Agent + Manager + CRM Admin). PBX/system recording settings remain outside this feature (`/pbx/call-recordings`, admin-only).
 - **CRM SMS:** `/crm/contacts/:id/sms` uses regular Connect Chat SMS as the source of truth. The route requires `requireCrmAccess`, `assertCrmContactAllowed`, and `can_send_sms`, then creates/reuses the normal `ConnectChatThread` and queues a `ConnectChatMessage` through the existing Connect Chat SMS send path. The CRM contact SMS panel reads `ConnectChatMessage` rows from that thread; timeline `SMS_SENT` / `SMS_RECEIVED` rows are supplemental activity feed mirrors only.
+- **CRM SMS templates (2026-06-06):** `/crm/sms/templates` is tenant-scoped and CRM-access gated. Shared templates are visible to CRM users; private templates are creator-only. Archive is allowed for admins, the creator, or CRM roles that bypass contact restrictions. Sending with `templateId` validates the template in the sender's tenant and increments usage best-effort after the normal Connect Chat SMS send succeeds.
 - **CRM SMS labels in Chat:** main Chat may show `CRM SMS` and a contact/company title only after the API verifies the viewer has CRM access and contact scope for exactly one matching contact phone in the tenant. If CRM is disabled, the user lacks CRM access, the contact is out of scope, or multiple contacts share the phone, Chat falls back to normal SMS phone labeling and must not expose CRM contact metadata.
 
 ### CRM permission matrix (Agent / Manager / Admin)
@@ -124,8 +125,15 @@ Pipeline (unchanged): Google Drive match → import (`CrmLeadDocument`) → text
 - Send Form uses the existing CRM email queue (`crm-email-send`) and sender resolution. Do not add a second outbound email path.
 - Public signing uses `/forms/sign/:token` in the portal and `/public/forms/:token` in the API. Tokens are random, stored hashed, expire, and can be revoked.
 - Completed public links show a completion state and no longer serve field definitions or the PDF preview.
-- Completed submissions are saved as `CrmFormSubmission.submittedData`; completed PDF generation remains pending in Phase 1.
+- Completed submissions are saved as `CrmFormSubmission.submittedData`; public DTOs must hide storage keys, token hashes, and field definitions after completion.
+- Autofill token defaults are resolved server-side before the public DTO is returned. `DATE` token defaults must be formatted for date inputs, not rendered as raw timestamps.
 - Timeline events: `FORM_SENT`, `FORM_OPENED`, `FORM_COMPLETED`, `FORM_REVOKED`.
+
+## CRM Funders And Tasks (2026-06-06)
+
+- `/crm/funders/[id]/workspace` is a portal route for the funder workspace; keep list, detail, and workspace behavior grouped with funder UI changes.
+- Funder timeline events are backed by the `20260606002000_funder_timeline_events` migration and tenant-scoped API routes. Do not add client-only timeline rows that are not persisted.
+- CRM tasks now use a dedicated `TaskDetailPanel` component. Keep task list/feed/KPI/detail interactions inside `components/crm/tasks/` unless a shared CRM shell abstraction already exists.
 
 ## Dashboard And Email UI
 
