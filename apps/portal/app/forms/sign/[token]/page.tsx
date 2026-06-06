@@ -26,6 +26,10 @@ type PublicField = {
   defaultValue?: string;
   required: boolean;
   pageNumber: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 };
 
 type PublicForm = {
@@ -86,16 +90,16 @@ const DEMO_FORM: PublicForm = {
     pageCount: 2,
   },
   fields: [
-    { id: "f1", fieldType: "TEXT",      label: "Full legal name",    autoFillToken: "contact.fullName",  defaultValue: "Jordan Rivera",          required: true,  pageNumber: 1 },
-    { id: "f2", fieldType: "TEXT",      label: "Business / DBA name", autoFillToken: "business.dba",     defaultValue: "Connect Demo Services",  required: false, pageNumber: 1 },
-    { id: "f3", fieldType: "TEXT",      label: "Entity type",         autoFillToken: "business.entityType", defaultValue: "LLC",                required: false, pageNumber: 1 },
-    { id: "f4", fieldType: "TEXT",      label: "Email address",       autoFillToken: "contact.email",    defaultValue: "demo.user@example.com",  required: true,  pageNumber: 1 },
-    { id: "f5", fieldType: "TEXT",      label: "Phone number",        autoFillToken: "contact.phone",    defaultValue: "(555) 010-9881",         required: false, pageNumber: 1 },
-    { id: "f6", fieldType: "TEXT",      label: "EIN / Tax ID",        autoFillToken: "business.ein",     defaultValue: "",                       required: false, pageNumber: 1 },
-    { id: "f7", fieldType: "DATE",      label: "Effective date",      autoFillToken: "form.date",        defaultValue: new Date().toISOString().slice(0, 10), required: false, pageNumber: 1 },
-    { id: "f8", fieldType: "CHECKBOX",  label: "I have read and agree to the terms and conditions", required: true, pageNumber: 2 },
-    { id: "f9", fieldType: "INITIALS",  label: "Initials — page 1",   required: true, pageNumber: 1 },
-    { id: "f10", fieldType: "SIGNATURE", label: "Authorized signature", required: true, pageNumber: 2 },
+    { id: "f1", fieldType: "TEXT",      label: "Full legal name",    autoFillToken: "contact.fullName",  defaultValue: "Jordan Rivera",          required: true,  pageNumber: 1, x: 60, y: 120, width: 180, height: 18 },
+    { id: "f2", fieldType: "TEXT",      label: "Business / DBA name", autoFillToken: "business.dba",     defaultValue: "Connect Demo Services",  required: false, pageNumber: 1, x: 60, y: 150, width: 180, height: 18 },
+    { id: "f3", fieldType: "TEXT",      label: "Entity type",         autoFillToken: "business.entityType", defaultValue: "LLC",                required: false, pageNumber: 1, x: 60, y: 180, width: 120, height: 18 },
+    { id: "f4", fieldType: "TEXT",      label: "Email address",       autoFillToken: "contact.email",    defaultValue: "demo.user@example.com",  required: true,  pageNumber: 1, x: 60, y: 210, width: 180, height: 18 },
+    { id: "f5", fieldType: "TEXT",      label: "Phone number",        autoFillToken: "contact.phone",    defaultValue: "(555) 010-9881",         required: false, pageNumber: 1, x: 60, y: 240, width: 140, height: 18 },
+    { id: "f6", fieldType: "TEXT",      label: "EIN / Tax ID",        autoFillToken: "business.ein",     defaultValue: "",                       required: false, pageNumber: 1, x: 60, y: 270, width: 140, height: 18 },
+    { id: "f7", fieldType: "DATE",      label: "Effective date",      autoFillToken: "form.date",        defaultValue: new Date().toISOString().slice(0, 10), required: false, pageNumber: 1, x: 60, y: 300, width: 120, height: 18 },
+    { id: "f8", fieldType: "CHECKBOX",  label: "I have read and agree to the terms and conditions", required: true, pageNumber: 2, x: 60, y: 120, width: 14, height: 14 },
+    { id: "f9", fieldType: "INITIALS",  label: "Initials — page 1",   required: true, pageNumber: 1, x: 60, y: 330, width: 80, height: 22 },
+    { id: "f10", fieldType: "SIGNATURE", label: "Authorized signature", required: true, pageNumber: 2, x: 60, y: 160, width: 180, height: 32 },
   ],
   submission: null,
 };
@@ -103,6 +107,156 @@ const DEMO_FORM: PublicForm = {
 function fmtDate(iso: string | null | undefined) {
   if (!iso) return "—";
   return new Intl.DateTimeFormat(undefined, { month: "long", day: "numeric", year: "numeric" }).format(new Date(iso));
+}
+
+function fmtPdfDate(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) return `${match[2]}/${match[3]}/${match[1]}`;
+  return raw;
+}
+
+function isImageSignature(value: unknown) {
+  return String(value ?? "").startsWith("data:image/");
+}
+
+type PageSize = { width: number; height: number; scale: number };
+
+function displayRectForField(field: PublicField, pageFields: PublicField[]) {
+  const sameRow = pageFields
+    .filter((other) => other.id !== field.id && Math.abs(other.y - field.y) <= 2 && other.x > field.x && other.x < field.x + field.width)
+    .sort((a, b) => a.x - b.x);
+  if (sameRow[0]) {
+    return { ...field, width: Math.max(1, sameRow[0].x - field.x) };
+  }
+
+  const precedingOverlap = pageFields
+    .filter((other) => other.id !== field.id && Math.abs(other.y - field.y) <= 2 && other.x < field.x && field.x < other.x + other.width)
+    .sort((a, b) => a.x - b.x);
+  if (precedingOverlap.length > 0) {
+    const rowStart = precedingOverlap[0];
+    const rowEnd = rowStart.x + rowStart.width;
+    return { ...field, width: Math.max(1, rowEnd - field.x) };
+  }
+
+  return field;
+}
+
+function PdfPageCanvas({
+  pdfUrl,
+  pageNumber,
+  onSize,
+  onError,
+}: {
+  pdfUrl: string;
+  pageNumber: number;
+  onSize: (s: PageSize) => void;
+  onError: (msg: string) => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const onSizeRef = useRef(onSize);
+  const onErrorRef = useRef(onError);
+
+  useEffect(() => { onSizeRef.current = onSize; });
+  useEffect(() => { onErrorRef.current = onError; });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const pdfjsLib = await import("pdfjs-dist/build/pdf.mjs" as any);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (pdfjsLib as any).GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const loadingTask = (pdfjsLib as any).getDocument({ url: pdfUrl });
+        const pdf = await loadingTask.promise;
+        if (cancelled) return;
+        const page = await pdf.getPage(pageNumber);
+        if (cancelled) return;
+
+        const containerWidth = canvasRef.current?.parentElement?.clientWidth || 700;
+        const vp0 = page.getViewport({ scale: 1 });
+        const scale = Math.min((containerWidth - 2) / vp0.width, 2.2);
+        const viewport = page.getViewport({ scale });
+
+        const canvas = canvasRef.current!;
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        canvas.style.width = `${viewport.width}px`;
+        canvas.style.height = `${viewport.height}px`;
+        const ctx = canvas.getContext("2d")!;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await page.render({ canvasContext: ctx as any, viewport }).promise;
+        if (!cancelled) onSizeRef.current({ width: viewport.width, height: viewport.height, scale });
+      } catch (err) {
+        if (!cancelled) onErrorRef.current(err instanceof Error ? err.message : "Unable to render PDF.");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [pdfUrl, pageNumber]);
+
+  return <canvas ref={canvasRef} className="block bg-white" />;
+}
+
+function PdfFieldOverlay({
+  field,
+  value,
+  scale,
+  pageFields,
+}: {
+  field: PublicField;
+  value: unknown;
+  scale: number;
+  pageFields: PublicField[];
+}) {
+  const rect = displayRectForField(field, pageFields);
+  const text = field.fieldType === "DATE" ? fmtPdfDate(value) : String(value ?? "").trim();
+  const hasValue = field.fieldType === "CHECKBOX" ? value === true : Boolean(text);
+  const isSignature = field.fieldType === "SIGNATURE" || field.fieldType === "INITIALS";
+  const isCenteredCell = field.fieldType === "DATE" || /^(city|state|zip(?: code)?)$/i.test(field.label.trim());
+  const scaledHeight = rect.height * scale;
+  const fontSize = isSignature
+    ? Math.max(10, Math.min(scaledHeight * 1.55, 22))
+    : Math.max(7, Math.min(scaledHeight * 0.9, 10));
+
+  return (
+    <div
+      className="absolute flex items-center overflow-hidden"
+      style={{
+        left: rect.x * scale,
+        top: rect.y * scale,
+        width: rect.width * scale,
+        height: scaledHeight,
+        justifyContent: isCenteredCell ? "center" : "flex-start",
+        overflow: isSignature ? "visible" : "hidden",
+        pointerEvents: "none",
+      }}
+    >
+      {field.fieldType === "CHECKBOX" ? (
+        hasValue ? <span className="text-sm font-bold leading-none text-slate-950">✓</span> : null
+      ) : isImageSignature(value) ? (
+        <img src={String(value)} alt="" className="h-full w-full object-contain object-left" />
+      ) : hasValue ? (
+        <span
+          className="block truncate text-slate-950"
+          style={{
+            fontFamily: isSignature ? "Brush Script MT, Segoe Script, Lucida Handwriting, cursive" : "Arial, sans-serif",
+            fontSize,
+            lineHeight: 1,
+            maxWidth: rect.width * scale,
+            transform: isSignature ? "translateY(1px)" : undefined,
+          }}
+        >
+          {text}
+        </span>
+      ) : field.required ? (
+        <span className="block h-full rounded-sm border border-dashed border-amber-300/70 bg-amber-100/20" />
+      ) : null}
+    </div>
+  );
 }
 
 // ─── Signature Canvas ─────────────────────────────────────────────────────────
@@ -121,19 +275,25 @@ function SignatureCanvas({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
   const lastPt = useRef<{ x: number; y: number } | null>(null);
-  const [hasStrokes, setHasStrokes] = useState(!!value);
+  const [hasStrokes, setHasStrokes] = useState(isImageSignature(value));
 
-  // Restore saved image on mount
+  // Restore saved image signatures; typed signatures render as text on the PDF overlay.
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !value) return;
+    const ctx = canvas?.getContext("2d");
+    if (!ctx || !canvas) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!isImageSignature(value)) {
+      setHasStrokes(false);
+      return;
+    }
     const img = new Image();
     img.onload = () => {
-      const ctx = canvas.getContext("2d");
-      if (ctx) ctx.drawImage(img, 0, 0);
+      ctx.drawImage(img, 0, 0);
+      setHasStrokes(true);
     };
     img.src = value;
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [value]);
 
   function getPoint(e: React.MouseEvent | React.TouchEvent) {
     const canvas = canvasRef.current!;
@@ -275,7 +435,17 @@ function FieldInput({
     return (
       <div className="rounded-xl border border-slate-200 bg-white p-3">
         <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-          Draw your signature below
+          Type or draw your signature
+        </p>
+        <input
+          value={isImageSignature(value) ? "" : String(value ?? "")}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Type your signature"
+          className="mb-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-2xl text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+          style={{ fontFamily: "Brush Script MT, Segoe Script, Lucida Handwriting, cursive" }}
+        />
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+          Or draw below
         </p>
         <SignatureCanvas
           value={String(value ?? "")}
@@ -293,8 +463,15 @@ function FieldInput({
     return (
       <div className="rounded-xl border border-slate-200 bg-white p-3">
         <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-          Draw your initials
+          Type or draw your initials
         </p>
+        <input
+          value={isImageSignature(value) ? "" : String(value ?? "")}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Type initials"
+          className="mb-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xl text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+          style={{ fontFamily: "Brush Script MT, Segoe Script, Lucida Handwriting, cursive" }}
+        />
         <SignatureCanvas
           value={String(value ?? "")}
           onChange={onChange}
@@ -394,6 +571,8 @@ export default function PublicFormSigningPage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  const [pageSizes, setPageSizes] = useState<Record<number, PageSize>>({});
   const [step, setStep] = useState<1 | 2 | 3>(2);
 
   const pdfUrl = `${getPortalApiBaseUrl()}/public/forms/${encodeURIComponent(token ?? "")}/pdf`;
@@ -520,6 +699,13 @@ export default function PublicFormSigningPage() {
   }, [form, values]);
 
   const totalRequired = useMemo(() => form?.fields.filter((f) => f.required).length ?? 0, [form]);
+  const renderedPageCount = useMemo(() => {
+    if (!form) return 1;
+    return Math.max(
+      form.template.pageCount ?? 1,
+      ...form.fields.map((field) => field.pageNumber || 1),
+    );
+  }, [form]);
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-indigo-50/30 to-slate-100 px-4 pb-12 pt-6">
@@ -534,6 +720,35 @@ export default function PublicFormSigningPage() {
         ) : null}
 
         {/* Header */}
+        <style jsx global>{`
+          @media print {
+            body * {
+              visibility: hidden !important;
+            }
+            .public-form-print-document,
+            .public-form-print-document * {
+              visibility: visible !important;
+            }
+            .public-form-print-document {
+              position: absolute !important;
+              left: 0 !important;
+              top: 0 !important;
+              width: 100% !important;
+              border: 0 !important;
+              box-shadow: none !important;
+            }
+            .public-form-print-scroll {
+              max-height: none !important;
+              overflow: visible !important;
+              padding: 0 !important;
+              background: white !important;
+            }
+            .public-form-pdf-actions {
+              display: none !important;
+            }
+          }
+        `}</style>
+
         <header className="mb-6">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="flex items-center gap-3">
@@ -613,10 +828,10 @@ export default function PublicFormSigningPage() {
           </div>
         ) : form ? (
           // ── Step 1: Review / Step 2: Complete & Sign ───────────────────────
-          <div className="grid gap-5 lg:grid-cols-[1fr_420px]">
+          <div className="grid items-start gap-5 lg:grid-cols-[1fr_420px]">
 
             {/* Left — PDF viewer */}
-            <div className="flex flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+            <div className="public-form-print-document self-start overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
               <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
                 <p className="text-sm font-semibold text-slate-700">
                   {form.template.name}
@@ -625,15 +840,24 @@ export default function PublicFormSigningPage() {
                   ) : null}
                 </p>
                 {!isDemo ? (
-                  <a
-                    href={pdfUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:border-indigo-300 hover:text-indigo-600"
-                  >
-                    <ExternalLink className="h-3.5 w-3.5" />
-                    Open full screen
-                  </a>
+                  <div className="public-form-pdf-actions flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => window.print()}
+                      className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:border-indigo-300 hover:text-indigo-600"
+                    >
+                      Print
+                    </button>
+                    <a
+                      href={pdfUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:border-indigo-300 hover:text-indigo-600"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      Original PDF
+                    </a>
+                  </div>
                 ) : (
                   <span className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-600">
                     Demo — mock document
@@ -704,16 +928,59 @@ export default function PublicFormSigningPage() {
                   </p>
                 </div>
               ) : (
-                <iframe
-                  title="Document preview"
-                  src={pdfUrl}
-                  className="h-[72vh] min-h-[500px] w-full bg-slate-100"
-                />
+                <div
+                  className={`public-form-print-scroll bg-slate-100/80 p-3 ${
+                    renderedPageCount > 1 ? "max-h-[calc(100vh-180px)] overflow-auto" : "overflow-visible"
+                  }`}
+                >
+                  {pdfError ? (
+                    <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                      PDF render error: {pdfError}
+                    </div>
+                  ) : null}
+                  <div className="mx-auto flex max-w-3xl flex-col items-center gap-4">
+                    {Array.from({ length: renderedPageCount }, (_, index) => {
+                      const pageNumber = index + 1;
+                      const pageSize = pageSizes[pageNumber];
+                      const pageFields = form.fields.filter((field) => field.pageNumber === pageNumber);
+                      return (
+                        <div
+                          key={pageNumber}
+                          className="relative w-full overflow-hidden rounded-sm bg-white shadow-sm ring-1 ring-slate-200/70"
+                          style={pageSize ? { width: pageSize.width, height: pageSize.height } : undefined}
+                        >
+                          <PdfPageCanvas
+                            pdfUrl={pdfUrl}
+                            pageNumber={pageNumber}
+                            onSize={(size) => setPageSizes((prev) => ({ ...prev, [pageNumber]: size }))}
+                            onError={setPdfError}
+                          />
+                          {pageSize ? (
+                            <div
+                              className="absolute inset-0"
+                              style={{ width: pageSize.width, height: pageSize.height }}
+                            >
+                              {pageFields.map((field) => (
+                                <PdfFieldOverlay
+                                  key={field.id}
+                                  field={field}
+                                  value={values[field.id]}
+                                  scale={pageSize.scale}
+                                  pageFields={pageFields}
+                                />
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               )}
             </div>
 
             {/* Right — Fields */}
-            <aside className="flex flex-col gap-4">
+            <aside className="public-form-sidebar flex flex-col gap-4">
 
               {/* Progress pill */}
               {form.fields.length > 0 ? (

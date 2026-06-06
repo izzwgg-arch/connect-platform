@@ -757,7 +757,7 @@ function FormEditorDrawer({ formId, onClose, onSaved }: { formId: string; onClos
       <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/10 px-4" style={{ background: "#1e293b" }}>
         <div className="flex items-center gap-3">
           <Layers className="h-5 w-5 text-indigo-400" />
-          <div>
+            <div>
             <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Field Placement Editor</p>
             <p className="text-sm font-semibold text-white">{detail?.form.name || "Loading…"}</p>
           </div>
@@ -846,7 +846,7 @@ function FormEditorDrawer({ formId, onClose, onSaved }: { formId: string; onClos
               {/* Type */}
               <label className="mb-3 block">
                 <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Type</span>
-                <ConnectSelect
+                  <ConnectSelect
                   value={fields[selectedIdx].fieldType}
                   onChange={(v) => setFields((prev) => prev.map((f, i) => i === selectedIdx ? { ...f, fieldType: v as FieldType } : f))}
                   options={FIELD_TYPES.map((t) => ({ value: t, label: t.charAt(0) + t.slice(1).toLowerCase() }))}
@@ -1148,8 +1148,8 @@ function FormEditorDrawer({ formId, onClose, onSaved }: { formId: string; onClos
                       }}
                     />
                   )
-                ))}
-              </div>
+                  ))}
+                </div>
             ) : !pdfError ? (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
                 <div className="h-7 w-7 animate-spin rounded-full border-2 border-slate-600 border-t-indigo-400" />
@@ -1159,7 +1159,7 @@ function FormEditorDrawer({ formId, onClose, onSaved }: { formId: string; onClos
           </div>
         </div>
 
-      </div>
+        </div>
     </div>
   );
 }

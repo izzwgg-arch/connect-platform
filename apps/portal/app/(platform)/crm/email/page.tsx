@@ -66,6 +66,7 @@ type RecentReply = {
   fromEmail: string | null;
   toEmail: string | null;
   previewSnippet: string | null;
+  replyText?: string | null;
   receivedAt: string | null;
   contactId: string | null;
 };
@@ -438,8 +439,11 @@ export default function CrmEmailLandingPage() {
                             ) : (message.fromEmail || "(unknown)")}
                             {message.receivedAt ? ` · ${formatCompactWhen(message.receivedAt)}` : null}
                           </p>
-                          {message.previewSnippet ? (
-                            <p className="mt-2 line-clamp-1 text-xs leading-relaxed text-crm-muted">{message.previewSnippet}</p>
+                          {message.replyText || message.previewSnippet ? (
+                            <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-crm-text">
+                              <span className="font-bold text-crm-muted">Reply: </span>
+                              {message.replyText || message.previewSnippet}
+                            </p>
                           ) : null}
                         </div>
                       </div>
