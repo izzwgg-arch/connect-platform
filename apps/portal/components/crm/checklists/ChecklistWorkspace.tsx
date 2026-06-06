@@ -12,11 +12,14 @@ import {
   RotateCcw,
   ClipboardList,
   AlertCircle,
+  ChevronRight,
+  Clock,
+  ListChecks,
 } from "lucide-react";
 import { formatCrmSaveError } from "../crmSaveHelpers";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
-import type { ChecklistHeaderTab, ChecklistViewMode } from "./ChecklistCommandHeader";
+import type { ChecklistHeaderTab } from "./ChecklistCommandHeader";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -40,9 +43,9 @@ type EditItem = { label: string; required: boolean; sortOrder: number };
 
 type Props = {
   selected: Checklist | null;
+  selectedId?: string | null;
   checklists: Checklist[];
   totalCount: number;
-  viewMode: ChecklistViewMode;
   activeFilter: ChecklistHeaderTab;
   search: string;
   onSelect: (id: string) => void;
@@ -232,10 +235,62 @@ function ItemListEditor({
   );
 }
 
-function checklistStatus(checklist: Checklist) {
-  if (!checklist.isActive) return "Archived";
-  if (checklist.items.length === 0) return "Draft";
-  return "Active";
+function checklistReadiness(checklist: Checklist) {
+  const requiredCount = checklist.items.filter((item) => item.required).length;
+  if (!checklist.isActive) {
+    return {
+      label: "Archived",
+      detail: "Hidden from active workflows",
+      percent: 0,
+      tone: "muted" as const,
+      requiredCount,
+    };
+  }
+  if (checklist.items.length === 0) {
+    return {
+      label: "Draft",
+      detail: "Add steps to finish setup",
+      percent: 12,
+      tone: "warning" as const,
+      requiredCount,
+    };
+  }
+  if (requiredCount === 0) {
+    return {
+      label: "Needs required steps",
+      detail: "Mark at least one required step",
+      percent: 64,
+      tone: "warning" as const,
+      requiredCount,
+    };
+  }
+  return {
+    label: "Finished setup",
+    detail: "Ready for live CRM workflow",
+    percent: 100,
+    tone: "success" as const,
+    requiredCount,
+  };
+}
+
+function statusPillClass(tone: ReturnType<typeof checklistReadiness>["tone"]) {
+  if (tone === "success") return "tasks-status-completed";
+  if (tone === "warning") return "tasks-status-today";
+  return "tasks-status-muted";
+}
+
+function relativeDate(iso: string | null | undefined): string {
+  if (!iso) return "No activity";
+  const ts = new Date(iso).getTime();
+  if (!Number.isFinite(ts)) return "No activity";
+  const diff = Math.max(0, Date.now() - ts);
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 60) return minutes <= 1 ? "just now" : `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function ChecklistEmptyState({
@@ -272,57 +327,102 @@ function ChecklistEmptyState({
   );
 }
 
-function ChecklistCard({
+function ChecklistIndexRow({
   checklist,
+  rank,
+  selected,
   onSelect,
 }: {
   checklist: Checklist;
+  rank: number;
+  selected?: boolean;
   onSelect: (id: string) => void;
 }) {
-  const requiredCount = checklist.items.filter((item) => item.required).length;
-  const status = checklistStatus(checklist);
+  const readiness = checklistReadiness(checklist);
+  const updatedLabel = relativeDate(checklist.updatedAt);
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={() => onSelect(checklist.id)}
-      className="tasks-list-row group rounded-crm border border-crm-border/60 p-4 text-left transition-colors"
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect(checklist.id);
+        }
+      }}
+      className={cn(
+        "crm-queue-row crm-checklist-row group",
+        selected && "crm-queue-row-selected checklist-index-row-active",
+        !checklist.isActive && "crm-queue-row-readonly opacity-90"
+      )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-3">
-          <span className="tasks-kpi-icon tasks-icon-scheduled">
-            <ClipboardList className="h-4 w-4" />
-          </span>
-          <span className="min-w-0">
-            <span className="block truncate text-sm font-semibold text-crm-text">
-              {checklist.name}
+      <div className="crm-queue-row-grid">
+        <label
+          className="crm-contact-row-check"
+          onClick={(event) => event.stopPropagation()}
+          aria-label={`Select ${checklist.name}`}
+        >
+          <input
+            type="checkbox"
+            readOnly
+            checked={selected}
+            className={crm.checkbox}
+          />
+        </label>
+        <span className="crm-queue-row-rank tabular-nums">{rank}</span>
+
+        <div className="crm-queue-row-avatar checklist-row-avatar" aria-hidden>
+          <ClipboardList className="h-4 w-4" />
+        </div>
+
+        <div className="crm-queue-row-main min-w-0">
+          <div className="crm-queue-row-title-line">
+            <span className="crm-queue-row-name truncate">{checklist.name}</span>
+            <span className={cn("crm-queue-pill", checklist.isActive ? "crm-queue-pill-stage" : "crm-queue-pill-warning")}>
+              {checklist.isActive ? "Active" : "Archived"}
             </span>
-            <span className="mt-1 block text-xs text-crm-muted">
-              {checklist.items.length} steps · {requiredCount} required
+            <span className={cn("tasks-status-pill", statusPillClass(readiness.tone))}>
+              {readiness.label}
             </span>
+          </div>
+          <p className="crm-queue-row-sub truncate">{readiness.detail}</p>
+        </div>
+
+        <div className="crm-queue-row-phone hidden md:flex">
+          <ListChecks className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">
+            {checklist.items.length} step{checklist.items.length !== 1 ? "s" : ""}
           </span>
         </div>
-        <span
-          className={cn(
-            "tasks-status-pill",
-            status === "Active"
-              ? "tasks-status-completed"
-              : status === "Draft"
-                ? "tasks-status-today"
-                : "tasks-status-muted"
-          )}
-        >
-          {status}
+
+        <div className="crm-queue-row-email hidden lg:flex">
+          <Check className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">{readiness.requiredCount} required</span>
+        </div>
+
+        <div className="crm-queue-row-meta hidden xl:flex">
+          <span className="crm-queue-pill crm-queue-pill-muted inline-flex items-center gap-0.5">
+            <Clock className="h-3 w-3" />
+            {updatedLabel}
+          </span>
+        </div>
+
+        <span className={cn("crm-queue-row-status shrink-0 tasks-status-pill", statusPillClass(readiness.tone))}>
+          {readiness.percent}%
         </span>
+
+        <ChevronRight className="crm-queue-row-chevron h-4 w-4 shrink-0" />
       </div>
-    </button>
+    </div>
   );
 }
 
 function ChecklistCollection({
   checklists,
   totalCount,
-  viewMode,
+  selectedId,
   activeFilter,
   search,
   onSelect,
@@ -331,6 +431,7 @@ function ChecklistCollection({
   checklists: Checklist[];
   totalCount: number;
   viewMode: ChecklistViewMode;
+  selectedId?: string | null;
   activeFilter: ChecklistHeaderTab;
   search: string;
   onSelect: (id: string) => void;
@@ -347,86 +448,37 @@ function ChecklistCollection({
   }
 
   return (
-    <section className="tasks-list-card overflow-hidden">
-      <div className="tasks-list-card-header flex items-center justify-between gap-3 px-4 py-4 sm:px-5">
+    <section className="checklist-collection-shell crm-queue-list-panel">
+      <div className="crm-queue-list-head">
         <div className="flex items-center gap-2">
-          <ClipboardList className="h-4 w-4 text-crm-muted" />
-          <h2 className="text-xs font-bold uppercase tracking-[0.14em] text-crm-text">
-            Checklists ({checklists.length})
-          </h2>
+          <ClipboardList className="h-3.5 w-3.5 text-crm-muted" />
+          <h2>Checklist rows</h2>
         </div>
-        <span className="text-xs font-medium text-crm-muted tabular-nums">
-          {totalCount} total
+        <span className="text-[10px] font-semibold text-crm-muted tabular-nums">
+          {checklists.length} shown · {totalCount} total
         </span>
       </div>
 
-      {viewMode === "list" ? (
-        <>
-          <div className="hidden border-b border-crm-border/55 px-5 py-2.5 text-[10px] font-bold uppercase tracking-[0.14em] text-crm-muted md:grid md:grid-cols-[minmax(0,1fr)_auto_auto_auto] md:items-center md:gap-4">
-            <span>Checklist</span>
-            <span>Status</span>
-            <span>Steps</span>
-            <span>Updated</span>
-          </div>
-          <div className="divide-y divide-crm-border/55">
-            {checklists.map((checklist) => {
-              const requiredCount = checklist.items.filter((item) => item.required).length;
-              const status = checklistStatus(checklist);
-              return (
-                <button
-                  key={checklist.id}
-                  type="button"
-                  onClick={() => onSelect(checklist.id)}
-                  className="tasks-list-row grid w-full grid-cols-1 gap-2 px-4 py-4 text-left md:grid-cols-[minmax(0,1fr)_auto_auto_auto] md:items-center md:gap-4 sm:px-5"
-                >
-                  <span className="min-w-0">
-                    <span className="block truncate text-sm font-semibold text-crm-text">
-                      {checklist.name}
-                    </span>
-                    <span className="text-xs text-crm-muted">{requiredCount} required</span>
-                  </span>
-                  <span
-                    className={cn(
-                      "tasks-status-pill w-fit",
-                      status === "Active"
-                        ? "tasks-status-completed"
-                        : status === "Draft"
-                          ? "tasks-status-today"
-                          : "tasks-status-muted"
-                    )}
-                  >
-                    {status}
-                  </span>
-                  <span className="text-sm font-medium text-crm-muted tabular-nums">
-                    {checklist.items.length}
-                  </span>
-                  <span className="text-sm font-medium text-crm-muted">
-                    {new Date(checklist.updatedAt).toLocaleDateString(undefined, {
-                      month: "short",
-                      day: "numeric",
-                    })}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </>
-      ) : (
-        <div className="grid gap-3 p-3 sm:grid-cols-2 sm:p-4 xl:grid-cols-3">
-          {checklists.map((checklist) => (
-            <ChecklistCard key={checklist.id} checklist={checklist} onSelect={onSelect} />
-          ))}
-        </div>
-      )}
+      <div className="crm-queue-row-list">
+        {checklists.map((checklist, index) => (
+          <ChecklistIndexRow
+            key={checklist.id}
+            checklist={checklist}
+            rank={index + 1}
+            selected={selectedId === checklist.id}
+            onSelect={onSelect}
+          />
+        ))}
+      </div>
     </section>
   );
 }
 
 export function ChecklistWorkspace({
   selected,
+  selectedId,
   checklists,
   totalCount,
-  viewMode,
   activeFilter,
   search,
   onSelect,
@@ -563,7 +615,7 @@ export function ChecklistWorkspace({
       <ChecklistCollection
         checklists={checklists}
         totalCount={totalCount}
-        viewMode={viewMode}
+        selectedId={selectedId}
         activeFilter={activeFilter}
         search={search}
         onSelect={onSelect}

@@ -3,8 +3,6 @@ import {
   Archive,
   ClipboardList,
   FileText,
-  LayoutGrid,
-  List,
   type LucideIcon,
   Plus,
   Search,
@@ -14,10 +12,10 @@ import { cn } from "../cn";
 import { ConnectSelect } from "../../ConnectSelect";
 import { CRMPageHeader } from "../CRMPageHeader";
 import { CRMWorkspaceHeader, CRMWorkspaceToolbar } from "../CRMWorkspaceShell";
+import { crm } from "../crmClasses";
 
 export type ChecklistHeaderTab = "all" | "active" | "draft" | "archived";
 export type ChecklistSortMode = "updated" | "name" | "steps";
-export type ChecklistViewMode = "card" | "list";
 
 const TABS: { id: ChecklistHeaderTab; label: string }[] = [
   { id: "all", label: "All Checklists" },
@@ -39,8 +37,6 @@ type Props = {
   onSearchChange: (value: string) => void;
   sortMode: ChecklistSortMode;
   onSortModeChange: (mode: ChecklistSortMode) => void;
-  viewMode: ChecklistViewMode;
-  onViewModeChange: (mode: ChecklistViewMode) => void;
   shownCount: number;
   onNewBlank: () => void;
 };
@@ -74,7 +70,7 @@ function KpiTile({
         : "text-crm-text";
 
   return (
-    <div className="tasks-kpi-card">
+    <div className="crm-queue-kpi-card tasks-kpi-card">
       <div className="flex min-w-0 flex-col gap-2">
         <span className="text-[11px] font-semibold leading-none text-crm-muted">
           {label}
@@ -109,8 +105,6 @@ export function ChecklistCommandHeader({
   onSearchChange,
   sortMode,
   onSortModeChange,
-  viewMode,
-  onViewModeChange,
   shownCount,
   onNewBlank,
 }: Props) {
@@ -118,21 +112,24 @@ export function ChecklistCommandHeader({
     <>
       <CRMWorkspaceHeader>
         <CRMPageHeader
+          compact
           icon={<ClipboardList className="h-5 w-5" />}
           title="Checklists"
           subtitle="Workflow checklists for agents, live calls, and campaign outreach."
-          className="tasks-page-header"
+          className={cn("tasks-page-header", crm.contactsHeaderPanel)}
           actions={
-            <button type="button" onClick={onNewBlank} className="tasks-primary-action">
-              <Plus size={15} />
-              New Checklist
-            </button>
+            <div className="contacts-hero-actions flex flex-wrap items-center gap-2">
+              <button type="button" onClick={onNewBlank} className="tasks-primary-action">
+                <Plus size={15} />
+                New Checklist
+              </button>
+            </div>
           }
         />
       </CRMWorkspaceHeader>
 
       <CRMWorkspaceToolbar className="flex flex-col gap-3">
-        <div className="tasks-kpi-grid grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="crm-queue-kpi-strip tasks-kpi-grid grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <KpiTile
             label="Active"
             value={String(activeCount)}
@@ -162,7 +159,7 @@ export function ChecklistCommandHeader({
           />
         </div>
 
-        <div className="tasks-filter-bar flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="crm-queue-filter-bar tasks-filter-bar flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex flex-wrap items-center gap-2">
             {TABS.map((t) => (
               <button
@@ -203,26 +200,6 @@ export function ChecklistCommandHeader({
                 size="sm"
               />
             </label>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => onViewModeChange("card")}
-                className={cn("tasks-filter-icon-button", viewMode === "card" && "tasks-filter-icon-button-active")}
-                title="Card View"
-              >
-                <LayoutGrid className="h-4 w-4" />
-                <span className="sr-only">Card View</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => onViewModeChange("list")}
-                className={cn("tasks-filter-icon-button", viewMode === "list" && "tasks-filter-icon-button-active")}
-                title="List View"
-              >
-                <List className="h-4 w-4" />
-                <span className="sr-only">List View</span>
-              </button>
-            </div>
             <span className="text-xs font-medium text-crm-muted tabular-nums">
               {shownCount} shown
             </span>

@@ -8,13 +8,12 @@ import {
   normalizeChecklist,
   requireSavedChecklist,
 } from "../../../../components/crm/crmSaveHelpers";
-import { apiGet, apiPost, apiPatch } from "../../../../services/apiClient";
+import { apiDelete, apiGet, apiPost, apiPatch } from "../../../../services/apiClient";
 import { crm } from "../../../../components/crm/crmClasses";
 import {
   ChecklistCommandHeader,
   type ChecklistSortMode,
   type ChecklistHeaderTab,
-  type ChecklistViewMode,
 } from "../../../../components/crm/checklists/ChecklistCommandHeader";
 import { ChecklistWorkspace } from "../../../../components/crm/checklists/ChecklistWorkspace";
 import { ChecklistProgressPanel } from "../../../../components/crm/checklists/ChecklistProgressPanel";
@@ -49,7 +48,130 @@ type Checklist = {
 };
 
 type EditItem = { label: string; required: boolean; sortOrder: number };
-const CHECKLIST_VIEW_STORAGE_KEY = "crm-checklists-view-mode";
+
+const DEV_CHECKLIST_PREVIEW_COUNT = 22;
+
+const DEV_PANEL_SCROLL_STEPS = [
+  "Confirm customer identity and workspace",
+  "Review consent for recording and notes",
+  "Open current CRM contact timeline",
+  "Verify preferred callback number",
+  "Confirm account owner assignment",
+  "Check active campaigns and suppression flags",
+  "Review open tasks due today",
+  "Validate funding source and eligibility notes",
+  "Confirm required disclosures were read",
+  "Capture objection or buying signal",
+  "Tag lead intent and urgency",
+  "Schedule next follow-up task",
+  "Send summary email or SMS",
+  "Attach supporting documents",
+  "Mark high-priority escalation if needed",
+  "Update campaign outcome",
+  "Verify no duplicate contact exists",
+  "Confirm local time window for follow-up",
+  "Log final disposition",
+  "Notify assigned teammate",
+  "Check automation enrollment",
+  "Close the interaction with next step",
+];
+
+function makeDevChecklist(
+  id: string,
+  name: string,
+  stepLabels: string[],
+  options: { active?: boolean; updatedAt: string; requiredEvery?: number }
+): Checklist {
+  const requiredEvery = options.requiredEvery ?? 3;
+  return {
+    id,
+    name,
+    isActive: options.active ?? true,
+    createdAt: "2026-05-20T14:00:00.000Z",
+    updatedAt: options.updatedAt,
+    items: stepLabels.map((label, index) => ({
+      id: `${id}-step-${index + 1}`,
+      label,
+      required: index === 0 || index % requiredEvery === 0,
+      sortOrder: index,
+    })),
+  };
+}
+
+const DEV_CHECKLIST_ROWS: Checklist[] = [
+  makeDevChecklist(
+    "dev-checklist-panel-scroll",
+    "Side Panel Scroll QA Checklist",
+    DEV_PANEL_SCROLL_STEPS,
+    { updatedAt: "2026-06-05T19:30:00.000Z", requiredEvery: 2 }
+  ),
+  makeDevChecklist(
+    "dev-checklist-live-call",
+    "Live Call Opening Workflow",
+    ["Confirm caller", "Open contact", "Read compliance line", "Capture intent", "Create follow-up"],
+    { updatedAt: "2026-06-05T18:20:00.000Z" }
+  ),
+  makeDevChecklist(
+    "dev-checklist-campaign-launch",
+    "Campaign Launch Review",
+    ["Audience selected", "Script approved", "Calling window checked", "Sender verified", "QA test completed"],
+    { updatedAt: "2026-06-05T17:40:00.000Z", requiredEvery: 2 }
+  ),
+  makeDevChecklist(
+    "dev-checklist-funding-intake",
+    "Funding Intake Checklist",
+    ["Business name", "Monthly revenue", "Time in business", "Bank statements", "Owner consent"],
+    { updatedAt: "2026-06-05T16:50:00.000Z" }
+  ),
+  makeDevChecklist(
+    "dev-checklist-compliance",
+    "Compliance Follow-up",
+    ["TCPA status", "DNC check", "Disclosure read", "Recording noted", "Disposition saved"],
+    { updatedAt: "2026-06-05T15:15:00.000Z", requiredEvery: 2 }
+  ),
+  makeDevChecklist(
+    "dev-checklist-draft",
+    "Draft Outreach Playbook",
+    [],
+    { updatedAt: "2026-06-05T14:10:00.000Z" }
+  ),
+  makeDevChecklist(
+    "dev-checklist-archived",
+    "Archived Legacy Intake",
+    ["Verify owner", "Collect docs", "Send recap"],
+    { active: false, updatedAt: "2026-06-04T20:15:00.000Z" }
+  ),
+];
+
+function cloneChecklistForDevPreview(checklist: Checklist, index: number): Checklist {
+  const cloneNumber = index + 1;
+  return {
+    ...checklist,
+    id: `${checklist.id}-preview-${cloneNumber}`,
+    name: `${checklist.name} ${cloneNumber}`,
+    updatedAt: new Date(
+      new Date(checklist.updatedAt).getTime() - cloneNumber * 13 * 60_000
+    ).toISOString(),
+    items: checklist.items.map((item) => ({
+      ...item,
+      id: `${checklist.id}-preview-${cloneNumber}-step-${item.sortOrder}`,
+    })),
+  };
+}
+
+function expandChecklistsForDevPreview(rows: Checklist[]): Checklist[] {
+  if (process.env.NODE_ENV !== "development") return rows;
+  const source =
+    rows.length === 0 || rows.length < DEV_CHECKLIST_PREVIEW_COUNT
+      ? [...DEV_CHECKLIST_ROWS, ...rows]
+      : rows;
+  if (source.length >= DEV_CHECKLIST_PREVIEW_COUNT) return source;
+  const clonesNeeded = DEV_CHECKLIST_PREVIEW_COUNT - source.length;
+  const clones = Array.from({ length: clonesNeeded }, (_, index) =>
+    cloneChecklistForDevPreview(source[index % source.length], index)
+  );
+  return [...source, ...clones];
+}
 
 function isDraftChecklist(checklist: Checklist) {
   return checklist.isActive && checklist.items.length === 0;
@@ -75,7 +197,6 @@ export default function CrmChecklistsPage() {
   const [headerTab, setHeaderTab] = useState<ChecklistHeaderTab>("all");
   const [search, setSearch] = useState("");
   const [sortMode, setSortMode] = useState<ChecklistSortMode>("updated");
-  const [viewMode, setViewMode] = useState<ChecklistViewMode>("card");
 
   // Create state
   const [creating, setCreating] = useState(false);
@@ -84,17 +205,22 @@ export default function CrmChecklistsPage() {
   const [createSaving, setCreateSaving] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  const activeChecklists = useMemo(
-    () => checklists.filter((c) => c.isActive && !isDraftChecklist(c)),
+  const sourceChecklists = useMemo(
+    () => expandChecklistsForDevPreview(checklists),
     [checklists]
+  );
+
+  const activeChecklists = useMemo(
+    () => sourceChecklists.filter((c) => c.isActive && !isDraftChecklist(c)),
+    [sourceChecklists]
   );
   const draftCount = useMemo(
-    () => checklists.filter(isDraftChecklist).length,
-    [checklists]
+    () => sourceChecklists.filter(isDraftChecklist).length,
+    [sourceChecklists]
   );
   const archivedCount = useMemo(
-    () => checklists.filter((c) => !c.isActive).length,
-    [checklists]
+    () => sourceChecklists.filter((c) => !c.isActive).length,
+    [sourceChecklists]
   );
   const liveReadyCount = useMemo(
     () => activeChecklists.filter(isLiveReady).length,
@@ -108,7 +234,7 @@ export default function CrmChecklistsPage() {
 
   const filteredChecklists = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return checklists
+    return sourceChecklists
       .filter((checklist) => {
         if (headerTab === "active") return checklist.isActive && !isDraftChecklist(checklist);
         if (headerTab === "draft") return isDraftChecklist(checklist);
@@ -124,7 +250,7 @@ export default function CrmChecklistsPage() {
         if (sortMode === "steps") return b.items.length - a.items.length || a.name.localeCompare(b.name);
         return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
       });
-  }, [checklists, headerTab, search, sortMode]);
+  }, [sourceChecklists, headerTab, search, sortMode]);
 
   async function loadList(options?: { silent?: boolean; mergeLocal?: Checklist[] }) {
     if (!options?.silent) setLoading(true);
@@ -152,16 +278,6 @@ export default function CrmChecklistsPage() {
     loadList();
   }, []);
 
-  useEffect(() => {
-    const saved = window.localStorage.getItem(CHECKLIST_VIEW_STORAGE_KEY);
-    if (saved === "card" || saved === "list") setViewMode(saved);
-  }, []);
-
-  const handleViewModeChange = useCallback((mode: ChecklistViewMode) => {
-    setViewMode(mode);
-    window.localStorage.setItem(CHECKLIST_VIEW_STORAGE_KEY, mode);
-  }, []);
-
   function handleNewBlank() {
     setCreating(true);
     setSelected(null);
@@ -187,7 +303,7 @@ export default function CrmChecklistsPage() {
   });
 
   function handleSelect(id: string) {
-    const found = checklists.find((c) => c.id === id) ?? null;
+    const found = sourceChecklists.find((c) => c.id === id) ?? null;
     setSelected(found);
     setCreating(false);
     setHeaderTab("all");
@@ -269,18 +385,36 @@ export default function CrmChecklistsPage() {
     [selected]
   );
 
+  const handleDelete = useCallback(
+    async (id: string) => {
+      const targetName =
+        selected?.id === id
+          ? selected.name
+          : sourceChecklists.find((checklist) => checklist.id === id)?.name ?? "this checklist";
+      if (!window.confirm(`Delete "${targetName}"? This removes it from the checklist list.`)) return;
+
+      await apiDelete(`/crm/checklists/${id}`);
+      setChecklists((prev) => prev.filter((checklist) => checklist.id !== id));
+      if (selected?.id === id) setSelected(null);
+      setCreating(false);
+      setSavedMsg("Deleted");
+      setTimeout(() => setSavedMsg(""), 2500);
+    },
+    [selected, sourceChecklists]
+  );
+
   // Sync selected checklist data when checklists list updates
   useEffect(() => {
     if (selected) {
-      const updated = checklists.find((c) => c.id === selected.id);
+      const updated = sourceChecklists.find((c) => c.id === selected.id);
       if (updated && updated !== selected) setSelected(updated);
     }
-  }, [checklists, selected]);
+  }, [sourceChecklists, selected]);
 
   if (loading) {
     return (
       <PermissionGate permission="can_view_crm_checklists" fallback={<div className="state-box">You do not have Checklists access.</div>}>
-      <CRMPageShell className={crm.tasksWorkspace} innerClassName={crm.pageInnerTasks}>
+      <CRMPageShell className={cn(crm.queueWorkspace, crm.checklistWorkspace)} innerClassName={crm.pageInnerChecklist}>
           <LoadingSkeleton />
       </CRMPageShell>
       </PermissionGate>
@@ -289,7 +423,7 @@ export default function CrmChecklistsPage() {
 
   return (
     <PermissionGate permission="can_view_crm_checklists" fallback={<div className="state-box">You do not have Checklists access.</div>}>
-    <CRMPageShell className={crm.tasksWorkspace} innerClassName={crm.pageInnerTasks}>
+    <CRMPageShell className={cn(crm.queueWorkspace, crm.checklistWorkspace)} innerClassName={crm.pageInnerChecklist}>
       <span className="sr-only">CRM checklist command center</span>
         <CRMWorkspaceShell>
           <CRMWorkspaceChrome>
@@ -297,7 +431,7 @@ export default function CrmChecklistsPage() {
               activeCount={activeChecklists.length}
               archivedCount={archivedCount}
               draftCount={draftCount}
-              totalCount={checklists.length}
+              totalCount={sourceChecklists.length}
               avgRequiredPct={avgRequiredPct}
               liveReadyCount={liveReadyCount}
               tab={headerTab}
@@ -306,8 +440,6 @@ export default function CrmChecklistsPage() {
               onSearchChange={setSearch}
               sortMode={sortMode}
               onSortModeChange={setSortMode}
-              viewMode={viewMode}
-              onViewModeChange={handleViewModeChange}
               shownCount={filteredChecklists.length}
               onNewBlank={handleNewBlank}
             />
@@ -326,13 +458,13 @@ export default function CrmChecklistsPage() {
           </CRMWorkspaceChrome>
 
           <CRMWorkspaceBody split>
-            <CRMWorkspaceMain>
-              <CRMWorkspaceScrollRegion>
+            <CRMWorkspaceMain className="crm-queue-main-workspace">
+              <CRMWorkspaceScrollRegion className="crm-queue-center-workspace">
                 <ChecklistWorkspace
-                  selected={selected}
+                  selected={null}
+                  selectedId={selected?.id ?? null}
                   checklists={filteredChecklists}
-                  totalCount={checklists.length}
-                  viewMode={viewMode}
+                  totalCount={sourceChecklists.length}
                   activeFilter={headerTab}
                   search={search}
                   onSelect={handleSelect}
@@ -340,7 +472,7 @@ export default function CrmChecklistsPage() {
                   onArchive={handleArchive}
                   onRestore={handleRestore}
                   savedMsg={savedMsg}
-                  creating={creating}
+                  creating={false}
                   createName={createName}
                   createItems={createItems}
                   onCreateNameChange={setCreateName}
@@ -354,13 +486,24 @@ export default function CrmChecklistsPage() {
               </CRMWorkspaceScrollRegion>
             </CRMWorkspaceMain>
 
-            <CRMWorkspaceRightRail>
+            <CRMWorkspaceRightRail className="crm-queue-right-rail crm-queue-detail-rail flex flex-col min-h-0">
               <ChecklistProgressPanel
                 checklist={selected}
-                checklists={checklists}
-                avgRequiredPct={avgRequiredPct}
-                liveReadyCount={liveReadyCount}
+                creating={creating}
+                createName={createName}
+                createItems={createItems}
+                createSaving={createSaving}
+                createError={createError}
+                savedMsg={savedMsg}
                 onNewBlank={handleNewBlank}
+                onCreateNameChange={setCreateName}
+                onCreateItemsChange={setCreateItems}
+                onConfirmCreate={handleConfirmCreate}
+                onCancelCreate={handleCancelCreate}
+                onSaveEdit={handleSaveEdit}
+                onArchive={handleArchive}
+                onRestore={handleRestore}
+                onDelete={handleDelete}
               />
             </CRMWorkspaceRightRail>
           </CRMWorkspaceBody>
