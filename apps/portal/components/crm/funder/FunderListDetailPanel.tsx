@@ -62,6 +62,7 @@ export function FunderListDetailPanel({
   onPrevious,
   onNext,
   onOpen,
+  onOpenWorkspace,
   onEdit,
   onDelete,
 }: {
@@ -73,12 +74,25 @@ export function FunderListDetailPanel({
   onPrevious: () => void;
   onNext: () => void;
   onOpen: () => void;
+  onOpenWorkspace?: (tab?: "timeline" | "sms" | "email") => void;
   onEdit?: () => void;
   onDelete?: () => void;
 }) {
   const archived = !!(funder.archivedAt || funder.active === false);
   const location = [funder.city, funder.state, funder.zip].filter(Boolean).join(", ");
   const statusColor = STATUS_HEX[funder.status];
+
+  function handleChannelAction(key: "email" | "sms" | "call") {
+    if (key === "call" && funder.phone) {
+      window.dispatchEvent(new CustomEvent("crm:dial", { detail: { target: funder.phone } }));
+      return;
+    }
+    if (onOpenWorkspace) {
+      onOpenWorkspace(key === "email" ? "email" : "sms");
+      return;
+    }
+    onOpen();
+  }
 
   return (
     <aside className="crm-queue-detail-panel crm-contact-detail-panel custom-scrollbar" aria-label="Funder details">
@@ -137,11 +151,7 @@ export function FunderListDetailPanel({
                 key={key}
                 type="button"
                 disabled={disabled}
-                onClick={() => {
-                  if (key === "email" && funder.email) window.location.href = `mailto:${funder.email}`;
-                  if (key === "sms" && funder.phone) window.location.href = `sms:${funder.phone}`;
-                  if (key === "call" && funder.phone) window.location.href = `tel:${funder.phone}`;
-                }}
+                onClick={() => handleChannelAction(key)}
                 className={cn(
                   "crm-queue-detail-channel",
                   `crm-queue-detail-channel-${key}`,
@@ -184,12 +194,18 @@ export function FunderListDetailPanel({
         <p className="crm-queue-detail-section-label">Funder actions</p>
         <button
           type="button"
-          onClick={onOpen}
+          onClick={() => {
+            if (onOpenWorkspace) {
+              onOpenWorkspace("timeline");
+              return;
+            }
+            onOpen();
+          }}
           disabled={archived}
           className={cn(crm.btnPrimary, "crm-queue-detail-primary-action w-full justify-center gap-2")}
         >
           <PhoneCall className="h-4 w-4" />
-          Open funder
+          Open workspace
         </button>
         <div className="crm-queue-detail-action-grid">
           {onEdit && !archived ? (

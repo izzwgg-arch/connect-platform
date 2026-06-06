@@ -1309,33 +1309,36 @@ export default function FundersPage() {
                   ) : null}
                 </div>
               ) : (
-                <div className="crm-queue-list-panel">
-                  <div className="crm-queue-list-head">
-                    <label className="flex cursor-pointer items-center gap-2 text-xs text-crm-muted">
-                      <input
-                        type="checkbox"
-                        className={crm.checkbox}
-                        checked={visibleFunders.length > 0 && visibleFunders.every((f) => selected.has(f.id))}
-                        onChange={() => visibleFunders.length > 0 && visibleFunders.every((f) => selected.has(f.id)) ? clearSelection() : selectAll()}
-                        title="Select all visible funders"
-                      />
-                      <span>Select active on this page</span>
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-semibold text-crm-muted tabular-nums">
-                        {visibleFunders.length} shown · {displayTotal} total
-                      </span>
-                      <button type="button" onClick={() => setShowNewTag(true)} className="funders-mini-action">
-                        <Plus size={13} /> New Tag
-                      </button>
+                <>
+                  <div className="crm-funder-list-controls-card">
+                    <div className="crm-queue-list-head">
+                      <label className="flex cursor-pointer items-center gap-2 text-xs text-crm-muted">
+                        <input
+                          type="checkbox"
+                          className={crm.checkbox}
+                          checked={visibleFunders.length > 0 && visibleFunders.every((f) => selected.has(f.id))}
+                          onChange={() => visibleFunders.length > 0 && visibleFunders.every((f) => selected.has(f.id)) ? clearSelection() : selectAll()}
+                          title="Select all visible funders"
+                        />
+                        <span>Select active on this page</span>
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-semibold text-crm-muted tabular-nums">
+                          {visibleFunders.length} shown · {displayTotal} total
+                        </span>
+                        <button type="button" onClick={() => setShowNewTag(true)} className="funders-mini-action">
+                          <Plus size={13} /> New Tag
+                        </button>
+                      </div>
                     </div>
                   </div>
-                  <div className="crm-queue-row-list">
-                    {visibleFunders.map((f, index) => {
-                      const location = [f.city, f.state].filter(Boolean).join(", ");
-                      return (
-                        <div
-                          key={f.id}
+                  <div className="crm-queue-list-panel crm-funder-list-rows-card">
+                    <div className="crm-queue-row-list">
+                      {visibleFunders.map((f, index) => {
+                        const location = [f.city, f.state].filter(Boolean).join(", ");
+                        return (
+                          <div
+                            key={f.id}
                           role="button"
                           tabIndex={0}
                           onClick={() => setActiveIndex(index)}
@@ -1411,10 +1414,11 @@ export default function FundersPage() {
                             <ChevronRight className="crm-queue-row-chevron h-4 w-4 shrink-0" />
                           </div>
                         </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
+                </>
               )}
             </CRMWorkspaceScrollRegion>
 
@@ -1455,6 +1459,7 @@ export default function FundersPage() {
                   onPrevious={() => setActiveIndex((i) => Math.max(0, i - 1))}
                   onNext={() => setActiveIndex((i) => Math.min(visibleFunders.length - 1, i + 1))}
                   onOpen={() => router.push(`/crm/funders/${activeFunder.id}`)}
+                  onOpenWorkspace={(tab = "timeline") => router.push(`/crm/funders/${activeFunder.id}/workspace?tab=${tab}`)}
                   onEdit={!activeFunder.archivedAt && activeFunder.active !== false ? () => router.push(`/crm/funders/${activeFunder.id}?edit=1`) : undefined}
                   onDelete={canManageFunders && !activeFunder.archivedAt && activeFunder.active !== false ? () => setDeleteTarget(activeFunder) : undefined}
                 />
