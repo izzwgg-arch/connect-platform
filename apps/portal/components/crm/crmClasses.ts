@@ -329,7 +329,7 @@ export const crm = {
 
   /** Phase 19J — checklist operational workspace */
   pageInnerChecklist:
-    "crm-checklist-inner mx-auto w-full max-w-[min(100%,1540px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-4 min-h-0",
+    "crm-checklist-inner mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
   /** Phase 19J — checklist operational workspace; theme tokens via globals `.crm-checklist-workspace` */
   checklistWorkspace: "crm-checklist-workspace relative min-h-full w-full min-h-0",
   checklistAmbientLayer:
@@ -445,7 +445,7 @@ export const crm = {
 
   /** Phase 19I / 19I.1 / 19I.2 — scripts premium playbook (theme-aware via globals `.crm-scripts-workspace`) */
   pageInnerScripts:
-    "mx-auto w-full max-w-[min(100%,1540px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-4 min-h-0",
+    "mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
   scriptsWorkspace: "crm-scripts-workspace w-full min-h-0",
   scriptsHero:
     "scripts-command-hero relative overflow-hidden rounded-[1.75rem] border px-4 py-5 sm:px-6 sm:py-6 lg:px-7",

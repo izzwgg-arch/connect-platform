@@ -57,7 +57,7 @@ export default function CrmLayout({ children }: { children: ReactNode }) {
   }, [hasCrmPermission, isAdmin, permissionsHydrated, router]);
 
   if (!permissionsHydrated) {
-    return <>{children}</>;
+    return <div className="crm-route-background">{children}</div>;
   }
 
   if (!hasCrmPermission) {
@@ -66,8 +66,10 @@ export default function CrmLayout({ children }: { children: ReactNode }) {
 
   if (state.phase === "loading") {
     return (
-      <div style={{ padding: "2rem" }}>
-        <LoadingSkeleton rows={4} />
+      <div className="crm-route-background">
+        <div style={{ padding: "2rem" }}>
+          <LoadingSkeleton rows={4} />
+        </div>
       </div>
     );
   }
@@ -84,49 +86,51 @@ export default function CrmLayout({ children }: { children: ReactNode }) {
     };
 
     return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "60vh", padding: "2rem" }}>
-        <div style={{
-          maxWidth: 480,
-          width: "100%",
-          background: "var(--surface)",
-          border: "1px solid var(--border)",
-          borderRadius: "0.75rem",
-          padding: "2rem",
-          textAlign: "center",
-        }}>
-          <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>📋</div>
-          <h2 style={{ margin: "0 0 0.5rem", fontSize: "1.25rem", fontWeight: 700 }}>
-            CRM is not enabled
-          </h2>
-          <p style={{ margin: "0 0 1.5rem", color: "var(--text-dim)", fontSize: "0.9375rem", lineHeight: 1.6 }}>
-            {state.isAdmin
-              ? "Enable the CRM module to start managing contacts, leads, campaigns, and call workflows for your team."
-              : "CRM has not been enabled for your workspace. Ask a tenant admin to enable it."}
-          </p>
-          {state.isAdmin && (
-            <button
-              onClick={handleEnable}
-              disabled={enabling}
-              style={{
-                padding: "0.625rem 1.5rem",
-                borderRadius: "0.5rem",
-                background: "var(--accent)",
-                color: "#fff",
-                border: "none",
-                fontSize: "0.9375rem",
-                fontWeight: 600,
-                cursor: enabling ? "not-allowed" : "pointer",
-                opacity: enabling ? 0.7 : 1,
-                transition: "opacity 0.15s",
-              }}
-            >
-              {enabling ? "Enabling…" : "Enable CRM"}
-            </button>
-          )}
+      <div className="crm-route-background">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "60vh", padding: "2rem" }}>
+          <div style={{
+            maxWidth: 480,
+            width: "100%",
+            background: "var(--surface)",
+            border: "1px solid var(--border)",
+            borderRadius: "0.75rem",
+            padding: "2rem",
+            textAlign: "center",
+          }}>
+            <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>📋</div>
+            <h2 style={{ margin: "0 0 0.5rem", fontSize: "1.25rem", fontWeight: 700 }}>
+              CRM is not enabled
+            </h2>
+            <p style={{ margin: "0 0 1.5rem", color: "var(--text-dim)", fontSize: "0.9375rem", lineHeight: 1.6 }}>
+              {state.isAdmin
+                ? "Enable the CRM module to start managing contacts, leads, campaigns, and call workflows for your team."
+                : "CRM has not been enabled for your workspace. Ask a tenant admin to enable it."}
+            </p>
+            {state.isAdmin && (
+              <button
+                onClick={handleEnable}
+                disabled={enabling}
+                style={{
+                  padding: "0.625rem 1.5rem",
+                  borderRadius: "0.5rem",
+                  background: "var(--accent)",
+                  color: "#fff",
+                  border: "none",
+                  fontSize: "0.9375rem",
+                  fontWeight: 600,
+                  cursor: enabling ? "not-allowed" : "pointer",
+                  opacity: enabling ? 0.7 : 1,
+                  transition: "opacity 0.15s",
+                }}
+              >
+                {enabling ? "Enabling…" : "Enable CRM"}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );
   }
 
-  return <>{children}</>;
+  return <div className="crm-route-background">{children}</div>;
 }
