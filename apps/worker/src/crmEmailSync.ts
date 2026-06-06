@@ -172,7 +172,7 @@ export async function processCrmEmailSyncJob(job: { tenantId: string; connection
       }
 
       try {
-        await db.crmEmailMessage.create({
+        const emailMessage = await db.crmEmailMessage.create({
           data: {
             tenantId,
             userId: t.userId,
@@ -195,10 +195,18 @@ export async function processCrmEmailSyncJob(job: { tenantId: string; connection
             data: {
               tenantId,
               contactId: t.contactId,
-              type: "EMAIL_RECEIVED",
-              title: "Email received",
-              body: subject || "Email received",
-              metadata: { from: fromEmail, to: toEmail, threadId: t.gmailThreadId },
+              type: "EMAIL_REPLY",
+              title: "Email reply received",
+              body: snippet || subject || "Email reply received",
+              metadata: {
+                from: fromEmail,
+                to: toEmail,
+                subject,
+                previewSnippet: snippet,
+                replyText: snippet,
+                threadId: t.gmailThreadId,
+              },
+              linkedId: emailMessage.id,
               createdByUserId: null,
             },
           }).catch(() => undefined);

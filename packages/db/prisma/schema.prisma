@@ -187,6 +187,30 @@ model CrmEmailTemplate {
   @@index([tenantId, createdByUserId])
 }
 
+/// CRM SMS Template — tenant-scoped reusable text snippets for contact SMS.
+/// SMS sends still use Connect Chat/VoIP.ms validation; this model stores copy and attribution.
+model CrmSmsTemplate {
+  id              String   @id @default(cuid())
+  tenantId        String
+  createdByUserId String?
+  name            String
+  bodyText        String
+  visibility      String   @default("SHARED")
+  isFavorite      Boolean  @default(false)
+  isArchived      Boolean  @default(false)
+  usageCount      Int      @default(0)
+  lastUsedAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User?  @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, isArchived, updatedAt])
+  @@index([tenantId, createdByUserId])
+  @@index([tenantId, isFavorite, updatedAt])
+}
+
 model CrmEmailBranding {
   id              String   @id @default(cuid())
   tenantId        String   @unique
@@ -722,6 +746,7 @@ model Tenant {
   crmChecklistResponses           CrmChecklistResponse[]
   crmCampaigns                    CrmCampaign[]
   crmCampaignMembers              CrmCampaignMember[]
+  funderTimelineEvents            FunderTimelineEvent[]
   crmCallerIdPool                 CrmCallerIdPool[]                 @relation("TenantCrmCallerIdPool")
   /// CRM email — Phase 1 (send-only) metadata-first models
   crmEmailConnections             CrmEmailConnection[]
@@ -729,6 +754,7 @@ model Tenant {
   crmEmailMessages                CrmEmailMessage[]
   crmEmailSendLogs                CrmEmailSendLog[]
   crmEmailTemplates               CrmEmailTemplate[]
+  crmSmsTemplates                 CrmSmsTemplate[]
   crmEmailBranding                CrmEmailBranding?
   crmEmailSignatures              CrmEmailSignature[]
   crmEmailTemplateAttachments     CrmEmailTemplateAttachment[]
@@ -819,6 +845,7 @@ model User {
   crmTasksAssigned               CrmContactTask[]                  @relation("CrmTaskAssignedTo")
   crmTasksCompleted              CrmContactTask[]                  @relation("CrmTaskCompletedBy")
   crmTasksCreated                CrmContactTask[]                  @relation("CrmTaskCreatedBy")
+  funderTimelineEventsCreated    FunderTimelineEvent[]             @relation("FunderTimelineEventCreatedBy")
   crmImportBatches               CrmImportBatch[]
   crmScriptsCreated              CrmScript[]                       @relation("CrmScriptCreatedBy")
   crmVoicemailDropsCreated       CrmVoicemailDrop[]                @relation("CrmVoicemailDropCreatedBy")
@@ -834,6 +861,7 @@ model User {
   crmEmailThreads                CrmEmailThread[]
   crmEmailSendLogs               CrmEmailSendLog[]
   crmEmailTemplates              CrmEmailTemplate[]
+  crmSmsTemplates                CrmSmsTemplate[]
   crmEmailSignatures             CrmEmailSignature[]
   crmEmailTemplateAttachments    CrmEmailTemplateAttachment[]
   crmBulkEmailJobsCreated        CrmBulkEmailJob[]                 @relation("CrmBulkEmailJobCreator")
@@ -4505,11 +4533,33 @@ model Funder {
   tenant   Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   creator  User?                 @relation("FunderCreatedBy", fields: [createdBy], references: [id], onDelete: SetNull)
   tagLinks FunderTagAssignment[]
+  timelineEvents FunderTimelineEvent[]
 
   @@index([tenantId, active])
   @@index([tenantId, status])
   @@index([tenantId, createdAt])
   @@index([tenantId, name])
+}
+
+model FunderTimelineEvent {
+  id              String   @id @default(cuid())
+  tenantId        String
+  funderId        String
+  type            String
+  title           String
+  body            String?
+  metadata        Json?
+  linkedId        String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  tenant        Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  funder        Funder @relation(fields: [funderId], references: [id], onDelete: Cascade)
+  createdByUser User?  @relation("FunderTimelineEventCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, funderId, createdAt])
+  @@index([tenantId, type, createdAt])
+  @@index([funderId, linkedId])
 }
 
 model FunderTag {

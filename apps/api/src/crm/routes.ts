@@ -409,7 +409,7 @@ export async function registerCrmRoutes(app: FastifyInstance, deps?: Pick<Connec
   await registerCrmBulkEmailRoutes(app);
 
   // CRM Funders — separate entity workspace for funding/referral/insurance/provider records
-  await registerCrmFunderRoutes(app);
+  await registerCrmFunderRoutes(app, deps);
 
   // CRM Drive (Phase 1 — Google Drive folder connection + lead document foundation)
   await registerCrmDriveRoutes(app);

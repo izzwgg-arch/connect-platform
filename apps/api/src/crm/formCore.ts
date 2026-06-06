@@ -82,6 +82,13 @@ function fmtDate(d: Date | string | null | undefined): string {
   return dt.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
 }
 
+function fmtDateInput(d: Date | string | null | undefined): string {
+  if (!d) return "";
+  const dt = d instanceof Date ? d : new Date(d);
+  if (isNaN(dt.getTime())) return "";
+  return dt.toISOString().slice(0, 10);
+}
+
 /** Pick a value from a JSON blob by trying multiple candidate keys (case-insensitive). */
 function pickJson(blob: unknown, ...keys: string[]): string {
   if (!blob || typeof blob !== "object") return "";
@@ -201,8 +208,10 @@ export function publicFormDto(request: any) {
           const base = formatFormField(f);
           // Resolve autoFillToken → defaultValue for non-signature fields only
           const canAutoFill = base.fieldType !== "SIGNATURE" && base.fieldType !== "INITIALS";
-          const defaultValue =
+          const rawDefaultValue =
             canAutoFill && base.autoFillToken ? (tokenVars[base.autoFillToken] ?? "") : "";
+          const defaultValue =
+            base.fieldType === "DATE" && rawDefaultValue ? fmtDateInput(rawDefaultValue) : rawDefaultValue;
           return { ...base, defaultValue };
         }),
     submission: request.submission ? { submittedAt: toIso(request.submission.submittedAt) } : null,
@@ -222,7 +231,7 @@ export function validateSubmission(fields: any[], submittedData: Record<string, 
       continue;
     }
     const text = String(value ?? "").trim();
-    sanitized[field.id] = text.slice(0, field.fieldType === "SIGNATURE" || field.fieldType === "INITIALS" ? 5000 : 2000);
+    sanitized[field.id] = text.slice(0, field.fieldType === "SIGNATURE" || field.fieldType === "INITIALS" ? 200_000 : 2000);
     if (field.required && !text) errors[field.id] = "required";
   }
   return { ok: Object.keys(errors).length === 0, errors, sanitized };

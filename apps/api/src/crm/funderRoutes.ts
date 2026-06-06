@@ -3,6 +3,13 @@ import { z } from "zod";
 import { db } from "@connect/db";
 import { requireCrmAccess, requireCrmAdmin, requireCrmManager } from "./guard";
 import { parseCsv } from "./importPipeline";
+import {
+  canSendSmsUser,
+  findOrCreateConnectChatSmsThread,
+  sendConnectChatSmsMessage,
+  type ConnectChatRoutesDeps,
+  type JwtUser,
+} from "../connectChatRoutes";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -42,6 +49,16 @@ const patchFunderSchema = z.object({
   zip: z.string().max(20).optional().nullable(),
   notes: z.string().max(5_000).optional().nullable(),
   status: z.enum(["ACTIVE", "INACTIVE", "PROSPECT", "PENDING"]).optional(),
+});
+
+const funderNoteSchema = z.object({
+  body: z.string().trim().min(1).max(5000),
+});
+
+const funderSmsSchema = z.object({
+  message: z.string().trim().min(1).max(1600),
+  phone: z.string().optional(),
+  templateId: z.string().min(1).optional(),
 });
 
 // ── CSV import field mapping ──────────────────────────────────────────────────
@@ -139,9 +156,34 @@ function formatFunder(f: any) {
   };
 }
 
+function formatFunderTimelineEvent(row: any) {
+  return {
+    id: row.id,
+    type: row.type,
+    title: row.title,
+    body: row.body ?? null,
+    metadata: row.metadata ?? null,
+    linkedId: row.linkedId ?? null,
+    createdAt: row.createdAt ? new Date(row.createdAt).toISOString() : null,
+    createdBy: row.createdByUser
+      ? {
+          id: row.createdByUser.id,
+          displayName: row.createdByUser.displayName || [row.createdByUser.firstName, row.createdByUser.lastName].filter(Boolean).join(" ") || row.createdByUser.email,
+        }
+      : null,
+  };
+}
+
+async function findActiveFunder(tenantId: string, id: string) {
+  return db.funder.findFirst({
+    where: { id, tenantId, active: true, archivedAt: null },
+    include: FUNDER_INCLUDE,
+  });
+}
+
 // ── Route registrar ────────────────────────────────────────────────────────────
 
-export async function registerCrmFunderRoutes(app: FastifyInstance) {
+export async function registerCrmFunderRoutes(app: FastifyInstance, deps?: Pick<ConnectChatRoutesDeps, "smsQueue">) {
   // ── GET /crm/funders/stats ─────────────────────────────────────────────────
   app.get("/crm/funders/stats", async (req, reply) => {
     const user = await requireCrmAccess(req, reply);
@@ -290,6 +332,192 @@ export async function registerCrmFunderRoutes(app: FastifyInstance) {
 
     if (!funder) return reply.status(404).send({ error: "not_found" });
     return formatFunder(funder);
+  });
+
+  app.get("/crm/funders/:id/timeline", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply);
+    if (!user) return;
+    const { tenantId } = user;
+    const { id } = req.params as { id: string };
+
+    const funder = await findActiveFunder(tenantId, id);
+    if (!funder) return reply.status(404).send({ error: "not_found" });
+
+    const explicitEvents = await (db as any).funderTimelineEvent.findMany({
+      where: { tenantId, funderId: id },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      include: {
+        createdByUser: { select: { id: true, displayName: true, firstName: true, lastName: true, email: true } },
+      },
+    });
+
+    const email = String(funder.email || "").trim().toLowerCase();
+    const [sendLogs, messages] = email
+      ? await Promise.all([
+          db.crmEmailSendLog.findMany({
+            where: { tenantId, toEmail: { equals: email, mode: "insensitive" } },
+            orderBy: { sentAt: "desc" },
+            take: 50,
+            select: { id: true, subject: true, status: true, errorMessage: true, sentAt: true, gmailMessageId: true },
+          }),
+          db.crmEmailMessage.findMany({
+            where: {
+              tenantId,
+              OR: [
+                { fromEmail: { equals: email, mode: "insensitive" } },
+                { toEmail: { contains: email, mode: "insensitive" } },
+              ],
+            },
+            orderBy: { createdAt: "desc" },
+            take: 50,
+            select: { id: true, direction: true, subject: true, fromEmail: true, toEmail: true, previewSnippet: true, sentAt: true, receivedAt: true, createdAt: true },
+          }),
+        ])
+      : [[], []];
+
+    const emailEvents = [
+      ...sendLogs.map((log) => ({
+        id: `email-log:${log.id}`,
+        type: log.status === "FAILED" ? "EMAIL_FAILED" : "EMAIL_SENT",
+        title: log.status === "FAILED" ? "Email failed" : "Email sent",
+        body: log.subject || log.errorMessage || null,
+        metadata: { toEmail: email, gmailMessageId: log.gmailMessageId, status: log.status },
+        linkedId: log.id,
+        createdAt: log.sentAt.toISOString(),
+        createdBy: null,
+      })),
+      ...messages.map((message) => ({
+        id: `email-message:${message.id}`,
+        type: message.direction === "INBOUND" ? "EMAIL_RECEIVED" : "EMAIL_SENT",
+        title: message.direction === "INBOUND" ? "Email received" : "Email sent",
+        body: message.previewSnippet || message.subject || null,
+        metadata: { fromEmail: message.fromEmail, toEmail: message.toEmail, subject: message.subject },
+        linkedId: message.id,
+        createdAt: (message.receivedAt || message.sentAt || message.createdAt).toISOString(),
+        createdBy: null,
+      })),
+    ];
+
+    const events = [
+      ...explicitEvents.map(formatFunderTimelineEvent),
+      ...emailEvents,
+    ].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()).slice(0, 150);
+
+    return { funderId: id, events };
+  });
+
+  app.post("/crm/funders/:id/notes", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply);
+    if (!user) return;
+    const { tenantId } = user;
+    const { id } = req.params as { id: string };
+    const parsed = funderNoteSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "invalid_payload", detail: parsed.error.format() });
+
+    const funder = await findActiveFunder(tenantId, id);
+    if (!funder) return reply.status(404).send({ error: "not_found" });
+
+    const event = await (db as any).funderTimelineEvent.create({
+      data: {
+        tenantId,
+        funderId: id,
+        type: "NOTE_ADDED",
+        title: "Note added",
+        body: parsed.data.body,
+        createdByUserId: user.sub,
+      },
+      include: {
+        createdByUser: { select: { id: true, displayName: true, firstName: true, lastName: true, email: true } },
+      },
+    });
+    return { event: formatFunderTimelineEvent(event) };
+  });
+
+  app.post("/crm/funders/:id/sms", async (req, reply) => {
+    if (!deps?.smsQueue) return reply.code(503).send({ error: "sms_queue_unavailable" });
+    const user = await requireCrmAccess(req, reply);
+    if (!user) return;
+    const chatUser = user as JwtUser;
+    if (!(await canSendSmsUser(chatUser))) return reply.code(403).send({ error: "FORBIDDEN" });
+
+    const { tenantId } = user;
+    const { id } = req.params as { id: string };
+    const parsed = funderSmsSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: "invalid_payload", detail: parsed.error.format() });
+
+    const funder = await findActiveFunder(tenantId, id);
+    if (!funder) return reply.status(404).send({ error: "not_found" });
+    const targetPhone = (parsed.data.phone || funder.phone || "").trim();
+    if (!targetPhone) return reply.status(400).send({ error: "no_phone", detail: "Funder has no phone number" });
+
+    const selectedTemplate = parsed.data.templateId
+      ? await (db as any).crmSmsTemplate.findFirst({
+          where: {
+            id: parsed.data.templateId,
+            tenantId,
+            isArchived: false,
+            OR: [{ visibility: "SHARED" }, { visibility: "PRIVATE", createdByUserId: user.sub }],
+          },
+          select: { id: true },
+        })
+      : null;
+    if (parsed.data.templateId && !selectedTemplate) {
+      return reply.code(404).send({ error: "template_not_found", detail: "Selected SMS template is no longer available" });
+    }
+
+    const threadResult = await findOrCreateConnectChatSmsThread({
+      tenantId,
+      userId: user.sub,
+      externalPhone: targetPhone,
+      title: `Funder SMS ${funder.name}`,
+    });
+    if (!threadResult.ok) return reply.code(threadResult.status).send({ error: threadResult.error, detail: threadResult.message });
+
+    const sendResult = await sendConnectChatSmsMessage({
+      deps,
+      user: chatUser,
+      tenantId,
+      threadId: threadResult.threadId,
+      body: parsed.data.message,
+      type: "TEXT",
+    });
+    if (!sendResult.ok) return reply.code(sendResult.status).send({ error: sendResult.error, detail: sendResult.message });
+
+    await (db as any).funderTimelineEvent.create({
+      data: {
+        tenantId,
+        funderId: id,
+        type: "SMS_SENT",
+        title: "SMS sent",
+        body: parsed.data.message.substring(0, 500),
+        metadata: {
+          to: targetPhone,
+          from: threadResult.fromNumber,
+          threadId: threadResult.threadId,
+          connectChatMessageId: sendResult.messageId,
+          ...(selectedTemplate ? { smsTemplateId: selectedTemplate.id } : {}),
+        },
+        linkedId: sendResult.messageId,
+        createdByUserId: user.sub,
+      },
+    });
+
+    if (selectedTemplate) {
+      await (db as any).crmSmsTemplate.update({
+        where: { id: selectedTemplate.id },
+        data: { usageCount: { increment: 1 }, lastUsedAt: new Date() },
+      }).catch(() => undefined);
+    }
+
+    return {
+      ok: true,
+      threadId: threadResult.threadId,
+      messageId: sendResult.messageId,
+      to: targetPhone,
+      from: threadResult.fromNumber,
+      deliveryStatus: sendResult.deliveryStatus,
+    };
   });
 
   // ── PATCH /crm/funders/:id ─────────────────────────────────────────────────

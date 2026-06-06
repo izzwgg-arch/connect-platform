@@ -25,6 +25,7 @@ test("CRM form field normalization preserves manual editor coordinates", () => {
   assert.deepEqual(fields[0], {
     fieldType: "SIGNATURE",
     label: "Owner Signature",
+    autoFillToken: null,
     required: true,
     pageNumber: 1,
     x: 10,
@@ -68,6 +69,40 @@ test("CRM public form DTO does not expose storage keys or token hashes", () => {
   });
   assert.equal(JSON.stringify(dto).includes("storageKey"), false);
   assert.equal(JSON.stringify(dto).includes("tokenHash"), false);
+});
+
+test("CRM public form DTO formats DATE token defaults for date inputs", () => {
+  const dto = publicFormDto({
+    id: "req_1",
+    status: "OPENED",
+    sentAt: new Date("2026-06-04T12:00:00Z"),
+    expiresAt: new Date("2026-06-18T12:00:00Z"),
+    completedAt: null,
+    formTemplate: {
+      id: "tpl_1",
+      name: "Application",
+      description: null,
+      category: "Sales",
+      pageCount: 1,
+      fields: [
+        {
+          id: "field_1",
+          fieldType: "DATE",
+          label: "Effective date",
+          autoFillToken: "form.date",
+          required: true,
+          pageNumber: 1,
+          x: 1,
+          y: 1,
+          width: 10,
+          height: 10,
+        },
+      ],
+    },
+    contact: { displayName: "Lead", company: "Acme" },
+    submission: null,
+  });
+  assert.match(String(dto.fields[0]?.defaultValue), /^\d{4}-\d{2}-\d{2}$/);
 });
 
 test("CRM public form DTO hides fields after completion", () => {

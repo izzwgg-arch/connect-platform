@@ -38,10 +38,10 @@ test("portal: CRM Admin gets settings but not platform admin console by default"
   assert.equal(expanded.includes("can_view_admin_console" as any), false);
 });
 
-test("guard: CRM manager/admin bypass contact campaign restrictions", () => {
+test("guard: every CRM access role bypasses contact campaign restrictions", () => {
+  assert.equal(crmRoleBypassesContactRestriction("AGENT"), true);
   assert.equal(crmRoleBypassesContactRestriction("MANAGER"), true);
   assert.equal(crmRoleBypassesContactRestriction("ADMIN"), true);
-  assert.equal(crmRoleBypassesContactRestriction("AGENT"), false);
   assert.equal(crmRoleBypassesContactRestriction(null), false);
 });
 

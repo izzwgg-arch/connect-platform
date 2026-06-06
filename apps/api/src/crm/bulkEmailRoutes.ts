@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { db } from "@connect/db";
 import IORedis from "ioredis";
 import { Queue } from "bullmq";
-import { requireCrmAdmin, isAdminRole } from "./guard";
+import { requireCrmAccess } from "./guard";
 
 // ── Queue ─────────────────────────────────────────────────────────────────────
 
@@ -108,7 +108,7 @@ export async function registerCrmBulkEmailRoutes(app: FastifyInstance) {
    * Used by BulkEmailModal to populate the tag picker for CONTACTS / CAMPAIGN sources.
    */
   app.get("/crm/contact-tags", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
 
     const tags = await db.contactTag.findMany({
@@ -126,7 +126,7 @@ export async function registerCrmBulkEmailRoutes(app: FastifyInstance) {
    * Creates a bulk email job. Resolves all recipients server-side, dedupes by email,
    * skips missing emails, then enqueues a single BullMQ job for worker processing.
    *
-   * Requires CRM admin (ADMIN / TENANT_ADMIN / SUPER_ADMIN).
+   * Requires CRM access.
    *
    * Body:
    * {
@@ -143,7 +143,7 @@ export async function registerCrmBulkEmailRoutes(app: FastifyInstance) {
    * }
    */
   app.post("/crm/email/bulk-jobs", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
 
     const body = (req.body as any) || {};
@@ -497,7 +497,7 @@ export async function registerCrmBulkEmailRoutes(app: FastifyInstance) {
    * List recent bulk email jobs for this tenant (newest first).
    */
   app.get("/crm/email/bulk-jobs", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
 
     const limit = Math.min(50, Math.max(1, Number((req.query as any)?.limit ?? 20)));
@@ -533,7 +533,7 @@ export async function registerCrmBulkEmailRoutes(app: FastifyInstance) {
    * Detail for a specific bulk job, including recipient summary.
    */
   app.get("/crm/email/bulk-jobs/:jobId", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
 
     const { jobId } = req.params as { jobId: string };
@@ -585,7 +585,7 @@ export async function registerCrmBulkEmailRoutes(app: FastifyInstance) {
    * Cancel a QUEUED job (before worker picks it up).
    */
   app.post("/crm/email/bulk-jobs/:jobId/cancel", async (req, reply) => {
-    const user = await requireCrmAdmin(req, reply);
+    const user = await requireCrmAccess(req, reply);
     if (!user) return;
 
     const { jobId } = req.params as { jobId: string };

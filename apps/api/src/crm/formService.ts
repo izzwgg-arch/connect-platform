@@ -1,14 +1,18 @@
 import * as crypto from "node:crypto";
 import { db } from "@connect/db";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { resolveImplicitSenderConnectionOrder } from "./crmEmailHelpers";
 import { queueCrmEmailSend } from "./crmEmailQueue";
 import { writeTimelineEvent } from "./timelineHelper";
 import {
   assertPdfUpload,
+  buildCrmFormCompletedStorageKey,
   buildCrmFormTemplateStorageKey,
   extractBasicPdfMetadata,
+  readCrmFormFile,
   writeCrmFormFile,
 } from "./formStorage";
+import { writeCrmDocFile } from "./docImportStorage";
 import {
   formatFormField,
   generateFormToken,
@@ -336,6 +340,126 @@ function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;");
 }
 
+function formatPdfDate(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) return `${match[2]}/${match[3]}/${match[1]}`;
+  return raw;
+}
+
+function isImageDataUrl(value: unknown): boolean {
+  return /^data:image\/(?:png|jpeg|jpg);base64,/i.test(String(value ?? ""));
+}
+
+function imageBytesFromDataUrl(value: unknown): Buffer | null {
+  const raw = String(value ?? "");
+  const match = raw.match(/^data:image\/(?:png|jpeg|jpg);base64,(.+)$/i);
+  if (!match?.[1]) return null;
+  try {
+    return Buffer.from(match[1], "base64");
+  } catch {
+    return null;
+  }
+}
+
+function pdfRectForField(field: any, pageFields: any[]) {
+  const sameRow = pageFields
+    .filter((other) => other.id !== field.id && Math.abs(Number(other.y || 0) - Number(field.y || 0)) <= 2 && Number(other.x || 0) > Number(field.x || 0) && Number(other.x || 0) < Number(field.x || 0) + Number(field.width || 0))
+    .sort((a, b) => Number(a.x || 0) - Number(b.x || 0));
+  if (sameRow[0]) {
+    return { ...field, width: Math.max(1, Number(sameRow[0].x || 0) - Number(field.x || 0)) };
+  }
+
+  const precedingOverlap = pageFields
+    .filter((other) => other.id !== field.id && Math.abs(Number(other.y || 0) - Number(field.y || 0)) <= 2 && Number(other.x || 0) < Number(field.x || 0) && Number(field.x || 0) < Number(other.x || 0) + Number(other.width || 0))
+    .sort((a, b) => Number(a.x || 0) - Number(b.x || 0));
+  if (precedingOverlap.length > 0) {
+    const rowStart = precedingOverlap[0];
+    const rowEnd = Number(rowStart.x || 0) + Number(rowStart.width || 0);
+    return { ...field, width: Math.max(1, rowEnd - Number(field.x || 0)) };
+  }
+
+  return field;
+}
+
+async function buildCompletedFormPdf(request: any, submittedData: Record<string, unknown>): Promise<Buffer> {
+  const original = await readCrmFormFile(request.formTemplate.storageKey);
+  const pdf = await PDFDocument.load(original);
+  const textFont = await pdf.embedFont(StandardFonts.Helvetica);
+  const signatureFont = await pdf.embedFont(StandardFonts.TimesRomanItalic);
+  const pages = pdf.getPages();
+
+  const fields = request.formTemplate.fields || [];
+  for (const originalField of fields) {
+    const pageFields = fields.filter((f: any) => Number(f.pageNumber || 1) === Number(originalField.pageNumber || 1));
+    const field = pdfRectForField(originalField, pageFields);
+    const page = pages[Math.max(0, Number(field.pageNumber || 1) - 1)];
+    if (!page) continue;
+
+    const value = submittedData[field.id];
+    const text = field.fieldType === "DATE" ? formatPdfDate(value) : String(value ?? "").trim();
+    const x = Number(field.x || 0);
+    const y = Number(field.y || 0);
+    const width = Math.max(1, Number(field.width || 1));
+    const height = Math.max(1, Number(field.height || 1));
+    const pdfY = page.getHeight() - y - height;
+
+    if (field.fieldType === "CHECKBOX") {
+      if (value === true) {
+        page.drawText("X", {
+          x,
+          y: pdfY + 1,
+          size: Math.max(8, Math.min(height, 14)),
+          font: textFont,
+          color: rgb(0, 0, 0),
+        });
+      }
+      continue;
+    }
+
+    if (!text) continue;
+
+    if (field.fieldType === "SIGNATURE" || field.fieldType === "INITIALS") {
+      const imageBytes = imageBytesFromDataUrl(value);
+      if (imageBytes && isImageDataUrl(value)) {
+        try {
+          const image = String(value).startsWith("data:image/jpeg") || String(value).startsWith("data:image/jpg")
+            ? await pdf.embedJpg(imageBytes)
+            : await pdf.embedPng(imageBytes);
+          page.drawImage(image, { x, y: pdfY, width, height });
+          continue;
+        } catch {
+          // Fall back to typed text if image embedding fails.
+        }
+      }
+      let size = Math.max(10, Math.min(height * 1.55, 22));
+      while (size > 7 && signatureFont.widthOfTextAtSize(text, size) > width) size -= 0.5;
+      page.drawText(text, {
+        x,
+        y: pdfY + (height - size) / 2 + size * 0.25,
+        size,
+        font: signatureFont,
+        color: rgb(0, 0, 0),
+      });
+      continue;
+    }
+
+    let size = Math.max(7, Math.min(height * 0.9, 10));
+    while (size > 5 && textFont.widthOfTextAtSize(text, size) > width) size -= 0.5;
+    const centerText = field.fieldType === "DATE" || /^(city|state|zip(?: code)?)$/i.test(String(field.label || "").trim());
+    const textWidth = textFont.widthOfTextAtSize(text, size);
+    page.drawText(text, {
+      x: centerText ? x + Math.max(0, (width - textWidth) / 2) : x + 1,
+      y: pdfY + (height - size) / 2 + size * 0.25,
+      size,
+      font: textFont,
+      color: rgb(0, 0, 0),
+    });
+  }
+
+  return Buffer.from(await pdf.save());
+}
+
 export async function loadPublicFormRequest(token: string, markOpened = false) {
   const tokenHash = hashFormToken(token);
 
@@ -420,17 +544,51 @@ export async function submitPublicForm(input: {
   if (request.status === "COMPLETED") throw Object.assign(new Error("already_completed"), { code: "already_completed" });
   const validation = validateSubmission(request.formTemplate.fields || [], input.submittedData);
   if (!validation.ok) throw Object.assign(new Error("validation_failed"), { code: "validation_failed", errors: validation.errors });
+  const submissionId = crypto.randomUUID();
+  const leadDocumentId = crypto.randomUUID();
+  const completedFileName = `${String(request.formTemplate.name || "completed-form").replace(/[^\w.-]+/g, "_")}-signed.pdf`;
+  const completedPdf = await buildCompletedFormPdf(request, validation.sanitized);
+  const completedPdfStorageKey = buildCrmFormCompletedStorageKey(request.tenantId, submissionId);
+  const completedStored = await writeCrmFormFile(completedPdfStorageKey, completedPdf);
+  const leadDocStored = await writeCrmDocFile({
+    tenantId: request.tenantId,
+    docId: leadDocumentId,
+    buffer: completedPdf,
+    mimeType: "application/pdf",
+    originalFileName: completedFileName,
+  });
   const result = await db.$transaction(async (tx: any) => {
     const submission = await tx.crmFormSubmission.create({
       data: {
+        id: submissionId,
         tenantId: request.tenantId,
         formRequestId: request.id,
         contactId: request.contactId,
         formTemplateId: request.formTemplateId,
         submittedData: validation.sanitized,
-        completedPdfStorageKey: null,
+        completedPdfStorageKey,
         ipAddressHash: hashPublicIp(input.ipAddress),
         userAgent: input.userAgent ? String(input.userAgent).slice(0, 500) : null,
+      },
+    });
+    const document = await tx.crmLeadDocument.create({
+      data: {
+        id: leadDocumentId,
+        tenantId: request.tenantId,
+        contactId: request.contactId,
+        source: "MANUAL_UPLOAD",
+        originalFileName: completedFileName,
+        mimeType: "application/pdf",
+        importedMimeType: "application/pdf",
+        sizeBytes: BigInt(leadDocStored.storedBytes),
+        contentHash: leadDocStored.contentHash,
+        storageKey: leadDocStored.storageKey,
+        status: "IMPORTED",
+        matchConfidence: "HIGH",
+        matchReason: "completed_crm_form",
+        reviewedByUserId: request.createdByUserId ?? null,
+        reviewedAt: new Date(),
+        importedAt: new Date(),
       },
     });
     const updated = await tx.crmFormRequest.update({
@@ -438,15 +596,25 @@ export async function submitPublicForm(input: {
       data: { status: "COMPLETED", completedAt: submission.submittedAt },
       include: { formTemplate: true, submission: true },
     });
-    return { submission, request: updated };
+    return { submission, document, request: updated };
   });
   await writeTimelineEvent({
     tenantId: request.tenantId,
     contactId: request.contactId,
     type: "FORM_COMPLETED",
     title: `Form completed: ${request.formTemplate.name}`,
+    body: `Signed PDF uploaded to Files as ${completedFileName}.`,
     linkedId: request.id,
-    metadata: { formTemplateId: request.formTemplateId, formRequestId: request.id, submissionId: result.submission.id },
+    metadata: {
+      formTemplateId: request.formTemplateId,
+      formRequestId: request.id,
+      submissionId: result.submission.id,
+      completedPdfStorageKey,
+      completedPdfBytes: completedStored.sizeBytes,
+      leadDocumentId: result.document.id,
+      completedFileName,
+      notifyUserId: request.createdByUserId ?? null,
+    },
   });
   return result;
 }

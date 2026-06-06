@@ -861,6 +861,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       fromEmail: r.fromEmail || null,
       toEmail: r.toEmail || null,
       previewSnippet: r.previewSnippet || null,
+      replyText: r.previewSnippet || null,
       receivedAt: r.receivedAt || null,
       contactId: r.contactId || null,
     }));
@@ -868,7 +869,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
   });
 
   // POST /crm/email/send — CRM email send with optional server-side template render.
-  // Body: { contactId?, toEmail?, subject?, bodyText?, bodyHtml?, templateId?, connectionId?, attachmentIds?, ccSelf? }
+  // Body: { contactId?, funderId?, toEmail?, subject?, bodyText?, bodyHtml?, templateId?, connectionId?, attachmentIds?, ccSelf? }
   app.post("/crm/email/send", async (req, reply) => {
     const user = await requireCrmAccess(req, reply); if (!user) return;
 
@@ -882,6 +883,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     if (!sender) return reply.status(409).send({ error: "no_sender_available" });
 
     const contactId = body?.contactId ? String(body.contactId) : null;
+    const funderId = body?.funderId ? String(body.funderId) : null;
     const toEmail = String(body?.toEmail || "").trim();
     const hasBodyTextOverride = typeof body?.bodyText === "string";
     const hasBodyHtmlOverride = typeof body?.bodyHtml === "string";
@@ -940,12 +942,12 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       bodyHtml = rendered.html;
     }
 
-    if (!contactId && !toEmail) return reply.status(400).send({ error: "invalid_payload", detail: "contactId or toEmail required" });
+    if (!contactId && !funderId && !toEmail) return reply.status(400).send({ error: "invalid_payload", detail: "contactId, funderId, or toEmail required" });
     if (subject.length > 500) return reply.status(400).send({ error: "invalid_payload", detail: "subject too long" });
     if (bodyText.length > 50000) return reply.status(400).send({ error: "invalid_payload", detail: "body too long" });
     if (bodyHtml.length > 150000) return reply.status(400).send({ error: "invalid_payload", detail: "html body too long" });
 
-    // Resolve and validate contact belongs to tenant; derive toEmail if needed
+    // Resolve and validate contact/funder belongs to tenant; derive toEmail if needed.
     let resolvedTo = toEmail;
     if (contactId) {
       if (!(await assertCrmContactAllowed(user, contactId, reply))) return;
@@ -957,6 +959,19 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
         resolvedTo = prim.email;
       }
     }
+    let funder: { id: string; email: string | null; name: string } | null = null;
+    if (funderId) {
+      funder = await db.funder.findFirst({
+        where: { id: funderId, tenantId: user.tenantId, active: true, archivedAt: null },
+        select: { id: true, email: true, name: true },
+      });
+      if (!funder) return reply.status(404).send({ error: "funder_not_found" });
+      if (!resolvedTo) {
+        if (!funder.email) return reply.status(404).send({ error: "funder_email_not_found" });
+        resolvedTo = funder.email;
+      }
+    }
+    if (!isValidEmailAddress(resolvedTo)) return reply.status(400).send({ error: "invalid_payload", detail: "valid toEmail required" });
 
     // Simple per-user 1-minute rate limit using send logs
     const since = new Date(Date.now() - 60 * 1000);
@@ -978,7 +993,28 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       ccEmail,
       ccSelf,
     }, { removeOnComplete: 100, removeOnFail: 100 });
-    await db.auditLog.create({ data: { tenantId: user.tenantId, action: "CRM_EMAIL_SEND_QUEUED", entityType: "Contact", entityId: contactId || "", actorUserId: user.sub } }).catch(() => undefined);
+    if (funder) {
+      await (db as any).funderTimelineEvent.create({
+        data: {
+          tenantId: user.tenantId,
+          funderId: funder.id,
+          type: "EMAIL_SENT",
+          title: "Email queued",
+          body: subject || null,
+          metadata: { toEmail: resolvedTo, templateId, status: "queued" },
+          createdByUserId: user.sub,
+        },
+      }).catch(() => undefined);
+    }
+    await db.auditLog.create({
+      data: {
+        tenantId: user.tenantId,
+        action: "CRM_EMAIL_SEND_QUEUED",
+        entityType: funder ? "Funder" : "Contact",
+        entityId: funder?.id || contactId || "",
+        actorUserId: user.sub,
+      },
+    }).catch(() => undefined);
     return { ok: true, senderId: sender.id };
   });
 

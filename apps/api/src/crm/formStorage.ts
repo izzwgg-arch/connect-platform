@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { sanitizeTenantScope, sanitizeBaseName } from "../promptStorage";
 
-const DEFAULT_ROOT = path.resolve(process.cwd(), "data/crm-forms");
+const DEFAULT_ROOT = path.resolve(__dirname, "../../data/crm-forms");
 const PDF_MIME = "application/pdf";
 
 export function getCrmFormStorageRoot(): string {

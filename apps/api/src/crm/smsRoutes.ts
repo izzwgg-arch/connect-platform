@@ -8,7 +8,7 @@ import {
   type ConnectChatRoutesDeps,
   type JwtUser,
 } from "../connectChatRoutes";
-import { requireCrmAccess } from "./guard";
+import { crmRoleBypassesContactRestriction, isAdminRole, loadCrmUserAccessRole, requireCrmAccess } from "./guard";
 import { assertCrmContactAllowed } from "./crmContactAccess";
 import { canonicalSmsPhone } from "@connect/shared";
 
@@ -25,6 +25,7 @@ export async function isCrmOutboundSmsConfigured(tenantId: string): Promise<bool
 
 const sendSmsBodySchema = z.object({
   message: z.string().min(1).max(1600),
+  templateId: z.string().min(1).optional(),
   // Optional: caller passes the numberRaw/numberNormalized of the desired phone
   // when the contact has multiple numbers. Defaults to primary.
   phone: z.string().optional(),
@@ -33,6 +34,35 @@ const sendSmsBodySchema = z.object({
 const readSmsQuerySchema = z.object({
   phone: z.string().optional(),
 });
+
+const createSmsTemplateBodySchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  bodyText: z.string().trim().min(1).max(1600),
+  isFavorite: z.boolean().optional(),
+});
+
+function formatSmsTemplate(row: any) {
+  return {
+    id: row.id,
+    name: row.name,
+    bodyText: row.bodyText,
+    isFavorite: Boolean(row.isFavorite),
+    usageCount: row.usageCount ?? 0,
+    lastUsedAt: row.lastUsedAt ? row.lastUsedAt.toISOString() : null,
+    createdAt: row.createdAt ? row.createdAt.toISOString() : null,
+    updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
+  };
+}
+
+async function canArchiveSmsTemplate(
+  user: { sub: string; tenantId: string; role?: string },
+  template: { createdByUserId?: string | null },
+): Promise<boolean> {
+  if (isAdminRole(user.role)) return true;
+  if (template.createdByUserId === user.sub) return true;
+  const crmRole = await loadCrmUserAccessRole(user.tenantId, user.sub);
+  return crmRoleBypassesContactRestriction(crmRole);
+}
 
 function selectContactDisplayName(contact: { displayName: string; company?: string | null }): string {
   return [contact.displayName, contact.company].filter(Boolean).join(" · ") || contact.displayName;
@@ -123,6 +153,86 @@ async function listThreadMessagesForCrmPanel(tenantId: string, threadId: string)
 // ── Route registrar ───────────────────────────────────────────────────────────
 
 export async function registerCrmSmsRoutes(app: FastifyInstance, deps?: Pick<ConnectChatRoutesDeps, "smsQueue">) {
+  app.get("/crm/sms/templates", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply);
+    if (!user) return;
+
+    const rows = await (db as any).crmSmsTemplate.findMany({
+      where: {
+        tenantId: user.tenantId,
+        isArchived: false,
+        OR: [
+          { visibility: "SHARED" },
+          { visibility: "PRIVATE", createdByUserId: user.sub },
+        ],
+      },
+      orderBy: [{ isFavorite: "desc" }, { updatedAt: "desc" }],
+      take: 200,
+    });
+
+    return { templates: rows.map(formatSmsTemplate) };
+  });
+
+  app.post("/crm/sms/templates", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply);
+    if (!user) return;
+
+    const parsed = createSmsTemplateBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_payload", detail: parsed.error.format() });
+    }
+
+    const row = await (db as any).crmSmsTemplate.create({
+      data: {
+        tenantId: user.tenantId,
+        createdByUserId: user.sub,
+        name: parsed.data.name,
+        bodyText: parsed.data.bodyText,
+        isFavorite: parsed.data.isFavorite ?? false,
+      },
+    });
+    await db.auditLog.create({
+      data: {
+        tenantId: user.tenantId,
+        action: "CRM_SMS_TEMPLATE_CREATED",
+        entityType: "CrmSmsTemplate",
+        entityId: row.id,
+        actorUserId: user.sub,
+      },
+    }).catch(() => undefined);
+
+    return { template: formatSmsTemplate(row) };
+  });
+
+  app.delete("/crm/sms/templates/:id", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply);
+    if (!user) return;
+    const { id } = req.params as { id: string };
+
+    const existing = await (db as any).crmSmsTemplate.findFirst({
+      where: { id, tenantId: user.tenantId, isArchived: false },
+      select: { id: true, createdByUserId: true },
+    });
+    if (!existing) return reply.code(404).send({ error: "template_not_found" });
+    if (!(await canArchiveSmsTemplate(user, existing))) return reply.code(403).send({ error: "forbidden" });
+
+    await (db as any).crmSmsTemplate.update({
+      where: { id },
+      data: { isArchived: true },
+    });
+    await db.auditLog.create({
+      data: {
+        tenantId: user.tenantId,
+        action: "CRM_SMS_TEMPLATE_ARCHIVED",
+        entityType: "CrmSmsTemplate",
+        entityId: id,
+        actorUserId: user.sub,
+      },
+    }).catch(() => undefined);
+
+    return { ok: true };
+  });
+
   app.get("/crm/contacts/:id/sms", async (req, reply) => {
     const user = await requireCrmAccess(req, reply);
     if (!user) return;
@@ -192,7 +302,25 @@ export async function registerCrmSmsRoutes(app: FastifyInstance, deps?: Pick<Con
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid_payload", detail: parsed.error.format() });
     }
-    const { message, phone: requestedPhone } = parsed.data;
+    const { message, phone: requestedPhone, templateId } = parsed.data;
+
+    const selectedTemplate = templateId
+      ? await (db as any).crmSmsTemplate.findFirst({
+          where: {
+            id: templateId,
+            tenantId: user.tenantId,
+            isArchived: false,
+            OR: [
+              { visibility: "SHARED" },
+              { visibility: "PRIVATE", createdByUserId: user.sub },
+            ],
+          },
+          select: { id: true },
+        })
+      : null;
+    if (templateId && !selectedTemplate) {
+      return reply.code(404).send({ error: "template_not_found", detail: "Selected SMS template is no longer available" });
+    }
 
     const resolved = await resolveContactSmsTarget({
       contactId,
@@ -248,11 +376,19 @@ export async function registerCrmSmsRoutes(app: FastifyInstance, deps?: Pick<Con
           from: threadResult.fromNumber,
           threadId: threadResult.threadId,
           connectChatMessageId: sendResult.messageId,
+          ...(selectedTemplate ? { smsTemplateId: selectedTemplate.id } : {}),
         },
         linkedId: sendResult.messageId,
         createdByUserId: user.sub,
       },
     });
+
+    if (selectedTemplate) {
+      await (db as any).crmSmsTemplate.update({
+        where: { id: selectedTemplate.id },
+        data: { usageCount: { increment: 1 }, lastUsedAt: new Date() },
+      }).catch(() => undefined);
+    }
 
     return {
       ok: true,

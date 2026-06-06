@@ -62,10 +62,15 @@ export async function registerCrmTimelineRoutes(app: FastifyInstance) {
         },
       },
     });
+    const emailReplyByEventId = await loadEmailReplySnippetsForTimelineEvents({
+      tenantId,
+      contactId: id,
+      events,
+    });
 
     return {
       contactId: id,
-      events: events.map(formatTimelineEvent),
+      events: events.map((event: any) => formatTimelineEvent(event, emailReplyByEventId.get(event.id))),
     };
   });
 
@@ -225,14 +230,118 @@ export async function registerCrmTimelineRoutes(app: FastifyInstance) {
 
 // ── Formatters ─────────────────────────────────────────────────────────────────
 
-function formatTimelineEvent(e: any) {
+type EmailReplyTimelineSnippet = {
+  id: string;
+  subject: string | null;
+  fromEmail: string | null;
+  toEmail: string | null;
+  previewSnippet: string | null;
+};
+
+async function loadEmailReplySnippetsForTimelineEvents({
+  tenantId,
+  contactId,
+  events,
+}: {
+  tenantId: string;
+  contactId: string;
+  events: any[];
+}): Promise<Map<string, EmailReplyTimelineSnippet>> {
+  const emailEvents = events.filter((event) => event.type === "EMAIL_RECEIVED" || event.type === "EMAIL_REPLY");
+  if (emailEvents.length === 0) return new Map();
+
+  const linkedIds = emailEvents
+    .map((event) => (typeof event.linkedId === "string" ? event.linkedId : null))
+    .filter(Boolean) as string[];
+  const threadIds = emailEvents
+    .map((event) => {
+      const metadata = event.metadata && typeof event.metadata === "object" ? event.metadata : null;
+      const threadId = metadata && "threadId" in metadata ? (metadata as Record<string, unknown>).threadId : null;
+      return typeof threadId === "string" ? threadId : null;
+    })
+    .filter(Boolean) as string[];
+
+  if (linkedIds.length === 0 && threadIds.length === 0) return new Map();
+
+  const messages = await (db as any).crmEmailMessage.findMany({
+    where: {
+      tenantId,
+      contactId,
+      direction: "INBOUND",
+      OR: [
+        ...(linkedIds.length ? [{ id: { in: linkedIds } }] : []),
+        ...(threadIds.length ? [{ thread: { gmailThreadId: { in: threadIds } } }] : []),
+      ],
+    },
+    select: {
+      id: true,
+      subject: true,
+      fromEmail: true,
+      toEmail: true,
+      previewSnippet: true,
+      createdAt: true,
+      thread: { select: { gmailThreadId: true } },
+    },
+  });
+  const messagesById = new Map(messages.map((message: any) => [message.id, message]));
+  const messagesByThreadId = new Map<string, any[]>();
+  for (const message of messages) {
+    const threadId = message.thread?.gmailThreadId;
+    if (!threadId) continue;
+    const group = messagesByThreadId.get(threadId) ?? [];
+    group.push(message);
+    messagesByThreadId.set(threadId, group);
+  }
+
+  const byEventId = new Map<string, EmailReplyTimelineSnippet>();
+  for (const event of emailEvents) {
+    const metadata = event.metadata && typeof event.metadata === "object" ? event.metadata : null;
+    const threadId = metadata && "threadId" in metadata ? (metadata as Record<string, unknown>).threadId : null;
+    const candidates =
+      (typeof event.linkedId === "string" && messagesById.get(event.linkedId)
+        ? [messagesById.get(event.linkedId)]
+        : null) ||
+      (typeof threadId === "string" ? messagesByThreadId.get(threadId) : null);
+    if (!candidates?.length) continue;
+    const eventTime = new Date(event.createdAt).getTime();
+    const match = candidates.reduce((best, candidate) => {
+      const bestDelta = Math.abs(new Date(best.createdAt).getTime() - eventTime);
+      const candidateDelta = Math.abs(new Date(candidate.createdAt).getTime() - eventTime);
+      return candidateDelta < bestDelta ? candidate : best;
+    }, candidates[0]);
+    byEventId.set(event.id, {
+      id: match.id,
+      subject: match.subject ?? null,
+      fromEmail: match.fromEmail ?? null,
+      toEmail: match.toEmail ?? null,
+      previewSnippet: match.previewSnippet ?? null,
+    });
+  }
+  return byEventId;
+}
+
+function formatTimelineEvent(e: any, emailReply?: EmailReplyTimelineSnippet) {
+  const metadata =
+    emailReply && (e.type === "EMAIL_RECEIVED" || e.type === "EMAIL_REPLY")
+      ? {
+          ...(e.metadata ?? {}),
+          from: emailReply.fromEmail ?? (e.metadata as any)?.from ?? null,
+          to: emailReply.toEmail ?? (e.metadata as any)?.to ?? null,
+          subject: emailReply.subject ?? (e.metadata as any)?.subject ?? e.body ?? null,
+          previewSnippet: emailReply.previewSnippet ?? (e.metadata as any)?.previewSnippet ?? null,
+          replyText: emailReply.previewSnippet ?? (e.metadata as any)?.replyText ?? null,
+        }
+      : e.metadata ?? null;
   return {
     id: e.id,
     type: e.type as string,
     title: e.title,
-    body: e.body ?? null,
-    metadata: e.metadata ?? null,
-    linkedId: e.linkedId ?? null,
+    body:
+      emailReply?.previewSnippet && (e.type === "EMAIL_RECEIVED" || e.type === "EMAIL_REPLY")
+        ? emailReply.previewSnippet
+        : e.body ?? null,
+    metadata,
+    linkedId: e.linkedId ?? emailReply?.id ?? null,
     createdAt: e.createdAt,
     createdBy: e.createdByUser
       ? {

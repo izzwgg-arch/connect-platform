@@ -14,10 +14,10 @@ export function isAdminRole(role: string | undefined): boolean {
   return role === "ADMIN" || role === "TENANT_ADMIN" || role === "SUPER_ADMIN";
 }
 
-/** CRM MANAGER / CRM ADMIN bypass per-contact campaign restrictions (tenant-scoped). */
+/** Any enabled CRM role can act across tenant CRM records; platform admins bypass separately. */
 export function crmRoleBypassesContactRestriction(crmAccessRole: string | null | undefined): boolean {
   const r = String(crmAccessRole || "").trim().toUpperCase();
-  return r === "MANAGER" || r === "ADMIN";
+  return r === "AGENT" || r === "MANAGER" || r === "ADMIN";
 }
 
 /** Load CrmUserAccess.role when CRM is enabled for the user. */
@@ -205,53 +205,12 @@ export async function requireCrmAdmin(
 }
 
 /**
- * Manager-level guard: accepts platform admins (ADMIN / TENANT_ADMIN / SUPER_ADMIN)
- * OR users whose CrmUserAccess.role is MANAGER or ADMIN (with CRM access enabled).
- *
- * Use this for operations that CRM managers should be allowed to perform
- * (e.g. lead import, campaign management) but regular CRM agents should not.
+ * Historical manager-level guard. Product policy now allows every CRM-enabled
+ * user to perform campaign/import/management CRM actions, regardless of CRM role.
  */
 export async function requireCrmManager(
   req: any,
   reply: any,
 ): Promise<CrmAuthUser | null> {
-  const user = req.user as CrmAuthUser | undefined;
-  if (!user?.sub) {
-    reply.status(401).send({ error: "unauthorized" });
-    return null;
-  }
-
-  const { tenantId, sub: userId, role } = user;
-  if (!tenantId) {
-    reply.status(400).send({ error: "no_tenant" });
-    return null;
-  }
-
-  const settings = await db.crmTenantSettings.findUnique({
-    where: { tenantId },
-    select: { enabled: true },
-  });
-  if (!settings?.enabled) {
-    reply
-      .status(403)
-      .send({ error: "crm_not_enabled", detail: "CRM is not enabled for this tenant" });
-    return null;
-  }
-
-  // Platform admins always pass
-  if (isAdminRole(role)) return user;
-
-  // Non-admin users need an active CrmUserAccess row with MANAGER or ADMIN role
-  const access = await db.crmUserAccess.findUnique({
-    where: { tenantId_userId: { tenantId, userId } },
-    select: { enabled: true, role: true },
-  });
-  if (!access?.enabled || (access.role !== "MANAGER" && access.role !== "ADMIN")) {
-    reply
-      .status(403)
-      .send({ error: "crm_permission_denied", detail: "CRM manager access required" });
-    return null;
-  }
-
-  return user;
+  return requireCrmAccess(req, reply);
 }

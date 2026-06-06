@@ -22,7 +22,7 @@ import { sanitizeTenantScope, sanitizeBaseName } from "../promptStorage";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const DEFAULT_ROOT = path.resolve(process.cwd(), "data/crm-lead-docs");
+const DEFAULT_ROOT = path.resolve(__dirname, "../../data/crm-lead-docs");
 
 /** Root directory for all tenant CRM lead document files. */
 export function getCrmDocStorageRoot(): string {
