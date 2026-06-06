@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, CalendarClock, CheckCircle2, Clock, Filter, ListChecks, SortAsc } from "lucide-react";
+import { AlertCircle, CheckCircle2, Clock, Filter, ListChecks, SortAsc } from "lucide-react";
 import { cn } from "../cn";
 
 export type TaskStats = {
@@ -30,45 +30,43 @@ export function TaskKpiStrip({
   const tiles: Array<{
     id: TaskTab | "scheduled";
     label: string;
+    hint: string;
     value: number | null;
     icon: React.ReactNode;
     tone: "danger" | "warning" | "scheduled" | "neutral" | "success";
     clickable?: boolean;
   }> = [
     {
-      id: "overdue",
-      label: "Overdue",
-      value: stats?.overdue ?? null,
-      icon: <AlertCircle className="h-5 w-5" />,
-      tone: "danger",
+      id: "all",
+      label: "Active",
+      hint: `${stats?.dueToday ?? 0} due today`,
+      value: stats?.myOpen ?? null,
+      icon: <ListChecks className="h-5 w-5" />,
+      tone: "success",
       clickable: true,
     },
     {
       id: "today",
       label: "Due Today",
+      hint: "Needs follow-up",
       value: stats?.dueToday ?? null,
       icon: <Clock className="h-5 w-5" />,
       tone: "warning",
       clickable: true,
     },
     {
-      id: "scheduled",
-      label: "Scheduled",
-      value: stats?.scheduled ?? null,
-      icon: <CalendarClock className="h-5 w-5" />,
-      tone: "scheduled",
-    },
-    {
-      id: "all",
-      label: "All Tasks",
-      value: stats?.allTasks ?? null,
-      icon: <ListChecks className="h-5 w-5" />,
-      tone: "neutral",
+      id: "overdue",
+      label: "Overdue",
+      hint: "Past due",
+      value: stats?.overdue ?? null,
+      icon: <AlertCircle className="h-5 w-5" />,
+      tone: "danger",
       clickable: true,
     },
     {
       id: "completed",
       label: "Completed",
+      hint: "Finished tasks",
       value: stats?.completed ?? null,
       icon: <CheckCircle2 className="h-5 w-5" />,
       tone: "success",
@@ -77,7 +75,7 @@ export function TaskKpiStrip({
   ];
 
   return (
-    <div className="tasks-kpi-grid grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+    <div className="crm-queue-kpi-strip tasks-kpi-grid grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
       {tiles.map((tile) => {
         const isActive = activeTab === tile.id;
         const valueClass =
@@ -109,6 +107,7 @@ export function TaskKpiStrip({
                   {tile.value}
                 </span>
               )}
+              <span className="text-xs font-medium text-crm-muted/90">{tile.hint}</span>
             </div>
             <span className={cn("tasks-kpi-icon", iconClass)}>{tile.icon}</span>
           </>
@@ -116,7 +115,7 @@ export function TaskKpiStrip({
 
         if (!tile.clickable) {
           return (
-            <div key={tile.id} className="tasks-kpi-card">
+            <div key={tile.id} className="crm-queue-kpi-card tasks-kpi-card">
               {content}
             </div>
           );
@@ -128,7 +127,7 @@ export function TaskKpiStrip({
             type="button"
             onClick={() => onTabChange(tile.id as TaskTab)}
             className={cn(
-              "tasks-kpi-card cursor-pointer text-left",
+              "crm-queue-kpi-card tasks-kpi-card cursor-pointer text-left",
               isActive && "tasks-kpi-card-active",
             )}
           >
@@ -181,7 +180,7 @@ export function TaskTabRow({
   ];
 
   return (
-    <div className="tasks-filter-bar flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="crm-queue-filter-bar tasks-filter-bar flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex flex-wrap items-center gap-2">
         {tabs.map((tab) => {
           const isActive = activeTab === tab.id;

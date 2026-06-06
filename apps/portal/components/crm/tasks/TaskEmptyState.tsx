@@ -62,7 +62,7 @@ export function TaskEmptyState({
             };
 
   return (
-    <div className="tasks-empty-state">
+    <div className="crm-queue-list-panel tasks-empty-state">
       <div className={cn("tasks-empty-icon", copy.tone)}>{copy.icon}</div>
       <p className="text-lg font-semibold tracking-tight text-crm-text">{copy.title}</p>
       <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-crm-muted">{copy.body}</p>
