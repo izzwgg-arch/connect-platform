@@ -74,7 +74,7 @@ export function ScriptWorkspaceIdle({
         </p>
 
         <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-          <button type="button" onClick={onCreate} className={cn(crm.btnPrimary, "gap-2 px-5")}>
+          <button type="button" onClick={onCreate} className={cn(crm.btnPrimary, "crm-create-blue-cta gap-2 px-5")}>
             <Plus className="h-4 w-4" />
             New script
           </button>

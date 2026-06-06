@@ -254,7 +254,7 @@ export function ScriptEditModal({ script, templateBody, onSave, onClose }: Scrip
             type="button"
             onClick={() => void handleSave()}
             disabled={saving || !name.trim()}
-            className={cn(crm.btnPrimary, "text-sm min-w-[100px]")}
+            className={cn(crm.btnPrimary, "text-sm min-w-[100px]", isCreate && "crm-create-blue-cta")}
           >
             {saving ? "Saving…" : isCreate ? "Create script" : "Save changes"}
           </button>

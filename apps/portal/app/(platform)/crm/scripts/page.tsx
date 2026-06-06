@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { CRMPageShell } from "../../../../components/crm/CRMPageShell";
 import {
   CRMWorkspaceShell,
   CRMWorkspaceChrome,
   CRMWorkspaceBody,
   CRMWorkspaceMain,
+  CRMWorkspaceScrollRegion,
   CRMWorkspaceRightRail,
 } from "../../../../components/crm/CRMWorkspaceShell";
 import { CRMEmptyState } from "../../../../components/crm/CRMEmptyState";
@@ -17,34 +17,102 @@ import {
   ScriptCommandHeader,
   type ScriptSortMode,
   type ScriptStatusFilter,
-  type ScriptViewMode,
 } from "../../../../components/crm/scripts/ScriptCommandHeader";
 import { ScriptLibraryPanel } from "../../../../components/crm/scripts/ScriptLibraryPanel";
 import { ScriptOperationalSidebar } from "../../../../components/crm/scripts/ScriptOperationalSidebar";
-import { ScriptEditModal } from "../../../../components/crm/scripts/ScriptEditModal";
 import { mergeScriptSummaries, requireSavedScript, toScriptSummary } from "../../../../components/crm/crmSaveHelpers";
-import { apiGet, apiPost } from "../../../../services/apiClient";
+import { apiDelete, apiGet, apiPatch, apiPost } from "../../../../services/apiClient";
 import { PermissionGate } from "../../../../components/PermissionGate";
 import type { Script, ScriptSummary } from "../../../../components/crm/scripts/scriptTypes";
-
-const SCRIPT_VIEW_STORAGE_KEY = "crm-scripts-view-mode";
 
 function isDraftScript(_script: ScriptSummary) {
   return false;
 }
 
+type ScriptPreviewSummary = ScriptSummary & {
+  body?: string;
+  previewOnly?: boolean;
+};
+
+const DEV_SCRIPT_PREVIEW_COUNT = 22;
+
+const DEV_SCRIPT_ROWS: Script[] = [
+  {
+    id: "dev-script-side-panel-qa",
+    name: "Side Panel QA Script",
+    isActive: true,
+    createdAt: "2026-05-20T14:00:00.000Z",
+    updatedAt: "2026-06-05T19:30:00.000Z",
+    body: "## Opener\nConfirm the contact, company, and reason for the call.\n\n## Discovery\nAsk what changed recently and what outcome they want from the next step.\n\n## Close\nConfirm the best callback number and summarize the agreed next action.",
+  },
+  {
+    id: "dev-script-live-call-opening",
+    name: "Live Call Opening Script",
+    isActive: true,
+    createdAt: "2026-05-21T14:00:00.000Z",
+    updatedAt: "2026-06-05T18:20:00.000Z",
+    body: "## Greeting\nHi [First name], this is [Agent] with Connect.\n\n## Reason\nI am calling about your recent request and want to make sure we have the right details.\n\n## Transition\nDo you have two minutes to confirm the next step?",
+  },
+  {
+    id: "dev-script-campaign-launch",
+    name: "Campaign Launch Talk Track",
+    isActive: true,
+    createdAt: "2026-05-22T14:00:00.000Z",
+    updatedAt: "2026-06-05T17:40:00.000Z",
+    body: "## Context\nReference the campaign offer and the customer's submitted interest.\n\n## Qualify\nConfirm timing, decision maker, and preferred communication channel.\n\n## Wrap\nOffer the next appointment slot and send a recap.",
+  },
+  {
+    id: "dev-script-archived",
+    name: "Archived Legacy Pitch",
+    isActive: false,
+    createdAt: "2026-05-18T14:00:00.000Z",
+    updatedAt: "2026-06-04T20:15:00.000Z",
+    body: "## Legacy Intro\nThis archived script is retained for review only.\n\n## Notes\nUse the active replacement instead.",
+  },
+];
+
+function cloneScriptForDevPreview(script: Script, index: number): ScriptPreviewSummary {
+  const cloneNumber = index + 1;
+  return {
+    ...script,
+    id: `${script.id}-preview-${cloneNumber}`,
+    name: `${script.name} ${cloneNumber}`,
+    updatedAt: new Date(
+      new Date(script.updatedAt).getTime() - cloneNumber * 11 * 60_000
+    ).toISOString(),
+    previewOnly: true,
+  };
+}
+
+function expandScriptsForDevPreview(rows: ScriptSummary[]): ScriptPreviewSummary[] {
+  if (process.env.NODE_ENV !== "development") return rows;
+  const source =
+    rows.length === 0 || rows.length < DEV_SCRIPT_PREVIEW_COUNT
+      ? [...DEV_SCRIPT_ROWS.map((script) => ({ ...script, previewOnly: true })), ...rows]
+      : rows;
+  if (source.length >= DEV_SCRIPT_PREVIEW_COUNT) return source;
+  const clonesNeeded = DEV_SCRIPT_PREVIEW_COUNT - source.length;
+  const clones = Array.from({ length: clonesNeeded }, (_, index) =>
+    cloneScriptForDevPreview(DEV_SCRIPT_ROWS[index % DEV_SCRIPT_ROWS.length], index)
+  );
+  return [...source, ...clones];
+}
+
 export default function CrmScriptsPage() {
-  const router = useRouter();
   const [scripts, setScripts] = useState<ScriptSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
-  const [modalOpen, setModalOpen] = useState(false);
+  const [selectedScript, setSelectedScript] = useState<Script | null>(null);
+  const [selectedLoading, setSelectedLoading] = useState(false);
+  const [selectedError, setSelectedError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [savedMsg, setSavedMsg] = useState("");
   const [libraryResetToken, setLibraryResetToken] = useState(0);
   const [statusFilter, setStatusFilter] = useState<ScriptStatusFilter>("all");
   const [search, setSearch] = useState("");
   const [sortMode, setSortMode] = useState<ScriptSortMode>("updated");
-  const [viewMode, setViewMode] = useState<ScriptViewMode>("card");
+  const sourceScripts = useMemo(() => expandScriptsForDevPreview(scripts), [scripts]);
 
   async function loadList(options?: { silent?: boolean; mergeLocal?: ScriptSummary[] }) {
     if (!options?.silent) setLoading(true);
@@ -70,18 +138,11 @@ export default function CrmScriptsPage() {
     void loadList();
   }, []);
 
-  useEffect(() => {
-    const saved = window.localStorage.getItem(SCRIPT_VIEW_STORAGE_KEY);
-    if (saved === "card" || saved === "list") setViewMode(saved);
-  }, []);
-
-  const handleViewModeChange = useCallback((mode: ScriptViewMode) => {
-    setViewMode(mode);
-    window.localStorage.setItem(SCRIPT_VIEW_STORAGE_KEY, mode);
-  }, []);
-
   const openCreate = useCallback(() => {
-    setModalOpen(true);
+    setCreating(true);
+    setSelectedScript(null);
+    setSelectedError(null);
+    setStatusFilter("all");
   }, []);
 
   useEffect(() => {
@@ -100,26 +161,118 @@ export default function CrmScriptsPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [openCreate]);
 
-  function closeModal() {
-    setModalOpen(false);
+  function flashSaved(message = "Saved") {
+    setSavedMsg(message);
+    window.setTimeout(() => setSavedMsg(""), 2500);
   }
 
-  async function handleSave(data: { name: string; body: string }) {
+  async function handleSelect(id: string) {
+    setCreating(false);
+    setSelectedLoading(true);
+    setSelectedError(null);
+    const summary = sourceScripts.find((script) => script.id === id) ?? null;
+    if (summary) {
+      setSelectedScript((prev) =>
+        prev?.id === id ? prev : { ...summary, body: "" }
+      );
+    }
+    if (summary?.previewOnly) {
+      setSelectedScript({
+        id: summary.id,
+        name: summary.name,
+        isActive: summary.isActive,
+        createdAt: summary.createdAt,
+        updatedAt: summary.updatedAt,
+        body: summary.body ?? "",
+      });
+      setSelectedLoading(false);
+      return;
+    }
+    try {
+      const res = await apiGet<{ script: Script }>(`/crm/scripts/${id}`);
+      setSelectedScript(res.script);
+    } catch (err: unknown) {
+      setSelectedError(String((err as Error)?.message ?? "Failed to load script"));
+      setSelectedScript(null);
+    } finally {
+      setSelectedLoading(false);
+    }
+  }
+
+  async function handleCreate(data: { name: string; body: string }) {
     const res = await apiPost<{ script: Script }>("/crm/scripts", data);
     const script = requireSavedScript(res);
     const summary = toScriptSummary(script);
     setScripts((prev) => mergeScriptSummaries([summary, ...prev], prev));
     setLibraryResetToken((token) => token + 1);
-    closeModal();
+    setCreating(false);
+    setSelectedScript(script);
+    flashSaved("Created");
     void loadList({ silent: true, mergeLocal: [summary] });
   }
 
-  const activeCount = scripts.filter((s) => s.isActive).length;
-  const draftCount = scripts.filter(isDraftScript).length;
-  const archivedCount = scripts.filter((s) => !s.isActive).length;
+  const handleSaveEdit = useCallback(
+    async (data: { name: string; body: string }) => {
+      if (!selectedScript) throw new Error("No script selected.");
+      if (selectedScript.id.startsWith("dev-script-")) {
+        throw new Error("Preview scripts are read-only. Create a real script to save changes.");
+      }
+      const res = await apiPatch<{ script: Script }>(`/crm/scripts/${selectedScript.id}`, data);
+      const script = requireSavedScript(res);
+      const summary = toScriptSummary(script);
+      setSelectedScript(script);
+      setScripts((prev) => mergeScriptSummaries([summary], prev));
+      flashSaved("Saved");
+      void loadList({ silent: true, mergeLocal: [summary] });
+    },
+    [selectedScript],
+  );
+
+  async function handleArchive(id: string) {
+    if (id.startsWith("dev-script-")) return;
+    const res = await apiPatch<{ script: Script }>(`/crm/scripts/${id}`, { isActive: false });
+    const script = requireSavedScript(res);
+    const summary = toScriptSummary(script);
+    setScripts((prev) => mergeScriptSummaries([summary], prev));
+    setSelectedScript((current) => (current?.id === id ? script : current));
+  }
+
+  async function handleRestore(id: string) {
+    if (id.startsWith("dev-script-")) return;
+    const res = await apiPatch<{ script: Script }>(`/crm/scripts/${id}`, { isActive: true });
+    const script = requireSavedScript(res);
+    const summary = toScriptSummary(script);
+    setScripts((prev) => mergeScriptSummaries([summary], prev));
+    setSelectedScript((current) => (current?.id === id ? script : current));
+  }
+
+  async function handleDelete(id: string) {
+    const targetName =
+      selectedScript?.id === id
+        ? selectedScript.name
+        : sourceScripts.find((script) => script.id === id)?.name ?? "this script";
+    if (!window.confirm(`Delete "${targetName}"? This archives it from the script list.`)) return;
+
+    if (id.startsWith("dev-script-")) {
+      setSelectedScript(null);
+      setCreating(false);
+      flashSaved("Deleted");
+      return;
+    }
+
+    await apiDelete(`/crm/scripts/${id}`);
+    setScripts((prev) => prev.filter((script) => script.id !== id));
+    if (selectedScript?.id === id) setSelectedScript(null);
+    setCreating(false);
+    flashSaved("Deleted");
+  }
+
+  const activeCount = sourceScripts.filter((s) => s.isActive).length;
+  const draftCount = sourceScripts.filter(isDraftScript).length;
+  const archivedCount = sourceScripts.filter((s) => !s.isActive).length;
   const filteredScripts = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return scripts
+    return sourceScripts
       .filter((script) => {
         if (statusFilter === "active") return script.isActive && !isDraftScript(script);
         if (statusFilter === "draft") return isDraftScript(script);
@@ -135,11 +288,14 @@ export default function CrmScriptsPage() {
         if (sortMode === "created") return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
         return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
       });
-  }, [scripts, search, sortMode, statusFilter]);
+  }, [sourceScripts, search, sortMode, statusFilter]);
 
   return (
     <PermissionGate permission="can_view_crm_scripts" fallback={<div className="state-box">You do not have Scripts access.</div>}>
-    <CRMPageShell className={crm.tasksWorkspace} innerClassName={crm.pageInnerTasks}>
+    <CRMPageShell
+      className={cn(crm.queueWorkspace, crm.scriptsWorkspace)}
+      innerClassName={cn(crm.pageInnerScripts, "crm-scripts-inner")}
+    >
       <CRMWorkspaceShell>
         {loading ? (
           <>
@@ -155,8 +311,6 @@ export default function CrmScriptsPage() {
                 onSearchChange={setSearch}
                 sortMode={sortMode}
                 onSortModeChange={setSortMode}
-                viewMode={viewMode}
-                onViewModeChange={handleViewModeChange}
                 shownCount={0}
                 onCreate={() => openCreate()}
               />
@@ -188,8 +342,6 @@ export default function CrmScriptsPage() {
                 onSearchChange={setSearch}
                 sortMode={sortMode}
                 onSortModeChange={setSortMode}
-                viewMode={viewMode}
-                onViewModeChange={handleViewModeChange}
                 shownCount={0}
                 onCreate={() => openCreate()}
               />
@@ -216,7 +368,7 @@ export default function CrmScriptsPage() {
           <>
             <CRMWorkspaceChrome>
               <ScriptCommandHeader
-                totalCount={scripts.length}
+                totalCount={sourceScripts.length}
                 activeCount={activeCount}
                 draftCount={draftCount}
                 archivedCount={archivedCount}
@@ -226,43 +378,47 @@ export default function CrmScriptsPage() {
                 onSearchChange={setSearch}
                 sortMode={sortMode}
                 onSortModeChange={setSortMode}
-                viewMode={viewMode}
-                onViewModeChange={handleViewModeChange}
                 shownCount={filteredScripts.length}
                 onCreate={() => openCreate()}
               />
             </CRMWorkspaceChrome>
 
             <CRMWorkspaceBody split>
-              <CRMWorkspaceMain className="min-h-0">
-                <ScriptLibraryPanel
-                  scripts={filteredScripts}
-                  totalCount={scripts.length}
-                  selectedId={null}
-                  resetFiltersToken={libraryResetToken}
-                  viewMode={viewMode}
-                  activeFilter={statusFilter}
-                  search={search}
-                  onSelect={(id) => router.push(`/crm/scripts/${id}`)}
-                  onCreate={() => openCreate()}
-                />
+              <CRMWorkspaceMain className="crm-queue-main-workspace min-h-0">
+                <CRMWorkspaceScrollRegion className="crm-queue-center-workspace">
+                  <ScriptLibraryPanel
+                    scripts={filteredScripts}
+                    totalCount={sourceScripts.length}
+                    selectedId={creating ? null : selectedScript?.id ?? null}
+                    resetFiltersToken={libraryResetToken}
+                    activeFilter={statusFilter}
+                    search={search}
+                    onSelect={(id) => void handleSelect(id)}
+                    onCreate={() => openCreate()}
+                  />
+                </CRMWorkspaceScrollRegion>
               </CRMWorkspaceMain>
 
-              <CRMWorkspaceRightRail>
-                <ScriptOperationalSidebar scripts={scripts} />
+              <CRMWorkspaceRightRail className="crm-queue-right-rail crm-queue-detail-rail flex flex-col min-h-0">
+                <ScriptOperationalSidebar
+                  script={selectedScript}
+                  loading={selectedLoading}
+                  error={selectedError}
+                  creating={creating}
+                  savedMsg={savedMsg}
+                  onCreate={() => openCreate()}
+                  onSaveCreate={handleCreate}
+                  onCancelCreate={() => setCreating(false)}
+                  onSaveEdit={handleSaveEdit}
+                  onArchive={(id) => void handleArchive(id)}
+                  onRestore={(id) => void handleRestore(id)}
+                  onDelete={(id) => void handleDelete(id)}
+                />
               </CRMWorkspaceRightRail>
             </CRMWorkspaceBody>
           </>
         )}
       </CRMWorkspaceShell>
-
-      {modalOpen ? (
-        <ScriptEditModal
-          script={null}
-          onSave={handleSave}
-          onClose={closeModal}
-        />
-      ) : null}
     </CRMPageShell>
     </PermissionGate>
   );

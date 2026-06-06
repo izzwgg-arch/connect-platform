@@ -3,9 +3,7 @@
 import {
   Archive,
   FileText,
-  LayoutGrid,
   LibraryBig,
-  List,
   PlayCircle,
   Plus,
   Search,
@@ -16,10 +14,10 @@ import { cn } from "../cn";
 import { ConnectSelect } from "../../ConnectSelect";
 import { CRMPageHeader } from "../CRMPageHeader";
 import { CRMWorkspaceHeader, CRMWorkspaceToolbar } from "../CRMWorkspaceShell";
+import { crm } from "../crmClasses";
 
 export type ScriptStatusFilter = "all" | "active" | "draft" | "archived";
 export type ScriptSortMode = "updated" | "created" | "name";
-export type ScriptViewMode = "card" | "list";
 
 const TABS: { id: ScriptStatusFilter; label: string }[] = [
   { id: "all", label: "All Scripts" },
@@ -39,8 +37,6 @@ export function ScriptCommandHeader({
   onSearchChange,
   sortMode,
   onSortModeChange,
-  viewMode,
-  onViewModeChange,
   shownCount,
   onCreate,
 }: {
@@ -54,8 +50,6 @@ export function ScriptCommandHeader({
   onSearchChange: (value: string) => void;
   sortMode: ScriptSortMode;
   onSortModeChange: (mode: ScriptSortMode) => void;
-  viewMode: ScriptViewMode;
-  onViewModeChange: (mode: ScriptViewMode) => void;
   shownCount: number;
   onCreate: () => void;
 }) {
@@ -63,31 +57,27 @@ export function ScriptCommandHeader({
     <>
       <CRMWorkspaceHeader>
         <CRMPageHeader
+          compact
           icon={<FileText className="h-5 w-5" />}
-          title="Call Scripts"
+          title="Scripts"
           subtitle="Sales playbooks and cold-call scripts for your outbound team."
-          className="tasks-page-header"
+          className={cn("tasks-page-header", crm.contactsHeaderPanel)}
           actions={
-            <button type="button" onClick={onCreate} className="tasks-primary-action">
-              <Plus className="h-4 w-4" />
-              New Script
-            </button>
+            <div className="contacts-hero-actions flex flex-wrap items-center gap-2">
+              <button type="button" onClick={onCreate} className="tasks-primary-action">
+                <Plus className="h-4 w-4" />
+                New Script
+              </button>
+            </div>
           }
         />
       </CRMWorkspaceHeader>
 
       <CRMWorkspaceToolbar className="flex flex-col gap-3">
-        <div className="tasks-kpi-grid grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <KpiTile
-            icon={<LibraryBig className="h-5 w-5" />}
-            label="Total"
-            value={totalCount}
-            sub="Script library"
-            tone="neutral"
-          />
+        <div className="crm-queue-kpi-strip tasks-kpi-grid grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <KpiTile
             icon={<PlayCircle className="h-5 w-5" />}
-            label="Active playbooks"
+            label="Active"
             value={activeCount}
             sub="Ready to dial"
             tone="success"
@@ -106,9 +96,16 @@ export function ScriptCommandHeader({
             sub="Hidden from use"
             tone="scheduled"
           />
+          <KpiTile
+            icon={<LibraryBig className="h-5 w-5" />}
+            label="Total"
+            value={totalCount}
+            sub="Scripts required"
+            tone="neutral"
+          />
         </div>
 
-        <div className="tasks-filter-bar flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="crm-queue-filter-bar tasks-filter-bar flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex flex-wrap items-center gap-2">
             {TABS.map((tab) => (
               <button
@@ -149,26 +146,6 @@ export function ScriptCommandHeader({
                 size="sm"
               />
             </label>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => onViewModeChange("card")}
-                className={cn("tasks-filter-icon-button", viewMode === "card" && "tasks-filter-icon-button-active")}
-                title="Card View"
-              >
-                <LayoutGrid className="h-4 w-4" />
-                <span className="sr-only">Card View</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => onViewModeChange("list")}
-                className={cn("tasks-filter-icon-button", viewMode === "list" && "tasks-filter-icon-button-active")}
-                title="List View"
-              >
-                <List className="h-4 w-4" />
-                <span className="sr-only">List View</span>
-              </button>
-            </div>
             <span className="text-xs font-medium text-crm-muted tabular-nums">
               {shownCount} shown
             </span>
@@ -208,7 +185,7 @@ function KpiTile({
         : "text-crm-text";
 
   return (
-    <div className="tasks-kpi-card">
+    <div className="crm-queue-kpi-card tasks-kpi-card">
       <div className="flex min-w-0 flex-col gap-2">
         <span className="text-[11px] font-semibold leading-none text-crm-muted">
           {label}
