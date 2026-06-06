@@ -12,10 +12,13 @@ import {
   MessageSquareDot,
   PhoneIncoming,
   PhoneOutgoing,
+  Send,
   User,
   UserPlus,
   ClipboardList,
   Voicemail,
+  FileText,
+  ScrollText,
 } from "lucide-react";
 import { CrmRecordingPlayer } from "../../CrmRecordingPlayer";
 import { cn } from "../cn";
@@ -51,11 +54,15 @@ function TimelineIcon({ type }: { type: string }) {
   if (type === "SMS_RECEIVED")
     return <MessageSquareDot className={cn(wrap, "text-violet-400")} size={sz} />;
   if (type === "EMAIL_SENT")
-    return <Mail className={cn(wrap, "text-emerald-400")} size={sz} />;
+    return <Send className={cn(wrap, "text-emerald-400")} size={sz} />;
   if (type === "EMAIL_RECEIVED" || type === "EMAIL_REPLY")
     return <Mail className={cn(wrap, "text-sky-400")} size={sz} />;
   if (type === "VOICEMAIL_DROP")
     return <Voicemail className={cn(wrap, "text-violet-400")} size={sz} />;
+  if (type.startsWith("FORM_"))
+    return <FileText className={cn(wrap, "text-amber-400")} size={sz} />;
+  if (type.startsWith("SCRIPT_"))
+    return <ScrollText className={cn(wrap, "text-fuchsia-400")} size={sz} />;
   return <Clock className={cn(wrap, "text-crm-muted")} size={sz} />;
 }
 
@@ -64,6 +71,9 @@ function eventTypeChip(type: string): string | null {
   if (type.startsWith("SMS_")) return "SMS";
   if (type.startsWith("EMAIL_")) return "Email";
   if (type === "VOICEMAIL_DROP") return "Voicemail Dropped";
+  if (type.startsWith("FORM_")) return "Form";
+  if (type.startsWith("SCRIPT_")) return "Script";
+  if (type.startsWith("CHECKLIST_")) return "Checklist";
   if (type.startsWith("NOTE_")) return "Note";
   if (type.startsWith("TASK_")) return "Task";
   if (type === "STAGE_CHANGED") return "Pipeline";
@@ -71,6 +81,23 @@ function eventTypeChip(type: string): string | null {
   if (type === "ASSIGNED_TO_USER") return "Assignment";
   if (type === "CONTACT_MERGED") return "Merge";
   return null;
+}
+
+function stringMeta(event: TimelineEvent, key: string): string | null {
+  const value = event.metadata?.[key];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function eventDisplayBody(event: TimelineEvent): string | null {
+  if (event.type === "EMAIL_RECEIVED" || event.type === "EMAIL_REPLY") {
+    return (
+      stringMeta(event, "replyText") ||
+      stringMeta(event, "previewSnippet") ||
+      event.body ||
+      null
+    );
+  }
+  return event.body || null;
 }
 
 export function ContactTimelineItem({
@@ -87,13 +114,17 @@ export function ContactTimelineItem({
   allowNoteMutations?: boolean;
 }) {
   const isNote = event.type === "NOTE_ADDED";
-  const isDeleted = event.body === "(deleted)";
+  const displayBody = eventDisplayBody(event);
+  const isDeleted = displayBody === "(deleted)";
   const chip = eventTypeChip(event.type);
   const isComm =
     event.type === "CDR_INBOUND" ||
     event.type === "CDR_OUTBOUND" ||
     event.type === "SMS_SENT" ||
     event.type === "SMS_RECEIVED" ||
+    event.type === "EMAIL_SENT" ||
+    event.type === "EMAIL_RECEIVED" ||
+    event.type === "EMAIL_REPLY" ||
     event.type === "VOICEMAIL_DROP";
 
   return (
@@ -122,14 +153,16 @@ export function ContactTimelineItem({
         </div>
         {isDeleted ? (
           <p className="mt-0.5 text-sm italic text-crm-muted">(note deleted)</p>
-        ) : event.body ? (
+        ) : displayBody ? (
           <p
             className={cn(
               "mt-0.5 text-sm leading-snug text-crm-text",
-              isNote ? "whitespace-pre-wrap" : "",
+              isNote || event.type === "EMAIL_RECEIVED" || event.type === "EMAIL_REPLY"
+                ? "whitespace-pre-wrap"
+                : "",
             )}
           >
-            {event.body}
+            {displayBody}
           </p>
         ) : null}
         <EventMeta event={event} />
@@ -257,6 +290,22 @@ function EventMeta({ event }: { event: TimelineEvent }) {
         {to ? <span className="font-mono text-[11px] text-crm-text">→ {to}</span> : null}
         <span className="rounded bg-emerald-500/15 px-1 py-0 text-[0.625rem] font-semibold text-emerald-300">
           sent
+        </span>
+      </MetaRow>
+    );
+  }
+  if ((event.type === "EMAIL_RECEIVED" || event.type === "EMAIL_REPLY") && event.metadata) {
+    const m = event.metadata as Record<string, unknown>;
+    const from = typeof m.from === "string" ? m.from : null;
+    const to = typeof m.to === "string" ? m.to : null;
+    const subject = typeof m.subject === "string" ? m.subject : null;
+    return (
+      <MetaRow>
+        {from ? <span className="font-mono text-[11px] text-crm-text">from {from}</span> : null}
+        {to ? <span className="text-[11px] text-crm-muted">→ {to}</span> : null}
+        {subject ? <span className="text-[11px] text-crm-muted">Subject: {subject}</span> : null}
+        <span className="rounded bg-sky-500/15 px-1 py-0 text-[0.625rem] font-semibold text-sky-300">
+          reply
         </span>
       </MetaRow>
     );

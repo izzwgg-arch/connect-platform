@@ -1,8 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { forwardRef } from "react";
-import { MessageSquareDot, Send } from "lucide-react";
+import { forwardRef, useEffect, useMemo, useState } from "react";
+import { MessageSquareDot, Plus, Save, Send, Trash2, X } from "lucide-react";
 import { CRMCard, CRMSection, crm } from "..";
 import { cn } from "../cn";
 import { ConnectSelect } from "../../ConnectSelect";
@@ -21,6 +21,14 @@ export type ContactSmsPanelMessage = {
   deliveryError?: string | null;
 };
 
+export type ContactSmsTemplate = {
+  id: string;
+  name: string;
+  bodyText: string;
+  isFavorite?: boolean;
+  usageCount?: number;
+};
+
 export const ContactSmsPanel = forwardRef<
   HTMLDivElement,
   {
@@ -36,6 +44,14 @@ export const ContactSmsPanel = forwardRef<
     smsSending: boolean;
     smsError: string | null;
     smsSuccess: boolean;
+    smsTemplates: ContactSmsTemplate[];
+    smsTemplatesLoading: boolean;
+    selectedSmsTemplateId: string;
+    setSelectedSmsTemplateId: (v: string) => void;
+    smsTemplateSaving: boolean;
+    smsTemplateError: string | null;
+    onCreateTemplate: (input: { name: string; bodyText: string }) => Promise<void>;
+    onArchiveTemplate: (templateId: string) => Promise<void>;
     onSend: () => void;
   }
 >(function ContactSmsPanel(
@@ -52,11 +68,56 @@ export const ContactSmsPanel = forwardRef<
     smsSending,
     smsError,
     smsSuccess,
+    smsTemplates,
+    smsTemplatesLoading,
+    selectedSmsTemplateId,
+    setSelectedSmsTemplateId,
+    smsTemplateSaving,
+    smsTemplateError,
+    onCreateTemplate,
+    onArchiveTemplate,
     onSend,
   },
   ref,
 ) {
+  const [creatingTemplate, setCreatingTemplate] = useState(false);
+  const [templateName, setTemplateName] = useState("");
+  const [templateBody, setTemplateBody] = useState("");
+  const selectedTemplate = useMemo(
+    () => smsTemplates.find((template) => template.id === selectedSmsTemplateId) ?? null,
+    [selectedSmsTemplateId, smsTemplates],
+  );
+
+  useEffect(() => {
+    if (!creatingTemplate) return;
+    setTemplateBody((current) => current || smsMessage);
+  }, [creatingTemplate, smsMessage]);
+
   if (phones.length === 0) return null;
+
+  const handleSelectTemplate = (templateId: string) => {
+    setSelectedSmsTemplateId(templateId);
+    const template = smsTemplates.find((item) => item.id === templateId);
+    if (template) setSmsMessage(template.bodyText);
+  };
+
+  const handleMessageChange = (value: string) => {
+    setSmsMessage(value);
+    if (selectedTemplate && value !== selectedTemplate.bodyText) {
+      setSelectedSmsTemplateId("");
+    }
+  };
+
+  const handleCreateTemplate = async () => {
+    try {
+      await onCreateTemplate({ name: templateName, bodyText: templateBody });
+      setTemplateName("");
+      setTemplateBody("");
+      setCreatingTemplate(false);
+    } catch {
+      // Keep the draft visible; the parent surfaces the API error.
+    }
+  };
 
   return (
     <div ref={ref}>
@@ -116,10 +177,104 @@ export const ContactSmsPanel = forwardRef<
                   ]}
                 />
               ) : null}
+              <div className="rounded-crm border border-crm-border bg-crm-surface-2/60 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <ConnectSelect
+                      value={selectedSmsTemplateId}
+                      onChange={handleSelectTemplate}
+                      className="w-full"
+                      options={[
+                        {
+                          value: "",
+                          label: smsTemplatesLoading ? "Loading SMS templates..." : "Select SMS template...",
+                        },
+                        ...smsTemplates.map((template) => ({
+                          value: template.id,
+                          label: `${template.isFavorite ? "Favorite: " : ""}${template.name}`,
+                        })),
+                      ]}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCreatingTemplate(true);
+                      setTemplateBody(smsMessage);
+                    }}
+                    className={cn(crm.btnSecondary, "px-3 py-2 text-xs")}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Template
+                  </button>
+                  {selectedTemplate ? (
+                    <button
+                      type="button"
+                      onClick={() => void onArchiveTemplate(selectedTemplate.id)}
+                      className={cn(crm.btnSecondary, "px-3 py-2 text-xs text-crm-danger")}
+                      title="Archive selected SMS template"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  ) : null}
+                </div>
+                <p className="mt-2 text-xs text-crm-muted">
+                  SMS templates allow 167 characters per SMS. Longer messages split into multiple SMS before sending.
+                </p>
+                {smsTemplateError ? <p className="mt-2 text-xs text-crm-danger">{smsTemplateError}</p> : null}
+                {creatingTemplate ? (
+                  <div className="mt-3 rounded-crm border border-crm-border/70 bg-crm-surface p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-bold text-crm-text">Create SMS template</p>
+                      <button
+                        type="button"
+                        onClick={() => setCreatingTemplate(false)}
+                        className="rounded-full p-1 text-crm-muted hover:bg-crm-surface-2 hover:text-crm-text"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <input
+                      value={templateName}
+                      onChange={(e) => setTemplateName(e.target.value)}
+                      placeholder="Template name"
+                      className={cn(crm.input, "mt-2")}
+                    />
+                    <textarea
+                      value={templateBody}
+                      onChange={(e) => setTemplateBody(e.target.value)}
+                      rows={3}
+                      placeholder="Template message..."
+                      className={cn(crm.input, "mt-2 min-h-[5rem] resize-none")}
+                    />
+                    <div className="mt-2 text-xs text-crm-muted">
+                      <SmsCharCounter text={templateBody} />
+                    </div>
+                    <div className="mt-3 flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCreatingTemplate(false)}
+                        className={cn(crm.btnSecondary, "px-3 py-2 text-xs")}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleCreateTemplate()}
+                        disabled={smsTemplateSaving || !templateName.trim() || !templateBody.trim() || isSmsTextOverLimit(templateBody)}
+                        className={cn(crm.btnPrimary, "px-3 py-2 text-xs")}
+                      >
+                        <Save className="h-3.5 w-3.5" />
+                        Save template
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
               <div className="flex gap-2">
                 <textarea
                   value={smsMessage}
-                  onChange={(e) => setSmsMessage(e.target.value)}
+                  onChange={(e) => handleMessageChange(e.target.value)}
                   rows={3}
                   placeholder="Type SMS reply…"
                   onKeyDown={(e) => {

@@ -43,6 +43,7 @@ export function ContactWorkspaceHeader({
   primaryEmail,
   workspaceHref,
   onCall,
+  onEmail,
   onSms,
   onNote,
   onTask,
@@ -71,6 +72,7 @@ export function ContactWorkspaceHeader({
   primaryEmail: string | null;
   workspaceHref: string;
   onCall: () => void;
+  onEmail: () => void;
   onSms: () => void;
   onNote: () => void;
   onTask: () => void;
@@ -144,13 +146,14 @@ export function ContactWorkspaceHeader({
                 <span className="text-crm-warning">No phone on file</span>
               )}
               {primaryEmail ? (
-                <a
-                  href={`mailto:${primaryEmail}`}
+                <button
+                  type="button"
+                  onClick={onEmail}
                   className="inline-flex min-w-0 items-center gap-1.5 text-crm-accent hover:underline"
                 >
                   <Mail className="h-3.5 w-3.5 shrink-0" />
                   <span className="truncate">{primaryEmail}</span>
-                </a>
+                </button>
               ) : null}
             </div>
             <div className="flex flex-wrap gap-2 text-xs text-crm-muted">
@@ -223,6 +226,7 @@ export function ContactWorkspaceHeader({
             contact={contact}
             workspaceHref={workspaceHref}
             onCall={onCall}
+            onEmail={onEmail}
             onSms={onSms}
             onNote={onNote}
             onTask={onTask}
@@ -292,6 +296,7 @@ function PrimaryActions({
   contact,
   workspaceHref,
   onCall,
+  onEmail,
   onSms,
   onNote,
   onTask,
@@ -303,6 +308,7 @@ function PrimaryActions({
   contact: CrmContactDetail;
   workspaceHref: string;
   onCall: () => void;
+  onEmail: () => void;
   onSms: () => void;
   onNote: () => void;
   onTask: () => void;
@@ -332,6 +338,15 @@ function PrimaryActions({
         <div className="grid grid-cols-2 gap-2">
           <button
             type="button"
+            onClick={onEmail}
+            disabled={contact.emails.length === 0}
+            className={cn(crm.btnSecondary, "justify-center py-2 text-xs")}
+          >
+            <Mail className="h-3.5 w-3.5" />
+            Email
+          </button>
+          <button
+            type="button"
             onClick={onSms}
             disabled={contact.phones.length === 0 || contact.doNotSms}
             className={cn(crm.btnSecondary, "justify-center py-2 text-xs")}
@@ -343,7 +358,7 @@ function PrimaryActions({
             <MessageSquare className="h-3.5 w-3.5" />
             Note
           </button>
-          <button type="button" onClick={onTask} className={cn(crm.btnSecondary, "justify-center py-2 text-xs col-span-2")}>
+          <button type="button" onClick={onTask} className={cn(crm.btnSecondary, "justify-center py-2 text-xs")}>
             <Calendar className="h-3.5 w-3.5" />
             Schedule task
           </button>

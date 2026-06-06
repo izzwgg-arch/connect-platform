@@ -197,18 +197,18 @@ function StatusPill({ status }: { status: ReturnType<typeof presenceFor> }) {
   return <span className={`cx-status cx-status--${status}`}><i />{label}</span>;
 }
 
-function ContactActions({ contact, onCall, onMessage }: { contact: Contact; onCall: (c: Contact) => void; onMessage: (c: Contact) => void }) {
+function ContactActions({ contact, onCall, onMessage, onEmail }: { contact: Contact; onCall: (c: Contact) => void; onMessage: (c: Contact) => void; onEmail: (c: Contact) => void }) {
   const email = contact.primaryEmail?.email;
   return (
     <div className="cx-actions">
       <button type="button" title="Call" onClick={(e) => { e.stopPropagation(); onCall(contact); }}><Phone size={15} /></button>
       <button type="button" title="Message" onClick={(e) => { e.stopPropagation(); onMessage(contact); }}><MessageSquare size={15} /></button>
-      <a title="Email" onClick={(e) => e.stopPropagation()} href={email ? `mailto:${email}` : undefined} aria-disabled={!email}><Mail size={15} /></a>
+      <button type="button" title="Email" onClick={(e) => { e.stopPropagation(); onEmail(contact); }} disabled={!email}><Mail size={15} /></button>
     </div>
   );
 }
 
-function ContactCard({ contact, status, onOpen, onCall, onMessage }: { contact: Contact; status: ReturnType<typeof presenceFor>; onOpen: () => void; onCall: (c: Contact) => void; onMessage: (c: Contact) => void }) {
+function ContactCard({ contact, status, onOpen, onCall, onMessage, onEmail }: { contact: Contact; status: ReturnType<typeof presenceFor>; onOpen: () => void; onCall: (c: Contact) => void; onMessage: (c: Contact) => void; onEmail: (c: Contact) => void }) {
   return (
     <button type="button" className="cx-card" onClick={onOpen}>
       <div className="cx-card-top">
@@ -230,12 +230,12 @@ function ContactCard({ contact, status, onOpen, onCall, onMessage }: { contact: 
         {contact.type === "internal_extension" ? <StatusPill status={status} /> : null}
         {contact.tags.slice(0, 3).map((tag) => <span key={tag.name} className="cx-tag">{tag.name}</span>)}
       </div>
-      <ContactActions contact={contact} onCall={onCall} onMessage={onMessage} />
+      <ContactActions contact={contact} onCall={onCall} onMessage={onMessage} onEmail={onEmail} />
     </button>
   );
 }
 
-function ContactList({ contacts, statuses, onOpen, onCall, onMessage }: { contacts: Contact[]; statuses: Map<string, ReturnType<typeof presenceFor>>; onOpen: (c: Contact) => void; onCall: (c: Contact) => void; onMessage: (c: Contact) => void }) {
+function ContactList({ contacts, statuses, onOpen, onCall, onMessage, onEmail }: { contacts: Contact[]; statuses: Map<string, ReturnType<typeof presenceFor>>; onOpen: (c: Contact) => void; onCall: (c: Contact) => void; onMessage: (c: Contact) => void; onEmail: (c: Contact) => void }) {
   return (
     <div className="cx-list">
       <div className="cx-list-head">
@@ -250,14 +250,14 @@ function ContactList({ contacts, statuses, onOpen, onCall, onMessage }: { contac
           <span>{contact.company || "—"}</span>
           <span className="cx-tag-row">{contact.tags.slice(0, 2).map((tag) => <em key={tag.name} className="cx-tag">{tag.name}</em>)}</span>
           <span>{contact.type === "internal_extension" ? <StatusPill status={statuses.get(contact.id) ?? "offline"} /> : "—"}</span>
-          <ContactActions contact={contact} onCall={onCall} onMessage={onMessage} />
+          <ContactActions contact={contact} onCall={onCall} onMessage={onMessage} onEmail={onEmail} />
         </button>
       ))}
     </div>
   );
 }
 
-function ContactPanel({ contact, status, onClose, onEdit, onArchive, onCall, onMessage }: { contact: Contact; status: ReturnType<typeof presenceFor>; onClose: () => void; onEdit: () => void; onArchive: () => void; onCall: (c: Contact) => void; onMessage: (c: Contact) => void }) {
+function ContactPanel({ contact, status, onClose, onEdit, onArchive, onCall, onMessage, onEmail }: { contact: Contact; status: ReturnType<typeof presenceFor>; onClose: () => void; onEdit: () => void; onArchive: () => void; onCall: (c: Contact) => void; onMessage: (c: Contact) => void; onEmail: (c: Contact) => void }) {
   return (
     <aside className="cx-panel">
       <button type="button" className="cx-panel-close" onClick={onClose}><X size={18} /></button>
@@ -274,7 +274,7 @@ function ContactPanel({ contact, status, onClose, onEdit, onArchive, onCall, onM
       <div className="cx-panel-actions">
         <button type="button" onClick={() => onCall(contact)}><Phone size={16} />Call</button>
         <button type="button" onClick={() => onMessage(contact)}><MessageSquare size={16} />Message</button>
-        {contact.primaryEmail?.email ? <a href={`mailto:${contact.primaryEmail.email}`}><Mail size={16} />Email</a> : null}
+        {contact.primaryEmail?.email ? <button type="button" onClick={() => onEmail(contact)}><Mail size={16} />Email</button> : null}
       </div>
       <section className="cx-detail-section">
         <h3>Phone Numbers</h3>
@@ -472,6 +472,15 @@ export default function ContactsPage() {
     if (target) router.push(`/sms?phone=${encodeURIComponent(target)}`);
   }, [router]);
 
+  const emailContact = useCallback((contact: Contact) => {
+    if (!contact.primaryEmail?.email) return;
+    if (contact.type === "internal_extension") {
+      router.push(`/team`);
+      return;
+    }
+    router.push(`/crm/contacts/${contact.id}?workspace=email&returnTo=/contacts`);
+  }, [router]);
+
   async function archiveContact(contact: Contact) {
     if (contact.type === "internal_extension") return;
     await apiDelete(`/contacts/${encodeURIComponent(contact.id)}`);
@@ -523,10 +532,10 @@ export default function ContactsPage() {
               <EmptyState title="No contacts found" message="No tenant contacts match this view." />
             ) : view === "cards" ? (
               <section className="cx-grid">
-                {contacts.map((contact) => <ContactCard key={contact.id} contact={contact} status={statuses.get(contact.id) ?? "offline"} onOpen={() => setSelected(contact)} onCall={callContact} onMessage={messageContact} />)}
+                {contacts.map((contact) => <ContactCard key={contact.id} contact={contact} status={statuses.get(contact.id) ?? "offline"} onOpen={() => setSelected(contact)} onCall={callContact} onMessage={messageContact} onEmail={emailContact} />)}
               </section>
             ) : (
-              <ContactList contacts={contacts} statuses={statuses} onOpen={setSelected} onCall={callContact} onMessage={messageContact} />
+              <ContactList contacts={contacts} statuses={statuses} onOpen={setSelected} onCall={callContact} onMessage={messageContact} onEmail={emailContact} />
             )}
           </>
         )}
@@ -540,6 +549,7 @@ export default function ContactsPage() {
             onArchive={() => archiveContact(selected)}
             onCall={callContact}
             onMessage={messageContact}
+            onEmail={emailContact}
         />
       ) : null}
 
@@ -602,7 +612,7 @@ const CONTACTS_CSS = `
 .cx-status--offline { color: var(--text-dim); background: var(--panel-2); }
 .cx-actions { margin-top: 14px; }
 .cx-actions button, .cx-actions a { width: 34px; height: 34px; border-radius: 12px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text-dim); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
-.cx-actions a[aria-disabled="true"] { opacity: .4; pointer-events: none; }
+.cx-actions a[aria-disabled="true"], .cx-actions button:disabled { opacity: .4; pointer-events: none; }
 .cx-star { color: #facc15; }
 .cx-list { display: grid; gap: 8px; }
 .cx-list-head, .cx-list-row { display: grid; grid-template-columns: 1.7fr .75fr 1fr 1.25fr 1fr 1fr .9fr auto; gap: 10px; align-items: center; }

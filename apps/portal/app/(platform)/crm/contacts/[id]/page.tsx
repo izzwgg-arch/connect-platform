@@ -42,6 +42,7 @@ import {
   ContactSmsPanel,
   ContactRelationshipHealth,
   type ContactSmsPanelMessage,
+  type ContactSmsTemplate,
   type CrmContactDetail,
   type CrmStage,
   type CrmTask,
@@ -195,7 +196,7 @@ function ContactPageFallback() {
   return <div className="py-24 text-center text-sm text-crm-muted">Loading contact…</div>;
 }
 
-// ── Drive Documents panel (files tab) ─────────────────────────────────────────
+// ── Contact files panel ───────────────────────────────────────────────────────
 
 type DriveLeadDoc = {
   id: string;
@@ -258,16 +259,26 @@ function ContactDriveDocuments({ contactId }: { contactId: string }) {
   const handleDocOpen = async (docId: string) => {
     const doc = docs.find((d) => d.id === docId);
     if (doc?.status === "IMPORTED") {
+      const popup = window.open("", "_blank");
       try {
+        if (popup) {
+          popup.document.title = doc.originalFileName || "Document";
+          popup.document.body.innerHTML = "<p style=\"font-family: system-ui, sans-serif; padding: 24px; color: #475569;\">Opening document...</p>";
+        }
         // Fetch a short-lived signed URL (requires JWT auth), then fetch the
         // document binary with auth headers, and open as a blob URL.
         // window.open(signedUrl) alone drops the Authorization header and is denied.
         const res = await apiGet<{ signedUrl: string }>(`/crm/documents/${docId}/open-url`);
         const blob = await apiFetchBlob(res.signedUrl);
         const blobUrl = URL.createObjectURL(blob);
-        window.open(blobUrl, "_blank", "noopener,noreferrer");
+        if (popup) {
+          popup.location.href = blobUrl;
+        } else {
+          window.open(blobUrl, "_blank", "noopener,noreferrer");
+        }
         setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
       } catch (e: any) {
+        popup?.close();
         alert(`Could not open document: ${e?.message ?? "error"}`);
       }
       return;
@@ -360,9 +371,9 @@ function ContactDriveDocuments({ contactId }: { contactId: string }) {
   if (docs.length === 0) {
     return (
       <div className="px-2 py-3 text-center">
-        <p className="text-sm font-semibold text-crm-text">No Drive documents attached yet.</p>
+        <p className="text-sm font-semibold text-crm-text">No files attached yet.</p>
         <p className="mt-1 text-sm text-crm-muted">
-          Upload a lead sheet and run Drive Match to automatically find and attach files from Google Drive.
+          Completed signed forms and matched Drive documents will appear here.
         </p>
       </div>
     );
@@ -372,7 +383,7 @@ function ContactDriveDocuments({ contactId }: { contactId: string }) {
     <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
       <div className="mb-3">
         <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-crm-accent">
-          Google Drive Documents
+          Attached Files
         </p>
         <h3 className="text-lg font-bold text-crm-text">
           {docs.length} attached file{docs.length !== 1 ? "s" : ""}
@@ -1298,7 +1309,7 @@ function ContactFormsPanel({
   defaultEmail: string | null;
   disabled: boolean;
   onActivity: () => void;
-  onToast?: (kind: "ok" | "err", text: string) => void;
+  onToast?: (kind: "ok" | "err", text: string, sticky?: boolean) => void;
 }) {
   const [requests, setRequests] = useState<ContactFormRequest[]>([]);
   const [templates, setTemplates] = useState<ContactFormTemplateOption[]>([]);
@@ -1339,7 +1350,7 @@ function ContactFormsPanel({
         for (const req of (data.requests || [])) {
           const prev = lastSeenStatusRef.current[req.id];
           if (prev && prev !== "COMPLETED" && req.status === "COMPLETED") {
-            onToast?.("ok", `Form completed: "${req.formName || "Form"}" was signed and submitted.`);
+            onToast?.("ok", `Form completed: "${req.formName || "Form"}" was signed and the PDF was uploaded to Files.`, true);
           }
           lastSeenStatusRef.current[req.id] = req.status;
         }
@@ -1578,7 +1589,7 @@ function CrmContactDetailInner() {
   const [campaignNavMembers, setCampaignNavMembers] = useState<CampaignNavMember[]>([]);
   const [campaignNavLoading, setCampaignNavLoading] = useState(false);
   const [outreachStarting, setOutreachStarting] = useState(false);
-  const [workspaceToast, setWorkspaceToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [workspaceToast, setWorkspaceToast] = useState<{ kind: "ok" | "err"; text: string; sticky?: boolean } | null>(null);
   const workspaceToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [queueMember, setQueueMember] = useState<QueueContextMember | null>(null);
   const [campaignName, setCampaignName] = useState<string | null>(null);
@@ -1694,6 +1705,11 @@ function CrmContactDetailInner() {
   const [smsThreadMessages, setSmsThreadMessages] = useState<ContactSmsPanelMessage[]>([]);
   const [smsError, setSmsError] = useState<string | null>(null);
   const [smsSuccess, setSmsSuccess] = useState(false);
+  const [smsTemplates, setSmsTemplates] = useState<ContactSmsTemplate[]>([]);
+  const [smsTemplatesLoading, setSmsTemplatesLoading] = useState(false);
+  const [selectedSmsTemplateId, setSelectedSmsTemplateId] = useState("");
+  const [smsTemplateSaving, setSmsTemplateSaving] = useState(false);
+  const [smsTemplateError, setSmsTemplateError] = useState<string | null>(null);
 
   // Caller-ID workflow (must be declared before any early return — Rules of Hooks)
   const [callerIdSelected, setCallerIdSelected] = useState<string | null>(null);
@@ -1799,6 +1815,20 @@ function CrmContactDetailInner() {
     }
   }, [id, smsPhone]);
 
+  const loadSmsTemplates = useCallback(async () => {
+    setSmsTemplatesLoading(true);
+    setSmsTemplateError(null);
+    try {
+      const data = await apiGet<{ templates: ContactSmsTemplate[] }>("/crm/sms/templates");
+      setSmsTemplates(data.templates ?? []);
+    } catch (e: any) {
+      setSmsTemplateError(e?.message || "Failed to load SMS templates");
+      setSmsTemplates([]);
+    } finally {
+      setSmsTemplatesLoading(false);
+    }
+  }, []);
+
   const loadTasks = useCallback(async () => {
     setTasksLoading(true);
     try {
@@ -1838,8 +1868,9 @@ function CrmContactDetailInner() {
     loadTimeline();
     loadTasks();
     loadDuplicates();
+    void loadSmsTemplates();
     void loadWorkspaceGuides();
-  }, [loadContact, loadTimeline, loadTasks, loadDuplicates, loadWorkspaceGuides]);
+  }, [loadContact, loadTimeline, loadTasks, loadDuplicates, loadSmsTemplates, loadWorkspaceGuides]);
 
   useEffect(() => {
     if (searchParams.get("edit") !== "1" || !contact) return;
@@ -1989,10 +2020,10 @@ function CrmContactDetailInner() {
     [campaignIdForNav, returnTo, router],
   );
 
-  const showWorkspaceToast = useCallback((kind: "ok" | "err", text: string) => {
+  const showWorkspaceToast = useCallback((kind: "ok" | "err", text: string, sticky = false) => {
     if (workspaceToastTimer.current) clearTimeout(workspaceToastTimer.current);
-    setWorkspaceToast({ kind, text });
-    workspaceToastTimer.current = setTimeout(() => setWorkspaceToast(null), 3200);
+    setWorkspaceToast({ kind, text, sticky });
+    if (!sticky) workspaceToastTimer.current = setTimeout(() => setWorkspaceToast(null), 3200);
   }, []);
 
   useEffect(() => {
@@ -2243,6 +2274,38 @@ function CrmContactDetailInner() {
     }
   };
 
+  const handleCreateSmsTemplate = async (input: { name: string; bodyText: string }) => {
+    if (!input.name.trim() || !input.bodyText.trim()) return;
+    setSmsTemplateSaving(true);
+    setSmsTemplateError(null);
+    try {
+      const result = await apiPost<{ template: ContactSmsTemplate }>("/crm/sms/templates", {
+        name: input.name.trim(),
+        bodyText: input.bodyText.trim(),
+      });
+      setSmsTemplates((prev) => [result.template, ...prev.filter((template) => template.id !== result.template.id)]);
+      setSelectedSmsTemplateId(result.template.id);
+      setSmsMessage(result.template.bodyText);
+    } catch (e: any) {
+      setSmsTemplateError(e?.message || "Failed to save SMS template");
+      throw e;
+    } finally {
+      setSmsTemplateSaving(false);
+    }
+  };
+
+  const handleArchiveSmsTemplate = async (templateId: string) => {
+    if (!templateId || !confirm("Archive this SMS template?")) return;
+    setSmsTemplateError(null);
+    try {
+      await apiDelete(`/crm/sms/templates/${templateId}`);
+      setSmsTemplates((prev) => prev.filter((template) => template.id !== templateId));
+      setSelectedSmsTemplateId((current) => current === templateId ? "" : current);
+    } catch (e: any) {
+      setSmsTemplateError(e?.message || "Failed to archive SMS template");
+    }
+  };
+
   const handleSendSms = async () => {
     if (!smsMessage.trim() || smsSending) return;
     setSmsSending(true);
@@ -2252,10 +2315,12 @@ function CrmContactDetailInner() {
       await apiPost(`/crm/contacts/${id}/sms`, {
         message: smsMessage.trim(),
         ...(smsPhone ? { phone: smsPhone } : {}),
+        ...(selectedSmsTemplateId ? { templateId: selectedSmsTemplateId } : {}),
       });
       setSmsSuccess(true);
       setSmsMessage("");
-      await Promise.all([loadSmsThread(), loadTimeline()]);
+      setSelectedSmsTemplateId("");
+      await Promise.all([loadSmsThread(), loadTimeline(), loadSmsTemplates()]);
       setTimeout(() => setSmsSuccess(false), 3000);
     } catch (e: any) {
       setSmsError(e?.message || "Failed to send SMS");
@@ -2868,6 +2933,14 @@ function CrmContactDetailInner() {
                 smsSending={smsSending}
                 smsError={smsError}
                 smsSuccess={smsSuccess}
+                smsTemplates={smsTemplates}
+                smsTemplatesLoading={smsTemplatesLoading}
+                selectedSmsTemplateId={selectedSmsTemplateId}
+                setSelectedSmsTemplateId={setSelectedSmsTemplateId}
+                smsTemplateSaving={smsTemplateSaving}
+                smsTemplateError={smsTemplateError}
+                onCreateTemplate={handleCreateSmsTemplate}
+                onArchiveTemplate={handleArchiveSmsTemplate}
                 onSend={handleSendSms}
               />
             ) : workspaceTab === "email" ? (
@@ -3601,15 +3674,24 @@ function CrmContactDetailInner() {
       ) : null}
 
       {workspaceToast ? (
-        <p
+        <div
           role="status"
           className={cn(
             "crm-contact-workspace-toast",
             workspaceToast.kind === "ok" ? "crm-contact-workspace-toast-success" : "crm-contact-workspace-toast-error",
           )}
         >
-          {workspaceToast.text}
-        </p>
+          <span>{workspaceToast.text}</span>
+          {workspaceToast.sticky ? (
+            <button
+              type="button"
+              className="ml-3 rounded-full border border-current/30 px-2 py-0.5 text-[11px] font-bold uppercase tracking-[0.12em]"
+              onClick={() => setWorkspaceToast(null)}
+            >
+              Dismiss
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </CRMPageShell>
       {mergeTarget && (

@@ -74,7 +74,14 @@ export type TimelineEventType =
   | "ASSIGNED_TO_USER"
   | "SMS_SENT"
   | "SMS_RECEIVED"
-  | "VOICEMAIL_DROP";
+  | "EMAIL_SENT"
+  | "EMAIL_RECEIVED"
+  | "EMAIL_REPLY"
+  | "VOICEMAIL_DROP"
+  | "FORM_SENT"
+  | "FORM_OPENED"
+  | "FORM_COMPLETED"
+  | "FORM_REVOKED";
 
 export type TimelineEventCreatedBy = { id: string; displayName: string };
 

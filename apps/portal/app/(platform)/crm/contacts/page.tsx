@@ -8,12 +8,10 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  Clock,
   Download,
   FileUp,
   Filter,
   Mail,
-  Megaphone,
   MoreHorizontal,
   Phone,
   PhoneOff,
@@ -929,7 +927,6 @@ export default function CrmContactsPage() {
   function handleDialContact(contact: CrmContact) {
     const phoneNumber = contact.primaryPhone?.numberRaw;
     if (!phoneNumber || contact.doNotCall) return;
-    if (!sipReady) return;
     window.dispatchEvent(new CustomEvent("crm:dial", { detail: { target: phoneNumber } }));
   }
 
@@ -1045,7 +1042,6 @@ export default function CrmContactsPage() {
                   ) : null}
                 </div>
                 <div className="crm-queue-filter-field">
-                  <Megaphone className="h-4 w-4 shrink-0 text-crm-muted" />
                   <label htmlFor="crm-contacts-campaign" className={cn(crm.label, "shrink-0")}>Campaign</label>
                   <ConnectSelect
                     id="crm-contacts-campaign"
@@ -1061,7 +1057,6 @@ export default function CrmContactsPage() {
                   />
                 </div>
                 <div className="crm-queue-filter-field">
-                  <Tag className="h-4 w-4 shrink-0 text-crm-muted" />
                   <label htmlFor="crm-contacts-tag" className={cn(crm.label, "shrink-0")}>Tag</label>
                   <ConnectSelect
                     id="crm-contacts-tag"
@@ -1076,7 +1071,6 @@ export default function CrmContactsPage() {
                   />
                 </div>
                 <div className="crm-queue-filter-field">
-                  <Clock className="h-4 w-4 shrink-0 text-crm-muted" />
                   <label htmlFor="crm-contacts-timezone" className={cn(crm.label, "shrink-0")}>Timezone</label>
                   <ConnectSelect
                     id="crm-contacts-timezone"

@@ -170,7 +170,7 @@ export function ContactListDetailPanel({
                         ? "Do not call"
                         : "No phone on file"
                     : key === "call" && !sipReady
-                      ? "Register softphone to place calls"
+                      ? "Fill dialer — reconnect softphone to place calls"
                       : `Open ${label.toLowerCase()} workspace`
                 }
               >
