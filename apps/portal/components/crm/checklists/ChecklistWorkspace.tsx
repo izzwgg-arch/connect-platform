@@ -430,7 +430,6 @@ function ChecklistCollection({
 }: {
   checklists: Checklist[];
   totalCount: number;
-  viewMode: ChecklistViewMode;
   selectedId?: string | null;
   activeFilter: ChecklistHeaderTab;
   search: string;
