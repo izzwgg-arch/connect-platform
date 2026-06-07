@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
-import { initials } from "../contact/contactFormatters";
+import { avatarGradient, initials } from "../contact/contactFormatters";
 
 export type FunderStatus = "ACTIVE" | "INACTIVE" | "PROSPECT" | "PENDING";
 
@@ -44,8 +44,6 @@ const STATUS_HEX: Record<FunderStatus, string> = {
   PROSPECT: "#c2410c",
   PENDING: "#b45309",
 };
-
-const AVATAR_GRADIENT = "linear-gradient(135deg, #6d5dfc 0%, #377dff 100%)";
 
 const CHANNEL_ACTIONS = [
   { key: "email" as const, label: "Email", icon: Mail },
@@ -122,7 +120,7 @@ export function FunderListDetailPanel({
       </header>
 
       <section className="crm-queue-detail-identity">
-        <div className="crm-queue-detail-avatar" style={{ background: AVATAR_GRADIENT }}>
+        <div className="crm-queue-detail-avatar" style={{ background: avatarGradient(funder.id ?? funder.name) }}>
           {initials(funder.name)}
         </div>
         <div className="min-w-0 flex-1">

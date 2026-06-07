@@ -41,6 +41,7 @@ import {
 import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { ViewportDropdown } from "../../../../components/ViewportDropdown";
 import { BulkEmailModal } from "../../../../components/crm/email/BulkEmailModal";
+import { avatarGradient } from "../../../../components/crm/contact/contactFormatters";
 import { apiGet, apiPost, apiDelete } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { CrmConfirmModal } from "../../../../components/crm/CrmConfirmModal";
@@ -1363,7 +1364,11 @@ export default function FundersPage() {
                               />
                             </label>
                             <span className="crm-queue-row-rank tabular-nums">{page * PAGE_LIMIT + index + 1}</span>
-                            <div className="crm-queue-row-avatar funders-avatar" aria-hidden>
+                            <div
+                              className="crm-queue-row-avatar funders-avatar"
+                              style={{ background: avatarGradient(f.id ?? f.name) }}
+                              aria-hidden
+                            >
                               {initials(f.name)}
                             </div>
                             <div className="crm-queue-row-main min-w-0">

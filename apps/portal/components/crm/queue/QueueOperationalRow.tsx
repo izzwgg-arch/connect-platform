@@ -10,13 +10,13 @@ import {
   Phone,
 } from "lucide-react";
 import { cn } from "../cn";
-import { initials, stageColor, stageLabel } from "../contact/contactFormatters";
 import {
   leadTimezoneBadgeShort,
   leadTimezoneBadgeTitle,
 } from "../contact/leadTimezoneDisplay";
 import type { CrmStage } from "../contact/contactTypes";
 import type { QueueMember } from "./queueTypes";
+import { avatarGradient, initials, stageColor, stageLabel } from "../contact/contactFormatters";
 import {
   callbackTimeLabel,
   isQueueMemberActionable,
@@ -91,7 +91,7 @@ export function QueueOperationalRow({
         <div
           className="crm-queue-row-avatar"
           style={{
-            background: `linear-gradient(135deg, ${stageColor(stage)}, color-mix(in srgb, ${stageColor(stage)} 42%, #6366f1))`,
+            background: avatarGradient(contact?.id ?? contact?.displayName),
           }}
           aria-hidden
         >
