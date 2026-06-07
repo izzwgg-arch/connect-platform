@@ -11,7 +11,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock3,
-  Filter,
   FileAudio,
   FileText,
   Headphones,
@@ -375,12 +374,6 @@ export default function CrmVoicemailDropsPage() {
                       { value: "ARCHIVED", label: "Archived" },
                     ]}
                   />
-                </div>
-                <div className="crm-queue-filter-field crm-voicemail-more-filters">
-                  <button type="button" className={cn(crm.btnSecondary, "min-h-[2.25rem] gap-1.5")}>
-                    <Filter className="h-4 w-4" />
-                    More filters
-                  </button>
                 </div>
               </div>
             </CRMActionBar>
