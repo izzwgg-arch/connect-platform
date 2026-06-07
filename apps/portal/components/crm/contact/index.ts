@@ -17,6 +17,7 @@ export { ContactTimelineItem } from "./ContactTimelineItem";
 export { ContactSmsPanel } from "./ContactSmsPanel";
 export type { ContactSmsPanelMessage, ContactSmsTemplate } from "./ContactSmsPanel";
 export { ContactRelationshipHealth } from "./ContactRelationshipHealth";
+export { CRMStatusChip, CRM_STATUS_PALETTE, crmStatusChipClassName } from "./ContactStatusChip";
 export { ContactOperationalRow, type ContactListRow } from "./ContactOperationalRow";
 export { ContactListDetailPanel, ContactListDetailPlaceholder } from "./ContactListDetailPanel";
 export { buildContactWorkspaceHref } from "./contactListUtils";

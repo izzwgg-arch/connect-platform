@@ -28,6 +28,40 @@ export function initials(name?: string | null): string {
   return letters || "?";
 }
 
+const AVATAR_GRADIENTS = [
+  ["#6366f1", "#8b5cf6"],
+  ["#0ea5e9", "#2563eb"],
+  ["#06b6d4", "#14b8a6"],
+  ["#10b981", "#22c55e"],
+  ["#84cc16", "#16a34a"],
+  ["#f59e0b", "#f97316"],
+  ["#fb7185", "#e11d48"],
+  ["#ec4899", "#a855f7"],
+  ["#8b5cf6", "#3b82f6"],
+  ["#14b8a6", "#0f766e"],
+  ["#f43f5e", "#d946ef"],
+  ["#64748b", "#475569"],
+  ["#7c3aed", "#db2777"],
+  ["#0891b2", "#4f46e5"],
+  ["#ca8a04", "#ea580c"],
+  ["#0d9488", "#65a30d"],
+];
+
+function avatarPaletteIndex(seed?: string | null): number {
+  const source = (seed ?? "").trim().toLowerCase();
+  if (!source) return 0;
+  let hash = 0;
+  for (let i = 0; i < source.length; i += 1) {
+    hash = (hash * 31 + source.charCodeAt(i)) >>> 0;
+  }
+  return hash % AVATAR_GRADIENTS.length;
+}
+
+export function avatarGradient(seed?: string | null): string {
+  const [from, to] = AVATAR_GRADIENTS[avatarPaletteIndex(seed)] ?? AVATAR_GRADIENTS[0]!;
+  return `linear-gradient(135deg, ${from}, ${to})`;
+}
+
 export function formatDate(iso: string): string {
   if (!iso) return "-";
   const d = new Date(iso as any);
