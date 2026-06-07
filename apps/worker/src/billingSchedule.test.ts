@@ -81,3 +81,32 @@ test("tenant-specific billing timezone metadata is honored when valid", () => {
   assert.equal(resolveBillingTimeZone({ billingTimeZone: "Not/AZone" }), "America/New_York");
 });
 
+test("autopay reminder window opens 3 calendar days before payment date local midnight", () => {
+  const onReminderDay = buildBillingSchedule({
+    now: new Date("2026-05-18T04:00:00.000Z"), // May 18 00:00 America/New_York
+    billingDayOfMonth: 21,
+  });
+  assert.equal(onReminderDay.reminderDate, "2026-05-18");
+  assert.equal(onReminderDay.reminderDue, true);
+  assert.equal(onReminderDay.due, false);
+  assert.equal(onReminderDay.scheduledReminderAt.toISOString(), "2026-05-18T04:00:00.000Z");
+  assert.equal(onReminderDay.scheduledChargeAt.toISOString(), "2026-05-21T04:00:00.000Z");
+});
+
+test("day before reminder window is not reminderDue", () => {
+  const beforeReminder = buildBillingSchedule({
+    now: new Date("2026-05-17T23:59:59.000Z"),
+    billingDayOfMonth: 21,
+  });
+  assert.equal(beforeReminder.reminderDue, false);
+});
+
+test("payment due date is charge due but not reminderDue", () => {
+  const onDueDate = buildBillingSchedule({
+    now: new Date("2026-05-21T04:00:00.000Z"),
+    billingDayOfMonth: 21,
+  });
+  assert.equal(onDueDate.due, true);
+  assert.equal(onDueDate.reminderDue, false);
+});
+

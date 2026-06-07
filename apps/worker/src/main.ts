@@ -23,8 +23,10 @@ import { chargeBillingInvoice } from "../../api/src/billing/solaBillingPayments"
 import { billingLiveChargesDisabled } from "../../api/src/billing/solaBillingPayments";
 import {
   clearInvoiceDunningMetadata,
+  queueAutopayReminderEmailOnce,
   queueInvoiceSentOnFinalize,
 } from "../../api/src/billing/billingEmailLifecycle";
+import { autopayPeriodInvoiceWhere } from "../../api/src/billing/autopayCycle";
 import { createBillingInvoice, createBillingInvoiceRowWithUniqueNumber } from "../../api/src/billing/invoiceEngine";
 import { findPaidBillingPeriodCoverage } from "../../api/src/billing/billingPeriodGuards";
 import { consumeScheduledPlanChange } from "../../api/src/billing/billingScheduledPlanConsume";
@@ -2017,6 +2019,139 @@ async function getAndConsumeBillingScheduleOverride(
   return "charge";
 }
 
+async function findAutopayPeriodInvoice(tenantId: string, schedule: BillingSchedule): Promise<any | null> {
+  return (db as any).billingInvoice.findFirst({
+    where: autopayPeriodInvoiceWhere(tenantId, schedule),
+    orderBy: { createdAt: "desc" },
+    include: { lineItems: true, tenant: true },
+  });
+}
+
+async function runAutopayReminderPhase(
+  setting: any,
+  schedule: BillingSchedule,
+  runId: string,
+  results: any[],
+): Promise<void> {
+  if (!schedule.reminderDue) return;
+
+  await (db as any).billingEventLog.create({
+    data: {
+      tenantId: setting.tenantId,
+      runId,
+      type: "autopay_invoice_generation_started",
+      message: "Autopay T-3 reminder window — ensuring invoice exists before payment date.",
+      metadata: {
+        scheduledReminderAt: schedule.scheduledReminderAt.toISOString(),
+        scheduledChargeAt: schedule.scheduledChargeAt.toISOString(),
+        reminderDate: schedule.reminderDate,
+        paymentDate: schedule.paymentDate,
+      },
+    },
+  }).catch(() => null);
+
+  const activeSolaBlock = await checkActiveSolaScheduleBlock(setting.tenantId);
+  if (activeSolaBlock) {
+    results.push({ tenantId: setting.tenantId, phase: "reminder", skipped: "active_sola_schedule" });
+    return;
+  }
+
+  const cutoverChargeBlock = await checkCutoverNextChargeAtBlock(setting.tenantId, new Date());
+  if (cutoverChargeBlock) {
+    results.push({ tenantId: setting.tenantId, phase: "reminder", skipped: "sola_cutover_not_due_yet" });
+    return;
+  }
+
+  const paidCoverage = await findPaidBillingPeriodCoverage({
+    tenantId: setting.tenantId,
+    periodStart: schedule.periodStart,
+    periodEnd: schedule.periodEnd,
+  });
+  if (paidCoverage) {
+    results.push({ tenantId: setting.tenantId, phase: "reminder", skipped: "period_already_paid", invoiceId: paidCoverage.invoiceId });
+    return;
+  }
+
+  let invoice = await findAutopayPeriodInvoice(setting.tenantId, schedule);
+  if (invoice) {
+    await (db as any).billingEventLog.create({
+      data: {
+        tenantId: setting.tenantId,
+        invoiceId: invoice.id,
+        runId,
+        type: "autopay_invoice_skipped_existing",
+        message: "Autopay T-3 — invoice already exists for this billing period.",
+        metadata: { invoiceNumber: invoice.invoiceNumber, status: invoice.status },
+      },
+    }).catch(() => null);
+  } else {
+    try {
+      invoice = await createWorkerBillingInvoice(setting, schedule, { skipInvoiceEmail: true });
+      await (db as any).billingEventLog.create({
+        data: {
+          tenantId: setting.tenantId,
+          invoiceId: invoice.id,
+          runId,
+          type: "autopay_invoice_created",
+          message: "Autopay T-3 — invoice created ahead of payment date.",
+          metadata: {
+            invoiceNumber: invoice.invoiceNumber,
+            scheduledChargeAt: schedule.scheduledChargeAt.toISOString(),
+            source: "worker_autopay_t3",
+          },
+        },
+      }).catch(() => null);
+    } catch (err: any) {
+      await (db as any).billingEventLog.create({
+        data: {
+          tenantId: setting.tenantId,
+          runId,
+          type: "autopay_invoice_generation_failed",
+          message: err?.message ? String(err.message) : "autopay_invoice_generation_failed",
+          metadata: { scheduledChargeAt: schedule.scheduledChargeAt.toISOString() },
+        },
+      }).catch(() => null);
+      results.push({ tenantId: setting.tenantId, phase: "reminder", error: err?.message || "invoice_create_failed" });
+      return;
+    }
+  }
+
+  if (invoice.status === "PAID") {
+    results.push({ tenantId: setting.tenantId, phase: "reminder", invoiceId: invoice.id, skipped: "already_paid" });
+    return;
+  }
+
+  const reminder = await queueAutopayReminderEmailOnce({
+    tenantId: setting.tenantId,
+    invoiceId: invoice.id,
+    invoiceNumber: invoice.invoiceNumber,
+    totalCents: invoice.totalCents,
+    balanceDueCents: invoice.balanceDueCents ?? invoice.totalCents,
+    dueDate: invoice.dueDate,
+    scheduledChargeAt: schedule.scheduledChargeAt,
+    periodStart: invoice.periodStart ?? null,
+    periodEnd: invoice.periodEnd ?? null,
+  });
+  if (!reminder.queued && reminder.reason === "already_sent") {
+    await (db as any).billingEventLog.create({
+      data: {
+        tenantId: setting.tenantId,
+        invoiceId: invoice.id,
+        runId,
+        type: "autopay_reminder_email_skipped_existing",
+        message: "Autopay T-3 reminder already queued or sent for this invoice.",
+      },
+    }).catch(() => null);
+  }
+  results.push({
+    tenantId: setting.tenantId,
+    phase: "reminder",
+    invoiceId: invoice.id,
+    reminderQueued: reminder.queued,
+    reminderReason: reminder.reason ?? null,
+  });
+}
+
 async function runMonthlyBillingAutomation(): Promise<void> {
   if (_billingAutomationRunning) return;
   _billingAutomationRunning = true;
@@ -2042,6 +2177,8 @@ async function runMonthlyBillingAutomation(): Promise<void> {
     const results: any[] = [];
     for (const { setting, schedule } of dueSchedules) {
       try {
+        await runAutopayReminderPhase(setting, schedule, run.id, results);
+
         if (!schedule.due) {
           await (db as any).billingEventLog.create({
             data: {
@@ -2110,20 +2247,7 @@ async function runMonthlyBillingAutomation(): Promise<void> {
           continue;
         }
 
-        const existing = await (db as any).billingInvoice.findFirst({
-          where: {
-            tenantId: setting.tenantId,
-            status: { not: "VOID" },
-            OR: [
-              { periodStart, periodEnd },
-              {
-                periodStart: { lte: schedule.scheduledChargeAt },
-                periodEnd: { gte: schedule.scheduledChargeAt },
-              },
-            ],
-          },
-          orderBy: { createdAt: "desc" },
-        });
+        const existing = await findAutopayPeriodInvoice(setting.tenantId, schedule);
         const paidCoverage = await findPaidBillingPeriodCoverage({
           tenantId: setting.tenantId,
           periodStart,
@@ -2150,7 +2274,35 @@ async function runMonthlyBillingAutomation(): Promise<void> {
           continue;
         }
 
-        const invoice = existing || await createWorkerBillingInvoice(setting, schedule);
+        if (!existing) {
+          await (db as any).billingEventLog.create({
+            data: {
+              tenantId: setting.tenantId,
+              runId: run.id,
+              type: "autopay_missing_invoice_on_due_date",
+              message: "CRITICAL: Connect autopay due date reached but no invoice exists for this billing period. Manual intervention required.",
+              metadata: {
+                scheduledChargeAt: schedule.scheduledChargeAt.toISOString(),
+                paymentDate: schedule.paymentDate,
+                periodStart: periodStart.toISOString(),
+                periodEnd: periodEnd.toISOString(),
+              },
+            },
+          }).catch(() => null);
+          await (db as any).alert.create({
+            data: {
+              tenantId: setting.tenantId,
+              severity: "HIGH",
+              category: "BILLING",
+              message: `Autopay blocked — no invoice for billing period ending ${schedule.paymentDate}`,
+              metadata: { runId: run.id, paymentDate: schedule.paymentDate },
+            },
+          }).catch(() => null);
+          results.push({ tenantId: setting.tenantId, invoiceId: null, transactionId: null, skipped: "missing_invoice_on_due_date" });
+          continue;
+        }
+
+        const invoice = existing;
         try {
           await consumeScheduledPlanChange({
             tenantId: setting.tenantId,
@@ -2266,7 +2418,40 @@ async function runMonthlyBillingAutomation(): Promise<void> {
 
         let transaction = null;
         if (setting.defaultPaymentMethod?.active && setting.defaultPaymentMethod.tenantId === setting.tenantId) {
+          await (db as any).billingEventLog.create({
+            data: {
+              tenantId: setting.tenantId,
+              invoiceId: invoice.id,
+              runId: run.id,
+              type: "autopay_charge_started",
+              message: "Connect autopay charge starting on payment due date.",
+              metadata: { scheduledChargeAt: schedule.scheduledChargeAt.toISOString() },
+            },
+          }).catch(() => null);
           transaction = await chargeWorkerInvoice(invoice, setting.defaultPaymentMethod, run.id);
+          if (transaction?.status === "APPROVED") {
+            await (db as any).billingEventLog.create({
+              data: {
+                tenantId: setting.tenantId,
+                invoiceId: invoice.id,
+                runId: run.id,
+                type: "autopay_charge_succeeded",
+                message: "Connect autopay charge succeeded.",
+                metadata: { transactionId: transaction.id },
+              },
+            }).catch(() => null);
+          } else if (transaction && transaction.status !== "APPROVED") {
+            await (db as any).billingEventLog.create({
+              data: {
+                tenantId: setting.tenantId,
+                invoiceId: invoice.id,
+                runId: run.id,
+                type: "autopay_charge_failed",
+                message: "Connect autopay charge failed.",
+                metadata: { transactionId: transaction.id, status: transaction.status },
+              },
+            }).catch(() => null);
+          }
         } else {
           await (db as any).billingEventLog.create({
             data: {
@@ -2443,14 +2628,19 @@ async function runBillingProfilesForTenant(
   }
 }
 
-async function createWorkerBillingInvoice(setting: any, schedule: BillingSchedule): Promise<any> {
+async function createWorkerBillingInvoice(
+  setting: any,
+  schedule: BillingSchedule,
+  opts?: { skipInvoiceEmail?: boolean },
+): Promise<any> {
   const invoice = await createBillingInvoice({
     tenantId: setting.tenantId,
     periodStart: schedule.periodStart,
     periodEnd: schedule.periodEnd,
     status: "OPEN",
+    skipInvoiceEmail: opts?.skipInvoiceEmail ?? false,
     invoiceCreatedEventMetadata: {
-      source: "worker_monthly",
+      source: opts?.skipInvoiceEmail ? "worker_autopay_t3" : "worker_monthly",
       scheduledChargeAt: schedule.scheduledChargeAt.toISOString(),
       paymentDate: schedule.paymentDate,
       nextPaymentDate: schedule.nextPaymentDate,
