@@ -1,15 +1,23 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, useMemo, type CSSProperties } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Users, Search,
-  PhoneCall, X, Download, UserPlus, CheckSquare2, Square,
-  Shuffle, Upload, History, Mail, MessageSquare,
+  PhoneCall, X, Download, UserPlus,
+  Shuffle, Upload, Mail, Target, TrendingUp,
 } from "lucide-react";
 import {
   CRMPageShell,
+  CRMWorkspaceShell,
+  CRMWorkspaceChrome,
+  CRMWorkspaceHeader,
+  CRMWorkspaceToolbar,
+  CRMWorkspaceBody,
+  CRMWorkspaceMain,
+  CRMWorkspaceScrollRegion,
+  CRMWorkspaceRightRail,
   CampaignGuidedEmpty,
   CampaignCommandHeader,
   CampaignMemberCard,
@@ -131,17 +139,6 @@ function campaignImportStatusLabel(s: string) {
     default:
       return s;
   }
-}
-
-function formatImportTimestamp(iso: string) {
-  const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
 }
 
 type CampaignImportSummary = {
@@ -312,206 +309,106 @@ function formatMetricNumber(value: number): string {
   return new Intl.NumberFormat().format(value);
 }
 
-function CampaignPerformanceWorkspace({
-  health,
-  workload,
-  members,
-}: {
-  health: ReturnType<typeof deriveCampaignHealth>;
-  workload: WorkloadRow[];
-  members: CampaignMember[];
-}) {
-  const total = Math.max(health.total, 1);
-  const visibleAttempts = members.reduce((sum, member) => sum + member.attemptCount, 0);
-  const attemptsAreComplete = members.length >= health.total;
-  const statusRows = [
-    { label: "Pending", value: health.pending, color: "#60a5fa" },
-    { label: "In progress", value: health.inProgress, color: "#38bdf8" },
-    { label: "Callbacks", value: health.callback, color: "#f59e0b" },
-    { label: "Contacted", value: health.contactedOnly, color: "#8b5cf6" },
-    { label: "Converted", value: health.converted, color: "#10b981" },
-  ];
-  const maxWorkload = Math.max(...workload.map((row) => row.total), health.total, 1);
-  const channelRows = [
-    { label: "Calls", value: attemptsAreComplete ? formatMetricNumber(visibleAttempts) : "Partial", hint: attemptsAreComplete ? "Member attempt count" : `${formatMetricNumber(visibleAttempts)} visible attempts`, color: "#2563eb" },
-    { label: "Emails", value: "Not tracked", hint: "No campaign channel count", color: "#7c3aed" },
-    { label: "SMS", value: "Not tracked", hint: "No campaign channel count", color: "#10b981" },
-    { label: "Voicemail drops", value: "Not tracked", hint: "No campaign channel count", color: "#f59e0b" },
-  ];
-
-  return (
-    <section id="reports" className="campaign-detail-analytics" aria-label="Campaign analytics">
-      <article className="campaign-detail-chart-card campaign-detail-line-card">
-        <div className="campaign-detail-card-head">
-          <div>
-            <h2>Performance Over Time</h2>
-            <p>Trend chart appears when time-series campaign stats are available.</p>
-          </div>
-          <span>Real-time snapshot</span>
-        </div>
-        <div className="campaign-detail-empty-chart">
-          <History className="h-6 w-6" />
-          <strong>Time-series metrics are not tracked yet</strong>
-          <span>Showing current contacted, converted, and callback totals below.</span>
-        </div>
-        <div className="campaign-detail-mini-stats">
-          <span><strong>{formatMetricNumber(health.contactedProgress)}</strong> Contacted</span>
-          <span><strong>{formatMetricNumber(health.converted)}</strong> Converted</span>
-          <span><strong>{formatMetricNumber(health.callback)}</strong> Replied</span>
-        </div>
-      </article>
-
-      <article className="campaign-detail-chart-card">
-        <div className="campaign-detail-card-head">
-          <div>
-            <h2>Operational Progress</h2>
-            <p>Roster progression by real member status</p>
-          </div>
-        </div>
-        <div className="campaign-detail-funnel">
-          {statusRows.map((stage) => (
-            <div key={stage.label} className="campaign-detail-funnel-row">
-              <div
-                style={{
-                  width: `${Math.max(8, Math.round((stage.value / total) * 100))}%`,
-                  background: `linear-gradient(90deg, ${stage.color}66, ${stage.color})`,
-                }}
-              />
-              <span>{stage.label}</span>
-              <strong>{formatMetricNumber(stage.value)}</strong>
-              <small>{`${Math.round((stage.value / total) * 100)}%`}</small>
-            </div>
-          ))}
-        </div>
-      </article>
-
-      <article className="campaign-detail-chart-card">
-        <div className="campaign-detail-card-head">
-          <div>
-            <h2>Channel Performance</h2>
-            <p>Only channel counts backed by campaign data are shown.</p>
-          </div>
-        </div>
-        <div className="campaign-detail-channel-list">
-          {channelRows.map((row) => (
-            <div key={row.label} className="campaign-detail-channel-row">
-              <div className="campaign-detail-channel-label">
-                <span style={{ color: row.color }}>{row.label === "Calls" ? <PhoneCall className="h-4 w-4" /> : row.label === "Emails" ? <Mail className="h-4 w-4" /> : row.label === "SMS" ? <MessageSquare className="h-4 w-4" /> : <History className="h-4 w-4" />}</span>
-                <strong>{row.label}</strong>
-              </div>
-              <div className="campaign-detail-channel-track">
-                <div style={{ width: row.label === "Calls" && attemptsAreComplete ? `${Math.min(100, Math.round((visibleAttempts / total) * 100))}%` : "0%", background: row.color }} />
-              </div>
-              <div className="campaign-detail-channel-metric">
-                <strong>{row.value}</strong>
-                <small>{row.hint}</small>
-              </div>
-            </div>
-          ))}
-        </div>
-        {workload.length > 0 ? (
-          <div className="campaign-detail-workload-strip">
-            {workload.slice(0, 4).map((row) => (
-              <span key={row.userId ?? "unassigned"} style={{ width: `${Math.max(10, Math.round((row.total / maxWorkload) * 100))}%` }} title={`${row.displayName}: ${row.total}`} />
-            ))}
-          </div>
-        ) : null}
-      </article>
-    </section>
-  );
-}
-
 function CampaignDetailRightRail({
   campaign,
   health,
-  workload,
-  importHistory,
   canQueue,
 }: {
   campaign: Campaign;
   health: ReturnType<typeof deriveCampaignHealth>;
-  workload: WorkloadRow[];
-  importHistory: CampaignImportHistoryRow[];
   canQueue: boolean;
 }) {
   const healthScore = health.total > 0
     ? Math.round(((health.contactedProgress + health.converted + Math.max(0, health.total - health.unassignedMembers)) / (health.total * 3)) * 100)
     : 0;
-  const topWorkload = [...workload].filter((row) => row.userId).sort((a, b) => b.total - a.total).slice(0, 3);
+  const total = Math.max(health.total, 1);
+  const conversionRate = Math.round((health.converted / total) * 100);
+  const contactedRate = Math.round((health.contactedProgress / total) * 100);
+  const queueRate = Math.round((health.activeQueueWork / total) * 100);
+  const callbackRate = Math.round((health.callback / total) * 100);
+  const assignedRate = Math.round(((health.total - health.unassignedMembers) / total) * 100);
+  const pendingRate = Math.round((health.pending / total) * 100);
+  const inProgressRate = Math.round((health.inProgress / total) * 100);
+  const unassignedRate = Math.round((health.unassignedMembers / total) * 100);
+  const metricCards = [
+    { label: "Campaign health", value: `${healthScore}/100`, hint: "Live readiness score", tone: "blue", icon: <TrendingUp className="h-4 w-4" />, progress: healthScore },
+    { label: "Total members", value: formatMetricNumber(health.total), hint: `${formatMetricNumber(health.total - health.unassignedMembers)} assigned`, tone: "violet", icon: <Users className="h-4 w-4" />, progress: assignedRate },
+    { label: "Queue work", value: formatMetricNumber(health.activeQueueWork), hint: `${queueRate}% of roster`, tone: "cyan", icon: <PhoneCall className="h-4 w-4" />, progress: queueRate },
+    { label: "Contacted", value: formatMetricNumber(health.contactedProgress), hint: `${contactedRate}% reached`, tone: "emerald", icon: <Mail className="h-4 w-4" />, progress: contactedRate },
+    { label: "Converted", value: formatMetricNumber(health.converted), hint: `${conversionRate}% conversion`, tone: "amber", icon: <Target className="h-4 w-4" />, progress: conversionRate },
+    { label: "Callbacks", value: formatMetricNumber(health.callback), hint: `${callbackRate}% need attention`, tone: "rose", icon: <PhoneCall className="h-4 w-4" />, progress: callbackRate },
+  ];
+  const reportRows = [
+    { label: "Pending", value: health.pending, progress: pendingRate, tone: "blue" },
+    { label: "Working", value: health.inProgress, progress: inProgressRate, tone: "violet" },
+    { label: "Reached", value: health.contactedProgress, progress: contactedRate, tone: "emerald" },
+  ];
+  const healthSignals = [
+    { label: "Assignment", value: `${assignedRate}%`, hint: `${formatMetricNumber(health.unassignedMembers)} open` },
+    { label: "Queue", value: `${queueRate}%`, hint: `${formatMetricNumber(health.activeQueueWork)} callable` },
+    { label: "Unassigned", value: `${unassignedRate}%`, hint: "needs owner" },
+  ];
+
   return (
-    <aside className="campaign-detail-rail" aria-label="Campaign operations">
-      <section className="campaign-detail-rail-card">
-        <div className="campaign-detail-rail-heading">
-          <p>Campaign Health</p>
-          <strong>{healthScore}/100</strong>
-        </div>
-        <div className="campaign-detail-progress-ring" style={{ "--progress": `${healthScore * 3.6}deg` } as CSSProperties}>
-          <span>{healthScore}</span>
-        </div>
-        <div className="campaign-detail-status-meta">
-          <span>{formatMetricNumber(health.total)} total members</span>
-          <span>{formatMetricNumber(health.activeQueueWork)} in queue</span>
-          <span>{formatMetricNumber(health.contactedProgress)} contacted</span>
-          <span>{formatMetricNumber(health.converted)} converted</span>
-          <span>{formatMetricNumber(health.callback)} callbacks</span>
-          <span>{formatMetricNumber(health.unassignedMembers)} unassigned</span>
-        </div>
-      </section>
-
-      <section className="campaign-detail-rail-card">
-        <div className="campaign-detail-rail-heading">
-          <p>Queue Ownership</p>
-          <strong>{health.activeAgents}</strong>
-        </div>
-        <div className="campaign-detail-action-list">
-          {topWorkload.map((row) => (
-            <span key={row.userId}><i className="bg-blue-500" /> {row.displayName} owns {row.total}</span>
-          ))}
-          {health.callback > 0 ? <span><i className="bg-orange-400" /> {health.callback} callbacks need attention</span> : null}
-          {health.unassignedMembers > 0 ? <span><i className="bg-violet-400" /> {health.unassignedMembers} unassigned leads</span> : null}
-          {canQueue && health.activeQueueWork > 0 ? <Link href={`/crm/queue?campaignId=${encodeURIComponent(campaign.id)}`}><i className="bg-blue-500" /> Open queue ({health.activeQueueWork})</Link> : null}
-          {topWorkload.length === 0 && health.callback === 0 && health.unassignedMembers === 0 ? <span><i className="bg-emerald-500" /> Ownership looks balanced</span> : null}
-        </div>
-      </section>
-
-      <section className="campaign-detail-rail-card">
-        <div className="campaign-detail-rail-heading">
-          <p>Activity Feed</p>
-          <strong>{importHistory.length}</strong>
-        </div>
-        <div className="campaign-detail-activity-feed">
-          <div className="campaign-detail-activity-item">
-            <span className="campaign-detail-activity-dot bg-blue-500" />
-            <div>
-              <strong>Campaign created</strong>
-              <p>{formatImportTimestamp(campaign.createdAt)}</p>
-            </div>
+    <div className="campaign-detail-rail" aria-label="Campaign operations">
+      <section className="campaign-detail-side-analytics campaign-detail-rail-card">
+        <div className="campaign-detail-side-analytics-head">
+          <div>
+            <p>Campaign Analytics</p>
+            <h2>{campaign.name}</h2>
           </div>
-          {importHistory.length > 0 ? importHistory.slice(0, 4).map((row) => (
-            <div className="campaign-detail-activity-item" key={row.id}>
-              <span className="campaign-detail-activity-dot bg-emerald-500" />
-              <div>
-                <strong>CSV imported · {row.fileName}</strong>
-                <p>
-                  {row.totalRows} rows · {row.createdCount} created · {row.updatedCount} updated · {row.skippedCount} skipped
-                </p>
-                <small>{formatImportTimestamp(row.completedAt ?? row.createdAt)}</small>
+          <span>{campaign.status}</span>
+        </div>
+        <div className="campaign-detail-side-analytics-grid">
+          {metricCards.map((card) => (
+            <article key={card.label} className={`campaign-detail-side-metric campaign-detail-side-metric-${card.tone}`}>
+              <div className="campaign-detail-side-metric-top">
+                <span>{card.icon}</span>
+                <small>{card.label}</small>
               </div>
+              <strong>{card.value}</strong>
+              <p>{card.hint}</p>
+              <div className="campaign-detail-side-metric-track" aria-hidden>
+                <span style={{ width: `${Math.min(100, Math.max(0, card.progress))}%` }} />
+              </div>
+            </article>
+          ))}
+        </div>
+        <div className="campaign-detail-side-report">
+          <div className="campaign-detail-side-report-head">
+            <p>2026 Campaign Report</p>
+            <span>Live</span>
+          </div>
+          <div className="campaign-detail-side-report-bars">
+            {reportRows.map((row) => (
+              <div key={row.label} className={`campaign-detail-side-report-row campaign-detail-side-metric-${row.tone}`}>
+                <div>
+                  <span>{row.label}</span>
+                  <strong>{formatMetricNumber(row.value)}</strong>
+                </div>
+                <div className="campaign-detail-side-metric-track" aria-hidden>
+                  <span style={{ width: `${Math.min(100, Math.max(0, row.progress))}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="campaign-detail-side-signal-grid">
+          {healthSignals.map((signal) => (
+            <div key={signal.label}>
+              <span>{signal.label}</span>
+              <strong>{signal.value}</strong>
+              <p>{signal.hint}</p>
             </div>
-          )) : (
-            <p className="campaign-detail-note">No imports or bulk activity recorded yet.</p>
-          )}
+          ))}
         </div>
+        {canQueue && health.activeQueueWork > 0 ? (
+          <Link className="campaign-detail-side-queue-link" href={`/crm/queue?campaignId=${encodeURIComponent(campaign.id)}`}>
+            Open queue ({formatMetricNumber(health.activeQueueWork)})
+          </Link>
+        ) : null}
       </section>
-
-      <section className="campaign-detail-rail-card">
-        <div className="campaign-detail-rail-heading">
-          <p>Notes</p>
-          <strong>{campaign.description?.trim() ? "1" : "0"}</strong>
-        </div>
-        <p className="campaign-detail-note">{campaign.description?.trim() || "No campaign notes yet. Add notes from campaign settings when context is needed."}</p>
-      </section>
-    </aside>
+    </div>
   );
 }
 
@@ -1572,153 +1469,144 @@ export default function CampaignDetailPage() {
           onCancel={() => setDeleteConfirmOpen(false)}
         />
 
-        <CampaignCommandHeader
-          campaign={campaign}
-          health={hd}
-          importHistory={importHistory}
-          isAdmin={isAdmin}
-          editingName={editingName}
-          nameInput={nameInput}
-          onNameInput={setNameInput}
-          onStartEditName={() => setEditingName(true)}
-          onSaveName={saveName}
-          onCancelEditName={() => setEditingName(false)}
-          onUpdateStatus={(status: CampaignStatus) => updateCampaign({ status })}
-          onRequestDelete={() => setDeleteConfirmOpen(true)}
-          onEditCampaign={canManageCampaigns ? () => setShowEditCampaign(true) : undefined}
-          canEditCampaign={canManageCampaigns}
-          onExport={exportCsv}
-          onImport={openImportModal}
-          onAddContacts={() => setShowAddContacts(true)}
-          onDistribute={openDistributeModal}
-          onBulkEmail={canManageCampaigns ? openBulkEmailAll : undefined}
-        />
+        <CRMWorkspaceShell className="campaign-detail-workspace-shell">
+          <CRMWorkspaceChrome className="campaign-detail-workspace-chrome">
+            <CRMWorkspaceHeader>
+              <CampaignCommandHeader
+                campaign={campaign}
+                health={hd}
+                importHistory={importHistory}
+                isAdmin={isAdmin}
+                editingName={editingName}
+                nameInput={nameInput}
+                onNameInput={setNameInput}
+                onStartEditName={() => setEditingName(true)}
+                onSaveName={saveName}
+                onCancelEditName={() => setEditingName(false)}
+                onUpdateStatus={(status: CampaignStatus) => updateCampaign({ status })}
+                onRequestDelete={() => setDeleteConfirmOpen(true)}
+                onEditCampaign={canManageCampaigns ? () => setShowEditCampaign(true) : undefined}
+                canEditCampaign={canManageCampaigns}
+                onExport={exportCsv}
+                onImport={openImportModal}
+                onAddContacts={() => setShowAddContacts(true)}
+                onDistribute={openDistributeModal}
+                onBulkEmail={canManageCampaigns ? openBulkEmailAll : undefined}
+              />
+            </CRMWorkspaceHeader>
 
-        <CampaignPerformanceWorkspace health={hd} workload={workload} members={members} />
-
-        <div className="campaign-detail-workbench">
-          <main className="campaign-detail-contact-workspace">
-            <section id="campaign-roster" className={cn(mk.rosterShell, "campaign-detail-roster-shell")} aria-label={`Members (${membersTotal})`}>
-              <div className={mk.rosterHead}>
-                <h2 className="cinema-roster-title">Members ({membersTotal})</h2>
-                <p className="cinema-roster-sub">Contacts are the primary workspace for this campaign.</p>
-              </div>
-              <div className="campaign-detail-roster-sticky">
-                <div className={cn(mk.rosterToolbar, "campaign-detail-filter-row")}>
-                  <label className="campaign-detail-filter-search">
-                    <span>Search</span>
-                    <div className="relative">
-                      <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-crm-muted/80" />
-                      <input
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        className={cn(crm.input, "h-9 pl-8 text-xs")}
-                        placeholder="Name, phone, email, company…"
-                      />
-                    </div>
-                  </label>
-                  <label>
-                    <span>Status</span>
-                    <ConnectSelect
-                      value={statusFilter}
-                      onChange={(value) => setStatusFilter(value)}
-                      size="sm"
-                      className={cn("min-w-[8.25rem]")}
-                      options={[
-                        { value: "", label: "All statuses" },
-                        ...(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => ({ value: s, label: MEMBER_STATUS_LABELS[s] })),
-                      ]}
+            <CRMWorkspaceToolbar className="campaign-detail-toolbar">
+              <div className="funders-filter-card crm-queue-filter-bar">
+                <div className="funders-filter-grid campaign-detail-funders-filter-grid">
+                  <div className="funders-search-field relative min-w-0">
+                    <Search size={16} className="funders-search-icon pointer-events-none absolute text-slate-400" />
+                    <input
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      className="funders-control funders-control-search"
+                      placeholder="Name, phone, email, company…"
                     />
-                  </label>
-                  <label>
-                    <span>Agent</span>
-                    <ConnectSelect
-                      value={assigneeFilter}
-                      onChange={(value) => {
-                        setAssigneeFilter(value);
-                        loadMembers(value);
-                      }}
-                      size="sm"
-                      className={cn("min-w-[8.25rem]")}
-                      options={[
-                        { value: "", label: "All agents" },
-                        { value: "UNASSIGNED", label: "Unassigned" },
-                        ...crmUsers.filter((u) => u.crmEnabled).map((u) => ({ value: u.userId, label: u.displayName || u.email })),
-                      ]}
-                    />
-                  </label>
-                  <span className="campaign-detail-filter-count">
-                    {filteredMembers.length} shown · {membersTotal} total
-                  </span>
-                </div>
-
-                {bulkEmailToast ? (
-                  <div className="campaign-detail-inline-toast">
-                    {bulkEmailToast}
                   </div>
-                ) : null}
+                  <ConnectSelect
+                    value={statusFilter}
+                    onChange={(value) => setStatusFilter(value)}
+                    size="sm"
+                    className="funders-control"
+                    options={[
+                      { value: "", label: "All statuses" },
+                      ...(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => ({ value: s, label: MEMBER_STATUS_LABELS[s] })),
+                    ]}
+                  />
+                  <ConnectSelect
+                    value={assigneeFilter}
+                    onChange={(value) => {
+                      setAssigneeFilter(value);
+                      loadMembers(value);
+                    }}
+                    size="sm"
+                    className="funders-control"
+                    options={[
+                      { value: "", label: "All agents" },
+                      { value: "UNASSIGNED", label: "Unassigned" },
+                      ...crmUsers.filter((u) => u.crmEnabled).map((u) => ({ value: u.userId, label: u.displayName || u.email })),
+                    ]}
+                  />
+                </div>
+              </div>
 
-                {selected.size > 0 ? (
-                  <div className="campaign-detail-bulk-bar">
-                    <span className="text-sm font-medium text-crm-text">{selected.size} selected</span>
+              {bulkEmailToast ? (
+                <div className="campaign-detail-inline-toast">
+                  {bulkEmailToast}
+                </div>
+              ) : null}
+
+              {selected.size > 0 ? (
+                <div className="campaign-detail-bulk-bar">
+                  <span className="text-sm font-medium text-crm-text">{selected.size} selected</span>
+                  <button
+                    type="button"
+                    onClick={() => void handleBulkAssign(appUser.id, appUser.name || appUser.email)}
+                    disabled={bulkAssigning}
+                    className={cn(crm.btnPrimary, "h-8 px-3 py-1 text-xs gap-1.5 shrink-0")}
+                  >
+                    <UserPlus className="h-3.5 w-3.5" />
+                    Assign Me
+                  </button>
+                  <div className="campaign-detail-bulk-assignee flex items-center gap-2">
+                    <UserPlus className="h-4 w-4 shrink-0 text-crm-accent" />
+                    <ConnectSelect
+                      value={bulkAssignUserId}
+                      onChange={(value) => setBulkAssignUserId(value)}
+                      size="sm"
+                      placeholder="Select agent…"
+                      className={cn("min-w-0 flex-1")}
+                      options={crmUsers.filter((u) => u.crmEnabled).map((u) => ({ value: u.userId, label: u.displayName || u.email }))}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const agent = crmUsers.find((u) => u.userId === bulkAssignUserId);
+                      void handleBulkAssign(bulkAssignUserId || null, agent?.displayName || agent?.email);
+                    }}
+                    disabled={bulkAssigning || !bulkAssignUserId}
+                    className={cn(crm.btnSecondary, "h-8 px-3 py-1 text-xs shrink-0 disabled:opacity-50")}
+                  >
+                    {bulkAssigning ? "Assigning…" : "Assign Agent"}
+                  </button>
+                  {isAdmin ? (
                     <button
                       type="button"
-                      onClick={() => void handleBulkAssign(appUser.id, appUser.name || appUser.email)}
-                      disabled={bulkAssigning}
-                      className={cn(crm.btnPrimary, "h-8 px-3 py-1 text-xs gap-1.5 shrink-0")}
-                    >
-                      <UserPlus className="h-3.5 w-3.5" />
-                      Assign Me
-                    </button>
-                    <div className="campaign-detail-bulk-assignee flex items-center gap-2">
-                      <UserPlus className="h-4 w-4 shrink-0 text-crm-accent" />
-                      <ConnectSelect
-                        value={bulkAssignUserId}
-                        onChange={(value) => setBulkAssignUserId(value)}
-                        size="sm"
-                        placeholder="Select agent…"
-                        className={cn("min-w-0 flex-1")}
-                        options={crmUsers.filter((u) => u.crmEnabled).map((u) => ({ value: u.userId, label: u.displayName || u.email }))}
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const agent = crmUsers.find((u) => u.userId === bulkAssignUserId);
-                        void handleBulkAssign(bulkAssignUserId || null, agent?.displayName || agent?.email);
-                      }}
-                      disabled={bulkAssigning || !bulkAssignUserId}
-                      className={cn(crm.btnSecondary, "h-8 px-3 py-1 text-xs shrink-0 disabled:opacity-50")}
-                    >
-                      {bulkAssigning ? "Assigning…" : "Assign Agent"}
-                    </button>
-                    {isAdmin ? (
-                      <button
-                        type="button"
-                        onClick={() => setShowBulkEmail(true)}
-                        className={cn(crm.btnSecondary, "h-8 px-3 py-1 text-xs gap-1.5 shrink-0")}
-                      >
-                        <Mail className="h-3.5 w-3.5" />
-                        Bulk Email
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={exportCsv}
+                      onClick={() => setShowBulkEmail(true)}
                       className={cn(crm.btnSecondary, "h-8 px-3 py-1 text-xs gap-1.5 shrink-0")}
                     >
-                      <Download className="h-3.5 w-3.5" />
-                      Export
+                      <Mail className="h-3.5 w-3.5" />
+                      Bulk Email
                     </button>
-                    <button type="button" onClick={() => setSelected(new Set())} className="p-1 text-crm-muted hover:text-crm-accent shrink-0" aria-label="Clear selection">
-                      <X className="h-4 w-4" />
-                    </button>
-                    {bulkMsg ? <span className="text-xs font-medium text-crm-accent">{bulkMsg}</span> : null}
-                  </div>
-                ) : null}
-              </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={exportCsv}
+                    className={cn(crm.btnSecondary, "h-8 px-3 py-1 text-xs gap-1.5 shrink-0")}
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Export
+                  </button>
+                  <button type="button" onClick={() => setSelected(new Set())} className="p-1 text-crm-muted hover:text-crm-accent shrink-0" aria-label="Clear selection">
+                    <X className="h-4 w-4" />
+                  </button>
+                  {bulkMsg ? <span className="text-xs font-medium text-crm-accent">{bulkMsg}</span> : null}
+                </div>
+              ) : null}
+            </CRMWorkspaceToolbar>
 
-              <div className="campaign-detail-roster-scroll">
+          </CRMWorkspaceChrome>
+
+          <CRMWorkspaceBody split className="campaign-detail-workbench">
+            <CRMWorkspaceMain className="campaign-detail-contact-workspace">
+              <CRMWorkspaceScrollRegion className="campaign-detail-main-scroll">
+                <section id="campaign-roster" className={cn(mk.rosterShell, "campaign-detail-roster-shell funders-table-shell")} aria-label={`Members (${membersTotal})`}>
+              <div className="campaign-detail-roster-scroll funders-table-scroll">
                 {membersLoading ? (
                   <div className="py-12 text-center text-sm text-crm-muted/80">Loading members…</div>
                 ) : filteredMembers.length === 0 ? (
@@ -1758,61 +1646,72 @@ export default function CampaignDetailPage() {
                     }
                   />
                 ) : (
-                  <div className={crm.campaignRosterBody}>
-                    <div className={mk.rosterTableHead}>
-                      <span>Name</span>
-                      <span>Phone</span>
-                      <span>Email</span>
-                      <span>Company</span>
-                      <span>Status</span>
-                      <span>Assigned Agent</span>
-                      <span>Last Activity</span>
-                      <span className="text-right">Actions</span>
+                  <>
+                    <div className="crm-funder-list-controls-card">
+                      <div className="crm-queue-list-head">
+                        <label className="flex cursor-pointer items-center gap-2 text-xs text-crm-muted">
+                          <input
+                            type="checkbox"
+                            className={crm.checkbox}
+                            checked={bulkSelectableMembers.length > 0 && bulkSelectableMembers.every((m) => selected.has(m.id))}
+                            onChange={toggleSelectAll}
+                            title="Select all visible members"
+                          />
+                          <span>Select active on this page</span>
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-semibold text-crm-muted tabular-nums">
+                            {filteredMembers.length} shown · {membersTotal} total
+                          </span>
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 px-3 py-1.5 lg:px-4">
-                      <button type="button" onClick={toggleSelectAll} className="p-1 rounded border border-transparent hover:border-crm-border hover:bg-crm-surface-2" aria-label="Select all visible members">
-                        {selected.size > 0 && bulkSelectableMembers.length > 0 && bulkSelectableMembers.every((m) => selected.has(m.id))
-                          ? <CheckSquare2 className="h-4 w-4 text-crm-accent" />
-                          : <Square className="h-4 w-4 text-crm-muted/80" />}
-                      </button>
-                      <span className="text-xs text-crm-muted">Select all eligible in this list</span>
+                    <div className="crm-queue-list-panel crm-funder-list-rows-card">
+                      <div className="crm-queue-row-list funders-table-body">
+                        {filteredMembers.map((m, index) => {
+                          const archivedLead = m.queueWorkEligible === false;
+                          const agentCannotAct = !isAdmin && archivedLead;
+                          return (
+                            <CampaignMemberCard
+                              key={m.id}
+                              member={m}
+                              campaignId={campaignId}
+                              rowMode
+                              rowNumber={index + 1}
+                              selected={selected.has(m.id)}
+                              readOnly={agentCannotAct}
+                              onSelect={(checked) => {
+                                const s = new Set(selected);
+                                if (checked) s.add(m.id);
+                                else s.delete(m.id);
+                                setSelected(s);
+                              }}
+                              onUpdated={loadMembers}
+                              onStatusChange={updateMemberStatus}
+                              token={token}
+                            />
+                          );
+                        })}
+                      </div>
                     </div>
-                    {filteredMembers.map((m) => {
-                      const archivedLead = m.queueWorkEligible === false;
-                      const agentCannotAct = !isAdmin && archivedLead;
-                      return (
-                        <CampaignMemberCard
-                          key={m.id}
-                          member={m}
-                          campaignId={campaignId}
-                          rowMode
-                          selected={selected.has(m.id)}
-                          readOnly={agentCannotAct}
-                          onSelect={(checked) => {
-                            const s = new Set(selected);
-                            if (checked) s.add(m.id);
-                            else s.delete(m.id);
-                            setSelected(s);
-                          }}
-                          onUpdated={loadMembers}
-                          onStatusChange={updateMemberStatus}
-                          token={token}
-                        />
-                      );
-                    })}
-                  </div>
+                  </>
                 )}
               </div>
-            </section>
-          </main>
-          <CampaignDetailRightRail
-            campaign={campaign}
-            health={hd}
-            workload={workload}
-            importHistory={importHistory}
-            canQueue={canQueue}
-          />
-        </div>
+                </section>
+              </CRMWorkspaceScrollRegion>
+            </CRMWorkspaceMain>
+            <CRMWorkspaceRightRail
+              className="campaign-detail-right-rail crm-queue-detail-rail flex flex-col min-h-0"
+              scrollClassName="campaign-detail-right-rail-scroll"
+            >
+              <CampaignDetailRightRail
+                campaign={campaign}
+                health={hd}
+                canQueue={canQueue}
+              />
+            </CRMWorkspaceRightRail>
+          </CRMWorkspaceBody>
+        </CRMWorkspaceShell>
     </CRMPageShell>
   );
 }

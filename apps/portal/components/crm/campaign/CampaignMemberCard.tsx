@@ -2,12 +2,12 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarClock, Edit2, ExternalLink, Mail, MessageSquare, MoreHorizontal, PhoneCall, X } from "lucide-react";
+import { CalendarClock, ChevronRight, Edit2, ExternalLink, Mail, MessageSquare, PhoneCall, X } from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
 import { ConnectSelect } from "../../ConnectSelect";
-import { mk } from "./campaignCinemaClasses";
 import { apiPatch } from "../../../services/apiClient";
+import { avatarGradient, initials } from "../contact/contactFormatters";
 import type { CampaignMember, MemberStatus } from "./campaignTypes";
 import { MEMBER_STATUS_CHIP, MEMBER_STATUS_LABELS } from "./campaignTypes";
 import { callbackUrgency, memberNextAction, relativeTime } from "./campaignUtils";
@@ -18,6 +18,7 @@ export function CampaignMemberCard({
   selected,
   readOnly,
   rowMode,
+  rowNumber,
   onSelect,
   onUpdated,
   onStatusChange,
@@ -28,6 +29,7 @@ export function CampaignMemberCard({
   selected: boolean;
   readOnly: boolean;
   rowMode?: boolean;
+  rowNumber?: number;
   onSelect: (checked: boolean) => void;
   onUpdated: () => void;
   onStatusChange: (memberId: string, status: MemberStatus) => void;
@@ -49,7 +51,7 @@ export function CampaignMemberCard({
 
   if (rowMode) {
     const displayName = member.contact?.displayName ?? "Unknown";
-    const avatarInitial = displayName.charAt(0).toUpperCase();
+    const displayRank = rowNumber ?? (Number.isFinite(member.sortOrder) ? member.sortOrder + 1 : 1);
     const workspaceParams = `campaignId=${encodeURIComponent(campaignId)}&memberId=${encodeURIComponent(member.id)}`;
     const workspaceHref = `/crm/contacts/${member.contactId}?${workspaceParams}`;
     const callHref = `${workspaceHref}&action=call`;
@@ -59,159 +61,123 @@ export function CampaignMemberCard({
     return (
       <article
         className={cn(
-          mk.memberRow,
-          selected && "cinema-member-row-selected",
-          !selected && isOverdue && "cinema-member-row-overdue",
+          "crm-queue-row crm-contact-row crm-funder-row campaign-member-list-row group",
+          selected && "crm-queue-row-selected",
+          !selected && isOverdue && "campaign-member-list-row-attention",
           terminal && "opacity-85",
           archivedLead && "opacity-80",
         )}
       >
-        <div className="flex min-w-0 items-start gap-2 lg:items-center">
-          <input
-            type="checkbox"
-            checked={selected}
-            disabled={readOnly}
-            onChange={(e) => onSelect(e.target.checked)}
-            className="cinema-member-checkbox mt-1 lg:mt-0 disabled:opacity-40"
+        <div className="crm-queue-row-grid">
+          <label
+            className="crm-contact-row-check"
+            onClick={(e) => e.stopPropagation()}
             aria-label={`Select ${displayName}`}
-          />
-          <div className={mk.memberAvatar} aria-hidden>
-            {avatarInitial}
+          >
+            <input
+              type="checkbox"
+              checked={selected}
+              disabled={readOnly}
+              onChange={(e) => onSelect(e.target.checked)}
+            />
+          </label>
+          <span className="crm-queue-row-rank tabular-nums">{displayRank}</span>
+          <div
+            className="crm-queue-row-avatar funders-avatar"
+            style={{ background: avatarGradient(member.contact?.id ?? member.contactId ?? displayName) }}
+            aria-hidden
+          >
+            {initials(displayName)}
           </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-1.5">
+          <div className="crm-queue-row-main min-w-0">
+            <div className="crm-queue-row-title-line">
               <button
                 type="button"
                 onClick={() => router.push(`/crm/contacts/${member.contactId}`)}
-                className="min-w-0 truncate cinema-member-name"
+                className="crm-queue-row-name campaigns-row-title truncate"
               >
                 {displayName}
               </button>
-              {archivedLead && (
-                <span className="text-[9px] font-bold uppercase tracking-wide text-crm-warning bg-crm-warning/12 px-1 py-0.5 rounded border border-crm-warning/30">
-                  Archived
+              {readOnly ? (
+                <span className={cn("campaigns-status-pill campaign-member-status-pill", MEMBER_STATUS_CHIP[member.status])}>
+                  <span className="campaigns-status-dot" />
+                  {MEMBER_STATUS_LABELS[member.status]}
                 </span>
+              ) : (
+                <ConnectSelect
+                  value={member.status}
+                  onChange={(value) => onStatusChange(member.id, value as MemberStatus)}
+                  size="sm"
+                  className={cn("campaign-member-status-select", MEMBER_STATUS_CHIP[member.status])}
+                  options={(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => ({
+                    value: s,
+                    label: MEMBER_STATUS_LABELS[s],
+                  }))}
+                />
               )}
+              <span className="funders-tag-pill">{member.assignedTo?.displayName ?? "Unassigned"}</span>
+              {archivedLead ? <span className="funders-tag-pill campaign-member-type-warning">Archived</span> : null}
+              {member.status === "CALLBACK" && member.callbackAt ? (
+                <span className={cn("funders-tag-pill", isOverdue ? "campaign-member-type-danger" : "campaign-member-type-warning")}>
+                  {cb.label}
+                </span>
+              ) : null}
             </div>
-            <p className="cinema-member-contact-line lg:hidden">
-              {[member.contact?.primaryPhone, member.contact?.primaryEmail, member.contact?.company]
+            <p className="crm-queue-row-sub truncate">
+              {[member.contact?.company, member.contact?.primaryPhone, member.contact?.primaryEmail]
                 .filter((value): value is string => Boolean(value && value.trim()))
-                .join(" • ") || "Missing phone, email, and company"}
+                .join(" · ") || "Missing phone, email, and company"}
             </p>
-            <div className="cinema-member-mobile-ops lg:hidden">
-              <span>{member.assignedTo?.displayName ?? "Unassigned"}</span>
-              <span>{member.attemptCount} attempt{member.attemptCount === 1 ? "" : "s"}</span>
-              <span>{lastTouch}</span>
-            </div>
           </div>
-        </div>
-
-        <div className="hidden min-w-0 text-xs lg:block">
-          <span className="cinema-member-col-label lg:hidden">Phone</span>
-          <p className="truncate cinema-member-touch">{member.contact?.primaryPhone ?? "No phone"}</p>
-        </div>
-
-        <div className="hidden min-w-0 text-xs lg:block">
-          <span className="cinema-member-col-label lg:hidden">Email</span>
-          <p className="truncate cinema-member-touch">{member.contact?.primaryEmail ?? "No email"}</p>
-        </div>
-
-        <div className="hidden min-w-0 text-xs lg:block">
-          <span className="cinema-member-col-label lg:hidden">Company</span>
-          <p className="truncate cinema-member-touch">{member.contact?.company ?? "—"}</p>
-        </div>
-
-        <div className="flex min-w-0 flex-row items-center justify-between gap-2 lg:flex-col lg:items-start lg:justify-center lg:gap-1">
-          <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Status</span>
-          {readOnly ? (
-            <span className={cn(mk.pill, "inline-flex w-fit", MEMBER_STATUS_CHIP[member.status])}>
-              {MEMBER_STATUS_LABELS[member.status]}
+          <div className="crm-queue-row-phone hidden md:flex">
+            <PhoneCall className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate font-mono">{member.contact?.primaryPhone || "No phone"}</span>
+          </div>
+          <div className="crm-queue-row-email hidden lg:flex">
+            <Mail className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{member.contact?.primaryEmail || "No email"}</span>
+          </div>
+          <div className="crm-queue-row-meta hidden xl:flex">
+            <span className="crm-queue-pill crm-queue-pill-muted inline-flex items-center gap-0.5">
+              {lastTouch}
             </span>
-          ) : (
-            <ConnectSelect
-              value={member.status}
-              onChange={(value) => onStatusChange(member.id, value as MemberStatus)}
-              size="sm"
-              className={cn("cinema-member-status-select", MEMBER_STATUS_CHIP[member.status])}
-              options={(Object.keys(MEMBER_STATUS_LABELS) as MemberStatus[]).map((s) => ({
-                value: s,
-                label: MEMBER_STATUS_LABELS[s],
-              }))}
-            />
-          )}
-          {member.status === "CALLBACK" && member.callbackAt ? (
-            <span
-              className={cn(
-                "w-fit text-[10px] font-semibold px-1.5 py-0.5 rounded",
-                isOverdue ? "text-crm-danger bg-crm-danger/10" : "text-crm-warning bg-crm-warning/10",
-              )}
+          </div>
+          <div className="campaigns-row-actions campaign-member-channel-actions" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              onClick={() => router.push(emailHref)}
+              className="crm-queue-detail-channel crm-queue-detail-channel-email campaign-member-channel-action"
+              aria-label={`Email ${displayName}`}
+              title="Open email workspace"
+              disabled={readOnly || !member.contact?.primaryEmail}
             >
-              {cb.label}
-            </span>
-          ) : null}
-        </div>
-
-        <div className="hidden text-xs min-w-0 lg:block">
-          <span className="cinema-member-col-label lg:hidden">Agent</span>
-          <p className="truncate cinema-member-agent">{member.assignedTo?.displayName ?? "Unassigned"}</p>
-        </div>
-
-        <div className="hidden lg:block">
-          <span className="text-[10px] font-semibold uppercase text-crm-muted lg:hidden">Last touch</span>
-          <p className="cinema-member-touch">{lastTouch}</p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-1 lg:justify-end">
-          <button
-            type="button"
-            onClick={() => router.push(callHref)}
-            className="cinema-member-icon-action"
-            aria-label={`Call ${displayName}`}
-            title="Call"
-            disabled={readOnly || !member.contact?.primaryPhone}
-          >
-            <PhoneCall className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => router.push(smsHref)}
-            className="cinema-member-icon-action"
-            aria-label={`SMS ${displayName}`}
-            title="SMS"
-            disabled={readOnly || !member.contact?.primaryPhone}
-          >
-            <MessageSquare className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => router.push(emailHref)}
-            className="cinema-member-icon-action"
-            aria-label={`Email ${displayName}`}
-            title="Email"
-            disabled={readOnly || !member.contact?.primaryEmail}
-          >
-            <Mail className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => router.push(workspaceHref)}
-            className="cinema-member-icon-action"
-            aria-label={`Open workspace for ${displayName}`}
-            title="Workspace"
-            disabled={readOnly}
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => router.push(workspaceHref)}
-            className="cinema-member-icon-action"
-            aria-label={`More actions for ${displayName}`}
-            title="More"
-            disabled={readOnly}
-          >
-            <MoreHorizontal className="h-3.5 w-3.5" />
-          </button>
+              <Mail className="h-3.5 w-3.5" />
+              <span>Email</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push(smsHref)}
+              className="crm-queue-detail-channel crm-queue-detail-channel-sms campaign-member-channel-action"
+              aria-label={`SMS ${displayName}`}
+              title="Open SMS workspace"
+              disabled={readOnly || !member.contact?.primaryPhone}
+            >
+              <MessageSquare className="h-3.5 w-3.5" />
+              <span>SMS</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push(callHref)}
+              className="crm-queue-detail-channel crm-queue-detail-channel-call campaign-member-channel-action"
+              aria-label={`Call ${displayName}`}
+              title="Fill dialer"
+              disabled={readOnly || !member.contact?.primaryPhone}
+            >
+              <PhoneCall className="h-3.5 w-3.5" />
+              <span>Call</span>
+            </button>
+          </div>
+          <ChevronRight className="crm-queue-row-chevron h-4 w-4 shrink-0" />
         </div>
       </article>
     );
