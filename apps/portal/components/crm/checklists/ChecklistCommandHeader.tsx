@@ -46,48 +46,30 @@ function KpiTile({
   value,
   hint,
   icon: Icon,
-  tone = "default",
+  tone,
 }: {
   label: string;
   value: string;
   hint: string;
   icon: LucideIcon;
-  tone?: "default" | "accent" | "success" | "warning";
+  tone: "blue" | "green" | "violet" | "amber" | "rose" | "cyan";
 }) {
-  const toneClass =
-    tone === "accent"
-      ? "tasks-icon-scheduled"
-      : tone === "success"
-        ? "tasks-icon-success"
-        : tone === "warning"
-          ? "tasks-icon-warning"
-          : "tasks-icon-neutral";
-  const valueClass =
-    tone === "success"
-      ? "text-crm-success"
-      : tone === "warning"
-        ? "text-crm-warning"
-        : "text-crm-text";
-
   return (
-    <div className="crm-queue-kpi-card tasks-kpi-card">
-      <div className="flex min-w-0 flex-col gap-2">
-        <span className="text-[11px] font-semibold leading-none text-crm-muted">
-          {label}
+    <div className={cn(crm.queueCountPill, `crm-queue-kpi-${tone}`, "relative overflow-hidden bg-crm-surface-2")}>
+      <span className="flex w-full items-start justify-between gap-3">
+        <span className="min-w-0">
+          <span className="crm-queue-kpi-label block text-[10px] font-bold uppercase tracking-wide text-crm-muted">
+            {label}
+          </span>
+          <span className="crm-queue-kpi-value mt-1 block text-2xl font-bold tabular-nums leading-none tracking-tight text-crm-text">
+            {value}
+          </span>
         </span>
-        <span
-          className={cn(
-            "text-3xl font-semibold leading-none tracking-tight tabular-nums",
-            valueClass
-          )}
-        >
-          {value}
+        <span className="crm-queue-kpi-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface/70 text-crm-accent">
+          <Icon className="h-4 w-4" />
         </span>
-        <span className="text-xs font-medium text-crm-muted/90">{hint}</span>
-      </div>
-      <span className={cn("tasks-kpi-icon", toneClass)}>
-        <Icon size={17} />
       </span>
+      <span className="crm-queue-kpi-micro text-[10px] font-medium text-crm-muted">{hint}</span>
     </div>
   );
 }
@@ -113,14 +95,14 @@ export function ChecklistCommandHeader({
       <CRMWorkspaceHeader>
         <CRMPageHeader
           compact
-          icon={<ClipboardList className="h-5 w-5" />}
+          icon={<ClipboardList className="h-6 w-6" aria-hidden />}
           title="Checklists"
           subtitle="Workflow checklists for agents, live calls, and campaign outreach."
-          className={cn("tasks-page-header", crm.contactsHeaderPanel)}
+          className={cn(crm.contactsHeaderPanel, "campaigns-command-header")}
           actions={
-            <div className="contacts-hero-actions flex flex-wrap items-center gap-2">
-              <button type="button" onClick={onNewBlank} className="tasks-primary-action">
-                <Plus size={15} />
+            <div className="campaigns-hero-actions">
+              <button type="button" onClick={onNewBlank} className="campaigns-btn-primary">
+                <Plus className="h-4 w-4" />
                 New Checklist
               </button>
             </div>
@@ -129,80 +111,94 @@ export function ChecklistCommandHeader({
       </CRMWorkspaceHeader>
 
       <CRMWorkspaceToolbar className="flex flex-col gap-3">
-        <div className="crm-queue-kpi-strip tasks-kpi-grid grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-4 xl:grid-cols-4" aria-label="Checklist metrics">
+          <KpiTile
+            label="Total"
+            value={String(totalCount)}
+            hint={`${avgRequiredPct}% avg required`}
+            icon={ClipboardList}
+            tone="blue"
+          />
           <KpiTile
             label="Active"
             value={String(activeCount)}
             hint={`${liveReadyCount} live-ready`}
             icon={ClipboardList}
-            tone="success"
+            tone="green"
           />
           <KpiTile
             label="Draft"
             value={String(draftCount)}
             hint="Needs steps"
             icon={FileText}
-            tone="warning"
+            tone="amber"
           />
           <KpiTile
             label="Archived"
             value={String(archivedCount)}
             hint="Hidden from live use"
             icon={Archive}
+            tone="violet"
           />
-          <KpiTile
-            label="Total"
-            value={String(totalCount)}
-            hint={`${avgRequiredPct}% avg required`}
-            icon={ClipboardList}
-            tone="accent"
-          />
-        </div>
+        </section>
 
-        <div className="crm-queue-filter-bar tasks-filter-bar flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <div className="flex flex-wrap items-center gap-2">
-            {TABS.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => onTabChange(t.id)}
-                className={cn(
-                  "tasks-filter-pill",
-                  tab === t.id && "tasks-filter-pill-active"
-                )}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-            <label className="relative min-w-0 sm:w-56">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-crm-muted" />
+        <div className="crm-queue-filter-bar tasks-filter-bar">
+          <div className="crm-queue-filter-grid checklist-filter-grid">
+            <div className="crm-queue-filter-field crm-queue-filter-field-search">
+              <Search className="crm-queue-filter-icon h-4 w-4 shrink-0 text-crm-muted" />
               <input
+                id="crm-checklists-search"
                 type="search"
                 value={search}
                 onChange={(event) => onSearchChange(event.target.value)}
-                placeholder="Search checklists"
-                className="h-8 w-full rounded-full border border-crm-border bg-crm-surface-2 pl-8 pr-3 text-xs font-medium text-crm-text outline-none placeholder:text-crm-muted"
+                placeholder="Name, description, workflow..."
+                className="crm-queue-filter-control min-w-[10rem] flex-1"
+                aria-label="Search checklists"
               />
-            </label>
-            <label className="tasks-sort-pill h-8">
-              <SortAsc className="h-3.5 w-3.5" />
-              <span className="sr-only">Sort</span>
+              {search ? (
+                <button type="button" onClick={() => onSearchChange("")} className="text-xs font-medium text-crm-accent hover:underline">
+                  Clear
+                </button>
+              ) : null}
+            </div>
+
+            <div className="crm-queue-filter-field">
+              <label htmlFor="crm-checklists-status" className="sr-only">Status</label>
               <ConnectSelect
+                id="crm-checklists-status"
+                value={tab}
+                onChange={(value) => onTabChange(value as ChecklistHeaderTab)}
+                options={TABS.map((t) => ({ value: t.id, label: t.label }))}
+                className="min-w-[10rem] flex-1"
+                size="sm"
+              />
+            </div>
+
+            <div className="crm-queue-filter-field">
+              <SortAsc className="h-4 w-4 shrink-0 text-crm-muted" />
+              <label htmlFor="crm-checklists-sort" className="sr-only">Sort</label>
+              <ConnectSelect
+                id="crm-checklists-sort"
                 value={sortMode}
                 onChange={(value) => onSortModeChange(value as ChecklistSortMode)}
                 options={[
-                  { value: "updated", label: "Sort: Updated" },
-                  { value: "name", label: "Sort: Name" },
-                  { value: "steps", label: "Sort: Steps" },
+                  { value: "updated", label: "Updated" },
+                  { value: "name", label: "Name" },
+                  { value: "steps", label: "Steps" },
                 ]}
+                className="min-w-[10rem] flex-1"
                 size="sm"
               />
-            </label>
-            <span className="text-xs font-medium text-crm-muted tabular-nums">
-              {shownCount} shown
-            </span>
+            </div>
+
+            <div className="crm-queue-filter-field checklist-filter-count">
+              <span
+                className="crm-queue-filter-control checklist-filter-count-value"
+                aria-label={`${shownCount} checklists shown`}
+              >
+                {shownCount}
+              </span>
+            </div>
           </div>
         </div>
       </CRMWorkspaceToolbar>

@@ -384,7 +384,7 @@ export function ChecklistProgressPanel({
               type="button"
               onClick={onConfirmCreate}
               disabled={!createName.trim() || createSaving}
-              className={crm.btnPrimary}
+              className="tasks-primary-action w-full justify-center gap-2"
             >
               <Check size={13} />
               {createSaving ? "Creating..." : "Create"}
@@ -444,7 +444,7 @@ export function ChecklistProgressPanel({
               type="button"
               onClick={handleSaveEdit}
               disabled={!editName.trim() || saving}
-              className={crm.btnPrimary}
+              className="tasks-primary-action w-full justify-center gap-2"
             >
               <Check size={13} />
               {saving ? "Saving..." : "Save"}
@@ -478,64 +478,6 @@ export function ChecklistProgressPanel({
               {selectedTotal} step{selectedTotal !== 1 ? "s" : ""} · {selectedRequiredCount} required · Updated {selectedUpdatedLabel}
             </p>
           </div>
-        </section>
-
-        <section className="crm-queue-detail-actions-card">
-          <p className="crm-queue-detail-section-label">Checklist actions</p>
-          {checklist.isActive ? (
-            <button
-              type="button"
-              onClick={() => void onSetDefault(checklist.id)}
-              disabled={checklist.isDefault}
-              className="crm-queue-detail-secondary-action"
-            >
-              <Check size={13} />
-              {checklist.isDefault ? "Default checklist" : "Set Default"}
-            </button>
-          ) : null}
-          {checklist.isActive ? (
-            <button
-              type="button"
-              onClick={() => setEditing(true)}
-              className={cn(crm.btnPrimary, "w-full justify-center gap-2")}
-            >
-              <Pencil size={13} />
-              Edit checklist
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => onRestore(checklist.id)}
-              className={cn(crm.btnPrimary, "w-full justify-center gap-2")}
-            >
-              <RotateCcw size={13} />
-              Restore checklist
-            </button>
-          )}
-          {checklist.isActive ? (
-            <button
-              type="button"
-              onClick={() => onArchive(checklist.id)}
-              className="crm-queue-detail-secondary-action"
-            >
-              <Archive size={13} />
-              Archive checklist
-            </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={handleDelete}
-            disabled={deleting}
-            className={cn(crm.btnDanger, "w-full justify-center gap-2")}
-          >
-            <Trash2 size={13} />
-            {deleting ? "Deleting..." : "Delete checklist"}
-          </button>
-          {deleteError ? (
-            <p className={cn(crm.bannerDanger, "rounded-2xl px-3 py-2 text-xs")} role="alert">
-              {deleteError}
-            </p>
-          ) : null}
         </section>
 
         <section className="checklist-detail-section">
@@ -583,6 +525,64 @@ export function ChecklistProgressPanel({
             </div>
           )}
         </section>
+
+        <section className="crm-queue-detail-actions-card mt-auto">
+          <p className="crm-queue-detail-section-label">Checklist actions</p>
+          {checklist.isActive ? (
+            <button
+              type="button"
+              onClick={() => void onSetDefault(checklist.id)}
+              disabled={checklist.isDefault}
+              className="crm-queue-detail-secondary-action"
+            >
+              <Check size={13} />
+              {checklist.isDefault ? "Default checklist" : "Set Default"}
+            </button>
+          ) : null}
+          {checklist.isActive ? (
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className="tasks-primary-action w-full justify-center gap-2"
+            >
+              <Pencil size={13} />
+              Edit checklist
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onRestore(checklist.id)}
+              className="tasks-primary-action w-full justify-center gap-2"
+            >
+              <RotateCcw size={13} />
+              Restore checklist
+            </button>
+          )}
+          {checklist.isActive ? (
+            <button
+              type="button"
+              onClick={() => onArchive(checklist.id)}
+              className="crm-queue-detail-secondary-action"
+            >
+              <Archive size={13} />
+              Archive checklist
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={handleDelete}
+            disabled={deleting}
+            className={cn(crm.btnDanger, "w-full justify-center gap-2")}
+          >
+            <Trash2 size={13} />
+            {deleting ? "Deleting..." : "Delete checklist"}
+          </button>
+          {deleteError ? (
+            <p className={cn(crm.bannerDanger, "rounded-2xl px-3 py-2 text-xs")} role="alert">
+              {deleteError}
+            </p>
+          ) : null}
+        </section>
       </PanelShell>
     );
   }
@@ -608,9 +608,9 @@ export function ChecklistProgressPanel({
         </div>
       </section>
 
-      <section className="crm-queue-detail-actions-card">
+      <section className="crm-queue-detail-actions-card mt-auto">
         <p className="crm-queue-detail-section-label">Checklist actions</p>
-        <button type="button" onClick={onNewBlank} className={cn(crm.btnPrimary, "w-full justify-center")}>
+        <button type="button" onClick={onNewBlank} className="tasks-primary-action w-full justify-center gap-2">
           <Plus size={13} />
           Create checklist
         </button>

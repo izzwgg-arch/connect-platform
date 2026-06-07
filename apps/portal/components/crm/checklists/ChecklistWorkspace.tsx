@@ -453,10 +453,10 @@ function ChecklistCollection({
   return (
     <section className="checklist-collection-shell crm-queue-list-panel">
       <div className="crm-queue-list-head">
-        <div className="flex items-center gap-2">
-          <ClipboardList className="h-3.5 w-3.5 text-crm-muted" />
-          <h2>Checklist rows</h2>
-        </div>
+        <label className="flex cursor-pointer items-center gap-2 text-xs text-crm-muted">
+          <input type="checkbox" readOnly checked={false} className={crm.checkbox} />
+          <span>Select checklist</span>
+        </label>
         <span className="text-[10px] font-semibold text-crm-muted tabular-nums">
           {checklists.length} shown · {totalCount} total
         </span>
