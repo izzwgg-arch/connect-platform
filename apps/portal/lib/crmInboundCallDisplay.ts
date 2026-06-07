@@ -62,3 +62,31 @@ export function shouldShowCrmInboundQuickAction(
     !!call.crmProfileUrl
   );
 }
+
+export function shouldShowCrmLiveWorkspaceShortcut(
+  call: CrmInboundCallFields & { direction?: string; linkedId?: string | null },
+): boolean {
+  return (
+    (call.direction === "inbound" || call.direction === "outbound") &&
+    !!call.crmContactId
+  );
+}
+
+export function buildCrmContactWorkspaceHref(
+  call: CrmInboundCallFields & { linkedId?: string | null },
+): string | null {
+  if (!call.crmContactId) return null;
+  const params = new URLSearchParams({ workspace: "timeline" });
+  if (call.linkedId?.trim()) params.set("linkedId", call.linkedId.trim());
+  return `/crm/contacts/${encodeURIComponent(call.crmContactId)}?${params.toString()}`;
+}
+
+export function buildCrmLiveWorkspaceHref(
+  call: CrmInboundCallFields & { linkedId?: string | null; from?: string | null },
+): string | null {
+  if (!call.crmContactId) return null;
+  const params = new URLSearchParams({ contactId: call.crmContactId });
+  if (call.linkedId?.trim()) params.set("linkedId", call.linkedId.trim());
+  if (call.from?.trim()) params.set("from", call.from.trim());
+  return `/crm/live-call?${params.toString()}`;
+}

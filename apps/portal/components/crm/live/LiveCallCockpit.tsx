@@ -1,42 +1,52 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, type ReactNode, type RefObject } from "react";
+import type { RefObject, ReactNode } from "react";
 import {
   Activity,
+  AlertCircle,
   BarChart3,
-  CheckCheck,
-  Clock,
+  BriefcaseBusiness,
+  CalendarClock,
+  CheckCircle2,
+  ClipboardList,
   FileText,
-  Headphones,
-  History,
-  Keyboard,
+  FolderOpen,
   Mail,
-  MapPin,
-  Megaphone,
   MessageSquare,
-  Mic,
-  MoreVertical,
-  Pause,
   Phone,
-  PhoneOff,
   Radio,
-  Send,
   ShieldCheck,
-  SquarePen,
-  Timer,
+  Sparkles,
   UserRound,
-  Users,
 } from "lucide-react";
-import { apiGet } from "../../../services/apiClient";
-import { ConnectSelect } from "../../ConnectSelect";
+import { CRMCard } from "../CRMCard";
+import { CRMSection } from "../CRMSection";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
-import { initials, ownerLabel, stageColor, stageLabel, formatTimeAgo } from "../contact/contactFormatters";
-import type { QueueCounts, QueueMember, QueueOperationalStats } from "../queue/queueTypes";
-import { MEMBER_STATUS_LABELS } from "../queue/queueUtils";
-import { DISPOSITION_OPTIONS, type CrmStage, type LiveContact, type Script, type ScriptSummary, type TimelineEvent } from "./liveTypes";
-import { STAGE_OPTIONS } from "../contact/contactFormatters";
+import { ownerLabel, stageColor, stageLabel, formatTimeAgo, formatDate } from "../contact/contactFormatters";
+import { LiveWorkspaceChecklistPanel } from "./LiveWorkspaceChecklistPanel";
+import { LiveWorkspaceNotePanel } from "./LiveWorkspaceNotePanel";
+import { LiveWorkspaceOutcomePanel } from "./LiveWorkspaceOutcomePanel";
+import { LiveWorkspaceScriptPanel } from "./LiveWorkspaceScriptPanel";
+import type {
+  Checklist,
+  CrmStage,
+  CrmTask,
+  LiveCallHistoryItem,
+  LiveContact,
+  LiveWorkspaceChecklistResponse,
+  LiveWorkspaceContext,
+  LiveWorkspaceDocument,
+  LiveWorkspaceFormRequest,
+  ScriptSummary,
+  TimelineEvent,
+} from "./liveTypes";
+
+type PhoneStatus = {
+  regState: string;
+  callState: string;
+};
 
 type DailyReport = {
   dispositionsToday?: number;
@@ -44,18 +54,6 @@ type DailyReport = {
   contactsCreatedToday?: number;
   activeCampaigns?: number;
   queueRemaining?: number;
-};
-
-type PhoneControls = {
-  regState: string;
-  callState: string;
-  muted: boolean;
-  onHold: boolean;
-  setMute: (mute: boolean) => void;
-  toggleHold: () => void;
-  hangup: () => void;
-  sendDtmf: (digit: string) => void;
-  transfer: (target: string) => void;
 };
 
 export function LiveCallCockpit({
@@ -91,6 +89,13 @@ export function LiveCallCockpit({
   onSaveOutcome,
   timeline,
   tasks,
+  forms,
+  documents,
+  callHistory,
+  checklists,
+  recentChecklistResponses,
+  defaultChecklistId,
+  liveContext,
   scriptSummaries,
   campaignScriptId,
   queueMembers,
@@ -105,6 +110,8 @@ export function LiveCallCockpit({
   onCall,
   onOpenContact,
   onOpenEmail,
+  onRefresh,
+  isDevPreview = false,
 }: {
   contact: LiveContact;
   isArchived: boolean;
@@ -137,14 +144,21 @@ export function LiveCallCockpit({
   isPowerMode: boolean;
   onSaveOutcome: () => void;
   timeline: TimelineEvent[];
-  tasks: { id: string; title: string; dueAt?: string | null; priority: string; status: string }[];
+  tasks: CrmTask[];
+  forms: LiveWorkspaceFormRequest[];
+  documents: LiveWorkspaceDocument[];
+  callHistory: LiveCallHistoryItem[];
+  checklists: Checklist[];
+  recentChecklistResponses: LiveWorkspaceChecklistResponse[];
+  defaultChecklistId: string | null;
+  liveContext: LiveWorkspaceContext | null;
   scriptSummaries: ScriptSummary[];
   campaignScriptId: string | null;
-  queueMembers: QueueMember[];
-  queueCounts: QueueCounts | null;
-  opStats: QueueOperationalStats | null;
+  queueMembers: Array<{ id: string; contactId: string; contact?: { displayName?: string | null; company?: string | null } | null; campaign?: { id: string; name?: string | null } | null; status?: string }>;
+  queueCounts: { pending?: number; due?: number; overdue?: number; upcoming?: number } | null;
+  opStats: { callsLinkedToday?: number; dispositionsToday?: number; queueRemaining?: number; myOpen?: number } | null;
   dailyReport: DailyReport | null;
-  phone: PhoneControls;
+  phone: PhoneStatus;
   sipNotice: string | null;
   callerIdChecked: boolean;
   callerIdSelected: string | null;
@@ -152,218 +166,134 @@ export function LiveCallCockpit({
   onCall: () => void;
   onOpenContact: () => void;
   onOpenEmail: () => void;
+  onRefresh?: () => void;
+  isDevPreview?: boolean;
+  previewScript?: unknown;
 }) {
-  const [noteTab, setNoteTab] = useState<"notes" | "activity" | "history">("notes");
-  const [queueTab, setQueueTab] = useState<"all" | "waiting" | "my" | "parked">("all");
-  const [activityFilter, setActivityFilter] = useState("all");
-  const [keypadOpen, setKeypadOpen] = useState(false);
-  const [transferOpen, setTransferOpen] = useState(false);
-  const [transferTarget, setTransferTarget] = useState("");
-  const [elapsed, setElapsed] = useState(0);
-  const [selectedScriptId, setSelectedScriptId] = useState("");
-  const [script, setScript] = useState<Script | null>(null);
-  const [scriptLoading, setScriptLoading] = useState(false);
-
-  const phoneActive = phone.callState !== "idle" && phone.callState !== "ended";
   const stage = (contact.crmStage ?? "LEAD") as CrmStage;
-  const email = contact.primaryEmail?.email ?? contact.emails?.find((e) => e.isPrimary)?.email ?? null;
-  const contactAny = contact as LiveContact & {
-    assignedTo?: Parameters<typeof ownerLabel>[0];
-    lastActivityAt?: string | null;
-    lastDisposition?: string | null;
-    city?: string | null;
-    state?: string | null;
-    location?: string | null;
-    leadScore?: number | string | null;
-  };
-  const location = contactAny.location ?? ([contactAny.city, contactAny.state].filter(Boolean).join(", ") || null);
-  const owner = ownerLabel(contactAny.assignedTo) ?? "You";
-  const leadScore = contactAny.leadScore ?? null;
-  const lastContact = contactAny.lastActivityAt ? formatTimeAgo(contactAny.lastActivityAt) : "No activity yet";
-
+  const email = contact.primaryEmail?.email ?? contact.emails?.find((item) => item.isPrimary)?.email ?? null;
+  const owner = contact.assignedTo
+    ? ownerLabel({ ...contact.assignedTo, email: contact.assignedTo.email ?? "" }) ?? "Unassigned"
+    : "Unassigned";
+  const lastTouch = contact.lastActivityAt ? formatTimeAgo(contact.lastActivityAt) : "No activity yet";
+  const lastDisposition = contact.lastDisposition ?? "Not set";
+  const activeCall = phone.callState !== "idle" && phone.callState !== "ended";
   const callsToday = dailyReport?.callsLinkedToday ?? opStats?.callsLinkedToday ?? 0;
-  const contactsReached = dailyReport?.dispositionsToday ?? opStats?.dispositionsToday ?? 0;
-  const conversations = timeline.filter((event) => ["CDR_INBOUND", "CDR_OUTBOUND", "SMS_SENT", "SMS_RECEIVED"].includes(event.type)).length;
-  const dispositionRate = callsToday > 0 ? Math.round((contactsReached / callsToday) * 100) : 0;
-
-  useEffect(() => {
-    if (!phoneActive) {
-      setElapsed(0);
-      return;
-    }
-    const started = Date.now();
-    const tick = () => setElapsed(Math.floor((Date.now() - started) / 1000));
-    tick();
-    const id = window.setInterval(tick, 1000);
-    return () => window.clearInterval(id);
-  }, [phoneActive, linkedId]);
-
-  useEffect(() => {
-    if (!campaignScriptId || selectedScriptId || scriptSummaries.length === 0) return;
-    if (scriptSummaries.some((item) => item.id === campaignScriptId)) setSelectedScriptId(campaignScriptId);
-  }, [campaignScriptId, scriptSummaries, selectedScriptId]);
-
-  useEffect(() => {
-    if (!selectedScriptId) {
-      setScript(null);
-      return;
-    }
-    let cancelled = false;
-    setScriptLoading(true);
-    apiGet<{ script: Script }>(`/crm/scripts/${selectedScriptId}`)
-      .then((res) => {
-        if (!cancelled) setScript(res.script ?? null);
-      })
-      .catch(() => {
-        if (!cancelled) setScript(null);
-      })
-      .finally(() => {
-        if (!cancelled) setScriptLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedScriptId]);
-
-  const scriptSections = useMemo(() => buildScriptSections(script?.body ?? ""), [script?.body]);
-  const filteredActivity = useMemo(() => {
-    if (activityFilter === "notes") return timeline.filter((event) => event.type.includes("NOTE"));
-    if (activityFilter === "calls") return timeline.filter((event) => event.type.includes("CDR"));
-    if (activityFilter === "messages") return timeline.filter((event) => event.type.includes("SMS"));
-    return timeline;
-  }, [activityFilter, timeline]);
-
-  const kpis = [
-    { label: "Active Call", value: phoneActive ? "1" : "0", sub: phoneActive ? "In progress" : "Ready", icon: <Phone className="h-4 w-4" />, tone: "green" },
-    { label: "Calls Today", value: callsToday.toLocaleString(), sub: opStats ? "CRM linked" : "Loaded from reports", icon: <Activity className="h-4 w-4" />, tone: "blue" },
-    { label: "Contacts Reached", value: contactsReached.toLocaleString(), sub: "Dispositioned", icon: <Users className="h-4 w-4" />, tone: "violet" },
-    { label: "Conversations", value: conversations.toLocaleString(), sub: "This contact", icon: <MessageSquare className="h-4 w-4" />, tone: "amber" },
-    { label: "Avg. Call Duration", value: formatDuration(elapsed), sub: phoneActive ? "Current call" : "No live timer", icon: <Timer className="h-4 w-4" />, tone: "cyan" },
-    { label: "Disposition Rate", value: `${dispositionRate}%`, sub: callsToday > 0 ? "Today" : "No calls yet", icon: <BarChart3 className="h-4 w-4" />, tone: "emerald" },
-  ];
-
-  function appendNote(label: string) {
-    setNoteBody(noteBody ? noteBody + (noteBody.endsWith(" ") ? "" : " ") + label : label);
-    noteRef.current?.focus();
-  }
-
-  function sendTransfer() {
-    if (!phoneActive || !transferTarget.trim()) return;
-    phone.transfer(transferTarget.trim());
-    setTransferTarget("");
-    setTransferOpen(false);
-  }
+  const dispositionsToday = dailyReport?.dispositionsToday ?? opStats?.dispositionsToday ?? 0;
+  const conversations = timeline.filter((event) => ["CDR_INBOUND", "CDR_OUTBOUND", "SMS_SENT", "SMS_RECEIVED", "EMAIL_SENT", "EMAIL_RECEIVED", "EMAIL_REPLY"].includes(event.type)).length;
+  const relationshipHealth = deriveRelationshipHealth({ contact, tasks, forms, documents, timeline });
+  const currentCall = liveContext?.currentCall ?? null;
+  const defaultScriptId = campaignScriptId ?? liveContext?.scripts?.defaultScriptId ?? null;
 
   return (
-    <div className="crm-live-workspace">
-      <header className="crm-live-hero">
-        <div className="flex min-w-0 items-center gap-4">
-          <div className="crm-live-hero-icon">
-            <Headphones className="h-6 w-6" />
-          </div>
-          <div className="min-w-0">
-            <h1 className="crm-live-title">Live Call Workspace</h1>
-            <span className="sr-only">CRM</span>
-            <p className="crm-live-subtitle">Real-time calling cockpit for active conversations and lead engagement.</p>
-          </div>
+    <div className="crm-live-cockpit flex flex-col gap-4">
+      {isDevPreview ? (
+        <div className="rounded-crm-lg border border-crm-accent/30 bg-crm-accent/10 px-4 py-2.5 text-sm text-crm-text">
+          <strong className="font-semibold">Development preview</strong>
+          <span className="text-crm-muted"> - populated layout for visual QA. Open a matched call/contact to use live data.</span>
         </div>
-        <div className="crm-live-hero-actions">
-          <span className={cn("crm-live-status-pill", phone.regState === "registered" && "is-online")}>
-            <span className="h-2 w-2 rounded-full bg-current" />
-            {phone.regState === "registered" ? "You're online" : phone.regState === "connecting" || phone.regState === "registering" ? "Connecting" : "Offline"}
-          </span>
-          <Link href="/crm/queue" className="crm-live-primary-action">
-            Open Queue
-          </Link>
-          <button type="button" className="crm-live-icon-action" disabled aria-label="More options">
-            <MoreVertical className="h-4 w-4" />
-          </button>
-        </div>
-      </header>
+      ) : null}
 
-      <section className="crm-live-kpi-grid" aria-label="Live call metrics">
-        {kpis.map((kpi) => (
-          <MetricCard key={kpi.label} {...kpi} />
-        ))}
+      <section className="crm-live-hero overflow-hidden rounded-[1.4rem] border border-crm-border bg-crm-surface shadow-crm">
+        <div className="relative p-4 sm:p-5 lg:p-6">
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_0%_0%,rgba(56,189,248,0.12),transparent_34%),radial-gradient(circle_at_100%_0%,rgba(124,58,237,0.10),transparent_34%)]" />
+          <div className="relative flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold", activeCall ? "bg-crm-success/15 text-crm-success" : "bg-crm-surface-2 text-crm-muted")}>
+                  <span className={activeCall ? crm.statusDotLive : crm.statusDot} />
+                  {activeCall ? "Active call" : "No active browser call"}
+                </span>
+                <span className="rounded-full px-2.5 py-1 text-xs font-bold" style={{ background: `${stageColor(stage)}22`, color: stageColor(stage) }}>
+                  {stageLabel(stage)}
+                </span>
+                {campaignName ? <Pill icon={<BriefcaseBusiness className="h-3.5 w-3.5" />} label={campaignName} /> : null}
+                {isArchived ? <Pill label="Archived" tone="danger" /> : null}
+              </div>
+              <h1 className="mt-3 text-2xl font-bold tracking-tight text-crm-text sm:text-3xl">{contact.displayName}</h1>
+              <p className="mt-1 text-sm text-crm-muted">
+                {[contact.title, contact.company].filter(Boolean).join(" · ") || "CRM contact"}
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2 text-sm">
+                <ContactChip icon={<Phone className="h-3.5 w-3.5" />} value={primaryPhone ?? fromNumber ?? "No phone"} mono />
+                {email ? <ContactChip icon={<Mail className="h-3.5 w-3.5" />} value={email} /> : null}
+                <ContactChip icon={<UserRound className="h-3.5 w-3.5" />} value={owner} />
+                <ContactChip icon={<ShieldCheck className="h-3.5 w-3.5" />} value={relationshipHealth.label} tone={relationshipHealth.tone} />
+              </div>
+            </div>
+
+            <div className="flex shrink-0 flex-col gap-2 sm:flex-row lg:min-w-[12rem] lg:flex-col">
+              <button type="button" onClick={onOpenContact} className={cn(crm.btnSecondary, "justify-center")}>
+                Open contact
+              </button>
+              <button type="button" onClick={onOpenEmail} disabled={!email} className={cn(crm.btnGhost, "justify-center")}>
+                Email history
+              </button>
+              {!activeCall && canCall ? (
+                <button type="button" onClick={onCall} disabled={callerIdLoading || isArchived} className={cn(crm.btnPrimary, "justify-center")}>
+                  {callerIdLoading ? "Preparing call..." : "Start call"}
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          {sipNotice ? (
+            <div className="relative mt-4 flex items-center gap-2 rounded-crm border border-crm-warning/35 bg-crm-warning/10 px-3 py-2 text-xs text-crm-warning">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+              {sipNotice}
+            </div>
+          ) : null}
+          {callerIdChecked ? (
+            <p className="relative mt-3 text-xs text-crm-muted">{callerIdSelected ? `Local presence: ${callerIdSelected}` : "Default caller ID"}</p>
+          ) : null}
+        </div>
       </section>
 
-      <section className="crm-live-cockpit-grid">
-        <div className="crm-live-main-stack">
-          <ActiveCallCard
-            contact={contact}
-            stage={stage}
-            primaryPhone={primaryPhone}
-            campaignName={campaignName}
-            memberId={memberId}
-            fromNumber={fromNumber}
-            linkedId={linkedId}
-            phoneActive={phoneActive}
-            phone={phone}
-            elapsed={elapsed}
-            canCall={canCall}
-            isArchived={isArchived}
-            sipNotice={sipNotice}
-            callerIdChecked={callerIdChecked}
-            callerIdSelected={callerIdSelected}
-            callerIdLoading={callerIdLoading}
-            onCall={onCall}
-            onOpenContact={onOpenContact}
-            onAddNote={() => noteRef.current?.focus()}
-            keypadOpen={keypadOpen}
-            setKeypadOpen={setKeypadOpen}
-            transferOpen={transferOpen}
-            setTransferOpen={setTransferOpen}
-            transferTarget={transferTarget}
-            setTransferTarget={setTransferTarget}
-            onTransfer={sendTransfer}
-          />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+        <KpiCard icon={<Radio className="h-4 w-4" />} label="Call status" value={activeCall ? "Live" : "Ready"} detail={currentCall?.linkedId ?? linkedId ?? "No linked id"} />
+        <KpiCard icon={<Activity className="h-4 w-4" />} label="Calls today" value={String(callsToday)} detail="CRM linked" />
+        <KpiCard icon={<CheckCircle2 className="h-4 w-4" />} label="Dispositions" value={String(dispositionsToday)} detail="Today" />
+        <KpiCard icon={<MessageSquare className="h-4 w-4" />} label="Conversation" value={String(conversations)} detail="Timeline items" />
+        <KpiCard icon={<ClipboardList className="h-4 w-4" />} label="Open items" value={String(tasks.length + forms.filter((f) => ["SENT", "OPENED"].includes(f.status)).length + documents.filter((d) => d.status !== "IMPORTED").length)} detail="Tasks/forms/files" />
+        <KpiCard icon={<BarChart3 className="h-4 w-4" />} label="Last touch" value={lastTouch} detail={lastDisposition} />
+      </div>
 
-          <LiveQueueCard
-            queueMembers={queueMembers}
-            queueCounts={queueCounts}
-            queueTab={queueTab}
-            setQueueTab={setQueueTab}
-          />
-        </div>
+      <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,430px)]">
+        <main className="min-w-0 space-y-4">
+          <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+            <ContactSnapshot contact={contact} stage={stage} owner={owner} lastTouch={lastTouch} lastDisposition={lastDisposition} campaignName={campaignName} relationshipHealth={relationshipHealth.label} currentCall={currentCall} memberId={memberId} />
+            <OpenItemsCard tasks={tasks} forms={forms} documents={documents} recentChecklistResponses={recentChecklistResponses} defaultChecklistId={defaultChecklistId} />
+          </div>
 
-        <div className="crm-live-center-stack">
-          <NotesActivityCard
-            noteTab={noteTab}
-            setNoteTab={setNoteTab}
-            noteRef={noteRef}
+          <LiveWorkspaceNotePanel
+            ref={noteRef}
             noteBody={noteBody}
             setNoteBody={setNoteBody}
             savingNote={savingNote}
             noteSavedAt={noteSavedAt}
-            onSaveNote={onSaveNote}
+            onSave={onSaveNote}
             disabled={isArchived}
-            appendNote={appendNote}
-            timeline={timeline}
-            tasks={tasks}
           />
 
-          <ContactSnapshotCard
+          <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+            <TimelineCard timeline={timeline} />
+            <CallHistoryCard callHistory={callHistory} timeline={timeline} />
+          </div>
+
+          <QueueCard queueMembers={queueMembers} queueCounts={queueCounts} queueBackHref={queueBackHref} />
+        </main>
+
+        <aside className="min-w-0 space-y-4">
+          <LiveWorkspaceScriptPanel scriptSummaries={scriptSummaries} defaultScriptId={defaultScriptId} />
+          <LiveWorkspaceChecklistPanel
+            checklists={checklists}
+            contactId={contact.id}
+            linkedId={linkedId}
+            defaultChecklistId={defaultChecklistId}
+            onSaved={onRefresh ?? (() => window.dispatchEvent(new CustomEvent("crm:live-checklist-saved")))}
+          />
+          <LiveWorkspaceOutcomePanel
             contact={contact}
-            stage={stage}
-            email={email}
-            primaryPhone={primaryPhone}
-            location={location}
-            leadScore={leadScore}
-            lastContact={lastContact}
-            owner={owner}
-            isArchived={isArchived}
-            onOpenContact={onOpenContact}
-            onOpenEmail={onOpenEmail}
-          />
-        </div>
-
-        <div className="crm-live-side-stack">
-          <CallScriptCard
-            scriptSummaries={scriptSummaries}
-            selectedScriptId={selectedScriptId}
-            setSelectedScriptId={setSelectedScriptId}
-            scriptLoading={scriptLoading}
-            scriptSections={scriptSections}
             disposition={disposition}
             setDisposition={setDisposition}
             outcomeNote={outcomeNote}
@@ -378,635 +308,350 @@ export function LiveCallCockpit({
             outcomeSaved={outcomeSaved}
             outcomeError={outcomeError}
             isPowerMode={isPowerMode}
-            onSaveOutcome={onSaveOutcome}
+            onSave={onSaveOutcome}
             disabled={isArchived}
           />
-
-          <RecentActivityCard
-            timeline={filteredActivity}
-            activityFilter={activityFilter}
-            setActivityFilter={setActivityFilter}
-          />
-        </div>
-      </section>
-
-      <section className="crm-live-performance-bar">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold text-crm-text">Your Performance Today</p>
-        </div>
-        <PerformanceItem label="Calls Made" value={callsToday.toLocaleString()} delta="CRM linked" />
-        <PerformanceItem label="Contacts Reached" value={contactsReached.toLocaleString()} delta="Dispositioned" />
-        <PerformanceItem label="Conversations" value={conversations.toLocaleString()} delta="This contact" />
-        <PerformanceItem label="Avg. Duration" value={formatDuration(elapsed)} delta={phoneActive ? "Current call" : "No live call"} />
-        <PerformanceItem label="Disposition Rate" value={`${dispositionRate}%`} delta={callsToday > 0 ? "Today" : "No calls"} />
-        <Link href="/crm/reports" className="crm-live-secondary-action ml-auto">
-          View Full Reports
-        </Link>
-      </section>
-
-      {queueBackHref ? (
-        <Link href={queueBackHref} className="crm-live-back-link">
-          Return to queue
-        </Link>
-      ) : null}
-    </div>
-  );
-}
-
-function MetricCard({ label, value, sub, icon, tone }: { label: string; value: string; sub: string; icon: ReactNode; tone: string }) {
-  return (
-    <div className={cn("crm-live-kpi-card", `tone-${tone}`)}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="crm-live-kpi-icon">{icon}</div>
-        <span className="crm-live-kpi-trend">{sub}</span>
-      </div>
-      <div>
-        <p className="crm-live-kpi-label">{label}</p>
-        <p className="crm-live-kpi-value">{value}</p>
+          <AiCallIntelligenceCard context={liveContext} />
+        </aside>
       </div>
     </div>
   );
 }
 
-function ActiveCallCard({
+function ContactSnapshot({
   contact,
   stage,
-  primaryPhone,
+  owner,
+  lastTouch,
+  lastDisposition,
   campaignName,
+  relationshipHealth,
+  currentCall,
   memberId,
-  fromNumber,
-  linkedId,
-  phoneActive,
-  phone,
-  elapsed,
-  canCall,
-  isArchived,
-  sipNotice,
-  callerIdChecked,
-  callerIdSelected,
-  callerIdLoading,
-  onCall,
-  onOpenContact,
-  onAddNote,
-  keypadOpen,
-  setKeypadOpen,
-  transferOpen,
-  setTransferOpen,
-  transferTarget,
-  setTransferTarget,
-  onTransfer,
 }: {
   contact: LiveContact;
   stage: CrmStage;
-  primaryPhone: string | null;
+  owner: string;
+  lastTouch: string;
+  lastDisposition: string;
   campaignName: string | null;
+  relationshipHealth: string;
+  currentCall: LiveWorkspaceContext["currentCall"] | null;
   memberId: string | null;
-  fromNumber: string | null;
-  linkedId: string | null;
-  phoneActive: boolean;
-  phone: PhoneControls;
-  elapsed: number;
-  canCall: boolean;
-  isArchived: boolean;
-  sipNotice: string | null;
-  callerIdChecked: boolean;
-  callerIdSelected: string | null;
-  callerIdLoading: boolean;
-  onCall: () => void;
-  onOpenContact: () => void;
-  onAddNote: () => void;
-  keypadOpen: boolean;
-  setKeypadOpen: (value: boolean) => void;
-  transferOpen: boolean;
-  setTransferOpen: (value: boolean) => void;
-  transferTarget: string;
-  setTransferTarget: (value: string) => void;
-  onTransfer: () => void;
 }) {
-  const statusLabel = phoneActive
-    ? phone.onHold
-      ? "On hold"
-      : phone.callState === "ringing"
-        ? "Ringing"
-        : phone.callState === "dialing"
-          ? "Dialing"
-          : "In progress"
-    : linkedId || fromNumber
-      ? "Call context"
-      : "Ready";
-
+  const address = contact.addresses?.[0];
+  const location = [address?.city, address?.state].filter(Boolean).join(", ") || contact.timezoneLabel || "Unknown";
+  const source = campaignName ?? (memberId ? "Queue" : currentCall?.linkedId ? "Screen pop" : "Contact");
   return (
-    <article className="crm-live-card crm-live-active-card">
-      <div className="crm-live-card-head">
-        <div className="flex items-center gap-2">
-          <span className={cn("crm-live-dot", phoneActive && "is-live")} />
-          <span className="crm-live-section-label">Active Call</span>
-        </div>
-        <span className="crm-live-timer">{phoneActive ? formatDuration(elapsed) : "00:00"}</span>
-      </div>
-
-      <div className="crm-live-contact-hero">
-        <div className="crm-live-avatar" style={{ background: stageColor(stage) }}>
-          {initials(contact.displayName)}
-        </div>
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="truncate text-xl font-bold text-crm-text">{contact.displayName}</h2>
-            <span className="crm-live-stage-pill" style={{ color: stageColor(stage), backgroundColor: `${stageColor(stage)}1f` }}>
-              {stageLabel(stage)}
-            </span>
-          </div>
-          <p className="mt-1 font-mono text-sm tabular-nums text-crm-muted">{primaryPhone ?? fromNumber ?? "No phone on file"}</p>
-        </div>
-      </div>
-
-      <div className="crm-live-detail-grid">
-        <DetailPill label="Campaign" value={campaignName ?? "No campaign"} />
-        <DetailPill label="Disposition" value={contactAnyValue(contact, "lastDisposition") ?? "Not set"} />
-        <DetailPill label="Source" value={memberId ? "Queue" : linkedId ? "Screen pop" : "Contact"} />
-      </div>
-
-      <div className="crm-live-chip-row">
-        <span className="crm-live-soft-chip">
-          <MapPin className="h-3.5 w-3.5" />
-          {contactAnyValue(contact, "location") ?? "Location not recorded"}
-        </span>
-        <span className="crm-live-soft-chip">
-          <Clock className="h-3.5 w-3.5" />
-          Local time {new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
-        </span>
-      </div>
-
-      {sipNotice ? <div className="crm-live-warning">{sipNotice}</div> : null}
-      {callerIdChecked ? (
-        <p className="text-xs text-crm-muted">{callerIdSelected ? `Local presence: ${callerIdSelected}` : "Default caller ID"}</p>
-      ) : null}
-
-      <div className="crm-live-controls" aria-label="Call controls">
-        <ControlButton icon={<Mic className="h-4 w-4" />} label={phone.muted ? "Unmute" : "Mute"} onClick={() => phone.setMute(!phone.muted)} disabled={!phoneActive} />
-        <ControlButton icon={<Keyboard className="h-4 w-4" />} label="Keypad" onClick={() => setKeypadOpen(!keypadOpen)} disabled={!phoneActive} />
-        <ControlButton icon={<Pause className="h-4 w-4" />} label={phone.onHold ? "Resume" : "Hold"} onClick={() => phone.toggleHold()} disabled={!phoneActive} />
-        <ControlButton icon={<Send className="h-4 w-4" />} label="Transfer" onClick={() => setTransferOpen(!transferOpen)} disabled={!phoneActive} />
-        <ControlButton icon={<SquarePen className="h-4 w-4" />} label="Add Note" onClick={onAddNote} disabled={isArchived} />
-        <ControlButton icon={<PhoneOff className="h-4 w-4" />} label="End Call" onClick={() => phone.hangup()} disabled={!phoneActive} danger />
-      </div>
-
-      {keypadOpen && phoneActive ? (
-        <div className="crm-live-keypad">
-          {"123456789*0#".split("").map((digit) => (
-            <button key={digit} type="button" onClick={() => phone.sendDtmf(digit)} className="crm-live-key">
-              {digit}
-            </button>
-          ))}
-        </div>
-      ) : null}
-
-      {transferOpen && phoneActive ? (
-        <div className="crm-live-transfer">
-          <input
-            value={transferTarget}
-            onChange={(event) => setTransferTarget(event.target.value)}
-            placeholder="Extension or phone number"
-            className="crm-live-input"
-          />
-          <button type="button" onClick={onTransfer} disabled={!transferTarget.trim()} className="crm-live-primary-action">
-            Transfer
-          </button>
-        </div>
-      ) : null}
-
-      <div className="crm-live-card-footer">
-        {canCall && !phoneActive ? (
-          <button type="button" onClick={onCall} disabled={callerIdLoading || isArchived} className="crm-live-inline-link">
-            {callerIdLoading ? "Selecting caller ID..." : "Start real call"}
-          </button>
-        ) : null}
-        <button type="button" onClick={onOpenContact} className="crm-live-inline-link">
-          View Contact
-        </button>
-      </div>
-    </article>
+    <CRMCard padding="md">
+      <CRMSection title="Contact snapshot" description="CRM context for this caller.">
+        <dl className="grid grid-cols-2 gap-2">
+          <SnapshotRow label="Company" value={contact.company ?? "Not set"} />
+          <SnapshotRow label="Stage" value={stageLabel(stage)} />
+          <SnapshotRow label="Owner" value={owner} />
+          <SnapshotRow label="Campaign/source" value={source} />
+          <SnapshotRow label="Relationship" value={relationshipHealth} />
+          <SnapshotRow label="Last touch" value={lastTouch} />
+          <SnapshotRow label="Last disposition" value={lastDisposition} />
+          <SnapshotRow label="Location" value={location} />
+        </dl>
+      </CRMSection>
+    </CRMCard>
   );
 }
 
-function ControlButton({ icon, label, onClick, disabled, strong, danger }: { icon: ReactNode; label: string; onClick: () => void; disabled?: boolean; strong?: boolean; danger?: boolean }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={cn("crm-live-control", strong && "is-strong", danger && "is-danger")}
-    >
-      {icon}
-      <span>{label}</span>
-    </button>
-  );
-}
-
-function NotesActivityCard({
-  noteTab,
-  setNoteTab,
-  noteRef,
-  noteBody,
-  setNoteBody,
-  savingNote,
-  noteSavedAt,
-  onSaveNote,
-  disabled,
-  appendNote,
-  timeline,
+function OpenItemsCard({
   tasks,
+  forms,
+  documents,
+  recentChecklistResponses,
+  defaultChecklistId,
 }: {
-  noteTab: "notes" | "activity" | "history";
-  setNoteTab: (tab: "notes" | "activity" | "history") => void;
-  noteRef: RefObject<HTMLTextAreaElement>;
-  noteBody: string;
-  setNoteBody: (value: string) => void;
-  savingNote: boolean;
-  noteSavedAt: Date | null;
-  onSaveNote: () => void;
-  disabled: boolean;
-  appendNote: (label: string) => void;
-  timeline: TimelineEvent[];
-  tasks: { id: string; title: string; dueAt?: string | null; priority: string; status: string }[];
+  tasks: CrmTask[];
+  forms: LiveWorkspaceFormRequest[];
+  documents: LiveWorkspaceDocument[];
+  recentChecklistResponses: LiveWorkspaceChecklistResponse[];
+  defaultChecklistId: string | null;
 }) {
+  const pendingForms = forms.filter((form) => ["SENT", "OPENED"].includes(form.status));
+  const pendingDocuments = documents.filter((doc) => doc.status !== "IMPORTED" && doc.status !== "REJECTED");
+  const checklist = defaultChecklistId
+    ? recentChecklistResponses.find((response) => response.checklistId === defaultChecklistId)
+    : recentChecklistResponses[0];
   return (
-    <article className="crm-live-card crm-live-notes-card">
-      <div className="crm-live-card-head">
-        <span className="crm-live-section-title">Notes & Activity</span>
-        <div className="crm-live-tabs">
-          {(["notes", "activity", "history"] as const).map((tab) => (
-            <button key={tab} type="button" onClick={() => setNoteTab(tab)} className={cn("crm-live-tab", noteTab === tab && "is-active")}>
-              {tab[0].toUpperCase() + tab.slice(1)}
-            </button>
+    <CRMCard padding="md">
+      <CRMSection title="Open items" description="Work still attached to this contact.">
+        <div className="grid grid-cols-2 gap-2">
+          <MiniMetric icon={<CalendarClock className="h-4 w-4" />} label="Open tasks" value={tasks.length} />
+          <MiniMetric icon={<FileText className="h-4 w-4" />} label="Pending forms" value={pendingForms.length} />
+          <MiniMetric icon={<FolderOpen className="h-4 w-4" />} label="Pending files" value={pendingDocuments.length} />
+          <MiniMetric icon={<ClipboardList className="h-4 w-4" />} label="Checklist" value={checklist ? checkedCount(checklist.answers) : 0} suffix={checklist ? " checked" : " none"} />
+        </div>
+        <div className="mt-3 space-y-2">
+          {tasks.slice(0, 3).map((task) => (
+            <div key={task.id} className="rounded-crm border border-crm-border/70 bg-crm-surface-2/50 px-3 py-2">
+              <p className="truncate text-sm font-semibold text-crm-text">{task.title}</p>
+              <p className="text-xs text-crm-muted">{task.dueAt ? `Due ${formatDate(task.dueAt)}` : task.priority}</p>
+            </div>
+          ))}
+          {pendingForms.slice(0, 2).map((form) => (
+            <div key={form.id} className="rounded-crm border border-crm-border/70 bg-crm-surface-2/50 px-3 py-2 text-sm text-crm-text">
+              {form.formTemplate?.name ?? "Form request"} <span className="text-xs text-crm-muted">({form.status})</span>
+            </div>
           ))}
         </div>
-      </div>
+      </CRMSection>
+    </CRMCard>
+  );
+}
 
-      {noteTab === "notes" ? (
-        <div className="flex flex-col gap-3">
-          <textarea
-            ref={noteRef}
-            value={noteBody}
-            onChange={(event) => setNoteBody(event.target.value)}
-            placeholder="Add a note about this call..."
-            rows={4}
-            disabled={disabled}
-            className="crm-live-textarea"
-          />
-          <div className="flex flex-wrap gap-1.5">
-            {["Interested", "Requested callback", "Sent estimate", "Wrong number"].map((label) => (
-              <button key={label} type="button" disabled={disabled} onClick={() => appendNote(label)} className="crm-live-mini-chip">
-                + {label}
-              </button>
+function TimelineCard({ timeline }: { timeline: TimelineEvent[] }) {
+  return (
+    <CRMCard padding="md">
+      <CRMSection title="Recent activity" description="Calls, SMS, email, forms, notes, files, and tasks.">
+        {timeline.length === 0 ? (
+          <p className="text-sm text-crm-muted">No CRM activity yet.</p>
+        ) : (
+          <div className="max-h-[28rem] space-y-2 overflow-y-auto pr-1">
+            {timeline.slice(0, 16).map((event) => (
+              <ActivityRow key={event.id} event={event} />
             ))}
           </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-xs text-crm-muted">
-              {noteSavedAt ? `Saved at ${noteSavedAt.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}` : "Saved notes appear in timeline."}
-            </span>
-            <button type="button" onClick={onSaveNote} disabled={!noteBody.trim() || savingNote || disabled} className="crm-live-primary-action">
-              {savingNote ? "Saving..." : "Add Note"}
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {noteTab === "activity" ? (
-        <ActivityRows events={timeline.slice(0, 4)} empty="No recent contact activity yet." />
-      ) : null}
-
-      {noteTab === "history" ? (
-        <div className="flex flex-col gap-2">
-          {tasks.slice(0, 3).map((task) => (
-            <div key={task.id} className="crm-live-feed-row">
-              <div className="crm-live-feed-icon">
-                <CheckCheck className="h-3.5 w-3.5" />
-              </div>
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-crm-text">{task.title}</p>
-                <p className="text-xs text-crm-muted">{task.dueAt ? formatTimeAgo(task.dueAt) : task.priority}</p>
-              </div>
-            </div>
-          ))}
-          {tasks.length === 0 ? <p className="text-sm text-crm-muted">No open tasks for this contact.</p> : null}
-        </div>
-      ) : null}
-    </article>
+        )}
+      </CRMSection>
+    </CRMCard>
   );
 }
 
-function CallScriptCard({
-  scriptSummaries,
-  selectedScriptId,
-  setSelectedScriptId,
-  scriptLoading,
-  scriptSections,
-  disposition,
-  setDisposition,
-  outcomeNote,
-  setOutcomeNote,
-  followUpOption,
-  setFollowUpOption,
-  followUpCustom,
-  setFollowUpCustom,
-  nextStage,
-  setNextStage,
-  savingOutcome,
-  outcomeSaved,
-  outcomeError,
-  isPowerMode,
-  onSaveOutcome,
-  disabled,
-}: {
-  scriptSummaries: ScriptSummary[];
-  selectedScriptId: string;
-  setSelectedScriptId: (value: string) => void;
-  scriptLoading: boolean;
-  scriptSections: { title: string; body: string }[];
-  disposition: string;
-  setDisposition: (value: string) => void;
-  outcomeNote: string;
-  setOutcomeNote: (value: string) => void;
-  followUpOption: "" | "today" | "tomorrow" | "nextweek" | "custom";
-  setFollowUpOption: (value: "" | "today" | "tomorrow" | "nextweek" | "custom") => void;
-  followUpCustom: string;
-  setFollowUpCustom: (value: string) => void;
-  nextStage: CrmStage | "";
-  setNextStage: (value: CrmStage | "") => void;
-  savingOutcome: boolean;
-  outcomeSaved: boolean;
-  outcomeError: string;
-  isPowerMode: boolean;
-  onSaveOutcome: () => void;
-  disabled: boolean;
-}) {
+function CallHistoryCard({ callHistory, timeline }: { callHistory: LiveCallHistoryItem[]; timeline: TimelineEvent[] }) {
+  const timelineCalls = timeline.filter((event) => event.type === "CDR_INBOUND" || event.type === "CDR_OUTBOUND");
   return (
-    <article className="crm-live-card crm-live-script-card">
-      <div className="crm-live-card-head">
-        <span className="crm-live-section-title">Call Script</span>
-        <FileText className="h-4 w-4 text-crm-muted" />
-      </div>
-
-      {scriptSummaries.length > 0 ? (
-        <ConnectSelect
-          value={selectedScriptId}
-          onChange={(value) => setSelectedScriptId(value)}
-          className="w-full"
-          size="sm"
-          placeholder="Select script"
-          options={scriptSummaries.map((summary) => ({ value: summary.id, label: summary.name }))}
-        />
-      ) : (
-        <p className="rounded-xl border border-dashed border-crm-border px-3 py-3 text-sm text-crm-muted">
-          No active scripts are available. Create one in Scripts to show guided talk tracks here.
-        </p>
-      )}
-
-      <div className="crm-live-script-sections">
-        {scriptLoading ? <p className="text-sm text-crm-muted">Loading script...</p> : null}
-        {!scriptLoading && scriptSections.map((section) => (
-          <section key={section.title} className="crm-live-script-section">
-            <p className="crm-live-script-heading">{section.title}</p>
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-crm-text">{section.body}</p>
-          </section>
-        ))}
-        {!scriptLoading && selectedScriptId && scriptSections.length === 0 ? (
-          <p className="text-sm text-crm-muted">This script has no body content yet.</p>
-        ) : null}
-      </div>
-
-      <div className="crm-live-disposition-box">
-        <p className="crm-live-section-label">Disposition</p>
-        <ConnectSelect
-          value={disposition}
-          onChange={(value) => setDisposition(value)}
-          disabled={disabled}
-          className="w-full"
-          size="sm"
-          placeholder="Select disposition"
-          options={DISPOSITION_OPTIONS.map((option) => ({ value: option, label: option }))}
-        />
-        <textarea
-          value={outcomeNote}
-          onChange={(event) => setOutcomeNote(event.target.value)}
-          placeholder="Outcome note (optional)"
-          rows={2}
-          disabled={disabled}
-          className="crm-live-textarea"
-        />
-        <div className="grid grid-cols-2 gap-2">
-          <ConnectSelect
-            value={followUpOption}
-            onChange={(value) => setFollowUpOption(value as "" | "today" | "tomorrow" | "nextweek" | "custom")}
-            disabled={disabled}
-            className="w-full"
-            size="sm"
-            options={[
-              { value: "", label: "No follow-up" },
-              { value: "today", label: "Today" },
-              { value: "tomorrow", label: "Tomorrow" },
-              { value: "nextweek", label: "Next week" },
-              { value: "custom", label: "Custom" },
-            ]}
-          />
-          <ConnectSelect
-            value={nextStage}
-            onChange={(value) => setNextStage(value as CrmStage | "")}
-            disabled={disabled}
-            className="w-full"
-            size="sm"
-            options={[
-              { value: "", label: "No stage change" },
-              ...STAGE_OPTIONS.map((stage) => ({ value: stage.value, label: stage.label })),
-            ]}
-          />
-        </div>
-        {followUpOption === "custom" ? (
-          <input type="datetime-local" value={followUpCustom} onChange={(event) => setFollowUpCustom(event.target.value)} disabled={disabled} className="crm-live-input" />
-        ) : null}
-        {outcomeError ? <p className="text-xs font-semibold text-crm-danger">{outcomeError}</p> : null}
-        {outcomeSaved ? <p className="text-xs font-semibold text-crm-success">Disposition saved.</p> : null}
-        <button type="button" onClick={onSaveOutcome} disabled={!disposition || savingOutcome || disabled} className="crm-live-primary-action w-full">
-          {savingOutcome ? "Saving..." : isPowerMode ? "Save Disposition & Next" : "Save Disposition"}
-        </button>
-      </div>
-    </article>
+    <CRMCard padding="md">
+      <CRMSection title="Call history" description="Previous calls and outcomes for this contact.">
+        {callHistory.length === 0 && timelineCalls.length === 0 ? (
+          <p className="text-sm text-crm-muted">No previous call history found.</p>
+        ) : (
+          <div className="max-h-[28rem] space-y-2 overflow-y-auto pr-1">
+            {callHistory.slice(0, 8).map((call) => (
+              <div key={call.linkedId} className="rounded-crm border border-crm-border/70 bg-crm-surface-2/45 px-3 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-crm-text">{call.direction === "outgoing" ? "Outbound" : "Inbound"} · {call.disposition}</p>
+                  <span className="text-xs text-crm-muted">{formatDuration(call.durationSec)}</span>
+                </div>
+                <p className="mt-1 text-xs text-crm-muted">{formatDate(call.startedAt)} · {call.fromNumber ?? "Unknown"}{" -> "}{call.toNumber ?? "Unknown"}</p>
+                <p className="mt-1 text-xs text-crm-muted">{call.transcriptionSummary ?? call.summary ?? "No transcript summary available."}</p>
+              </div>
+            ))}
+            {callHistory.length === 0 && timelineCalls.slice(0, 8).map((event) => <ActivityRow key={event.id} event={event} />)}
+          </div>
+        )}
+      </CRMSection>
+    </CRMCard>
   );
 }
 
-function LiveQueueCard({
+function QueueCard({
   queueMembers,
   queueCounts,
-  queueTab,
-  setQueueTab,
+  queueBackHref,
 }: {
-  queueMembers: QueueMember[];
-  queueCounts: QueueCounts | null;
-  queueTab: "all" | "waiting" | "my" | "parked";
-  setQueueTab: (tab: "all" | "waiting" | "my" | "parked") => void;
+  queueMembers: Array<{ id: string; contactId: string; contact?: { displayName?: string | null; company?: string | null } | null; campaign?: { id: string; name?: string | null } | null; status?: string }>;
+  queueCounts: { pending?: number; due?: number; overdue?: number; upcoming?: number } | null;
+  queueBackHref: string | null;
 }) {
   return (
-    <article className="crm-live-card">
-      <div className="crm-live-card-head">
-        <span className="crm-live-section-title">Live Queue</span>
-        <span className="text-xs font-semibold text-crm-muted">{queueCounts ? `${queueCounts.pending} pending` : "Loading"}</span>
-      </div>
-      <div className="crm-live-tabs">
-        <button type="button" onClick={() => setQueueTab("all")} className={cn("crm-live-tab", queueTab === "all" && "is-active")}>All</button>
-        <button type="button" disabled className="crm-live-tab">Waiting</button>
-        <button type="button" disabled className="crm-live-tab">My Calls</button>
-        <button type="button" disabled className="crm-live-tab">Parked</button>
-      </div>
-      <div className="flex flex-col gap-2">
-        {queueMembers.slice(0, 4).map((member) => (
-          <Link key={member.id} href={`/crm/live-call?contactId=${member.contactId}&memberId=${member.id}&campaignId=${member.campaign?.id ?? ""}&returnTo=/crm/queue`} className="crm-live-queue-row">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-bold text-crm-text">{member.contact?.displayName ?? "Unknown contact"}</p>
-              <p className="font-mono text-xs tabular-nums text-crm-muted">{member.contact?.primaryPhone ?? "No phone"}</p>
-            </div>
-            <div className="min-w-0 text-right">
-              <p className="truncate text-xs text-crm-muted">{member.campaign?.name ?? "No campaign"}</p>
-              <span className="crm-live-queue-status">{MEMBER_STATUS_LABELS[member.status]}</span>
-            </div>
+    <CRMCard padding="md">
+      <CRMSection title="Compact queue" description="Nearby leads and callbacks without leaving the call.">
+        <div className="mb-3 flex flex-wrap gap-2">
+          <Pill label={`Pending ${queueCounts?.pending ?? 0}`} />
+          <Pill label={`Due ${queueCounts?.due ?? 0}`} />
+          <Pill label={`Overdue ${queueCounts?.overdue ?? 0}`} tone={(queueCounts?.overdue ?? 0) > 0 ? "danger" : "default"} />
+        </div>
+        <div className="grid gap-2 md:grid-cols-2">
+          {queueMembers.slice(0, 4).map((member) => (
+            <Link key={member.id} href={`/crm/live-call?contactId=${member.contactId}&memberId=${member.id}&campaignId=${member.campaign?.id ?? ""}&returnTo=/crm/queue`} className="rounded-crm border border-crm-border/70 bg-crm-surface-2/45 px-3 py-2 hover:border-crm-accent/35">
+              <p className="truncate text-sm font-semibold text-crm-text">{member.contact?.displayName ?? "Contact"}</p>
+              <p className="truncate text-xs text-crm-muted">{member.contact?.company ?? member.campaign?.name ?? member.status ?? "Queue"}</p>
+            </Link>
+          ))}
+        </div>
+        {queueBackHref ? (
+          <Link href={queueBackHref} className={cn(crm.btnGhost, "mt-3 w-full justify-center text-xs")}>
+            Return to queue
           </Link>
-        ))}
-        {queueMembers.length === 0 ? <p className="text-sm text-crm-muted">No queue rows available.</p> : null}
-      </div>
-      <Link href="/crm/queue" className="crm-live-card-link">
-        View full queue
-      </Link>
-    </article>
+        ) : null}
+      </CRMSection>
+    </CRMCard>
   );
 }
 
-function ContactSnapshotCard({ contact, stage, email, primaryPhone, location, leadScore, lastContact, owner, isArchived, onOpenContact, onOpenEmail }: { contact: LiveContact; stage: CrmStage; email: string | null; primaryPhone: string | null; location: string | null; leadScore: string | number | null; lastContact: string; owner: string; isArchived: boolean; onOpenContact: () => void; onOpenEmail: () => void }) {
+function AiCallIntelligenceCard({ context }: { context: LiveWorkspaceContext | null }) {
+  const ai = context?.aiCallIntelligence;
+  const transcript = ai?.transcript ?? null;
+  const status = transcript?.status ?? (ai?.transcriptionEnabled ? "WAITING" : "DISABLED");
+  const statusLabel =
+    status === "COMPLETED"
+      ? "Transcript ready"
+      : status === "PROCESSING"
+        ? "Processing recording"
+        : status === "QUEUED"
+          ? "Queued"
+          : status === "FAILED"
+            ? "Transcription failed"
+            : status === "UNAVAILABLE"
+              ? "Transcript unavailable"
+              : ai?.transcriptionEnabled
+                ? "Waiting for recording"
+                : "Transcription not enabled";
   return (
-    <article className="crm-live-card">
-      <div className="crm-live-card-head">
-        <span className="crm-live-section-title">Contact Snapshot</span>
-        <button type="button" onClick={onOpenContact} className="text-xs font-bold text-crm-accent">View Contact</button>
-      </div>
-      <div className="flex items-center gap-3">
-        <div className="crm-live-avatar small" style={{ background: stageColor(stage) }}>{initials(contact.displayName)}</div>
-        <div className="min-w-0">
-          <p className="truncate text-base font-bold text-crm-text">{contact.displayName}</p>
-          <p className="font-mono text-xs text-crm-muted">{primaryPhone ?? "No phone"}</p>
-          <span className="crm-live-stage-pill mt-1" style={{ color: stageColor(stage), backgroundColor: `${stageColor(stage)}1f` }}>{stageLabel(stage)}</span>
-        </div>
-      </div>
-      <div className="crm-live-quick-actions">
-        {email ? <button type="button" onClick={onOpenEmail} className="crm-live-icon-mini"><Mail className="h-4 w-4" /><span>Email</span></button> : null}
-        <button type="button" onClick={onOpenContact} className="crm-live-icon-mini"><UserRound className="h-4 w-4" /><span>Profile</span></button>
-        {isArchived ? <span className="crm-live-icon-mini is-disabled"><ShieldCheck className="h-4 w-4" /><span>Archived</span></span> : null}
-      </div>
-      <div className="crm-live-snapshot-list">
-        <SnapshotRow icon={<Mail className="h-4 w-4" />} label="Email" value={email ?? "Not recorded"} />
-        <SnapshotRow icon={<MapPin className="h-4 w-4" />} label="Location" value={location ?? "Not recorded"} />
-        <SnapshotRow icon={<BarChart3 className="h-4 w-4" />} label="Lead Score" value={leadScore === null ? "Not scored" : String(leadScore)} />
-        <SnapshotRow icon={<History className="h-4 w-4" />} label="Last Contact" value={lastContact} />
-        <SnapshotRow icon={<UserRound className="h-4 w-4" />} label="Owner" value={owner} />
-      </div>
-    </article>
-  );
-}
-
-function RecentActivityCard({ timeline, activityFilter, setActivityFilter }: { timeline: TimelineEvent[]; activityFilter: string; setActivityFilter: (value: string) => void }) {
-  return (
-    <article className="crm-live-card">
-      <div className="crm-live-card-head">
-        <span className="crm-live-section-title">Recent Activity</span>
-        <ConnectSelect
-          value={activityFilter}
-          onChange={(value) => setActivityFilter(value)}
-          size="sm"
-          options={[
-            { value: "all", label: "All Activity" },
-            { value: "notes", label: "Notes" },
-            { value: "calls", label: "Calls" },
-            { value: "messages", label: "Messages" },
-          ]}
-        />
-      </div>
-      <ActivityRows events={timeline.slice(0, 5)} empty="No recent activity." />
-      <Link href="/crm/reports" className="crm-live-card-link">
-        View all activity
-      </Link>
-    </article>
-  );
-}
-
-function ActivityRows({ events, empty }: { events: TimelineEvent[]; empty: string }) {
-  if (events.length === 0) return <p className="text-sm text-crm-muted">{empty}</p>;
-  return (
-    <div className="flex flex-col gap-2">
-      {events.map((event) => (
-        <div key={event.id} className="crm-live-feed-row">
-          <div className="crm-live-feed-icon">
-            {event.type.includes("SMS") ? <MessageSquare className="h-3.5 w-3.5" /> : event.type.includes("CDR") ? <Phone className="h-3.5 w-3.5" /> : <Activity className="h-3.5 w-3.5" />}
+    <CRMCard padding="md">
+      <CRMSection title="AI call intelligence" description="Transcript, summary, actions, sentiment, and intent when supported.">
+        <div className="space-y-3">
+          <div className="rounded-crm border border-crm-border bg-crm-surface-2/45 px-3 py-3 text-sm text-crm-muted">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-2 font-semibold text-crm-text">
+                <Sparkles className="h-4 w-4 text-crm-accent" />
+                {statusLabel}
+              </span>
+              <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider", status === "COMPLETED" ? "bg-crm-success/15 text-crm-success" : status === "FAILED" || status === "UNAVAILABLE" ? "bg-crm-danger/10 text-crm-danger" : "bg-crm-accent/10 text-crm-accent")}>
+                {status}
+              </span>
+            </div>
+            <p>{transcript?.errorMessage ?? ai?.placeholder ?? "Transcript will appear here after the recorded call is processed."}</p>
+            {transcript?.updatedAt ? (
+              <p className="mt-2 text-xs text-crm-muted">Updated {formatTimeAgo(transcript.updatedAt)}</p>
+            ) : null}
           </div>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-crm-text">{event.title}</p>
-            {event.body ? <p className="line-clamp-2 text-xs text-crm-muted">{event.body}</p> : null}
-          </div>
-          <span className="shrink-0 text-xs text-crm-muted">{formatTimeAgo(event.createdAt)}</span>
+
+          {transcript?.summary ? (
+            <div className="rounded-crm border border-crm-border bg-crm-surface px-3 py-3">
+              <p className="text-xs font-bold uppercase tracking-wider text-crm-muted">Summary</p>
+              <p className="mt-1 text-sm leading-relaxed text-crm-text">{transcript.summary}</p>
+            </div>
+          ) : null}
+
+          {transcript?.actionItems?.length ? (
+            <div className="rounded-crm border border-crm-border bg-crm-surface px-3 py-3">
+              <p className="text-xs font-bold uppercase tracking-wider text-crm-muted">Action items</p>
+              <ul className="mt-2 space-y-2">
+                {transcript.actionItems.map((item, index) => (
+                  <li key={`${item.title}-${index}`} className="rounded-crm border border-crm-border/70 bg-crm-surface-2/45 px-2.5 py-2">
+                    <p className="text-sm font-semibold text-crm-text">{item.title}</p>
+                    {item.detail || item.dueHint ? (
+                      <p className="mt-1 text-xs text-crm-muted">{[item.detail, item.dueHint].filter(Boolean).join(" · ")}</p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {transcript?.transcript ? (
+            <details className="rounded-crm border border-crm-border bg-crm-surface px-3 py-3">
+              <summary className="cursor-pointer text-sm font-semibold text-crm-text">Transcript</summary>
+              <pre className="mt-3 max-h-72 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-crm-muted">
+                {transcript.transcript}
+              </pre>
+            </details>
+          ) : null}
         </div>
-      ))}
-    </div>
+      </CRMSection>
+    </CRMCard>
   );
 }
 
-function DetailPill({ label, value }: { label: string; value: string }) {
+function KpiCard({ icon, label, value, detail }: { icon: ReactNode; label: string; value: string; detail: string }) {
   return (
-    <div className="crm-live-detail-pill">
-      <p>{label}</p>
-      <strong>{value}</strong>
+    <div className="min-w-0 rounded-crm-lg border border-crm-border bg-crm-surface px-3 py-3 shadow-crm">
+      <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider text-crm-muted">
+        {icon}
+        {label}
+      </div>
+      <p className="mt-2 truncate text-xl font-bold text-crm-text">{value}</p>
+      <p className="mt-1 truncate text-xs text-crm-muted">{detail}</p>
     </div>
   );
 }
 
-function SnapshotRow({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
+function SnapshotRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="crm-live-snapshot-row">
-      <span>{icon}</span>
-      <span>{label}</span>
-      <strong>{value}</strong>
+    <div className="rounded-crm border border-crm-border/70 bg-crm-surface-2/45 px-3 py-2">
+      <dt className="text-[10px] font-bold uppercase tracking-wider text-crm-muted">{label}</dt>
+      <dd className="mt-1 truncate text-sm font-semibold text-crm-text">{value}</dd>
     </div>
   );
 }
 
-function PerformanceItem({ label, value, delta }: { label: string; value: string; delta: string }) {
+function MiniMetric({ icon, label, value, suffix = "" }: { icon: ReactNode; label: string; value: number; suffix?: string }) {
   return (
-    <div className="crm-live-performance-item">
-      <p>{label}</p>
-      <strong>{value}</strong>
-      <span>{delta}</span>
+    <div className="rounded-crm border border-crm-border/70 bg-crm-surface-2/45 px-3 py-2">
+      <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-crm-muted">{icon}{label}</div>
+      <p className="mt-1 text-lg font-bold text-crm-text">{value}<span className="text-xs font-medium text-crm-muted">{suffix}</span></p>
     </div>
   );
 }
 
-function formatDuration(seconds: number): string {
-  const safe = Math.max(0, seconds);
-  const minutes = Math.floor(safe / 60);
-  const remaining = safe % 60;
-  return `${minutes.toString().padStart(2, "0")}:${remaining.toString().padStart(2, "0")}`;
+function ActivityRow({ event }: { event: TimelineEvent }) {
+  return (
+    <div className="rounded-crm border border-crm-border/70 bg-crm-surface-2/45 px-3 py-2">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-sm font-semibold text-crm-text">{event.title}</p>
+        <span className="shrink-0 text-xs text-crm-muted">{formatTimeAgo(event.createdAt)}</span>
+      </div>
+      <p className="mt-1 text-[11px] font-bold uppercase tracking-wider text-crm-muted">{event.type.replaceAll("_", " ")}</p>
+      {event.body ? <p className="mt-1 line-clamp-2 text-xs text-crm-muted">{event.body}</p> : null}
+    </div>
+  );
 }
 
-function buildScriptSections(body: string): { title: string; body: string }[] {
-  const trimmed = body.trim();
-  if (!trimmed) return [];
-  const wanted = ["Opening", "Need Discovery", "Value Proposition"];
-  const sections = wanted.map((title) => ({ title, body: extractSection(trimmed, title) })).filter((section) => section.body);
-  if (sections.length > 0) return sections;
-  return [{ title: "Opening", body: trimmed }];
+function Pill({ icon, label, tone = "default" }: { icon?: ReactNode; label: string; tone?: "default" | "danger" }) {
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold", tone === "danger" ? "border-crm-danger/35 bg-crm-danger/10 text-crm-danger" : "border-crm-border bg-crm-surface-2 text-crm-muted")}>
+      {icon}
+      {label}
+    </span>
+  );
 }
 
-function extractSection(body: string, title: string): string {
-  const pattern = new RegExp(`(?:^|\\n)#{0,3}\\s*${title}\\s*:?\\s*\\n([\\s\\S]*?)(?=\\n#{0,3}\\s*(Opening|Need Discovery|Value Proposition|Disposition)\\s*:?\\s*\\n|$)`, "i");
-  return pattern.exec(body)?.[1]?.trim() ?? "";
+function ContactChip({ icon, value, mono, tone }: { icon: ReactNode; value: string; mono?: boolean; tone?: string }) {
+  return (
+    <span className={cn("inline-flex max-w-full items-center gap-1.5 rounded-full border border-crm-border/70 bg-crm-surface-2/60 px-2.5 py-1 text-crm-text", mono && "font-mono tabular-nums", tone)}>
+      <span className="shrink-0 text-crm-muted">{icon}</span>
+      <span className="truncate">{value}</span>
+    </span>
+  );
 }
 
-function contactAnyValue(contact: LiveContact, key: string): string | null {
-  const value = (contact as unknown as Record<string, unknown>)[key];
-  return typeof value === "string" && value.trim() ? value : null;
+function deriveRelationshipHealth({
+  contact,
+  tasks,
+  forms,
+  documents,
+  timeline,
+}: {
+  contact: LiveContact;
+  tasks: CrmTask[];
+  forms: LiveWorkspaceFormRequest[];
+  documents: LiveWorkspaceDocument[];
+  timeline: TimelineEvent[];
+}) {
+  if (contact.doNotCall) return { label: "Do not call", tone: "text-crm-danger" };
+  if (tasks.some((task) => task.dueAt && new Date(task.dueAt).getTime() < Date.now())) return { label: "Needs follow-up", tone: "text-crm-warning" };
+  if (forms.some((form) => ["SENT", "OPENED"].includes(form.status))) return { label: "Forms pending", tone: "text-crm-warning" };
+  if (documents.some((doc) => doc.status === "IMPORT_FAILED" || doc.status === "FAILED")) return { label: "File attention", tone: "text-crm-warning" };
+  if (timeline.some((event) => event.type === "DISPOSITION_SET" && event.createdAt && Date.now() - new Date(event.createdAt).getTime() < 7 * 86400000)) {
+    return { label: "Recently engaged", tone: "text-crm-success" };
+  }
+  return { label: "Stable", tone: "text-crm-success" };
+}
+
+function checkedCount(answers: Record<string, boolean>) {
+  return Object.values(answers).filter(Boolean).length;
+}
+
+function formatDuration(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "0:00";
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}:${String(secs).padStart(2, "0")}`;
 }

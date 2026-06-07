@@ -10,7 +10,13 @@ import {
   LiveWorkspaceIdle,
   type CrmStage,
   type CrmTask,
+  type Checklist,
+  type LiveCallHistoryItem,
   type LiveContact,
+  type LiveWorkspaceContext,
+  type LiveWorkspaceDocument,
+  type LiveWorkspaceFormRequest,
+  type LiveWorkspaceChecklistResponse,
   type ScriptSummary,
   type TimelineEvent,
 } from "../../../../components/crm";
@@ -18,7 +24,9 @@ import { DISPOSITION_OPTIONS } from "../../../../components/crm/live";
 import type { QueueCounts, QueueMember, QueueOperationalStats } from "../../../../components/crm/queue/queueTypes";
 import { apiGet, apiPatch, apiPost } from "../../../../services/apiClient";
 import { useSipPhone } from "../../../../hooks/useSipPhone";
+import { useTelephony } from "../../../../contexts/TelephonyContext";
 import { PermissionGate } from "../../../../components/PermissionGate";
+import { buildCrmContactWorkspaceHref } from "../../../../lib/crmInboundCallDisplay";
 
 const TIMELINE_LIMIT = 25;
 
@@ -28,6 +36,19 @@ type DailyReport = {
   contactsCreatedToday?: number;
   activeCampaigns?: number;
   queueRemaining?: number;
+};
+
+type RecentLiveContactWorkspace = {
+  href: string;
+  name: string;
+};
+
+type SimulatedContactListResponse = {
+  rows: Array<{
+    id: string;
+    displayName: string;
+    primaryPhone?: { numberRaw: string } | null;
+  }>;
 };
 
 function LiveCallPageFallback() {
@@ -48,10 +69,14 @@ function LiveCallWorkspaceInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const phone = useSipPhone();
+  const telephony = useTelephony();
+  const linkedCallSeenRef = useRef(false);
 
   const contactId = searchParams.get("contactId");
   const linkedId = searchParams.get("linkedId");
   const fromNumber = searchParams.get("from");
+  const isSimulatedCall = linkedId?.startsWith("sim-") ?? false;
+  const canSimulateLiveCall = process.env.NODE_ENV !== "production";
   const campaignId = searchParams.get("campaignId");
   const memberId = searchParams.get("memberId");
   const returnTo = searchParams.get("returnTo");
@@ -68,8 +93,18 @@ function LiveCallWorkspaceInner() {
   const [contact, setContact] = useState<LiveContact | null>(null);
   const [tasks, setTasks] = useState<CrmTask[]>([]);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [liveContext, setLiveContext] = useState<LiveWorkspaceContext | null>(null);
+  const [forms, setForms] = useState<LiveWorkspaceFormRequest[]>([]);
+  const [documents, setDocuments] = useState<LiveWorkspaceDocument[]>([]);
+  const [callHistory, setCallHistory] = useState<LiveCallHistoryItem[]>([]);
+  const [checklists, setChecklists] = useState<Checklist[]>([]);
+  const [recentChecklistResponses, setRecentChecklistResponses] = useState<LiveWorkspaceChecklistResponse[]>([]);
+  const [defaultChecklistId, setDefaultChecklistId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [recentWorkspace, setRecentWorkspace] = useState<RecentLiveContactWorkspace | null>(null);
+  const [simulationLoading, setSimulationLoading] = useState(false);
+  const [simulationError, setSimulationError] = useState<string | null>(null);
   const [idleStats, setIdleStats] = useState<QueueOperationalStats | null>(null);
   const [idleStatsLoading, setIdleStatsLoading] = useState(false);
   const [opStats, setOpStats] = useState<QueueOperationalStats | null>(null);
@@ -84,6 +119,13 @@ function LiveCallWorkspaceInner() {
   const [callerIdSelected, setCallerIdSelected] = useState<string | null>(null);
   const [callerIdChecked, setCallerIdChecked] = useState(false);
   const [callerIdLoading, setCallerIdLoading] = useState(false);
+
+  const contactWorkspaceHref = contactId
+    ? buildCrmContactWorkspaceHref({
+        crmContactId: contactId,
+        linkedId: linkedId && !isSimulatedCall ? linkedId : undefined,
+      })
+    : null;
 
   const [noteBody, setNoteBody] = useState("");
   const [savingNote, setSavingNote] = useState(false);
@@ -100,6 +142,39 @@ function LiveCallWorkspaceInner() {
   const [outcomeError, setOutcomeError] = useState("");
 
   const saveOutcomeRef = useRef<() => Promise<void>>(async () => {});
+
+  useEffect(() => {
+    if (!linkedId) {
+      linkedCallSeenRef.current = false;
+      return;
+    }
+    if (isSimulatedCall) {
+      linkedCallSeenRef.current = true;
+      return;
+    }
+
+    const linkedCallActive = telephony.activeCalls.some(
+      (call) => call.linkedId === linkedId || call.id === linkedId,
+    );
+    if (linkedCallActive) {
+      linkedCallSeenRef.current = true;
+      return;
+    }
+
+    if (
+      linkedCallSeenRef.current ||
+      phone.callState === "idle" ||
+      phone.callState === "ended"
+    ) {
+      linkedCallSeenRef.current = false;
+      router.replace("/crm/live-call");
+    }
+  }, [isSimulatedCall, linkedId, phone.callState, router, telephony.activeCalls]);
+
+  useEffect(() => {
+    if (!contactWorkspaceHref) return;
+    router.replace(contactWorkspaceHref);
+  }, [contactWorkspaceHref, router]);
 
   // ── Draft note autosave ───────────────────────────────────────────────────
   const draftKey = contactId ? `crm:live:note:${contactId}` : null;
@@ -136,14 +211,8 @@ function LiveCallWorkspaceInner() {
   async function refreshAll() {
     if (!contactId) return;
     try {
-      const [contactRes, tasksRes, timelineRes] = await Promise.all([
-        apiGet<{ contact: LiveContact }>(`/crm/contacts/${contactId}`),
-        apiGet<{ tasks: CrmTask[] }>(`/crm/contacts/${contactId}/tasks?status=open&limit=10`),
-        apiGet<{ events: TimelineEvent[] }>(`/crm/contacts/${contactId}/timeline?limit=${TIMELINE_LIMIT}`),
-      ]);
-      setContact(contactRes.contact ?? (contactRes as unknown as LiveContact));
-      setTasks(tasksRes.tasks ?? []);
-      setTimeline(timelineRes.events ?? []);
+      const res = await apiGet<LiveWorkspaceContext>(buildContextPath());
+      applyLiveContext(res);
     } catch {
       // non-critical
     }
@@ -173,45 +242,121 @@ function LiveCallWorkspaceInner() {
     }
 
     setLoading(true);
-    const fetches: Promise<unknown>[] = [
-      apiGet<{ contact: LiveContact }>(`/crm/contacts/${contactId}`),
-      apiGet<{ tasks: CrmTask[] }>(`/crm/contacts/${contactId}/tasks?status=open&limit=10`),
-      apiGet<{ events: TimelineEvent[] }>(`/crm/contacts/${contactId}/timeline?limit=${TIMELINE_LIMIT}`),
-      apiGet<{ scripts: ScriptSummary[] }>("/crm/scripts").catch(() => ({ scripts: [] as ScriptSummary[] })),
-    ];
-    if (campaignId) {
-      fetches.push(
-        apiGet<{ campaign: { name: string; scriptId: string | null } }>(
-          `/crm/campaigns/${campaignId}`,
-        ).catch(() => null),
-      );
-    }
-
-    Promise.all(fetches)
-      .then((results) => {
-        const [contactRes, tasksRes, timelineRes, scriptsRes, campaignRes] = results as [
-          { contact: LiveContact },
-          { tasks: CrmTask[] },
-          { events: TimelineEvent[] },
-          { scripts: ScriptSummary[] },
-          { campaign: { name: string; scriptId: string | null } } | null | undefined,
-        ];
-        const c = contactRes.contact ?? (contactRes as unknown as LiveContact);
-        setContact(c);
-        setTasks(tasksRes.tasks ?? []);
-        setTimeline(timelineRes.events ?? []);
-        setScriptSummaries(scriptsRes.scripts ?? []);
-        if (campaignRes?.campaign) {
-          setCampaignName(campaignRes.campaign.name);
-          setCampaignScriptId(campaignRes.campaign.scriptId);
-        }
-      })
+    apiGet<LiveWorkspaceContext>(buildContextPath())
+      .then(applyLiveContext)
       .catch((err: unknown) => {
         setError(String((err as Error)?.message ?? "Failed to load contact"));
       })
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contactId]);
+  }, [contactId, linkedId, fromNumber, memberId, campaignId]);
+
+  function buildContextPath() {
+    const params = new URLSearchParams();
+    if (contactId) params.set("contactId", contactId);
+    if (linkedId && !isSimulatedCall) params.set("linkedId", linkedId);
+    if (fromNumber) params.set("phone", fromNumber);
+    if (memberId) params.set("memberId", memberId);
+    if (campaignId) params.set("campaignId", campaignId);
+    return `/crm/live-call/context?${params.toString()}`;
+  }
+
+  function applyLiveContext(res: LiveWorkspaceContext) {
+    setLiveContext(res);
+    if (!res.matched || !res.contact) {
+      setContact(null);
+      setTasks([]);
+      setTimeline([]);
+      setForms([]);
+      setDocuments([]);
+      setCallHistory([]);
+      setChecklists([]);
+      setRecentChecklistResponses([]);
+      setDefaultChecklistId(null);
+      setScriptSummaries([]);
+      setCampaignScriptId(null);
+      setCampaignName(null);
+      return;
+    }
+    setContact(res.contact);
+    const recentHref = buildCrmContactWorkspaceHref({
+      crmContactId: res.contact.id,
+      linkedId: linkedId ?? undefined,
+    });
+    if (recentHref) {
+      setRecentWorkspace({
+        href: recentHref,
+        name: res.contact.displayName,
+      });
+    }
+    setTasks(res.tasks ?? []);
+    setTimeline(res.timeline ?? []);
+    setForms(res.forms ?? []);
+    setDocuments(res.documents ?? []);
+    setCallHistory(res.callHistory ?? []);
+    setChecklists(res.checklists?.items ?? []);
+    setRecentChecklistResponses(res.checklists?.recentResponses ?? []);
+    setDefaultChecklistId(res.checklists?.defaultChecklistId ?? null);
+    setScriptSummaries(res.scripts?.items ?? []);
+    setCampaignScriptId(res.scripts?.defaultScriptId ?? null);
+    setCampaignName(res.campaignContext?.campaign?.name ?? null);
+  }
+
+  const startSimulatedIncomingCall = useCallback(async () => {
+    if (!canSimulateLiveCall || simulationLoading) return;
+    setSimulationLoading(true);
+    setSimulationError(null);
+    try {
+      const res = await apiGet<SimulatedContactListResponse>("/crm/contacts?limit=12");
+      const simulatedContact = res.rows.find((row) => row.primaryPhone?.numberRaw) ?? res.rows[0];
+      if (!simulatedContact) {
+        setSimulationError("No CRM contacts are available to simulate.");
+        return;
+      }
+
+      const params = new URLSearchParams({
+        contactId: simulatedContact.id,
+        linkedId: `sim-${Date.now()}`,
+      });
+      if (simulatedContact.primaryPhone?.numberRaw) {
+        params.set("from", simulatedContact.primaryPhone.numberRaw);
+      }
+      const recentHref = buildCrmContactWorkspaceHref({
+        crmContactId: simulatedContact.id,
+      });
+      if (recentHref) {
+        setRecentWorkspace({
+          href: recentHref,
+          name: simulatedContact.displayName,
+        });
+      }
+      router.push(`/crm/live-call?${params.toString()}`);
+    } catch {
+      setSimulationError("Could not load a CRM contact to simulate.");
+    } finally {
+      setSimulationLoading(false);
+    }
+  }, [canSimulateLiveCall, router, simulationLoading]);
+
+  const hangUpSimulatedIncomingCall = useCallback(() => {
+    if (!contact) {
+      router.replace("/crm/live-call");
+      return;
+    }
+
+    const recentHref = buildCrmContactWorkspaceHref({
+      crmContactId: contact.id,
+      linkedId: linkedId ?? undefined,
+    });
+    if (recentHref) {
+      setRecentWorkspace({
+        href: recentHref,
+        name: contact.displayName,
+      });
+    }
+    linkedCallSeenRef.current = false;
+    router.replace("/crm/live-call");
+  }, [contact, linkedId, router]);
 
   useEffect(() => {
     const token = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
@@ -400,13 +545,42 @@ function LiveCallWorkspaceInner() {
   if (!contactId) {
     return (
       <CRMPageShell innerClassName={`${crm.pageInnerLive} ${crm.liveWorkspace}`}>
-        <LiveWorkspaceIdle stats={idleStats} statsLoading={idleStatsLoading} />
+        <LiveWorkspaceIdle
+          stats={idleStats}
+          statsLoading={idleStatsLoading}
+          recentContactHref={recentWorkspace?.href ?? null}
+          recentContactName={recentWorkspace?.name ?? null}
+          canSimulateCall={canSimulateLiveCall}
+          simulationLoading={simulationLoading}
+          simulationError={simulationError}
+          onSimulateIncomingCall={startSimulatedIncomingCall}
+        />
+      </CRMPageShell>
+    );
+  }
+
+  if (contactWorkspaceHref) {
+    return (
+      <CRMPageShell innerClassName={`${crm.pageInnerLive} ${crm.liveWorkspace}`}>
+        <div className="py-24 text-center text-sm text-crm-muted">Opening contact workspace…</div>
       </CRMPageShell>
     );
   }
 
   return (
     <CRMPageShell innerClassName={`${crm.pageInnerLive} ${crm.liveWorkspace}`}>
+      {canSimulateLiveCall && isSimulatedCall ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-crm-lg border border-crm-accent/20 bg-crm-surface/80 px-4 py-3 text-sm shadow-crm">
+          <div>
+            <p className="font-semibold text-crm-text">Simulated incoming CRM call</p>
+            <p className="text-xs text-crm-muted">Use hang up to return to idle and keep the last-call workspace shortcut.</p>
+          </div>
+          <button type="button" className="tasks-primary-action" onClick={hangUpSimulatedIncomingCall}>
+            Hang up simulation
+          </button>
+        </div>
+      ) : null}
+
       {loading ? <LoadingSkeleton /> : null}
 
       {error ? (
@@ -449,6 +623,13 @@ function LiveCallWorkspaceInner() {
           onSaveOutcome={() => void saveOutcome()}
           timeline={timeline}
           tasks={tasks}
+          forms={forms}
+          documents={documents}
+          callHistory={callHistory}
+          checklists={checklists}
+          recentChecklistResponses={recentChecklistResponses}
+          defaultChecklistId={defaultChecklistId}
+          liveContext={liveContext}
           scriptSummaries={scriptSummaries}
           campaignScriptId={campaignScriptId}
           queueMembers={queueMembers}
@@ -463,11 +644,16 @@ function LiveCallWorkspaceInner() {
           onCall={() => void handleCall()}
           onOpenContact={() => router.push(`/crm/contacts/${contact.id}`)}
           onOpenEmail={() => router.push(`/crm/contacts/${contact.id}?workspace=email&returnTo=/crm/live-call`)}
+          onRefresh={() => void refreshAll()}
         />
       ) : null}
 
       {!loading && !error && !contact ? (
-        <div className="py-12 text-center text-sm text-crm-muted">Contact not found.</div>
+        <div className="rounded-crm-lg border border-dashed border-crm-border bg-crm-surface px-6 py-12 text-center text-sm text-crm-muted shadow-crm">
+          {liveContext?.reason === "matched_contact_not_in_crm"
+            ? "Matched contact is not enabled for CRM."
+            : "No CRM contact matched for this call."}
+        </div>
       ) : null}
     </CRMPageShell>
   );
