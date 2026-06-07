@@ -1,4 +1,5 @@
 import { db } from "@connect/db";
+import { enqueueAndProcessCallTranscription } from "./callTranscriptionService";
 
 /**
  * CRM CDR hook — Phase 2A.
@@ -54,7 +55,7 @@ export async function fireCrmCdrHook(params: CdrHookParams): Promise<void> {
     // Check CRM tenant settings — bail early if CRM is disabled
     const settings = await (db as any).crmTenantSettings.findUnique({
       where: { tenantId },
-      select: { enabled: true },
+      select: { enabled: true, transcriptionEnabled: true },
     });
     if (!settings?.enabled) return;
 
@@ -122,7 +123,6 @@ export async function fireCrmCdrHook(params: CdrHookParams): Promise<void> {
           where: { contactId, linkedId, type: eventType },
           select: { id: true },
         });
-        if (existing) continue;
 
         const title = `${label} · ${dispLabel}${durationLabel ? " · " + durationLabel : ""}`;
 
@@ -140,23 +140,24 @@ export async function fireCrmCdrHook(params: CdrHookParams): Promise<void> {
           cdrLinkedId: linkedId,
         };
 
-        // Write timeline event — using upsert-style with unique index for final safety
-        try {
-          await (db as any).crmTimelineEvent.create({
-            data: {
-              tenantId,
-              contactId,
-              type: eventType,
-              title,
-              body: body ?? null,
-              metadata,
-              linkedId,
-            },
-          });
-        } catch (createErr: any) {
-          // Unique constraint violation (P2002) means a duplicate — acceptable, skip
-          if (createErr?.code === "P2002") continue;
-          throw createErr;
+        if (!existing) {
+          // Write timeline event — using upsert-style with unique index for final safety
+          try {
+            await (db as any).crmTimelineEvent.create({
+              data: {
+                tenantId,
+                contactId,
+                type: eventType,
+                title,
+                body: body ?? null,
+                metadata,
+                linkedId,
+              },
+            });
+          } catch (createErr: any) {
+            // Unique constraint violation (P2002) means a duplicate — acceptable, keep processing side effects.
+            if (createErr?.code !== "P2002") throw createErr;
+          }
         }
 
         // Update CrmContactMeta.lastActivityAt
@@ -164,6 +165,16 @@ export async function fireCrmCdrHook(params: CdrHookParams): Promise<void> {
           where: { contactId, tenantId },
           data: { lastActivityAt: startedAt },
         });
+
+        if (settings.transcriptionEnabled && recordingAvailable) {
+          enqueueAndProcessCallTranscription({ tenantId, contactId, linkedId }).catch((err) => {
+            console.error("[CRM][cdrHook] Failed to enqueue call transcription", {
+              contactId,
+              linkedId,
+              err: err?.message,
+            });
+          });
+        }
       } catch (contactErr: any) {
         console.error("[CRM][cdrHook] Failed to write timeline for contact", {
           contactId,

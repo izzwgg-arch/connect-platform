@@ -31,6 +31,7 @@ import { registerCrmBatchDiagnosticsRoutes } from "./batchDiagnosticsRoutes";
 import { registerCrmLeadTimezoneRoutes } from "./leadTimezoneRoutes";
 import { registerCrmQuickDispositionRoutes } from "./quickDispositionRoutes";
 import { registerCrmFormRoutes } from "./formRoutes";
+import { registerCrmLiveCallContextRoutes } from "./liveCallContextRoutes";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -365,6 +366,9 @@ export async function registerCrmRoutes(app: FastifyInstance, deps?: Pick<Connec
 
   // Register CRM contact routes (Phase 1B)
   await registerCrmContactRoutes(app);
+
+  // CRM Live Call Workspace context — tenant-scoped contact/call cockpit aggregate
+  await registerCrmLiveCallContextRoutes(app);
 
   // Register CRM timeline + notes routes (Phase 1C)
   await registerCrmTimelineRoutes(app);

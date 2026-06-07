@@ -199,6 +199,9 @@ export async function registerCrmReportRoutes(app: FastifyInstance) {
       queueGroups,        // per user, per status — queue counts
       callbackDueGroups,  // per user — callbacks due today
       dispositionGroups,  // per user — dispositions today
+      contactTouchRows,   // per user/contact — contacts with agent activity today
+      voicemailGroups,    // per user — voicemail drops today
+      emailGroups,        // per user — emails sent today
       conversionGroups,   // per user — conversions in lookback window
       taskGroups,         // per user — open tasks
       extensionRows,      // per user — owned active SIP extensions (for wallboard on-call matching)
@@ -231,6 +234,39 @@ export async function registerCrmReportRoutes(app: FastifyInstance) {
         where: {
           tenantId,
           type: "DISPOSITION_SET",
+          createdByUserId: { in: userIds },
+          createdAt: { gte: todayStart },
+        },
+        _count: { id: true },
+      }),
+      // Distinct contacts touched by agent activity today.
+      (db as any).crmTimelineEvent.findMany({
+        where: {
+          tenantId,
+          type: { in: ["DISPOSITION_SET", "VOICEMAIL_DROP"] },
+          createdByUserId: { in: userIds },
+          createdAt: { gte: todayStart },
+        },
+        distinct: ["createdByUserId", "contactId"],
+        select: { createdByUserId: true, contactId: true },
+      }),
+      // Voicemail drops initiated by each CRM user today.
+      (db as any).crmTimelineEvent.groupBy({
+        by: ["createdByUserId"],
+        where: {
+          tenantId,
+          type: "VOICEMAIL_DROP",
+          createdByUserId: { in: userIds },
+          createdAt: { gte: todayStart },
+        },
+        _count: { id: true },
+      }),
+      // Emails sent by each CRM user today.
+      (db as any).crmTimelineEvent.groupBy({
+        by: ["createdByUserId"],
+        where: {
+          tenantId,
+          type: "EMAIL_SENT",
           createdByUserId: { in: userIds },
           createdAt: { gte: todayStart },
         },
@@ -269,6 +305,13 @@ export async function registerCrmReportRoutes(app: FastifyInstance) {
     const queueByUser       = new Map<string, number>((queueGroups as any[]).map((g: any) => [g.assignedToUserId, g._count.id]));
     const callbackByUser    = new Map<string, number>((callbackDueGroups as any[]).map((g: any) => [g.assignedToUserId, g._count.id]));
     const dispByUser        = new Map<string, number>((dispositionGroups as any[]).map((g: any) => [g.createdByUserId, g._count.id]));
+    const touchedContactsByUser = new Map<string, number>();
+    for (const row of contactTouchRows as Array<{ createdByUserId: string | null; contactId: string }>) {
+      if (!row.createdByUserId) continue;
+      touchedContactsByUser.set(row.createdByUserId, (touchedContactsByUser.get(row.createdByUserId) ?? 0) + 1);
+    }
+    const voicemailByUser   = new Map<string, number>((voicemailGroups as any[]).map((g: any) => [g.createdByUserId, g._count.id]));
+    const emailByUser       = new Map<string, number>((emailGroups as any[]).map((g: any) => [g.createdByUserId, g._count.id]));
     const convertedByUser   = new Map<string, number>((conversionGroups as any[]).map((g: any) => [g.assignedToUserId, g._count.id]));
     const openTasksByUser   = new Map<string, number>((taskGroups as any[]).map((g: any) => [g.assignedToUserId, g._count.id]));
 
@@ -289,6 +332,11 @@ export async function registerCrmReportRoutes(app: FastifyInstance) {
       assignedQueue:     queueByUser.get(u.userId) ?? 0,
       callbacksDueToday: callbackByUser.get(u.userId) ?? 0,
       dispositionsToday: dispByUser.get(u.userId) ?? 0,
+      callsHandledToday: dispByUser.get(u.userId) ?? 0,
+      contactsSpokenToToday: touchedContactsByUser.get(u.userId) ?? 0,
+      missedCallsToday: 0,
+      voicemailsToday: voicemailByUser.get(u.userId) ?? 0,
+      emailsSentToday: emailByUser.get(u.userId) ?? 0,
       convertedLast:     convertedByUser.get(u.userId) ?? 0,
       openTasks:         openTasksByUser.get(u.userId) ?? 0,
       lookbackDays:      days,
