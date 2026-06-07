@@ -4,6 +4,7 @@ export type ScriptSummary = {
   id: string;
   name: string;
   isActive: boolean;
+  isDefault?: boolean;
 };
 
 export type Script = ScriptSummary & { body: string };
@@ -19,6 +20,7 @@ export type Checklist = {
   id: string;
   name: string;
   isActive: boolean;
+  isDefault?: boolean;
   items: ChecklistItem[];
 };
 

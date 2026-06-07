@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
-import { initials, stageColor, stageLabel } from "./contactFormatters";
+import { avatarGradient, initials, stageColor, stageLabel } from "./contactFormatters";
 import {
   leadTimezoneBadgeShort,
   leadTimezoneDetailLabel,
@@ -108,7 +108,7 @@ export function ContactListDetailPanel({
         <div
           className="crm-queue-detail-avatar"
           style={{
-            background: `linear-gradient(135deg, ${stageColor(stage)}, color-mix(in srgb, ${stageColor(stage)} 38%, #6366f1))`,
+            background: avatarGradient(contact.id ?? contact.displayName),
           }}
         >
           {initials(contact.displayName)}

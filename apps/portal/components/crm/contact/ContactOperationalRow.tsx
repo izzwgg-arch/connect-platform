@@ -2,7 +2,7 @@
 
 import { Archive, ChevronRight, Clock, Mail, Phone } from "lucide-react";
 import { cn } from "../cn";
-import { initials, stageColor, stageLabel } from "./contactFormatters";
+import { avatarGradient, initials, stageLabel } from "./contactFormatters";
 import {
   leadTimezoneBadgeShort,
   leadTimezoneBadgeTitle,
@@ -110,7 +110,7 @@ export function ContactOperationalRow({
         <div
           className="crm-queue-row-avatar"
           style={{
-            background: `linear-gradient(135deg, ${stageColor(stage)}, color-mix(in srgb, ${stageColor(stage)} 42%, #6366f1))`,
+            background: avatarGradient(contact.id ?? contact.displayName),
           }}
           aria-hidden
         >

@@ -82,14 +82,14 @@ export function LiveWorkspaceChecklistPanel({
   const totalCount = checklist?.items.length ?? 0;
 
   return (
-    <CRMCard padding="md">
+    <CRMCard padding="md" className="crm-contact-module-card crm-contact-checklist-panel">
       <button
         type="button"
-        className="flex w-full items-center justify-between gap-2 text-left"
+        className="crm-contact-module-header flex w-full items-center justify-between gap-2 text-left"
         onClick={() => setOpen((v) => !v)}
       >
         <div className="flex items-center gap-2">
-          <ClipboardList className="h-4 w-4 text-crm-accent" />
+          <span className="crm-contact-module-icon-bubble"><ClipboardList className="h-4 w-4 text-crm-accent" /></span>
           <span className="text-sm font-semibold text-crm-text">Checklist</span>
           {checklist && totalCount > 0 ? (
             <span
@@ -109,7 +109,7 @@ export function LiveWorkspaceChecklistPanel({
       {open ? (
         <div className="mt-3 space-y-3">
           {checklists.length === 0 ? (
-            <p className="text-sm text-crm-muted">
+            <p className="crm-contact-module-empty text-sm text-crm-muted">
               No active checklists.{" "}
               <Link href="/crm/checklists" className="text-crm-accent hover:underline">
                 Create in Checklists
@@ -121,11 +121,16 @@ export function LiveWorkspaceChecklistPanel({
               onChange={(value) => handleSelectChecklist(value)}
               className="w-full"
               placeholder="— Select checklist —"
-              options={checklists.map((c) => ({ value: c.id, label: c.name }))}
+              options={checklists.map((c) => ({ value: c.id, label: `${c.name}${c.id === defaultChecklistId ? " · Default" : ""}` }))}
             />
           )}
           {checklist ? (
             <div className="space-y-2">
+              {totalCount > 0 ? (
+                <div className="crm-contact-checklist-progress">
+                  <span style={{ width: `${Math.round((checkedCount / Math.max(totalCount, 1)) * 100)}%` }} />
+                </div>
+              ) : null}
               {checklist.items.map((item) => {
                 const checked = !!answers[item.id];
                 return (
@@ -134,9 +139,9 @@ export function LiveWorkspaceChecklistPanel({
                     type="button"
                     onClick={() => setAnswers((prev) => ({ ...prev, [item.id]: !prev[item.id] }))}
                     className={cn(
-                      "flex w-full items-center gap-2 rounded-crm border px-2.5 py-2 text-left text-sm transition-colors",
+                      "crm-contact-checklist-item flex w-full items-center gap-2 rounded-crm border px-2.5 py-2 text-left text-sm transition-colors",
                       checked
-                        ? "border-crm-success/35 bg-crm-success/8 text-crm-muted line-through"
+                        ? "crm-contact-checklist-item-complete border-crm-success/35 bg-crm-success/8 text-crm-muted line-through"
                         : "border-crm-border bg-crm-surface-2/50 text-crm-text",
                     )}
                   >
@@ -147,7 +152,7 @@ export function LiveWorkspaceChecklistPanel({
                     )}
                     <span className="flex-1">{item.label}</span>
                     {item.required && !checked ? (
-                      <span className="text-[0.625rem] font-bold text-crm-warning">Required</span>
+                      <span className="crm-contact-module-badge text-[0.625rem] font-bold text-crm-warning">Required</span>
                     ) : null}
                   </button>
                 );

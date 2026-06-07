@@ -122,7 +122,7 @@ export function ContactTimeline({
     BASE_FILTERS.find((filter) => filter.value === timelineFilter)?.label ?? "timeline";
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="crm-contact-timeline flex flex-col gap-4">
       <CRMSection
         title="Activity timeline"
         description={
@@ -131,7 +131,7 @@ export function ContactTimeline({
             : "Every call, message, note, and task in one stream"
         }
         actions={
-          <div className="flex items-center gap-2">
+          <div className="crm-contact-timeline-filter-bar flex items-center gap-2">
             <Filter className="h-3.5 w-3.5 text-crm-muted" />
             <ConnectSelect
               size="sm"
@@ -174,7 +174,7 @@ export function ContactTimeline({
             <p className="mt-1 text-crm-muted">Choose another filter to see the rest of the timeline.</p>
           </div>
         ) : (
-          <div className="flex flex-col gap-1">
+          <div className="crm-contact-timeline-list flex flex-col gap-1">
             {filteredEvents.map((event) => (
               <ContactTimelineItem
                 key={event.id}

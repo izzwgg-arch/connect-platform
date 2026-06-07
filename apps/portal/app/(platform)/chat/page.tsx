@@ -31,6 +31,7 @@ export default function ChatPage() {
   const [scrollIntent, setScrollIntent] = useState<ChatScrollIntent>({ reason: "initial", token: 0 });
   const [toast, setToast] = useState("");
   const [handledExt, setHandledExt] = useState("");
+  const [handledThreadId, setHandledThreadId] = useState("");
   const messagesRef = useRef<ChatMessage[]>([]);
   const messageRequestSeq = useRef(0);
   const loadedThreadId = useRef<string | null>(null);
@@ -118,6 +119,16 @@ export default function ChatPage() {
       })
       .catch(() => {});
   }, [searchParams, users, handledExt]);
+
+  useEffect(() => {
+    const targetThreadId = searchParams.get("threadId");
+    if (!targetThreadId || targetThreadId === handledThreadId || threads.length === 0) return;
+    const thread = threads.find((item) => item.id === targetThreadId);
+    if (!thread) return;
+    setHandledThreadId(targetThreadId);
+    setPendingThreadId(targetThreadId);
+    setActiveThread(thread);
+  }, [searchParams, threads, handledThreadId]);
 
   useEffect(() => {
     if (!activeThread) return;

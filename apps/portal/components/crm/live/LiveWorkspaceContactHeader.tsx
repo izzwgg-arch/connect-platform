@@ -6,7 +6,7 @@ import { AlertCircle, Clock, Mail, Megaphone, ListOrdered, MapPin, Phone, Shield
 import { CRMCard } from "../CRMCard";
 import { crm } from "../crmClasses";
 import { cn } from "../cn";
-import { formatTimeAgo, initials, ownerLabel, stageColor, stageLabel } from "../contact/contactFormatters";
+import { avatarGradient, formatTimeAgo, initials, ownerLabel, stageColor, stageLabel } from "../contact/contactFormatters";
 import type { CrmStage, LiveContact } from "./liveTypes";
 
 export function LiveWorkspaceContactHeader({
@@ -54,7 +54,7 @@ export function LiveWorkspaceContactHeader({
         <div className="flex min-w-0 gap-4">
           <div
             className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl text-xl font-bold text-white shadow-[0_18px_34px_-22px_rgba(15,23,42,0.9)] ring-4 ring-white/50 dark:ring-white/10"
-            style={{ background: `linear-gradient(135deg, ${stageColor(stage)}, #6366f1)` }}
+            style={{ background: avatarGradient(contact?.id ?? contact?.displayName) }}
           >
             {initials(contact?.displayName ?? "")}
           </div>

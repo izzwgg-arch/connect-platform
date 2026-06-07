@@ -80,6 +80,7 @@ export function ContactRightRailSectionList({
   const [dragEnabled, setDragEnabled] = useState(false);
   const [draggingId, setDraggingId] = useState<RightRailSectionId | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+  const dropTargetRef = useRef<DropTarget | null>(null);
 
   useEffect(() => {
     setOrder(loadRightRailSectionOrder(userId));
@@ -113,6 +114,7 @@ export function ContactRightRailSectionList({
       }
       dragSessionRef.current = null;
       setDraggingId(null);
+      dropTargetRef.current = null;
       setDropTarget(null);
     },
     [commitOrder, order],
@@ -135,6 +137,15 @@ export function ContactRightRailSectionList({
         const session = dragSessionRef.current;
         if (!session || moveEvent.pointerId !== session.pointerId) return;
 
+        if (session.dragging && moveEvent.buttons === 0) {
+          const container = containerRef.current;
+          const target = container
+            ? resolveDropTarget(moveEvent.clientY, container, session.activeId) ?? dropTargetRef.current
+            : dropTargetRef.current;
+          finishDrag(session.activeId, target);
+          return;
+        }
+
         if (!session.dragging) {
           if (Math.abs(moveEvent.clientY - session.startY) < DRAG_THRESHOLD_PX) return;
           session.dragging = true;
@@ -145,7 +156,9 @@ export function ContactRightRailSectionList({
         moveEvent.preventDefault();
         const container = containerRef.current;
         if (!container) return;
-        setDropTarget(resolveDropTarget(moveEvent.clientY, container, session.activeId));
+        const target = resolveDropTarget(moveEvent.clientY, container, session.activeId);
+        dropTargetRef.current = target;
+        setDropTarget(target);
       };
 
       const handlePointerUp = (upEvent: PointerEvent) => {
@@ -155,6 +168,7 @@ export function ContactRightRailSectionList({
         window.removeEventListener("pointermove", handlePointerMove);
         window.removeEventListener("pointerup", handlePointerUp);
         window.removeEventListener("pointercancel", handlePointerUp);
+        window.removeEventListener("mouseup", handleMouseUp);
 
         if (summaryEl.hasPointerCapture?.(upEvent.pointerId)) {
           summaryEl.releasePointerCapture(upEvent.pointerId);
@@ -163,8 +177,29 @@ export function ContactRightRailSectionList({
         if (session.dragging) {
           const container = containerRef.current;
           const target = container
-            ? resolveDropTarget(upEvent.clientY, container, session.activeId)
-            : null;
+            ? resolveDropTarget(upEvent.clientY, container, session.activeId) ?? dropTargetRef.current
+            : dropTargetRef.current;
+          finishDrag(session.activeId, target);
+          return;
+        }
+
+        dragSessionRef.current = null;
+      };
+
+      const handleMouseUp = (upEvent: MouseEvent) => {
+        const session = dragSessionRef.current;
+        if (!session) return;
+
+        window.removeEventListener("pointermove", handlePointerMove);
+        window.removeEventListener("pointerup", handlePointerUp);
+        window.removeEventListener("pointercancel", handlePointerUp);
+        window.removeEventListener("mouseup", handleMouseUp);
+
+        if (session.dragging) {
+          const container = containerRef.current;
+          const target = container
+            ? resolveDropTarget(upEvent.clientY, container, session.activeId) ?? dropTargetRef.current
+            : dropTargetRef.current;
           finishDrag(session.activeId, target);
           return;
         }
@@ -175,6 +210,7 @@ export function ContactRightRailSectionList({
       window.addEventListener("pointermove", handlePointerMove);
       window.addEventListener("pointerup", handlePointerUp);
       window.addEventListener("pointercancel", handlePointerUp);
+      window.addEventListener("mouseup", handleMouseUp);
     },
     [dragEnabled, finishDrag],
   );

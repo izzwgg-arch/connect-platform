@@ -22,6 +22,7 @@ import {
   callbackTimeLabel,
   formatDate,
   formatTimeAgo,
+  avatarGradient,
   initials,
   ownerLabel,
   stageColor,
@@ -101,7 +102,7 @@ export function ContactWorkspaceHeader({
         <div className="flex gap-4">
           <div
             className="flex h-16 w-16 shrink-0 items-center justify-center rounded-crm-lg text-xl font-bold text-white shadow-crm"
-            style={{ background: stageColor(stage) }}
+            style={{ background: avatarGradient(contact.id ?? contact.displayName) }}
           >
             {initials(contact.displayName)}
           </div>

@@ -67,20 +67,31 @@ function TimelineIcon({ type }: { type: string }) {
 }
 
 function eventTypeChip(type: string): string | null {
-  if (type.startsWith("CDR_")) return "Call";
+  if (type.startsWith("CDR_")) return "CALL";
   if (type.startsWith("SMS_")) return "SMS";
-  if (type.startsWith("EMAIL_")) return "Email";
-  if (type === "VOICEMAIL_DROP") return "Voicemail Dropped";
-  if (type.startsWith("FORM_")) return "Form";
-  if (type.startsWith("SCRIPT_")) return "Script";
-  if (type.startsWith("CHECKLIST_")) return "Checklist";
-  if (type.startsWith("NOTE_")) return "Note";
-  if (type.startsWith("TASK_")) return "Task";
-  if (type === "STAGE_CHANGED") return "Pipeline";
-  if (type === "DISPOSITION_SET") return "Outcome";
-  if (type === "ASSIGNED_TO_USER") return "Assignment";
-  if (type === "CONTACT_MERGED") return "Merge";
+  if (type.startsWith("EMAIL_")) return "EMAIL";
+  if (type === "VOICEMAIL_DROP") return "VM";
+  if (type.startsWith("FORM_")) return "FORM";
+  if (type.startsWith("SCRIPT_")) return "SCRIPT";
+  if (type.startsWith("CHECKLIST_")) return "CHECKLIST";
+  if (type.startsWith("NOTE_")) return "NOTE";
+  if (type.startsWith("TASK_")) return "TASK";
+  if (type === "STAGE_CHANGED") return "PIPELINE";
+  if (type === "DISPOSITION_SET") return "OUTCOME";
+  if (type === "ASSIGNED_TO_USER") return "ASSIGN";
+  if (type === "CONTACT_MERGED") return "MERGE";
   return null;
+}
+
+function eventTypeChipClass(type: string): string {
+  if (type.startsWith("CDR_")) return "crm-contact-timeline-badge-call";
+  if (type.startsWith("SMS_")) return "crm-contact-timeline-badge-sms";
+  if (type.startsWith("EMAIL_")) return "crm-contact-timeline-badge-email";
+  if (type.startsWith("FORM_")) return "crm-contact-timeline-badge-form";
+  if (type.startsWith("TASK_")) return "crm-contact-timeline-badge-task";
+  if (type.startsWith("NOTE_")) return "crm-contact-timeline-badge-note";
+  if (type === "VOICEMAIL_DROP") return "crm-contact-timeline-badge-vm";
+  return "crm-contact-timeline-badge-activity";
 }
 
 function stringMeta(event: TimelineEvent, key: string): string | null {
@@ -130,14 +141,14 @@ export function ContactTimelineItem({
   return (
     <article
       className={cn(
-        "group relative flex gap-2 rounded-xl border px-2.5 py-1.5 transition-colors sm:px-3",
+        "crm-contact-timeline-item group relative flex gap-2 rounded-xl border px-2.5 py-1.5 sm:px-3",
         isComm
-          ? "border-crm-accent/20 bg-crm-accent/6 hover:border-crm-accent/35"
-          : "border-crm-border/70 bg-crm-surface/90 hover:bg-crm-surface-2/40",
+          ? "crm-contact-timeline-item-comm border-crm-accent/20 bg-crm-accent/6 hover:border-crm-accent/35"
+          : "crm-contact-timeline-item-default border-crm-border/70 bg-crm-surface/90 hover:bg-crm-surface-2/40",
       )}
     >
       <div
-        className="absolute bottom-2 left-[1.1rem] top-8 w-px bg-crm-border/60 group-last:hidden"
+        className="crm-contact-timeline-connector absolute bottom-2 left-[1.1rem] top-8 w-px bg-crm-border/60 group-last:hidden"
         aria-hidden
       />
       <TimelineIconBox type={event.type} />
@@ -145,9 +156,9 @@ export function ContactTimelineItem({
         <div className="flex flex-wrap items-start justify-between gap-1.5">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
             <span className="text-sm font-semibold leading-snug text-crm-text">{event.title}</span>
-            {chip ? <span className={cn(crm.chip, "py-0 text-[10px]")}>{chip}</span> : null}
+            {chip ? <span className={cn("crm-contact-timeline-badge", eventTypeChipClass(event.type))}>{chip}</span> : null}
           </div>
-          <time className="shrink-0 text-[11px] tabular-nums text-crm-muted">
+          <time className="crm-contact-timeline-time shrink-0 text-[11px] tabular-nums text-crm-muted">
             {formatDateTime(event.createdAt)}
           </time>
         </div>
@@ -202,7 +213,7 @@ export function ContactTimelineItem({
 
 function TimelineIconBox({ type }: { type: string }) {
   return (
-    <div className="relative z-[1] flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-crm-border/60 bg-crm-surface-2">
+    <div className="crm-contact-timeline-icon relative z-[1] flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-crm-border/60 bg-crm-surface-2">
       <TimelineIcon type={type} />
     </div>
   );

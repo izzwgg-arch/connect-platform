@@ -483,6 +483,8 @@ export function FloatingDialer() {
   const [rawBlfSearch, setRawBlfSearch] = useState("");
   const [ringerOn, setRingerOn] = useState(true);
   const [dialerMounted, setDialerMounted] = useState(false);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const shellRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const blfSearch = useDebouncedValue(rawBlfSearch, 120);
@@ -564,10 +566,10 @@ export function FloatingDialer() {
   }, [phone.callState]);
 
   useEffect(() => {
-    if ((phone.callState === "ringing" && phone.callDirection === "inbound") || phone.callState === "dialing") {
+    if (isInCall) {
       setOpen(true);
     }
-  }, [phone.callState, phone.callDirection]);
+  }, [isInCall]);
 
   useEffect(() => {
     if (phone.callState === "idle" || phone.callState === "ended") {
@@ -578,9 +580,23 @@ export function FloatingDialer() {
   }, [phone.callState]);
 
   useEffect(() => {
-    if (!open || isInCall) return;
+    if (!open || !dialerMounted || isInCall) return;
     const id = window.requestAnimationFrame(() => inputRef.current?.focus());
     return () => window.cancelAnimationFrame(id);
+  }, [open, dialerMounted, isInCall]);
+
+  useEffect(() => {
+    if (!open || isInCall) return undefined;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (shellRef.current?.contains(target) || toggleRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    return () => document.removeEventListener("pointerdown", handlePointerDown, true);
   }, [open, isInCall]);
 
   const { activeExts, ringingExts } = useMemo(() => {
@@ -670,8 +686,9 @@ export function FloatingDialer() {
       <style>{DIALER_CSS}</style>
 
       <button
+        ref={toggleRef}
         className="icon-btn"
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => setOpen((value) => (isInCall ? true : !value))}
         title={`Phone (${status.label})`}
         aria-label="Toggle phone dialer"
         style={{ position: "relative" }}
@@ -685,6 +702,7 @@ export function FloatingDialer() {
 
       {dialerMounted && (
         <section
+          ref={shellRef}
           className="fd-shell"
           data-blf-open={blfOpen ? "true" : "false"}
           data-state={open ? "open" : "closing"}

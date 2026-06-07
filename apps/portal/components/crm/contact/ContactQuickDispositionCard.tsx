@@ -1,5 +1,6 @@
 "use client";
 
+import type { CSSProperties } from "react";
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronUp, GripVertical, Phone, Plus, Settings2, Trash2 } from "lucide-react";
 import { ConnectSelect } from "../../ConnectSelect";
@@ -10,20 +11,32 @@ import {
   type DispositionChannel,
   type WorkspacePhoneWithDisposition,
 } from "./contactWorkspaceHelpers";
+import { crmStatusChipClassName } from "./ContactStatusChip";
 
 export type QuickDispositionOption = {
   id: string;
   label: string;
   isDefault?: boolean;
+  color?: string;
 };
 
 export type CustomQuickDispositionDraft = {
   id: string;
   label: string;
   sortOrder: number;
+  color?: string;
 };
 
 const PRIMARY_BUTTON_COUNT = 4;
+const DEFAULT_CUSTOM_COLOR = "#2563EB";
+const LEGACY_CUSTOM_COLOR_VALUES: Record<string, string> = {
+  blue: "#2563EB",
+  purple: "#9333EA",
+  green: "#16A34A",
+  orange: "#E67E22",
+  red: "#DC2626",
+  slate: "#64748B",
+};
 
 const utilityActionClass =
   "inline-flex items-center gap-0.5 border-0 bg-transparent p-0 text-[11px] font-semibold text-crm-muted transition-colors hover:text-crm-accent disabled:cursor-not-allowed disabled:opacity-50";
@@ -36,6 +49,35 @@ function compactDispositionLabel(label: string): string {
   if (label === "Do Not Call") return "DNC";
   if (label === "Appointment Set") return "Appt";
   return label;
+}
+
+function normalizeCustomColor(color: string | null | undefined): string {
+  const value = String(color || "").trim();
+  const legacy = LEGACY_CUSTOM_COLOR_VALUES[value.toLowerCase()];
+  if (legacy) return legacy;
+  const match = value.match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i)?.[1];
+  if (!match) return DEFAULT_CUSTOM_COLOR;
+  const expanded = match.length === 3
+    ? match.split("").map((char) => `${char}${char}`).join("")
+    : match;
+  return `#${expanded.toUpperCase()}`;
+}
+
+function customColorStyle(color: string | null | undefined): CSSProperties {
+  const backgroundColor = normalizeCustomColor(color);
+  return {
+    backgroundColor,
+    color: readableTextColor(backgroundColor),
+  };
+}
+
+function readableTextColor(hexColor: string): string {
+  const hex = normalizeCustomColor(hexColor).slice(1);
+  const red = Number.parseInt(hex.slice(0, 2), 16);
+  const green = Number.parseInt(hex.slice(2, 4), 16);
+  const blue = Number.parseInt(hex.slice(4, 6), 16);
+  const luminance = (0.299 * red + 0.587 * green + 0.114 * blue) / 255;
+  return luminance > 0.64 ? "#0F172A" : "#FFFFFF";
 }
 
 export function ContactQuickDispositionCard({
@@ -84,6 +126,7 @@ export function ContactQuickDispositionCard({
   const [manageOpen, setManageOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [draftLabel, setDraftLabel] = useState("");
+  const [draftColor, setDraftColor] = useState(DEFAULT_CUSTOM_COLOR);
   const [draftRows, setDraftRows] = useState<CustomQuickDispositionDraft[]>(customQuickDispositions);
 
   const activePhone = phones.find((p) => p.id === activePhoneId) ?? phones[0] ?? null;
@@ -114,6 +157,7 @@ export function ContactQuickDispositionCard({
         id: `custom-${Date.now()}`,
         label,
         sortOrder: draftRows.length,
+        color: normalizeCustomColor(draftColor),
       },
     ];
     setDraftRows(next);
@@ -140,18 +184,27 @@ export function ContactQuickDispositionCard({
     await onSaveCustomQuickDispositions(normalized);
   }
 
+  async function updateCustomColor(id: string, color: string) {
+    const next = draftRows.map((row) => row.id === id ? { ...row, color: normalizeCustomColor(color) } : row);
+    setDraftRows(next);
+    await onSaveCustomQuickDispositions(next);
+  }
+
   function renderDispositionButton(option: QuickDispositionOption, compact = false) {
+    const isCustom = option.isDefault === false;
+    const statusClassName = isCustom ? "" : crmStatusChipClassName(compactDispositionLabel(option.label));
     return (
       <button
         key={option.id}
         type="button"
         disabled={disabled || saving}
         onClick={() => onQuickDisposition(option.label)}
+        style={isCustom && disposition !== option.label ? customColorStyle(option.color) : undefined}
         className={cn(
-          "rounded-full border px-2.5 py-1 text-[11px] font-semibold leading-tight shadow-[0_1px_0_rgba(15,23,42,0.04)] transition-all duration-150",
+          "rounded-full border-0 px-2.5 py-1 text-[11px] font-bold leading-tight shadow-[inset_0_0_0_1px_rgba(255,255,255,0.55),0_1px_2px_rgba(15,23,42,0.04)] transition-all duration-150",
           disposition === option.label
-            ? "border-crm-accent bg-crm-accent text-white shadow-[0_8px_18px_-14px_rgba(14,165,233,0.85)]"
-            : "border-crm-border/70 bg-white text-crm-text hover:-translate-y-px hover:border-crm-accent/35 hover:bg-crm-accent/6 hover:text-crm-accent",
+            ? "bg-crm-accent text-white shadow-[0_10px_18px_-14px_rgba(37,99,235,0.9)]"
+            : cn(statusClassName, "hover:-translate-y-px hover:brightness-[0.98]"),
           compact && "whitespace-nowrap",
         )}
       >
@@ -257,6 +310,32 @@ export function ContactQuickDispositionCard({
               <Plus className="h-3.5 w-3.5" />
             </button>
           </div>
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <label className="inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full border border-crm-border/70 bg-white shadow-sm" title="Create custom label color">
+              <span className="sr-only">Create custom label color</span>
+              <input
+                type="color"
+                value={normalizeCustomColor(draftColor)}
+                onChange={(event) => setDraftColor(normalizeCustomColor(event.target.value))}
+                className="h-6 w-6 cursor-pointer rounded-full border-0 bg-transparent p-0"
+              />
+            </label>
+            <input
+              value={draftColor}
+              onChange={(event) => setDraftColor(event.target.value)}
+              onBlur={() => setDraftColor(normalizeCustomColor(draftColor))}
+              placeholder="#2563EB"
+              maxLength={7}
+              className={cn(crm.input, "min-w-0 flex-1 bg-white py-1 text-xs font-semibold uppercase shadow-none")}
+              aria-label="Custom label hex color"
+            />
+            <span
+              className="shrink-0 rounded-full px-2 py-1 text-[11px] font-bold leading-tight"
+              style={customColorStyle(draftColor)}
+            >
+              Preview
+            </span>
+          </div>
           <div className="mt-1.5 flex flex-col gap-1">
             {draftRows.length === 0 ? (
               <p className="text-[11px] text-crm-muted">No custom labels yet.</p>
@@ -264,7 +343,28 @@ export function ContactQuickDispositionCard({
               draftRows.map((row) => (
                 <div key={row.id} className="flex items-center gap-1.5 rounded-lg border border-crm-border/45 bg-white px-1.5 py-1">
                   <GripVertical className="h-3 w-3 text-crm-muted" />
-                  <span className="min-w-0 flex-1 truncate text-xs font-medium text-crm-text">{row.label}</span>
+                  <span
+                    className="rounded-full px-2 py-0.5 text-[11px] font-bold leading-tight"
+                    style={customColorStyle(row.color)}
+                  >
+                    {row.label}
+                  </span>
+                  <div className="flex min-w-0 flex-1 items-center gap-1" aria-label={`${row.label} color`}>
+                    <input
+                      type="color"
+                      value={normalizeCustomColor(row.color)}
+                      className="h-5 w-5 shrink-0 cursor-pointer rounded-full border-0 bg-transparent p-0"
+                      aria-label={`Create color for ${row.label}`}
+                      onChange={(event) => void updateCustomColor(row.id, event.target.value)}
+                    />
+                    <input
+                      value={normalizeCustomColor(row.color)}
+                      onChange={(event) => void updateCustomColor(row.id, event.target.value)}
+                      className={cn(crm.input, "min-w-0 flex-1 bg-white px-1.5 py-0.5 text-[10px] font-semibold uppercase shadow-none")}
+                      maxLength={7}
+                      aria-label={`${row.label} hex color`}
+                    />
+                  </div>
                   <button type="button" className="px-0.5 text-[10px] text-crm-muted hover:text-crm-text" onClick={() => void moveCustom(row.id, -1)}>
                     ↑
                   </button>

@@ -55,6 +55,7 @@ import {
   formatTimeAgo,
   stageColor,
   stageLabel,
+  CRMStatusChip,
   cn,
 } from "../../../../../components/crm";
 import { ConnectSelect } from "../../../../../components/ConnectSelect";
@@ -117,6 +118,37 @@ type ContactWorkspaceTab =
   | "intelligence"
   | "tasks";
 
+function formatSmsWorkspaceError(error: unknown, fallback: string): string {
+  const body = (error as { body?: { error?: unknown; detail?: unknown } } | null)?.body;
+  const code = typeof body?.error === "string" ? body.error : "";
+  if (code === "NO_SMS_NUMBER") {
+    return "This lead has a phone number, but CRM needs an active outbound SMS number in Settings before sending.";
+  }
+  if (code === "VOIPMS_NOT_CONFIGURED") {
+    return "SMS provider credentials are not configured for this tenant yet.";
+  }
+  if (code === "do_not_sms") {
+    return "This contact has opted out of SMS messages.";
+  }
+  const detail = typeof body?.detail === "string" ? body.detail : "";
+  if (detail) return detail;
+  return (error as { message?: string } | null)?.message || fallback;
+}
+
+function formatSmsTemplateError(error: unknown, fallback = "SMS templates are temporarily unavailable."): string {
+  const body = (error as { body?: { error?: unknown; message?: unknown; detail?: unknown } } | null)?.body;
+  const code = typeof body?.error === "string" ? body.error : "";
+  if (code === "sms_templates_unavailable") return "SMS templates are temporarily unavailable.";
+  if (code === "template_not_found") return "Selected SMS template is no longer available.";
+  const message = String((error as { message?: string } | null)?.message ?? "");
+  if (/prisma|crmsmstemplate|database|public\./i.test(message)) {
+    return "SMS templates are temporarily unavailable.";
+  }
+  const detail = typeof body?.detail === "string" ? body.detail : "";
+  if (detail && !/prisma|crmsmstemplate|database|public\./i.test(detail)) return detail;
+  return message || fallback;
+}
+
 function HeaderMetric({
   label,
   value,
@@ -134,14 +166,41 @@ function HeaderMetric({
       : tone === "emerald"
         ? "bg-emerald-500/10 text-emerald-600"
         : "bg-crm-surface-2 text-crm-text";
+  const metricSlug = label.toLowerCase().replace(/\s+/g, "-");
+  const ownerInitials =
+    label === "Owner" && typeof value === "string"
+      ? value
+          .split(/\s+/)
+          .filter(Boolean)
+          .slice(0, 2)
+          .map((part) => part[0]?.toUpperCase())
+          .join("")
+      : "";
   return (
-    <div className="min-w-0 rounded-[1.1rem] border border-crm-border/70 bg-crm-surface-2/45 px-3 py-2.5">
-      <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-crm-muted">{label}</p>
-      <p className={cn("mt-1 truncate rounded-full px-2 py-0.5 text-sm font-black tabular-nums", toneClass)}>
+    <div className={cn("crm-contact-header-metric min-w-0 rounded-[1.1rem] border border-crm-border/70 bg-crm-surface-2/45 px-3 py-2.5", `crm-contact-header-metric-${metricSlug}`)}>
+      <p className="crm-contact-header-metric-label text-[10px] font-bold uppercase tracking-[0.16em] text-crm-muted">{label}</p>
+      <p className={cn("crm-contact-header-metric-value mt-1 truncate rounded-full px-2 py-0.5 text-sm font-black tabular-nums", toneClass)}>
+        {ownerInitials ? <span className="crm-contact-header-owner-avatar" aria-hidden>{ownerInitials}</span> : null}
         {value}
       </p>
-      {sub ? <p className="mt-1 truncate text-[11px] font-semibold text-crm-muted">{sub}</p> : null}
+      {sub ? <p className="crm-contact-header-metric-sub mt-1 truncate text-[11px] font-semibold text-crm-muted">{sub}</p> : null}
     </div>
+  );
+}
+
+function OutreachPermissionBadge({ blocked }: { blocked: boolean }) {
+  return (
+    <span
+      className={cn(
+        "crm-contact-right-rail-semantic-badge",
+        blocked
+          ? "crm-contact-right-rail-semantic-badge-danger"
+          : "crm-contact-right-rail-semantic-badge-allowed",
+      )}
+    >
+      <span className="crm-contact-right-rail-semantic-dot" aria-hidden />
+      {blocked ? "Blocked" : "Allowed"}
+    </span>
   );
 }
 
@@ -354,7 +413,7 @@ function ContactDriveDocuments({ contactId }: { contactId: string }) {
 
   if (loading) {
     return (
-      <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-6 text-center text-sm text-crm-muted">
+      <div className="crm-contact-module-empty rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-6 text-center text-sm text-crm-muted">
         Loading documents…
       </div>
     );
@@ -362,7 +421,7 @@ function ContactDriveDocuments({ contactId }: { contactId: string }) {
 
   if (err) {
     return (
-      <div className="rounded-[1.35rem] border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-400">
+      <div className="crm-contact-module-alert crm-contact-module-alert-danger rounded-[1.35rem] border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-400">
         {err}
       </div>
     );
@@ -370,7 +429,7 @@ function ContactDriveDocuments({ contactId }: { contactId: string }) {
 
   if (docs.length === 0) {
     return (
-      <div className="px-2 py-3 text-center">
+      <div className="crm-contact-module-empty px-2 py-3 text-center">
         <p className="text-sm font-semibold text-crm-text">No files attached yet.</p>
         <p className="mt-1 text-sm text-crm-muted">
           Completed signed forms and matched Drive documents will appear here.
@@ -380,7 +439,7 @@ function ContactDriveDocuments({ contactId }: { contactId: string }) {
   }
 
   return (
-    <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+    <div className="crm-contact-module-card crm-contact-files-panel rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
       <div className="mb-3">
         <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-crm-accent">
           Attached Files
@@ -393,9 +452,9 @@ function ContactDriveDocuments({ contactId }: { contactId: string }) {
         {docs.map((doc) => (
           <div
             key={doc.id}
-            className="flex items-start gap-3 rounded-xl border border-crm-border/60 bg-crm-surface p-3"
+            className="crm-contact-file-card flex items-start gap-3 rounded-xl border border-crm-border/60 bg-crm-surface p-3"
           >
-            <FileText className="h-4 w-4 shrink-0 text-crm-muted mt-0.5" />
+            <span className="crm-contact-module-icon-bubble mt-0.5"><FileText className="h-4 w-4 shrink-0" /></span>
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold text-crm-text">
                 {doc.originalFileName}
@@ -475,7 +534,7 @@ function ContactDriveDocuments({ contactId }: { contactId: string }) {
                   type="button"
                   onClick={() => handleDocOpen(doc.id)}
                   disabled={importingId === doc.id}
-                  className="rounded-lg border border-crm-border/60 bg-crm-surface-2/50 px-2.5 py-1 text-xs font-semibold text-crm-muted hover:text-crm-text transition-colors"
+                  className="crm-contact-module-action-button rounded-lg border border-crm-border/60 bg-crm-surface-2/50 px-2.5 py-1 text-xs font-semibold text-crm-muted hover:text-crm-text transition-colors"
                 >
                   Open document
                 </button>
@@ -484,7 +543,7 @@ function ContactDriveDocuments({ contactId }: { contactId: string }) {
                 <button
                   type="button"
                   onClick={() => handleViewText(doc.id)}
-                  className="rounded-lg border border-purple-500/30 bg-purple-500/10 px-2.5 py-1 text-xs font-semibold text-purple-400 hover:bg-purple-500/20 transition-colors"
+                  className="crm-contact-module-action-button crm-contact-module-action-button-purple rounded-lg border border-purple-500/30 bg-purple-500/10 px-2.5 py-1 text-xs font-semibold text-purple-400 hover:bg-purple-500/20 transition-colors"
                 >
                   View text
                 </button>
@@ -510,7 +569,7 @@ function ContactDriveDocuments({ contactId }: { contactId: string }) {
                         : "Retry text extraction"
                       : "Extract text from document"
                   }
-                  className="rounded-lg border border-purple-500/30 bg-purple-500/8 px-2.5 py-1 text-xs font-semibold text-purple-400 hover:bg-purple-500/20 transition-colors"
+                  className="crm-contact-module-action-button crm-contact-module-action-button-purple rounded-lg border border-purple-500/30 bg-purple-500/8 px-2.5 py-1 text-xs font-semibold text-purple-400 hover:bg-purple-500/20 transition-colors"
                 >
                   {extractingId === doc.id
                     ? "Extracting…"
@@ -524,7 +583,7 @@ function ContactDriveDocuments({ contactId }: { contactId: string }) {
                   type="button"
                   onClick={() => handleDocOpen(doc.id)}
                   disabled={importingId === doc.id}
-                  className="rounded-lg border border-crm-border/60 bg-crm-accent/10 px-2.5 py-1 text-xs font-semibold text-crm-accent hover:bg-crm-accent/20 transition-colors"
+                  className="crm-contact-module-action-button rounded-lg border border-crm-border/60 bg-crm-accent/10 px-2.5 py-1 text-xs font-semibold text-crm-accent hover:bg-crm-accent/20 transition-colors"
                 >
                   {importingId === doc.id
                     ? "Importing…"
@@ -538,7 +597,7 @@ function ContactDriveDocuments({ contactId }: { contactId: string }) {
                   href={doc.driveViewUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="rounded-lg border border-crm-border/60 bg-crm-surface-2/50 px-2.5 py-1 text-xs font-semibold text-crm-muted hover:text-crm-text transition-colors"
+                  className="crm-contact-module-action-button rounded-lg border border-crm-border/60 bg-crm-surface-2/50 px-2.5 py-1 text-xs font-semibold text-crm-muted hover:text-crm-text transition-colors"
                 >
                   View in Drive
                 </a>
@@ -707,7 +766,7 @@ function ContactDiscoveries({ contactId }: { contactId: string }) {
 
   if (loading) {
     return (
-      <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-6 text-center text-sm text-crm-muted">
+      <div className="crm-contact-module-empty rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-6 text-center text-sm text-crm-muted">
         Loading discoveries…
       </div>
     );
@@ -715,7 +774,7 @@ function ContactDiscoveries({ contactId }: { contactId: string }) {
 
   if (err) {
     return (
-      <div className="rounded-[1.35rem] border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-400">
+      <div className="crm-contact-module-alert crm-contact-module-alert-danger rounded-[1.35rem] border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-400">
         {err}
       </div>
     );
@@ -725,7 +784,7 @@ function ContactDiscoveries({ contactId }: { contactId: string }) {
 
   if (!hasDiscoveries) {
     return (
-      <div className="px-2 py-3 text-center">
+      <div className="crm-contact-module-empty px-2 py-3 text-center">
         <p className="text-sm font-semibold text-crm-text">No pending discoveries.</p>
         <p className="mt-1 text-sm text-crm-muted">
           Import documents, extract their text, then click{" "}
@@ -741,9 +800,9 @@ function ContactDiscoveries({ contactId }: { contactId: string }) {
       : "inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-400";
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="crm-contact-module crm-contact-discoveries-workspace flex flex-col gap-4">
       {phones.length > 0 && (
-        <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+        <div className="crm-contact-module-card crm-contact-discovery-panel rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
           <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.16em] text-purple-400">
             Discovered Phone Numbers ({phones.length})
           </p>
@@ -751,9 +810,9 @@ function ContactDiscoveries({ contactId }: { contactId: string }) {
             {phones.map((p) => (
               <div
                 key={p.id}
-                className="flex items-start gap-3 rounded-xl border border-crm-border/60 bg-crm-surface p-3"
+                className="crm-contact-discovery-card flex items-start gap-3 rounded-xl border border-crm-border/60 bg-crm-surface p-3"
               >
-                <Phone className="h-4 w-4 shrink-0 text-crm-muted mt-0.5" />
+                <span className="crm-contact-module-icon-bubble mt-0.5"><Phone className="h-4 w-4 shrink-0" /></span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-semibold text-crm-text">{p.phoneNumber}</span>
@@ -775,7 +834,7 @@ function ContactDiscoveries({ contactId }: { contactId: string }) {
                     type="button"
                     disabled={working === p.id}
                     onClick={() => handleAcceptPhone(p.id)}
-                    className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                    className="crm-contact-module-action-button crm-contact-module-action-button-success rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-400 hover:bg-emerald-500/20 transition-colors"
                   >
                     {working === p.id ? "…" : "Accept"}
                   </button>
@@ -783,7 +842,7 @@ function ContactDiscoveries({ contactId }: { contactId: string }) {
                     type="button"
                     disabled={working === p.id}
                     onClick={() => handleRejectPhone(p.id)}
-                    className="rounded-lg border border-red-500/25 bg-red-500/8 px-2.5 py-1 text-xs font-semibold text-red-400 hover:bg-red-500/15 transition-colors"
+                    className="crm-contact-module-action-button crm-contact-module-action-button-danger rounded-lg border border-red-500/25 bg-red-500/8 px-2.5 py-1 text-xs font-semibold text-red-400 hover:bg-red-500/15 transition-colors"
                   >
                     {working === p.id ? "…" : "Reject"}
                   </button>
@@ -795,7 +854,7 @@ function ContactDiscoveries({ contactId }: { contactId: string }) {
       )}
 
       {emails.length > 0 && (
-        <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+        <div className="crm-contact-module-card crm-contact-discovery-panel rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
           <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.16em] text-purple-400">
             Discovered Emails ({emails.length})
           </p>
@@ -803,9 +862,9 @@ function ContactDiscoveries({ contactId }: { contactId: string }) {
             {emails.map((e) => (
               <div
                 key={e.id}
-                className="flex items-start gap-3 rounded-xl border border-crm-border/60 bg-crm-surface p-3"
+                className="crm-contact-discovery-card flex items-start gap-3 rounded-xl border border-crm-border/60 bg-crm-surface p-3"
               >
-                <Mail className="h-4 w-4 shrink-0 text-crm-muted mt-0.5" />
+                <span className="crm-contact-module-icon-bubble mt-0.5"><Mail className="h-4 w-4 shrink-0" /></span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-semibold text-crm-text">{e.email}</span>
@@ -827,7 +886,7 @@ function ContactDiscoveries({ contactId }: { contactId: string }) {
                     type="button"
                     disabled={working === e.id}
                     onClick={() => handleAcceptEmail(e.id)}
-                    className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                    className="crm-contact-module-action-button crm-contact-module-action-button-success rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-semibold text-emerald-400 hover:bg-emerald-500/20 transition-colors"
                   >
                     {working === e.id ? "…" : "Accept"}
                   </button>
@@ -835,7 +894,7 @@ function ContactDiscoveries({ contactId }: { contactId: string }) {
                     type="button"
                     disabled={working === e.id}
                     onClick={() => handleRejectEmail(e.id)}
-                    className="rounded-lg border border-red-500/25 bg-red-500/8 px-2.5 py-1 text-xs font-semibold text-red-400 hover:bg-red-500/15 transition-colors"
+                    className="crm-contact-module-action-button crm-contact-module-action-button-danger rounded-lg border border-red-500/25 bg-red-500/8 px-2.5 py-1 text-xs font-semibold text-red-400 hover:bg-red-500/15 transition-colors"
                   >
                     {working === e.id ? "…" : "Reject"}
                   </button>
@@ -962,7 +1021,7 @@ function ContactIntelligence({ contactId }: { contactId: string }) {
 
   if (loading) {
     return (
-      <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-6 text-center text-sm text-crm-muted">
+      <div className="crm-contact-module-empty rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-6 text-center text-sm text-crm-muted">
         Loading…
       </div>
     );
@@ -970,7 +1029,7 @@ function ContactIntelligence({ contactId }: { contactId: string }) {
 
   if (!report) {
     return (
-      <div className="px-2 py-3 text-center">
+      <div className="crm-contact-module-empty px-2 py-3 text-center">
         <p className="text-sm font-semibold text-crm-text">No intelligence report yet.</p>
         <p className="mt-1 text-sm text-crm-muted">
           Import documents, extract their text, then generate an AI advisory report.
@@ -991,7 +1050,7 @@ function ContactIntelligence({ contactId }: { contactId: string }) {
 
   if (report.status === "PROCESSING") {
     return (
-      <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-8 text-center">
+      <div className="crm-contact-module-empty rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-8 text-center">
         <Brain className="mx-auto h-8 w-8 animate-pulse text-crm-accent" />
         <p className="mt-3 text-sm font-semibold text-crm-text">Generating intelligence report…</p>
         <p className="mt-1 text-sm text-crm-muted">This may take 10–30 seconds.</p>
@@ -1001,8 +1060,8 @@ function ContactIntelligence({ contactId }: { contactId: string }) {
 
   if (report.status === "FAILED") {
     return (
-      <div className="flex flex-col gap-3">
-        <div className="rounded-[1.35rem] border border-red-500/20 bg-red-500/5 p-4">
+      <div className="crm-contact-module crm-contact-intelligence-workspace flex flex-col gap-3">
+        <div className="crm-contact-module-alert crm-contact-module-alert-danger rounded-[1.35rem] border border-red-500/20 bg-red-500/5 p-4">
           <p className="text-sm font-semibold text-red-400">Intelligence generation failed</p>
           {report.error && <p className="mt-1 text-xs text-red-300">{report.error}</p>}
         </div>
@@ -1026,12 +1085,12 @@ function ContactIntelligence({ contactId }: { contactId: string }) {
   const missingInfo = report.missingInformation ?? [];
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="crm-contact-module crm-contact-intelligence-workspace flex flex-col gap-4">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4 rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+      <div className="crm-contact-module-card crm-contact-intelligence-hero flex items-start justify-between gap-4 rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 mb-1">
-            <Brain className="h-4 w-4 text-crm-accent" />
+            <span className="crm-contact-module-icon-bubble"><Brain className="h-4 w-4 text-crm-accent" /></span>
             <p className="text-xs font-bold uppercase tracking-[0.16em] text-crm-accent">AI Intelligence Report</p>
           </div>
           {report.summary && (
@@ -1060,7 +1119,7 @@ function ContactIntelligence({ contactId }: { contactId: string }) {
           </div>
           {/* Exclusion warning — shown when documents were dropped due to tenant limits */}
           {report.documentsExcluded !== null && report.documentsExcluded > 0 && (
-            <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-400">
+            <div className="crm-contact-module-alert crm-contact-module-alert-warning mt-2 flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-400">
               <span>⚠</span>
               <span>
                 {report.documentsExcluded} document{report.documentsExcluded !== 1 ? "s were" : " was"} excluded due
@@ -1093,7 +1152,7 @@ function ContactIntelligence({ contactId }: { contactId: string }) {
 
       {/* Business Overview */}
       {report.businessOverview && (
-        <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+        <div className="crm-contact-module-card crm-contact-intelligence-card rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
           <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-crm-muted">Business Overview</p>
           <p className="text-sm text-crm-text leading-relaxed">{report.businessOverview}</p>
         </div>
@@ -1101,23 +1160,23 @@ function ContactIntelligence({ contactId }: { contactId: string }) {
 
       {/* Key Findings */}
       {Object.keys(kf).length > 0 && (
-        <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+        <div className="crm-contact-module-card crm-contact-intelligence-card rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
           <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.16em] text-crm-muted">Key Findings</p>
           <div className="grid grid-cols-3 gap-3 mb-3">
             {typeof kf.phoneCount === "number" && (
-              <div className="rounded-xl bg-crm-surface/60 p-3 text-center">
+              <div className="crm-contact-intelligence-kpi rounded-xl bg-crm-surface/60 p-3 text-center">
                 <p className="text-xl font-bold text-crm-text">{kf.phoneCount}</p>
                 <p className="text-[10px] text-crm-muted mt-0.5">Phone{kf.phoneCount !== 1 ? "s" : ""}</p>
               </div>
             )}
             {typeof kf.emailCount === "number" && (
-              <div className="rounded-xl bg-crm-surface/60 p-3 text-center">
+              <div className="crm-contact-intelligence-kpi rounded-xl bg-crm-surface/60 p-3 text-center">
                 <p className="text-xl font-bold text-crm-text">{kf.emailCount}</p>
                 <p className="text-[10px] text-crm-muted mt-0.5">Email{kf.emailCount !== 1 ? "s" : ""}</p>
               </div>
             )}
             {typeof kf.documentCount === "number" && (
-              <div className="rounded-xl bg-crm-surface/60 p-3 text-center">
+              <div className="crm-contact-intelligence-kpi rounded-xl bg-crm-surface/60 p-3 text-center">
                 <p className="text-xl font-bold text-crm-text">{kf.documentCount}</p>
                 <p className="text-[10px] text-crm-muted mt-0.5">Document{kf.documentCount !== 1 ? "s" : ""}</p>
               </div>
@@ -1158,7 +1217,7 @@ function ContactIntelligence({ contactId }: { contactId: string }) {
 
       {/* Discovered Entities */}
       {Object.values(de).some((v) => Array.isArray(v) && v.length > 0) && (
-        <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+        <div className="crm-contact-module-card crm-contact-intelligence-card rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
           <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.16em] text-purple-400">Discovered Entities</p>
           {(["phones", "emails", "websites", "names", "addresses"] as const).map((key) => {
             const items = Array.isArray(de[key]) ? (de[key] as string[]) : [];
@@ -1180,7 +1239,7 @@ function ContactIntelligence({ contactId }: { contactId: string }) {
 
       {/* Risk Flags */}
       {riskFlags.length > 0 && (
-        <div className="rounded-[1.35rem] border border-amber-500/20 bg-amber-500/5 p-4">
+        <div className="crm-contact-module-card crm-contact-module-alert-warning rounded-[1.35rem] border border-amber-500/20 bg-amber-500/5 p-4">
           <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-amber-400">Risk Flags</p>
           <ul className="flex flex-col gap-1.5">
             {riskFlags.map((flag, i) => (
@@ -1195,7 +1254,7 @@ function ContactIntelligence({ contactId }: { contactId: string }) {
 
       {/* Missing Information */}
       {missingInfo.length > 0 && (
-        <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+        <div className="crm-contact-module-card crm-contact-intelligence-card rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
           <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-crm-muted">Missing Information</p>
           <ul className="flex flex-col gap-1.5">
             {missingInfo.map((item, i) => (
@@ -1297,6 +1356,14 @@ type ContactFormRequest = {
   expiresAt: string | null;
   completedPdfAvailable: boolean;
 };
+
+function contactFormStatusClass(status: ContactFormRequest["status"]): string {
+  if (status === "SENT") return "crm-contact-form-status-sent";
+  if (status === "OPENED") return "crm-contact-form-status-viewed";
+  if (status === "COMPLETED") return "crm-contact-form-status-completed";
+  if (status === "EXPIRED") return "crm-contact-form-status-expired";
+  return "crm-contact-form-status-declined";
+}
 
 function ContactFormsPanel({
   contactId,
@@ -1451,7 +1518,7 @@ function ContactFormsPanel({
   };
 
   return (
-    <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+    <div className="crm-contact-module-card crm-contact-forms-panel rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-crm-accent">Forms</p>
@@ -1465,15 +1532,15 @@ function ContactFormsPanel({
         ) : null}
       </div>
 
-      {error ? <div className="mb-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-200">{error}</div> : null}
+      {error ? <div className="crm-contact-module-alert crm-contact-module-alert-danger mb-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-200">{error}</div> : null}
 
       {sentLink ? (
-        <div className="mb-4 rounded-xl border border-crm-border/70 bg-crm-surface p-3">
+        <div className="crm-contact-form-link-card mb-4 rounded-xl border border-crm-border/70 bg-crm-surface p-3">
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-crm-muted">
             {sentLink.emailSent ? "Form sent — copy link to share again" : "No email sender configured — copy link to share manually"}
           </p>
           <div className="flex items-center gap-2">
-            <input readOnly value={sentLink.url} className={cn(crm.input, "flex-1 truncate text-xs")} onFocus={(e) => e.target.select()} />
+            <input readOnly value={sentLink.url} className={cn(crm.input, "crm-contact-module-input flex-1 truncate text-xs")} onFocus={(e) => e.target.select()} />
             <button type="button" onClick={() => copyLink(sentLink.url)} className={crm.btnSecondary}>
               {linkCopied ? "Copied!" : "Copy"}
             </button>
@@ -1485,7 +1552,7 @@ function ContactFormsPanel({
       ) : null}
 
       {sendingOpen ? (
-        <div className="mb-4 rounded-xl border border-crm-border/70 bg-crm-surface p-3">
+        <div className="crm-contact-form-send-card mb-4 rounded-xl border border-crm-border/70 bg-crm-surface p-3">
           <div className="grid gap-3 md:grid-cols-2">
             <label className="text-xs font-semibold uppercase tracking-wide text-crm-muted">
               Form
@@ -1501,10 +1568,10 @@ function ContactFormsPanel({
             </label>
             <label className="text-xs font-semibold uppercase tracking-wide text-crm-muted">
               Recipient email
-              <input value={recipientEmail} onChange={(e) => setRecipientEmail(e.target.value)} className={cn(crm.input, "mt-1")} />
+              <input value={recipientEmail} onChange={(e) => setRecipientEmail(e.target.value)} className={cn(crm.input, "crm-contact-module-input mt-1")} />
             </label>
           </div>
-          <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3} placeholder="Optional message" className={cn(crm.input, "mt-3 min-h-[5rem] resize-none")} />
+          <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3} placeholder="Optional message" className={cn(crm.input, "crm-contact-module-input mt-3 min-h-[5rem] resize-none")} />
           <div className="mt-3 flex justify-end gap-2">
             <button type="button" onClick={() => setSendingOpen(false)} className={crm.btnSecondary}>Cancel</button>
             <button type="button" onClick={sendForm} disabled={working === "send" || !templates.length} className={crm.btnPrimary}>
@@ -1523,7 +1590,7 @@ function ContactFormsPanel({
       {loading ? (
         <LoadingSkeleton rows={2} />
       ) : requests.length === 0 ? (
-        <div className="px-2 py-3 text-center">
+        <div className="crm-contact-module-empty px-2 py-3 text-center">
           <p className="text-sm text-crm-muted">No forms have been sent to this contact yet.</p>
           {!loading && templates.length === 0 ? (
             <p className="mt-1 text-xs text-crm-muted">
@@ -1540,13 +1607,13 @@ function ContactFormsPanel({
       ) : (
         <div className="space-y-3">
           {requests.map((request) => (
-            <div key={request.id} className="rounded-xl border border-crm-border/70 bg-crm-surface px-3 py-3">
+            <div key={request.id} className="crm-contact-form-request-card rounded-xl border border-crm-border/70 bg-crm-surface px-3 py-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
                   <p className="font-semibold text-crm-text">{request.formName || "Form"}</p>
                   <p className="text-xs text-crm-muted">To {request.recipientEmail} · Sent {request.sentAt ? formatDate(request.sentAt) : "—"}</p>
                 </div>
-                <span className="rounded-full bg-crm-accent/10 px-2 py-1 text-xs font-semibold text-crm-accent">{request.status}</span>
+                <span className={cn("crm-contact-module-badge crm-contact-form-status rounded-full px-2 py-1 text-xs font-semibold", contactFormStatusClass(request.status))}>{request.status === "OPENED" ? "VIEWED" : request.status}</span>
               </div>
               <div className="mt-2 grid gap-2 text-xs text-crm-muted md:grid-cols-3">
                 <span>Opened: {request.openedAt ? formatDate(request.openedAt) : "—"}</span>
@@ -1647,6 +1714,8 @@ function CrmContactDetailInner() {
   // Script/checklist workspace state reuses existing CRM live-workspace APIs.
   const [scriptSummaries, setScriptSummaries] = useState<ScriptSummary[]>([]);
   const [checklists, setChecklists] = useState<Checklist[]>([]);
+  const [defaultScriptId, setDefaultScriptId] = useState<string | null>(null);
+  const [defaultChecklistId, setDefaultChecklistId] = useState<string | null>(null);
   const [workspaceTab, setWorkspaceTab] = useState<ContactWorkspaceTab>("timeline");
   const workspacePanelRef = useRef<HTMLDivElement>(null);
   const campaignDeepLinkHandledRef = useRef<string | null>(null);
@@ -1703,6 +1772,8 @@ function CrmContactDetailInner() {
   const [smsSending, setSmsSending] = useState(false);
   const [smsThreadLoading, setSmsThreadLoading] = useState(false);
   const [smsThreadMessages, setSmsThreadMessages] = useState<ContactSmsPanelMessage[]>([]);
+  const [smsThreadId, setSmsThreadId] = useState<string | null>(null);
+  const [smsOutboundConfigured, setSmsOutboundConfigured] = useState(true);
   const [smsError, setSmsError] = useState<string | null>(null);
   const [smsSuccess, setSmsSuccess] = useState(false);
   const [smsTemplates, setSmsTemplates] = useState<ContactSmsTemplate[]>([]);
@@ -1710,6 +1781,7 @@ function CrmContactDetailInner() {
   const [selectedSmsTemplateId, setSelectedSmsTemplateId] = useState("");
   const [smsTemplateSaving, setSmsTemplateSaving] = useState(false);
   const [smsTemplateError, setSmsTemplateError] = useState<string | null>(null);
+  const [smsOpeningChat, setSmsOpeningChat] = useState(false);
 
   // Caller-ID workflow (must be declared before any early return — Rules of Hooks)
   const [callerIdSelected, setCallerIdSelected] = useState<string | null>(null);
@@ -1806,10 +1878,17 @@ function CrmContactDetailInner() {
       const qs = new URLSearchParams();
       if (smsPhone) qs.set("phone", smsPhone);
       const suffix = qs.toString() ? `?${qs.toString()}` : "";
-      const data = await apiGet<{ messages: ContactSmsPanelMessage[] }>(`/crm/contacts/${id}/sms${suffix}`);
+      const data = await apiGet<{
+        messages: ContactSmsPanelMessage[];
+        outboundConfigured?: boolean;
+        thread?: { id: string } | null;
+      }>(`/crm/contacts/${id}/sms${suffix}`);
       setSmsThreadMessages(data.messages ?? []);
+      setSmsThreadId(data.thread?.id ?? null);
+      setSmsOutboundConfigured(data.outboundConfigured ?? true);
     } catch {
       setSmsThreadMessages([]);
+      setSmsThreadId(null);
     } finally {
       setSmsThreadLoading(false);
     }
@@ -1822,7 +1901,7 @@ function CrmContactDetailInner() {
       const data = await apiGet<{ templates: ContactSmsTemplate[] }>("/crm/sms/templates");
       setSmsTemplates(data.templates ?? []);
     } catch (e: any) {
-      setSmsTemplateError(e?.message || "Failed to load SMS templates");
+      setSmsTemplateError(formatSmsTemplateError(e));
       setSmsTemplates([]);
     } finally {
       setSmsTemplatesLoading(false);
@@ -1845,12 +1924,18 @@ function CrmContactDetailInner() {
 
   const loadWorkspaceGuides = useCallback(async () => {
     const [scriptsRes, checklistRes, quickRes] = await Promise.allSettled([
-      apiGet<{ scripts: ScriptSummary[] }>("/crm/scripts"),
-      apiGet<{ checklists: Checklist[] }>("/crm/checklists"),
+      apiGet<{ scripts: ScriptSummary[]; defaultScriptId?: string | null }>("/crm/scripts"),
+      apiGet<{ checklists: Checklist[]; defaultChecklistId?: string | null }>("/crm/checklists"),
       apiGet<{ items: QuickDispositionOption[]; canManage: boolean }>("/crm/quick-dispositions"),
     ]);
-    if (scriptsRes.status === "fulfilled") setScriptSummaries(scriptsRes.value.scripts ?? []);
-    if (checklistRes.status === "fulfilled") setChecklists(checklistRes.value.checklists ?? []);
+    if (scriptsRes.status === "fulfilled") {
+      setScriptSummaries(scriptsRes.value.scripts ?? []);
+      setDefaultScriptId(scriptsRes.value.defaultScriptId ?? null);
+    }
+    if (checklistRes.status === "fulfilled") {
+      setChecklists(checklistRes.value.checklists ?? []);
+      setDefaultChecklistId(checklistRes.value.defaultChecklistId ?? null);
+    }
     if (quickRes.status === "fulfilled") {
       const items = quickRes.value.items ?? [];
       setQuickDispositionOptions(items);
@@ -1858,7 +1943,7 @@ function CrmContactDetailInner() {
       setCustomQuickDispositions(
         items
           .filter((item) => !item.isDefault)
-          .map((item, index) => ({ id: item.id, label: item.label, sortOrder: index })),
+          .map((item, index) => ({ id: item.id, label: item.label, sortOrder: index, color: item.color })),
       );
     }
   }, []);
@@ -1885,24 +1970,42 @@ function CrmContactDetailInner() {
     const key = `${id}:${workspace ?? ""}:${action ?? ""}`;
     if (campaignDeepLinkHandledRef.current === key) return;
 
-    if (workspace === "sms" || workspace === "email") {
+    if (workspace === "sms") {
       campaignDeepLinkHandledRef.current = key;
-      setWorkspaceTab(workspace);
+      const resolution = resolvePhoneAction(contact.phones);
+      if (resolution.kind === "execute") {
+        setDispositionTarget(resolution.phone.id, "SMS");
+        setSmsPhone(resolution.phone.isPrimary ? "" : resolution.phone.numberRaw);
+      } else if (resolution.kind === "pick") {
+        setPhonePickerIntent("sms");
+      }
+      setWorkspaceTab("sms");
+      window.setTimeout(() => workspacePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+      return;
+    }
+
+    if (workspace === "email") {
+      campaignDeepLinkHandledRef.current = key;
+      setWorkspaceTab("email");
       window.setTimeout(() => workspacePanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
       return;
     }
 
     if (action === "call") {
-      const primaryPhone = contact.phones.find((p) => p.isPrimary) ?? contact.phones[0] ?? null;
-      if (!primaryPhone?.numberRaw) return;
+      const resolution = resolvePhoneAction(contact.phones);
+      if (resolution.kind === "disabled") return;
       campaignDeepLinkHandledRef.current = key;
-      setActiveDispositionPhoneId(primaryPhone.id);
+      if (resolution.kind === "pick") {
+        setPhonePickerIntent("call");
+        return;
+      }
+      setActiveDispositionPhoneId(resolution.phone.id);
       setActiveDispositionChannel("CALL");
       void apiPost<{ callerId: string | null }>(`/crm/calls/originate`, {
-        destination: primaryPhone.numberRaw,
+        destination: resolution.phone.numberRaw,
         contactId: id,
       }).catch(() => null);
-      window.dispatchEvent(new CustomEvent("crm:dial", { detail: { target: primaryPhone.numberRaw } }));
+      window.dispatchEvent(new CustomEvent("crm:dial", { detail: { target: resolution.phone.numberRaw } }));
     }
   }, [contact, id, searchParams]);
 
@@ -2287,7 +2390,7 @@ function CrmContactDetailInner() {
       setSelectedSmsTemplateId(result.template.id);
       setSmsMessage(result.template.bodyText);
     } catch (e: any) {
-      setSmsTemplateError(e?.message || "Failed to save SMS template");
+      setSmsTemplateError(formatSmsTemplateError(e, "Failed to save SMS template."));
       throw e;
     } finally {
       setSmsTemplateSaving(false);
@@ -2302,7 +2405,7 @@ function CrmContactDetailInner() {
       setSmsTemplates((prev) => prev.filter((template) => template.id !== templateId));
       setSelectedSmsTemplateId((current) => current === templateId ? "" : current);
     } catch (e: any) {
-      setSmsTemplateError(e?.message || "Failed to archive SMS template");
+      setSmsTemplateError(formatSmsTemplateError(e, "Failed to archive SMS template."));
     }
   };
 
@@ -2323,9 +2426,36 @@ function CrmContactDetailInner() {
       await Promise.all([loadSmsThread(), loadTimeline(), loadSmsTemplates()]);
       setTimeout(() => setSmsSuccess(false), 3000);
     } catch (e: any) {
-      setSmsError(e?.message || "Failed to send SMS");
+      setSmsError(formatSmsWorkspaceError(e, "Failed to send SMS"));
     } finally {
       setSmsSending(false);
+    }
+  };
+
+  const handleOpenSmsInChat = async () => {
+    if (!contact?.phones.length || smsOpeningChat) return;
+    const selectedPhone = smsPhone || contact.phones.find((phone) => phone.isPrimary)?.numberRaw || contact.phones[0]?.numberRaw || "";
+    if (!selectedPhone) return;
+    setSmsOpeningChat(true);
+    setSmsError(null);
+    try {
+      if (smsThreadId) {
+        router.push(`/chat?threadId=${encodeURIComponent(smsThreadId)}`);
+        return;
+      }
+      if (!smsOutboundConfigured) {
+        setSmsError("This lead has a phone number, but CRM needs an active outbound SMS number in Settings before opening a new SMS conversation.");
+        return;
+      }
+      const res = await apiPost<{ threadId: string }>("/chat/threads", {
+        type: "sms",
+        externalPhone: selectedPhone,
+      });
+      router.push(`/chat?threadId=${encodeURIComponent(res.threadId)}`);
+    } catch (e: any) {
+      setSmsError(formatSmsWorkspaceError(e, "Could not open chat conversation"));
+    } finally {
+      setSmsOpeningChat(false);
     }
   };
 
@@ -2573,7 +2703,7 @@ function CrmContactDetailInner() {
       setCustomQuickDispositions(
         (res.items ?? [])
           .filter((item) => !item.isDefault)
-          .map((item, index) => ({ id: item.id, label: item.label, sortOrder: index })),
+          .map((item, index) => ({ id: item.id, label: item.label, sortOrder: index, color: item.color })),
       );
     } catch {
       setOutcomeError("Could not save custom quick dispositions.");
@@ -2646,11 +2776,30 @@ function CrmContactDetailInner() {
     setVoicemailDropOpen(true);
   };
 
+  const workspaceMenuItems = [
+    { tab: "timeline" as const, label: "Timeline", Icon: Activity, count: timeline.length },
+    { tab: "script" as const, label: "Script", Icon: FileText },
+    { tab: "checklist" as const, label: "Checklist", Icon: ClipboardCheck },
+    { tab: "email" as const, label: "Email", Icon: Mail, count: contact.emails.length },
+    { tab: "sms" as const, label: "SMS", Icon: MessageSquareDot, count: smsThreadMessages.length },
+    { tab: "notes" as const, label: "Notes", Icon: NotebookPen },
+    { tab: "files" as const, label: "Files", Icon: Files },
+    { tab: "forms" as const, label: "Forms", Icon: FileSignature },
+    { tab: "discoveries" as const, label: "Discoveries", Icon: ScanText },
+    { tab: "intelligence" as const, label: "AI Intelligence", Icon: Brain },
+    { tab: "tasks" as const, label: "Tasks", Icon: ListTodo, count: tasks.length },
+  ] satisfies Array<{
+    tab: ContactWorkspaceTab;
+    label: string;
+    Icon: typeof Activity;
+    count?: number;
+  }>;
+
   function TaskPanelContent() {
     return (
       <div ref={tasksPanelRef} className="flex flex-col gap-3">
         {!isArchived && addingTask ? (
-          <div className="rounded-xl border border-crm-border/70 bg-crm-surface p-3">
+          <div className="crm-contact-task-create-card rounded-xl border border-crm-border/70 bg-crm-surface p-3">
             <input
               value={newTaskTitle}
               onChange={(e) => setNewTaskTitle(e.target.value)}
@@ -2660,7 +2809,7 @@ function CrmContactDetailInner() {
                 if (e.key === "Enter") handleCreateTask();
                 if (e.key === "Escape") setAddingTask(false);
               }}
-              className={crm.input}
+              className={cn(crm.input, "crm-contact-module-input")}
             />
             <div className="mt-2 flex flex-wrap gap-1.5">
               {[
@@ -2708,14 +2857,14 @@ function CrmContactDetailInner() {
         {tasksLoading ? (
           <LoadingSkeleton rows={2} />
         ) : tasks.length === 0 && !addingTask ? (
-          <p className="px-2 py-2 text-center text-sm text-crm-muted">
+          <p className="crm-contact-module-empty px-2 py-2 text-center text-sm text-crm-muted">
             No open tasks.
           </p>
         ) : (
           tasks.map((task) => {
             const isDue = task.dueAt && new Date(task.dueAt) < new Date();
             return (
-              <div key={task.id} className="flex items-start gap-3 rounded-xl border border-crm-border/70 bg-crm-surface px-3 py-2.5">
+              <div key={task.id} className="crm-contact-task-card flex items-start gap-3 rounded-xl border border-crm-border/70 bg-crm-surface px-3 py-2.5">
                 {!isArchived ? (
                   <button
                     type="button"
@@ -2845,19 +2994,7 @@ function CrmContactDetailInner() {
             <CRMCard padding="md" className="border-crm-border/70">
               <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-crm-muted">Communicate</p>
               <div className="mt-3 flex flex-col gap-1.5">
-              {([
-                ["timeline", "Timeline", Activity],
-                ["script", "Script", FileText],
-                ["checklist", "Checklist", ClipboardCheck],
-                ["email", "Email", Mail],
-                ["sms", "SMS", MessageSquareDot],
-                ["notes", "Notes", NotebookPen],
-                ["files", "Files", Files],
-                ["forms", "Forms", FileSignature],
-                ["discoveries", "Discoveries", ScanText],
-                ["intelligence", "AI Intelligence", Brain],
-                ["tasks", "Tasks", ListTodo],
-              ] as const).map(([tab, label, Icon]) => (
+              {workspaceMenuItems.map(({ tab, label, Icon, count }) => (
                 <button
                   key={tab}
                   type="button"
@@ -2865,17 +3002,24 @@ function CrmContactDetailInner() {
                     setWorkspaceTab(tab);
                   }}
                   className={cn(
-                    "flex w-full items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-left text-sm font-semibold transition-colors",
+                    "crm-contact-communicate-item flex w-full items-center justify-between gap-2 rounded-xl border px-3 py-2.5 text-left text-sm font-semibold",
                     workspaceTab === tab
-                      ? "border-crm-accent/35 bg-crm-accent/10 text-crm-accent"
-                      : "border-transparent bg-transparent text-crm-text hover:border-crm-border/70 hover:bg-crm-surface-2/55",
+                      ? "crm-contact-communicate-item-active"
+                      : "crm-contact-communicate-item-idle",
                   )}
                 >
                   <span className="inline-flex min-w-0 items-center gap-2">
-                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className="crm-contact-communicate-icon">
+                      <Icon className="h-4 w-4 shrink-0" />
+                    </span>
                     <span className="truncate">{label}</span>
                   </span>
-                  <ChevronRight className="h-3.5 w-3.5 text-crm-muted" />
+                  <span className="inline-flex shrink-0 items-center gap-1.5">
+                    {typeof count === "number" && count > 0 ? (
+                      <span className="crm-contact-communicate-count">{count}</span>
+                    ) : null}
+                    <ChevronRight className="h-3.5 w-3.5 text-crm-muted" />
+                  </span>
                 </button>
               ))}
             </div>
@@ -2908,19 +3052,20 @@ function CrmContactDetailInner() {
             ) : workspaceTab === "script" ? (
               <LiveWorkspaceScriptPanel
                 scriptSummaries={scriptSummaries}
-                defaultScriptId={null}
+                defaultScriptId={defaultScriptId}
               />
             ) : workspaceTab === "checklist" ? (
               <LiveWorkspaceChecklistPanel
                 checklists={checklists}
                 contactId={contact.id}
                 linkedId={null}
-                defaultChecklistId={null}
+                defaultChecklistId={defaultChecklistId}
                 onSaved={() => void loadTimeline()}
               />
             ) : workspaceTab === "sms" ? (
               <ContactSmsPanel
                 ref={smsPanelRef}
+                contactName={contact.displayName}
                 phones={contact.phones}
                 messages={smsThreadMessages}
                 loading={smsThreadLoading}
@@ -2931,6 +3076,7 @@ function CrmContactDetailInner() {
                 smsMessage={smsMessage}
                 setSmsMessage={setSmsMessage}
                 smsSending={smsSending}
+                outboundConfigured={smsOutboundConfigured}
                 smsError={smsError}
                 smsSuccess={smsSuccess}
                 smsTemplates={smsTemplates}
@@ -2942,6 +3088,8 @@ function CrmContactDetailInner() {
                 onCreateTemplate={handleCreateSmsTemplate}
                 onArchiveTemplate={handleArchiveSmsTemplate}
                 onSend={handleSendSms}
+                onOpenChat={handleOpenSmsInChat}
+                openingChat={smsOpeningChat}
               />
             ) : workspaceTab === "email" ? (
               <ContactEmailWorkspacePanel
@@ -2977,7 +3125,7 @@ function CrmContactDetailInner() {
             ) : workspaceTab === "intelligence" ? (
               <ContactIntelligence contactId={id} />
             ) : workspaceTab === "tasks" ? (
-              <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+              <div className="crm-contact-module-card crm-contact-tasks-center-panel rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <div>
                     <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-crm-accent">Open Tasks</p>
@@ -2993,9 +3141,9 @@ function CrmContactDetailInner() {
                 <TaskPanelContent />
               </div>
             ) : workspaceTab === "notes" ? (
-              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.85fr)]">
+              <div className="crm-contact-module crm-contact-notes-workspace grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.85fr)]">
                 <div ref={noteComposerRef}>
-                  <CRMCard padding="md" className="border-crm-border/70 bg-crm-surface-2/45">
+                  <CRMCard padding="md" className="crm-contact-module-card crm-contact-note-composer border-crm-border/70 bg-crm-surface-2/45">
                     <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-crm-accent">Quick Note</p>
                     <textarea
                       ref={noteTextareaRef}
@@ -3004,7 +3152,7 @@ function CrmContactDetailInner() {
                       rows={7}
                       disabled={isArchived}
                       placeholder="Add a note to the contact timeline..."
-                      className={cn(crm.input, "mt-3 min-h-[9rem] resize-none")}
+                      className={cn(crm.input, "crm-contact-module-input crm-contact-note-input mt-3 min-h-[9rem] resize-none")}
                     />
                     <div className="mt-3 flex items-center justify-between gap-3">
                       <span className="text-xs text-crm-muted">
@@ -3019,7 +3167,7 @@ function CrmContactDetailInner() {
                     <p className="mt-1 text-xs text-crm-danger">{noteError}</p>
                   ) : null}
                 </div>
-                <div className="rounded-2xl border border-crm-border/70 bg-crm-surface-2/45 p-4">
+                <div className="crm-contact-module-card crm-contact-scratch-notes rounded-2xl border border-crm-border/70 bg-crm-surface-2/45 p-4">
                   <h3 className="text-sm font-bold uppercase tracking-wide text-crm-muted">Scratch notes</h3>
                   {editing && !isArchived ? (
                     <textarea
@@ -3027,10 +3175,11 @@ function CrmContactDetailInner() {
                       onChange={(e) => setEditNotes(e.target.value)}
                       rows={8}
                       placeholder="Quick scratch pad for this contact…"
+                      className="crm-contact-module-input"
                       style={{ ...inputStyle, resize: "vertical", lineHeight: 1.5 }}
                     />
                   ) : (
-                    <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-crm-text">
+                    <p className={cn("mt-3 whitespace-pre-wrap text-sm leading-relaxed text-crm-text", !contact.notes && "crm-contact-module-empty-copy")}>
                       {contact.notes || "No scratch notes."}
                     </p>
                   )}
@@ -3097,32 +3246,34 @@ function CrmContactDetailInner() {
             id="right-rail-activity"
             title="Activity Summary"
           >
-          <div className="space-y-3">
+          <div className="crm-contact-right-rail-card-body crm-contact-right-rail-activity-card space-y-3">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-bold uppercase tracking-wide text-crm-muted">Activity summary</p>
-                <p className="mt-1 text-sm font-semibold text-crm-text">{lastInteractionLabel ?? "No interactions yet"}</p>
+                <p className="crm-contact-right-rail-eyebrow">Activity summary</p>
+                <p className="mt-1 text-sm font-bold text-crm-text">{lastInteractionLabel ?? "No interactions yet"}</p>
               </div>
-              <Sparkles className="h-4 w-4 text-crm-accent" />
+              <span className="crm-contact-right-rail-icon-bubble crm-contact-right-rail-icon-bubble-purple">
+                <Sparkles className="h-4 w-4" />
+              </span>
             </div>
             <div className="mt-3 grid grid-cols-2 gap-2">
-              <div className="rounded-xl border border-crm-border/70 bg-crm-surface-2/50 p-2">
+              <div className="crm-contact-right-rail-kpi">
                 <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Last touch</p>
                 <p className="mt-1 truncate text-xs font-semibold text-crm-text">
                   {lastInteractionAt ? formatTimeAgo(lastInteractionAt) : "None"}
                 </p>
               </div>
-              <div className="rounded-xl border border-crm-border/70 bg-crm-surface-2/50 p-2">
+              <div className="crm-contact-right-rail-kpi">
                 <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Recent events</p>
                 <p className="mt-1 text-xs font-semibold text-crm-text">{recentActivityCount} in 7d</p>
               </div>
-              <div className="rounded-xl border border-crm-border/70 bg-crm-surface-2/50 p-2">
+              <div className="crm-contact-right-rail-kpi">
                 <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Callbacks</p>
                 <p className={cn("mt-1 text-xs font-semibold", callbackUrgent ? "text-crm-danger" : "text-crm-text")}>
                   {callbackUrgent ? "Overdue" : queueMember?.callbackAt ? formatDate(queueMember.callbackAt) : "None due"}
                 </p>
               </div>
-              <div className="rounded-xl border border-crm-border/70 bg-crm-surface-2/50 p-2">
+              <div className="crm-contact-right-rail-kpi">
                 <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Open tasks</p>
                 <p className="mt-1 text-xs font-semibold text-crm-text">{tasks.length}</p>
               </div>
@@ -3135,8 +3286,8 @@ function CrmContactDetailInner() {
             id="right-rail-outreach-rules"
             title="Outreach Rules"
           >
-          <div className="panel rounded-crm-lg border border-crm-border/60 shadow-crm" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
-            <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>
+          <div className="panel crm-contact-right-rail-card-body crm-contact-right-rail-outreach-card" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "1rem" }}>
+            <h3 className="crm-contact-right-rail-subheading" style={{ margin: 0 }}>
               Outreach rules &amp; signal
             </h3>
 
@@ -3178,9 +3329,7 @@ function CrmContactDetailInner() {
                   <span style={{ fontSize: "0.875rem" }}>Do Not Call</span>
                 </label>
               ) : (
-                <span style={{ fontSize: "0.875rem", color: contact.doNotCall ? "#ef4444" : "var(--text-dim)" }}>
-                  {contact.doNotCall ? "Yes" : "No"}
-                </span>
+                <OutreachPermissionBadge blocked={contact.doNotCall} />
               )}
             </div>
 
@@ -3196,13 +3345,11 @@ function CrmContactDetailInner() {
                   <span style={{ fontSize: "0.875rem" }}>Do Not SMS</span>
                 </label>
               ) : (
-                <span style={{ fontSize: "0.875rem", color: contact.doNotSms ? "#ef4444" : "var(--text-dim)" }}>
-                  {contact.doNotSms ? "Yes" : "No"}
-                </span>
+                <OutreachPermissionBadge blocked={contact.doNotSms} />
               )}
             </div>
 
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "1rem 1.5rem", fontSize: "0.8125rem", color: "var(--text-dim)", paddingTop: "0.375rem", borderTop: "1px solid var(--border)" }}>
+            <div className="crm-contact-right-rail-meta-row" style={{ display: "flex", flexWrap: "wrap", gap: "1rem 1.5rem", fontSize: "0.8125rem", color: "var(--text-dim)", paddingTop: "0.375rem", borderTop: "1px solid var(--border)" }}>
               <span style={{ display: "flex", alignItems: "center", gap: "0.3rem" }}>
                 <Clock size={12} /> Added {formatDate(contact.createdAt)}
               </span>
@@ -3214,7 +3361,7 @@ function CrmContactDetailInner() {
               {contact.lastDisposition && (
                 <span style={{ display: "flex", alignItems: "center", gap: "0.3rem", color: "#0ea5e9" }}>
                   <CheckCheck size={12} />
-                  Last disposition: <strong style={{ fontWeight: 600 }}>{contact.lastDisposition}</strong>
+                  Last disposition: <CRMStatusChip status={contact.lastDisposition} className="px-2 py-0.5 text-[10px]">{contact.lastDisposition}</CRMStatusChip>
                   {contact.lastDispositionAt && (
                     <span style={{ color: "var(--text-dim)", fontWeight: 400 }}>
                       &nbsp;· {formatDate(contact.lastDispositionAt)}
@@ -3237,16 +3384,16 @@ function CrmContactDetailInner() {
             id="right-rail-open-tasks"
             title="Tasks"
           >
-          <div ref={tasksPanelRef} className="panel rounded-crm-lg border border-crm-border/60 shadow-crm" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
+          <div ref={tasksPanelRef} className="panel crm-contact-right-rail-card-body crm-contact-right-rail-tasks-card" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>
+              <h3 className="crm-contact-right-rail-subheading" style={{ margin: 0 }}>
                 Open Tasks {tasks.length > 0 && <span style={{ fontWeight: 400, color: "var(--accent)" }}>({tasks.length})</span>}
               </h3>
               {!isArchived && (
                 <button
                   onClick={() => setAddingTask((v) => !v)}
                   title="Add follow-up"
-                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--accent)", padding: "0.125rem", display: "flex", alignItems: "center", gap: "0.25rem", fontSize: "0.8125rem", fontWeight: 600 }}
+                  className="crm-contact-right-rail-add-button"
                 >
                   <Plus size={13} /> Add
                 </button>
@@ -3324,7 +3471,10 @@ function CrmContactDetailInner() {
             {tasksLoading ? (
               <LoadingSkeleton rows={2} />
             ) : tasks.length === 0 && !addingTask ? (
-              <p style={{ margin: 0, fontSize: "0.8125rem", color: "var(--text-dim)" }}>No open tasks.</p>
+              <div className="crm-contact-right-rail-empty-state">
+                <span className="crm-contact-right-rail-empty-icon"><ListTodo size={14} /></span>
+                <p style={{ margin: 0, fontSize: "0.8125rem", color: "var(--text-dim)" }}>No open tasks.</p>
+              </div>
             ) : (
               tasks.map((task) => {
                 const isDue = task.dueAt && new Date(task.dueAt) < new Date();
@@ -3373,18 +3523,19 @@ function CrmContactDetailInner() {
             id="right-rail-scratch-notes"
             title="Outreach Notes"
           >
-          <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
-            <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>Scratch Notes</h3>
+          <div className="panel crm-contact-right-rail-card-body crm-contact-right-rail-notes-card" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
+            <h3 className="crm-contact-right-rail-subheading" style={{ margin: 0 }}>Scratch Notes</h3>
             {editing && !isArchived ? (
               <textarea
                 value={editNotes}
                 onChange={(e) => setEditNotes(e.target.value)}
                 rows={4}
                 placeholder="Quick scratch pad for this contact…"
+                className="crm-contact-right-rail-note-input"
                 style={{ ...inputStyle, resize: "vertical", lineHeight: 1.5 }}
               />
             ) : (
-              <p style={{ margin: 0, fontSize: "0.875rem", color: contact.notes ? "var(--text)" : "var(--text-dim)", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+              <p className={cn(!contact.notes && "crm-contact-right-rail-empty-copy")} style={{ margin: 0, fontSize: "0.875rem", color: contact.notes ? "var(--text)" : "var(--text-dim)", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
                 {contact.notes || "No scratch notes."}
               </p>
             )}
@@ -3404,17 +3555,17 @@ function CrmContactDetailInner() {
             id="right-rail-contact-info"
             title="Contact Info"
           >
-          <div className="panel" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
-            <h3 style={{ margin: 0, fontSize: "0.875rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-dim)" }}>Contact Info</h3>
+          <div className="panel crm-contact-right-rail-card-body crm-contact-right-rail-contact-card" style={{ padding: "1.25rem", display: "flex", flexDirection: "column", gap: "0.625rem" }}>
+            <h3 className="crm-contact-right-rail-subheading" style={{ margin: 0 }}>Contact Info</h3>
 
             {contact.phones.length === 0 && contact.emails.length === 0 && !addingPhone && !addingEmail && (
-              <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--text-dim)" }}>No contact info yet.</p>
+              <p className="crm-contact-right-rail-empty-copy" style={{ margin: 0, fontSize: "0.875rem", color: "var(--text-dim)" }}>No contact info yet.</p>
             )}
 
             {/* Phones */}
             {contact.phones.map((p) => (
-              <div key={p.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <Phone size={13} style={{ color: "var(--accent)", flexShrink: 0 }} />
+              <div key={p.id} className="crm-contact-right-rail-contact-row" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <span className="crm-contact-right-rail-mini-icon"><Phone size={13} /></span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: "0.875rem", fontWeight: p.isPrimary ? 600 : 400 }}>{p.numberRaw}</div>
                   <div style={{ fontSize: "0.75rem", color: "var(--text-dim)", textTransform: "capitalize" }}>
@@ -3479,12 +3630,12 @@ function CrmContactDetailInner() {
             ))}
 
             {/* Divider */}
-            <div style={{ borderTop: "1px solid var(--border)", margin: "0.25rem 0" }} />
+            <div className="crm-contact-right-rail-divider" style={{ borderTop: "1px solid var(--border)", margin: "0.25rem 0" }} />
 
             {/* Emails */}
             {contact.emails.map((e) => (
-              <div key={e.id} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <Mail size={13} style={{ color: "var(--accent)", flexShrink: 0 }} />
+              <div key={e.id} className="crm-contact-right-rail-contact-row" style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <span className="crm-contact-right-rail-mini-icon"><Mail size={13} /></span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: "0.875rem", fontWeight: e.isPrimary ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.email}</div>
                   <div style={{ fontSize: "0.75rem", color: "var(--text-dim)", textTransform: "capitalize" }}>
@@ -3555,14 +3706,14 @@ function CrmContactDetailInner() {
             {/* Addresses — display read-only (imported from CSV or set via API) */}
             {(contact.addresses ?? []).length > 0 && (
               <>
-                <div style={{ borderTop: "1px solid var(--border)", margin: "0.25rem 0" }} />
+                <div className="crm-contact-right-rail-divider" style={{ borderTop: "1px solid var(--border)", margin: "0.25rem 0" }} />
                 {(contact.addresses ?? []).map((addr) => {
                   const line1 = addr.street ?? "";
                   const line2 = [addr.city, addr.state, addr.zip].filter(Boolean).join(", ");
                   if (!line1 && !line2) return null;
                   return (
-                    <div key={addr.id} style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem" }}>
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--accent)", flexShrink: 0, marginTop: "0.2rem" }}><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                    <div key={addr.id} className="crm-contact-right-rail-contact-row" style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem" }}>
+                      <span className="crm-contact-right-rail-mini-icon" style={{ marginTop: "0.05rem" }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg></span>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         {line1 && <div style={{ fontSize: "0.875rem" }}>{line1}</div>}
                         {line2 && <div style={{ fontSize: "0.8125rem", color: "var(--text-dim)" }}>{line2}</div>}

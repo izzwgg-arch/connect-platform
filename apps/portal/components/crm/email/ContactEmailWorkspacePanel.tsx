@@ -264,38 +264,38 @@ export function ContactEmailWorkspacePanel({
   };
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(15rem,0.85fr)_minmax(0,1.35fr)]">
-      <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+    <div className="crm-contact-module crm-contact-email-workspace grid gap-4 xl:grid-cols-[minmax(15rem,0.85fr)_minmax(0,1.35fr)]">
+      <div className="crm-contact-module-card crm-contact-email-template-panel rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
         <div className="mb-3 flex items-start justify-between gap-3">
           <div>
             <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-crm-accent">Email Templates</p>
             <h3 className="mt-1 text-lg font-bold text-crm-text">Select a template</h3>
           </div>
           <div className="flex items-center gap-2">
-            <button type="button" onClick={() => void load()} disabled={loading} className="text-xs font-semibold text-crm-accent hover:underline disabled:opacity-50">
+            <button type="button" onClick={() => void load()} disabled={loading} className="crm-contact-module-link-button text-xs font-semibold text-crm-accent hover:underline disabled:opacity-50">
               Refresh
             </button>
-            <Mail className="h-5 w-5 text-crm-accent" />
+            <span className="crm-contact-module-icon-bubble"><Mail className="h-5 w-5 text-crm-accent" /></span>
           </div>
         </div>
 
-        <label className="relative block">
+        <label className="crm-contact-email-search relative block">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-crm-muted" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className={cn(crm.input, "pl-9")}
+            className={cn(crm.input, "crm-contact-module-input pl-9")}
             placeholder="Search templates"
           />
         </label>
 
         <div className="mt-3 flex max-h-[23rem] flex-col gap-2 overflow-y-auto pr-1">
           {loading ? (
-            <div className="flex items-center gap-2 rounded-crm border border-crm-border/70 bg-crm-surface/60 p-4 text-sm text-crm-muted">
+            <div className="crm-contact-module-empty flex items-center gap-2 rounded-crm border border-crm-border/70 bg-crm-surface/60 p-4 text-sm text-crm-muted">
               <Loader2 className="h-4 w-4 animate-spin" /> Loading templates...
             </div>
           ) : filteredTemplates.length === 0 ? (
-            <div className="rounded-crm border border-dashed border-crm-border/70 p-4 text-sm text-crm-muted">
+            <div className="crm-contact-module-empty rounded-crm border border-dashed border-crm-border/70 p-4 text-sm text-crm-muted">
               <p className="font-semibold text-crm-text">{query.trim() ? "No matching templates" : "No active templates yet"}</p>
               <p className="mt-1">
                 {query.trim()
@@ -314,9 +314,9 @@ export function ContactEmailWorkspacePanel({
                   type="button"
                   onClick={() => selectTemplate(tpl)}
                   className={cn(
-                    "rounded-crm border p-3 text-left transition",
+                    "crm-contact-email-template-card rounded-crm border p-3 text-left transition",
                     active
-                      ? "border-crm-accent/55 bg-crm-accent/10"
+                      ? "crm-contact-email-template-card-active border-crm-accent/55 bg-crm-accent/10"
                       : "border-crm-border/70 bg-crm-surface/70 hover:border-crm-accent/35",
                   )}
                 >
@@ -325,7 +325,7 @@ export function ContactEmailWorkspacePanel({
                       <div className="flex flex-wrap items-center gap-1.5">
                         <p className="truncate text-sm font-semibold text-crm-text">{tpl.name}</p>
                         {tpl.category ? (
-                          <span className="rounded-full border border-crm-border/70 bg-crm-surface-2/70 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">
+                          <span className="crm-contact-module-badge crm-contact-email-category-badge rounded-full border border-crm-border/70 bg-crm-surface-2/70 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">
                             {tpl.category}
                           </span>
                         ) : null}
@@ -334,7 +334,7 @@ export function ContactEmailWorkspacePanel({
                       <p className="mt-1 line-clamp-2 text-xs text-crm-muted">{snippet || "No preview available"}</p>
                       <p className="mt-2 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">{formatTemplateDate(tpl.updatedAt)}</p>
                     </div>
-                    {tpl.attachments?.length ? <Paperclip className="h-3.5 w-3.5 shrink-0 text-crm-muted" /> : null}
+                    {tpl.attachments?.length ? <span className="crm-contact-email-attachment-count"><Paperclip className="h-3.5 w-3.5 shrink-0" />{tpl.attachments.length}</span> : null}
                   </div>
                 </button>
               );
@@ -343,7 +343,7 @@ export function ContactEmailWorkspacePanel({
         </div>
       </div>
 
-      <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
+      <div className="crm-contact-module-card crm-contact-email-compose-panel rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4">
         <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-crm-accent">Preview & Send</p>
@@ -352,14 +352,14 @@ export function ContactEmailWorkspacePanel({
             <p className="mt-1 text-xs text-crm-muted">From {senderLabel(selectedSender)}</p>
           </div>
           {selectedSender?.scope === "TENANT" ? (
-            <span className="rounded-full border border-crm-success/35 bg-crm-success/10 px-2.5 py-1 text-[11px] font-semibold text-crm-success">
+            <span className="crm-contact-module-badge rounded-full border border-crm-success/35 bg-crm-success/10 px-2.5 py-1 text-[11px] font-semibold text-crm-success">
               Tenant sender
             </span>
           ) : null}
         </div>
 
         {!selectedTemplate ? (
-          <div className="rounded-crm border border-dashed border-crm-border/70 p-6 text-center text-sm text-crm-muted">
+          <div className="crm-contact-module-empty rounded-crm border border-dashed border-crm-border/70 p-6 text-center text-sm text-crm-muted">
             <FileText className="mx-auto mb-2 h-5 w-5" />
             Select a saved template to preview merge fields and send one email.
           </div>
@@ -367,7 +367,7 @@ export function ContactEmailWorkspacePanel({
           <div className="space-y-3">
             <div>
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-crm-muted">Subject</label>
-              <input value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={500} className={crm.input} />
+              <input value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={500} className={cn(crm.input, "crm-contact-module-input")} />
             </div>
             <div>
               <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-crm-muted">Message</label>
@@ -376,11 +376,11 @@ export function ContactEmailWorkspacePanel({
                 onChange={(e) => setBodyText(e.target.value)}
                 rows={10}
                 maxLength={50000}
-                className={cn(crm.input, "resize-y font-sans")}
+                className={cn(crm.input, "crm-contact-module-input crm-contact-email-body-input resize-y font-sans")}
               />
             </div>
             {selectedTemplate.attachments?.length ? (
-              <div className="rounded-crm border border-crm-border/70 bg-crm-surface/60 p-3 text-xs text-crm-muted">
+              <div className="crm-contact-email-attachments rounded-crm border border-crm-border/70 bg-crm-surface/60 p-3 text-xs text-crm-muted">
                 <p className="mb-1 font-semibold text-crm-text">Template attachments included</p>
                 {selectedTemplate.attachments.map((attachment) => (
                   <p key={attachment.id} className="truncate">
@@ -391,7 +391,7 @@ export function ContactEmailWorkspacePanel({
               </div>
             ) : null}
             {mergeWarnings.length || unresolvedTokens.length ? (
-              <div className="rounded-crm border border-crm-warning/35 bg-crm-warning/10 p-3 text-xs text-crm-warning">
+              <div className="crm-contact-module-alert crm-contact-module-alert-warning rounded-crm border border-crm-warning/35 bg-crm-warning/10 p-3 text-xs text-crm-warning">
                 <p className="font-semibold">Merge field warning</p>
                 {mergeWarnings.length ? <p className="mt-1">{mergeWarnings.join(", ")}.</p> : null}
                 {unresolvedTokens.length ? <p className="mt-1">Unresolved fields: {unresolvedTokens.join(", ")}.</p> : null}
@@ -415,14 +415,14 @@ export function ContactEmailWorkspacePanel({
           </div>
         )}
 
-        {error ? <div className="mt-3 rounded-crm border border-crm-danger/40 bg-crm-danger/10 px-3 py-2 text-xs text-crm-danger">{error}</div> : null}
+        {error ? <div className="crm-contact-module-alert crm-contact-module-alert-danger mt-3 rounded-crm border border-crm-danger/40 bg-crm-danger/10 px-3 py-2 text-xs text-crm-danger">{error}</div> : null}
         {success ? (
-          <div className="mt-3 flex items-center gap-2 rounded-crm border border-crm-success/40 bg-crm-success/10 px-3 py-2 text-xs text-crm-success">
+          <div className="crm-contact-module-alert crm-contact-module-alert-success mt-3 flex items-center gap-2 rounded-crm border border-crm-success/40 bg-crm-success/10 px-3 py-2 text-xs text-crm-success">
             <CheckCircle2 className="h-3.5 w-3.5" /> {success}
           </div>
         ) : null}
         {sendBlocker && selectedTemplate ? (
-          <div className="mt-3 flex items-start gap-2 rounded-crm border border-crm-warning/35 bg-crm-warning/10 px-3 py-2 text-xs text-crm-warning">
+          <div className="crm-contact-module-alert crm-contact-module-alert-warning mt-3 flex items-start gap-2 rounded-crm border border-crm-warning/35 bg-crm-warning/10 px-3 py-2 text-xs text-crm-warning">
             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             <span>
               {sendBlocker}

@@ -28,10 +28,18 @@ export function ContactRelationshipHealth({
   const smsCount = timeline.filter((e) => e.type.startsWith("SMS_")).length;
 
   return (
-    <CRMCard padding="md" className="border-crm-border/70">
-      <CRMSection title="Relationship health" description="From real activity on this contact">
+    <CRMCard padding="md" className="crm-contact-right-rail-card-body crm-contact-right-rail-relationship-card border-crm-border/70">
+      <CRMSection
+        title="Relationship health"
+        description="From real activity on this contact"
+        actions={
+          <span className="crm-contact-right-rail-health-badge">
+            {recentActivityCount > 0 ? "Healthy" : "Needs touch"}
+          </span>
+        }
+      >
         <div className="flex flex-col gap-4">
-          <div className="flex items-center gap-4 rounded-2xl border border-crm-border/70 bg-crm-surface-2/50 p-3">
+          <div className="crm-contact-right-rail-health-summary flex items-center gap-4 rounded-2xl border border-crm-border/70 bg-crm-surface-2/50 p-3">
             <CRMRingMetric
               value={recentActivityCount}
               max={Math.max(recentActivityCount, 10)}
@@ -42,7 +50,7 @@ export function ContactRelationshipHealth({
               stroke={8}
             />
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-crm-text">
+              <p className="text-sm font-bold text-crm-text">
                 {recentActivityCount > 0 ? "Active relationship" : "Quiet relationship"}
               </p>
               <p className="mt-1 text-xs leading-relaxed text-crm-muted">

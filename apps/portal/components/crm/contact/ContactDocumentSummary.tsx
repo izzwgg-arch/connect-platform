@@ -63,10 +63,10 @@ function SourceBadge({ field }: { field: SummaryField }) {
   return (
     <span
       className={cn(
-        "ml-1.5 inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-        field.source === "contact" && "bg-emerald-500/15 text-emerald-400",
-        field.source === "document" && "bg-violet-500/15 text-violet-300",
-        field.source === "ai" && "bg-crm-accent/15 text-crm-accent",
+        "crm-contact-business-profile-source-badge",
+        field.source === "contact" && "crm-contact-business-profile-source-badge-contact",
+        field.source === "document" && "crm-contact-business-profile-source-badge-document",
+        field.source === "ai" && "crm-contact-business-profile-source-badge-ai",
       )}
     >
       {label}
@@ -77,7 +77,7 @@ function SourceBadge({ field }: { field: SummaryField }) {
 
 function SummaryFieldRow({ label, field }: { label: string; field: SummaryField | null | undefined }) {
   return (
-    <div className="grid grid-cols-[minmax(0,38%)_1fr] gap-x-3 gap-y-0.5 border-b border-crm-border/40 py-2 last:border-b-0">
+    <div className="crm-contact-business-profile-row grid grid-cols-[minmax(0,38%)_1fr] gap-x-3 gap-y-0.5 border-b border-crm-border/40 py-2 last:border-b-0">
       <dt className="text-xs font-semibold text-crm-muted">{label}</dt>
       <dd className="text-sm text-crm-text">
         {field?.displayValue ? (
@@ -89,7 +89,7 @@ function SummaryFieldRow({ label, field }: { label: string; field: SummaryField 
             ) : null}
           </span>
         ) : (
-          <span className="text-crm-muted">Not found</span>
+          <span className="crm-contact-right-rail-empty-copy text-crm-muted">Not found</span>
         )}
       </dd>
     </div>
@@ -128,7 +128,7 @@ export function ContactDocumentSummary({ contactId, refreshToken = 0 }: Props) {
 
   if (loading) {
     return (
-      <div className="rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4 text-sm text-crm-muted">
+      <div className="crm-contact-right-rail-empty-state rounded-[1.35rem] border border-crm-border/70 bg-crm-surface-2/45 p-4 text-sm text-crm-muted">
         Loading document summary…
       </div>
     );
@@ -136,7 +136,7 @@ export function ContactDocumentSummary({ contactId, refreshToken = 0 }: Props) {
 
   if (error) {
     return (
-      <div className="rounded-[1.35rem] border border-red-500/25 bg-red-500/5 p-4 text-sm text-red-400">
+      <div className="rounded-[1.35rem] border border-red-500/25 bg-red-500/5 p-4 text-sm text-red-400 shadow-[0_14px_30px_-24px_rgba(239,68,68,0.65)]">
         {error}
       </div>
     );
@@ -150,12 +150,14 @@ export function ContactDocumentSummary({ contactId, refreshToken = 0 }: Props) {
   const hasExtracted = extractedKeys.some((k) => summary.extracted[k]?.displayValue);
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="crm-contact-right-rail-card-body crm-contact-right-rail-business-card flex flex-col gap-3">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <FileSearch className="h-4 w-4 text-crm-accent" />
-            <h3 className="text-[11px] font-bold uppercase tracking-[0.16em] text-crm-accent">
+            <span className="crm-contact-right-rail-icon-bubble crm-contact-right-rail-icon-bubble-teal">
+              <FileSearch className="h-4 w-4" />
+            </span>
+            <h3 className="crm-contact-right-rail-eyebrow">
               Business profile
             </h3>
           </div>
@@ -165,8 +167,15 @@ export function ContactDocumentSummary({ contactId, refreshToken = 0 }: Props) {
             {summary.meta.intelligenceStatus === "COMPLETE" ? " · AI report ready" : ""}
           </p>
         </div>
+        <span className="crm-contact-business-profile-progress" aria-label={`${summary.meta.documentsWithText} of ${summary.meta.documentCount} documents scanned`}>
+          <span
+            style={{
+              width: `${Math.min(100, Math.round((summary.meta.documentsWithText / Math.max(summary.meta.documentCount, 1)) * 100))}%`,
+            }}
+          />
+        </span>
         {summary.meta.hasConflicts ? (
-          <span className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-400">
+          <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700">
             Conflicts
           </span>
         ) : null}
@@ -176,7 +185,7 @@ export function ContactDocumentSummary({ contactId, refreshToken = 0 }: Props) {
         id="contact-summary-verified"
         title="Verified CRM fields"
       >
-        <dl className="rounded-xl border border-crm-border/50 bg-crm-surface/40 px-3">
+        <dl className="crm-contact-business-profile-list rounded-xl border border-crm-border/50 bg-crm-surface/40 px-3">
           {verifiedKeys.map((key) => (
             <SummaryFieldRow
               key={key}
@@ -185,7 +194,7 @@ export function ContactDocumentSummary({ contactId, refreshToken = 0 }: Props) {
             />
           ))}
           {!hasVerified ? (
-            <p className="py-2 text-xs text-crm-muted">No verified profile fields on the CRM record yet.</p>
+            <p className="crm-contact-right-rail-empty-copy py-2 text-xs text-crm-muted">No verified profile fields on the CRM record yet.</p>
           ) : null}
         </dl>
       </ContactCollapsibleSection>
@@ -194,7 +203,7 @@ export function ContactDocumentSummary({ contactId, refreshToken = 0 }: Props) {
         id="contact-summary-extracted"
         title="From imported documents"
       >
-        <dl className="rounded-xl border border-crm-border/50 bg-crm-surface/40 px-3">
+        <dl className="crm-contact-business-profile-list rounded-xl border border-crm-border/50 bg-crm-surface/40 px-3">
           {extractedKeys.map((key) => (
             <SummaryFieldRow
               key={key}
@@ -203,7 +212,7 @@ export function ContactDocumentSummary({ contactId, refreshToken = 0 }: Props) {
             />
           ))}
           {!hasExtracted ? (
-            <p className="py-2 text-xs text-crm-muted">
+            <p className="crm-contact-right-rail-empty-copy py-2 text-xs text-crm-muted">
               Import and scan documents to populate extracted fields.
             </p>
           ) : null}
@@ -227,7 +236,7 @@ export function ContactDocumentSummary({ contactId, refreshToken = 0 }: Props) {
             {summary.phones.map((p, idx) => (
               <li
                 key={`${p.normalized ?? p.number}-${idx}`}
-                className="flex items-center justify-between gap-2 rounded-lg border border-crm-border/40 bg-crm-surface/50 px-2.5 py-1.5"
+                className="crm-contact-business-profile-phone-row flex items-center justify-between gap-2 rounded-lg border border-crm-border/40 bg-crm-surface/50 px-2.5 py-1.5"
               >
                 <div className="min-w-0">
                   <div className="text-sm font-medium text-crm-text">{p.number}</div>
