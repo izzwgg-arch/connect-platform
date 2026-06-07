@@ -14,8 +14,8 @@ import {
   CRMWorkspaceRightRail,
 } from "../CRMWorkspaceShell";
 import { apiDelete, apiGet, apiPatch } from "../../../services/apiClient";
-import { TaskKpiStrip, TaskTabRow } from "./TaskKpiStrip";
-import type { TaskStats, TaskTab } from "./TaskKpiStrip";
+import { TaskFilterBar, TaskKpiStrip } from "./TaskKpiStrip";
+import type { TaskSortMode, TaskStats, TaskTab } from "./TaskKpiStrip";
 import { TaskFeed } from "./TaskFeed";
 import { TaskDetailPanel } from "./TaskDetailPanel";
 import { TaskEmptyState } from "./TaskEmptyState";
@@ -160,8 +160,24 @@ async function getTaskTotal(params: Record<string, string>) {
   return data.total;
 }
 
-function sortForTaskList(rows: CrmTask[]) {
+const PRIORITY_ORDER: Record<TaskPriority, number> = {
+  URGENT: 0,
+  HIGH: 1,
+  MEDIUM: 2,
+  LOW: 3,
+};
+
+function sortForTaskList(rows: CrmTask[], sortMode: TaskSortMode = "due") {
   return [...rows].sort((a, b) => {
+    if (sortMode === "title") return a.title.localeCompare(b.title);
+    if (sortMode === "created") {
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    }
+    if (sortMode === "priority") {
+      const priorityDelta =
+        (PRIORITY_ORDER[a.priority] ?? 9) - (PRIORITY_ORDER[b.priority] ?? 9);
+      if (priorityDelta !== 0) return priorityDelta;
+    }
     const aDone = a.status === "DONE" || a.status === "CANCELED";
     const bDone = b.status === "DONE" || b.status === "CANCELED";
     if (aDone !== bDone) return aDone ? 1 : -1;
@@ -171,10 +187,24 @@ function sortForTaskList(rows: CrmTask[]) {
   });
 }
 
+function matchesTaskSearch(task: CrmTask, needle: string) {
+  if (!needle) return true;
+  const query = needle.toLowerCase();
+  return (
+    task.title.toLowerCase().includes(query) ||
+    (task.body?.toLowerCase().includes(query) ?? false) ||
+    (task.contact?.displayName?.toLowerCase().includes(query) ?? false) ||
+    (task.contact?.company?.toLowerCase().includes(query) ?? false) ||
+    (task.assignedTo?.displayName?.toLowerCase().includes(query) ?? false)
+  );
+}
+
 // ── TaskCommandDesk ───────────────────────────────────────────────────────────
 
 export function TaskCommandDesk({ initialTab }: { initialTab?: TaskTab }) {
   const [activeTab, setActiveTab] = useState<TaskTab>(initialTab ?? "all");
+  const [search, setSearch] = useState("");
+  const [sortMode, setSortMode] = useState<TaskSortMode>("due");
   const [assignedToMe, setAssignedToMe] = useState(false);
   const [tasks, setTasks] = useState<CrmTask[]>([]);
   const [upcomingTasks, setUpcomingTasks] = useState<CrmTask[]>([]);
@@ -186,6 +216,13 @@ export function TaskCommandDesk({ initialTab }: { initialTab?: TaskTab }) {
   const [panelMode, setPanelMode] = useState<TaskPanelMode>("summary");
   const [savedMsg, setSavedMsg] = useState("");
   const sourceTasks = useMemo(() => expandTasksForDevPreview(tasks), [tasks]);
+  const displayedTasks = useMemo(() => {
+    const needle = search.trim();
+    return sortForTaskList(
+      sourceTasks.filter((task) => matchesTaskSearch(task, needle)),
+      sortMode,
+    );
+  }, [sourceTasks, search, sortMode]);
 
   const loadStats = useCallback(async () => {
     setStatsLoading(true);
@@ -355,17 +392,13 @@ export function TaskCommandDesk({ initialTab }: { initialTab?: TaskTab }) {
         <CRMWorkspaceHeader>
           <CRMPageHeader
             compact
-            icon={<CheckSquare className="h-5 w-5" />}
+            icon={<CheckSquare className="h-6 w-6" aria-hidden />}
             title="Tasks"
             subtitle="Follow-ups, callbacks, and action items across your contacts."
-            className={cn("tasks-page-header", crm.contactsHeaderPanel)}
+            className={cn(crm.contactsHeaderPanel, "campaigns-command-header")}
             actions={
-              <div className="contacts-hero-actions flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={triggerAdd}
-                  className="tasks-primary-action"
-                >
+              <div className="campaigns-hero-actions">
+                <button type="button" onClick={triggerAdd} className="campaigns-btn-primary">
                   <Plus className="h-4 w-4" />
                   New Task
                 </button>
@@ -375,18 +408,15 @@ export function TaskCommandDesk({ initialTab }: { initialTab?: TaskTab }) {
         </CRMWorkspaceHeader>
 
         <CRMWorkspaceToolbar className="flex flex-col gap-3">
-          <TaskKpiStrip
-            stats={stats}
-            loading={statsLoading}
+          <TaskKpiStrip stats={stats} loading={statsLoading} />
+          <TaskFilterBar
             activeTab={activeTab}
             onTabChange={handleTabChange}
-          />
-          <TaskTabRow
-            activeTab={activeTab}
-            onTabChange={handleTabChange}
-            stats={stats}
-            total={total}
-            loading={loading}
+            search={search}
+            onSearchChange={setSearch}
+            sortMode={sortMode}
+            onSortModeChange={setSortMode}
+            shownCount={displayedTasks.length}
             assignedToMe={assignedToMe}
             onAssignedToMeChange={setAssignedToMe}
           />
@@ -404,9 +434,9 @@ export function TaskCommandDesk({ initialTab }: { initialTab?: TaskTab }) {
               />
             ) : (
               <TaskFeed
-                tasks={sourceTasks}
+                tasks={displayedTasks}
                 loading={loading}
-                activeTab={activeTab}
+                totalCount={total}
                 onComplete={handleComplete}
                 selectedTaskId={selectedTask?.id ?? null}
                 onSelect={handleSelectTask}

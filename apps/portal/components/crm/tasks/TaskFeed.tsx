@@ -1,38 +1,26 @@
 "use client";
 
-import { ListChecks } from "lucide-react";
-import { cn } from "../cn";
 import { TaskCard } from "./TaskCard";
 import type { CrmTask } from "./TaskCard";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
-import type { TaskTab } from "./TaskKpiStrip";
-
+import { crm } from "../crmClasses";
 // ── TaskFeed ──────────────────────────────────────────────────────────────────
 
 export function TaskFeed({
   tasks,
   loading,
-  activeTab,
+  totalCount,
   onComplete,
   selectedTaskId,
   onSelect,
 }: {
   tasks: CrmTask[];
   loading: boolean;
-  activeTab: TaskTab;
+  totalCount: number;
   onComplete: (t: CrmTask) => Promise<void>;
   selectedTaskId?: string | null;
   onSelect: (t: CrmTask) => void;
 }) {
-  const label =
-    activeTab === "today"
-      ? "Due Today"
-      : activeTab === "overdue"
-        ? "Overdue"
-        : activeTab === "completed"
-          ? "Completed"
-          : "Task Rows";
-
   if (loading) {
     return (
       <div className="crm-queue-list-panel tasks-list-card p-5">
@@ -42,22 +30,35 @@ export function TaskFeed({
   }
 
   if (tasks.length === 0) {
-    return null; // let parent render empty state
+    return (
+      <section className="checklist-collection-shell crm-queue-list-panel tasks-list-card">
+        <div className="crm-queue-list-head">
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-crm-muted">
+            <input type="checkbox" readOnly checked={false} className={crm.checkbox} />
+            <span>Select task</span>
+          </label>
+          <span className="text-[10px] font-semibold text-crm-muted tabular-nums">
+            0 shown · {totalCount} total
+          </span>
+        </div>
+        <div className="px-5 py-10 text-center text-sm text-crm-muted">
+          No tasks match the current filters.
+        </div>
+      </section>
+    );
   }
-
   return (
     <section className="checklist-collection-shell crm-queue-list-panel tasks-list-card">
       <div className="crm-queue-list-head">
-        <div className="flex items-center gap-2">
-          <ListChecks className="h-3.5 w-3.5 text-crm-muted" />
-          <h2>{label}</h2>
-        </div>
+        <label className="flex cursor-pointer items-center gap-2 text-xs text-crm-muted">
+          <input type="checkbox" readOnly checked={false} className={crm.checkbox} />
+          <span>Select task</span>
+        </label>
         <span className="text-[10px] font-semibold text-crm-muted tabular-nums">
-          {tasks.length} shown
+          {tasks.length} shown · {totalCount} total
         </span>
       </div>
-      <div className="crm-queue-row-list">
-        {tasks.map((task, index) => (
+      <div className="crm-queue-row-list">        {tasks.map((task, index) => (
           <TaskCard
             key={task.id}
             task={task}

@@ -516,7 +516,7 @@ function TaskForm({
           type="button"
           onClick={handleSubmit}
           disabled={saving || !draft.title.trim() || (!editing && !draft.selectedContact)}
-          className={crm.btnPrimary}
+          className="tasks-primary-action w-full justify-center gap-2"
         >
           <Check size={13} />
           {saving ? "Saving..." : editing ? "Save" : "Create"}
@@ -548,9 +548,9 @@ function SummaryPanel({ onNewTask }: Pick<Props, "onNewTask">) {
         </div>
       </section>
 
-      <section className="crm-queue-detail-actions-card">
+      <section className="crm-queue-detail-actions-card mt-auto">
         <p className="crm-queue-detail-section-label">Task actions</p>
-        <button type="button" onClick={onNewTask} className={cn(crm.btnPrimary, "w-full justify-center")}>
+        <button type="button" onClick={onNewTask} className="tasks-primary-action w-full justify-center gap-2">
           <Plus size={13} />
           Create task
         </button>
@@ -727,58 +727,6 @@ export function TaskDetailPanel({
         </div>
       </section>
 
-      <section className="crm-queue-detail-actions-card">
-        <p className="crm-queue-detail-section-label">Task actions</p>
-        <button
-          type="button"
-          onClick={() => setEditing(true)}
-          className={cn(crm.btnPrimary, "w-full justify-center gap-2")}
-        >
-          <Pencil size={13} />
-          Edit task
-        </button>
-        {task.status === "DONE" ? (
-          <button
-            type="button"
-            onClick={() => onSave(task, { status: "OPEN" })}
-            className="crm-queue-detail-secondary-action"
-          >
-            <RotateCcw size={13} />
-            Reopen task
-          </button>
-        ) : task.status !== "CANCELED" ? (
-          <button
-            type="button"
-            onClick={handleComplete}
-            disabled={completing}
-            className="crm-queue-detail-secondary-action"
-          >
-            <CheckCircle2 size={13} />
-            {completing ? "Completing..." : "Mark complete"}
-          </button>
-        ) : null}
-        {task.contact ? (
-          <Link href={`/crm/contacts/${task.contactId}?tab=workspace`} className="crm-queue-detail-secondary-action">
-            <ExternalLink size={13} />
-            Open contact workspace
-          </Link>
-        ) : null}
-        <button
-          type="button"
-          onClick={handleDelete}
-          disabled={deleting}
-          className={cn(crm.btnDanger, "w-full justify-center gap-2")}
-        >
-          <Trash2 size={13} />
-          {deleting ? "Deleting..." : "Delete task"}
-        </button>
-        {deleteError ? (
-          <p className={cn(crm.bannerDanger, "rounded-2xl px-3 py-2 text-xs")} role="alert">
-            {deleteError}
-          </p>
-        ) : null}
-      </section>
-
       <section className="tasks-detail-section">
         <div className="mb-3 flex items-center gap-2">
           <span className="tasks-kpi-icon tasks-icon-neutral">
@@ -837,6 +785,58 @@ export function TaskDetailPanel({
           </div>
         </section>
       ) : null}
+
+      <section className="crm-queue-detail-actions-card mt-auto">
+        <p className="crm-queue-detail-section-label">Task actions</p>
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="tasks-primary-action w-full justify-center gap-2"
+        >
+          <Pencil size={13} />
+          Edit task
+        </button>
+        {task.status === "DONE" ? (
+          <button
+            type="button"
+            onClick={() => onSave(task, { status: "OPEN" })}
+            className="crm-queue-detail-secondary-action"
+          >
+            <RotateCcw size={13} />
+            Reopen task
+          </button>
+        ) : task.status !== "CANCELED" ? (
+          <button
+            type="button"
+            onClick={handleComplete}
+            disabled={completing}
+            className="crm-queue-detail-secondary-action"
+          >
+            <CheckCircle2 size={13} />
+            {completing ? "Completing..." : "Mark complete"}
+          </button>
+        ) : null}
+        {task.contact ? (
+          <Link href={`/crm/contacts/${task.contactId}?tab=workspace`} className="crm-queue-detail-secondary-action">
+            <ExternalLink size={13} />
+            Open contact workspace
+          </Link>
+        ) : null}
+        <button
+          type="button"
+          onClick={handleDelete}
+          disabled={deleting}
+          className={cn(crm.btnDanger, "w-full justify-center gap-2")}
+        >
+          <Trash2 size={13} />
+          {deleting ? "Deleting..." : "Delete task"}
+        </button>
+        {deleteError ? (
+          <p className={cn(crm.bannerDanger, "rounded-2xl px-3 py-2 text-xs")} role="alert">
+            {deleteError}
+          </p>
+        ) : null}
+      </section>
     </PanelShell>
   );
 }
