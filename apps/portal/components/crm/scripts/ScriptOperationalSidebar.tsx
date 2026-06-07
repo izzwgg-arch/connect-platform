@@ -50,7 +50,7 @@ export function ScriptOperationalSidebar({
 }) {
   if (creating) {
     return (
-      <ScriptDetailPanelShell>
+      <ScriptDetailPanelShell className="scripts-create-detail-panel">
         <ScriptEditorPanel
           mode="create"
           onSave={onSaveCreate}
@@ -82,7 +82,7 @@ export function ScriptOperationalSidebar({
   if (error) {
     return (
       <ScriptDetailPanelShell>
-        <section className={panelSectionClass}>
+        <section className={cn(panelSectionClass, "scripts-content-card")}>
           <div className="mb-3 flex items-center gap-2">
             <span className="tasks-kpi-icon tasks-icon-neutral">
               <AlertCircle className="h-4 w-4" />
@@ -261,8 +261,8 @@ function SectionEditor({
   onRemove: () => void;
 }) {
   return (
-    <div className="rounded-[1rem] border border-crm-border/45 bg-crm-surface/70">
-      <div className="flex items-center gap-2 border-b border-crm-border/45 px-2.5 py-2">
+    <div className="script-section-editor rounded-[1rem] border border-crm-border/45 bg-crm-surface/70">
+      <div className="script-section-editor-head flex items-center gap-2 border-b border-crm-border/45 px-2.5 py-2">
         <span className="text-[10px] font-bold uppercase tracking-wider text-crm-muted">
           §{index + 1}
         </span>
@@ -273,7 +273,7 @@ function SectionEditor({
           placeholder="Section title"
           className={cn(
             crm.input,
-            "min-w-0 flex-1 border-0 bg-transparent py-1 text-xs font-semibold shadow-none focus:border-0 focus:ring-0"
+            "script-section-title-input min-w-0 flex-1 border-0 bg-transparent py-1 text-xs font-semibold shadow-none focus:border-0 focus:ring-0"
           )}
         />
         {canRemove ? (
@@ -294,7 +294,7 @@ function SectionEditor({
         rows={5}
         className={cn(
           crm.input,
-          "min-h-[7rem] resize-y rounded-none border-0 bg-transparent text-xs leading-relaxed shadow-none focus:border-0 focus:ring-0"
+          "script-section-body-input min-h-[7rem] resize-y rounded-none border-0 bg-transparent text-xs leading-relaxed shadow-none focus:border-0 focus:ring-0"
         )}
       />
     </div>
@@ -373,14 +373,14 @@ function ScriptEditorPanel({
 
   return (
     <>
-      <header className="crm-queue-detail-header">
+      <header className="crm-queue-detail-header scripts-editor-header">
         <span className="crm-queue-pill crm-queue-pill-info inline-flex items-center gap-1">
           {mode === "create" ? <Plus className="h-3 w-3" /> : <Pencil className="h-3 w-3" />}
           {mode === "create" ? "New script" : "Editing"}
         </span>
       </header>
 
-      <section className="crm-queue-detail-identity">
+      <section className="crm-queue-detail-identity scripts-editor-hero">
         <div className="crm-queue-detail-avatar scripts-detail-icon">
           <FileText className="h-5 w-5" />
         </div>
@@ -391,7 +391,7 @@ function ScriptEditorPanel({
         </div>
       </section>
 
-      <section className={cn(panelSectionClass, "flex flex-col gap-3")}>
+      <section className={cn(panelSectionClass, "scripts-editor-card flex flex-col gap-3")}>
         <label className={crm.label} htmlFor={`script-${mode}-name`}>
           Script name
         </label>
@@ -400,7 +400,7 @@ function ScriptEditorPanel({
           value={name}
           onChange={(event) => setName(event.target.value)}
           placeholder="e.g. Cold Call - SMB"
-          className={crm.input}
+          className={cn(crm.input, "scripts-editor-input")}
           autoFocus
         />
 
@@ -410,7 +410,7 @@ function ScriptEditorPanel({
             <select
               value={selectedTemplate}
               onChange={(event) => applyTemplate(event.target.value)}
-              className={crm.select}
+              className={cn(crm.select, "scripts-editor-input scripts-editor-select")}
             >
               <option value="">Start from scratch</option>
               {SCRIPT_TEMPLATES.map((template) => (
@@ -422,7 +422,7 @@ function ScriptEditorPanel({
           </label>
         ) : null}
 
-        <div className="flex items-center justify-between gap-2">
+        <div className="scripts-section-toolbar flex items-center justify-between gap-2">
           <span className={crm.label}>Script sections</span>
           <span className="text-[11px] text-crm-muted tabular-nums">
             {sections.length} section{sections.length !== 1 ? "s" : ""}
@@ -443,7 +443,7 @@ function ScriptEditorPanel({
         <button
           type="button"
           onClick={addSection}
-          className="flex items-center justify-center gap-2 rounded-[0.9rem] border border-dashed border-crm-border/65 bg-crm-surface/70 px-3 py-2.5 text-xs font-semibold text-crm-muted transition-colors hover:border-crm-accent/35 hover:bg-crm-accent/5 hover:text-crm-text"
+          className="scripts-add-section-btn flex items-center justify-center gap-2 rounded-[0.9rem] border border-dashed border-crm-border/65 bg-crm-surface/70 px-3 py-2.5 text-xs font-semibold text-crm-muted transition-colors hover:border-crm-accent/35 hover:bg-crm-accent/5 hover:text-crm-text"
         >
           <Plus size={12} />
           Add section
@@ -455,7 +455,7 @@ function ScriptEditorPanel({
           </p>
         ) : null}
 
-        <div className="grid grid-cols-2 gap-2 border-t border-crm-border/45 pt-3">
+        <div className="scripts-editor-footer grid grid-cols-2 gap-2 border-t border-crm-border/45 pt-3">
           <button type="button" onClick={onCancel} className={crm.btnSecondary}>
             <X size={13} />
             Cancel
@@ -527,7 +527,7 @@ function ScriptDetailPanel({
 
   if (editing) {
     return (
-      <ScriptDetailPanelShell>
+      <ScriptDetailPanelShell className="scripts-edit-detail-panel">
         <ScriptEditorPanel
           mode="edit"
           script={script}
@@ -542,8 +542,8 @@ function ScriptDetailPanel({
   }
 
   return (
-    <ScriptDetailPanelShell>
-      <header className="crm-queue-detail-header">
+    <ScriptDetailPanelShell className="scripts-view-detail-panel">
+      <header className="crm-queue-detail-header scripts-view-header">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className={cn("tasks-status-pill", readinessTone.pill)}>
             {readiness.label}
@@ -553,7 +553,7 @@ function ScriptDetailPanel({
         {savedMsg ? <span className="text-xs font-semibold text-crm-success">{savedMsg}</span> : null}
       </header>
 
-      <section className="crm-queue-detail-identity">
+      <section className="crm-queue-detail-identity scripts-editor-hero">
         <div className="crm-queue-detail-avatar scripts-detail-icon">
           <FileText className="h-5 w-5" />
         </div>
@@ -565,7 +565,47 @@ function ScriptDetailPanel({
         </div>
       </section>
 
-      <section className="crm-queue-detail-actions-card scripts-detail-section">
+      <section className={cn(panelSectionClass, "scripts-content-card")}>
+        <div className="mb-3 flex items-center gap-2">
+          <span className="tasks-kpi-icon tasks-icon-neutral">
+            <FileText className="h-4 w-4" />
+          </span>
+          <div>
+            <h3 className="text-sm font-bold text-crm-text">Script Content</h3>
+          </div>
+        </div>
+        {stats.sectionCount === 0 ? (
+          <div className="rounded-[1rem] border border-dashed border-crm-border/45 p-4 text-center">
+            <AlertCircle size={20} className="mx-auto mb-2 text-crm-muted/45" />
+            <p className="text-xs text-crm-muted">No sections yet.</p>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {stats.sections.map((section, index) => (
+              <div
+                key={`${section.title}-${index}`}
+                className="script-content-preview rounded-[0.95rem] border border-crm-border/40 bg-crm-surface/70 p-2.5"
+              >
+                <div className="mb-1 flex items-center gap-2">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-crm-border/60 bg-crm-surface-2 text-[11px] font-bold text-crm-muted tabular-nums">
+                    {index + 1}
+                  </span>
+                  <h4 className="min-w-0 truncate text-xs font-bold text-crm-text">
+                    {section.title || `Section ${index + 1}`}
+                  </h4>
+                </div>
+                {section.content ? (
+                  <p className="whitespace-pre-line text-xs leading-5 text-crm-muted">
+                    {section.content}
+                  </p>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="crm-queue-detail-actions-card scripts-detail-section scripts-action-card mt-auto">
         <p className="crm-queue-detail-section-label">Script actions</p>
         {script.isActive ? (
           <button
@@ -623,46 +663,6 @@ function ScriptDetailPanel({
         ) : null}
       </section>
 
-      <section className={panelSectionClass}>
-        <div className="mb-3 flex items-center gap-2">
-          <span className="tasks-kpi-icon tasks-icon-neutral">
-            <FileText className="h-4 w-4" />
-          </span>
-          <div>
-            <h3 className="text-sm font-bold text-crm-text">Script Content</h3>
-          </div>
-        </div>
-        {stats.sectionCount === 0 ? (
-          <div className="rounded-[1rem] border border-dashed border-crm-border/45 p-4 text-center">
-            <AlertCircle size={20} className="mx-auto mb-2 text-crm-muted/45" />
-            <p className="text-xs text-crm-muted">No sections yet.</p>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {stats.sections.map((section, index) => (
-              <div
-                key={`${section.title}-${index}`}
-                className="rounded-[0.95rem] border border-crm-border/40 bg-crm-surface/70 p-2.5"
-              >
-                <div className="mb-1 flex items-center gap-2">
-                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-crm-border/60 bg-crm-surface-2 text-[11px] font-bold text-crm-muted tabular-nums">
-                    {index + 1}
-                  </span>
-                  <h4 className="min-w-0 truncate text-xs font-bold text-crm-text">
-                    {section.title || `Section ${index + 1}`}
-                  </h4>
-                </div>
-                {section.content ? (
-                  <p className="whitespace-pre-line text-xs leading-5 text-crm-muted">
-                    {section.content}
-                  </p>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
     </ScriptDetailPanelShell>
   );
 }
@@ -681,7 +681,7 @@ function ScriptEmptyDetailPanel({
         </span>
       </header>
 
-      <section className="crm-queue-detail-identity">
+      <section className="crm-queue-detail-identity scripts-editor-hero">
         <div className="crm-queue-detail-avatar scripts-detail-icon">
           <FileText className="h-5 w-5" />
         </div>
@@ -690,9 +690,9 @@ function ScriptEmptyDetailPanel({
         </div>
       </section>
 
-      <section className="crm-queue-detail-actions-card scripts-detail-section">
+      <section className="crm-queue-detail-actions-card scripts-detail-section scripts-action-card mt-auto">
         <p className="crm-queue-detail-section-label">Script actions</p>
-        <button type="button" onClick={onCreate} className={cn(crm.btnPrimary, "crm-create-blue-cta w-full justify-center")}>
+        <button type="button" onClick={onCreate} className="tasks-primary-action w-full justify-center gap-2">
           <Plus size={13} />
           Create script
         </button>
@@ -700,3 +700,8 @@ function ScriptEmptyDetailPanel({
     </ScriptDetailPanelShell>
   );
 }
+
+
+
+
+
