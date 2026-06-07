@@ -3822,6 +3822,10 @@ model CrmTenantSettings {
   defaultQueueFilter   String   @default("PENDING")
   /// Tenant-defined quick disposition buttons (JSON array). Built-in defaults are merged in API.
   quickDispositions    Json?
+  /// Tenant default CRM workspace script. Null means agents choose manually.
+  defaultScriptId      String?
+  /// Tenant default CRM workspace checklist. Null means agents choose manually.
+  defaultChecklistId   String?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 

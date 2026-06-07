@@ -14,6 +14,7 @@ const customRowSchema = z.object({
   label: z.string().min(1).max(100),
   sortOrder: z.number().int().min(0).max(999),
   enabled: z.boolean().optional(),
+  color: z.string().trim().regex(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i).optional(),
 });
 
 const putSchema = z.object({

@@ -12,6 +12,7 @@ const patchSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   body: z.string().min(1).optional(),
   isActive: z.boolean().optional(),
+  isDefault: z.boolean().optional(),
 });
 
 export async function registerCrmScriptRoutes(app: FastifyInstance) {
@@ -25,13 +26,27 @@ export async function registerCrmScriptRoutes(app: FastifyInstance) {
     const q = req.query as Record<string, string>;
     const includeInactive = q.includeInactive === "true";
 
-    const scripts = await db.crmScript.findMany({
-      where: { tenantId, ...(includeInactive ? {} : { isActive: true }) },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, name: true, isActive: true, createdAt: true, updatedAt: true },
-    });
+    const [settingsRows, scripts] = await Promise.all([
+      db.$queryRaw<Array<{ defaultScriptId: string | null }>>`
+        SELECT "defaultScriptId"
+        FROM "CrmTenantSettings"
+        WHERE "tenantId" = ${tenantId}
+        LIMIT 1
+      `,
+      db.crmScript.findMany({
+        where: { tenantId, ...(includeInactive ? {} : { isActive: true }) },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, name: true, isActive: true, createdAt: true, updatedAt: true },
+      }),
+    ]);
 
-    return { scripts };
+    return {
+      defaultScriptId: settingsRows[0]?.defaultScriptId ?? null,
+      scripts: scripts.map((script) => ({
+        ...script,
+        isDefault: script.id === settingsRows[0]?.defaultScriptId,
+      })),
+    };
   });
 
   // ── GET /crm/scripts/:id ─────────────────────────────────────────────────────
@@ -84,13 +99,36 @@ export async function registerCrmScriptRoutes(app: FastifyInstance) {
     const parsed = patchSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues });
 
-    const script = await db.crmScript.update({
-      where: { id },
-      data: {
-        ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
-        ...(parsed.data.body !== undefined ? { body: parsed.data.body } : {}),
-        ...(parsed.data.isActive !== undefined ? { isActive: parsed.data.isActive } : {}),
-      },
+    const script = await db.$transaction(async (tx) => {
+      const updated = await tx.crmScript.update({
+        where: { id },
+        data: {
+          ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
+          ...(parsed.data.body !== undefined ? { body: parsed.data.body } : {}),
+          ...(parsed.data.isActive !== undefined ? { isActive: parsed.data.isActive } : {}),
+        },
+      });
+
+      if (parsed.data.isDefault === true && parsed.data.isActive !== false) {
+        await tx.crmTenantSettings.upsert({
+          where: { tenantId },
+          create: { tenantId, enabled: true },
+          update: {},
+        });
+        await tx.$executeRaw`
+          UPDATE "CrmTenantSettings"
+          SET "defaultScriptId" = ${id}, "updatedAt" = NOW()
+          WHERE "tenantId" = ${tenantId}
+        `;
+      } else if (parsed.data.isDefault === false || parsed.data.isActive === false) {
+        await tx.$executeRaw`
+          UPDATE "CrmTenantSettings"
+          SET "defaultScriptId" = NULL, "updatedAt" = NOW()
+          WHERE "tenantId" = ${tenantId} AND "defaultScriptId" = ${id}
+        `;
+      }
+
+      return updated;
     });
     return { script };
   });
@@ -106,7 +144,14 @@ export async function registerCrmScriptRoutes(app: FastifyInstance) {
     const existing = await db.crmScript.findFirst({ where: { id, tenantId }, select: { id: true } });
     if (!existing) return reply.code(404).send({ error: "not_found" });
 
-    await db.crmScript.update({ where: { id }, data: { isActive: false } });
+    await db.$transaction([
+      db.crmScript.update({ where: { id }, data: { isActive: false } }),
+      db.$executeRaw`
+        UPDATE "CrmTenantSettings"
+        SET "defaultScriptId" = NULL, "updatedAt" = NOW()
+        WHERE "tenantId" = ${tenantId} AND "defaultScriptId" = ${id}
+      `,
+    ]);
     return { ok: true };
   });
 }

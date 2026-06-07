@@ -19,6 +19,7 @@ const createSchema = z.object({
 const patchSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   isActive: z.boolean().optional(),
+  isDefault: z.boolean().optional(),
   // Replace items entirely when provided
   items: z.array(itemSchema).optional(),
 });
@@ -40,15 +41,29 @@ export async function registerCrmChecklistRoutes(app: FastifyInstance) {
     const q = req.query as Record<string, string>;
     const includeInactive = q.includeInactive === "true";
 
-    const checklists = await db.crmChecklist.findMany({
-      where: { tenantId, ...(includeInactive ? {} : { isActive: true }) },
-      orderBy: { createdAt: "desc" },
-      include: {
-        items: { orderBy: { sortOrder: "asc" } },
-      },
-    });
+    const [settingsRows, checklists] = await Promise.all([
+      db.$queryRaw<Array<{ defaultChecklistId: string | null }>>`
+        SELECT "defaultChecklistId"
+        FROM "CrmTenantSettings"
+        WHERE "tenantId" = ${tenantId}
+        LIMIT 1
+      `,
+      db.crmChecklist.findMany({
+        where: { tenantId, ...(includeInactive ? {} : { isActive: true }) },
+        orderBy: { createdAt: "desc" },
+        include: {
+          items: { orderBy: { sortOrder: "asc" } },
+        },
+      }),
+    ]);
 
-    return { checklists };
+    return {
+      defaultChecklistId: settingsRows[0]?.defaultChecklistId ?? null,
+      checklists: checklists.map((checklist) => ({
+        ...checklist,
+        isDefault: checklist.id === settingsRows[0]?.defaultChecklistId,
+      })),
+    };
   });
 
   // ── GET /crm/checklists/:id ──────────────────────────────────────────────────
@@ -123,13 +138,36 @@ export async function registerCrmChecklistRoutes(app: FastifyInstance) {
       }
     }
 
-    const checklist = await db.crmChecklist.update({
-      where: { id },
-      data: {
-        ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
-        ...(parsed.data.isActive !== undefined ? { isActive: parsed.data.isActive } : {}),
-      },
-      include: { items: { orderBy: { sortOrder: "asc" } } },
+    const checklist = await db.$transaction(async (tx) => {
+      const updated = await tx.crmChecklist.update({
+        where: { id },
+        data: {
+          ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
+          ...(parsed.data.isActive !== undefined ? { isActive: parsed.data.isActive } : {}),
+        },
+        include: { items: { orderBy: { sortOrder: "asc" } } },
+      });
+
+      if (parsed.data.isDefault === true && parsed.data.isActive !== false) {
+        await tx.crmTenantSettings.upsert({
+          where: { tenantId },
+          create: { tenantId, enabled: true },
+          update: {},
+        });
+        await tx.$executeRaw`
+          UPDATE "CrmTenantSettings"
+          SET "defaultChecklistId" = ${id}, "updatedAt" = NOW()
+          WHERE "tenantId" = ${tenantId}
+        `;
+      } else if (parsed.data.isDefault === false || parsed.data.isActive === false) {
+        await tx.$executeRaw`
+          UPDATE "CrmTenantSettings"
+          SET "defaultChecklistId" = NULL, "updatedAt" = NOW()
+          WHERE "tenantId" = ${tenantId} AND "defaultChecklistId" = ${id}
+        `;
+      }
+
+      return updated;
     });
     return { checklist };
   });
@@ -145,7 +183,14 @@ export async function registerCrmChecklistRoutes(app: FastifyInstance) {
     const existing = await db.crmChecklist.findFirst({ where: { id, tenantId }, select: { id: true } });
     if (!existing) return reply.code(404).send({ error: "not_found" });
 
-    await db.crmChecklist.update({ where: { id }, data: { isActive: false } });
+    await db.$transaction([
+      db.crmChecklist.update({ where: { id }, data: { isActive: false } }),
+      db.$executeRaw`
+        UPDATE "CrmTenantSettings"
+        SET "defaultChecklistId" = NULL, "updatedAt" = NOW()
+        WHERE "tenantId" = ${tenantId} AND "defaultChecklistId" = ${id}
+      `,
+    ]);
     return { ok: true };
   });
 

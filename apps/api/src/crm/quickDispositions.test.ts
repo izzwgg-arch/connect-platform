@@ -25,10 +25,11 @@ test("buildDefaultQuickDispositionItems includes all required defaults", () => {
 
 test("mergeQuickDispositionItems appends enabled custom labels", () => {
   const merged = mergeQuickDispositionItems([
-    { id: "custom-1", label: "Gatekeeper", sortOrder: 0, enabled: true },
+    { id: "custom-1", label: "Gatekeeper", sortOrder: 0, enabled: true, color: "#9333EA" },
   ]);
   assert.equal(merged.some((item) => item.label === "Gatekeeper"), true);
   assert.equal(merged.some((item) => item.label === "No Answer"), true);
+  assert.equal(merged.find((item) => item.label === "Gatekeeper")?.color, "#9333EA");
 });
 
 test("normalizeCustomQuickDispositionInput rejects duplicate labels and default collisions", () => {
@@ -39,6 +40,15 @@ test("normalizeCustomQuickDispositionInput rejects duplicate labels and default 
   ]);
   assert.equal(normalized.length, 1);
   assert.equal(normalized[0]?.label, "Custom A");
+});
+
+test("normalizeCustomQuickDispositionInput preserves custom hex colors and defaults invalid colors", () => {
+  const normalized = normalizeCustomQuickDispositionInput([
+    { id: "a", label: "Needs Docs", sortOrder: 0, color: "#12abef" },
+    { id: "b", label: "Decision Maker", sortOrder: 1, color: "magenta" as any },
+  ]);
+  assert.equal(normalized[0]?.color, "#12ABEF");
+  assert.equal(normalized[1]?.color, "#2563EB");
 });
 
 test("canManageQuickDispositions allows manager/admin and platform admin", () => {

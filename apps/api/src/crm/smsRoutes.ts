@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { db } from "@connect/db";
 import {
@@ -52,6 +52,19 @@ function formatSmsTemplate(row: any) {
     createdAt: row.createdAt ? row.createdAt.toISOString() : null,
     updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
   };
+}
+
+function isSmsTemplateStoreError(error: unknown): boolean {
+  const code = (error as { code?: string } | null)?.code;
+  const message = String((error as { message?: string } | null)?.message ?? "");
+  return code === "P2021" || code === "P2022" || message.includes("CrmSmsTemplate") || message.includes("crmSmsTemplate");
+}
+
+function sendSmsTemplateStoreError(reply: FastifyReply) {
+  return reply.code(503).send({
+    error: "sms_templates_unavailable",
+    message: "SMS templates are temporarily unavailable.",
+  });
 }
 
 async function canArchiveSmsTemplate(
@@ -157,18 +170,24 @@ export async function registerCrmSmsRoutes(app: FastifyInstance, deps?: Pick<Con
     const user = await requireCrmAccess(req, reply);
     if (!user) return;
 
-    const rows = await (db as any).crmSmsTemplate.findMany({
-      where: {
-        tenantId: user.tenantId,
-        isArchived: false,
-        OR: [
-          { visibility: "SHARED" },
-          { visibility: "PRIVATE", createdByUserId: user.sub },
-        ],
-      },
-      orderBy: [{ isFavorite: "desc" }, { updatedAt: "desc" }],
-      take: 200,
-    });
+    let rows: any[];
+    try {
+      rows = await (db as any).crmSmsTemplate.findMany({
+        where: {
+          tenantId: user.tenantId,
+          isArchived: false,
+          OR: [
+            { visibility: "SHARED" },
+            { visibility: "PRIVATE", createdByUserId: user.sub },
+          ],
+        },
+        orderBy: [{ isFavorite: "desc" }, { updatedAt: "desc" }],
+        take: 200,
+      });
+    } catch (error) {
+      if (isSmsTemplateStoreError(error)) return sendSmsTemplateStoreError(reply);
+      throw error;
+    }
 
     return { templates: rows.map(formatSmsTemplate) };
   });
@@ -182,15 +201,21 @@ export async function registerCrmSmsRoutes(app: FastifyInstance, deps?: Pick<Con
       return reply.code(400).send({ error: "invalid_payload", detail: parsed.error.format() });
     }
 
-    const row = await (db as any).crmSmsTemplate.create({
-      data: {
-        tenantId: user.tenantId,
-        createdByUserId: user.sub,
-        name: parsed.data.name,
-        bodyText: parsed.data.bodyText,
-        isFavorite: parsed.data.isFavorite ?? false,
-      },
-    });
+    let row: any;
+    try {
+      row = await (db as any).crmSmsTemplate.create({
+        data: {
+          tenantId: user.tenantId,
+          createdByUserId: user.sub,
+          name: parsed.data.name,
+          bodyText: parsed.data.bodyText,
+          isFavorite: parsed.data.isFavorite ?? false,
+        },
+      });
+    } catch (error) {
+      if (isSmsTemplateStoreError(error)) return sendSmsTemplateStoreError(reply);
+      throw error;
+    }
     await db.auditLog.create({
       data: {
         tenantId: user.tenantId,
@@ -209,17 +234,28 @@ export async function registerCrmSmsRoutes(app: FastifyInstance, deps?: Pick<Con
     if (!user) return;
     const { id } = req.params as { id: string };
 
-    const existing = await (db as any).crmSmsTemplate.findFirst({
-      where: { id, tenantId: user.tenantId, isArchived: false },
-      select: { id: true, createdByUserId: true },
-    });
+    let existing: { id: string; createdByUserId?: string | null } | null;
+    try {
+      existing = await (db as any).crmSmsTemplate.findFirst({
+        where: { id, tenantId: user.tenantId, isArchived: false },
+        select: { id: true, createdByUserId: true },
+      });
+    } catch (error) {
+      if (isSmsTemplateStoreError(error)) return sendSmsTemplateStoreError(reply);
+      throw error;
+    }
     if (!existing) return reply.code(404).send({ error: "template_not_found" });
     if (!(await canArchiveSmsTemplate(user, existing))) return reply.code(403).send({ error: "forbidden" });
 
-    await (db as any).crmSmsTemplate.update({
-      where: { id },
-      data: { isArchived: true },
-    });
+    try {
+      await (db as any).crmSmsTemplate.update({
+        where: { id },
+        data: { isArchived: true },
+      });
+    } catch (error) {
+      if (isSmsTemplateStoreError(error)) return sendSmsTemplateStoreError(reply);
+      throw error;
+    }
     await db.auditLog.create({
       data: {
         tenantId: user.tenantId,
@@ -255,10 +291,14 @@ export async function registerCrmSmsRoutes(app: FastifyInstance, deps?: Pick<Con
       return reply.code(resolved.status ?? 400).send({ error: resolved.error, detail: resolved.detail });
     }
 
-    const thread = await findExistingSmsThreadForPhone(user.tenantId, resolved.toPhone);
+    const [thread, outboundConfigured] = await Promise.all([
+      findExistingSmsThreadForPhone(user.tenantId, resolved.toPhone),
+      isCrmOutboundSmsConfigured(user.tenantId),
+    ]);
     const messages = thread ? await listThreadMessagesForCrmPanel(user.tenantId, thread.id) : [];
     return {
       contactId,
+      outboundConfigured,
       thread: thread
         ? {
             id: thread.id,
@@ -304,8 +344,10 @@ export async function registerCrmSmsRoutes(app: FastifyInstance, deps?: Pick<Con
     }
     const { message, phone: requestedPhone, templateId } = parsed.data;
 
-    const selectedTemplate = templateId
-      ? await (db as any).crmSmsTemplate.findFirst({
+    let selectedTemplate: { id: string } | null = null;
+    if (templateId) {
+      try {
+        selectedTemplate = await (db as any).crmSmsTemplate.findFirst({
           where: {
             id: templateId,
             tenantId: user.tenantId,
@@ -316,8 +358,12 @@ export async function registerCrmSmsRoutes(app: FastifyInstance, deps?: Pick<Con
             ],
           },
           select: { id: true },
-        })
-      : null;
+        });
+      } catch (error) {
+        if (isSmsTemplateStoreError(error)) return sendSmsTemplateStoreError(reply);
+        throw error;
+      }
+    }
     if (templateId && !selectedTemplate) {
       return reply.code(404).send({ error: "template_not_found", detail: "Selected SMS template is no longer available" });
     }
@@ -346,7 +392,7 @@ export async function registerCrmSmsRoutes(app: FastifyInstance, deps?: Pick<Con
       externalPhone: resolved.toPhone,
       title: `CRM SMS ${selectContactDisplayName(resolved.contact)}`,
     });
-    if (!threadResult.ok) {
+    if (threadResult.ok === false) {
       return reply.code(threadResult.status).send({ error: threadResult.error, detail: threadResult.message });
     }
 
@@ -358,7 +404,7 @@ export async function registerCrmSmsRoutes(app: FastifyInstance, deps?: Pick<Con
       body: message,
       type: "TEXT",
     });
-    if (!sendResult.ok) {
+    if (sendResult.ok === false) {
       return reply.code(sendResult.status).send({ error: sendResult.error, detail: sendResult.message });
     }
 

@@ -12,11 +12,23 @@ export const DEFAULT_QUICK_DISPOSITIONS = [
   "Appointment Set",
 ] as const;
 
+export const DEFAULT_CUSTOM_QUICK_DISPOSITION_COLOR = "#2563EB";
+
+const LEGACY_CUSTOM_COLOR_VALUES: Record<string, string> = {
+  blue: "#2563EB",
+  purple: "#9333EA",
+  green: "#16A34A",
+  orange: "#E67E22",
+  red: "#DC2626",
+  slate: "#64748B",
+};
+
 export type StoredCustomQuickDisposition = {
   id: string;
   label: string;
   sortOrder: number;
   enabled?: boolean;
+  color?: string;
 };
 
 export type QuickDispositionItem = {
@@ -24,6 +36,7 @@ export type QuickDispositionItem = {
   label: string;
   sortOrder: number;
   isDefault: boolean;
+  color?: string;
 };
 
 function defaultId(label: string): string {
@@ -54,6 +67,7 @@ export function parseStoredCustomQuickDispositions(raw: unknown): StoredCustomQu
       label: label.slice(0, 100),
       sortOrder,
       enabled: rec.enabled === false ? false : true,
+      color: parseCustomColor(rec.color),
     });
   }
   return out.sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label));
@@ -70,6 +84,7 @@ export function mergeQuickDispositionItems(
       label: row.label,
       sortOrder: defaults.length + row.sortOrder,
       isDefault: false,
+      color: row.color ?? DEFAULT_CUSTOM_QUICK_DISPOSITION_COLOR,
     }));
   return [...defaults, ...customItems].sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label));
 }
@@ -94,9 +109,23 @@ export function normalizeCustomQuickDispositionInput(
       label,
       sortOrder: Number.isFinite(row.sortOrder) ? row.sortOrder : index,
       enabled: row.enabled !== false,
+      color: parseCustomColor(row.color),
     });
   }
   return normalized.sort((a, b) => a.sortOrder - b.sortOrder || a.label.localeCompare(b.label));
+}
+
+export function parseCustomColor(value: unknown): string {
+  if (typeof value !== "string") return DEFAULT_CUSTOM_QUICK_DISPOSITION_COLOR;
+  const trimmed = value.trim();
+  const legacy = LEGACY_CUSTOM_COLOR_VALUES[trimmed.toLowerCase()];
+  if (legacy) return legacy;
+  const hex = trimmed.match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i)?.[1];
+  if (!hex) return DEFAULT_CUSTOM_QUICK_DISPOSITION_COLOR;
+  const expanded = hex.length === 3
+    ? hex.split("").map((char) => `${char}${char}`).join("")
+    : hex;
+  return `#${expanded.toUpperCase()}`;
 }
 
 export function canManageQuickDispositions(
