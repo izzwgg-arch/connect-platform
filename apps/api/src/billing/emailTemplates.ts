@@ -176,6 +176,11 @@ export function billingInvoiceEmailMarker(invoiceId: string): string {
   return `<!-- connect-billing-invoice:${invoiceId} -->`;
 }
 
+/** Hidden marker parsed when attaching receipt PDFs to outbound receipt emails. */
+export function billingPaymentTransactionMarker(transactionId: string): string {
+  return `<!-- connect-billing-transaction:${transactionId} -->`;
+}
+
 export function invoiceSentEmail(input: {
   invoiceNumber: string;
   totalCents: number;
@@ -231,6 +236,51 @@ export function invoiceSentEmail(input: {
   ].filter((line): line is string => line != null);
   const text = textLines.join("\n");
   return { subject, html: emailShell("Invoice ready", body, brand), text };
+}
+
+/** Autopay T-3 reminder — payment due in 3 days, autopay will charge automatically. */
+export function autopayReminderEmail(input: {
+  invoiceNumber: string;
+  totalCents: number;
+  balanceDueCents?: number;
+  dueDate: Date;
+  scheduledChargeAt: Date;
+  billingInvoiceId: string;
+  servicePeriod?: string | null;
+  brand?: InvoiceEmailBranding | null;
+}): { subject: string; html: string; text: string } {
+  const brand = mergeBrand(input.brand ?? null);
+  const bal = input.balanceDueCents != null ? input.balanceDueCents : input.totalCents;
+  const subject = `Your Connect payment is due in 3 days`;
+
+  const rows = [
+    summaryRow("Amount due", `<strong style="color:${CONNECT_BLUE};">${money(bal)}</strong>`, false, true),
+    summaryRow("Invoice number", escapeHtml(input.invoiceNumber)),
+    summaryRow("Payment date", fmtDate(input.scheduledChargeAt)),
+    summaryRow("Invoice due date", fmtDate(input.dueDate)),
+  ];
+  if (input.servicePeriod) {
+    rows.push(summaryRow("Service period", escapeHtml(input.servicePeriod)));
+  }
+
+  const body = `
+    <p style="margin:0 0 10px;font-size:17px;line-height:25px;font-weight:700;color:#1e293b;">Your payment is due in 3 days.</p>
+    <p style="margin:0 0 20px;font-size:16px;line-height:25px;color:#475569;">Your saved payment method will be charged automatically on your billing date. Your invoice is attached for your records.</p>
+    ${infoBox(rows.join(""))}
+    <p style="margin:18px 0 0;font-size:14px;line-height:22px;color:#64748b;">Your invoice PDF is attached.</p>
+    ${billingInvoiceEmailMarker(input.billingInvoiceId)}
+  `;
+
+  const text = [
+    subject,
+    `Amount due: ${money(bal)}`,
+    `Invoice: ${input.invoiceNumber}`,
+    `Payment date: ${fmtDate(input.scheduledChargeAt)}`,
+    "Your saved payment method will be charged automatically on your billing date.",
+    "Your invoice PDF is attached.",
+  ].join("\n");
+
+  return { subject, html: emailShell("Payment due soon", body, brand), text };
 }
 
 /** Admin / manual resend — PDF is attached when the email job is sent. */
@@ -298,6 +348,7 @@ export function paymentReceiptEmail(input: {
   totalCents: number;
   paidAt: Date;
   billingInvoiceId: string;
+  transactionId: string;
   cardLabel?: string | null;
   portalInvoiceUrl?: string | null;
   paidViaAutopay?: boolean;
@@ -335,14 +386,15 @@ export function paymentReceiptEmail(input: {
     ${autopayNote}
     ${infoBox(rows.join(""))}
     ${viewBtn}
-    <p style="margin:12px 0 0;font-size:14px;line-height:22px;color:#64748b;">Your invoice PDF is attached.</p>
+    <p style="margin:12px 0 0;font-size:14px;line-height:22px;color:#64748b;">Attached: your invoice and your payment receipt.</p>
     ${billingInvoiceEmailMarker(input.billingInvoiceId)}
+    ${billingPaymentTransactionMarker(input.transactionId)}
   `;
 
   return {
     subject,
     html: emailShell(h1, body, brand),
-    text: `${subject}\nAmount: ${money(input.totalCents)}\nInvoice: ${input.invoiceNumber}\nPaid: ${fmtDate(input.paidAt)}${input.portalInvoiceUrl ? `\nPortal: ${input.portalInvoiceUrl}` : ""}`,
+    text: `${subject}\nAmount: ${money(input.totalCents)}\nInvoice: ${input.invoiceNumber}\nPaid: ${fmtDate(input.paidAt)}\nAttached: invoice PDF and receipt PDF${input.portalInvoiceUrl ? `\nPortal: ${input.portalInvoiceUrl}` : ""}`,
   };
 }
 

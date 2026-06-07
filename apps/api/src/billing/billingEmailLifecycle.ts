@@ -1,6 +1,6 @@
 import { db } from "@connect/db";
 import { buildBillingEmailJobCreateData } from "./billingAuth";
-import { billingApologyEmail, invoiceSentEmail, paymentFailedEmail, paymentLinkEmail, paymentReceiptEmail, paymentRefundedEmail } from "./emailTemplates";
+import { billingApologyEmail, autopayReminderEmail, invoiceSentEmail, paymentFailedEmail, paymentLinkEmail, paymentReceiptEmail, paymentRefundedEmail } from "./emailTemplates";
 import { clearDunningSlice } from "./billingDunning";
 import { resolveInvoiceEmailBranding } from "./invoiceBranding";
 import { createBillingInvoicePayToken } from "./billingPayToken";
@@ -197,7 +197,65 @@ export async function queueInvoiceSentOnFinalize(invoice: {
   return { queued: true };
 }
 
-/** Payment-link-only email (traceable tenantId + invoiceId). */
+/** Autopay T-3 reminder — one email per invoice (idempotent via EmailJob type + marker). */
+export async function queueAutopayReminderEmailOnce(params: {
+  tenantId: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  totalCents: number;
+  balanceDueCents?: number;
+  dueDate: Date;
+  scheduledChargeAt: Date;
+  periodStart?: Date | null;
+  periodEnd?: Date | null;
+}): Promise<{ queued: boolean; reason?: string }> {
+  if (await hasBillingEmailJob({ tenantId: params.tenantId, invoiceId: params.invoiceId, type: "BILLING_AUTOPAY_REMINDER" })) {
+    return { queued: false, reason: "already_sent" };
+  }
+  const recipient = await resolveBillingEmailRecipient({ tenantId: params.tenantId, invoiceId: params.invoiceId });
+  const to = recipient.to;
+  if (!to) {
+    await logLifecycle("autopay_reminder_email_skipped", params.tenantId, params.invoiceId, "No billing email configured");
+    return { queued: false, reason: "no_billing_email" };
+  }
+  const brand = resolveInvoiceEmailBranding(recipient.settings || {}, recipient.tenantName);
+  let servicePeriod: string | null = null;
+  if (params.periodStart && params.periodEnd) {
+    const fmtOpt: Intl.DateTimeFormatOptions = { year: "numeric", month: "short", day: "numeric", timeZone: "UTC" };
+    const s = new Date(params.periodStart).toLocaleDateString("en-US", fmtOpt);
+    const e = new Date(params.periodEnd).toLocaleDateString("en-US", fmtOpt);
+    servicePeriod = `${s} – ${e}`;
+  }
+  const tpl = autopayReminderEmail({
+    invoiceNumber: params.invoiceNumber,
+    totalCents: params.totalCents,
+    balanceDueCents: params.balanceDueCents ?? params.totalCents,
+    dueDate: params.dueDate,
+    scheduledChargeAt: params.scheduledChargeAt,
+    billingInvoiceId: params.invoiceId,
+    servicePeriod,
+    brand,
+  });
+  await (db as any).emailJob.create({
+    data: buildBillingEmailJobCreateData({
+      tenantId: params.tenantId,
+      invoiceId: params.invoiceId,
+      to,
+      type: "BILLING_AUTOPAY_REMINDER",
+      subject: tpl.subject,
+      html: tpl.html,
+      text: tpl.text,
+    }),
+  });
+  await logLifecycle("autopay_reminder_email_sent", params.tenantId, params.invoiceId, null, {
+    emailType: "BILLING_AUTOPAY_REMINDER",
+    to,
+    recipientSource: recipient.source,
+    scheduledChargeAt: params.scheduledChargeAt.toISOString(),
+  });
+  return { queued: true };
+}
+
 export async function queuePaymentLinkEmail(params: {
   tenantId: string;
   invoiceId: string;
@@ -259,6 +317,7 @@ export async function queueReceiptEmailOnce(params: {
     totalCents: params.totalCents,
     paidAt: new Date(),
     billingInvoiceId: params.invoiceId,
+    transactionId: params.transactionId,
     cardLabel: params.cardLabel ?? null,
     portalInvoiceUrl,
     paidViaAutopay: params.paidViaAutopay,

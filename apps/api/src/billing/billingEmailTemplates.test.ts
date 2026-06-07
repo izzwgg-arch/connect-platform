@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { invoiceSentEmail, paymentLinkEmail, paymentReceiptEmail, paymentFailedEmail } from "./emailTemplates";
+import { autopayReminderEmail, invoiceSentEmail, paymentLinkEmail, paymentReceiptEmail, paymentFailedEmail } from "./emailTemplates";
 import { billingInvoicePdfApiUrl, billingInvoicePortalUrl, billingInvoicePublicPayUrl } from "./billingEmailLifecycle";
 import { verifyBillingInvoicePayToken } from "./billingPayToken";
 import { resolveInvoiceEmailBranding } from "./invoiceBranding";
@@ -157,6 +157,7 @@ test("paymentReceiptEmail includes invoice number and amount", () => {
     totalCents: 7500,
     paidAt: new Date("2026-05-19"),
     billingInvoiceId: "inv_5",
+    transactionId: "tx_5",
     portalInvoiceUrl: "https://example.com/i",
   });
   assert.match(t.html, /INV-5/);
@@ -170,6 +171,7 @@ test("paymentReceiptEmail shows payment confirmation badge", () => {
     totalCents: 1000,
     paidAt: new Date("2026-05-19"),
     billingInvoiceId: "inv_test_6",
+    transactionId: "tx_6",
   });
   assert.match(t.html, /Payment confirmed/);
   assert.match(t.html, /Thank you/);
@@ -181,6 +183,7 @@ test("paymentReceiptEmail includes masked card label when provided", () => {
     totalCents: 2000,
     paidAt: new Date("2026-05-01"),
     billingInvoiceId: "inv_7",
+    transactionId: "tx_7",
     cardLabel: "Visa •••• 4242",
   });
   assert.match(t.html, /Visa/);
@@ -189,16 +192,18 @@ test("paymentReceiptEmail includes masked card label when provided", () => {
   assert.doesNotMatch(t.html, /\b\d{16}\b/);
 });
 
-test("paymentReceiptEmail notes PDF attachment and embeds invoice marker", () => {
+test("paymentReceiptEmail notes both PDF attachments and embeds invoice + transaction markers", () => {
   const t = paymentReceiptEmail({
     invoiceNumber: "INV-8",
     totalCents: 3000,
     paidAt: new Date("2026-05-19"),
     billingInvoiceId: "inv_abc",
+    transactionId: "tx_abc",
     portalInvoiceUrl: "https://example.com/i",
   });
-  assert.match(t.html, /invoice PDF is attached/i);
+  assert.match(t.html, /Attached: your invoice and your payment receipt/i);
   assert.match(t.html, /connect-billing-invoice:inv_abc/);
+  assert.match(t.html, /connect-billing-transaction:tx_abc/);
   assert.doesNotMatch(t.html, /\/api\/billing\/platform\/invoices\//);
 });
 
@@ -208,6 +213,7 @@ test("paymentReceiptEmail does not include Pay Invoice CTA", () => {
     totalCents: 3000,
     paidAt: new Date("2026-05-19"),
     billingInvoiceId: "inv_paid",
+    transactionId: "tx_paid",
     portalInvoiceUrl: "https://example.com/i",
   });
   assert.doesNotMatch(t.html, /Pay Invoice/);
@@ -220,6 +226,7 @@ test("paymentReceiptEmail shows autopay note when paidViaAutopay", () => {
     totalCents: 5000,
     paidAt: new Date("2026-05-01"),
     billingInvoiceId: "inv_9",
+    transactionId: "tx_9",
     paidViaAutopay: true,
   });
   assert.match(t.html, /saved payment method/);
@@ -232,6 +239,7 @@ test("paymentReceiptEmail does not include raw card details", () => {
     totalCents: 1000,
     paidAt: new Date("2026-05-19"),
     billingInvoiceId: "inv_10",
+    transactionId: "tx_10",
     cardLabel: "Visa •••• 4242",
   });
   // No raw token / CVV / full card number
@@ -246,6 +254,7 @@ test("paymentReceiptEmail uses white/light background", () => {
     totalCents: 100,
     paidAt: new Date("2026-05-19"),
     billingInvoiceId: "inv_11",
+    transactionId: "tx_11",
   });
   assert.match(t.html, /#f3f6fa/);
   assert.doesNotMatch(t.html, /#0b1220/);
@@ -301,6 +310,26 @@ test("emailShell keeps Connect logo even when custom logoUrl is configured", () 
   });
   assert.match(t.html, /connect-logo\.png/);
   assert.doesNotMatch(t.html, /mybrand-logo\.png/);
+});
+
+// ---------------------------------------------------------------------------
+// autopayReminderEmail
+// ---------------------------------------------------------------------------
+
+test("autopayReminderEmail says due in 3 days and autopay will charge", () => {
+  const t = autopayReminderEmail({
+    invoiceNumber: "CC-100",
+    totalCents: 9900,
+    dueDate: new Date("2026-06-21"),
+    scheduledChargeAt: new Date("2026-06-21"),
+    billingInvoiceId: "inv_rem",
+  });
+  assert.match(t.subject, /due in 3 days/i);
+  assert.match(t.html, /due in 3 days/i);
+  assert.match(t.html, /charged automatically/i);
+  assert.match(t.html, /invoice PDF is attached/i);
+  assert.match(t.html, /connect-billing-invoice:inv_rem/);
+  assert.doesNotMatch(t.html, /Payment confirmed/i);
 });
 
 // ---------------------------------------------------------------------------

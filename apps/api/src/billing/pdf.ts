@@ -34,6 +34,60 @@ type TotalRow = {
   tone?: "default" | "credit" | "paid" | "due";
 };
 
+export type BillingPdfDocumentType = "invoice" | "receipt";
+
+export type BillingReceiptPdfContext = {
+  transactionId: string;
+  paymentAmountCents: number;
+  paymentDate: Date;
+  paymentMethod?: string | null;
+  processorReference?: string | null;
+};
+
+export type RenderBillingPdfOptions = {
+  documentType?: BillingPdfDocumentType;
+  /** Invoice PDF in receipt emails: show billed amount due before payment. */
+  billedSnapshot?: boolean;
+  receipt?: BillingReceiptPdfContext;
+};
+
+function invoiceViewForPdf(invoice: any, options?: RenderBillingPdfOptions): any {
+  const total = Number(invoice.totalCents ?? 0);
+  if (options?.billedSnapshot) {
+    return {
+      ...invoice,
+      status: "OPEN",
+      balanceDueCents: total,
+      amountPaidCents: 0,
+      paidAt: null,
+    };
+  }
+  if (options?.documentType === "receipt" && options.receipt) {
+    return {
+      ...invoice,
+      status: "PAID",
+      balanceDueCents: 0,
+      amountPaidCents: options.receipt.paymentAmountCents,
+      paidAt: options.receipt.paymentDate,
+    };
+  }
+  return invoice;
+}
+
+export async function generateInvoicePdf(
+  invoice: any,
+  options?: Pick<RenderBillingPdfOptions, "billedSnapshot">,
+): Promise<Buffer> {
+  return renderBillingInvoicePdf(invoice, {
+    documentType: "invoice",
+    billedSnapshot: options?.billedSnapshot,
+  });
+}
+
+export async function generateReceiptPdf(invoice: any, receipt: BillingReceiptPdfContext): Promise<Buffer> {
+  return renderBillingInvoicePdf(invoice, { documentType: "receipt", receipt });
+}
+
 function logoBuffer(): Buffer | null {
   try {
     if (fs.existsSync(BUNDLED_LOGO_PATH)) return fs.readFileSync(BUNDLED_LOGO_PATH);
@@ -290,7 +344,10 @@ function drawIconBadge(doc: PDFKit.PDFDocument, kind: IconKind, x: number, y: nu
   doc.restore();
 }
 
-export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
+export async function renderBillingInvoicePdf(invoice: any, options?: RenderBillingPdfOptions): Promise<Buffer> {
+  const documentType = options?.documentType ?? "invoice";
+  const viewInvoice = invoiceViewForPdf(invoice, options);
+  const receiptCtx = options?.receipt;
   const settings = invoice.tenant?.billingSettings || {};
   const tenantName = invoice.tenant?.name || "Customer";
   const brand = resolveInvoiceEmailBranding(settings, tenantName);
@@ -302,10 +359,17 @@ export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
   const payUrl = billingInvoicePublicPayUrl(invoice.id, invoice.tenantId);
   const logo = logoBuffer();
   const lineItems: InvoiceLineItem[] = invoice.lineItems || [];
-  const statusText = statusLabel(invoice.status || "OPEN");
+  const statusText = documentType === "receipt" ? "PAID" : statusLabel(viewInvoice.status || "OPEN");
   const isPaid = statusText === "PAID";
-  const balanceDue = Number(invoice.balanceDueCents ?? invoice.totalCents ?? 0);
-  const showPayButton = !isPaid && balanceDue > 0;
+  const balanceDue = documentType === "receipt"
+    ? 0
+    : Number(viewInvoice.balanceDueCents ?? viewInvoice.totalCents ?? 0);
+  const showPayButton = documentType === "invoice" && !options?.billedSnapshot && !isPaid && balanceDue > 0;
+  const receiptNumber = receiptCtx?.processorReference || receiptCtx?.transactionId || "";
+  const paymentMethodLabel = receiptCtx?.paymentMethod?.trim() || null;
+  const pdfTitle = documentType === "receipt"
+    ? `Receipt ${receiptNumber || invoice.invoiceNumber || invoice.id}`
+    : `Invoice ${invoice.invoiceNumber || invoice.id}`;
 
   const ink = "#0f172a";
   const text = "#334155";
@@ -319,7 +383,7 @@ export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
     const doc = new PDFDocument({
       size: "LETTER",
       margin: 0,
-      info: { Title: `Invoice ${invoice.invoiceNumber || invoice.id}` },
+      info: { Title: pdfTitle },
       bufferPages: false,
     });
     const chunks: Buffer[] = [];
@@ -346,9 +410,15 @@ export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
       doc.fillColor(ink).font(FONT_BOLD).fontSize(15.5).text(CONNECT_LEGAL_NAME, ml, 44, { width: 210 });
     }
 
-    doc.fillColor(ink).font(FONT_BOLD).fontSize(24).text("INVOICE", mr - 170, 30, { width: 170, align: "right" });
-    doc.fillColor(blue).font(FONT_SEMIBOLD).fontSize(10.8).text(invoice.invoiceNumber || invoice.id, mr - 170, 61, { width: 170, align: "right" });
-    doc.fillColor(muted).font(FONT_REGULAR).fontSize(8.5).text(`Issued ${formatDateShort(invoice.createdAt || invoice.issueDate)}`, mr - 170, 79, { width: 170, align: "right" });
+    const docTitle = documentType === "receipt" ? "RECEIPT" : "INVOICE";
+    doc.fillColor(ink).font(FONT_BOLD).fontSize(24).text(docTitle, mr - 170, 30, { width: 170, align: "right" });
+    if (documentType === "receipt") {
+      doc.fillColor(blue).font(FONT_SEMIBOLD).fontSize(10.8).text(receiptNumber || "Payment receipt", mr - 170, 61, { width: 170, align: "right" });
+      doc.fillColor(muted).font(FONT_REGULAR).fontSize(8.5).text(`Invoice ${invoice.invoiceNumber || invoice.id}`, mr - 170, 79, { width: 170, align: "right" });
+    } else {
+      doc.fillColor(blue).font(FONT_SEMIBOLD).fontSize(10.8).text(invoice.invoiceNumber || invoice.id, mr - 170, 61, { width: 170, align: "right" });
+      doc.fillColor(muted).font(FONT_REGULAR).fontSize(8.5).text(`Issued ${formatDateShort(invoice.createdAt || invoice.issueDate)}`, mr - 170, 79, { width: 170, align: "right" });
+    }
     drawStatusPill(doc, statusText, mr - 18, 101);
 
     // Bill-from and bill-to column block with a vertical separator like the reference.
@@ -380,27 +450,45 @@ export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
     const cardY = 128;
     roundedPanel(doc, cardX, cardY, cardW, cardH, "#ffffff", "#dfe7f2", 7);
     doc.roundedRect(cardX + 2, cardY + 2, cardW - 4, cardH - 4, 6).strokeColor("#f3f6fb").lineWidth(0.6).stroke();
-    label(doc, "Balance due", cardX + 18, cardY + 18, cardW - 36, "#334155");
-    doc.fillColor(blue).font(FONT_BOLD).fontSize(31).text(money(balanceDue), cardX + 18, cardY + 36, { width: cardW - 36 });
-    drawCalendarIcon(doc, cardX + 18, cardY + 76);
-    doc.fillColor(text).font(FONT_REGULAR).fontSize(8.3).text(`Due on ${formatDateShort(invoice.dueDate)}`, cardX + 39, cardY + 75, { width: cardW - 58 });
-    if (showPayButton) {
-      doc.roundedRect(cardX + 18, cardY + 101, cardW - 36, 29, 5).fill(blue);
-      doc.fillColor("#ffffff").font(FONT_SEMIBOLD).fontSize(9.4).text("Pay Now Securely", cardX + 18, cardY + 110, { width: cardW - 36, align: "center" });
-      doc.link(cardX + 18, cardY + 101, cardW - 36, 29, payUrl);
+    if (documentType === "receipt" && receiptCtx) {
+      label(doc, "Amount paid", cardX + 18, cardY + 18, cardW - 36, "#334155");
+      doc.fillColor("#067647").font(FONT_BOLD).fontSize(31).text(money(receiptCtx.paymentAmountCents), cardX + 18, cardY + 36, { width: cardW - 36 });
+      drawCalendarIcon(doc, cardX + 18, cardY + 76);
+      doc.fillColor(text).font(FONT_REGULAR).fontSize(8.3).text(`Paid ${formatDateShort(receiptCtx.paymentDate)}`, cardX + 39, cardY + 75, { width: cardW - 58 });
+      if (paymentMethodLabel) {
+        doc.fillColor(muted).font(FONT_REGULAR).fontSize(8).text(paymentMethodLabel, cardX + 18, cardY + 92, { width: cardW - 36 });
+      }
+      doc.fillColor(muted).font(FONT_REGULAR).fontSize(8).text(`Balance due ${money(0)}`, cardX + 18, cardY + 104, { width: cardW - 36 });
+      doc.fillColor("#067647").font(FONT_SEMIBOLD).fontSize(9.4).text("Paid in full", cardX + 18, cardY + 118, { width: cardW - 36 });
     } else {
-      doc.fillColor("#067647").font(FONT_SEMIBOLD).fontSize(9.4).text("Paid in full", cardX + 18, cardY + 104, { width: cardW - 36 });
+      label(doc, "Balance due", cardX + 18, cardY + 18, cardW - 36, "#334155");
+      doc.fillColor(blue).font(FONT_BOLD).fontSize(31).text(money(balanceDue), cardX + 18, cardY + 36, { width: cardW - 36 });
+      drawCalendarIcon(doc, cardX + 18, cardY + 76);
+      doc.fillColor(text).font(FONT_REGULAR).fontSize(8.3).text(`Due on ${formatDateShort(invoice.dueDate)}`, cardX + 39, cardY + 75, { width: cardW - 58 });
+      if (showPayButton) {
+        doc.roundedRect(cardX + 18, cardY + 101, cardW - 36, 29, 5).fill(blue);
+        doc.fillColor("#ffffff").font(FONT_SEMIBOLD).fontSize(9.4).text("Pay Now Securely", cardX + 18, cardY + 110, { width: cardW - 36, align: "center" });
+        doc.link(cardX + 18, cardY + 101, cardW - 36, 29, payUrl);
+      } else if (isPaid) {
+        doc.fillColor("#067647").font(FONT_SEMIBOLD).fontSize(9.4).text("Paid in full", cardX + 18, cardY + 104, { width: cardW - 36 });
+      }
     }
 
     // Divider and metadata row.
     let y = 282;
     doc.moveTo(ml, y).lineTo(mr, y).strokeColor(line).lineWidth(0.8).stroke();
     y += 18;
-    const meta = [
-      ["Issue date", formatDateShort(invoice.createdAt || invoice.issueDate), "cal"],
-      ["Due date", formatDateShort(invoice.dueDate), "cal"],
-      ["Service period", `${formatDateShort(invoice.periodStart)} - ${formatDateShort(invoice.periodEnd)}`, "cal"],
-    ];
+    const meta = documentType === "receipt" && receiptCtx
+      ? [
+        ["Payment date", formatDateShort(receiptCtx.paymentDate), "cal"],
+        ["Invoice number", String(invoice.invoiceNumber || invoice.id), "cal"],
+        ["Transaction ref", receiptNumber || receiptCtx.transactionId, "cal"],
+      ]
+      : [
+        ["Issue date", formatDateShort(invoice.createdAt || invoice.issueDate), "cal"],
+        ["Due date", formatDateShort(invoice.dueDate), "cal"],
+        ["Service period", `${formatDateShort(invoice.periodStart)} - ${formatDateShort(invoice.periodEnd)}`, "cal"],
+      ];
     const metaW = contentW / meta.length;
     meta.forEach(([k, v, icon], idx) => {
       const x = ml + idx * metaW + 12;
@@ -469,7 +557,7 @@ export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
     const totalsX = mr - totalsW;
     roundedPanel(doc, totalsX, splitY - 6, totalsW, notesH + 24, "#ffffff", line, 6);
     let ty = splitY + 6;
-    buildTotalsRows(invoice, lineItems).forEach((row) => {
+    buildTotalsRows(viewInvoice, lineItems).forEach((row) => {
       const due = row.tone === "due";
       const bold = due || row.label === "Invoice total";
       if (due) {
@@ -534,7 +622,7 @@ export async function renderBillingInvoicePdf(invoice: any): Promise<Buffer> {
       { width: contentW, align: "center" },
     );
 
-    if (invoice.status === "PAID") {
+    if (documentType === "receipt" || (viewInvoice.status === "PAID" && !options?.billedSnapshot)) {
       doc.save();
       doc.rotate(-22, { origin: [306, 396] });
       doc.fillOpacity(0.055).fillColor("#15803d").fontSize(70).font(FONT_BOLD).text("PAID", 170, 360);

@@ -5,8 +5,13 @@ export type BillingSchedule = {
   paymentDate: string;
   nextPaymentDate: string;
   scheduledChargeAt: Date;
+  /** Local midnight on the calendar day 3 days before paymentDate (autopay reminder window opens). */
+  scheduledReminderAt: Date;
+  reminderDate: string;
   periodStart: Date;
   periodEnd: Date;
+  /** True on/after scheduledReminderAt and before scheduledChargeAt (T-3 reminder + invoice prep). */
+  reminderDue: boolean;
   due: boolean;
 };
 
@@ -92,6 +97,12 @@ function localMidnightToUtc(parts: LocalDateParts, timeZone: string): Date {
   return utc;
 }
 
+function addLocalDays(parts: LocalDateParts, days: number, timeZone: string): LocalDateParts {
+  const base = localMidnightToUtc(parts, timeZone);
+  const shifted = new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+  return localDateParts(shifted, timeZone);
+}
+
 export function buildBillingSchedule(input: {
   now?: Date;
   billingDayOfMonth: number;
@@ -113,14 +124,19 @@ export function buildBillingSchedule(input: {
   };
   const scheduledChargeAt = localMidnightToUtc(paymentLocal, timeZone);
   const nextScheduledChargeAt = localMidnightToUtc(nextPaymentLocal, timeZone);
+  const reminderLocal = addLocalDays(paymentLocal, -3, timeZone);
+  const scheduledReminderAt = localMidnightToUtc(reminderLocal, timeZone);
 
   return {
     timeZone,
     paymentDate: localDateKey(paymentLocal),
     nextPaymentDate: localDateKey(nextPaymentLocal),
     scheduledChargeAt,
+    scheduledReminderAt,
+    reminderDate: localDateKey(reminderLocal),
     periodStart: scheduledChargeAt,
     periodEnd: new Date(nextScheduledChargeAt.getTime() - 1),
+    reminderDue: now.getTime() >= scheduledReminderAt.getTime() && now.getTime() < scheduledChargeAt.getTime(),
     due: now.getTime() >= scheduledChargeAt.getTime() && today.day >= paymentDay,
   };
 }

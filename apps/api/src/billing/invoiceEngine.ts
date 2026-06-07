@@ -585,6 +585,8 @@ export async function createBillingInvoice(input: {
   status?: "DRAFT" | "OPEN";
   /** Merged into `BillingEventLog` row for `invoice_created` (e.g. `{ source: "worker_monthly" }`). */
   invoiceCreatedEventMetadata?: Record<string, unknown>;
+  /** When true, skip the standard BILLING_INVOICE_SENT email (autopay T-3 uses reminder instead). */
+  skipInvoiceEmail?: boolean;
 }): Promise<any> {
   const preview = await buildBillingInvoicePreview(input);
   const paidCoverage = await findPaidBillingPeriodCoverage({
@@ -634,16 +636,18 @@ export async function createBillingInvoice(input: {
     type: "invoice_created",
     metadata: { invoiceNumber, ...(input.invoiceCreatedEventMetadata || {}) },
   });
-  await queueInvoiceSentOnFinalize({
-    id: invoice.id,
-    tenantId: invoice.tenantId,
-    invoiceNumber: invoice.invoiceNumber,
-    totalCents: invoice.totalCents,
-    balanceDueCents: invoice.balanceDueCents,
-    dueDate: invoice.dueDate,
-    periodStart: invoice.periodStart ?? null,
-    periodEnd: invoice.periodEnd ?? null,
-  }).catch(() => null);
+  if (!input.skipInvoiceEmail) {
+    await queueInvoiceSentOnFinalize({
+      id: invoice.id,
+      tenantId: invoice.tenantId,
+      invoiceNumber: invoice.invoiceNumber,
+      totalCents: invoice.totalCents,
+      balanceDueCents: invoice.balanceDueCents,
+      dueDate: invoice.dueDate,
+      periodStart: invoice.periodStart ?? null,
+      periodEnd: invoice.periodEnd ?? null,
+    }).catch(() => null);
+  }
   return invoice;
 }
 

@@ -108,6 +108,7 @@ test("approved autopay receipt queues once per approved transaction", async () =
   assert.equal(replay, false);
   assert.equal(state.emailJobs.filter((job) => job.type === "BILLING_RECEIPT").length, 1);
   assert.equal(state.emailJobs[0].toEmail, "billing@example.com");
+  assert.match(String(state.emailJobs[0].htmlBody || ""), /connect-billing-transaction:tx_approved/);
   assert.equal(state.events.filter((event) => event.type === "receipt_emailed").length, 1);
 });
 
@@ -150,4 +151,33 @@ test("declined payment email path does not create a paid receipt", async () => {
   assert.equal(state.emailJobs.length, 1);
   assert.equal(state.emailJobs[0].type, "BILLING_PAYMENT_FAILED");
   assert.equal(state.events.some((event) => event.type === "receipt_emailed"), false);
+});
+
+test("autopay T-3 reminder queues once per invoice", async () => {
+  const { queueAutopayReminderEmailOnce } = await loadLifecycle();
+  resetState();
+  seedTenant("tenant_1", "billing@example.com");
+  seedInvoice("invoice_1");
+
+  const first = await queueAutopayReminderEmailOnce({
+    tenantId: "tenant_1",
+    invoiceId: "invoice_1",
+    invoiceNumber: "CC-T3",
+    totalCents: 5000,
+    dueDate: new Date("2026-06-21"),
+    scheduledChargeAt: new Date("2026-06-21"),
+  });
+  const replay = await queueAutopayReminderEmailOnce({
+    tenantId: "tenant_1",
+    invoiceId: "invoice_1",
+    invoiceNumber: "CC-T3",
+    totalCents: 5000,
+    dueDate: new Date("2026-06-21"),
+    scheduledChargeAt: new Date("2026-06-21"),
+  });
+
+  assert.deepEqual(first, { queued: true });
+  assert.deepEqual(replay, { queued: false, reason: "already_sent" });
+  assert.equal(state.emailJobs.filter((j) => j.type === "BILLING_AUTOPAY_REMINDER").length, 1);
+  assert.match(String(state.emailJobs[0].htmlBody || ""), /due in 3 days/i);
 });
