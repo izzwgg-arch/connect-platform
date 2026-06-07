@@ -34,6 +34,7 @@ export type Checklist = {
   id: string;
   name: string;
   isActive: boolean;
+  isDefault?: boolean;
   createdAt: string;
   updatedAt: string;
   items: ChecklistItem[];
@@ -386,6 +387,9 @@ function ChecklistIndexRow({
             <span className={cn("tasks-status-pill", statusPillClass(readiness.tone))}>
               {readiness.label}
             </span>
+            {checklist.isDefault ? (
+              <span className="crm-queue-pill crm-queue-pill-stage">Default</span>
+            ) : null}
           </div>
           <p className="crm-queue-row-sub truncate">{readiness.detail}</p>
         </div>

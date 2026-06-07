@@ -42,6 +42,7 @@ type Checklist = {
   id: string;
   name: string;
   isActive: boolean;
+  isDefault?: boolean;
   createdAt: string;
   updatedAt: string;
   items: ChecklistItem[];
@@ -194,6 +195,7 @@ export default function CrmChecklistsPage() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Checklist | null>(null);
   const [savedMsg, setSavedMsg] = useState("");
+  const [defaultChecklistId, setDefaultChecklistId] = useState<string | null>(null);
   const [headerTab, setHeaderTab] = useState<ChecklistHeaderTab>("all");
   const [search, setSearch] = useState("");
   const [sortMode, setSortMode] = useState<ChecklistSortMode>("updated");
@@ -208,6 +210,11 @@ export default function CrmChecklistsPage() {
   const sourceChecklists = useMemo(
     () => expandChecklistsForDevPreview(checklists),
     [checklists]
+  );
+
+  const checklistsWithDefault = useMemo(
+    () => sourceChecklists.map((checklist) => ({ ...checklist, isDefault: checklist.id === defaultChecklistId })),
+    [sourceChecklists, defaultChecklistId],
   );
 
   const activeChecklists = useMemo(
@@ -234,7 +241,7 @@ export default function CrmChecklistsPage() {
 
   const filteredChecklists = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return sourceChecklists
+    return checklistsWithDefault
       .filter((checklist) => {
         if (headerTab === "active") return checklist.isActive && !isDraftChecklist(checklist);
         if (headerTab === "draft") return isDraftChecklist(checklist);
@@ -250,14 +257,15 @@ export default function CrmChecklistsPage() {
         if (sortMode === "steps") return b.items.length - a.items.length || a.name.localeCompare(b.name);
         return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
       });
-  }, [sourceChecklists, headerTab, search, sortMode]);
+  }, [checklistsWithDefault, headerTab, search, sortMode]);
 
   async function loadList(options?: { silent?: boolean; mergeLocal?: Checklist[] }) {
     if (!options?.silent) setLoading(true);
     try {
-      const res = await apiGet<{ checklists: Checklist[] }>(
+      const res = await apiGet<{ checklists: Checklist[]; defaultChecklistId?: string | null }>(
         "/crm/checklists?includeInactive=true"
       );
+      setDefaultChecklistId(res.defaultChecklistId ?? null);
       const fetched = (res.checklists ?? []).map((checklist) => normalizeChecklist(checklist));
       if (options?.mergeLocal?.length) {
         setChecklists(mergeChecklistSummaries(options.mergeLocal, fetched));
@@ -364,13 +372,14 @@ export default function CrmChecklistsPage() {
   const handleArchive = useCallback(
     async (id: string) => {
       await apiPatch(`/crm/checklists/${id}`, { isActive: false });
+      if (defaultChecklistId === id) setDefaultChecklistId(null);
       setChecklists((prev) =>
         prev.map((c) => (c.id === id ? { ...c, isActive: false } : c))
       );
       if (selected?.id === id)
         setSelected((s) => (s ? { ...s, isActive: false } : null));
     },
-    [selected]
+    [selected, defaultChecklistId]
   );
 
   const handleRestore = useCallback(
@@ -394,6 +403,7 @@ export default function CrmChecklistsPage() {
       if (!window.confirm(`Delete "${targetName}"? This removes it from the checklist list.`)) return;
 
       await apiDelete(`/crm/checklists/${id}`);
+      if (defaultChecklistId === id) setDefaultChecklistId(null);
       setChecklists((prev) => prev.filter((checklist) => checklist.id !== id));
       if (selected?.id === id) setSelected(null);
       setCreating(false);
@@ -403,13 +413,31 @@ export default function CrmChecklistsPage() {
     [selected, sourceChecklists]
   );
 
+  const selectedWithDefault = selected
+    ? { ...selected, isDefault: selected.id === defaultChecklistId }
+    : null;
+
+  const handleSetDefault = useCallback(
+    async (id: string) => {
+      if (id.startsWith("dev-checklist-")) return;
+      const res = await apiPatch<{ checklist: Checklist }>(`/crm/checklists/${id}`, { isDefault: true });
+      const checklist = normalizeChecklist(requireSavedChecklist(res));
+      setDefaultChecklistId(id);
+      setChecklists((prev) => mergeChecklistSummaries([{ ...checklist, isDefault: true }], prev).map((item) => ({ ...item, isDefault: item.id === id })));
+      setSelected((current) => current?.id === id ? { ...checklist, isDefault: true } : current);
+      setSavedMsg("Default set");
+      setTimeout(() => setSavedMsg(""), 2500);
+    },
+    [],
+  );
+
   // Sync selected checklist data when checklists list updates
   useEffect(() => {
     if (selected) {
-      const updated = sourceChecklists.find((c) => c.id === selected.id);
+      const updated = checklistsWithDefault.find((c) => c.id === selected.id);
       if (updated && updated !== selected) setSelected(updated);
     }
-  }, [sourceChecklists, selected]);
+  }, [checklistsWithDefault, selected]);
 
   if (loading) {
     return (
@@ -463,8 +491,8 @@ export default function CrmChecklistsPage() {
                 <ChecklistWorkspace
                   selected={null}
                   selectedId={selected?.id ?? null}
-                  checklists={filteredChecklists}
-                  totalCount={sourceChecklists.length}
+                checklists={filteredChecklists}
+                totalCount={checklistsWithDefault.length}
                   activeFilter={headerTab}
                   search={search}
                   onSelect={handleSelect}
@@ -488,7 +516,7 @@ export default function CrmChecklistsPage() {
 
             <CRMWorkspaceRightRail className="crm-queue-right-rail crm-queue-detail-rail flex flex-col min-h-0">
               <ChecklistProgressPanel
-                checklist={selected}
+                  checklist={selectedWithDefault}
                 creating={creating}
                 createName={createName}
                 createItems={createItems}
@@ -501,6 +529,7 @@ export default function CrmChecklistsPage() {
                 onConfirmCreate={handleConfirmCreate}
                 onCancelCreate={handleCancelCreate}
                 onSaveEdit={handleSaveEdit}
+                onSetDefault={handleSetDefault}
                 onArchive={handleArchive}
                 onRestore={handleRestore}
                 onDelete={handleDelete}

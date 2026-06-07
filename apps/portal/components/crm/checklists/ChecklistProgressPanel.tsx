@@ -27,6 +27,7 @@ type Checklist = {
   id: string;
   name: string;
   isActive: boolean;
+  isDefault?: boolean;
   updatedAt?: string;
   items: ChecklistItem[];
 };
@@ -45,6 +46,7 @@ type Props = {
   onConfirmCreate: () => Promise<void>;
   onCancelCreate: () => void;
   onSaveEdit: (name: string, items: EditItem[]) => Promise<void>;
+  onSetDefault: (id: string) => Promise<void>;
   onArchive: (id: string) => Promise<void>;
   onRestore: (id: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
@@ -255,6 +257,7 @@ export function ChecklistProgressPanel({
   onConfirmCreate,
   onCancelCreate,
   onSaveEdit,
+  onSetDefault,
   onArchive,
   onRestore,
   onDelete,
@@ -456,9 +459,12 @@ export function ChecklistProgressPanel({
     return (
       <PanelShell>
         <header className="crm-queue-detail-header">
-          <span className={cn("tasks-status-pill", readinessTone.pill)}>
-            {readiness.label}
-          </span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className={cn("tasks-status-pill", readinessTone.pill)}>
+              {readiness.label}
+            </span>
+            {checklist.isDefault ? <span className="crm-queue-pill crm-queue-pill-stage">Default</span> : null}
+          </div>
           {savedMsg ? <span className="text-xs font-semibold text-crm-success">{savedMsg}</span> : null}
         </header>
 
@@ -476,6 +482,17 @@ export function ChecklistProgressPanel({
 
         <section className="crm-queue-detail-actions-card">
           <p className="crm-queue-detail-section-label">Checklist actions</p>
+          {checklist.isActive ? (
+            <button
+              type="button"
+              onClick={() => void onSetDefault(checklist.id)}
+              disabled={checklist.isDefault}
+              className="crm-queue-detail-secondary-action"
+            >
+              <Check size={13} />
+              {checklist.isDefault ? "Default checklist" : "Set Default"}
+            </button>
+          ) : null}
           {checklist.isActive ? (
             <button
               type="button"
