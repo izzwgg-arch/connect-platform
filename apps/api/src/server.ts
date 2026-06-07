@@ -143,7 +143,7 @@ import { fireCrmCdrHook } from "./crm/cdrHook";
 import { registerAdminUserCrmAccessRoutes } from "./admin/userCrmAccessRoutes";
 import { resolvePortalPermissionsWithCrmUserAccess } from "./crm/portalCrmPermissions";
 import { registerBillingRoutes } from "./billing/routes";
-import { extractBillingInvoiceIdFromEmailJob, loadBillingInvoicePdfAttachmentForEmailJob } from "./billing/billingEmailAttachments";
+import { extractBillingInvoiceIdFromEmailJob, loadBillingPdfAttachmentsForEmailJob } from "./billing/billingEmailAttachments";
 import { applySolaWebhookToBillingInvoice, reconcileBillingTransactionFromPortalRefund, resolvePlatformBillingInvoiceForWebhookRef } from "./billing/solaBillingPayments";
 import { getBillingSolaAdapter } from "./billing/solaGateway";
 import { maskSolaSecretsForResponse } from "./billing/solaConfigMasking";
@@ -821,7 +821,7 @@ async function sendEmailJobNow(job: any): Promise<void> {
     }
     const fromEmail = provider.fromEmail || "billing@connectcomunications.com";
     const fromName = provider.fromName || "Connect Communications";
-    const pdfAttachment = await loadBillingInvoicePdfAttachmentForEmailJob(job).catch(() => null);
+    const pdfAttachments = await loadBillingPdfAttachmentsForEmailJob(job).catch(() => []);
     const toAddresses = String(job.toEmail || "")
       .split(",")
       .map((e: string) => e.trim())
@@ -836,13 +836,13 @@ async function sendEmailJobNow(job: any): Promise<void> {
         { type: "text/html", value: job.htmlBody }
       ]
     };
-    if (pdfAttachment) {
-      payload.attachments = [{
+    if (pdfAttachments.length > 0) {
+      payload.attachments = pdfAttachments.map((pdfAttachment) => ({
         content: pdfAttachment.content.toString("base64"),
         type: pdfAttachment.contentType,
         filename: pdfAttachment.filename,
         disposition: "attachment",
-      }];
+      }));
     }
     const resp = await fetch("https://api.sendgrid.com/v3/mail/send", {
       method: "POST",
@@ -885,7 +885,7 @@ async function sendEmailJobNow(job: any): Promise<void> {
   });
 
   try {
-    const pdfAttachment = await loadBillingInvoicePdfAttachmentForEmailJob(job).catch(() => null);
+    const pdfAttachments = await loadBillingPdfAttachmentsForEmailJob(job).catch(() => []);
     await transporter.sendMail({
       from: fromName ? `"${fromName}" <${fromEmail}>` : fromEmail,
       to: job.toEmail,
@@ -893,8 +893,12 @@ async function sendEmailJobNow(job: any): Promise<void> {
       subject: job.subject,
       text: job.textBody,
       html: job.htmlBody,
-      attachments: pdfAttachment
-        ? [{ filename: pdfAttachment.filename, content: pdfAttachment.content, contentType: pdfAttachment.contentType }]
+      attachments: pdfAttachments.length > 0
+        ? pdfAttachments.map((pdfAttachment) => ({
+          filename: pdfAttachment.filename,
+          content: pdfAttachment.content,
+          contentType: pdfAttachment.contentType,
+        }))
         : undefined,
     });
   } catch (e: any) {
@@ -4758,7 +4762,24 @@ app.addHook("preHandler", async (req, reply) => {
 
 app.get("/me", async (req) => {
   const user = getUser(req);
-  const row = await db.user.findUnique({ where: { id: user.sub }, select: { firstName: true, lastName: true, displayName: true, email: true, status: true, lastLoginAt: true, avatarUrl: true } as any }).catch(() => null);
+  const row = await db.user.findUnique({
+    where: { id: user.sub },
+    select: {
+      firstName: true,
+      lastName: true,
+      displayName: true,
+      email: true,
+      status: true,
+      lastLoginAt: true,
+      avatarUrl: true,
+      ownedExtensions: {
+        where: { status: "ACTIVE" },
+        orderBy: { createdAt: "asc" },
+        take: 1,
+        select: { id: true, extNumber: true, displayName: true, status: true },
+      },
+    } as any,
+  }).catch(() => null);
   const portalPermissionSet = await resolvePortalPermissionsWithCrmUserAccess(
     user.role,
     user.sub,
@@ -4772,6 +4793,7 @@ app.get("/me", async (req) => {
   const tenantRow = user.tenantId
     ? await db.tenant.findUnique({ where: { id: user.tenantId }, select: { id: true, name: true } }).catch(() => null)
     : null;
+  const extension = (row as any)?.ownedExtensions?.[0] || null;
   return {
     id: user.sub,
     tenantId: user.tenantId,
@@ -4779,6 +4801,14 @@ app.get("/me", async (req) => {
     email: user.email,
     role: user.role,
     name: row ? displayNameForUser(row as any) : user.email,
+    extension: extension
+      ? {
+          id: extension.id,
+          number: extension.extNumber,
+          displayName: extension.displayName,
+          status: extension.status,
+        }
+      : null,
     status: (row as any)?.status || "ACTIVE",
     lastLoginAt: (row as any)?.lastLoginAt || null,
     avatarUrl: (row as any)?.avatarUrl ?? null,
