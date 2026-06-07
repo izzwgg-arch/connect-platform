@@ -4,6 +4,7 @@ export type ScriptSummary = {
   id: string;
   name: string;
   isActive: boolean;
+  isDefault?: boolean;
   createdAt: string;
   updatedAt: string;
 };

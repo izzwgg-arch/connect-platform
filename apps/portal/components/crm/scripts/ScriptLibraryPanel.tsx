@@ -228,6 +228,9 @@ function ScriptIndexRow({
             >
               {readiness.label}
             </span>
+            {script.isDefault ? (
+              <span className="crm-queue-pill crm-queue-pill-stage">Default</span>
+            ) : null}
           </div>
           <p className="crm-queue-row-sub truncate">{readiness.detail}</p>
         </div>

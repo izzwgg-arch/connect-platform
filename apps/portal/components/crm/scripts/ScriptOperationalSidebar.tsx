@@ -29,6 +29,7 @@ export function ScriptOperationalSidebar({
   onSaveCreate,
   onCancelCreate,
   onSaveEdit,
+  onSetDefault,
   onArchive,
   onRestore,
   onDelete,
@@ -42,6 +43,7 @@ export function ScriptOperationalSidebar({
   onSaveCreate: (data: { name: string; body: string }) => Promise<void>;
   onCancelCreate: () => void;
   onSaveEdit: (data: { name: string; body: string }) => Promise<void>;
+  onSetDefault: (id: string) => void;
   onArchive: (id: string) => void;
   onRestore: (id: string) => void;
   onDelete: (id: string) => void;
@@ -102,6 +104,7 @@ export function ScriptOperationalSidebar({
         script={script}
         savedMsg={savedMsg}
         onSaveEdit={onSaveEdit}
+        onSetDefault={onSetDefault}
         onArchive={onArchive}
         onRestore={onRestore}
         onDelete={onDelete}
@@ -476,6 +479,7 @@ function ScriptDetailPanel({
   script,
   savedMsg,
   onSaveEdit,
+  onSetDefault,
   onArchive,
   onRestore,
   onDelete,
@@ -483,6 +487,7 @@ function ScriptDetailPanel({
   script: Script;
   savedMsg: string;
   onSaveEdit: (data: { name: string; body: string }) => Promise<void>;
+  onSetDefault: (id: string) => void;
   onArchive: (id: string) => void;
   onRestore: (id: string) => void;
   onDelete: (id: string) => void;
@@ -539,9 +544,12 @@ function ScriptDetailPanel({
   return (
     <ScriptDetailPanelShell>
       <header className="crm-queue-detail-header">
-        <span className={cn("tasks-status-pill", readinessTone.pill)}>
-          {readiness.label}
-        </span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className={cn("tasks-status-pill", readinessTone.pill)}>
+            {readiness.label}
+          </span>
+          {script.isDefault ? <span className="crm-queue-pill crm-queue-pill-stage">Default</span> : null}
+        </div>
         {savedMsg ? <span className="text-xs font-semibold text-crm-success">{savedMsg}</span> : null}
       </header>
 
@@ -578,6 +586,17 @@ function ScriptDetailPanel({
             Restore script
           </button>
         )}
+        {script.isActive ? (
+          <button
+            type="button"
+            onClick={() => onSetDefault(script.id)}
+            disabled={script.isDefault}
+            className="crm-queue-detail-secondary-action"
+          >
+            <Check size={13} />
+            {script.isDefault ? "Default script" : "Set Default"}
+          </button>
+        ) : null}
         {script.isActive ? (
           <button
             type="button"

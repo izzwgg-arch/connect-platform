@@ -108,6 +108,7 @@ export default function CrmScriptsPage() {
   const [selectedError, setSelectedError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [savedMsg, setSavedMsg] = useState("");
+  const [defaultScriptId, setDefaultScriptId] = useState<string | null>(null);
   const [libraryResetToken, setLibraryResetToken] = useState(0);
   const [statusFilter, setStatusFilter] = useState<ScriptStatusFilter>("all");
   const [search, setSearch] = useState("");
@@ -117,8 +118,9 @@ export default function CrmScriptsPage() {
   async function loadList(options?: { silent?: boolean; mergeLocal?: ScriptSummary[] }) {
     if (!options?.silent) setLoading(true);
     try {
-      const res = await apiGet<{ scripts: ScriptSummary[] }>("/crm/scripts?includeInactive=true");
+      const res = await apiGet<{ scripts: ScriptSummary[]; defaultScriptId?: string | null }>("/crm/scripts?includeInactive=true");
       const fetched = res.scripts ?? [];
+      setDefaultScriptId(res.defaultScriptId ?? null);
       if (options?.mergeLocal?.length) {
         setScripts(mergeScriptSummaries(options.mergeLocal, fetched));
       } else if (options?.silent) {
@@ -233,6 +235,7 @@ export default function CrmScriptsPage() {
     const res = await apiPatch<{ script: Script }>(`/crm/scripts/${id}`, { isActive: false });
     const script = requireSavedScript(res);
     const summary = toScriptSummary(script);
+    if (defaultScriptId === id) setDefaultScriptId(null);
     setScripts((prev) => mergeScriptSummaries([summary], prev));
     setSelectedScript((current) => (current?.id === id ? script : current));
   }
@@ -261,6 +264,7 @@ export default function CrmScriptsPage() {
     }
 
     await apiDelete(`/crm/scripts/${id}`);
+    if (defaultScriptId === id) setDefaultScriptId(null);
     setScripts((prev) => prev.filter((script) => script.id !== id));
     if (selectedScript?.id === id) setSelectedScript(null);
     setCreating(false);
@@ -270,9 +274,29 @@ export default function CrmScriptsPage() {
   const activeCount = sourceScripts.filter((s) => s.isActive).length;
   const draftCount = sourceScripts.filter(isDraftScript).length;
   const archivedCount = sourceScripts.filter((s) => !s.isActive).length;
+  const scriptsWithDefault = useMemo(
+    () => sourceScripts.map((script) => ({ ...script, isDefault: script.id === defaultScriptId })),
+    [sourceScripts, defaultScriptId],
+  );
+
+  const selectedScriptWithDefault = selectedScript
+    ? { ...selectedScript, isDefault: selectedScript.id === defaultScriptId }
+    : null;
+
+  async function handleSetDefault(id: string) {
+    if (id.startsWith("dev-script-")) return;
+    const res = await apiPatch<{ script: Script }>(`/crm/scripts/${id}`, { isDefault: true });
+    const script = requireSavedScript(res);
+    const summary = toScriptSummary(script);
+    setDefaultScriptId(id);
+    setScripts((prev) => mergeScriptSummaries([{ ...summary, isDefault: true }], prev).map((item) => ({ ...item, isDefault: item.id === id })));
+    setSelectedScript((current) => current?.id === id ? { ...script, isDefault: true } : current);
+    flashSaved("Default set");
+  }
+
   const filteredScripts = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return sourceScripts
+    return scriptsWithDefault
       .filter((script) => {
         if (statusFilter === "active") return script.isActive && !isDraftScript(script);
         if (statusFilter === "draft") return isDraftScript(script);
@@ -288,7 +312,7 @@ export default function CrmScriptsPage() {
         if (sortMode === "created") return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
         return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
       });
-  }, [sourceScripts, search, sortMode, statusFilter]);
+  }, [scriptsWithDefault, search, sortMode, statusFilter]);
 
   return (
     <PermissionGate permission="can_view_crm_scripts" fallback={<div className="state-box">You do not have Scripts access.</div>}>
@@ -368,7 +392,7 @@ export default function CrmScriptsPage() {
           <>
             <CRMWorkspaceChrome>
               <ScriptCommandHeader
-                totalCount={sourceScripts.length}
+                totalCount={scriptsWithDefault.length}
                 activeCount={activeCount}
                 draftCount={draftCount}
                 archivedCount={archivedCount}
@@ -388,8 +412,8 @@ export default function CrmScriptsPage() {
                 <CRMWorkspaceScrollRegion className="crm-queue-center-workspace">
                   <ScriptLibraryPanel
                     scripts={filteredScripts}
-                    totalCount={sourceScripts.length}
-                    selectedId={creating ? null : selectedScript?.id ?? null}
+                    totalCount={scriptsWithDefault.length}
+                    selectedId={creating ? null : selectedScriptWithDefault?.id ?? null}
                     resetFiltersToken={libraryResetToken}
                     activeFilter={statusFilter}
                     search={search}
@@ -401,7 +425,7 @@ export default function CrmScriptsPage() {
 
               <CRMWorkspaceRightRail className="crm-queue-right-rail crm-queue-detail-rail flex flex-col min-h-0">
                 <ScriptOperationalSidebar
-                  script={selectedScript}
+                  script={selectedScriptWithDefault}
                   loading={selectedLoading}
                   error={selectedError}
                   creating={creating}
@@ -410,6 +434,7 @@ export default function CrmScriptsPage() {
                   onSaveCreate={handleCreate}
                   onCancelCreate={() => setCreating(false)}
                   onSaveEdit={handleSaveEdit}
+                  onSetDefault={(id) => void handleSetDefault(id)}
                   onArchive={(id) => void handleArchive(id)}
                   onRestore={(id) => void handleRestore(id)}
                   onDelete={(id) => void handleDelete(id)}
