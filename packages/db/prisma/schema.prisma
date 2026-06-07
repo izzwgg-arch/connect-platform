@@ -739,6 +739,7 @@ model Tenant {
   crmContactPhoneDispositions     CrmContactPhoneDisposition[]
   crmTimelineEvents               CrmTimelineEvent[]
   crmContactNotes                 CrmContactNote[]
+  crmCallTranscripts              CrmCallTranscript[]
   crmTasks                        CrmContactTask[]
   crmImportBatches                CrmImportBatch[]
   crmScripts                      CrmScript[]
@@ -1937,6 +1938,7 @@ model Contact {
   crmPhoneDispositions  CrmContactPhoneDisposition[]
   crmTimelineEvents     CrmTimelineEvent[]
   crmNotes              CrmContactNote[]
+  crmCallTranscripts    CrmCallTranscript[]
   crmTasks              CrmContactTask[]
   crmChecklistResponses CrmChecklistResponse[]
   crmCampaignMembers    CrmCampaignMember[]
@@ -4005,6 +4007,14 @@ enum CrmTimelineEventType {
   FORM_REVOKED
 }
 
+enum CrmCallTranscriptStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  UNAVAILABLE
+}
+
 /// Immutable audit-style record of CRM activity for a contact.
 /// body stores human-readable content (note text, stage description).
 /// metadata stores machine-readable detail (e.g. { from, to } for stage changes).
@@ -4030,6 +4040,44 @@ model CrmTimelineEvent {
   @@index([tenantId, type, createdAt])
   @@index([contactId, createdAt])
   @@index([contactId, linkedId]) // fast dedup lookup for CDR hook
+}
+
+/// Post-call transcript/summary for a CRM call recording.
+/// One row per tenant + CDR linkedId; raw PBX recording paths are never stored here.
+model CrmCallTranscript {
+  id                  String                  @id @default(cuid())
+  tenantId            String
+  contactId           String
+  linkedId            String
+  status              CrmCallTranscriptStatus @default(QUEUED)
+  provider            String                  @default("google")
+  languageCode        String                  @default("en-US")
+  transcript          String?                 @db.Text
+  summary             String?                 @db.Text
+  actionItems         Json?
+  sentiment           String?
+  intent              String?
+  confidence          Float?
+  modelName           String?
+  googleOperationName String?
+  gcsUri              String?
+  audioDurationSec    Int?
+  errorCode           String?
+  errorMessage        String?
+  queuedAt            DateTime                @default(now())
+  startedAt           DateTime?
+  completedAt         DateTime?
+  failedAt            DateTime?
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, linkedId])
+  @@index([tenantId, contactId, createdAt])
+  @@index([tenantId, status, updatedAt])
+  @@index([contactId, linkedId])
 }
 
 /// Structured notes on a CRM contact. Multiple notes per contact; each has an author.
