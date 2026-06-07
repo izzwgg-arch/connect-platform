@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import {
   Activity,
@@ -13,6 +13,7 @@ import {
   FileUp,
   HandCoins,
   Mail,
+  Palette,
   Phone,
   Plus,
   Search,
@@ -21,6 +22,7 @@ import {
   Upload,
   Users,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import {
   crm,
@@ -55,6 +57,49 @@ type FunderTag = {
   name: string;
   color?: string | null;
 };
+
+type FunderTagDraft = {
+  id: string;
+  label: string;
+  color: { r: number; g: number; b: number };
+};
+
+const DEFAULT_TAG_RGB = { r: 109, g: 93, b: 252 };
+
+function clampRgbChannel(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function rgbToHex({ r, g, b }: FunderTagDraft["color"]) {
+  return `#${[r, g, b].map((channel) => clampRgbChannel(channel).toString(16).padStart(2, "0")).join("")}`;
+}
+
+function hexToRgb(hex: string) {
+  const normalized = hex.replace("#", "");
+  if (!/^[0-9a-f]{6}$/i.test(normalized)) return DEFAULT_TAG_RGB;
+  const value = Number.parseInt(normalized, 16);
+  return {
+    r: (value >> 16) & 255,
+    g: (value >> 8) & 255,
+    b: value & 255,
+  };
+}
+
+function funderTagPillStyle(color: FunderTagDraft["color"] | string | null | undefined) {
+  const rgb = typeof color === "string" ? hexToRgb(color) : color ?? DEFAULT_TAG_RGB;
+  const { r, g, b } = rgb;
+  const textR = Math.max(20, Math.round(r * 0.42));
+  const textG = Math.max(28, Math.round(g * 0.42));
+  const textB = Math.max(42, Math.round(b * 0.42));
+
+  return {
+    "--campaign-tag-rgb": `${r} ${g} ${b}`,
+    backgroundColor: `rgba(${r}, ${g}, ${b}, 0.14)`,
+    borderColor: `rgba(${r}, ${g}, ${b}, 0.32)`,
+    color: `rgb(${textR}, ${textG}, ${textB})`,
+  } as CSSProperties;
+}
 
 type Funder = {
   id: string;
@@ -296,7 +341,61 @@ function parseCsvLocally(text: string): string[][] {
   return rows;
 }
 
+function FunderKpiTile({
+  label,
+  value,
+  hint,
+  icon: Icon,
+  tone,
+  loading,
+}: {
+  label: string;
+  value: number;
+  hint: string;
+  icon: LucideIcon;
+  tone: "blue" | "green" | "violet" | "amber" | "rose" | "cyan";
+  loading?: boolean;
+}) {
+  return (
+    <div className={cn(crm.queueCountPill, `crm-queue-kpi-${tone}`, "relative overflow-hidden bg-crm-surface-2")}>
+      <span className="flex w-full items-start justify-between gap-3">
+        <span className="min-w-0">
+          <span className="crm-queue-kpi-label block text-[10px] font-bold uppercase tracking-wide text-crm-muted">
+            {label}
+          </span>
+          {loading ? (
+            <span className="crm-queue-kpi-value mt-1 block h-7 w-12 animate-pulse rounded bg-crm-surface-2" />
+          ) : (
+            <span className="crm-queue-kpi-value mt-1 block text-2xl font-bold tabular-nums leading-none tracking-tight text-crm-text">
+              {value}
+            </span>
+          )}
+        </span>
+        <span className="crm-queue-kpi-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface/70 text-crm-accent">
+          <Icon className="h-4 w-4" />
+        </span>
+      </span>
+      <span className="crm-queue-kpi-micro text-[10px] font-medium text-crm-muted">{hint}</span>
+    </div>
+  );
+}
+
 // ── Modal: New Funder ─────────────────────────────────────────────────────────
+
+const EMPTY_FUNDER_FORM = {
+  name: "",
+  organization: "",
+  website: "",
+  email: "",
+  phone: "",
+  phone2: "",
+  address: "",
+  city: "",
+  state: "",
+  zip: "",
+  notes: "",
+  status: "ACTIVE" as FunderStatus,
+};
 
 type NewFunderModalProps = {
   open: boolean;
@@ -306,13 +405,18 @@ type NewFunderModalProps = {
 };
 
 function NewFunderModal({ open, tags, onClose, onCreated }: NewFunderModalProps) {
-  const [form, setForm] = useState({
-    name: "", organization: "", website: "", email: "", phone: "", phone2: "",
-    address: "", city: "", state: "", zip: "", notes: "", status: "ACTIVE" as FunderStatus,
-  });
+  const [form, setForm] = useState(EMPTY_FUNDER_FORM);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+  const [stagedTags, setStagedTags] = useState<FunderTagDraft[]>([]);
+  const [tagLabel, setTagLabel] = useState("");
+  const [tagColor, setTagColor] = useState(DEFAULT_TAG_RGB);
+  const [tagError, setTagError] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  const tagHex = rgbToHex(tagColor);
+  const selectedExistingTags = tags.filter((tag) => selectedTagIds.includes(tag.id));
+  const hasAssignedTags = selectedExistingTags.length > 0 || stagedTags.length > 0;
 
   if (!open) return null;
 
@@ -321,17 +425,80 @@ function NewFunderModal({ open, tags, onClose, onCreated }: NewFunderModalProps)
       setForm((f) => ({ ...f, [key]: e.target.value }))
   );
 
+  function handleTagChannelChange(channel: keyof FunderTagDraft["color"], value: string) {
+    setTagColor((current) => ({
+      ...current,
+      [channel]: clampRgbChannel(Number.parseInt(value || "0", 10)),
+    }));
+  }
+
+  function handleAddTag() {
+    const label = tagLabel.trim();
+    setTagError("");
+    if (!label) {
+      setTagError("Give the tag a label first.");
+      return;
+    }
+    const normalized = label.toLowerCase();
+    if (
+      stagedTags.some((tag) => tag.label.toLowerCase() === normalized) ||
+      tags.some((tag) => tag.name.toLowerCase() === normalized)
+    ) {
+      setTagError("That tag already exists or is staged.");
+      return;
+    }
+
+    setStagedTags((current) => [
+      ...current,
+      {
+        id: `${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${Date.now()}`,
+        label,
+        color: {
+          r: clampRgbChannel(tagColor.r),
+          g: clampRgbChannel(tagColor.g),
+          b: clampRgbChannel(tagColor.b),
+        },
+      },
+    ]);
+    setTagLabel("");
+  }
+
+  function resetForm() {
+    setForm(EMPTY_FUNDER_FORM);
+    setSelectedTagIds([]);
+    setStagedTags([]);
+    setTagLabel("");
+    setTagColor(DEFAULT_TAG_RGB);
+    setTagError("");
+    setErr(null);
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.name.trim()) { setErr("Name is required"); return; }
+    if (!form.name.trim()) {
+      setErr("Name is required");
+      return;
+    }
     setSaving(true);
     setErr(null);
     try {
+      const createdTagIds: string[] = [];
+      for (const stagedTag of stagedTags) {
+        const created = await apiPost<FunderTag>("/crm/funder-tags", {
+          name: stagedTag.label,
+          color: rgbToHex(stagedTag.color),
+        });
+        createdTagIds.push(created.id);
+      }
+
       const enrichedNotes = [
         form.website.trim() ? `Website: ${form.website.trim()}` : "",
         form.address.trim() ? `Address: ${form.address.trim()}` : "",
         form.notes.trim(),
-      ].filter(Boolean).join("\n\n");
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+
       const funder = await apiPost<Funder>("/crm/funders", {
         name: form.name.trim(),
         organization: form.organization,
@@ -343,11 +510,10 @@ function NewFunderModal({ open, tags, onClose, onCreated }: NewFunderModalProps)
         zip: form.zip,
         notes: enrichedNotes,
         status: form.status,
-        tagIds: selectedTagIds,
+        tagIds: [...selectedTagIds, ...createdTagIds],
       });
       onCreated(funder);
-      setForm({ name: "", organization: "", website: "", email: "", phone: "", phone2: "", address: "", city: "", state: "", zip: "", notes: "", status: "ACTIVE" });
-      setSelectedTagIds([]);
+      resetForm();
     } catch (e: any) {
       setErr(e?.message ?? "Failed to create funder");
     } finally {
@@ -356,40 +522,65 @@ function NewFunderModal({ open, tags, onClose, onCreated }: NewFunderModalProps)
   };
 
   return (
-    <div className="funders-modal-backdrop fixed inset-0 z-50 flex items-center justify-center px-3 py-6 sm:px-4" onClick={onClose}>
+    <div
+      className={cn(
+        crm.campaignModalBackdrop,
+        "items-start justify-center overflow-y-auto py-[max(1.25rem,env(safe-area-inset-top,0px))] sm:items-center sm:py-6",
+      )}
+      onClick={onClose}
+    >
       <div
-        className="funders-modal-panel w-full max-w-2xl overflow-hidden rounded-[1.5rem] border bg-white shadow-2xl"
+        className="campaign-create-modal-card my-auto w-full max-w-xl max-h-[min(90dvh,calc(100dvh-6rem))]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between border-b border-slate-200/80 px-5 py-4 sm:px-6">
-          <div>
-            <h2 className="text-base font-semibold text-slate-950">Add New Funder</h2>
-            <p className="mt-1 text-sm text-slate-500">Create a funding partner profile for grants, referrals, and financial relationships.</p>
+        <div className="campaign-create-modal-glow" aria-hidden />
+        <div className="campaign-create-modal-inner custom-scrollbar !max-h-[min(90dvh,calc(100dvh-6rem))]">
+          <div className="mb-1 flex items-start gap-3">
+            <header className="campaign-create-modal-header !mb-0 min-w-0 flex-1">
+              <div className="campaign-create-modal-icon">
+                <HandCoins className="h-5 w-5" aria-hidden />
+              </div>
+              <div className="min-w-0">
+                <p className="campaign-create-modal-eyebrow">Funder workspace</p>
+                <h2>Add new funder</h2>
+                <p>Create a funding partner profile for grants, referrals, and financial relationships.</p>
+              </div>
+            </header>
+            <button
+              type="button"
+              onClick={onClose}
+              className="campaign-create-secondary-btn !min-h-0 shrink-0 !rounded-full !p-2"
+              aria-label="Close"
+            >
+              <X size={16} />
+            </button>
           </div>
-          <button onClick={onClose} className="rounded-full border border-slate-200 bg-white p-2 text-slate-500 shadow-sm transition hover:bg-slate-50 hover:text-slate-900">
-            <X size={16} />
-          </button>
-        </div>
-        <form onSubmit={handleSubmit} className="max-h-[calc(100vh-7rem)] overflow-y-auto">
-          <div className="space-y-5 px-5 py-5 sm:px-6">
-            {err && (
-              <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">{err}</div>
-            )}
 
-            <section className="funders-form-section">
-              <div>
-                <h3>Organization Information</h3>
-                <p>Core identity and partner classification.</p>
+          <form onSubmit={handleSubmit} className="campaign-create-form">
+            {err ? <p className="campaign-create-inline-error">{err}</p> : null}
+
+            <section className="campaign-create-section">
+              <div className="campaign-create-section-head">
+                <div>
+                  <p className="campaign-create-section-kicker">Organization</p>
+                  <h3>Core identity</h3>
+                </div>
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="funders-field-label">Funder Name *</label>
-                  <input className="funders-field mt-1" value={form.name} onChange={field("name")} placeholder="Enter funder name" />
+                <div className="sm:col-span-2">
+                  <label className="campaign-create-label">Funder name *</label>
+                  <input
+                    autoFocus
+                    className="campaign-create-input"
+                    value={form.name}
+                    onChange={field("name")}
+                    placeholder="Enter funder name"
+                  />
                 </div>
                 <div>
-                  <label className="funders-field-label">Organization Type</label>
+                  <label className="campaign-create-label">Organization type</label>
                   <ConnectSelect
-                    className="funders-field mt-1"
+                    className="campaign-create-input mt-[0.38rem]"
                     value={form.organization}
                     onChange={(value) => setForm((f) => ({ ...f, organization: value }))}
                     placeholder="Select type"
@@ -403,69 +594,10 @@ function NewFunderModal({ open, tags, onClose, onCreated }: NewFunderModalProps)
                     ]}
                   />
                 </div>
-                <div className="sm:col-span-2">
-                  <label className="funders-field-label">Website</label>
-                  <input className="funders-field mt-1" value={form.website} onChange={field("website")} placeholder="https://example.org" />
-                </div>
-              </div>
-            </section>
-
-            <section className="funders-form-section">
-              <div>
-                <h3>Contact Information</h3>
-                <p>Primary outreach details for this funder.</p>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-3">
                 <div>
-                  <label className="funders-field-label">Email *</label>
-                  <input type="email" className="funders-field mt-1" value={form.email} onChange={field("email")} placeholder="email@example.org" />
-                </div>
-                <div>
-                  <label className="funders-field-label">Primary Phone</label>
-                  <input className="funders-field mt-1" value={form.phone} onChange={field("phone")} placeholder="(555) 000-0000" />
-                </div>
-                <div>
-                  <label className="funders-field-label">Secondary Phone</label>
-                  <input className="funders-field mt-1" value={form.phone2} onChange={field("phone2")} placeholder="(555) 000-0000" />
-                </div>
-              </div>
-            </section>
-
-            <section className="funders-form-section">
-              <div>
-                <h3>Location</h3>
-                <p>Office or mailing location for records.</p>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-6">
-                <div className="sm:col-span-6">
-                  <label className="funders-field-label">Address</label>
-                  <input className="funders-field mt-1" value={form.address} onChange={field("address")} placeholder="Street address" />
-                </div>
-                <div className="sm:col-span-2">
-                  <label className="funders-field-label">City</label>
-                  <input className="funders-field mt-1" value={form.city} onChange={field("city")} placeholder="City" />
-                </div>
-                <div className="sm:col-span-2">
-                  <label className="funders-field-label">State</label>
-                  <input className="funders-field mt-1" value={form.state} onChange={field("state")} placeholder="State" />
-                </div>
-                <div className="sm:col-span-2">
-                  <label className="funders-field-label">ZIP Code</label>
-                  <input className="funders-field mt-1" value={form.zip} onChange={field("zip")} placeholder="ZIP code" />
-                </div>
-              </div>
-            </section>
-
-            <section className="funders-form-section">
-              <div>
-                <h3>Additional Information</h3>
-                <p>Status, tags, and notes for internal context.</p>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="funders-field-label">Status</label>
+                  <label className="campaign-create-label">Status</label>
                   <ConnectSelect
-                    className="funders-field mt-1"
+                    className="campaign-create-input mt-[0.38rem]"
                     value={form.status}
                     onChange={(value) => setForm((f) => ({ ...f, status: value as FunderStatus }))}
                     options={(["ACTIVE", "INACTIVE", "PROSPECT", "PENDING"] as FunderStatus[]).map((s) => ({
@@ -474,51 +606,228 @@ function NewFunderModal({ open, tags, onClose, onCreated }: NewFunderModalProps)
                     }))}
                   />
                 </div>
-                {tags.length > 0 && (
-                  <div>
-                    <label className="funders-field-label">Tags</label>
-                    <div className="mt-1 flex min-h-[2.75rem] flex-wrap gap-1.5 rounded-xl border border-slate-200 bg-slate-50/80 p-2">
-                      {tags.map((t) => (
-                        <button
-                          key={t.id}
-                          type="button"
-                          onClick={() =>
-                            setSelectedTagIds((prev) =>
-                              prev.includes(t.id) ? prev.filter((id) => id !== t.id) : [...prev, t.id]
-                            )
-                          }
-                          className={cn(
-                            "rounded-full border px-2.5 py-1 text-xs font-semibold transition-colors",
-                            selectedTagIds.includes(t.id)
-                              ? "border-orange-200 bg-orange-50 text-orange-700"
-                              : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
-                          )}
-                        >
-                          {t.name}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
                 <div className="sm:col-span-2">
-                  <label className="funders-field-label">Notes</label>
-                  <textarea
-                    className="funders-field mt-1 min-h-[92px] resize-y"
-                    value={form.notes}
-                    onChange={field("notes")}
-                    placeholder="Add notes about this funder..."
+                  <label className="campaign-create-label">Website</label>
+                  <input
+                    className="campaign-create-input"
+                    value={form.website}
+                    onChange={field("website")}
+                    placeholder="https://example.org"
                   />
                 </div>
               </div>
             </section>
-          </div>
-          <div className="flex items-center justify-end gap-2 border-t border-slate-200/80 bg-slate-50/80 px-5 py-4 sm:px-6">
-            <button type="button" onClick={onClose} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50">Cancel</button>
-            <button type="submit" disabled={saving} className="rounded-xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-orange-500/25 transition hover:bg-orange-600 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none">
-              {saving ? "Saving..." : "Save Funder"}
-            </button>
-          </div>
-        </form>
+
+            <section className="campaign-create-section">
+              <div className="campaign-create-section-head">
+                <div>
+                  <p className="campaign-create-section-kicker">Contact</p>
+                  <h3>Outreach details</h3>
+                </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="sm:col-span-3">
+                  <label className="campaign-create-label">Email</label>
+                  <input
+                    type="email"
+                    className="campaign-create-input"
+                    value={form.email}
+                    onChange={field("email")}
+                    placeholder="email@example.org"
+                  />
+                </div>
+                <div>
+                  <label className="campaign-create-label">Primary phone</label>
+                  <input className="campaign-create-input" value={form.phone} onChange={field("phone")} placeholder="(555) 000-0000" />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="campaign-create-label">Secondary phone</label>
+                  <input className="campaign-create-input" value={form.phone2} onChange={field("phone2")} placeholder="(555) 000-0000" />
+                </div>
+              </div>
+            </section>
+
+            <section className="campaign-create-section">
+              <div className="campaign-create-section-head">
+                <div>
+                  <p className="campaign-create-section-kicker">Location</p>
+                  <h3>Mailing address</h3>
+                </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-6">
+                <div className="sm:col-span-6">
+                  <label className="campaign-create-label">Street address</label>
+                  <input className="campaign-create-input" value={form.address} onChange={field("address")} placeholder="Street address" />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="campaign-create-label">City</label>
+                  <input className="campaign-create-input" value={form.city} onChange={field("city")} placeholder="City" />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="campaign-create-label">State</label>
+                  <input className="campaign-create-input" value={form.state} onChange={field("state")} placeholder="State" />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="campaign-create-label">ZIP code</label>
+                  <input className="campaign-create-input" value={form.zip} onChange={field("zip")} placeholder="ZIP code" />
+                </div>
+              </div>
+            </section>
+
+            <section className="campaign-create-section campaign-create-tag-section">
+              <div className="campaign-create-section-head">
+                <div>
+                  <p className="campaign-create-section-kicker">Tags</p>
+                  <h3>Stage custom RGB labels</h3>
+                </div>
+                <Tag className="h-4 w-4 text-crm-accent" aria-hidden />
+              </div>
+              <div className="campaign-create-tag-builder">
+                <div className="campaign-create-tag-label-wrap">
+                  <label className="campaign-create-label">Tag label</label>
+                  <input
+                    value={tagLabel}
+                    onChange={(e) => setTagLabel(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddTag();
+                      }
+                    }}
+                    className="campaign-create-input"
+                    placeholder="e.g. Grants, Foundation, VIP"
+                    maxLength={36}
+                  />
+                </div>
+                <div className="campaign-create-color-control">
+                  <label className="campaign-create-label">Color</label>
+                  <div className="campaign-create-color-row">
+                    <input
+                      type="color"
+                      value={tagHex}
+                      onChange={(e) => setTagColor(hexToRgb(e.target.value))}
+                      className="campaign-create-color-picker"
+                      aria-label="Tag color picker"
+                    />
+                    <span className="campaign-create-color-value">{tagHex.toUpperCase()}</span>
+                  </div>
+                </div>
+              </div>
+              <div className="campaign-create-rgb-grid" aria-label="RGB color values">
+                {(["r", "g", "b"] as const).map((channel) => (
+                  <label key={channel} className="campaign-create-rgb-field">
+                    <span>{channel.toUpperCase()}</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={255}
+                      value={tagColor[channel]}
+                      onChange={(e) => handleTagChannelChange(channel, e.target.value)}
+                      className="campaign-create-rgb-input"
+                    />
+                  </label>
+                ))}
+                <button type="button" onClick={handleAddTag} className="campaign-create-add-tag">
+                  <Plus className="h-4 w-4" />
+                  Add tag
+                </button>
+              </div>
+              {tags.length > 0 ? (
+                <div className="mt-3">
+                  <p className="campaign-create-label !mb-2">Tag library</p>
+                  <div className="campaign-create-tag-preview !mt-0">
+                    {tags.map((tag) => {
+                      const selected = selectedTagIds.includes(tag.id);
+                      return (
+                        <button
+                          key={tag.id}
+                          type="button"
+                          onClick={() =>
+                            setSelectedTagIds((prev) =>
+                              prev.includes(tag.id) ? prev.filter((id) => id !== tag.id) : [...prev, tag.id],
+                            )
+                          }
+                          className={cn("campaign-create-tag-pill transition-opacity", !selected && "opacity-55 hover:opacity-80")}
+                          style={funderTagPillStyle(tag.color)}
+                        >
+                          <span className="campaign-create-tag-dot" />
+                          {tag.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+              <div className="campaign-create-tag-preview">
+                {hasAssignedTags ? (
+                  <>
+                    {selectedExistingTags.map((tag) => (
+                      <span key={tag.id} className="campaign-create-tag-pill" style={funderTagPillStyle(tag.color)}>
+                        <span className="campaign-create-tag-dot" />
+                        {tag.name}
+                        <button
+                          type="button"
+                          onClick={() => setSelectedTagIds((prev) => prev.filter((id) => id !== tag.id))}
+                          aria-label={`Remove ${tag.name} tag`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                    {stagedTags.map((tag) => (
+                      <span key={tag.id} className="campaign-create-tag-pill" style={funderTagPillStyle(tag.color)}>
+                        <span className="campaign-create-tag-dot" />
+                        {tag.label}
+                        <button
+                          type="button"
+                          onClick={() => setStagedTags((current) => current.filter((item) => item.id !== tag.id))}
+                          aria-label={`Remove ${tag.label} tag`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </>
+                ) : (
+                  <span className="campaign-create-empty-tags">
+                    <Palette className="h-3.5 w-3.5" />
+                    Add tags to preview the pill system.
+                  </span>
+                )}
+              </div>
+              <p className="campaign-create-tag-note">
+                New tags are saved to your funder tag library when you create this funder.
+              </p>
+              {tagError ? <p className="campaign-create-inline-error">{tagError}</p> : null}
+            </section>
+
+            <section className="campaign-create-section">
+              <div className="campaign-create-section-head">
+                <div>
+                  <p className="campaign-create-section-kicker">Notes</p>
+                  <h3>Internal context</h3>
+                </div>
+              </div>
+              <label className="campaign-create-label">Notes</label>
+              <textarea
+                className="campaign-create-input campaign-create-textarea"
+                value={form.notes}
+                onChange={field("notes")}
+                rows={3}
+                placeholder="Add notes about this funder..."
+              />
+            </section>
+
+            <footer className="campaign-create-footer">
+              <button type="button" onClick={onClose} className="campaign-create-secondary-btn">
+                Cancel
+              </button>
+              <button type="submit" disabled={saving || !form.name.trim()} className="campaign-create-primary-btn">
+                {saving ? "Saving..." : "Save funder"}
+              </button>
+            </footer>
+          </form>
+        </div>
       </div>
     </div>
   );
@@ -1004,13 +1313,6 @@ export default function FundersPage() {
     setPage(0);
   };
 
-  const kpiCards = [
-    { label: "Total Funders", value: totalFunders, description: "All funders in your CRM", icon: <Users size={18} />, tone: "violet" },
-    { label: "Active", value: activeFunders, description: "Currently active funders", icon: <Activity size={18} />, tone: "emerald" },
-    { label: "Inactive", value: inactiveFunders, description: "Not currently active", icon: <BarChart3 size={18} />, tone: "slate" },
-    { label: "Prospects", value: prospectFunders, description: "Potential funders", icon: <CircleDollarSign size={18} />, tone: "amber" },
-  ];
-
   return (
     <CRMPageShell className={cn(crm.queueWorkspace, crm.fundersWorkspace)} innerClassName={crm.pageInnerQueue}>
       <CrmConfirmModal
@@ -1048,44 +1350,67 @@ export default function FundersPage() {
           <CRMWorkspaceHeader>
             <CRMPageHeader
               compact
-              className={crm.contactsHeaderPanel}
+              className={cn(crm.contactsHeaderPanel, "campaigns-command-header")}
               icon={<HandCoins className="h-6 w-6" aria-hidden />}
               title="Funders"
               subtitle="Manage funding sources, grant organizations, and financial partners."
               actions={
-                <div className="contacts-hero-actions flex flex-wrap items-center gap-2">
-                <button onClick={() => setShowImport(true)} className={cn(crm.btnSecondary, "funders-command-ghost")}>
-                  <FileUp size={15} /> Import CSV
-                </button>
-                <button onClick={handleExport} className={cn(crm.btnSecondary, "funders-command-ghost")}>
-                  <Download size={15} /> Export CSV
-                </button>
-                <button onClick={() => setShowNew(true)} className="funders-btn funders-btn-primary">
-                  <Plus size={15} /> Add Funder
-                </button>
-              </div>
+                <div className="campaigns-hero-actions">
+                  <button type="button" onClick={() => setShowImport(true)} className="campaigns-btn-secondary">
+                    <FileUp className="h-4 w-4" />
+                    Import CSV
+                  </button>
+                  <button type="button" onClick={handleExport} className="campaigns-btn-secondary">
+                    <Download className="h-4 w-4" />
+                    Export CSV
+                  </button>
+                  <button type="button" onClick={() => setShowNew(true)} className="campaigns-btn-primary">
+                    <Plus className="h-4 w-4" />
+                    Add Funder
+                  </button>
+                </div>
               }
             />
           </CRMWorkspaceHeader>
 
           <CRMWorkspaceToolbar className="flex flex-col gap-3">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              {kpiCards.map((kpi) => (
-                <div
-                  key={kpi.label}
-                  className={cn("funders-kpi-card crm-queue-kpi-card", `funders-kpi-${kpi.tone}`)}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="funders-kpi-icon crm-queue-kpi-icon">{kpi.icon}</div>
-                    <span className="funders-kpi-label crm-queue-kpi-label">{kpi.label}</span>
-                  </div>
-                  <div className="funders-kpi-value crm-queue-kpi-value">
-                    {showLoadingState ? <span className="animate-pulse opacity-40">—</span> : kpi.value}
-                  </div>
-                  <p className="funders-kpi-description">{kpi.description}</p>
-                </div>
-              ))}
-            </div>
+            <section
+              className="crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-4 xl:grid-cols-4"
+              aria-label="Funder metrics"
+            >
+              <FunderKpiTile
+                label="Total"
+                value={totalFunders}
+                hint="All funders in your CRM"
+                icon={Users}
+                tone="blue"
+                loading={showLoadingState}
+              />
+              <FunderKpiTile
+                label="Active"
+                value={activeFunders}
+                hint="Currently active funders"
+                icon={Activity}
+                tone="green"
+                loading={showLoadingState}
+              />
+              <FunderKpiTile
+                label="Inactive"
+                value={inactiveFunders}
+                hint="Not currently active"
+                icon={BarChart3}
+                tone="cyan"
+                loading={showLoadingState}
+              />
+              <FunderKpiTile
+                label="Prospects"
+                value={prospectFunders}
+                hint="Potential funders"
+                icon={CircleDollarSign}
+                tone="amber"
+                loading={showLoadingState}
+              />
+            </section>
 
             <div className="funders-filter-card crm-queue-filter-bar">
               <div className="funders-filter-grid">
@@ -1304,8 +1629,8 @@ export default function FundersPage() {
                       : "Add your first funder to get started."}
                   </p>
                   {!search && statusFilter === "all" && !tagFilter && typeFilter === "all" ? (
-                    <button onClick={() => setShowNew(true)} className="funders-btn funders-btn-primary mx-auto mt-6">
-                      <Plus size={14} /> Add Funder
+                    <button type="button" onClick={() => setShowNew(true)} className="campaigns-btn-primary mx-auto mt-6">
+                      <Plus className="h-4 w-4" /> Add Funder
                     </button>
                   ) : null}
                 </div>
@@ -1481,7 +1806,7 @@ export default function FundersPage() {
         open={showNew}
         tags={tags}
         onClose={() => setShowNew(false)}
-        onCreated={(f) => { setShowNew(false); fetchFunders(); }}
+        onCreated={() => { setShowNew(false); void fetchFunders(); void fetchTags(); }}
       />
       <NewTagModal
         open={showNewTag}
