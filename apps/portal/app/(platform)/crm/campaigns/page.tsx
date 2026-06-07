@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -17,12 +17,16 @@ import {
   Grid2X2,
   ListOrdered,
   Megaphone,
+  Palette,
   PhoneCall,
   Plus,
   Search,
   Send,
+  Sparkles,
+  Tag,
   Target,
   Users,
+  X,
   Zap,
 } from "lucide-react";
 import {
@@ -58,6 +62,11 @@ import { formatShortDate, queueHref } from "../../../../components/crm/campaign/
 type CampaignSort = "status" | "updated" | "name";
 type CampaignQuickFilter = "all" | CampaignStatus | "SCHEDULED";
 type CampaignTypeFilter = "all" | "LOW" | "NORMAL" | "HIGH" | "URGENT" | "SCRIPTED" | "CHECKLIST";
+type CampaignTagDraft = {
+  id: string;
+  label: string;
+  color: { r: number; g: number; b: number };
+};
 
 const QUICK_FILTER_OPTIONS: { value: CampaignQuickFilter; label: string }[] = [
   { value: "all", label: "All" },
@@ -78,6 +87,41 @@ const TYPE_FILTER_OPTIONS: { value: CampaignTypeFilter; label: string }[] = [
   { value: "HIGH", label: "High priority" },
   { value: "URGENT", label: "Urgent priority" },
 ];
+
+const DEFAULT_TAG_RGB = { r: 109, g: 93, b: 252 };
+
+function clampRgbChannel(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function rgbToHex({ r, g, b }: CampaignTagDraft["color"]) {
+  return `#${[r, g, b].map((channel) => clampRgbChannel(channel).toString(16).padStart(2, "0")).join("")}`;
+}
+
+function hexToRgb(hex: string) {
+  const normalized = hex.replace("#", "");
+  if (!/^[0-9a-f]{6}$/i.test(normalized)) return DEFAULT_TAG_RGB;
+  const value = Number.parseInt(normalized, 16);
+  return {
+    r: (value >> 16) & 255,
+    g: (value >> 8) & 255,
+    b: value & 255,
+  };
+}
+
+function campaignTagPillStyle({ r, g, b }: CampaignTagDraft["color"]) {
+  const textR = Math.max(20, Math.round(r * 0.42));
+  const textG = Math.max(28, Math.round(g * 0.42));
+  const textB = Math.max(42, Math.round(b * 0.42));
+
+  return {
+    "--campaign-tag-rgb": `${r} ${g} ${b}`,
+    backgroundColor: `rgba(${r}, ${g}, ${b}, 0.14)`,
+    borderColor: `rgba(${r}, ${g}, ${b}, 0.32)`,
+    color: `rgb(${textR}, ${textG}, ${textB})`,
+  } as CSSProperties;
+}
 
 const CAMPAIGN_STATUS_TONE: Record<CampaignStatus | "SCHEDULED", string> = {
   ACTIVE: "campaigns-status-active",
@@ -393,10 +437,50 @@ function CreateCampaignModal({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<CampaignListItem["priority"]>("NORMAL");
+  const [tagLabel, setTagLabel] = useState("");
+  const [tagColor, setTagColor] = useState(DEFAULT_TAG_RGB);
+  const [tags, setTags] = useState<CampaignTagDraft[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [tagError, setTagError] = useState("");
 
-  async function handleSubmit(e: React.FormEvent) {
+  const tagHex = rgbToHex(tagColor);
+
+  function handleTagChannelChange(channel: keyof CampaignTagDraft["color"], value: string) {
+    setTagColor((current) => ({
+      ...current,
+      [channel]: clampRgbChannel(Number.parseInt(value || "0", 10)),
+    }));
+  }
+
+  function handleAddTag() {
+    const label = tagLabel.trim();
+    setTagError("");
+    if (!label) {
+      setTagError("Give the tag a label first.");
+      return;
+    }
+    if (tags.some((tag) => tag.label.toLowerCase() === label.toLowerCase())) {
+      setTagError("That tag is already staged.");
+      return;
+    }
+
+    setTags((current) => [
+      ...current,
+      {
+        id: `${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${Date.now()}`,
+        label,
+        color: {
+          r: clampRgbChannel(tagColor.r),
+          g: clampRgbChannel(tagColor.g),
+          b: clampRgbChannel(tagColor.b),
+        },
+      },
+    ]);
+    setTagLabel("");
+  }
+
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!name.trim()) return;
     setSaving(true);
@@ -417,73 +501,181 @@ function CreateCampaignModal({
 
   return (
     <div className={crm.campaignModalBackdrop}>
-      <div className={cn(crm.card, "w-full max-w-md p-6 shadow-xl")}>
-        <h2 className="text-lg font-semibold text-crm-text mb-1">
-          {importAfterCreate ? "Create campaign & import leads" : "New campaign"}
-        </h2>
-        {importAfterCreate && (
-          <p className="text-sm text-crm-muted mb-4">
-            Name your campaign, then import a CSV on the next screen. Contacts will be added as campaign members.
-          </p>
-        )}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-crm-text mb-1">Campaign name</label>
+      <div className="campaign-create-modal-card w-full max-w-2xl">
+        <div className="campaign-create-modal-glow" aria-hidden />
+        <div className="campaign-create-modal-inner">
+          <header className="campaign-create-modal-header">
+            <div className="campaign-create-modal-icon">
+              <Sparkles className="h-5 w-5" aria-hidden />
+            </div>
+            <div className="min-w-0">
+              <p className="campaign-create-modal-eyebrow">Campaign cockpit</p>
+              <h2>{importAfterCreate ? "Create campaign & import leads" : "New campaign"}</h2>
+              <p>
+                {importAfterCreate
+                  ? "Name the mission, stage its vibe, then drop into CSV import with everything ready."
+                  : "Spin up a polished campaign shell with priority and color-coded signals."}
+              </p>
+            </div>
+          </header>
+
+          <form onSubmit={handleSubmit} className="campaign-create-form">
+            <section className="campaign-create-section">
+              <div className="campaign-create-section-head">
+                <div>
+                  <p className="campaign-create-section-kicker">Basics</p>
+                  <h3>Give the team a clear brief</h3>
+                </div>
+                <span className="campaign-create-mini-pill">Draft first</span>
+              </div>
+              <label className="campaign-create-label">Campaign name</label>
             <input
               autoFocus
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className={crm.input}
-              placeholder="e.g. Q3 Outbound"
+                className="campaign-create-input"
+                placeholder="e.g. Q3 Outbound Blitz"
               maxLength={200}
             />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-crm-text mb-1">
+              <label className="campaign-create-label">
               Description <span className="text-crm-muted font-normal">(optional)</span>
             </label>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              className={cn(crm.input, "resize-none min-h-[5.5rem] bg-crm-surface-2/90")}
+                className="campaign-create-input campaign-create-textarea"
               rows={3}
-              placeholder="Objective for agents…"
+                placeholder="Objective, audience, offer, and the one thing agents should not forget..."
               maxLength={2000}
             />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-crm-text mb-1">Queue priority</label>
-            <div className="flex gap-2 flex-wrap">
+            </section>
+
+            <section className="campaign-create-section">
+              <div className="campaign-create-section-head">
+                <div>
+                  <p className="campaign-create-section-kicker">Priority</p>
+                  <h3>Set the queue energy</h3>
+                </div>
+              </div>
+              <div className="campaign-create-priority-grid" role="group" aria-label="Queue priority">
               {(["NORMAL", "HIGH", "URGENT"] as const).map((p) => (
                 <button
                   key={p}
                   type="button"
                   onClick={() => setPriority(p)}
                   className={cn(
-                    crm.campaignPriorityPill,
-                    priority === p &&
-                      (p === "URGENT"
-                        ? crm.campaignPriorityPillUrgent
-                        : p === "HIGH"
-                          ? crm.campaignPriorityPillHigh
-                          : crm.campaignPriorityPillActive),
+                      "campaign-create-priority-card",
+                      priority === p && "campaign-create-priority-card-active",
+                      priority === p && p === "URGENT" && "campaign-create-priority-card-urgent",
+                      priority === p && p === "HIGH" && "campaign-create-priority-card-high",
                   )}
                 >
-                  {p}
+                    <span>{CAMPAIGN_PRIORITY_LABELS[p]}</span>
+                    <small>
+                      {p === "URGENT" ? "Move now" : p === "HIGH" ? "Hot lane" : "Steady tempo"}
+                    </small>
                 </button>
               ))}
             </div>
-          </div>
-          {error ? <p className="text-sm text-crm-danger">{error}</p> : null}
-          <div className="flex gap-2 justify-end pt-2">
-            <button type="button" onClick={onClose} className={crm.btnSecondary}>
+            </section>
+
+            <section className="campaign-create-section campaign-create-tag-section">
+              <div className="campaign-create-section-head">
+                <div>
+                  <p className="campaign-create-section-kicker">Tags</p>
+                  <h3>Stage custom RGB labels</h3>
+                </div>
+                <Tag className="h-4 w-4 text-crm-accent" aria-hidden />
+              </div>
+              <div className="campaign-create-tag-builder">
+                <div className="campaign-create-tag-label-wrap">
+                  <label className="campaign-create-label">Tag label</label>
+                  <input
+                    value={tagLabel}
+                    onChange={(e) => setTagLabel(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleAddTag();
+                      }
+                    }}
+                    className="campaign-create-input"
+                    placeholder="e.g. VIP, Renewal, spicy lead"
+                    maxLength={36}
+                  />
+                </div>
+                <div className="campaign-create-color-control">
+                  <label className="campaign-create-label">Color</label>
+                  <div className="campaign-create-color-row">
+                    <input
+                      type="color"
+                      value={tagHex}
+                      onChange={(e) => setTagColor(hexToRgb(e.target.value))}
+                      className="campaign-create-color-picker"
+                      aria-label="Tag color picker"
+                    />
+                    <span className="campaign-create-color-value">{tagHex.toUpperCase()}</span>
+                  </div>
+                </div>
+              </div>
+              <div className="campaign-create-rgb-grid" aria-label="RGB color values">
+                {(["r", "g", "b"] as const).map((channel) => (
+                  <label key={channel} className="campaign-create-rgb-field">
+                    <span>{channel.toUpperCase()}</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={255}
+                      value={tagColor[channel]}
+                      onChange={(e) => handleTagChannelChange(channel, e.target.value)}
+                      className="campaign-create-rgb-input"
+                    />
+                  </label>
+                ))}
+                <button type="button" onClick={handleAddTag} className="campaign-create-add-tag">
+                  <Plus className="h-4 w-4" />
+                  Add tag
+                </button>
+              </div>
+              <div className="campaign-create-tag-preview">
+                {tags.length > 0 ? (
+                  tags.map((tag) => (
+                    <span key={tag.id} className="campaign-create-tag-pill" style={campaignTagPillStyle(tag.color)}>
+                      <span className="campaign-create-tag-dot" />
+                      {tag.label}
+                      <button
+                        type="button"
+                        onClick={() => setTags((current) => current.filter((item) => item.id !== tag.id))}
+                        aria-label={`Remove ${tag.label} tag`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))
+                ) : (
+                  <span className="campaign-create-empty-tags">
+                    <Palette className="h-3.5 w-3.5" />
+                    Add tags to preview the pill system.
+                  </span>
+                )}
+              </div>
+              <p className="campaign-create-tag-note">
+                RGB tag styling is ready here; persistence waits for campaign tag storage in the API.
+              </p>
+              {tagError ? <p className="campaign-create-inline-error">{tagError}</p> : null}
+            </section>
+
+            {error ? <p className="campaign-create-inline-error">{error}</p> : null}
+            <footer className="campaign-create-footer">
+              <button type="button" onClick={onClose} className="campaign-create-secondary-btn">
               Cancel
             </button>
-            <button type="submit" disabled={saving || !name.trim()} className={crm.btnPrimary}>
-              {saving ? "Creating…" : importAfterCreate ? "Create & go to import" : "Create"}
+              <button type="submit" disabled={saving || !name.trim()} className="campaign-create-primary-btn">
+                {saving ? "Creating..." : importAfterCreate ? "Create & import leads" : "Launch draft"}
             </button>
-          </div>
+            </footer>
         </form>
+        </div>
       </div>
     </div>
   );
