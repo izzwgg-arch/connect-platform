@@ -1,7 +1,27 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Archive, CheckCircle, Eye, FileSignature, GripVertical, Layers, Pencil, Plus, RefreshCw, Trash2, Upload, X } from "lucide-react";
+import {
+  Archive,
+  Calendar,
+  CheckCircle,
+  ChevronRight,
+  ClipboardCheck,
+  Eye,
+  FileSignature,
+  FileText,
+  GripVertical,
+  Layers,
+  Pencil,
+  Plus,
+  Search,
+  Send,
+  SortAsc,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
 import { CRMPageHeader } from "../CRMPageHeader";
 import {
   CRMWorkspaceBody,
@@ -16,6 +36,8 @@ import {
 import { ConnectSelect } from "../../ConnectSelect";
 import { ApiError, apiGet, apiPost, apiPut, getPortalApiBaseUrl } from "../../../services/apiClient";
 import { CRM_FORM_MERGE_FIELDS } from "@connect/shared";
+import { cn } from "../cn";
+import { crm } from "../crmClasses";
 
 type FormStatus = "DRAFT" | "ACTIVE" | "ARCHIVED";
 type FieldType = "TEXT" | "DATE" | "CHECKBOX" | "SIGNATURE" | "INITIALS";
@@ -35,6 +57,11 @@ type FormTemplate = {
   updatedAt: string;
   timesSent: number;
   completedCount: number;
+};
+
+type FormPreviewRow = FormTemplate & {
+  previewRowKey: string;
+  isDevPreviewDuplicate: boolean;
 };
 
 type FormField = {
@@ -61,7 +88,21 @@ type FormDetailResponse = {
   fields: FormField[];
 };
 
+type FormSortMode = "updated" | "created" | "name";
+
 const FIELD_TYPES: FieldType[] = ["TEXT", "DATE", "CHECKBOX", "SIGNATURE", "INITIALS"];
+const STATUS_OPTIONS: { value: "ALL" | FormStatus; label: string }[] = [
+  { value: "ALL", label: "All statuses" },
+  { value: "ACTIVE", label: "Active" },
+  { value: "DRAFT", label: "Draft" },
+  { value: "ARCHIVED", label: "Archived" },
+];
+const SORT_OPTIONS: { value: FormSortMode; label: string }[] = [
+  { value: "updated", label: "Updated" },
+  { value: "created", label: "Created" },
+  { value: "name", label: "Name" },
+];
+const DEV_ROW_PREVIEW_COUNT = 20;
 
 // ── Token picker options — grouped from the shared CRM_FORM_MERGE_FIELDS list ─
 const TOKEN_OPTION_GROUPS = (() => {
@@ -101,9 +142,56 @@ function fmtDate(value: string | null | undefined) {
 }
 
 function statusClass(status: FormStatus) {
-  if (status === "ACTIVE") return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-200";
-  if (status === "ARCHIVED") return "bg-slate-500/10 text-slate-600 dark:text-slate-300";
-  return "bg-amber-500/10 text-amber-700 dark:text-amber-200";
+  if (status === "ACTIVE") return "tasks-status-completed";
+  if (status === "ARCHIVED") return "tasks-status-muted";
+  return "tasks-status-today";
+}
+
+function initialsFromName(name: string): string {
+  return (
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase())
+      .join("") || "FM"
+  );
+}
+
+function fmtFileSize(bytes: number | null | undefined): string {
+  const size = Number(bytes || 0);
+  if (!size) return "Unknown size";
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function sortForms(forms: FormTemplate[], sortMode: FormSortMode) {
+  return [...forms].sort((a, b) => {
+    if (sortMode === "name") return a.name.localeCompare(b.name);
+    const aTime = new Date(sortMode === "created" ? a.createdAt : a.updatedAt).getTime();
+    const bTime = new Date(sortMode === "created" ? b.createdAt : b.updatedAt).getTime();
+    return bTime - aTime;
+  });
+}
+
+function expandRowsForDevPreview(forms: FormTemplate[], minRows = DEV_ROW_PREVIEW_COUNT): FormPreviewRow[] {
+  if (process.env.NODE_ENV !== "development" || forms.length === 0 || forms.length >= minRows) {
+    return forms.map((form) => ({
+      ...form,
+      previewRowKey: form.id,
+      isDevPreviewDuplicate: false,
+    }));
+  }
+
+  return Array.from({ length: minRows }, (_, index) => {
+    const form = forms[index % forms.length];
+    const cycle = Math.floor(index / forms.length);
+    return {
+      ...form,
+      previewRowKey: cycle === 0 ? form.id : `${form.id}-dev-preview-${cycle}-${index}`,
+      isDevPreviewDuplicate: cycle > 0,
+    };
+  });
 }
 
 function openFormPreview(formId: string) {
@@ -142,6 +230,8 @@ export function FormsCommandDesk() {
   const [stats, setStats] = useState<FormsResponse["stats"]>({});
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<"ALL" | FormStatus>("ALL");
+  const [sortMode, setSortMode] = useState<FormSortMode>("updated");
+  const [selectedRowKey, setSelectedRowKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -167,6 +257,19 @@ export function FormsCommandDesk() {
 
   useEffect(() => { loadForms(); }, [loadForms]);
 
+  const displayedForms = useMemo(() => sortForms(forms, sortMode), [forms, sortMode]);
+  const previewForms = useMemo(() => expandRowsForDevPreview(displayedForms), [displayedForms]);
+  const usingDevPreview = previewForms.length > displayedForms.length;
+  const selectedForm = useMemo(
+    () => previewForms.find((form) => form.previewRowKey === selectedRowKey) ?? previewForms[0] ?? null,
+    [previewForms, selectedRowKey],
+  );
+
+  useEffect(() => {
+    if (selectedRowKey && previewForms.some((form) => form.previewRowKey === selectedRowKey)) return;
+    setSelectedRowKey(previewForms[0]?.previewRowKey ?? null);
+  }, [previewForms, selectedRowKey]);
+
   const totals = useMemo(() => ({
     all: forms.length,
     active: stats.ACTIVE || 0,
@@ -181,120 +284,141 @@ export function FormsCommandDesk() {
       <CRMWorkspaceChrome>
         <CRMWorkspaceHeader>
           <CRMPageHeader
-            icon={<FileSignature className="h-5 w-5" />}
+            compact
+            icon={<FileSignature className="h-6 w-6" aria-hidden />}
             title="Forms"
             subtitle="Reusable PDF forms for secure lead completion, signatures, and CRM submissions."
-            className="tasks-page-header"
+            className={cn(crm.contactsHeaderPanel, "campaigns-command-header")}
             actions={
-              <button type="button" onClick={() => setUploadOpen(true)} className="tasks-primary-action">
-                <Plus className="h-4 w-4" />
-                Upload Form
-              </button>
+              <div className="campaigns-hero-actions">
+                <button type="button" onClick={() => setUploadOpen(true)} className="campaigns-btn-primary">
+                  <Plus className="h-4 w-4" />
+                  Upload Form
+                </button>
+              </div>
             }
           />
         </CRMWorkspaceHeader>
 
         <CRMWorkspaceToolbar className="flex flex-col gap-3">
-          <div className="tasks-kpi-grid grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            {[
-              ["Templates", totals.all],
-              ["Active", totals.active],
-              ["Draft", totals.draft],
-              ["Times sent", totals.sent],
-              ["Completed", totals.completed],
-            ].map(([label, value]) => (
-              <div key={label} className="tasks-kpi-card">
-                <div className="flex min-w-0 flex-col gap-2">
-                  <span className="text-[11px] font-semibold leading-none text-crm-muted">{label}</span>
-                  <span className="text-3xl font-semibold leading-none tracking-tight tabular-nums text-crm-text">{value}</span>
-                </div>
+          <section className="crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-4 xl:grid-cols-4" aria-label="Form metrics">
+            <FormsKpiCard icon={<FileSignature className="h-4 w-4" />} label="Templates" value={String(totals.all)} micro={usingDevPreview ? `${previewForms.length} preview rows` : `${displayedForms.length} shown`} accent="blue" />
+            <FormsKpiCard icon={<CheckCircle className="h-4 w-4" />} label="Active" value={String(totals.active)} micro="Ready to send" accent="green" />
+            <FormsKpiCard icon={<FileText className="h-4 w-4" />} label="Draft" value={String(totals.draft)} micro="Needs setup" accent="amber" />
+            <FormsKpiCard icon={<ClipboardCheck className="h-4 w-4" />} label="Completed" value={String(totals.completed)} micro={`${totals.sent} signer links`} accent="cyan" />
+          </section>
+
+          <div className="crm-queue-filter-bar tasks-filter-bar">
+            <div className="crm-queue-filter-grid forms-filter-grid">
+              <div className="crm-queue-filter-field crm-queue-filter-field-search">
+                <Search className="crm-queue-filter-icon h-4 w-4 shrink-0 text-crm-muted" />
+                <input
+                  id="crm-forms-search"
+                  type="search"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Name, category, description..."
+                  className="crm-queue-filter-control min-w-[10rem] flex-1"
+                  aria-label="Search forms"
+                />
+                {search ? (
+                  <button type="button" onClick={() => setSearch("")} className="text-xs font-medium text-crm-accent hover:underline">
+                    Clear
+                  </button>
+                ) : null}
               </div>
-            ))}
+
+              <div className="crm-queue-filter-field">
+                <label htmlFor="crm-forms-status" className="sr-only">Status</label>
+                <ConnectSelect
+                  id="crm-forms-status"
+                  value={status}
+                  onChange={(value) => setStatus(value as typeof status)}
+                  className="min-w-[10rem] flex-1"
+                  size="sm"
+                  options={STATUS_OPTIONS}
+                />
+              </div>
+
+              <div className="crm-queue-filter-field">
+                <SortAsc className="h-4 w-4 shrink-0 text-crm-muted" />
+                <label htmlFor="crm-forms-sort" className="sr-only">Sort</label>
+                <ConnectSelect
+                  id="crm-forms-sort"
+                  value={sortMode}
+                  onChange={(value) => setSortMode(value as FormSortMode)}
+                  className="min-w-[10rem] flex-1"
+                  size="sm"
+                  options={SORT_OPTIONS}
+                />
+              </div>
+
+              <div className="crm-queue-filter-field forms-filter-count">
+                <span className="crm-queue-filter-control forms-filter-count-value" aria-label={`${previewForms.length} form rows shown`}>
+                  {previewForms.length}
+                </span>
+              </div>
+            </div>
           </div>
-          <div className="tasks-filter-bar flex flex-col gap-3 md:flex-row md:items-center">
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search forms by name, category, or description"
-              className="min-w-0 flex-1 rounded-xl border border-crm-border bg-crm-surface px-3 py-2 text-sm text-crm-text outline-none"
-            />
-            <ConnectSelect
-              value={status}
-              onChange={(value) => setStatus(value as typeof status)}
-              size="sm"
-              options={[
-                { value: "ALL", label: "All statuses" },
-                { value: "ACTIVE", label: "Active" },
-                { value: "DRAFT", label: "Draft" },
-                { value: "ARCHIVED", label: "Archived" },
-              ]}
-            />
-            <button type="button" onClick={loadForms} className="rounded-xl border border-crm-border px-3 py-2 text-sm text-crm-text">
-              <RefreshCw className="mr-2 inline h-4 w-4" />
-              Refresh
-            </button>
-          </div>
-          {error ? <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-200">{error}</div> : null}
+          {error ? <div className={cn(crm.bannerDanger, "rounded-xl px-3 py-2 text-sm")}>{error}</div> : null}
         </CRMWorkspaceToolbar>
       </CRMWorkspaceChrome>
 
       <CRMWorkspaceBody split>
-        <CRMWorkspaceMain>
-          <CRMWorkspaceScrollRegion>
-            <div className="tasks-list-card overflow-hidden">
+        <CRMWorkspaceMain className="crm-queue-main-workspace">
+          <CRMWorkspaceScrollRegion className="crm-queue-center-workspace flex min-w-0 flex-col gap-3">
+            <section className="checklist-collection-shell crm-queue-list-panel forms-list-panel">
               {loading ? (
-                <div className="p-6 text-sm text-crm-muted">Loading forms…</div>
+                <div className="py-24 text-center text-sm text-crm-muted" aria-busy="true">Loading forms...</div>
               ) : forms.length === 0 ? (
-                <div className="p-8 text-center">
+                <div className="tasks-empty-state px-6 py-14 text-center">
                   <FileSignature className="mx-auto h-10 w-10 text-crm-muted" />
                   <h3 className="mt-3 text-lg font-semibold text-crm-text">No forms yet</h3>
                   <p className="mt-1 text-sm text-crm-muted">Upload a reusable PDF form to start sending secure signing links.</p>
+                  <button type="button" onClick={() => setUploadOpen(true)} className="tasks-primary-action mt-6">
+                    <Plus className="h-4 w-4" />
+                    Upload Form
+                  </button>
                 </div>
               ) : (
-                <div className="divide-y divide-crm-border/60">
-                  {forms.map((form) => (
-                    <div key={form.id} className="grid gap-3 p-4 lg:grid-cols-[1.4fr_.8fr_.6fr_.7fr_.7fr_.7fr_auto] lg:items-center">
-                      <div>
-                        <div className="font-semibold text-crm-text">{form.name}</div>
-                        <div className="text-xs text-crm-muted">{form.originalFileName}</div>
-                      </div>
-                      <div className="text-sm text-crm-text">{form.category || "Uncategorized"}</div>
-                      <span className={`w-fit rounded-full px-2 py-1 text-xs font-medium ${statusClass(form.status)}`}>{form.status}</span>
-                      <div className="text-sm text-crm-muted">{fmtDate(form.createdAt)}</div>
-                      <div className="text-sm text-crm-muted">{fmtDate(form.updatedAt)}</div>
-                      <div className="text-sm text-crm-muted">{form.timesSent} sent · {form.completedCount} done</div>
-                      <div className="flex flex-wrap gap-2">
-                        <button type="button" onClick={() => setEditingId(form.id)} className="rounded-lg border border-crm-border px-2 py-1 text-xs text-crm-text">
-                          <Pencil className="mr-1 inline h-3.5 w-3.5" /> Edit
-                        </button>
-                        <button type="button" onClick={() => openFormPreview(form.id)} className="rounded-lg border border-crm-border px-2 py-1 text-xs text-crm-text">
-                          <Eye className="mr-1 inline h-3.5 w-3.5" /> View
-                        </button>
-                        {form.status === "DRAFT" ? (
-                          <button type="button" onClick={async () => { await apiPut(`/crm/forms/${form.id}`, { status: "ACTIVE" }); loadForms(); }} className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
-                            <CheckCircle className="mr-1 inline h-3.5 w-3.5" /> Activate
-                          </button>
-                        ) : null}
-                        {form.status !== "ARCHIVED" ? (
-                          <button type="button" onClick={async () => { await apiPost(`/crm/forms/${form.id}/archive`); loadForms(); }} className="rounded-lg border border-crm-border px-2 py-1 text-xs text-crm-text">
-                            <Archive className="mr-1 inline h-3.5 w-3.5" /> Archive
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <>
+                  <div className="crm-queue-list-head">
+                    <label className="flex cursor-pointer items-center gap-2 text-xs text-crm-muted">
+                      <input type="checkbox" readOnly checked={false} className={crm.checkbox} />
+                      <span>Select form</span>
+                    </label>
+                    <span className="text-[10px] font-semibold text-crm-muted tabular-nums">
+                      {previewForms.length} shown · {forms.length} total{usingDevPreview ? " · dev preview" : ""}
+                    </span>
+                  </div>
+                  <div className="crm-queue-row-list">
+                    {previewForms.map((form, index) => (
+                      <FormTemplateRow
+                        key={form.previewRowKey}
+                        form={form}
+                        rank={index + 1}
+                        selected={selectedForm?.previewRowKey === form.previewRowKey}
+                        onSelect={() => setSelectedRowKey(form.previewRowKey)}
+                        onEdit={() => setEditingId(form.id)}
+                        onView={() => openFormPreview(form.id)}
+                        onActivate={async () => { await apiPut(`/crm/forms/${form.id}`, { status: "ACTIVE" }); void loadForms(); }}
+                        onArchive={async () => { await apiPost(`/crm/forms/${form.id}/archive`); void loadForms(); }}
+                      />
+                    ))}
+                  </div>
+                </>
               )}
-            </div>
+            </section>
           </CRMWorkspaceScrollRegion>
         </CRMWorkspaceMain>
-        <CRMWorkspaceRightRail>
-          <div className="flex flex-col gap-4">
-            <section className="tasks-sidebar-card">
-              <h3 className="text-xs font-bold uppercase tracking-[0.14em] text-crm-text">Phase 1 editor</h3>
-              <p className="mt-2 text-sm leading-relaxed text-crm-muted">Add fields as a structured list now. Coordinates are stored so a drag/drop PDF overlay can be added later without a data migration.</p>
-            </section>
-          </div>
+        <CRMWorkspaceRightRail className="crm-queue-right-rail crm-queue-detail-rail forms-right-rail flex flex-col min-h-0">
+          <FormsDetailPanel
+            form={selectedForm}
+            totals={totals}
+            onUpload={() => setUploadOpen(true)}
+            onEdit={(formId) => setEditingId(formId)}
+            onView={(formId) => openFormPreview(formId)}
+          />
         </CRMWorkspaceRightRail>
       </CRMWorkspaceBody>
 
@@ -304,8 +428,284 @@ export function FormsCommandDesk() {
   );
 }
 
+function FormsKpiCard({
+  icon,
+  label,
+  value,
+  micro,
+  accent,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  micro: string;
+  accent: "blue" | "violet" | "green" | "amber" | "rose" | "cyan";
+}) {
+  return (
+    <div className={cn(crm.queueCountPill, `crm-queue-kpi-${accent}`, "relative overflow-hidden bg-crm-surface-2")}>
+      <span className="flex w-full items-start justify-between gap-3">
+        <span className="min-w-0">
+          <span className="crm-queue-kpi-label block text-[10px] font-bold uppercase tracking-wide text-crm-muted">{label}</span>
+          <span className="crm-queue-kpi-value mt-1 block text-2xl font-bold tabular-nums leading-none tracking-tight text-crm-text">{value}</span>
+        </span>
+        <span className="crm-queue-kpi-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface/70 text-crm-accent">
+          {icon}
+        </span>
+      </span>
+      <span className="crm-queue-kpi-micro text-[10px] font-medium text-crm-muted">{micro}</span>
+    </div>
+  );
+}
+
+function FormTemplateRow({
+  form,
+  rank,
+  selected,
+  onSelect,
+  onEdit,
+  onView,
+  onActivate,
+  onArchive,
+}: {
+  form: FormTemplate;
+  rank: number;
+  selected: boolean;
+  onSelect: () => void;
+  onEdit: () => void;
+  onView: () => void;
+  onActivate: () => Promise<void>;
+  onArchive: () => Promise<void>;
+}) {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-selected={selected}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+      className={cn(
+        "crm-queue-row crm-contact-row crm-form-row group",
+        selected && "crm-queue-row-selected",
+        form.status === "ARCHIVED" && "crm-queue-row-readonly opacity-90",
+      )}
+    >
+      <div className="crm-queue-row-grid">
+        <label className="crm-contact-row-check" onClick={(event) => event.stopPropagation()} aria-label={`Select ${form.name}`}>
+          <input type="checkbox" checked={selected} readOnly onChange={onSelect} className={crm.checkbox} />
+        </label>
+        <span className="crm-queue-row-rank tabular-nums">{rank}</span>
+
+        <div className="crm-queue-row-avatar forms-row-avatar" aria-hidden>
+          {initialsFromName(form.name)}
+        </div>
+
+        <div className="crm-queue-row-main min-w-0">
+          <div className="crm-queue-row-title-line">
+            <span className="crm-queue-row-name truncate">{form.name}</span>
+            <span className={cn("tasks-status-pill", statusClass(form.status))}>{form.status}</span>
+          </div>
+          <p className="crm-queue-row-sub truncate">{form.description || form.originalFileName}</p>
+        </div>
+
+        <div className="crm-queue-row-phone hidden md:flex">
+          <FileSignature className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">{form.category || "Uncategorized"}</span>
+        </div>
+
+        <div className="crm-queue-row-email hidden lg:flex">
+          <FileText className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">{form.originalFileName}</span>
+        </div>
+
+        <div className="crm-queue-row-meta hidden xl:flex">
+          <span className="crm-queue-pill crm-queue-pill-muted inline-flex items-center gap-0.5">
+            <Calendar className="h-3 w-3" />
+            {fmtDate(form.updatedAt)}
+          </span>
+        </div>
+
+        <span className="crm-queue-row-status shrink-0 crm-queue-pill crm-queue-pill-stage">
+          {form.timesSent} sent
+        </span>
+
+        <div className="forms-row-actions">
+          <button type="button" onClick={(event) => { event.stopPropagation(); onEdit(); }} className="forms-row-action" aria-label={`Edit ${form.name}`}>
+            <Pencil className="h-3.5 w-3.5" />
+            <span>Edit</span>
+          </button>
+          <button type="button" onClick={(event) => { event.stopPropagation(); onView(); }} className="forms-row-action" aria-label={`Preview ${form.name}`}>
+            <Eye className="h-3.5 w-3.5" />
+            <span>View</span>
+          </button>
+          {form.status === "DRAFT" ? (
+            <button type="button" onClick={(event) => { event.stopPropagation(); void onActivate(); }} className="forms-row-action forms-row-action-success" aria-label={`Activate ${form.name}`}>
+              <CheckCircle className="h-3.5 w-3.5" />
+              <span>Activate</span>
+            </button>
+          ) : null}
+          {form.status !== "ARCHIVED" ? (
+            <button type="button" onClick={(event) => { event.stopPropagation(); void onArchive(); }} className="forms-row-action" aria-label={`Archive ${form.name}`}>
+              <Archive className="h-3.5 w-3.5" />
+              <span>Archive</span>
+            </button>
+          ) : null}
+        </div>
+
+        <ChevronRight className="crm-queue-row-chevron h-4 w-4 shrink-0" />
+      </div>
+    </div>
+  );
+}
+
+function FormsDetailPanel({
+  form,
+  totals,
+  onUpload,
+  onEdit,
+  onView,
+}: {
+  form: FormTemplate | null;
+  totals: { all: number; active: number; draft: number; archived: number; sent: number; completed: number };
+  onUpload: () => void;
+  onEdit: (formId: string) => void;
+  onView: (formId: string) => void;
+}) {
+  if (!form) {
+    return (
+      <aside className="crm-queue-detail-panel crm-contact-detail-panel forms-detail-panel flex min-h-full flex-col gap-4 p-4" aria-label="Forms summary">
+        <div className="crm-queue-detail-glow" aria-hidden />
+        <FormsDetailHero icon={<FileSignature className="h-5 w-5" />} eyebrow="Forms library" title="Select a form" detail="Open a row to review setup status, sends, completions, and PDF metadata." />
+        <FormsMetricGrid totals={totals} />
+        <button type="button" onClick={onUpload} className="tasks-primary-action relative z-[1] mt-auto w-full justify-center">
+          <Plus className="h-4 w-4" />
+          Upload Form
+        </button>
+      </aside>
+    );
+  }
+
+  return (
+    <aside className="crm-queue-detail-panel crm-contact-detail-panel forms-detail-panel flex min-h-full flex-col gap-4 p-4" aria-label="Form details">
+      <div className="crm-queue-detail-glow" aria-hidden />
+      <FormsDetailHero
+        icon={<FileSignature className="h-5 w-5" />}
+        eyebrow={form.status}
+        title={form.name}
+        detail={form.description || "No description added yet."}
+        status={form.status}
+      />
+
+      <section className="crm-queue-detail-actions-card forms-detail-card">
+        <p className="crm-queue-detail-section-label">Form activity</p>
+        <div className="grid grid-cols-2 gap-2">
+          <FormsDetailMetric icon={<Send className="h-4 w-4" />} label="Sent" value={String(form.timesSent)} />
+          <FormsDetailMetric icon={<ClipboardCheck className="h-4 w-4" />} label="Completed" value={String(form.completedCount)} />
+          <FormsDetailMetric icon={<FileText className="h-4 w-4" />} label="Pages" value={String(form.pageCount ?? 1)} />
+          <FormsDetailMetric icon={<Layers className="h-4 w-4" />} label="Size" value={fmtFileSize(form.sizeBytes)} />
+        </div>
+      </section>
+
+      <section className="crm-queue-detail-actions-card forms-detail-card">
+        <p className="crm-queue-detail-section-label">Metadata</p>
+        <div className="space-y-2">
+          <FormsMetadataRow label="Category" value={form.category || "Uncategorized"} />
+          <FormsMetadataRow label="Original file" value={form.originalFileName} />
+          <FormsMetadataRow label="Created" value={fmtDate(form.createdAt)} />
+          <FormsMetadataRow label="Updated" value={fmtDate(form.updatedAt)} />
+        </div>
+      </section>
+
+      <section className="crm-queue-detail-actions-card forms-detail-card">
+        <p className="crm-queue-detail-section-label">Phase 1 editor</p>
+        <p className="text-sm leading-relaxed text-crm-muted">
+          Add fields as a structured list now. Coordinates are stored so a drag/drop PDF overlay can be added later without a data migration.
+        </p>
+      </section>
+
+      <footer className="relative z-[1] mt-auto grid gap-2 border-t border-crm-border/60 pt-4">
+        <button type="button" onClick={() => onEdit(form.id)} className="tasks-primary-action w-full justify-center">
+          <Pencil className="h-4 w-4" />
+          Edit Fields
+        </button>
+        <button type="button" onClick={() => onView(form.id)} className={crm.btnSecondary}>
+          <Eye className="h-4 w-4" />
+          Preview PDF
+        </button>
+      </footer>
+    </aside>
+  );
+}
+
+function FormsDetailHero({
+  icon,
+  eyebrow,
+  title,
+  detail,
+  status,
+}: {
+  icon: ReactNode;
+  eyebrow: string;
+  title: string;
+  detail: string;
+  status?: FormStatus;
+}) {
+  return (
+    <header className="forms-detail-hero relative z-[1] flex items-start gap-3">
+      <div className="forms-detail-orb flex h-11 w-11 shrink-0 items-center justify-center rounded-crm border border-crm-border bg-crm-surface-2 text-crm-accent">
+        {icon}
+      </div>
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-[11px] font-black uppercase tracking-wider text-crm-muted">{eyebrow}</p>
+          {status ? <span className={cn("tasks-status-pill", statusClass(status))}>{status}</span> : null}
+        </div>
+        <h2 className="mt-1 truncate text-lg font-black text-crm-text">{title}</h2>
+        <p className="mt-1 text-xs leading-relaxed text-crm-muted">{detail}</p>
+      </div>
+    </header>
+  );
+}
+
+function FormsMetricGrid({ totals }: { totals: { all: number; active: number; draft: number; archived: number; sent: number; completed: number } }) {
+  return (
+    <div className="relative z-[1] grid grid-cols-2 gap-2">
+      <FormsDetailMetric icon={<FileSignature className="h-4 w-4" />} label="Templates" value={String(totals.all)} />
+      <FormsDetailMetric icon={<CheckCircle className="h-4 w-4" />} label="Active" value={String(totals.active)} />
+      <FormsDetailMetric icon={<FileText className="h-4 w-4" />} label="Draft" value={String(totals.draft)} />
+      <FormsDetailMetric icon={<Archive className="h-4 w-4" />} label="Archived" value={String(totals.archived)} />
+    </div>
+  );
+}
+
+function FormsDetailMetric({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
+  return (
+    <div className="rounded-crm border border-crm-border/50 bg-crm-surface/70 p-3">
+      <div className="flex items-center gap-2 text-crm-muted">
+        {icon}
+        <span className="text-[10px] font-bold uppercase tracking-wider">{label}</span>
+      </div>
+      <p className="mt-2 text-lg font-black tabular-nums text-crm-text">{value}</p>
+    </div>
+  );
+}
+
+function FormsMetadataRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start justify-between gap-3 border-t border-crm-border/45 py-2 first:border-t-0 first:pt-0 last:pb-0">
+      <span className="text-[11px] font-bold uppercase tracking-wider text-crm-muted">{label}</span>
+      <span className="max-w-[12rem] text-right text-xs font-semibold text-crm-text">{value}</span>
+    </div>
+  );
+}
+
 function UploadFormModal({ onClose, onUploaded }: { onClose: () => void; onUploaded: () => void }) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const [selectedFileName, setSelectedFileName] = useState("");
   const [name, setName] = useState("");
   const [category, setCategory] = useState("");
   const [description, setDescription] = useState("");
@@ -338,22 +738,94 @@ function UploadFormModal({ onClose, onUploaded }: { onClose: () => void; onUploa
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-lg rounded-2xl border border-crm-border bg-crm-surface p-5 shadow-2xl">
-        <h2 className="text-lg font-semibold text-crm-text">Upload PDF form</h2>
-        <div className="mt-4 space-y-3">
-          <input ref={fileRef} type="file" accept="application/pdf,.pdf" className="block w-full text-sm text-crm-text" />
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Form name" className="w-full rounded-xl border border-crm-border bg-crm-surface px-3 py-2 text-sm text-crm-text" />
-          <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Category" className="w-full rounded-xl border border-crm-border bg-crm-surface px-3 py-2 text-sm text-crm-text" />
-          <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description" rows={3} className="w-full rounded-xl border border-crm-border bg-crm-surface px-3 py-2 text-sm text-crm-text" />
-          {error ? <div className="text-sm text-red-600">{error}</div> : null}
-        </div>
-        <div className="mt-5 flex justify-end gap-2">
-          <button type="button" onClick={onClose} className="rounded-xl border border-crm-border px-4 py-2 text-sm text-crm-text">Cancel</button>
-          <button type="button" disabled={busy} onClick={upload} className="tasks-primary-action">
-            <Upload className="h-4 w-4" />
-            {busy ? "Uploading…" : "Upload"}
-          </button>
+    <div className="forms-upload-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="forms-upload-title">
+      <div className="forms-upload-modal-card w-full max-w-2xl">
+        <div className="forms-upload-modal-glow" aria-hidden />
+        <div className="forms-upload-modal-inner">
+          <header className="forms-upload-modal-header">
+            <div className="forms-upload-modal-icon">
+              <FileSignature className="h-5 w-5" aria-hidden />
+            </div>
+            <div className="min-w-0">
+              <p className="forms-upload-modal-eyebrow">Forms library</p>
+              <h2 id="forms-upload-title">Upload PDF form</h2>
+              <p>Bring a reusable PDF into Connect, then map signer fields and CRM auto-fill tokens.</p>
+            </div>
+            <button type="button" onClick={onClose} className="forms-upload-modal-close" aria-label="Close upload form">
+              <X className="h-4 w-4" />
+            </button>
+          </header>
+
+          <div className="forms-upload-form">
+            <section className="forms-upload-section forms-upload-file-section">
+              <div className="forms-upload-section-head">
+                <div>
+                  <p className="forms-upload-section-kicker">PDF source</p>
+                  <h3>Choose the original document</h3>
+                </div>
+                <span className="forms-upload-mini-pill">PDF only</span>
+              </div>
+
+              <label className="forms-upload-dropzone">
+                <span className="forms-upload-dropzone-icon">
+                  <Upload className="h-5 w-5" aria-hidden />
+                </span>
+                <span className="forms-upload-dropzone-copy">
+                  <span>{selectedFileName || "Select a PDF to upload"}</span>
+                  <small>{selectedFileName ? "Ready for upload" : "Accepted format: .pdf"}</small>
+                </span>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  className="sr-only"
+                  onChange={(event) => setSelectedFileName(event.target.files?.[0]?.name ?? "")}
+                />
+              </label>
+            </section>
+
+            <section className="forms-upload-section">
+              <div className="forms-upload-section-head">
+                <div>
+                  <p className="forms-upload-section-kicker">Template details</p>
+                  <h3>Name and organize the form</h3>
+                </div>
+                <FileText className="h-4 w-4 text-crm-accent" aria-hidden />
+              </div>
+
+              <div className="forms-upload-field-grid">
+                <label>
+                  <span className="forms-upload-label">Form name</span>
+                  <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Funding authorization" className="forms-upload-input" />
+                </label>
+                <label>
+                  <span className="forms-upload-label">Category</span>
+                  <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. Intake, Funding, Compliance" className="forms-upload-input" />
+                </label>
+              </div>
+
+              <label className="mt-3 block">
+                <span className="forms-upload-label">Description</span>
+                <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Short internal note for agents using this form..." rows={3} className="forms-upload-input forms-upload-textarea" />
+              </label>
+            </section>
+
+            {error ? (
+              <div className="forms-upload-error" role="alert">
+                {error}
+              </div>
+            ) : null}
+
+            <footer className="forms-upload-footer">
+              <button type="button" onClick={onClose} className="forms-upload-secondary-btn">
+                Cancel
+              </button>
+              <button type="button" disabled={busy} onClick={upload} className="forms-upload-primary-btn">
+                <Upload className="h-4 w-4" />
+                {busy ? "Uploading..." : "Upload PDF"}
+              </button>
+            </footer>
+          </div>
         </div>
       </div>
     </div>
