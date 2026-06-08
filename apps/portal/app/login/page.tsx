@@ -9,7 +9,7 @@ import { writeAuthToken } from "../../services/session";
 import { clearStaleVisualQaSession } from "../../services/visualQaMode";
 import type { Permission } from "../../types/app";
 
-const LOCAL_DEV_EMAIL = "imwog@gmail.com";
+const LOCAL_DEV_EMAIL = "imwogg@gmail.com";
 const LOCAL_DEV_PASSWORD = "LocalDev2026!";
 
 function isLocalhostDev(): boolean {

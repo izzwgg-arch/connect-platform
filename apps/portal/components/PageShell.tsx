@@ -70,7 +70,7 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
             : isCrmQueueRoute
             ? "console-shell crm-queue-shell"
             : isCrmEmailRoute
-              ? "console-shell crm-email-shell"
+              ? "console-shell crm-queue-shell"
               : isCrmLiveCallRoute
                 ? "console-shell crm-live-shell"
                 : "console-shell"

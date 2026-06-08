@@ -11,7 +11,7 @@ export function SearchInput({
 }) {
   return (
     <input
-      className="input"
+      className="input global-search-input"
       value={value}
       placeholder={placeholder || "Search"}
       onChange={(event) => onChange(event.target.value)}

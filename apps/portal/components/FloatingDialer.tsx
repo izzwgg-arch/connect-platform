@@ -9,17 +9,21 @@ import { useAppContext } from "../hooks/useAppContext";
 import { useAsyncResource } from "../hooks/useAsyncResource";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { useSipPhone, type SipRegState } from "../hooks/useSipPhone";
+import type { LiveCall } from "../types/liveCall";
 import {
   getWebRingerEnabled,
   setWebRingerEnabled,
 } from "../hooks/telephonyAudioPreferences";
+import { apiGet } from "../services/apiClient";
 import { loadPbxResource } from "../services/pbxData";
 import { callsForTenant as scopeLiveCallsForTenant, extensionSetsFromCalls, liveExtensionForTenant } from "../services/liveCallState";
 import {
+  buildCrmLiveWorkspaceHref,
   findInboundLiveCallForParty,
   inboundCallerDisplayName,
   inboundCallerDisplayPhone,
-  shouldShowCrmInboundQuickAction,
+  phonesLikelyMatch,
+  shouldShowCrmLiveWorkspaceShortcut,
 } from "../lib/crmInboundCallDisplay";
 
 type PresenceState = "available" | "ringing" | "on_call" | "offline";
@@ -39,6 +43,13 @@ type BlfEntry = {
   name: string;
   extension: string;
   presence: PresenceState;
+};
+
+type CrmLookupContact = {
+  id: string;
+  displayName: string;
+  company?: string | null;
+  isInCrm?: boolean;
 };
 
 const DIALPAD: [string, string][] = [
@@ -155,6 +166,34 @@ function friendlyError(error: string | null, micPermission: string, regState: Si
   if (raw.includes("connection") || raw.includes("transport") || raw.includes("websocket")) return "Connection issue";
   if (error) return "Connection issue";
   return null;
+}
+
+function callIsOpen(call: LiveCall): boolean {
+  return call.state === "ringing" || call.state === "dialing" || call.state === "up" || call.state === "held";
+}
+
+function activePartyPhone(call: LiveCall | null, fallback: string | null | undefined): string | null {
+  if (!call) return fallback?.trim() || null;
+  const candidates =
+    call.direction === "inbound"
+      ? [call.from, fallback]
+      : [call.to, call.connectedLine, fallback, call.from];
+  return candidates.find((value) => value?.trim())?.trim() ?? null;
+}
+
+function findOutboundLiveCallForParty(
+  activeCalls: LiveCall[],
+  party: string | null | undefined,
+): LiveCall | null {
+  if (!party?.trim()) return null;
+  return (
+    activeCalls.find(
+      (call) =>
+        call.direction === "outbound" &&
+        callIsOpen(call) &&
+        [call.to, call.connectedLine, call.from].some((candidate) => phonesLikelyMatch(candidate, party)),
+    ) ?? null
+  );
 }
 
 function MiniAvatar({ party }: { party: string | null }) {
@@ -467,7 +506,7 @@ function BlfPanel({
 export function FloatingDialer() {
   const phone = useSipPhone();
   const telephony = useTelephony();
-  const { tenantId, tenant, adminScope } = useAppContext();
+  const { tenantId, tenant, adminScope, can } = useAppContext();
   const router = useRouter();
   const isDesktop = typeof window !== "undefined" && Boolean(window.connectDesktop?.isDesktop);
 
@@ -483,6 +522,9 @@ export function FloatingDialer() {
   const [rawBlfSearch, setRawBlfSearch] = useState("");
   const [ringerOn, setRingerOn] = useState(true);
   const [dialerMounted, setDialerMounted] = useState(false);
+  const [lookupKey, setLookupKey] = useState<string | null>(null);
+  const [lookupContact, setLookupContact] = useState<CrmLookupContact | null>(null);
+  const [lookupLoading, setLookupLoading] = useState(false);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const shellRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -522,13 +564,101 @@ export function FloatingDialer() {
   const isActive = phone.callState === "connected";
   const isIncoming = phone.callState === "ringing" && phone.callDirection === "inbound";
   const isOutgoing = phone.callState === "dialing" || (phone.callState === "ringing" && phone.callDirection === "outbound");
+  const outboundParty = phone.remoteParty ?? phone.dialpadInput;
+  const matchedOutboundCall = useMemo(
+    () => findOutboundLiveCallForParty(tenantScopedCalls, outboundParty),
+    [tenantScopedCalls, outboundParty],
+  );
+  const activeWorkspaceCall = phone.callDirection === "inbound" ? matchedInboundCall : matchedOutboundCall;
+  const activeWorkspacePhone = activePartyPhone(
+    activeWorkspaceCall,
+    phone.callDirection === "outbound" ? outboundParty : phone.remoteParty,
+  );
+  const canOpenCrmContactWorkspace = can("can_view_section_crm") && can("can_view_crm_contacts");
+  const enrichedWorkspaceContact = useMemo<CrmLookupContact | null>(() => {
+    if (!activeWorkspaceCall?.crmContactId) return null;
+    return {
+      id: activeWorkspaceCall.crmContactId,
+      displayName: activeWorkspaceCall.crmContactName ?? "Contact",
+      company: activeWorkspaceCall.crmCompanyName ?? null,
+      isInCrm: true,
+    };
+  }, [
+    activeWorkspaceCall?.crmCompanyName,
+    activeWorkspaceCall?.crmContactId,
+    activeWorkspaceCall?.crmContactName,
+  ]);
+  const lookupMatchesActiveContact =
+    lookupKey != null &&
+    activeWorkspaceCall != null &&
+    lookupKey === `${activeWorkspaceCall.linkedId || activeWorkspaceCall.id}:${activeWorkspacePhone ?? ""}`;
+  const workspaceContact = enrichedWorkspaceContact ?? (lookupMatchesActiveContact ? lookupContact : null);
+  const liveWorkspaceHref =
+    workspaceContact && activeWorkspaceCall
+      ? buildCrmLiveWorkspaceHref({
+          crmContactId: workspaceContact.id,
+          linkedId: activeWorkspaceCall.linkedId || activeWorkspaceCall.id,
+          from: activeWorkspacePhone ?? undefined,
+        })
+      : null;
   const showCrmOpen =
-    isIncoming &&
-    matchedInboundCall != null &&
-    shouldShowCrmInboundQuickAction(matchedInboundCall);
+    canOpenCrmContactWorkspace &&
+    activeWorkspaceCall != null &&
+    workspaceContact != null &&
+    shouldShowCrmLiveWorkspaceShortcut({
+      direction: activeWorkspaceCall.direction,
+      crmContactId: workspaceContact.id,
+      linkedId: activeWorkspaceCall.linkedId || activeWorkspaceCall.id,
+    });
   const canDial = phone.regState === "registered" && phone.dialpadInput.trim().length > 0;
   const status = statusFromRegistration(phone.regState, Boolean(phone.error));
   const cleanError = friendlyError(phone.error, phone.diag.micPermission, phone.regState);
+
+  useEffect(() => {
+    if (
+      !isInCall ||
+      !canOpenCrmContactWorkspace ||
+      !activeWorkspaceCall ||
+      !activeWorkspacePhone ||
+      enrichedWorkspaceContact
+    ) {
+      setLookupKey(null);
+      setLookupContact(null);
+      setLookupLoading(false);
+      return;
+    }
+
+    const nextLookupKey = `${activeWorkspaceCall.linkedId || activeWorkspaceCall.id}:${activeWorkspacePhone}`;
+    setLookupKey(nextLookupKey);
+    setLookupContact(null);
+    setLookupLoading(true);
+
+    let cancelled = false;
+    apiGet<{
+      results: Array<{ contact: CrmLookupContact }>;
+    }>(`/crm/contacts/lookup?phone=${encodeURIComponent(activeWorkspacePhone)}`)
+      .then((data) => {
+        if (cancelled) return;
+        const contact = data.results?.[0]?.contact ?? null;
+        setLookupContact(contact?.isInCrm === false ? null : contact);
+      })
+      .catch(() => {
+        if (!cancelled) setLookupContact(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLookupLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeWorkspaceCall,
+    activeWorkspacePhone,
+    canOpenCrmContactWorkspace,
+    enrichedWorkspaceContact,
+    isInCall,
+  ]);
 
   useEffect(() => {
     setRingerOn(getWebRingerEnabled());
@@ -827,6 +957,17 @@ export function FloatingDialer() {
                 <MiniAvatar party={phone.remoteParty ?? phone.dialpadInput} />
                 <strong>{phone.remoteParty ?? phone.dialpadInput}</strong>
                 <span>{phone.callState === "dialing" ? "Calling" : "Ringing"}</span>
+                {showCrmOpen && liveWorkspaceHref ? (
+                  <button
+                    type="button"
+                    className="fd-crm-open"
+                    onClick={() => router.push(liveWorkspaceHref)}
+                  >
+                    Open Workspace
+                  </button>
+                ) : lookupLoading ? (
+                  <span className="fd-crm-unmatched">Checking CRM match...</span>
+                ) : null}
                 <button className="fd-hangup" type="button" onClick={phone.hangup}>Hang up</button>
               </div>
             )}
@@ -839,14 +980,18 @@ export function FloatingDialer() {
                 {inboundCallerSubtitle ? (
                   <span className="fd-caller-sub">{inboundCallerSubtitle}</span>
                 ) : null}
-                {showCrmOpen && matchedInboundCall?.crmProfileUrl ? (
+                {showCrmOpen && liveWorkspaceHref ? (
                   <button
                     type="button"
                     className="fd-crm-open"
-                    onClick={() => router.push(matchedInboundCall.crmProfileUrl!)}
+                    onClick={() => router.push(liveWorkspaceHref)}
                   >
-                    Open CRM Profile
+                    Open Workspace
                   </button>
+                ) : lookupLoading ? (
+                  <span className="fd-crm-unmatched">Checking CRM match...</span>
+                ) : isIncoming ? (
+                  <span className="fd-crm-unmatched">No CRM contact matched</span>
                 ) : null}
                 <div className="fd-incoming-actions">
                   <button className="fd-hangup" type="button" onClick={phone.hangup}>Decline</button>
@@ -868,16 +1013,13 @@ export function FloatingDialer() {
                     ) : null}
                     <span>{phone.onHold ? "On hold" : fmt(elapsed)}</span>
                   </div>
-                  {phone.callDirection === "inbound" &&
-                  matchedInboundCall &&
-                  shouldShowCrmInboundQuickAction(matchedInboundCall) &&
-                  matchedInboundCall.crmProfileUrl ? (
+                  {showCrmOpen && liveWorkspaceHref ? (
                     <button
                       type="button"
                       className="fd-crm-open fd-crm-open-compact"
-                      onClick={() => router.push(matchedInboundCall.crmProfileUrl!)}
+                      onClick={() => router.push(liveWorkspaceHref)}
                     >
-                      Open CRM Profile
+                      Open Workspace
                     </button>
                   ) : null}
                 </div>
@@ -1035,6 +1177,7 @@ const DIALER_CSS = `
 .fd-crm-open { margin: 6px 0 2px; width: 100%; min-height: 32px; border-radius: 10px; border: 1px solid rgba(99, 102, 241, 0.35); background: rgba(99, 102, 241, 0.12); color: #4f46e5; font-weight: 800; font-size: 12px; cursor: pointer; }
 .fd-crm-open-compact { width: auto; margin: 0 0 0 auto; padding: 0 10px; flex-shrink: 0; }
 .fd-crm-open:hover { background: rgba(99, 102, 241, 0.2); }
+.fd-crm-unmatched { display: inline-flex; width: 100%; min-height: 30px; align-items: center; justify-content: center; border-radius: 10px; border: 1px dashed var(--fd-border); color: var(--fd-muted); font-size: 11px !important; font-weight: 800; }
 .fd-controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .fd-control { min-height: 36px; border: 1px solid var(--fd-border); border-radius: 12px; color: var(--fd-text); background: var(--fd-card-2); cursor: pointer; font-weight: 850; font-size: 11px; }
 .fd-control[data-active="true"] { color: #fff; border-color: transparent; background: linear-gradient(135deg, #6366f1, #8b5cf6); }

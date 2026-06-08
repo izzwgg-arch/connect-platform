@@ -11,6 +11,7 @@ import { ScopedActionButton } from "./ScopedActionButton";
 import { ViewportDropdown } from "./ViewportDropdown";
 import { ConnectSelect } from "./ConnectSelect";
 import { UserAvatarUpload } from "./UserAvatarUpload";
+import { getPreferredUserDisplayName } from "../lib/userDisplayName";
 
 type ControlPanelResponse = {
   extension: null | {
@@ -121,8 +122,7 @@ export function ProfileMenu() {
   const { user, tenant, role, setRole, theme, setTheme, setUserAvatarUrl } = useAppContext();
   const sipPhone = useSipPhone();
   const closeMenu = useCallback(() => setOpen(false), []);
-  const displayName = formatTopbarUserName(user.name, user.email);
-  const avatarText = initialsFor(displayName);
+  const displayName = getPreferredUserDisplayName(user);
   const extensionNumber = panelData?.extension?.number || user.extension || "Not assigned";
   const presence = dnd ? "DND" : panelData?.presence || user.presence || "AVAILABLE";
   const greeting = panelData?.greeting ?? DEFAULT_GREETING;
@@ -487,24 +487,6 @@ function ControlToggle({ label, detail, checked, onChange }: { label: string; de
       <span className={`ecp-switch ${checked ? "on" : ""}`} aria-hidden><span /></span>
     </button>
   );
-}
-
-function formatTopbarUserName(name?: string | null, email?: string | null): string {
-  const rawName = (name ?? "").trim();
-  const rawEmail = (email ?? "").trim();
-  const base = rawName && !rawName.includes("@")
-    ? rawName
-    : rawEmail.split("@")[0] || rawName.split("@")[0] || "User";
-  return base.replace(/\d{6,}$/, "") || base;
-}
-
-function initialsFor(name: string): string {
-  return name
-    .split(/\s+/)
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase() || "U";
 }
 
 function statusTone(status: string): string {

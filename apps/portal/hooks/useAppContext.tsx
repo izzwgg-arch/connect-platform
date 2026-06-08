@@ -72,6 +72,24 @@ const FALLBACK_TENANT: Tenant = { id: "local", name: "My Workspace", plan: "Busi
 
 const AppContext = createContext<AppContextType | null>(null);
 
+type MeExtension = {
+  id?: string | null;
+  number?: string | null;
+  extNumber?: string | null;
+  extensionNumber?: string | null;
+  displayName?: string | null;
+  name?: string | null;
+  label?: string | null;
+  status?: string | null;
+} | null;
+
+type MeUser = {
+  id?: string | null;
+  name?: string | null;
+  email?: string | null;
+  extension?: MeExtension;
+};
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<ThemeMode>("light");
   const [themeHydrated, setThemeHydrated] = useState(false);
@@ -129,6 +147,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // tenant display name — without it the `tenant` object falls back to
   // "My Workspace" and client-side tenant-name filters drop every row.
   const [meTenant, setMeTenant] = useState<{ id: string; name: string | null } | null>(null);
+  const [meUser, setMeUser] = useState<MeUser | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -139,6 +158,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       tenantName?: string | null;
       avatarUrl?: string | null;
       role?: string | null;
+      id?: string | null;
+      name?: string | null;
+      email?: string | null;
+      extension?: MeExtension;
     }) => {
       if (!active) return;
       if (Array.isArray(me.portalPermissionSet)) {
@@ -163,6 +186,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
       }
       if (me.avatarUrl) setUserAvatarUrl(me.avatarUrl);
+      setMeUser({
+        id: me.id ?? null,
+        name: me.name ?? null,
+        email: me.email ?? null,
+        extension: me.extension ?? null,
+      });
       setPermissionsHydrated(true);
       if (Array.isArray(me.portalPermissionSet)) {
         notifyPortalPermissionsHydrated(me.portalPermissionSet as Permission[]);
@@ -188,6 +217,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         tenantName?: string | null;
         avatarUrl?: string | null;
         role?: string | null;
+        id?: string | null;
+        name?: string | null;
+        email?: string | null;
+        extension?: MeExtension;
       }>("/me")
         .then((me) => {
           window.clearTimeout(hydrateTimeout);
@@ -348,17 +381,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const user = useMemo<User>(() => {
     const jwt = readJwtPayload();
+    const extension = meUser?.extension ?? null;
+    const extensionNumber = extension?.number || extension?.extNumber || extension?.extensionNumber || "";
+    const extensionDisplayName = extension?.displayName || extension?.name || extension?.label || null;
     return {
-      id: jwt?.sub || "local-user",
-      name: jwt?.name || jwt?.email || "User",
-      email: jwt?.email || "",
-      extension: "",
+      id: meUser?.id || jwt?.sub || "local-user",
+      name: meUser?.name || jwt?.name || jwt?.email || "User",
+      email: meUser?.email || jwt?.email || "",
+      extension: extensionNumber,
+      extensionDisplayName,
       role,
       tenantId,
       presence: "AVAILABLE",
       avatarUrl: userAvatarUrl,
     };
-  }, [role, tenantId, userAvatarUrl]);
+  }, [meUser, role, tenantId, userAvatarUrl]);
 
   const tenant = useMemo<Tenant>(() => {
     // 1. Prefer a tenant loaded via the super-admin switcher (rich metadata).
@@ -405,6 +442,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       canPermission,
       permissionsHydrated,
       meTenant,
+      meUser,
       refreshPbxTenants,
       role,
       tenant,

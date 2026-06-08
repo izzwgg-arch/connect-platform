@@ -9,6 +9,7 @@ import { TenantSwitcher } from "./TenantSwitcher";
 import { UserAvatarUpload } from "./UserAvatarUpload";
 import { NAV_SECTION_ORDER, navSectionMeta, type NavItem } from "../navigation/navConfig";
 import { CollapsibleNavSection } from "./CollapsibleNavSection";
+import { getPreferredUserDisplayName } from "../lib/userDisplayName";
 
 type SidebarNavProps = {
   items: NavItem[];
@@ -37,7 +38,7 @@ export function SidebarNav({
   const pathname = usePathname();
   const { user, setUserAvatarUrl } = useAppContext();
   const { isExpanded, toggle } = useNavSectionExpansion();
-  const displayName = formatUserDisplayName(user.name, user.email);
+  const displayName = getPreferredUserDisplayName(user);
 
   const effectiveRail = !isMobile && railMode;
   const asideClass = [
@@ -167,13 +168,4 @@ export function SidebarNav({
       ) : null}
     </aside>
   );
-}
-
-function formatUserDisplayName(name?: string | null, email?: string | null): string {
-  const rawName = (name ?? "").trim();
-  const rawEmail = (email ?? "").trim();
-  const base = rawName && !rawName.includes("@")
-    ? rawName
-    : rawEmail.split("@")[0] || rawName.split("@")[0] || "User";
-  return base.replace(/\d{6,}$/, "") || base;
 }

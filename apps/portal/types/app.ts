@@ -19,6 +19,7 @@ export type User = {
   name: string;
   email: string;
   extension: string;
+  extensionDisplayName?: string | null;
   role: Role;
   tenantId: string;
   presence: Presence;
