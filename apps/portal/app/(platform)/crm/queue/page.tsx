@@ -418,7 +418,7 @@ function QueuePageInner() {
           <CRMWorkspaceHeader>
             <CRMPageHeader
               compact
-              className={crm.contactsHeaderPanel}
+              className={cn(crm.contactsHeaderPanel, "campaigns-command-header")}
               icon={<ListOrdered className="h-6 w-6" aria-hidden />}
               title="My Queue"
               subtitle={
@@ -429,22 +429,24 @@ function QueuePageInner() {
                     : `${total} lead${total !== 1 ? "s" : ""} in this view`
               }
               actions={
-                <div className="contacts-hero-actions flex flex-wrap items-center gap-2">
+                <div className="campaigns-hero-actions">
+                  <button
+                    type="button"
+                    onClick={() => load()}
+                    disabled={loading || acting}
+                    className="campaigns-btn-secondary"
+                  >
+                    <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+                    Refresh
+                  </button>
                   <button
                     type="button"
                     onClick={toggleSortMode}
                     disabled={loading}
-                    className={cn(
-                      crm.btnSecondary,
-                      sortMode === "smart" && "border-crm-accent/40 bg-crm-accent/12 text-crm-accent",
-                    )}
+                    className="campaigns-btn-primary"
                   >
                     <Sparkles className="h-4 w-4" />
                     {sortMode === "smart" ? "Smart sort" : "Original sort"}
-                  </button>
-                  <button type="button" onClick={() => load()} disabled={loading || acting} className={crm.btnSecondary}>
-                    <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
-                    Refresh
                   </button>
                 </div>
               }
@@ -463,8 +465,8 @@ function QueuePageInner() {
               <div className="crm-queue-filter-grid">
                 {campaigns.length > 0 ? (
                   <div className="crm-queue-filter-field">
-                    <Megaphone className="h-4 w-4 shrink-0 text-crm-muted" />
-                    <label htmlFor="crm-queue-campaign" className={cn(crm.label, "shrink-0")}>Campaign</label>
+                    <Megaphone className="crm-queue-filter-icon h-4 w-4 shrink-0 text-crm-muted" />
+                    <label htmlFor="crm-queue-campaign" className="sr-only">Campaign</label>
                     <ConnectSelect
                       id="crm-queue-campaign"
                       size="sm"
@@ -485,8 +487,8 @@ function QueuePageInner() {
                   </div>
                 ) : null}
                 <div className="crm-queue-filter-field">
-                  <Globe className="h-4 w-4 shrink-0 text-crm-muted" />
-                  <label htmlFor="crm-queue-timezone" className={cn(crm.label, "shrink-0")}>Timezone</label>
+                  <Globe className="crm-queue-filter-icon h-4 w-4 shrink-0 text-crm-muted" />
+                  <label htmlFor="crm-queue-timezone" className="sr-only">Timezone</label>
                   <ConnectSelect
                     id="crm-queue-timezone"
                     size="sm"

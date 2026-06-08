@@ -20,7 +20,6 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "../cn";
-import { crm } from "../crmClasses";
 import { avatarGradient, initials, stageColor, stageLabel } from "../contact/contactFormatters";
 import {
   leadTimezoneBadgeShort,
@@ -254,7 +253,7 @@ export function QueueLeadDetailPanel({
           type="button"
           onClick={() => openWorkspace()}
           disabled={acting || !actionable}
-          className={cn(crm.btnPrimary, "crm-queue-detail-primary-action w-full justify-center gap-2")}
+          className="campaigns-btn-primary crm-queue-detail-primary-action w-full justify-center gap-2"
         >
           <PhoneCall className="h-4 w-4" />
           Open workspace
@@ -335,7 +334,7 @@ export function QueueLeadDetailPanel({
           type="button"
           onClick={onPrevious}
           disabled={!canGoPrevious || acting}
-          className={cn(crm.btnSecondary, "crm-queue-detail-nav flex-1 justify-center gap-1.5")}
+          className="campaigns-btn-primary crm-queue-detail-nav flex-1 justify-center gap-1.5"
         >
           <ChevronLeft className="h-4 w-4" />
           Previous
@@ -344,7 +343,7 @@ export function QueueLeadDetailPanel({
           type="button"
           onClick={onNext}
           disabled={!canGoNext || acting}
-          className={cn(crm.btnSecondary, "crm-queue-detail-nav flex-1 justify-center gap-1.5")}
+          className="campaigns-btn-primary crm-queue-detail-nav flex-1 justify-center gap-1.5"
         >
           Next
           <ChevronRight className="h-4 w-4" />
