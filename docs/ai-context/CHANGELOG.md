@@ -4,6 +4,52 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-08 — WebRTC TURN provisioning unify + relay health guards
+
+**Task:** telephony / TURN / app-level relay hardening deploy  
+**Risk:** high — production telephony provisioning path; API blue/green deploy
+
+### Root cause (preserved)
+
+- Softphone provisioning ignored the admin `TurnConfig` table.
+- Because `tenant.iceServers` was `null`, `GET /voice/me/extension` fell back to env `TURN_SERVER`.
+- `TURN_SERVER` was a **bare IP**, so `buildEnvIceServers()` emitted only
+  `turn:45.14.194.179:3478` (**UDP only**).
+- Clients had **no TCP/TLS relay fallback** → restricted/4G/CGNAT users failed media/audio.
+- Relay usage was **0% system-wide for days**; nobody was watching.
+- **coturn TLS 5349 is still down** and must be fixed separately (infra runbook pending).
+
+### Shipped (app-level only)
+
+- New `apps/api/src/voice/iceServers.ts` — multi-transport ICE builder (UDP+TCP+TLS) with
+  HMAC ephemeral creds + `assertIceServersHaveRelayFallback` guard.
+- New `apps/api/src/voice/turnProbe.ts` — active STUN/TURN Allocate probe (udp/tcp/tls, no deps).
+- New `apps/api/src/voice/relayUsage.ts` — per-tenant relay-usage SLO analyzer.
+- `apps/api/src/server.ts` — `resolveClientIceServers()` serves the admin `TurnConfig`
+  multi-transport set with fresh HMAC creds (config delivered == config validated); env
+  fallback now expands to udp+tcp(+TLS); startup ICE-fallback guard, TURN Allocate probe loop,
+  and relay-usage SLO loop with Prometheus gauges.
+- `apps/api/package.json` — test runner now includes `src/voice/*.test.ts`.
+
+No infra (coturn/firewall/nginx/PBX), CRM, billing, or onboarding changes. No DB migration.
+
+### Verification
+
+- `iceServers` / `turnProbe` / `relayUsage` / `voiceProvisioningBundle` tests: **31/31 pass**.
+- API typecheck: new files + `server.ts` clean. Pre-existing unrelated errors remain in
+  `src/voice/webrtcCallDiagnostics.ts`, `src/webrtcCallingIncident.test.ts`,
+  `src/webrtcGlobalOutage.test.ts`, and `packages/{db,shared}/src/webrtc*` (subpath
+  `@connect/shared/*` moduleResolution + implicit-any in existing tests — not introduced here).
+- Live Allocate probe vs coturn: **udp:3478 OK, tcp:3478 OK, tls:5349 ECONNREFUSED**.
+
+### Remaining infra blocker
+
+**coturn TLS listener on 5349 down (`ECONNREFUSED`).** TLS relay URL advertised but unusable
+until coturn TLS is restored; TCP relay on 3478 is the working fallback. **Infra runbook for
+5349 still pending** — handle separately.
+
+---
+
 ## 2026-06-06 — CRM page rollout + backend support deploy
 
 **Task:** CRM portal pages / API support / production deploy  

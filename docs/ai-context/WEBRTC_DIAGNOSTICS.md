@@ -10,6 +10,51 @@
 
 ---
 
+## Incident: UDP-only TURN relay — no media on restricted networks (2026-06-08)
+
+> **Status: ROOT CAUSE PROVEN + APP-LEVEL FIX SHIPPED. Infra blocker (coturn TLS 5349) PENDING.**
+
+### Root cause (proven)
+
+1. Softphone provisioning ignored the admin `TurnConfig` table entirely.
+2. Both affected tenants had `tenant.iceServers = null`, so `GET /voice/me/extension`
+   (`resolveWebrtcConfig` → `buildEnvIceServers`) fell back to the env `TURN_SERVER`.
+3. `TURN_SERVER` was a **bare IP** (`45.14.194.179`).
+4. `buildEnvIceServers()` therefore emitted a single relay URL: `turn:45.14.194.179:3478`
+   — **UDP only**, no `?transport=tcp`, no `turns:` TLS.
+5. Clients on UDP-blocking networks (mobile/4G/CGNAT, e.g. a PH user) could not allocate a
+   relay; ICE fell back to direct/`prflx` and media (audio) failed one-way.
+6. **Relay usage was 0% system-wide for days** and nothing watched it; coturn's **TLS 5349
+   listener was (and still is) down** (`ECONNREFUSED`).
+
+Verified read-only: HMAC secret in API == coturn `static-auth-secret`; UFW allows
+3478 udp/tcp, 5349 tcp, relay range 49152–65535. A live Allocate probe confirmed
+**udp:3478 OK, tcp:3478 OK, tls:5349 ECONNREFUSED**.
+
+### Fix shipped (app-level, `fix(webrtc): unify TURN provisioning and relay health guards`)
+
+- `apps/api/src/voice/iceServers.ts` — multi-transport ICE builder + `assertIceServersHaveRelayFallback`.
+- `apps/api/src/voice/turnProbe.ts` — active STUN/TURN Allocate probe (udp/tcp/tls), no deps.
+- `apps/api/src/voice/relayUsage.ts` — per-tenant relay-usage SLO analyzer.
+- `apps/api/src/server.ts` — `resolveClientIceServers()` now serves the admin `TurnConfig`
+  multi-transport set (udp+tcp+turns) with fresh HMAC creds; env fallback now expands to
+  udp+tcp+TLS. Startup ICE-fallback guard + probe loop + relay-usage loop with gauges
+  `connect_turn_ice_fallback_ok`, `connect_turn_probe_{reachable,allocate_ok}{transport}`,
+  `connect_webrtc_relay_usage_breaching_tenants`.
+
+Clients now receive **UDP + TCP + TLS (when configured)** relays with ephemeral HMAC
+credentials. The TURN shared secret is never sent to clients (only derived `username`/
+`credential`). See `TELEPHONY.md` § "TURN provisioning + relay health guards".
+
+### Remaining infra blocker (PENDING — out of scope of the app deploy)
+
+**coturn TLS listener on 5349 is down (`ECONNREFUSED`).** The `turns:…:5349` URL is advertised
+but unusable until the coturn TLS listener is restored (cert/listener). TCP relay on 3478 is
+the working fallback meanwhile. Infra runbook for the 5349 bring-up is **still pending** and
+must be handled separately (do not touch coturn/firewall/nginx in app deploys).
+
+---
+
 ## Incident: Full WebRTC calling outage — inbound + outbound (2026-06-02/04)
 
 > **Status: PARTIALLY PROVEN (2026-06-04 extended forensics pass).**

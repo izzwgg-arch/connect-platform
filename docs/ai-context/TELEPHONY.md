@@ -163,6 +163,46 @@
   `TURN_SERVER` + either `TURN_AUTH_SECRET` (HMAC time-limited) or
   `TURN_USERNAME`/`TURN_PASSWORD`.
 - Tenant TURN validation jobs run in worker (`runTurnValidationMaintenanceCycle`).
+
+### TURN provisioning + relay health guards (2026-06-08)
+
+Client ICE/relay config is built in `apps/api/src/voice/iceServers.ts` and consumed by
+`resolveClientIceServers()` / `resolveWebrtcConfig()` in `server.ts`. The relay URL set is
+resolved in this **priority order**:
+
+1. `tenant.iceServers` — explicit per-tenant override (used verbatim).
+2. **Effective `TurnConfig.urls`** (tenant-scoped, else GLOBAL) — admin-managed multi-transport
+   relay set, with **fresh HMAC ephemeral credentials injected per request** so the config
+   clients receive == the config the admin TURN UI validates. A cached GLOBAL copy
+   (`cachedGlobalTurnUrls`, refreshed every 5 min in `refreshTurnGauge`) makes this synchronous.
+3. Env-derived multi-transport relay: a bare `TURN_SERVER` host now expands to **both**
+   `turn:<host>:3478?transport=udp` **and** `turn:<host>:3478?transport=tcp`
+   (`expandTurnHostToUrls`), plus `TURN_TLS_URL` when set
+   (e.g. `turns:app.connectcomunications.com:5349?transport=tcp`).
+
+> **Why:** Before 2026-06-08 `buildEnvIceServers()` emitted a single UDP-only
+> `turn:<ip>:3478`. UDP-blocking networks (mobile/4G/CGNAT) had no relay fallback →
+> one-way / no audio. See `WEBRTC_DIAGNOSTICS.md` § "UDP-only TURN relay".
+
+Relay env vars (API): `TURN_SERVER`, `TURN_AUTH_SECRET` (HMAC; never exposed to clients —
+only derived ephemeral `username`/`credential` are sent), optional `TURN_TLS_URL`,
+`TURN_REALM`, `TURN_CRED_TTL_SECS`, `TURN_PROBE_INTERVAL_MS`, `RELAY_USAGE_*`.
+
+Guards / observability (all non-fatal, gauges on `apiRegistry`):
+
+- `connect_turn_ice_fallback_ok` — 0 if the ICE list we would deliver is UDP-only/missing a
+  TCP/TLS fallback (logged `error` `turn_ice_fallback_misconfigured`). Hard CI guard:
+  `voice/iceServers.test.ts`.
+- `connect_turn_probe_reachable{transport}` / `connect_turn_probe_allocate_ok{transport}` —
+  active STUN/TURN Allocate probe (`voice/turnProbe.ts`) every `TURN_PROBE_INTERVAL_MS`
+  (default 5 min) against udp/tcp/tls. Logs `turn_probe_ok` / `turn_probe_failed`.
+- `connect_webrtc_relay_usage_breaching_tenants` — per-tenant relay-usage SLO
+  (`voice/relayUsage.ts`); raises a rate-limited (`HIGH`/`VOICE_TURN`) `Alert` when relay
+  usage collapses to ~0% over the window (`webrtc_relay_usage_collapsed`).
+
+> **Open infra blocker:** coturn's **TLS listener on 5349 is down** (`ECONNREFUSED`); the TLS
+> relay URL is advertised but unusable until coturn TLS is restored (separate infra runbook —
+> **pending**). TCP relay on 3478 works and is the active fallback meanwhile.
 - Media reliability gate per tenant — see
   `runMediaReliabilityMaintenanceCycle` in worker.
 - SBC mode: `apps/api` exposes `/admin/sbc/status` and `/voice/sbc/status` to

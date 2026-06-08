@@ -35,6 +35,15 @@ import { shouldSkipJwtVerification } from "./jwtPublicRouteBypass";
 import { fetchAriSliceForPbxLiveFromRedisOrAri } from "./pbxLiveAriSlice";
 import { buildVoiceProvisioningBundleFromIdentity, resolveWebrtcSipIdentity } from "./voiceProvisioningBundle";
 import {
+  buildIceServers as buildIceServerList,
+  expandTurnHostToUrls,
+  assertIceServersHaveRelayFallback,
+  classifyIceServers,
+  type IceServer,
+} from "./voice/iceServers";
+import { probeTurnAllocate, parseRelayUrlForProbe } from "./voice/turnProbe";
+import { breachingTenants as relayBreachingTenants } from "./voice/relayUsage";
+import {
   canAttemptMobileInviteRequeue,
   isPendingMobileInviteEligible,
   markMobileInviteRequeueAttempt,
@@ -429,55 +438,51 @@ const turnServerEnv: string | null = process.env.TURN_SERVER?.trim() || null;
 const turnAuthSecretEnv: string | null = process.env.TURN_AUTH_SECRET?.trim() || null;
 const turnUsernameEnv: string | null = process.env.TURN_USERNAME?.trim() || null;
 const turnPasswordEnv: string | null = process.env.TURN_PASSWORD?.trim() || null;
+// Optional explicit TLS relay URL, e.g. "turns:app.connectcomunications.com:5349?transport=tcp".
+// Required for clients on UDP-blocking networks (mobile/4G). When TURN_SERVER is a
+// bare host this is the only way to advertise a TLS relay fallback from env.
+const turnTlsUrlEnv: string | null = process.env.TURN_TLS_URL?.trim() || null;
+// Optional CoTURN realm (best-effort; the active probe uses the realm the server
+// returns in its 401 challenge, so this is only a fallback hint).
+const turnRealmEnv: string | null = process.env.TURN_REALM?.trim() || null;
 // Credential TTL in seconds (default 24 h). Short enough to limit abuse window.
 const TURN_CRED_TTL_SECS = Number(process.env.TURN_CRED_TTL_SECS || 86400);
 
-/**
- * Generate short-lived HMAC TURN credentials compatible with CoTURN
- * `use-auth-secret` mode (RFC 8489 / coturn convention).
- *
- * username = "<expiry_unix_ts>"
- * password = base64( HMAC-SHA1( shared_secret, username ) )
- *
- * These credentials are time-limited: CoTURN rejects them once the
- * embedded timestamp has passed, so a stolen credential pair expires
- * automatically without any server-side revocation.
- */
-function generateTurnCredentials(secret: string, ttlSecs = TURN_CRED_TTL_SECS): { username: string; credential: string } {
-  const expiry = Math.floor(Date.now() / 1000) + ttlSecs;
-  const username = String(expiry);
-  const password = createHmac("sha1", secret).update(username).digest("base64");
-  return { username, credential: password };
+// Canonical STUN url list delivered to every client.
+const STUN_URLS = [stunServerEnv, "stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302"];
+
+// Derive the TURN relay url set from env. A bare TURN_SERVER host expands to
+// BOTH udp and tcp transports (so clients on UDP-blocking networks have a TCP
+// fallback), and TURN_TLS_URL adds a TLS relay when configured.
+//
+// History: before 2026-06-08 this only emitted a single UDP `turn:<ip>:3478`,
+// which silently broke media for users behind UDP-blocking NAT (mobile/4G).
+function envTurnUrls(): string[] {
+  if (!turnServerEnv) return [];
+  const urls = expandTurnHostToUrls(turnServerEnv);
+  if (turnTlsUrlEnv) urls.push(turnTlsUrlEnv);
+  return urls;
 }
 
 // Build the canonical env-sourced ICE server list.
 // When TURN_AUTH_SECRET is set, HMAC credentials are generated fresh on every
 // call so ICE configs delivered to clients always have unexpired credentials.
-// Tenant DB values override this when present (see resolveWebrtcConfig).
-function buildEnvIceServers(): Array<{ urls: string; username?: string; credential?: string }> {
-  const servers: Array<{ urls: string; username?: string; credential?: string }> = [
-    { urls: stunServerEnv },
-    { urls: "stun:stun1.l.google.com:19302" },
-    { urls: "stun:stun2.l.google.com:19302" },
-  ];
-  if (turnServerEnv) {
-    const turnUrl = (turnServerEnv.startsWith("turn:") || turnServerEnv.startsWith("turns:"))
-      ? turnServerEnv
-      : `turn:${turnServerEnv}:3478`;
-    const entry: { urls: string; username?: string; credential?: string } = { urls: turnUrl };
-    if (turnAuthSecretEnv) {
-      // HMAC mode: fresh time-limited credentials
-      const { username, credential } = generateTurnCredentials(turnAuthSecretEnv);
-      entry.username = username;
-      entry.credential = credential;
-    } else {
-      // Legacy static credentials
-      if (turnUsernameEnv) entry.username = turnUsernameEnv;
-      if (turnPasswordEnv) entry.credential = turnPasswordEnv;
-    }
-    servers.push(entry);
-  }
-  return servers;
+// Tenant/global TurnConfig DB values override the relay urls (see resolveWebrtcConfig).
+function buildEnvIceServers(turnUrlsOverride?: string[]): Array<{ urls: string; username?: string; credential?: string }> {
+  const turnUrls = (turnUrlsOverride && turnUrlsOverride.length) ? turnUrlsOverride : envTurnUrls();
+  return buildIceServerList({
+    stunUrls: STUN_URLS,
+    turnUrls,
+    authSecret: turnAuthSecretEnv,
+    staticUsername: turnUsernameEnv,
+    staticCredential: turnPasswordEnv,
+    credTtlSecs: TURN_CRED_TTL_SECS,
+  });
+}
+
+// Whether the deployment intends TURN relay to be available at all.
+function turnRelayConfigured(): boolean {
+  return !!turnServerEnv || !!turnTlsUrlEnv;
 }
 
 // NOTE: DEFAULT_ICE_SERVERS is intentionally kept for backward compat but
@@ -590,9 +595,28 @@ async function getTenantPbxLinkOrThrow(tenantId: string) {
   return link;
 }
 
-function resolveWebrtcConfig(tenant: any, link: any) {
+// Resolve the ICE servers delivered to a client, in priority order:
+//   1. tenant.iceServers       — explicit per-tenant override (used verbatim)
+//   2. effective TurnConfig.urls — admin-managed relay url set (multi-transport),
+//      with fresh HMAC credentials injected so the client config == admin config
+//   3. env-derived multi-transport relay (TURN_SERVER udp+tcp + TURN_TLS_URL)
+//
+// (2) closes the 2026-06-08 gap where the admin TurnConfig table listed UDP+TCP+TLS
+// relays but the softphone only ever received a single env-derived UDP url.
+function resolveClientIceServers(tenant: any, turnCfg: any): any[] {
+  const tenantIce = Array.isArray(tenant?.iceServers) ? tenant.iceServers.filter((x: any) => x?.urls) : [];
+  if (tenantIce.length) return tenantIce;
+  const turnCfgUrls = turnCfg ? normalizeTurnUrls(turnCfg.urls) : [];
+  if (turnCfgUrls.length) return buildEnvIceServers(turnCfgUrls);
+  // Fall back to the cached GLOBAL TurnConfig relay set (admin-managed,
+  // multi-transport) before the env-only relay so the admin UI's TURN config
+  // is what clients actually receive.
+  if (cachedGlobalTurnUrls.length) return buildEnvIceServers(cachedGlobalTurnUrls);
+  return buildEnvIceServers();
+}
+
+function resolveWebrtcConfig(tenant: any, link: any, turnCfg: any = null) {
   const domain = tenant?.sipDomain || link?.pbxDomain || (link?.pbxInstance?.baseUrl ? new URL(link.pbxInstance.baseUrl).hostname : null);
-  const configuredIce = Array.isArray(tenant?.iceServers) ? tenant.iceServers.filter((x: any) => x?.urls) : [];
   const explicitSipWsUrl = tenant?.sipWsUrl?.trim() || null;
   const fallbackSipWsUrl = tenant?.webrtcRouteViaSbc
     ? "wss://app.connectcomunications.com/sip"
@@ -603,9 +627,7 @@ function resolveWebrtcConfig(tenant: any, link: any) {
     sipWsUrl: explicitSipWsUrl || fallbackSipWsUrl,
     sipDomain: domain,
     outboundProxy: tenant?.outboundProxy || null,
-    // Tenant-configured ICE servers override env-sourced servers (TURN/STUN from env).
-    // buildEnvIceServers() is called fresh here so TURN credentials are always current.
-    iceServers: configuredIce.length ? configuredIce : buildEnvIceServers(),
+    iceServers: resolveClientIceServers(tenant, turnCfg),
     dtmfMode: tenant?.dtmfMode || "RFC2833"
   };
 }
@@ -615,8 +637,9 @@ function buildVoiceProvisioningBundle(
   tenantLink: any,
   pbxLink: { pbxSipUsername?: string | null; pbxDeviceName?: string | null },
   sipPassword: string | null,
+  turnCfg: any = null,
 ) {
-  return buildVoiceProvisioningBundleFromIdentity(resolveWebrtcConfig(tenant, tenantLink), pbxLink, sipPassword);
+  return buildVoiceProvisioningBundleFromIdentity(resolveWebrtcConfig(tenant, tenantLink, turnCfg), pbxLink, sipPassword);
 }
 
 function maskIceServersForResponse(input: any[]): any[] {
@@ -2243,9 +2266,10 @@ async function issueOneTimeProvisioningForUser(user: JwtUser): Promise<{ sipPass
   });
 
   const tenant = await db.tenant.findUnique({ where: { id: user.tenantId } });
+  const turnCfg = await getEffectiveTurnConfig(user.tenantId).catch(() => null);
   return {
     sipPassword,
-    provisioning: buildVoiceProvisioningBundle(tenant, link, row, sipPassword),
+    provisioning: buildVoiceProvisioningBundle(tenant, link, row, sipPassword, turnCfg),
     pbxExtensionLinkId: row.id
   };
 }
@@ -4288,15 +4312,209 @@ const turnConfiguredGauge = new Gauge({
   registers: [apiRegistry],
 });
 
+// 1 if the ICE config delivered to clients has a TCP/TLS relay fallback, 0 if it
+// is UDP-only (the 2026-06-08 failure mode that breaks media on mobile/4G).
+const turnIceFallbackOkGauge = new Gauge({
+  name: "connect_turn_ice_fallback_ok",
+  help: "1 if client ICE config has a TCP/TLS relay fallback, 0 if UDP-only or missing",
+  registers: [apiRegistry],
+});
+
+// Cached GLOBAL TurnConfig relay urls, refreshed alongside the gauge so that
+// resolveClientIceServers() can synchronously hand clients the admin-managed
+// multi-transport relay set without a DB round-trip on every provisioning call.
+let cachedGlobalTurnUrls: string[] = [];
+
+// Validate that the ICE config we WOULD deliver to a client includes a relay
+// fallback. Loud + observable, but non-fatal — telephony is one feature of a
+// large API and must not block billing/CRM startup. The unit test in
+// voice/iceServers.test.ts is the hard CI guard against the regression.
+function evaluateIceFallbackHealth(): void {
+  if (!turnRelayConfigured() && cachedGlobalTurnUrls.length === 0) {
+    // No TURN intended at all — nothing to assert.
+    turnIceFallbackOkGauge.set(1);
+    return;
+  }
+  const sampleIce = resolveClientIceServers(null, null) as IceServer[];
+  try {
+    const summary = assertIceServersHaveRelayFallback(sampleIce, { turnEnabled: true });
+    turnIceFallbackOkGauge.set(1);
+    app.log.info(
+      { event: "turn_ice_fallback_ok", turnUdp: summary.hasTurnUdp, turnTcp: summary.hasTurnTcp, turnsTls: summary.hasTurnsTls },
+      "turn_ice_fallback_ok",
+    );
+  } catch (err) {
+    turnIceFallbackOkGauge.set(0);
+    const summary = classifyIceServers(sampleIce);
+    app.log.error(
+      {
+        event: "turn_ice_fallback_misconfigured",
+        err: String((err as Error)?.message ?? err),
+        summary,
+        hint: "Set TURN_TLS_URL or a GLOBAL TurnConfig with udp+tcp+turns urls so mobile/4G clients have a relay fallback.",
+      },
+      "turn_ice_fallback_misconfigured",
+    );
+  }
+}
+
 // Check TURN config status at startup and every 5m
 async function refreshTurnGauge() {
   try {
     const count = await db.turnConfig.count();
     turnConfiguredGauge.set(count > 0 ? 1 : 0);
+    const globalCfg = await db.turnConfig.findFirst({ where: { scope: "GLOBAL" } });
+    cachedGlobalTurnUrls = normalizeTurnUrls(globalCfg?.urls || []);
   } catch { /* DB not ready yet */ }
+  evaluateIceFallbackHealth();
 }
 refreshTurnGauge();
 registerShutdownTimer(setInterval(refreshTurnGauge, 300_000));
+
+// ── Guard 3: active TURN allocation probe ─────────────────────────────────────
+// Periodically performs a real STUN/TURN Allocate against each relay transport
+// the clients are told to use (udp/tcp/tls). Exposes 0/1 gauges and loud
+// structured error logs so Prometheus/log alerting fires the moment a relay path
+// (e.g. the TLS 5349 listener) goes down — instead of silently shipping 0% relay
+// for a week as happened on 2026-06-08.
+const turnProbeReachableGauge = new Gauge({
+  name: "connect_turn_probe_reachable",
+  help: "1 if the TURN relay transport answered a STUN Allocate, 0 otherwise",
+  labelNames: ["transport"],
+  registers: [apiRegistry],
+});
+const turnProbeAllocateGauge = new Gauge({
+  name: "connect_turn_probe_allocate_ok",
+  help: "1 if a real TURN relay allocation succeeded for the transport, 0 otherwise",
+  labelNames: ["transport"],
+  registers: [apiRegistry],
+});
+
+const TURN_PROBE_INTERVAL_MS = Number(process.env.TURN_PROBE_INTERVAL_MS || 5 * 60 * 1000);
+let turnProbeRunning = false;
+
+async function runTurnProbes(): Promise<void> {
+  if (turnProbeRunning) return;
+  if (!turnAuthSecretEnv) return; // cannot auth-probe without the shared secret
+  turnProbeRunning = true;
+  try {
+    const urls = cachedGlobalTurnUrls.length ? cachedGlobalTurnUrls : envTurnUrls();
+    const seen = new Set<string>();
+    const targets: Array<{ host: string; port: number; transport: "udp" | "tcp" | "tls" }> = [];
+    for (const url of urls) {
+      const t = parseRelayUrlForProbe(url);
+      if (!t) continue;
+      const key = `${t.transport}:${t.host}:${t.port}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      targets.push(t);
+    }
+    if (!targets.length) return;
+    const failures: string[] = [];
+    for (const t of targets) {
+      const res = await probeTurnAllocate({
+        host: t.host,
+        port: t.port,
+        transport: t.transport,
+        authSecret: turnAuthSecretEnv,
+        realm: turnRealmEnv || "",
+        timeoutMs: 4000,
+      });
+      turnProbeReachableGauge.set({ transport: t.transport }, res.reachable ? 1 : 0);
+      turnProbeAllocateGauge.set({ transport: t.transport }, res.allocateOk ? 1 : 0);
+      if (res.allocateOk) {
+        app.log.info(
+          { event: "turn_probe_ok", transport: t.transport, host: t.host, port: t.port, relay: res.relayAddress, ms: res.elapsedMs },
+          "turn_probe_ok",
+        );
+      } else {
+        failures.push(`${t.transport}://${t.host}:${t.port} stage=${res.stage} err=${res.error ?? res.errorCode ?? "?"}`);
+        app.log.error(
+          {
+            event: "turn_probe_failed",
+            transport: t.transport, host: t.host, port: t.port,
+            stage: res.stage, reachable: res.reachable, errorCode: res.errorCode, error: res.error, ms: res.elapsedMs,
+          },
+          "turn_probe_failed",
+        );
+      }
+    }
+    if (failures.length) {
+      app.log.error(
+        { event: "turn_probe_summary_degraded", failingTransports: failures.length, total: targets.length, detail: failures },
+        "turn_probe_summary_degraded",
+      );
+    }
+  } catch (err) {
+    app.log.error({ err: String((err as Error)?.message ?? err) }, "turn_probe_run_failed");
+  } finally {
+    turnProbeRunning = false;
+  }
+}
+
+// Stagger the first probe a little so it runs after the global TURN cache warms.
+setTimeout(() => { void runTurnProbes(); }, 20_000).unref?.();
+registerShutdownTimer(setInterval(() => { void runTurnProbes(); }, TURN_PROBE_INTERVAL_MS));
+
+// ── Guard 4: relay-usage SLO alert ────────────────────────────────────────────
+// Watches CALL_QUALITY_REPORT telemetry per tenant; when relay usage collapses to
+// ~0% over enough calls (i.e. clients can place calls but never establish a TURN
+// relay — the 2026-06-08 signature), raise a per-tenant Alert. The data was always
+// present in VoiceDiagEvent; this is the watcher that was missing.
+const relayUsageBreachingGauge = new Gauge({
+  name: "connect_webrtc_relay_usage_breaching_tenants",
+  help: "Number of tenants whose TURN relay usage has collapsed (~0%) over the SLO window",
+  registers: [apiRegistry],
+});
+
+const RELAY_USAGE_WINDOW_MS = Number(process.env.RELAY_USAGE_WINDOW_MS || 60 * 60 * 1000);
+const RELAY_USAGE_CHECK_INTERVAL_MS = Number(process.env.RELAY_USAGE_CHECK_INTERVAL_MS || 15 * 60 * 1000);
+const RELAY_USAGE_ALERT_COOLDOWN_MS = Number(process.env.RELAY_USAGE_ALERT_COOLDOWN_MS || 6 * 60 * 60 * 1000);
+const relayUsageLastAlertAt = new Map<string, number>();
+let relayUsageCheckRunning = false;
+
+async function runRelayUsageCheck(): Promise<void> {
+  if (relayUsageCheckRunning) return;
+  relayUsageCheckRunning = true;
+  try {
+    const since = new Date(Date.now() - RELAY_USAGE_WINDOW_MS);
+    const rows = await db.voiceDiagEvent.findMany({
+      where: { type: "CALL_QUALITY_REPORT" as any, createdAt: { gte: since } },
+      select: { tenantId: true, payload: true },
+      take: 5000,
+    });
+    const breaching = relayBreachingTenants(
+      rows.map((r) => ({ tenantId: String(r.tenantId), payload: (r as any).payload })),
+    );
+    relayUsageBreachingGauge.set(breaching.length);
+    const now = Date.now();
+    for (const t of breaching) {
+      app.log.error(
+        { event: "webrtc_relay_usage_collapsed", tenantId: t.tenantId, attempts: t.attempts, relayCount: t.relayCount, ratio: Number(t.ratio.toFixed(3)) },
+        "webrtc_relay_usage_collapsed",
+      );
+      const last = relayUsageLastAlertAt.get(t.tenantId) ?? 0;
+      if (now - last < RELAY_USAGE_ALERT_COOLDOWN_MS) continue;
+      relayUsageLastAlertAt.set(t.tenantId, now);
+      await db.alert.create({
+        data: {
+          tenantId: t.tenantId,
+          severity: "HIGH",
+          category: "VOICE_TURN",
+          message: `TURN relay usage collapsed: ${t.relayCount}/${t.attempts} calls used a relay (${Math.round(t.ratio * 100)}%) in the last ${Math.round(RELAY_USAGE_WINDOW_MS / 60000)}m. Likely no working TCP/TLS relay path for this tenant's clients.`,
+          metadata: { attempts: t.attempts, relayCount: t.relayCount, ratio: t.ratio, windowMs: RELAY_USAGE_WINDOW_MS } as any,
+        },
+      }).catch((err) => app.log.error({ err: String((err as Error)?.message ?? err), tenantId: t.tenantId }, "relay_usage_alert_persist_failed"));
+    }
+  } catch (err) {
+    app.log.error({ err: String((err as Error)?.message ?? err) }, "relay_usage_check_failed");
+  } finally {
+    relayUsageCheckRunning = false;
+  }
+}
+
+setTimeout(() => { void runRelayUsageCheck(); }, 45_000).unref?.();
+registerShutdownTimer(setInterval(() => { void runRelayUsageCheck(); }, RELAY_USAGE_CHECK_INTERVAL_MS));
 
 // Refresh session gauge every 30s from the live call store
 registerShutdownTimer(
@@ -7582,8 +7800,9 @@ app.post("/pbx/extensions/:id/reset-sip-password", async (req, reply) => {
 
   await db.pbxExtensionLink.update({ where: { id: row.id }, data: { sipPasswordIssuedAt: new Date() } });
   const tenantCfg = await db.tenant.findUnique({ where: { id: admin.tenantId } });
+  const resetTurnCfg = await getEffectiveTurnConfig(admin.tenantId).catch(() => null);
   await audit({ tenantId: admin.tenantId, actorUserId: admin.sub, action: "PBX_EXTENSION_SIP_PASSWORD_RESET", entityType: "PbxExtensionLink", entityId: row.id });
-  return { sipPassword, provisioning: buildVoiceProvisioningBundle(tenantCfg, link, row, sipPassword) };
+  return { sipPassword, provisioning: buildVoiceProvisioningBundle(tenantCfg, link, row, sipPassword, resetTurnCfg) };
 });
 
 /**
@@ -8255,7 +8474,8 @@ app.get("/voice/me/extension", async (req, reply) => {
     });
   }
 
-  const cfg = resolveWebrtcConfig(tenant, link);
+  const turnCfg = await getEffectiveTurnConfig(user.tenantId).catch(() => null);
+  const cfg = resolveWebrtcConfig(tenant, link, turnCfg);
   const { sipUsername, authUsername } = resolveWebrtcSipIdentity(row);
   return {
     extensionId: ext.id,
