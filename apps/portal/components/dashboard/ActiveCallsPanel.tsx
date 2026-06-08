@@ -49,11 +49,88 @@ function dirClass(direction: string): string {
   return "unknown";
 }
 
-function counterpartyLabel(call: LiveCall): string {
-  if (call.direction === "inbound" && call.crmContactName) return call.crmContactName;
-  if (call.fromName && call.direction === "inbound") return call.fromName;
-  if (call.direction === "outbound") return call.to || call.connectedLine || "—";
-  return call.from || call.connectedLine || "—";
+function stringField(source: Record<string, unknown> | undefined, key: string): string | null {
+  const raw = source?.[key];
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null;
+}
+
+function firstNumberField(call: LiveCall, keys: string[]): string | null {
+  const source = call as unknown as Record<string, unknown>;
+  const metadata = call.metadata;
+  for (const key of keys) {
+    const value = stringField(source, key) ?? stringField(metadata, key);
+    if (value && /\d/.test(value)) return value;
+  }
+  return null;
+}
+
+function firstNameField(call: LiveCall, keys: string[]): string | null {
+  const source = call as unknown as Record<string, unknown>;
+  const metadata = call.metadata;
+  for (const key of keys) {
+    const value = stringField(source, key) ?? stringField(metadata, key);
+    if (value && !/\d/.test(value)) return value;
+  }
+  return null;
+}
+
+function callIdentity(call: LiveCall): { primary: string; secondaryNumber: string | null } {
+  const inboundNumberKeys = [
+    "callerIdNumber",
+    "callerNumber",
+    "fromNumber",
+    "from",
+    "phoneNumber",
+    "remoteNumber",
+    "number",
+  ];
+  const outboundNumberKeys = [
+    "calleeNumber",
+    "toNumber",
+    "to",
+    "remoteNumber",
+    "phoneNumber",
+    "number",
+    "connectedLine",
+    "callerIdNumber",
+    "callerNumber",
+    "fromNumber",
+    "from",
+  ];
+  const internalNumberKeys = [
+    "remoteNumber",
+    "phoneNumber",
+    "number",
+    "toNumber",
+    "to",
+    "connectedLine",
+    "callerIdNumber",
+    "callerNumber",
+    "fromNumber",
+    "from",
+  ];
+  const inboundNameKeys = ["crmContactName", "callerIdName", "callerName", "fromName", "cnam", "contactName", "displayName", "name"];
+  const outboundNameKeys = ["crmContactName", "calleeName", "toName", "connectedLineName", "contactName", "displayName", "name", "to"];
+  const internalNameKeys = ["crmContactName", "fromName", "connectedLineName", "displayName", "name"];
+
+  const number =
+    call.direction === "outbound"
+      ? firstNumberField(call, outboundNumberKeys)
+      : call.direction === "internal"
+        ? firstNumberField(call, internalNumberKeys)
+        : firstNumberField(call, inboundNumberKeys);
+
+  const name =
+    call.direction === "outbound"
+      ? firstNameField(call, outboundNameKeys)
+      : call.direction === "internal"
+        ? firstNameField(call, internalNameKeys)
+        : firstNameField(call, inboundNameKeys);
+
+  if (name) return { primary: name, secondaryNumber: number };
+  if (number) return { primary: number, secondaryNumber: null };
+  if (call.direction === "outbound") return { primary: call.to || call.connectedLine || "—", secondaryNumber: null };
+  return { primary: call.from || call.connectedLine || "—", secondaryNumber: null };
 }
 
 function handlerLabel(call: LiveCall): string {
@@ -121,14 +198,16 @@ export function ActiveCallsPanel({ calls, isLive, showTenantBadge = false }: Pro
               const dur = liveDurationSec(call);
               const state = (call.state || "unknown").toLowerCase();
               const tenantLabel = tenantBadgeLabel(call);
+              const identity = callIdentity(call);
               return (
                 <li key={call.id} className={`dash-v2-active-row state-${state} dir-${dirClass(call.direction)}`}>
                   <div className="dash-v2-active-row-dir" aria-label={dirLabel(call.direction)}>
                     {dirIconFor(call.direction)}
                   </div>
                   <div className="dash-v2-active-row-main">
-                    <span className="dash-v2-active-row-name">{counterpartyLabel(call)}</span>
+                    <span className="dash-v2-active-row-name">{identity.primary}</span>
                     <span className="dash-v2-active-row-meta">
+                      {identity.secondaryNumber ? <span className="dash-v2-active-row-number">{identity.secondaryNumber}</span> : null}
                       <span className={`dash-v2-active-pill dir-${dirClass(call.direction)}`}>{dirLabel(call.direction)}</span>
                       {showTenantBadge ? (
                         <span className="dash-v2-active-pill tenant" title={tenantLabel}>

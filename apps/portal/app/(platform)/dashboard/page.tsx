@@ -14,6 +14,12 @@ import { ActiveCallsPanel } from "../../../components/dashboard/ActiveCallsPanel
 import { CallActivityRow } from "../../../components/dashboard/CallActivityRow";
 import { CommunicationsRow, type CommunicationsData } from "../../../components/dashboard/CommunicationsRow";
 import { IvrAnalyticsCard, type IvrAnalyticsData } from "../../../components/dashboard/IvrAnalyticsCard";
+import {
+  buildDashboardDevPreviewCalls,
+  buildDashboardDevPreviewCommunications,
+  buildDashboardDevPreviewTraffic,
+  DASHBOARD_DEV_PREVIEW_IVR,
+} from "../../../components/dashboard/devPreviewData";
 
 type ConnectKpis = {
   incomingToday: number;
@@ -64,6 +70,38 @@ function firstName(name: string | null | undefined, email: string | null | undef
   return "there";
 }
 
+const IS_DEV_PREVIEW_ENABLED = process.env.NODE_ENV === "development";
+
+function hasTrafficData(data: TrafficData | null): boolean {
+  if (!data) return false;
+  if ((data.totals?.total ?? 0) > 0) return true;
+  return (data.points ?? []).some((point) =>
+    (point.incoming ?? 0) + (point.outgoing ?? 0) + (point.internal ?? 0) + (point.missed ?? 0) + (point.canceled ?? 0) > 0,
+  );
+}
+
+function hasCommunicationsData(data: CommunicationsData | null): boolean {
+  if (!data) return false;
+  return (
+    (data.voicemails?.unread ?? 0) > 0 ||
+    (data.messages?.unread ?? 0) > 0 ||
+    (data.voicemails?.recent?.length ?? 0) > 0 ||
+    (data.messages?.recent?.length ?? 0) > 0
+  );
+}
+
+function hasIvrData(data: IvrAnalyticsData | null): boolean {
+  if (!data) return false;
+  const totals = data.totals;
+  return (
+    (totals?.ivrCalls ?? 0) > 0 ||
+    (totals?.optionsPressed ?? 0) > 0 ||
+    (totals?.timeouts ?? 0) > 0 ||
+    (totals?.invalidEntries ?? 0) > 0 ||
+    (data.topOptions?.length ?? 0) > 0
+  );
+}
+
 export default function DashboardPage() {
   const { adminScope, tenantId: contextTenantId, tenant, user, role } = useAppContext();
   const isGlobal = adminScope === "GLOBAL";
@@ -73,6 +111,7 @@ export default function DashboardPage() {
   // Date range filter state — controls the volume chart, KPIs, and IVR analytics.
   // Active Calls and Communications are always "now" (live state, not date-windowed).
   const [range, setRange] = useState<DateRangeValue>({ key: "7d" });
+  const previewNow = useMemo(() => Date.now(), []);
 
   // Refresh ticks
   const [kpiTick, setKpiTick] = useState(0);
@@ -93,6 +132,14 @@ export default function DashboardPage() {
   );
   const trafficData = trafficState.status === "success" ? trafficState.data : null;
   const trafficLoading = trafficState.status === "loading";
+  const usingTrafficPreview =
+    IS_DEV_PREVIEW_ENABLED &&
+    !trafficLoading &&
+    !hasTrafficData(trafficData);
+  const displayTrafficData = useMemo(
+    () => usingTrafficPreview ? buildDashboardDevPreviewTraffic(range, previewNow) : trafficData,
+    [previewNow, range, trafficData, usingTrafficPreview],
+  );
 
   // KPI fetch — date-range aware (Connect canonical totals)
   const kpiQuery = useMemo(() => buildKpiQuery(range, isGlobal, contextTenantId), [range, isGlobal, contextTenantId]);
@@ -106,7 +153,7 @@ export default function DashboardPage() {
   // Prefer the (cheaper, already-aggregated) traffic totals when available so the
   // 5-card row stays in sync with the chart even if the KPI fetch is still in flight.
   const callTotals = useMemo(() => {
-    const t = trafficData?.totals;
+    const t = displayTrafficData?.totals;
     if (t) {
       return {
         incoming: t.incoming ?? null,
@@ -123,7 +170,7 @@ export default function DashboardPage() {
       missed:   kpis?.missedToday   ?? null,
       canceled: kpis?.canceledToday ?? null,
     };
-  }, [trafficData, kpis]);
+  }, [displayTrafficData, kpis]);
 
   // Communications — per-user, no range
   const commState = useAsyncResource<CommunicationsData>(
@@ -132,6 +179,14 @@ export default function DashboardPage() {
   );
   const commData = commState.status === "success" ? commState.data : null;
   const commLoading = commState.status === "loading";
+  const usingCommunicationsPreview =
+    IS_DEV_PREVIEW_ENABLED &&
+    !commLoading &&
+    !hasCommunicationsData(commData);
+  const displayCommData = useMemo(
+    () => usingCommunicationsPreview ? buildDashboardDevPreviewCommunications(previewNow) : commData,
+    [commData, previewNow, usingCommunicationsPreview],
+  );
 
   // IVR analytics — admin only, date-range aware
   const ivrQuery = useMemo(() => buildIvrQuery(range, isGlobal, contextTenantId), [range, isGlobal, contextTenantId]);
@@ -141,6 +196,12 @@ export default function DashboardPage() {
   );
   const ivrData = isAdmin && ivrState.status === "success" ? ivrState.data : null;
   const ivrLoading = isAdmin && ivrState.status === "loading";
+  const usingIvrPreview =
+    IS_DEV_PREVIEW_ENABLED &&
+    isAdmin &&
+    !ivrLoading &&
+    !hasIvrData(ivrData);
+  const displayIvrData = usingIvrPreview ? DASHBOARD_DEV_PREVIEW_IVR : ivrData;
 
   // Live calls (telephony WS, scoped to current tenant)
   const extState = useAsyncResource<{ rows: Record<string, unknown>[] }>(
@@ -153,30 +214,47 @@ export default function DashboardPage() {
     () => callsForTenant(telephony.activeCalls, isGlobal ? null : contextTenantId, extensionRows, tenant?.name),
     [contextTenantId, extensionRows, isGlobal, telephony.activeCalls, tenant?.name],
   );
+  const usingActiveCallsPreview = IS_DEV_PREVIEW_ENABLED && liveCalls.length === 0;
+  const displayLiveCalls = useMemo(
+    () => usingActiveCallsPreview ? buildDashboardDevPreviewCalls(isGlobal ? null : contextTenantId, tenant?.name, previewNow) : liveCalls,
+    [contextTenantId, isGlobal, liveCalls, previewNow, tenant?.name, usingActiveCallsPreview],
+  );
   const showTenantBadge = useMemo(() => {
     if (isGlobal) return true;
     const tenantKeys = new Set(
-      liveCalls.map((call) => call.tenantId || call.tenantSlug || call.tenantName || "__unknown__"),
+      displayLiveCalls.map((call) => call.tenantId || call.tenantSlug || call.tenantName || "__unknown__"),
     );
     return tenantKeys.size > 1;
-  }, [isGlobal, liveCalls]);
+  }, [displayLiveCalls, isGlobal]);
 
   const greetingName = firstName(user.name, user.email);
+  const usingDevPreview =
+    usingTrafficPreview ||
+    usingCommunicationsPreview ||
+    usingIvrPreview ||
+    usingActiveCallsPreview;
 
   return (
     <PermissionGate permission="can_view_dashboard" fallback={<div className="state-box">You do not have dashboard access.</div>}>
-      <div className="dash-v2-shell">
+      <div className="dash-v2-shell workspace-overview">
         {/* Header */}
         <header className="dash-v2-header">
           <div className="dash-v2-header-text">
             <h1 className="dash-v2-title">Welcome, {greetingName}</h1>
-            <p className="dash-v2-subtitle">{tenant?.name ? `${tenant.name} · ` : ""}Here's what's happening right now.</p>
+            <p className="dash-v2-subtitle">
+              {tenant?.name ? `${tenant.name} · ` : ""}Here's what's happening right now.
+              {usingDevPreview ? (
+                <span className="ml-2 rounded-full border border-crm-border/60 bg-crm-surface-2 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">
+                  Dev preview data
+                </span>
+              ) : null}
+            </p>
           </div>
           <DateRangeFilter value={range} onChange={setRange} />
         </header>
 
         {/* 1. Hourly call volume chart — top */}
-        <CallVolumeChart data={trafficData} loading={trafficLoading} rangeKey={range.key} />
+        <CallVolumeChart data={displayTrafficData} loading={trafficLoading && !usingTrafficPreview} rangeKey={range.key} />
 
         {/* 2. Call activity (5 metrics) */}
         <CallActivityRow
@@ -185,13 +263,13 @@ export default function DashboardPage() {
         />
 
         {/* 3. Active calls — live, below metrics */}
-        <ActiveCallsPanel calls={liveCalls} isLive={telephony.isLive} showTenantBadge={showTenantBadge} />
+        <ActiveCallsPanel calls={displayLiveCalls} isLive={telephony.isLive || usingActiveCallsPreview} showTenantBadge={showTenantBadge} />
 
         {/* 4. Communications — voicemail + messages */}
-        <CommunicationsRow data={commData} loading={commLoading} />
+        <CommunicationsRow data={displayCommData} loading={commLoading && !usingCommunicationsPreview} />
 
         {/* 5. IVR analytics — admin only */}
-        {isAdmin ? <IvrAnalyticsCard data={ivrData} loading={ivrLoading} /> : null}
+        {isAdmin ? <IvrAnalyticsCard data={displayIvrData} loading={ivrLoading && !usingIvrPreview} /> : null}
       </div>
     </PermissionGate>
   );

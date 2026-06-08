@@ -304,14 +304,17 @@ export function CallVolumeChart({ data, loading, rangeKey }: Props) {
           {hover && data?.points?.[hover.index] ? (
             (() => {
               const p = data.points[hover.index]!;
-              // Position tooltip: stay within plot bounds
+              // Keep the tooltip clear of the chart/card edges after it flips sides.
               const tooltipW = 200;
               const tooltipH = 110;
-              const margin = 12;
-              let left = hover.x + 14;
-              let top = hover.y - tooltipH - 12;
-              if (left + tooltipW > size.w - margin) left = hover.x - tooltipW - 14;
-              if (top < margin) top = hover.y + 14;
+              const tooltipInset = 12;
+              const tooltipGap = 14;
+              let left = hover.x + tooltipGap;
+              let top = hover.y - tooltipH - tooltipInset;
+              if (left + tooltipW > size.w - tooltipInset) left = hover.x - tooltipW - tooltipGap;
+              if (top < tooltipInset) top = hover.y + tooltipGap;
+              const maxLeft = Math.max(tooltipInset, size.w - tooltipW - tooltipInset);
+              left = Math.min(Math.max(left, tooltipInset), maxLeft);
               return (
                 <div
                   className="dash-v2-graph-tooltip"
