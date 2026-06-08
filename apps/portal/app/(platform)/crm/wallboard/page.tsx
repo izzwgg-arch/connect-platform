@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import {
   PhoneCall, Users, Megaphone, CalendarClock,
@@ -8,13 +8,15 @@ import {
   PhoneIncoming, PhoneOutgoing, Phone, Inbox,
   TrendingUp, CheckSquare, LayoutGrid,
   Zap, ChevronRight, Tv, X, AlertTriangle,
-  Settings, Maximize2, Activity, Headphones, Target,
+  Maximize2, Activity, Headphones, Target,
   BarChart3, Keyboard, ListChecks, Copy, Sparkles,
-  CircleDot, ShieldCheck,
+  CircleDot, ShieldCheck, UserRound,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { apiGet } from "../../../../services/apiClient";
 import { useTelephony } from "../../../../contexts/TelephonyContext";
-import type { LiveCall } from "../../../../types/liveCall";
+import type { LiveCall, LiveQueueState } from "../../../../types/liveCall";
+import { cn } from "../../../../components/crm/cn";
 import { crm } from "../../../../components/crm/crmClasses";
 import { CRMRingMetric } from "../../../../components/crm/charts/CRMRingMetric";
 
@@ -23,6 +25,9 @@ import { CRMRingMetric } from "../../../../components/crm/charts/CRMRingMetric";
 const REFRESH_MS   = 60_000; // CRM report panels refresh every 60 s
 const TICK_MS      = 10_000; // Live call duration display ticks every 10 s
 const COUNTDOWN_S  = REFRESH_MS / 1000; // 60
+const WALLBOARD_PANEL_PREVIEW_STORAGE_KEY = "cc-wallboard-panel-preview";
+const DEV_WALLBOARD_PANEL_PREVIEW =
+  typeof process !== "undefined" && process.env.NODE_ENV !== "production";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -61,6 +66,11 @@ type AgentRow = {
   assignedQueue: number;
   callbacksDueToday: number;
   dispositionsToday: number;
+  callsHandledToday?: number;
+  contactsSpokenToToday?: number;
+  missedCallsToday?: number;
+  voicemailsToday?: number;
+  emailsSentToday?: number;
   convertedLast: number;
   openTasks: number;
   /** SIP extension numbers owned by this user (e.g. ["101"]). Empty array = no extension assigned. */
@@ -106,6 +116,39 @@ type WallboardData = {
   agents:    AgentRow[];
   followUps: FollowUpsReport;
 };
+
+type WallboardLookupContact = {
+  id: string;
+  displayName: string;
+  company: string | null;
+  title?: string | null;
+  crmStage?: string | null;
+  primaryPhone?: { numberRaw?: string | null } | null;
+  primaryEmail?: { email?: string | null } | null;
+  lastActivityAt?: string | null;
+  lastDisposition?: string | null;
+  lastDispositionAt?: string | null;
+  isInCrm?: boolean;
+};
+
+type WallboardLookupResult = {
+  matchedPhone?: string | null;
+  contact: WallboardLookupContact;
+  openTasksCount?: number;
+  nextDueTask?: { title: string; dueAt: string | null } | null;
+};
+
+type WallboardCallContext = {
+  callId: string | null;
+  loading: boolean;
+  contact: WallboardLookupContact | null;
+  matchedPhone: string | null;
+  openTasksCount: number;
+  nextDueTask: { title: string; dueAt: string | null } | null;
+  error: string | null;
+};
+
+type WallboardPanelPreviewMode = "none" | "matched" | "outbound" | "unmatched";
 
 // "needs-attention" = overdue callbacks and nothing done today (most urgent)
 // "callbacks-due"   = callbacks due but some activity today
@@ -175,6 +218,264 @@ function findAgentCall(extensions: string[], calls: LiveCall[]): LiveCall | null
     }
   }
   return null;
+}
+
+function findAgentForCall(agents: AgentRow[], call: LiveCall | null): AgentRow | null {
+  if (!call) return null;
+  return agents.find((agent) => findAgentCall(agent.extensions ?? [], [call]) != null) ?? null;
+}
+
+function callPartyForCrmLookup(call: LiveCall): string | null {
+  if (call.direction === "outbound") return call.to ?? call.connectedLine ?? call.from;
+  return call.from ?? call.connectedLine ?? call.to;
+}
+
+function resolveWallboardFocusCall(calls: LiveCall[], selectedCallId: string | null): LiveCall | null {
+  if (calls.length === 0) return null;
+  if (calls.length === 1) return calls[0];
+  if (!selectedCallId) return null;
+  return calls.find((call) => call.id === selectedCallId) ?? null;
+}
+
+function buildContactWorkspaceHref(contactId: string, call: LiveCall): string {
+  const params = new URLSearchParams({ workspace: "timeline" });
+  if (call.linkedId?.trim()) params.set("linkedId", call.linkedId.trim());
+  return `/crm/contacts/${encodeURIComponent(contactId)}?${params.toString()}`;
+}
+
+function contactFromLiveCall(call: LiveCall | null): WallboardLookupContact | null {
+  if (!call?.crmContactId) return null;
+  return {
+    id: call.crmContactId,
+    displayName: call.crmContactName ?? "Matched CRM contact",
+    company: call.crmCompanyName ?? null,
+    isInCrm: true,
+  };
+}
+
+function formatDirection(call: LiveCall): string {
+  if (call.direction === "outbound") return "Outbound";
+  if (call.direction === "inbound") return "Inbound";
+  if (call.direction === "internal") return "Internal";
+  return "Unknown";
+}
+
+function formatCallStatus(call: LiveCall): string {
+  if (call.state === "up") return "Connected";
+  if (call.state === "ringing") return "Ringing";
+  if (call.state === "dialing") return "Dialing";
+  if (call.state === "held") return "On hold";
+  return call.state || "Active";
+}
+
+function isWallboardPanelPreviewMode(value: string | null): value is Exclude<WallboardPanelPreviewMode, "none"> {
+  return value === "matched" || value === "outbound" || value === "unmatched";
+}
+
+function wallboardPreviewAllowed(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "0.0.0.0" ||
+    hostname === "" ||
+    hostname.endsWith(".local") ||
+    hostname.endsWith(".test") ||
+    hostname.includes("local") ||
+    /^10\./.test(hostname) ||
+    /^192\.168\./.test(hostname) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)
+  );
+}
+
+function normalizeWallboardPanelPreview(value: string | null): WallboardPanelPreviewMode {
+  if (value === "0" || value === "false" || value === "off" || value === "none") return "none";
+  if (value === "1" || value === "true" || value === "active") return "matched";
+  return isWallboardPanelPreviewMode(value) ? value : "none";
+}
+
+function wallboardPanelPreviewEnabled(): boolean {
+  if (typeof window === "undefined") return DEV_WALLBOARD_PANEL_PREVIEW;
+  if (process.env.NEXT_PUBLIC_WALLBOARD_PANEL_PREVIEW === "1") return true;
+  if (DEV_WALLBOARD_PANEL_PREVIEW) return true;
+  return wallboardPreviewAllowed(window.location.hostname);
+}
+
+function resolveWallboardPanelPreviewMode(): WallboardPanelPreviewMode {
+  if (typeof window === "undefined" || !wallboardPanelPreviewEnabled()) return "none";
+
+  const params = new URLSearchParams(window.location.search);
+  const rawPreview = params.get("panelPreview");
+  if (rawPreview != null) return normalizeWallboardPanelPreview(rawPreview);
+
+  const stored = window.localStorage.getItem(WALLBOARD_PANEL_PREVIEW_STORAGE_KEY);
+  if (stored === "off" || stored === "none" || stored === "0") return "none";
+  if (stored && isWallboardPanelPreviewMode(stored)) return stored;
+
+  return "matched";
+}
+
+function persistWallboardPanelPreviewMode(mode: WallboardPanelPreviewMode) {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  if (mode === "none") {
+    url.searchParams.delete("panelPreview");
+    window.localStorage.setItem(WALLBOARD_PANEL_PREVIEW_STORAGE_KEY, "off");
+  } else {
+    url.searchParams.set("panelPreview", mode);
+    window.localStorage.setItem(WALLBOARD_PANEL_PREVIEW_STORAGE_KEY, mode);
+  }
+  window.history.replaceState(null, "", url.toString());
+}
+
+function buildPreviewWallboardCall(mode: Exclude<WallboardPanelPreviewMode, "none">): LiveCall {
+  const inbound = mode !== "outbound";
+  const matched = mode !== "unmatched";
+  return {
+    id: `wallboard-preview-${mode}`,
+    linkedId: `preview-${mode}-linked`,
+    tenantId: "local-preview",
+    tenantSlug: "local-preview",
+    tenantName: "Local Preview",
+    direction: inbound ? "inbound" : "outbound",
+    state: "up",
+    from: inbound ? "+1 (770) 555-0188" : "101",
+    fromName: inbound ? "Morgan Fields" : "Local Dev",
+    to: inbound ? "Sales Queue" : "+1 (770) 555-0142",
+    connectedLine: inbound ? "101" : "Morgan Fields",
+    source_extension: inbound ? null : "101",
+    destination_extension: inbound ? "101" : null,
+    channelState: "Up",
+    channels: ["PJSIP/T25_101-00001234", "PJSIP/trunk-00001235"],
+    bridgeIds: ["preview-bridge-1"],
+    extensions: ["101"],
+    queueId: inbound ? "Signature Form QA Queue" : null,
+    trunk: "preview-trunk",
+    startedAt: new Date(Date.now() - 4 * 60_000 - 18_000).toISOString(),
+    answeredAt: new Date(Date.now() - 3 * 60_000 - 42_000).toISOString(),
+    endedAt: null,
+    durationSec: 258,
+    billableSec: 222,
+    metadata: { preview: true, source: "wallboard_panel_preview" },
+    ...(matched
+      ? {
+          crmContactId: "preview-contact-morgan-fields",
+          crmContactName: "Morgan Fields",
+          crmCompanyName: "Bluebird Capital",
+          crmProfileUrl: "/crm/contacts/preview-contact-morgan-fields",
+          crmMatchSource: "exact" as const,
+        }
+      : {}),
+  };
+}
+
+type AgentQueueSummary = {
+  queueName: string | null;
+  waiting: number;
+  answered: number;
+  missed: number;
+  voicemails: number;
+};
+
+function extensionFromQueueInterface(iface: string): string | null {
+  const cleaned = iface.trim();
+  if (!cleaned) return null;
+  const ifaceMatch = /(?:PJSIP|SIP|Local|IAX2?)\/(?:[A-Za-z]\d+_)?(\d{2,6})/i.exec(cleaned);
+  if (ifaceMatch?.[1]) return ifaceMatch[1];
+  const tail = cleaned.split("/").pop()?.split("-")[0]?.split("@")[0]?.trim() ?? "";
+  return /^\d{2,6}$/.test(tail) ? tail : null;
+}
+
+function resolveAgentQueueSummary(
+  call: LiveCall,
+  agent: AgentRow | null,
+  queueList: LiveQueueState[],
+  isPreview: boolean,
+): AgentQueueSummary {
+  if (isPreview) {
+    return {
+      queueName: call.queueId ?? "Signature Form QA Queue",
+      waiting: 3,
+      answered: 6,
+      missed: agent?.missedCallsToday ?? 1,
+      voicemails: agent?.voicemailsToday ?? 2,
+    };
+  }
+
+  const queueKey = call.queueId?.trim() || null;
+  const queue = queueKey
+    ? queueList.find((row) =>
+        row.queueName === queueKey ||
+        row.queueName.toLowerCase() === queueKey.toLowerCase(),
+      )
+    : null;
+
+  const agentExts = new Set(
+    [
+      ...(agent?.extensions ?? []),
+      ...(call.extensions ?? []),
+      call.source_extension,
+      call.destination_extension,
+    ]
+      .filter(Boolean)
+      .map(String),
+  );
+
+  let callsTaken = 0;
+  if (queue) {
+    for (const member of queue.members) {
+      const ext = extensionFromQueueInterface(member.interface);
+      if (ext && agentExts.has(ext)) {
+        callsTaken = Math.max(callsTaken, member.callsTaken);
+      }
+    }
+  }
+
+  return {
+    queueName: queue?.queueName ?? queueKey,
+    waiting: queue?.callerCount ?? 0,
+    answered: callsTaken > 0 ? callsTaken : (agent?.callsHandledToday ?? 0),
+    missed: agent?.missedCallsToday ?? 0,
+    voicemails: agent?.voicemailsToday ?? 0,
+  };
+}
+
+function buildPreviewWallboardContext(mode: Exclude<WallboardPanelPreviewMode, "none">, call: LiveCall): WallboardCallContext {
+  if (mode === "unmatched") {
+    return {
+      callId: call.id,
+      loading: false,
+      contact: null,
+      matchedPhone: null,
+      openTasksCount: 0,
+      nextDueTask: null,
+      error: null,
+    };
+  }
+
+  return {
+    callId: call.id,
+    loading: false,
+    contact: {
+      id: call.crmContactId ?? "preview-contact-morgan-fields",
+      displayName: call.crmContactName ?? "Morgan Fields",
+      company: call.crmCompanyName ?? "Bluebird Capital",
+      title: "Operations Director",
+      crmStage: "QUALIFIED",
+      primaryPhone: { numberRaw: mode === "outbound" ? call.to : call.from },
+      primaryEmail: { email: "morgan.fields@example.test" },
+      lastActivityAt: new Date(Date.now() - 48 * 60_000).toISOString(),
+      lastDisposition: "Interested",
+      lastDispositionAt: new Date(Date.now() - 48 * 60_000).toISOString(),
+      isInCrm: true,
+    },
+    matchedPhone: mode === "outbound" ? call.to : call.from,
+    openTasksCount: 2,
+    nextDueTask: {
+      title: "Send funding packet after live call",
+      dueAt: new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
+    },
+    error: null,
+  };
 }
 
 // ── WallboardKpiTile — TV-ready big metric card ────────────────────────────────
@@ -592,20 +893,21 @@ type WallboardMetric = {
   label: string;
   value: string | number;
   sub: string;
-  icon: React.ReactNode;
-  tone: "blue" | "green" | "purple" | "teal" | "orange" | "pink" | "indigo";
+  icon: LucideIcon;
+  tone: "blue" | "green" | "violet" | "cyan" | "amber" | "rose";
   href?: string;
-  spark?: number[];
 };
 
-const toneClasses: Record<WallboardMetric["tone"], { icon: string; line: string; bg: string }> = {
-  blue: { icon: "bg-sky-50 text-sky-600 ring-sky-100", line: "stroke-sky-500", bg: "from-sky-50/80" },
-  green: { icon: "bg-emerald-50 text-emerald-600 ring-emerald-100", line: "stroke-emerald-500", bg: "from-emerald-50/80" },
-  purple: { icon: "bg-purple-50 text-purple-600 ring-purple-100", line: "stroke-purple-500", bg: "from-purple-50/80" },
-  teal: { icon: "bg-teal-50 text-teal-600 ring-teal-100", line: "stroke-teal-500", bg: "from-teal-50/80" },
-  orange: { icon: "bg-orange-50 text-orange-600 ring-orange-100", line: "stroke-orange-500", bg: "from-orange-50/80" },
-  pink: { icon: "bg-fuchsia-50 text-fuchsia-600 ring-fuchsia-100", line: "stroke-fuchsia-500", bg: "from-fuchsia-50/80" },
-  indigo: { icon: "bg-indigo-50 text-indigo-600 ring-indigo-100", line: "stroke-indigo-500", bg: "from-indigo-50/80" },
+type SparklineTone = "blue" | "green" | "purple" | "teal" | "orange" | "pink" | "indigo";
+
+const sparklineToneClasses: Record<SparklineTone, string> = {
+  blue: "stroke-sky-500",
+  green: "stroke-emerald-500",
+  purple: "stroke-purple-500",
+  teal: "stroke-teal-500",
+  orange: "stroke-orange-500",
+  pink: "stroke-fuchsia-500",
+  indigo: "stroke-indigo-500",
 };
 
 function formatPercentValue(value: number): string {
@@ -637,7 +939,7 @@ function miniSeries(seed: number, length = 7): number[] {
   return Array.from({ length }, (_, index) => Math.max(1, Math.round(base * (0.48 + index * 0.08 + ((index % 3) * 0.07)))));
 }
 
-function Sparkline({ values, tone = "blue", tall = false }: { values: number[]; tone?: WallboardMetric["tone"]; tall?: boolean }) {
+function Sparkline({ values, tone = "blue", tall = false }: { values: number[]; tone?: SparklineTone; tall?: boolean }) {
   const max = Math.max(1, ...values);
   const points = values.map((value, index) => {
     const x = (index / Math.max(1, values.length - 1)) * 100;
@@ -653,7 +955,7 @@ function Sparkline({ values, tone = "blue", tall = false }: { values: number[]; 
         strokeWidth="3"
         strokeLinecap="round"
         strokeLinejoin="round"
-        className={toneClasses[tone].line}
+        className={sparklineToneClasses[tone]}
       />
     </svg>
   );
@@ -688,27 +990,28 @@ function WallboardCard({
   );
 }
 
-function MockupKpiCard({ metric }: { metric: WallboardMetric }) {
-  const tone = toneClasses[metric.tone];
-  const content = (
-    <div className={`group relative min-h-[7.4rem] overflow-hidden rounded-[1.25rem] border border-crm-border bg-gradient-to-br ${tone.bg} via-white to-white p-4 shadow-crm transition-all hover:-translate-y-0.5 hover:shadow-[0_16px_36px_-20px_rgba(15,23,42,0.35)]`}>
-      <div className="flex items-start justify-between gap-2">
-        <span className={`flex h-9 w-9 items-center justify-center rounded-xl ring-1 ${tone.icon}`}>
-          {metric.icon}
+function WallboardKpiStripTile({ metric }: { metric: WallboardMetric }) {
+  const Icon = metric.icon;
+  const tile = (
+    <div className={cn(crm.queueCountPill, `crm-queue-kpi-${metric.tone}`, "relative overflow-hidden bg-crm-surface-2")}>
+      <span className="flex w-full items-start justify-between gap-3">
+        <span className="min-w-0">
+          <span className="crm-queue-kpi-label block text-[10px] font-bold uppercase tracking-wide text-crm-muted">
+            {metric.label}
+          </span>
+          <span className="crm-queue-kpi-value mt-1 block text-2xl font-bold tabular-nums leading-none tracking-tight text-crm-text">
+            {metric.value}
+          </span>
         </span>
-        <Sparkline values={metric.spark ?? miniSeries(Number(metric.value) || 1)} tone={metric.tone} />
-      </div>
-      <div className="mt-3">
-        <p className="text-[11px] font-semibold text-crm-muted">{metric.label}</p>
-        <div className="mt-1 flex items-end justify-between gap-3">
-          <span className="text-[1.65rem] font-bold leading-none tracking-tight text-crm-text tabular-nums">{metric.value}</span>
-          <span className="text-[10px] font-semibold text-emerald-600">{metric.sub}</span>
-        </div>
-      </div>
+        <span className="crm-queue-kpi-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface/70 text-crm-accent">
+          <Icon className="h-4 w-4" />
+        </span>
+      </span>
+      <span className="crm-queue-kpi-micro text-[10px] font-medium text-crm-muted">{metric.sub}</span>
     </div>
   );
 
-  return metric.href ? <Link href={metric.href} className="block no-underline">{content}</Link> : content;
+  return metric.href ? <Link href={metric.href} className="block no-underline">{tile}</Link> : tile;
 }
 
 function TeamPerformanceCard({ agents, activeCalls }: { agents: AgentRow[]; activeCalls: LiveCall[] }) {
@@ -831,7 +1134,17 @@ function LiveActivityFeedCard({
   );
 }
 
-function LiveCallsWorkspaceCard({ calls, isLive }: { calls: LiveCall[]; isLive: boolean }) {
+function LiveCallsWorkspaceCard({
+  calls,
+  isLive,
+  selectedCallId,
+  onSelectCall,
+}: {
+  calls: LiveCall[];
+  isLive: boolean;
+  selectedCallId: string | null;
+  onSelectCall: (callId: string) => void;
+}) {
   const [, setTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setTick((n) => n + 1), TICK_MS);
@@ -855,8 +1168,26 @@ function LiveCallsWorkspaceCard({ calls, isLive }: { calls: LiveCall[]; isLive: 
           const isAnswered = call.state === "up" || !!call.answeredAt;
           const status = call.state === "dialing" ? "Dialing" : isAnswered ? (call.direction === "outbound" ? "Speaking" : "Listening") : call.state;
           const sentiment = isAnswered ? "AI ready" : "Monitoring";
+          const workspaceHref = call.crmContactId ? buildContactWorkspaceHref(call.crmContactId, call) : null;
+          const isSelected = selectedCallId === call.id;
+          const showSelected = isSelected && calls.length > 1;
           return (
-            <div key={call.id} className="grid gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1.3fr)_minmax(0,0.9fr)_0.6fr_auto] sm:items-center">
+            <div
+              key={call.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => onSelectCall(call.id)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelectCall(call.id);
+                }
+              }}
+              aria-pressed={isSelected}
+              className={`grid gap-3 px-4 py-3 transition-colors sm:grid-cols-[minmax(0,1.3fr)_minmax(0,0.9fr)_0.6fr_auto] sm:items-center ${
+                calls.length > 1 ? "cursor-pointer hover:bg-crm-surface-2/20" : ""
+              } ${showSelected ? "border-l-2 border-crm-accent bg-crm-surface-2/30 pl-[calc(1rem-2px)]" : ""}`}
+            >
               <div className="flex min-w-0 items-center gap-3">
                 <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600 ring-1 ring-emerald-100">
                   {call.direction === "outbound" ? <PhoneOutgoing className="h-4 w-4" /> : <PhoneIncoming className="h-4 w-4" />}
@@ -876,13 +1207,313 @@ function LiveCallsWorkspaceCard({ calls, isLive }: { calls: LiveCall[]; isLive: 
               </div>
               <div className="flex items-center justify-between gap-3 sm:justify-end">
                 <span className="font-semibold tabular-nums text-crm-text">{callDuration(call.startedAt, call.answeredAt)}</span>
-                <Link href="/crm/live-call" className="text-xs font-semibold text-crm-accent hover:underline">Go to workspace</Link>
+                {workspaceHref ? (
+                  <Link
+                    href={workspaceHref}
+                    onClick={(event) => event.stopPropagation()}
+                    className="text-xs font-semibold text-crm-accent hover:underline"
+                  >
+                    Open contact
+                  </Link>
+                ) : null}
               </div>
             </div>
           );
         })}
       </div>
     </WallboardCard>
+  );
+}
+
+function WallboardPanelStat({
+  label,
+  value,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string | number;
+  tone?: "neutral" | "good" | "warn" | "accent";
+}) {
+  const toneCls =
+    tone === "good" ? "text-emerald-600"
+    : tone === "warn" ? "text-amber-600"
+    : tone === "accent" ? "text-crm-accent"
+    : "text-crm-text";
+  return (
+    <div className="rounded-crm border border-crm-border/70 bg-crm-surface-2/45 px-2.5 py-2 text-center">
+      <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">{label}</p>
+      <p className={`mt-0.5 text-lg font-black tabular-nums ${toneCls}`}>{value}</p>
+    </div>
+  );
+}
+
+function WallboardLiveCallSidePanel({
+  call,
+  agent,
+  context,
+  queueList,
+  isLive,
+  isPreview = false,
+  awaitingSelection = false,
+}: {
+  call: LiveCall | null;
+  agent: AgentRow | null;
+  context: WallboardCallContext;
+  queueList: LiveQueueState[];
+  isLive: boolean;
+  isPreview?: boolean;
+  awaitingSelection?: boolean;
+}) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!call) return;
+    const id = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [call?.id]);
+
+  const panelCls = "crm-wallboard-call-panel crm-queue-detail-panel crm-contact-detail-panel h-full min-h-0";
+
+  if (!call) {
+    return (
+      <aside className={panelCls} aria-label="Live wallboard call details">
+        <div className="crm-queue-detail-glow" aria-hidden />
+        <header className="crm-queue-detail-header shrink-0">
+          <span className="crm-queue-detail-status-pill border-emerald-100 bg-emerald-50 text-emerald-700">
+            {isLive ? "Wallboard live" : "Connecting"}
+          </span>
+          <span className="crm-queue-detail-position">Idle</span>
+        </header>
+        <div className="crm-wallboard-call-panel-scroll custom-scrollbar">
+          <section className="crm-queue-detail-identity">
+            <div className="crm-queue-detail-avatar bg-gradient-to-br from-sky-100 to-indigo-100 text-sky-700">
+              <Headphones className="h-5 w-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="crm-queue-detail-section-label mb-1">Live call</p>
+              <h2 className="crm-queue-detail-name">{awaitingSelection ? "Select a live call" : "Awaiting live call"}</h2>
+              <p className="crm-queue-detail-sub">
+                {awaitingSelection
+                  ? "Click a row in Live Calls to inspect that call."
+                  : "Active calls populate this panel automatically."}
+              </p>
+            </div>
+          </section>
+        </div>
+        <section className="crm-queue-detail-actions-card shrink-0">
+          <div className="grid grid-cols-2 gap-2">
+            <WallboardPanelStat label="Active calls" value="0" />
+            <WallboardPanelStat label="WS status" value={isLive ? "Live" : "Pending"} tone={isLive ? "good" : "warn"} />
+          </div>
+        </section>
+      </aside>
+    );
+  }
+
+  const liveContact = contactFromLiveCall(call);
+  const contact = context.contact ?? liveContact;
+  const matchedContactId = contact?.id ?? call.crmContactId ?? null;
+  const matched = !!matchedContactId;
+  const queueSummary = resolveAgentQueueSummary(call, agent, queueList, isPreview);
+  const workspaceHref = matchedContactId ? buildContactWorkspaceHref(matchedContactId, call) : null;
+  const callsHandled = (agent?.callsHandledToday ?? agent?.dispositionsToday ?? 0) + (agent ? 1 : 0);
+  const peopleReached = agent?.contactsSpokenToToday ?? agent?.dispositionsToday ?? 0;
+  const voicemailsToday = agent?.voicemailsToday ?? queueSummary.voicemails;
+  const emailsSentToday = agent?.emailsSentToday ?? 0;
+  const myQWorked = agent?.dispositionsToday ?? 0;
+  const myQRemaining = agent?.assignedQueue ?? 0;
+  const myQCallbacks = agent?.callbacksDueToday ?? 0;
+  const myQTotal = myQWorked + myQRemaining;
+  const myQProgress = myQTotal > 0 ? Math.round((myQWorked / myQTotal) * 100) : (myQWorked > 0 ? 100 : 0);
+  const contactName = contact?.displayName ?? call.crmContactName ?? "No CRM contact matched";
+  const party = callPartyForCrmLookup(call) ?? call.from ?? call.to ?? "Unknown party";
+  const recentItems = [
+    {
+      key: "live",
+      title: `${formatDirection(call)} ${formatCallStatus(call).toLowerCase()}`,
+      detail: `${party}${agent ? ` · ${agent.displayName}` : ""}`,
+      time: callDuration(call.startedAt, call.answeredAt),
+    },
+    contact?.lastDisposition
+      ? {
+          key: "disp",
+          title: `Last disposition: ${contact.lastDisposition}`,
+          detail: contact.company ?? contact.displayName,
+          time: contact.lastDispositionAt ? relTime(contact.lastDispositionAt) : "recent",
+        }
+      : null,
+    context.nextDueTask
+      ? {
+          key: "task",
+          title: context.nextDueTask.title,
+          detail: "Next open task",
+          time: context.nextDueTask.dueAt ? callbackLabel(context.nextDueTask.dueAt).label : "open",
+        }
+      : null,
+    queueSummary.queueName
+      ? {
+          key: "queue",
+          title: queueSummary.queueName,
+          detail: `${queueSummary.waiting} waiting · ${queueSummary.answered} answered from Q`,
+          time: "live",
+        }
+      : null,
+  ].filter(Boolean) as Array<{ key: string; title: string; detail: string; time: string }>;
+
+  return (
+    <aside className={panelCls} aria-label="Live wallboard call details">
+      <div className="crm-queue-detail-glow" aria-hidden />
+
+      <header className="crm-queue-detail-header shrink-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="crm-queue-detail-status-pill border-emerald-100 bg-emerald-50 text-emerald-700">
+            {formatCallStatus(call)}
+          </span>
+          <span className="crm-queue-pill crm-queue-pill-accent inline-flex items-center gap-1">
+            {call.direction === "outbound" ? <PhoneOutgoing className="h-3 w-3" /> : <PhoneIncoming className="h-3 w-3" />}
+            {formatDirection(call)}
+          </span>
+          {isPreview ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800">
+              <Sparkles className="h-3 w-3" />
+              Preview
+            </span>
+          ) : null}
+        </div>
+        <span className="crm-queue-detail-position tabular-nums">{callDuration(call.startedAt, call.answeredAt)}</span>
+      </header>
+
+      <div className="crm-wallboard-call-panel-scroll custom-scrollbar">
+      <section className="crm-queue-detail-identity">
+        <div className="crm-queue-detail-avatar" style={{ background: matched ? undefined : "linear-gradient(135deg, #e2e8f0, #f8fafc)" }}>
+          {matched ? initials(contactName) : <UserRound className="h-5 w-5" />}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="crm-queue-detail-section-label mb-1">Talking to</p>
+          <h2 className="crm-queue-detail-name truncate">{contactName}</h2>
+          <p className="crm-queue-detail-sub truncate">
+            {matched
+              ? [contact?.company, context.matchedPhone ? `Matched ${context.matchedPhone}` : call.crmMatchSource].filter(Boolean).join(" · ") || "CRM lead matched"
+              : "Live call — no CRM lead matched for this viewer"}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <span className={`crm-queue-pill ${matched ? "crm-queue-pill-stage" : "crm-queue-pill-warning"}`}>
+              {matched ? (contact?.crmStage ?? "CRM matched") : "No CRM match"}
+            </span>
+            {agent ? <span className="crm-queue-pill crm-queue-pill-accent">Agent {agent.displayName}</span> : null}
+          </div>
+        </div>
+      </section>
+
+      <section className="crm-queue-detail-contact-strip">
+        <div className="crm-queue-detail-lines">
+          <div className="crm-queue-detail-line">
+            <Phone className="h-3.5 w-3.5 shrink-0 text-crm-accent" />
+            <span className="font-mono text-[12px]">{call.from || "Unknown"} → {call.to || "Unknown"}</span>
+          </div>
+          <div className="crm-queue-detail-line">
+            <Headphones className="h-3.5 w-3.5 shrink-0 text-crm-accent" />
+            <span className="text-[12px]">
+              {agent
+                ? `${agent.displayName}${agent.extensions.length ? ` · Ext ${agent.extensions.join(", ")}` : ""}`
+                : "Agent not matched to extension"}
+            </span>
+          </div>
+        </div>
+      </section>
+
+      {agent ? (
+        <section className="crm-queue-detail-actions-card">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="crm-queue-detail-section-label m-0">My Q today</p>
+            <span className="text-[11px] font-bold text-crm-accent">{myQProgress}%</span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-crm-surface-2">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-sky-500 to-indigo-500 transition-[width] duration-500"
+              style={{ width: `${Math.min(100, Math.max(0, myQProgress))}%` }}
+            />
+          </div>
+          <p className="mt-2 text-xs font-semibold text-crm-text">
+            {myQWorked} worked · {myQRemaining} in My Q
+            {myQCallbacks > 0 ? ` · ${myQCallbacks} callbacks due` : ""}
+          </p>
+        </section>
+      ) : null}
+
+      <section className="crm-queue-detail-actions-card">
+        <p className="crm-queue-detail-section-label">Agent today</p>
+        <div className="grid grid-cols-2 gap-2">
+          <WallboardPanelStat label="Reached" value={peopleReached} tone="good" />
+          <WallboardPanelStat label="Voicemails" value={voicemailsToday} />
+          <WallboardPanelStat label="Emails sent" value={emailsSentToday} tone="accent" />
+          <WallboardPanelStat label="Calls handled" value={callsHandled} />
+        </div>
+      </section>
+
+      <section className="crm-queue-detail-actions-card">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className="crm-queue-detail-section-label m-0">Q summary</p>
+          {queueSummary.waiting > 0 ? (
+            <span className="text-[11px] font-bold text-crm-accent">{queueSummary.waiting} in queue</span>
+          ) : null}
+        </div>
+        {queueSummary.queueName ? (
+          <>
+            <p className="truncate text-sm font-bold text-crm-text">{queueSummary.queueName}</p>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <WallboardPanelStat label="Answered" value={queueSummary.answered} tone="good" />
+              <WallboardPanelStat label="Missed" value={queueSummary.missed} tone={queueSummary.missed > 0 ? "warn" : "neutral"} />
+              <WallboardPanelStat label="Voicemails" value={queueSummary.voicemails} />
+              <WallboardPanelStat label="Waiting" value={queueSummary.waiting} tone="accent" />
+            </div>
+          </>
+        ) : (
+          <p className="text-sm text-crm-muted">No live queue context for this call.</p>
+        )}
+      </section>
+
+      <section className="crm-queue-detail-actions-card">
+        <p className="crm-queue-detail-section-label">Recent activity</p>
+        <div className="space-y-2">
+          {recentItems.map((item) => (
+            <div key={item.key} className="rounded-crm border border-crm-border/70 bg-crm-surface-2/45 p-2.5">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-semibold text-crm-text">{item.title}</p>
+                  <p className="truncate text-[11px] text-crm-muted">{item.detail}</p>
+                </div>
+                <span className="shrink-0 text-[10px] font-semibold text-crm-muted">{item.time}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {context.error && !matched ? (
+        <div className="crm-queue-detail-alert">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          CRM enrichment unavailable. Showing live call details only.
+        </div>
+      ) : null}
+      </div>
+
+      <section className="crm-queue-detail-actions-card shrink-0">
+        {workspaceHref ? (
+          <Link href={workspaceHref} className={`${crm.btnPrimary} crm-queue-detail-primary-action w-full justify-center gap-2`}>
+            <ArrowRight className="h-4 w-4" />
+            Open contact workspace
+          </Link>
+        ) : (
+          <button type="button" disabled className={`${crm.btnPrimary} crm-queue-detail-primary-action w-full justify-center gap-2 opacity-60`}>
+            <ArrowRight className="h-4 w-4" />
+            Open workspace unavailable
+          </button>
+        )}
+        <p className="mt-2 text-center text-[11px] font-medium text-crm-muted">
+          Telephony WS active call{context.loading ? " · matching CRM contact…" : ""}
+        </p>
+      </section>
+    </aside>
   );
 }
 
@@ -982,79 +1613,6 @@ function TopCampaignsTodayCard({ campaigns }: { campaigns: CampaignRow[] }) {
         ))}
       </div>
     </WallboardCard>
-  );
-}
-
-function WallboardRightRail({ data, activeCalls }: { data: WallboardData; activeCalls: LiveCall[] }) {
-  const topCampaign = [...data.campaigns].sort((a, b) => b.conversionRate - a.conversionRate)[0];
-  return (
-    <aside className="flex flex-col gap-4">
-      <WallboardCard title="Instructions" icon={<Sparkles className="h-4 w-4" />}>
-        <div className="space-y-3 px-4 py-4 text-xs leading-relaxed text-crm-muted">
-          <p>Use this wallboard to monitor live CRM performance and keep your team aligned.</p>
-          {[
-            "Monitor live activity across calls, agents, and campaign status in real time.",
-            "Optimize performance by spotting queue pressure and follow-up risk.",
-            "Take action by jumping into Live Call Workspace or campaign views.",
-          ].map((item, index) => (
-            <div key={item} className="flex gap-2">
-              <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-sky-50 text-[10px] font-bold text-sky-700">{index + 1}</span>
-              <span>{item}</span>
-            </div>
-          ))}
-        </div>
-      </WallboardCard>
-      <WallboardCard title="Quick Actions" icon={<Zap className="h-4 w-4" />}>
-        <div className="grid gap-2 px-4 py-4">
-          <Link href="/crm/live-call" className="flex items-center justify-between rounded-xl border border-crm-border bg-slate-50 px-3 py-2 text-sm font-semibold text-crm-text no-underline hover:bg-white">
-            Open Live Call Workspace <ArrowRight className="h-4 w-4 text-crm-accent" />
-          </Link>
-          <Link href="/crm/campaigns" className="flex items-center justify-between rounded-xl border border-crm-border bg-slate-50 px-3 py-2 text-sm font-semibold text-crm-text no-underline hover:bg-white">
-            Review Campaigns <ArrowRight className="h-4 w-4 text-crm-accent" />
-          </Link>
-          <Link href="/crm/reports" className="flex items-center justify-between rounded-xl border border-crm-border bg-slate-50 px-3 py-2 text-sm font-semibold text-crm-text no-underline hover:bg-white">
-            View Reports <ArrowRight className="h-4 w-4 text-crm-accent" />
-          </Link>
-        </div>
-      </WallboardCard>
-      <WallboardCard title="Wallboard Insights" icon={<ShieldCheck className="h-4 w-4" />}>
-        <div className="space-y-3 px-4 py-4 text-sm">
-          <div className="rounded-xl bg-emerald-50 px-3 py-2 text-emerald-800 ring-1 ring-emerald-100">
-            <span className="font-bold">{activeCalls.length}</span> live calls currently visible.
-          </div>
-          {topCampaign ? (
-            <div className="rounded-xl bg-sky-50 px-3 py-2 text-sky-800 ring-1 ring-sky-100">
-              Top conversion: <span className="font-bold">{topCampaign.name}</span> at {formatPercentValue(topCampaign.conversionRate)}.
-            </div>
-          ) : (
-            <div className="rounded-xl bg-slate-50 px-3 py-2 text-crm-muted ring-1 ring-slate-100">Campaign insights appear after activity starts.</div>
-          )}
-        </div>
-      </WallboardCard>
-    </aside>
-  );
-}
-
-function BottomShortcutStrip() {
-  const shortcuts = [
-    { icon: <Keyboard className="h-4 w-4" />, title: "Press N", body: "Create new checklist anytime", href: "/crm/checklists" },
-    { icon: <ListChecks className="h-4 w-4" />, title: "Checklist mode", body: "Use guided flows in Live Call", href: "/crm/live-call" },
-    { icon: <Copy className="h-4 w-4" />, title: "Copy steps", body: "Reuse proven language", href: "/crm/checklists" },
-    { icon: <PhoneCall className="h-4 w-4" />, title: "Go live", body: "Open Live Call Workspace", href: "/crm/live-call" },
-  ];
-
-  return (
-    <div className="grid gap-2 rounded-[1.35rem] border border-crm-border bg-crm-surface p-2 shadow-crm sm:grid-cols-2 lg:grid-cols-4">
-      {shortcuts.map((shortcut) => (
-        <Link key={shortcut.title} href={shortcut.href} className="flex items-center gap-3 rounded-2xl px-3 py-3 no-underline transition-colors hover:bg-slate-50">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-50 text-crm-accent ring-1 ring-slate-100">{shortcut.icon}</span>
-          <span className="min-w-0">
-            <span className="block text-sm font-bold text-crm-text">{shortcut.title}</span>
-            <span className="block truncate text-[11px] text-crm-muted">{shortcut.body}</span>
-          </span>
-        </Link>
-      ))}
-    </div>
   );
 }
 
@@ -1211,15 +1769,36 @@ export default function WallboardPage() {
   const [tvMode, setTvMode]           = useState(false);
   const [clockTime, setClockTime]     = useState<Date>(() => new Date());
   const [lightWallboard, setLightWallboard] = useState(true);
+  const [panelPreviewMode, setPanelPreviewMode] = useState<WallboardPanelPreviewMode>(() => resolveWallboardPanelPreviewMode());
+  const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
+  const [callContext, setCallContext] = useState<WallboardCallContext>({
+    callId: null,
+    loading: false,
+    contact: null,
+    matchedPhone: null,
+    openTasksCount: 0,
+    nextDueTask: null,
+    error: null,
+  });
 
   const refreshTimerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const clockTimerRef     = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Resolve preview before paint; re-sync when user navigates with back/forward.
+  useLayoutEffect(() => {
+    if (typeof window === "undefined") return;
+    setPanelPreviewMode(resolveWallboardPanelPreviewMode());
+    const onPopState = () => setPanelPreviewMode(resolveWallboardPanelPreviewMode());
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
   // Read ?tv=1 from URL on mount (avoids Suspense requirement for useSearchParams)
   useEffect(() => {
     if (typeof window !== "undefined") {
-      setTvMode(new URLSearchParams(window.location.search).get("tv") === "1");
+      const params = new URLSearchParams(window.location.search);
+      setTvMode(params.get("tv") === "1");
     }
   }, []);
 
@@ -1339,13 +1918,155 @@ export default function WallboardPage() {
     void document.documentElement.requestFullscreen?.();
   }, []);
 
+  const previewCall = useMemo(
+    () => panelPreviewMode === "none" ? null : buildPreviewWallboardCall(panelPreviewMode),
+    [panelPreviewMode],
+  );
+  const previewAgent = useMemo<AgentRow | null>(
+    () => panelPreviewMode === "none"
+      ? null
+      : {
+          userId: "preview-agent-local-dev",
+          displayName: "Local Dev",
+          email: "local.dev@example.test",
+          crmRole: "AGENT",
+          assignedQueue: 12,
+          callbacksDueToday: 2,
+          dispositionsToday: 6,
+          callsHandledToday: 9,
+          contactsSpokenToToday: 7,
+          missedCallsToday: 1,
+          voicemailsToday: 2,
+          emailsSentToday: 4,
+          convertedLast: 1,
+          openTasks: 4,
+          extensions: ["101"],
+        },
+    [panelPreviewMode],
+  );
+  const panelPreviewActive = panelPreviewMode !== "none" && activeCalls.length === 0;
+  const displayedActiveCalls = useMemo(
+    () => panelPreviewActive && previewCall ? [previewCall] : activeCalls,
+    [activeCalls, panelPreviewActive, previewCall],
+  );
+
+  useEffect(() => {
+    if (displayedActiveCalls.length === 0) {
+      setSelectedCallId(null);
+      return;
+    }
+    if (displayedActiveCalls.length === 1) {
+      setSelectedCallId(displayedActiveCalls[0].id);
+      return;
+    }
+    setSelectedCallId((current) =>
+      current && displayedActiveCalls.some((call) => call.id === current) ? current : null,
+    );
+  }, [displayedActiveCalls]);
+
+  const focusCall = useMemo(
+    () => resolveWallboardFocusCall(displayedActiveCalls, selectedCallId),
+    [displayedActiveCalls, selectedCallId],
+  );
+  const focusAgent = useMemo(
+    () => findAgentForCall(data?.agents ?? [], focusCall),
+    [data?.agents, focusCall],
+  );
+
+  useEffect(() => {
+    if (!focusCall) {
+      setCallContext({
+        callId: null,
+        loading: false,
+        contact: null,
+        matchedPhone: null,
+        openTasksCount: 0,
+        nextDueTask: null,
+        error: null,
+      });
+      return;
+    }
+
+    if (panelPreviewMode !== "none") {
+      setCallContext(buildPreviewWallboardContext(panelPreviewMode, focusCall));
+      return;
+    }
+
+    const wsContact = contactFromLiveCall(focusCall);
+    const lookupPhone = callPartyForCrmLookup(focusCall);
+    setCallContext({
+      callId: focusCall.id,
+      loading: !!lookupPhone,
+      contact: wsContact,
+      matchedPhone: null,
+      openTasksCount: 0,
+      nextDueTask: null,
+      error: null,
+    });
+
+    if (!lookupPhone) {
+      setCallContext((prev) => ({ ...prev, loading: false }));
+      return;
+    }
+
+    let cancelled = false;
+    apiGet<{ results: WallboardLookupResult[] }>(
+      `/crm/contacts/lookup?phone=${encodeURIComponent(lookupPhone)}`,
+      token,
+    )
+      .then((res) => {
+        if (cancelled) return;
+        const results = res.results ?? [];
+        const preferred =
+          (focusCall.crmContactId
+            ? results.find((result) => result.contact.id === focusCall.crmContactId)
+            : null) ??
+          results.find((result) => result.contact.isInCrm !== false) ??
+          null;
+        setCallContext({
+          callId: focusCall.id,
+          loading: false,
+          contact: preferred?.contact ?? wsContact,
+          matchedPhone: preferred?.matchedPhone ?? lookupPhone,
+          openTasksCount: preferred?.openTasksCount ?? 0,
+          nextDueTask: preferred?.nextDueTask ?? null,
+          error: null,
+        });
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setCallContext({
+          callId: focusCall.id,
+          loading: false,
+          contact: wsContact,
+          matchedPhone: null,
+          openTasksCount: 0,
+          nextDueTask: null,
+          error: (err as Error)?.message ?? "CRM lookup failed",
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    focusCall?.id,
+    focusCall?.linkedId,
+    focusCall?.crmContactId,
+    focusCall?.from,
+    focusCall?.to,
+    focusCall?.connectedLine,
+    focusCall?.direction,
+    panelPreviewMode,
+    token,
+  ]);
+
   // ── Loading state ────────────────────────────────────────────────────────────
 
   if (loading && !data) {
     return (
       <div
         className={`${crm.wallboardWorkspace} min-h-screen flex items-center justify-center ${tvMode ? "fixed inset-0 z-50" : ""}`}
-        style={{ background: "var(--crm-bg)" }}
       >
         <div className="text-center text-crm-muted">
           <LayoutGrid className="h-12 w-12 mx-auto mb-3 text-crm-border animate-pulse" />
@@ -1361,7 +2082,6 @@ export default function WallboardPage() {
     return (
       <div
         className={`${crm.wallboardWorkspace} min-h-screen flex items-center justify-center ${tvMode ? "fixed inset-0 z-50" : ""}`}
-        style={{ background: "var(--crm-bg)" }}
       >
         <div className="text-center max-w-sm px-4">
           <AlertCircle className="h-10 w-10 mx-auto mb-3 text-crm-danger" />
@@ -1376,7 +2096,6 @@ export default function WallboardPage() {
   }
 
   const { daily, campaigns, agents, followUps } = data!;
-  const totalUrgent = followUps.callbacks.overdue.count + followUps.tasks.overdue.count;
 
   // Countdown display
   const countdownLabel = loading
@@ -1398,17 +2117,10 @@ export default function WallboardPage() {
     </span>
   );
 
-  const UrgentBadge = totalUrgent > 0 ? (
-    <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-semibold border bg-crm-danger/12 text-crm-danger border-crm-danger/25 shrink-0">
-      <AlertTriangle className="h-3 w-3" />
-      {totalUrgent} urgent
-    </span>
-  ) : null;
-
   // KPI strip shared between normal and TV
   const KpiStrip = ({ isTv }: { isTv: boolean }) => (
     <div className="grid grid-cols-4 sm:grid-cols-8 gap-3">
-      <WallboardKpiTile label="Active Calls"       value={activeCalls.length}         icon={<PhoneCall     className={isTv ? "h-6 w-6" : "h-5 w-5"} />} tv={isTv} />
+      <WallboardKpiTile label="Active Calls"       value={displayedActiveCalls.length}         icon={<PhoneCall     className={isTv ? "h-6 w-6" : "h-5 w-5"} />} tv={isTv} />
       <WallboardKpiTile label="Queue Remaining"    value={daily.queueRemaining}        icon={<Zap           className={isTv ? "h-6 w-6" : "h-5 w-5"} />} href="/crm/queue" tv={isTv} />
       <WallboardKpiTile label="Overdue Callbacks"  value={daily.overdueCallbacks}      icon={<AlertCircle   className={isTv ? "h-6 w-6" : "h-5 w-5"} />} tone="danger" href="/crm/queue?mode=power&filter=overdue" tv={isTv} />
       <WallboardKpiTile label="Due Today (CB)"     value={daily.callbacksDueToday}     icon={<CalendarClock className={isTv ? "h-6 w-6" : "h-5 w-5"} />} tone="warn" href="/crm/queue?mode=power&filter=due" tv={isTv} />
@@ -1422,8 +2134,8 @@ export default function WallboardPage() {
   // Panel grid shared between normal and TV
   const PanelGrid = ({ isTv }: { isTv: boolean }) => (
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-      <LiveCallsPanel     calls={activeCalls} isLive={isLive} tv={isTv} />
-      <AgentActivityPanel agents={agents} activeCalls={activeCalls} tv={isTv} />
+      <LiveCallsPanel     calls={displayedActiveCalls} isLive={isLive} tv={isTv} />
+      <AgentActivityPanel agents={agents} activeCalls={displayedActiveCalls} tv={isTv} />
       <CampaignProgressPanel campaigns={campaigns} tv={isTv} />
       <FollowUpUrgencyPanel  data={followUps} tv={isTv} />
     </div>
@@ -1437,7 +2149,6 @@ export default function WallboardPage() {
     return (
       <div
         className={`fixed inset-0 z-50 overflow-auto ${crm.wallboardWorkspace}`}
-        style={{ background: "var(--crm-bg)" }}
       >
         {/* TV Header */}
         <div className="border-b border-crm-border bg-crm-surface">
@@ -1451,7 +2162,6 @@ export default function WallboardPage() {
                 <h1 className="text-xl font-bold text-crm-text">Live Wallboard</h1>
                 <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                   {LiveBadge}
-                  {UrgentBadge}
                 </div>
               </div>
             </div>
@@ -1512,7 +2222,6 @@ export default function WallboardPage() {
     return (
       <div
         className={`min-h-screen ${crm.wallboardWorkspace}`}
-        style={{ background: "var(--crm-bg)" }}
       >
         <div className="sticky top-0 z-10 border-b border-crm-border bg-crm-surface/95 backdrop-blur-sm">
           <div className="max-w-[1600px] mx-auto px-5 py-4 flex items-center justify-between gap-4">
@@ -1522,7 +2231,6 @@ export default function WallboardPage() {
               </div>
               <h1 className="text-lg font-bold text-crm-text truncate">Live Wallboard</h1>
               {LiveBadge}
-              {UrgentBadge}
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
@@ -1571,76 +2279,66 @@ export default function WallboardPage() {
     (sum, queue) => sum + queue.members.filter((member) => !member.paused && member.status === "idle").length,
     0,
   );
-  const availableAgents = availableAgentsFromQueues || agents.filter((agent) => !findAgentCall(agent.extensions ?? [], activeCalls)).length;
+  const availableAgents = availableAgentsFromQueues || agents.filter((agent) => !findAgentCall(agent.extensions ?? [], displayedActiveCalls)).length;
   const campaignAttempts = campaigns.reduce((sum, campaign) => sum + campaign.totalAttempts, 0);
   const campaignConverted = campaigns.reduce((sum, campaign) => sum + campaign.converted, 0);
   const conversionRate = campaignAttempts > 0 ? (campaignConverted / campaignAttempts) * 100 : 0;
-  const totalCallsToday = Math.max(daily.dispositionsToday, daily.callsLinkedToday + activeCalls.length);
+  const totalCallsToday = Math.max(daily.dispositionsToday, daily.callsLinkedToday + displayedActiveCalls.length);
   const kpiMetrics: WallboardMetric[] = [
     {
       label: "Active Calls",
-      value: activeCalls.length,
+      value: displayedActiveCalls.length,
       sub: isLive ? "Live now" : "Connecting",
-      icon: <PhoneCall className="h-4 w-4" />,
+      icon: PhoneCall,
       tone: "blue",
-      spark: miniSeries(activeCalls.length + 2),
     },
     {
       label: "Available Agents",
       value: availableAgents,
       sub: "Ready to connect",
-      icon: <Users className="h-4 w-4" />,
+      icon: Users,
       tone: "green",
-      spark: miniSeries(availableAgents + 2),
     },
     {
       label: "Calls in Queue",
       value: callsInQueue,
       sub: callsInQueue > 0 ? "Waiting" : "Clear",
-      icon: <Clock className="h-4 w-4" />,
-      tone: "purple",
+      icon: Clock,
+      tone: "violet",
       href: "/crm/queue",
-      spark: miniSeries(callsInQueue + 2),
     },
     {
       label: "Answered Today",
       value: daily.callsLinkedToday,
       sub: `${daily.contactsCreatedToday} contacts`,
-      icon: <CheckCheck className="h-4 w-4" />,
-      tone: "teal",
-      spark: miniSeries(daily.callsLinkedToday + 2),
+      icon: CheckCheck,
+      tone: "cyan",
     },
     {
       label: "Total Calls Today",
       value: totalCallsToday,
       sub: `${daily.dispositionsToday} outcomes`,
-      icon: <PhoneIncoming className="h-4 w-4" />,
-      tone: "orange",
-      spark: miniSeries(totalCallsToday + 2),
+      icon: PhoneIncoming,
+      tone: "amber",
     },
     {
       label: "Avg. Talk Time",
-      value: formatAverageTalkTime(activeCalls),
+      value: formatAverageTalkTime(displayedActiveCalls),
       sub: "Active calls",
-      icon: <Headphones className="h-4 w-4" />,
-      tone: "pink",
-      spark: miniSeries(activeCalls.reduce((sum, call) => sum + call.durationSec, 0) + 2),
+      icon: Headphones,
+      tone: "rose",
     },
     {
       label: "Conversion Rate",
       value: formatPercentValue(conversionRate),
       sub: `${campaignConverted} wins`,
-      icon: <TrendingUp className="h-4 w-4" />,
-      tone: "indigo",
-      spark: miniSeries(Math.round(conversionRate) + 2),
+      icon: TrendingUp,
+      tone: "blue",
     },
   ];
 
   return (
-    <div
-      className={`min-h-screen ${crm.wallboardWorkspace} crm-wallboard-shell`}
-      style={{ background: "var(--crm-bg)" }}
-    >
+    <div className={`min-h-screen ${crm.wallboardWorkspace} crm-wallboard-shell`}>
       <div className="mx-auto flex w-full max-w-[1720px] flex-col gap-4 px-3 py-4 sm:px-5 lg:px-6 xl:px-7">
         <header className="rounded-[1.6rem] border border-crm-border bg-crm-surface px-4 py-4 shadow-crm sm:px-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -1655,7 +2353,6 @@ export default function WallboardPage() {
                     <span className={`h-1.5 w-1.5 rounded-full ${isLive ? "animate-pulse bg-emerald-500" : "bg-amber-500"}`} />
                     {isLive ? "Live" : "Connecting"}
                   </span>
-                  {UrgentBadge}
                 </div>
                 <p className="mt-1 text-sm text-crm-muted">Real-time overview of your team&apos;s performance</p>
               </div>
@@ -1678,37 +2375,54 @@ export default function WallboardPage() {
                 <Maximize2 className="h-4 w-4" />
                 <span className="hidden sm:inline">Fullscreen</span>
               </button>
-              <Link href="/crm/settings" className={crm.btnGhost}>
-                <Settings className="h-4 w-4" />
-              </Link>
             </div>
           </div>
         </header>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
-          {kpiMetrics.map((metric) => <MockupKpiCard key={metric.label} metric={metric} />)}
+        <section className="crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-4 xl:grid-cols-7" aria-label="Wallboard metrics">
+          {kpiMetrics.map((metric) => <WallboardKpiStripTile key={metric.label} metric={metric} />)}
+        </section>
+
+        <div className="crm-wallboard-content-grid">
+          <LiveCallsWorkspaceCard
+            calls={displayedActiveCalls}
+            isLive={isLive}
+            selectedCallId={selectedCallId}
+            onSelectCall={setSelectedCallId}
+          />
+
+          <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.2fr)_minmax(24rem,0.8fr)]">
+            <TeamPerformanceCard agents={agents} activeCalls={displayedActiveCalls} />
+            <LiveActivityFeedCard activeCalls={displayedActiveCalls} data={data!} isLive={isLive} />
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            <CallOutcomesCard daily={daily} />
+            <CallsOverTimeCard total={totalCallsToday} answered={daily.callsLinkedToday} />
+            <TopCampaignsTodayCard campaigns={campaigns} />
+          </div>
+
+          <div className="crm-wallboard-panel-slot">
+            <WallboardLiveCallSidePanel
+              call={focusCall}
+              agent={focusAgent ?? previewAgent}
+              context={callContext.callId === focusCall?.id ? callContext : {
+                callId: focusCall?.id ?? null,
+                loading: false,
+                contact: focusCall ? contactFromLiveCall(focusCall) : null,
+                matchedPhone: null,
+                openTasksCount: 0,
+                nextDueTask: null,
+                error: null,
+              }}
+              queueList={telephony.queueList}
+              isLive={isLive}
+              isPreview={panelPreviewActive}
+              awaitingSelection={displayedActiveCalls.length > 1 && !focusCall}
+            />
+          </div>
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_21rem] 2xl:grid-cols-[minmax(0,1fr)_22rem]">
-          <main className="flex min-w-0 flex-col gap-4">
-            <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.2fr)_minmax(24rem,0.8fr)]">
-              <TeamPerformanceCard agents={agents} activeCalls={activeCalls} />
-              <LiveActivityFeedCard activeCalls={activeCalls} data={data!} isLive={isLive} />
-            </div>
-
-            <LiveCallsWorkspaceCard calls={activeCalls} isLive={isLive} />
-
-            <div className="grid gap-4 lg:grid-cols-3">
-              <CallOutcomesCard daily={daily} />
-              <CallsOverTimeCard total={totalCallsToday} answered={daily.callsLinkedToday} />
-              <TopCampaignsTodayCard campaigns={campaigns} />
-            </div>
-          </main>
-
-          <WallboardRightRail data={data!} activeCalls={activeCalls} />
-        </div>
-
-        <BottomShortcutStrip />
       </div>
     </div>
   );
