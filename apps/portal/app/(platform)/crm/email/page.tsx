@@ -8,6 +8,7 @@ import {
   ArrowRight,
   BarChart3,
   CheckCircle2,
+  ExternalLink,
   FileText,
   Inbox,
   Loader2,
@@ -15,13 +16,24 @@ import {
   MessageCircle,
   Send,
   Settings,
-  Sparkles,
   ShieldCheck,
   Clock3,
   WifiOff,
-  X,
+  type LucideIcon,
 } from "lucide-react";
-import { CRMPageShell, CRMCard, crm, cn } from "../../../../components/crm";
+import {
+  CRMPageShell,
+  CRMPageHeader,
+  CRMWorkspaceShell,
+  CRMWorkspaceChrome,
+  CRMWorkspaceHeader,
+  CRMWorkspaceToolbar,
+  CRMWorkspaceBody,
+  CRMWorkspaceMain,
+  CRMWorkspaceScrollRegion,
+  crm,
+  cn,
+} from "../../../../components/crm";
 import { PermissionGate } from "../../../../components/PermissionGate";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { apiGet, apiPost } from "../../../../services/apiClient";
@@ -47,7 +59,6 @@ type ReplyTrackingDiag = {
   autoSyncIntervalMs: number;
 };
 
-
 type RecentSent = {
   id: string;
   toEmail: string;
@@ -56,6 +67,7 @@ type RecentSent = {
   errorMessage: string | null;
   sentAt: string;
   contactId: string | null;
+  gmailMessageId?: string | null;
 };
 
 type RecentReply = {
@@ -71,8 +83,121 @@ type RecentReply = {
   contactId: string | null;
 };
 
+const DEV_PREVIEW_ENABLED = process.env.NODE_ENV === "development";
+
+function minutesAgo(minutes: number): string {
+  return new Date(Date.now() - minutes * 60_000).toISOString();
+}
+
+const DEV_PREVIEW_CONN: EmailConnection = {
+  connected: true,
+  emailAddress: "alex@connectcomms.example",
+  displayName: "Alex Morgan",
+  replyTrackingEnabled: true,
+};
+
+const DEV_PREVIEW_REPLIES: RecentReply[] = [
+  {
+    id: "preview-reply-1",
+    gmailMessageId: "preview-message-1",
+    gmailThreadId: "thread-a:r9146529078213651041",
+    subject: "Re: Funding application next steps",
+    fromEmail: "jordan@northstar.example",
+    toEmail: "alex@connectcomms.example",
+    previewSnippet: "Thanks for sending this over. Friday afternoon works for a quick follow-up call.",
+    replyText: "Thanks for sending this over. Friday afternoon works for a quick follow-up call.",
+    receivedAt: minutesAgo(28),
+    contactId: null,
+  },
+  {
+    id: "preview-reply-2",
+    gmailMessageId: "preview-message-2",
+    gmailThreadId: null,
+    subject: "Re: Updated offer summary",
+    fromEmail: "maria@harbor-retail.example",
+    toEmail: "alex@connectcomms.example",
+    previewSnippet: "Can you send the shorter version to my partner before we decide?",
+    replyText: "Can you send the shorter version to my partner before we decide?",
+    receivedAt: minutesAgo(94),
+    contactId: null,
+  },
+  {
+    id: "preview-reply-3",
+    gmailMessageId: "preview-message-3",
+    gmailThreadId: "thread-a:r7284065119736402218",
+    subject: "Re: Checking in after your call",
+    fromEmail: "sam@greenfield.example",
+    toEmail: "alex@connectcomms.example",
+    previewSnippet: "Looks good. Please keep me posted once underwriting has the package.",
+    replyText: "Looks good. Please keep me posted once underwriting has the package.",
+    receivedAt: minutesAgo(210),
+    contactId: null,
+  },
+];
+
+const DEV_PREVIEW_SENT: RecentSent[] = [
+  {
+    id: "preview-sent-1",
+    toEmail: "jordan@northstar.example",
+    subject: "Funding application next steps",
+    status: "SENT",
+    errorMessage: null,
+    sentAt: minutesAgo(65),
+    contactId: null,
+    gmailMessageId: "preview-sent-message-1",
+  },
+  {
+    id: "preview-sent-2",
+    toEmail: "maria@harbor-retail.example",
+    subject: "Updated offer summary",
+    status: "SENT",
+    errorMessage: null,
+    sentAt: minutesAgo(138),
+    contactId: null,
+    gmailMessageId: "preview-sent-message-2",
+  },
+  {
+    id: "preview-sent-3",
+    toEmail: "sam@greenfield.example",
+    subject: "Checking in after your call",
+    status: "SENT",
+    errorMessage: null,
+    sentAt: minutesAgo(260),
+    contactId: null,
+    gmailMessageId: "preview-sent-message-3",
+  },
+  {
+    id: "preview-sent-4",
+    toEmail: "lee@crescent.example",
+    subject: "Documents needed for review",
+    status: "FAILED",
+    errorMessage: "Mailbox rejected the recipient address.",
+    sentAt: minutesAgo(390),
+    contactId: null,
+    gmailMessageId: null,
+  },
+];
+
+const DEV_PREVIEW_DIAG: ReplyTrackingDiag = {
+  trackedThreads: 18,
+  inboundReplies: 7,
+  outboundMessages: 42,
+  legacyThreadsWithNullSender: 0,
+  connectionsTotal: 1,
+  connectionsEnabled: 1,
+  connectionsDisabled: 0,
+  connectionsMissingScope: 0,
+  lastSyncAt: minutesAgo(11),
+  autoSyncEnabled: true,
+  autoSyncIntervalMs: 300_000,
+};
+
 function formatWhen(iso: string): string {
-  try { return new Date(iso).toLocaleString(); } catch { return iso; }
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
 }
 
 function formatCompactWhen(iso: string): string {
@@ -88,75 +213,6 @@ function formatCompactWhen(iso: string): string {
   }
 }
 
-function initialsFor(conn: EmailConnection | null): string {
-  const source = conn?.displayName || conn?.emailAddress || "Email";
-  const parts = source
-    .replace(/@.*/, "")
-    .split(/\s+|[._-]+/)
-    .filter(Boolean);
-  return (parts[0]?.[0] || "E").toUpperCase() + (parts[1]?.[0] || "").toUpperCase();
-}
-
-function EmptyRepliesState() {
-  return (
-    <div className="crm-email-empty flex min-h-[7rem] flex-col items-center justify-center px-4 py-4 text-center">
-      <span className={cn(crm.emailIconWell, "crm-email-empty-icon mb-2 h-10 w-10 text-crm-accent")}>
-        <MessageCircle className="h-4 w-4" />
-      </span>
-      <h3 className="text-base font-bold tracking-tight text-crm-text">No replies synced</h3>
-      <p className="mt-1.5 max-w-[19rem] text-xs leading-relaxed text-crm-muted">
-        Enable reply tracking in Settings, then sync now to fetch metadata.
-      </p>
-      <Link href="/crm/email/settings" className={cn(crm.btnPrimary, "crm-email-sync-cta mt-3")}>
-        Sync now
-      </Link>
-    </div>
-  );
-}
-
-function EmptySentState() {
-  return (
-    <div className="crm-email-empty px-4 py-8 text-center">
-      <span className={cn(crm.emailIconWell, "mx-auto mb-3 h-12 w-12 text-crm-accent")}>
-        <Send className="h-5 w-5" />
-      </span>
-      <p className="text-sm font-bold text-crm-text">No outbound sends</p>
-      <p className="mt-1 text-xs leading-relaxed text-crm-muted">
-        Open a contact and send CRM email to begin outreach.
-      </p>
-    </div>
-  );
-}
-
-function KpiCard({
-  label,
-  value,
-  detail,
-  icon,
-  accent,
-}: {
-  label: string;
-  value: string | number;
-  detail: string;
-  icon: ReactNode;
-  accent: "blue" | "green" | "violet" | "rose";
-}) {
-  return (
-    <div className={cn(crm.emailKpiCard, `crm-email-kpi-${accent}`)}>
-      <div className="relative z-[1] flex h-full flex-col gap-3">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="crm-email-kpi-label text-[0.68rem] font-bold uppercase tracking-wider text-crm-muted">{label}</p>
-            <p className="crm-email-kpi-value mt-2 text-3xl font-bold tracking-tight text-crm-text">{value}</p>
-          </div>
-          <span className={cn(crm.emailIconWell, "crm-email-kpi-icon h-11 w-11")}>{icon}</span>
-        </div>
-        <p className="mt-auto text-xs font-medium leading-relaxed text-crm-muted">{detail}</p>
-      </div>
-    </div>
-  );
-}
-
 function formatRelative(iso: string | null | undefined): string {
   if (!iso) return "never";
   try {
@@ -167,7 +223,195 @@ function formatRelative(iso: string | null | undefined): string {
     const hrs = Math.floor(mins / 60);
     if (hrs < 24) return `${hrs}h ago`;
     return `${Math.floor(hrs / 24)}d ago`;
-  } catch { return iso; }
+  } catch {
+    return iso;
+  }
+}
+
+function gmailInboxUrl(): string {
+  return "https://mail.google.com/mail/u/0/#inbox";
+}
+
+function gmailThreadUrl(threadId: string): string {
+  const safeThreadId = threadId.replace(/[<>"']/g, "");
+  return `https://mail.google.com/mail/u/0/#inbox/${safeThreadId}`;
+}
+
+function gmailSearchUrl(params: { to?: string | null; from?: string | null; subject?: string | null }): string {
+  const parts: string[] = [];
+  if (params.from) parts.push(`from:${params.from}`);
+  if (params.to) parts.push(`to:${params.to}`);
+  if (params.subject) {
+    const safeSubject = params.subject.replace(/"/g, "").trim();
+    if (safeSubject) parts.push(`subject:"${safeSubject}"`);
+  }
+  const query = parts.length > 0 ? parts.join(" ") : "in:sent";
+  return `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(query)}`;
+}
+
+function resolveReplyGmailHref(message: RecentReply): string {
+  if (message.gmailThreadId) return gmailThreadUrl(message.gmailThreadId);
+  return gmailSearchUrl({ from: message.fromEmail, subject: message.subject });
+}
+
+function resolveSentGmailHref(message: RecentSent): string {
+  return gmailSearchUrl({ to: message.toEmail, subject: message.subject });
+}
+
+function EmailKpiTile({
+  label,
+  value,
+  hint,
+  icon: Icon,
+  tone,
+  loading,
+}: {
+  label: string;
+  value: string | number;
+  hint: string;
+  icon: LucideIcon;
+  tone: "blue" | "green" | "violet" | "rose" | "cyan" | "amber";
+  loading?: boolean;
+}) {
+  return (
+    <div className={cn(crm.queueCountPill, `crm-queue-kpi-${tone}`, "relative overflow-hidden bg-crm-surface-2")}>
+      <span className="flex w-full items-start justify-between gap-3">
+        <span className="min-w-0">
+          <span className="crm-queue-kpi-label block text-[10px] font-bold uppercase tracking-wide text-crm-muted">
+            {label}
+          </span>
+          {loading ? (
+            <span className="crm-queue-kpi-value mt-1 block h-7 w-12 animate-pulse rounded bg-crm-surface-2" />
+          ) : (
+            <span className="crm-queue-kpi-value mt-1 block text-2xl font-bold tabular-nums leading-none tracking-tight text-crm-text">
+              {value}
+            </span>
+          )}
+        </span>
+        <span className="crm-queue-kpi-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface/70 text-crm-accent">
+          <Icon className="h-4 w-4" />
+        </span>
+      </span>
+      <span className="crm-queue-kpi-micro text-[10px] font-medium text-crm-muted">{hint}</span>
+    </div>
+  );
+}
+
+function GmailLinkButton({
+  href,
+  label,
+  compact = false,
+}: {
+  href: string;
+  label: string;
+  compact?: boolean;
+}) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={cn(
+        compact ? "crm-email-gmail-link-compact" : "crm-email-gmail-link",
+        "inline-flex items-center gap-1.5 rounded-crm border border-crm-border/70 bg-crm-surface-2/60 text-xs font-bold text-crm-text transition hover:border-crm-accent/35 hover:bg-crm-accent/5 hover:text-crm-accent",
+        compact ? "px-2 py-1" : "px-2.5 py-1.5",
+      )}
+    >
+      <Mail className="h-3 w-3" />
+      {label}
+      <ExternalLink className="h-3 w-3 opacity-70" />
+    </a>
+  );
+}
+
+function EmptyRepliesState({
+  connected,
+  canEmailSettings,
+}: {
+  connected: boolean;
+  canEmailSettings: boolean;
+}) {
+  return (
+    <div className="crm-email-empty tasks-empty-state flex min-h-[12rem] flex-col items-center justify-center px-6 py-8 text-center">
+      <span className="crm-email-empty-icon mb-3 flex h-11 w-11 items-center justify-center rounded-crm border border-crm-border/60 bg-crm-surface-2 text-crm-accent">
+        <MessageCircle className="h-5 w-5" />
+      </span>
+      <h3 className="text-base font-semibold text-crm-text">No replies synced yet</h3>
+      <p className="mt-2 max-w-sm text-sm leading-relaxed text-crm-muted">
+        Connect tracks reply metadata only - conversations stay in Gmail. Enable reply tracking, then sync to see activity here.
+      </p>
+      <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+        {canEmailSettings ? (
+          <Link href="/crm/email/settings" className="campaigns-btn-secondary inline-flex items-center gap-2">
+            <Settings className="h-4 w-4" />
+            Email settings
+          </Link>
+        ) : null}
+        {connected ? (
+          <a href={gmailInboxUrl()} target="_blank" rel="noopener noreferrer" className="campaigns-btn-primary inline-flex items-center gap-2">
+            <Mail className="h-4 w-4" />
+            Open Gmail
+          </a>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function EmptySentState() {
+  return (
+    <div className="crm-email-empty tasks-empty-state flex min-h-[12rem] flex-col items-center justify-center px-6 py-8 text-center">
+      <span className="crm-email-empty-icon mb-3 flex h-11 w-11 items-center justify-center rounded-crm border border-crm-border/60 bg-crm-surface-2 text-crm-accent">
+        <Send className="h-5 w-5" />
+      </span>
+      <h3 className="text-base font-semibold text-crm-text">No outbound sends yet</h3>
+      <p className="mt-2 max-w-sm text-sm leading-relaxed text-crm-muted">
+        Send CRM email from a contact record to start outreach. Connect logs send metadata - replies happen in Gmail.
+      </p>
+      <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+        <Link href="/crm/contacts" className="campaigns-btn-secondary inline-flex items-center gap-2">
+          Open contacts
+        </Link>
+        <Link href="/crm/email/templates" className="campaigns-btn-secondary inline-flex items-center gap-2">
+          <FileText className="h-4 w-4" />
+          Templates
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function EmptyConnectionState({
+  canEmailSettings,
+  connectBusy,
+  onConnect,
+}: {
+  canEmailSettings: boolean;
+  connectBusy: boolean;
+  onConnect: () => void;
+}) {
+  return (
+    <div className="crm-email-empty tasks-empty-state flex min-h-[8rem] flex-col items-center justify-center px-6 py-6 text-center sm:min-h-0 sm:flex-row sm:items-center sm:justify-between sm:text-left">
+      <div className="min-w-0">
+        <h3 className="text-sm font-semibold text-crm-text">Email channel not connected</h3>
+        <p className="mt-1 max-w-xl text-sm leading-relaxed text-crm-muted">
+          Connect Google to send CRM email and optionally track reply metadata. Connect does not store your inbox.
+        </p>
+      </div>
+      <div className="mt-4 flex shrink-0 flex-wrap items-center gap-2 sm:mt-0">
+        {canEmailSettings ? (
+          <Link href="/crm/email/settings" className="campaigns-btn-primary inline-flex items-center gap-2">
+            Connect Google
+          </Link>
+        ) : (
+          <button type="button" disabled={connectBusy} onClick={onConnect} className="campaigns-btn-primary inline-flex items-center gap-2">
+            {connectBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            Connect Google
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function ReplyTrackingHealthBanner({
@@ -183,7 +427,6 @@ function ReplyTrackingHealthBanner({
 }) {
   if (loading || !conn?.connected) return null;
 
-  // Show warning when no connection has reply tracking enabled
   const noTracking = diag !== null && diag.connectionsEnabled === 0;
   const missingScope = diag !== null && diag.connectionsMissingScope > 0;
 
@@ -193,28 +436,115 @@ function ReplyTrackingHealthBanner({
     <div className="flex flex-wrap items-start gap-3 rounded-crm-lg border border-crm-warning/40 bg-crm-warning/10 px-4 py-3">
       <WifiOff className="mt-0.5 h-4 w-4 shrink-0 text-crm-warning" />
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold text-crm-text">Reply tracking not active</p>
-        <p className="mt-0.5 text-xs text-crm-muted">
+        <p className="text-sm font-semibold text-crm-text">Reply tracking needs attention</p>
+        <p className="mt-0.5 text-xs leading-relaxed text-crm-muted">
           {missingScope
-            ? `${diag!.connectionsMissingScope} sender${diag!.connectionsMissingScope !== 1 ? "s" : ""} need${diag!.connectionsMissingScope === 1 ? "s" : ""} to be reconnected to grant the gmail.readonly scope. `
+            ? `${diag!.connectionsMissingScope} sender${diag!.connectionsMissingScope !== 1 ? "s" : ""} need${diag!.connectionsMissingScope === 1 ? "s" : ""} to be reconnected for Gmail read access. `
             : ""}
-          {noTracking && !missingScope
-            ? "Reply tracking is disabled on all connected senders. "
-            : ""}
-          Replies will not be synced until reply tracking is enabled.
+          {noTracking && !missingScope ? "Reply tracking is off for all connected senders. " : ""}
+          Reply metadata will not sync until this is fixed. Conversations still happen in Gmail.
         </p>
       </div>
       {showSettingsLink ? (
-        <Link href="/crm/email/settings" className={cn(crm.btnPrimary, "shrink-0 text-xs")}>
-          <Settings className="h-3.5 w-3.5" /> Fix in Settings
+        <Link href="/crm/email/settings" className="campaigns-btn-secondary shrink-0 inline-flex items-center gap-1.5 text-xs">
+          <Settings className="h-3.5 w-3.5" />
+          Fix in settings
         </Link>
       ) : null}
     </div>
   );
 }
 
+function EmailStatusRow({
+  connected,
+  loading,
+  senderEmail,
+  senderName,
+  replyTrackingActive,
+  lastSyncAt,
+}: {
+  connected: boolean;
+  loading: boolean;
+  senderEmail: string;
+  senderName: string;
+  replyTrackingActive: boolean;
+  lastSyncAt: string | null;
+}) {
+  return (
+    <section className="crm-email-status-row grid gap-3 md:grid-cols-3" aria-label="Email channel status">
+      <div className="crm-email-status-card rounded-crm-lg border border-crm-border/70 bg-crm-surface px-4 py-3">
+        <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Gmail connection</p>
+        <div className="mt-2 flex items-center gap-2">
+          {loading ? (
+            <Loader2 className="h-4 w-4 animate-spin text-crm-muted" />
+          ) : (
+            <span className={connected ? crm.statusDotLive : crm.statusDotWarn} />
+          )}
+          <p className="text-sm font-semibold text-crm-text">
+            {loading ? "Checking..." : connected ? "Connected" : "Not connected"}
+          </p>
+        </div>
+        <p className="mt-1 truncate text-xs text-crm-muted">{connected ? senderEmail : "Connect Google to send CRM email"}</p>
+      </div>
+
+      <div className="crm-email-status-card rounded-crm-lg border border-crm-border/70 bg-crm-surface px-4 py-3">
+        <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Reply tracking</p>
+        <div className="mt-2 flex items-center gap-2">
+          <ShieldCheck className={cn("h-4 w-4", replyTrackingActive ? "text-crm-success" : "text-crm-warning")} />
+          <p className="text-sm font-semibold text-crm-text">
+            {loading ? "Checking..." : replyTrackingActive ? "Active" : connected ? "Disabled" : "Unavailable"}
+          </p>
+        </div>
+        <p className="mt-1 text-xs text-crm-muted">
+          {replyTrackingActive ? "Metadata sync enabled" : "Enable in settings to track replies"}
+        </p>
+      </div>
+
+      <div className="crm-email-status-card rounded-crm-lg border border-crm-border/70 bg-crm-surface px-4 py-3">
+        <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Sender account</p>
+        <div className="mt-2 flex items-center gap-2">
+          <Mail className="h-4 w-4 text-crm-accent" />
+          <p className="truncate text-sm font-semibold text-crm-text">{loading ? "..." : senderName}</p>
+        </div>
+        <p className="mt-1 text-xs text-crm-muted">
+          Last sync {formatRelative(lastSyncAt)}
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function ActivityPanel({
+  title,
+  icon,
+  action,
+  children,
+  className,
+}: {
+  title: string;
+  icon: ReactNode;
+  action?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={cn("crm-email-activity-card crm-queue-list-panel flex min-h-[20rem] min-w-0 flex-col", className)}>
+      <div className="crm-email-activity-head flex items-center justify-between gap-3 border-b border-crm-border/60 px-4 py-3">
+        <h3 className="flex min-w-0 items-center gap-2 text-sm font-bold tracking-tight text-crm-text">
+          <span className="crm-email-card-title-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-crm border border-crm-border/60 bg-crm-surface-2 text-crm-accent">
+            {icon}
+          </span>
+          {title}
+        </h3>
+        {action}
+      </div>
+      <div className="crm-email-panel-scroll custom-scrollbar min-h-0 flex-1 overflow-y-auto p-4">{children}</div>
+    </section>
+  );
+}
+
 export default function CrmEmailLandingPage() {
-  const { can, tenantId, user } = useAppContext();
+  const { can } = useAppContext();
   const canEmailSettings = can("can_view_crm_settings");
   const [conn, setConn] = useState<EmailConnection | null>(null);
   const [connectBusy, setConnectBusy] = useState(false);
@@ -223,9 +553,6 @@ export default function CrmEmailLandingPage() {
   const [diag, setDiag] = useState<ReplyTrackingDiag | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMoreSent, setLoadingMoreSent] = useState(false);
-  const [senderCardHidden, setSenderCardHidden] = useState(false);
-
-  const senderCardHiddenKey = `crm-email:sender-card-hidden:${tenantId}:${user.id}`;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -247,22 +574,9 @@ export default function CrmEmailLandingPage() {
     }
   }, [canEmailSettings]);
 
-  useEffect(() => { void load(); }, [load]);
-
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    setSenderCardHidden(window.localStorage.getItem(senderCardHiddenKey) === "1");
-  }, [senderCardHiddenKey]);
-
-  const hideSenderCard = () => {
-    setSenderCardHidden(true);
-    if (typeof window !== "undefined") window.localStorage.setItem(senderCardHiddenKey, "1");
-  };
-
-  const showSenderCard = () => {
-    setSenderCardHidden(false);
-    if (typeof window !== "undefined") window.localStorage.removeItem(senderCardHiddenKey);
-  };
+    void load();
+  }, [load]);
 
   const startUserOAuth = async () => {
     setConnectBusy(true);
@@ -288,360 +602,288 @@ export default function CrmEmailLandingPage() {
     }
   }, []);
 
-  const connected = Boolean(conn?.connected);
-  const senderName = connected ? conn?.displayName || conn?.emailAddress || "Connected sender" : "Email channel not connected";
-  const senderEmail = conn?.emailAddress || "Connect Google in Settings";
-  const sentCount = recent.length;
-  const deliveredCount = recent.filter((message) => message.status === "SENT").length;
-  const failedCount = recent.filter((message) => message.status === "FAILED").length;
-  const replyCount = replies.length;
+  const showPreviewData = DEV_PREVIEW_ENABLED && !loading && recent.length === 0 && replies.length === 0;
+  const displayedConn = showPreviewData && !conn?.connected ? DEV_PREVIEW_CONN : conn;
+  const displayedDiag = showPreviewData ? DEV_PREVIEW_DIAG : diag;
+  const displayedRecent = showPreviewData ? DEV_PREVIEW_SENT : recent;
+  const displayedReplies = showPreviewData ? DEV_PREVIEW_REPLIES : replies;
+
+  const connected = Boolean(displayedConn?.connected);
+  const senderName = connected ? displayedConn?.displayName || displayedConn?.emailAddress || "Connected sender" : "Not connected";
+  const senderEmail = displayedConn?.emailAddress || "Connect Google in Settings";
+  const sentCount = displayedRecent.length;
+  const deliveredCount = displayedRecent.filter((message) => message.status === "SENT").length;
+  const failedCount = displayedRecent.filter((message) => message.status === "FAILED").length;
+  const replyCount = displayedReplies.length;
   const replyRate = sentCount > 0 ? Math.round((replyCount / sentCount) * 100) : 0;
+  const replyTrackingActive = Boolean(
+    connected && (displayedConn?.replyTrackingEnabled || (displayedDiag?.connectionsEnabled ?? 0) > 0),
+  );
   const lastActivity =
-    replies[0]?.receivedAt
-      ? { when: replies[0].receivedAt, label: "Latest tracked reply metadata" }
-      : recent[0]?.sentAt
-        ? { when: recent[0].sentAt, label: "Latest outbound CRM email" }
+    displayedReplies[0]?.receivedAt
+      ? { when: displayedReplies[0].receivedAt, label: showPreviewData ? "Preview tracked reply metadata" : "Latest tracked reply metadata" }
+      : displayedRecent[0]?.sentAt
+        ? { when: displayedRecent[0].sentAt, label: showPreviewData ? "Preview outbound CRM email" : "Latest outbound CRM email" }
         : null;
 
   return (
     <PermissionGate permission="can_view_crm_email" fallback={<div className="state-box">You do not have CRM Email access.</div>}>
-    <CRMPageShell className={crm.emailWorkspace} innerClassName={crm.pageInnerEmail}>
-      <section className={crm.emailHero}>
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div className="flex min-w-0 items-center gap-4">
-            <span className={cn(crm.emailIconWell, "crm-email-hero-icon h-12 w-12 text-crm-accent")}>
-              <Mail className="h-5 w-5" />
-            </span>
-            <div className="min-w-0">
-              <h1 className="crm-email-title text-2xl font-bold tracking-tight text-crm-text">CRM Email</h1>
-              <p className="crm-email-subtitle mt-1 text-sm leading-relaxed text-crm-muted">
-                Metadata-first email operations. Connect never archives your inbox.
-              </p>
-            </div>
-          </div>
-          <div className="crm-email-hero-actions flex flex-wrap items-center gap-2">
-            <Link href="/crm/email/templates" className={cn(crm.btnSecondary, "crm-email-btn-secondary")}>
-              <FileText className="h-4 w-4" /> Templates
-            </Link>
-            {canEmailSettings ? (
-              <Link href="/crm/email/settings" className={cn(crm.btnPrimary, "crm-email-btn-primary")}>
-                <Settings className="h-4 w-4" /> Settings
-              </Link>
-            ) : null}
-          </div>
-        </div>
-      </section>
-
-      <ReplyTrackingHealthBanner conn={conn} diag={diag} loading={loading} showSettingsLink={canEmailSettings} />
-
-      <section className="crm-email-kpi-strip grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard
-          label="Sent"
-          value={loading ? "..." : sentCount}
-          detail={failedCount > 0 ? `${failedCount} failed in recent activity` : "Live from recent CRM sends"}
-          icon={<Send className="h-5 w-5" />}
-          accent="blue"
-        />
-        <KpiCard
-          label="Delivered"
-          value={loading ? "..." : deliveredCount}
-          detail={sentCount > 0 ? `${Math.round((deliveredCount / sentCount) * 100)}% of recent sends` : "No recent delivery metadata"}
-          icon={<CheckCircle2 className="h-5 w-5" />}
-          accent="green"
-        />
-        <KpiCard
-          label="Replies"
-          value={loading ? "..." : replyCount}
-          detail={replyCount > 0 ? "Tracked reply metadata visible" : "No replies from recent sync"}
-          icon={<MessageCircle className="h-5 w-5" />}
-          accent="violet"
-        />
-        <KpiCard
-          label="Reply rate"
-          value={loading ? "..." : `${replyRate}%`}
-          detail={sentCount > 0 ? "Replies divided by recent sends" : "Awaiting recent send volume"}
-          icon={<BarChart3 className="h-5 w-5" />}
-          accent="rose"
-        />
-      </section>
-
-      {senderCardHidden ? (
-        <CRMCard padding="md" className={cn(crm.emailPanel, "crm-email-sender-compact")}>
-          <div className="relative z-[1] flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
-              <p className="text-sm font-bold text-crm-text">
-                {connected ? "Google sender connected" : "Email channel not connected"}
-              </p>
-              <p className="mt-1 text-xs leading-relaxed text-crm-muted">
-                {connected
-                  ? "Sender details are hidden on this device."
-                  : "Connect Google to enable CRM sending and reply tracking."}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {canEmailSettings ? (
-                <Link href="/crm/email/settings" className={cn(connected ? crm.btnSecondary : crm.btnPrimary, "crm-email-manage-btn")}>
-                  {connected ? "Manage sender" : "Connect Google"}
-                </Link>
-              ) : (
-                <button
-                  type="button"
-                  disabled={connectBusy || connected}
-                  onClick={() => void startUserOAuth()}
-                  className={cn(connected ? crm.btnSecondary : crm.btnPrimary, "crm-email-manage-btn")}
-                >
-                  {connectBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                  {connected ? "Google connected" : "Connect Google"}
-                </button>
-              )}
-              <button type="button" onClick={showSenderCard} className={cn(crm.btnSecondary, "crm-email-btn-secondary")}>
-                Show details
-              </button>
-            </div>
-          </div>
-        </CRMCard>
-      ) : null}
-
-      <div className="crm-email-workspace-grid grid gap-4 lg:grid-cols-[minmax(0,1.08fr)_minmax(22rem,0.92fr)]">
-        <CRMCard padding="none" className={cn(crm.emailPanel, "crm-email-replies-card")}>
-          <div className="crm-email-activity-panel relative z-[1] flex min-h-[18rem] flex-col p-3.5 sm:p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <h3 className="flex items-center gap-2 text-sm font-bold tracking-tight text-crm-text">
-                <span className={cn(crm.emailIconWell, "crm-email-card-title-icon h-8 w-8 text-crm-accent")}>
-                  <Inbox className="h-4 w-4" />
-                </span>
-                Recent replies
-              </h3>
-              {canEmailSettings ? (
-                <Link href="/crm/email/settings" className="crm-email-action-link inline-flex items-center gap-1 text-xs font-bold text-crm-accent">
-                  Reply tracking <ArrowRight className="h-3 w-3" />
-                </Link>
-              ) : null}
-            </div>
-            <div className="crm-email-panel-scroll custom-scrollbar min-h-0 flex-1 overflow-y-auto pr-1">
-              {loading ? (
-                <div className="flex items-center gap-2 text-sm text-crm-muted"><Loader2 className="h-4 w-4 animate-spin" /> Loading replies...</div>
-              ) : replies.length === 0 ? (
-                <EmptyRepliesState />
-              ) : (
-                <ul className="m-0 flex list-none flex-col gap-2 p-0">
-                  {replies.map((message) => (
-                    <li key={message.id} className="crm-email-reply-row rounded-crm border border-crm-border/65 bg-crm-surface-2/35 px-3.5 py-3">
-                      <div className="flex items-start gap-3">
-                        <span className={cn(crm.statusDotSync, "mt-2")} />
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-bold text-crm-text">{message.subject || "(no subject)"}</p>
-                          <p className="mt-1 truncate text-xs text-crm-muted">
-                            {message.contactId ? (
-                              <Link href={`/crm/contacts/${message.contactId}`} className="text-crm-accent">
-                                {message.fromEmail || "(unknown)"}
-                              </Link>
-                            ) : (message.fromEmail || "(unknown)")}
-                            {message.receivedAt ? ` · ${formatCompactWhen(message.receivedAt)}` : null}
-                          </p>
-                          {message.replyText || message.previewSnippet ? (
-                            <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-crm-text">
-                              <span className="font-bold text-crm-muted">Reply: </span>
-                              {message.replyText || message.previewSnippet}
-                            </p>
-                          ) : null}
-                        </div>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
-        </CRMCard>
-
-        <CRMCard padding="none" className={cn(crm.emailPanel, "crm-email-sent-card")}>
-          <div className="crm-email-activity-panel relative z-[1] flex min-h-[18rem] flex-col p-3.5 sm:p-4">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <h3 className="flex items-center gap-2 text-sm font-bold tracking-tight text-crm-text">
-                <span className={cn(crm.emailIconWell, "crm-email-card-title-icon h-8 w-8 text-crm-accent")}>
-                  <Send className="h-4 w-4" />
-                </span>
-                Recent sent
-              </h3>
-              <Link href="/crm/email/templates" className="crm-email-action-link inline-flex items-center gap-1 text-xs font-bold text-crm-accent">
-                Templates <ArrowRight className="h-3 w-3" />
-              </Link>
-            </div>
-            <div className="crm-email-panel-scroll custom-scrollbar min-h-0 flex-1 overflow-y-auto pr-1">
-              {loading ? (
-                <div className="flex items-center gap-2 text-sm text-crm-muted"><Loader2 className="h-4 w-4 animate-spin" /> Loading sends...</div>
-              ) : recent.length === 0 ? (
-                <EmptySentState />
-              ) : (
-                <ul className="m-0 flex list-none flex-col divide-y divide-crm-border/55 p-0">
-                  {recent.map((message) => (
-                    <li key={message.id} className="crm-email-sent-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-2.5 first:pt-0">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-bold leading-tight text-crm-text">{message.subject || "(no subject)"}</p>
-                        <p className="mt-1 truncate text-xs text-crm-muted">
-                          {message.contactId ? (
-                            <Link href={`/crm/contacts/${message.contactId}`} className="text-crm-accent">
-                              {message.toEmail}
-                            </Link>
-                          ) : message.toEmail}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-3">
-                        <span className="hidden text-[11px] font-medium text-crm-muted sm:inline">{formatCompactWhen(message.sentAt)}</span>
-                        <span
-                          className={cn(
-                            "crm-email-status-badge inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-wide",
-                            message.status === "SENT" ? "crm-email-status-sent text-crm-success" : "crm-email-status-failed text-crm-danger",
-                          )}
-                          title={message.errorMessage || undefined}
-                        >
-                          {message.status === "SENT" ? <CheckCircle2 className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
-                          {message.status}
-                        </span>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            {!loading && recent.length > 0 ? (
-              <button
-                type="button"
-                onClick={() => void loadMoreSent()}
-                disabled={loadingMoreSent}
-                className="crm-email-view-all mt-3 inline-flex items-center justify-center gap-1.5 border-t border-crm-border/60 pt-3 text-xs font-bold text-crm-accent disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {loadingMoreSent ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-                View all sent emails <ArrowRight className="h-3 w-3" />
-              </button>
-            ) : null}
-          </div>
-        </CRMCard>
-      </div>
-
-      {!senderCardHidden ? (
-        <CRMCard padding="none" className={cn(crm.emailPanel, "crm-email-sender-card")}>
-          <div className="crm-email-card-glow" />
-          <div className="relative z-[1] grid min-h-[10.75rem] gap-0 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.36fr)]">
-            <div className="flex min-w-0 flex-col justify-between gap-4 p-4 sm:p-5">
-              <div>
-                <div className="flex items-start justify-between gap-3">
-                  <p className={cn(crm.label, "crm-email-section-label")}>Sender infrastructure</p>
-                  <button
-                    type="button"
-                    onClick={hideSenderCard}
-                    className="crm-email-dismiss-btn inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-crm-border/70 bg-crm-surface-2/45 text-crm-muted transition hover:border-crm-border hover:text-crm-text"
-                    aria-label="Hide sender infrastructure card"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-                <div className="mt-4 flex min-w-0 items-start gap-4">
-                  <span className="crm-email-avatar flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-base font-bold">
-                    {initialsFor(conn)}
-                  </span>
-                  <div className="min-w-0">
-                    <h2 className="break-words text-xl font-bold tracking-tight text-crm-text">{senderName}</h2>
-                    <p className="mt-1 max-w-2xl text-sm leading-relaxed text-crm-muted">
-                      {connected
-                        ? "CRM contact pages can send through the connected Google account while reply metadata stays scoped to CRM."
-                        : "Connect a Google account in Settings to unlock CRM sending and reply tracking."}
-                    </p>
-                    <span
-                      className={cn(
-                        "crm-email-status-pill mt-3 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide",
-                        loading
-                          ? "border-crm-accent/35 bg-crm-accent/10 text-crm-accent"
-                          : connected
-                            ? "border-crm-success/35 bg-crm-success/10 text-crm-success"
-                            : "border-crm-warning/35 bg-crm-warning/10 text-crm-warning",
-                      )}
-                    >
-                      {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <span className={connected ? crm.statusDotLive : crm.statusDotWarn} />}
-                      {loading ? "Checking" : connected ? "Connected" : "Disconnected"}
-                    </span>
+      <CRMPageShell className={crm.emailWorkspace} innerClassName={crm.pageInnerEmail}>
+        <CRMWorkspaceShell>
+          <CRMWorkspaceChrome>
+            <CRMWorkspaceHeader>
+              <CRMPageHeader
+                compact
+                icon={<Mail className="h-6 w-6" aria-hidden />}
+                title="CRM Email"
+                subtitle="Metadata-first email operations. Send from Connect - reply and converse in Gmail."
+                className={cn(crm.contactsHeaderPanel, "campaigns-command-header")}
+                actions={
+                  <div className="campaigns-hero-actions flex flex-wrap items-center gap-2">
+                    <Link href="/crm/email/templates" className="campaigns-btn-secondary inline-flex items-center gap-2">
+                      <FileText className="h-4 w-4" />
+                      Templates
+                    </Link>
+                    {canEmailSettings ? (
+                      <Link href="/crm/email/settings" className="campaigns-btn-secondary inline-flex items-center gap-2">
+                        <Settings className="h-4 w-4" />
+                        Settings
+                      </Link>
+                    ) : null}
+                    {connected ? (
+                      <a href={gmailInboxUrl()} target="_blank" rel="noopener noreferrer" className="campaigns-btn-primary inline-flex items-center gap-2">
+                        <Mail className="h-4 w-4" />
+                        Open Gmail
+                        <ExternalLink className="h-3.5 w-3.5 opacity-80" />
+                      </a>
+                    ) : canEmailSettings ? (
+                      <Link href="/crm/email/settings" className="campaigns-btn-primary inline-flex items-center gap-2">
+                        Connect Google
+                      </Link>
+                    ) : (
+                      <button type="button" disabled={connectBusy} onClick={() => void startUserOAuth()} className="campaigns-btn-primary inline-flex items-center gap-2">
+                        {connectBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                        Connect Google
+                      </button>
+                    )}
                   </div>
-                </div>
-              </div>
+                }
+              />
+            </CRMWorkspaceHeader>
 
-              <div className="crm-email-sender-metrics grid gap-3 sm:grid-cols-3">
-                <div>
-                  <p className="text-[0.65rem] font-bold uppercase tracking-wider text-crm-muted">Connection</p>
-                  <p className="mt-1 text-sm font-bold text-crm-text">{connected ? "Google OAuth active" : "Action needed"}</p>
-                </div>
-                <div>
-                  <p className="text-[0.65rem] font-bold uppercase tracking-wider text-crm-muted">Recent replies</p>
-                  <p className="mt-1 text-lg font-bold tabular-nums text-crm-text">{loading ? "..." : replyCount}</p>
-                </div>
-                <div>
-                  <p className="text-[0.65rem] font-bold uppercase tracking-wider text-crm-muted">Recent sent</p>
-                  <p className="mt-1 text-lg font-bold tabular-nums text-crm-text">{loading ? "..." : sentCount}</p>
-                </div>
-              </div>
-              {diag && (
-                <div className="flex flex-wrap items-center gap-2 border-t border-crm-border/50 pt-3">
-                  <span className={cn(
-                    "inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide",
-                    diag.connectionsEnabled > 0
-                      ? "border-crm-success/30 bg-crm-success/10 text-crm-success"
-                      : "border-crm-warning/30 bg-crm-warning/10 text-crm-warning",
-                  )}>
-                    <ShieldCheck className="h-3 w-3" />
-                    {diag.connectionsEnabled > 0 ? "Reply tracking active" : "Reply tracking off"}
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-crm-border/65 bg-crm-surface-2/45 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">
-                    <Clock3 className="h-3 w-3 text-crm-accent" />
-                    Last sync <span className="font-mono text-crm-text">{formatRelative(diag.lastSyncAt)}</span>
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-crm-border/65 bg-crm-surface-2/45 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">
-                    <span className="text-crm-muted">tracked</span>
-                    <span className="font-mono text-crm-text">{diag.trackedThreads}</span>
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-crm-border/65 bg-crm-surface-2/45 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">
-                    <span className="text-crm-muted">replies</span>
-                    <span className="font-mono text-crm-text">{diag.inboundReplies}</span>
-                  </span>
-                </div>
-              )}
-            </div>
+            <CRMWorkspaceToolbar className="flex flex-col gap-3">
+              <ReplyTrackingHealthBanner conn={displayedConn} diag={displayedDiag} loading={loading} showSettingsLink={canEmailSettings} />
 
-            <div className="crm-email-sender-aside flex min-w-0 flex-col justify-between gap-4 p-4 sm:p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <p className={cn(crm.label, "crm-email-section-label")}>Last activity</p>
-                  <p className="mt-2 text-sm font-bold text-crm-text">
-                    {lastActivity ? formatWhen(lastActivity.when) : "No activity yet"}
-                  </p>
-                  <p className="mt-1 text-xs leading-relaxed text-crm-muted">
-                    {lastActivity ? lastActivity.label : "Activity appears after sends or reply syncs."}
-                  </p>
-                </div>
-                <span className={cn(crm.emailIconWell, "crm-email-mail-illus h-16 w-16 text-crm-accent")}>
-                  <Mail className="h-7 w-7" />
-                  <Sparkles className="crm-email-mail-spark h-4 w-4" />
-                </span>
-              </div>
-              {canEmailSettings ? (
-                <Link href="/crm/email/settings" className={cn(connected ? crm.btnSecondary : crm.btnPrimary, "crm-email-manage-btn w-full")}>
-                  {connected ? "Manage sender" : "Connect Google"}
-                </Link>
+              <section className="crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-4 xl:grid-cols-4" aria-label="Email metrics">
+                <EmailKpiTile
+                  label="Sent"
+                  value={sentCount}
+                  hint={failedCount > 0 ? `${failedCount} failed in recent activity` : "Recent CRM sends"}
+                  icon={Send}
+                  tone="blue"
+                  loading={loading}
+                />
+                <EmailKpiTile
+                  label="Delivered"
+                  value={deliveredCount}
+                  hint={sentCount > 0 ? `${Math.round((deliveredCount / sentCount) * 100)}% of recent sends` : "No recent delivery metadata"}
+                  icon={CheckCircle2}
+                  tone="green"
+                  loading={loading}
+                />
+                <EmailKpiTile
+                  label="Replies"
+                  value={replyCount}
+                  hint={replyCount > 0 ? "Tracked reply metadata" : "No replies synced yet"}
+                  icon={MessageCircle}
+                  tone="violet"
+                  loading={loading}
+                />
+                <EmailKpiTile
+                  label="Reply rate"
+                  value={`${replyRate}%`}
+                  hint={sentCount > 0 ? "Replies ÷ recent sends" : "Awaiting send volume"}
+                  icon={BarChart3}
+                  tone="cyan"
+                  loading={loading}
+                />
+              </section>
+
+              {!loading && !connected ? (
+                <EmptyConnectionState
+                  canEmailSettings={canEmailSettings}
+                  connectBusy={connectBusy}
+                  onConnect={() => void startUserOAuth()}
+                />
               ) : (
-                <button
-                  type="button"
-                  disabled={connectBusy || connected}
-                  onClick={() => void startUserOAuth()}
-                  className={cn(connected ? crm.btnSecondary : crm.btnPrimary, "crm-email-manage-btn w-full")}
-                >
-                  {connectBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                  {connected ? "Google connected" : "Connect Google"}
-                </button>
+                <EmailStatusRow
+                  connected={connected}
+                  loading={loading}
+                  senderEmail={senderEmail}
+                  senderName={senderName}
+                  replyTrackingActive={replyTrackingActive}
+                  lastSyncAt={displayedDiag?.lastSyncAt ?? null}
+                />
               )}
-            </div>
-          </div>
-        </CRMCard>
-      ) : null}
-    </CRMPageShell>
+            </CRMWorkspaceToolbar>
+          </CRMWorkspaceChrome>
+
+          <CRMWorkspaceBody>
+            <CRMWorkspaceMain className="crm-queue-main-workspace min-w-0">
+              <CRMWorkspaceScrollRegion className="crm-queue-center-workspace flex min-w-0 flex-col gap-4">
+                <div className="crm-email-workspace-grid grid w-full min-w-0 gap-4 xl:grid-cols-2">
+                  <ActivityPanel
+                    title="Recent replies"
+                    icon={<Inbox className="h-4 w-4" />}
+                    action={
+                      canEmailSettings ? (
+                        <Link href="/crm/email/settings" className="crm-email-action-link inline-flex items-center gap-1 text-xs font-bold text-crm-accent">
+                          Reply tracking <ArrowRight className="h-3 w-3" />
+                        </Link>
+                      ) : connected ? (
+                        <GmailLinkButton href={gmailInboxUrl()} label="Open Gmail" compact />
+                      ) : null
+                    }
+                  >
+                    {loading ? (
+                      <div className="flex items-center gap-2 text-sm text-crm-muted">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Loading replies...
+                      </div>
+                    ) : displayedReplies.length === 0 ? (
+                      <EmptyRepliesState connected={connected} canEmailSettings={canEmailSettings} />
+                    ) : (
+                      <ul className="m-0 flex list-none flex-col gap-2 p-0">
+                        {displayedReplies.map((message) => (
+                          <li key={message.id} className="crm-email-reply-row rounded-crm border border-crm-border/65 bg-crm-surface-2/35 px-3.5 py-3">
+                            <div className="flex items-start gap-3">
+                              <span className={cn(crm.statusDotSync, "mt-2 shrink-0")} />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-start justify-between gap-2">
+                                  <p className="min-w-0 truncate text-sm font-bold text-crm-text">{message.subject || "(no subject)"}</p>
+                                  <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                                    <GmailLinkButton href={resolveReplyGmailHref(message)} label="Reply in Gmail" compact />
+                                    {message.gmailThreadId ? (
+                                      <GmailLinkButton href={gmailThreadUrl(message.gmailThreadId)} label="View thread" compact />
+                                    ) : null}
+                                  </div>
+                                </div>
+                                <p className="mt-1 truncate text-xs text-crm-muted">
+                                  {message.contactId ? (
+                                    <Link href={`/crm/contacts/${message.contactId}`} className="text-crm-accent hover:underline">
+                                      {message.fromEmail || "(unknown)"}
+                                    </Link>
+                                  ) : (
+                                    message.fromEmail || "(unknown)"
+                                  )}
+                                  {message.receivedAt ? ` · ${formatCompactWhen(message.receivedAt)}` : null}
+                                </p>
+                                {message.replyText || message.previewSnippet ? (
+                                  <p className="mt-2 line-clamp-2 text-xs leading-relaxed text-crm-muted">
+                                    {message.replyText || message.previewSnippet}
+                                  </p>
+                                ) : null}
+                              </div>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </ActivityPanel>
+
+                  <ActivityPanel
+                    title="Recent sent"
+                    icon={<Send className="h-4 w-4" />}
+                    action={
+                      <Link href="/crm/email/templates" className="crm-email-action-link inline-flex items-center gap-1 text-xs font-bold text-crm-accent">
+                        Templates <ArrowRight className="h-3 w-3" />
+                      </Link>
+                    }
+                  >
+                    {loading ? (
+                      <div className="flex items-center gap-2 text-sm text-crm-muted">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Loading sends...
+                      </div>
+                    ) : displayedRecent.length === 0 ? (
+                      <EmptySentState />
+                    ) : (
+                      <>
+                        <ul className="m-0 flex list-none flex-col divide-y divide-crm-border/55 p-0">
+                          {displayedRecent.map((message) => (
+                            <li key={message.id} className="crm-email-sent-row grid grid-cols-1 items-start gap-2 py-3 first:pt-0 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-bold leading-tight text-crm-text">{message.subject || "(no subject)"}</p>
+                                <p className="mt-1 truncate text-xs text-crm-muted">
+                                  {message.contactId ? (
+                                    <Link href={`/crm/contacts/${message.contactId}`} className="text-crm-accent hover:underline">
+                                      {message.toEmail}
+                                    </Link>
+                                  ) : (
+                                    message.toEmail
+                                  )}
+                                </p>
+                              </div>
+                              <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+                                <span className="text-[11px] font-medium text-crm-muted">{formatCompactWhen(message.sentAt)}</span>
+                                {connected && message.status === "SENT" ? (
+                                  <GmailLinkButton href={resolveSentGmailHref(message)} label="View in Gmail" compact />
+                                ) : null}
+                                <span
+                                  className={cn(
+                                    "crm-email-status-badge inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-wide",
+                                    message.status === "SENT" ? "crm-email-status-sent text-crm-success" : "crm-email-status-failed text-crm-danger",
+                                  )}
+                                  title={message.errorMessage || undefined}
+                                >
+                                  {message.status === "SENT" ? <CheckCircle2 className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}
+                                  {message.status}
+                                </span>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                        <button
+                          type="button"
+                          onClick={() => void loadMoreSent()}
+                          disabled={loadingMoreSent}
+                          className="crm-email-action-link crm-email-view-all mt-2 inline-flex items-center gap-1 text-xs font-bold text-crm-accent disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {loadingMoreSent ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                          View all sent emails <ArrowRight className="h-3 w-3" />
+                        </button>
+                      </>
+                    )}
+                  </ActivityPanel>
+                </div>
+
+                <section className="crm-email-quick-actions crm-queue-list-panel px-4 py-4 sm:px-5">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Gmail-first workflow</p>
+                  <h3 className="mt-1 text-sm font-bold text-crm-text">Reply in Gmail, track activity in Connect</h3>
+                  <p className="mt-1 max-w-2xl text-xs leading-relaxed text-crm-muted">
+                    Connect sends outbound CRM email and stores metadata only. When a contact replies, open the thread in Gmail to continue the conversation.
+                    {lastActivity ? ` Last activity: ${formatWhen(lastActivity.when)} - ${lastActivity.label}.` : null}
+                  </p>
+                  {displayedDiag ? (
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-crm-border/65 bg-crm-surface-2/45 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">
+                        <Clock3 className="h-3 w-3 text-crm-accent" />
+                        Sync {formatRelative(displayedDiag.lastSyncAt)}
+                      </span>
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-crm-border/65 bg-crm-surface-2/45 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">
+                        {displayedDiag.trackedThreads} tracked threads
+                      </span>
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-crm-border/65 bg-crm-surface-2/45 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-crm-muted">
+                        {displayedDiag.inboundReplies} total replies
+                      </span>
+                    </div>
+                  ) : null}
+                </section>
+              </CRMWorkspaceScrollRegion>
+            </CRMWorkspaceMain>
+          </CRMWorkspaceBody>
+        </CRMWorkspaceShell>
+      </CRMPageShell>
     </PermissionGate>
   );
 }
