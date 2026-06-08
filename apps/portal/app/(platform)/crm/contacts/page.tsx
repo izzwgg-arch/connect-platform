@@ -1002,7 +1002,7 @@ export default function CrmContactsPage() {
           </CRMWorkspaceHeader>
           <CRMWorkspaceToolbar className="flex flex-col gap-3">
       {!loading && !error && (rows.length > 0 || total > 0) && (
-        <section className="crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <section className="crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-3 xl:grid-cols-6" aria-label="Contact metrics">
           <ContactKpiTile label="Total Contacts" value={total} micro={`${sliceFrom}-${sliceTo} showing`} icon={<Users className="h-4 w-4" />} accent="blue" />
           <ContactKpiTile label="New This 30 Days" value={summary.newThisMonth} micro="recently created" icon={<Sparkles className="h-4 w-4" />} accent="violet" />
           <ContactKpiTile label="Contacted" value={summary.contacted} micro="stage matched" icon={<Phone className="h-4 w-4" />} accent="cyan" />

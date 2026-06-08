@@ -38,8 +38,8 @@ export const crm = {
   queueWorkspace: "crm-queue-workspace w-full min-h-0",
   /** CRM Email light-mode operations workspace. */
   pageInnerEmail:
-    "crm-email-inner mx-auto w-full max-w-[min(100%,1365px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 flex flex-col gap-4 min-h-0",
-  emailWorkspace: "crm-email-workspace w-full min-h-0",
+    "crm-email-inner mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
+  emailWorkspace: "crm-email-workspace crm-queue-workspace w-full min-h-0",
   emailHero: "crm-email-hero rounded-crm-lg border border-crm-border bg-crm-surface p-4 shadow-crm sm:p-5",
   emailPanel: "crm-email-panel relative overflow-hidden rounded-crm-lg border border-crm-border bg-crm-surface shadow-crm",
   emailIconWell: "crm-email-icon-well flex shrink-0 items-center justify-center rounded-crm border",
@@ -59,8 +59,6 @@ export const crm = {
     "crm-funders-inner mx-auto w-full max-w-[min(100%,1680px)] px-3 py-5 sm:px-5 lg:px-6 xl:px-7 2xl:px-8 flex flex-col gap-4 min-h-0",
   contactsHeaderPanel: "contacts-header-panel",
   contactsPanel: "contacts-panel",
-  contactsKpiTile: "contacts-kpi-tile relative flex min-h-[6.375rem] min-w-0 flex-col gap-2 overflow-hidden rounded-crm-lg border px-3.5 py-3 transition-all duration-200 sm:min-w-0",
-  contactsKpiIcon: "contacts-kpi-icon flex h-8 w-8 shrink-0 items-center justify-center rounded-crm",
   contactsFilterBar: "contacts-filter-bar",
   contactsBulkBar: "contacts-bulk-bar mb-4 flex flex-wrap items-center gap-3 rounded-crm border px-4 py-3",
   contactsListShell: "contacts-list-shell overflow-hidden p-0",

@@ -307,21 +307,22 @@ export default function CrmVoicemailDropsPage() {
 
   return (
     <PermissionGate permission="can_view_crm_voicemail_drops" fallback={<div className="state-box">You do not have Voicemail Drops access.</div>}>
-    <CRMPageShell className={cn(crm.queueWorkspace, crm.contactsWorkspace, "crm-voicemail-drops-workspace w-full min-h-0")} innerClassName={crm.pageInnerQueue}>
+    <CRMPageShell className={cn(crm.queueWorkspace, "crm-voicemail-drops-workspace w-full min-h-0")} innerClassName={crm.pageInnerQueue}>
       <CRMWorkspaceShell>
         <CRMWorkspaceChrome>
           <CRMWorkspaceHeader>
             <CRMPageHeader
               compact
-              className={crm.contactsHeaderPanel}
+              className={cn(crm.contactsHeaderPanel, "campaigns-command-header")}
               icon={<Voicemail className="h-6 w-6" aria-hidden />}
               title="Voicemail Drops"
+              subtitle="Upload, manage, and deploy PBX-safe voicemail drop recordings."
               actions={
-                <div className="contacts-hero-actions flex flex-wrap items-center gap-2">
+                <div className="campaigns-hero-actions">
                   <button
                     type="button"
                     onClick={handleNewVoicemail}
-                    className={cn(crm.btnPrimary, "contacts-new-contact-cta crm-create-blue-cta")}
+                    className="campaigns-btn-primary"
                   >
                     <Plus className="h-4 w-4" />
                     New voicemail
@@ -347,19 +348,18 @@ export default function CrmVoicemailDropsPage() {
               <div className="crm-queue-filter-grid w-full">
                 <div className="crm-queue-filter-field crm-queue-filter-field-search min-w-[min(100%,14rem)] flex-[2]">
                   <Search className="crm-queue-filter-icon h-4 w-4 shrink-0 text-crm-muted" />
-                  <label htmlFor="crm-voicemail-search" className={cn(crm.label, "shrink-0")}>Search</label>
                   <input
                     id="crm-voicemail-search"
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
                     placeholder="Name, campaign, audio file..."
-                    className={cn(crm.input, "crm-queue-filter-control min-w-[10rem] flex-1 py-1.5")}
+                    className={cn(crm.input, "crm-queue-filter-control min-w-[10rem] flex-1")}
                     aria-label="Search voicemail drops"
                   />
                 </div>
                 <div className="crm-queue-filter-field">
-                  <Voicemail className="h-4 w-4 shrink-0 text-crm-muted" />
-                  <label htmlFor="crm-voicemail-status" className={cn(crm.label, "shrink-0")}>Status</label>
+                  <Voicemail className="crm-queue-filter-icon h-4 w-4 shrink-0 text-crm-muted" />
+                  <label htmlFor="crm-voicemail-status" className="sr-only">Status</label>
                   <ConnectSelect
                     id="crm-voicemail-status"
                     value={statusFilter}
@@ -401,7 +401,7 @@ export default function CrmVoicemailDropsPage() {
                     <FileAudio className="mx-auto h-10 w-10 text-crm-border" />
                     <h2 className="mt-3 text-lg font-bold text-crm-text">No voicemail drops yet</h2>
                     <p className="mx-auto mt-2 max-w-md text-sm text-crm-muted">Upload your first PBX-safe voicemail drop recording to get started.</p>
-                    <button type="button" onClick={handleNewVoicemail} className={cn(crm.btnPrimary, "crm-create-blue-cta mt-6")}>
+                    <button type="button" onClick={handleNewVoicemail} className="tasks-primary-action mt-6">
                       <Plus className="h-4 w-4" />
                       New voicemail
                     </button>
@@ -773,7 +773,7 @@ function NewVoicemailPanel({ onClose, onCreated }: { onClose: () => void; onCrea
       </div>
 
       <footer className="relative z-[1] mt-auto flex flex-col gap-2 border-t border-crm-border/60 pt-4">
-        <button type="button" disabled={saving || !name.trim() || !file} onClick={() => void submit()} className={cn(crm.btnPrimary, "crm-create-blue-cta")}>
+        <button type="button" disabled={saving || !name.trim() || !file} onClick={() => void submit()} className="tasks-primary-action w-full justify-center">
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clock3 className="h-4 w-4" />}
           Create Voicemail
         </button>
@@ -913,7 +913,7 @@ function VoicemailDetailPanel({
             </div>
           </div>
         </PanelSection>
-        <button type="button" onClick={onNew} className={cn(crm.btnPrimary, "relative z-[1] mt-auto")}>
+        <button type="button" onClick={onNew} className="tasks-primary-action relative z-[1] mt-auto w-full justify-center">
           <Plus className="h-4 w-4" />
           New Voicemail
         </button>

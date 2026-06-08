@@ -40,6 +40,7 @@ import {
 import { LoadingSkeleton } from "../../../../components/LoadingSkeleton";
 import { apiGet } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
+import { getPreferredUserDisplayName } from "../../../../lib/userDisplayName";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -525,7 +526,7 @@ export default function CrmDashboardPage() {
   const hourly = typeof window !== "undefined" ? new Date().getHours() : 12;
   const greet = greetingLabel(hourly);
   const scene = greetingScene(hourly);
-  const firstName = user?.name?.split(/\s+/)[0] ?? "there";
+  const welcomeName = getPreferredUserDisplayName(user) || "there";
 
   const activeCampaignsCount = daily?.activeCampaigns ?? taskStats?.activeCampaigns ?? 0;
 
@@ -616,7 +617,7 @@ export default function CrmDashboardPage() {
     <CRMPageShell className={crm.dashboardWorkspace} innerClassName={crm.pageInnerDashboard}>
       <CRMPageHeader
         icon={<LayoutDashboard size={22} strokeWidth={1.75} />}
-        title={`${greet}, ${firstName}`}
+        title={`${greet}, ${welcomeName}`}
         subtitle="Here's what's happening in your CRM today."
         className={cn("crm-dashboard-hero", `crm-dashboard-hero-${scene}`)}
         art={<HeroScene scene={scene} />}
