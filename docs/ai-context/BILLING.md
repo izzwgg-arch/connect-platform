@@ -682,6 +682,8 @@ Signed pay links for **`BillingInvoice`** (platform stack) — distinct from leg
 
 **Autopay scheduling + double-charge guard:** Worker monthly run computes an explicit `scheduledChargeAt` for each tenant billing cycle. Billing periods are anchored to the payment date in the configured billing timezone (`TenantBillingSettings.metadata.billingTimeZone` / `billingTimezone`, default `America/New_York`), not calendar-month UTC bounds. Example: `billingDayOfMonth=21` means service period **May 21 00:00 local → June 20 23:59:59.999 local**, with card charge eligibility starting at **May 21 00:00 local**. Worker startup catch-up may only charge when `now >= scheduledChargeAt`; "invoice exists" or UTC day matching is not sufficient. Worker monthly run + `chargeWorkerInvoice` also skip when `status === PAID` or `balanceDueCents <= 0` (`billing.autopay_skipped_already_paid`). `chargeBillingInvoice` / `chargeBillingInvoiceWithSut` throw `INVOICE_ALREADY_PAID` if paid before charge.
 
+**Autopay T-3 invoice + reminder (2026-06):** For tenants with `autoBillingEnabled`, the worker (`runMonthlyBillingAutomation`) runs hourly. **Three calendar days before** `scheduledChargeAt` (`schedule.reminderDue`): creates the period invoice if missing (`autopay_invoice_created`, skips duplicate with `autopay_invoice_skipped_existing`), queues **`BILLING_AUTOPAY_REMINDER`** (subject: "Your Connect payment is due in 3 days", one invoice PDF, explains autopay will charge automatically). Idempotent per invoice via `EmailJob` type + `connect-billing-invoice:{id}` marker. **On payment due date** (`schedule.due`): charges the **existing** invoice only — if missing, logs **`autopay_missing_invoice_on_due_date`** (HIGH alert) and does **not** create a last-second invoice. Success → **`BILLING_RECEIPT`** with invoice + receipt PDFs. Failure → no receipt PDF.
+
 ### Admin SMS payment links
 
 | Route | Purpose |
@@ -927,7 +929,7 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 
 **Email templates (white/light theme):** All five billing email templates now use a white card layout with Connect blue (`#0284c7`) accent header. Previously dark-themed (`#0b1220`). Customer-friendly and mobile-responsive.
 
-**Receipt email:** Structured summary box (amount paid, invoice #, payment date, card). Confirmation badge. Autopay note block. Copy states the invoice PDF is **attached** (not a download link).
+**Receipt email:** Structured summary box (amount paid, invoice #, payment date, card). Confirmation badge. Autopay note block. Copy states **two PDFs are attached**: the original **invoice** (billed amount due before payment) and a **payment receipt** (proof of payment). Filenames: `invoice-<invoiceNumber>.pdf` and `receipt-<reference-or-transactionId>.pdf`.
 
 **Invoice sent email:** Added optional `servicePeriod` field in the summary box. Computed from `invoice.periodStart`/`periodEnd` in `billingEmailLifecycle.ts`. Copy states the invoice PDF is **attached**.
 
@@ -999,7 +1001,7 @@ Backward compatibility: existing rows keep **`apiBaseUrl`**, **`pathOverrides`**
 
 ### Invoice PDF attachments + portal PDF routes (2026-05-19)
 
-**Email PDF attachments (no schema migration):** When `processEmailJobsBatch` in `apps/api/src/server.ts` sends billing jobs (`BILLING_INVOICE_SENT`, `BILLING_INVOICE_READY`, `BILLING_RECEIPT`), it generates the invoice PDF at send time via `billingEmailAttachments.ts` and attaches it for **SendGrid** and **SMTP**. Templates embed a hidden HTML marker `<!-- connect-billing-invoice:{id} -->` so the processor can resolve the `BillingInvoice` without a JWT-protected API link. Invoice/receipt emails no longer link to `GET /billing/platform/invoices/:id/pdf` (that route requires login).
+**Email PDF attachments (no schema migration):** When `processEmailJobsBatch` in `apps/api/src/server.ts` sends billing jobs (`BILLING_INVOICE_SENT`, `BILLING_INVOICE_READY`, `BILLING_RECEIPT`), it generates PDFs at send time via `billingEmailAttachments.ts` and attaches them for **SendGrid** and **SMTP**. Templates embed hidden HTML markers `<!-- connect-billing-invoice:{id} -->` and (receipt only) `<!-- connect-billing-transaction:{id} -->` so the processor can resolve the `BillingInvoice` and `PaymentTransaction` without JWT-protected API links. **Unpaid invoice emails** attach one PDF (`invoice-<number>.pdf`). **Receipt emails** attach two PDFs: billed-state **invoice** + **receipt** (`receipt-<ref>.pdf`). Invoice/receipt emails no longer link to `GET /billing/platform/invoices/:id/pdf` (that route requires login).
 
 **PDF download in Connect:**
 - **Tenant users:** `GET /billing/platform/invoices/:id/pdf` (JWT + `?token=` for new-tab download).
