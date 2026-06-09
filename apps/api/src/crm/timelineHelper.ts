@@ -21,6 +21,7 @@ export type TimelineEventType =
   | "EMAIL_SENT"
   | "EMAIL_RECEIVED"
   | "EMAIL_REPLY"
+  | "WEBSITE_SUBMISSION"
   | "VOICEMAIL_DROP"
   | "FORM_SENT"
   | "FORM_OPENED"

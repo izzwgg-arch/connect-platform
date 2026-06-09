@@ -4,6 +4,25 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-09 — CRM learned website submission email intake
+
+**Task:** CRM / email sync / learned website submission rule  
+**Risk:** high — CRM email worker, Prisma schema, contact/document writes, PII handling
+
+### Shipped
+
+- Added tenant-scoped learned website submission email rules in CRM Email settings.
+- Extended the existing CRM email sync worker with a rule-gated inbox scan that leaves tracked-thread reply sync unchanged.
+- Matching emails create `CrmWebsiteSubmission` records, extract only existing CRM contact fields, create/update CRM contacts, link email attachments through CRM document storage, write timeline events, and create dismissible CRM notifications.
+- Added PII redaction for logs/UI summaries and masked notification/timeline text.
+
+### Not included
+
+- No webhook intake, separate intake app, broad Gmail archive, or generic custom-field system.
+- Low-confidence/review-first submissions are recorded without auto-updating important contact fields.
+
+---
+
 ## 2026-06-08 — WebRTC TURN provisioning unify + relay health guards
 
 **Task:** telephony / TURN / app-level relay hardening deploy  

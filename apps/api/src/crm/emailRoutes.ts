@@ -49,6 +49,11 @@ import {
   readCrmEmailAssetFile,
   writeCrmEmailAssetFile,
 } from "./emailTemplateAttachmentStorage.js";
+import {
+  analyzeWebsiteSubmissionSample,
+  getWebsiteSubmissionFieldDefinitions,
+  redactSensitiveText,
+} from "./websiteSubmissionExtraction.js";
 export { canManageTenantSender, hasReadonlyScope, replyTrackingStatus, GMAIL_READONLY_SCOPE } from "./crmEmailHelpers.js";
 
 /**
@@ -107,6 +112,80 @@ async function canManageTenantSenderForUser(user: { tenantId: string; sub: strin
   if (canManageTenantSender(user)) return true;
   const crmRole = await loadCrmUserAccessRole(user.tenantId, user.sub);
   return canManageTenantSender(user, crmRole);
+}
+
+function formatWebsiteSubmissionRule(row: any) {
+  return {
+    id: row.id,
+    connectionId: row.connectionId,
+    name: row.name,
+    active: row.active,
+    senderEmail: row.senderEmail ?? null,
+    senderDomain: row.senderDomain ?? null,
+    subjectPattern: row.subjectPattern ?? null,
+    bodyPatterns: Array.isArray(row.bodyPatterns) ? row.bodyPatterns : [],
+    fieldMap: row.fieldMap && typeof row.fieldMap === "object" ? row.fieldMap : {},
+    attachmentExpectations: Array.isArray(row.attachmentExpectations) ? row.attachmentExpectations : [],
+    assignmentUserId: row.assignmentUserId ?? null,
+    assignmentTeamId: row.assignmentTeamId ?? null,
+    confidenceThreshold: row.confidenceThreshold,
+    mode: row.mode,
+    sampleMetadata: row.sampleMetadata ?? null,
+    lastMatchedAt: row.lastMatchedAt ?? null,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    connection: row.connection ? {
+      id: row.connection.id,
+      emailAddress: row.connection.emailAddress,
+      label: row.connection.label ?? null,
+      scope: row.connection.scope,
+      status: row.connection.status,
+    } : undefined,
+    assignmentUser: row.assignmentUser ? {
+      id: row.assignmentUser.id,
+      email: row.assignmentUser.email,
+      displayName: row.assignmentUser.displayName,
+      firstName: row.assignmentUser.firstName,
+      lastName: row.assignmentUser.lastName,
+    } : null,
+    _count: row._count ?? undefined,
+  };
+}
+
+async function loadWebsiteRuleConnection(tenantId: string, connectionId: string) {
+  return (db as any).crmEmailConnection.findFirst({
+    where: {
+      id: connectionId,
+      tenantId,
+      status: "CONNECTED",
+      replyTrackingEnabled: true,
+      scopes: { has: GMAIL_READONLY_SCOPE },
+    },
+    select: { id: true, emailAddress: true },
+  });
+}
+
+function normalizeWebsiteRulePayload(body: any) {
+  const mode = body?.mode === "AUTO_CREATE" ? "AUTO_CREATE" : "REVIEW_FIRST";
+  const threshold = Number(body?.confidenceThreshold);
+  const bodyPatterns = Array.isArray(body?.bodyPatterns)
+    ? body.bodyPatterns.map((v: unknown) => String(v || "").trim().slice(0, 120)).filter(Boolean).slice(0, 12)
+    : [];
+  return {
+    name: String(body?.name || "Website submission").trim().slice(0, 120) || "Website submission",
+    active: typeof body?.active === "boolean" ? body.active : true,
+    senderEmail: typeof body?.senderEmail === "string" ? String(body.senderEmail).trim().toLowerCase().slice(0, 320) || null : null,
+    senderDomain: typeof body?.senderDomain === "string" ? String(body.senderDomain).trim().toLowerCase().slice(0, 255) || null : null,
+    subjectPattern: typeof body?.subjectPattern === "string" ? String(body.subjectPattern).trim().slice(0, 200) || null : null,
+    bodyPatterns,
+    fieldMap: body?.fieldMap && typeof body.fieldMap === "object" && !Array.isArray(body.fieldMap) ? body.fieldMap : {},
+    attachmentExpectations: Array.isArray(body?.attachmentExpectations) ? body.attachmentExpectations.slice(0, 20) : [],
+    assignmentUserId: typeof body?.assignmentUserId === "string" && body.assignmentUserId.trim() ? body.assignmentUserId.trim() : null,
+    assignmentTeamId: typeof body?.assignmentTeamId === "string" && body.assignmentTeamId.trim() ? body.assignmentTeamId.trim() : null,
+    confidenceThreshold: Number.isFinite(threshold) ? Math.max(0.1, Math.min(0.99, threshold)) : 0.75,
+    mode,
+    sampleMetadata: body?.sampleMetadata && typeof body.sampleMetadata === "object" ? body.sampleMetadata : null,
+  };
 }
 
 function isValidEmailAddress(value: string): boolean {
@@ -772,6 +851,127 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     return { ok: true, senderId: sender.id, sentTo: to };
   });
 
+  // GET /crm/email/website-submission-rules — admin-only learned inbox intake rules
+  app.get("/crm/email/website-submission-rules", async (req, reply) => {
+    const user = await requireCrmEmailSettingsAccess(req, reply); if (!user) return;
+    const rows = await (db as any).crmWebsiteSubmissionEmailRule.findMany({
+      where: { tenantId: user.tenantId },
+      orderBy: [{ active: "desc" }, { createdAt: "desc" }],
+      include: {
+        connection: { select: { id: true, emailAddress: true, label: true, scope: true, status: true } },
+        assignmentUser: { select: { id: true, email: true, displayName: true, firstName: true, lastName: true } },
+        _count: { select: { submissions: true } },
+      },
+    });
+    return {
+      rules: rows.map(formatWebsiteSubmissionRule),
+      fields: getWebsiteSubmissionFieldDefinitions(),
+    };
+  });
+
+  // POST /crm/email/website-submission-rules/analyze-sample
+  app.post("/crm/email/website-submission-rules/analyze-sample", async (req, reply) => {
+    const user = await requireCrmEmailSettingsAccess(req, reply); if (!user) return;
+    const body = (req.body as any) || {};
+    const rawEmail = String(body.rawEmail || body.sampleEmail || "").slice(0, 200_000);
+    if (!rawEmail.trim()) return reply.code(400).send({ error: "sample_required" });
+    const analysis = analyzeWebsiteSubmissionSample({
+      rawEmail,
+      fromEmail: typeof body.fromEmail === "string" ? body.fromEmail : null,
+      subject: typeof body.subject === "string" ? body.subject : null,
+      attachments: Array.isArray(body.attachments) ? body.attachments : [],
+    });
+    return {
+      analysis: {
+        ...analysis,
+        unmappedSummary: analysis.unmappedSummary.map((line) => redactSensitiveText(line)),
+      },
+      fields: getWebsiteSubmissionFieldDefinitions(),
+    };
+  });
+
+  // POST /crm/email/website-submission-rules
+  app.post("/crm/email/website-submission-rules", async (req, reply) => {
+    const user = await requireCrmEmailSettingsAccess(req, reply); if (!user) return;
+    const body = (req.body as any) || {};
+    const connectionId = String(body.connectionId || "");
+    const connection = await loadWebsiteRuleConnection(user.tenantId, connectionId);
+    if (!connection) return reply.code(400).send({ error: "connection_not_ready", detail: "Mailbox must be connected with Gmail readonly/reply tracking enabled." });
+    const data = normalizeWebsiteRulePayload(body);
+    if (data.assignmentUserId) {
+      const assignee = await (db as any).user.findFirst({ where: { id: data.assignmentUserId, tenantId: user.tenantId }, select: { id: true } });
+      if (!assignee) return reply.code(400).send({ error: "invalid_assignment_user" });
+    }
+    const row = await (db as any).crmWebsiteSubmissionEmailRule.create({
+      data: {
+        tenantId: user.tenantId,
+        connectionId,
+        createdByUserId: user.sub,
+        ...data,
+        sampleMetadata: data.sampleMetadata ? JSON.parse(JSON.stringify(data.sampleMetadata, (_k, v) => typeof v === "string" ? redactSensitiveText(v) : v)) : null,
+      },
+      include: {
+        connection: { select: { id: true, emailAddress: true, label: true, scope: true, status: true } },
+        assignmentUser: { select: { id: true, email: true, displayName: true, firstName: true, lastName: true } },
+        _count: { select: { submissions: true } },
+      },
+    });
+    await db.auditLog.create({
+      data: { tenantId: user.tenantId, actorUserId: user.sub, action: "CRM_WEBSITE_SUBMISSION_RULE_CREATED", entityType: "CrmWebsiteSubmissionEmailRule", entityId: row.id },
+    }).catch(() => undefined);
+    return { rule: formatWebsiteSubmissionRule(row) };
+  });
+
+  // PATCH /crm/email/website-submission-rules/:id
+  app.patch("/crm/email/website-submission-rules/:id", async (req, reply) => {
+    const user = await requireCrmEmailSettingsAccess(req, reply); if (!user) return;
+    const { id } = req.params as { id: string };
+    const existing = await (db as any).crmWebsiteSubmissionEmailRule.findFirst({ where: { id, tenantId: user.tenantId } });
+    if (!existing) return reply.code(404).send({ error: "rule_not_found" });
+    const body = (req.body as any) || {};
+    const data = normalizeWebsiteRulePayload({ ...existing, ...body });
+    const nextConnectionId = body.connectionId ? String(body.connectionId) : existing.connectionId;
+    if (nextConnectionId !== existing.connectionId) {
+      const connection = await loadWebsiteRuleConnection(user.tenantId, nextConnectionId);
+      if (!connection) return reply.code(400).send({ error: "connection_not_ready" });
+    }
+    if (data.assignmentUserId) {
+      const assignee = await (db as any).user.findFirst({ where: { id: data.assignmentUserId, tenantId: user.tenantId }, select: { id: true } });
+      if (!assignee) return reply.code(400).send({ error: "invalid_assignment_user" });
+    }
+    const row = await (db as any).crmWebsiteSubmissionEmailRule.update({
+      where: { id },
+      data: { ...data, connectionId: nextConnectionId },
+      include: {
+        connection: { select: { id: true, emailAddress: true, label: true, scope: true, status: true } },
+        assignmentUser: { select: { id: true, email: true, displayName: true, firstName: true, lastName: true } },
+        _count: { select: { submissions: true } },
+      },
+    });
+    await db.auditLog.create({
+      data: { tenantId: user.tenantId, actorUserId: user.sub, action: "CRM_WEBSITE_SUBMISSION_RULE_UPDATED", entityType: "CrmWebsiteSubmissionEmailRule", entityId: row.id },
+    }).catch(() => undefined);
+    return { rule: formatWebsiteSubmissionRule(row) };
+  });
+
+  // POST /crm/email/website-submission-rules/:id/test — dry extraction only
+  app.post("/crm/email/website-submission-rules/:id/test", async (req, reply) => {
+    const user = await requireCrmEmailSettingsAccess(req, reply); if (!user) return;
+    const { id } = req.params as { id: string };
+    const rule = await (db as any).crmWebsiteSubmissionEmailRule.findFirst({ where: { id, tenantId: user.tenantId } });
+    if (!rule) return reply.code(404).send({ error: "rule_not_found" });
+    const rawEmail = String(((req.body as any) || {}).rawEmail || "").slice(0, 200_000);
+    if (!rawEmail.trim()) return reply.code(400).send({ error: "sample_required" });
+    const analysis = analyzeWebsiteSubmissionSample({ rawEmail, fromEmail: rule.senderEmail, subject: rule.subjectPattern });
+    return {
+      matched: true,
+      analysis: {
+        ...analysis,
+        unmappedSummary: analysis.unmappedSummary.map((line) => redactSensitiveText(line)),
+      },
+    };
+  });
+
   // POST /crm/email/sync-now — enqueue metadata-only reply sync (opt-in connections only)
   app.post("/crm/email/sync-now", async (req, reply) => {
     const user = await requireCrmAccess(req, reply); if (!user) return;
@@ -825,6 +1025,46 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
       select: { createdAt: true, metadata: true },
     });
     return { last: audit || null };
+  });
+
+  // GET /crm/notifications — lightweight persisted CRM notifications for the topbar
+  app.get("/crm/notifications", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply); if (!user) return;
+    const includeDismissed = String((req.query as any)?.includeDismissed || "") === "1";
+    const limit = Math.min(50, Math.max(1, Number((req.query as any)?.limit ?? 20)));
+    const rows = await (db as any).crmUserNotification.findMany({
+      where: {
+        tenantId: user.tenantId,
+        userId: user.sub,
+        ...(includeDismissed ? {} : { dismissedAt: null }),
+      },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    });
+    return {
+      notifications: rows.map((n: any) => ({
+        id: n.id,
+        title: n.title,
+        body: n.body ? redactSensitiveText(n.body) : null,
+        route: n.route ?? null,
+        kind: n.kind,
+        metadata: n.metadata ?? null,
+        dismissedAt: n.dismissedAt ?? null,
+        createdAt: n.createdAt,
+      })),
+    };
+  });
+
+  // POST /crm/notifications/:id/dismiss — per-user dismiss
+  app.post("/crm/notifications/:id/dismiss", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply); if (!user) return;
+    const { id } = req.params as { id: string };
+    const result = await (db as any).crmUserNotification.updateMany({
+      where: { id, tenantId: user.tenantId, userId: user.sub },
+      data: { dismissedAt: new Date() },
+    });
+    if (!result.count) return reply.code(404).send({ error: "notification_not_found" });
+    return { ok: true };
   });
 
   // GET /crm/email/replies/recent — metadata-only recent inbound messages

@@ -54,6 +54,8 @@ model CrmEmailConnection {
 
   bulkJobs     CrmBulkEmailJob[]
   driveFolders CrmDriveFolder[]
+  websiteSubmissionRules CrmWebsiteSubmissionEmailRule[]
+  websiteSubmissions     CrmWebsiteSubmission[]
 
   // Note: partial unique indexes (USER per tenant+user+provider, single TENANT default per
   // tenant+provider, single TENANT row per tenant+email+provider) are created via raw SQL
@@ -118,10 +120,90 @@ model CrmEmailMessage {
   /// Which CrmEmailConnection sent this message. Null = legacy/unknown.
   senderConnectionId String?
 
+  websiteSubmissions CrmWebsiteSubmission[]
+
   @@unique([tenantId, gmailMessageId])
   @@index([threadId, createdAt])
   @@index([tenantId, hasCachedBody, bodyCacheExpiresAt])
   @@index([senderConnectionId])
+}
+
+enum CrmWebsiteSubmissionRuleMode {
+  AUTO_CREATE
+  REVIEW_FIRST
+}
+
+enum CrmWebsiteSubmissionStatus {
+  MATCHED
+  PROCESSED
+  PENDING_REVIEW
+  FAILED
+}
+
+model CrmWebsiteSubmissionEmailRule {
+  id                      String                       @id @default(cuid())
+  tenantId                String
+  connectionId            String
+  name                    String
+  active                  Boolean                      @default(true)
+  senderEmail             String?
+  senderDomain            String?
+  subjectPattern          String?
+  bodyPatterns            Json?
+  fieldMap                Json                         @default("{}")
+  attachmentExpectations  Json                         @default("[]")
+  assignmentUserId        String?
+  assignmentTeamId        String?
+  confidenceThreshold     Float                        @default(0.75)
+  mode                    CrmWebsiteSubmissionRuleMode @default(REVIEW_FIRST)
+  sampleMetadata          Json?
+  lastMatchedAt           DateTime?
+  createdByUserId         String?
+  createdAt               DateTime                     @default(now())
+  updatedAt               DateTime                     @updatedAt
+
+  tenant         Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  connection     CrmEmailConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  assignmentUser User?              @relation("CrmWebsiteSubmissionRuleAssignmentUser", fields: [assignmentUserId], references: [id], onDelete: SetNull)
+  createdBy      User?              @relation("CrmWebsiteSubmissionRuleCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  submissions    CrmWebsiteSubmission[]
+
+  @@index([tenantId, connectionId, active])
+  @@index([tenantId, active])
+  @@index([assignmentUserId])
+}
+
+model CrmWebsiteSubmission {
+  id                String                     @id @default(cuid())
+  tenantId          String
+  ruleId            String
+  connectionId      String
+  gmailMessageId    String
+  emailMessageId    String?
+  contactId         String?
+  status            CrmWebsiteSubmissionStatus @default(MATCHED)
+  fromEmail         String?
+  subject           String?
+  receivedAt        DateTime?
+  extractedFields   Json                       @default("{}")
+  unmappedSummary   Json                       @default("[]")
+  attachmentSummary Json                       @default("[]")
+  confidence        Float?
+  safeError         String?
+  processedAt       DateTime?
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+
+  tenant       Tenant                        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rule         CrmWebsiteSubmissionEmailRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  connection   CrmEmailConnection            @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  emailMessage CrmEmailMessage?              @relation(fields: [emailMessageId], references: [id], onDelete: SetNull)
+  contact      Contact?                      @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, gmailMessageId])
+  @@index([tenantId, status, createdAt])
+  @@index([tenantId, ruleId, createdAt])
+  @@index([tenantId, contactId])
 }
 
 model CrmEmailSendLog {
@@ -760,6 +842,9 @@ model Tenant {
   crmEmailSignatures              CrmEmailSignature[]
   crmEmailTemplateAttachments     CrmEmailTemplateAttachment[]
   crmBulkEmailJobs                CrmBulkEmailJob[]
+  crmWebsiteSubmissionEmailRules  CrmWebsiteSubmissionEmailRule[]
+  crmWebsiteSubmissions           CrmWebsiteSubmission[]
+  crmUserNotifications            CrmUserNotification[]
   crmDriveFolders                 CrmDriveFolder[]
   crmLeadDocuments                CrmLeadDocument[]
   crmLeadDocumentTexts            CrmLeadDocumentText[]
@@ -866,6 +951,9 @@ model User {
   crmEmailSignatures             CrmEmailSignature[]
   crmEmailTemplateAttachments    CrmEmailTemplateAttachment[]
   crmBulkEmailJobsCreated        CrmBulkEmailJob[]                 @relation("CrmBulkEmailJobCreator")
+  crmWebsiteSubmissionRulesAssigned CrmWebsiteSubmissionEmailRule[] @relation("CrmWebsiteSubmissionRuleAssignmentUser")
+  crmWebsiteSubmissionRulesCreated  CrmWebsiteSubmissionEmailRule[] @relation("CrmWebsiteSubmissionRuleCreatedBy")
+  crmUserNotifications              CrmUserNotification[]
   customRolesCreated             CustomRole[]                      @relation("CustomRoleCreatedBy")
   customRolesUpdated             CustomRole[]                      @relation("CustomRoleUpdatedBy")
   customRoleAssignments          UserCustomRole[]
@@ -939,6 +1027,7 @@ enum ContactSource {
   MANUAL
   EXTENSION
   IMPORTED
+  WEBSITE_SUBMISSION
 }
 
 enum ContactPhoneType {
@@ -1946,6 +2035,7 @@ model Contact {
   crmEmailThreads       CrmEmailThread[]
   crmEmailMessages      CrmEmailMessage[]
   crmEmailSendLogs      CrmEmailSendLog[]
+  crmWebsiteSubmissions CrmWebsiteSubmission[]
   leadDocuments         CrmLeadDocument[]
   crmFormRequests       CrmFormRequest[]
   crmFormSubmissions    CrmFormSubmission[]
@@ -2254,6 +2344,26 @@ model Alert {
 
   @@index([tenantId, createdAt])
   @@index([severity, createdAt])
+}
+
+model CrmUserNotification {
+  id          String    @id @default(cuid())
+  tenantId    String
+  userId      String
+  title       String
+  body        String?
+  route       String?
+  kind        String    @default("CRM")
+  metadata    Json?
+  dismissedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, userId, dismissedAt, createdAt])
+  @@index([tenantId, createdAt])
 }
 
 /// Super-admin visibility for voicemail ingestion stalls (REST vs spool, helper errors, notify/worker paths).
@@ -4000,6 +4110,7 @@ enum CrmTimelineEventType {
   EMAIL_SENT
   EMAIL_RECEIVED
   EMAIL_REPLY
+  WEBSITE_SUBMISSION
   VOICEMAIL_DROP
   FORM_SENT
   FORM_OPENED
@@ -4741,6 +4852,7 @@ enum CrmDriveFolderPurpose {
 enum CrmLeadDocumentSource {
   GOOGLE_DRIVE
   MANUAL_UPLOAD
+  EMAIL_ATTACHMENT
 }
 
 enum CrmLeadDocumentStatus {

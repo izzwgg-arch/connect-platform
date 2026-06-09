@@ -1,5 +1,7 @@
 import { db } from "@connect/db";
 import { decryptJson, encryptJson } from "@connect/security";
+import { processWebsiteSubmissionEmail } from "../../api/src/crm/websiteSubmissionProcessor";
+import { ruleMatchesEmail } from "../../api/src/crm/websiteSubmissionExtraction";
 
 export function parseHeader(headers: Array<{ name: string; value: string }>, key: string): string | null {
   const h = headers.find((x) => x.name.toLowerCase() === key.toLowerCase());
@@ -11,6 +13,50 @@ export function extractEmail(addr: string | null): string | null {
   const m = addr.match(/<([^>]+)>/);
   const v = m ? m[1] : addr;
   return v.trim() || null;
+}
+
+function decodeGmailBase64Url(data: string | null | undefined): Buffer {
+  const raw = String(data || "").replace(/-/g, "+").replace(/_/g, "/");
+  return Buffer.from(raw, "base64");
+}
+
+function extractGmailTextAndAttachments(payload: any): {
+  text: string;
+  attachments: Array<{ fileName: string; mimeType: string; attachmentId: string; size: number }>;
+} {
+  const textParts: string[] = [];
+  const attachments: Array<{ fileName: string; mimeType: string; attachmentId: string; size: number }> = [];
+  const walk = (part: any) => {
+    if (!part) return;
+    const mimeType = String(part.mimeType || "");
+    const fileName = String(part.filename || "");
+    const body = part.body || {};
+    if (fileName && body.attachmentId) {
+      attachments.push({ fileName, mimeType, attachmentId: String(body.attachmentId), size: Number(body.size || 0) });
+      return;
+    }
+    if ((mimeType === "text/plain" || mimeType === "text/html") && body.data) {
+      const decoded = decodeGmailBase64Url(body.data).toString("utf8");
+      textParts.push(mimeType === "text/html" ? decoded.replace(/<[^>]+>/g, " ") : decoded);
+    }
+    for (const child of Array.isArray(part.parts) ? part.parts : []) walk(child);
+  };
+  walk(payload);
+  return { text: textParts.join("\n").replace(/\s+\n/g, "\n").trim(), attachments };
+}
+
+async function fetchGmailAttachment(input: {
+  accessToken: string;
+  messageId: string;
+  attachmentId: string;
+  fileName: string;
+  mimeType: string;
+}): Promise<{ fileName: string; mimeType: string; buffer: Buffer } | null> {
+  const url = new URL(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(input.messageId)}/attachments/${encodeURIComponent(input.attachmentId)}`);
+  const res = await fetch(url.toString(), { headers: { authorization: `Bearer ${input.accessToken}` } });
+  const json: any = await res.json().catch(() => ({}));
+  if (!res.ok || !json?.data) return null;
+  return { fileName: input.fileName, mimeType: input.mimeType || "application/octet-stream", buffer: decodeGmailBase64Url(json.data) };
 }
 
 /**
@@ -54,6 +100,112 @@ async function refreshAccessToken(refreshToken: string): Promise<{ accessToken: 
   const tokenType = String(json.token_type || "Bearer");
   const scope = String(json.scope || "").split(/\s+/).filter(Boolean);
   return { accessToken, expiresAt: expiresInSec ? new Date(Date.now() + expiresInSec * 1000) : null, scope, tokenType };
+}
+
+async function runWebsiteSubmissionRuleScan(input: {
+  tenantId: string;
+  connectionId: string;
+  accessToken: string;
+  senderEmailAddress: string;
+}): Promise<{ candidates: number; processed: number; matched: number; errors: number }> {
+  if ((process.env.CRM_WEBSITE_SUBMISSION_EMAIL_ENABLED || "true").toLowerCase() === "false") {
+    return { candidates: 0, processed: 0, matched: 0, errors: 0 };
+  }
+  const rules = await (db as any).crmWebsiteSubmissionEmailRule.findMany({
+    where: { tenantId: input.tenantId, connectionId: input.connectionId, active: true },
+    select: { id: true, senderEmail: true, senderDomain: true, subjectPattern: true, bodyPatterns: true },
+    take: 25,
+  });
+  if (rules.length === 0) return { candidates: 0, processed: 0, matched: 0, errors: 0 };
+
+  const maxCandidates = Math.max(1, Math.min(50, Number(process.env.CRM_WEBSITE_SUBMISSION_SCAN_MAX || 15)));
+  const seen = new Set<string>();
+  let candidates = 0;
+  let processed = 0;
+  let matched = 0;
+  let errors = 0;
+
+  for (const rule of rules) {
+    const qParts = ["in:inbox", "newer_than:30d"];
+    if (rule.senderEmail) qParts.push(`from:${rule.senderEmail}`);
+    else if (rule.senderDomain) qParts.push(`from:${rule.senderDomain}`);
+    const listUrl = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
+    listUrl.searchParams.set("q", qParts.join(" "));
+    listUrl.searchParams.set("maxResults", String(maxCandidates));
+    let listJson: any = {};
+    try {
+      const res = await fetch(listUrl.toString(), { headers: { authorization: `Bearer ${input.accessToken}` } });
+      listJson = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        errors += 1;
+        continue;
+      }
+    } catch {
+      errors += 1;
+      continue;
+    }
+
+    for (const item of Array.isArray(listJson.messages) ? listJson.messages : []) {
+      const msgId = String(item?.id || "");
+      if (!msgId || seen.has(msgId)) continue;
+      seen.add(msgId);
+      candidates += 1;
+
+      const msgUrl = new URL(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(msgId)}`);
+      msgUrl.searchParams.set("format", "full");
+      try {
+        const res = await fetch(msgUrl.toString(), { headers: { authorization: `Bearer ${input.accessToken}` } });
+        const msg: any = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          errors += 1;
+          continue;
+        }
+        const labels: string[] = Array.isArray(msg?.labelIds) ? msg.labelIds : [];
+        const payload = msg?.payload || {};
+        const headers: Array<{ name: string; value: string }> = Array.isArray(payload?.headers) ? payload.headers : [];
+        const fromEmail = extractEmail(parseHeader(headers, "From"));
+        const toEmail = extractEmail(parseHeader(headers, "To"));
+        const subject = parseHeader(headers, "Subject") || null;
+        const dateStr = parseHeader(headers, "Date");
+        const receivedAt = dateStr ? new Date(dateStr) : null;
+        const snippet = typeof msg?.snippet === "string" ? msg.snippet.slice(0, 300) : null;
+        const { inbound } = classifyGmailMessage({ labelIds: labels, fromEmail, senderEmailAddress: input.senderEmailAddress });
+        if (!inbound) continue;
+        const parsed = extractGmailTextAndAttachments(payload);
+        const bodyText = parsed.text || snippet || "";
+        if (!ruleMatchesEmail(rule, { fromEmail, subject, body: bodyText })) continue;
+        matched += 1;
+        const attachments = [];
+        for (const att of parsed.attachments.slice(0, 10)) {
+          const fetched = await fetchGmailAttachment({
+            accessToken: input.accessToken,
+            messageId: msgId,
+            attachmentId: att.attachmentId,
+            fileName: att.fileName,
+            mimeType: att.mimeType,
+          }).catch(() => null);
+          if (fetched) attachments.push(fetched);
+        }
+        await processWebsiteSubmissionEmail({
+          tenantId: input.tenantId,
+          connectionId: input.connectionId,
+          gmailMessageId: msgId,
+          gmailThreadId: String(msg?.threadId || ""),
+          fromEmail,
+          toEmail,
+          subject,
+          receivedAt,
+          snippet,
+          bodyText,
+          attachments,
+        });
+        processed += 1;
+      } catch {
+        errors += 1;
+      }
+    }
+  }
+  return { candidates, processed, matched, errors };
 }
 
 export async function processCrmEmailSyncJob(job: { tenantId: string; connectionId: string; diag?: boolean }) {
@@ -123,6 +275,10 @@ export async function processCrmEmailSyncJob(job: { tenantId: string; connection
   let skippedNotInbound = 0;
   let skippedDuplicates = 0;
   let errorCount = 0;
+  let websiteSubmissionCandidates = 0;
+  let websiteSubmissionMatched = 0;
+  let websiteSubmissionProcessed = 0;
+  let websiteSubmissionErrors = 0;
 
   for (const t of threads) {
     const url = new URL(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(t.gmailThreadId)}`);
@@ -218,6 +374,23 @@ export async function processCrmEmailSyncJob(job: { tenantId: string; connection
     }
   }
 
+  try {
+    const websiteScan = await runWebsiteSubmissionRuleScan({
+      tenantId,
+      connectionId: conn.id,
+      accessToken,
+      senderEmailAddress: conn.emailAddress,
+    });
+    websiteSubmissionCandidates = websiteScan.candidates;
+    websiteSubmissionMatched = websiteScan.matched;
+    websiteSubmissionProcessed = websiteScan.processed;
+    websiteSubmissionErrors = websiteScan.errors;
+    errorCount += websiteScan.errors;
+  } catch {
+    websiteSubmissionErrors += 1;
+    errorCount += 1;
+  }
+
   // Update lastSyncAt regardless of outcome (indicates we attempted)
   await db.crmEmailConnection.update({ where: { id: conn.id }, data: { lastSyncAt: new Date(), lastError: errorCount ? `errors:${errorCount}` : null } }).catch(() => undefined);
 
@@ -235,11 +408,15 @@ export async function processCrmEmailSyncJob(job: { tenantId: string; connection
           inserted,
           skippedNotInbound,
           skippedDuplicates,
+          websiteSubmissionCandidates,
+          websiteSubmissionMatched,
+          websiteSubmissionProcessed,
+          websiteSubmissionErrors,
           errors: errorCount,
         },
       },
     });
   } catch {}
 
-  return { ok: true, threadsChecked: threads.length, fetched, inserted, skippedNotInbound, skippedDuplicates, errors: errorCount };
+  return { ok: true, threadsChecked: threads.length, fetched, inserted, skippedNotInbound, skippedDuplicates, websiteSubmissionCandidates, websiteSubmissionMatched, websiteSubmissionProcessed, websiteSubmissionErrors, errors: errorCount };
 }

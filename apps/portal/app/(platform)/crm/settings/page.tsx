@@ -66,6 +66,44 @@ type AiSettings = {
   isDefault?: boolean;
 };
 
+type EmailSender = {
+  id: string;
+  emailAddress: string;
+  label: string | null;
+  scope: "USER" | "TENANT";
+  status: string;
+  replyTrackingEnabled: boolean;
+  scopes: string[];
+};
+
+type WebsiteSubmissionRule = {
+  id: string;
+  connectionId: string;
+  name: string;
+  active: boolean;
+  senderEmail: string | null;
+  senderDomain: string | null;
+  subjectPattern: string | null;
+  fieldMap: Record<string, string>;
+  attachmentExpectations: Array<{ fileName?: string; mimeType?: string; documentType?: string }>;
+  assignmentUserId: string | null;
+  confidenceThreshold: number;
+  mode: "AUTO_CREATE" | "REVIEW_FIRST";
+  lastMatchedAt: string | null;
+  connection?: { emailAddress: string; label: string | null };
+  _count?: { submissions: number };
+};
+
+type WebsiteSubmissionAnalysis = {
+  detectedSenderEmail: string | null;
+  detectedSenderDomain: string | null;
+  detectedSubjectPattern: string | null;
+  mappedFields: Record<string, string>;
+  unmappedSummary: string[];
+  attachmentExpectations: Array<{ fileName?: string; mimeType?: string; documentType: string }>;
+  confidence: number;
+};
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 const ROLE_LABELS: Record<string, string> = {
@@ -355,6 +393,106 @@ export default function CrmSettingsPage() {
     setAiSettingsDraft((prev) => prev ? { ...prev, ...patch } : null);
   };
 
+  // ── Website submission email rules ─────────────────────────────────────────
+  const [emailSenders, setEmailSenders] = useState<EmailSender[]>([]);
+  const [websiteRules, setWebsiteRules] = useState<WebsiteSubmissionRule[]>([]);
+  const [websiteRulesLoading, setWebsiteRulesLoading] = useState(false);
+  const [websiteRulesError, setWebsiteRulesError] = useState<string | null>(null);
+  const [learnOpen, setLearnOpen] = useState(false);
+  const [sampleEmail, setSampleEmail] = useState("");
+  const [analysis, setAnalysis] = useState<WebsiteSubmissionAnalysis | null>(null);
+  const [analyzingSample, setAnalyzingSample] = useState(false);
+  const [savingRule, setSavingRule] = useState(false);
+  const [ruleDraft, setRuleDraft] = useState({
+    name: "Website submission",
+    connectionId: "",
+    assignmentUserId: "",
+    mode: "AUTO_CREATE" as "AUTO_CREATE" | "REVIEW_FIRST",
+    confidenceThreshold: 0.75,
+    active: true,
+  });
+
+  const loadWebsiteSubmissionRules = useCallback(async () => {
+    if (!isAdmin) return;
+    setWebsiteRulesLoading(true);
+    setWebsiteRulesError(null);
+    try {
+      const [rulesRes, sendersRes] = await Promise.all([
+        apiGet<{ rules: WebsiteSubmissionRule[] }>("/crm/email/website-submission-rules"),
+        apiGet<{ senders: EmailSender[] }>("/crm/email/connections"),
+      ]);
+      setWebsiteRules(rulesRes.rules);
+      const usableSenders = sendersRes.senders.filter((s) => s.status === "CONNECTED" && s.replyTrackingEnabled && s.scopes?.includes("https://www.googleapis.com/auth/gmail.readonly"));
+      setEmailSenders(usableSenders);
+      setRuleDraft((prev) => ({ ...prev, connectionId: prev.connectionId || usableSenders[0]?.id || "" }));
+    } catch (e: any) {
+      setWebsiteRulesError(e?.message || "Failed to load website submission rules");
+    } finally {
+      setWebsiteRulesLoading(false);
+    }
+  }, [isAdmin]);
+
+  useEffect(() => { loadWebsiteSubmissionRules(); }, [loadWebsiteSubmissionRules]);
+
+  const analyzeSample = async () => {
+    if (!sampleEmail.trim()) return;
+    setAnalyzingSample(true);
+    setWebsiteRulesError(null);
+    try {
+      const res = await apiPost<{ analysis: WebsiteSubmissionAnalysis }>("/crm/email/website-submission-rules/analyze-sample", { rawEmail: sampleEmail });
+      setAnalysis(res.analysis);
+      setRuleDraft((prev) => ({
+        ...prev,
+        name: prev.name || "Website submission",
+      }));
+    } catch (e: any) {
+      setWebsiteRulesError(e?.message || "Failed to analyze sample");
+    } finally {
+      setAnalyzingSample(false);
+    }
+  };
+
+  const saveWebsiteRule = async () => {
+    if (!analysis || !ruleDraft.connectionId) return;
+    setSavingRule(true);
+    setWebsiteRulesError(null);
+    try {
+      await apiPost("/crm/email/website-submission-rules", {
+        ...ruleDraft,
+        assignmentUserId: ruleDraft.assignmentUserId || null,
+        senderEmail: analysis.detectedSenderEmail,
+        senderDomain: analysis.detectedSenderDomain,
+        subjectPattern: analysis.detectedSubjectPattern,
+        fieldMap: analysis.mappedFields,
+        attachmentExpectations: analysis.attachmentExpectations,
+        sampleMetadata: {
+          senderEmail: analysis.detectedSenderEmail,
+          senderDomain: analysis.detectedSenderDomain,
+          subjectPattern: analysis.detectedSubjectPattern,
+          mappedFieldKeys: Object.keys(analysis.mappedFields),
+          unmappedCount: analysis.unmappedSummary.length,
+        },
+      });
+      setLearnOpen(false);
+      setSampleEmail("");
+      setAnalysis(null);
+      loadWebsiteSubmissionRules();
+    } catch (e: any) {
+      setWebsiteRulesError(e?.message || "Failed to save rule");
+    } finally {
+      setSavingRule(false);
+    }
+  };
+
+  const toggleWebsiteRule = async (rule: WebsiteSubmissionRule) => {
+    try {
+      await apiPatch(`/crm/email/website-submission-rules/${rule.id}`, { active: !rule.active });
+      loadWebsiteSubmissionRules();
+    } catch (e: any) {
+      setWebsiteRulesError(e?.message || "Failed to update rule");
+    }
+  };
+
   // ── Render ──────────────────────────────────────────────────────────────────
 
   if (!isAdmin) {
@@ -524,6 +662,128 @@ export default function CrmSettingsPage() {
           )}
         </section>
       )}
+
+      {/* ── Website Submission Email Rules ─────────────────────────────────── */}
+      <section className="panel" style={{ padding: "1.5rem" }}>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem", marginBottom: "1rem" }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: "0.9375rem", fontWeight: 600 }}>Email / Website Submissions</h3>
+            <p style={{ margin: "0.25rem 0 0", fontSize: "0.8125rem", color: "var(--text-dim)" }}>
+              Teach Connect what website form emails look like. Matching future emails can create or update CRM contacts, attach documents, and notify the assigned user.
+            </p>
+          </div>
+          <button
+            onClick={() => setLearnOpen((v) => !v)}
+            style={{ padding: "0.4rem 0.875rem", borderRadius: "0.5rem", background: "var(--accent)", color: "#fff", fontWeight: 600, fontSize: "0.8125rem", border: "none", cursor: "pointer" }}
+          >
+            Learn Website Submission Email
+          </button>
+        </div>
+
+        {websiteRulesError && <p style={{ color: "#ef4444", fontSize: "0.8125rem", margin: "0 0 0.75rem" }}>{websiteRulesError}</p>}
+        {websiteRulesLoading ? <LoadingSkeleton rows={2} /> : websiteRules.length === 0 ? (
+          <p style={{ margin: 0, color: "var(--text-dim)", fontSize: "0.875rem" }}>No learned website submission rules yet.</p>
+        ) : (
+          <div style={{ display: "grid", gap: "0.75rem", marginBottom: learnOpen ? "1rem" : 0 }}>
+            {websiteRules.map((rule) => (
+              <div key={rule.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem", padding: "0.875rem", border: "1px solid var(--border)", borderRadius: "0.75rem", background: "var(--surface)" }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                    <strong style={{ fontSize: "0.9rem" }}>{rule.name}</strong>
+                    <span style={{ padding: "0.1rem 0.45rem", borderRadius: 999, fontSize: "0.7rem", fontWeight: 700, background: rule.active ? "#d1fae5" : "#f1f5f9", color: rule.active ? "#065f46" : "#64748b" }}>
+                      {rule.active ? "Active" : "Disabled"}
+                    </span>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-dim)" }}>{rule.mode === "AUTO_CREATE" ? "Auto-create" : "Review first"}</span>
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: "0.78rem", color: "var(--text-dim)" }}>
+                    {rule.connection?.label || rule.connection?.emailAddress || "Mailbox"} · {rule.senderEmail || rule.senderDomain || "Any sender"} · {Object.keys(rule.fieldMap || {}).length} mapped fields · {rule._count?.submissions ?? 0} submissions
+                  </div>
+                </div>
+                <button
+                  onClick={() => toggleWebsiteRule(rule)}
+                  style={{ padding: "0.35rem 0.75rem", borderRadius: "0.5rem", background: "var(--surface-hover)", border: "1px solid var(--border)", color: "var(--text)", fontWeight: 600, fontSize: "0.78rem", cursor: "pointer" }}
+                >
+                  {rule.active ? "Disable" : "Enable"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {learnOpen && (
+          <div style={{ marginTop: "1rem", padding: "1rem", border: "1px solid var(--border)", borderRadius: "0.75rem", background: "var(--surface-hover)" }}>
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              <div style={{ display: "grid", gap: "0.75rem", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                <div>
+                  <label style={{ display: "block", fontSize: "0.75rem", fontWeight: 700, color: "var(--text-dim)", marginBottom: 4 }}>Rule name</label>
+                  <input value={ruleDraft.name} onChange={(e) => setRuleDraft((p) => ({ ...p, name: e.target.value }))} style={{ width: "100%", padding: "0.45rem 0.6rem", border: "1px solid var(--border)", borderRadius: "0.5rem", background: "var(--surface)", color: "var(--text)" }} />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "0.75rem", fontWeight: 700, color: "var(--text-dim)", marginBottom: 4 }}>Mailbox/account</label>
+                  <ConnectSelect
+                    value={ruleDraft.connectionId}
+                    onChange={(value) => setRuleDraft((p) => ({ ...p, connectionId: value }))}
+                    placeholder="Select connected mailbox"
+                    options={emailSenders.map((s) => ({ value: s.id, label: `${s.label || s.emailAddress} (${s.scope})` }))}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "0.75rem", fontWeight: 700, color: "var(--text-dim)", marginBottom: 4 }}>Assigned user</label>
+                  <ConnectSelect
+                    value={ruleDraft.assignmentUserId}
+                    onChange={(value) => setRuleDraft((p) => ({ ...p, assignmentUserId: value }))}
+                    placeholder="First available admin/user"
+                    options={[{ value: "", label: "Auto assign" }, ...users.filter((u) => u.crmEnabled).map((u) => ({ value: u.userId, label: u.displayName || u.email }))]}
+                  />
+                </div>
+              </div>
+
+              <textarea
+                value={sampleEmail}
+                onChange={(e) => setSampleEmail(e.target.value)}
+                placeholder="Paste the raw sample email or copied message body here..."
+                rows={8}
+                style={{ width: "100%", padding: "0.65rem", border: "1px solid var(--border)", borderRadius: "0.75rem", background: "var(--surface)", color: "var(--text)", fontFamily: "monospace", fontSize: "0.8rem" }}
+              />
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center" }}>
+                <button onClick={analyzeSample} disabled={analyzingSample || !sampleEmail.trim()} style={{ padding: "0.4rem 0.875rem", borderRadius: "0.5rem", background: "var(--accent)", color: "#fff", fontWeight: 700, fontSize: "0.8125rem", border: "none", cursor: analyzingSample ? "not-allowed" : "pointer", opacity: !sampleEmail.trim() ? 0.55 : 1 }}>
+                  {analyzingSample ? "Analyzing..." : "Test extraction"}
+                </button>
+                <select value={ruleDraft.mode} onChange={(e) => setRuleDraft((p) => ({ ...p, mode: e.target.value as any }))} style={{ padding: "0.4rem 0.6rem", borderRadius: "0.5rem", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)" }}>
+                  <option value="AUTO_CREATE">Auto-create when confident</option>
+                  <option value="REVIEW_FIRST">Review first</option>
+                </select>
+              </div>
+
+              {analysis && (
+                <div style={{ display: "grid", gap: "0.75rem", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                  <div style={{ padding: "0.75rem", borderRadius: "0.65rem", background: "var(--surface)", border: "1px solid var(--border)" }}>
+                    <strong style={{ fontSize: "0.8rem" }}>Detected match</strong>
+                    <p style={{ margin: "0.35rem 0 0", fontSize: "0.78rem", color: "var(--text-dim)" }}>Sender: {analysis.detectedSenderEmail || analysis.detectedSenderDomain || "Unknown"}</p>
+                    <p style={{ margin: "0.2rem 0 0", fontSize: "0.78rem", color: "var(--text-dim)" }}>Subject: {analysis.detectedSubjectPattern || "Any"}</p>
+                    <p style={{ margin: "0.2rem 0 0", fontSize: "0.78rem", color: "var(--text-dim)" }}>Confidence: {Math.round(analysis.confidence * 100)}%</p>
+                  </div>
+                  <div style={{ padding: "0.75rem", borderRadius: "0.65rem", background: "var(--surface)", border: "1px solid var(--border)" }}>
+                    <strong style={{ fontSize: "0.8rem" }}>Mapped CRM fields</strong>
+                    <p style={{ margin: "0.35rem 0 0", fontSize: "0.78rem", color: "var(--text-dim)" }}>{Object.keys(analysis.mappedFields).length ? Object.keys(analysis.mappedFields).join(", ") : "No CRM fields detected yet"}</p>
+                  </div>
+                  <div style={{ padding: "0.75rem", borderRadius: "0.65rem", background: "var(--surface)", border: "1px solid var(--border)" }}>
+                    <strong style={{ fontSize: "0.8rem" }}>Unmapped summary</strong>
+                    <p style={{ margin: "0.35rem 0 0", fontSize: "0.78rem", color: "var(--text-dim)" }}>{analysis.unmappedSummary.slice(0, 3).join("; ") || "None"}</p>
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+                <button onClick={() => setLearnOpen(false)} style={{ padding: "0.4rem 0.75rem", borderRadius: "0.5rem", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", cursor: "pointer" }}>Cancel</button>
+                <button onClick={saveWebsiteRule} disabled={!analysis || !ruleDraft.connectionId || savingRule} style={{ padding: "0.4rem 0.875rem", borderRadius: "0.5rem", border: "none", background: "var(--accent)", color: "#fff", fontWeight: 700, cursor: savingRule ? "not-allowed" : "pointer", opacity: (!analysis || !ruleDraft.connectionId) ? 0.55 : 1 }}>
+                  {savingRule ? "Saving..." : "Save rule"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
 
       {/* ── Local Presence pool panel ───────────────────────────────────────── */}
       {settings?.localPresenceEnabled && (

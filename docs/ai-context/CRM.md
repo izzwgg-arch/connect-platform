@@ -149,6 +149,17 @@ Pipeline (unchanged): Google Drive match → import (`CrmLeadDocument`) → text
 - Sender cards should feel like production infrastructure: connection state, reply tracking, sync health, last sync/activity, and compact diagnostics.
 - Do not invent backend fields, fake metrics, demo activity, placeholder buttons, or inbox archive behavior.
 
+## CRM Email Website Submission Intake
+
+- Learned website submission rules live inside `/crm/settings` under **Email / Website Submissions**. Do not add a webhook intake, standalone intake app, or large review page for Phase 1.
+- API routes are under `/crm/email/website-submission-rules` in `apps/api/src/crm/emailRoutes.ts` and require `requireCrmEmailSettingsAccess` (CRM Admin/platform admin).
+- Worker integration is in `apps/worker/src/crmEmailSync.ts`. Existing tracked-thread reply sync remains unchanged; the website submission scan runs only when active rules exist for the tenant mailbox and can be disabled with `CRM_WEBSITE_SUBMISSION_EMAIL_ENABLED=false`.
+- Rules are tenant-scoped by `tenantId` + `CrmEmailConnection.id`. Body/attachment reads are allowed only for active learned rules; do not broaden this into general Gmail inbox archiving.
+- Extraction maps only to fields that exist today on `Contact`, `ContactPhone`, `ContactEmail`, `ContactAddress`, and `CrmContactMeta`. Useful unmapped values go into safe summary/notes. Do not invent custom CRM fields until a real custom-field subsystem exists.
+- Attachments from matching emails use `CrmLeadDocument` with `source=EMAIL_ATTACHMENT` and existing CRM document storage/signed open routes. Original bytes stay in tenant-scoped secure storage.
+- Timeline event type is `WEBSITE_SUBMISSION`; notifications use `CrmUserNotification` and must not include SSNs, bank account numbers, or other sensitive full values.
+- Dedupe is by `(tenantId, gmailMessageId)` plus contact lookup by tenant-scoped email/phone. Existing contact fields are filled only when empty; low-confidence or review-first submissions should not overwrite important fields.
+
 ## CRM Email Template Builder
 
 - `/crm/email/templates` is a no-code builder, not a raw admin form. The layout is library rail + visual editor + live preview, with bottom panels for Branding, Attachments, Merge Fields, and AI Assistant.
