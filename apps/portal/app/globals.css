@@ -9819,6 +9819,7 @@
   color: var(--crm-text-muted);
 }
 
+/* Voicemail Drops uses a light-mode layout block above, so dark mode restores the CRM dark tokens here. */
 :is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace.crm-queue-workspace {
   --crm-bg: #0a0e14;
   --crm-surface: #141f2b;
