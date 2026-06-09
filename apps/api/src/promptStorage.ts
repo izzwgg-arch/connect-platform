@@ -176,6 +176,8 @@ export async function convertToPbxWav(sourceBytes: Buffer): Promise<Buffer> {
       [
         "-y",
         "-i", sourcePath,
+        "-map", "0:a:0",
+        "-vn",
         "-ac", "1",
         "-ar", "8000",
         "-sample_fmt", "s16",

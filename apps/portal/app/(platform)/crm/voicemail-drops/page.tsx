@@ -757,12 +757,17 @@ function NewVoicemailPanel({ onClose, onCreated }: { onClose: () => void; onCrea
               <span className="voicemail-drops-upload-icon">
                 <Upload className="h-6 w-6" />
               </span>
-              <span className="text-sm font-black text-crm-text">{file ? file.name : "Drop in WAV, MP3, M4A, or OGG"}</span>
+              <span className="text-sm font-black text-crm-text">{file ? file.name : "Drop in any audio or media file"}</span>
               <span className="text-xs leading-relaxed text-crm-muted">
-                {file ? `${file.type || "Audio file"} ${fmtFileSize(file.size) ? `· ${fmtFileSize(file.size)}` : ""}` : "Connect converts uploads to a PBX-safe voicemail format."}
+                {file ? `${file.type || "Media file"} ${fmtFileSize(file.size) ? `· ${fmtFileSize(file.size)}` : ""}` : "Connect extracts audio and converts uploads to a PBX-safe voicemail format."}
               </span>
               <VoicemailWaveform muted={!file} />
-              <input type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg" className="hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+              <input
+                type="file"
+                accept="audio/*,video/*,.wav,.mp3,.m4a,.ogg,.oga,.opus,.aac,.flac,.webm,.mp4,.mov,.mkv,.amr,.aif,.aiff"
+                className="hidden"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              />
             </label>
           </div>
           <label className="mt-3 flex items-center justify-between rounded-crm border border-crm-border bg-crm-surface/70 px-3 py-2.5 text-sm font-semibold text-crm-text">

@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { db } from "@connect/db";
+import { sendBufferWithOptionalRange } from "../httpVoicemailRange";
 import { resolvePbxRouteHelperConfig } from "../pbxInboundRouteHelperClient";
 import { pushPromptToHelper } from "../pbxPromptPushClient";
 import {
@@ -420,9 +421,8 @@ export async function registerCrmVoicemailDropRoutes(app: FastifyInstance) {
     const verified = verifySignedCrmVoicemailDropUrl(drop.id, drop.pbxStorageKey, q.exp, q.sig);
     if (!verified.ok) return reply.code(403).send({ error: verified.reason === "expired" ? "signed_url_expired" : "invalid_signature" });
     const bytes = await readCrmVoicemailDropAudio(drop.pbxStorageKey);
-    reply.header("content-type", contentTypeForCrmVoicemailDrop(drop.pbxStorageKey));
     reply.header("cache-control", "private, max-age=300");
-    return reply.send(bytes);
+    return sendBufferWithOptionalRange(req, reply, bytes, contentTypeForCrmVoicemailDrop(drop.pbxStorageKey));
   });
 
   app.get("/crm/voicemail-drops/:id", async (req, reply) => {

@@ -126,6 +126,29 @@ export function contentTypeForCrmVoicemailDrop(storageKey: string): string {
   return contentTypeForFilename(storageKey);
 }
 
+function shouldAppendSameOriginApiPrefix(url: URL): boolean {
+  if (url.pathname && url.pathname !== "/") return false;
+  if (url.port === "3001" || url.port === "3004") return false;
+  const host = url.hostname.toLowerCase();
+  if (host === "api" || host.startsWith("api.")) return false;
+  return true;
+}
+
+export function normalizeCrmVoicemailDropPublicBaseUrl(publicBaseUrl: string): string {
+  const raw = String(publicBaseUrl || "").trim().replace(/\/+$/, "");
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    if (shouldAppendSameOriginApiPrefix(url)) {
+      url.pathname = "/api";
+      return url.toString().replace(/\/+$/, "");
+    }
+  } catch {
+    // Preserve relative or otherwise non-URL bases for tests and local callers.
+  }
+  return raw;
+}
+
 export function buildSignedCrmVoicemailDropUrl(
   publicBaseUrl: string,
   dropId: string,
@@ -137,7 +160,7 @@ export function buildSignedCrmVoicemailDropUrl(
     .createHmac("sha256", signingSecret())
     .update(`${dropId}:${storageKey}:${exp}`)
     .digest("hex");
-  const base = publicBaseUrl.replace(/\/+$/, "");
+  const base = normalizeCrmVoicemailDropPublicBaseUrl(publicBaseUrl);
   return `${base}/crm/voicemail-drops/${encodeURIComponent(dropId)}/stream?exp=${exp}&sig=${sig}`;
 }
 
