@@ -344,13 +344,14 @@ export function registerTelephonyRoutes(
       return;
     }
 
-    const { linkedId, tenantId, fileBaseName, strategy, waitSeconds, agentEndpoint } = req.body as {
+    const { linkedId, tenantId, fileBaseName, strategy, waitSeconds, agentEndpoint, agentExtension } = req.body as {
       linkedId?: unknown;
       tenantId?: unknown;
       fileBaseName?: unknown;
       strategy?: unknown;
       waitSeconds?: unknown;
       agentEndpoint?: unknown;
+      agentExtension?: unknown;
     };
     const callId = typeof linkedId === "string" ? linkedId.trim() : "";
     const requestedTenantId = typeof tenantId === "string" ? tenantId.trim() : "";
@@ -361,9 +362,14 @@ export function registerTelephonyRoutes(
         ? Math.round(waitSeconds)
         : null;
     const agentHint = typeof agentEndpoint === "string" && agentEndpoint.trim() ? agentEndpoint.trim() : null;
+    const agentExt = typeof agentExtension === "string" && agentExtension.trim() ? agentExtension.trim() : "";
 
-    if (!callId) {
-      res.status(400).json({ error: "linkedId_required" });
+    // A precise linkedId is preferred, but the WebRTC dialer can't always map its
+    // SIP session to the AMI/ARI live-call id. When the caller supplies the agent
+    // extension we can resolve the bridged call server-side instead — this is what
+    // makes Voicemail Drop reliable from the floating dialer.
+    if (!callId && !agentExt) {
+      res.status(400).json({ error: "linkedId_or_agent_extension_required" });
       return;
     }
     if (!requestedTenantId) {
@@ -375,7 +381,17 @@ export function registerTelephonyRoutes(
       return;
     }
 
-    const call = telephony.callStore.getById(callId);
+    let call = callId ? telephony.callStore.getById(callId) : undefined;
+    if ((!call || call.state === "hungup") && agentExt) {
+      // Resolve among bridged/active calls for this tenant whose extension set
+      // includes the agent. Prefer a call that classifies to a real customer leg.
+      const candidates = telephony.callStore
+        .getActive()
+        .filter((c) => c.tenantId === requestedTenantId && (c.extensions ?? []).includes(agentExt));
+      call =
+        candidates.find((c) => classifyVoicemailDropLegs(c.channels, agentHint).customerLeg != null) ??
+        candidates[0];
+    }
     if (!call || call.state === "hungup") {
       res.status(404).json({ error: "no_active_call" });
       return;

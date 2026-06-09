@@ -653,6 +653,11 @@ export function FloatingDialer() {
   const [vmDropState, setVmDropState] = useState<"idle" | "dropping" | "done" | "error">("idle");
   const [vmDropError, setVmDropError] = useState<string | null>(null);
   const activeDropCallId = activeWorkspaceCall?.linkedId || activeWorkspaceCall?.id || null;
+  const dropAgentExtension = phone.diag.extensionNumber?.trim() || null;
+  // The WebRTC dialer can't always map its SIP session to a backend live-call id.
+  // As long as the user is on a connected call and has an extension, telephony can
+  // resolve the bridged call server-side — so don't gate the button on the match.
+  const canDropVoicemail = Boolean(activeDropCallId) || (isActive && Boolean(dropAgentExtension));
 
   useEffect(() => {
     // Reset drop status whenever the call ends/changes.
@@ -663,11 +668,12 @@ export function FloatingDialer() {
   }, [phone.callState]);
 
   const handleVoicemailDrop = useCallback(() => {
-    if (!activeDropCallId || vmDropState === "dropping") return;
+    if (!canDropVoicemail || vmDropState === "dropping") return;
     setVmDropState("dropping");
     setVmDropError(null);
     apiPost<{ ok: boolean }>("/crm/voicemail-drops/drop", {
-      activeCallId: activeDropCallId,
+      ...(activeDropCallId ? { activeCallId: activeDropCallId } : {}),
+      ...(dropAgentExtension ? { agentExtension: dropAgentExtension } : {}),
       ...(workspaceContact?.id ? { contactId: workspaceContact.id } : {}),
     })
       .then(() => {
@@ -686,7 +692,7 @@ export function FloatingDialer() {
         setVmDropError(friendly);
         setVmDropState("error");
       });
-  }, [activeDropCallId, vmDropState, workspaceContact?.id]);
+  }, [activeDropCallId, canDropVoicemail, dropAgentExtension, vmDropState, workspaceContact?.id]);
 
   useEffect(() => {
     if (
@@ -1152,10 +1158,10 @@ export function FloatingDialer() {
                     type="button"
                     className="fd-vmdrop"
                     data-state={vmDropState}
-                    disabled={!activeDropCallId || vmDropState === "dropping" || vmDropState === "done"}
+                    disabled={!canDropVoicemail || vmDropState === "dropping" || vmDropState === "done"}
                     onClick={handleVoicemailDrop}
                     title={
-                      activeDropCallId
+                      canDropVoicemail
                         ? "Drop your default voicemail and end the call"
                         : "Voicemail drop unavailable for this call"
                     }

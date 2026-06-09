@@ -27,18 +27,28 @@ const patchSchema = z.object({
   status: z.enum(["READY", "PROCESSING", "FAILED", "ARCHIVED"]).optional(),
 });
 
-const dropSchema = z.object({
-  activeCallId: z.string().min(1),
-  // Optional: the floating dialer drops on the active call without requiring a
-  // CRM contact. When present, a timeline event is recorded against the contact.
-  contactId: z.string().min(1).optional(),
-  // Optional: when omitted, the tenant's default voicemail drop is used.
-  voicemailDropId: z.string().min(1).optional(),
-  // Optional dialer hints.
-  agentEndpoint: z.string().min(1).max(120).optional(),
-  strategy: z.enum(["fixed", "waitsilence", "amd"]).optional(),
-  waitSeconds: z.number().int().min(0).max(30).optional(),
-});
+const dropSchema = z
+  .object({
+    // The WebRTC dialer can't always map its SIP session to the AMI/ARI live-call
+    // id, so this is optional as long as agentExtension is supplied (telephony
+    // resolves the bridged call by extension server-side).
+    activeCallId: z.string().min(1).optional(),
+    // Optional: the floating dialer drops on the active call without requiring a
+    // CRM contact. When present, a timeline event is recorded against the contact.
+    contactId: z.string().min(1).optional(),
+    // Optional: when omitted, the tenant's default voicemail drop is used.
+    voicemailDropId: z.string().min(1).optional(),
+    // Optional dialer hints.
+    agentEndpoint: z.string().min(1).max(120).optional(),
+    // The agent's own extension — lets telephony resolve the live call when no
+    // precise activeCallId is available.
+    agentExtension: z.string().min(1).max(16).optional(),
+    strategy: z.enum(["fixed", "waitsilence", "amd"]).optional(),
+    waitSeconds: z.number().int().min(0).max(30).optional(),
+  })
+  .refine((data) => Boolean(data.activeCallId || data.agentExtension), {
+    message: "activeCallId or agentExtension is required",
+  });
 
 function model() {
   return (db as any).crmVoicemailDrop;
@@ -149,6 +159,7 @@ async function requestTelephonyVoicemailDrop(input: {
   tenantId: string;
   fileBaseName: string;
   agentEndpoint?: string;
+  agentExtension?: string;
   strategy?: "fixed" | "waitsilence" | "amd";
   waitSeconds?: number;
 }) {
@@ -291,7 +302,7 @@ export async function registerCrmVoicemailDropRoutes(app: FastifyInstance) {
     if (!user) return;
     const parsed = dropSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues });
-    const { activeCallId, contactId, voicemailDropId, agentEndpoint, strategy, waitSeconds } = parsed.data;
+    const { activeCallId, contactId, voicemailDropId, agentEndpoint, agentExtension, strategy, waitSeconds } = parsed.data;
 
     // Contact is optional (floating dialer can drop without a CRM contact). When
     // supplied, enforce contact access + record a timeline event against it.
@@ -374,10 +385,11 @@ export async function registerCrmVoicemailDropRoutes(app: FastifyInstance) {
         return reply.code(503).send({ error: pushResult.reason || "pbx_helper_unavailable" });
       }
       const result = await requestTelephonyVoicemailDrop({
-        linkedId: activeCallId,
+        linkedId: activeCallId ?? "",
         tenantId: user.tenantId,
         fileBaseName: drop.pbxFileBaseName,
         agentEndpoint,
+        agentExtension,
         strategy,
         waitSeconds,
       });
@@ -413,7 +425,7 @@ export async function registerCrmVoicemailDropRoutes(app: FastifyInstance) {
         dropStarted: true,
         voicemailDropId: drop.id,
         contactId: contactId ?? null,
-        callId: activeCallId,
+        callId: result?.linkedId ?? activeCallId ?? null,
         strategy: result?.strategy ?? strategy ?? "fixed",
       };
     } catch (err: any) {
