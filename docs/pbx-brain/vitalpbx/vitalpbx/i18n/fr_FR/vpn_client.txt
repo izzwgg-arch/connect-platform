@@ -1,0 +1,36 @@
+menu.vpn_client = {vpn_client}
+module.vpn_client = {vpn_client}
+vpn_client = Client OpenVPN
+vpn_client.assigned_ip = IP attribuée
+vpn_client.assigned_ip.tooltip = Il affiche l'adresse IP attribuée par le serveur OpenVPN à ce client
+vpn_client.cannot_extract_configuration = La configuration fournie ne peut pas être extraite
+vpn_client.configuration = Configuration VPN
+vpn_client.configuration.tooltip = Vous permet de télécharger la configuration du client OpenVPN au format TAR
+vpn_client.configuration_not_found = La configuration OpenVPN n'a pas été trouvée dans le fichier TAR de téléchargement
+vpn_client.connection_info = Informations de connexion
+vpn_client.disable = Désactiver
+vpn_client.enable = Activer
+vpn_client.general = {vitalpbx.general}
+vpn_client.network_mask = Masque de réseau
+vpn_client.network_mask.tooltip = Masque de réseau
+vpn_client.no_file_selected = Aucun fichier de configuration sélectionné
+vpn_client.no_valid_file = Aucun fichier valide n'a été sélectionné. Veuillez télécharger un fichier tar
+vpn_client.server_ip = IP du serveur
+vpn_client.server_ip.tooltip =
+	Il montre l'IP du serveur OpenVPN
+vpn_client.service.invalid_action = Vous essayez d'exécuter une action invalide
+vpn_client.service.successfully_disabled = Le client OpenVPN a été désactivé avec succès
+vpn_client.service.successfully_enabled = Le client OpenVPN a été activé avec succès
+vpn_client.status = Statut
+vpn_client.status.active = Connecté
+vpn_client.status.inactive = Déconnecté
+vpn_client.status.tooltip = Il affiche l'état actuel de la connexion OpenVPN Client
+vpn_client.update_config = Mettre à jour la configuration
+vpn_client.upload.success = La configuration a été téléchargée avec succès
+vpn_client.upload_config = Télécharger la configuration
+vpn_client.connection_log = Journal de connexion
+vpn_client.service_status = État du service
+vpn_client.service_status.tooltip =
+	Il indique l'état du service. Ne confondez pas cet état avec l'état de la connexion, le service peut être en cours d'exécution mais pas forcément connecté au serveur.
+vpn_client.status.running = En cours d'exécution
+vpn_client.status.stopped = Arrêté

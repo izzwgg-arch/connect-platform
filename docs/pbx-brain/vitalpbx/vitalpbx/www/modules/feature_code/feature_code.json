@@ -1,0 +1,145 @@
+{
+  "id-name" : "feature_code",
+  "name" : "Feature Code",
+  "author" : "Telesoft S.A",
+  "dependencies" : ["time_conditions"],
+  "number-to-dial" : {
+    "table" : "feature_codes",
+    "field" : "customnumber"
+  },
+  "main-pk" : "feature_code_group_id",
+  "main-tbl" : "feature_code_groups",
+  "tables" : {
+	"feature_code_groups" : {
+	  "desc-field" : "description",
+	  "pk" : "feature_code_group_id",
+	  "columns" : {
+		"feature_code_group_id" : {
+		  "type" : "int",
+		  "autoIncrement" : "true",
+		  "primaryKey" : "true",
+		  "notNull" : "true"
+		},
+		"description" : {
+		  "type" : "varchar",
+		  "notNull" : "true"
+		},
+		"group_name" : {
+		  "type" : "varchar"
+		}
+	  }
+	},
+	"feature_codes" : {
+	  "pk" : "feature_code_id",
+	  "desc-field" : "description",
+	  "columns" : {
+		"feature_code_id" : {
+		  "type" : "int",
+		  "autoIncrement" : "true",
+		  "primaryKey" : "true",
+		  "notNull" : "true"
+		},
+		"feature_code_group_id" : {
+		  "type" : "int",
+		  "notNull" : "true"
+		},
+		"feature_name" : {
+		  "type" : "varchar",
+		  "notNull" : "true"
+		},
+		"description" : {
+		  "type" : "varchar",
+		  "notNull" : "true"
+		},
+		"defaultnumber" : {
+		  "type" : "varchar"
+		},
+		"customnumber" : {
+		  "type" : "varchar"
+		},
+		"func" : {
+		  "type" : "varchar",
+		  "notNull" : "true"
+		},
+		"prefix" : {
+		  "type" : "varchar"
+		},
+		"sufix" : {
+		  "type" : "varchar"
+		},
+		"sendlength" : {
+		  "type" : "enum",
+		  "default" : "no",
+		  "options" : [
+			"yes",
+			"no"
+		  ]
+		},
+		"param01" : {
+		  "type" : "varchar"
+		},
+		"param02" : {
+		  "type" : "varchar"
+		},
+		"param03" : {
+		  "type" : "varchar"
+		},
+		"param04" : {
+		  "type" : "varchar"
+		},
+		"param05" : {
+		  "type" : "varchar"
+		},
+		"state" : {
+		  "type" : "enum",
+		  "notNull" : "true",
+		  "default" : "yes",
+		  "options" : [
+			"yes",
+			"no"
+		  ]
+		},
+		"edit" : {
+		  "type" : "enum",
+		  "notNull" : "true",
+		  "default" : "no",
+		  "options" : [
+			"yes",
+			"no"
+		  ]
+		},
+		"generate" : {
+		  "type" : "enum",
+		  "notNull" : "true",
+		  "default" : "yes",
+		  "options" : [
+			"yes",
+			"no"
+		  ]
+		},
+		"display" : {
+		  "type" : "enum",
+		  "notNull" : "true",
+		  "default" : "yes",
+		  "options" : [
+			"yes",
+			"no"
+		  ]
+		}
+	  },
+	  "foreign-keys" : [
+		{
+		  "table" : "feature_code_groups",
+		  "reference" : {
+			"local" : "feature_code_group_id",
+			"foreign" : "feature_code_group_id"
+		  }
+		}
+	  ]
+	}
+  },
+  "references-module" : [
+	"nightmode",
+	"parking"
+  ]
+}

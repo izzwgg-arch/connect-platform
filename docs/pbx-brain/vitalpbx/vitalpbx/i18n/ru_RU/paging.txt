@@ -1,0 +1,56 @@
+menu.paging_and_intercom = Внутренняя связь
+module.paging = Внутренняя связь
+paging = Внутренняя связь
+paging.description = Описание
+paging.description.tooltip = Краткое описание для идентификации этой внутренней связи.
+paging.duplex = Двухсторонний
+paging.duplex.tooltip = Параметр, позволяющий включить двустороннюю связь между членами группы.
+paging.extensions = Внутренние номера
+paging.extensions.tooltip = Список внутренних номеров для набора.
+paging.extension = Номер
+paging.extension.invalid = Недопустимый номер. Разрешены только символы *, #, + и цифры.
+paging.extension.tooltip = Номер для доступа к этой услуге.
+paging.general = Общие
+paging.ignore = Игнорировать переадресацию
+paging.ignore.tooltip = Игнорировать попытки переадресации вызова.
+paging.invalid.already_exists = Недопустимый номер внутренней связи {0}. Номер используется модулем {1}.
+paging.quiet = Тихий режим
+paging.quiet.tooltip = Не проигрывать сигнал абоненту.
+paging.record = Запись 
+paging.record.tooltip = Записывать внутреннюю связь в файл
+paging.seconds =
+	[one] Одна сек.
+	[other] {0} сек.
+paging.skip_busy = Пропустить занятый номер
+paging.skip_busy.tooltip = Набирает номер, только если номер не занят. Этот вариант, вероятно, полезен (и надежен) только для SIP каналов, и даже в этом случае он может не работать, если для одной линии разрешено несколько вызовов. Поэтому в любом случае не полагайтесь на эту опцию.
+paging.timeout = Таймаут
+paging.timeout.tooltip = Укажите время, в течение которого система будет пытаться подключить вызов. По истечении этого интервала любые вызовы по внутренней связи, на которые не был получен ответ, будут сброшены системой.
+paging.multicastrtp = MulticastRTP
+paging.ip_address = IP адрес
+paging.port = Порт
+paging.no_members = Не выбран внутренний номер
+paging.announcement = Объявление
+paging.announcement.tooltip = Объявление для всех участников
+paging.mode = Режим
+paging.mode.tooltip = Позволяет определить поведение объявлений
+paging.mode.default = По умолчанию
+paging.mode.annon_only = Только объявление
+paging.mode.default.tooltip = Поведение по умолчанию. Проигрывает объявление, если оно определено, а затем позволяет звонящему продолжить разговор.
+paging.mode.annon_only.tooltip = Воспроизводит объявление, а затем отключается
+paging.schedule = Расписание
+paging.schedule_enabled = Включено
+paging.schedule_enabled.tooltip = Если установлено <b>«Да»</b>, то это автоматизирует проигрывание объявлений в соответствии с предоставленным расписанием.
+paging.schedules.time = Время
+paging.schedules.start_day = Начальный день
+paging.schedules.end_day = Конечный день
+paging.schedules.excluded_dates = Исключенные даты
+paging.schedules.description = Описание
+paging.validation.mode.no_announcement = Вы установили режим «Только объявление», но не выбрали объявление
+paging.schedules.month = Месяц
+paging.schedules.dom = День месяца
+paging.validation.schedule.no_announcement = 
+	Вы включили расписание, но не выбрали объявление, которое будет проигрываться при совпадении расписаний
+paging.validation.no_schedules = Вы включили расписание, но не выбрали дату и время
+paging.no_license = 
+ Вы достигли максимального количества бесплатных объявлений с включенной функцией расписания.
+ Активируйте дополнение, чтобы отключить это ограничение

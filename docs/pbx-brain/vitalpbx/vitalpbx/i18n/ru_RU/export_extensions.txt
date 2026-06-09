@@ -1,0 +1,10 @@
+menu.export_extensions = Экспорт номеров
+module.export_extensions = Экспорт номеров
+export_extensions = Экспорт номеров
+export_extensions.add_extension = Добавить номер
+export_extensions.extensions = Номера
+export_extensions.export_extensions.tooltip = Номера для экспорта
+export_extensions.export_extensions = Экспорт номеров
+export_extensions.general = Общие
+export_extensions.no_extensions_selected = Номера не выбраны
+export_extensions.select_extensions = Выберите номер для экспорта

@@ -1,0 +1,17 @@
+blacklist = Blacklist
+blacklist.description = Descrizione
+blacklist.description.tooltip = Descrizione del numero della Blacklist.
+blacklist.general = Generale
+blacklist.not_found = Blacklist non trovata.
+blacklist.number = Numero CID
+blacklist.number.tooltip = Numero CID da includere nella blacklist.
+blacklist.numebr.invalid = Il numero della Blacklist non e' valido.
+blacklist.search = Cerca
+menu.blacklist = Blacklist
+module.blacklist = Blacklist
+blacklist.destination = Destinazione
+blacklist.destination.tooltip =
+	Destinazione opzionale. Se impostato, il chiamante con un numero CID che corrisponde a quello configurato sopra verra' reindirizzato
+	alla destinazione configurata. Se non impostato, verra' invece riprodotto un messaggio.
+blacklist.enabled = Abilitato
+blacklist.enabled.tooltip = Abilita/Disabilita numero CID dalla blacklist.

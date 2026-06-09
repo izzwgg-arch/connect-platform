@@ -1,0 +1,10 @@
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage=nonRepudiation, digitalSignature, keyEncipherment
+extendedKeyUsage=serverAuth,clientAuth
+subjectAltName = @alt_names
+nsComment = "Unified Communications System"
+
+[alt_names]
+email.1 = sales@vitalpbx.com
+DNS.1 = vmi2718844.contaboserver.net

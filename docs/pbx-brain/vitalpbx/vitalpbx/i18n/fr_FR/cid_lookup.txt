@@ -1,0 +1,57 @@
+cid_lookup.arguments = Chaîne de requête
+cid_lookup.arguments.tooltip =
+	Il définit les arguments nécessaires à l'exécution du script.
+	la valeur de l'argument spécial <b>[CIDNUM]</b> sera remplacé par le numéro cid de l'appelant.
+	<br><br> Exemple : <br> <b>caller_num=[CIDNUM]&ctype=vip</b>
+cid_lookup.description = Description {0}
+cid_lookup.description.tooltip = Une courte description pour identifier cette recherche CID
+cid_lookup.general = {vitalpbx.general}
+cid_lookup.host = Hôte {0}
+cid_lookup.host.tooltip = Il définit l'hôte API pour faire la demande
+cid_lookup.opencnam.sid = SID {0}
+cid_lookup.opencnam.sid.tooltip = OpenCNAM SID
+cid_lookup.opencnam.token = REDACTED
+cid_lookup.opencnam.token.tooltip = Jeton OpenCNAM
+cid_lookup.password = REDACTED
+cid_lookup.password.tooltip = Il définit le mot de passe pour authentifier la requête HTTP/HTTPS
+cid_lookup.path = Chemin
+cid_lookup.path.tooltip = Il définit le nom du fichier de script à exécuter sur demande. Exemple : <b>cid_lookup.php</b>
+cid_lookup.port = Port
+cid_lookup.port.tooltip = Il définit le port pour faire la requête. Par défaut 80 pour la requête HTTP et 443 pour la requête HTTPS
+cid_lookup.secure = Sécurisé
+cid_lookup.secure.tooltip = Si est coché, la requête se fera via HTTPS, sinon via HTTP
+cid_lookup.source = Source {0}
+cid_lookup.source.option.api = HTTP/HTTPS
+cid_lookup.source.option.opencnam = OpenCNAM
+cid_lookup.source.tooltip = Il définit la méthode pour obtenir le nom cid d'un appelant entrant
+cid_lookup.user = Authentifier l'utilisateur
+cid_lookup.user.tooltip = Il définit l'utilisateur pour authentifier la requête HTTP/HTTPS
+cid_lookup.validation.invalid_source = Un type de source invalide a été fourni.
+cid_lookup.validation.no_description = Aucune description n'a été fournie.
+cid_lookup.validation.no_sid = Le SID n'a pas été fourni.
+cid_lookup.validation.no_token = REDACTED
+cid_lookup.validation.no_valid_host = Un nom d'hôte ou une adresse IP invalide a été fourni.
+cid_lookup.validation.no_valid_port = Un numéro de port invalide a été fourni.
+menu.cid_lookup = {module.cid_lookup}
+module.cid_lookup = Recherche CID
+cid_lookup.database = Base de données {0}
+cid_lookup.database.tooltip = Base de données MySQL
+cid_lookup.mysql_host.tooltip = Hôte MySQL
+cid_lookup.mysql_password = REDACTED
+cid_lookup.mysql_password.tooltip = Mot de passe à utiliser pour l'authentification MySQL
+cid_lookup.query = Requête {0}
+cid_lookup.query.tooltip =
+	Requête à exécuter. Le jeton spécial <b>[CIDNUM]</b> sera remplacé par le numéro de l'appelant. par exemple.:
+	<b> SELECT `name` FROM `customers` WHERE `number` = '[CIDNUM]' </b>
+cid_lookup.source.option.mysql = MySQL
+cid_lookup.username = Nom d'utilisateur {0}
+cid_lookup.username.tooltip = Nom d'utilisateur à utiliser pour l'authentification MySQL
+cid_lookup.validation.no_database = Aucun nom de base de données n'a été fourni
+cid_lookup.validation.no_mysql_username = Aucun nom d'utilisateur n'a été fourni
+cid_lookup.validation.no_query = Aucune requête n'a été fournie
+cid_lookup.phonebook = Annuaire {0}
+cid_lookup.phonebook.tooltip = Répertoire à utiliser comme source de recherche CID. Seuls les annuaires téléphoniques externes sont répertoriés ici
+cid_lookup.source.option.phonebook = Répertoire
+cid_lookup.validation.no_phonebook = Vous n'avez sélectionné aucun répertoire
+cid_lookup.timeout = Délai d'attente
+cid_lookup.timeout.tooltip = Temps maximum en secondes pour la phase de connexion au serveur. Les valeurs par défaut sont de 5 secondes

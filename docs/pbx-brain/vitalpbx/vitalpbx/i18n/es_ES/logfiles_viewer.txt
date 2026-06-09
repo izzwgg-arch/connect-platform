@@ -1,0 +1,18 @@
+logfiles_viewer.error = Error
+logfiles_viewer.general = General
+logfiles_viewer.invalid_request = Solicitud no válida
+logfiles_viewer.lines = Líneas
+logfiles_viewer.lines.tooltip = Número de líneas a mostrar
+logfiles_viewer.logfile = Archivo de Registro
+logfiles_viewer.logfile.tooltip = Seleccione el archivo de registro a ver
+logfiles_viewer.no_file_selected = Ningún archivo seleccionado
+logfiles_viewer.read_logfile = Leer Archivo de Registro
+logfiles_viewer.select_logfile = --- Seleccione un archivo de registro ---
+menu.log_file_viewer = Visor de Archivo de Registro
+module.logfiles_viewer = Visor de Archivo de Registro
+logfiles_viewer.invalid_filename = El archivo de registro solicitado no se puede encontrar
+logfiles_viewer.filter = Filtrar
+logfiles_viewer.filter.tooltip = 
+	Le permite filtrar fácilmente el contenido de los archivos de registro según las cadenas o palabras. Por ejemplo, si quieres
+	filtrar solo los registros de errores de Asterisk, puede poner "ERRORS" y solo aparecerán los mensajes de error.
+logfiles_viewer.refresh = Refrescar

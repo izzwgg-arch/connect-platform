@@ -1,0 +1,19 @@
+● mariadb.service - MariaDB 10.11.14 database server
+     Loaded: loaded (/lib/systemd/system/mariadb.service; enabled; preset: enabled)
+     Active: active (running) since Tue 2026-05-12 23:16:21 EDT; 3 weeks 6 days ago
+       Docs: man:mariadbd(8)
+             https://mariadb.com/kb/en/library/systemd/
+    Process: 670 ExecStartPre=/usr/bin/install -m 755 -o mysql -g root -d /var/run/mysqld (code=exited, status=0/SUCCESS)
+    Process: 686 ExecStartPre=/bin/sh -c systemctl unset-environment _WSREP_START_POSITION (code=exited, status=0/SUCCESS)
+    Process: 689 ExecStartPre=/bin/sh -c [ ! -e /usr/bin/galera_recovery ] && VAR= ||   VAR=`/usr/bin/galera_recovery`; [ $? -eq 0 ]   && systemctl set-environment _WSREP_START_POSITION=$VAR || exit 1 (code=exited, status=0/SUCCESS)
+    Process: 2030 ExecStartPost=/bin/sh -c systemctl unset-environment _WSREP_START_POSITION (code=exited, status=0/SUCCESS)
+    Process: 2032 ExecStartPost=/etc/mysql/debian-start (code=exited, status=0/SUCCESS)
+   Main PID: 833 (mariadbd)
+     Status: "Taking your SQL requests now..."
+      Tasks: 46 (limit: 381131)
+     Memory: 12.8G
+        CPU: 10h 47min 35.972s
+     CGroup: /system.slice/mariadb.service
+             └─833 /usr/sbin/mariadbd
+
+Notice: journal has been rotated since unit was started, output may be incomplete.

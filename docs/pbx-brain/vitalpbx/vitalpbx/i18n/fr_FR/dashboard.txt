@@ -1,0 +1,82 @@
+dashboard.asterisk = Asterisk
+dashboard.asterisk_uptime = Disponibilité Asterisk
+dashboard.available = Disponible
+dashboard.current_time = Heure courante
+dashboard.dahdi = DAHDi
+dashboard.days =
+	[0]
+	[one] 1 jour
+	*[other] {0} jours
+dashboard.fail2ban = Fail2Ban
+dashboard.general = Informations système
+dashboard.hard_disk = Informations disque dur
+dashboard.hours =
+	[0]
+	[one] , 1 heure
+	*[other] , {0} heures
+dashboard.minutes =
+	[0]
+	[one] , 1 minute
+	*[other] , {0} minutes
+dashboard.network_usage = Utilisation réseau
+dashboard.seconds =
+	[0]
+	[one] , 1 seconde
+	*[other] , {0} secondes
+dashboard.server_uptime = Disponibilité serveur
+dashboard.services_status = État des services
+dashboard.ssh = SSH
+dashboard.system_usage = Utilisation système
+dashboard.time = Heure
+dashboard.uptime_format = {dashboard.days[0]}{dashboard.hours[1]}{dashboard.minutes[2]}{dashboard.seconds[3]}
+dashboard.used = Utilisé
+dashboard.unavailable = Non/A
+menu.dashboard = Infos système
+module.dashboard = Infos système
+dashboard.cpu_usage = Utilisation CPU
+dashboard.firewall = Pare-feu
+dashboard.intrusion_detection = Détection d'intrusion
+dashboard.memory_usage = Utilisation mémoire
+dashboard.active_calls = Appels actifs
+dashboard.devices = {0} Périphériques
+dashboard.disk_usage = Utilisation du disque
+dashboard.free_space = Espace libre
+dashboard.last_fifteen_minutes = Quinze dernières minutes
+dashboard.last_five_minutes = Cinq dernières minutes
+dashboard.last_minute = Dernière Minute
+dashboard.used_space = Espace utilisé
+dashboard.asterisk_version = Asterisk
+dashboard.conferences = Conférences
+dashboard.cpu = CPU
+dashboard.cpu_cores = Cœurs CPU
+dashboard.cpu_model = Modèle de CPU
+dashboard.distro = Distribution
+dashboard.extensions = Extensions
+dashboard.free = Libre
+dashboard.hardware_info = Informations sur le matériel
+dashboard.ivrs = SVIs
+dashboard.kernel = Kernel
+dashboard.last_60_seconds = 60 dernières secondes
+dashboard.last_boot = Dernier démarrage
+dashboard.memory = Mémoire
+dashboard.motherboard = Carte mère
+dashboard.parking_lots = Parking Lots
+dashboard.queues = Files d'attente
+dashboard.ram = RAM
+dashboard.swap = Swap
+dashboard.system_info = Informations système
+dashboard.system_services = Services système
+dashboard.trunks = Trunks
+dashboard.unlimited = Illimité
+dashboard.usage = Utilisation
+dashboard.virtualization = Virtualisation
+dashboard.softphone_devices = Périphérique Softphone
+dashboard.call_traffic_today = Trafic d'appel du jour
+dashboard.calls = Appels
+dashboard.contacts = {0} Périphérique
+dashboard.devices.info = %s enregistré / %s non enregistré
+dashboard.disk_usage.info = %s Utilisé / %s Libre
+dashboard.hour = Heure
+dashboard.running = En cours d'exécution
+dashboard.stopped = Arrêté
+dashboard.uptime = Disponibilité

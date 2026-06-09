@@ -1,0 +1,122 @@
+menu.tenants = {module.tenants}
+module.tenants = Tenants
+tenants.allow_recordings = Consenti Registrazioni
+tenants.allow_recordings.tooltip = Consente a questo Tenant di registrare o meno le chiamate.
+tenants.allowed_tenant_trunks = Trunk Tenant consentiti
+tenants.allowed_tenant_trunks.tooltip = Consente di definire quali tenant possono essere utilizzati come trunk tenant.
+tenants.assign_to_existing_user = Assegna ad Utente Esistente
+tenants.assign_to_existing_user.tooltip = Se selezionato, invece di creare un nuovo utente e possibile assegnarne uno esistente.
+tenants.conferences = Conferenze
+tenants.conferences.tooltip = Consente di definire il numero massimo di conferenze per questo tenant.
+tenants.confirm_delete = 
+	Sei sicuro di voler eliminare questo tenant? <br> Questa azione e' irreversibile e tutti i relativi dati
+        verranno eliminati definitivamente.
+tenants.description = Descrizione
+tenants.description.required = Descrizione {0}
+tenants.description.tooltip = Descrizione per identificare questo tenant.
+tenants.disabled = L'accesso a questo tenant e' stato disabilitato, contatta il tuo provider PBX.
+tenants.duplicated_name = Il nome digitato e' gia' in uso.
+tenants.duplicated_prefix = Il prefisso inserito e' gia' in uso per un altro Tenant.
+tenants.enabled = Abilitato
+tenants.enabled.tooltip = 
+	Ti consente di abilitare / disabilitare un Tenant. Se il tenant e' disabilitato, gli utenti che ne fanno parte non saranno in grado
+        per accedere ad esso ne' eseguire alcuna azione.
+tenants.extensions = Interni
+tenants.extensions.tooltip = Consente di definire il numero massimo di interni per questo Tenant.
+tenants.full_name = Nome Completo
+tenants.full_name.tooltip = Il nome completo dell'amministratore, se non definito, verra' utilizzata la descrizione del Tenant.
+tenants.general = Generale
+tenants.ivrs = IVR
+tenants.ivrs.tooltip = Consente di definire il numero massimo di IVR per questo tenant.
+tenants.limitations = Limitazioni
+tenants.name = Nome
+tenants.name.required = Nome {0}
+tenants.name.tooltip = Un nome univoco per questo inquilino. Questo nome verra' utilizzato per creare cartelle, collegare le informazioni del CDR, ecc.
+tenants.no_license = Hai raggiunto il numero massimo di Tenant liberi. Attiva questo componente aggiuntivo con una licenza valida per creare Tenant illimitati.
+tenants.no_role = Non e' stato selezionato un ruolo valido per l'Amministratore di questo Tenant.
+tenants.no_user = Il Tenant non e' stato assegnato a nessun utente.
+tenants.parking_lots = Parcheggi
+tenants.parking_lots.tooltip = Consente di definire il numero massimo di Parcheggi per questo Tenant.
+tenants.path = Path
+tenants.path.tooltip = 
+	Nome del percorso utilizzato nella cartella di archiviazione di questo Tenant e come albero del database Asterisk
+tenants.prefix = Prefisso
+tenants.prefix.placeholder = Genera Automaticamente
+tenants.prefix.tooltip = 
+	Consente di definire un prefisso da utilizzare per dispositivi di interni e altri. Se lasciato vuoto, verra' visualizzato un prefisso automatico
+        essere usato.
+tenants.queues = Code
+tenants.queues.tooltip = Consente di definire il numero massimo di Dode per questo Tenant.
+tenants.recordings_maintenance = Impostazioni Manutenzione Registrazioni
+tenants.role = {users.role}
+tenants.role.tooltip = 
+	Profilo del ruolo per l'Amministratore di questo Tenant. <b> Fare attenzione a non assegnare un ruolo troppo permissivo, che
+        puo' interessare altri Tenant. </b>
+tenants.startup = {users.startup}
+tenants.startup.tooltip = {users.startup.tooltip}
+tenants.trunks = Trunks
+tenants.trunks.tooltip = Consente di definire il numero massimo di trunk per questo tenant.
+tenants.unlimited = Illimitato
+tenants.user = Utente
+tenants.user.tooltip = Utente incaricato di amministrare e gestire questo Tenant
+tenants.user_name = Eamil Admin
+tenants.user_name.required = Email Admin {0}
+tenants.user_name.tooltip = L'indirizzo e-mail dell'utente che gestira' questo Tenant.
+tenants.user_password = REDACTED
+tenants.user_password.required = Password Admin {0}
+tenants.user_password.tooltip = Password per autenticare l'utente che gestira' questo Tenant.
+tenants.user_settings = Amministratore Tenant
+tenants.validation.enter_valid_tenant = Immettere un nome Tenant valido: sono consentiti lettere, numeri, trattini e trattini bassi.
+tenants.allowed_outbound_routes = Rotte in Uscita Consentite
+tenants.allowed_outbound_routes.tooltip = 
+	Percorsi che verranno utilizzati quando questo Tenant effettua chiamate tramite un Trunk Tenant che punta al Tenant principale.
+        Le chiamate effettuate a qualsiasi altro Tenant diverso dal principale verranno inviate tramite le definizioni dei percorsi in entrata.
+tenants.did_pattern = DID Pattern
+tenants.did_pattern.placeholder = 1NXXNXXXXXX
+tenants.inbound_numbers = DID in Entrata
+tenants.inbound_numbers.tooltip = 
+	Elenco di numeri / modelli appartenenti a questo Tenant. Le chiamate che corrispondono a questi numeri verranno inoltrate automaticamente
+        a queste route in ingresso tenant. La configurazione di questi numeri ha la precedenza sulle definizioni delle rotte in entrata
+        sul Tenenat principale.
+tenants.outbound_profiles = Profili Uscita
+tenants.outbound_profiles.tooltip = 
+	Consente di definire quali elementi di selezione del percorso possono essere utilizzati come profilo in uscita su questo tenant.
+tenants.routing = Instradamento Chiamate
+tenants.scom_devices = Dispositivi Softphone
+tenants.scom_devices.tooltip = Consente di definire quanti dispositivi Sonata Communicator possono essere attivati su questo Tenant.
+tenants.emergency_trunks = Trunk Emergenze
+tenants.emergency_trunks.tooltip = 
+	Consente di condividere trunk con questo Tenant da utilizzare come trunk di emergenza sul modulo del numero di emergenza
+tenants.name.validation.alphanumeric = Il nome del tenant deve essere un valore alfanumerico valido.
+tenants.send_welcome_email = Invia e-mail di Benvenuto
+tenants.send_welcome_email.tooltip = 
+	Se abilitato, verra' inviata un'e-mail con le informazioni sull'account all'Amministratore del Tenant. Puoi trovare il modello
+        per questa e-mail in Amministratore> Impostazioni di sistema> Modelli e-mail.
+tenants.addons = Componenti Aggiuntivi Esterni
+tenants.addons.tooltip = 
+	Consente di selezionare quali componenti aggiuntivi esterni verranno mostrati a questo tenant nel menu dell'utente.
+tenants.settings = Impostazioni
+tenants.timezone = Fuso Orario
+tenants.timezone.tooltip = 
+	Definisce il Fuso Orario predefinito per questo tenant. Se e' selezionata l'opzione "Sistema", quindi, il fuso orario del server
+        sara' usato.
+tenants.calls_limit = Limite Chiamate Simultanee.
+tenants.calls_limit.invalid = Hai fornito un valore limite per le chiamate non valide.
+tenants.calls_limit.placeholder = No Limite
+tenants.calls_limit.tooltip = Consente di definire il numero di chiamate in uscita simultanee consentite per questo tenant.
+tenants.cid = Default CID Externo
+tenants.cid.tooltip = 
+	Consente di definire il nome e il numero CID esterno predefinito da utilizzare nelle chiamate in uscita.
+tenants.cid_name = Nome CID
+tenants.cid_number = Numbero CID
+tenants.main = (Main)
+tenants.no_default_cid = Il campo "Restricted CID" è impostato su "Predefinito" ma il numero CID esterno predefinito non è stato definito.
+tenants.no_dids = Il campo "Restricted CID" è impostato su "DIDs" ma non è stato definito alcun DID
+tenants.restricted_cid = Restricted CID
+tenants.restricted_cid.default = Default
+tenants.restricted_cid.default.tooltip = Tutte le chiamate esterne per questo tenant saranno obbligate a utilizzare le informazioni CID definite nel campo "CID esterno predefinito".
+tenants.restricted_cid.dids = DIDs
+tenants.restricted_cid.dids.tooltip = Il numero CID esterno deve corrispondere ai modelli / numeri DID definiti per questo Tenant.
+tenants.restricted_cid.disabled = Disabilitato
+tenants.restricted_cid.disabled.tooltip = Non verranno applicate restrizioni. L'inquilino potrà utilizzare qualsiasi numero CID esterno.
+tenants.restricted_cid.tooltip = Consente di definire se i numeri ID chiamante per le chiamate esterne saranno limitati o meno.

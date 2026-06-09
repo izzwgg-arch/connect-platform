@@ -1,0 +1,5 @@
+dahdi_settings.general = Общие
+dahdi_settings.save = Сохранить
+dahdi_settings.tonezone = Тоновая зона
+dahdi_settings.tonezone.tooltip = Тоновая зона по умолчанию для всех пользователей
+module.dahdi_settings = Настройки телефонии

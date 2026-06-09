@@ -1,0 +1,54 @@
+menu.outbound_routes = Rotas de saída
+module.trunk_group = Rotas de saída
+trunk_group = Rotas de saída
+trunk_group.description = Descrição
+trunk_group.description.tooltip = Breve descrição para identificar esta rota de saída
+trunk_group.general = Geral
+trunk_group.pin_list_id = PIN
+trunk_group.pin_list_id.tooltip = Escolha um PIN de grupo.
+trunk_group.select_outbound_route = - Selecione a rota de saída -
+trunk_group.trklist = Troncos Selecionados
+trunk_group.trklist.empty = Nenhum troncos selecionado para esta rota de saída.
+trunk_group.trklist.tooltip = Lista de troncos para discar
+trunk_group.trkpattern = Padrões de discagem% s
+trunk_group.trkpattern.pattern = Padrão de discagem
+trunk_group.trkpattern.pattern.invalid = Padrão na linha {0}
+trunk_group.trkpattern.pattern.placeholder = Padrão de discagem
+trunk_group.trkpattern.pattern.tooltip = A correspondência de padrões nos permite criar padrões de ramais em nosso plano de discagem que correspondam a mais de um número discado possível
+trunk_group.trkpattern.prefix = Acesso a rota
+trunk_group.trkpattern.prefix.placeholder = Acesso a Rota
+trunk_group.trkpattern.prefix.tooltip = Prefixo a ser removido ao corresponder.
+trunk_group.trkpattern.prepend = Prefixar
+trunk_group.trkpattern.prepend.placeholder = Prefixar
+trunk_group.trkpattern.prepend.tooltip = Dígitos para preceder ao combinar.
+trunk_group.virttrk = Troncos de inquilino
+trunk_group.virttrk.tooltip = Lista de inquilinos que esse inquilino pode chamar como tronco
+trunk_group.intra_company = Intra-empresa
+trunk_group.intra_company.tooltip =
+	Se marcado, o ID do chamador interno será enviado por essa rota de saída, em vez do ID do chamador externo
+	do ramal de chamada
+trunk_group.no_patterns = Nenhum padrão configurado para esta rota de saída
+trunk_group.no_description = Nenhuma descrição foi fornecidatrunk_group.failover_destination = Failover Destination
+trunk_group.failover_destination.tooltip = 
+	Destino opcional a executar caso a chamada falhe após tentativa com todos os troncos listados.
+trunk_group.failover_destination = Destino se falhar
+trunk_group.trkpattern.cid_pattern = Padrão CID
+trunk_group.trkpattern.cid_pattern.placeholder = Corresponder ao padrão CID
+trunk_group.trkpattern.cid_pattern.tooltip = 
+	Se definido, as chamadas que correspondem ao padrão definido também devem corresponder a este padrão de identificação de chamada, a fim de
+	siga este caminho. O identificador de chamadas correspondente será o CID interno e não o CID externo.
+trunk_group.cid = CID de saída
+trunk_group.cid.tooltip = Ele permite que você defina um número / nome de ID do chamador específico que será usado nesta rota de saída quando a configuração "Substituir CID" estiver habilitada
+trunk_group.cid_name = Nome CID
+trunk_group.cid_number = Número CID
+trunk_group.no_cid = A configuração "Substituir CID" está habilitada, mas você não definiu os parâmetros de CID de saída.
+trunk_group.overwrite_cid = Substituir CID
+trunk_group.overwrite_cid.tooltip = Se habilitado, o CID de saída do ramal será substituído pelos parâmetros CID definidos nesta rota de saída
+trunk_group.overwrite_cid.if_not_provided = Se não for fornecido
+trunk_group.overwrite_cid.if_not_provided.tooltip = Ele substituirá as informações do CID apenas se nenhum CID externo for fornecido durante a chamada
+trunk_group.overwrite_cid.no = {vitalpbx.no}
+trunk_group.overwrite_cid.no.tooltip = Ele preservará qualquer CID fornecido durante a chamada. Não irá realizar nenhuma sobregravação
+trunk_group.overwrite_cid.yes = {vitalpbx.yes}
+trunk_group.overwrite_cid.yes.tooltip = Força a sobrescrever o CID com os parâmetros CID definidos nesta rota de saída
+trunk_group.record = {vitalpbx.record}
+trunk_group.record.tooltip = Se a resposta for sim, todas as chamadas que utilizam esta rota de saída serão gravadas.

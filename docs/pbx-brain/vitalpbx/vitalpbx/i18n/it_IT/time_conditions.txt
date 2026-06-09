@@ -1,0 +1,45 @@
+menu.time_conditions = Condizioni Temporali
+module.time_conditions = Condizioni Temporali
+time_conditions = Condizioni Temporali
+time_conditions.cancel = Annulla
+time_conditions.delete = Elimina
+time_conditions.description = Descrizione
+time_conditions.description.tooltip = Descrizione per identificare questa Condizione Temporale.
+time_conditions.falsegoto = Destinazione se il tempo non corrisponde %s
+time_conditions.general = Condizioni Temporali
+time_conditions.modfalse = Modulo Falso
+time_conditions.modtrue = Module Vero
+time_conditions.save = Salva
+time_conditions.time_group_id = Gruppo Temporale
+time_conditions.time_group_id.tooltip = Seleziona un Gruppo Temporale creato in Gruppi Temporali. I tempi di corrispondenza saranno inviati alla destinazione corrispondente.
+time_conditions.truegoto = Destinazione se il tempo corrisponde %s
+time_conditions.update = Aggiorna
+time_conditions.blf_inverted = BLF Invertito
+time_conditions.blf_inverted.tooltip = 
+	Per impostazione predefinita, il colore della luce BLF è verde quando la condizione temporale corrisponde e rossa quando non corrisponde. Impostare
+        questo a "si" fara' si che il comportamento sia l'inverso di quanto descritto sopra.
+time_conditions.code = {nightmode.code}
+time_conditions.code.tooltip = Comporre il codice per alternare lo stato della condizione temporale tramite il telefono.
+time_conditions.hint = {nightmode.phone_hint}
+time_conditions.hint.tooltip = {nightmode.phone_hint.tooltip}
+time_conditions.pin = PIN Autorizzazione
+time_conditions.pin.tooltip = Password opzionale per proteggere da persone non autorizzate la modifica di questa condizione temporale.
+time_conditions.status = Stato
+time_conditions.status.default = Default
+time_conditions.status.default.desc = Comportamento predefinito
+time_conditions.status.permanently_matched = Corrispondenza permanente
+time_conditions.status.permanently_matched_unmatched = Corrispondenza permanente / senza corrispondenza
+time_conditions.status.permanently_matched_unmatched.desc = 
+	Ignora in modo permanente la condizione temporale e invia le chiamate alla destinazione corrispondente / non corrispondente fino a quando l'override non viene rimosso.
+time_conditions.status.permanently_unmatched = Permanentemente Senza corrispondenza
+time_conditions.status.temporary_matched = Corrispondenza temporanea
+time_conditions.status.temporary_matched_unmatched = Corrispondenza / non corrispondenza temporanea 
+time_conditions.status.temporary_matched_unmatched.desc = 
+	Ignora temporaneamente la condizione temporale e invia le chiamate alla destinazione corrispondente / non corrispondente fino all'intervallo di tempo corrente
+        e' trascorso. Dopodiche', il comportamento tornera' all'impostazione predefinita
+time_conditions.status.temporary_unmatched = Non Corrispondenza temporanea
+time_conditions.status.tooltip = Consente di sovrascrivere il comportamento predefinito di una condizione temporale.
+time_conditions.timezone = Fuso Orario
+time_conditions.timezone.tooltip = 
+	Consente di definire il fuso orario da utilizzare per la corrispondenza del gruppo temporale associato a questa condizione temporale. Se impostato su Sistema,
+        prendera' il fuso orario dal server.

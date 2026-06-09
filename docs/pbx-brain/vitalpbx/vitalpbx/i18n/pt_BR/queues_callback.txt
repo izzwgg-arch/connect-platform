@@ -1,0 +1,63 @@
+menu.queues_callback = {queues_callback}
+module.queues_callback = {queues_callback}
+queues_callback = Filas de Chamada de Retorno
+queues_callback.allowed_patterns = Regras de números permitidos
+queues_callback.allowed_tries = Máximo de tentativas
+queues_callback.allowed_tries.tooltip = Quantidade de tentativas permitidas antes de marcar a chamada de volta como falhada
+queues_callback.ask_callback_number = Pergunte o número de retorno da chamada
+queues_callback.ask_callback_number.tooltip = 
+	Se ativado, o chamador será solicitado a digitar seu número de retorno. Se definido como não, o número de
+	identificação de chamada será utilizado como número de retorno, desde que o número corresponda às regras de número permitido.
+queues_callback.cid = Identificação do chamador
+queues_callback.cid.tooltip = 
+	Informações de identificação de chamadas a serem usadas durante a ligação de retorno. Estas informações podem ser
+	modificadas durante o processo de chamada pelos troncos ou configurações de rotas de saída.
+queues_callback.cid_name = Nome de identificação do chamador
+queues_callback.cid_number = Número de identificação do chamador
+queues_callback.cos = Classe de serviço
+queues_callback.cos.tooltip = 
+	Permite definir que Classe de Serviço será utilizada para realizar a ligação de retorno. Lembre-se de que a classe
+	de serviço contém as permissões para permitir chamadas de saída através de troncos específicos ou rotas de saída.
+queues_callback.description = Descrição
+queues_callback.description.tooltip = Breve descrição
+queues_callback.dial_prefix = Prefixo de discagem
+queues_callback.dial_prefix.tooltip = Se definido, ele será prefixado ao número de retorno solicitado.
+queues_callback.enabled = Habilitado
+queues_callback.enabled.tooltip = Permite ativar / desativar regras padrão
+queues_callback.general = {vitalpbx.general}
+queues_callback.invalid_message = Mensagem inválida
+queues_callback.invalid_message.tooltip = 
+	Mensagem a ser reproduzida quando o número fornecido pelo chamador não coincide com as regras de número definidas.
+	<br><br> Mensagem padrão: "Desculpe, esse não é um número de telefone reconhecido"
+queues_callback.none = {none}
+queues_callback.number_prompt = Áudio para pedir número
+queues_callback.number_prompt.tooltip = 
+	Mensagem de instruções para pedir a digitação do número de retorno.<br><br>Mensagem padrão: "Por favor, digite seu
+	número de telefone"
+queues_callback.pattern = Padrão
+queues_callback.pattern.tooltip = Permite definir regras de que tipo de números podem ser usados ao solicitar uma chamada de retorno
+queues_callback.periodic_announcement = Mensagem de instruções
+queues_callback.periodic_announcement.tooltip = 
+	Mensagem a ser reproduzida com as instruções para solicitar uma chamada de retorno.<br><br>Mensagem padrão:
+	"Todos os nossos representantes estão atualmente ocupados.  Por favor, fique em linha e sua chamada será atendida
+	pelo próximo representante disponível, ou pressione um para ser chamado de volta quando um representante estiver
+	disponível".
+queues_callback.queue = Fila de retorno
+queues_callback.queue.tooltip = Ele permite definir a fila para onde os chamadores que solicitam uma ligação de retorno serão enviados.
+queues_callback.ringtime = {extensions.ringtime}
+queues_callback.ringtime.tooltip = Permite definir o tempo que os números de chamada de retorno tocarão antes de marcar a chamada como não atendida
+queues_callback.same_queue = Mesma fila
+queues_callback.time_group = Grupo de tempo
+queues_callback.time_group.tooltip = 
+	Permite configurar um grupo de tempo para definir os tempos permitidos para realizar chamadas de retorno
+queues_callback.thank_you_prompt = Mensagem de agradecimento
+queues_callback.thank_you_prompt.tooltip = 
+	Mensagem a ser reproduzida para o interlocutor após o término do agendamento de uma ligação de retorno. Mensagem
+	padrão: "Obrigado, você será chamado de volta em breve".
+queues_callback.dial_agents_first = Disque primeiro os agentes
+queues_callback.dial_agents_first.tooltip = 
+	Se a resposta for sim, as chamadas programadas serão enviadas primeiro aos agentes e depois ao cliente.
+queues_callback.priority = Prioridade
+queues_callback.priority.tooltip = É a prioridade a ser aplicada quando uma chamada programada entra na Fila de espera. Um valor maior significa maior prioridade.
+queues_callback.dtmf_digit = Dígito DTMF
+queues_callback.dtmf_digit.tooltip = O dígito DTMF que o chamador tem que pressionar para solicitar uma ligação de retorno.

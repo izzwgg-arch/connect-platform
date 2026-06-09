@@ -1,0 +1,27 @@
+#!/bin/sh
+
+endpoint=$1
+
+if [ -z "$endpoint" ]
+then
+  echo "You didn't provide a valid endpoint name."
+  echo "Script Usage: GetPJSIPDeviceState my-endpoint"
+  exit 1
+fi
+
+status=$(asterisk -rx"pjsip show endpoints" | egrep "Endpoint\:\s+$endpoint" | sed -e 's/^[[:space:]]*//')
+if [ -n "$status" ]
+then
+  # set nocasematch option
+  shopt -s nocasematch
+
+  regex="^Endpoint:\s+($endpoint)\s+(Unknown|Not in use|In use|Invalid|Unavailable|Unreachable|Busy|Ringing|Ring in use|On Hold)\s+(.*)$"
+   if [[ $status =~ $regex ]]
+   then
+     echo "${BASH_REMATCH[2]}"
+     exit 0
+   fi
+fi
+
+echo "No Status"
+exit 0

@@ -1,0 +1,2 @@
+vm_bodytext = Hai ricevuto un messaggio vocale $ $ VM_DUR} da $ {VM_CALLERID} a $ {VM_DATE}.\nUna registrazione di questo messaggio e' allegata a questa email, puoi anche ascoltarla componendo * 97 dal tuo interno, oppure componendo * 98 da qualsiasi altro interno
+vm_subject = Numero di posta vocale $ {VM_MSGNUM} per la cassetta postale $ {VM_MAILBOX} da $ {VM_CALLERID} ricevuto a $ {VM_DATE}

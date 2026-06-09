@@ -1,0 +1,33 @@
+menu.rtp_settings = Configurações RTP
+module.rtp_settings = Configurações RTP
+rtp_settings.general = Geral
+rtp_settings.certificate_id = Certificado
+rtp_settings.certificate_id.tooltip = Arquivo de certificado do servidor.
+rtp_settings.rtpstart = Porta inicial da RTP
+rtp_settings.rtpstart.tooltip = Indica onde a porta começa.
+rtp_settings.rtpend = Porto final da RTP
+rtp_settings.rtpend.tooltip = Indica o final da porta.
+rtp_settings.strictrtp = RTP estrito
+rtp_settings.strictrtp.tooltip = Ativar proteção RTP estrita. Isso eliminará os pacotes RTP que não são provenientes da fonte do fluxo RTP.
+rtp_settings.rtpchecksums = RTP Checksums
+rtp_settings.rtpchecksums.tooltip = Se deseja habilitar ou desabilitar somas de verificação UDP no tráfego RTP.
+rtp_settings.icesupport = Suporte ICE
+rtp_settings.icesupport.tooltip = Seja para ativar ou desativar o suporte ao ICE. Esta opção está desativada por padrão.
+rtp_settings.stunaddr = Servidor Stun
+rtp_settings.stunaddr.tooltip = Nome de host ou endereço para o servidor STUN usado ao determinar o endereço IP externo e a porta em que uma sessão RTP pode ser acessada em. O número da porta é opcional.
+rtp_settings.turnaddr = Transformar servidor
+rtp_settings.turnaddr.tooltip = Nome do host ou endereço para o servidor TURN ser usado como retransmissão. O número da porta é opcional.
+rtp_settings.turnusername = Ativar nome do servidor
+rtp_settings.turnusername.tooltip = Nome de usuário usado para autenticar com o servidor de retransmissão TURN.
+rtp_settings.turnpassword = REDACTED
+rtp_settings.turnpassword.tooltip = Senha usada para autenticar com o servidor de retransmissão TURN.
+rtp_settings.ice_host_candidates = Configurações para anfitriões ICE
+rtp_settings.local_address = Endereço local
+rtp_settings.advertised_address = Endereço publicitado
+rtp_settings.include_local_address = Incluir endereço local
+rtp_settings.ice_host_candidates.tooltip =
+    Quando o Asterisk estiver por trás de um NAT estático um-para-um e o ICE estiver em uso, o ICE exporá o endereço IP
+    interno do servidor como um dos candidatos a anfitrião. Embora o uso de STUN (veja a opção de configuração 'stunaddr')
+    forneça um IP publicamente acessível, o IP interno ainda será enviado para o ponto remoto. Para ajudar a ocultar a
+    topologia de sua rede interna, você pode anular os candidatos do host que o Asterisk enviará para o ponto remoto.
+    Se você definir alguma coisa aqui, quase certamente NÃO vai querer especificar os endereços 'Stun Server' ou 'Turn Server'.

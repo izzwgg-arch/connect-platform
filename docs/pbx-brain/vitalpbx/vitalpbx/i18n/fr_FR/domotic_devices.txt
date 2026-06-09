@@ -1,0 +1,4 @@
+domotic_devices = Appareils Domotiques
+domotic_devices.general.tab = {vitalpbx.general}
+domotic_devices.show_menu = Afficher le menu avec les appareils
+module.domotic_devices = {domotic_devices}

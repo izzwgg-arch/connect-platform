@@ -1,0 +1,15 @@
+#import_extensionsgeneral .row .column-pbx:nth-child(2) div:not(.legend) {
+	margin-top: 1.5em;
+	margin-left: 2em;
+	text-indent: -2em;
+}
+
+#import_extensionsgeneral .row .column-pbx:nth-child(2) div:not(.legend) span {
+	text-transform: uppercase;
+	font-weight: bold;
+}
+
+#import_extensionsgeneral .row .column-pbx:nth-child(1) textarea {
+	height: 25em;
+	overflow-y: auto;
+}

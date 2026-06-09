@@ -1,0 +1,5 @@
+module.softphone_extensions = Softphone устройства
+menu.softphone_extensions = {module.softphone_extensions}
+softphone_extensions.max_reached =
+	Вам не разрешено добавлять более {0} устройств
+softphone_extensions.general = {vitalpbx.general}

@@ -1,0 +1,92 @@
+menu.pjsip_settings = Настройки PJSIP
+module.pjsip_settings = Настройки PJSIP
+pjsip_settings.general = Общие
+pjsip_settings.debug = Отладка
+pjsip_settings.debug.tooltip = Вкл/Выкл ведение журнала SIP отладки.
+pjsip_settings.timer_t1 = Таймер T1
+pjsip_settings.timer_t1.tooltip = Таймер T1 является базой для определения того, сколько времени ждать до повторных передач запросов, которые не получают ответа при использовании ненадежного транспорта (например, UDP).
+pjsip_settings.timer_b = Таймер B
+pjsip_settings.timer_b.tooltip = Таймер B определяет максимальное время ожидания после отправки запроса INVITE перед прекращением транзакции.
+pjsip_settings.disable_tcp_switch = Отключить TCP переключение
+pjsip_settings.disable_tcp_switch.tooltip = Отключить автоматическое переключение с UDP на TCP транспорт, если исходящий запрос слишком большой.
+pjsip_settings.bind = Привязать адрес
+pjsip_settings.bindaddr = Адрес
+pjsip_settings.bindport = Порт
+pjsip_settings.bind.tooltip = IP-адрес и порт для привязки. 
+pjsip_settings.tlsbind = Привязать TLS 
+pjsip_settings.tlsbind.tooltip = IP-адрес и порт для привязки через TLS протокол.
+pjsip_settings.certificate = Сертификат
+pjsip_settings.certificate.tooltip = Сертификат для использования с TLS соединениями.
+pjsip_settings.verify_client = Проверять клиента
+pjsip_settings.verify_client.tooltip = Определяет, требовать ли проверку сертификата клиента (Только с TLS)
+pjsip_settings.ssl_method = SSL метод
+pjsip_settings.ssl_method.tooltip = Метод SSL транспорта (Только с TLS)
+pjsip_settings.verify_server = Проверять сервер
+pjsip_settings.verify_server.tooltip = Определяет, требовать ли проверку сертификата сервера (Только с TLS)
+pjsip_settings.local_net = Локальная сеть
+pjsip_settings.local_net.tooltip = Диапазон адресов локальной сети (используется для NAT).
+pjsip_settings.external_media_address = Внешний адрес для RTP
+pjsip_settings.external_media_address.tooltip = Внешний IP адрес используемый для обработки RTP медиа трафика. Должен быть назначен тот же IP адрес, что и в поле <b>"Внешний адрес для SIP"</b>, если вы, конечно, не хотите разделить сигнальный и медиа трафик и направить их на разные IP адреса или сервера.
+pjsip_settings.external_signaling_address = Внешний адрес для SIP
+pjsip_settings.external_signaling_address.tooltip = Внешний IP адрес используемый для SIP сигнализации. Должен быть назначен тот же IP адрес, что и в поле <b>"Внешний адрес для RTP"</b>, если вы, конечно, не хотите разделить сигнальный и медиа трафик и направить их на разные IP адреса или сервера.
+pjsip_settings.nat_settings = Настройки NAT
+pjsip_settings.tonezone = {sip_settings.tonezone}
+pjsip_settings.tonezone.tooltip = Тоновые параметры страны, которые будут использоваться для каналов, созданных PJSIP устройствами и внешними линиями.
+pjsip_settings.codecs = Кодеки
+pjsip_settings.codecs.tooltip =
+	Этот параметр задаёт, какие кодеки использовать для каналов, созданных для PJSIP устройств и внешних линий. Применяется только в том случае, 
+	если для внешних линий или устройств не определены собственные кодеки.	
+pjsip_settings.mwi_settings = Настройки MWI
+pjsip_settings.mwi_tps_queue_high = Макс. очередь процессора задач
+pjsip_settings.mwi_tps_queue_high.tooltip =
+	В сильно загруженной системе вам может потребоваться настроить лимиты очереди процессора задач. Если размер очереди какого-либо процессора задач достигает своего
+	максимального значения, PJSIP прекращает обработку новых запросов до тех пор, пока предупреждение не будет удалено. Предупреждение удаляется, когда все очереди
+	процессора задач падают до минимального значения.	
+pjsip_settings.mwi_tps_queue_low = Миним. очередь процессора задач
+pjsip_settings.mwi_tps_queue_low.tooltip =
+	В сильно загруженной системе вам может потребоваться настроить лимиты очереди процессора задач. Если размер очереди какого-либо процессора 
+	задач достигает своего максимального значения, PJSIP прекращает обработку новых запросов до тех пор, пока предупреждение не будет удалено. 
+	Предупреждение удаляется, когда все очереди процессора задач падают до минимального значения. Установите -1, чтобы минимальное значение 
+	составляло 90% от максимального.	
+pjsip_settings.mwi_disable_initial_unsolicited = Отключить первоначальные MWI
+pjsip_settings.mwi_disable_initial_unsolicited.tooltip =
+	Когда первоначальные незапрашиваемые уведомления MWI (Message Waiting Indication) включены, то эти уведомления отправляются при запуске. 
+	Если у вас много Endpoints (тысячи), которые используют незапрашиваемые MWI, вы можете рассмотреть возможность отключения первоначальных 
+	уведомлений о запуске. Когда первоначальные незапрашиваемые уведомления MWI отключены при запуске, уведомления начнут поступать при 
+	следующем обновлении контактов на endpoints.	
+pjsip_settings.keep_alive_interval = Интервал проверки
+pjsip_settings.keep_alive_interval.tooltip =
+	Интервал (в секундах) отправки keepalive-сообщений для проверки активности соединения.
+pjsip_settings.contact_expiration_check_interval = Интервал для контактов
+pjsip_settings.contact_expiration_check_interval.tooltip =
+	Интервал (в секундах) для проверки "истекших" контактов.
+pjsip_settings.max_initial_qualify_time =  Макс. время проверки
+pjsip_settings.max_initial_qualify_time.tooltip =
+	Максимальный промежуток времени с момента запуска, в течение которого должна выполняться попытка проверки для всех контактов. 
+	Если больше значения "Qualify Frequency" для AOR, то будет использоваться значение "Qualify Frequency".
+pjsip_settings.unidentified_request_period = Неопознанный период запроса
+pjsip_settings.unidentified_request_period.tooltip =
+	Количество секунд, в течение которых накапливаются неопознанные запросы. Если неопознанные запросы получены в течение этого периода, 
+	будет сгенерировано событие безопасности. 
+pjsip_settings.unidentified_request_count = Неопознанное количество запросов
+pjsip_settings.unidentified_request_count.tooltip = Число разрешенных неопознанных запросов с одного IP-адреса. 
+pjsip_settings.unidentified_request_prune_interval = Интервал отсечения неопознанных запросов
+pjsip_settings.unidentified_request_prune_interval.tooltip =
+		Интервал, с которым проверяются неопознанные запросы, чтобы увидеть, можно ли их отсечь. Если они в два раза старше чем значение "Неопознанный период запроса" они обрезаются.
+pjsip_settings.language.tooltip = Язык по умолчанию, который будет использоваться для каналов, созданных PJSIP endpoints
+pjsip_settings.allow_reload = Разрешить перезагрузку транспорта
+pjsip_settings.allow_reload.tooltip =
+	Определяет, будут ли перезагружаться PJSIP транспорт при перезагрузке res_pjsip. Рекомендуется установить для этого параметра
+	значение <b>«Нет»</b>, поскольку перезагрузка транспорта может нарушить выполняющиеся вызовы.	
+pjsip_settings.endpoint_identifier_order = Порядок идентификаторов Endpoint
+pjsip_settings.endpoint_identifier_order.tooltip =
+	Этот параметр позволяет определить список имен идентификаторов Endpoint. Порядок списка - это указанный порядок, в котором именованные 
+	идентификаторы проверяют запрос. По умолчанию: <b>"IP,Username,Anonymous"</b>
+pjsip_settings.endpoint_identifier_order.ip = IP
+pjsip_settings.endpoint_identifier_order.username = Username
+pjsip_settings.endpoint_identifier_order.anonymous = Anonymous
+pjsip_settings.endpoint_identifier_order.auth_username = Auth Username
+pjsip_settings.endpoint_identifier_order.header = Header
+pjsip_settings.ms_signaling_address = MS Teams домен
+pjsip_settings.ms_signaling_address.tooltip = Домен, который будет отправлен при вызове через внешнюю линию с транспортом «TLS+MSTeams», например: <b>sip.mypbx.com</b>
+pjsip_settings.ms_signaling_address.invalid.msg = Предоставленный MS домен недействителен. Пожалуйста, укажите правильное полное доменное имя.

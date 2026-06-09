@@ -1,0 +1,25 @@
+ha_monitor = Moniteur HA
+menu.ha_monitor = {ha_monitor}
+module.ha_monitor = Moniteur Ha
+ha_monitor.master = Maître
+ha_monitor.standby = Veille
+ha_monitor.unstandby = Démarrer le serveur
+ha_monitor.started = Commencé
+ha_monitor.stopped = Arrêté
+ha_monitor.hdd = Synchronisation du disque dur
+ha_monitor.database = Base de données
+ha_monitor.dahdi = DAHDI
+ha_monitor.asterisk = Astérisk
+ha_monitor.vitalpbx = VitalPBX
+ha_monitor.bascul = Bascul
+ha_monitor.confirm_bascul.title = Changer les rôles des serveurs en Haute Disponibilité
+ha_monitor.confirm_bascul =
+    <strong>¡ATTENTION !</strong>, tous les appels en cours seront perdus et le système sera dans un état d'indisponibilité pendant quelques secondes.<br>
+    <strong>Êtes-vous sûr de passer de {0} à {1} ? </strong>
+ha_monitor.success = Le Basculement a été exécuté avec succès
+ha_monitor.executed = Le Basculement est exécuté en arrière-plan
+ha_monitor.confirm_unstandby.title = Démarrer la confirmation
+ha_monitor.confirm_unstandby =
+    Êtes-vous sûr de vouloir exécuter le Démarage maintenant ?
+ha_monitor.executed_unstandby = Le mode veille a été exécuté avec succès
+ha_monitor.off = Serveur arrêté

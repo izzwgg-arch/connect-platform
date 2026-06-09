@@ -1,0 +1,56 @@
+; ============================================================================
+; Connect tenant MOH enforcement layer
+; (Auto-installed by scripts/pbx/install-connect-tenant-moh-dialplan.sh —
+;  DO NOT HAND-EDIT THIS FILE. Re-run the installer to update.)
+;
+; Read-only consumer of these AstDB keys (written by Connect API on every
+; MOH publish + rollback):
+;
+;   connect/pbx_tenant_map/<numeric-vital-tenant-id>/slug      → tenant slug
+;   connect/pbx_tenant_map/<numeric-vital-tenant-id>/moh_class → effective class
+;   connect/t_<slug>/moh_class                                 → primary value
+;   connect/t_<slug>/active_moh_class                          → fallback alias
+;
+; Wired in via the VitalPBX-generated [sub-before-bridging-call] in
+; extensions__20-baseplan.conf, which Gosubs [global-before-bridging-call-hook]
+; (defined below). The resolver Sets CHANNEL(musicclass) on the leg about to
+; be bridged so when that leg is later put on hold, MoH plays the tenant's
+; selected class.
+;
+; Fail-safe: any missing AstDB key, missing endpoint prefix, or non-numeric
+; tenant id results in a bare Return() and leaves the channel's musicclass
+; untouched. NEVER hangs up, redirects, or alters CDR/recording behavior.
+; ============================================================================
+
+[sub-connect-tenant-moh]
+exten => s,1,NoOp(Connect tenant MOH resolver tenant=${ARG1} caller=${ARG2} callee=${ARG3} preset=${CHANNEL(musicclass)})
+ same => n,Set(TENANT_RAW=${ARG1})
+ same => n,GotoIf($["${TENANT_RAW}" = ""]?done)
+ ; Normalize "T3" → "3"; leave bare numerics (or unknown shapes) alone.
+ same => n,Set(TENANT_ID=${IF($["${TENANT_RAW:0:1}" = "T"]?${TENANT_RAW:1}:${TENANT_RAW})})
+ same => n,GotoIf($["${TENANT_ID}" = ""]?done)
+ same => n,Set(TENANT_SLUG_LOCAL=${DB(connect/pbx_tenant_map/${TENANT_ID}/slug)})
+ same => n,GotoIf($["${TENANT_SLUG_LOCAL}" = ""]?done)
+ same => n,Set(MOH_CLASS_LOCAL=${DB(connect/t_${TENANT_SLUG_LOCAL}/moh_class)})
+ same => n,ExecIf($["${MOH_CLASS_LOCAL}" = ""]?Set(MOH_CLASS_LOCAL=${DB(connect/t_${TENANT_SLUG_LOCAL}/active_moh_class)}))
+ same => n,GotoIf($["${MOH_CLASS_LOCAL}" = ""]?done)
+ same => n,Set(CHANNEL(musicclass)=${MOH_CLASS_LOCAL})
+ same => n,Set(__CONNECT_MOH=${MOH_CLASS_LOCAL})
+ same => n,NoOp(Connect tenant MOH applied tenant_id=${TENANT_ID} slug=${TENANT_SLUG_LOCAL} class=${MOH_CLASS_LOCAL})
+ same => n,Return()
+ same => n(done),NoOp(Connect tenant MOH skipped tenant_id=${TENANT_ID} slug=${TENANT_SLUG_LOCAL} class=${MOH_CLASS_LOCAL})
+ same => n,Return()
+
+; Wrapper hook called by VitalPBX-generated [sub-before-bridging-call]. The
+; baseplan in some VitalPBX builds forwards (TENANT, CALLER, CALLEE) as
+; positional args; in others the values are only available as channel vars.
+; The IF()-Set() pattern below works in both cases without a prior read of
+; extensions__20-baseplan.conf — see scripts/pbx/install-connect-tenant-moh-dialplan.sh
+; comment block for the contract notes.
+[global-before-bridging-call-hook]
+exten => s,1,NoOp(Connect global before-bridging hook arg1=${ARG1} tenant=${TENANT} caller=${CALLER} callee=${CALLEE})
+ same => n,Set(T=${IF($["${ARG1}" != ""]?${ARG1}:${TENANT})})
+ same => n,Set(FROM=${IF($["${ARG2}" != ""]?${ARG2}:${CALLER})})
+ same => n,Set(TO=${IF($["${ARG3}" != ""]?${ARG3}:${CALLEE})})
+ same => n,Gosub(sub-connect-tenant-moh,s,1(${T},${FROM},${TO}))
+ same => n,Return()

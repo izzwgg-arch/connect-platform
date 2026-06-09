@@ -1,0 +1,1 @@
+domotic.connection_fail = Impossibile connettersi all'unita' con il seguente indirizzo: %s

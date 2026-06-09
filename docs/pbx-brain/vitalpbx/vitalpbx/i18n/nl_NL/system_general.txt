@@ -1,0 +1,65 @@
+menu.system_general = Systeem Algemeen
+module.system_general = Systeem Algemeen
+system_general.ast_agi_dir = Asterisk AGI-map
+system_general.ast_dir = Asterisk-map
+system_general.ast_libs_dir = Asterisk Bibliotheekmap
+system_general.ast_log_dir = Asterisk Logboekmap
+system_general.ast_module_dir = Asterisk Modulemap
+system_general.ast_sound_dir = Asterisk Geluidsmap
+system_general.ast_spool_dir = Asterisk Spoolmap
+system_general.auto_hints = Hints Aanmaken
+system_general.auto_hints.tooltip = Als dit ingeschakeld is, worden de hints automatisch ingeschakeld telkens als u een extensie aanmaakt.
+system_general.auto_portal = Portaal Inschakelen
+system_general.auto_portal.tooltip = Als dit ingeschakeld is, wordt het portaal automatisch ingeschakeld telkens als u een extensie aanmaakt.
+system_general.auto_voicemail = Voicemail Inschakelen
+system_general.auto_voicemail.tooltip = Als dit ingeschakeld is, wordt de voicemail automatisch ingeschakeld telkens als u een extensie aanmaakt.
+system_general.dialoptions = Kiesopties Extensies
+system_general.dialoptions.tooltip = Standaardopties die moeten worden gebruikt om interne extensies te kiezen als er geen kiesopties gedefinieerd zijn (op extensiemodule).
+system_general.dialplan_settings = Instellingen Kiesplan
+system_general.extension_settings = Extensie-instellingen
+system_general.general = Algemeen
+system_general.recording_format = Opnameformaat
+system_general.recording_format.tooltip = Standaardaudioformaat voor het opnemen van oproepen.
+system_general.ringtime = Standaardrinkeltimer
+system_general.ringtime.placeholder = Waarde in seconden
+system_general.ringtime.tooltip = Standaardtijd dat het rinkelen duurt bij uitgaande oproepen als er geen rinkeltimer als standaard is gedefinieerd of ingesteld (op extensiemodule).
+system_general.save = Opslaan
+system_general.system_directories = Systeemmappen
+system_general.table.description = Omschrijving
+system_general.table.path = Pad
+system_general.trunk_dialoptions = Kiesopties Externe Koppeling
+system_general.trunk_dialoptions.tooltip = Standaardopties die moeten worden gebruikt om externe nummers te kiezen als er geen kiesopties voor externe koppelingen gedefinieerd zijn (op extensiemodule).
+system_general.recording_script = Recording Script
+system_general.recording_script.invalid = Recording script is not found
+system_general.recording_script.tooltip = Script to be executed when the recording is over. The script parameters can be defined as space separated sequence of strings like ^{{<i><b>name</b></i>}}, where <i><b>name</b></i> can be any channel or MixMonitor variable. For example, <br> ^{{UNIQUEID}} - channel ID<br> ^{{MIXMONITOR_FILENAME}} - recording file name.
+system_general.default_ast_lang = Default Language
+system_general.default_ast_lang.tooltip = Language to select by default when a new extension is being created
+system_general.devices_prefix = Devices Prefix
+system_general.devices_prefix.tooltip = Prefix to append by default to devices name
+system_general.blacklisted = Blacklisted
+system_general.blacklisted.tooltip = 
+	Allows you to define a custom prompt that will be reproduced to callers who are blacklisted
+system_general.dnd = DND
+system_general.dnd.tooltip = 
+	Allows you to define a custom prompt that will be reproduced when an extension has active the DND
+system_general.sounds = System Prompts
+system_general.featuredigittimeout = Features Digit Timeout
+system_general.featuredigittimeout.placeholder = Value in milliseconds
+system_general.featuredigittimeout.tooltip = Max time (ms) between digits for feature activation  (default is 1000 ms)
+system_general.transferdigittimeout = Transfer Digit Timout
+system_general.transferdigittimeout.placeholder = {system_general.ringtime.placeholder}
+system_general.transferdigittimeout.tooltip = Number of seconds to wait between digits when transferring a call (default is 3 seconds)
+system_general.gui_settings = GUI Settings
+system_general.show_login_panel = Show Login Panel
+system_general.show_login_panel.tooltip = If set to yes, it shows a panel with the sonata add-ons when these are installed.
+system_general.queues_callback = Queues CallBack
+system_general.search_frequency = Search Frequency
+system_general.search_frequency.placeholder = {system_general.ringtime.placeholder}
+system_general.search_frequency.tooltip = Defines how often the queues callback service will search for scheduled callbacks.
+system_general.email_credentials = Email Credentials
+system_general.email_credentials.tooltip = 
+	Enable this feature to send an email to the newly created extension user with their extension and account information.
+	You can find the template for this email under Admin > System Settings > Email Templates.
+system_general.show_addons_menu = Show Add-ons Menu
+system_general.show_addons_menu.tooltip = 
+	If set to yes, a menu button will be shown on the login screen to access to external add-ons like the Sonata or VitXi

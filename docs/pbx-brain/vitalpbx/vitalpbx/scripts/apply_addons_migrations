@@ -1,0 +1,17 @@
+#!/bin/bash
+set -e
+
+migrationsPath="/usr/share/vitalpbx/migrations"
+
+find $migrationsPath -maxdepth 1 -mindepth 1 -type d | while read dir; do
+  # shellcheck disable=SC2046
+  # shellcheck disable=SC2005
+  # shellcheck disable=SC2086
+
+  migrationFolder=$(basename $dir)
+  if [ "$migrationFolder" == "ai_assistants" ]; then
+    /usr/share/vitalpbx/scripts/apply_migrations "voice_hub"
+  fi
+  echo "$migrationFolder"
+  /usr/share/vitalpbx/scripts/apply_migrations "$migrationFolder"
+done

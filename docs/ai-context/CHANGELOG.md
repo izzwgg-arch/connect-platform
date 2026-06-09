@@ -4,6 +4,21 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-09 — PBX brain snapshot (docs only, no deploy)
+
+**Task:** PBX repo/config read-only export for Cursor + voicemail-drop design  
+**Risk:** low — documentation only; secrets redacted per `RISKS_AND_LIMITATIONS.md`
+
+- Added `docs/pbx-brain/` extracted VitalPBX/Asterisk snapshot + architecture indexes:
+  `PBX_ARCHITECTURE.md`, `VITALPBX_STRUCTURE.md`, `TENANT_MODEL.md`,
+  `CONNECT_INTEGRATION_POINTS.md`, `RISKS_AND_LIMITATIONS.md`.
+- **Excluded** local `pbx-full-brain-*.tar.gz` (~500MB) from git — extracted tree only.
+- Referenced by `docs/pbx/connect-voicemail-drop-plugin-design.md`.
+
+Deploy: **none** (docs-only).
+
+---
+
 ## 2026-06-09 — CRM UI/design cleanup: queue, wallboard, workspace CSS
 
 **Task:** CRM portal visual refresh — queue + wallboard + shared workspace surfaces  

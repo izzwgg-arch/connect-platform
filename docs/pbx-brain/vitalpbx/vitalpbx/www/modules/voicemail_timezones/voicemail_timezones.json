@@ -1,0 +1,34 @@
+{
+  "id-name" : "voicemail_timezones",
+  "name" : "Voicemail General",
+  "author" : "Telesoft S.A",
+  "main-pk" : "voicemail_timezone_id",
+  "main-tbl" : "voicemail_timezones",
+  "tables" : {
+	"voicemail_timezones" : {
+	  "desc-field" : "tzname",
+	  "pk" : "voicemail_timezone_id",
+	  "columns" : {
+		"voicemail_timezone_id" : {
+		  "type" : "int",
+		  "autoIncrement" : "true",
+		  "primaryKey" : "true",
+		  "notNull" : "true"
+		},
+		"tzname" : {
+		  "type" : "varchar",
+		  "notNull" : "true",
+		  "unique" : "true"
+		},
+		"timezone" : {
+		  "type" : "varchar",
+		  "notNull" : "true"
+		},
+		"tzdefinition" : {
+		  "type" : "varchar",
+		  "notNull" : "true"
+		}
+	  }
+	}
+  }
+}

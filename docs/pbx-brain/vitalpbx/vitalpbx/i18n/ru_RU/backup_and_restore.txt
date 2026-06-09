@@ -1,0 +1,82 @@
+backup_and_restore.backup = Резервное копирование
+backup_and_restore.intro = Чтобы восстановить резервную копию, выберите нужную в боковом меню.
+backup_and_restore.backup_invalid = Не удалось загрузить выбранную резервную копию
+backup_and_restore.backup_created = Резервная копия успешно создана
+backup_and_restore.backup_restored = Резервная копия успешно восстановлена
+backup_and_restore.backup_error = Не удалось создать резервную копию
+backup_and_restore.restore_error = Не удалось восстановить резервную копию
+backup_and_restore.backups = Резервные копии
+backup_and_restore.cancel = Отмена
+backup_and_restore.list_content = {0} {1}
+backup_and_restore.list_description = {0,datetime}
+backup_and_restore.restore = Восстановление
+backup_and_restore.title = {0} {1} - {2,longdatetime}
+menu.backup_and_restore = Резервирование и восстановление
+module.backup_and_restore = Резервирование и восстановление
+backup_and_restore.product = Название
+backup_and_restore.product.tooltip = Название этой резервной копии
+backup_and_restore.version = Версия
+backup_and_restore.version.tooltip = Версия этой резервной копии
+backup_and_restore.created = Создано
+backup_and_restore.created.tooltip = Дата и время создания этой резервной копии
+backup_and_restore.created.format = {0,longdatetime}
+backup_and_restore.click_to_restore = Нажмите кнопку "Восстановить" ниже, чтобы использовать эту резервную копию и начать процесс восстановления. Этот процесс может занять несколько минут.
+backup_and_restore.download = Скачать
+backup_and_restore.comment = Комментарий
+backup_and_restore.comment.tooltip = Пользовательский комментарий, который будет добавлен к резервной копии
+backup_and_restore.include_cdr = Добавить детализацию
+backup_and_restore.include_cdr.tooltip = Включение этого пункта добавит детализацию звонков в резервную копию
+backup_and_restore.include_recordings = Добавить записи вызовов
+backup_and_restore.include_recordings.tooltip = Включение этого пункта добавит записи вызовов в резервную копию
+backup_and_restore.include_voicemail = Добавить голосовую почту
+backup_and_restore.include_voicemail.tooltip = Включение этого пункта добавит голосовую почту в резервную копию
+backup_and_restore.restore_cdr = Восстановить детализацию
+backup_and_restore.restore_cdr.tooltip = Включение этого пункта заменит существующие записи детализации звонков на те, что содержатся в этой резервной копии
+backup_and_restore.restore_recordings = Восстановить записи вызовов
+backup_and_restore.restore_recordings.tooltip = Включение этого пункта заменит существующие записи вызовов на те, что содержатся в этой резервной копии
+backup_and_restore.restore_voicemail = Восстановить голосовую почту
+backup_and_restore.restore_voicemail.tooltip = Включение этого пункта заменит существующую голосовую почту на ту, что содержится в этой резервной копии
+backup_and_restore.restore_file = Загрузить резервную копию
+backup_and_restore.restore_file.tooltip = Выберите загруженную ранее резервную копию для восстановления
+backup_and_restore.restore_file.invalid = Резервная копия недействительна
+backup_and_restore.delete = Удалить
+backup_and_restore.confirm_delete = Вы уверены, что хотите удалить эту резервную копию?
+backup_and_restore.backup_deleted = Резервная копия удалена
+backup_and_restore.name = Имя
+backup_and_restore.name.tooltip = Имя для этого резервного копирования
+backup_and_restore.include_faxes = Добавить факсы
+backup_and_restore.include_faxes.tooltip = Включение этого пункта добавит факсы в резервную копию
+backup_and_restore.restore_faxes = Восстановить факсы
+backup_and_restore.restore_faxes.tooltip = Включение этого пункта заменит существующие факсы на те, что содержатся в этой резервной копии
+backup_and_restore.import = Импорт рез. копии
+backup_and_restore.execute = Создать резервную копию!
+backup_and_restore.general = {general}
+backup_and_restore.automatic_backup = Запускать автоматически
+backup_and_restore.automatic_backup.tooltip =
+	Позволяет использовать Планировщик задач <b>(АТС-Инструменты-Планировщик задач)</b> для автоматического
+  создания резервных копий с выбранными вами параметрами  
+backup_and_restore.limit = Кол-во копий
+backup_and_restore.limit.tooltip =
+  Позволяет определить количество создаваемых резервных копий. 
+  При превышении заданного количества самая старая копия будет удалена.
+backup_and_restore.validations.name = Укажите правильное имя. Разрешены буквы, цифры, пробелы, тире, подчеркивания и точки.
+backup_and_restore.validations.duplicated_name = Уже существует резервная копия с тем же именем.
+backup_and_restore.backups_list = Список резервных копий
+backup_and_restore.date_time = Дата и время
+backup_and_restore.app_version = {0} Версия
+backup_and_restore.actions = Действия
+backup_and_restore.validations.no_backup_data = Недостаточно информации для создания резервной копии
+backup_and_restore.backup_not_deleted = Не удалось удалить резервную копию
+backup_and_restore.cannot_restore = Извините! Выбранная резервная копия не может быть восстановлена
+backup_and_restore.backup = Резервная копия 
+backup_and_restore.created = Создана
+backup_and_restore.product_version = Версия приложения
+backup_and_restore.cannot_create_backup_group = Не удалось создать группу резервных копий "{0}"
+backup_and_restore.confirm_group_delete =
+	Вы уверены, что хотите удалить эту группу резервных копий и все созданные ею резервные копии?
+backup_and_restore.cannot_delete_group = Не удалось удалить группу резервных копий
+backup_and_restore.old_backup = 
+	Резервная копия версии {0} не может быть восстановлена на {1}, у которой версия выше, чем {2}. 
+	Ваша резервная копия должна быть не ниже версии {3}	
+backup_and_restore.addons = Дополнения
+backup_and_restore.addons.tooltip = Позволяет вам выбрать дополнения, для которых будет выполнено резервное копирование.

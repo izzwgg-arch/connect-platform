@@ -1,0 +1,14 @@
+asterisk_sounds.actions = Ações
+asterisk_sounds.available_version = Versão Disponível
+asterisk_sounds.cannot_remove = O pacote de sons do Asterisk não pode ser removido porque ainda não está instalado
+asterisk_sounds.cannot_update = O pacote de sons do Asterisk não pode ser atualizado porque ainda não está instalado
+asterisk_sounds.general = {vitalpbx.general}
+asterisk_sounds.installed_version = Versão Instalada
+asterisk_sounds.invalid_data = Data fornecida é inválida
+asterisk_sounds.not_installed = O pacote de sons do Asterisk ainda não está instalado
+asterisk_sounds.sound = Pacote de sons
+asterisk_sounds.successfully_installed = O pacote de sons do Asterisk foi instalado com sucesso
+asterisk_sounds.successfully_removed = O pacote de sons do Asterisk foi removido com sucesso
+asterisk_sounds.successfully_updated = O pacote de sons do Asterisk foi atualizado com sucesso
+menu.asterisk_sounds = Sons do Asterisk
+module.asterisk_sounds = {menu.asterisk_sounds}

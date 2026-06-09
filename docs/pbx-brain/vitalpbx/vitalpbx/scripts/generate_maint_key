@@ -1,0 +1,30 @@
+#!/bin/sh
+
+# This code is the property of VitalPBX LLC Company
+# License: Proprietary
+# Date: 30-Jul-2020
+# Create a random maintenance key (secret. Readable only to root) and its
+# hash readable to VitalPBX.
+
+hash_cmd=sha512sum
+dir=/etc/vitalpbx
+
+mkdir -p ${dir}
+
+secret_file="$dir/vitalpbx-maint.conf"
+
+hash_output() {
+	$hash_cmd | cut -d' ' -f1
+}
+
+# shellcheck disable=SC2039
+if [ ! -f $secret_file ]
+then
+	touch "$secret_file"
+	chmod go= "$secret_file"
+	head -c 512 /dev/urandom | hash_output >"$secret_file"
+fi
+
+#Allow be readable by www-data
+chown www-data:www-data ${secret_file}
+

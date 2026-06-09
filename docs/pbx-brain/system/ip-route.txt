@@ -1,0 +1,3 @@
+default via 209.145.48.1 dev eth0 onlink 
+10.8.0.0/24 dev tun0 proto kernel scope link src 10.8.0.1 
+209.145.48.0/20 via 209.145.48.1 dev eth0 

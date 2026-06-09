@@ -1,0 +1,78 @@
+menu.cid_management = Modificatori CID
+module.cid_management = Modificatori CID
+cid_management.description = Descrizione
+cid_management.description.help = Descrizione per identificare in modo univoco questo Modificatore.
+cid_management.default_cid_numebr = +039081......
+cid_management.default_cid_name = Giovanni P.
+cid_management.cid_name_settings = Impostazioni Nome CID
+cid_management.cid_number_settings = Impostazioni Numero CID
+cid_management.prepend_to_cid_name = Anteporre
+cid_management.prepend_to_cid_name.help = Testo che puo' essere aggiunto davanti al nome originale dell'ID chiamante.
+cid_management.append_to_cid_name = Aggiungere
+cid_management.append_to_cid_name.help = Testo che puo' essere aggiunto alla fine del nome originale dell'ID chiamante.
+cid_management.replace_cid_name_with = Sostituirlo Con
+cid_management.replace_cid_name_with.help = Sostituisci completamente il nome CID con questo testo. Lascia vuoto questo campo per mantenere il nome CID originale.
+cid_management.prepend_to_cid_number = Anteporre
+cid_management.prepend_to_cid_number.help = Prefisso da aggiungere all'inizio del Numero originale ID Chiamante.
+cid_management.append_to_cid_number = Aggiungere
+cid_management.append_to_cid_number.help = Suffisso da aggiungere dopo il Numero originale ID chiamante.
+cid_management.strip_off = Salta / Lunghezza
+cid_management.strip_off.help = Modificare il numero CID in entrata avviando la manipolazione di un numero di cifre dall'inizio o dalla fine del numero CID, mantenendo un numero qualsiasi di cifre originali.
+cid_management.skip = Salta
+cid_management.skip.help = Specificare dove iniziare a modificare il numero CID. Un valore di salto positivo di x ignorera' le cifre iniziali di x. Un valore negativo di x iniziera' x cifre prima della fine del numero CID in entrata.
+cid_management.length = Lunghezza
+cid_management.length.help = Determina la lunghezza del numero CID modificato. Se la lunghezza e' zero, verranno utilizzate tutte le cifre dopo la posizione iniziale. Definire una lunghezza negativa di x per scartare le cifre finali x.
+cid_management.v.cid.in_use = Impossibile rimuovere il Modificatore CID. Attualmente e' in uso dal modulo {0}  ({1}).
+cid_management.v.prepend_to_cid_name = Campo "Anteporre" sulle Impostazioni del Nome CID.
+cid_management.v.append_to_cid_name = Campo "Aggiungere" sulle Impostazioni del Nome CID.
+cid_management.v.replace_cid_name_with = Campo "Sostituisci con" nelle Impostazioni del Nome CID.
+cid_management.v.prepend_to_cid_number = Campo "Anteporre" sulle Impostazioni del Numero CID
+cid_management.v.prepend_to_cid_number.invalid = %s e' invalido. Sono consentiti solo numeri e *, #, +.
+cid_management.v.append_to_cid_number = Campo "Aggiungere" su Impostazioni Numero CID
+cid_management.v.append_to_cid_number.invalid = %s e' invalido. Sono consentiti solo numeri e *, #, +.
+cid_management.v.skip_on_cid_number = Campo "Strip Off (Salta)" sulle Impostazioni del Numero CID
+cid_management.v.cid_number_length = Campo "Strip Off (lunghezza)" sulle Impostazioni del Numero CID
+cid_management.v.description.unique = La Descrizione deve essere unica.
+cid_management.none = Nessuna
+cid_management.realtime_test = Simulazione
+cid_management.phone_number = Numero CID Originale
+cid_management.phone_number_result = Numero CID Modificato
+cid_management.phone_number_result.title = Mostra il risultato dopo aver applicato le impostazioni al numero sopra.
+cid_management.cid_name = Nome CID Originale
+cid_management.cid_name_result = Nome CID Modificato
+cid_management.cid_name_result.title = Mostra il risultato dopo aver applicato le impostazioni al nome sopra.
+cid_management.general = {vitalpbx.general}
+cid_management.api_settings = Impostazioni HTTP/HTTPS richieste
+cid_management.auth_password = REDACTED
+cid_management.auth_password.tooltip = La password per autenticare la richiesta HTTP/HTTPS.
+cid_management.auth_user = Auth User
+cid_management.auth_user.tooltip = Il nome utente per autenticare la richiesta HTTP/HTTPS
+cid_management.database = Database {0}
+cid_management.database.tooltip = Nome Database
+cid_management.mysql_host = Host {0}
+cid_management.mysql_host.tooltip = Nome host o indirizzo IP su cui e' ospitato il database.
+cid_management.mysql_password = REDACTED
+cid_management.mysql_password.tooltip = La password per autenticare le query del database.
+cid_management.mysql_settings = Impostazioni MySQL
+cid_management.mysql_username = Username {0}
+cid_management.mysql_username.tooltip = Il nome utente per autenticare le query del database.
+cid_management.query = Query {0}
+cid_management.query.tooltip = 
+	Query da eseguire. ad esempio: <b> seleziona cidname, cidnumber dal cliente dove phone = "[CIDNUM]" </b> <br> <br>
+        La variabile <b> [CIDNUM] </b> verrà sostituita dal numero del chiamante e la variabile <b> [CIDNAME] </b> verra' sostituita dal nome del chiamante. <br> <br>
+        La query deve restituire le colonne <b> cidname </b> e <b> cidnumber </b> per eseguire le modifiche CID, in
+        in altri casi, le informazioni CID non verranno modificate
+cid_management.type = Source {0}
+cid_management.type.option.api = Richiesta HTTP/HTTPS
+cid_management.type.option.mysql = MySQL
+cid_management.type.option.static = Statico
+cid_management.type.tooltip = Consente di definire da dove ottenere le informazioni per modificare il nome/numero CID del chiamante.
+cid_management.url = URL {0}
+cid_management.url.tooltip = 
+	URL che verrà chiamato o eseguito. Puoi passare molti argomenti di cui hai bisogno, l'argomento speciale
+        <b> [CIDNUM] </b> verrà sostituito dal numero del chiamante e l'argomento <b> [CIDNAME] </b> verrà sostituito dal nome del chiamante. <br> <br>
+        es .: <b> https://mycrm.com/cid.php?caller=[CIDNUM”&callername=[CIDNAME] </b> <br> <br>
+        L'esecuzione dell'URL deve restituire un risultato in formato json contenente gli attributi <b> "cidname" </b> e <b> "cidnumber" </b> per poter eseguire la modifica CID
+cid_management.validation.no_url = Non e' stato fornito alcun URL valido
+cid_management.timeout = {cid_lookup.timeout}
+cid_management.timeout.tooltip = {cid_lookup.timeout.tooltip}

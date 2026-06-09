@@ -1,0 +1,12 @@
+cel_events = Настройки CEL
+module.cel_events = {cel_events}
+menu.cel_events = {cel_events}
+cel_events.general = {vitalpbx.general}
+cel.enable = Включить
+cel.enable.tooltip = Включение / Отключение CEL (Asterisk Channel Event Logging - Регистрация событий канала Asterisk) 
+cel.apps = Приложения
+cel.apps.tooltip = Позволяет указать список приложений, для которых вы хотите получать события CEL.
+cel.events = События
+cel.events.tooltip = Позволяет вам указать список событий, которые вы хотите отслеживать.
+cel.dateformat = Формат даты
+cel.dateformat.tooltip = Позволяет указать формат даты, используемый при возникновении событий CEL.

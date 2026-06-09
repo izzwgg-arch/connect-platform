@@ -1,0 +1,64 @@
+
+PBX Core settings
+-----------------
+  Version:                     20.18.2
+  ABI related Build Options:   OPTIONAL_API
+  All Build Options:           DONT_OPTIMIZE, COMPILE_DOUBLE, OPTIONAL_API
+  Maximum calls:               Not set
+  Maximum open file handles:   50000
+  Root console verbosity:      0
+  Current console verbosity:   0
+  Debug level:                 0
+  Trace level:                 0
+  Dump core on crash:          Yes
+  Core dump file:              core
+  Maximum load average:        0.000000
+  Minimum free memory:         0 MB
+  Startup time:                23:16:21
+  Last reload time:            10:04:53
+  System:                      Linux/6.1.0-42-amd64 built by root on x86_64 2026-03-06 18:44:22 UTC
+  System name:                 
+  Entity ID:                   00:50:56:5b:f5:0a
+  PBX UUID:                    518ea2de-49f6-449f-b868-696251130860
+  Default language:            en
+  Language prefix:             Enabled
+  User name and group:         /
+  Running directory:           /var/lib/asterisk
+  Executable includes:         Disabled
+  Transcode via SLIN:          Enabled
+  Transmit silence during rec: Enabled
+  Generic PLC:                 Enabled
+  Generic PLC on equal codecs: Disabled
+  Hide Msg Chan AMI events:    Enabled
+  Sounds search custom dir:    Disabled
+  Min DTMF duration::          80
+  Cache media frames:          Enabled
+  RTP use dynamic payloads:    1
+  RTP dynamic payload types:   35-63,96-127
+  Channel storage backend:     ao2_legacy
+  Shell on remote consoles:    Enabled
+
+* Subsystems
+  -------------
+  Manager (AMI):               Enabled
+  Web Manager (AMI/HTTP):      Disabled
+  Call data records:           Enabled
+  Realtime Architecture (ARA): Enabled
+
+* Directories
+  -------------
+  Configuration file:          /etc/asterisk/asterisk.conf
+  Configuration directory:     /etc/asterisk
+  Module directory:            /usr/lib/asterisk/modules
+  Spool directory:             /var/spool/asterisk
+  Log directory:               /var/log/asterisk
+  Run/Sockets directory:       /run/asterisk
+  PID file:                    /run/asterisk/asterisk.pid
+  VarLib directory:            /var/lib/asterisk
+  Data directory:              /var/lib/asterisk
+  ASTDB:                       /var/lib/asterisk/astdb
+  IAX2 Keys directory:         /var/lib/asterisk/keys
+  AGI Scripts directory:       /var/lib/asterisk/agi-bin
+  Cache directory:             /var/cache/asterisk
+
+

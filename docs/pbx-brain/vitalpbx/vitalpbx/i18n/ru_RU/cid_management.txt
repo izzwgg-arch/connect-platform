@@ -1,0 +1,78 @@
+menu.cid_management = Изменение CID
+module.cid_management = Изменение CID
+cid_management.description = Описание
+cid_management.description.help = Краткое описание для идентификации этого пункта
+cid_management.default_cid_numebr = +123456789012345
+cid_management.default_cid_name = John Smith
+cid_management.cid_name_settings = Настройки имени CID
+cid_management.cid_number_settings = Настройки номера CID
+cid_management.prepend_to_cid_name = Перед
+cid_management.prepend_to_cid_name.help = Определяет, что будет добавлено перед идентификатором вызывающего абонента (CID).
+cid_management.append_to_cid_name = После
+cid_management.append_to_cid_name.help = Определяет, что будет добавлено в конце идентификатора вызывающего абонента (CID).
+cid_management.replace_cid_name_with = Заменить
+cid_management.replace_cid_name_with.help = Заменяет CID полностью. Чтобы сохранить тот же CID, оставьте это поле пустым.
+cid_management.prepend_to_cid_number = Перед
+cid_management.prepend_to_cid_number.help = Определяет, что будет добавлено перед номером идентификатора вызывающего абонента (CID).
+cid_management.append_to_cid_number = После
+cid_management.append_to_cid_number.help = Определяет, что будет добавлено в конце номера идентификатора вызывающего абонента (CID).
+cid_management.strip_off = Пропуск / Длина
+cid_management.strip_off.help = Изменяет входящий номер CID, манипулируя несколькими цифрами либо с начала, либо с конца номера CID, сохраняя при этом любое количество исходных цифр.
+cid_management.skip = Пропуск
+cid_management.skip.help = Указывает, с чего начать изменять номер CID. Положительное значение X поля "Пропуск" будет игнорировать первые X цифр. Отрицательное значение X поля "Пропуск" будет игнорировать все первые цифры до Х знаков от конца входящего номера CID.
+cid_management.length = Длина
+cid_management.length.help = Определяет длину измененного номера CID. Если длина равна нулю, будут использоваться все цифры после начальной позиции. Если длина отрицательная, то будут отброшены X последних цифр.
+cid_management.v.cid.in_use = Не удается удалить. В настоящее время используется модулем <b>{0}</b> (<b>{1}</b>).
+cid_management.v.prepend_to_cid_name = Поле "Перед" в настройках имени CID
+cid_management.v.append_to_cid_name = Поле "После" в настройках имени CID
+cid_management.v.replace_cid_name_with = Поле "Заменить" в настройках имени CID
+cid_management.v.prepend_to_cid_number = Поле "Перед" в настройках номера CID
+cid_management.v.prepend_to_cid_number.invalid = %s недействительно. Разрешены только *, #, + и числа.
+cid_management.v.append_to_cid_number = Поле "После" в настройках номера CID
+cid_management.v.append_to_cid_number.invalid = %s недействительно. Разрешены только *, #, + и числа.
+cid_management.v.skip_on_cid_number = Поле "Пропуск" в настройках номера CID
+cid_management.v.cid_number_length = Поле "Длина" в настройках номера CID
+cid_management.v.description.unique = Описание должно быть уникальным
+cid_management.none = Нет
+cid_management.realtime_test = Пример
+cid_management.phone_number = Исходный номер CID
+cid_management.phone_number_result = Измененный номер CID
+cid_management.phone_number_result.title = Показывает результат изменения номера после применения настроек выше.
+cid_management.cid_name = Исходное имя CID
+cid_management.cid_name_result = Измененное имя CID
+cid_management.cid_name_result.title = Показывает результат изменения имени после применения настроек выше.
+cid_management.general = {vitalpbx.general}
+cid_management.type = Источник {0}
+cid_management.type.option.static = Статический
+cid_management.type.option.mysql = MySQL
+cid_management.type.option.api = Запрос HTTP / HTTPS
+cid_management.type.tooltip = озволяет определить, откуда взять информацию, чтобы изменить CID Имя/Номер звонящего
+cid_management.mysql_settings = Настройки MySQL
+cid_management.database = База данных {0}
+cid_management.database.tooltip = Название базы данных
+cid_management.query = Запрос {0}
+cid_management.query.tooltip =
+	Пример запроса: <b>select cidname, cidnumber from customer where phone = '[CIDNUM]'</b> <br><br>
+	Переменная <b>[CIDNUM]</b> будет заменена номером вызывающего абонента, а переменная <b>[CIDNAME]</b> будет заменена именем вызывающего абонента. <br><br>
+	Запрос должен вернуть столбцы <b>cidname</b> и <b>cidnumber</b> для выполнения изменений CID, 
+  в противном случае информация CID не будет изменена.
+cid_management.mysql_host = Хост {0}
+cid_management.mysql_host.tooltip = Имя хоста или IP-адрес, на котором размещена база данных
+cid_management.mysql_username = Имя пользователя {0}
+cid_management.mysql_username.tooltip = Имя пользователя для авторизации запросов в базе данных
+cid_management.mysql_password = REDACTED
+cid_management.mysql_password.tooltip = Пароль для авторизации запросов в базе данных
+cid_management.api_settings = Настройки запросов HTTP/HTTPS
+cid_management.url = URL {0}
+cid_management.url.tooltip =
+	URL, который будет вызван или выполнен. Вы можете передать столько аргументов, сколько вам нужно. 
+  Специальный аргумент <b>[CIDNUM]</b> будет заменен номером вызывающего абонента, а аргумент <b>[CIDNAME]</b> будет заменен именем вызывающего абонента. <br><br>
+  Например: <b>https://mycrm.com/cid.php?caller=[CIDNUM]&callername=[CIDNAME]</b> <br><br>
+  Выполнение URL-адреса должно возвращать результат в формате json, содержащий атрибуты <b>"cidname"</b> и <b>"cidnumber"</b>, чтобы выполнить модификацию CID  
+cid_management.auth_user = Имя пользователя 
+cid_management.auth_user.tooltip = Имя пользователя для авторизации HTTP/HTTPS-запроса 
+cid_management.auth_password = REDACTED
+cid_management.auth_password.tooltip = Пароль для авторизации HTTP/HTTPS-запроса
+cid_management.validation.no_url = URL не указан
+cid_management.timeout = {cid_lookup.timeout}
+cid_management.timeout.tooltip = {cid_lookup.timeout.tooltip}

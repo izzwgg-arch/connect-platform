@@ -1,0 +1,49 @@
+maintenance = Manutenzione
+maintenance.cdr_preservation = Cancella il CDR piu' vecchio.
+maintenance.cdr_preservation.tooltip = 
+	Consente di definire il numero massimo di giorni in cui il CDR deve essere conservato. Il CDR con piu' giorni, di 
+    	quelli definiti, saranno cancellati.
+maintenance.confirm_mcp = 
+	Sei sicuro di voler eseguire la manutenzione ora? <br> Potrebbero essere necessari diversi minuti, in special modo
+        se ci sono molte registrazioni da convertire.
+maintenance.confirm_mcp.title = Confermi Manutenzione
+maintenance.convert_recordings = Converte Registrazioni
+maintenance.convert_recordings.tooltip = Abilita / Disabilita call recordings conversion to MP3.
+maintenance.enabled = Abilitato
+maintenance.enabled.tooltip = 
+	Permette di abilitare o disabilitare la manutenzione del PBX.
+maintenance.execute = Esegui Ora
+maintenance.executed = La manutenzione viene eseguita in background.
+maintenance.general = {vitalpbx.general}
+maintenance.mcp.invalid_tenant = La manutenzione non puo' essere eseguita perche' sono state fornite informazioni non valide.
+maintenance.no_license_notification = 	
+	Le seguenti funzionalita': "Cancella le registrazioni piu' vecchie" e "Converti registrazioni", non funzioneranno finche' non verra' attivata una licenza
+	per questo componente aggiuntivo.
+maintenance.recordings_min_duration = Cancella Registrazioni Brevi
+maintenance.recordings_min_duration.tooltip = 
+	Consente di definire la durata minima in secondi per cui una registrazione deve essere considerata troppo breve ed eliminarla.
+maintenance.recordings_preservation = Cancella Vecchie Registrazioni
+maintenance.recordings_preservation.tooltip = 
+	Consente di definire il numero massimo di giorni per la conservazione dele registrazioni. Le registrazioni superiore ai giorni
+	definiti qui, saranno cancellate.
+maintenance.schedule = Schedule
+maintenance.schedule.tooltip = 
+	Permette di definire il programma in cui verra' eseguita la manutenzione del PBX (Conversione delle registrazioni,
+	Pulizia di registrazioni e CDR, ecc.). Se nessuna pianificazione e' selezionata, tutte le opzioni di manutenzione saranno disabilitate.
+maintenance.tenant = Tenant
+maintenance.tenant.tooltip = Consente di selezionare l'utente su cui verranno applicate le configurazioni di manutenzione.
+maintenance.validation.enabled_without_cron = La manutenzione e' stata abilitata ma nessun profilo cron e' stato selezionato.
+menu.maintenance = {maintenance}
+module.maintenance = {maintenance}
+maintenance.best = Best ({0}k)
+maintenance.conversion_quality = Qualità Audio
+maintenance.conversion_quality.tooltip = 
+	La qualità audio da applicare durante la conversione da WAV a MP3. Qualità più elevate producono audio migliori, ma utilizzano più spazio
+        nel disco rigido; Qualità inferiori producono file audio più piccoli, ma la qualità viene ridotta.
+maintenance.good = Good ({0}k)
+maintenance.high = High ({0}k)
+maintenance.medium = Medium ({0}k)
+maintenance.voicemail_preservation = Cancella Messaggi Vocali meno recenti
+maintenance.voicemail_preservation.tooltip = 
+	Consente di definire il numero massimo di giorni in cui conservare le registrazioni della posta vocale.
+        Le registrazioni con un'età superiore ai giorni qui definiti verranno eliminate.

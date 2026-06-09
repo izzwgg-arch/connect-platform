@@ -1,0 +1,1125 @@
+
+ Endpoint:  <Endpoint/CID.....................................>  <State.....>  <Channels.>
+    I/OAuth:  <AuthId/UserName...........................................................>
+        Aor:  <Aor............................................>  <MaxContact>
+      Contact:  <Aor/ContactUri..........................> <Hash....> <Status> <RTT(ms)..>
+  Transport:  <TransportId........>  <Type>  <cos>  <tos>  <BindAddress..................>
+   Identify:  <Identify/Endpoint.........................................................>
+        Match:  <criteria.........................>
+    Channel:  <ChannelId......................................>  <State.....>  <Time.....>
+        Exten: <DialedExten...........>  CLCID: <ConnectedLineCID.......>
+==========================================================================================
+
+ Endpoint:  101/101                                              Unavailable   0 of inf
+    OutAuth:  auth101/101
+     InAuth:  auth101/101
+        Aor:  101                                                5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  101_1/101                                            Unavailable   0 of inf
+    OutAuth:  auth101_1/101_1
+     InAuth:  auth101_1/101_1
+        Aor:  101_1                                              3
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  17778620916102                                       Not in use    0 of inf
+    OutAuth:  17778620916102-oauth/17778620916102
+        Aor:  17778620916102                                     2
+      Contact:  17778620916102/sip:17778620916102@sip.call 897b357e32 Avail        51.308
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  17778620916102/17778620916102
+        Match: 199.87.144.75/32
+        Match: 199.87.144.69/32
+        Match: 199.87.144.71/32
+        Match: 199.87.144.74/32
+        Match: 199.87.144.73/32
+        Match: 199.87.144.72/32
+
+ Endpoint:  344022_Comfortcont                                   Not in use    0 of inf
+    OutAuth:  344022_Comfortcont-oauth/344022_Comfortcont
+        Aor:  344022_Comfortcont                                 2
+      Contact:  344022_Comfortcont/sip:344022_Comfortcont@ 3073abadd1 Avail        26.729
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_Comfortcont/344022_Comfortcont
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_Koznitsc                                      Not in use    0 of inf
+    OutAuth:  344022_Koznitsc-oauth/344022_Koznitsc
+        Aor:  344022_Koznitsc                                    2
+      Contact:  344022_Koznitsc/sip:344022_Koznitsc@newyor 320bbd22ec Avail        25.925
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_Koznitsc/344022_Koznitsc
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_Lovi1                                         Not in use    0 of inf
+    OutAuth:  344022_Lovi1-oauth/344022_Lovi1
+        Aor:  344022_Lovi1                                       2
+      Contact:  344022_Lovi1/sip:344022_Lovi1@newyork1.voi bd08cfbb81 Avail        25.745
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_Lovi1/344022_Lovi1
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_LuxureManag                                   Not in use    0 of inf
+    OutAuth:  344022_LuxureManag-oauth/344022_LuxureManag
+        Aor:  344022_LuxureManag                                 2
+      Contact:  344022_LuxureManag/sip:344022_LuxureManag@ 61dc4a9ef0 Avail        28.406
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_LuxureManag/344022_LuxureManag
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_McNamara                                      Not in use    0 of inf
+    OutAuth:  344022_McNamara-oauth/344022_McNamara
+        Aor:  344022_McNamara                                    2
+      Contact:  344022_McNamara/sip:344022_McNamara@newyor 68a7e102c7 Avail        25.587
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_McNamara/344022_McNamara
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_Smooth                                        Not in use    0 of inf
+    OutAuth:  344022_Smooth-oauth/344022_Smooth
+        Aor:  344022_Smooth                                      2
+      Contact:  344022_Smooth/sip:344022_Smooth@newyork1.v 4d3752ca5b Avail        25.478
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  344022_Smooth2                                       Not in use    0 of inf
+    OutAuth:  344022_Smooth2-oauth/344022_Smooth2
+        Aor:  344022_Smooth2                                     2
+      Contact:  344022_Smooth2/sip:344022_Smooth2@newyork2 f00ecc89ea Avail        25.948
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_Smooth2/344022_Smooth2
+        Match: 208.100.60.67/32
+
+ Endpoint:  344022_Sterlion                                      Not in use    0 of inf
+    OutAuth:  344022_Sterlion-oauth/344022_Sterlion
+        Aor:  344022_Sterlion                                    2
+      Contact:  344022_Sterlion/sip:344022_Sterlion@newyor cfeff9d83e Avail        25.419
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_Sterlion/344022_Sterlion
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_Trusttrimpro                                  Not in use    0 of inf
+    OutAuth:  344022_Trusttrimpro-oauth/344022_Trusttrimpro
+        Aor:  344022_Trusttrimpro                                2
+      Contact:  344022_Trusttrimpro/sip:344022_Trusttrimpr d7e0a92a92 Avail        26.286
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_Trusttrimpro/344022_Trusttrimpro
+        Match: 208.100.60.67/32
+
+ Endpoint:  344022_Vaddb                                         Not in use    0 of inf
+    OutAuth:  344022_Vaddb-oauth/344022_Vaddb
+        Aor:  344022_Vaddb                                       2
+      Contact:  344022_Vaddb/sip:344022_Vaddb@newyork2.voi a01e1f9407 Avail        26.260
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_Vaddb/344022_Vaddb
+        Match: 208.100.60.67/32
+
+ Endpoint:  344022_actual                                        Not in use    0 of inf
+    OutAuth:  344022_actual-oauth/344022_actual
+        Aor:  344022_actual                                      2
+      Contact:  344022_actual/sip:344022_actual@newyork1.v 0e99a27393 Avail        25.993
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_actual/344022_actual
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_brightview                                    Not in use    0 of inf
+    OutAuth:  344022_brightview-oauth/344022_brightview
+        Aor:  344022_brightview                                  2
+      Contact:  344022_brightview/sip:344022_brightview@ne 3efa42229d Avail        26.385
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_brightview/344022_brightview
+        Match: 208.100.60.67/32
+
+ Endpoint:  344022_bvb2                                          Not in use    0 of inf
+    OutAuth:  344022_bvb2-oauth/344022_bvb2
+        Aor:  344022_bvb2                                        2
+      Contact:  344022_bvb2/sip:344022_bvb2@newyork2.voip. 8b0f6ef687 Avail        26.010
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_bvb2/344022_bvb2
+        Match: 208.100.60.67/32
+
+ Endpoint:  344022_bvb3                                          Not in use    0 of inf
+    OutAuth:  344022_bvb3-oauth/344022_bvb3
+        Aor:  344022_bvb3                                        2
+      Contact:  344022_bvb3/sip:344022_bvb3@newyork1.voip. 49c490dc7b Avail        25.265
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_bvb3/344022_bvb3
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_cab                                           Not in use    0 of inf
+    OutAuth:  344022_cab-oauth/344022_cab
+        Aor:  344022_cab                                         2
+      Contact:  344022_cab/sip:344022_cab@newyork1.voip.ms ac2d3a7dfc Avail        25.231
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_cab/344022_cab
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_cabnew                                        Not in use    0 of inf
+    OutAuth:  344022_cabnew-oauth/344022_cabnew
+        Aor:  344022_cabnew                                      2
+      Contact:  344022_cabnew/sip:344022_cabnew@newyork1.v 31953da7ea Avail        30.641
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_cabnew/344022_cabnew
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_caremeals                                     Not in use    0 of inf
+    OutAuth:  344022_caremeals-oauth/344022_caremeals
+        Aor:  344022_caremeals                                   2
+      Contact:  344022_caremeals/sip:344022_caremeals@newy 40cc85402f Avail        25.851
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_caremeals/344022_caremeals
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_ddex                                          Not in use    0 of inf
+    OutAuth:  344022_ddex-oauth/344022_ddex
+        Aor:  344022_ddex                                        2
+      Contact:  344022_ddex/sip:344022_ddex@newyork1.voip. 12b061215e Avail        25.737
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_ddex/344022_ddex
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_eli                                           Not in use    0 of inf
+    OutAuth:  344022_eli-oauth/344022_eli
+        Aor:  344022_eli                                         2
+      Contact:  344022_eli/sip:344022_eli@newyork2.voip.ms 6604be7496 Avail        26.000
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_eli/344022_eli
+        Match: 208.100.60.67/32
+
+ Endpoint:  344022_fixupusa                                      Not in use    0 of inf
+    OutAuth:  344022_fixupusa-oauth/344022_fixupusa
+        Aor:  344022_fixupusa                                    2
+      Contact:  344022_fixupusa/sip:344022_fixupusa@newyor dd4c41a4c5 Avail        25.737
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_fixupusa/344022_fixupusa
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_fleetease                                     Not in use    0 of inf
+    OutAuth:  344022_fleetease-oauth/344022_fleetease
+        Aor:  344022_fleetease                                   2
+      Contact:  344022_fleetease/sip:344022_fleetease@newy 5bf358826f Avail        25.257
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_fleetease/344022_fleetease
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_gardensprklr                                  Not in use    0 of inf
+    OutAuth:  344022_gardensprklr-oauth/344022_gardensprklr
+        Aor:  344022_gardensprklr                                2
+      Contact:  344022_gardensprklr/sip:344022_gardensprkl 38833e2a0e Avail        25.780
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_gardensprklr/344022_gardensprklr
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_gesheft                                       Not in use    0 of inf
+    OutAuth:  344022_gesheft-oauth/344022_gesheft
+        Aor:  344022_gesheft                                     2
+      Contact:  344022_gesheft/sip:344022_gesheft@atlanta1 0f8b2dd34d Avail        33.534
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_gesheft/344022_gesheft
+        Match: 208.100.60.17/32
+
+ Endpoint:  344022_giti                                          Not in use    0 of inf
+    OutAuth:  344022_giti-oauth/344022_giti
+        Aor:  344022_giti                                        2
+      Contact:  344022_giti/sip:344022_giti@newyork2.voip. e2df49a2a7 Avail        26.053
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_giti/344022_giti
+        Match: 208.100.60.67/32
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_iTrimpro                                      Not in use    0 of inf
+    OutAuth:  344022_iTrimpro-oauth/344022_iTrimpro
+        Aor:  344022_iTrimpro                                    2
+      Contact:  344022_iTrimpro/sip:344022_iTrimpro@newyor 0fe26f343d Avail        25.337
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_iTrimpro/344022_iTrimpro
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_iniimini                                      Not in use    0 of inf
+    OutAuth:  344022_iniimini-oauth/344022_iniimini
+        Aor:  344022_iniimini                                    2
+      Contact:  344022_iniimini/sip:344022_iniimini@newyor 68de8b1bee Avail        26.191
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_iniimini/344022_iniimini
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_lanhome                                       Not in use    0 of inf
+    OutAuth:  344022_lanhome-oauth/344022_lanhome
+        Aor:  344022_lanhome                                     2
+      Contact:  344022_lanhome/sip:344022_lanhome@newyork1 b62973bd23 Avail        25.134
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_lanhome/344022_lanhome
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_lemmecheck                                    Not in use    0 of inf
+    OutAuth:  344022_lemmecheck-oauth/344022_lemmecheck
+        Aor:  344022_lemmecheck                                  2
+      Contact:  344022_lemmecheck/sip:344022_lemmecheck@ne a934103f01 Avail        25.818
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_lemmecheck/344022_lemmecheck
+        Match: 208.100.60.67/32
+
+ Endpoint:  344022_luxman                                        Not in use    0 of inf
+    OutAuth:  344022_luxman-oauth/344022_luxman
+        Aor:  344022_luxman                                      2
+      Contact:  344022_luxman/sip:344022_luxman@newyork1.v 7ec67de2e7 Avail        25.678
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_luxman/344022_luxman
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_luzer                                         Not in use    0 of inf
+    OutAuth:  344022_luzer-oauth/344022_luzer
+        Aor:  344022_luzer                                       2
+      Contact:  344022_luzer/sip:344022_luzer@newyork1.voi 0416744b34 Avail        26.022
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  344022_nexus2                                        Not in use    0 of inf
+    OutAuth:  344022_nexus2-oauth/344022_nexus2
+        Aor:  344022_nexus2                                      2
+      Contact:  344022_nexus2/sip:344022_nexus2@newyork1.v 7e24bc33ac Avail        25.907
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_nexus2/344022_nexus2
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_relax                                         Not in use    0 of inf
+    OutAuth:  344022_relax-oauth/344022_relax
+        Aor:  344022_relax                                       2
+      Contact:  344022_relax/sip:344022_relax@newyork1.voi b9e29d3160 Avail        25.580
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_relax/344022_relax
+        Match: 208.100.60.67/32
+
+ Endpoint:  344022_relax2                                        Not in use    0 of inf
+    OutAuth:  344022_relax2-oauth/344022_relax2
+        Aor:  344022_relax2                                      2
+      Contact:  344022_relax2/sip:344022_relax2@newyork2.v 099f887037 Avail        25.714
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_relax2/344022_relax2
+        Match: 208.100.60.67/32
+
+ Endpoint:  344022_ribitcapital                                  Not in use    0 of inf
+    OutAuth:  344022_ribitcapital-oauth/344022_ribitcapital
+        Aor:  344022_ribitcapital                                2
+      Contact:  344022_ribitcapital/sip:344022_ribitcapita bbdafb1776 Avail        26.119
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_ribitcapital/344022_ribitcapital
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_secro2                                        Not in use    0 of inf
+    OutAuth:  344022_secro2-oauth/344022_secro2
+        Aor:  344022_secro2                                      2
+      Contact:  344022_secro2/sip:344022_secro2@newyork1.v facc56ef1f Avail        50.594
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_secro2/344022_secro2
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_senderhome2                                   Not in use    0 of inf
+    OutAuth:  344022_senderhome2-oauth/344022_senderhome2
+        Aor:  344022_senderhome2                                 2
+      Contact:  344022_senderhome2/sip:344022_senderhome2@ aab83b7026 Avail        25.343
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_senderhome2/344022_senderhome2
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_slim                                          Not in use    0 of inf
+    OutAuth:  344022_slim-oauth/344022_slim
+        Aor:  344022_slim                                        2
+      Contact:  344022_slim/sip:344022_slim@newyork1.voip. 1a5b92bbef Avail        25.292
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_slim/344022_slim
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_smoothtrust                                   Not in use    0 of inf
+    OutAuth:  344022_smoothtrust-oauth/344022_smoothtrust
+        Aor:  344022_smoothtrust                                 2
+      Contact:  344022_smoothtrust/sip:344022_smoothtrust@ d96834603c Avail        28.397
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  344022_solidefyc                                     Not in use    0 of inf
+    OutAuth:  344022_solidefyc-oauth/344022_solidefyc
+        Aor:  344022_solidefyc                                   2
+      Contact:  344022_solidefyc/sip:344022_solidefyc@newy 0b54b1a93e Avail        26.524
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_solidefyc/344022_solidefyc
+        Match: 208.100.60.68/32
+
+ Endpoint:  344022_trimprotrust                                  Not in use    0 of inf
+    OutAuth:  344022_trimprotrust-oauth/344022_trimprotrust
+        Aor:  344022_trimprotrust                                2
+      Contact:  344022_trimprotrust/sip:344022_trimprotrus f6644d4bc4 Avail        27.503
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_trimprotrust/344022_trimprotrust
+        Match: 208.100.60.67/32
+
+ Endpoint:  344022_trus105                                       Not in use    0 of inf
+    OutAuth:  344022_trus105-oauth/344022_trus105
+        Aor:  344022_trus105                                     2
+      Contact:  344022_trus105/sip:344022_trus105@newyork1 2789fd39a2 Avail        25.926
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_trus105/344022_trus105
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_trust                                         Not in use    0 of inf
+    OutAuth:  344022_trust-oauth/344022_trust
+        Aor:  344022_trust                                       2
+      Contact:  344022_trust/sip:344022_trust@newyork1.voi c2586c5fd4 Avail        25.379
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_trust/344022_trust
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_trust104                                      Not in use    0 of inf
+    OutAuth:  344022_trust104-oauth/344022_trust104
+        Aor:  344022_trust104                                    2
+      Contact:  344022_trust104/sip:344022_trust104@newyor 2b81ba54a3 Avail        26.253
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_trust104/344022_trust104
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_trust106                                      Not in use    0 of inf
+    OutAuth:  344022_trust106-oauth/344022_trust106
+        Aor:  344022_trust106                                    2
+      Contact:  344022_trust106/sip:344022_trust106@newyor c7f35d41d9 Avail        26.495
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_trust106/344022_trust106
+        Match: 208.100.60.66/32
+
+ Endpoint:  344022_trustSGE                                      Not in use    0 of inf
+    OutAuth:  344022_trustSGE-oauth/344022_trustSGE
+        Aor:  344022_trustSGE                                    2
+      Contact:  344022_trustSGE/sip:344022_trustSGE@newyor 7847dd7070 Avail        26.295
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_trustSGE/344022_trustSGE
+        Match: 208.100.60.68/32
+
+ Endpoint:  344022_ywoodworks                                    Not in use    0 of inf
+    OutAuth:  344022_ywoodworks-oauth/344022_ywoodworks
+        Aor:  344022_ywoodworks                                  2
+      Contact:  344022_ywoodworks/sip:344022_ywoodworks@ne f8375062d9 Avail        30.794
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  344022_ywoodworks/344022_ywoodworks
+        Match: 208.100.60.66/32
+
+ Endpoint:  355362_Homevital                                     Not in use    0 of inf
+    OutAuth:  355362_Homevital-oauth/355362_Homevital
+        Aor:  355362_Homevital                                   2
+      Contact:  355362_Homevital/sip:355362_Homevital@newy 01d3a77149 Avail        25.472
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  355362_Homevital/355362_Homevital
+        Match: 208.100.60.66/32
+
+ Endpoint:  355362_apluscenter                                   Not in use    0 of inf
+    OutAuth:  355362_apluscenter-oauth/355362_apluscenter
+        Aor:  355362_apluscenter                                 2
+      Contact:  355362_apluscenter/sip:355362_apluscenter@ 5075eacda3 Avail        25.490
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  355362_apluscenter/355362_apluscenter
+        Match: 208.100.60.66/32
+
+ Endpoint:  355362_kjpc                                          Not in use    0 of inf
+    OutAuth:  355362_kjpc-oauth/355362_kjpc
+        Aor:  355362_kjpc                                        2
+      Contact:  355362_kjpc/sip:355362_kjpc@newyork1.voip. d1da1cb366 Avail        26.380
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  355362_kjpc/355362_kjpc
+        Match: 208.100.60.66/32
+
+ Endpoint:  355362_smartsteps                                    Not in use    0 of inf
+    OutAuth:  355362_smartsteps-oauth/355362_smartsteps
+        Aor:  355362_smartsteps                                  2
+      Contact:  355362_smartsteps/sip:355362_smartsteps@ne 5d85e0bea4 Avail        26.212
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+   Identify:  355362_smartsteps/355362_smartsteps
+        Match: 208.100.60.67/32
+
+ Endpoint:  T10_101/8454923351                                   Unavailable   0 of inf
+    OutAuth:  authT10_101/T10_101
+     InAuth:  authT10_101/T10_101
+        Aor:  T10_101                                            5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T11_101/101                                          Not in use    0 of inf
+    OutAuth:  authT11_101/T11_101
+     InAuth:  authT11_101/T11_101
+        Aor:  T11_101                                            5
+      Contact:  T11_101/sip:T11_101@69.118.75.72:11290     c7498644c6 Avail       122.511
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T11_102/102                                          Not in use    0 of inf
+    OutAuth:  authT11_102/T11_102
+     InAuth:  authT11_102/T11_102
+        Aor:  T11_102                                            1
+      Contact:  T11_102/sip:T11_102@38.105.207.148:1024    39ce8b244d Avail        35.421
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T11_103/103                                          Not in use    0 of inf
+    OutAuth:  authT11_103/T11_103
+     InAuth:  authT11_103/T11_103
+        Aor:  T11_103                                            5
+      Contact:  T11_103/sip:T11_103@69.118.75.72:21667     f28319461f Avail        32.175
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T11_105/105                                          Not in use    0 of inf
+    OutAuth:  authT11_105/T11_105
+     InAuth:  authT11_105/T11_105
+        Aor:  T11_105                                            5
+      Contact:  T11_105/sip:T11_105@69.118.75.72:5060      7302db5a05 Avail        34.920
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T11_105_1/105                                        Unavailable   0 of inf
+    OutAuth:  authT11_105_1/T11_105_1
+     InAuth:  authT11_105_1/T11_105_1
+        Aor:  T11_105_1                                          1
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T11_107/107                                          Not in use    0 of inf
+    OutAuth:  authT11_107/T11_107
+     InAuth:  authT11_107/T11_107
+        Aor:  T11_107                                            5
+      Contact:  T11_107/sip:T11_107@69.118.75.72:30896     115dd6b488 Avail        34.219
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T14_101/101                                          Unavailable   0 of inf
+    OutAuth:  authT14_101/T14_101
+     InAuth:  authT14_101/T14_101
+        Aor:  T14_101                                            5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T14_101_1/101                                        Unavailable   0 of inf
+    OutAuth:  authT14_101_1/T14_101_1
+     InAuth:  authT14_101_1/T14_101_1
+        Aor:  T14_101_1                                          1
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T14_102/102                                          Unavailable   0 of inf
+    OutAuth:  authT14_102/T14_102
+     InAuth:  authT14_102/T14_102
+        Aor:  T14_102                                            5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T14_102_1/102                                        Unavailable   0 of inf
+    OutAuth:  authT14_102_1/T14_102_1
+     InAuth:  authT14_102_1/T14_102_1
+        Aor:  T14_102_1                                          1
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T18_101/101                                          Not in use    0 of inf
+    OutAuth:  authT18_101/T18_101
+     InAuth:  authT18_101/T18_101
+        Aor:  T18_101                                            5
+      Contact:  T18_101/sip:T18_101@38.105.207.148:1026    a846949fb7 Avail        37.583
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T18_101_1/101                                        Unavailable   0 of inf
+    OutAuth:  authT18_101_1/T18_101_1
+     InAuth:  authT18_101_1/T18_101_1
+        Aor:  T18_101_1                                          1
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T18_104/104                                          Not in use    0 of inf
+    OutAuth:  authT18_104/T18_104
+     InAuth:  authT18_104/T18_104
+        Aor:  T18_104                                            5
+      Contact:  T18_104/sip:T18_104@38.105.207.148:1024    eca63e624f Avail        41.117
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T18_105/105                                          Not in use    0 of inf
+    OutAuth:  authT18_105/T18_105
+     InAuth:  authT18_105/T18_105
+        Aor:  T18_105                                            5
+      Contact:  T18_105/sip:T18_105@38.105.207.148:1025    46ccf2e6ac Avail        32.333
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T18_105_1/105                                        Unavailable   0 of inf
+    OutAuth:  authT18_105_1/T18_105_1
+     InAuth:  authT18_105_1/T18_105_1
+        Aor:  T18_105_1                                          1
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T18_106/106                                          Not in use    0 of inf
+    OutAuth:  authT18_106/T18_106
+     InAuth:  authT18_106/T18_106
+        Aor:  T18_106                                            5
+      Contact:  T18_106/sip:T18_106@38.105.207.148:5060    1f64a75b21 Avail        36.913
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T18_106_1/106                                        Unavailable   0 of inf
+    OutAuth:  authT18_106_1/T18_106_1
+     InAuth:  authT18_106_1/T18_106_1
+        Aor:  T18_106_1                                          1
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T20_102/102                                          Not in use    0 of inf
+    OutAuth:  authT20_102/T20_102
+     InAuth:  authT20_102/T20_102
+        Aor:  T20_102                                            1
+      Contact:  T20_102/sip:T20_102@38.105.207.148:5060    3ce0c2d222 Avail        32.727
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T21_101/101                                          Unavailable   0 of inf
+    OutAuth:  authT21_101/T21_101
+     InAuth:  authT21_101/T21_101
+        Aor:  T21_101                                            5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T21_101_1/101                                        Unavailable   0 of inf
+    OutAuth:  authT21_101_1/T21_101_1
+     InAuth:  authT21_101_1/T21_101_1
+        Aor:  T21_101_1                                          3
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T21_102/102                                          Unavailable   0 of inf
+    OutAuth:  authT21_102/T21_102
+     InAuth:  authT21_102/T21_102
+        Aor:  T21_102                                            5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T24_101/101                                          Unavailable   0 of inf
+    OutAuth:  authT24_101/T24_101
+     InAuth:  authT24_101/T24_101
+        Aor:  T24_101                                            5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T25_1003/1003                                        Unavailable   0 of inf
+    OutAuth:  authT25_1003/T25_1003
+     InAuth:  authT25_1003/T25_1003
+        Aor:  T25_1003                                           5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T25_101/101                                          Unavailable   0 of inf
+    OutAuth:  authT25_101/T25_101
+     InAuth:  authT25_101/T25_101
+        Aor:  T25_101                                            5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T25_101_1/101                                        Unavailable   0 of inf
+    OutAuth:  authT25_101_1/T25_101_1
+     InAuth:  authT25_101_1/T25_101_1
+        Aor:  T25_101_1                                          3
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T26_101/101                                          Not in use    0 of inf
+    OutAuth:  authT26_101/T26_101
+     InAuth:  authT26_101/T26_101
+        Aor:  T26_101                                            5
+      Contact:  T26_101/sip:T26_101@159.65.251.173:58913;r 33d96defe4 Avail        27.868
+      Contact:  T26_101/sip:T26_101@159.65.251.173:36585;r 5d3cb81230 Avail        26.655
+      Contact:  T26_101/sip:T26_101@159.65.251.173:64927;r b366a3d347 Avail        28.669
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T28_101/101                                          Not in use    0 of inf
+    OutAuth:  authT28_101/T28_101
+     InAuth:  authT28_101/T28_101
+        Aor:  T28_101                                            5
+      Contact:  T28_101/sip:T28_101@72.68.201.218:1056;x-a bf96d2ed2c Avail       110.820
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T28_102/102                                          Not in use    0 of inf
+    OutAuth:  authT28_102/T28_102
+     InAuth:  authT28_102/T28_102
+        Aor:  T28_102                                            5
+      Contact:  T28_102/sip:T28_102@72.68.201.218:5060;x-a d6a313e86b Avail       204.326
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T28_102_1/102                                        Unavailable   0 of inf
+    OutAuth:  authT28_102_1/T28_102_1
+     InAuth:  authT28_102_1/T28_102_1
+        Aor:  T28_102_1                                          1
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T28_103/103                                          Not in use    0 of inf
+    OutAuth:  authT28_103/T28_103
+     InAuth:  authT28_103/T28_103
+        Aor:  T28_103                                            5
+      Contact:  T28_103/sip:T28_103@72.68.201.218:1059;x-a 0ea2a85453 Avail       228.359
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T28_104/104                                          Not in use    0 of inf
+    OutAuth:  authT28_104/T28_104
+     InAuth:  authT28_104/T28_104
+        Aor:  T28_104                                            5
+      Contact:  T28_104/sip:T28_104@72.68.201.218:1053;x-a b8bf53224c Avail       200.303
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T28_105/105                                          Not in use    0 of inf
+    OutAuth:  authT28_105/T28_105
+     InAuth:  authT28_105/T28_105
+        Aor:  T28_105                                            5
+      Contact:  T28_105/sip:T28_105@72.68.201.218:1052;x-a 91d2bab16b Avail       277.019
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T28_106/106                                          Unavailable   0 of inf
+    OutAuth:  authT28_106/T28_106
+     InAuth:  authT28_106/T28_106
+        Aor:  T28_106                                            5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T28_107/107                                          Unavailable   0 of inf
+    OutAuth:  authT28_107/T28_107
+     InAuth:  authT28_107/T28_107
+        Aor:  T28_107                                            5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T29_101/101                                          Not in use    0 of inf
+    OutAuth:  authT29_101/T29_101
+     InAuth:  authT29_101/T29_101
+        Aor:  T29_101                                            5
+      Contact:  T29_101/sip:T29_101@64.225.12.13:23481;rin 032a9c5d72 Avail        30.232
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_101/101                                           Not in use    0 of inf
+    OutAuth:  authT2_101/T2_101
+     InAuth:  authT2_101/T2_101
+        Aor:  T2_101                                             5
+      Contact:  T2_101/sip:T2_101@24.187.220.38:1028       c4768f7431 Avail        34.573
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_102/102                                           Not in use    0 of inf
+    OutAuth:  authT2_102/T2_102
+     InAuth:  authT2_102/T2_102
+        Aor:  T2_102                                             5
+      Contact:  T2_102/sip:T2_102@24.187.220.38:1031       1180d48410 Avail        46.761
+      Contact:  T2_102/sip:T2_102@24.187.220.38:1034       9c89757b1c Avail        50.283
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_103/103                                           Not in use    0 of inf
+    OutAuth:  authT2_103/T2_103
+     InAuth:  authT2_103/T2_103
+        Aor:  T2_103                                             5
+      Contact:  T2_103/sip:T2_103@24.187.220.38:1029       9e992d00af Avail        35.724
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_103_1/103                                         Unavailable   0 of inf
+    OutAuth:  authT2_103_1/T2_103_1
+     InAuth:  authT2_103_1/T2_103_1
+        Aor:  T2_103_1                                           3
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_104/104                                           Not in use    0 of inf
+    OutAuth:  authT2_104/T2_104
+     InAuth:  authT2_104/T2_104
+        Aor:  T2_104                                             5
+      Contact:  T2_104/sip:T2_104@24.187.220.38:1033       030cdc16b0 Avail        47.087
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_105/105                                           Not in use    0 of inf
+    OutAuth:  authT2_105/T2_105
+     InAuth:  authT2_105/T2_105
+        Aor:  T2_105                                             5
+      Contact:  T2_105/sip:T2_105@24.187.220.38:1035       1b618df481 Avail        47.902
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_107/107                                           Unavailable   0 of inf
+    OutAuth:  authT2_107/T2_107
+     InAuth:  authT2_107/T2_107
+        Aor:  T2_107                                             5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_108/108                                           Not in use    0 of inf
+    OutAuth:  authT2_108/T2_108
+     InAuth:  authT2_108/T2_108
+        Aor:  T2_108                                             5
+      Contact:  T2_108/sip:T2_108@50.49.194.85:45230;x-ast fb88a0c0d7 Avail        36.556
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_108_1/108                                         Unavailable   0 of inf
+    OutAuth:  authT2_108_1/T2_108_1
+     InAuth:  authT2_108_1/T2_108_1
+        Aor:  T2_108_1                                           1
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_110/110                                           Not in use    0 of inf
+    OutAuth:  authT2_110/T2_110
+     InAuth:  authT2_110/T2_110
+        Aor:  T2_110                                             1
+      Contact:  T2_110/sip:T2_110@165.227.182.9:36984;rins 3814b6983d Avail        29.964
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_111/111                                           Not in use    0 of inf
+    OutAuth:  authT2_111/T2_111
+     InAuth:  authT2_111/T2_111
+        Aor:  T2_111                                             5
+      Contact:  T2_111/sip:T2_111@24.187.220.38:1030       f38a80cdd5 Avail        37.107
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_112/112                                           Not in use    0 of inf
+    OutAuth:  authT2_112/T2_112
+     InAuth:  authT2_112/T2_112
+        Aor:  T2_112                                             5
+      Contact:  T2_112/sip:T2_112@24.187.220.38:1032       6e67b2cf12 Avail        43.401
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_502/502                                           Not in use    0 of inf
+    OutAuth:  authT2_502/T2_502
+     InAuth:  authT2_502/T2_502
+        Aor:  T2_502                                             5
+      Contact:  T2_502/sip:T2_502@24.187.220.38:1025       e73a1ed2f7 Avail        36.085
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_503/503                                           Not in use    0 of inf
+    OutAuth:  authT2_503/T2_503
+     InAuth:  authT2_503/T2_503
+        Aor:  T2_503                                             5
+      Contact:  T2_503/sip:T2_503@24.187.220.38:1024       bb656786d4 Avail        36.116
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_504/504                                           Not in use    0 of inf
+    OutAuth:  authT2_504/T2_504
+     InAuth:  authT2_504/T2_504
+        Aor:  T2_504                                             5
+      Contact:  T2_504/sip:T2_504@24.187.220.38:1027       c2eee857c3 Avail        34.264
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_505/505                                           Not in use    0 of inf
+    OutAuth:  authT2_505/T2_505
+     InAuth:  authT2_505/T2_505
+        Aor:  T2_505                                             5
+      Contact:  T2_505/sip:T2_505@24.187.220.38:1026       bcc44d8b45 Avail        32.478
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_506/506                                           Unavailable   0 of inf
+    OutAuth:  authT2_506/T2_506
+     InAuth:  authT2_506/T2_506
+        Aor:  T2_506                                             5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_507/507                                           Unavailable   0 of inf
+    OutAuth:  authT2_507/T2_507
+     InAuth:  authT2_507/T2_507
+        Aor:  T2_507                                             5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_509/509                                           Not in use    0 of inf
+    OutAuth:  authT2_509/T2_509
+     InAuth:  authT2_509/T2_509
+        Aor:  T2_509                                             5
+      Contact:  T2_509/sip:T2_509@24.187.220.38:5060       9bc3a1fb95 Avail        36.606
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T2_510/510                                           Unavailable   0 of inf
+    OutAuth:  authT2_510/T2_510
+     InAuth:  authT2_510/T2_510
+        Aor:  T2_510                                             5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T30_101/101                                          Unavailable   0 of inf
+    OutAuth:  authT30_101/T30_101
+     InAuth:  authT30_101/T30_101
+        Aor:  T30_101                                            5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T30_101_1/101                                        Unavailable   0 of inf
+    OutAuth:  authT30_101_1/T30_101_1
+     InAuth:  authT30_101_1/T30_101_1
+        Aor:  T30_101_1                                          3
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T30_102/102                                          Unavailable   0 of inf
+    OutAuth:  authT30_102/T30_102
+     InAuth:  authT30_102/T30_102
+        Aor:  T30_102                                            5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T30_102_1/102                                        Unavailable   0 of inf
+    OutAuth:  authT30_102_1/T30_102_1
+     InAuth:  authT30_102_1/T30_102_1
+        Aor:  T30_102_1                                          3
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T30_300/300                                          Unavailable   0 of inf
+    OutAuth:  authT30_300/T30_300
+     InAuth:  authT30_300/T30_300
+        Aor:  T30_300                                            5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T30_300_1/300                                        Unavailable   0 of inf
+    OutAuth:  authT30_300_1/T30_300_1
+     InAuth:  authT30_300_1/T30_300_1
+        Aor:  T30_300_1                                          3
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T3_103/103                                           Not in use    0 of inf
+    OutAuth:  authT3_103/T3_103
+     InAuth:  authT3_103/T3_103
+        Aor:  T3_103                                             5
+      Contact:  T3_103/sip:T3_103@50.122.143.130:5060;x-as 27f484c241 Avail        40.874
+      Contact:  T3_103/sip:T3_103@167.172.251.36:15938;rin 3aa4cfeb6a Avail        59.706
+      Contact:  T3_103/sip:T3_103@167.172.251.36:49752;rin d9e0fbc03c Avail        59.894
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T3_301/301                                           Not in use    0 of inf
+    OutAuth:  authT3_301/T3_301
+     InAuth:  authT3_301/T3_301
+        Aor:  T3_301                                             5
+      Contact:  T3_301/sip:T3_301@100.37.173.241:5060;x-as 4fc8c90288 Avail        30.211
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T3_301_1/301                                         Unavailable   0 of inf
+    OutAuth:  authT3_301_1/T3_301_1
+     InAuth:  authT3_301_1/T3_301_1
+        Aor:  T3_301_1                                           1
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T3_302/302                                           Not in use    0 of inf
+    OutAuth:  authT3_302/T3_302
+     InAuth:  authT3_302/T3_302
+        Aor:  T3_302                                             5
+      Contact:  T3_302/sip:T3_302@159.65.189.13:18903;rins 03c7f39de4 Avail        28.744
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T3_302_1/302                                         Unavailable   0 of inf
+    OutAuth:  authT3_302_1/T3_302_1
+     InAuth:  authT3_302_1/T3_302_1
+        Aor:  T3_302_1                                           1
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T3_307/307                                           Unavailable   0 of inf
+    OutAuth:  authT3_307/T3_307
+     InAuth:  authT3_307/T3_307
+        Aor:  T3_307                                             5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T3_307_1/307                                         Unavailable   0 of inf
+    OutAuth:  authT3_307_1/T3_307_1
+     InAuth:  authT3_307_1/T3_307_1
+        Aor:  T3_307_1                                           1
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T4_201/201                                           Not in use    0 of inf
+    OutAuth:  authT4_201/T4_201
+     InAuth:  authT4_201/T4_201
+        Aor:  T4_201                                             5
+      Contact:  T4_201/sip:T4_201@50.122.139.106:5060;x-as 797a39984b Avail        34.530
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T4_202/202                                           Unavailable   0 of inf
+    OutAuth:  authT4_202/T4_202
+     InAuth:  authT4_202/T4_202
+        Aor:  T4_202                                             5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T4_203/203                                           Not in use    0 of inf
+    OutAuth:  authT4_203/T4_203
+     InAuth:  authT4_203/T4_203
+        Aor:  T4_203                                             5
+      Contact:  T4_203/sip:T4_203@159.203.81.60:15186;rins fe534c75d4 Avail        35.501
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T5_101/101                                           Not in use    0 of inf
+    OutAuth:  authT5_101/T5_101
+     InAuth:  authT5_101/T5_101
+        Aor:  T5_101                                             5
+      Contact:  T5_101/sip:T5_101@159.65.251.173:47834;rin ba1bee62e7 Avail        31.691
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T5_102/102                                           Unavailable   0 of inf
+    OutAuth:  authT5_102/T5_102
+     InAuth:  authT5_102/T5_102
+        Aor:  T5_102                                             5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T6_101/101                                           Not in use    0 of inf
+    OutAuth:  authT6_101/T6_101
+     InAuth:  authT6_101/T6_101
+        Aor:  T6_101                                             5
+      Contact:  T6_101/sip:T6_101@64.225.12.13:44905;rinst 5641150ef6 Avail        28.701
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T6_101_1/101                                         Unavailable   0 of inf
+    OutAuth:  authT6_101_1/T6_101_1
+     InAuth:  authT6_101_1/T6_101_1
+        Aor:  T6_101_1                                           1
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T6_102/102                                           Not in use    0 of inf
+    OutAuth:  authT6_102/T6_102
+     InAuth:  authT6_102/T6_102
+        Aor:  T6_102                                             5
+      Contact:  T6_102/sip:T6_102@74.102.130.106:5060;x-as 36c7dcf1d0 Avail        34.349
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T6_104/104                                           Unavailable   0 of inf
+    OutAuth:  authT6_104/T6_104
+     InAuth:  authT6_104/T6_104
+        Aor:  T6_104                                             5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T7_101/101                                           Unavailable   0 of inf
+    OutAuth:  authT7_101/T7_101
+     InAuth:  authT7_101/T7_101
+        Aor:  T7_101                                             5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T7_102/102                                           Unavailable   0 of inf
+    OutAuth:  authT7_102/T7_102
+     InAuth:  authT7_102/T7_102
+        Aor:  T7_102                                             5
+
+ Endpoint:  T7_102_1/102                                         Unavailable   0 of inf
+    OutAuth:  authT7_102_1/T7_102_1
+     InAuth:  authT7_102_1/T7_102_1
+        Aor:  T7_102_1                                           3
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T7_103/103                                           Not in use    0 of inf
+    OutAuth:  authT7_103/T7_103
+     InAuth:  authT7_103/T7_103
+        Aor:  T7_103                                             5
+      Contact:  T7_103/sip:T7_103@10.8.0.2:1032;x-ast-orig ca6ca185cc Avail        67.358
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T7_104/104                                           Not in use    0 of inf
+    OutAuth:  authT7_104/T7_104
+     InAuth:  authT7_104/T7_104
+        Aor:  T7_104                                             5
+      Contact:  T7_104/sip:T7_104@10.8.0.2:5060;x-ast-orig 4dc6b9ffb4 Avail        65.477
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T7_105/105                                           Unavailable   0 of inf
+    OutAuth:  authT7_105/T7_105
+     InAuth:  authT7_105/T7_105
+        Aor:  T7_105                                             5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T7_106/106                                           Unavailable   0 of inf
+    OutAuth:  authT7_106/T7_106
+     InAuth:  authT7_106/T7_106
+        Aor:  T7_106                                             5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T7_107/107                                           Unavailable   0 of inf
+    OutAuth:  authT7_107/T7_107
+     InAuth:  authT7_107/T7_107
+        Aor:  T7_107                                             5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T8_101/101                                           Not in use    0 of inf
+    OutAuth:  authT8_101/T8_101
+     InAuth:  authT8_101/T8_101
+        Aor:  T8_101                                             5
+      Contact:  T8_101/sip:T8_101@75.99.30.60:50691;x-ast- e739aefe37 Avail        33.436
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T8_101_1/101                                         Unavailable   0 of inf
+    OutAuth:  authT8_101_1/T8_101_1
+     InAuth:  authT8_101_1/T8_101_1
+        Aor:  T8_101_1                                           1
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T8_102/102                                           Not in use    0 of inf
+    OutAuth:  authT8_102/T8_102
+     InAuth:  authT8_102/T8_102
+        Aor:  T8_102                                             5
+      Contact:  T8_102/sip:T8_102@75.99.30.60:27304;x-ast- 246da93a1a Avail        32.743
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T8_102_1/102                                         Unavailable   0 of inf
+    OutAuth:  authT8_102_1/T8_102_1
+     InAuth:  authT8_102_1/T8_102_1
+        Aor:  T8_102_1                                           1
+  Transport:  transport-wss-eb7e9c0a1b729f563090     wss      0      0  0.0.0.0:5060
+
+ Endpoint:  T8_103/103                                           Not in use    0 of inf
+    OutAuth:  authT8_103/T8_103
+     InAuth:  authT8_103/T8_103
+        Aor:  T8_103                                             5
+      Contact:  T8_103/sip:T8_103@75.99.30.60:35982;x-ast- d6459760d8 Avail        36.263
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T8_104/104                                           Not in use    0 of inf
+    OutAuth:  authT8_104/T8_104
+     InAuth:  authT8_104/T8_104
+        Aor:  T8_104                                             5
+      Contact:  T8_104/sip:T8_104@75.99.30.60:28491;x-ast- c84872d075 Avail        32.530
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T8_105/105                                           Not in use    0 of inf
+    OutAuth:  authT8_105/T8_105
+     InAuth:  authT8_105/T8_105
+        Aor:  T8_105                                             5
+      Contact:  T8_105/sip:T8_105@75.99.30.60:28961;x-ast- 15f09bcf64 Avail        33.089
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T8_106/106                                           Not in use    0 of inf
+    OutAuth:  authT8_106/T8_106
+     InAuth:  authT8_106/T8_106
+        Aor:  T8_106                                             5
+      Contact:  T8_106/sip:T8_106@75.99.30.60:31679;x-ast- 19198a7368 Avail        30.655
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T8_107/107                                           Not in use    0 of inf
+    OutAuth:  authT8_107/T8_107
+     InAuth:  authT8_107/T8_107
+        Aor:  T8_107                                             5
+      Contact:  T8_107/sip:T8_107@75.99.30.60:9211;x-ast-o 716cf8da9f Avail        39.787
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T8_108/108                                           Not in use    0 of inf
+    OutAuth:  authT8_108/T8_108
+     InAuth:  authT8_108/T8_108
+        Aor:  T8_108                                             5
+      Contact:  T8_108/sip:T8_108@75.99.30.60:39798;x-ast- 4e7dfe8200 Avail        35.268
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T8_111/111                                           Not in use    0 of inf
+    OutAuth:  authT8_111/T8_111
+     InAuth:  authT8_111/T8_111
+        Aor:  T8_111                                             5
+      Contact:  T8_111/sip:T8_111@75.99.30.60:62431;x-ast- d22c89adbb Avail        30.931
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T8_114/114                                           Not in use    0 of inf
+    OutAuth:  authT8_114/T8_114
+     InAuth:  authT8_114/T8_114
+        Aor:  T8_114                                             5
+      Contact:  T8_114/sip:T8_114@75.99.30.60:5060;x-ast-o 68e616f493 Avail        46.955
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T8_897/897                                           Not in use    0 of inf
+    OutAuth:  authT8_897/T8_897
+     InAuth:  authT8_897/T8_897
+        Aor:  T8_897                                             1
+      Contact:  T8_897/sip:T8_897@75.99.30.60:22181        c5c8f2328a Avail        31.363
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T9_101/101                                           Not in use    0 of inf
+    OutAuth:  authT9_101/T9_101
+     InAuth:  authT9_101/T9_101
+        Aor:  T9_101                                             5
+      Contact:  T9_101/sip:T9_101@47.17.126.158:5060       399e499492 Avail        94.778
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T9_102/102                                           Not in use    0 of inf
+    OutAuth:  authT9_102/T9_102
+     InAuth:  authT9_102/T9_102
+        Aor:  T9_102                                             5
+      Contact:  T9_102/sip:T9_102@47.17.126.158:45544      03dd92c9ef Avail       291.934
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T9_103/103                                           Not in use    0 of inf
+    OutAuth:  authT9_103/T9_103
+     InAuth:  authT9_103/T9_103
+        Aor:  T9_103                                             5
+      Contact:  T9_103/sip:T9_103@47.17.126.158:45539      a96db5320e Avail        90.932
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T9_104/104                                           Not in use    0 of inf
+    OutAuth:  authT9_104/T9_104
+     InAuth:  authT9_104/T9_104
+        Aor:  T9_104                                             5
+      Contact:  T9_104/sip:T9_104@47.17.126.158:45541      3f5394d35c Avail       122.450
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T9_105/105                                           Unavailable   0 of inf
+    OutAuth:  authT9_105/T9_105
+     InAuth:  authT9_105/T9_105
+        Aor:  T9_105                                             5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+ Endpoint:  T9_106/106                                           Unavailable   0 of inf
+    OutAuth:  authT9_106/T9_106
+     InAuth:  authT9_106/T9_106
+        Aor:  T9_106                                             5
+  Transport:  transport-udp-3baa003c2d301de89c68     udp      0      0  0.0.0.0:5060
+
+
+Objects found: 158
+

@@ -1,0 +1,16 @@
+menu.pjsip_endpoints = {pjsip_endpoints}
+module.pjsip_endpoints = {pjsip_endpoints}
+pjsip_endpoints = Dispositivo PJSIP
+pjsip_endpoints.client_uri = URI Cliente
+pjsip_endpoints.contacts = Contatti
+pjsip_endpoints.endpoint = Dispositivo
+pjsip_endpoints.endpoints = Dispositivi
+pjsip_endpoints.extension = Estensione
+pjsip_endpoints.match = Corrispondenza
+pjsip_endpoints.max_contacts = Max Contatti
+pjsip_endpoints.registrations = Registrazioni in uscita
+pjsip_endpoints.server_uri = URI Server
+pjsip_endpoints.status = Stato
+pjsip_endpoints.trunk_name = Nome Trunk
+pjsip_endpoints.trunks = Trunks
+pjsip_endpoints.tenant = Tenant

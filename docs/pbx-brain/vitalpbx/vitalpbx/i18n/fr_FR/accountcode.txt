@@ -1,0 +1,14 @@
+accountcode = Code affaire
+accountcode.code = Code affaire
+accountcode.code.tooltip = Numéro de code affaire
+accountcode.description = Description
+accountcode.description.tooltip = Description courte identifiant ce code affaire
+accountcode.enabled = Activé
+accountcode.enabled.tooltip = Active/Désactive ce code affaire
+accountcode.general = Général
+accountcode.not_found = Code affaire non trouvé
+accountcode.search = Rechercher
+module.accountcode = Codes affaires
+menu.account_codes = Codes affaires
+accountcode.code.invalid = Code affaire invalide. Seuls les chiffres et le signe "*" (asterisque) sont autorisés.
+accountcode.duplicated_code = Le code fourni est déjà utilisé

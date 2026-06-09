@@ -1,0 +1,30 @@
+dynamic_routing = Roteamento Dinâmico
+dynamic_routing.actions = Ações
+dynamic_routing.calldate = Data e hora da chamada
+dynamic_routing.called = Número Chamado
+dynamic_routing.completed = Concluído
+dynamic_routing.delete_used_records = Excluir registros usados
+dynamic_routing.delete_used_records.tooltip = 
+	Se marcado, o registro será excluído da lista de roteamento dinâmico quando o retorno de chamada for respondido
+dynamic_routing.digits_match = Correspondência de dígitos
+dynamic_routing.digits_match.tooltip = 
+	Permite definir a quantidade de dígitos a serem extraídos do número do chamador (da direita para a esquerda), para posteriormente
+	procure correspondências na lista de roteamento dinâmico. Se for deixado em branco, todo o número do chamador será usado para pesquisar
+	para correspondências
+dynamic_routing.et.hours = 
+	[um] {0} Hora
+	[outros] {0} Horas
+dynamic_routing.et.never = Nunca
+dynamic_routing.expiration_time = Data de validade
+dynamic_routing.expiration_time.tooltip = 
+	Permite definir por quanto tempo os registros da lista de roteamento dinâmico serão conservados, antes de serem
+	excluído automaticamente
+dynamic_routing.extension = Número do Ramal
+dynamic_routing.general = {vitalpbx.general}
+dynamic_routing.list = Lista
+dynamic_routing.only_missed_calls = Manter apenas chamadas perdidas
+dynamic_routing.only_missed_calls.tooltip = 
+	Se marcado, apenas as chamadas (de saída) que são perdidas pela parte chamada serão salvas na lista de roteamento dinâmico
+dynamic_routing.trunk = Tronco
+menu.dynamic_routing = {dynamic_routing}
+module.dynamic_routing = {dynamic_routing}

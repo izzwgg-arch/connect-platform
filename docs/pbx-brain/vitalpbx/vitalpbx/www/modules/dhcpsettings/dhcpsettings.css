@@ -1,0 +1,17 @@
+/* Align DHCP toogle buttons */
+div#enabled {
+	padding-left: 15px;
+	padding-right: 15px;
+}
+
+/* Divid row to two columns for lease time */
+/* First column */
+input#lease_time {
+	width: 37%;
+	display: inline-block;
+}
+/* Second column */
+select.lease_unit {
+	width: 37%;
+	display: inline-block;
+}

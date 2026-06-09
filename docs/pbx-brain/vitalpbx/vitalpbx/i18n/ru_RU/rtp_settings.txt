@@ -1,0 +1,33 @@
+menu.rtp_settings = Настройки RTP
+module.rtp_settings = Настройки RTP
+rtp_settings.general = Общие
+rtp_settings.certificate_id = Сертификат
+rtp_settings.certificate_id.tooltip = Файл сертификата сервера.
+rtp_settings.rtpstart = Начальный порт RTP
+rtp_settings.rtpstart.tooltip = Указывает начало диапазона используемых портов для RTP.
+rtp_settings.rtpend = Конечный порт RTP
+rtp_settings.rtpend.tooltip = Указывает конец диапазона используемых портов для RTP.
+rtp_settings.strictrtp = Строгий RTP
+rtp_settings.strictrtp.tooltip = Включите строгую защиту RTP. Это приведет к удалению пакетов RTP, которые не поступают из источника потока RTP. 
+rtp_settings.rtpchecksums = Контрольная сумма RTP
+rtp_settings.rtpchecksums.tooltip = Включить или отключить контрольную сумму UDP для RTP трафика.
+rtp_settings.icesupport = Поддержка ICE
+rtp_settings.icesupport.tooltip = Включить или отключить поддержку ICE. По умолчанию этот параметр отключен.
+rtp_settings.stunaddr = STUN сервер
+rtp_settings.stunaddr.tooltip = Имя хоста или адрес для STUN-сервера, используемого при определении внешнего IP-адреса и порта для сеанса RTP, если с ним есть какие-то проблемы (например, не слышно одну из сторон). Номер порта не является обязательным.
+rtp_settings.turnaddr = TURN сервер
+rtp_settings.turnaddr.tooltip = Имя хоста или адрес для сервера TURN, который будет использоваться в качестве ретранслятора. Номер порта не является обязательным. 
+rtp_settings.turnusername = TURN логин
+rtp_settings.turnusername.tooltip = Имя пользователя, используемое для аутентификации с сервером ретрансляции TURN.
+rtp_settings.turnpassword = REDACTED
+rtp_settings.turnpassword.tooltip = Пароль, используемый для аутентификации с сервером ретрансляции TURN.
+rtp_settings.ice_host_candidates = Настройки ICE хоста
+rtp_settings.local_address = Локальный адрес
+rtp_settings.advertised_address = Предложенный адрес
+rtp_settings.include_local_address = Содержит локальный адрес
+rtp_settings.ice_host_candidates.tooltip =
+  Когда Asterisk находится за статическим NAT и используется ICE, ICE будет выставлять внутренний IP-адрес сервера в 
+  качестве одного из кандидатов на хост. Хотя при использовании STUN (см. параметр конфигурации stunaddr) предоставляется 
+  внешний IP-адрес, все равно внутренний IP-адрес будет отправлен удаленному узлу. Чтобы скрыть топологию вашей внутренней 
+  сети, вы можете переопределить хосты, которые Asterisk отправит удаленному узлу. Если вы укажете 
+  здесь что-либо, вы почти наверняка НЕ захотите указывать адреса «Stun сервера» или «Turn сервера».

@@ -1,0 +1,51 @@
+menu.outbound_routes = Rutas Salientes
+module.trunk_group = Rutas Salientes
+trunk_group = Rutas Salientes
+trunk_group.description = Descripción
+trunk_group.description.tooltip = Breve descripción para identificar esta Rutas Saliente
+trunk_group.general = General
+trunk_group.pin_list_id = PIN
+trunk_group.pin_list_id.tooltip = Elija un grupo de PIN.
+trunk_group.select_outbound_route = -- Seleccione la ruta de salida --
+trunk_group.trklist = Troncal
+trunk_group.trklist.empty = No hay troncales seleccionadas para este grupo de troncales.
+trunk_group.trklist.tooltip = Lista de los troncales para marcar
+trunk_group.trkpattern = Patrones de Marcación %s
+trunk_group.trkpattern.pattern = Patrones
+trunk_group.trkpattern.pattern.invalid = Patrón no Válido
+trunk_group.trkpattern.pattern.placeholder = Patrones de Coincidencia
+trunk_group.trkpattern.pattern.tooltip = Patrones de Coincidencia nos permite crear patrones de extensión en nuestro plan de numeración que coincidan con más de un número marcado.
+trunk_group.trkpattern.prefix = Prefijo
+trunk_group.trkpattern.prefix.placeholder = Prefijo
+trunk_group.trkpattern.prefix.tooltip = Prefijo para eliminar al coincidir.
+trunk_group.trkpattern.prepend = Anteponer
+trunk_group.trkpattern.prepend.placeholder = Anteponer
+trunk_group.trkpattern.prepend.tooltip = Dígitos para anteponer al coincidir.
+trunk_group.virttrk = Troncal Tenant 
+trunk_group.virttrk.tooltip = Lista de los Tenants que este Tenant puede llamar por medio de una troncal
+trunk_group.intra_company = Entre-Empresas
+trunk_group.intra_company.tooltip = 	
+	Si está marcada, la identificación del llamante interna se enviará a través de esta ruta de salida, en lugar de la ID de llamada externa
+	de la extensión que llama
+trunk_group.no_description = No se ha proporcionado ninguna descripción
+trunk_group.no_patterns = No hay patrones configurados para esta ruta de salida
+trunk_group.failover_destination = Destino por error
+trunk_group.failover_destination.tooltip = 	Destino opcional para ejecutar en caso de que la llamada falle después de probar con todas las líneas troncales enumeradas.
+trunk_group.trkpattern.cid_pattern = Patrón CID
+trunk_group.trkpattern.cid_pattern.placeholder = Coincidir con el patrón CID
+trunk_group.trkpattern.cid_pattern.tooltip = 
+	Si se definen, las llamadas que coinciden con el patrón definido también deben coincidir con este patrón de identificación de llamadas para
+	tomar esta ruta. El identificador de llamadas que coincidirá será el CID interno y no el CID externo.
+trunk_group.cid = CID Saliente
+trunk_group.cid.tooltip = Le permite definir un Número/Nombre de identificación de llamada específico que se usará en esta ruta de salida cuando la configuración "Sobrescribir CID" esté habilitada
+trunk_group.cid_name = Nombre CID
+trunk_group.cid_number = Número CID
+trunk_group.no_cid = La configuración "Sobrescribir CID" está habilitada, pero no definió los parámetros del CID saliente.
+trunk_group.overwrite_cid = Sobrescribir CID
+trunk_group.overwrite_cid.tooltip = Si está habilitado, el CID de salida de la extensión se sobrescribirá con los parámetros de CID definidos en esta Ruta de salida
+trunk_group.overwrite_cid.if_not_provided = Si no se Proporciona
+trunk_group.overwrite_cid.if_not_provided.tooltip = Sobrescribirá la información del CID solo si no se proporciona un CID externo durante la llamada.
+trunk_group.overwrite_cid.no = {vitalpbx.no}
+trunk_group.overwrite_cid.no.tooltip = Conservará cualquier CID proporcionado durante la llamada. No realizará ninguna sobrescritura.
+trunk_group.overwrite_cid.yes = {vitalpbx.yes}
+trunk_group.overwrite_cid.yes.tooltip = Obliga a sobrescribir el CID con los parámetros del CID definidos en esta ruta de salida.

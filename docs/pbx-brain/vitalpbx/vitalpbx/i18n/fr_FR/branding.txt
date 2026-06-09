@@ -1,0 +1,49 @@
+branding = Marque Blanche
+branding.base_color = Couleur de base
+branding.base_color.tooltip = Couleur principale utilisée pour les éléments de menu actifs, les onglets de formulaire actifs et le texte sélectionné
+branding.desktop_logo = Logo du bureau
+branding.facebook_page = page Facebook
+branding.general = {vitalpbx.general}
+branding.login_footer = Pied de page de connexion
+branding.login_footer.tooltip = Il vous permet de personnaliser le contenu du pied de page dans l'écran de connexion
+branding.mobile_logo = Logo mobile
+branding.page_title = Titre de l'APP
+branding.page_title.tooltip = Vous permet de personnaliser le titre de l'en-tête qui apparaît dans l'onglet du navigateur
+branding.slogan = slogan
+branding.slogan.tooltip = Il vous permet de personnaliser le slogan qui apparaît dans l'écran de connexion
+branding.social.tooltip = Il vous permet de personnaliser le lien <b>{0}</b> qui apparaît dans le pied de page de connexion
+branding.twitter_page = page Twitter
+branding.youtube_channel = chaîne YouTube
+menu.branding = {branding}
+module.branding = {branding}
+branding.instagram_page = Page Instagram
+branding.app_name = Nom de l'APP
+branding.app_name.tooltip = Il permet de définir le nom/titre de l'application à afficher dans l'onglet des navigateurs.
+branding.meet_url = URL Visio conférence
+branding.meet_url.tooltip = URL à utiliser par défaut pour les conférences générées via le module de visioconférences
+branding.login = Design de connexion
+branding.login_addons_menu = Menu des modules complémentaires
+branding.login_addons_menu.tooltip = Couleur d'arrière-plan du bouton du menu des modules complémentaires
+branding.login_bg = Arrière-plan de connexion
+branding.login_bg.tooltip = Couleur de fond de la page de connexion. S'il n'est pas renseigné, l'arrière-plan par défaut sera utilisé.
+branding.login_btn = Soumettre la couleur du bouton
+branding.login_btn.tooltip = Couleur de fond du bouton de connexion
+branding.login_fc = Couleur de la police
+branding.login_fc.tooltip = Couleur de police à utiliser dans le formulaire de connexion
+branding.login_frm_bg = Arrière-plan du formulaire
+branding.login_frm_bg.tooltip = Couleur de fond pour le panneau de gauche dans le formulaire de connexion
+branding.reset = Réinitialiser
+branding.reset.confirm =
+	Voulez-vous vraiment réinitialiser les paramètres de la marque blanche? 
+	Ce processus est irréversible et toute la configuration que vous avez effectuée sera perdu.
+branding.reset_applied = Tous les paramètres ont été réinitialisés avec succès.
+branding.warning_note = Ces paramètres seront appliqués jusqu'à ce qu'une <a href="{0}" target="_blank">licence</a> soit appliquée au module complémentaire de marque blanche ou soit activée pour l'un des <a href= "{1}" target="_blank">forfaits disponibles</a>
+branding.addon.app_name.tooltip =
+	Permet de définir le nom/titre de l'application à afficher dans l'onglet des navigateurs.
+branding.addon.url_prefix.tooltip =
+	Permet de définir le préfixe à utiliser pour accéder sur l'application "<b>{0}</b>". ex. : si vous réglez le préfixe de
+	<b>"{1}"</b>, signifie que vous devez accéder à l'application de la manière suivante <b>http(s)://YOUR_IP/{1}</b>
+branding.addons = Modules complémentaires
+branding.url_prefix = Préfixe d'URL
+branding.desktop_logo_dark = Logo du bureau (mode sombre)
+branding.mobile_logo_dark = Logo mobile (mode sombre)

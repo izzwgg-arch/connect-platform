@@ -1,0 +1,170 @@
+$base-color: #73a517;
+$buttons-success-color: $base-color;
+$buttons-primary-color: #768a9c;
+$buttons-primary-color-hover: #768a9c;
+$buttons-info-color: #4379a5;
+$buttons-info-color-hover: #4379a5;
+$buttons-danger-color: #c57c6e;
+$buttons-danger-color-hover: #c57c6e;
+$warning-color: #caa75a;
+$delete-confirmation: $buttons-danger-color;
+$links-color: #337ab7;
+
+// Dashboard Colors
+$time-info-title: #73a517;
+$pjsip-card: #caa75a;
+$sip-card: #73a517;
+$iax-card: #768a9c;
+$call-counter-card: #c57c6e;
+$warning-label: $call-counter-card;
+
+.text-success{
+  color: $base-color;
+}
+
+.text-primary{
+  color: $buttons-primary-color;
+}
+
+.text-info{
+  color: $buttons-info-color;
+}
+
+.text-warning{
+  color: $warning-color;
+}
+
+.text-danger{
+  color: $buttons-danger-color;
+}
+
+#ombu-logo {
+  margin-top: 7px;
+  width: auto;
+  height: 50px;
+}
+
+/* Warnings & Notifications */
+.modal-module-errors .modal-header{
+  background-color: $warning-color;
+}
+
+ul.module-error-list li{
+  color: $warning-color;
+}
+
+/* Text Selection */
+::selection{
+  background: $base-color !important;
+  color: white;
+}
+
+::-moz-selection{
+  background: $base-color !important;
+  color: white;
+}
+
+/* Login */
+div.login-pbx-page .panel-inverse > .panel-heading img {
+  width: 180px;
+}
+
+.btn-login, .btn-panel {
+  display: flex;
+  width: 100%;
+  text-align: center;
+  justify-content: center;
+  align-items: center;
+  outline: 0;
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 28px;
+  padding: 0 24px;
+  height: 52px;
+  border-radius: 3px;
+  flex: 1 auto;
+  background-color: #202c2c7d !important;
+}
+
+.btn-login:hover, .btn-login:focus {
+  background-color: #202c2ca6 !important;
+  outline: 0;
+}
+
+/* Add-ons module */
+.btn-info,
+.btn-info:active:hover,
+.btn-info.active:hover,
+.open > .dropdown-toggle.btn-info:hover,
+.btn-info:active:focus,
+.btn-info.active:focus,
+.open > .dropdown-toggle.btn-info:focus,
+.btn-info:active.focus, .btn-info.active.focus,
+.open > .dropdown-toggle.btn-info.focus {
+  background-color: $buttons-info-color !important;
+  border-color: $buttons-info-color !important;
+}
+
+/* Links */
+a, a:active, a:visited, a:hover {
+  color: $links-color;
+  text-decoration: none;
+}
+
+.pagination > .active > a, .pagination > .active > span, .pagination > .active > a:hover, .pagination > .active > span:hover, .pagination > .active > a:focus, .pagination > .active > span:focus {
+  background-color: $buttons-primary-color;
+  border-color: $buttons-primary-color;
+}
+
+.btn-login i{
+  display: none;
+}
+
+/* Mobile Login */
+@media (max-width: 767px){
+  .login-row{
+    background: none;
+    box-shadow: none;
+    -webkit-box-shadow: none;
+    padding: 10px;
+  }
+
+  .login-right-column {
+    background: transparent;
+  }
+
+  .setup-fields .input-group-addon,
+  .setup-fields label {
+    color: white !important;
+  }
+
+  .login-mobile-data h3{
+    color: rgba(249, 248, 248, 0.75);
+  }
+
+  .btn-login {
+    background-color: #23342ed1 !important;
+    width: auto;
+    float: right;
+    margin-right: 15px;
+    border-radius: 50%;
+    padding: 12px 19px;
+    span{
+      display: none;
+    }
+    i{
+      display: block;
+      color: #ffffffa3;
+    }
+    &:hover, &:active, &:focus {
+      background: #23342ede !important;
+    }
+    &:hover i, &:active i, &:focus i {
+      color: white !important;
+    }
+  }
+
+  div.login-pbx-page .pbxlogin-form .input-group, div.login-pbx-page .form-control{
+    color: white !important;
+  }
+}

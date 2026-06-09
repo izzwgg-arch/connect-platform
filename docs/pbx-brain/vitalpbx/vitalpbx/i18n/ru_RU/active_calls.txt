@@ -1,0 +1,10 @@
+active_calls = Активные вызовы
+active_calls.called_number = Вызываемый номер
+active_calls.caller_id = ID звонящего
+active_calls.calls = Вызовы
+active_calls.channel = Канал
+active_calls.duration = Длительность
+active_calls.linkedid = Связанный ID
+active_calls.state = Состояние
+menu.active_calls = {active_calls}
+module.active_calls = {active_calls}

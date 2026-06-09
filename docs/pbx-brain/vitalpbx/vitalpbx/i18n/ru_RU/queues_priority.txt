@@ -1,0 +1,11 @@
+menu.queue_priorities = Приоритеты очереди
+module.queues_priority = Приоритеты очереди
+queues_priority = Приоритет очередей
+queues_priority.description = Описание
+queues_priority.description.tooltip = Краткое описание для определения этого приоритета очереди.
+queues_priority.destination = Направление
+queues_priority.general = Общие
+queues_priority.mod_dest = Модель назначения
+queues_priority.priority = Приоритет
+queues_priority.priority.tooltip = Устанавливается приоритет очереди. Этот параметр будет динамически изменять вес очереди, чтобы определять приоритеты входящих вызовов для этого пути. Более высокие значения означают более высокий приоритет. Обычно очередь выбирают в "Направлении".
+queues_priority.menu.priority = Приоритет {0}

@@ -1,0 +1,69 @@
+#!/bin/sh
+
+# This code is the property of VitalPBX LLC Company
+# License: Proprietary
+# Date: 27-Feb-2026
+# Migrate the VitalPBX Whitelist to IPSets
+
+MIGDIR="/var/lib/vitalpbx/migrations"
+MARKER="$MIGDIR/firewall_whitelist_ipset_v1.done"
+
+mkdir -p "$MIGDIR"
+
+if [ ! -f "$MARKER" ]; then
+  echo "PBX: migrating firewall whitelist to ipset..."
+
+  # 1) ensure firewalld running (don't hard fail if not installed/enabled)
+  if command -v firewall-cmd >/dev/null 2>&1; then
+
+    # 2) create ipset if missing (runtime)
+    if ! firewall-cmd --get-ipsets 2>/dev/null | tr ' ' '\n' | grep -qx "vpbx_white_list"; then
+      firewall-cmd --new-ipset=vpbx_white_list --type=hash:net --option=family=inet >/dev/null 2>&1 || true
+    fi
+
+    # 3) create ipset if missing (permanent)
+    if ! firewall-cmd --permanent --get-ipsets 2>/dev/null | tr ' ' '\n' | grep -qx "vpbx_white_list"; then
+      firewall-cmd --permanent --new-ipset=vpbx_white_list --type=hash:net --option=family=inet >/dev/null 2>&1 || true
+    fi
+
+    # 4) migrate existing -s ... -j ACCEPT rules from vpbx_white_list chain into ipset
+    # Get all direct rules and filter chain=vpbx_white_list and "-s X"
+    RULES="$(firewall-cmd --direct --get-all-rules 2>/dev/null | awk '$3=="vpbx_white_list" {print}')"
+
+    if [ -n "$RULES" ]; then
+      echo "$RULES" | while read -r r; do
+        # Example r:
+        # ipv4 filter vpbx_white_list 0 -s 1.2.3.4 -j ACCEPT
+        SRC="$(echo "$r" | sed -n 's/.* -s \([^ ]*\) .*/\1/p')"
+        if [ -n "$SRC" ]; then
+          echo "PBX: whitelisting IP ${SRC}"
+          # add to ipset (runtime + permanent)
+          firewall-cmd --ipset=vpbx_white_list --add-entry="$SRC" >/dev/null 2>&1 || true
+          firewall-cmd --permanent --ipset=vpbx_white_list --add-entry="$SRC" >/dev/null 2>&1 || true
+
+          # remove old direct rule
+          # r = "ipv4 filter vpbx_white_list 0 -s 127.0.0.1 -j ACCEPT"
+          set -- $r
+          ipv="$1"; table="$2"; chain="$3"; prio="$4"
+          shift 4
+          firewall-cmd --direct --remove-rule "$ipv" "$table" "$chain" "$prio" "$@" >/dev/null 2>&1 || true
+          firewall-cmd --permanent --direct --remove-rule "$ipv" "$table" "$chain" "$prio" "$@" >/dev/null 2>&1 || true
+        fi
+      done
+    fi
+
+    # 5) ensure the ipset match rule exists in the chain
+    # (add it; if already present, command fails -> ignore)
+    firewall-cmd --direct --add-rule ipv4 filter vpbx_white_list 0 -m set --match-set vpbx_white_list src -j ACCEPT >/dev/null 2>&1 || true
+    firewall-cmd --permanent --direct --add-rule ipv4 filter vpbx_white_list 0 -m set --match-set vpbx_white_list src -j ACCEPT >/dev/null 2>&1 || true
+
+    # 6) reload to apply permanent state
+    firewall-cmd --reload >/dev/null 2>&1 || true
+  fi
+
+  # 7) mark migration done
+  touch "$MARKER"
+  echo "PBX: firewall whitelist migration done."
+fi
+
+exit 0;
