@@ -635,6 +635,13 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const callStartedAtRef = useRef<number | null>(null);
   /** Blocks duplicate dial() until the outbound attempt ends (separate from answered-at). */
   const dialGuardRef = useRef<number | null>(null);
+  /**
+   * Max age of a dial guard that has no live session before it is treated as
+   * stale and cleared. Covers the worst-case async dial setup window (outbound
+   * route resolve + getUserMedia). Beyond this, a still-armed guard with no
+   * session means a prior attempt leaked it, so we recover instead of wedging.
+   */
+  const STALE_DIAL_GUARD_MS = 12_000;
   /** True while UK local ringback synth is playing (outbound). */
   const localRingbackActiveRef = useRef(false);
   const callDirectionRef = useRef<"outbound" | "inbound">("outbound");
@@ -1929,10 +1936,22 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         return;
       }
       // Guard: dialGuardRef is set synchronously before async work so double-click
-      // cannot place a second SIP INVITE.
+      // cannot place a second SIP INVITE. It is self-healing: the guard is cleared
+      // by the session "ended"/"failed" handlers, but an abnormal teardown (no JsSIP
+      // event) could leave it armed forever, which would make every later Call press
+      // silently no-op and leave the user stuck on the dialpad. So we only suppress
+      // when there is a genuinely live session, or the previous attempt is recent
+      // enough to still be in its async setup window; otherwise we treat the guard
+      // as stale, clear it, and proceed.
       if (dialGuardRef.current !== null) {
-        console.warn("[SipPhone] dial() suppressed — call already in progress");
-        return;
+        const guardAgeMs = Date.now() - dialGuardRef.current;
+        const sessionLive = !!sessionRef.current && sessionRef.current.isEnded?.() !== true;
+        if (sessionLive || guardAgeMs < STALE_DIAL_GUARD_MS) {
+          console.warn("[SipPhone] dial() suppressed — call already in progress");
+          return;
+        }
+        console.warn(`[SipPhone] dial() recovering stale dial guard after ${guardAgeMs}ms`);
+        dialGuardRef.current = null;
       }
       const domain = uaRef.current._configuration?.uri?.host;
       if (!domain) return;
