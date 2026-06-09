@@ -75,6 +75,29 @@ function fieldString(fields: Record<string, any>, name: string): string | null {
   return s || null;
 }
 
+// Human-readable reason for a failed voicemail drop, used in the agent's bell
+// notification so they understand why nothing was delivered (and what to fix).
+const VM_DROP_FAILURE_REASONS: Record<string, string> = {
+  no_active_call: "There was no active call to drop the voicemail into.",
+  no_customer_leg: "We couldn't find the customer's line on the call.",
+  call_not_bridged: "The call wasn't fully connected yet.",
+  vm_drop_context_missing: "The phone system isn't configured for voicemail drops.",
+  voicemail_drop_not_ready: "The recording isn't ready to send yet.",
+  audio_not_found: "The recording's audio file is missing.",
+  no_ready_voicemail_drop_audio: "No ready recording has a usable audio file.",
+  no_default_voicemail_drop: "No default voicemail recording is set.",
+  voicemail_drop_not_found: "The selected recording no longer exists.",
+  pbx_helper_unavailable: "We couldn't reach the phone system to load the recording.",
+  ami_not_connected: "The phone system is temporarily unavailable.",
+  ami_probe_failed: "The phone system didn't respond in time.",
+  tenant_mismatch: "That call doesn't belong to your account.",
+  vm_drop_failed: "The voicemail drop could not be completed.",
+};
+
+function friendlyVoicemailDropFailure(errorCode: string): string {
+  return VM_DROP_FAILURE_REASONS[errorCode] ?? "The voicemail drop could not be delivered.";
+}
+
 function formatDrop(row: any, req: any, opts: { audioAvailable?: boolean } = {}) {
   const audioAvailable = opts.audioAvailable ?? Boolean(row?.pbxStorageKey);
   const streamUrl = row?.pbxStorageKey && audioAvailable
@@ -316,6 +339,58 @@ export async function registerCrmVoicemailDropRoutes(app: FastifyInstance) {
       if (!contact) return reply.code(404).send({ error: "contact_not_found" });
     }
 
+    // Surface a non-delivery to the agent: an in-app bell notification (always,
+    // since the floating dialer can drop without a CRM contact) plus a contact
+    // timeline entry when a contact is attached. Best-effort — never throws, so a
+    // logging hiccup can't turn a recoverable drop failure into a 500.
+    const notifyNotDelivered = async (
+      errorCode: string,
+      opts: { detail?: string; dropId?: string | null; dropName?: string | null } = {},
+    ) => {
+      const reason = friendlyVoicemailDropFailure(errorCode);
+      const label = opts.dropName ? ` (${opts.dropName})` : "";
+      await (db as any).crmUserNotification
+        .create({
+          data: {
+            tenantId: user.tenantId,
+            userId: user.sub,
+            title: "Voicemail drop not delivered",
+            body: `${reason}${label}`,
+            route: contactId ? `/crm/contacts/${contactId}` : "/crm/voicemail-drops",
+            kind: "CRM_VOICEMAIL_DROP_FAILED",
+            metadata: {
+              voicemailDropId: opts.dropId ?? voicemailDropId ?? null,
+              recordingName: opts.dropName ?? null,
+              contactId: contactId ?? null,
+              callId: activeCallId ?? null,
+              agentExtension: agentExtension ?? null,
+              error: errorCode,
+              detail: opts.detail ? String(opts.detail).slice(0, 500) : null,
+              status: "Failed",
+            },
+          },
+        })
+        .catch(() => undefined);
+      if (contactId) {
+        await writeTimelineEvent({
+          tenantId: user.tenantId,
+          contactId,
+          type: "VOICEMAIL_DROP",
+          title: opts.dropName ? `Voicemail Drop failed — ${opts.dropName}` : "Voicemail Drop failed",
+          body: opts.detail ? String(opts.detail).slice(0, 500) : reason,
+          linkedId: opts.dropId ?? undefined,
+          createdByUserId: user.sub,
+          metadata: {
+            voicemailDropId: opts.dropId ?? null,
+            recordingName: opts.dropName ?? null,
+            callId: activeCallId,
+            status: "Failed",
+            error: errorCode,
+          },
+        }).catch(() => {});
+      }
+    };
+
     // Resolve the recording: explicit id, else the tenant default. A READY row
     // is only usable for live drops when its converted WAV still exists.
     let drop = voicemailDropId
@@ -325,15 +400,17 @@ export async function registerCrmVoicemailDropRoutes(app: FastifyInstance) {
           orderBy: { updatedAt: "desc" },
         });
     if (!drop) {
-      return reply.code(voicemailDropId ? 404 : 409).send({
-        error: voicemailDropId ? "voicemail_drop_not_found" : "no_default_voicemail_drop",
-      });
+      const errorCode = voicemailDropId ? "voicemail_drop_not_found" : "no_default_voicemail_drop";
+      await notifyNotDelivered(errorCode);
+      return reply.code(voicemailDropId ? 404 : 409).send({ error: errorCode });
     }
     if (drop.status !== "READY" || !drop.pbxStorageKey || !drop.pbxFileBaseName) {
+      await notifyNotDelivered("voicemail_drop_not_ready", { dropId: drop.id, dropName: drop.name });
       return reply.code(409).send({ error: "voicemail_drop_not_ready", status: drop.status });
     }
     if (!(await crmVoicemailDropAudioExists(drop.pbxStorageKey))) {
       if (voicemailDropId) {
+        await notifyNotDelivered("audio_not_found", { dropId: drop.id, dropName: drop.name });
         return reply.code(409).send({ error: "audio_not_found" });
       }
       const readyDrops = await model().findMany({
@@ -347,28 +424,14 @@ export async function registerCrmVoicemailDropRoutes(app: FastifyInstance) {
           break;
         }
       }
-      if (!drop) return reply.code(409).send({ error: "no_ready_voicemail_drop_audio" });
+      if (!drop) {
+        await notifyNotDelivered("no_ready_voicemail_drop_audio");
+        return reply.code(409).send({ error: "no_ready_voicemail_drop_audio" });
+      }
     }
 
-    const recordFailure = async (errorCode: string, detail?: string) => {
-      if (!contactId) return;
-      await writeTimelineEvent({
-        tenantId: user.tenantId,
-        contactId,
-        type: "VOICEMAIL_DROP",
-        title: `Voicemail Drop failed — ${drop.name}`,
-        body: detail ? String(detail).slice(0, 500) : null,
-        linkedId: drop.id,
-        createdByUserId: user.sub,
-        metadata: {
-          voicemailDropId: drop.id,
-          recordingName: drop.name,
-          callId: activeCallId,
-          status: "Failed",
-          error: errorCode,
-        },
-      }).catch(() => {});
-    };
+    const recordFailure = async (errorCode: string, detail?: string) =>
+      notifyNotDelivered(errorCode, { detail, dropId: drop.id, dropName: drop.name });
 
     try {
       const pushResult = await pushDropToPbx({

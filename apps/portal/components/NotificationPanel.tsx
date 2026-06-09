@@ -29,16 +29,46 @@ export function NotificationPanel() {
     }
   }, []);
   useEffect(() => { if (open) loadNotifications(); }, [open, loadNotifications]);
+  // Keep the bell fresh even while closed so failures (e.g. an undelivered
+  // voicemail drop) surface promptly via the unread indicator.
+  useEffect(() => {
+    void loadNotifications();
+    const timer = setInterval(() => { void loadNotifications(); }, 60_000);
+    return () => clearInterval(timer);
+  }, [loadNotifications]);
 
   const dismiss = async (id: string) => {
     await apiPost(`/crm/notifications/${id}/dismiss`, {}).catch(() => undefined);
     setNotifications((prev) => prev.filter((n) => n.id !== id));
   };
 
+  const hasUnread = notifications.length > 0;
+
   return (
     <div className="menu-wrap">
-      <button ref={triggerRef} className="icon-btn" onClick={() => setOpen((v) => !v)} title="Notifications">
+      <button
+        ref={triggerRef}
+        className="icon-btn"
+        onClick={() => setOpen((v) => !v)}
+        title={hasUnread ? `${notifications.length} notification${notifications.length === 1 ? "" : "s"}` : "Notifications"}
+        style={{ position: "relative" }}
+      >
         <Bell size={16} />
+        {hasUnread ? (
+          <span
+            aria-hidden
+            style={{
+              position: "absolute",
+              top: 4,
+              right: 4,
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              background: "var(--danger)",
+              boxShadow: "0 0 0 2px var(--surface, #0b0f1a)",
+            }}
+          />
+        ) : null}
       </button>
       <ViewportDropdown open={open} triggerRef={triggerRef} onClose={closePanel}>
           <div className="panel-headline">Notifications</div>
@@ -53,7 +83,16 @@ export function NotificationPanel() {
                 }}
                 style={{ all: "unset", cursor: entry.route ? "pointer" : "default" }}
               >
-                <StatusChip tone={entry.kind === "CRM_WEBSITE_SUBMISSION" ? "info" : "warning"} label="CRM" />{" "}
+                <StatusChip
+                  tone={
+                    entry.kind === "CRM_VOICEMAIL_DROP_FAILED"
+                      ? "danger"
+                      : entry.kind === "CRM_WEBSITE_SUBMISSION"
+                        ? "info"
+                        : "warning"
+                  }
+                  label={entry.kind === "CRM_VOICEMAIL_DROP_FAILED" ? "Voicemail" : "CRM"}
+                />{" "}
                 <strong>{entry.title}</strong>
                 {entry.body ? <div style={{ marginTop: 4, fontSize: 12, color: "var(--text-dim)" }}>{entry.body}</div> : null}
               </button>
