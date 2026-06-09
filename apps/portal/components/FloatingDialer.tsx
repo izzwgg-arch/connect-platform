@@ -172,6 +172,33 @@ function callIsOpen(call: LiveCall): boolean {
   return call.state === "ringing" || call.state === "dialing" || call.state === "up" || call.state === "held";
 }
 
+function callIncludesExtension(call: LiveCall, extension: string | null | undefined): boolean {
+  const ext = extension?.trim();
+  if (!ext) return false;
+  return [
+    ...(call.extensions ?? []),
+    call.from,
+    call.to,
+    call.connectedLine,
+    call.source_extension,
+    call.destination_extension,
+  ].some((value) => value?.trim() === ext);
+}
+
+function findOpenLiveCallForExtension(
+  activeCalls: LiveCall[],
+  extension: string | null | undefined,
+  direction: "outbound" | "inbound" | null,
+): LiveCall | null {
+  const matches = activeCalls.filter((call) => callIsOpen(call) && callIncludesExtension(call, extension));
+  if (matches.length === 0) return null;
+  if (direction) {
+    const sameDirection = matches.find((call) => call.direction === direction);
+    if (sameDirection) return sameDirection;
+  }
+  return matches[0] ?? null;
+}
+
 function activePartyPhone(call: LiveCall | null, fallback: string | null | undefined): string | null {
   if (!call) return fallback?.trim() || null;
   const candidates =
@@ -569,7 +596,11 @@ export function FloatingDialer() {
     () => findOutboundLiveCallForParty(tenantScopedCalls, outboundParty),
     [tenantScopedCalls, outboundParty],
   );
-  const activeWorkspaceCall = phone.callDirection === "inbound" ? matchedInboundCall : matchedOutboundCall;
+  const fallbackExtensionCall = useMemo(
+    () => findOpenLiveCallForExtension(tenantScopedCalls, phone.diag.extensionNumber, phone.callDirection),
+    [phone.callDirection, phone.diag.extensionNumber, tenantScopedCalls],
+  );
+  const activeWorkspaceCall = (phone.callDirection === "inbound" ? matchedInboundCall : matchedOutboundCall) ?? fallbackExtensionCall;
   const activeWorkspacePhone = activePartyPhone(
     activeWorkspaceCall,
     phone.callDirection === "outbound" ? outboundParty : phone.remoteParty,
