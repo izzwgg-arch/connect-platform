@@ -1768,7 +1768,7 @@ export default function WallboardPage() {
   const [countdown, setCountdown]     = useState(COUNTDOWN_S);
   const [tvMode, setTvMode]           = useState(false);
   const [clockTime, setClockTime]     = useState<Date>(() => new Date());
-  const [lightWallboard, setLightWallboard] = useState(true);
+  const lightWallboard = true;
   const [panelPreviewMode, setPanelPreviewMode] = useState<WallboardPanelPreviewMode>(() => resolveWallboardPanelPreviewMode());
   const [selectedCallId, setSelectedCallId] = useState<string | null>(null);
   const [callContext, setCallContext] = useState<WallboardCallContext>({
@@ -1800,22 +1800,6 @@ export default function WallboardPage() {
       const params = new URLSearchParams(window.location.search);
       setTvMode(params.get("tv") === "1");
     }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const readTheme = () => {
-      const theme = document.documentElement.dataset.theme || localStorage.getItem("cc-theme") || "light";
-      setLightWallboard(theme !== "dark");
-    };
-    readTheme();
-    const observer = new MutationObserver(readTheme);
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-    window.addEventListener("storage", readTheme);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("storage", readTheme);
-    };
   }, []);
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;

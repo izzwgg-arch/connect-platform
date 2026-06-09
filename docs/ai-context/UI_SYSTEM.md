@@ -204,6 +204,7 @@ Chart colors live in `components/crm/charts/chartColors.ts` (aligned with `--crm
 - Right rail: `QueueOverviewPanel` renders Today's Snapshot and Session cards; `QueueAttentionPanel` renders Queue Health and Recent Activity. Rail metrics are derived from existing queue/task stats and collapse to a two-column tablet grid, then one column on mobile.
 - Priority section: bottom cards link to due today, overdue, follow-ups, and high-priority work. They visually align to KPI card accents and use real counts from queue/task stats.
 - Dark mode: existing CRM token surfaces remain the operational dark baseline. The queue redesign does not force a light island in dark mode; scoped compatibility classes only add layout for the new sections.
+- Member status chips: use semantic `crm-queue-status-*` hooks from `queueUtils.ts` (not ad-hoc Tailwind status colors) so light/dark overrides stay centralized in `globals.css`.
 - Responsive behavior: desktop uses an 8+4 main/right rail grid; tablet stacks the main workspace above a two-column rail; mobile stacks all cards with no fixed-width overflow and full-width CTAs.
 
 ---

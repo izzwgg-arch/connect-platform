@@ -278,6 +278,19 @@ Layout-only pattern for CRM desk pages (Queue, Funders, Tasks, Scripts, Checklis
   - `<1280px`: split bodies stack; page scroll allowed for graceful mobile use
 - `/crm/funders` keeps search/filter controls sticky in the Funders chrome, renders the bulk action bar only for selected rows, and uses independent desktop scroll regions for the funder list and right rail.
 
+### Queue member status styling (2026-06-09)
+
+- `MEMBER_STATUS_COLORS` in `components/crm/queue/queueUtils.ts` pairs Tailwind token
+  classes with semantic hooks: `crm-queue-status-pending|active|info|callback|success|muted|danger`.
+- Scoped overrides live in `globals.css` under `.crm-my-queue-workspace` / `.crm-queue-*`.
+- Do not reintroduce light Tailwind `*-100` chips on queue routes.
+
+### Wallboard presentation (2026-06-09)
+
+- Live wallboard (`/crm/wallboard`) is **light-first** for desk/TV use: the page no longer
+  follows global dark-theme toggles at runtime.
+- Layout/surface rules live under `.crm-wallboard-workspace` in `globals.css`.
+
 ### When adding a new CRM list page
 
 1. Wrap content in `CRMPageShell` + `CRMWorkspaceShell`.

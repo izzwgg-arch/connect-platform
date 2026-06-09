@@ -75,13 +75,13 @@ export function memberPriorityTier(member: QueueMember): "high" | "medium" | "lo
 }
 
 export const MEMBER_STATUS_COLORS: Record<MemberStatus, string> = {
-  PENDING: "bg-crm-surface-2 text-crm-muted border border-crm-border/80",
-  IN_PROGRESS: "bg-crm-accent/15 text-crm-accent border border-crm-accent/25",
-  CONTACTED: "bg-purple-500/15 text-purple-300 border border-purple-500/25",
-  CALLBACK: "bg-crm-warning/15 text-crm-warning border border-crm-warning/30",
-  CONVERTED: "bg-crm-success/15 text-crm-success border border-crm-success/30",
-  SKIPPED: "bg-crm-surface-2 text-crm-muted border border-crm-border/80",
-  DO_NOT_CALL: "bg-crm-danger/15 text-crm-danger border border-crm-danger/30",
+  PENDING: "crm-queue-status-pending bg-crm-surface-2 text-crm-muted border border-crm-border/80",
+  IN_PROGRESS: "crm-queue-status-active bg-crm-accent/15 text-crm-accent border border-crm-accent/25",
+  CONTACTED: "crm-queue-status-info bg-purple-500/15 text-purple-300 border border-purple-500/25",
+  CALLBACK: "crm-queue-status-callback bg-crm-warning/15 text-crm-warning border border-crm-warning/30",
+  CONVERTED: "crm-queue-status-success bg-crm-success/15 text-crm-success border border-crm-success/30",
+  SKIPPED: "crm-queue-status-muted bg-crm-surface-2 text-crm-muted border border-crm-border/80",
+  DO_NOT_CALL: "crm-queue-status-danger bg-crm-danger/15 text-crm-danger border border-crm-danger/30",
 };
 
 export const MEMBER_STATUS_LABELS: Record<MemberStatus, string> = {

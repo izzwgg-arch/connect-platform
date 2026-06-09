@@ -404,7 +404,7 @@ function QueuePageInner() {
   const sessionEfficiency = callsToday > 0 ? Math.round((completedToday / callsToday) * 100) : 0;
 
   return (
-    <CRMPageShell className={crm.queueWorkspace} innerClassName={crm.pageInnerQueue}>
+    <CRMPageShell className={cn(crm.queueWorkspace, "crm-my-queue-workspace")} innerClassName={crm.pageInnerQueue}>
       {callbackModalMember && (
         <SetCallbackModal
           member={callbackModalMember}

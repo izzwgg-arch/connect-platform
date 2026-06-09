@@ -4,6 +4,25 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-09 — CRM UI/design cleanup: queue, wallboard, workspace CSS
+
+**Task:** CRM portal visual refresh — queue + wallboard + shared workspace surfaces  
+**Risk:** low — portal CSS/layout only; no API/worker/telephony changes
+
+- **`globals.css`:** expanded CRM workspace styling for queue, wallboard, checklists,
+  tasks, contacts, and email action links; light/dark theme scoping preserved.
+- **`/crm/queue`:** adds `crm-my-queue-workspace` route hook for scoped layout rules;
+  member status chips use semantic `crm-queue-status-*` classes (see `queueUtils.ts`).
+- **`/crm/wallboard`:** locks light wallboard presentation (`lightWallboard = true`) and
+  removes runtime theme flip observer — wallboard is intentionally light-first for TV/desk
+  displays.
+- **Tests:** `@connect/portal` typecheck clean.
+
+Deploy: **portal only** (blue/green direct deploy). Rollback: redeploy previous portal SHA
+(`fa58959623fe06961804c367deac944ab30eb24f` or earlier).
+
+---
+
 ## 2026-06-09 — Voicemail Drop: PBX plugin design + AMI app-side wiring (local only)
 
 **Task:** CRM / dialer / voicemail drop — design from PBX repo snapshot + build
