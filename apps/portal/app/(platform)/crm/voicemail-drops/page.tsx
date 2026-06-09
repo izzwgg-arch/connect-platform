@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Archive,
@@ -517,8 +517,36 @@ function VoicemailRow({
   onSelect: () => void;
 }) {
   const [playing, setPlaying] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const src = withToken(drop.streamUrl);
   const color = statusColor(drop.status);
+
+  useEffect(() => {
+    setPlaying(false);
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
+  }, [src]);
+
+  async function togglePreview() {
+    if (!src || drop.status !== "READY") return;
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (playing) {
+      audio.pause();
+      setPlaying(false);
+      return;
+    }
+    try {
+      audio.currentTime = 0;
+      await audio.play();
+      setPlaying(true);
+    } catch {
+      setPlaying(false);
+    }
+  }
+
   return (
     <div
       role="button"
@@ -568,7 +596,18 @@ function VoicemailRow({
           <p className="crm-queue-row-sub truncate">
             Voicemail drop · {fmtDuration(drop.durationSeconds)} · Used {drop.usageCount} times
           </p>
-          {playing && src ? <audio className="mt-2 w-full max-w-md" src={src} controls autoPlay onEnded={() => setPlaying(false)} /> : null}
+          {src ? (
+            <audio
+              ref={audioRef}
+              className={cn("mt-2 w-full max-w-md", !playing && "hidden")}
+              src={src}
+              controls
+              preload="metadata"
+              onPlay={() => setPlaying(true)}
+              onPause={() => setPlaying(false)}
+              onEnded={() => setPlaying(false)}
+            />
+          ) : null}
         </div>
 
         <div className="crm-queue-row-phone hidden md:flex">
@@ -593,7 +632,7 @@ function VoicemailRow({
           disabled={!src || drop.status !== "READY"}
           onClick={(event) => {
             event.stopPropagation();
-            setPlaying((value) => !value);
+            void togglePreview();
           }}
           className="crm-queue-row-status shrink-0 crm-queue-pill crm-queue-pill-stage"
           aria-label={playing ? "Pause voicemail preview" : "Play voicemail preview"}
