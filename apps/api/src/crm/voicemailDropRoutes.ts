@@ -8,6 +8,7 @@ import { pushPromptToHelper } from "../pbxPromptPushClient";
 import {
   buildSignedCrmVoicemailDropUrl,
   contentTypeForCrmVoicemailDrop,
+  crmVoicemailDropAudioExists,
   readCrmVoicemailDropAudio,
   verifySignedCrmVoicemailDropUrl,
   writeCrmVoicemailDropAudio,
@@ -64,8 +65,9 @@ function fieldString(fields: Record<string, any>, name: string): string | null {
   return s || null;
 }
 
-function formatDrop(row: any, req: any) {
-  const streamUrl = row?.pbxStorageKey
+function formatDrop(row: any, req: any, opts: { audioAvailable?: boolean } = {}) {
+  const audioAvailable = opts.audioAvailable ?? Boolean(row?.pbxStorageKey);
+  const streamUrl = row?.pbxStorageKey && audioAvailable
     ? buildSignedCrmVoicemailDropUrl(publicBaseUrl(req), row.id, row.pbxStorageKey, 900)
     : null;
   return {
@@ -194,8 +196,13 @@ export async function registerCrmVoicemailDropRoutes(app: FastifyInstance) {
     const ready = drops.filter((d: any) => d.status === "READY");
     const duration = ready.reduce((sum: number, d: any) => sum + (d.durationSeconds || 0), 0);
     const usage = drops.reduce((sum: number, d: any) => sum + (d.usageCount || 0), 0);
+    const voicemailDrops = await Promise.all(
+      drops.map(async (d: any) => formatDrop(d, req, {
+        audioAvailable: d.pbxStorageKey ? await crmVoicemailDropAudioExists(d.pbxStorageKey) : false,
+      })),
+    );
     return {
-      voicemailDrops: drops.map((d: any) => formatDrop(d, req)),
+      voicemailDrops,
       stats: {
         totalRecordings: drops.length,
         totalDurationSeconds: duration,
@@ -420,7 +427,13 @@ export async function registerCrmVoicemailDropRoutes(app: FastifyInstance) {
     if (!drop?.pbxStorageKey) return reply.code(404).send({ error: "not_found" });
     const verified = verifySignedCrmVoicemailDropUrl(drop.id, drop.pbxStorageKey, q.exp, q.sig);
     if (!verified.ok) return reply.code(403).send({ error: verified.reason === "expired" ? "signed_url_expired" : "invalid_signature" });
-    const bytes = await readCrmVoicemailDropAudio(drop.pbxStorageKey);
+    let bytes: Buffer;
+    try {
+      bytes = await readCrmVoicemailDropAudio(drop.pbxStorageKey);
+    } catch (err: any) {
+      if (err?.code === "ENOENT") return reply.code(404).send({ error: "audio_not_found" });
+      throw err;
+    }
     reply.header("cache-control", "private, max-age=300");
     return sendBufferWithOptionalRange(req, reply, bytes, contentTypeForCrmVoicemailDrop(drop.pbxStorageKey));
   });

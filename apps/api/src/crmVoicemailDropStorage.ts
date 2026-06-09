@@ -103,6 +103,16 @@ export async function readCrmVoicemailDropAudio(storageKey: string): Promise<Buf
   return fs.promises.readFile(resolveCrmVoicemailDropStoragePath(storageKey));
 }
 
+export async function crmVoicemailDropAudioExists(storageKey: string | null | undefined): Promise<boolean> {
+  if (!storageKey) return false;
+  try {
+    const stat = await fs.promises.stat(resolveCrmVoicemailDropStoragePath(storageKey));
+    return stat.isFile();
+  } catch {
+    return false;
+  }
+}
+
 export async function probeWavDurationSeconds(bytes: Buffer): Promise<number | null> {
   const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "crm-vm-drop-probe-"));
   const wavPath = path.join(tmpDir, "audio.wav");
