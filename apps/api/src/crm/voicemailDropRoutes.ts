@@ -305,8 +305,9 @@ export async function registerCrmVoicemailDropRoutes(app: FastifyInstance) {
       if (!contact) return reply.code(404).send({ error: "contact_not_found" });
     }
 
-    // Resolve the recording: explicit id, else the tenant default.
-    const drop = voicemailDropId
+    // Resolve the recording: explicit id, else the tenant default. A READY row
+    // is only usable for live drops when its converted WAV still exists.
+    let drop = voicemailDropId
       ? await model().findFirst({ where: { id: voicemailDropId, tenantId: user.tenantId } })
       : await model().findFirst({
           where: { tenantId: user.tenantId, isDefault: true, status: "READY" },
@@ -319,6 +320,23 @@ export async function registerCrmVoicemailDropRoutes(app: FastifyInstance) {
     }
     if (drop.status !== "READY" || !drop.pbxStorageKey || !drop.pbxFileBaseName) {
       return reply.code(409).send({ error: "voicemail_drop_not_ready", status: drop.status });
+    }
+    if (!(await crmVoicemailDropAudioExists(drop.pbxStorageKey))) {
+      if (voicemailDropId) {
+        return reply.code(409).send({ error: "audio_not_found" });
+      }
+      const readyDrops = await model().findMany({
+        where: { tenantId: user.tenantId, status: "READY", pbxStorageKey: { not: null }, pbxFileBaseName: { not: null } },
+        orderBy: [{ isDefault: "desc" }, { updatedAt: "desc" }],
+      });
+      drop = null;
+      for (const candidate of readyDrops) {
+        if (await crmVoicemailDropAudioExists(candidate.pbxStorageKey)) {
+          drop = candidate;
+          break;
+        }
+      }
+      if (!drop) return reply.code(409).send({ error: "no_ready_voicemail_drop_audio" });
     }
 
     const recordFailure = async (errorCode: string, detail?: string) => {
