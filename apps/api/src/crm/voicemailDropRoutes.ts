@@ -27,8 +27,15 @@ const patchSchema = z.object({
 
 const dropSchema = z.object({
   activeCallId: z.string().min(1),
-  contactId: z.string().min(1),
-  voicemailDropId: z.string().min(1),
+  // Optional: the floating dialer drops on the active call without requiring a
+  // CRM contact. When present, a timeline event is recorded against the contact.
+  contactId: z.string().min(1).optional(),
+  // Optional: when omitted, the tenant's default voicemail drop is used.
+  voicemailDropId: z.string().min(1).optional(),
+  // Optional dialer hints.
+  agentEndpoint: z.string().min(1).max(120).optional(),
+  strategy: z.enum(["fixed", "waitsilence", "amd"]).optional(),
+  waitSeconds: z.number().int().min(0).max(30).optional(),
 });
 
 function model() {
@@ -130,17 +137,23 @@ async function pushDropToPbx(input: {
   return { pushed: true, response: resp };
 }
 
-async function requestTelephonyPlayback(input: {
+// AMI-based drop: redirects the customer/PSTN leg into the [connect-vm-drop]
+// dialplan context and hangs up the agent leg (frees the dialer immediately).
+// The telephony service refuses (vm_drop_context_missing) when the PBX plugin
+// is not installed, so this never drops a live call into a missing context.
+async function requestTelephonyVoicemailDrop(input: {
   linkedId: string;
   tenantId: string;
   fileBaseName: string;
-  targetLeg?: "external" | "agent";
+  agentEndpoint?: string;
+  strategy?: "fixed" | "waitsilence" | "amd";
+  waitSeconds?: number;
 }) {
   const base = (process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003").replace(/\/$/, "");
   const headers: Record<string, string> = { "content-type": "application/json" };
   const secret = String(process.env.CDR_INGEST_SECRET || "").trim();
   if (secret) headers["x-cdr-secret"] = secret;
-  const res = await fetch(`${base}/telephony/internal/calls/play-prompt`, {
+  const res = await fetch(`${base}/telephony/internal/calls/voicemail-drop`, {
     method: "POST",
     headers,
     body: JSON.stringify(input),
@@ -149,7 +162,7 @@ async function requestTelephonyPlayback(input: {
   const text = await res.text().catch(() => "");
   const json = text ? JSON.parse(text) : {};
   if (!res.ok) {
-    const error = String(json?.error || "pbx_playback_failed");
+    const error = String(json?.error || "vm_drop_failed");
     const err: any = new Error(error);
     err.status = res.status;
     err.body = json;
@@ -270,22 +283,55 @@ export async function registerCrmVoicemailDropRoutes(app: FastifyInstance) {
     if (!user) return;
     const parsed = dropSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_payload", issues: parsed.error.issues });
-    const { activeCallId, contactId, voicemailDropId } = parsed.data;
+    const { activeCallId, contactId, voicemailDropId, agentEndpoint, strategy, waitSeconds } = parsed.data;
 
-    if (!(await assertCrmContactAllowed(user, contactId, reply))) return;
-
-    const [contact, drop] = await Promise.all([
-      (db as any).contact.findFirst({
+    // Contact is optional (floating dialer can drop without a CRM contact). When
+    // supplied, enforce contact access + record a timeline event against it.
+    let contact: { id: string; displayName: string | null } | null = null;
+    if (contactId) {
+      if (!(await assertCrmContactAllowed(user, contactId, reply))) return;
+      contact = await (db as any).contact.findFirst({
         where: { id: contactId, tenantId: user.tenantId, active: true },
         select: { id: true, displayName: true },
-      }),
-      model().findFirst({ where: { id: voicemailDropId, tenantId: user.tenantId } }),
-    ]);
-    if (!contact) return reply.code(404).send({ error: "contact_not_found" });
-    if (!drop) return reply.code(404).send({ error: "voicemail_drop_not_found" });
+      });
+      if (!contact) return reply.code(404).send({ error: "contact_not_found" });
+    }
+
+    // Resolve the recording: explicit id, else the tenant default.
+    const drop = voicemailDropId
+      ? await model().findFirst({ where: { id: voicemailDropId, tenantId: user.tenantId } })
+      : await model().findFirst({
+          where: { tenantId: user.tenantId, isDefault: true, status: "READY" },
+          orderBy: { updatedAt: "desc" },
+        });
+    if (!drop) {
+      return reply.code(voicemailDropId ? 404 : 409).send({
+        error: voicemailDropId ? "voicemail_drop_not_found" : "no_default_voicemail_drop",
+      });
+    }
     if (drop.status !== "READY" || !drop.pbxStorageKey || !drop.pbxFileBaseName) {
       return reply.code(409).send({ error: "voicemail_drop_not_ready", status: drop.status });
     }
+
+    const recordFailure = async (errorCode: string, detail?: string) => {
+      if (!contactId) return;
+      await writeTimelineEvent({
+        tenantId: user.tenantId,
+        contactId,
+        type: "VOICEMAIL_DROP",
+        title: `Voicemail Drop failed — ${drop.name}`,
+        body: detail ? String(detail).slice(0, 500) : null,
+        linkedId: drop.id,
+        createdByUserId: user.sub,
+        metadata: {
+          voicemailDropId: drop.id,
+          recordingName: drop.name,
+          callId: activeCallId,
+          status: "Failed",
+          error: errorCode,
+        },
+      }).catch(() => {});
+    };
 
     try {
       const pushResult = await pushDropToPbx({
@@ -298,45 +344,59 @@ export async function registerCrmVoicemailDropRoutes(app: FastifyInstance) {
         requestedBy: user.sub,
       });
       if (!pushResult.pushed) {
+        await recordFailure(pushResult.reason || "pbx_helper_unavailable");
         return reply.code(503).send({ error: pushResult.reason || "pbx_helper_unavailable" });
       }
-      const playback = await requestTelephonyPlayback({
+      const result = await requestTelephonyVoicemailDrop({
         linkedId: activeCallId,
         tenantId: user.tenantId,
         fileBaseName: drop.pbxFileBaseName,
-        targetLeg: "external",
+        agentEndpoint,
+        strategy,
+        waitSeconds,
       });
       await model().update({
         where: { id: drop.id },
         data: { usageCount: { increment: 1 }, lastUsedAt: new Date() },
       });
-      await writeTimelineEvent({
-        tenantId: user.tenantId,
-        contactId,
-        type: "VOICEMAIL_DROP",
-        title: `Voicemail Drop — ${drop.name}`,
-        body: drop.durationSeconds ? `Duration ${drop.durationSeconds}s` : null,
-        linkedId: drop.id,
-        createdByUserId: user.sub,
-        metadata: {
-          voicemailDropId: drop.id,
-          recordingName: drop.name,
-          durationSeconds: drop.durationSeconds ?? null,
-          callId: activeCallId,
-          status: "Voicemail Dropped",
-          playbackId: playback?.playbackId ?? null,
-        },
-      });
-      await (db as any).crmContactMeta.updateMany({
-        where: { tenantId: user.tenantId, contactId },
-        data: { lastActivityAt: new Date() },
-      });
-      return { ok: true, playbackStarted: true, voicemailDropId: drop.id, contactId, callId: activeCallId };
+      if (contactId) {
+        await writeTimelineEvent({
+          tenantId: user.tenantId,
+          contactId,
+          type: "VOICEMAIL_DROP",
+          title: `Voicemail Drop — ${drop.name}`,
+          body: drop.durationSeconds ? `Duration ${drop.durationSeconds}s` : null,
+          linkedId: drop.id,
+          createdByUserId: user.sub,
+          metadata: {
+            voicemailDropId: drop.id,
+            recordingName: drop.name,
+            durationSeconds: drop.durationSeconds ?? null,
+            callId: activeCallId,
+            status: "Voicemail Dropped",
+            strategy: result?.strategy ?? strategy ?? "fixed",
+          },
+        });
+        await (db as any).crmContactMeta.updateMany({
+          where: { tenantId: user.tenantId, contactId },
+          data: { lastActivityAt: new Date() },
+        });
+      }
+      return {
+        ok: true,
+        dropStarted: true,
+        voicemailDropId: drop.id,
+        contactId: contactId ?? null,
+        callId: activeCallId,
+        strategy: result?.strategy ?? strategy ?? "fixed",
+      };
     } catch (err: any) {
       const status = Number(err?.status || 503);
       const body = err?.body && typeof err.body === "object" ? err.body : {};
+      const errorCode = body.error || err?.message || "vm_drop_failed";
+      await recordFailure(errorCode, body.detail);
       return reply.code(status >= 400 && status < 600 ? status : 503).send({
-        error: body.error || err?.message || "pbx_playback_failed",
+        error: errorCode,
         detail: body.detail || undefined,
       });
     }

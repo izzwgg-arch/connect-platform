@@ -6,6 +6,7 @@ import { normalizeCallForClient } from "../telephony/normalizers/normalizeCallEv
 import { normalizeExtensionForClient } from "../telephony/normalizers/normalizeExtensionEvent";
 import { normalizeQueueForClient } from "../telephony/normalizers/normalizeQueueEvent";
 import { selectPlaybackChannelName } from "./telephonyPlaybackHelpers";
+import { classifyVoicemailDropLegs } from "./voicemailDropLegs";
 
 export function registerTelephonyRoutes(
   router: Router,
@@ -323,6 +324,121 @@ export function registerTelephonyRoutes(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(503).json({ error: "pbx_playback_failed", detail: msg });
+    }
+  });
+
+  // ── CRM Voicemail Drop (AMI → [connect-vm-drop] dialplan; no ARI media) ─────
+  // Redirects the CUSTOMER/PSTN leg into the additive [connect-vm-drop] context
+  // (installed by scripts/pbx/install-connect-vm-drop-dialplan.sh) to play the
+  // pushed recording, then hangs up the AGENT leg so the dialer frees instantly.
+  //
+  // HARD SAFETY: never issues the Redirect unless DIALPLAN_EXISTS(connect-vm-drop)
+  // is confirmed on the live channel — redirecting into a missing context would
+  // drop the live customer call.
+  //
+  // Auth: x-cdr-secret (same as play-prompt). Returns quickly (fire-and-forget):
+  // playback completion is observed later via the customer-leg Hangup event.
+  router.post("/telephony/internal/calls/voicemail-drop", async (req: Request, res: Response) => {
+    if (!isInternalRouteAuthorized(req)) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const { linkedId, tenantId, fileBaseName, strategy, waitSeconds, agentEndpoint } = req.body as {
+      linkedId?: unknown;
+      tenantId?: unknown;
+      fileBaseName?: unknown;
+      strategy?: unknown;
+      waitSeconds?: unknown;
+      agentEndpoint?: unknown;
+    };
+    const callId = typeof linkedId === "string" ? linkedId.trim() : "";
+    const requestedTenantId = typeof tenantId === "string" ? tenantId.trim() : "";
+    const baseName = typeof fileBaseName === "string" ? fileBaseName.trim() : "";
+    const wait = strategy === "waitsilence" ? "waitsilence" : strategy === "amd" ? "amd" : "fixed";
+    const waitSecs =
+      typeof waitSeconds === "number" && Number.isFinite(waitSeconds) && waitSeconds >= 0 && waitSeconds <= 30
+        ? Math.round(waitSeconds)
+        : null;
+    const agentHint = typeof agentEndpoint === "string" && agentEndpoint.trim() ? agentEndpoint.trim() : null;
+
+    if (!callId) {
+      res.status(400).json({ error: "linkedId_required" });
+      return;
+    }
+    if (!requestedTenantId) {
+      res.status(400).json({ error: "tenantId_required" });
+      return;
+    }
+    if (!/^[a-zA-Z0-9_-]{1,160}$/.test(baseName)) {
+      res.status(400).json({ error: "invalid_file_base_name" });
+      return;
+    }
+
+    const call = telephony.callStore.getById(callId);
+    if (!call || call.state === "hungup") {
+      res.status(404).json({ error: "no_active_call" });
+      return;
+    }
+    if (call.tenantId !== requestedTenantId) {
+      res.status(403).json({ error: "tenant_mismatch" });
+      return;
+    }
+    if (!telephony.callStore.getActive().some((active) => active.id === call.id)) {
+      res.status(409).json({ error: "call_not_bridged" });
+      return;
+    }
+    if (!telephony.ami._isConnected) {
+      res.status(503).json({ error: "ami_not_connected" });
+      return;
+    }
+
+    const { customerLeg, agentLeg } = classifyVoicemailDropLegs(call.channels, agentHint);
+    if (!customerLeg) {
+      res.status(409).json({ error: "no_customer_leg" });
+      return;
+    }
+
+    // HARD GUARD: confirm the dialplan context is installed on the live channel
+    // before redirecting. DIALPLAN_EXISTS returns "1" when present.
+    try {
+      const probe = await telephony.ami.getVar(customerLeg, "DIALPLAN_EXISTS(connect-vm-drop,s,1)", 2_500);
+      if (!probe.ok || probe.value.trim() !== "1") {
+        res.status(409).json({ error: "vm_drop_context_missing" });
+        return;
+      }
+    } catch {
+      res.status(503).json({ error: "ami_probe_failed" });
+      return;
+    }
+
+    try {
+      telephony.ami.sendAction("Setvar", { Channel: customerLeg, Variable: "VMDROP_FILE", Value: baseName });
+      telephony.ami.sendAction("Setvar", { Channel: customerLeg, Variable: "VMDROP_STRATEGY", Value: wait });
+      if (waitSecs !== null) {
+        telephony.ami.sendAction("Setvar", { Channel: customerLeg, Variable: "VMDROP_WAIT", Value: String(waitSecs) });
+      }
+      await telephony.telephonyService.redirectChannel({
+        channel: customerLeg,
+        exten: "s",
+        context: "connect-vm-drop",
+      });
+      // Free the agent immediately. Best-effort: the redirect already tore down
+      // the bridge; an explicit Hangup releases the agent's softphone UI now.
+      if (agentLeg && agentLeg !== customerLeg) {
+        try {
+          await telephony.telephonyService.hangupChannel(agentLeg);
+        } catch (err) {
+          res.locals["log"]?.warn?.(
+            { callId: call.id, agentLeg, err: err instanceof Error ? err.message : String(err) },
+            "voicemail-drop: agent leg hangup failed (non-fatal)",
+          );
+        }
+      }
+      res.json({ ok: true, linkedId: call.id, customerLeg, agentLeg: agentLeg ?? null, strategy: wait });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(503).json({ error: "vm_drop_failed", detail: msg });
     }
   });
 

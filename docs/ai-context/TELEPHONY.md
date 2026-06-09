@@ -852,6 +852,69 @@ registration worked May 27. See `WEBRTC_DIAGNOSTICS.md` for full entity IDs and 
 
 ---
 
+## Voicemail Drop (CRM) — architecture + known limitation
+
+> **Status (2026-06-09): playback is INOPERABLE on the current PBX build.** The
+> drop request succeeds up to the PBX media step, then silently fails. Do not
+> mark a drop "successful" until the mechanism below is in place and verified.
+
+### Current (as-shipped) data path
+
+1. **Upload** — `POST /crm/voicemail-drops` stores the audio
+   (`apps/api/src/crmVoicemailDropStorage.ts`) and best-effort pushes a
+   PCM WAV to the PBX at `/var/lib/asterisk/sounds/custom/<base>.wav` via the
+   route-helper `/upload-prompt` (`pbxPromptPushClient.ts`,
+   `PBX_ROUTE_HELPER_BASE_URL`). This part works.
+2. **Drop** — `POST /crm/voicemail-drops/drop` (`apps/api/src/crm/voicemailDropRoutes.ts`)
+   re-pushes the file, then calls telephony
+   `POST /telephony/internal/calls/play-prompt` (`apps/telephony/src/routes/telephony.ts`).
+3. **Playback** — telephony selects the leg
+   (`selectPlaybackChannelName`, `telephonyPlaybackHelpers.ts`) and calls ARI
+   `POST /ari/channels/{id}/play` (`AriActions.playSoundOnChannel`).
+
+### Why step 3 cannot work here (root cause)
+
+- ARI `/channels/{id}/play` **requires the channel to be in a registered Stasis
+  application**.
+- This Asterisk build has **no `res_ari_websockets.so`**, so the telephony ARI
+  client is **REST-only** and never registers/joins a Stasis app
+  (see the header comment in `apps/telephony/src/telephony/ari/AriClient.ts`).
+- Verified live: `GET /ari/applications` → `[]`; live call channels are normal
+  dialplan channels, never in Stasis. The play call returns `409` →
+  `pbx_playback_failed`. (DB proof: `CrmVoicemailDrop.usageCount = 0`, zero
+  `VOICEMAIL_DROP` timeline rows ever.)
+
+### Sustainable mechanism (AMI, no Stasis required)
+
+`TelephonyService` already exposes the needed AMI actions: `redirectChannel`
+(AMI `Redirect`), `hangupChannel` (AMI `Hangup`), and `Setvar`. The working drop:
+
+1. Resolve the **customer/PSTN trunk leg** uniqueid and the **agent leg** from the
+   active call in `CallStateStore`.
+2. AMI `Setvar` `VMDROP_FILE=<base>` on the trunk leg.
+3. AMI `Redirect` the trunk leg into a new **additive** dialplan context
+   `[connect-vm-drop]` (`Answer → Playback(custom/${VMDROP_FILE}) → Hangup`). The
+   redirect tears the bridge down, freeing the agent; we also AMI `Hangup` the
+   agent leg explicitly so the agent UI is released.
+4. Customer leg stays up through `Playback`; the dialplan hangs it up at the end.
+   "Playback complete" is inferred from the trunk-leg `Hangup` AMI event for that
+   `linkedId` after a drop was accepted (no Stasis playback-finished event exists).
+
+The dialplan artifact to install (one-time, per PBX) lives in
+`docs/pbx/connect-voicemail-drop-context.conf`.
+
+### Limitations (be honest, do not fake)
+
+- **No beep/voicemail detection** (no AMD / `WaitForSilence`). The safe approach is
+  a fixed `Wait()` before `Playback`; the agent confirms voicemail was reached
+  before clicking. True beep detection is a separate, individually-validated change.
+- Requires a **PBX dialplan change** (`[connect-vm-drop]` + `dialplan reload`),
+  which is governed by `AGENTS.md` (human approval + snapshot + validation).
+  Until installed, the backend must refuse the drop (do **not** redirect a live
+  customer call into a missing context — that would drop the call).
+
+---
+
 ## Recordings
 
 - Persisted by VitalPBX. Streamed back to clients via `apps/api` (so tenants never

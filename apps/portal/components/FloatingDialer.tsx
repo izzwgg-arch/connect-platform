@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Headphones, Info, Maximize2, MessageSquare, Phone, Search, Settings, X } from "lucide-react";
+import { Headphones, Info, Maximize2, MessageSquare, Phone, Search, Settings, Voicemail, X } from "lucide-react";
 import { ConnectSelect } from "./ConnectSelect";
 import { useTelephony } from "../contexts/TelephonyContext";
 import { useAppContext } from "../hooks/useAppContext";
@@ -14,7 +14,7 @@ import {
   getWebRingerEnabled,
   setWebRingerEnabled,
 } from "../hooks/telephonyAudioPreferences";
-import { apiGet } from "../services/apiClient";
+import { apiGet, apiPost } from "../services/apiClient";
 import { loadPbxResource } from "../services/pbxData";
 import { callsForTenant as scopeLiveCallsForTenant, extensionSetsFromCalls, liveExtensionForTenant } from "../services/liveCallState";
 import {
@@ -614,6 +614,49 @@ export function FloatingDialer() {
   const status = statusFromRegistration(phone.regState, Boolean(phone.error));
   const cleanError = friendlyError(phone.error, phone.diag.micPermission, phone.regState);
 
+  // ── Voicemail Drop (CRM-gated) ─────────────────────────────────────────────
+  // Only available when the user's account has CRM enabled. Drops the tenant's
+  // default recording into the live customer leg over AMI, then the backend
+  // hangs up the agent leg so the dialer frees immediately for the next call.
+  const canVoicemailDrop = can("can_view_section_crm");
+  const [vmDropState, setVmDropState] = useState<"idle" | "dropping" | "done" | "error">("idle");
+  const [vmDropError, setVmDropError] = useState<string | null>(null);
+  const activeDropCallId = activeWorkspaceCall?.linkedId || activeWorkspaceCall?.id || null;
+
+  useEffect(() => {
+    // Reset drop status whenever the call ends/changes.
+    if (phone.callState === "idle" || phone.callState === "ended") {
+      setVmDropState("idle");
+      setVmDropError(null);
+    }
+  }, [phone.callState]);
+
+  const handleVoicemailDrop = useCallback(() => {
+    if (!activeDropCallId || vmDropState === "dropping") return;
+    setVmDropState("dropping");
+    setVmDropError(null);
+    apiPost<{ ok: boolean }>("/crm/voicemail-drops/drop", {
+      activeCallId: activeDropCallId,
+      ...(workspaceContact?.id ? { contactId: workspaceContact.id } : {}),
+    })
+      .then(() => {
+        // Success: the backend redirects the customer leg into the voicemail-drop
+        // dialplan and hangs up the agent leg, so the SIP session ends on its own.
+        setVmDropState("done");
+      })
+      .catch((err: unknown) => {
+        const raw = err instanceof Error ? err.message : String(err);
+        let friendly = "Voicemail drop failed";
+        if (raw.includes("no_default_voicemail_drop")) friendly = "No default recording set";
+        else if (raw.includes("vm_drop_context_missing")) friendly = "PBX not configured for drops";
+        else if (raw.includes("voicemail_drop_not_ready")) friendly = "Recording not ready";
+        else if (raw.includes("no_customer_leg") || raw.includes("no_active_call")) friendly = "No active call leg";
+        else if (raw.includes("403") || raw.includes("forbidden")) friendly = "Not allowed";
+        setVmDropError(friendly);
+        setVmDropState("error");
+      });
+  }, [activeDropCallId, vmDropState, workspaceContact?.id]);
+
   useEffect(() => {
     if (
       !isInCall ||
@@ -1073,6 +1116,30 @@ export function FloatingDialer() {
                   <ControlButton label="Transfer" active={showXfer} onClick={() => { setShowXfer((value) => !value); setShowDtmf(false); }} />
                 </div>
 
+                {canVoicemailDrop && (
+                  <button
+                    type="button"
+                    className="fd-vmdrop"
+                    data-state={vmDropState}
+                    disabled={!activeDropCallId || vmDropState === "dropping" || vmDropState === "done"}
+                    onClick={handleVoicemailDrop}
+                    title={
+                      activeDropCallId
+                        ? "Drop your default voicemail and end the call"
+                        : "Voicemail drop unavailable for this call"
+                    }
+                  >
+                    <Voicemail size={16} />
+                    {vmDropState === "dropping"
+                      ? "Dropping voicemail..."
+                      : vmDropState === "done"
+                        ? "Voicemail dropped"
+                        : vmDropState === "error"
+                          ? (vmDropError ?? "Voicemail drop failed")
+                          : "Voicemail Drop"}
+                  </button>
+                )}
+
                 <button className="fd-hangup fd-hangup-wide" type="button" onClick={phone.hangup}>End call</button>
               </div>
             )}
@@ -1170,6 +1237,12 @@ const DIALER_CSS = `
 .fd-answer { background: linear-gradient(135deg, #22c55e, #059669); }
 .fd-hangup { background: linear-gradient(135deg, #ef4444, #dc2626); min-height: 38px; padding: 0 14px; box-shadow: 0 12px 28px rgba(239,68,68,.24); font-size: 12px; }
 .fd-hangup-wide { width: 100%; }
+.fd-vmdrop { width: 100%; min-height: 38px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid rgba(99,102,241,.35); border-radius: 12px; background: rgba(99,102,241,.12); color: #818cf8; font-weight: 850; font-size: 12px; cursor: pointer; transition: background .15s ease, border-color .15s ease, opacity .15s ease; }
+.fd-vmdrop:hover:not(:disabled) { background: rgba(99,102,241,.2); border-color: rgba(99,102,241,.55); }
+.fd-vmdrop:disabled { cursor: default; opacity: .65; }
+.fd-vmdrop[data-state="dropping"] { color: var(--fd-muted); }
+.fd-vmdrop[data-state="done"] { color: #22c55e; border-color: rgba(34,197,94,.4); background: rgba(34,197,94,.12); }
+.fd-vmdrop[data-state="error"] { color: #ef4444; border-color: rgba(239,68,68,.4); background: rgba(239,68,68,.1); }
 .fd-active-party { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
 .fd-active-party strong, .fd-active-party span { display: block; }
 .fd-active-party span { color: #22c55e; font-weight: 900; font-size: 13px; margin-top: 3px; }

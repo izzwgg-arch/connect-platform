@@ -4,6 +4,86 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-09 — Voicemail Drop: PBX plugin design + AMI app-side wiring (local only)
+
+**Task:** CRM / dialer / voicemail drop — design from PBX repo snapshot + build
+**Risk:** extreme — live telephony, active call legs, PBX dialplan
+
+Built (local only — **PBX plugin NOT installed**; backend safely refuses until it is):
+
+- **PBX plugin** `scripts/pbx/install-connect-vm-drop-dialplan.sh` (install/`--check`/
+  `--dry-run`/`--rollback`) writing the additive `[connect-vm-drop]` context to
+  `/etc/asterisk/vitalpbx/extensions__96-connect-vm-drop.conf` (auto-loaded by the
+  existing `#include vitalpbx/extensions__*.conf`, mirroring `__95-connect-vm-greeting`).
+  Exact snippet: `docs/pbx/connect-voicemail-drop-context.conf`. Pluggable wait
+  strategy (Choice B): `fixed` default; `amd`/`waitsilence` ready (both modules loaded).
+- **Telephony** `POST /telephony/internal/calls/voicemail-drop` — classifies customer
+  vs agent leg (`voicemailDropLegs.ts`, unit-tested), **hard-guards** on
+  `DIALPLAN_EXISTS(connect-vm-drop,s,1)` (never redirects into a missing context),
+  `Setvar`+`Redirect` customer leg, `Hangup` agent leg.
+- **API** `POST /crm/voicemail-drops/drop` repointed from broken ARI play-prompt to the
+  AMI path; `contactId`/`voicemailDropId` optional (default recording); timeline on
+  success/failure.
+- **UI** floating dialer: CRM-gated ("can_view_section_crm") Voicemail Drop control; the
+  backend hangs up the agent leg so the dialer frees immediately.
+
+Design + full answers (include point, context name, channel strategy, install/rollback,
+risks, tests): `docs/pbx/connect-voicemail-drop-plugin-design.md`.
+
+Tests: `@connect/telephony` 48/48 pass (incl. 7 new leg-classifier tests); telephony +
+portal typecheck clean. PBX brain snapshot inspected: `docs/pbx-brain/`.
+
+---
+
+## 2026-06-09 — Voicemail Drop: root-cause investigation (playback inoperable on this PBX)
+
+**Task:** CRM / dialer / voicemail drop / live-server investigation  
+**Risk:** extreme — live telephony, active call legs, PBX dialplan
+
+### Root cause (server-verified, not guessed)
+
+The CRM Voicemail Drop **playback step has never worked on this PBX build** and is
+architecturally incapable of working as currently written:
+
+- The drop path is `POST /crm/voicemail-drops/drop` → push WAV to PBX `custom/`
+  (works) → `POST /telephony/internal/calls/play-prompt` → ARI
+  `POST /ari/channels/{id}/play` (`apps/telephony/src/routes/telephony.ts`).
+- That ARI call **requires the channel to be inside a registered Stasis
+  application**. This Asterisk build ships **without `res_ari_websockets.so`**,
+  so the telephony service runs **REST-only ARI** and never connects a Stasis
+  app (`apps/telephony/src/telephony/ari/AriClient.ts` header comment).
+- Live ARI proof against `http://209.145.60.79:8088`:
+  - `GET /ari/applications` → **`[]`** (no `connectcomms` Stasis app registered).
+  - `GET /ari/channels` → live call channels are ordinary dialplan channels
+    (`app_name: Hangup`, context `messages`), **never in Stasis**.
+  - Result: `/channels/{id}/play` returns `409` → caught as `pbx_playback_failed`.
+- Corroboration that it never once succeeded: DB `CrmVoicemailDrop.usageCount = 0`,
+  `lastUsedAt = NULL`; **zero** `CrmTimelineEvent` rows of type `VOICEMAIL_DROP`;
+  **zero** `/telephony/internal/calls/play-prompt` hits in 9 days of telephony logs.
+- Secondary gap: the drop UI exists **only on the CRM contact page**
+  (`CrmVoicemailDropDrawer`), not on the active-call dialer; it also never
+  releases the agent leg or ends the call after playback.
+
+### Sustainable fix (planned — gated on approval)
+
+Working playback on this build must go through **AMI**, not ARI: AMI `Setvar`
++ `Redirect` the customer/PSTN trunk leg into a new additive dialplan context
+`[connect-vm-drop]` (`Answer → Playback(custom/${VMDROP_FILE}) → Hangup`), then
+AMI `Hangup` the agent leg. See `docs/pbx/connect-voicemail-drop-context.conf`
+and `TELEPHONY.md` § Voicemail Drop.
+
+### Not included / blocked
+
+- **No PBX dialplan change made** — adding `[connect-vm-drop]` + `dialplan reload`
+  is a VitalPBX change requiring human approval (`AGENTS.md`); not done blindly.
+- **No live proof test** — the drop cannot complete until the dialplan context is
+  installed; shipping an AMI redirect against a missing context would drop the
+  live customer call, so backend wiring is held until the context is approved.
+- **Beep/voicemail detection is not implemented** (no AMD / `WaitForSilence`); the
+  safe available approach is a fixed `Wait()` before `Playback`.
+
+---
+
 ## 2026-06-09 — CRM learned website submission email intake
 
 **Task:** CRM / email sync / learned website submission rule  
