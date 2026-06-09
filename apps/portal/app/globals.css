@@ -9819,6 +9819,207 @@
   color: var(--crm-text-muted);
 }
 
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace.crm-queue-workspace {
+  --crm-bg: #0a0e14;
+  --crm-surface: #141f2b;
+  --crm-surface-2: #1a2635;
+  --crm-border: rgba(126, 154, 194, 0.2);
+  --crm-text: #e8f0f8;
+  --crm-text-muted: #9baabb;
+  --crm-accent: #4f8cff;
+  --crm-success: #36d08b;
+  --crm-warning: #f5b84b;
+  --crm-danger: #fb7185;
+  color-scheme: dark;
+  color: var(--crm-text);
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-route-background:has(.crm-voicemail-drops-workspace),
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .console-content:has(.crm-voicemail-drops-workspace),
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-page-shell.crm-voicemail-drops-workspace,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace.crm-queue-workspace,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-inner,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-workspace-shell,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-workspace-chrome,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-workspace-body,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-workspace-main,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-workspace-scroll-region,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-workspace-right-rail,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-main-workspace,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-center-workspace,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-detail-rail {
+  background: var(--crm-bg) !important;
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .contacts-header-panel,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-kpi-card,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-filter-bar {
+  border-color: rgba(126, 154, 194, 0.17) !important;
+  background:
+    linear-gradient(180deg, rgba(17, 29, 49, 0.92), rgba(10, 20, 35, 0.96)) !important;
+  box-shadow:
+    0 14px 34px -30px rgba(0, 0, 0, 0.84),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045) !important;
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-filter-field input,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-filter-field .cs-trigger {
+  border-color: rgba(126, 154, 194, 0.14) !important;
+  background-color: rgba(9, 18, 32, 0.72) !important;
+  color: var(--crm-text) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.035),
+    0 0 0 1px rgba(2, 8, 18, 0.18) !important;
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-filter-field input::placeholder {
+  color: rgba(155, 170, 187, 0.68) !important;
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-filter-field input:focus,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-filter-field .cs-trigger:focus,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-filter-field .cs-trigger:focus-visible,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-filter-field .cs-trigger[aria-expanded="true"] {
+  border-color: rgba(79, 140, 255, 0.48) !important;
+  box-shadow:
+    0 0 0 3px rgba(79, 140, 255, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+  outline: none;
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-filter-icon,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-filter-field > svg {
+  color: rgba(156, 194, 255, 0.76);
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-list-panel:has(.crm-queue-row-list) {
+  border-color: transparent !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-list-head {
+  border-color: rgba(126, 154, 194, 0.13) !important;
+  background: rgba(10, 19, 33, 0.62) !important;
+  box-shadow:
+    0 10px 24px -24px rgba(0, 0, 0, 0.72),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045) !important;
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drop-row {
+  border-color: rgba(126, 154, 194, 0.14) !important;
+  background:
+    linear-gradient(180deg, rgba(16, 28, 47, 0.86), rgba(10, 20, 35, 0.94)) !important;
+  box-shadow:
+    0 8px 20px -18px rgba(0, 0, 0, 0.78),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drop-row:hover {
+  border-color: rgba(126, 154, 194, 0.24) !important;
+  background:
+    linear-gradient(180deg, rgba(20, 33, 54, 0.92), rgba(11, 23, 40, 0.96)) !important;
+  box-shadow:
+    0 12px 28px -22px rgba(0, 0, 0, 0.86),
+    inset 0 1px 0 rgba(255, 255, 255, 0.055) !important;
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drop-row.crm-queue-row-selected {
+  border-color: rgba(79, 140, 255, 0.38) !important;
+  background:
+    linear-gradient(180deg, rgba(24, 39, 64, 0.94), rgba(12, 26, 46, 0.98)) !important;
+  box-shadow:
+    inset 3px 0 0 rgba(79, 140, 255, 0.72),
+    0 14px 32px -24px rgba(0, 0, 0, 0.88) !important;
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-pill,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drops-tag-chip {
+  border-color: rgba(151, 178, 214, 0.16);
+  background: rgba(255, 255, 255, 0.045);
+  color: rgba(226, 235, 248, 0.88);
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drops-tag-accent,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-pill-stage {
+  border-color: rgba(79, 140, 255, 0.24);
+  background: rgba(79, 140, 255, 0.12);
+  color: #c4dcff;
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drops-tag-success,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .tasks-status-completed {
+  border-color: rgba(54, 208, 139, 0.26);
+  background: rgba(54, 208, 139, 0.11);
+  color: #91e8bc;
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drops-tag-warning,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .tasks-status-today {
+  border-color: rgba(245, 184, 75, 0.3);
+  background: rgba(245, 184, 75, 0.12);
+  color: #ffd78a;
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drops-tag-danger,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .tasks-status-overdue {
+  border-color: rgba(251, 113, 133, 0.28);
+  background: rgba(251, 113, 133, 0.11);
+  color: #fecdd3;
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drops-right-rail .crm-workspace-right-rail-scroll {
+  border-color: rgba(151, 178, 214, 0.24);
+  background:
+    linear-gradient(180deg, rgba(19, 33, 55, 0.99), rgba(11, 22, 38, 1));
+  box-shadow:
+    0 24px 58px -34px rgba(0, 0, 0, 0.98),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drops-right-rail .crm-queue-detail-panel,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drops-right-rail .voicemail-drops-studio-panel {
+  border-color: transparent !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drops-studio-hero,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drops-command-card,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-detail-actions-card,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drops-rail-pager,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-detail-panel .rounded-crm {
+  border-color: rgba(151, 178, 214, 0.16);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.024)) !important;
+  box-shadow:
+    0 10px 26px -24px rgba(0, 0, 0, 0.86),
+    inset 0 1px 0 rgba(255, 255, 255, 0.055);
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drops-play-core,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drops-audio-empty,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drops-upload-zone {
+  border-color: rgba(151, 178, 214, 0.16);
+  background:
+    linear-gradient(180deg, rgba(9, 18, 32, 0.7), rgba(12, 24, 41, 0.82)) !important;
+  color: var(--crm-text-muted);
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drops-orb,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drops-upload-icon,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drops-play-button,
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .crm-queue-kpi-icon {
+  border-color: rgba(157, 196, 255, 0.2) !important;
+  background: rgba(79, 140, 255, 0.12) !important;
+  color: #9cc2ff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+:is(:root[data-theme="dark"], :root:not([data-theme="light"])) .crm-voicemail-drops-workspace .voicemail-drops-readiness-track {
+  background: rgba(9, 18, 32, 0.86);
+}
+
 @media (max-width: 1279px) {
   .crm-voicemail-drops-workspace .crm-workspace-body--split {
     grid-template-columns: 1fr;
