@@ -52,8 +52,7 @@ This pass converts `/billing` into a premium SaaS finance workspace with light-m
 - Public hosted invoice payment route: `apps/portal/app/pay/invoice/[token]/page.tsx`.
 - Reusable trust components: `apps/portal/components/billing/SolaLogo.tsx` and `apps/portal/components/billing/PaymentTrustBadge.tsx`.
 - Official Sola assets live under `apps/portal/public/assets/vendor/sola/`.
-  - Light backgrounds: `sola-logo-positive-rgb.png`.
-  - Dark backgrounds: `sola-logo-reverse-rgb.png`.
+  - Hosted payment badge: `sola-logo.svg`.
   - Source and usage rules: `apps/portal/public/assets/vendor/sola/README.md`.
 - Do not replace the Sola mark with plain text when the official asset is available.
 - Do not stretch, recolor, invert, or distort the logo; preserve the original `1100x300` aspect ratio.

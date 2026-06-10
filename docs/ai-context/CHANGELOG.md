@@ -10,7 +10,7 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 **Risk:** high — public payment UX only; no API, worker, gateway, database, CRM, telephony, WebRTC, onboarding, or PBX changes
 
 - Replaced the hosted payment footer's plain `SOLA` text with the official Sola Payments logo via reusable `SolaLogo` and `PaymentTrustBadge` components.
-- Added selected official logo files under `apps/portal/public/assets/vendor/sola/`: positive RGB for light backgrounds and reverse RGB for dark backgrounds, with source/usage notes.
+- Added the official logo SVG under `apps/portal/public/assets/vendor/sola/`, with source/usage notes.
 - Hosted invoice payment page theme now supports `?theme=dark` / `?theme=light`, existing app theme when available, and `prefers-color-scheme` fallback.
 - Refined the public payment trust badge layout for desktop, tablet, and narrow mobile widths; copy remains limited to secure processing and SSL encryption without PCI overclaiming.
 
