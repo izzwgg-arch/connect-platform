@@ -20,6 +20,7 @@ import {
   flightSetSipState,
 } from "../diagnostics/CallFlightRecorder";
 import { ensureMicPermissionOrAlert } from "../sip/permissions";
+import { showAppAlert } from "../components/ui/appAlert";
 import {
   classifyOutboundSipFailure,
   normalizeMobileDialTarget,
@@ -48,7 +49,20 @@ type SipState = {
   saveProvisioning: (bundle: ProvisioningBundle) => Promise<void>;
   register: (options?: { forceRestart?: boolean }) => Promise<void>;
   unregister: () => Promise<void>;
-  dial: (target: string, options?: { displayTarget?: string }) => Promise<void>;
+  dial: (
+    target: string,
+    options?: {
+      displayTarget?: string;
+      /**
+       * Explicit opt-in for starting a call while another call is already
+       * active (the "Add call" flow). When omitted/false and a call is in
+       * progress, `dial` refuses and asks the user to confirm first — this
+       * prevents accidental double-taps / two-button presses from silently
+       * spawning multiple background calls.
+       */
+      allowSecond?: boolean;
+    },
+  ) => Promise<void>;
   answer: () => Promise<void>;
   answerIncomingInvite: (
     match: { inviteId?: string | null; fromNumber?: string | null; toExtension?: string | null; pbxCallId?: string | null; sipCallTarget?: string | null },
@@ -162,6 +176,15 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // Ref tracking registration state for use inside AppState event callbacks
   // (closures capture stale state otherwise).
   const registrationStateRef = useRef<SipRegistrationState>("idle");
+
+  // Mirror of callState read synchronously inside dial() so the
+  // "already on a call" guard isn't fooled by a stale render closure.
+  const callStateRef = useRef<CallState>("idle");
+
+  // Re-entrancy lock for dial(). Held from the moment a dial begins until the
+  // underlying client.dial() settles, so a rapid double-tap (or two different
+  // call buttons pressed at once) can't fan out into several background calls.
+  const dialInFlightRef = useRef(false);
 
   // Multi-call event bridge. CallSessionManager registers a listener at
   // mount; SipContext forwards onSessionAdded/Changed/Removed into it.
@@ -286,6 +309,11 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     registrationStateRef.current = registrationState;
   }, [registrationState]);
+
+  // Keep callStateRef in sync for the synchronous guard inside dial().
+  useEffect(() => {
+    callStateRef.current = callState;
+  }, [callState]);
 
   // ── Bluetooth-headset availability watcher ─────────────────────────────
   // Active only during a live call. Uses the native AudioManager on
@@ -1241,89 +1269,144 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           throw new Error("Invalid dial target");
         }
 
-        const micOk = await ensureMicPermissionOrAlert();
-        if (!micOk) {
+        // ── Accidental multi-call safeguard ────────────────────────────────
+        // A second outbound call must never start automatically. Two failure
+        // modes are blocked here:
+        //   1. A dial is already in flight (double-tap, or two different call
+        //      buttons mashed at once) → ignore the duplicate outright.
+        //   2. A call is already active (dialing/ringing/connected) → only
+        //      proceed when the caller explicitly opted in (the "Add call"
+        //      flow passes allowSecond) or the user confirms the prompt.
+        const allowSecond = options?.allowSecond === true;
+        if (dialInFlightRef.current) {
+          flightRecord("USER", "OUTBOUND_DIAL_SUPPRESSED_DUPLICATE", {
+            payload: { displayTarget, normalizedTarget },
+          });
+          return;
+        }
+        dialInFlightRef.current = true;
+        try {
+          const activeState = callStateRef.current;
+          const alreadyInCall =
+            activeState === "dialing" ||
+            activeState === "ringing" ||
+            activeState === "connected";
+          if (alreadyInCall && !allowSecond) {
+            const proceed = await new Promise<boolean>((resolve) => {
+              let settled = false;
+              const done = (v: boolean) => {
+                if (!settled) {
+                  settled = true;
+                  resolve(v);
+                }
+              };
+              showAppAlert(
+                "Already on a call",
+                `Start a new call to ${displayTarget}? Your current call will be kept.`,
+                [
+                  { text: "Cancel", style: "cancel", onPress: () => done(false) },
+                  { text: "Add call", style: "default", onPress: () => done(true) },
+                ],
+              );
+            });
+            if (!proceed) {
+              flightRecord("USER", "OUTBOUND_SECOND_CALL_DECLINED", {
+                payload: { displayTarget, normalizedTarget, activeState },
+              });
+              return;
+            }
+          }
+
+          const micOk = await ensureMicPermissionOrAlert();
+          if (!micOk) {
+            void flightBeginCall({
+              callDirection: "outbound",
+              dialedNumber: normalizedTarget,
+              fromNumber: normalizedTarget,
+            });
+            flightRecord("USER", "OUTBOUND_PERMISSION_CHECK", {
+              severity: "error",
+              payload: { granted: false },
+            });
+            await flightEndCall("failed");
+            throw new Error("Microphone permission required");
+          }
+
+          await ensureProvisioningLoaded();
+          flightSetSipState(registrationStateRef.current);
+
           void flightBeginCall({
             callDirection: "outbound",
             dialedNumber: normalizedTarget,
-            fromNumber: normalizedTarget,
+            fromNumber: displayTarget,
           });
-          flightRecord("USER", "OUTBOUND_PERMISSION_CHECK", {
-            severity: "error",
-            payload: { granted: false },
-          });
-          await flightEndCall("failed");
-          throw new Error("Microphone permission required");
-        }
-
-        await ensureProvisioningLoaded();
-        flightSetSipState(registrationStateRef.current);
-
-        void flightBeginCall({
-          callDirection: "outbound",
-          dialedNumber: normalizedTarget,
-          fromNumber: displayTarget,
-        });
-        flightRecord("USER", "OUTBOUND_CALL_START", {
-          payload: {
-            displayTarget,
-            normalizedTarget,
-            registrationState: registrationStateRef.current,
-          },
-        });
-        flightRecord("USER", "OUTBOUND_PERMISSION_CHECK", {
-          payload: { granted: true },
-        });
-
-        const client = clientRef.current as any;
-        const connected = typeof client.isConnected === "function" ? client.isConnected() : false;
-        const registered = typeof client.isRegistered === "function" ? client.isRegistered() : false;
-        const registrationAgeMs =
-          typeof client.getRegistrationAgeMs === "function" ? client.getRegistrationAgeMs() : null;
-
-        if (!connected || !registered) {
-          flightRecord("SIP", "OUTBOUND_REGISTER_START", {
-            payload: { connected, registered, registrationAgeMs },
-          });
-        }
-
-        setCallDirection("outbound");
-        setRemoteParty(displayTarget);
-        setLastError(null);
-        setLastDialed(displayTarget);
-        SecureStore.setItemAsync(LAST_DIALED_KEY, displayTarget).catch(() => {});
-        callInfoRef.current = {
-          direction: "outbound",
-          answered: false,
-          startMs: Date.now(),
-          remoteParty: displayTarget,
-          remotePartyName: null,
-        };
-        const snapshot = getAudioDevicesSnapshot();
-        setAudioRoute(snapshot.bluetoothConnected ? "bluetooth" : "earpiece");
-
-        try {
-          await clientRef.current.dial(normalizedTarget);
-          if (typeof client.getRegistrationAgeMs === "function") {
-            flightRecord("SIP", "OUTBOUND_REGISTERED", {
-              payload: {
-                registrationAgeMs: client.getRegistrationAgeMs(),
-                registrationState: registrationStateRef.current,
-              },
-            });
-          }
-        } catch (e: unknown) {
-          const msg = e instanceof Error ? e.message : String(e);
-          const diagnosis = classifyOutboundSipFailure({ localReason: msg });
-          flightRecord("SIP", "OUTBOUND_FAILED", {
-            severity: "error",
+          flightRecord("USER", "OUTBOUND_CALL_START", {
             payload: {
-              message: msg,
-              diagnosisCategory: diagnosis.category,
+              displayTarget,
+              normalizedTarget,
+              registrationState: registrationStateRef.current,
             },
           });
-          await flightEndCall("failed");
-          throw e instanceof Error ? e : new Error(msg);
+          flightRecord("USER", "OUTBOUND_PERMISSION_CHECK", {
+            payload: { granted: true },
+          });
+
+          const client = clientRef.current as any;
+          const connected = typeof client.isConnected === "function" ? client.isConnected() : false;
+          const registered = typeof client.isRegistered === "function" ? client.isRegistered() : false;
+          const registrationAgeMs =
+            typeof client.getRegistrationAgeMs === "function" ? client.getRegistrationAgeMs() : null;
+
+          if (!connected || !registered) {
+            flightRecord("SIP", "OUTBOUND_REGISTER_START", {
+              payload: { connected, registered, registrationAgeMs },
+            });
+          }
+
+          setCallDirection("outbound");
+          setRemoteParty(displayTarget);
+          setLastError(null);
+          setLastDialed(displayTarget);
+          SecureStore.setItemAsync(LAST_DIALED_KEY, displayTarget).catch(() => {});
+          callInfoRef.current = {
+            direction: "outbound",
+            answered: false,
+            startMs: Date.now(),
+            remoteParty: displayTarget,
+            remotePartyName: null,
+          };
+          const snapshot = getAudioDevicesSnapshot();
+          setAudioRoute(snapshot.bluetoothConnected ? "bluetooth" : "earpiece");
+
+          try {
+            await clientRef.current.dial(normalizedTarget);
+            // Optimistically mark the call active so a tap that lands in the
+            // gap before the client's state event re-renders React (and syncs
+            // callStateRef) still trips the "already on a call" guard above.
+            callStateRef.current = "dialing";
+            if (typeof client.getRegistrationAgeMs === "function") {
+              flightRecord("SIP", "OUTBOUND_REGISTERED", {
+                payload: {
+                  registrationAgeMs: client.getRegistrationAgeMs(),
+                  registrationState: registrationStateRef.current,
+                },
+              });
+            }
+          } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            const diagnosis = classifyOutboundSipFailure({ localReason: msg });
+            flightRecord("SIP", "OUTBOUND_FAILED", {
+              severity: "error",
+              payload: {
+                message: msg,
+                diagnosisCategory: diagnosis.category,
+              },
+            });
+            await flightEndCall("failed");
+            throw e instanceof Error ? e : new Error(msg);
+          }
+        } finally {
+          dialInFlightRef.current = false;
         }
       },
 
