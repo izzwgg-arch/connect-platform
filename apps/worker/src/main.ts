@@ -1574,6 +1574,7 @@ async function sendSmsPushNotification(input: SmsPushInput): Promise<void> {
         messageId: input.messageId,
         phoneNumber: input.phoneNumber,
         tenantId: input.tenantId,
+        recipientUserId: input.userId,
         preview: input.preview,
         timestamp: input.timestamp,
       },

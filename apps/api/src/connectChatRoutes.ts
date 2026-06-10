@@ -198,8 +198,8 @@ async function ensureDefaultTenantGroup(tenantId: string, tenantName: string, cu
 }
 
 type ChatPushPayload =
-  | { type: "dm_message"; conversationId: string; messageId: string; senderUserId: string; tenantId: string; senderName?: string | null; preview?: string | null; timestamp: string }
-  | { type: "sms_message"; conversationId: string; messageId: string; phoneNumber: string; tenantId: string; preview?: string | null; timestamp: string };
+  | { type: "dm_message"; conversationId: string; messageId: string; senderUserId: string; recipientUserId?: string; tenantId: string; senderName?: string | null; preview?: string | null; timestamp: string }
+  | { type: "sms_message"; conversationId: string; messageId: string; phoneNumber: string; recipientUserId?: string; tenantId: string; preview?: string | null; timestamp: string };
 
 export type ConnectChatRoutesDeps = {
   smsQueue: Queue;
@@ -1405,6 +1405,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
                 conversationId: threadId,
                 messageId: msg.id,
                 senderUserId: user.sub,
+                recipientUserId: recipient.userId,
                 tenantId,
                 senderName: sender?.displayName || sender?.email || "New message",
                 preview: pushPreview(input.body, internalAttachments.length ? "Sent an attachment" : "Sent a message"),
@@ -2082,6 +2083,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
                 conversationId: thread.id,
                 messageId: msg.id,
                 phoneNumber: extE164,
+                recipientUserId: recipient.userId,
                 tenantId,
                 preview: pushPreview(message, mmsUrls.length ? "Sent an attachment" : "New SMS message"),
                 timestamp: new Date().toISOString(),

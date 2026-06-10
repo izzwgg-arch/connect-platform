@@ -9,6 +9,60 @@ export function setActiveNotificationChatThread(threadId: string | null) {
   activeChatThreadId = threadId;
 }
 
+// ─── Per-user notification isolation ──────────────────────────────────────────
+// The identity of the user currently signed in on THIS device. Kept in a
+// module-level slot (updated by NotificationsContext whenever the auth token
+// changes) so the notification handler — which is registered at import time,
+// outside React — can enforce per-user isolation synchronously.
+export type NotificationIdentity = { userId: string | null; tenantId: string | null };
+
+let currentIdentity: NotificationIdentity = { userId: null, tenantId: null };
+
+export function setCurrentNotificationIdentity(identity: NotificationIdentity | null): void {
+  currentIdentity = identity
+    ? { userId: identity.userId ?? null, tenantId: identity.tenantId ?? null }
+    : { userId: null, tenantId: null };
+}
+
+export function getCurrentNotificationIdentity(): NotificationIdentity {
+  return currentIdentity;
+}
+
+/**
+ * Hard per-user isolation guard.
+ *
+ * Returns false when a push is addressed to a DIFFERENT user or tenant than the
+ * one currently signed in on this device. This is the last line of defence
+ * against notification leakage: even if a stale / rotated / reassigned push
+ * token ever delivers another user's notification to this phone, the app
+ * refuses to show or act on it.
+ *
+ * Deliberately conservative — it only BLOCKS on a *positive* mismatch (both the
+ * payload field and the signed-in value are known and differ). When the payload
+ * carries no recipient identity (older server build) or we don't yet know the
+ * signed-in identity (cold start before the token is decoded), it ALLOWS, so a
+ * user never loses their own notifications.
+ */
+export function isNotificationForCurrentUser(
+  data: any,
+  identity: NotificationIdentity = currentIdentity,
+): boolean {
+  const recipientUserId =
+    data?.recipientUserId != null
+      ? String(data.recipientUserId)
+      : data?.toUserId != null
+        ? String(data.toUserId)
+        : '';
+  if (recipientUserId && identity.userId && recipientUserId !== String(identity.userId)) {
+    return false;
+  }
+  const payloadTenant = data?.tenantId != null ? String(data.tenantId) : '';
+  if (payloadTenant && identity.tenantId && payloadTenant !== String(identity.tenantId)) {
+    return false;
+  }
+  return true;
+}
+
 export function shouldSuppressForegroundPush(data: any): boolean {
   const type = String(data?.type || '');
   if ((type === 'dm_message' || type === 'sms_message') && activeChatThreadId) {
@@ -40,6 +94,8 @@ export function isUserAlertPushType(type: string | undefined | null): boolean {
  */
 export function shouldPresentForegroundUserAlert(data: any, hasOsContent: boolean): boolean {
   if (!isUserAlertPushType(data?.type)) return false;
+  // Per-user isolation: never surface an alert addressed to another user.
+  if (!isNotificationForCurrentUser(data)) return false;
   if (!data?.alertTitle) return false;
   if (data?._localPresented === true || data?._localPresented === 'true') return false;
   if (hasOsContent) return false;

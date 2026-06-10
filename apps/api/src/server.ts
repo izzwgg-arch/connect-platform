@@ -2628,10 +2628,10 @@ type MobilePushPayload =
   | { type: "INVITE_CLAIMED"; inviteId: string; tenantId: string; timestamp: string }
   | { type: "INVITE_CANCELED"; inviteId: string; pbxCallId?: string | null; reason?: string | null; tenantId: string; timestamp: string }
   | { type: "MISSED_CALL"; inviteId: string; fromNumber: string; fromDisplay?: string | null; toExtension: string; tenantId: string; timestamp: string }
-  | { type: "voicemail"; voicemailId: string; tenantId: string; extensionId: string; callerNameOrNumber?: string | null; timestamp: string }
-  | { type: "missed_call"; callId: string; tenantId: string; extensionId?: string | null; callerNumber: string; callerNameOrNumber?: string | null; timestamp: string }
-  | { type: "dm_message"; conversationId: string; messageId: string; senderUserId: string; tenantId: string; senderName?: string | null; preview?: string | null; timestamp: string }
-  | { type: "sms_message"; conversationId: string; messageId: string; phoneNumber: string; tenantId: string; preview?: string | null; timestamp: string };
+  | { type: "voicemail"; voicemailId: string; tenantId: string; extensionId: string; recipientUserId?: string; callerNameOrNumber?: string | null; timestamp: string }
+  | { type: "missed_call"; callId: string; tenantId: string; extensionId?: string | null; recipientUserId?: string; callerNumber: string; callerNameOrNumber?: string | null; timestamp: string }
+  | { type: "dm_message"; conversationId: string; messageId: string; senderUserId: string; recipientUserId?: string; tenantId: string; senderName?: string | null; preview?: string | null; timestamp: string }
+  | { type: "sms_message"; conversationId: string; messageId: string; phoneNumber: string; recipientUserId?: string; tenantId: string; preview?: string | null; timestamp: string };
 
 /** Android FCM `data` map values must be strings — Expo forwards to FCM. */
 function fcmDataStrings(data: Record<string, unknown>): Record<string, string> {
@@ -23132,6 +23132,7 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
             voicemailId: voicemail.id,
             tenantId: link.tenantId,
             extensionId: ext.id,
+            recipientUserId: ext.ownerUserId,
             callerNameOrNumber: vmExtractCallerName(rawCallerid) || callerNumber || "Unknown caller",
             timestamp: new Date().toISOString(),
           },
@@ -26601,6 +26602,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
             callId: d.linkedId,
             tenantId: tenantPack.tenantId,
             extensionId: ext.id,
+            recipientUserId: ext.ownerUserId,
             callerNumber: d.fromNumber || "Unknown caller",
             callerNameOrNumber: d.fromName || d.fromNumber || "Unknown caller",
             timestamp: new Date().toISOString(),

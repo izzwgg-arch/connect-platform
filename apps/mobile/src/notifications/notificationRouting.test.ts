@@ -7,6 +7,9 @@ import {
   userAlertChannelId,
   notificationDataToRoute,
   setActiveNotificationChatThread,
+  isNotificationForCurrentUser,
+  setCurrentNotificationIdentity,
+  getCurrentNotificationIdentity,
 } from "./notificationRouting";
 
 test("isUserAlertPushType recognises the four user-facing alert types", () => {
@@ -101,6 +104,46 @@ test("notificationDataToRoute maps each alert type to a deep-link route", () => 
   });
   // chat route with no conversationId is unroutable
   assert.equal(notificationDataToRoute({ type: "dm_message" }), null);
+});
+
+test("isNotificationForCurrentUser blocks a push addressed to a different user", () => {
+  const me = { userId: "user-A", tenantId: "tnt-1" };
+  // same user → allowed
+  assert.equal(isNotificationForCurrentUser({ recipientUserId: "user-A", tenantId: "tnt-1" }, me), true);
+  // different user, same tenant → BLOCKED (this is the cross-user leak case)
+  assert.equal(isNotificationForCurrentUser({ recipientUserId: "user-B", tenantId: "tnt-1" }, me), false);
+  // toUserId is honoured as an alias
+  assert.equal(isNotificationForCurrentUser({ toUserId: "user-B" }, me), false);
+  assert.equal(isNotificationForCurrentUser({ toUserId: "user-A" }, me), true);
+});
+
+test("isNotificationForCurrentUser blocks a push from a different tenant", () => {
+  const me = { userId: "user-A", tenantId: "tnt-1" };
+  assert.equal(isNotificationForCurrentUser({ tenantId: "tnt-2" }, me), false);
+  assert.equal(isNotificationForCurrentUser({ tenantId: "tnt-1" }, me), true);
+});
+
+test("isNotificationForCurrentUser is conservative when identity or payload id is unknown", () => {
+  // No signed-in identity yet (cold start) → allow, don't drop the user's own alerts
+  assert.equal(isNotificationForCurrentUser({ recipientUserId: "user-B", tenantId: "tnt-2" }, { userId: null, tenantId: null }), true);
+  // Older payload with no recipient id and no tenant → allow
+  assert.equal(isNotificationForCurrentUser({ type: "voicemail" }, { userId: "user-A", tenantId: "tnt-1" }), true);
+});
+
+test("foreground present is blocked for a user-alert addressed to another user", () => {
+  setCurrentNotificationIdentity({ userId: "user-A", tenantId: "tnt-1" });
+  const mine = { type: "voicemail", alertTitle: "New voicemail", recipientUserId: "user-A", tenantId: "tnt-1" };
+  const theirs = { type: "voicemail", alertTitle: "New voicemail", recipientUserId: "user-B", tenantId: "tnt-1" };
+  assert.equal(shouldPresentForegroundUserAlert(mine, false), true);
+  assert.equal(shouldPresentForegroundUserAlert(theirs, false), false);
+  setCurrentNotificationIdentity(null);
+});
+
+test("setCurrentNotificationIdentity round-trips and clears", () => {
+  setCurrentNotificationIdentity({ userId: "u1", tenantId: "t1" });
+  assert.deepEqual(getCurrentNotificationIdentity(), { userId: "u1", tenantId: "t1" });
+  setCurrentNotificationIdentity(null);
+  assert.deepEqual(getCurrentNotificationIdentity(), { userId: null, tenantId: null });
 });
 
 test("shouldSuppressForegroundPush only suppresses the active chat thread", () => {

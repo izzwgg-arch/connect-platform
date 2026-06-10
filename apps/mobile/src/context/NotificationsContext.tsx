@@ -89,7 +89,10 @@ import {
   shouldSuppressForegroundPush,
   shouldPresentForegroundUserAlert,
   userAlertChannelId,
+  isNotificationForCurrentUser,
+  setCurrentNotificationIdentity,
 } from "../notifications/notificationRouting";
+import { decodeJwtPayloadLoose } from "../voicemail/vmGreetingInviteUtils";
 /**
  * Reads native ringtone timing data from the Android bridge and records
  * RINGTONE_START / RINGTONE_STOP events in the flight recorder.
@@ -143,8 +146,15 @@ Notifications.setNotificationHandler({
       return { shouldShowAlert: false, shouldPlaySound: false, shouldSetBadge: false };
     }
     const USER_ALERT_TYPES = new Set(["voicemail", "missed_call", "dm_message", "sms_message"]);
-    if (USER_ALERT_TYPES.has(type) && data?.alertTitle) {
-      return { shouldShowAlert: true, shouldPlaySound: true, shouldSetBadge: false };
+    if (USER_ALERT_TYPES.has(type)) {
+      // Per-user isolation: never display an alert addressed to a different
+      // signed-in user (defends against stale/rotated push tokens).
+      if (!isNotificationForCurrentUser(data)) {
+        return { shouldShowAlert: false, shouldPlaySound: false, shouldSetBadge: false };
+      }
+      if (data?.alertTitle) {
+        return { shouldShowAlert: true, shouldPlaySound: true, shouldSetBadge: false };
+      }
     }
     // When IncomingCallFirebaseService consumes the FCM payload before expo-
     // notifications sees it, the JS notification arrives with empty data.type.
@@ -811,6 +821,21 @@ export function NotificationsProvider({
   const tokenRef = useRef<string | null>(token);
   useEffect(() => {
     tokenRef.current = token;
+  }, [token]);
+
+  // Keep the module-level notification identity in sync with the signed-in user
+  // so the (import-time) notification handler can enforce per-user isolation:
+  // a notification addressed to a different userId/tenantId is never shown.
+  useEffect(() => {
+    if (!token) {
+      setCurrentNotificationIdentity(null);
+      return;
+    }
+    const claims = decodeJwtPayloadLoose(token) as { sub?: unknown; tenantId?: unknown } | null;
+    setCurrentNotificationIdentity({
+      userId: claims?.sub != null ? String(claims.sub) : null,
+      tenantId: claims?.tenantId != null ? String(claims.tenantId) : null,
+    });
   }, [token]);
 
   // Mirror the current "is there an active call?" into a ref so safeSetInvite

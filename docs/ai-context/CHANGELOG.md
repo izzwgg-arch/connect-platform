@@ -31,7 +31,25 @@ worker, or database changes** in this entry.
   `isUserAlertPushType` with 11 unit tests
   (`pnpm --filter @connect/mobile test:notification-routing`).
 
-**Notification root-cause findings (server-side, NOT changed here):**
+**Per-user notification isolation (no leakage between users):**
+- **Hard client-side recipient guard** (`notificationRouting.ts`
+  `isNotificationForCurrentUser` + `setCurrentNotificationIdentity`): the app now
+  tracks the signed-in user's `userId`/`tenantId` (decoded from the JWT) and the
+  notification handler, foreground listener, and foreground-present decision all
+  drop any user-alert addressed to a different user/tenant. Last line of defence
+  against a stale/rotated/reassigned push token ever delivering another user's
+  notification. Conservative: only blocks on a positive mismatch.
+- **Logout now unregisters the device** (`AuthContext.logout` →
+  `POST /mobile/devices/unregister` with this device's expo token) so the
+  user signing out stops receiving notifications on that phone immediately.
+- **Server stamps `recipientUserId`** on every user-alert push (`dm_message`,
+  `sms_message`, `voicemail`, `missed_call` in `apps/api` + the worker SMS poll)
+  so the client guard is exact at the **user** level (not just tenant) — closes
+  the same-tenant cross-user chat case. (Server send path was already scoped to
+  `{tenantId, userId, active:true}`; this is defence-in-depth.) **Requires api +
+  worker deploy.**
+
+**Notification root-cause findings (server-side):**
 - **Voicemail push is disabled by default** — gated behind
   `VOICEMAIL_PUSH_NOTIFICATIONS_ENABLED` (a "SEV-1 containment" default in
   `apps/api/src/server.ts`). Unless that env flag is `true`, no voicemail push is

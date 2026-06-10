@@ -1,8 +1,9 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import * as SecureStore from "expo-secure-store";
-import { login as apiLogin } from "../api/client";
+import { login as apiLogin, unregisterMobileDevice } from "../api/client";
 
 const TOKEN_KEY = "cc_mobile_token";
+const EXPO_PUSH_TOKEN_KEY = "cc_mobile_expo_push_token";
 
 type AuthState = {
   token: string | null;
@@ -37,6 +38,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await SecureStore.setItemAsync(TOKEN_KEY, out.token);
       },
       logout: async () => {
+        // Deactivate THIS device's push registration server-side before the
+        // token is gone, so the user who is logging out stops receiving any
+        // notifications on this phone (prevents leakage to the next person who
+        // signs in here). Best-effort — never block logout on it.
+        try {
+          if (token) {
+            const pushTok = await SecureStore.getItemAsync(EXPO_PUSH_TOKEN_KEY).catch(() => null);
+            await unregisterMobileDevice(token, pushTok || undefined);
+          }
+        } catch {
+          // ignore — logout must always proceed
+        }
         setToken(null);
         await SecureStore.deleteItemAsync(TOKEN_KEY);
         await SecureStore.deleteItemAsync("cc_mobile_provision");
