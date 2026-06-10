@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
-  Alert,
   Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,6 +19,7 @@ import { useSip } from '../context/SipContext';
 import { useIncomingNotifications } from '../context/NotificationsContext';
 import { getMyMobileDevices, getVoiceExtension, getWakeTimeline, type MobileDeviceDiagnostics, type WakeTimelineEvent } from '../api/client';
 import { HeaderBar } from '../components/HeaderBar';
+import { showAppAlert } from '../components/ui/appAlert';
 import type { VoiceExtension } from '../types';
 import { typography } from '../theme/typography';
 import { spacing, radius } from '../theme/spacing';
@@ -170,7 +170,7 @@ export function DiagnosticsScreen() {
       })();
 
   const handleClearProvisioning = () => {
-    Alert.alert(
+    showAppAlert(
       'Clear Provisioning',
       'This will remove your SIP credentials and require re-provisioning via QR code.',
       [

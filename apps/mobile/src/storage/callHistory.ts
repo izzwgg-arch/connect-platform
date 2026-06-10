@@ -50,14 +50,29 @@ export function mergeCallRecords(
   remote: CallRecord[],
   local: CallRecord[],
 ): CallRecord[] {
-  const remoteMs = remote.map((r) => new Date(r.startedAt).getTime());
+  // "Answered on another device" is a signal only THIS device knows (it saw
+  // the call get answered away from it while ringing). The server's record
+  // for the same call is usually "missed". When a local answered_elsewhere
+  // record overlaps a remote record, promote the remote record's disposition
+  // so Recent shows the accurate label instead of a red Missed.
+  const merged = remote.map((r) => {
+    const rt = new Date(r.startedAt).getTime();
+    const overlap = local.find(
+      (l) =>
+        (l.disposition || '').toLowerCase() === 'answered_elsewhere' &&
+        Math.abs(new Date(l.startedAt).getTime() - rt) < 90_000,
+    );
+    return overlap ? { ...r, disposition: 'answered_elsewhere' } : r;
+  });
+
+  const mergedMs = merged.map((r) => new Date(r.startedAt).getTime());
 
   const uniqueLocal = local.filter((l) => {
     const lt = new Date(l.startedAt).getTime();
-    return !remoteMs.some((rt) => Math.abs(lt - rt) < 90_000);
+    return !mergedMs.some((rt) => Math.abs(lt - rt) < 90_000);
   });
 
-  return [...remote, ...uniqueLocal].sort(
+  return [...merged, ...uniqueLocal].sort(
     (a, b) =>
       new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
   );

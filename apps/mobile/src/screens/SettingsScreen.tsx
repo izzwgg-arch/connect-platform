@@ -5,7 +5,6 @@ import {
   ScrollView,
   TouchableOpacity,
   StyleSheet,
-  Alert,
   Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,6 +15,7 @@ import { useAuth } from '../context/AuthContext';
 import { useSip } from '../context/SipContext';
 import { useIncomingNotifications, type CallReadiness } from '../context/NotificationsContext';
 import { Avatar } from '../components/ui/Avatar';
+import { showAppAlert } from '../components/ui/appAlert';
 import { HeaderBar } from '../components/HeaderBar';
 import { getVoiceExtension } from '../api/client';
 import {
@@ -151,7 +151,7 @@ export function SettingsScreen() {
   );
 
   const handleLogout = () => {
-    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
+    showAppAlert('Sign Out', 'Are you sure you want to sign out?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Sign Out',

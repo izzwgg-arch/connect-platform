@@ -1,13 +1,13 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Animated,
   BackHandler,
   Dimensions,
   Easing,
   FlatList,
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   PanResponder,
@@ -38,6 +38,7 @@ import { useSip } from '../../context/SipContext';
 import { Avatar } from '../../components/ui/Avatar';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
+import { showAppAlert } from '../../components/ui/appAlert';
 import {
   createChatThread,
   deleteChatMessage,
@@ -306,6 +307,24 @@ export function ChatTab() {
   const [toast, setToast] = useState('');
   const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
   const [mediaLinkError, setMediaLinkError] = useState(false);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  // Whether the message list is pinned to the bottom. We only auto-scroll on
+  // new content when the user is already at the bottom, so reading older
+  // messages isn't interrupted by background refetches or incoming messages.
+  const atBottomRef = useRef(true);
+
+  const scrollToBottom = useCallback((animated: boolean) => {
+    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated }));
+  }, []);
+
+  const handleListScroll = useCallback(
+    (e: { nativeEvent: { layoutMeasurement: { height: number }; contentOffset: { y: number }; contentSize: { height: number } } }) => {
+      const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
+      const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
+      atBottomRef.current = distanceFromBottom < 120;
+    },
+    [],
+  );
 
   const threadsQuery = useQuery({
     queryKey: mobileQueryKeys.chatThreads,
@@ -375,11 +394,42 @@ export function ChatTab() {
     return () => sub.remove();
   }, [activeThread]);
 
+  // Opening a thread always jumps to the newest message.
   useEffect(() => {
-    if (activeThread && messages.length > 0) {
-      requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: false }));
+    if (activeThread) {
+      atBottomRef.current = true;
+      if (messages.length > 0) scrollToBottom(false);
     }
-  }, [activeThread?.id, messages.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeThread?.id]);
+
+  // New content (incoming message / background refetch): only follow to the
+  // bottom when the user is already pinned there.
+  useEffect(() => {
+    if (activeThread && messages.length > 0 && atBottomRef.current) {
+      scrollToBottom(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length]);
+
+  // When the keyboard opens, snap to the latest message and never leave a
+  // bubble hidden behind it. Also dismiss the emoji panel so the two never
+  // fight for the same space.
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvt, () => {
+      setKeyboardOpen(true);
+      setEmojiOpen(false);
+      atBottomRef.current = true;
+      scrollToBottom(true);
+    });
+    const hideSub = Keyboard.addListener(hideEvt, () => setKeyboardOpen(false));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [scrollToBottom]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -532,7 +582,7 @@ export function ChatTab() {
     const type = (options?.type || (attachments[0] ? fileKind(attachments[0].mimeType) : 'TEXT')) as Exclude<ChatMessageType, 'SYSTEM'>;
     if (!body && attachments.length === 0 && !options?.location) return;
     const reply = replyingTo;
-    const localId = options?.retryId || `local:${Date.now()}`;
+    const localId = options?.retryId || `local:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
     const optimistic: ChatMessage = {
       id: localId,
       threadId: activeThread.id,
@@ -608,7 +658,12 @@ export function ChatTab() {
     }
   }, [activeThread, sendPreparedMessage, showToast, token]);
 
-  const send = useCallback(() => sendPreparedMessage(), [sendPreparedMessage]);
+  const send = useCallback(() => {
+    // Sending always snaps back to the newest message.
+    atBottomRef.current = true;
+    scrollToBottom(true);
+    void sendPreparedMessage();
+  }, [scrollToBottom, sendPreparedMessage]);
 
   const startRecording = useCallback(async () => {
     if (!activeThread || !token || recording) return;
@@ -721,7 +776,7 @@ export function ChatTab() {
 
   const deleteMessage = useCallback((message: ChatMessage, mode: 'me' | 'everyone') => {
     if (!token || !activeThread) return;
-    Alert.alert(
+    showAppAlert(
       mode === 'everyone' ? 'Delete for everyone?' : 'Delete message?',
       mode === 'everyone' ? 'This removes the message from the conversation for everyone.' : 'This removes the message only for you.',
       [
@@ -917,7 +972,11 @@ export function ChatTab() {
               contentContainerStyle={styles.messageList}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-              onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
+              onScroll={handleListScroll}
+              scrollEventThrottle={64}
+              onContentSizeChange={() => {
+                if (atBottomRef.current) listRef.current?.scrollToEnd({ animated: false });
+              }}
               initialNumToRender={18}
               maxToRenderPerBatch={12}
               windowSize={9}
@@ -961,6 +1020,7 @@ export function ChatTab() {
             onRecordEnd={stopRecording}
             onRecordCancel={cancelRecording}
             recording={recording}
+            compact={keyboardOpen}
             bottomInset={Math.max(insets.bottom, 10)}
           />
         </View>
@@ -1386,6 +1446,7 @@ function Composer({
   onRecordEnd,
   onRecordCancel,
   recording,
+  compact,
   bottomInset,
 }: {
   draft: string;
@@ -1402,6 +1463,7 @@ function Composer({
   onRecordEnd: () => void;
   onRecordCancel: () => void;
   recording: boolean;
+  compact: boolean;
   bottomInset: number;
 }) {
   const { colors } = useTheme();
@@ -1544,9 +1606,11 @@ function Composer({
       ) : null}
       <View style={styles.composeRow}>
         <View style={[styles.composerField, { borderColor: colors.border }]}>
-          <TouchableOpacity style={styles.composerIcon} onPress={onEmoji}>
-            <Ionicons name="happy-outline" size={25} color={colors.textSecondary} />
-          </TouchableOpacity>
+          {!compact ? (
+            <TouchableOpacity style={styles.composerIcon} onPress={onEmoji}>
+              <Ionicons name="happy-outline" size={25} color={colors.textSecondary} />
+            </TouchableOpacity>
+          ) : null}
           <TextInput
             value={draft}
             onChangeText={onDraft}
@@ -1555,12 +1619,16 @@ function Composer({
             style={[styles.composerInput, { color: colors.text }]}
             multiline
           />
-          <TouchableOpacity style={styles.composerIcon} onPress={onAttach}>
-            <Ionicons name="attach-outline" size={25} color={colors.textSecondary} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.composerIcon} onPress={onCamera}>
-            <Ionicons name="camera-outline" size={25} color={colors.textSecondary} />
-          </TouchableOpacity>
+          {!compact ? (
+            <>
+              <TouchableOpacity style={styles.composerIcon} onPress={onAttach}>
+                <Ionicons name="attach-outline" size={25} color={colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.composerIcon} onPress={onCamera}>
+                <Ionicons name="camera-outline" size={25} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </>
+          ) : null}
         </View>
         {canSend ? (
           <TouchableOpacity style={[styles.sendBtn, { backgroundColor: colors.primary }]} onPress={onSend}><Ionicons name="send" size={18} color="#fff" /></TouchableOpacity>
@@ -1822,7 +1890,7 @@ function MessageActions({ thread, message, onClose, onCopy, onReply, onReact, on
           </View>
           <ActionRow icon="copy-outline" label="Copy" onPress={() => onCopy(message)} />
           <ActionRow icon="return-up-back-outline" label="Reply" onPress={() => onReply(message)} />
-          <ActionRow icon="trash-outline" label={thread?.type === 'SMS' ? 'Delete for me' : 'Delete for me'} destructive onPress={() => onDelete(message, 'me')} />
+          <ActionRow icon="trash-outline" label="Delete for me" destructive onPress={() => onDelete(message, 'me')} />
           {canEveryone ? <ActionRow icon="trash-bin-outline" label="Delete for everyone" destructive onPress={() => onDelete(message, 'everyone')} /> : null}
         </Pressable>
       </Pressable>

@@ -29,12 +29,12 @@ import {
   Pressable,
   Platform,
   Easing,
-  Alert,
   Dimensions,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useCallSessions } from "../../context/CallSessionManager";
+import { showAppAlert } from "../../components/ui/appAlert";
 import type { CallSession } from "../../types/callSession";
 import { TransferModal } from "./TransferModal";
 
@@ -520,7 +520,7 @@ export function CallsDrawer() {
       if (!id) return;
       const ok = transfer(id, target);
       if (!ok) {
-        Alert.alert("Transfer failed", "Unable to dispatch transfer.");
+        showAppAlert("Transfer failed", "Unable to dispatch transfer.");
       }
     },
     [transfer, transferTargetId],
@@ -528,7 +528,7 @@ export function CallsDrawer() {
 
   const handleMerge = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
-    Alert.alert(
+    showAppAlert(
       "Merge calls",
       "Conference bridging requires PBX conference-room support. Contact your admin to configure a conference extension.",
       [{ text: "OK" }],

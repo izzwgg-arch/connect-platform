@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
   Animated,
   FlatList,
   Modal,
@@ -22,6 +21,9 @@ import type { RouteProp } from '@react-navigation/native';
 import type { TabParamList } from '../../navigation/types';
 import { useAuth } from '../../context/AuthContext';
 import { useSip } from '../../context/SipContext';
+import { useTheme } from '../../context/ThemeContext';
+import { showAppAlert } from '../../components/ui/appAlert';
+import type { AppColors } from '../../theme/colors';
 import { Avatar } from '../../components/ui/Avatar';
 import {
   API_BASE,
@@ -41,30 +43,48 @@ import { spacing } from '../../theme/spacing';
 type PrimaryFilter = 'all' | 'new' | 'urgent' | 'old';
 type DateFilter = 'any' | 'today' | 'week';
 
-const VM = {
-  bg: '#07111f',
-  bg2: '#0a1628',
-  card: '#101b2f',
-  card2: '#14223a',
-  cardMuted: '#0d1728',
-  border: '#1d304d',
-  borderSoft: 'rgba(148, 163, 184, 0.12)',
-  text: '#f5f8ff',
-  text2: '#a9b8d4',
-  text3: '#64748b',
-  primary: '#3b82f6',
-  primarySoft: 'rgba(59, 130, 246, 0.16)',
-  cyan: '#06b6d4',
-  cyanSoft: 'rgba(6, 182, 212, 0.14)',
-  green: '#22c55e',
-  greenSoft: 'rgba(34, 197, 94, 0.14)',
-  red: '#fb7185',
-  redSoft: 'rgba(251, 113, 133, 0.16)',
-  orange: '#f59e0b',
-  orangeSoft: 'rgba(245, 158, 11, 0.16)',
-  purple: '#a78bfa',
-  shadow: '#000000',
-};
+// Theme-driven palette. Derived from the app theme so the screen follows
+// light/dark mode instead of being hardcoded dark. The keys mirror the old
+// `VM` constant so every existing `VM.*` / `styles.*` reference keeps working.
+function makeVmPalette(c: AppColors) {
+  return {
+    bg: c.bg,
+    bg2: c.bgSecondary,
+    card: c.surface,
+    card2: c.surfaceElevated,
+    cardMuted: c.surfaceHigh,
+    border: c.border,
+    borderSoft: c.borderSubtle,
+    text: c.text,
+    text2: c.textSecondary,
+    text3: c.textTertiary,
+    primary: c.primary,
+    primarySoft: c.primaryMuted,
+    cyan: c.teal,
+    cyanSoft: c.tealMuted,
+    green: c.success,
+    greenSoft: c.successMuted,
+    red: c.danger,
+    redSoft: c.dangerMuted,
+    orange: c.warning,
+    orangeSoft: c.warningMuted,
+    purple: c.purple,
+    shadow: c.black,
+  };
+}
+
+type VmPalette = ReturnType<typeof makeVmPalette>;
+type VmStyles = ReturnType<typeof makeStyles>;
+
+// File-local theme context so the many sub-components can read the themed
+// palette + stylesheet without prop-drilling. Sub-components destructure
+// `{ VM, styles }` which shadows the names their bodies already use.
+const VmThemeContext = React.createContext<{ VM: VmPalette; styles: VmStyles } | null>(null);
+function useVm(): { VM: VmPalette; styles: VmStyles } {
+  const ctx = React.useContext(VmThemeContext);
+  if (!ctx) throw new Error('useVm must be used within VoicemailTab');
+  return ctx;
+}
 
 function formatDuration(sec: number): string {
   const safe = Math.max(0, Math.floor(sec || 0));
@@ -110,6 +130,9 @@ export function VoicemailTab() {
   const insets = useSafeAreaInsets();
   const { token } = useAuth();
   const sip = useSip();
+  const { colors } = useTheme();
+  const VM = useMemo(() => makeVmPalette(colors), [colors]);
+  const styles = useMemo(() => makeStyles(VM), [VM]);
   const queryClient = useQueryClient();
   const [rows, setRows] = useState<Voicemail[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -358,7 +381,7 @@ export function VoicemailTab() {
   }, [sip]);
 
   const messageCaller = useCallback((vm: Voicemail) => {
-    Alert.alert('Message', `Open Chat to message ${callerLabel(vm)}.`);
+    showAppAlert('Message', `Open Chat to message ${callerLabel(vm)}.`);
   }, []);
 
   const downloadVoicemail = useCallback(async (vm: Voicemail) => {
@@ -387,6 +410,7 @@ export function VoicemailTab() {
   }, []);
 
   return (
+    <VmThemeContext.Provider value={{ VM, styles }}>
     <View style={styles.screen}>
       <View style={[styles.header, { paddingTop: insets.top + spacing['4'] }]}>
         <Text style={styles.title}>Voicemail</Text>
@@ -517,6 +541,7 @@ export function VoicemailTab() {
         }}
       />
     </View>
+    </VmThemeContext.Provider>
   );
 }
 
@@ -531,6 +556,7 @@ function VoicemailSearchHeader({
   onQueryChange: (next: string) => void;
   onOpenFilters: () => void;
 }) {
+  const { VM, styles } = useVm();
   return (
     <View style={styles.searchRow}>
       <View style={styles.searchBox}>
@@ -570,6 +596,7 @@ function VoicemailFilterChips({
   onChange: (next: PrimaryFilter) => void;
   onClearAdvanced: () => void;
 }) {
+  const { VM, styles } = useVm();
   const options: Array<{ id: PrimaryFilter; label: string; count: number; color: string }> = [
     { id: 'all', label: 'All', count: stats.total, color: VM.primary },
     { id: 'new', label: 'New', count: stats.unread, color: VM.green },
@@ -602,6 +629,7 @@ function VoicemailFilterChips({
 }
 
 function FilterChip({ label, count, active, color, onPress }: { label: string; count: number; active: boolean; color: string; onPress: () => void }) {
+  const { VM, styles } = useVm();
   return (
     <TouchableOpacity
       style={[
@@ -646,6 +674,7 @@ function VoicemailCard({
   onMessage,
   onMore,
 }: VoicemailCardProps) {
+  const { VM, styles } = useVm();
   const status = statusFor(vm);
   const urgent = status === 'urgent';
   const unread = status === 'new';
@@ -726,6 +755,7 @@ function VoicemailCard({
 }
 
 function StatusBadge({ status }: { status: 'urgent' | 'new' | 'old' }) {
+  const { VM, styles } = useVm();
   const color = status === 'urgent' ? VM.orange : status === 'new' ? VM.primary : VM.text3;
   const bg = status === 'urgent' ? VM.orangeSoft : status === 'new' ? VM.primarySoft : 'rgba(100, 116, 139, 0.12)';
   return (
@@ -746,6 +776,7 @@ function Waveform({
   duration: number;
   accent: string;
 }) {
+  const { styles } = useVm();
   const pulse = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -807,6 +838,7 @@ function VoicemailMiniPlayer({
   onToggle: () => void;
   onCall: () => void;
 }) {
+  const { VM, styles } = useVm();
   const duration = Math.max(1, progress.duration || vm.durationSec || 1);
   const pct = Math.min(1, (progress.position || 0) / duration);
   return (
@@ -839,6 +871,7 @@ function VoicemailActionMenu({
   onToggleRead: (vm: Voicemail) => void;
   onDownload: (vm: Voicemail) => void;
 }) {
+  const { VM, styles } = useVm();
   const visible = Boolean(vm);
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -862,25 +895,6 @@ function VoicemailActionMenu({
                 label="Download"
                 onPress={() => onDownload(vm)}
               />
-              <MenuAction
-                icon="archive-outline"
-                label="Archive unavailable"
-                muted
-                onPress={() => {
-                  onClose();
-                  Alert.alert('Archive', 'Archive is not supported by the current voicemail API.');
-                }}
-              />
-              <MenuAction
-                icon="trash-outline"
-                label="Delete unavailable"
-                danger
-                muted
-                onPress={() => {
-                  onClose();
-                  Alert.alert('Delete', 'Delete is not supported by the current voicemail API.');
-                }}
-              />
             </>
           )}
         </Pressable>
@@ -902,6 +916,7 @@ function MenuAction({
   muted?: boolean;
   onPress: () => void;
 }) {
+  const { VM, styles } = useVm();
   const color = danger ? VM.red : muted ? VM.text3 : VM.text;
   return (
     <TouchableOpacity style={styles.menuAction} activeOpacity={0.78} onPress={onPress}>
@@ -936,6 +951,7 @@ function VoicemailFilterSheet({
   onClear: () => void;
   onClose: () => void;
 }) {
+  const { VM, styles } = useVm();
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.sheetBackdrop} onPress={onClose} />
@@ -1013,6 +1029,7 @@ function VoicemailFilterSheet({
 }
 
 function VoicemailSkeletonList() {
+  const { styles } = useVm();
   return (
     <View style={styles.list}>
       {Array.from({ length: 5 }).map((_, idx) => (
@@ -1044,6 +1061,7 @@ function VoicemailState({
   actionLabel: string;
   onAction: () => void;
 }) {
+  const { VM, styles } = useVm();
   return (
     <View style={styles.stateWrap}>
       <View style={styles.stateIcon}>
@@ -1058,7 +1076,8 @@ function VoicemailState({
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles(VM: VmPalette) {
+  return StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: VM.bg,
@@ -1231,11 +1250,11 @@ const styles = StyleSheet.create({
   },
   cardNew: {
     borderColor: `${VM.primary}44`,
-    backgroundColor: '#111f37',
+    backgroundColor: VM.primarySoft,
   },
   cardUrgent: {
     borderColor: `${VM.orange}66`,
-    backgroundColor: '#1c1a22',
+    backgroundColor: VM.orangeSoft,
   },
   cardMuted: {
     backgroundColor: VM.cardMuted,
@@ -1243,7 +1262,7 @@ const styles = StyleSheet.create({
   },
   cardSelected: {
     borderColor: VM.primary,
-    backgroundColor: '#132745',
+    backgroundColor: VM.primarySoft,
   },
   cardTop: {
     flexDirection: 'row',
@@ -1393,7 +1412,7 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     borderWidth: 1,
     borderColor: `${VM.primary}55`,
-    backgroundColor: '#0f213c',
+    backgroundColor: VM.card2,
     padding: spacing['3'],
     flexDirection: 'row',
     alignItems: 'center',
@@ -1479,7 +1498,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 1,
     borderColor: VM.border,
-    backgroundColor: '#0d182b',
+    backgroundColor: VM.card2,
     padding: spacing['3'],
     shadowColor: VM.shadow,
     shadowOffset: { width: 0, height: 14 },
@@ -1747,4 +1766,5 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '900',
   },
-});
+  });
+}

@@ -22,6 +22,8 @@
     "lint": "echo lint-mobile",
     "test:caller-identity": "tsx --test src/calls/callerIdentity.test.ts",
     "test:notification-routing": "tsx --test src/notifications/notificationRouting.test.ts",
+    "test:call-origin": "tsx --test src/navigation/callOrigin.test.ts",
+    "test:call-history-merge": "tsx --test src/storage/callHistory.merge.test.ts",
     "test:vm-greeting": "tsx src/voicemail/vmGreetingInviteUtils.test.ts",
     "test:voicemail-pagination": "tsx src/api/voicemailPagination.test.ts",
     "test:voicemail-scope": "tsx src/api/voicemailScope.test.ts",

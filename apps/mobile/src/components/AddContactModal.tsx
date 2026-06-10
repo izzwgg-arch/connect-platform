@@ -6,13 +6,13 @@ import {
   TextInput,
   ScrollView,
   TouchableOpacity,
-  Alert,
   StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { createContact } from '../api/client';
+import { showAppAlert } from './ui/appAlert';
 import { spacing } from '../theme/spacing';
 
 export type AddContactPrefill = {
@@ -94,11 +94,11 @@ export function AddContactModal({
     } catch (e: any) {
       const msg = String(e?.message || '').toUpperCase();
       if (msg.includes('DUPLICATE_PHONE')) {
-        Alert.alert('Duplicate phone', 'A contact with this phone number already exists.');
+        showAppAlert('Duplicate phone', 'A contact with this phone number already exists.');
       } else if (msg.includes('NAME_PHONE_OR_EMAIL_REQUIRED')) {
-        Alert.alert('Missing info', 'Please provide a name plus a phone or email.');
+        showAppAlert('Missing info', 'Please provide a name plus a phone or email.');
       } else {
-        Alert.alert('Could not save contact', 'Please try again.');
+        showAppAlert('Could not save contact', 'Please try again.');
       }
     } finally {
       setSubmitting(false);

@@ -1,8 +1,9 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { spacing } from '../../theme/spacing';
+import { AppAlertOptions, registerAppAlertHandler } from './appAlert';
 
 export type PopupAction = {
   key?: string;
@@ -147,6 +148,85 @@ export function AppConfirmDialog({
   );
 }
 
+/**
+ * Mount once near the app root. Registers the imperative `showAppAlert`
+ * handler and renders a Connect-themed modal instead of the white system
+ * dialog. Supports the same shape as `Alert.alert(title, message, buttons)`.
+ */
+export function AppAlertHost() {
+  const { colors } = useTheme();
+  const [current, setCurrent] = useState<AppAlertOptions | null>(null);
+
+  useEffect(() => {
+    registerAppAlertHandler((opts) => setCurrent(opts));
+    return () => registerAppAlertHandler(null);
+  }, []);
+
+  const close = () => setCurrent(null);
+
+  const buttons =
+    current?.buttons && current.buttons.length > 0
+      ? current.buttons
+      : [{ text: 'OK' as const }];
+  const stacked = buttons.length > 2;
+
+  return (
+    <Modal visible={!!current} transparent animationType="fade" onRequestClose={close}>
+      <Pressable
+        style={[styles.backdrop, styles.centerBackdrop]}
+        onPress={() => {
+          // Tapping the scrim behaves like a cancel button if one exists.
+          const cancel = buttons.find((b) => b.style === 'cancel');
+          close();
+          cancel?.onPress?.();
+        }}
+      >
+        <AnimatedPanel center>
+          <Pressable
+            style={[styles.confirmCard, { backgroundColor: colors.surface, borderColor: colors.border }]}
+            onPress={() => undefined}
+          >
+            {current?.title ? (
+              <Text style={[styles.confirmTitle, { color: colors.text }]}>{current.title}</Text>
+            ) : null}
+            {current?.message ? (
+              <Text style={[styles.confirmMessage, { color: colors.textSecondary }]}>{current.message}</Text>
+            ) : null}
+            <View style={[styles.confirmActions, stacked && styles.alertActionsStacked]}>
+              {buttons.map((btn, index) => {
+                const isPrimary = btn.style !== 'cancel';
+                const bg = btn.style === 'destructive'
+                  ? colors.danger
+                  : btn.style === 'cancel'
+                    ? colors.surfaceElevated
+                    : colors.primary;
+                const fg = btn.style === 'cancel' ? colors.textSecondary : '#fff';
+                return (
+                  <TouchableOpacity
+                    key={`${btn.text}:${index}`}
+                    activeOpacity={0.78}
+                    style={[
+                      styles.confirmButton,
+                      stacked && styles.alertButtonStacked,
+                      { backgroundColor: bg, borderColor: btn.style === 'cancel' ? colors.border : 'transparent' },
+                    ]}
+                    onPress={() => {
+                      close();
+                      btn.onPress?.();
+                    }}
+                  >
+                    <Text style={[styles.confirmButtonText, { color: fg }]}>{btn.text}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </Pressable>
+        </AnimatedPanel>
+      </Pressable>
+    </Modal>
+  );
+}
+
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
@@ -238,6 +318,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: spacing['3'],
     marginTop: spacing['5'],
+  },
+  alertActionsStacked: {
+    flexDirection: 'column-reverse',
+  },
+  alertButtonStacked: {
+    flex: 0,
+    width: '100%',
   },
   confirmButton: {
     flex: 1,

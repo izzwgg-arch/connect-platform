@@ -1,7 +1,6 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Animated,
   FlatList,
   Linking,
@@ -27,6 +26,7 @@ import { Avatar } from '../../components/ui/Avatar';
 import { PulseDot } from '../../components/ui/PulseDot';
 import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
 import { AppActionSheet } from '../../components/ui/AppPopup';
+import { showAppAlert } from '../../components/ui/appAlert';
 import { createContact, getContacts, mobileQueryKeys } from '../../api/client';
 import { subscribeToBLF, type LiveTelephonyState } from '../../api/realtime';
 import type { Contact } from '../../types';
@@ -213,7 +213,7 @@ export function ContactTab() {
   }, [sip]);
 
   const messageContact = useCallback((contact: Contact) => {
-    Alert.alert('Message', `Open Chat to message ${contact.displayName}.`);
+    showAppAlert('Message', `Open Chat to message ${contact.displayName}.`);
   }, []);
 
   const emailContact = useCallback((contact: Contact) => {
@@ -620,11 +620,11 @@ function AddContactModal({
     } catch (e: any) {
       const msg = String(e?.message || '').toUpperCase();
       if (msg.includes('DUPLICATE_PHONE')) {
-        Alert.alert('Duplicate phone', 'A contact with this phone number already exists.');
+        showAppAlert('Duplicate phone', 'A contact with this phone number already exists.');
       } else if (msg.includes('NAME_PHONE_OR_EMAIL_REQUIRED')) {
-        Alert.alert('Missing info', 'Please provide a name plus a phone or email.');
+        showAppAlert('Missing info', 'Please provide a name plus a phone or email.');
       } else {
-        Alert.alert('Could not save contact', 'Please try again.');
+        showAppAlert('Could not save contact', 'Please try again.');
       }
     } finally {
       setSubmitting(false);

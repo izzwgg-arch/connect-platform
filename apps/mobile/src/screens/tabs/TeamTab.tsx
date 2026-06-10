@@ -1,5 +1,5 @@
 import React, { memo, useCallback, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, FlatList, PanResponder, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Animated, FlatList, PanResponder, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -12,6 +12,7 @@ import { Avatar } from '../../components/ui/Avatar';
 import { PulseDot } from '../../components/ui/PulseDot';
 import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
 import { AppActionSheet } from '../../components/ui/AppPopup';
+import { showAppAlert } from '../../components/ui/appAlert';
 import { getTeamDirectory, mobileQueryKeys } from '../../api/client';
 import { subscribeToBLF, type LiveTelephonyState } from '../../api/realtime';
 import type { LiveCall, TeamDirectoryMember, TeamPresence } from '../../types';
@@ -201,7 +202,7 @@ export function TeamTab() {
   }, [sip]);
 
   const messageMember = useCallback((member: TeamDirectoryMember) => {
-    Alert.alert('Message', `Chat actions for ${member.name} will open from Chat.`);
+    showAppAlert('Message', `Chat actions for ${member.name} will open from Chat.`);
   }, []);
 
   return (

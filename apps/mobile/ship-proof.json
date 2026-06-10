@@ -1,9 +1,9 @@
 ﻿{
-    "completedAt":  "2026-06-03T15:22:07.0806143-04:00",
-    "shipBuildId":  "20260603-151732",
-    "shipVersionCode":  "1780514252",
+    "completedAt":  "2026-06-10T13:44:03.5035517-04:00",
+    "shipBuildId":  "20260610-132723",
+    "shipVersionCode":  "1781112443",
     "apkPath":  "C:\\Users\\izzyw\\.connect-mobile-build\\repo\\apps\\mobile\\android\\app\\build\\outputs\\apk\\release\\app-release.apk",
-    "apkBytes":  144424441,
+    "apkBytes":  144445653,
     "buildRoot":  "C:\\Users\\izzyw\\.connect-mobile-build\\repo",
     "realRepo":  "C:\\dev\\projects\\Connect 2",
     "skipInstall":  true

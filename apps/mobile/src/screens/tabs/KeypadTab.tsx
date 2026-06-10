@@ -6,7 +6,6 @@ import {
   StyleSheet,
   Animated,
   Dimensions,
-  Alert,
   Platform,
   Pressable,
   ScrollView,
@@ -21,6 +20,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { usePresence } from '../../context/PresenceContext';
 import { Avatar } from '../../components/ui/Avatar';
 import { AppConfirmDialog } from '../../components/ui/AppPopup';
+import { showAppAlert } from '../../components/ui/appAlert';
 import { getContacts, getOutboundRoutes, getVoiceExtension, resolveOutboundDial } from '../../api/client';
 import { loadLocalCallHistory } from '../../storage/callHistory';
 import type { Contact, CallRecord, OutboundDialRoute, VoiceExtension } from '../../types';
@@ -334,7 +334,7 @@ export function KeypadTab() {
 
   const doCall = async (target: string) => {
     if (sip.registrationState !== 'registered') {
-      Alert.alert(
+      showAppAlert(
         'Not Registered',
         'The softphone is not registered. Please check your connection in Settings.',
       );
@@ -359,7 +359,7 @@ export function KeypadTab() {
       await sip.dial(pbxTarget, { displayTarget: target });
     } catch (e: any) {
       setSelectedOutboundRouteId('');
-      Alert.alert('Call Failed', e?.message || 'Could not start the call. Check your connection.');
+      showAppAlert('Call Failed', e?.message || 'Could not start the call. Check your connection.');
     } finally {
       setDialing(false);
     }

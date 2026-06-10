@@ -1,4 +1,5 @@
-import { Platform, PermissionsAndroid, Alert } from 'react-native';
+import { Platform, PermissionsAndroid } from 'react-native';
+import { showAppAlert } from '../components/ui/appAlert';
 
 /** Result of a mic-permission pre-check. `granted` is authoritative; `message`
  *  is optional human-readable context (why we asked, what platform). */
@@ -86,6 +87,6 @@ export async function ensureMicPermission(): Promise<MicPermissionResult> {
 export async function ensureMicPermissionOrAlert(): Promise<boolean> {
   const res = await ensureMicPermission();
   if (res.granted) return true;
-  Alert.alert('Microphone Required', res.message ?? 'Microphone access is needed to make calls.');
+  showAppAlert('Microphone Required', res.message ?? 'Microphone access is needed to make calls.');
   return false;
 }

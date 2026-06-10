@@ -21,6 +21,7 @@ import { logCallFlow } from '../debug/callFlowDebug';
 import { moveAppToBackground } from '../sip/callkeep';
 import type { CallDirection, CallState } from '../types';
 import { findCallModalNavigator } from './callStackNav';
+import { getCallReturnTab, recordFocusedRoute } from './callOrigin';
 import { MobileNotificationRoute, notificationDataToRoute } from '../notifications/notificationRouting';
 
 function hasActiveOrPendingCall(
@@ -140,6 +141,9 @@ function TabsWrapper() {
           console.log('[LOCK_CALL_CLEANUP] skip moveAppToBackground (not from lock screen) — keep MainActivity resumed for next incoming call');
         }
       }
+      // Return to whichever tab the call started from (dialer, call history,
+      // contacts, messages, ...) instead of always the dialer.
+      const returnTab = getCallReturnTab();
       const stack = appStackNav();
       stack.dispatch(
         CommonActions.reset({
@@ -148,15 +152,15 @@ function TabsWrapper() {
             {
               name: 'Tabs',
               state: {
-                routes: [{ name: 'Keypad' }],
+                routes: [{ name: returnTab }],
                 index: 0,
               },
             },
           ],
         }),
       );
-      console.log('[ANSWER_FLOW] RETURNED_TO_KEYPAD');
-      logCallFlow('NAVIGATE_BACK_TO_KEYPAD', { extra: { source: 'returnToDefaultTab' } });
+      console.log('[ANSWER_FLOW] RETURNED_TO_ORIGIN_TAB', returnTab);
+      logCallFlow('NAVIGATE_BACK_TO_ORIGIN_TAB', { extra: { source: 'returnToDefaultTab', tab: returnTab } });
     } catch {}
   };
 
@@ -458,7 +462,14 @@ export function RootNavigator() {
     <>
       {/* Keep navigation mounted even while splash is visible so incoming-call
           handoff never tears down and rebuilds the app shell. */}
-      <NavigationContainer ref={navRef} onReady={() => setNavReady(true)}>
+      <NavigationContainer
+        ref={navRef}
+        onReady={() => {
+          setNavReady(true);
+          recordFocusedRoute(navRef.getCurrentRoute()?.name);
+        }}
+        onStateChange={() => recordFocusedRoute(navRef.getCurrentRoute()?.name)}
+      >
         <RootStack.Navigator screenOptions={{ headerShown: false }}>
           {!token ? (
             <RootStack.Screen name="Auth" component={AuthNavigator} />

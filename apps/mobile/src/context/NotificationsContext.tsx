@@ -11,7 +11,8 @@ import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import Constants from "expo-constants";
 import * as SecureStore from "expo-secure-store";
-import { Alert, AppState, Linking, NativeEventEmitter, NativeModules, PermissionsAndroid, Platform } from "react-native";
+import { AppState, Linking, NativeEventEmitter, NativeModules, PermissionsAndroid, Platform } from "react-native";
+import { showAppAlert } from "../components/ui/appAlert";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   getMediaTestStatus,
@@ -53,6 +54,7 @@ import { initVoipPushListener, getCachedVoipPushToken } from "../sip/voipPush";
 // remote cancel. Static import guarantees the function exists before we
 // call it and keeps teardown fully synchronous.
 import { stopAllTelephonyAudio } from "../audio/telephonyAudio";
+import { appendCallRecord } from "../storage/callHistory";
 import * as FileSystem from "expo-file-system";
 import type { CallInvite, MobilePushPayload } from "../types";
 import {
@@ -298,6 +300,25 @@ function safeParse(raw: string | null): any {
   } catch {
     return null;
   }
+}
+
+/**
+ * Mirror of the telephony service's `looksDivertedToVoicemail` channel check
+ * (apps/telephony/.../MobilePushNotifier.ts). The mobile answer-status poll
+ * only receives the active channel name strings, so we inspect those for the
+ * voicemail markers Asterisk leaves on the channel once a call rolls into the
+ * VoiceMail() app. Used purely to pick the right "call ended" wording when a
+ * still-ringing invite is answered away from this device.
+ */
+function channelsLookLikeVoicemail(channels: unknown): boolean {
+  if (!Array.isArray(channels)) return false;
+  const joined = channels.map((c) => String(c || "")).join(" ").toLowerCase();
+  return (
+    joined.includes("voicemail") ||
+    joined.includes("vmail") ||
+    joined.includes("@vm") ||
+    joined.includes("app-voicemail")
+  );
 }
 
 function parseIncomingCallActionUrl(url: string | null): ParsedIncomingCallAction | null {
@@ -796,7 +817,7 @@ async function openBatteryOptimizationSettings(): Promise<void> {
   }
 
   // Final fallback: show manual instructions alert
-  Alert.alert(
+  showAppAlert(
     "One More Step (Samsung)",
     "To ensure calls ring when the app is closed:\n\n" +
     "1. Open Settings → Battery → Background usage limits\n" +
@@ -1347,7 +1368,7 @@ export function NotificationsProvider({
       isFullyReady: granted && prev.pushTokenRegistered,
     }));
     if (!granted) {
-      Alert.alert(
+      showAppAlert(
         "Notifications required",
         "Connect needs notification permission to show incoming call alerts.\n\nPlease enable it in Android Settings → Apps → Connect → Notifications.",
         [{ text: "OK" }],
@@ -2750,6 +2771,44 @@ export function NotificationsProvider({
           );
           return;
         }
+        // Tertiary signal: the call has been ANSWERED, but not by this
+        // device (if WE had answered, the answerHandoff guard at the top of
+        // tick would have stopped this poll already). That means another of
+        // the user's devices / a desk phone in the same ring group picked up,
+        // OR the call rolled to voicemail (Asterisk's VoiceMail app answers
+        // the channel, so answeredAt is set the instant it diverts). In every
+        // one of these cases the mobile must stop ringing immediately instead
+        // of ringing on while someone else talks / leaves a voicemail.
+        if (status?.pbxAnswered) {
+          const reachedVoicemail = channelsLookLikeVoicemail(status?.activeChannels);
+          cancelled = true;
+          if (timer !== null) {
+            clearTimeout(timer);
+            timer = null;
+          }
+          if (!reachedVoicemail && incomingInvite) {
+            // Stamp a local call-history entry so Recent shows "Answered on
+            // another device" for this call. mergeCallRecords lets this
+            // device-only signal override the server record's disposition.
+            appendCallRecord({
+              id: 'invite:' + inviteId,
+              linkedId: incomingInvite.pbxCallId || null,
+              direction: 'inbound',
+              fromNumber: incomingInvite.fromNumber || '',
+              fromName: incomingInvite.fromDisplay || null,
+              toNumber: incomingInvite.toExtension || '',
+              startedAt: new Date((incomingInvite as any)?._pushReceivedAt || Date.now()).toISOString(),
+              durationSec: 0,
+              disposition: 'answered_elsewhere',
+            }).catch(() => undefined);
+          }
+          killAll(
+            reachedVoicemail ? 'reached_voicemail' : 'answered_on_another_device',
+            reachedVoicemail ? 'Call ended' : 'Answered on another device',
+            700,
+          );
+          return;
+        }
       } catch (e: any) {
         console.warn('[INVITE_POLL] error tick=' + tickCount + ' inviteId=' + inviteId + ' msg=' + (e?.message || String(e)));
       }
@@ -3542,7 +3601,7 @@ export function NotificationsProvider({
               "connect_notif_permission_prompted",
               "1",
             ).catch(() => {});
-            Alert.alert(
+            showAppAlert(
               "Allow notifications for incoming calls",
               'Connect needs notification permission to ring when you receive a call.\n\nGo to Settings → Apps → Connect → Notifications and enable them.',
               [{ text: "OK" }],

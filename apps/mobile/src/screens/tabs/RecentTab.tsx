@@ -1,6 +1,5 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
   Animated,
   View,
   Text,
@@ -25,6 +24,7 @@ import { Avatar } from '../../components/ui/Avatar';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
 import { AppActionSheet } from '../../components/ui/AppPopup';
+import { showAppAlert } from '../../components/ui/appAlert';
 import { getCallHistory, getContacts, getVoiceExtension, mobileQueryKeys } from '../../api/client';
 import { loadLocalCallHistory, mergeCallRecords } from '../../storage/callHistory';
 import {
@@ -43,7 +43,7 @@ import { teamFilterChipColors } from '../../theme/filterChipColors';
 import { radius, spacing } from '../../theme/spacing';
 
 type CallFilter = 'all' | 'missed' | 'incoming' | 'outgoing';
-type CallKind = 'missed' | 'incoming' | 'outgoing' | 'internal' | 'voicemail';
+type CallKind = 'missed' | 'incoming' | 'outgoing' | 'internal' | 'voicemail' | 'answered_elsewhere';
 
 type CallGroup = {
   type: 'group';
@@ -116,6 +116,7 @@ function normalizeDisposition(call: CallRecord): NormalizedDisposition {
 function callKind(call: CallRecord): CallKind {
   const disposition = normalizeDisposition(call);
   if (disposition === 'voicemail') return 'voicemail';
+  if (disposition === 'answered_elsewhere') return 'answered_elsewhere';
   if (disposition === 'missed' || disposition === 'no_answer' || (isInboundCall(call) && call.durationSec === 0)) return 'missed';
   if (isInternalDirection(call)) return 'internal';
   return isInboundCall(call) ? 'incoming' : 'outgoing';
@@ -228,6 +229,7 @@ function kindAccent(kind: CallKind, colors: ReturnType<typeof useTheme>['colors'
     case 'outgoing': return colors.success;
     case 'internal': return colors.purple;
     case 'voicemail': return colors.indigo;
+    case 'answered_elsewhere': return colors.textSecondary;
   }
 }
 
@@ -238,6 +240,7 @@ function kindIcon(kind: CallKind): keyof typeof Ionicons.glyphMap {
     case 'outgoing': return 'arrow-up';
     case 'internal': return 'swap-horizontal-outline';
     case 'voicemail': return 'recording-outline';
+    case 'answered_elsewhere': return 'phone-portrait-outline';
   }
 }
 
@@ -248,6 +251,7 @@ function kindLabel(kind: CallKind): string {
     case 'outgoing': return 'Outgoing';
     case 'internal': return 'Internal';
     case 'voicemail': return 'Voicemail';
+    case 'answered_elsewhere': return 'Answered on another device';
   }
 }
 
@@ -427,7 +431,7 @@ export function RecentTab() {
   }, [sip]);
 
   const handleMessage = useCallback((group: CallGroup) => {
-    Alert.alert('Message', `Open Chat to message ${group.displayName}.`);
+    showAppAlert('Message', `Open Chat to message ${group.displayName}.`);
   }, []);
 
   const handleAddContact = useCallback(
@@ -438,7 +442,7 @@ export function RecentTab() {
 
       // No usable external/extension number — cannot create a contact.
       if (!number) {
-        Alert.alert(
+        showAppAlert(
           'No phone number',
           'This recent call has no usable phone number, so it can’t be saved as a contact.',
         );
@@ -448,7 +452,7 @@ export function RecentTab() {
       // Dedupe: if a contact already has this number, don't open the form.
       const existingName = resolveContactName(number);
       if (existingName) {
-        Alert.alert('Already in contacts', `${existingName} already has this number.`);
+        showAppAlert('Already in contacts', `${existingName} already has this number.`);
         return;
       }
 
@@ -472,7 +476,7 @@ export function RecentTab() {
         .invalidateQueries({ queryKey: mobileQueryKeys.contacts('') })
         .catch(() => undefined);
       if (saved?.displayName) {
-        Alert.alert('Saved', `${saved.displayName} added to contacts.`);
+        showAppAlert('Saved', `${saved.displayName} added to contacts.`);
       }
     },
     [queryClient],

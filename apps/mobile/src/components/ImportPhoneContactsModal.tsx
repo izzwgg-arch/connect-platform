@@ -12,7 +12,6 @@
 import React, { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   Modal,
   Platform,
@@ -25,6 +24,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
+import { showAppAlert } from './ui/appAlert';
 import { typography } from '../theme/typography';
 import { spacing, radius } from '../theme/spacing';
 import {
@@ -217,7 +217,7 @@ export function ImportPhoneContactsModal({
         selectedCount,
         previewCandidateCount: preview.candidates.length,
       });
-      Alert.alert('Nothing selected', 'Pick at least one contact to import.');
+      showAppAlert('Nothing selected', 'Pick at least one contact to import.');
       return;
     }
     setStep('importing');
