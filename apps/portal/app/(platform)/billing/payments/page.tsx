@@ -24,6 +24,55 @@ function cssVar(source: Element, name: string, fallback: string) {
   return window.getComputedStyle(source).getPropertyValue(name).trim() || fallback;
 }
 
+function parseCssColor(color: string): [number, number, number, number] | null {
+  const rgbMatch = color.match(/rgba?\(([^)]+)\)/i);
+  if (rgbMatch) {
+    const parts = rgbMatch[1].split(",").map((part) => part.trim());
+    const [r, g, b] = parts.slice(0, 3).map((part) => Number.parseFloat(part));
+    const a = parts[3] == null ? 1 : Number.parseFloat(parts[3]);
+    return [r, g, b, Number.isFinite(a) ? a : 1];
+  }
+
+  const srgbMatch = color.match(/color\(srgb\s+([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)(?:\s*\/\s*([0-9.]+))?\)/i);
+  if (srgbMatch) {
+    const [, r, g, b, a] = srgbMatch;
+    return [
+      Number.parseFloat(r) * 255,
+      Number.parseFloat(g) * 255,
+      Number.parseFloat(b) * 255,
+      a == null ? 1 : Number.parseFloat(a),
+    ];
+  }
+
+  return null;
+}
+
+function compositeColor(foreground: [number, number, number, number], background: [number, number, number]) {
+  const [r, g, b, a] = foreground;
+  return [
+    r * a + background[0] * (1 - a),
+    g * a + background[1] * (1 - a),
+    b * a + background[2] * (1 - a),
+  ] as [number, number, number];
+}
+
+function effectiveBackgroundColor(element: Element | null, fallback: string) {
+  if (!element) return fallback;
+  const chain: Element[] = [];
+  for (let node: Element | null = element; node; node = node.parentElement) {
+    chain.unshift(node);
+  }
+
+  let resolved: [number, number, number] = [255, 255, 255];
+  for (const node of chain) {
+    const parsed = parseCssColor(window.getComputedStyle(node).backgroundColor);
+    if (!parsed || parsed[3] <= 0) continue;
+    resolved = compositeColor(parsed, resolved);
+  }
+
+  return `rgb(${resolved.map((part) => Math.round(part)).join(", ")})`;
+}
+
 function applySolaIFieldStyle() {
   if (!window.setIfieldStyle) return;
   const form = document.querySelector(".billing-payments-form");
@@ -32,7 +81,7 @@ function applySolaIFieldStyle() {
   const sampleInput = form.querySelector<HTMLInputElement>('input[name="cardholderName"]');
   const sampleInputStyle = sampleInput ? window.getComputedStyle(sampleInput) : null;
   const inputHeight = sampleInputStyle?.height || cssVar(form, "--billing-payments-input-height", "44px");
-  const inputBackground = sampleInputStyle?.backgroundColor || cssVar(form, "--billing-payments-input-bg", "#111827");
+  const inputBackground = effectiveBackgroundColor(sampleInput, cssVar(form, "--billing-payments-input-bg", "#111827"));
   const inputColor = sampleInputStyle?.color || cssVar(form, "--billing-payments-input-text", "#e5eef8");
   const inputFontFamily = sampleInputStyle?.fontFamily || cssVar(form, "--billing-payments-input-font", "Inter, system-ui, sans-serif");
   const inputFontSize = sampleInputStyle?.fontSize || cssVar(form, "--billing-payments-input-font-size", "13px");
