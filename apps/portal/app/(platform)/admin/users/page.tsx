@@ -15,9 +15,13 @@ type RoleOption = { id: string; label: string };
 type CatalogResponse = {
   tenantId: string | null;
   roles: RoleOption[];
+  customRoles?: RoleOption[];
   userFacingOnly: boolean;
   totalExtensions: number;
   filteredOut: number;
+};
+type UserCustomRolesResponse = {
+  customRoles: Array<{ id: string; name: string; active: boolean }>;
 };
 type AdminUser = {
   id: string;
@@ -80,6 +84,20 @@ const DEFAULT_PORTAL_ROLES: RoleOption[] = [
   { id: "TENANT_ADMIN", label: "Tenant Admin" },
   { id: "SUPER_ADMIN", label: "Platform Admin" },
 ];
+
+const CUSTOM_ROLE_PREFIX = "custom:";
+
+function customRolePickerValue(roleId: string) {
+  return `${CUSTOM_ROLE_PREFIX}${roleId}`;
+}
+
+function isCustomRolePickerValue(value: string) {
+  return value.startsWith(CUSTOM_ROLE_PREFIX);
+}
+
+function customRoleIdFromPickerValue(value: string) {
+  return value.slice(CUSTOM_ROLE_PREFIX.length);
+}
 
 const emptyForm = {
   tenantId: "",
@@ -1009,6 +1027,9 @@ function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
   const { options: tenantOptions } = useTenantOptions();
   const tenants: TenantOption[] = tenantOptions.map((t) => ({ id: t.id, name: t.name, status: "ACTIVE" }));
   const [roles, setRoles] = useState<RoleOption[]>(DEFAULT_PORTAL_ROLES);
+  const [customRoles, setCustomRoles] = useState<RoleOption[]>([]);
+  const [customRoleIds, setCustomRoleIds] = useState<string[]>([]);
+  const [rolePicker, setRolePicker] = useState(() => user ? portalBucketForRole(user.role) : "END_USER");
   const [userFacingOnly, setUserFacingOnly] = useState(true);
   // Canonical extension options — auto-refetches when cc-pbx-sync-complete fires.
   const { extensions: extensionOptions, totalExtensions: extTotal, filteredOut: extFilteredOut } = useExtensionOptions({
@@ -1018,24 +1039,74 @@ function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
   const extensionFilterStats = { total: extTotal, hidden: extFilteredOut };
   const selectedExtension = extensionOptions.find((e) => e.id === form.extensionId);
   const roleOptions = roles.length ? roles : DEFAULT_PORTAL_ROLES;
+  const roleGroups = useMemo(() => {
+    const groups = [{
+      label: "Platform roles",
+      options: roleOptions.map((r) => ({ value: r.id, label: r.label })),
+    }];
+    if (customRoles.length > 0) {
+      groups.push({
+        label: "Custom roles",
+        options: customRoles.map((r) => ({ value: customRolePickerValue(r.id), label: r.label })),
+      });
+    }
+    return groups;
+  }, [roleOptions, customRoles]);
 
-  // Bootstrap: fetch portal-bucket roles once when modal opens.
+  // Fetch portal-bucket + tenant custom roles when tenant changes.
   // Tenant list is provided by useTenantOptions; extension list by useExtensionOptions.
   useEffect(() => {
+    if (!form.tenantId) return;
     let active = true;
-    apiGet<CatalogResponse>(`/admin/users/catalog?userFacingOnly=${userFacingOnly ? "true" : "false"}`)
+    const qs = new URLSearchParams({
+      tenantId: form.tenantId,
+      userFacingOnly: userFacingOnly ? "true" : "false",
+    });
+    apiGet<CatalogResponse>(`/admin/users/catalog?${qs.toString()}`)
       .then((r) => {
         if (!active) return;
         if (r.roles?.length) setRoles(r.roles);
-        if (!form.tenantId && tenants.length > 0) {
-          const initial = tenants.some((t) => t.id === defaultTenantId) ? defaultTenantId : (tenants[0]?.id || "");
-          if (initial) setForm((f) => ({ ...f, tenantId: initial }));
-        }
+        setCustomRoles(r.customRoles ?? []);
       })
       .catch((e: any) => { if (active) setError(e?.message || "Failed to load roles"); });
     return () => { active = false; };
+  }, [form.tenantId, userFacingOnly]);
+
+  useEffect(() => {
+    if (!form.tenantId && tenants.length > 0) {
+      const initial = tenants.some((t) => t.id === defaultTenantId) ? defaultTenantId : (tenants[0]?.id || "");
+      if (initial) setForm((f) => ({ ...f, tenantId: initial }));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [tenants.length, defaultTenantId]);
+
+  useEffect(() => {
+    if (mode !== "edit" || !user?.id || !form.tenantId) return;
+    let active = true;
+    const qs = new URLSearchParams({ tenantId: form.tenantId });
+    apiGet<UserCustomRolesResponse>(`/admin/users/${user.id}/custom-roles?${qs.toString()}`)
+      .then((r) => {
+        if (!active) return;
+        const assigned = (r.customRoles ?? []).filter((cr) => cr.active).map((cr) => cr.id);
+        setCustomRoleIds(assigned);
+        setRolePicker(assigned.length > 0 ? customRolePickerValue(assigned[0]) : portalBucketForRole(user.role));
+      })
+      .catch(() => {
+        if (!active) return;
+        setCustomRoleIds([]);
+        setRolePicker(portalBucketForRole(user.role));
+      });
+    return () => { active = false; };
+  }, [mode, user?.id, user?.role, form.tenantId]);
+
+  useEffect(() => {
+    if (!isCustomRolePickerValue(rolePicker)) return;
+    const selectedId = customRoleIdFromPickerValue(rolePicker);
+    if (!customRoles.some((r) => r.id === selectedId)) {
+      setRolePicker(form.role);
+      setCustomRoleIds([]);
+    }
+  }, [customRoles, rolePicker, form.role]);
 
   // Set default tenantId once tenant options have loaded (handles async hook).
   useEffect(() => {
@@ -1066,12 +1137,33 @@ function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
     }
   }
 
+  function onRolePickerChange(value: string) {
+    setRolePicker(value);
+    if (isCustomRolePickerValue(value)) {
+      setCustomRoleIds([customRoleIdFromPickerValue(value)]);
+      return;
+    }
+    setForm((f) => ({ ...f, role: value }));
+    setCustomRoleIds([]);
+  }
+
   async function save() {
     setSaving(true);
     setError("");
     try {
-      if (mode === "create") await apiPost("/admin/users", form);
-      else if (user) await apiPatch(`/admin/users/${user.id}`, { ...form, status: form.active ? "ACTIVE" : "DISABLED" });
+      let userId = user?.id;
+      if (mode === "create") {
+        const created = await apiPost<{ user?: { id: string } }>("/admin/users", form);
+        userId = created.user?.id;
+      } else if (user) {
+        await apiPatch(`/admin/users/${user.id}`, { ...form, status: form.active ? "ACTIVE" : "DISABLED" });
+      }
+      if (userId) {
+        await apiPut(`/admin/users/${userId}/custom-roles`, {
+          customRoleIds,
+          tenantId: form.tenantId,
+        });
+      }
       onSaved(mode === "create" ? form.tenantId : undefined);
     } catch (e: any) {
       setError(e?.message || "Save failed");
@@ -1131,11 +1223,17 @@ function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
           </Field>
           <Field label="Role">
             <ConnectSelect
-              value={form.role}
-              onChange={(v) => setForm({ ...form, role: v })}
+              value={rolePicker}
+              onChange={onRolePickerChange}
               style={{ width: "100%" }}
-              options={roleOptions.map((r) => ({ value: r.id, label: r.label }))}
+              groups={roleGroups}
+              searchable={roleGroups.flatMap((g) => g.options).length > 8}
             />
+            {isCustomRolePickerValue(rolePicker) ? (
+              <span className="muted" style={{ fontSize: 12 }}>
+                Custom roles add permissions on top of the user&apos;s platform role ({roleOptions.find((r) => r.id === form.role)?.label || "End User"}).
+              </span>
+            ) : null}
           </Field>
           <Field label="Email"><input className="input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
           <Field label="First name"><input className="input" value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} /></Field>

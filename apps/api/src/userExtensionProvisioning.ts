@@ -209,10 +209,19 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
       ? shapedExtensions.filter((e) => e.isUserFacing)
       : shapedExtensions;
 
+    const customRoles = tenantId
+      ? await db.customRole.findMany({
+          where: { tenantId, active: true },
+          orderBy: { name: "asc" },
+          select: { id: true, name: true },
+        })
+      : [];
+
     return {
       tenantId,
       tenants: filteredTenants,
       roles: PORTAL_ROLE_BUCKETS.map((b) => ({ id: b, label: portalBucketLabel(b) })),
+      customRoles: customRoles.map((r) => ({ id: r.id, label: r.name })),
       extensions: visibleExtensions,
       userFacingOnly,
       totalExtensions: shapedExtensions.length,
