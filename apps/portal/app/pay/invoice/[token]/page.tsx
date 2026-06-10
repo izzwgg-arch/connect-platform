@@ -264,7 +264,7 @@ export default function PublicBillingInvoicePayPage() {
           <footer className="billing-pay-trust-strip">
             <div className="billing-pay-trust-cell sola">
               <span>Secured &amp; Powered by</span>
-              <strong><span className="sola-mark" aria-hidden="true" /> SOLA</strong>
+              <strong>SOLA</strong>
             </div>
             <div className="billing-pay-trust-cell security">
               <ShieldCheck size={24} />
