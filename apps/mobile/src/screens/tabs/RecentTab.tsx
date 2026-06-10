@@ -25,7 +25,7 @@ import { Avatar } from '../../components/ui/Avatar';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
 import { AppActionSheet } from '../../components/ui/AppPopup';
-import { createContact, getCallHistory, getContacts, mobileQueryKeys } from '../../api/client';
+import { createContact, getCallHistory, getContacts, getVoiceExtension, mobileQueryKeys } from '../../api/client';
 import { loadLocalCallHistory, mergeCallRecords } from '../../storage/callHistory';
 import {
   normalizeCallerIdentity,
@@ -187,7 +187,11 @@ function callDirectionKind(call: CallRecord): CallerDirection {
  *   - legacy local records: the raw SIP display name was stored in
  *     `fromNumber` (e.g. "New Tires:New Tires:") with no `fromName`.
  */
-function callIdentity(call: CallRecord): NormalizedCallerIdentity {
+/** The logged-in user's own extension identity, so it is never shown as the
+ *  remote party (e.g. the "Home" extension name on outbound/inbound rows). */
+type SelfIdentity = { names: string[]; numbers: string[] };
+
+function callIdentity(call: CallRecord, self?: SelfIdentity): NormalizedCallerIdentity {
   const legacyDisplayInNumber =
     (!call.fromName || !call.fromName.trim()) &&
     isInboundCall(call) &&
@@ -197,20 +201,22 @@ function callIdentity(call: CallRecord): NormalizedCallerIdentity {
     displayName: legacyDisplayInNumber ? call.fromNumber : call.fromName,
     toNumber: call.toNumber,
     direction: callDirectionKind(call),
+    selfNames: self?.names,
+    selfExtensionNumbers: self?.numbers,
   });
 }
 
-function callDisplayNumber(call: CallRecord): string {
-  const id = callIdentity(call);
+function callDisplayNumber(call: CallRecord, self?: SelfIdentity): string {
+  const id = callIdentity(call, self);
   return id.externalNumber || id.extensionNumber || id.rawSipCallerId || (isInboundCall(call) ? call.fromNumber : call.toNumber);
 }
 
-function callDisplayName(call: CallRecord): string {
-  return callerDisplayLines(callIdentity(call)).primary;
+function callDisplayName(call: CallRecord, self?: SelfIdentity): string {
+  return callerDisplayLines(callIdentity(call, self)).primary;
 }
 
-function isUnknownCaller(call: CallRecord): boolean {
-  const lines = callerDisplayLines(callIdentity(call));
+function isUnknownCaller(call: CallRecord, self?: SelfIdentity): boolean {
+  const lines = callerDisplayLines(callIdentity(call, self));
   return lines.primary === 'Unknown';
 }
 
@@ -252,11 +258,12 @@ function kindLabel(kind: CallKind): string {
 function buildGroups(
   rows: CallRecord[],
   resolveContactName?: (number: string | null) => string | null,
+  self?: SelfIdentity,
 ): CallGroup[] {
   const groups: CallGroup[] = [];
   for (const call of rows) {
     const kind = callKind(call);
-    const number = canonicalNumber(callDisplayNumber(call));
+    const number = canonicalNumber(callDisplayNumber(call, self));
     const day = dayKey(call.startedAt);
     const prev = groups[groups.length - 1];
     const canJoin =
@@ -273,7 +280,7 @@ function buildGroups(
         prev.earliestAt = call.startedAt;
       }
     } else {
-      const identity = callIdentity(call);
+      const identity = callIdentity(call, self);
       const resolvedName = resolveContactName?.(identity.externalNumber) ?? null;
       const lines = callerDisplayLines(
         resolvedName ? { ...identity, displayName: resolvedName } : identity,
@@ -292,7 +299,7 @@ function buildGroups(
         count: 1,
         totalDurationSec: Math.max(0, call.durationSec || 0),
         maxDurationSec: Math.max(0, call.durationSec || 0),
-        unknown: isUnknownCaller(call),
+        unknown: isUnknownCaller(call, self),
       });
     }
   }
@@ -363,6 +370,27 @@ export function RecentTab() {
     [contactNameByDigits],
   );
 
+  // The logged-in user's own extension, so its name (e.g. "Home") is never
+  // shown as the remote party on a call row.
+  const voiceExtensionQuery = useQuery({
+    queryKey: ['mobile', 'voiceExtension'],
+    enabled: Boolean(token),
+    queryFn: () => getVoiceExtension(token!),
+    staleTime: 30 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+  });
+
+  const self = useMemo<SelfIdentity>(() => {
+    const v = voiceExtensionQuery.data;
+    const names = [v?.displayName].filter((x): x is string => Boolean(x && x.trim()));
+    const numbers = [v?.extensionNumber, v?.sipUsername?.replace(/_\d+$/, '')].filter(
+      (x): x is string => Boolean(x && x.trim()),
+    );
+    return { names, numbers };
+  }, [voiceExtensionQuery.data]);
+
   const calls = callHistoryQuery.data ?? [];
   const loading = callHistoryQuery.isLoading && calls.length === 0;
   const refreshing = callHistoryQuery.isRefetching;
@@ -405,7 +433,7 @@ export function RecentTab() {
     async (group: CallGroup) => {
       if (savingContact) return;
       const primaryCall = group.calls[0];
-      const identity = callIdentity(primaryCall);
+      const identity = callIdentity(primaryCall, self);
       const number = callbackNumber(identity);
 
       // No usable external/extension number — cannot create a contact.
@@ -457,7 +485,7 @@ export function RecentTab() {
         setSavingContact(false);
       }
     },
-    [savingContact, token, resolveContactName, queryClient],
+    [savingContact, token, resolveContactName, queryClient, self],
   );
 
   const todayCount = useMemo(() => {
@@ -475,15 +503,15 @@ export function RecentTab() {
       .filter((call) => {
         if (!q) return true;
         return (
-          callDisplayName(call).toLowerCase().includes(q) ||
-          callDisplayNumber(call).toLowerCase().includes(q) ||
+          callDisplayName(call, self).toLowerCase().includes(q) ||
+          callDisplayNumber(call, self).toLowerCase().includes(q) ||
           call.fromNumber.toLowerCase().includes(q) ||
           call.toNumber.toLowerCase().includes(q)
         );
       })
       .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
 
-    const groups = buildGroups(filtered, resolveContactName);
+    const groups = buildGroups(filtered, resolveContactName, self);
     const out: TimelineItem[] = [];
     let current = '';
     for (const group of groups) {
@@ -495,7 +523,7 @@ export function RecentTab() {
       out.push(group);
     }
     return out;
-  }, [calls, filter, query, resolveContactName]);
+  }, [calls, filter, query, resolveContactName, self]);
 
   const emptyIcon: keyof typeof Ionicons.glyphMap = query.trim() ? 'search-outline' : 'time-outline';
   const emptyTitle = query.trim()

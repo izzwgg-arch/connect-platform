@@ -158,14 +158,20 @@ export function normalizeCallerIdentity(input: CallerIdentityInput): NormalizedC
 
   // ── Outbound: the remote party is the dialed number ──────────────────────
   if (direction === "outbound") {
+    // For an outbound call the SIP/CDR "from" name+number is OUR OWN identity
+    // (the dialing extension), NEVER the remote party. So we must not surface
+    // `displayName` here — that is where the own-extension name ("Home") leaks
+    // onto the row. The remote party is purely the dialed number; any human
+    // name comes later from a contact match.
     const dialed = clean(input.toNumber) || clean(input.number);
     if (looksLikeExtension(dialed) && !looksLikePstn(dialed)) {
-      return { ...base, extensionNumber: dialed || null, extensionName: rest || null };
+      return { ...base, extensionNumber: dialed || null, extensionName: null, ringGroupPrefix: null };
     }
     return {
       ...base,
       externalNumber: dialed || null,
-      displayName: rest && !looksLikePstn(rest) ? rest : null,
+      displayName: null,
+      ringGroupPrefix: null,
     };
   }
 
@@ -178,10 +184,15 @@ export function normalizeCallerIdentity(input: CallerIdentityInput): NormalizedC
     (toNumber === "" || looksLikeExtension(toNumber)) &&
     !looksLikePstn(fromNumber);
   if (direction === "internal" || (direction !== "inbound" && internalByShape)) {
+    let extName = rest && !looksLikePstn(rest) ? rest : null;
+    // Never show our own extension/user name as the remote party.
+    if (extName && (matchesAny(extName, input.selfNames) || matchesAny(fromNumber, input.selfExtensionNumbers))) {
+      extName = null;
+    }
     return {
       ...base,
       extensionNumber: fromNumber || null,
-      extensionName: rest && !looksLikePstn(rest) ? rest : null,
+      extensionName: extName,
       ringGroupPrefix: prefix,
     };
   }

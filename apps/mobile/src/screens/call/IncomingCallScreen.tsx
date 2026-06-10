@@ -20,7 +20,7 @@ import { useIncomingNotifications } from '../../context/NotificationsContext';
 import { clearAndroidLockScreenCallPresentation } from '../../sip/callkeep';
 import { useAuth } from '../../context/AuthContext';
 import { startRingtone, stopAllTelephonyAudio } from '../../audio/telephonyAudio';
-import { postVoiceDiagEvent } from '../../api/client';
+import { postVoiceDiagEvent, getVoiceExtension } from '../../api/client';
 import { typography } from '../../theme/typography';
 import { logCallFlow } from '../../debug/callFlowDebug';
 import { markCallLatency } from '../../debug/callLatency';
@@ -47,6 +47,43 @@ export function IncomingCallScreen() {
   const [displayInvite, setDisplayInvite] = useState(incomingInvite);
   // Remaining-time countdown (seconds until invite expires)
   const [secondsLeft, setSecondsLeft] = useState(INVITE_TTL_S);
+
+  // The logged-in user's own extension identity, so its name (e.g. "Home") is
+  // never shown as the incoming caller. Loaded non-blocking with an
+  // AsyncStorage cache so it is instant on subsequent calls and never delays
+  // the ring UI.
+  const [selfExtNames, setSelfExtNames] = useState<string[]>([]);
+  const [selfExtNumbers, setSelfExtNumbers] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const SELF_KEY = 'cc_self_ext_identity';
+    (async () => {
+      try {
+        const cached = await AsyncStorage.getItem(SELF_KEY);
+        if (cached && !cancelled) {
+          const o = JSON.parse(cached);
+          if (Array.isArray(o?.names)) setSelfExtNames(o.names);
+          if (Array.isArray(o?.numbers)) setSelfExtNumbers(o.numbers);
+        }
+      } catch {}
+      if (!token) return;
+      try {
+        const v = await getVoiceExtension(token);
+        const names = [v?.displayName].filter((x): x is string => Boolean(x && x.trim()));
+        const numbers = [v?.extensionNumber, v?.sipUsername?.replace(/_\d+$/, '')].filter(
+          (x): x is string => Boolean(x && x.trim()),
+        );
+        if (!cancelled) {
+          setSelfExtNames(names);
+          setSelfExtNumbers(numbers);
+        }
+        await AsyncStorage.setItem(SELF_KEY, JSON.stringify({ names, numbers }));
+      } catch {}
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   useEffect(() => {
     if (incomingInvite) {
@@ -251,6 +288,8 @@ export function IncomingCallScreen() {
     number: displayInvite?.fromNumber,
     displayName: displayInvite?.fromDisplay,
     direction: 'inbound',
+    selfNames: selfExtNames,
+    selfExtensionNumbers: selfExtNumbers,
   });
   const callerLines = callerDisplayLines(callerIdentity);
   const callerName = callerLines.primary;

@@ -113,6 +113,62 @@ test("outbound external call: dialed number is the party", () => {
   assert.equal(callbackNumber(id), "8455551212");
 });
 
+test("outbound: own extension name in fromName is NEVER shown (shows dialed number)", () => {
+  // Regression: dialing an external number not in contacts must not show the
+  // dialing extension's own name ("Home") as the row name.
+  const id = normalizeCallerIdentity({
+    direction: "outbound",
+    number: "101",
+    displayName: "Home",
+    toNumber: "8457833399",
+  });
+  assert.equal(id.displayName, null);
+  assert.equal(id.ringGroupPrefix, null);
+  assert.equal(id.externalNumber, "8457833399");
+  const lines = callerDisplayLines(id);
+  assert.equal(lines.primary, "8457833399");
+  assert.equal(lines.secondary, null);
+  assert.equal(suggestedContactName(id), null);
+});
+
+test("inbound: own extension name leaking as caller is suppressed (no contact, no CNAM)", () => {
+  const id = normalizeCallerIdentity({
+    direction: "inbound",
+    number: "8457833399",
+    displayName: "Home",
+    selfNames: ["Home"],
+  });
+  assert.equal(id.displayName, null);
+  const lines = callerDisplayLines(id);
+  assert.equal(lines.primary, "8457833399");
+});
+
+test("inbound: real CNAM like WIRELESS CALLER is kept + number shown", () => {
+  const id = normalizeCallerIdentity({
+    direction: "inbound",
+    number: "8457833399",
+    displayName: "WIRELESS CALLER",
+    selfNames: ["Home"],
+  });
+  assert.equal(id.displayName, "WIRELESS CALLER");
+  const lines = callerDisplayLines(id);
+  assert.equal(lines.primary, "WIRELESS CALLER");
+  assert.equal(lines.secondary, "8457833399");
+});
+
+test("internal: own extension name as remote is suppressed", () => {
+  const id = normalizeCallerIdentity({
+    direction: "internal",
+    number: "101",
+    toNumber: "102",
+    displayName: "Home",
+    selfNames: ["Home"],
+  });
+  assert.equal(id.extensionName, null);
+  const lines = callerDisplayLines(id);
+  assert.equal(lines.primary, "Ext 101");
+});
+
 test("unknown caller: no number, no name", () => {
   const id = normalizeCallerIdentity({
     direction: "inbound",
