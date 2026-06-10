@@ -1,0 +1,219 @@
+.billing-payments-page {
+  --billing-payments-shell: color-mix(in srgb, var(--background) 82%, transparent);
+  --billing-payments-card: color-mix(in srgb, var(--panel) 94%, transparent);
+  --billing-payments-card-soft: color-mix(in srgb, var(--background) 48%, var(--panel));
+  --billing-payments-border: color-mix(in srgb, var(--border) 78%, transparent);
+  --billing-payments-border-strong: color-mix(in srgb, var(--border) 92%, var(--accent) 8%);
+  --billing-payments-input-bg: color-mix(in srgb, var(--background) 62%, var(--panel));
+  --billing-payments-input-text: var(--text);
+  --billing-payments-input-muted: var(--muted);
+  --billing-payments-input-height: 44px;
+  --billing-payments-input-font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --billing-payments-input-font-size: 13px;
+  gap: 14px;
+  min-height: 100%;
+  border: 1px solid color-mix(in srgb, var(--billing-payments-border) 72%, transparent);
+  border-radius: 18px;
+  padding: 16px;
+  background:
+    radial-gradient(circle at 10% 0%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 34%),
+    var(--billing-payments-shell);
+}
+
+.billing-payments-page .page-header {
+  align-items: center;
+  min-height: 0;
+  border: 1px solid var(--billing-payments-border);
+  border-radius: 16px;
+  padding: 14px 16px;
+  background: var(--billing-payments-card);
+  box-shadow: none;
+}
+
+.billing-payments-page .page-header h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 750;
+  letter-spacing: -0.015em;
+}
+
+.billing-payments-page .page-header .muted {
+  margin-top: 3px;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.billing-payments-page .billing-tenant-hero {
+  grid-template-columns: minmax(0, 1fr) auto;
+  border-radius: 18px;
+  padding: 18px;
+  background:
+    radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 38%),
+    linear-gradient(135deg, color-mix(in srgb, var(--panel) 96%, transparent), color-mix(in srgb, var(--background) 58%, var(--panel)));
+  box-shadow: none;
+}
+
+.billing-payments-page .billing-tenant-hero h2 {
+  margin: 3px 0 5px;
+  font-size: clamp(1.35rem, 2vw, 1.85rem);
+  letter-spacing: -0.035em;
+}
+
+.billing-payments-page .billing-hero-metrics span {
+  min-width: 112px;
+  border-color: var(--billing-payments-border);
+  background: var(--billing-payments-card-soft);
+}
+
+.billing-payments-page .panel,
+.billing-payments-page .state-box {
+  border-color: var(--billing-payments-border);
+  border-radius: 16px;
+  background: var(--billing-payments-card);
+  box-shadow: none;
+}
+
+.billing-payments-page .panel {
+  padding: 14px;
+}
+
+.billing-payments-page .panel-head {
+  align-items: center;
+  min-height: 28px;
+  margin-bottom: 8px;
+}
+
+.billing-payments-page .panel h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 720;
+  letter-spacing: -0.01em;
+}
+
+.billing-payments-form {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.74fr);
+  gap: 12px 14px;
+}
+
+.billing-payments-form label {
+  gap: 7px;
+  color: var(--billing-payments-input-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.billing-payments-form input:not([type="hidden"]),
+.billing-payments-form select,
+.billing-payments-form .sola-ifield-frame {
+  box-sizing: border-box;
+  height: var(--billing-payments-input-height);
+  min-height: var(--billing-payments-input-height);
+  border: 1px solid var(--billing-payments-border-strong);
+  border-radius: 12px;
+  background: var(--billing-payments-input-bg);
+  color: var(--billing-payments-input-text);
+  font-family: var(--billing-payments-input-font);
+  font-size: var(--billing-payments-input-font-size);
+  font-weight: 600;
+  line-height: var(--billing-payments-input-height);
+  text-align: center;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #ffffff 5%, transparent);
+}
+
+.billing-payments-form input:not([type="hidden"]) {
+  padding: 0 14px;
+}
+
+.billing-payments-form input::placeholder {
+  color: color-mix(in srgb, var(--billing-payments-input-muted) 72%, transparent);
+  text-align: center;
+}
+
+.billing-payments-form .sola-ifield-frame {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  padding: 0;
+}
+
+.billing-payments-form input:not([type="hidden"]):focus,
+.billing-payments-form select:focus,
+.billing-payments-form .sola-ifield-frame:focus {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--billing-payments-border));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #ffffff 6%, transparent);
+}
+
+.billing-payments-form .billing-pay-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.billing-payments-form .billing-status-pill,
+.billing-payments-form .btn.primary {
+  grid-column: 1 / -1;
+}
+
+.billing-payments-form .btn.primary {
+  min-height: 44px;
+  justify-content: center;
+  border-radius: 12px;
+}
+
+.billing-payments-page .billing-line-list > div {
+  border-color: var(--billing-payments-border);
+  background: var(--billing-payments-card-soft);
+}
+
+:root[data-theme="light"] .billing-payments-page {
+  --billing-payments-shell: rgba(240, 247, 255, 0.68);
+  --billing-payments-card: rgba(255, 255, 255, 0.96);
+  --billing-payments-card-soft: rgba(246, 250, 255, 0.94);
+  --billing-payments-border: rgba(184, 204, 226, 0.92);
+  --billing-payments-border-strong: rgba(190, 209, 230, 0.98);
+  --billing-payments-input-bg: #ffffff;
+  --billing-payments-input-text: #102238;
+  --billing-payments-input-muted: #61758c;
+}
+
+:root[data-theme="light"] .billing-payments-page .page-header,
+:root[data-theme="light"] .billing-payments-page .billing-tenant-hero,
+:root[data-theme="light"] .billing-payments-page .panel,
+:root[data-theme="light"] .billing-payments-page .state-box,
+:root[data-theme="light"] .billing-payments-page .billing-line-list > div {
+  box-shadow: var(--shadow-sm, 0 10px 24px rgba(31, 53, 78, 0.08));
+}
+
+:root[data-theme="light"] .billing-payments-form input:not([type="hidden"]),
+:root[data-theme="light"] .billing-payments-form select,
+:root[data-theme="light"] .billing-payments-form .sola-ifield-frame {
+  box-shadow:
+    var(--shadow-sm, 0 6px 14px rgba(31, 53, 78, 0.06)),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+@media (max-width: 1120px) {
+  .billing-payments-page .billing-tenant-hero,
+  .billing-payments-form {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .billing-payments-page {
+    padding: 12px;
+  }
+
+  .billing-payments-page .page-header,
+  .billing-payments-page .billing-tenant-hero,
+  .billing-payments-page .panel {
+    padding: 12px;
+  }
+
+  .billing-payments-form .billing-pay-row {
+    grid-template-columns: 1fr;
+  }
+}

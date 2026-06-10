@@ -1,5 +1,6 @@
 "use client";
 
+import "./paymentMethods.css";
 import { useEffect, useRef, useState } from "react";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
 import { apiDelete, apiGet, apiPost } from "../../../../services/apiClient";
@@ -14,8 +15,40 @@ import { BillingPageChrome, billingErrorMessage } from "../../../../components/B
 declare global {
   interface Window {
     setAccount?: (key: string, softwareName: string, softwareVersion: string) => void;
+    setIfieldStyle?: (fieldName: "card-number" | "cvv", style: Record<string, string>) => void;
     getTokens?: (success: () => void, failure: () => void, timeoutMs: number) => void;
   }
+}
+
+function cssVar(source: Element, name: string, fallback: string) {
+  return window.getComputedStyle(source).getPropertyValue(name).trim() || fallback;
+}
+
+function applySolaIFieldStyle() {
+  if (!window.setIfieldStyle) return;
+  const form = document.querySelector(".billing-payments-form");
+  if (!form) return;
+
+  const inputHeight = cssVar(form, "--billing-payments-input-height", "44px");
+  const fieldStyle = {
+    "box-sizing": "border-box",
+    width: "100%",
+    height: inputHeight,
+    border: "0",
+    margin: "0",
+    padding: "0 14px",
+    background: "transparent",
+    color: cssVar(form, "--billing-payments-input-text", "#e5eef8"),
+    "font-family": cssVar(form, "--billing-payments-input-font", "Inter, system-ui, sans-serif"),
+    "font-size": cssVar(form, "--billing-payments-input-font-size", "13px"),
+    "font-weight": "600",
+    "line-height": inputHeight,
+    "text-align": "center",
+    outline: "0",
+  };
+
+  window.setIfieldStyle("card-number", fieldStyle);
+  window.setIfieldStyle("cvv", fieldStyle);
 }
 
 export default function BillingPaymentsPage() {
@@ -56,6 +89,8 @@ export default function BillingPaymentsPage() {
     const configure = () => {
       if (window.setAccount) {
         window.setAccount(solaPublicConfig.ifieldsKey, "ConnectComms", "1.0.0");
+        applySolaIFieldStyle();
+        window.setTimeout(applySolaIFieldStyle, 150);
         setIfieldsReady(true);
       }
     };
@@ -69,12 +104,21 @@ export default function BillingPaymentsPage() {
     document.body.appendChild(script);
   }, [solaPublicConfig]);
 
+  useEffect(() => {
+    if (!ifieldsReady) return;
+    applySolaIFieldStyle();
+    const applyOnThemeChange = () => window.requestAnimationFrame(applySolaIFieldStyle);
+    const observer = new MutationObserver(applyOnThemeChange);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "class"] });
+    return () => observer.disconnect();
+  }, [ifieldsReady]);
+
   const ifieldsVersion = solaPublicConfig?.ifieldsVersion || "3.4.2602.2001";
 
   return (
     <PermissionGate permission="can_view_billing_payments" fallback={<div className="state-box">You do not have payment access.</div>}>
       <BillingPageChrome toast={toast}>
-        <div className="stack compact-stack billing-admin-shell">
+        <div className="stack compact-stack billing-admin-shell billing-payments-page">
           <PageHeader title="Payment Methods" subtitle="Saved payment cards. Raw card numbers are never stored — only PCI-compliant tokens." />
 
           {/* Saved cards summary */}
@@ -103,7 +147,7 @@ export default function BillingPaymentsPage() {
               </div>
             ) : (
               <form
-                className="billing-form"
+                className="billing-form billing-payments-form"
                 onSubmit={async (event) => {
                   event.preventDefault();
                   if (submittedRef.current) return;
