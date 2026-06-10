@@ -29,8 +29,17 @@ function applySolaIFieldStyle() {
   const form = document.querySelector(".billing-payments-form");
   if (!form) return;
 
-  const inputHeight = cssVar(form, "--billing-payments-input-height", "44px");
-  const inputBackground = cssVar(form, "--billing-payments-input-bg", "#111827");
+  const sampleInput = form.querySelector<HTMLInputElement>('input[name="cardholderName"]');
+  const sampleInputStyle = sampleInput ? window.getComputedStyle(sampleInput) : null;
+  const inputHeight = sampleInputStyle?.height || cssVar(form, "--billing-payments-input-height", "44px");
+  const inputBackground = sampleInputStyle?.backgroundColor || cssVar(form, "--billing-payments-input-bg", "#111827");
+  const inputColor = sampleInputStyle?.color || cssVar(form, "--billing-payments-input-text", "#e5eef8");
+  const inputFontFamily = sampleInputStyle?.fontFamily || cssVar(form, "--billing-payments-input-font", "Inter, system-ui, sans-serif");
+  const inputFontSize = sampleInputStyle?.fontSize || cssVar(form, "--billing-payments-input-font-size", "13px");
+  const inputFontWeight = sampleInputStyle?.fontWeight || "600";
+  form.querySelectorAll<HTMLIFrameElement>(".sola-ifield-frame").forEach((frame) => {
+    frame.style.backgroundColor = inputBackground;
+  });
   const fieldStyle = {
     "box-sizing": "border-box",
     display: "block",
@@ -42,10 +51,10 @@ function applySolaIFieldStyle() {
     padding: "0",
     background: inputBackground,
     "background-color": inputBackground,
-    color: cssVar(form, "--billing-payments-input-text", "#e5eef8"),
-    "font-family": cssVar(form, "--billing-payments-input-font", "Inter, system-ui, sans-serif"),
-    "font-size": cssVar(form, "--billing-payments-input-font-size", "13px"),
-    "font-weight": "600",
+    color: inputColor,
+    "font-family": inputFontFamily,
+    "font-size": inputFontSize,
+    "font-weight": inputFontWeight,
     "line-height": inputHeight,
     "text-align": "center",
     outline: "0",
@@ -198,12 +207,12 @@ export default function BillingPaymentsPage() {
                   }, 30000);
                 }}
               >
-                <label>Cardholder name <input name="cardholderName" autoComplete="cc-name" placeholder="Jane Smith" /></label>
+                <label>Cardholder name <input name="cardholderName" autoComplete="cc-name" placeholder="Cardholder name" /></label>
                 <div className="billing-pay-row">
                   <label>Exp. month <input name="expMonth" inputMode="numeric" autoComplete="cc-exp-month" placeholder="MM" minLength={2} maxLength={2} required /></label>
                   <label>Exp. year <input name="expYear" inputMode="numeric" autoComplete="cc-exp-year" placeholder="YY" minLength={2} maxLength={4} required /></label>
                 </div>
-                <label>Billing ZIP <input name="billingZip" autoComplete="postal-code" placeholder="10950" /></label>
+                <label>Billing ZIP <input name="billingZip" autoComplete="postal-code" placeholder="Billing ZIP" /></label>
                 <label>
                   Card number
                   <iframe
