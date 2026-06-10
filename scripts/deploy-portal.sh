@@ -60,6 +60,9 @@ deploy_common_emit_stage "git-sync"
 LOCK_BEFORE="$(deploy_common_lock_hash)"
 PKG_BEFORE="$(deploy_common_pkg_hash)"
 PERSISTED_OLD_HEAD="$(deploy_common_last_deployed_commit "$SERVICE" || true)"
+if [[ -z "$PERSISTED_OLD_HEAD" ]]; then
+  PERSISTED_OLD_HEAD="$(docker exec app-portal-1 sh -lc 'cat /app/.build-commit 2>/dev/null | tr -d "\r\n"' 2>/dev/null || true)"
+fi
 PRE_SYNC_HEAD=""
 deploy_common_git_sync "$ROOT" "${BRANCH:-main}" "$COMMIT" PRE_SYNC_HEAD
 OLD_HEAD="${PERSISTED_OLD_HEAD:-$PRE_SYNC_HEAD}"
