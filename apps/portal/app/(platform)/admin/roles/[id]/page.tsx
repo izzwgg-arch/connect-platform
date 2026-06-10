@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter, useParams } from "next/navigation";
+import { useRouter, useParams, useSearchParams } from "next/navigation";
 import { AlertTriangle, ArrowLeft, Shield } from "lucide-react";
 import Link from "next/link";
 import {
@@ -105,8 +105,10 @@ function PermissionToggle({
 export default function RoleEditPage() {
   const router = useRouter();
   const params = useParams();
+  const searchParams = useSearchParams();
   const id = params?.id as string;
   const isNew = id === "new";
+  const tenantId = searchParams?.get("tenantId") || undefined;
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -161,18 +163,20 @@ export default function RoleEditPage() {
     setSaving(true);
     setSaveError("");
     try {
-      const payload = {
+      const payload: Record<string, unknown> = {
         name: name.trim(),
         description: description.trim() || null,
         active,
         permissions: [...selectedPerms],
       };
+      if (tenantId) payload.tenantId = tenantId;
       if (isNew) {
         await apiPost("/admin/custom-roles", payload);
       } else {
         await apiPut(`/admin/custom-roles/${id}`, payload);
       }
-      router.push("/admin/roles");
+      const backQs = tenantId ? `?tenantId=${tenantId}` : "";
+      router.push(`/admin/roles${backQs}`);
     } catch (err: any) {
       setSaveError(err?.message || "Save failed.");
     } finally {
@@ -198,7 +202,7 @@ export default function RoleEditPage() {
           subtitle={isNew ? "Define a name, description, and permission set." : "Modify the role's permissions and status."}
           actions={
             <div style={{ display: "flex", gap: 8 }}>
-              <Link href="/admin/roles" className="btn ghost">
+              <Link href={`/admin/roles${tenantId ? `?tenantId=${tenantId}` : ""}`} className="btn ghost">
                 <ArrowLeft size={14} style={{ marginRight: 4 }} />
                 Back
               </Link>

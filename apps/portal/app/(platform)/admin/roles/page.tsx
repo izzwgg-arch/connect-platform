@@ -1,11 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, Shield, Users, Eye, EyeOff, Copy, Trash2, Edit3 } from "lucide-react";
+import { Plus, Shield, Users, Copy, Trash2, Edit3 } from "lucide-react";
 import Link from "next/link";
 import { PageHeader } from "../../../../components/PageHeader";
 import { PermissionGate } from "../../../../components/PermissionGate";
+import { ConnectSelect } from "../../../../components/ConnectSelect";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
+import { useTenantOptions } from "../../../../hooks/useTenantOptions";
 import { apiDelete, apiGet, apiPost } from "../../../../services/apiClient";
 import { useAppContext } from "../../../../hooks/useAppContext";
 
@@ -24,8 +26,13 @@ type CustomRole = {
 type RolesResponse = { roles: CustomRole[] };
 
 export default function CustomRolesPage() {
-  const { role } = useAppContext();
+  const { role, tenantId: myTenantId } = useAppContext();
   const isSuperAdmin = role === "SUPER_ADMIN";
+
+  const { options: tenantOptions } = useTenantOptions();
+  const [selectedTenantId, setSelectedTenantId] = useState("");
+
+  const effectiveTenantId = isSuperAdmin ? (selectedTenantId || myTenantId || "") : (myTenantId || "");
 
   const [deleting, setDeleting] = useState<string | null>(null);
   const [duplicating, setDuplicating] = useState<string | null>(null);
@@ -35,8 +42,11 @@ export default function CustomRolesPage() {
   function refresh() { setTick((t) => t + 1); }
 
   const roles = useAsyncResource<RolesResponse>(
-    () => apiGet("/admin/custom-roles"),
-    [tick],
+    () => {
+      const qs = isSuperAdmin && effectiveTenantId ? `?tenantId=${effectiveTenantId}` : "";
+      return apiGet(`/admin/custom-roles${qs}`);
+    },
+    [tick, effectiveTenantId],
   );
 
   async function handleDuplicate(role: CustomRole) {
@@ -83,12 +93,29 @@ export default function CustomRolesPage() {
           title="Custom Roles"
           subtitle="Create and manage custom permission roles for your tenant."
           actions={
-            <Link href="/admin/roles/new" className="btn">
+            <Link href={`/admin/roles/new${effectiveTenantId ? `?tenantId=${effectiveTenantId}` : ""}`} className="btn">
               <Plus size={15} style={{ marginRight: 6 }} />
               New Role
             </Link>
           }
         />
+
+        {isSuperAdmin && tenantOptions.length > 0 && (
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <span className="muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>Tenant:</span>
+            <ConnectSelect
+              size="sm"
+              value={selectedTenantId}
+              onChange={setSelectedTenantId}
+              searchable
+              style={{ width: 260 }}
+              options={[
+                { value: "", label: "My tenant (platform admin)" },
+                ...tenantOptions.map((t) => ({ value: t.id, label: t.name })),
+              ]}
+            />
+          </div>
+        )}
 
         {actionMsg && (
           <div className={`chip ${actionMsg.type === "success" ? "success" : "danger"}`} style={{ alignSelf: "flex-start" }}>
@@ -169,7 +196,7 @@ export default function CustomRolesPage() {
                     <td style={{ padding: "12px 16px", textAlign: "right" }}>
                       <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
                         <Link
-                          href={`/admin/roles/${role.id}`}
+                          href={`/admin/roles/${role.id}${effectiveTenantId ? `?tenantId=${effectiveTenantId}` : ""}`}
                           className="btn ghost"
                           style={{ fontSize: 12, padding: "4px 10px" }}
                           title="Edit role"
