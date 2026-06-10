@@ -209,13 +209,15 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
       ? shapedExtensions.filter((e) => e.isUserFacing)
       : shapedExtensions;
 
-    const customRoles = tenantId
-      ? await db.customRole.findMany({
-          where: { tenantId, active: true },
-          orderBy: { name: "asc" },
-          select: { id: true, name: true },
-        })
-      : [];
+    // Custom roles are platform-wide (owned by the admin's own tenant).
+    // Always return roles from the acting admin's tenant so they appear
+    // in the Edit User dropdown regardless of which customer tenant the
+    // user being edited belongs to.
+    const customRoles = await db.customRole.findMany({
+      where: { tenantId: admin.tenantId, active: true },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    });
 
     return {
       tenantId,

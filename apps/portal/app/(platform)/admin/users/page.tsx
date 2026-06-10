@@ -1083,8 +1083,7 @@ function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
   useEffect(() => {
     if (mode !== "edit" || !user?.id || !form.tenantId) return;
     let active = true;
-    const qs = new URLSearchParams({ tenantId: form.tenantId });
-    apiGet<UserCustomRolesResponse>(`/admin/users/${user.id}/custom-roles?${qs.toString()}`)
+    apiGet<UserCustomRolesResponse>(`/admin/users/${user.id}/custom-roles`)
       .then((r) => {
         if (!active) return;
         const assigned = (r.customRoles ?? []).filter((cr) => cr.active).map((cr) => cr.id);
@@ -1159,10 +1158,7 @@ function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
         await apiPatch(`/admin/users/${user.id}`, { ...form, status: form.active ? "ACTIVE" : "DISABLED" });
       }
       if (userId) {
-        await apiPut(`/admin/users/${userId}/custom-roles`, {
-          customRoleIds,
-          tenantId: form.tenantId,
-        });
+        await apiPut(`/admin/users/${userId}/custom-roles`, { customRoleIds });
       }
       onSaved(mode === "create" ? form.tenantId : undefined);
     } catch (e: any) {

@@ -367,15 +367,16 @@ export async function registerCustomRoleRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: "forbidden" });
     }
     const { userId } = req.params as { userId: string };
-    const query = req.query as { tenantId?: string };
-    const tenantId = resolveTargetTenantId(actor.role, actor.tenantId, query.tenantId);
 
     const user = await db.user.findUnique({ where: { id: userId }, select: { tenantId: true } });
     if (!user) return reply.code(404).send({ error: "not_found" });
-    if (user.tenantId !== tenantId) return reply.code(403).send({ error: "forbidden" });
+    if (actor.role !== "SUPER_ADMIN" && user.tenantId !== actor.tenantId) {
+      return reply.code(403).send({ error: "forbidden" });
+    }
 
+    // Assignments are stored under the admin's tenantId (roles are platform-wide).
     const assignments = await db.userCustomRole.findMany({
-      where: { userId, tenantId },
+      where: { userId, tenantId: actor.tenantId },
       select: {
         id: true,
         createdAt: true,
@@ -386,6 +387,9 @@ export async function registerCustomRoleRoutes(app: FastifyInstance) {
   });
 
   // ── Set custom role assignments for a user (replace) ────────────────────────
+  // Custom roles are platform-wide (owned by the admin's tenant). Roles are
+  // validated against the ACTOR's tenant so an admin can assign their roles to
+  // users in any customer tenant.
   app.put("/admin/users/:userId/custom-roles", async (req, reply) => {
     const actor = getUser(req);
     if (!isTenantAdminOrAbove(actor.role)) {
@@ -398,28 +402,32 @@ export async function registerCustomRoleRoutes(app: FastifyInstance) {
     }).safeParse(req.body);
     if (!body.success) return reply.code(400).send({ error: "validation_error", issues: body.error.issues });
 
-    const tenantId = resolveTargetTenantId(actor.role, actor.tenantId, body.data.tenantId);
-
+    // Verify the target user exists and the actor has permission to manage them.
     const targetUser = await db.user.findUnique({ where: { id: userId }, select: { tenantId: true } });
     if (!targetUser) return reply.code(404).send({ error: "not_found" });
-    if (targetUser.tenantId !== tenantId) return reply.code(403).send({ error: "forbidden" });
+    if (actor.role !== "SUPER_ADMIN" && targetUser.tenantId !== actor.tenantId) {
+      return reply.code(403).send({ error: "forbidden" });
+    }
 
     const roleIds = body.data.customRoleIds;
+    // Validate roles belong to the actor's (admin) tenant — roles are platform-wide.
     if (roleIds.length > 0) {
       const roles = await db.customRole.findMany({
-        where: { id: { in: roleIds }, tenantId },
+        where: { id: { in: roleIds }, tenantId: actor.tenantId },
         select: { id: true },
       });
       if (roles.length !== roleIds.length) {
-        return reply.code(400).send({ error: "invalid_role_ids", message: "One or more custom role IDs do not belong to this tenant." });
+        return reply.code(400).send({ error: "invalid_role_ids", message: "One or more custom role IDs are invalid." });
       }
     }
 
+    // Store assignments scoped to the actor's (admin) tenant so they are
+    // found when resolving permissions.
     await db.$transaction([
-      db.userCustomRole.deleteMany({ where: { userId, tenantId } }),
+      db.userCustomRole.deleteMany({ where: { userId, tenantId: actor.tenantId } }),
       ...roleIds.map((customRoleId) =>
         db.userCustomRole.create({
-          data: { tenantId, userId, customRoleId, assignedByUserId: actor.sub },
+          data: { tenantId: actor.tenantId, userId, customRoleId, assignedByUserId: actor.sub },
         }),
       ),
     ]);
