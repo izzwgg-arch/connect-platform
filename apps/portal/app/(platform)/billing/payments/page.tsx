@@ -82,7 +82,8 @@ function applySolaIFieldStyle() {
   const sampleInputStyle = sampleInput ? window.getComputedStyle(sampleInput) : null;
   const inputHeight = sampleInputStyle?.height || cssVar(form, "--billing-payments-input-height", "44px");
   const inputBackground = effectiveBackgroundColor(sampleInput, cssVar(form, "--billing-payments-input-bg", "#111827"));
-  const inputColor = sampleInputStyle?.color || cssVar(form, "--billing-payments-input-text", "#e5eef8");
+  const placeholderStyle = sampleInput ? window.getComputedStyle(sampleInput, "::placeholder") : null;
+  const inputColor = placeholderStyle?.color || sampleInputStyle?.color || cssVar(form, "--billing-payments-input-text", "#e5eef8");
   const inputFontFamily = sampleInputStyle?.fontFamily || cssVar(form, "--billing-payments-input-font", "Inter, system-ui, sans-serif");
   const inputFontSize = sampleInputStyle?.fontSize || cssVar(form, "--billing-payments-input-font-size", "13px");
   const inputFontWeight = sampleInputStyle?.fontWeight || "600";
