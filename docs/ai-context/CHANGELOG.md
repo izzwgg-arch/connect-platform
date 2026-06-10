@@ -4,6 +4,51 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-10 — Mobile Add-to-Contacts form + foreground notification presentation
+
+**Task:** Mobile app — make Add-to-Contacts an editable, pre-filled form; make
+new-message / voicemail / missed-call notifications surface while the app is open.
+**Risk:** high — mobile (Expo/React Native) client only; **no PBX, telephony, API,
+worker, or database changes** in this entry.
+
+- **Add to Contacts is now an editable form** (`apps/mobile/src/components/AddContactModal.tsx`,
+  shared component): tapping "Add to contacts" from a Recent Call opens a
+  pre-filled "New Contact" sheet (external number filled in, plus a caller name
+  only when the PBX delivered a real caller ID — never the user's own extension
+  name). The user reviews/edits the name and adds email/company/notes before
+  saving. It no longer silently saves a bare, nameless number. Dedupe + the API
+  `DUPLICATE_PHONE` guard still apply; saved contacts resolve onto Recent rows.
+- **Foreground notification gap fixed** (`NotificationsContext.tsx` +
+  `notifications/notificationRouting.ts`): the native Android FCM service
+  deliberately skips the tray while the app is foreground, and the JS listener
+  previously only logged — so a new chat message / voicemail / missed call that
+  arrived while the app was open was silently dropped. The foreground push
+  listener now presents a local notification (on the correct channel:
+  `connect-voicemail` / `connect-missed-calls` / `connect-messages`) for the four
+  user-alert types, guarded against re-entrancy, against pushes that already
+  carried an OS notification block, and against the actively-viewed chat thread.
+  New pure helpers `shouldPresentForegroundUserAlert` / `userAlertChannelId` /
+  `isUserAlertPushType` with 11 unit tests
+  (`pnpm --filter @connect/mobile test:notification-routing`).
+
+**Notification root-cause findings (server-side, NOT changed here):**
+- **Voicemail push is disabled by default** — gated behind
+  `VOICEMAIL_PUSH_NOTIFICATIONS_ENABLED` (a "SEV-1 containment" default in
+  `apps/api/src/server.ts`). Unless that env flag is `true`, no voicemail push is
+  ever sent. This is the primary cause of "no voicemail notifications" and
+  requires an env/ops decision (or an approved API code-default change + deploy).
+- All user-alert pushes are **data-only** (no `notification` block). Android
+  renders them via the native service (background) + the new foreground path;
+  **iOS has no native equivalent**, so iOS background/killed alerts remain a
+  structural gap (out of scope for this Android APK).
+- Pushes are filtered by `active: true` device + per-thread `muted: false`;
+  battery-optimization / force-stop can stop the Android FCM service from firing.
+
+Deploy: **none for the APK** — mobile build + publish only. Voicemail re-enable
+is a separate server decision.
+
+---
+
 ## 2026-06-10 — Mobile caller ID / ring-group prefix + Recent Calls fixes
 
 **Task:** Mobile app — Recent Calls Add-to-Contact, external number display, incoming caller ID / ring-group prefix

@@ -25,7 +25,7 @@ import { Avatar } from '../../components/ui/Avatar';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
 import { AppActionSheet } from '../../components/ui/AppPopup';
-import { createContact, getCallHistory, getContacts, getVoiceExtension, mobileQueryKeys } from '../../api/client';
+import { getCallHistory, getContacts, getVoiceExtension, mobileQueryKeys } from '../../api/client';
 import { loadLocalCallHistory, mergeCallRecords } from '../../storage/callHistory';
 import {
   normalizeCallerIdentity,
@@ -36,6 +36,7 @@ import {
   type NormalizedCallerIdentity,
 } from '../../calls/callerIdentity';
 import { useQueryClient } from '@tanstack/react-query';
+import { AddContactModal, type AddContactPrefill } from '../../components/AddContactModal';
 import type { CallRecord } from '../../types';
 import { typography } from '../../theme/typography';
 import { teamFilterChipColors } from '../../theme/filterChipColors';
@@ -318,7 +319,7 @@ export function RecentTab() {
   const [detailGroup, setDetailGroup] = useState<CallGroup | null>(null);
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [menuGroup, setMenuGroup] = useState<CallGroup | null>(null);
-  const [savingContact, setSavingContact] = useState(false);
+  const [addContactPrefill, setAddContactPrefill] = useState<AddContactPrefill | null>(null);
 
   const callHistoryQuery = useQuery({
     queryKey: mobileQueryKeys.callHistory,
@@ -430,8 +431,7 @@ export function RecentTab() {
   }, []);
 
   const handleAddContact = useCallback(
-    async (group: CallGroup) => {
-      if (savingContact) return;
+    (group: CallGroup) => {
       const primaryCall = group.calls[0];
       const identity = callIdentity(primaryCall, self);
       const number = callbackNumber(identity);
@@ -444,48 +444,38 @@ export function RecentTab() {
         );
         return;
       }
-      if (!token) {
-        Alert.alert('Not signed in', 'Please sign in again to save contacts.');
-        return;
-      }
 
-      // Dedupe: if a contact already has this number, don't create a duplicate.
+      // Dedupe: if a contact already has this number, don't open the form.
       const existingName = resolveContactName(number);
       if (existingName) {
         Alert.alert('Already in contacts', `${existingName} already has this number.`);
         return;
       }
 
-      // Pre-fill the contact: caller name when known, else the number itself.
+      // Open the editable contact form pre-filled with the external number and
+      // a caller name only when the PBX delivered a real caller ID (never the
+      // user's own extension name). The user reviews/edits and adds details.
       const suggested = suggestedContactName(identity);
-      const displayName = suggested || number;
+      const first = suggested ? suggested.split(/\s+/)[0] : '';
+      const last = suggested ? suggested.split(/\s+/).slice(1).join(' ') : '';
+      setMenuGroup(null);
+      setDetailGroup(null);
+      setAddContactPrefill({ phone: number, firstName: first, lastName: last });
+    },
+    [resolveContactName, self],
+  );
 
-      setSavingContact(true);
-      try {
-        await createContact(token, {
-          displayName,
-          // Only set firstName when we have a real caller name (not the number),
-          // so "John Smith" splits cleanly but a number-only contact stays clean.
-          firstName: suggested ? suggested : undefined,
-          phones: [{ type: 'mobile', numberRaw: number, isPrimary: true }],
-          notes: 'Added from Recent Calls',
-        });
-        await queryClient
-          .invalidateQueries({ queryKey: mobileQueryKeys.contacts('') })
-          .catch(() => undefined);
-        Alert.alert('Saved', `${displayName} added to contacts.`);
-      } catch (e: any) {
-        const msg = String(e?.message || '').toUpperCase();
-        if (msg.includes('DUPLICATE_PHONE')) {
-          Alert.alert('Already in contacts', 'A contact with this phone number already exists.');
-        } else {
-          Alert.alert('Could not save contact', 'Please try again.');
-        }
-      } finally {
-        setSavingContact(false);
+  const handleContactCreated = useCallback(
+    (saved?: { displayName: string }) => {
+      setAddContactPrefill(null);
+      queryClient
+        .invalidateQueries({ queryKey: mobileQueryKeys.contacts('') })
+        .catch(() => undefined);
+      if (saved?.displayName) {
+        Alert.alert('Saved', `${saved.displayName} added to contacts.`);
       }
     },
-    [savingContact, token, resolveContactName, queryClient, self],
+    [queryClient],
   );
 
   const todayCount = useMemo(() => {
@@ -656,6 +646,13 @@ export function RecentTab() {
           { label: 'Message', icon: 'chatbubble-ellipses-outline', onPress: () => menuGroup && handleMessage(menuGroup) },
           { label: 'Add to contacts', icon: 'person-add-outline', onPress: () => menuGroup && handleAddContact(menuGroup) },
         ]}
+      />
+      <AddContactModal
+        visible={Boolean(addContactPrefill)}
+        prefill={addContactPrefill ?? undefined}
+        title="Add to Contacts"
+        onClose={() => setAddContactPrefill(null)}
+        onCreated={handleContactCreated}
       />
     </View>
   );

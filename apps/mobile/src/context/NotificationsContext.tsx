@@ -85,7 +85,11 @@ import {
   createSipAnswerDeadline,
 } from "../sip/mobileAnswerTiming";
 import type { SipAnswerTraceEvent } from "../sip/types";
-import { shouldSuppressForegroundPush } from "../notifications/notificationRouting";
+import {
+  shouldSuppressForegroundPush,
+  shouldPresentForegroundUserAlert,
+  userAlertChannelId,
+} from "../notifications/notificationRouting";
 /**
  * Reads native ringtone timing data from the Android bridge and records
  * RINGTONE_START / RINGTONE_STOP events in the flight recorder.
@@ -3760,6 +3764,35 @@ export function NotificationsProvider({
           messageId: (data as any)?.messageId,
           voicemailId: (data as any)?.voicemailId,
         });
+
+        // ── Foreground presentation of user alerts ──────────────────────────
+        // The native FCM service (IncomingCallFirebaseService) deliberately
+        // skips posting a tray notification while the app is foreground, and a
+        // strict data-only push has no OS-rendered banner. Without this, a new
+        // voicemail / chat message / missed call that arrives while the app is
+        // open is silently dropped (the user's exact complaint). Present a
+        // local notification so it always surfaces in-app.
+        //
+        // Guards:
+        //  - _localPresented: prevents the re-entrant loop (this very listener
+        //    fires again for the notification we schedule below).
+        //  - hasOsContent: if the push already carried a notification block
+        //    (title/body), the OS/handler renders it — don't duplicate.
+        //  - shouldSuppressForegroundPush: don't alert for the chat thread the
+        //    user is actively viewing.
+        const hasOsContent = !!(evt.request.content.title || evt.request.content.body);
+        if (shouldPresentForegroundUserAlert(data, hasOsContent)) {
+          const channelId = userAlertChannelId(data);
+          Notifications.scheduleNotificationAsync({
+            content: {
+              title: String((data as any).alertTitle),
+              body: (data as any)?.alertBody ? String((data as any).alertBody) : undefined,
+              data: { ...(data as any), _localPresented: true },
+              sound: "default",
+            },
+            trigger: Platform.OS === "android" ? ({ channelId } as any) : null,
+          }).catch(() => undefined);
+        }
       }
 
       // If notification data is null/empty (common when IncomingCallFirebaseService.java

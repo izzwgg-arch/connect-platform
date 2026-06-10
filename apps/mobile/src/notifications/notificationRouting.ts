@@ -17,6 +17,46 @@ export function shouldSuppressForegroundPush(data: any): boolean {
   return false;
 }
 
+const USER_ALERT_TYPES = new Set(['voicemail', 'missed_call', 'dm_message', 'sms_message']);
+
+export function isUserAlertPushType(type: string | undefined | null): boolean {
+  return USER_ALERT_TYPES.has(String(type || ''));
+}
+
+/**
+ * Decide whether the foreground push listener should present a local
+ * notification for a user-facing alert (voicemail / chat / missed call).
+ *
+ * The native FCM service skips the tray while the app is foreground, and a
+ * strict data-only push has no OS-rendered banner — so without an explicit
+ * local notification these alerts are silently dropped while the app is open.
+ *
+ * Returns false when:
+ *  - the push is not a user-alert type
+ *  - there is no human-readable alertTitle to show
+ *  - this is the re-entrant local notification we already presented
+ *  - the push already carried an OS-rendered notification block (avoid dup)
+ *  - the alert is for the chat thread the user is actively viewing
+ */
+export function shouldPresentForegroundUserAlert(data: any, hasOsContent: boolean): boolean {
+  if (!isUserAlertPushType(data?.type)) return false;
+  if (!data?.alertTitle) return false;
+  if (data?._localPresented === true || data?._localPresented === 'true') return false;
+  if (hasOsContent) return false;
+  if (shouldSuppressForegroundPush(data)) return false;
+  return true;
+}
+
+/** Resolve the Android channel for a user-alert push, with type-based fallback. */
+export function userAlertChannelId(data: any): string {
+  const explicit = data?.androidChannelId ? String(data.androidChannelId) : '';
+  if (explicit) return explicit;
+  const type = String(data?.type || '');
+  if (type === 'voicemail') return 'connect-voicemail';
+  if (type === 'missed_call') return 'connect-missed-calls';
+  return 'connect-messages';
+}
+
 export function notificationDataToRoute(data: any): MobileNotificationRoute | null {
   const type = String(data?.type || '');
   if (type === 'voicemail') {
