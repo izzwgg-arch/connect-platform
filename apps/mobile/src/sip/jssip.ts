@@ -36,6 +36,7 @@ import {
   extractJsSipFailureFields,
   isWebrtcSdpRejection,
 } from "@connect/shared/webrtcBlackbox";
+import { MobileWebrtcBlackboxRecorder } from "./webrtcBlackboxRecorder";
 import { buildVoiceAudioConstraints } from "./voiceAudioConstraints";
 
 const VOICE_AUDIO_CONSTRAINTS = buildVoiceAudioConstraints();
