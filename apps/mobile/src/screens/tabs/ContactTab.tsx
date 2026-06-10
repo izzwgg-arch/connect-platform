@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -23,12 +23,10 @@ import { useAuth } from '../../context/AuthContext';
 import { useSip } from '../../context/SipContext';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { Avatar } from '../../components/ui/Avatar';
-import { PulseDot } from '../../components/ui/PulseDot';
 import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
 import { AppActionSheet } from '../../components/ui/AppPopup';
 import { showAppAlert } from '../../components/ui/appAlert';
 import { createContact, getContacts, mobileQueryKeys } from '../../api/client';
-import { subscribeToBLF, type LiveTelephonyState } from '../../api/realtime';
 import type { Contact } from '../../types';
 import { typography } from '../../theme/typography';
 import { teamFilterChipColors } from '../../theme/filterChipColors';
@@ -41,13 +39,6 @@ import {
 } from '../../contacts/phoneContactsImport';
 
 type ContactFilter = 'all' | 'extensions' | 'external' | 'favorites';
-type ContactStatus = {
-  label: 'Available' | 'Away' | 'On Call' | 'Offline';
-  color: string;
-  pulse: boolean;
-  /** Presence ordering for within-extensions sort (lower = higher in list). */
-  weight: number;
-};
 type ContactListItem =
   | { type: 'section'; id: string; title: string; count?: number }
   | { type: 'contact'; id: string; contact: Contact };
@@ -75,7 +66,6 @@ export function ContactTab() {
   const { token } = useAuth();
   const sip = useSip();
   const queryClient = useQueryClient();
-  const [live, setLive] = useState<LiveTelephonyState | null>(null);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<ContactFilter>('all');
   const [selected, setSelected] = useState<Contact | null>(null);
@@ -109,11 +99,6 @@ export function ContactTab() {
     }, [contactsQuery.data, contactsQuery.isStale, load]),
   );
 
-  useEffect(() => {
-    if (!token) return undefined;
-    return subscribeToBLF(token, setLive);
-  }, [token]);
-
   // Request contacts permission within the button's gesture context so Android
   // shows the system dialog immediately rather than after async modal boot().
   const openImportContacts = useCallback(async () => {
@@ -125,25 +110,6 @@ export function ContactTab() {
     setResolvedImportPermission(resolved);
     setShowImportFromPhone(true);
   }, []);
-
-  const statusFor = useCallback((contact: Contact): ContactStatus | null => {
-    if (contact.type !== 'internal_extension' || !contact.extension) return null;
-    if (!live) return { label: 'Offline', color: colors.textTertiary, pulse: false, weight: 3 };
-    const ext = contact.extension;
-    const hasRinging = [...live.calls.values()].some((call) =>
-      (call.state === 'ringing' || call.state === 'dialing') &&
-      (call.extensions || []).includes(ext) &&
-      (!contact.tenantId || !call.tenantId || call.tenantId === contact.tenantId),
-    );
-    if (hasRinging) return { label: 'Away', color: colors.warning, pulse: true, weight: 1 };
-    const hasActive = [...live.calls.values()].some((call) =>
-      (call.state === 'up' || call.state === 'held') &&
-      (call.extensions || []).includes(ext) &&
-      (!contact.tenantId || !call.tenantId || call.tenantId === contact.tenantId),
-    );
-    if (hasActive) return { label: 'On Call', color: colors.danger, pulse: true, weight: 2 };
-    return { label: 'Available', color: colors.success, pulse: true, weight: 0 };
-  }, [colors.danger, colors.success, colors.textTertiary, colors.warning, live]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -164,22 +130,17 @@ export function ContactTab() {
   }, [contacts, filter, query]);
 
   /**
-   * Sort extensions by presence (available → ringing → on-call → offline),
-   * then by extension number. External + favorites are A-Z.
+   * Sort extensions by extension number (numeric), then name. External +
+   * favorites are A-Z. (Live presence/BLF lives only on the Team tab.)
    */
   const sortExtensions = useCallback((rows: Contact[]): Contact[] => {
     return [...rows].sort((a, b) => {
-      const sa = statusFor(a);
-      const sb = statusFor(b);
-      const wa = sa?.weight ?? 3;
-      const wb = sb?.weight ?? 3;
-      if (wa !== wb) return wa - wb;
       const ea = parseInt(a.extension || '0', 10);
       const eb = parseInt(b.extension || '0', 10);
       if (Number.isFinite(ea) && Number.isFinite(eb) && ea !== eb) return ea - eb;
       return a.displayName.localeCompare(b.displayName);
     });
-  }, [statusFor]);
+  }, []);
 
   const sortAlpha = useCallback((rows: Contact[]): Contact[] => {
     return [...rows].sort((a, b) => a.displayName.localeCompare(b.displayName));
@@ -332,7 +293,6 @@ export function ContactTab() {
           ) : (
             <ContactCard
               contact={item.contact}
-              status={statusFor(item.contact)}
               onPress={() => setSelected(item.contact)}
               onCall={() => callContact(item.contact)}
               onMessage={() => messageContact(item.contact)}
@@ -421,14 +381,12 @@ const FilterChip = memo(function FilterChip({
 
 const ContactCard = memo(function ContactCard({
   contact,
-  status,
   onPress,
   onCall,
   onMessage,
   onMore,
 }: {
   contact: Contact;
-  status: ContactStatus | null;
   onPress: () => void;
   onCall: () => void;
   onMessage: () => void;
@@ -437,7 +395,6 @@ const ContactCard = memo(function ContactCard({
   const { colors } = useTheme();
   const scale = useRef(new Animated.Value(1)).current;
   const translateX = useRef(new Animated.Value(0)).current;
-  const tone = status?.color ?? colors.textTertiary;
 
   const panResponder = useMemo(() => PanResponder.create({
     onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dx) > 14 && Math.abs(gesture.dx) > Math.abs(gesture.dy),
@@ -458,9 +415,6 @@ const ContactCard = memo(function ContactCard({
   const pressOut = useCallback(() => {
     Animated.spring(scale, { toValue: 1, speed: 25, bounciness: 4, useNativeDriver: true }).start();
   }, [scale]);
-
-  const presenceLabel = status?.label ?? 'Offline';
-  const onCallAccent = status?.label === 'On Call';
 
   return (
     <View style={styles.swipeWrap}>
@@ -483,23 +437,13 @@ const ContactCard = memo(function ContactCard({
             styles.card,
             {
               backgroundColor: colors.surface,
-              borderColor: onCallAccent ? colors.danger + '33' : colors.borderSubtle,
+              borderColor: colors.borderSubtle,
               shadowColor: '#000',
             },
           ]}
         >
-          <View
-            style={[
-              styles.avatarWrap,
-              onCallAccent
-                ? { shadowColor: colors.danger, shadowOpacity: 0.25, shadowRadius: 10, elevation: 4 }
-                : null,
-            ]}
-          >
+          <View style={styles.avatarWrap}>
             <Avatar name={contact.displayName} size="md" />
-            <View style={[styles.presenceBadge, { borderColor: colors.surface, backgroundColor: colors.surface }]}>
-              <PulseDot color={tone} size={10} active={status?.pulse ?? false} />
-            </View>
           </View>
 
           <View style={styles.info}>
@@ -512,20 +456,6 @@ const ContactCard = memo(function ContactCard({
             <Text style={[styles.metaText, { color: colors.textSecondary }]} numberOfLines={1}>
               {contactMeta(contact)}
             </Text>
-            <View
-              style={[
-                styles.statusPill,
-                {
-                  backgroundColor: tone + '18',
-                  borderColor: tone + '40',
-                },
-              ]}
-            >
-              <View style={[styles.statusDot, { backgroundColor: tone }]} />
-              <Text style={[styles.statusPillText, { color: tone }]} numberOfLines={1}>
-                {presenceLabel}
-              </Text>
-            </View>
           </View>
 
           <View style={styles.actionRow}>

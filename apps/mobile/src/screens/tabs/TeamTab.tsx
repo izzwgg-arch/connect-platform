@@ -22,38 +22,49 @@ import { radius, spacing } from '../../theme/spacing';
 
 type TeamFilter = 'all' | TeamPresence;
 
-function involvedExtensions(call: LiveCall): string[] {
-  const out = new Set<string>();
-  const add = (value: string | null | undefined) => {
-    const v = String(value || '').trim();
-    if (/^\d{2,6}$/.test(v)) out.add(v);
-  };
-  (call.extensions || []).forEach(add);
-  add(call.from);
-  add(call.to);
-  add(call.connectedLine);
-  return [...out];
+/**
+ * Does a live call involve this extension? Uses only the authoritative
+ * `extensions[]` list the telephony service attaches to each call — NOT a
+ * fuzzy from/to/connectedLine match, which previously flagged the wrong
+ * person as "on a call" (e.g. when a DID or short code looked like an
+ * extension number).
+ */
+function callInvolvesExtension(call: LiveCall, extension: string, tenantId?: string | null): boolean {
+  const belongsToTenant = !tenantId || !call.tenantId || call.tenantId === tenantId;
+  if (!belongsToTenant) return false;
+  return (call.extensions || []).includes(extension);
 }
 
+/**
+ * Real-time presence for a team member.
+ *
+ * Primary signal is the Asterisk device hint (`LiveExtensionState.status`) —
+ * the exact same state desk-phone BLF lamps subscribe to — so the mobile dot
+ * matches the desk phone and clears the instant a call ends (the hint returns
+ * to `idle` and the live call is removed). Live calls are layered on top so a
+ * ringing/answered call lights up immediately even before the hint settles.
+ *
+ * Precedence: ringing → on_call → available → offline.
+ */
 function livePresence(member: TeamDirectoryMember, live: LiveTelephonyState | null): TeamPresence {
   if (!live) return member.presence;
-  const active = new Set<string>();
-  const ringing = new Set<string>();
+
+  let onCall = false;
+  let ringing = false;
   for (const call of live.calls.values()) {
-    const belongsToTenant = !member.tenantId || !call.tenantId || call.tenantId === member.tenantId;
-    if (!belongsToTenant) continue;
-    const exts = involvedExtensions(call);
-    if (call.state === 'up' || call.state === 'held') exts.forEach((ext) => active.add(ext));
-    if (call.state === 'ringing' || call.state === 'dialing') exts.forEach((ext) => ringing.add(ext));
+    if (!callInvolvesExtension(call, member.extension, member.tenantId)) continue;
+    if (call.state === 'ringing' || call.state === 'dialing') ringing = true;
+    else if (call.state === 'up' || call.state === 'held') onCall = true;
   }
-  if (ringing.has(member.extension)) return 'ringing';
-  if (active.has(member.extension)) return 'on_call';
 
   const direct = [...live.extensions.values()].find((ext) =>
     ext.extension === member.extension && (!member.tenantId || !ext.tenantId || ext.tenantId === member.tenantId),
   );
-  const state = String(direct?.status || '').toLowerCase();
-  if (['idle', 'not_inuse', 'registered', 'inuse', 'busy', 'onhold', 'ringing', '0', '1', '2', '3'].includes(state)) return 'available';
+  const hint = String(direct?.status || '').trim().toLowerCase();
+
+  if (ringing || hint === 'ringing') return 'ringing';
+  if (onCall || hint === 'inuse' || hint === 'busy' || hint === 'onhold') return 'on_call';
+  if (hint === 'idle') return 'available';
   return 'offline';
 }
 
@@ -92,9 +103,8 @@ function formatElapsed(startedAt: string | null | undefined, now: number): strin
 function activeCallStartedAt(member: TeamDirectoryMember, live: LiveTelephonyState | null): string | null {
   if (!live) return null;
   for (const call of live.calls.values()) {
-    const belongsToTenant = !member.tenantId || !call.tenantId || call.tenantId === member.tenantId;
-    if (!belongsToTenant || (call.state !== 'up' && call.state !== 'held')) continue;
-    if (involvedExtensions(call).includes(member.extension)) return call.answeredAt || call.startedAt;
+    if (call.state !== 'up' && call.state !== 'held') continue;
+    if (callInvolvesExtension(call, member.extension, member.tenantId)) return call.answeredAt || call.startedAt;
   }
   return null;
 }

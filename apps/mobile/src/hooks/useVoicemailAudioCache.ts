@@ -33,10 +33,14 @@ import * as FileSystem from "expo-file-system";
 import { buildVoicemailPreloadUri } from "../api/client";
 
 // ── Tuneable constants ────────────────────────────────────────────────────────
-const MAX_PRELOAD_COUNT = 5;
-const MAX_CACHED_FILES  = 10;
-const MAX_TOTAL_BYTES   = 30 * 1024 * 1024; // 30 MB
+// Preload the newest/unread voicemails so Play starts instantly. Downloads are
+// throttled to MAX_CONCURRENT_DOWNLOADS at a time so we don't saturate the
+// radio or drain the battery while still warming a healthy working set.
+const MAX_PRELOAD_COUNT = 15;
+const MAX_CACHED_FILES  = 25;
+const MAX_TOTAL_BYTES   = 60 * 1024 * 1024; // 60 MB
 const MAX_FILE_BYTES    =  5 * 1024 * 1024; //  5 MB per file
+const MAX_CONCURRENT_DOWNLOADS = 3;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type PreloadStatus = "idle" | "loading" | "ready" | "error";
@@ -222,16 +226,32 @@ export function useVoicemailAudioCache(
         if (a.listened !== b.listened) return a.listened ? 1 : -1;
         return new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime();
       })
-      .slice(0, MAX_PRELOAD_COUNT);
+      .slice(0, MAX_PRELOAD_COUNT)
+      .filter(
+        (vm) =>
+          statusRef.current.get(vm.id) !== "ready" &&
+          statusRef.current.get(vm.id) !== "loading",
+      );
 
-    for (const vm of candidates) {
-      if (
-        statusRef.current.get(vm.id) === "ready" ||
-        statusRef.current.get(vm.id) === "loading"
-      ) continue;
-      // Fire-and-forget; errors are logged internally
-      preloadOne(vm.id, token).catch(() => undefined);
-    }
+    // Throttled worker pool: at most MAX_CONCURRENT_DOWNLOADS run at once so a
+    // large preload set warms gradually rather than firing a burst of requests.
+    let cancelled = false;
+    const queue = [...candidates];
+    const runWorker = async () => {
+      while (!cancelled) {
+        const vm = queue.shift();
+        if (!vm) return;
+        await preloadOne(vm.id, token).catch(() => undefined);
+      }
+    };
+    const workers = Array.from(
+      { length: Math.min(MAX_CONCURRENT_DOWNLOADS, queue.length) },
+      () => runWorker(),
+    );
+    void Promise.all(workers);
+    return () => {
+      cancelled = true;
+    };
   }, [rows, token, preloadOne]);
 
   // ── cancel all in-flight downloads on unmount ──────────────────────────────

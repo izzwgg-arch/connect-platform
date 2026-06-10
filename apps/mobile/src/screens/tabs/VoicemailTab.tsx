@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -42,6 +43,12 @@ import { spacing } from '../../theme/spacing';
 
 type PrimaryFilter = 'all' | 'new' | 'urgent' | 'old';
 type DateFilter = 'any' | 'today' | 'week';
+
+// Instant paint: the last-seen voicemail list is cached on disk per user so the
+// page renders immediately on open while React Query refetches in the
+// background — instead of showing a long skeleton on every cold start.
+const VM_LIST_CACHE_PREFIX = 'cc_vm_list_';
+const VM_LIST_CACHE_MAX = 300;
 
 // Theme-driven palette. Derived from the app theme so the screen follows
 // light/dark mode instead of being hardcoded dark. The keys mirror the old
@@ -193,6 +200,39 @@ export function VoicemailTab() {
     if (nextRows !== undefined) setRows(nextRows);
   }, [voicemailQuery.data]);
 
+  // Hydrate from the on-disk cache so the list paints instantly on open.
+  // Only seeds when we don't already have rows (fresh query data wins).
+  useEffect(() => {
+    if (!token) return undefined;
+    let cancelled = false;
+    const key = `${VM_LIST_CACHE_PREFIX}${voicemailQueryUserScope(token)}`;
+    AsyncStorage.getItem(key)
+      .then((raw) => {
+        if (cancelled || !raw) return;
+        try {
+          const cached = JSON.parse(raw) as Voicemail[];
+          if (Array.isArray(cached) && cached.length > 0) {
+            setRows((cur) => (cur.length ? cur : cached));
+          }
+        } catch {
+          /* ignore corrupt cache */
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  // Persist the freshest list to disk for the next cold start.
+  useEffect(() => {
+    if (!token) return;
+    const next = voicemailQuery.data?.voicemails;
+    if (!next) return;
+    const key = `${VM_LIST_CACHE_PREFIX}${voicemailQueryUserScope(token)}`;
+    AsyncStorage.setItem(key, JSON.stringify(next.slice(0, VM_LIST_CACHE_MAX))).catch(() => undefined);
+  }, [token, voicemailQuery.data]);
+
   // When opened from a voicemail push notification, expand and highlight
   // the specific voicemail. Reset the primary filter to 'all' so the
   // entry is always visible regardless of the current filter state.
@@ -261,11 +301,6 @@ export function VoicemailTab() {
         (vm.transcription || '').toLowerCase().includes(q),
       );
   }, [dateFilter, primaryFilter, query, rows, transcriptOnly]);
-
-  const activeVoicemail = useMemo(
-    () => rows.find((vm) => vm.id === activeId) ?? null,
-    [activeId, rows],
-  );
 
   const selectionMode = selectedIds.length > 0;
 
@@ -472,10 +507,7 @@ export function VoicemailTab() {
           alwaysBounceVertical={false}
           overScrollMode="never"
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} tintColor={VM.primary} />}
-          contentContainerStyle={[
-            styles.list,
-            { paddingBottom: activeVoicemail ? 164 : spacing['5'] },
-          ]}
+          contentContainerStyle={[styles.list, { paddingBottom: spacing['5'] }]}
           renderItem={({ item }) => (
             <VoicemailCard
               vm={item}
@@ -498,18 +530,8 @@ export function VoicemailTab() {
         />
       )}
 
-      {activeVoicemail && (
-        <VoicemailMiniPlayer
-          vm={activeVoicemail}
-          progress={progress}
-          onToggle={() => play(activeVoicemail)}
-          onCall={() => callBack(activeVoicemail)}
-          bottom={Math.max(insets.bottom, 8) + 72}
-        />
-      )}
-
       {playbackError && (
-        <View style={[styles.snackbar, { bottom: Math.max(insets.bottom, 8) + (activeVoicemail ? 150 : 86) }]}>
+        <View style={[styles.snackbar, { bottom: Math.max(insets.bottom, 8) + 86 }]}>
           <Ionicons name="warning-outline" size={16} color={VM.orange} />
           <Text style={styles.snackbarText}>{playbackError}</Text>
         </View>
@@ -821,41 +843,6 @@ function Waveform({
           />
         );
       })}
-    </View>
-  );
-}
-
-function VoicemailMiniPlayer({
-  vm,
-  progress,
-  bottom,
-  onToggle,
-  onCall,
-}: {
-  vm: Voicemail;
-  progress: { position: number; duration: number };
-  bottom: number;
-  onToggle: () => void;
-  onCall: () => void;
-}) {
-  const { VM, styles } = useVm();
-  const duration = Math.max(1, progress.duration || vm.durationSec || 1);
-  const pct = Math.min(1, (progress.position || 0) / duration);
-  return (
-    <View style={[styles.miniPlayer, { bottom }]}>
-      <TouchableOpacity style={styles.miniPlay} onPress={onToggle} activeOpacity={0.8}>
-        <Ionicons name="pause" size={18} color={VM.text} />
-      </TouchableOpacity>
-      <View style={styles.miniInfo}>
-        <Text style={styles.miniTitle} numberOfLines={1}>{callerLabel(vm)}</Text>
-        <View style={styles.miniProgressTrack}>
-          <View style={[styles.miniProgressFill, { width: `${pct * 100}%` }]} />
-        </View>
-        <Text style={styles.miniTime}>{formatDuration(progress.position)} / {formatDuration(duration)}</Text>
-      </View>
-      <TouchableOpacity style={styles.miniCall} onPress={onCall} activeOpacity={0.8}>
-        <Ionicons name="call" size={18} color={VM.green} />
-      </TouchableOpacity>
     </View>
   );
 }
