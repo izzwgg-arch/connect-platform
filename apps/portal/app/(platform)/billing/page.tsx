@@ -5,17 +5,37 @@ import "../admin/billing/_components/billingPhase4.css";
 import "../admin/billing/_components/billingPhase5.css";
 import "./billingWorkspace.css";
 import Link from "next/link";
-import { useState } from "react";
+import {
+  CalendarDays,
+  CreditCard,
+  FileText,
+  PhoneCall,
+  Plus,
+  ReceiptText,
+  ShieldCheck,
+  WalletCards,
+} from "lucide-react";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { apiGet } from "../../../services/apiClient";
 import { ErrorState } from "../../../components/ErrorState";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
-import { PageHeader } from "../../../components/PageHeader";
 import { PermissionGate } from "../../../components/PermissionGate";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { BillingActivityList } from "../../../components/billing/BillingActivityList";
+import { CRMPageHeader } from "../../../components/crm/CRMPageHeader";
 import {
-  dollars, formatDate, formatDateTime,
+  CRMWorkspaceBody,
+  CRMWorkspaceChrome,
+  CRMWorkspaceHeader,
+  CRMWorkspaceShell,
+  CRMWorkspaceToolbar,
+} from "../../../components/crm/CRMWorkspaceShell";
+import { CRMPageShell } from "../../../components/crm/CRMPageShell";
+import { mk } from "../../../components/crm/campaign/campaignCinemaClasses";
+import { cn } from "../../../components/crm/cn";
+import { crm } from "../../../components/crm/crmClasses";
+import {
+  dollars, formatDate,
   invoiceStatusLabel, invoiceStatusClass,
   worstOpenInvoice, nextBillingSummary,
   nextOpenInvoiceDueSummary,
@@ -39,12 +59,132 @@ type InvoicePreview = {
   totalCents: number;
 };
 
-function greetingForNow(name: string): string {
-  const hour = new Date().getHours();
-  const first = name.split(" ").filter(Boolean)[0] || name || "there";
-  if (hour < 12) return `Good morning, ${first} 👋`;
-  if (hour < 18) return `Good afternoon, ${first} 👋`;
-  return `Good evening, ${first} 👋`;
+type BillingDemoData = {
+  settings: any;
+  invoices: any[];
+  methods: any[];
+  usage: any;
+  invoicePreview: InvoicePreview;
+  timeline: { events: Array<{ id: string; type: string; message: string | null; createdAt: string }> };
+};
+
+function isoDaysFromNow(days: number) {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return date.toISOString();
+}
+
+function buildBillingDemoData(): BillingDemoData {
+  const periodStart = isoDaysFromNow(-9);
+  const periodEnd = isoDaysFromNow(21);
+  const dueDate = isoDaysFromNow(12);
+
+  return {
+    settings: {
+      autoBillingEnabled: true,
+      billingDayOfMonth: 15,
+      defaultPaymentMethodId: "demo-card-visa",
+    },
+    methods: [
+      {
+        id: "demo-card-visa",
+        brand: "Visa",
+        last4: "4242",
+        expMonth: 4,
+        expYear: 2029,
+        isDefault: true,
+      },
+    ],
+    usage: {
+      extensionCount: 18,
+      localPhoneNumberCount: 7,
+      tollFreePhoneNumberCount: 2,
+    },
+    invoicePreview: {
+      periodStart,
+      periodEnd,
+      dueDate,
+      lineItems: [
+        { type: "EXTENSION", description: "Hosted VoIP extensions", quantity: 18, unitPriceCents: 1699, amountCents: 30582 },
+        { type: "PHONE_NUMBER", description: "Local phone numbers", quantity: 7, unitPriceCents: 299, amountCents: 2093 },
+        { type: "PHONE_NUMBER", description: "Toll-free numbers", quantity: 2, unitPriceCents: 599, amountCents: 1198 },
+        { type: "SMS_PACKAGE", description: "Business messaging package", quantity: 1, unitPriceCents: 1900, amountCents: 1900 },
+        { type: "DISCOUNT", description: "Bundle discount", quantity: 1, unitPriceCents: -2500, amountCents: -2500 },
+      ],
+      subtotalCents: 33273,
+      taxCents: 2736,
+      totalCents: 36009,
+    },
+    invoices: [
+      {
+        id: "demo-open-invoice",
+        invoiceNumber: "INV-2026-0615",
+        status: "OPEN",
+        periodStart,
+        periodEnd,
+        dueDate,
+        totalCents: 36009,
+        balanceDueCents: 36009,
+        publicPayUrl: "",
+        paidAt: null,
+      },
+      {
+        id: "demo-paid-invoice-1",
+        invoiceNumber: "INV-2026-0515",
+        status: "PAID",
+        periodStart: isoDaysFromNow(-39),
+        periodEnd: isoDaysFromNow(-10),
+        dueDate: isoDaysFromNow(-2),
+        totalCents: 34872,
+        balanceDueCents: 0,
+        paidAt: isoDaysFromNow(-5),
+      },
+      {
+        id: "demo-paid-invoice-2",
+        invoiceNumber: "INV-2026-0415",
+        status: "PAID",
+        periodStart: isoDaysFromNow(-70),
+        periodEnd: isoDaysFromNow(-40),
+        dueDate: isoDaysFromNow(-32),
+        totalCents: 33124,
+        balanceDueCents: 0,
+        paidAt: isoDaysFromNow(-35),
+      },
+      {
+        id: "demo-void-invoice",
+        invoiceNumber: "INV-2026-0315",
+        status: "VOID",
+        periodStart: isoDaysFromNow(-101),
+        periodEnd: isoDaysFromNow(-71),
+        dueDate: isoDaysFromNow(-64),
+        totalCents: 32500,
+        balanceDueCents: 0,
+        paidAt: null,
+      },
+    ],
+    timeline: {
+      events: [
+        {
+          id: "demo-event-created",
+          type: "invoice_created",
+          message: "Invoice INV-2026-0615 was generated for the current billing cycle.",
+          createdAt: isoDaysFromNow(-1),
+        },
+        {
+          id: "demo-event-emailed",
+          type: "invoice_emailed",
+          message: "Invoice email delivered to billing@localdev.example.",
+          createdAt: isoDaysFromNow(-1),
+        },
+        {
+          id: "demo-event-paid",
+          type: "payment_succeeded",
+          message: "Previous invoice INV-2026-0515 was paid with Visa ending 4242.",
+          createdAt: isoDaysFromNow(-5),
+        },
+      ],
+    },
+  };
 }
 
 function invoiceDetailHref(id: string) {
@@ -59,71 +199,70 @@ function invoicePayHref(invoice: any) {
   return invoiceDetailHref(invoice.id);
 }
 
-function InvoicePreviewSection() {
-  const [open, setOpen] = useState(false);
-  const [preview, setPreview] = useState<InvoicePreview | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+function isPastDueDate(dueDate: string | Date | null | undefined) {
+  if (!dueDate) return false;
+  const due = new Date(dueDate);
+  if (Number.isNaN(due.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  due.setHours(0, 0, 0, 0);
+  return due.getTime() < today.getTime();
+}
 
-  async function loadPreview() {
-    if (preview) { setOpen((o) => !o); return; }
-    setLoading(true);
-    setError("");
-    try {
-      const data = await apiGet<InvoicePreview>("/billing/invoice-preview");
-      setPreview(data);
-      setOpen(true);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to load preview.";
-      setError(msg);
-    } finally {
-      setLoading(false);
-    }
-  }
+function BillingKpiTile({
+  label,
+  value,
+  icon,
+  micro,
+  accent,
+  tone = "default",
+  truncateValue = false,
+}: {
+  label: string;
+  value: string | number;
+  icon: JSX.Element;
+  micro: string;
+  accent: "blue" | "violet" | "green" | "amber" | "rose" | "cyan";
+  tone?: "default" | "good" | "warn" | "danger";
+  truncateValue?: boolean;
+}) {
+  const toneClass =
+    tone === "good"
+      ? "text-crm-success"
+      : tone === "warn"
+        ? "text-crm-warning"
+        : tone === "danger"
+          ? "text-crm-danger"
+          : "text-crm-text";
 
   return (
-    <div className="billing-unpaid-callout" style={{ marginTop: 8 }}>
-      <div className="billing-unpaid-callout-head" style={{ alignItems: "center" }}>
-        <span style={{ fontWeight: 600 }}>Estimated next invoice</span>
-        <button
-          className="btn ghost"
-          type="button"
-          style={{ fontSize: 12, padding: "4px 10px" }}
-          onClick={() => void loadPreview()}
-          disabled={loading}
-        >
-          {loading ? "Loading…" : open ? "Hide" : "Preview"}
-        </button>
-      </div>
-      {error ? <p style={{ fontSize: 13, color: "var(--danger, #dc2626)", padding: "6px 0" }}>{error}</p> : null}
-      {open && preview ? (
-        <div style={{ padding: "8px 0" }}>
-          <div style={{ fontSize: 12, background: "var(--surface-alt, #f8fafc)", border: "1px solid var(--border, #e5e7eb)", borderRadius: 8, padding: "8px 12px", marginBottom: 10, color: "var(--muted, #475569)" }}>
-            <strong>Preview only</strong> — no invoice is created. Period {formatDate(preview.periodStart)} – {formatDate(preview.periodEnd)} · Due {formatDate(preview.dueDate)}.
-          </div>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <tbody>
-              {preview.lineItems.map((item, idx) => (
-                <tr key={idx} style={{ borderBottom: "1px solid var(--border-light, #f3f4f6)" }}>
-                  <td style={{ padding: "4px 0" }}>{item.description}</td>
-                  <td style={{ textAlign: "right", padding: "4px 0", color: item.amountCents < 0 ? "var(--danger, #dc2626)" : undefined, fontWeight: 500 }}>
-                    {item.amountCents < 0 ? `(${dollars(-item.amountCents)})` : dollars(item.amountCents)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr style={{ borderTop: "1px solid var(--border, #e5e7eb)" }}>
-                <td style={{ padding: "6px 0", fontWeight: 700 }}>Estimated total</td>
-                <td style={{ textAlign: "right", padding: "6px 0", fontWeight: 700 }}>{dollars(preview.totalCents)}</td>
-              </tr>
-            </tfoot>
-          </table>
-          {preview.taxCents > 0 ? (
-            <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>Includes {dollars(preview.taxCents)} in taxes and fees.</p>
-          ) : null}
-        </div>
-      ) : null}
+    <div
+      className={cn(
+        crm.queueCountPill,
+        `crm-queue-kpi-${accent}`,
+        "relative overflow-hidden bg-crm-surface-2",
+      )}
+    >
+      <span className="flex w-full items-start justify-between gap-3">
+        <span className="min-w-0">
+          <span className="crm-queue-kpi-label block text-[10px] font-bold uppercase tracking-wide text-crm-muted">{label}</span>
+          <span
+            className={cn(
+              "crm-queue-kpi-value mt-1 block font-bold tabular-nums leading-none tracking-tight",
+              truncateValue ? "truncate text-xl" : "text-2xl",
+              toneClass,
+            )}
+          >
+            {value}
+          </span>
+        </span>
+        <span className="crm-queue-kpi-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface/70 text-crm-accent">
+          {icon}
+        </span>
+      </span>
+      <span className={cn("crm-queue-kpi-micro text-[10px] font-medium", tone === "default" ? "text-crm-muted" : toneClass)}>
+        {micro}
+      </span>
     </div>
   );
 }
@@ -147,10 +286,10 @@ function FailedPaymentBanner({ invoice }: { invoice: any }) {
             : "Pay now to avoid interruption."}
         </p>
         <div className="billing-alert-actions">
-          <Link className="btn primary" href={invoicePayHref(invoice)}>
+          <Link className={crm.btnPrimary} href={invoicePayHref(invoice)}>
             Pay now
           </Link>
-          <Link className="btn ghost" href="/billing/payments">
+          <Link className={crm.btnSecondary} href="/billing/payments">
             Update payment method
           </Link>
         </div>
@@ -160,7 +299,7 @@ function FailedPaymentBanner({ invoice }: { invoice: any }) {
 }
 
 export default function BillingOverviewPage() {
-  const { user, tenantId, tenant } = useAppContext();
+  const { tenantId, tenant } = useAppContext();
   const tenantScopeKey = tenantId;
   const tenantResourceOpts = { keepPreviousData: false as const };
 
@@ -170,225 +309,292 @@ export default function BillingOverviewPage() {
   const usage = useAsyncResource(() => apiGet<any>("/billing/usage/current"), [tenantScopeKey], tenantResourceOpts);
   const invoicePreview = useAsyncResource(() => apiGet<InvoicePreview>("/billing/invoice-preview"), [tenantScopeKey], tenantResourceOpts);
 
-  const allInvoices = invoices.status === "success" ? invoices.data : [];
+  const rawInvoices = invoices.status === "success" ? invoices.data : [];
+  const isLocalBillingPreview =
+    typeof window !== "undefined" &&
+    ["localhost", "127.0.0.1"].includes(window.location.hostname);
+  const shouldUseDemoData =
+    isLocalBillingPreview &&
+    invoices.status === "success" &&
+    rawInvoices.length === 0 &&
+    String(tenant?.name || "").toLowerCase().includes("local dev");
+  const demoData = shouldUseDemoData ? buildBillingDemoData() : null;
+
+  const allInvoices = demoData?.invoices ?? rawInvoices;
   const openBalance = allInvoices
     .filter((inv) => !["PAID", "VOID"].includes(String(inv.status)) && Number(inv.balanceDueCents || 0) > 0)
     .reduce((sum, inv) => sum + Number(inv.balanceDueCents || 0), 0);
   const worst = worstOpenInvoice(allInvoices);
   const unpaid = allInvoices.filter((inv) => ["OPEN", "FAILED", "OVERDUE", "DRAFT"].includes(String(inv.status)) && Number(inv.balanceDueCents || 0) > 0);
-  const recentPaid = allInvoices
-    .filter((inv) => inv.status === "PAID" && inv.paidAt)
-    .sort((a, b) => new Date(b.paidAt).getTime() - new Date(a.paidAt).getTime())
-    .slice(0, 3);
+  const balanceTone: "good" | "warn" | "danger" = openBalance === 0
+    ? "good"
+    : unpaid.some((inv) => ["FAILED", "OVERDUE"].includes(String(inv.status)) || isPastDueDate(inv.dueDate))
+      ? "danger"
+      : "warn";
 
-  const pmRows = methods.status === "success" ? methods.data : [];
+  const pmRows = demoData?.methods ?? (methods.status === "success" ? methods.data : []);
   const defaultPm = pmRows.find((m: any) => m.isDefault) || pmRows[0] || null;
 
-  const s = settings.status === "success" ? settings.data : null;
+  const s = demoData?.settings ?? (settings.status === "success" ? settings.data : null);
   const nextBill = s ? nextBillingSummary(s.billingDayOfMonth, !!s.autoBillingEnabled) : null;
-  const autopayLabel = s?.autoBillingEnabled
-    ? (s.billingDayOfMonth ? `Day ${s.billingDayOfMonth}` : "Enabled")
-    : "Off";
+  const usageData = demoData?.usage ?? (usage.status === "success" ? usage.data : null);
+  const activeExtensions = usageData ? Number(usageData.extensionCount || 0) : null;
+  const activePhoneNumbers = usageData
+    ? Number(usageData.localPhoneNumberCount || 0) + Number(usageData.tollFreePhoneNumberCount || 0)
+    : null;
+  const previewData = demoData?.invoicePreview ?? (invoicePreview.status === "success" ? invoicePreview.data : null);
 
   const loading = settings.status === "loading" || invoices.status === "loading";
 
-  const timelineId = worst?.id || (allInvoices[0]?.id ?? null);
+  const timelineId = demoData ? null : (worst?.id || (rawInvoices[0]?.id ?? null));
   const timeline = useAsyncResource<any | null>(
     () => (timelineId ? apiGet<any>(`/billing/platform/invoices/${timelineId}`) : Promise.resolve(null)),
     [timelineId, tenantScopeKey],
     tenantResourceOpts,
   );
+  const timelineData = demoData?.timeline ?? (timeline.status === "success" ? timeline.data : null);
 
   return (
     <PermissionGate permission="can_view_billing_overview" fallback={<div className="state-box">You do not have billing access.</div>}>
-      <div className="billing-workspace" data-testid="billing-tenant-overview-loaded">
-        <PageHeader title="Billing" subtitle={tenant?.name ? `${tenant.name} billing` : undefined} />
+      <CRMPageShell
+        className={cn("campaigns-page-shell billing-page-shell", crm.queueWorkspace)}
+        innerClassName={cn(crm.pageInnerQueue, mk.workspace, "campaigns-page-inner billing-workspace")}
+      >
+        <span data-testid="billing-tenant-overview-loaded" className="sr-only">Billing overview loaded</span>
+        <CRMWorkspaceShell className="campaigns-workspace-shell billing-workspace-shell">
+          <CRMWorkspaceChrome>
+            <CRMWorkspaceHeader>
+              <CRMPageHeader
+                compact
+                className={cn(crm.contactsHeaderPanel, "campaigns-command-header billing-header-panel")}
+                icon={<WalletCards className="h-6 w-6" aria-hidden />}
+                title="Billing"
+                subtitle={tenant?.name ? `${tenant.name} billing workspace` : "Billing workspace"}
+                actions={(
+                  <div className="campaigns-hero-actions billing-hero-actions">
+                    <Link className="campaigns-btn-secondary" href="/billing/invoices">Invoices</Link>
+                    <Link className="campaigns-btn-secondary billing-action-button" href="/billing/payments">
+                      <Plus className="h-4 w-4" />
+                      Payment methods
+                    </Link>
+                    {openBalance > 0 && worst ? (
+                      <Link className="campaigns-btn-primary" href={invoicePayHref(worst)}>
+                        Pay {dollars(openBalance)}
+                      </Link>
+                    ) : null}
+                  </div>
+                )}
+              />
+            </CRMWorkspaceHeader>
 
-        {loading ? <LoadingSkeleton rows={4} /> : null}
-        {settings.status === "error" ? <ErrorState message={settings.error} /> : null}
-        {invoices.status === "error" ? <ErrorState message={invoices.error} /> : null}
+            <CRMWorkspaceToolbar className="flex flex-col gap-3">
+              {loading ? <LoadingSkeleton rows={3} /> : null}
+              {settings.status === "error" ? <ErrorState message={settings.error} /> : null}
+              {invoices.status === "error" ? <ErrorState message={invoices.error} /> : null}
 
-        {/* Hero */}
-        <section className="bw-hero billing-card">
-          <div className="bw-hero-main">
-            <h2>{greetingForNow(user?.name || "")}</h2>
-            <p className="muted">
-              {openBalance > 0
-                ? `You have ${unpaid.length} unpaid invoice${unpaid.length !== 1 ? "s" : ""}.`
-                : "Your account is in good standing."}
-            </p>
-          </div>
-          <div className="bw-hero-actions">
-            {openBalance > 0 && worst ? (
-              <Link className="btn primary" href={invoicePayHref(worst)}>
-                Pay {dollars(openBalance)}
-              </Link>
-            ) : null}
-          </div>
-        </section>
-
-        {/* KPI row */}
-        {!loading && s ? (
-          <section className="bw-kpi-grid">
-            <div className="billing-card bw-kpi">
-              <div className="bw-kpi-label">Current balance</div>
-              <div className={`bw-kpi-value ${openBalance > 0 ? "neg" : ""}`}>{dollars(openBalance)}</div>
-              <div className="bw-kpi-sub">{nextOpenInvoiceDueSummary(allInvoices) || (openBalance === 0 ? "No balance due" : "")}</div>
-              {openBalance > 0 && worst ? (
-                <div className="bw-kpi-cta"><Link className="btn primary" href={invoicePayHref(worst)}>Pay now</Link></div>
+              {!loading ? (
+                <section
+                  className="crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-4"
+                  aria-label="Billing summary"
+                >
+                  <BillingKpiTile
+                    label="Balance"
+                    value={dollars(openBalance)}
+                    accent="blue"
+                    tone={balanceTone}
+                    icon={<WalletCards className="h-4 w-4" />}
+                    micro={nextOpenInvoiceDueSummary(allInvoices) || (openBalance === 0 ? "No balance due" : "Open balance")}
+                  />
+                  <BillingKpiTile
+                    label="Payment method"
+                    value={defaultPm ? `${defaultPm.brand || "Card"} ···${defaultPm.last4 || "••••"}` : "None"}
+                    accent="violet"
+                    truncateValue
+                    icon={<CreditCard className="h-4 w-4" />}
+                    micro={
+                      defaultPm?.expMonth && defaultPm?.expYear
+                        ? `Expires ${defaultPm.expMonth}/${String(defaultPm.expYear).slice(-2)}`
+                        : s?.defaultPaymentMethodId
+                          ? "Default method"
+                          : "No card on file"
+                    }
+                  />
+                  <BillingKpiTile
+                    label="Next invoice"
+                    value={previewData ? dollars(previewData.totalCents) : "—"}
+                    accent="cyan"
+                    icon={<ReceiptText className="h-4 w-4" />}
+                    micro={
+                      previewData
+                        ? `${formatDate(previewData.periodStart)} - ${formatDate(previewData.periodEnd)}`
+                        : "Preview pending"
+                    }
+                  />
+                  <BillingKpiTile
+                    label="Services"
+                    value={activeExtensions ?? "—"}
+                    accent="green"
+                    icon={<PhoneCall className="h-4 w-4" />}
+                    micro={activePhoneNumbers != null ? `${activePhoneNumbers} phone numbers` : "Extensions"}
+                  />
+                </section>
               ) : null}
-            </div>
-            <div className="billing-card bw-kpi">
-              <div className="bw-kpi-label">Next autopay</div>
-              <div className="bw-kpi-value">{s?.autoBillingEnabled ? (s.billingDayOfMonth ? `Day ${s.billingDayOfMonth}` : "Enabled") : "Off"}</div>
-              <div className="bw-kpi-sub">{nextBill || (s?.autoBillingEnabled ? "Auto-billing on" : "Autopay is off")}</div>
-            </div>
-            <div className="billing-card bw-kpi bw-kpi--pm">
-              <div className="bw-kpi-label">Payment method</div>
-              <div className="bw-kpi-value">
-                {defaultPm ? `${defaultPm.brand || "Card"} ···${defaultPm.last4 || "••••"}` : "None"}
-              </div>
-              <div className="bw-kpi-sub">
-                {defaultPm?.expMonth && defaultPm?.expYear ? `Expires ${defaultPm.expMonth}/${String(defaultPm.expYear).slice(-2)}` : s?.defaultPaymentMethodId ? "Default" : "No card on file"}
-              </div>
-              <div className="bw-kpi-chips">
-                {s?.defaultPaymentMethodId && defaultPm ? (
-                  <span className="bw-chip" title="Default payment method">Default</span>
-                ) : null}
-                {s?.autoBillingEnabled ? (
-                  <span className="bw-chip bw-chip--accent" title="Autopay is enabled">Autopay</span>
-                ) : null}
-              </div>
-              <div className="bw-kpi-cta"><Link className="btn ghost" href="/billing/payments">{defaultPm ? "Manage" : "Add card"}</Link></div>
-            </div>
-            <div className="billing-card bw-kpi">
-              <div className="bw-kpi-label">Estimated next invoice</div>
-              <div className="bw-kpi-value">{invoicePreview.status === "success" ? dollars(invoicePreview.data?.totalCents) : "—"}</div>
-              <div className="bw-kpi-sub">{invoicePreview.status === "success" ? `${formatDate(invoicePreview.data.periodStart)} – ${formatDate(invoicePreview.data.periodEnd)}` : "Preview pending"}</div>
-              <div className="bw-kpi-cta"><a className="btn ghost" href="#estimate">View estimate</a></div>
-            </div>
-            <div className="billing-card bw-kpi">
-              <div className="bw-kpi-label">Active services</div>
-              <div className="bw-kpi-value">{usage.status === "success" ? String(usage.data.extensionCount || 0) : "—"}</div>
-              <div className="bw-kpi-sub">{usage.status === "success" ? `${usage.data.localPhoneNumberCount + usage.data.tollFreePhoneNumberCount} phone numbers` : "Extensions"}</div>
-            </div>
-            <div className="billing-card bw-kpi">
-              <div className="bw-kpi-label">Billing health</div>
-              <div className={`bw-kpi-value ${worst ? (worst.status === "FAILED" || worst.status === "OVERDUE" ? "neg" : "") : "pos"}`}>
-                {worst ? invoiceStatusLabel(worst.status) : "Good standing"}
-              </div>
-              <div className="bw-kpi-sub">{worst ? (worst.dueDate ? `Due ${formatDate(worst.dueDate)}` : "Open balance") : "Thank you!"}</div>
-            </div>
-          </section>
-        ) : null}
 
-        {/* Unpaid banner */}
-        {!loading && worst ? <FailedPaymentBanner invoice={worst} /> : null}
+              {!loading && worst ? <FailedPaymentBanner invoice={worst} /> : null}
+            </CRMWorkspaceToolbar>
+          </CRMWorkspaceChrome>
 
-        {/* Body grid: estimate · timeline · recent */}
-        <section className="bw-main-grid">
-          <div className="billing-card" id="estimate">
-            <div className="bw-section-head">
-              <h3>Estimated next invoice preview</h3>
-              <Link className="btn ghost" href="/billing/invoices">View full estimate</Link>
-            </div>
-            {invoicePreview.status === "loading" ? <LoadingSkeleton rows={3} /> : null}
-            {invoicePreview.status === "error" ? <ErrorState message={invoicePreview.error} /> : null}
-            {invoicePreview.status === "success" && invoicePreview.data?.lineItems?.length ? (
-              <div className="bw-estimate-table-wrap">
-                <table className="bw-estimate-table">
-                  <thead>
-                    <tr>
-                      <th>Item</th>
-                      <th>Qty</th>
-                      <th>Unit price</th>
-                      <th>Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {invoicePreview.data.lineItems.map((item, idx) => (
-                      <tr key={idx}>
-                        <td>{item.description}</td>
-                        <td className="num">{item.quantity ?? "—"}</td>
-                        <td className="num">{item.unitPriceCents != null ? dollars(item.unitPriceCents) : "—"}</td>
-                        <td className={`num ${item.amountCents < 0 ? "neg" : ""}`}>
-                          {item.amountCents < 0 ? `(${dollars(-item.amountCents)})` : dollars(item.amountCents)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr>
-                      <td colSpan={3}>Estimated total</td>
-                      <td className="num">{dollars(invoicePreview.data.totalCents)}</td>
-                    </tr>
-                  </tfoot>
-                </table>
-                {invoicePreview.data.taxCents > 0 ? (
-                  <p className="muted" style={{ marginTop: 8 }}>Includes {dollars(invoicePreview.data.taxCents)} in taxes and fees.</p>
-                ) : null}
-              </div>
-            ) : (
-              <div className="state-box">
-                <div className="state-illus" aria-hidden>
-                  <svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-                </div>
-                <div className="state-title">No estimate available</div>
-                <div className="state-text">We’ll show your next invoice preview as soon as it’s ready.</div>
-                <div className="state-actions"><Link className="btn ghost" href="/billing/invoices">View invoices</Link></div>
-              </div>
-            )}
-          </div>
-
-          <div className="billing-card">
-            <div className="bw-section-head"><h3>Billing timeline</h3></div>
-            {timeline.status === "loading" ? <LoadingSkeleton rows={3} /> : null}
-            {timeline.status === "success" && timeline.data?.events?.length ? (
-              <BillingActivityList events={timeline.data.events} />
-            ) : (
-              <div className="state-box">
-                <div className="state-illus" aria-hidden>
-                  <svg viewBox="0 0 24 24" fill="none"><path d="M12 6v6l4 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-                </div>
-                <div className="state-title">No recent billing activity</div>
-                <div className="state-text">You’ll see payments and invoice updates here.</div>
-              </div>
-            )}
-          </div>
-
-          <div className="billing-card">
-            <div className="bw-section-head">
-              <h3>Recent invoices</h3>
-              <Link className="btn ghost" href="/billing/invoices">View all</Link>
-            </div>
-            {!loading && allInvoices.slice(0, 5).length ? (
-              <div className="bw-invoice-list">
-                {allInvoices.slice(0, 5).map((inv) => (
-                  <Link className="bw-invoice-row" key={inv.id} href={invoiceDetailHref(inv.id)}>
-                    <div className="bw-invoice-id">
-                      <strong>{inv.invoiceNumber || inv.id.slice(0, 8)}</strong>
-                      <small className="muted">{inv.periodStart && inv.periodEnd ? `${formatDate(inv.periodStart)} – ${formatDate(inv.periodEnd)}` : "—"}</small>
+          <CRMWorkspaceBody className="billing-workspace-body">
+            <section className="bw-main-grid">
+              <div className="bw-primary-grid">
+                <div className="billing-card bw-panel bw-estimate-panel" id="estimate">
+                  <div className="bw-section-head">
+                    <div>
+                      <h2>Estimated next invoice</h2>
                     </div>
-                    <span className={`billing-status-pill ${invoiceStatusClass(inv.status)}`}>
-                      {invoiceStatusLabel(inv.status)}
-                    </span>
-                    <div className="bw-invoice-amt">{dollars(inv.totalCents)}</div>
-                  </Link>
-                ))}
-              </div>
-            ) : (
-              <div className="state-box">
-                <div className="state-illus" aria-hidden>
-                  <svg viewBox="0 0 24 24" fill="none"><path d="M6 7h12M6 12h12M6 17h7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                  </div>
+                  <div className="bw-card-scroll">
+                    {!demoData && invoicePreview.status === "loading" ? <LoadingSkeleton rows={3} /> : null}
+                    {!demoData && invoicePreview.status === "error" ? <ErrorState message={invoicePreview.error} /> : null}
+                    {previewData?.lineItems?.length ? (
+                      <div className="bw-estimate-table-wrap">
+                        <table className="bw-estimate-table">
+                          <thead>
+                            <tr>
+                              <th>Item</th>
+                              <th>Qty</th>
+                              <th>Unit price</th>
+                              <th>Amount</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {previewData.lineItems.map((item, idx) => (
+                              <tr key={idx}>
+                                <td>{item.description}</td>
+                                <td className="num">{item.quantity ?? "—"}</td>
+                                <td className="num">{item.unitPriceCents != null ? dollars(item.unitPriceCents) : "—"}</td>
+                                <td className={`num ${item.amountCents < 0 ? "neg" : ""}`}>
+                                  {item.amountCents < 0 ? `(${dollars(-item.amountCents)})` : dollars(item.amountCents)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr>
+                              <td colSpan={3}>Estimated total</td>
+                              <td className="num">{dollars(previewData.totalCents)}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                        {previewData.taxCents > 0 ? (
+                          <p className="muted" style={{ marginTop: 8 }}>Includes {dollars(previewData.taxCents)} in taxes and fees.</p>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="state-box">
+                        <div className="state-illus" aria-hidden>
+                          <svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                        </div>
+                        <div className="state-title">No estimate available</div>
+                        <div className="state-text">We’ll show your next invoice preview as soon as it’s ready.</div>
+                        <div className="state-actions"><Link className="campaigns-btn-secondary" href="/billing/invoices">View invoices</Link></div>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="state-title">No invoices yet</div>
-                <div className="state-text">Your invoices will appear here once generated.</div>
-                <div className="state-actions"><Link className="btn ghost" href="/billing/settings">Review billing settings</Link></div>
+
+                <div className="billing-card bw-panel bw-timeline-panel">
+                  <div className="bw-section-head">
+                    <div>
+                      <h2>Timeline</h2>
+                    </div>
+                  </div>
+                  <div className="bw-card-scroll">
+                    {!demoData && timeline.status === "loading" ? <LoadingSkeleton rows={3} /> : null}
+                    {timelineData?.events?.length ? (
+                      <BillingActivityList events={timelineData.events} />
+                    ) : (
+                      <div className="state-box">
+                        <div className="state-illus" aria-hidden>
+                          <svg viewBox="0 0 24 24" fill="none"><path d="M12 6v6l4 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                        </div>
+                        <div className="state-title">No recent billing activity</div>
+                        <div className="state-text">You’ll see payments and invoice updates here.</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
-            )}
-          </div>
-        </section>
-      </div>
+
+              <aside className="bw-right-rail">
+                <div className="billing-card bw-panel bw-panel--summary">
+                  <div className="bw-section-head">
+                    <div>
+                      <h2>Billing status</h2>
+                    </div>
+                  </div>
+                  <div className="bw-card-scroll">
+                    <div className="bw-status-grid">
+                      <div className="bw-status-item">
+                        <span><ShieldCheck size={15} />Status</span>
+                        <strong className={balanceTone === "danger" ? "neg" : balanceTone === "warn" ? "warn" : "pos"}>
+                          {worst ? invoiceStatusLabel(worst.status) : "Good standing"}
+                        </strong>
+                      </div>
+                      <div className="bw-status-item">
+                        <span><CalendarDays size={15} />Autopay</span>
+                        <strong>{s?.autoBillingEnabled ? (s.billingDayOfMonth ? `Day ${s.billingDayOfMonth}` : "Enabled") : "Off"}</strong>
+                        <small>{nextBill || (s?.autoBillingEnabled ? "Auto-billing on" : "Manual payments")}</small>
+                      </div>
+                      <div className="bw-status-item">
+                        <span><FileText size={15} />Open invoices</span>
+                        <strong>{unpaid.length}</strong>
+                        <small>{openBalance > 0 ? `${dollars(openBalance)} due` : "Nothing due"}</small>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="billing-card bw-panel bw-recent-panel">
+                  <div className="bw-section-head">
+                    <div>
+                      <h2>Recent invoices</h2>
+                    </div>
+                    <Link className="campaigns-btn-secondary" href="/billing/invoices">View all</Link>
+                  </div>
+                  <div className="bw-card-scroll">
+                    {!loading && allInvoices.slice(0, 5).length ? (
+                      <div className="bw-invoice-list">
+                        {allInvoices.slice(0, 5).map((inv) => (
+                          <Link className="bw-invoice-row" key={inv.id} href={invoiceDetailHref(inv.id)}>
+                            <div className="bw-invoice-id">
+                              <strong>{inv.invoiceNumber || inv.id.slice(0, 8)}</strong>
+                              <small className="muted">{inv.periodStart && inv.periodEnd ? `${formatDate(inv.periodStart)} – ${formatDate(inv.periodEnd)}` : "—"}</small>
+                            </div>
+                            <span className={`billing-status-pill ${invoiceStatusClass(inv.status)}`}>
+                              {invoiceStatusLabel(inv.status)}
+                            </span>
+                            <div className="bw-invoice-amt">{dollars(inv.totalCents)}</div>
+                          </Link>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="state-box">
+                        <div className="state-illus" aria-hidden>
+                          <svg viewBox="0 0 24 24" fill="none"><path d="M6 7h12M6 12h12M6 17h7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                        </div>
+                        <div className="state-title">No invoices yet</div>
+                        <div className="state-text">Your invoices will appear here once generated.</div>
+                        <div className="state-actions"><Link className="campaigns-btn-secondary" href="/billing/settings">Review billing settings</Link></div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </aside>
+            </section>
+          </CRMWorkspaceBody>
+        </CRMWorkspaceShell>
+      </CRMPageShell>
     </PermissionGate>
   );
 }

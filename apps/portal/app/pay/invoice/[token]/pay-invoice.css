@@ -97,7 +97,7 @@ body:has(.billing-pay-page) {
 }
 
 .billing-pay-card {
-  width: min(100%, 620px);
+  width: min(100%, 660px);
   margin: 0 auto;
   overflow: hidden;
   background: color-mix(in srgb, var(--pay-card) 96%, transparent);
@@ -349,6 +349,7 @@ body:has(.billing-pay-page) {
   display: flex;
   align-items: center;
   padding: 0 0.95rem;
+  min-height: 46px;
   overflow: hidden;
   resize: none;
   scrollbar-width: none;
@@ -366,9 +367,9 @@ body:has(.billing-pay-page) {
   width: 100% !important;
   max-width: 100% !important;
   min-width: 0 !important;
-  height: 20px !important;
-  min-height: 20px !important;
-  max-height: 20px !important;
+  height: 46px !important;
+  min-height: 46px !important;
+  max-height: 46px !important;
   margin: 0 !important;
   padding: 0 !important;
   border: 0 !important;
@@ -439,21 +440,35 @@ body:has(.billing-pay-page) {
 .billing-pay-form .btn.primary {
   grid-column: 1 / -1;
   min-height: 48px;
-  border: 0;
+  border: 1px solid rgba(79, 70, 229, 0.2);
   border-radius: 0.8rem;
-  background: linear-gradient(135deg, #0563eb, #0277ff);
+  background: linear-gradient(135deg, #6d5dfc 0%, #377dff 100%);
   color: #ffffff;
   font-size: 0.95rem;
   font-weight: 850;
   letter-spacing: -0.01em;
-  box-shadow: 0 14px 28px rgba(5, 99, 235, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.24);
+  box-shadow: 0 14px 26px -18px rgba(55, 125, 255, 0.85);
   cursor: pointer;
   transition: transform 160ms ease, box-shadow 160ms ease, filter 160ms ease;
 }
 
+.billing-pay-page[data-pay-theme="dark"] .billing-pay-form .btn.primary {
+  border-color: rgba(47, 140, 255, 0.36);
+  background: linear-gradient(135deg, #2f8cff, #2563eb);
+  box-shadow:
+    0 16px 32px -22px rgba(47, 140, 255, 0.78),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
 .billing-pay-form .btn.primary:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 18px 36px rgba(5, 99, 235, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  background: linear-gradient(135deg, #5b4cf0 0%, #246df0 100%);
+  box-shadow: 0 18px 32px -18px rgba(55, 125, 255, 0.9);
+}
+
+.billing-pay-page[data-pay-theme="dark"] .billing-pay-form .btn.primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, #55a0ff 0%, #2f8cff 100%);
+  box-shadow: 0 20px 38px -20px rgba(47, 140, 255, 0.88);
 }
 
 .billing-pay-form .btn.primary:active:not(:disabled) {
@@ -541,79 +556,131 @@ body:has(.billing-pay-page) {
   to { transform: rotate(360deg); }
 }
 
-.billing-pay-trust-strip {
+.billing-pay-trust-badge {
   display: grid;
-  grid-template-columns: 1fr 1.05fr 1.4fr;
-  border-top: 1px solid var(--pay-border);
-  background: color-mix(in srgb, var(--pay-card-soft) 66%, var(--pay-card));
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1.1fr) minmax(0, 1.55fr);
+  gap: 0.75rem;
+  margin: 1.45rem 1.35rem 1.35rem;
+  padding: 0.75rem;
+  border: 1px solid var(--pay-border);
+  border-radius: 1.15rem;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--pay-card-soft) 82%, transparent), color-mix(in srgb, var(--pay-card) 92%, transparent));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.48);
 }
 
-.billing-pay-trust-cell {
-  min-height: 78px;
+.billing-pay-page[data-pay-theme="dark"] .billing-pay-trust-badge {
+  background:
+    linear-gradient(180deg, rgba(17, 31, 51, 0.9), rgba(11, 21, 35, 0.88));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.billing-pay-trust-panel {
+  min-width: 0;
+  min-height: 76px;
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 1rem 1.1rem;
-  border-right: 1px solid var(--pay-border);
+  gap: 0.78rem;
+  padding: 0.88rem 0.95rem;
+  border: 1px solid color-mix(in srgb, var(--pay-border) 82%, transparent);
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--pay-card) 86%, transparent);
   color: var(--pay-muted);
   font-size: 0.72rem;
+  line-height: 1.25;
 }
 
-.billing-pay-trust-cell:last-child {
-  border-right: 0;
+.billing-pay-page[data-pay-theme="dark"] .billing-pay-trust-panel {
+  background: rgba(255, 255, 255, 0.035);
 }
 
-.billing-pay-trust-cell strong {
+.billing-pay-trust-panel strong {
   display: block;
+  margin-bottom: 0.12rem;
   color: var(--pay-text);
-  font-size: 0.82rem;
+  font-size: 0.84rem;
   line-height: 1.2;
 }
 
-.billing-pay-trust-cell span {
+.billing-pay-trust-panel span {
   display: block;
 }
 
-.billing-pay-trust-cell.security svg {
-  color: var(--pay-blue);
-}
-
-.billing-pay-trust-cell.brands {
+.billing-pay-trust-panel--brand {
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
   gap: 0.42rem;
 }
 
-.billing-pay-trust-cell.brands div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
+.billing-pay-sola-logo {
+  display: block;
+  width: 82px;
+  height: auto;
+  object-fit: contain;
 }
 
-.billing-pay-trust-cell.brands b {
-  min-height: 22px;
+.billing-pay-trust-icon {
+  width: 38px;
+  height: 38px;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--pay-blue-soft);
+  color: var(--pay-blue);
+}
+
+.billing-pay-trust-panel--brands {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.46rem;
+}
+
+.billing-pay-trust-title {
+  display: flex;
+  align-items: center;
+  gap: 0.38rem;
+  color: var(--pay-muted);
+  font-weight: 760;
+}
+
+.billing-pay-trust-title svg {
+  color: var(--pay-blue);
+}
+
+.billing-pay-card-brands {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.38rem;
+}
+
+.billing-pay-card-brands b {
+  min-height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0 0.42rem;
+  padding: 0 0.48rem;
   border: 1px solid var(--pay-border);
-  border-radius: 0.34rem;
+  border-radius: 0.42rem;
   background: var(--pay-card);
   color: var(--pay-text);
   font-size: 0.58rem;
   font-weight: 900;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
-.billing-pay-trust-cell.brands .brand-visa { color: #1a1f71; }
-.billing-pay-trust-cell.brands .brand-mastercard { color: #ea580c; }
-.billing-pay-trust-cell.brands .brand-amex { color: #2563eb; }
-.billing-pay-trust-cell.brands .brand-discover { color: #b45309; }
-.billing-pay-trust-cell.brands .brand-apple { color: #111827; text-transform: none; }
+.billing-pay-card-brands .brand-visa { color: #1a1f71; }
+.billing-pay-card-brands .brand-mastercard { color: #ea580c; }
+.billing-pay-card-brands .brand-amex { color: #2563eb; }
+.billing-pay-card-brands .brand-discover { color: #b45309; }
+.billing-pay-card-brands .brand-apple-pay { color: #111827; }
 
-.billing-pay-page[data-pay-theme="dark"] .billing-pay-trust-cell.brands b {
+.billing-pay-page[data-pay-theme="dark"] .billing-pay-card-brands b {
   color: #e8f1ff;
   background: rgba(255, 255, 255, 0.06);
 }
@@ -637,6 +704,17 @@ body:has(.billing-pay-page) {
     border-right: 0;
     border-bottom: 0;
     border-radius: 1.4rem 1.4rem 0 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .billing-pay-trust-badge {
+    grid-template-columns: 1fr 1fr;
+    margin: 1.25rem 1rem 1rem;
+  }
+
+  .billing-pay-trust-panel--brands {
+    grid-column: 1 / -1;
   }
 }
 
@@ -681,18 +759,19 @@ body:has(.billing-pay-page) {
     grid-template-columns: 1fr 0.72fr 0.9fr;
   }
 
-  .billing-pay-trust-strip {
+  .billing-pay-trust-badge {
     grid-template-columns: 1fr;
+    gap: 0.6rem;
+    padding: 0.65rem;
   }
 
-  .billing-pay-trust-cell {
-    min-height: 64px;
-    border-right: 0;
-    border-bottom: 1px solid var(--pay-border);
+  .billing-pay-trust-panel {
+    min-height: 66px;
+    padding: 0.82rem 0.9rem;
   }
 
-  .billing-pay-trust-cell:last-child {
-    border-bottom: 0;
+  .billing-pay-trust-panel--brands {
+    grid-column: auto;
   }
 }
 

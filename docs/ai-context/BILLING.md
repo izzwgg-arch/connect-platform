@@ -47,6 +47,19 @@ This pass converts `/billing` into a premium SaaS finance workspace with light-m
   - Sizing unified: `.cc-logo { height: 18px; width: auto; }`.
   - Maintain equal visual weight; avoid stretching.
 
+## Hosted invoice payment page trust badge (2026-06-10)
+
+- Public hosted invoice payment route: `apps/portal/app/pay/invoice/[token]/page.tsx`.
+- Reusable trust components: `apps/portal/components/billing/SolaLogo.tsx` and `apps/portal/components/billing/PaymentTrustBadge.tsx`.
+- Official Sola assets live under `apps/portal/public/assets/vendor/sola/`.
+  - Light backgrounds: `sola-logo-positive-rgb.png`.
+  - Dark backgrounds: `sola-logo-reverse-rgb.png`.
+  - Source and usage rules: `apps/portal/public/assets/vendor/sola/README.md`.
+- Do not replace the Sola mark with plain text when the official asset is available.
+- Do not stretch, recolor, invert, or distort the logo; preserve the original `1100x300` aspect ratio.
+- Theme behavior for the hosted page: `?theme=dark` / `?theme=light` override for QA and shared links, existing app theme when available, and `prefers-color-scheme` fallback.
+- Trust/security copy is intentionally conservative: "Secured & powered by", "Secure payment", "256-bit SSL encryption", and "Connect Communications never stores your full card number or CVV." Do not add PCI or "bank-grade" claims unless separately documented and approved.
+
 > Read `CURSOR_START_HERE.md` first. High-risk: payments and invoices.
 
 ## Canonical production hostname

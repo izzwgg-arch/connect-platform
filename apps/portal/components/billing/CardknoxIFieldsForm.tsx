@@ -122,11 +122,11 @@ export function CardknoxIFieldsForm({
         fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif",
         fontSize: "14px",
         fontWeight: "500",
-        lineHeight: "20px",
+        lineHeight: "46px",
         padding: "0",
         margin: "0",
         width: "100%",
-        height: "20px",
+        height: "46px",
         overflow: "hidden",
         resize: "none",
         color: resolvedFieldTheme === "dark" ? "#e5eefb" : "#0f172a",
@@ -139,18 +139,46 @@ export function CardknoxIFieldsForm({
   function readBilling(form: HTMLFormElement): CardknoxBillingFields {
     const fd = new FormData(form);
     return {
-      cardholderName: String(fd.get("cardholderName") || ""),
-      expMonth: String(fd.get("expMonth") || ""),
-      expYear: String(fd.get("expYear") || ""),
-      billingEmail: String(fd.get("billingEmail") || ""),
-      billingPhone: String(fd.get("billingPhone") || ""),
-      billingAddress1: String(fd.get("billingAddress1") || ""),
-      billingAddress2: String(fd.get("billingAddress2") || ""),
-      billingCity: String(fd.get("billingCity") || ""),
-      billingState: String(fd.get("billingState") || ""),
-      billingZip: String(fd.get("billingZip") || ""),
-      billingCountry: String(fd.get("billingCountry") || "US"),
+      cardholderName: String(fd.get("cardholderName") || "").trim(),
+      expMonth: String(fd.get("expMonth") || "").trim(),
+      expYear: String(fd.get("expYear") || "").trim(),
+      billingEmail: String(fd.get("billingEmail") || "").trim(),
+      billingPhone: String(fd.get("billingPhone") || "").trim(),
+      billingAddress1: String(fd.get("billingAddress1") || "").trim(),
+      billingAddress2: String(fd.get("billingAddress2") || "").trim(),
+      billingCity: String(fd.get("billingCity") || "").trim(),
+      billingState: String(fd.get("billingState") || "").trim(),
+      billingZip: String(fd.get("billingZip") || "").trim(),
+      billingCountry: String(fd.get("billingCountry") || "US").trim(),
     };
+  }
+
+  function validateRequiredBillingFields(form: HTMLFormElement): boolean {
+    const requiredNames = [
+      "cardholderName",
+      "expMonth",
+      "expYear",
+      ...(showEmail ? ["billingEmail"] : []),
+      ...(showBillingAddress ? ["billingAddress1", "billingCity", "billingState", "billingZip"] : ["billingZip"]),
+    ];
+
+    for (const name of requiredNames) {
+      const field = form.elements.namedItem(name);
+      if (!(field instanceof HTMLInputElement || field instanceof HTMLSelectElement)) continue;
+      field.setCustomValidity(field.value.trim() ? "" : "This field is required.");
+    }
+
+    const isValid = form.checkValidity();
+    if (!isValid) form.reportValidity();
+
+    for (const name of requiredNames) {
+      const field = form.elements.namedItem(name);
+      if (field instanceof HTMLInputElement || field instanceof HTMLSelectElement) {
+        field.setCustomValidity("");
+      }
+    }
+
+    return isValid;
   }
 
   async function handleCardToken(data: TokenData) {
@@ -184,6 +212,7 @@ export function CardknoxIFieldsForm({
 
   function beginTokenize(form: HTMLFormElement) {
     if (busy || disabled || !ifieldsReady) return;
+    if (!validateRequiredBillingFields(form)) return;
     pendingRef.current = readBilling(form);
     tokenConsumedRef.current = false;
     setBusy(true);
@@ -293,7 +322,7 @@ export function CardknoxIFieldsForm({
       )}
       <label className="billing-ifields-card">
         Card number
-        <span className="billing-ifields-host">
+        <span className="billing-ifields-host" aria-required="true">
           <IField
             ref={cardFieldRef as any}
             account={account}
@@ -307,7 +336,7 @@ export function CardknoxIFieldsForm({
       </label>
       <label className="billing-ifields-cvv">
         CVV
-        <span className="billing-ifields-host">
+        <span className="billing-ifields-host" aria-required="true">
           <IField
             account={account}
             type={CVV_TYPE}

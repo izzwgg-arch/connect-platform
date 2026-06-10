@@ -5,6 +5,7 @@ import { useParams, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, Lock, ShieldCheck } from "lucide-react";
 import { CardknoxIFieldsForm, type CardknoxBillingFields } from "../../../../components/billing/CardknoxIFieldsForm";
+import { PaymentTrustBadge } from "../../../../components/billing/PaymentTrustBadge";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { readAuthToken } from "../../../../services/session";
 import "./pay-invoice.css";
@@ -30,6 +31,8 @@ type PublicConfig = {
   canPay: boolean;
 };
 
+type PayTheme = "light" | "dark";
+
 function dollars(cents: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format((cents || 0) / 100);
 }
@@ -50,12 +53,19 @@ function fmtDate(iso: string) {
   }
 }
 
+function normalizePayTheme(value: string | null | undefined): PayTheme | null {
+  return value === "dark" || value === "light" ? value : null;
+}
+
 export default function PublicBillingInvoicePayPage() {
   const params = useParams<{ token: string }>();
   const search = useSearchParams();
   const token = params?.token;
   const { theme } = useAppContext();
-  const payTheme = theme === "dark" ? "dark" : "light";
+  const [systemTheme, setSystemTheme] = useState<PayTheme>("light");
+  const queryTheme = normalizePayTheme(search.get("theme"));
+  const appTheme = normalizePayTheme(theme);
+  const payTheme = queryTheme ?? appTheme ?? systemTheme;
   const [invoice, setInvoice] = useState<InvoicePayView | null>(null);
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -91,6 +101,14 @@ export default function PublicBillingInvoicePayPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const syncSystemTheme = () => setSystemTheme(media.matches ? "dark" : "light");
+    syncSystemTheme();
+    media.addEventListener("change", syncSystemTheme);
+    return () => media.removeEventListener("change", syncSystemTheme);
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -250,40 +268,15 @@ export default function PublicBillingInvoicePayPage() {
                 secureNote={(
                   <div className="billing-pay-secure-note">
                     <ShieldCheck size={20} />
-                    <p>Your card details are entered directly and securely with our payment processor. We never store your full card number or CVV.</p>
+                    <p>Connect Communications never stores your full card number or CVV.</p>
                   </div>
                 )}
                 onSubmitCardToken={submitPayment}
               />
-              <p className="billing-pay-microcopy">
-                Payments are processed securely. Connect Communications never stores your full card number or CVV.
-              </p>
             </>
           )}
 
-          <footer className="billing-pay-trust-strip">
-            <div className="billing-pay-trust-cell sola">
-              <span>Secured &amp; Powered by</span>
-              <strong>SOLA</strong>
-            </div>
-            <div className="billing-pay-trust-cell security">
-              <ShieldCheck size={24} />
-              <div>
-                <strong>Secure payment</strong>
-                <span>256-bit SSL encryption</span>
-              </div>
-            </div>
-            <div className="billing-pay-trust-cell brands">
-              <span>We accept</span>
-              <div aria-label="Accepted payment brands">
-                <b className="brand-visa">Visa</b>
-                <b className="brand-mastercard">Mastercard</b>
-                <b className="brand-amex">AmEx</b>
-                <b className="brand-discover">Discover</b>
-                <b className="brand-apple">Apple Pay</b>
-              </div>
-            </div>
-          </footer>
+          <PaymentTrustBadge theme={payTheme} />
         </section>
       </div>
     </main>
