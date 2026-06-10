@@ -30,14 +30,18 @@ function applySolaIFieldStyle() {
   if (!form) return;
 
   const inputHeight = cssVar(form, "--billing-payments-input-height", "44px");
+  const inputBackground = cssVar(form, "--billing-payments-input-bg", "#111827");
   const fieldStyle = {
     "box-sizing": "border-box",
+    display: "block",
     width: "100%",
     height: inputHeight,
     border: "0",
+    "border-radius": "0",
     margin: "0",
-    padding: "0 14px",
-    background: "transparent",
+    padding: "0",
+    background: inputBackground,
+    "background-color": inputBackground,
     color: cssVar(form, "--billing-payments-input-text", "#e5eef8"),
     "font-family": cssVar(form, "--billing-payments-input-font", "Inter, system-ui, sans-serif"),
     "font-size": cssVar(form, "--billing-payments-input-font-size", "13px"),
@@ -91,6 +95,8 @@ export default function BillingPaymentsPage() {
         window.setAccount(solaPublicConfig.ifieldsKey, "ConnectComms", "1.0.0");
         applySolaIFieldStyle();
         window.setTimeout(applySolaIFieldStyle, 150);
+        window.setTimeout(applySolaIFieldStyle, 600);
+        window.setTimeout(applySolaIFieldStyle, 1400);
         setIfieldsReady(true);
       }
     };
@@ -205,6 +211,8 @@ export default function BillingPaymentsPage() {
                     title="Secure card number"
                     data-ifields-id="card-number"
                     data-ifields-placeholder="Card Number"
+                    scrolling="no"
+                    onLoad={applySolaIFieldStyle}
                     src={`https://cdn.cardknox.com/ifields/${ifieldsVersion}/ifield.htm`}
                   />
                 </label>
@@ -215,6 +223,8 @@ export default function BillingPaymentsPage() {
                     title="Secure CVV"
                     data-ifields-id="cvv"
                     data-ifields-placeholder="CVV"
+                    scrolling="no"
+                    onLoad={applySolaIFieldStyle}
                     src={`https://cdn.cardknox.com/ifields/${ifieldsVersion}/ifield.htm`}
                   />
                 </label>
