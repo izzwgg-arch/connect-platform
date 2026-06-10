@@ -1631,6 +1631,23 @@ Resolver: `apps/api/src/crm/inboundCallerMatch.ts`; enricher:
 
 ## Mobile call handling
 
+### Caller ID / ring-group prefix (mobile rendering, 2026-06-10)
+
+VitalPBX ring groups prepend the prefix to the CallerID **name**, colon-separated
+— `Set(CALLERID(name)=Estimates:${CALLERID(name)})`
+(`extensions__50-9-dialplan.conf`) — while `CALLERID(num)` keeps the raw external
+number. The Connect wake hook forwards both (`fromNumber=${CALLERID(num)}`,
+`fromDisplay=${CALLERID(name)}`); `MobilePushNotifier` sends
+`fromNumber=call.from` + `fromDisplay=call.fromName`; the `CallInvite`/push and
+`GET /voice/me/calls` (`ConnectCdr.fromNumber` + `fromName`) preserve both. **The
+server does not drop the external number or the prefix** — keep mobile caller-ID
+display fixes on the client. Mobile parsing/normalization lives in
+`apps/mobile/src/calls/callerIdentity.ts`; see
+`MOBILE_CALL_TIMELINE.md` § "Caller ID normalization + ring-group prefix" for the
+model and deterministic display rules. Do **not** strip the prefix or the number
+in telephony/API to "simplify" — desk phones rely on `Prefix:Caller` in the name
+field.
+
 - **Push-wake** (Android): worker sends a high-priority FCM data message that the
   native FCM service routes to `handleCallTerminationNative` /
   `handleIncomingCallNative` so the device can ring even when the app is killed.

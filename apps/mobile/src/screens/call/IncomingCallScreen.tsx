@@ -26,6 +26,7 @@ import { logCallFlow } from '../../debug/callFlowDebug';
 import { markCallLatency } from '../../debug/callLatency';
 import { spacing } from '../../theme/spacing';
 import { findCallModalNavigator } from '../../navigation/callStackNav';
+import { normalizeCallerIdentity, callerDisplayLines } from '../../calls/callerIdentity';
 
 const INVITE_TTL_S = 45; // seconds before invite expires
 
@@ -243,8 +244,18 @@ export function IncomingCallScreen() {
     }
   };
 
-  const callerName = displayInvite?.fromDisplay || displayInvite?.fromNumber || 'Unknown';
-  const callerNumber = displayInvite?.fromNumber || '';
+  // Normalize the PBX-delivered caller identity so the ring-group prefix,
+  // external number, and caller name are kept separate and rendered
+  // deterministically (never the prefix alone, never our own extension name).
+  const callerIdentity = normalizeCallerIdentity({
+    number: displayInvite?.fromNumber,
+    displayName: displayInvite?.fromDisplay,
+    direction: 'inbound',
+  });
+  const callerLines = callerDisplayLines(callerIdentity);
+  const callerName = callerLines.primary;
+  const callerNumber = callerLines.secondary || '';
+  const prefixBadge = callerLines.prefixBadge;
   const toExt = displayInvite?.toExtension || '';
   const inAnswerHandoff =
     !!displayInvite?.id && answerHandoffInviteIdRef.current === displayInvite.id;
@@ -375,15 +386,25 @@ export function IncomingCallScreen() {
           </View>
         </View>
 
+        {/* Ring-group / context prefix (matches how desk phones show it) */}
+        {prefixBadge ? (
+          <View style={styles.prefixBadge}>
+            <Ionicons name="people-outline" size={12} color="rgba(34,197,94,0.95)" style={{ marginRight: 5 }} />
+            <Text style={[typography.caption, { color: 'rgba(34,197,94,0.95)', fontWeight: '700' }]}>
+              {prefixBadge}
+            </Text>
+          </View>
+        ) : null}
+
         {/* Caller info */}
         <Text style={[typography.callName, { color: '#f0f4ff', textAlign: 'center' }]} numberOfLines={2}>
           {callerName}
         </Text>
-        {callerNumber !== callerName && (
+        {callerNumber && callerNumber !== callerName ? (
           <Text style={[typography.bodyLg, { color: 'rgba(136,153,187,0.8)', marginTop: 4 }]}>
             {callerNumber}
           </Text>
-        )}
+        ) : null}
         {toExt ? (
           <View style={styles.extPill}>
             <Ionicons name="call-outline" size={12} color="rgba(136,153,187,0.7)" style={{ marginRight: 4 }} />
@@ -492,6 +513,17 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#22c55e',
     letterSpacing: 1,
+  },
+  prefixBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(34,197,94,0.12)',
+    borderColor: 'rgba(34,197,94,0.35)',
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    marginBottom: 10,
   },
   extPill: {
     flexDirection: 'row',

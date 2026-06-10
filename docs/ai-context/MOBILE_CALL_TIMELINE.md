@@ -722,6 +722,74 @@ before this fix.
 
 ---
 
+## Caller ID normalization + ring-group prefix (2026-06-10)
+
+> Single source of truth for how the mobile app interprets the caller identity
+> VitalPBX delivers. Helper: `apps/mobile/src/calls/callerIdentity.ts`
+> (pure, unit-tested — `callerIdentity.test.ts`).
+
+### What the PBX actually sends (proven, not assumed)
+
+From the PBX brain snapshot (`docs/pbx-brain/.../asterisk-cli/dialplan-show.txt`,
+generated `extensions__50-9-dialplan.conf`), ring groups run:
+
+```
+Set(CALLERID(name)=Estimates:${CALLERID(name)})
+```
+
+The **ring-group prefix is prepended to the CallerID _name_** with a colon;
+`CALLERID(num)` (the real external PSTN number) is left untouched. The Connect
+wake hook (`extensions__60_custom.conf`) forwards **both** verbatim:
+
+```
+fromNumber  = ${CALLERID(num)}     → raw external number
+fromDisplay = ${CALLERID(name)}    → "Prefix:OriginalCallerName"
+```
+
+So the prefix lives **inside** the display-name field, colon-separated, and the
+external number is a separate field. Server preserves both end-to-end:
+telephony `MobilePushNotifier` (`fromNumber=call.from`, `fromDisplay=call.fromName`),
+the `CallInvite`/push payload, and `GET /voice/me/calls`
+(`ConnectCdr.fromNumber` + `fromName`). **Nothing is dropped server-side** — any
+"missing number / wrong name" symptom is mobile rendering.
+
+Observed display-name shapes the helper handles:
+
+| `fromDisplay` | `fromNumber` | Parsed result |
+|---|---|---|
+| `Sales:8455551212` | `8455551212` | prefix `Sales`, externalNumber `8455551212`, no name |
+| `Sales:John Smith` | `8455551212` | prefix `Sales`, name `John Smith`, number `8455551212` |
+| `New Tires:New Tires:` | (empty) | prefix `New Tires`, no name/number (prefix-only) |
+| `New Tires:8453050021` | (empty) | prefix `New Tires`, externalNumber `8453050021` |
+| `A PLUS CENTER NY` | `8455551212` | no prefix, name `A PLUS CENTER NY`, number `8455551212` |
+
+### Normalized model (`NormalizedCallerIdentity`)
+
+`externalNumber`, `displayName`, `ringGroupPrefix`, `extensionNumber`,
+`extensionName`, `rawSipCallerId`, `rawPbxCallerId`, `direction`. Build with
+`normalizeCallerIdentity(...)`; render with `callerDisplayLines(...)`
+(`{ primary, secondary, prefixBadge }`); for save/dial use `callbackNumber(...)`
+and `suggestedContactName(...)`.
+
+### Deterministic display rules
+
+- **inbound external:** primary = contact/caller name, else the external number;
+  secondary = external number (when primary is a name); prefix badge when present.
+  The external number is **always** surfaced and **never** hidden behind a name.
+- **internal:** primary = extension/user name, secondary = `Ext N`.
+- **outbound:** primary = contact name or dialed number, secondary = number.
+- **Never** present the logged-in user's own extension/user name as the caller
+  for an inbound external call (guarded via `selfNames`/`selfExtensionNumbers`).
+
+### Where it is wired
+
+- `screens/tabs/RecentTab.tsx` — rows show name + external number + prefix badge;
+  Add-to-Contact uses `callbackNumber`/`suggestedContactName`; saved contacts
+  resolve onto rows.
+- `screens/call/IncomingCallScreen.tsx` — prefix badge + caller name + number.
+
+---
+
 ## What this doc deliberately does NOT cover
 
 - ~~Outbound calls (covered tangentially by `SipContext`/`useSipPhone`).~~

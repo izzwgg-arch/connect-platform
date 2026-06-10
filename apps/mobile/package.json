@@ -20,6 +20,7 @@
     "update:production": "eas update --channel production",
     "typecheck": "tsc --noEmit",
     "lint": "echo lint-mobile",
+    "test:caller-identity": "tsx --test src/calls/callerIdentity.test.ts",
     "test:vm-greeting": "tsx src/voicemail/vmGreetingInviteUtils.test.ts",
     "test:voicemail-pagination": "tsx src/api/voicemailPagination.test.ts",
     "test:voicemail-scope": "tsx src/api/voicemailScope.test.ts",

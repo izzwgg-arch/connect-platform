@@ -4,6 +4,42 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-10 — Mobile caller ID / ring-group prefix + Recent Calls fixes
+
+**Task:** Mobile app — Recent Calls Add-to-Contact, external number display, incoming caller ID / ring-group prefix
+**Risk:** high — mobile (Expo/React Native) client only; **no PBX, telephony, API, worker, or database changes**
+
+Evidence (from `docs/pbx-brain/` snapshot): VitalPBX ring groups prepend the
+prefix to the CallerID **name** with a colon — `Set(CALLERID(name)=Estimates:${CALLERID(name)})`
+(`extensions__50-9-dialplan.conf`) — while `CALLERID(num)` keeps the raw
+external number. The Connect wake hook forwards **both** (`fromNumber=${CALLERID(num)}`,
+`fromDisplay=${CALLERID(name)}`), telephony (`MobilePushNotifier`), the
+`CallInvite`/push payload, and `GET /voice/me/calls` (`ConnectCdr.fromNumber` +
+`fromName`) all preserve both. The defects were **mobile rendering only**.
+
+- New shared helper `apps/mobile/src/calls/callerIdentity.ts` — a single
+  normalized caller-identity model (`externalNumber`, `displayName`,
+  `ringGroupPrefix`, `extensionNumber`, `extensionName`, `rawSipCallerId`,
+  `rawPbxCallerId`, `direction`) with deterministic display rules and
+  `callbackNumber` / `suggestedContactName`. 13 unit tests
+  (`callerIdentity.test.ts`, `pnpm --filter @connect/mobile test:caller-identity`).
+- **Recent Calls** (`RecentTab.tsx`): rows now show the external number as a
+  secondary line + a ring-group prefix badge; the number is never hidden behind
+  the name. Saved contacts resolve onto rows (number→name map).
+- **Add to Contacts** (`RecentTab.tsx`): implemented — creates a contact from
+  the recent call's external number (prefix-stripped name pre-filled), dedupes
+  against existing contacts and the API `DUPLICATE_PHONE` guard, clear error
+  when no usable number exists.
+- **Incoming Call screen** (`IncomingCallScreen.tsx`): shows the ring-group
+  prefix as a context badge + caller name + external number, deterministically;
+  never collapses to prefix-only and never uses the user's own extension name
+  for an inbound external caller.
+
+Deploy: **none** — APK build + publish to the Connect download page only.
+Rollback: republish previous APK (`connectcomms-latest.previous.apk`).
+
+---
+
 ## 2026-06-10 — Hosted payment page Sola trust badge + dark mode
 
 **Task:** Billing / hosted invoice payment page — official Sola brand asset, trust badge polish, dark-mode support

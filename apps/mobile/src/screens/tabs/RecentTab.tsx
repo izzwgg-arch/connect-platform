@@ -25,8 +25,17 @@ import { Avatar } from '../../components/ui/Avatar';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { HorizontalFilterScroll } from '../../components/ui/HorizontalFilterScroll';
 import { AppActionSheet } from '../../components/ui/AppPopup';
-import { getCallHistory, mobileQueryKeys } from '../../api/client';
+import { createContact, getCallHistory, getContacts, mobileQueryKeys } from '../../api/client';
 import { loadLocalCallHistory, mergeCallRecords } from '../../storage/callHistory';
+import {
+  normalizeCallerIdentity,
+  callerDisplayLines,
+  callbackNumber,
+  suggestedContactName,
+  type CallerDirection,
+  type NormalizedCallerIdentity,
+} from '../../calls/callerIdentity';
+import { useQueryClient } from '@tanstack/react-query';
 import type { CallRecord } from '../../types';
 import { typography } from '../../theme/typography';
 import { teamFilterChipColors } from '../../theme/filterChipColors';
@@ -41,6 +50,11 @@ type CallGroup = {
   calls: CallRecord[];
   canonicalNumber: string;
   displayName: string;
+  /** External phone number shown as the row's secondary line (null when the
+   *  primary line is already the number, or there is no usable number). */
+  secondaryNumber: string | null;
+  /** Ring-group / context prefix badge (e.g. "Sales"), null when absent. */
+  prefixBadge: string | null;
   kind: CallKind;
   latestAt: string;
   earliestAt: string;
@@ -156,69 +170,48 @@ function dayKey(iso: string): number {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
 
-function callDisplayNumber(call: CallRecord): string {
-  return isInboundCall(call) ? call.fromNumber : call.toNumber;
+function callDirectionKind(call: CallRecord): CallerDirection {
+  if (isInternalDirection(call)) return 'internal';
+  if (isInboundCall(call)) return 'inbound';
+  return 'outbound';
 }
 
 /**
- * Format a ring-group-prefixed display name into "Prefix: CallerInfo".
+ * Build the normalized caller identity for a recent-call row using the shared
+ * caller-identity helper. This keeps the external number, ring-group prefix,
+ * and caller name separate so the number is never hidden behind a name.
  *
- * VitalPBX ring groups write "Prefix:CallerInfo" into CallerIDName, which
- * ends up in the SIP From: display_name.  Several forms are seen in practice:
- *
- *   "New Tires:8453050021"   — no CNAM; PBX put the caller's number after ":"
- *   "New Tires:John Smith"   — CNAM available
- *   "New Tires:New Tires:"   — no CNAM; PBX used the ring-group name as
- *                              the caller name (prefix appears twice)
- *   "A PLUS CENTER MONROE NY"— space-separated prefix format (no colon)
- *
- * Rules applied in order:
- *   1. No colon → return as-is  ("A PLUS CENTER MONROE NY" unchanged).
- *   2. "Prefix:PhoneNumber"     → "Prefix: PhoneNumber"  (number stays).
- *   3. "Prefix:DuplicatePrefix" or "Prefix:" (empty after colon)
- *      → "Prefix: phoneNumber" when a real number is available,
- *      → "Prefix"              when no number is available (avoids dup).
- *   4. "Prefix:CallerName"      → "Prefix: CallerName".
+ * Handles two record shapes:
+ *   - new records: `fromName` carries the PBX CallerID name (may include the
+ *     "Prefix:Caller" ring-group form), `fromNumber` carries the real number.
+ *   - legacy local records: the raw SIP display name was stored in
+ *     `fromNumber` (e.g. "New Tires:New Tires:") with no `fromName`.
  */
-function formatRingGroupDisplayName(rawName: string, phoneNumber: string): string {
-  const colonIdx = rawName.indexOf(':');
-  if (colonIdx <= 0) return rawName;
-  const prefix = rawName.slice(0, colonIdx).trim();
-  const rest   = rawName.slice(colonIdx + 1).replace(/:$/, '').trim();
+function callIdentity(call: CallRecord): NormalizedCallerIdentity {
+  const legacyDisplayInNumber =
+    (!call.fromName || !call.fromName.trim()) &&
+    isInboundCall(call) &&
+    (call.fromNumber || '').includes(':');
+  return normalizeCallerIdentity({
+    number: legacyDisplayInNumber ? '' : call.fromNumber,
+    displayName: legacyDisplayInNumber ? call.fromNumber : call.fromName,
+    toNumber: call.toNumber,
+    direction: callDirectionKind(call),
+  });
+}
 
-  if (!rest || rest === prefix) {
-    // Duplicate prefix or empty caller part — show real phone number if present.
-    if (phoneNumber && !phoneNumber.includes(':')) return `${prefix}: ${phoneNumber}`;
-    return prefix;
-  }
-  // CallerInfo (name or number) after the prefix.
-  return `${prefix}: ${rest}`;
+function callDisplayNumber(call: CallRecord): string {
+  const id = callIdentity(call);
+  return id.externalNumber || id.extensionNumber || id.rawSipCallerId || (isInboundCall(call) ? call.fromNumber : call.toNumber);
 }
 
 function callDisplayName(call: CallRecord): string {
-  const number = callDisplayNumber(call);
-
-  // Case 1: fromName was captured (new local records or CDR records).
-  // It may equal fromNumber when the fallback path stored the display_name
-  // as both fields, so test content not just identity.
-  if (call.fromName && call.fromName !== call.fromNumber) {
-    return formatRingGroupDisplayName(call.fromName, number);
-  }
-
-  // Case 2: old local history records where fromNumber is the raw SIP
-  // display_name ("New Tires:New Tires:" stored before this fix).
-  // Parse it so at least the ring group prefix shows without duplication.
-  if (number && number.includes(':')) {
-    return formatRingGroupDisplayName(number, '');
-  }
-
-  return number || 'Unknown';
+  return callerDisplayLines(callIdentity(call)).primary;
 }
 
 function isUnknownCaller(call: CallRecord): boolean {
-  const number = callDisplayNumber(call);
-  const name = call.fromName;
-  return !name || name === number || name.trim() === '';
+  const lines = callerDisplayLines(callIdentity(call));
+  return lines.primary === 'Unknown';
 }
 
 function kindAccent(kind: CallKind, colors: ReturnType<typeof useTheme>['colors']): string {
@@ -256,7 +249,10 @@ function kindLabel(kind: CallKind): string {
  * canonical number, and kind. Preserves every underlying CallRecord inside
  * `calls` so the detail sheet can still list individual attempts.
  */
-function buildGroups(rows: CallRecord[]): CallGroup[] {
+function buildGroups(
+  rows: CallRecord[],
+  resolveContactName?: (number: string | null) => string | null,
+): CallGroup[] {
   const groups: CallGroup[] = [];
   for (const call of rows) {
     const kind = callKind(call);
@@ -277,12 +273,19 @@ function buildGroups(rows: CallRecord[]): CallGroup[] {
         prev.earliestAt = call.startedAt;
       }
     } else {
+      const identity = callIdentity(call);
+      const resolvedName = resolveContactName?.(identity.externalNumber) ?? null;
+      const lines = callerDisplayLines(
+        resolvedName ? { ...identity, displayName: resolvedName } : identity,
+      );
       groups.push({
         type: 'group',
         id: `grp:${kind}:${number}:${day}:${call.id}`,
         calls: [call],
         canonicalNumber: number,
-        displayName: callDisplayName(call),
+        displayName: lines.primary,
+        secondaryNumber: lines.secondary,
+        prefixBadge: lines.prefixBadge,
         kind,
         latestAt: call.startedAt,
         earliestAt: call.startedAt,
@@ -301,12 +304,14 @@ export function RecentTab() {
   const { token } = useAuth();
   const sip = useSip();
   const insets = useSafeAreaInsets();
+  const queryClient = useQueryClient();
 
   const [filter, setFilter] = useState<CallFilter>('all');
   const [query, setQuery] = useState('');
   const [detailGroup, setDetailGroup] = useState<CallGroup | null>(null);
   const [filterMenuOpen, setFilterMenuOpen] = useState(false);
   const [menuGroup, setMenuGroup] = useState<CallGroup | null>(null);
+  const [savingContact, setSavingContact] = useState(false);
 
   const callHistoryQuery = useQuery({
     queryKey: mobileQueryKeys.callHistory,
@@ -322,6 +327,41 @@ export function RecentTab() {
     refetchOnMount: false,
     refetchOnWindowFocus: false,
   });
+
+  // Tenant contacts — used to (a) resolve a saved contact name onto recent-call
+  // rows and (b) dedupe before creating a new contact from a recent call.
+  const contactsQuery = useQuery({
+    queryKey: mobileQueryKeys.contacts(''),
+    enabled: Boolean(token),
+    queryFn: () => getContacts(token!, ''),
+    staleTime: 3 * 60 * 1000,
+    gcTime: 20 * 60 * 1000,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+  });
+
+  // digits → saved contact display name. Keyed by phone digits so formatting
+  // differences (spaces, +1, dashes) still match.
+  const contactNameByDigits = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of contactsQuery.data?.rows ?? []) {
+      for (const p of c.phones ?? []) {
+        const digits = String(p.numberRaw ?? '').replace(/\D/g, '');
+        if (digits.length >= 7 && !map.has(digits)) map.set(digits, c.displayName);
+      }
+    }
+    return map;
+  }, [contactsQuery.data]);
+
+  const resolveContactName = useCallback(
+    (number: string | null): string | null => {
+      if (!number) return null;
+      const digits = number.replace(/\D/g, '');
+      if (digits.length < 7) return null;
+      return contactNameByDigits.get(digits) ?? null;
+    },
+    [contactNameByDigits],
+  );
 
   const calls = callHistoryQuery.data ?? [];
   const loading = callHistoryQuery.isLoading && calls.length === 0;
@@ -361,9 +401,64 @@ export function RecentTab() {
     Alert.alert('Message', `Open Chat to message ${group.displayName}.`);
   }, []);
 
-  const handleAddContact = useCallback((group: CallGroup) => {
-    Alert.alert('Add to contacts', `Saving ${group.displayName} to contacts is coming soon.`);
-  }, []);
+  const handleAddContact = useCallback(
+    async (group: CallGroup) => {
+      if (savingContact) return;
+      const primaryCall = group.calls[0];
+      const identity = callIdentity(primaryCall);
+      const number = callbackNumber(identity);
+
+      // No usable external/extension number — cannot create a contact.
+      if (!number) {
+        Alert.alert(
+          'No phone number',
+          'This recent call has no usable phone number, so it can’t be saved as a contact.',
+        );
+        return;
+      }
+      if (!token) {
+        Alert.alert('Not signed in', 'Please sign in again to save contacts.');
+        return;
+      }
+
+      // Dedupe: if a contact already has this number, don't create a duplicate.
+      const existingName = resolveContactName(number);
+      if (existingName) {
+        Alert.alert('Already in contacts', `${existingName} already has this number.`);
+        return;
+      }
+
+      // Pre-fill the contact: caller name when known, else the number itself.
+      const suggested = suggestedContactName(identity);
+      const displayName = suggested || number;
+
+      setSavingContact(true);
+      try {
+        await createContact(token, {
+          displayName,
+          // Only set firstName when we have a real caller name (not the number),
+          // so "John Smith" splits cleanly but a number-only contact stays clean.
+          firstName: suggested ? suggested : undefined,
+          phones: [{ type: 'mobile', numberRaw: number, isPrimary: true }],
+          notes: 'Added from Recent Calls',
+        });
+        await queryClient
+          .invalidateQueries({ queryKey: mobileQueryKeys.contacts('') })
+          .catch(() => undefined);
+        Alert.alert('Saved', `${displayName} added to contacts.`);
+      } catch (e: any) {
+        const msg = String(e?.message || '').toUpperCase();
+        if (msg.includes('DUPLICATE_PHONE')) {
+          Alert.alert('Already in contacts', 'A contact with this phone number already exists.');
+        } else {
+          Alert.alert('Could not save contact', 'Please try again.');
+        }
+      } finally {
+        setSavingContact(false);
+      }
+    },
+    [savingContact, token, resolveContactName, queryClient],
+  );
 
   const todayCount = useMemo(() => {
     const today = dayKey(new Date().toISOString());
@@ -388,7 +483,7 @@ export function RecentTab() {
       })
       .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
 
-    const groups = buildGroups(filtered);
+    const groups = buildGroups(filtered, resolveContactName);
     const out: TimelineItem[] = [];
     let current = '';
     for (const group of groups) {
@@ -400,7 +495,7 @@ export function RecentTab() {
       out.push(group);
     }
     return out;
-  }, [calls, filter, query]);
+  }, [calls, filter, query, resolveContactName]);
 
   const emptyIcon: keyof typeof Ionicons.glyphMap = query.trim() ? 'search-outline' : 'time-outline';
   const emptyTitle = query.trim()
@@ -697,9 +792,23 @@ const CallCard = memo(function CallCard({
           </View>
 
           <View style={styles.info}>
-            <Text style={[styles.nameText, { color: colors.text }]} numberOfLines={1}>
-              {primaryName}
-            </Text>
+            <View style={styles.nameRow}>
+              {group.prefixBadge ? (
+                <View style={[styles.prefixBadge, { backgroundColor: accent + '1f', borderColor: accent + '40' }]}>
+                  <Text style={[styles.prefixBadgeText, { color: accent }]} numberOfLines={1}>
+                    {group.prefixBadge}
+                  </Text>
+                </View>
+              ) : null}
+              <Text style={[styles.nameText, { color: colors.text }]} numberOfLines={1}>
+                {primaryName}
+              </Text>
+            </View>
+            {group.secondaryNumber ? (
+              <Text style={[styles.numberText, { color: colors.textSecondary }]} numberOfLines={1}>
+                {group.secondaryNumber}
+              </Text>
+            ) : null}
             <View style={styles.metaRow}>
               <Ionicons name={kindIcon(group.kind)} size={13} color={accent} style={styles.kindIcon} />
               <Text style={[styles.metaText, { color: colors.textSecondary }]} numberOfLines={1}>
@@ -993,12 +1102,33 @@ const styles = StyleSheet.create({
   },
 
   info: { flex: 1, minWidth: 0 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
   nameText: {
+    flexShrink: 1,
     fontSize: 15.5,
     lineHeight: 20,
     fontWeight: '800',
     letterSpacing: -0.15,
-    marginBottom: 3,
+  },
+  numberText: {
+    fontSize: 12.5,
+    lineHeight: 16,
+    fontWeight: '600',
+    opacity: 0.9,
+    marginBottom: 2,
+  },
+  prefixBadge: {
+    flexShrink: 0,
+    maxWidth: '52%',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: radius.full,
+    borderWidth: 1,
+  },
+  prefixBadgeText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    letterSpacing: 0.2,
   },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   kindIcon: { opacity: 0.9 },
