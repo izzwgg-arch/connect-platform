@@ -184,6 +184,7 @@ import {
   hasEffectivePortalPermission,
   registerPlatformRolePermissionRoutes,
 } from "./platformRolePermissions";
+import { decideActionGate, userHasActionPermission } from "./permissionGates";
 import { registerCustomRoleRoutes } from "./customRoleRoutes";
 import { registerUserExtensionProvisioningRoutes } from "./userExtensionProvisioning";
 import {
@@ -1705,6 +1706,51 @@ async function requirePermission(req: any, reply: any, checker: (user: JwtUser) 
 
 async function requireAdmin(req: any, reply: any): Promise<JwtUser | null> {
   return requirePermission(req, reply, (user) => isRole(user, ["ADMIN", "TENANT_ADMIN", "SUPER_ADMIN"]));
+}
+
+/**
+ * Additive-OR gate: allow when the existing role check passes OR when the user
+ * effectively holds the given portal permission key (e.g. via an authoritative
+ * custom role). Sends 403 and returns null otherwise. Never narrows existing
+ * role-based access — only widens it to custom-role grantees.
+ */
+async function requireRoleOrPortalPermission(
+  req: any,
+  reply: any,
+  checker: (user: JwtUser) => boolean,
+  key: string,
+): Promise<JwtUser | null> {
+  const user = getUser(req);
+  const allowed = decideActionGate({
+    roleAllowed: checker(user),
+    hasKey: await userHasActionPermission(user, key),
+  });
+  if (!allowed) {
+    reply.status(403).send({ error: "forbidden" });
+    return null;
+  }
+  return user;
+}
+
+/** Additive-OR convenience: tenant/admin role OR the given portal permission key. */
+async function requireAdminOrPortalPermission(req: any, reply: any, key: string): Promise<JwtUser | null> {
+  return requireRoleOrPortalPermission(
+    req,
+    reply,
+    (user) => isRole(user, ["ADMIN", "TENANT_ADMIN", "SUPER_ADMIN"]),
+    key,
+  );
+}
+
+/**
+ * Authoritative permission gate: allow ONLY when the user effectively holds the
+ * key (no legacy role fallback). For custom-role users this is exactly their
+ * role's permissions; for plain users it follows their bucket snapshot. Use for
+ * actions where the editor toggle must be fully authoritative (e.g. contacts).
+ * SUPER_ADMIN passes because its bucket includes every key.
+ */
+async function requirePortalActionPermission(req: any, reply: any, key: string): Promise<JwtUser | null> {
+  return requireRoleOrPortalPermission(req, reply, () => false, key);
 }
 
 async function requireSuperAdmin(req: any, reply: any): Promise<JwtUser | null> {
@@ -5864,7 +5910,7 @@ app.get("/settings/sms-limits", async (req, reply) => {
 });
 
 app.post("/settings/sms-limits", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requireAdminOrPortalPermission(req, reply, "can_manage_tenant_settings");
   if (!admin) return;
 
   const input = z.object({
@@ -5958,7 +6004,7 @@ app.get("/settings/providers", async (req, reply) => {
 });
 
 app.put("/settings/providers/twilio", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requireAdminOrPortalPermission(req, reply, "can_manage_integrations");
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -5980,7 +6026,7 @@ app.put("/settings/providers/twilio", async (req, reply) => {
 });
 
 app.post("/settings/providers/twilio/enable", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requireAdminOrPortalPermission(req, reply, "can_manage_integrations");
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -6014,7 +6060,7 @@ app.post("/settings/providers/twilio/enable", async (req, reply) => {
 });
 
 app.post("/settings/providers/twilio/disable", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requireAdminOrPortalPermission(req, reply, "can_manage_integrations");
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -6028,7 +6074,7 @@ app.post("/settings/providers/twilio/disable", async (req, reply) => {
 });
 
 app.put("/settings/providers/voipms", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requireAdminOrPortalPermission(req, reply, "can_manage_integrations");
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -6049,7 +6095,7 @@ app.put("/settings/providers/voipms", async (req, reply) => {
 });
 
 app.post("/settings/providers/voipms/enable", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requireAdminOrPortalPermission(req, reply, "can_manage_integrations");
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -6082,7 +6128,7 @@ app.post("/settings/providers/voipms/enable", async (req, reply) => {
 });
 
 app.post("/settings/providers/voipms/disable", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requireAdminOrPortalPermission(req, reply, "can_manage_integrations");
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -6116,7 +6162,7 @@ app.get("/settings/providers/whatsapp", async (req, reply) => {
 });
 
 app.put("/settings/providers/whatsapp/twilio", async (req, reply) => {
-  const admin = await requirePermission(req, reply, canManageMessaging);
+  const admin = await requireRoleOrPortalPermission(req, reply, canManageMessaging, "can_manage_integrations");
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -6170,7 +6216,7 @@ app.put("/settings/providers/whatsapp/twilio", async (req, reply) => {
 });
 
 app.put("/settings/providers/whatsapp/meta", async (req, reply) => {
-  const admin = await requirePermission(req, reply, canManageMessaging);
+  const admin = await requireRoleOrPortalPermission(req, reply, canManageMessaging, "can_manage_integrations");
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -6228,7 +6274,7 @@ app.put("/settings/providers/whatsapp/meta", async (req, reply) => {
 });
 
 app.post("/settings/providers/whatsapp/enable", async (req, reply) => {
-  const admin = await requirePermission(req, reply, canManageMessaging);
+  const admin = await requireRoleOrPortalPermission(req, reply, canManageMessaging, "can_manage_integrations");
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -6243,7 +6289,7 @@ app.post("/settings/providers/whatsapp/enable", async (req, reply) => {
 });
 
 app.post("/settings/providers/whatsapp/disable", async (req, reply) => {
-  const admin = await requirePermission(req, reply, canManageMessaging);
+  const admin = await requireRoleOrPortalPermission(req, reply, canManageMessaging, "can_manage_integrations");
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -6498,7 +6544,7 @@ app.get("/settings/sms-routing", async (req, reply) => {
 });
 
 app.post("/settings/sms-routing", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requireAdminOrPortalPermission(req, reply, "can_manage_tenant_settings");
   if (!admin) return;
 
   const input = z.object({ routingMode: z.enum(["SINGLE_PRIMARY", "FAILOVER"]), primaryProvider: z.enum(["TWILIO", "VOIPMS"]), secondaryProvider: z.enum(["TWILIO", "VOIPMS"]).nullable().optional() }).parse(req.body);
@@ -6527,7 +6573,7 @@ app.post("/settings/sms-routing", async (req, reply) => {
 });
 
 app.post("/settings/sms-routing/lock", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requireAdminOrPortalPermission(req, reply, "can_manage_tenant_settings");
   if (!admin) return;
 
   const input = z.object({ provider: z.enum(["TWILIO", "VOIPMS"]), reason: z.string().min(2) }).parse(req.body);
@@ -6549,7 +6595,7 @@ app.post("/settings/sms-routing/lock", async (req, reply) => {
 });
 
 app.post("/settings/sms-routing/unlock", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requireAdminOrPortalPermission(req, reply, "can_manage_tenant_settings");
   if (!admin) return;
 
   await db.tenant.update({ where: { id: admin.tenantId }, data: { smsProviderLock: null, smsProviderLockReason: null, smsProviderLockedAt: null, smsProviderLockedByUserId: null } });
@@ -6768,7 +6814,7 @@ app.get("/settings/sms-mode", async (req, reply) => {
 });
 
 app.post("/settings/sms-mode", async (req, reply) => {
-  const admin = await requireAdmin(req, reply);
+  const admin = await requireAdminOrPortalPermission(req, reply, "can_manage_tenant_settings");
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -15873,6 +15919,27 @@ app.delete("/voice/voicemail/:id", async (req, reply) => {
   if (!vm || vm.deletedAt) return reply.code(404).send({ error: "not_found" });
   if (!(await canAccessVoicemail(vm, user, reply))) return;
 
+  // Deletion is stricter than viewing: a tenant-wide *viewer* must not delete
+  // other people's voicemail. Allow when super-admin, when the mailbox is the
+  // caller's own (owner carve-out preserves self-service), or when the user
+  // effectively holds can_delete_voicemail.
+  {
+    const isSuperAdmin = isRole(user, ["SUPER_ADMIN"]);
+    let isOwnMailbox = false;
+    try {
+      const ownScope = await resolveVoicemailOwnedScopeForJwtUser(user);
+      if (ownScope.ok) {
+        isOwnMailbox = voicemailRowInOwnedScope(vm, { tenantIds: ownScope.tenantIds, extensions: ownScope.extensions });
+      }
+    } catch { isOwnMailbox = false; }
+    let hasDeleteKey = false;
+    try { hasDeleteKey = await hasEffectivePortalPermission(user, "can_delete_voicemail" as any); } catch { hasDeleteKey = false; }
+    if (!decideActionGate({ isSuperAdmin, isOwner: isOwnMailbox, hasKey: hasDeleteKey })) {
+      reply.code(403).send({ error: "forbidden" });
+      return;
+    }
+  }
+
   // Soft-delete in Connect DB — always succeeds regardless of PBX state
   await db.voicemail.update({ where: { id }, data: { deletedAt: new Date() } });
 
@@ -16903,6 +16970,52 @@ async function streamCallRecording(
       if (rec.extension && owned.length > 0 && !owned.includes(rec.extension)) {
         reply.code(403).send({ error: "forbidden" }); return;
       }
+    }
+  }
+
+  // Listening (inline stream) requires can_view_pbx_call_recordings, so the
+  // recordings view toggle actually controls playback. Owner carve-out: you can
+  // always replay a recording for your own extension. This is an additional
+  // necessary gate layered on top of the tenant/owner scope check above (it
+  // never widens access — it only blocks tenant-wide listeners who lack the key).
+  if (!asAttachment && !isSuperAdmin) {
+    let isOwner = false;
+    try {
+      const ownedForListen = await getUserExtensionNumbers(user as any);
+      isOwner = !!(rec.extension && ownedForListen.includes(rec.extension));
+    } catch { isOwner = false; }
+    let hasViewKey = false;
+    try {
+      hasViewKey = await hasEffectivePortalPermission({
+        role: user.role,
+        sub: (user as any)?.sub || String((user as any)?.id || ""),
+        tenantId: user.tenantId,
+      } as any, "can_view_pbx_call_recordings" as any);
+    } catch { hasViewKey = false; }
+    if (!decideActionGate({ isOwner, hasKey: hasViewKey })) {
+      reply.code(403).send({ error: "forbidden" }); return;
+    }
+  }
+
+  // Download (attachment) additionally requires can_download_recordings, with an
+  // owner carve-out: you can always download a recording for your own extension.
+  // Inline listen/stream playback is unaffected (asAttachment=false).
+  if (asAttachment && !isSuperAdmin) {
+    let isOwner = false;
+    try {
+      const ownedForDownload = await getUserExtensionNumbers(user as any);
+      isOwner = !!(rec.extension && ownedForDownload.includes(rec.extension));
+    } catch { isOwner = false; }
+    let hasDownloadKey = false;
+    try {
+      hasDownloadKey = await hasEffectivePortalPermission({
+        role: user.role,
+        sub: (user as any)?.sub || String((user as any)?.id || ""),
+        tenantId: user.tenantId,
+      } as any, "can_download_recordings" as any);
+    } catch { hasDownloadKey = false; }
+    if (!decideActionGate({ isOwner, hasKey: hasDownloadKey })) {
+      reply.code(403).send({ error: "forbidden" }); return;
     }
   }
 
@@ -19510,7 +19623,7 @@ app.get("/voice/ivr/override", async (req, reply) => {
 
 // ── POST /voice/ivr/override/activate ────────────────────────────────────────
 app.post("/voice/ivr/override/activate", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageIvr);
+  const user = await requireRoleOrPortalPermission(req, reply, canManageIvr, "can_override_ivr_routing");
   if (!user) return;
   const body = z.object({
     tenantId:  z.string(),
@@ -19550,7 +19663,7 @@ app.post("/voice/ivr/override/activate", async (req, reply) => {
 
 // ── POST /voice/ivr/override/deactivate ──────────────────────────────────────
 app.post("/voice/ivr/override/deactivate", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageIvr);
+  const user = await requireRoleOrPortalPermission(req, reply, canManageIvr, "can_override_ivr_routing");
   if (!user) return;
   const body = z.object({ tenantId: z.string() }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
@@ -19698,7 +19811,7 @@ app.get("/voice/ivr/publish-history", async (req, reply) => {
 // ── POST /voice/ivr/publish ───────────────────────────────────────────────────
 // Computes the current mode, writes all AstDB keys, and logs the publish.
 app.post("/voice/ivr/publish", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageIvr);
+  const user = await requireRoleOrPortalPermission(req, reply, canManageIvr, "can_publish_ivr_routing");
   if (!user) return;
   const body = z.object({ tenantId: z.string() }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
@@ -22115,7 +22228,7 @@ app.get("/voice/moh/override", async (req, reply) => {
 // ── POST /voice/moh/override/activate ────────────────────────────────────────
 // Saves the override AND immediately publishes to AstDB (no waiting for worker).
 app.post("/voice/moh/override/activate", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageMoh);
+  const user = await requireRoleOrPortalPermission(req, reply, canManageMoh, "can_override_moh");
   if (!user) return;
   const body = z.object({
     tenantId:  z.string(),
@@ -22162,7 +22275,7 @@ app.post("/voice/moh/override/activate", async (req, reply) => {
 // ── POST /voice/moh/override/deactivate ──────────────────────────────────────
 // Clears the override AND immediately publishes the schedule-derived state to AstDB.
 app.post("/voice/moh/override/deactivate", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageMoh);
+  const user = await requireRoleOrPortalPermission(req, reply, canManageMoh, "can_override_moh");
   if (!user) return;
   const body = z.object({ tenantId: z.string() }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
@@ -22247,7 +22360,7 @@ app.get("/voice/moh/publish-history", async (req, reply) => {
 // ── POST /voice/moh/publish ───────────────────────────────────────────────────
 // Immediately computes effective Hold Profile and writes the MOH AstDB keys.
 app.post("/voice/moh/publish", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageMoh);
+  const user = await requireRoleOrPortalPermission(req, reply, canManageMoh, "can_publish_moh");
   if (!user) return;
   const body = z.object({ tenantId: z.string() }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
@@ -24257,7 +24370,7 @@ app.get("/settings/email", async (req, reply) => {
 });
 
 app.put("/settings/email", async (req, reply) => {
-  const admin = await requirePermission(req, reply, canManageBilling);
+  const admin = await requireRoleOrPortalPermission(req, reply, canManageBilling, "can_manage_integrations");
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
 
@@ -24474,7 +24587,7 @@ app.get("/admin/email-settings", async (req, reply) => {
 });
 
 app.patch("/admin/email-settings/google-workspace", async (req, reply) => {
-  const admin = await requirePermission(req, reply, canManageBilling);
+  const admin = await requireRoleOrPortalPermission(req, reply, canManageBilling, "can_manage_integrations");
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
   const tenantId = getEffectiveEmailTenantId(req, admin);
@@ -24657,7 +24770,7 @@ app.post("/admin/email-settings/google-workspace/test", async (req, reply) => {
 });
 
 app.post("/admin/email-settings/google-workspace/disconnect", async (req, reply) => {
-  const admin = await requirePermission(req, reply, canManageBilling);
+  const admin = await requireRoleOrPortalPermission(req, reply, canManageBilling, "can_manage_integrations");
   if (!admin) return;
   return reply.status(403).send({
     error: "EMAIL_PROVIDER_DISCONNECT_DISABLED",
@@ -24914,7 +25027,7 @@ app.get("/contacts", async (req, reply) => {
 });
 
 app.post("/contacts", async (req, reply) => {
-  const user = await requirePermission(req, reply, canCreateContacts);
+  const user = await requirePortalActionPermission(req, reply, "can_manage_contacts");
   if (!user) return;
   const tenantId = effectiveContactsTenantId(req, user);
   if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
@@ -24963,7 +25076,7 @@ app.get("/contacts/:id", async (req, reply) => {
 });
 
 app.patch("/contacts/:id", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageCustomerWorkflow);
+  const user = await requirePortalActionPermission(req, reply, "can_manage_contacts");
   if (!user) return;
   const tenantId = effectiveContactsTenantId(req, user);
   if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
@@ -24989,7 +25102,7 @@ app.patch("/contacts/:id", async (req, reply) => {
 });
 
 app.delete("/contacts/:id", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageCustomerWorkflow);
+  const user = await requirePortalActionPermission(req, reply, "can_manage_contacts");
   if (!user) return;
   const tenantId = effectiveContactsTenantId(req, user);
   if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
@@ -25026,7 +25139,7 @@ app.get("/contacts/:id/avatar", async (req, reply) => {
 });
 
 app.post("/contacts/:id/avatar", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageCustomerWorkflow);
+  const user = await requirePortalActionPermission(req, reply, "can_manage_contacts");
   if (!user) return;
   const tenantId = effectiveContactsTenantId(req, user);
   if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
@@ -25055,7 +25168,7 @@ app.post("/contacts/:id/avatar", async (req, reply) => {
 });
 
 app.delete("/contacts/:id/avatar", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageCustomerWorkflow);
+  const user = await requirePortalActionPermission(req, reply, "can_manage_contacts");
   if (!user) return;
   const tenantId = effectiveContactsTenantId(req, user);
   if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
@@ -31116,6 +31229,11 @@ app.get("/pbx/live/combined", async (req, reply) => {
   if (!user) return;
   if (!ensureCredentialCrypto(reply)) return;
 
+  // The live active-calls list is gated by can_view_live_calls (authoritative
+  // for custom roles; END_USER snapshot already includes it). Summary metrics
+  // remain under the broader workspace-overview gate.
+  const canSeeLiveCalls = await userHasActionPermission(user, "can_view_live_calls");
+
   // SUPER_ADMIN with vpbx: tenant context: use first enabled instance scoped to that tenant.
   const pbxTenantOverride = (req as any).pbxTenantOverride as string | undefined;
   if (pbxTenantOverride && isRole(user, ["SUPER_ADMIN"])) {
@@ -31130,7 +31248,7 @@ app.get("/pbx/live/combined", async (req, reply) => {
       const meta = (r as any).__cacheMeta || pbxLiveCacheMeta(`live-combined:vpbx:${pbxTenantOverride}`, undefined, { fromCache: false });
       return {
         summary: { tenantId: pbxTenantOverride, callsToday: r.callsToday, incomingToday: r.incomingToday, outgoingToday: r.outgoingToday, internalToday: r.internalToday, answeredToday: r.answeredToday, missedToday: r.missedToday, activeCalls: r.activeCalls, activeCallsSource: r.activeCallsSource, registeredEndpoints: r.registeredEndpoints, unregisteredEndpoints: r.unregisteredEndpoints, activeCallsSnapshotAgeMs: r.activeCallsSnapshotAgeMs ?? null, lastUpdatedAt: r.lastUpdatedAt },
-        activeCalls: { calls: r.activeCallsList, source: r.activeCallsSource, snapshotAgeMs: r.activeCallsSnapshotAgeMs ?? null, lastUpdatedAt: r.lastUpdatedAt },
+        activeCalls: { calls: canSeeLiveCalls ? r.activeCallsList : [], source: r.activeCallsSource, snapshotAgeMs: r.activeCallsSnapshotAgeMs ?? null, lastUpdatedAt: r.lastUpdatedAt },
         cached: meta.cached,
         lastUpdated: meta.lastUpdated || r.lastUpdatedAt,
         stale: meta.stale,
@@ -31168,7 +31286,7 @@ app.get("/pbx/live/combined", async (req, reply) => {
         lastUpdatedAt: r.lastUpdatedAt
       },
       activeCalls: {
-        calls: r.activeCallsList,
+        calls: canSeeLiveCalls ? r.activeCallsList : [],
         source: r.activeCallsSource,
         snapshotAgeMs: r.activeCallsSnapshotAgeMs ?? null,
         lastUpdatedAt: r.lastUpdatedAt
@@ -31229,6 +31347,9 @@ app.get("/pbx/live/active-calls", async (req, reply) => {
   if (!user) return;
   if (!ensureCredentialCrypto(reply)) return;
 
+  // Active-calls list requires can_view_live_calls (see /pbx/live/combined).
+  const canSeeLiveCalls = await userHasActionPermission(user, "can_view_live_calls");
+
   const link = await db.tenantPbxLink.findUnique({
     where: { tenantId: user.tenantId },
     include: { pbxInstance: true }
@@ -31241,7 +31362,7 @@ app.get("/pbx/live/active-calls", async (req, reply) => {
     const r = await getPbxLiveCombined(link, user.tenantId);
     const meta = (r as any).__cacheMeta || pbxLiveCacheMeta(`live-combined:${user.tenantId}`, undefined, { fromCache: false });
     return {
-      calls: r.activeCallsList,
+      calls: canSeeLiveCalls ? r.activeCallsList : [],
       source: r.activeCallsSource,
       snapshotAgeMs: r.activeCallsSnapshotAgeMs ?? null,
       lastUpdatedAt: r.lastUpdatedAt,

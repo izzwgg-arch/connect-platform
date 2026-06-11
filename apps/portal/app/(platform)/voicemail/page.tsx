@@ -338,6 +338,7 @@ function VoicemailRow({
   selected,
   expanded,
   showTenant,
+  canDelete,
   deleting,
   activeId,
   onSelect,
@@ -354,6 +355,7 @@ function VoicemailRow({
   selected: boolean;
   expanded: boolean;
   showTenant: boolean;
+  canDelete: boolean;
   deleting: boolean;
   activeId: string | null;
   onSelect: (vm: Voicemail) => void;
@@ -416,9 +418,11 @@ function VoicemailRow({
                 <button onClick={() => { onCopy(vm.callerId); setMenuOpen(false); }}>
                   <Copy size={14} /> Copy number
                 </button>
-                <button className="danger" disabled={deleting} onClick={() => { onDelete(vm.id); setMenuOpen(false); }}>
-                  <Trash2 size={14} /> Delete
-                </button>
+                {canDelete ? (
+                  <button className="danger" disabled={deleting} onClick={() => { onDelete(vm.id); setMenuOpen(false); }}>
+                    <Trash2 size={14} /> Delete
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -436,6 +440,7 @@ function VoicemailRow({
 function DetailPanel({
   vm,
   showTenant,
+  canDelete,
   activeId,
   deleting,
   note,
@@ -452,6 +457,7 @@ function DetailPanel({
 }: {
   vm: Voicemail;
   showTenant: boolean;
+  canDelete: boolean;
   activeId: string | null;
   deleting: boolean;
   note: string;
@@ -524,7 +530,9 @@ function DetailPanel({
           <button onClick={() => onMarkRead(vm, !vm.listened)}><Check size={15} /> Mark {vm.listened ? "unread" : "read"}</button>
           <button onClick={() => onMarkUrgent(vm, vm.folder !== "urgent")}><Star size={15} /> {vm.folder === "urgent" ? "Remove urgent" : "Mark urgent"}</button>
           <button onClick={() => onCopy(vm.callerId)}><Copy size={15} /> Copy number</button>
-          <button className="danger" disabled={deleting} onClick={() => onDelete(vm.id)}><Trash2 size={15} /> Delete</button>
+          {canDelete ? (
+            <button className="danger" disabled={deleting} onClick={() => onDelete(vm.id)}><Trash2 size={15} /> Delete</button>
+          ) : null}
         </div>
       </section>
 
@@ -556,7 +564,12 @@ function groupVoicemails(rows: Voicemail[]) {
 export default function VoicemailPage() {
   const router = useRouter();
   const phone = useSipPhone();
-  const { adminScope, tenantId: contextTenantId } = useAppContext();
+  const { adminScope, tenantId: contextTenantId, can } = useAppContext();
+  // Deleting a voicemail requires can_delete_voicemail. Owner carve-out: users
+  // who only see their own mailbox (no tenant-wide voicemail view) can always
+  // delete their own — matching the server's own-mailbox carve-out. Tenant-wide
+  // viewers must hold the explicit key to delete other people's voicemail.
+  const canDeleteVoicemail = can("can_delete_voicemail") || !can("can_view_tenant_voicemails");
   const [reloadKey, setReloadKey] = useState(0);
   const [page, setPage] = useState(1);
   const [activeTab, setActiveTab] = useState<TabKey>("inbox");
@@ -814,6 +827,7 @@ export default function VoicemailPage() {
                         selected={selected?.id === vm.id}
                         expanded={activePlayerId === vm.id}
                         showTenant={showTenant}
+                        canDelete={canDeleteVoicemail}
                         deleting={deleteId === vm.id}
                         activeId={activePlayerId}
                         onSelect={setSelected}
@@ -843,6 +857,7 @@ export default function VoicemailPage() {
           <DetailPanel
             vm={selected}
             showTenant={showTenant}
+            canDelete={canDeleteVoicemail}
             activeId={activePlayerId}
             deleting={deleteId === selected.id}
             note={notes[selected.id] ?? ""}

@@ -189,6 +189,11 @@ export default function HoldSchedulingPage() {
   const [loading, setLoading] = useState(false);
 
   const canManage = can("can_manage_moh");
+  // Split permissions: a custom role can grant just publishing or just override
+  // toggles. Full manage implies both. Mirrors the server additive-OR gate
+  // (can_publish_moh / can_override_moh).
+  const canPublish = can("can_publish_moh") || canManage;
+  const canOverride = can("can_override_moh") || canManage;
 
   const reload = useCallback(async () => {
     if (!tenantId) return;
@@ -276,10 +281,10 @@ export default function HoldSchedulingPage() {
         <ScheduleTab schedule={schedule} profiles={profiles} tenantId={tenantId} canManage={canManage} onRefresh={reload} />
       )}
       {!loading && activeTab === "Override" && (
-        <OverrideTab override={override} profiles={profiles} tenantId={tenantId} canManage={canManage} onRefresh={reload} />
+        <OverrideTab override={override} profiles={profiles} tenantId={tenantId} canManage={canOverride} onRefresh={reload} />
       )}
       {!loading && activeTab === "Publish" && (
-        <PublishTab history={history} preview={preview} tenantId={tenantId} canManage={canManage} onRefresh={reload} />
+        <PublishTab history={history} preview={preview} tenantId={tenantId} canManage={canPublish} onRefresh={reload} />
       )}
     </div>
   );

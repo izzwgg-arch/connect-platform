@@ -262,8 +262,10 @@ export default function DashboardPage() {
           loading={kpiLoading && trafficLoading}
         />
 
-        {/* 3. Active calls — live, below metrics */}
-        <ActiveCallsPanel calls={displayLiveCalls} isLive={telephony.isLive || usingActiveCallsPreview} showTenantBadge={showTenantBadge} />
+        {/* 3. Active calls — live, below metrics (gated by can_view_live_calls) */}
+        <PermissionGate permission="can_view_live_calls" fallback={null}>
+          <ActiveCallsPanel calls={displayLiveCalls} isLive={telephony.isLive || usingActiveCallsPreview} showTenantBadge={showTenantBadge} />
+        </PermissionGate>
 
         {/* 4. Communications — voicemail + messages */}
         <CommunicationsRow data={displayCommData} loading={commLoading && !usingCommunicationsPreview} />

@@ -257,7 +257,7 @@ function ContactList({ contacts, statuses, onOpen, onCall, onMessage, onEmail }:
   );
 }
 
-function ContactPanel({ contact, status, onClose, onEdit, onArchive, onCall, onMessage, onEmail }: { contact: Contact; status: ReturnType<typeof presenceFor>; onClose: () => void; onEdit: () => void; onArchive: () => void; onCall: (c: Contact) => void; onMessage: (c: Contact) => void; onEmail: (c: Contact) => void }) {
+function ContactPanel({ contact, canManage, status, onClose, onEdit, onArchive, onCall, onMessage, onEmail }: { contact: Contact; canManage: boolean; status: ReturnType<typeof presenceFor>; onClose: () => void; onEdit: () => void; onArchive: () => void; onCall: (c: Contact) => void; onMessage: (c: Contact) => void; onEmail: (c: Contact) => void }) {
   return (
     <aside className="cx-panel">
       <button type="button" className="cx-panel-close" onClick={onClose}><X size={18} /></button>
@@ -301,8 +301,8 @@ function ContactPanel({ contact, status, onClose, onEdit, onArchive, onCall, onM
         <p className="cx-muted">Recent calls and messages will appear here as activity data is connected.</p>
       </section>
       <div className="cx-panel-footer">
-        {contact.type !== "internal_extension" ? <button type="button" onClick={onEdit}>Edit</button> : null}
-        {contact.type !== "internal_extension" ? <button type="button" className="danger" onClick={onArchive}><Archive size={15} />Archive</button> : null}
+        {canManage && contact.type !== "internal_extension" ? <button type="button" onClick={onEdit}>Edit</button> : null}
+        {canManage && contact.type !== "internal_extension" ? <button type="button" className="danger" onClick={onArchive}><Archive size={15} />Archive</button> : null}
       </div>
     </aside>
   );
@@ -419,7 +419,10 @@ function DynamicEmails({ emails, onChange }: { emails: ContactEmail[]; onChange:
 }
 
 export default function ContactsPage() {
-  const { adminScope, tenantId, tenant } = useAppContext();
+  const { adminScope, tenantId, tenant, can } = useAppContext();
+  // Creating/editing/archiving workspace contacts requires can_manage_contacts.
+  // The server enforces the same authoritative gate; viewing is unaffected.
+  const canManageContacts = can("can_manage_contacts");
   const telephony = useTelephony();
   const phone = useSipPhone();
   const router = useRouter();
@@ -500,7 +503,7 @@ export default function ContactsPage() {
           </div>
           <div className="cx-hero-actions">
             <button type="button" className="cx-secondary"><Upload size={16} />Import CSV</button>
-            <button type="button" className="cx-primary" onClick={() => setEditing(null)}><Plus size={17} />Add Contact</button>
+            {canManageContacts ? <button type="button" className="cx-primary" onClick={() => setEditing(null)}><Plus size={17} />Add Contact</button> : null}
           </div>
         </header>
 
@@ -543,6 +546,7 @@ export default function ContactsPage() {
         {selected ? (
           <ContactPanel
             contact={selected}
+            canManage={canManageContacts}
             status={statuses.get(selected.id) ?? "offline"}
             onClose={() => setSelected(null)}
             onEdit={() => setEditing(selected)}

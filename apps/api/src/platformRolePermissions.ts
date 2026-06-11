@@ -118,13 +118,25 @@ export async function getEffectivePortalPermissionSetForJwtRole(
   }
 }
 
+/**
+ * Permissions from a user's ACTIVE custom-role assignments.
+ *
+ * Custom roles are platform-wide: an admin in tenant A can assign a role to a
+ * user who lives in tenant B, and the assignment row is stored under the
+ * ADMIN's tenantId (see PUT /admin/users/:id/custom-roles). Therefore the
+ * runtime lookup MUST scope by `userId` only — scoping by the user's own
+ * tenantId silently drops every cross-tenant assignment (the historic
+ * "custom role does nothing" bug). The `(userId, customRoleId)` unique index
+ * guarantees no duplicate rows. `tenantId` is accepted for signature
+ * compatibility but intentionally not used to filter assignments.
+ */
 export async function getEffectiveCustomRolePermissions(
   userId: string,
-  tenantId: string,
+  _tenantId?: string | null,
 ): Promise<PortalPermissionKey[]> {
   try {
     const assignments = await db.userCustomRole.findMany({
-      where: { userId, tenantId, customRole: { active: true } },
+      where: { userId, customRole: { active: true } },
       select: { customRole: { select: { permissions: true } } },
     });
     const out = new Set<PortalPermissionKey>();

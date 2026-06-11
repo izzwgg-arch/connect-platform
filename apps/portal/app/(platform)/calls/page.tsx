@@ -369,6 +369,12 @@ function CallFeedItem({
 // ─── Detail panel ─────────────────────────────────────────────────────────────
 
 function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () => void }) {
+  const { can } = useAppContext();
+  // Listening to a recording requires can_view_pbx_call_recordings; downloading
+  // additionally requires can_download_recordings. The server enforces both with
+  // an owner carve-out (your own extension's recordings stay playable/downloadable).
+  const canViewRecordings = can("can_view_pbx_call_recordings");
+  const canDownloadRecording = can("can_download_recordings");
   const [techExpanded, setTechExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const dir = row.direction;
@@ -538,7 +544,7 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
         ) : null}
 
         {/* Recording — preload="none" so opening the panel does NOT trigger a PBX request until play */}
-        {row.recordingAvailable ? (
+        {row.recordingAvailable && canViewRecordings ? (
           <div className="cdp-section">
             <h4 className="cdp-section-title">
               <Mic size={14} style={{ marginRight: 4, verticalAlign: "middle" }} />
@@ -553,15 +559,17 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
               >
                 Your browser does not support audio playback.
               </audio>
-              <a
-                className="btn ghost btn-sm"
-                style={{ marginTop: 6, display: "inline-flex", alignItems: "center", gap: 4 }}
-                href={`/api/voice/recording/${encodeURIComponent(row.linkedId)}/download?token=${typeof window !== "undefined" ? (localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "") : ""}`}
-                download
-              >
-                <Download size={13} />
-                Download
-              </a>
+              {canDownloadRecording ? (
+                <a
+                  className="btn ghost btn-sm"
+                  style={{ marginTop: 6, display: "inline-flex", alignItems: "center", gap: 4 }}
+                  href={`/api/voice/recording/${encodeURIComponent(row.linkedId)}/download?token=${typeof window !== "undefined" ? (localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "") : ""}`}
+                  download
+                >
+                  <Download size={13} />
+                  Download
+                </a>
+              ) : null}
             </div>
           </div>
         ) : null}

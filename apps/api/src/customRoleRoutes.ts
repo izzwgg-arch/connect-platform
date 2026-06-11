@@ -22,6 +22,7 @@ import {
   PROTECTED_PLATFORM_ADMIN_PERMISSIONS,
   isPortalPermissionKey,
   type PortalPermissionKey,
+  type PortalRoleBucket,
   SIDEBAR_SECTIONS,
   SIDEBAR_ITEMS,
   ACTION_PERMISSION_KEYS,
@@ -118,12 +119,25 @@ export async function registerCustomRoleRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: "forbidden" });
     }
     const grantable = await getGrantablePermissions(actor.role, actor.sub, actor.tenantId);
+
+    // Base-role prefill: the granular permission set each built-in bucket grants,
+    // intersected with what THIS actor is allowed to grant. The editor seeds the
+    // permission matrix from one of these when an admin picks a base role, then
+    // lets them add/remove individual toggles on top.
+    const buckets: PortalRoleBucket[] = ["END_USER", "TENANT_ADMIN", "SUPER_ADMIN"];
+    const bucketDefaults: Record<string, PortalPermissionKey[]> = {};
+    for (const b of buckets) {
+      const list = await getEffectivePortalPermissionListForBucket(b);
+      bucketDefaults[b] = list.filter((p) => grantable.has(p));
+    }
+
     return {
       keys: PORTAL_PERMISSION_KEYS,
       grantableKeys: [...grantable],
       sections: SIDEBAR_SECTIONS,
       items: SIDEBAR_ITEMS,
       actionKeys: ACTION_PERMISSION_KEYS,
+      bucketDefaults,
     };
   });
 

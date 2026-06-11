@@ -409,6 +409,11 @@ export default function IvrRoutingPage() {
   // Prompts permission lets a limited-role user change greetings without
   // having full routing edit rights. The server enforces the same split.
   const canManagePrompts = can("can_manage_ivr_prompts") || canManage;
+  // Publish / override are split permissions: a custom role can grant just
+  // publishing or just override toggles. Full manage implies both. Mirrors the
+  // server additive-OR gate (can_publish_ivr_routing / can_override_ivr_routing).
+  const canPublish       = can("can_publish_ivr_routing") || canManage;
+  const canOverride      = can("can_override_ivr_routing") || canManage;
 
   const reload = useCallback(async () => {
     if (!tenantId) return;
@@ -509,7 +514,7 @@ export default function IvrRoutingPage() {
           override={override}
           profiles={profiles}
           tenantId={tenantId}
-          canManage={canManage}
+          canManage={canOverride}
           onRefresh={reload}
         />
       )}
@@ -519,7 +524,7 @@ export default function IvrRoutingPage() {
           preview={preview}
           profiles={profiles}
           tenantId={tenantId}
-          canManage={canManage}
+          canManage={canPublish}
           onRefresh={reload}
         />
       )}

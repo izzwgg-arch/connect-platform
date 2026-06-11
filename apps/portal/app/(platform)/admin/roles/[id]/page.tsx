@@ -18,7 +18,14 @@ import { apiGet, apiPost, apiPut } from "../../../../../services/apiClient";
 type CatalogResponse = {
   keys: PortalPermissionKey[];
   grantableKeys: PortalPermissionKey[];
+  bucketDefaults?: Record<string, PortalPermissionKey[]>;
 };
+
+const BASE_ROLE_OPTIONS: Array<{ bucket: string; label: string }> = [
+  { bucket: "END_USER", label: "End User" },
+  { bucket: "TENANT_ADMIN", label: "Tenant Administrator" },
+  { bucket: "SUPER_ADMIN", label: "Admin" },
+];
 
 type RoleResponse = {
   role: {
@@ -43,6 +50,34 @@ const DANGEROUS_PERMISSIONS: Set<string> = new Set([
   "can_manage_deploys",
   "can_view_admin_permissions",
   "can_sync_voip_ms_numbers",
+]);
+
+/**
+ * Action permission keys hidden from the editor's Action Permissions panel
+ * because they are not (yet) enforced anywhere, so toggling them would mislead.
+ *  - No working backend: call forwarding (no API route), BLFs (UI stub),
+ *    edit team (Team Directory is read-only).
+ *  - Public by design: APK download endpoint bypasses auth for pre-login invites.
+ *  - Legacy "view" keys superseded by the granular sidebar section/item keys
+ *    above — visibility is driven by those, so these are dead duplicates here.
+ */
+const HIDDEN_ACTION_KEYS: Set<string> = new Set([
+  "can_manage_call_forwarding",
+  "can_manage_blfs",
+  "can_edit_team",
+  "can_download_apk",
+  "can_view_dashboard",
+  "can_view_team",
+  "can_view_calls",
+  "can_view_voicemail",
+  "can_view_chat",
+  "can_view_contacts",
+  "can_view_settings",
+  "can_view_apps",
+  "can_view_admin",
+  "can_view_ivr_routing",
+  "can_view_moh",
+  "can_view_did_routing",
 ]);
 
 // Tenant-wide communications permission keys and labels
@@ -153,6 +188,39 @@ export default function RoleEditPage() {
     });
   }
 
+  /**
+   * Toggling a sidebar SECTION off also removes every child item permission
+   * under it, so "off" genuinely means hidden — there are no orphaned child
+   * permissions left in the saved set under a disabled section.
+   */
+  function toggleSection(sectionPermission: string, sectionId: string, value: boolean) {
+    setSelectedPerms((prev) => {
+      const next = new Set(prev);
+      if (value) {
+        next.add(sectionPermission);
+      } else {
+        next.delete(sectionPermission);
+        for (const item of SIDEBAR_ITEMS) {
+          if (item.section === sectionId) next.delete(item.permission);
+        }
+      }
+      return next;
+    });
+  }
+
+  /**
+   * Seed the permission matrix from a built-in role bucket's defaults (only the
+   * keys this admin is allowed to grant). The admin can then add/remove
+   * individual toggles. This is a convenience prefill — the saved role is always
+   * exactly the resulting toggle state, never the bucket itself.
+   */
+  function applyBaseRole(bucket: string) {
+    if (catalog.status !== "success") return;
+    const defaults = catalog.data.bucketDefaults?.[bucket] ?? [];
+    const grantableDefaults = defaults.filter((p) => grantable.has(p));
+    setSelectedPerms(new Set(grantableDefaults));
+  }
+
   async function handleSave() {
     if (!name.trim()) {
       setSaveError("Role name is required.");
@@ -259,6 +327,31 @@ export default function RoleEditPage() {
                 <div className="muted" style={{ fontSize: 11 }}>Inactive roles are ignored during permission checks</div>
               </div>
             </div>
+
+            {/* Base role prefill */}
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 2 }}>Start from a base role</label>
+              <div className="muted" style={{ fontSize: 11, marginBottom: 8 }}>
+                Fills the permission matrix with a built-in role&apos;s defaults. Add or remove individual toggles below — the role is saved exactly as you leave it.
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {BASE_ROLE_OPTIONS.filter(
+                  (opt) => (catalog.status === "success" ? (catalog.data.bucketDefaults?.[opt.bucket]?.length ?? 0) > 0 : false),
+                ).map((opt) => (
+                  <button
+                    key={opt.bucket}
+                    type="button"
+                    className="btn ghost"
+                    style={{ fontSize: 12 }}
+                    disabled={loading}
+                    onClick={() => applyBaseRole(opt.bucket)}
+                    title={`Replace current selection with ${opt.label} defaults`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -296,7 +389,7 @@ export default function RoleEditPage() {
                       checked={sectionOn}
                       disabled={!sectionGrantable}
                       title={!sectionGrantable ? "You cannot grant this permission" : `${section.label} section access`}
-                      onChange={(v) => togglePerm(section.permission, v)}
+                      onChange={(v) => toggleSection(section.permission, section.id, v)}
                     />
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 13, fontWeight: 700 }}>{section.label}</div>
@@ -366,7 +459,7 @@ export default function RoleEditPage() {
               </div>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <tbody>
-                  {ACTION_PERMISSION_KEYS.filter((k) => !TENANT_COMM_PERMS.some((t) => t.key === k)).map((key, idx) => {
+                  {ACTION_PERMISSION_KEYS.filter((k) => !TENANT_COMM_PERMS.some((t) => t.key === k) && !HIDDEN_ACTION_KEYS.has(k)).map((key, idx) => {
                     const isGrantable = grantable.has(key);
                     const checked = selectedPerms.has(key);
                     const isDangerous = DANGEROUS_PERMISSIONS.has(key);

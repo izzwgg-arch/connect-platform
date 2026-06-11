@@ -49,8 +49,10 @@ function normalizeAppPassword(value: string): string {
 }
 
 export default function SettingsEmailPage() {
-  const { role } = useAppContext();
-  const canEdit = role === "SUPER_ADMIN" || role === "TENANT_ADMIN";
+  const { role, can } = useAppContext();
+  // Custom roles can grant integration management to non-admins; the server
+  // enforces the same additive-OR gate (role admin OR can_manage_integrations).
+  const canEdit = role === "SUPER_ADMIN" || role === "TENANT_ADMIN" || can("can_manage_integrations");
   const [data, setData] = useState<EmailSettingsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);

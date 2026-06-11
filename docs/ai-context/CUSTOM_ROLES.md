@@ -12,9 +12,21 @@ that are **additively unioned** with a user's built-in role bucket
 (`END_USER` / `TENANT_ADMIN` / `SUPER_ADMIN`).
 
 Key invariants:
-- Custom roles **add** permissions. They never remove built-in permissions.
+- Custom roles are **authoritative** for non-`SUPER_ADMIN` users: when a user has
+  one or more active custom roles assigned, their effective portal permission set
+  is **exactly** the union of those roles' permissions. The built-in role bucket
+  no longer grants anything on its own, so a permission toggled **OFF** in the
+  role is genuinely hidden (ON = visible, OFF = hidden — deterministic).
+- A user with **no** custom roles behaves exactly as before (built-in bucket
+  ∪ CRM-if-enabled). Fully backwards compatible.
 - Inactive roles (`active: false`) are **ignored** during resolution.
-- `SUPER_ADMIN` users cannot be weakened by any custom role.
+- `SUPER_ADMIN` users cannot be weakened by any custom role (they always keep
+  their full set — they are exempt from the authoritative override).
+- Custom-role assignments are **platform-wide**: the assignment row is stored
+  under the *admin's* tenantId, and the runtime resolver looks them up by
+  `userId` only. (Scoping the lookup by the user's own tenantId silently dropped
+  every cross-tenant assignment — the historic "custom role does nothing" bug,
+  fixed 2026-06-10.)
 - All tenant isolation is enforced at the **backend API layer** only.
   Frontend hiding is supplementary, not a security boundary.
 
@@ -63,16 +75,25 @@ Unique: `(userId, customRoleId)`.
 
 ```
 effective_permissions(user) =
-  built_in_role_bucket_permissions(user.role)
-  ∪ crm_permissions_if_enabled(user)
-  ∪ union(customRole.permissions for each active custom role assigned to user)
+  if user.bucket != SUPER_ADMIN AND user has >=1 active custom role:
+      union(customRole.permissions for each active custom role)   # AUTHORITATIVE
+  else:
+      built_in_role_bucket_permissions(user.role)
+      ∪ crm_permissions_if_enabled(user)
 ```
 
+The authoritative union is used **literally** (no legacy expansion) so that a
+permission the admin deliberately left OFF cannot be silently re-enabled by a
+sibling legacy key. The base-role "prefill" in the editor populates the granular
+section/item keys, so nav visibility resolves correctly.
+
 The resolver is `resolvePortalPermissionsWithCrmUserAccess()` in
-`apps/api/src/crm/portalCrmPermissions.ts`. This is the **single point**
-that computes all effective permissions. Every API route permission check
-flows through `hasEffectivePortalPermission()` →
-`resolvePortalPermissionsWithCrmUserAccess()`.
+`apps/api/src/crm/portalCrmPermissions.ts`; the authoritative decision is the
+pure, unit-tested helper `computeAuthoritativePortalPermissions()` in the same
+file. This is the **single point** that computes all effective permissions.
+Every API route permission check flows through `hasEffectivePortalPermission()`
+→ `resolvePortalPermissionsWithCrmUserAccess()`, so the authoritative set is
+enforced at the **API layer**, not just hidden in the nav.
 
 **All existing permission checks automatically benefit from custom roles
 without any code changes.**
@@ -80,6 +101,61 @@ without any code changes.**
 The `/me` endpoint returns `portalPermissionSet` which includes custom role
 permissions, so the portal sidebar and `PermissionGate` components reflect
 custom roles immediately.
+
+---
+
+## Action-Permission Enforcement Matrix
+
+Most permission keys are **nav/view** keys enforced generically by
+`PORTAL_API_PERMISSION_RULES` (route-prefix → required view permission). The
+keys below are **action** permissions that gate specific writes/operations. They
+were wired end-to-end on 2026-06-10 so every toggle in the custom-role editor's
+**Action Permissions** panel actually enforces. Two enforcement patterns are
+used (helpers in `apps/api/src/permissionGates.ts`, pure `decideActionGate()` is
+unit-tested in `permissionGates.test.ts`):
+
+- **Additive-OR** (`requireAdminOrPortalPermission` / `requireRoleOrPortalPermission`):
+  allow when the existing role check passes **OR** the user holds the key. Zero
+  regression for current role-based admins; custom roles can additionally grant.
+- **Authoritative** (`requirePortalActionPermission`): allow **only** when the
+  user holds the key (no legacy role fallback) — the toggle is the source of
+  truth. SUPER_ADMIN still passes because its bucket contains every key.
+- **Owner carve-out**: personal-data actions also allow the resource owner
+  (own extension / own mailbox), preserving self-service regardless of the key.
+
+| Key | Pattern | Server gate (apps/api/src) | Portal UI |
+|---|---|---|---|
+| `can_manage_integrations` | additive-OR | provider Twilio/VoIP.ms/WhatsApp writes, `PUT /settings/email`, Google-workspace `PATCH`/`disconnect` | `settings/email` edit |
+| `can_manage_tenant_settings` | additive-OR | `/settings/sms-limits`, `/settings/sms-routing[/lock|/unlock]`, `/settings/sms-mode` | (admin surface) |
+| `can_publish_ivr_routing` | additive-OR | `POST /voice/ivr/publish` | `pbx/ivr-routing` Publish tab |
+| `can_override_ivr_routing` | additive-OR | `POST /voice/ivr/override/{activate,deactivate}` | `pbx/ivr-routing` Override tab |
+| `can_publish_moh` | additive-OR | `POST /voice/moh/publish` | `pbx/moh-scheduling` Publish tab |
+| `can_override_moh` | additive-OR | `POST /voice/moh/override/{activate,deactivate}` | `pbx/moh-scheduling` Override tab |
+| `can_download_recordings` | owner carve-out | `streamCallRecording` download path (`/voice/recording/:id/download`) | `calls` Download button (play always allowed) |
+| `can_delete_voicemail` | owner carve-out (own mailbox) | `DELETE /voice/voicemail/:id` | `voicemail` delete buttons |
+| `can_manage_contacts` | authoritative | `POST/PATCH/DELETE /contacts[/:id]`, contact avatar writes | `contacts` Add/Edit/Archive |
+| `can_view_live_calls` | authoritative (list) | `/pbx/live/combined` + `/pbx/live/active-calls` active-calls list | dashboard `ActiveCallsPanel` |
+
+Behavior change confirmed at review: plain `END_USER`s previously could create
+workspace contacts and delete any voicemail they could view (missing checks).
+After wiring they follow the snapshot intent — `END_USER` lacks
+`can_manage_contacts` / `can_delete_voicemail`; owner carve-outs preserve
+self-service (delete your own voicemail, download your own call's recording). To
+restore contact management for end users, add `can_manage_contacts` to the
+`END_USER` snapshot (config only, no code). `END_USER` already includes
+`can_download_recordings` and `can_view_live_calls`, so those remain unchanged.
+
+**Intentionally not wired (still super-admin-only):** the global VoIP.ms
+credentials endpoint (`PUT /admin/apps/voip-ms/credentials`,
+`connectChatRoutes.ts`) is a platform-wide config shared by all tenants. Adding
+a tenant-grantable `can_manage_integrations` OR there would allow cross-tenant
+escalation, so it stays `isSuper`-gated. The tenant-scoped
+`/settings/providers/voipms` integration is wired normally.
+
+**Pruned from the editor** (`HIDDEN_ACTION_KEYS` in the role editor page) because
+they have no working backend or are public by design: `can_manage_call_forwarding`,
+`can_manage_blfs`, `can_edit_team`, `can_download_apk`, plus the vestigial legacy
+`can_view_*` keys superseded by the granular sidebar section/item keys.
 
 ---
 
@@ -152,10 +228,12 @@ Route implementation: `apps/api/src/customRoleRoutes.ts`.
 
 ## Deny/Override
 
-**Not implemented.** Permissions are additive only.
-Deny/override semantics require significant API contract changes and
-should be designed explicitly before implementing. Current behavior:
-custom roles can only ADD to a user's built-in permission set.
+Explicit per-permission deny switches are **not implemented** and are no longer
+needed for the common case: because assigned custom roles are **authoritative**
+for non-`SUPER_ADMIN` users, turning a toggle OFF in the role already hides the
+permission. The editor's "Start from a base role" buttons let an admin seed the
+matrix from `END_USER` / `TENANT_ADMIN` / `SUPER_ADMIN` defaults and then
+add/remove individual toggles — the saved role is exactly the resulting state.
 
 ---
 
