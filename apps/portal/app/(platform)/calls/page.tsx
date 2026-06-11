@@ -370,10 +370,14 @@ function CallFeedItem({
 
 function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () => void }) {
   const { can } = useAppContext();
-  // Listening to a recording requires can_view_pbx_call_recordings; downloading
-  // additionally requires can_download_recordings. The server enforces both with
-  // an owner carve-out (your own extension's recordings stay playable/downloadable).
-  const canViewRecordings = can("can_view_pbx_call_recordings");
+  // Listening to a recording requires the "View Recordings" action permission
+  // (can_view_recordings); downloading additionally requires can_download_recordings.
+  // Gate on the ACTION key can_view_recordings — NOT the sidebar-item key
+  // can_view_pbx_call_recordings — because custom roles resolve permissions
+  // literally with no legacy expansion, so a role granting "View Recordings"
+  // exposes can_view_recordings only. The server enforces both with an owner
+  // carve-out (your own extension's recordings stay playable/downloadable).
+  const canViewRecordings = can("can_view_recordings");
   const canDownloadRecording = can("can_download_recordings");
   const [techExpanded, setTechExpanded] = useState(false);
   const [copied, setCopied] = useState(false);

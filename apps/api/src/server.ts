@@ -2167,6 +2167,11 @@ function formatAdminUser(row: any) {
     notes: row.notes || "",
     role: row.role,
     roleLabel: roleLabel(row.role),
+    // Custom roles are additive on top of the platform role bucket. The list
+    // handler attaches __customRoles (batched); other callers default to [].
+    customRoles: Array.isArray(row.__customRoles)
+      ? row.__customRoles.map((c: any) => ({ id: c.id, name: c.name }))
+      : [],
     status: row.status || "ACTIVE",
     emailVerifiedAt: row.emailVerifiedAt || null,
     lastLoginAt: row.lastLoginAt || null,
@@ -5229,8 +5234,25 @@ app.get("/admin/users", async (req, reply) => {
     select: { id: true, extNumber: true, displayName: true, pbxUserEmail: true, ownerUserId: true, status: true },
     take: 1000,
   });
+  // Batched custom-role assignments (additive on top of platform role). Stored
+  // under the assigning admin's tenant, so we filter by userId only — matching
+  // getEffectiveCustomRolePermissions, which is tenant-agnostic by design.
+  const userIds = users.map((u: any) => u.id);
+  const customRoleRows = userIds.length
+    ? await db.userCustomRole.findMany({
+        where: { userId: { in: userIds }, customRole: { active: true } },
+        select: { userId: true, customRole: { select: { id: true, name: true } } },
+      })
+    : [];
+  const customRolesByUser = new Map<string, Array<{ id: string; name: string }>>();
+  for (const r of customRoleRows as any[]) {
+    if (!r.customRole) continue;
+    const list = customRolesByUser.get(r.userId) ?? [];
+    list.push({ id: r.customRole.id, name: r.customRole.name });
+    customRolesByUser.set(r.userId, list);
+  }
   return {
-    users: users.map(formatAdminUser),
+    users: users.map((u: any) => formatAdminUser({ ...u, __customRoles: customRolesByUser.get(u.id) ?? [] })),
     tenants: tenants.map((t) => ({ id: t.id, name: t.name, status: t.isApproved === false ? "SUSPENDED" : "ACTIVE" })),
     extensions,
     roles: USER_MANAGEMENT_ROLES,
@@ -16973,11 +16995,16 @@ async function streamCallRecording(
     }
   }
 
-  // Listening (inline stream) requires can_view_pbx_call_recordings, so the
-  // recordings view toggle actually controls playback. Owner carve-out: you can
-  // always replay a recording for your own extension. This is an additional
-  // necessary gate layered on top of the tenant/owner scope check above (it
-  // never widens access — it only blocks tenant-wide listeners who lack the key).
+  // Listening (inline stream) requires the "View Recordings" action permission
+  // (can_view_recordings), so the recordings toggle actually controls playback.
+  // IMPORTANT: gate on the ACTION key can_view_recordings, not the sidebar-item
+  // key can_view_pbx_call_recordings. Custom roles resolve permissions LITERALLY
+  // with no legacy expansion, so a role granting can_view_recordings would NOT
+  // imply can_view_pbx_call_recordings — gating on the latter silently blocked
+  // custom-role users who were explicitly granted recordings access. Owner
+  // carve-out: you can always replay a recording for your own extension. This is
+  // an additional gate on top of the tenant/owner scope check above (it never
+  // widens access — it only blocks tenant-wide listeners who lack the key).
   if (!asAttachment && !isSuperAdmin) {
     let isOwner = false;
     try {
@@ -16990,7 +17017,7 @@ async function streamCallRecording(
         role: user.role,
         sub: (user as any)?.sub || String((user as any)?.id || ""),
         tenantId: user.tenantId,
-      } as any, "can_view_pbx_call_recordings" as any);
+      } as any, "can_view_recordings" as any);
     } catch { hasViewKey = false; }
     if (!decideActionGate({ isOwner, hasKey: hasViewKey })) {
       reply.code(403).send({ error: "forbidden" }); return;
