@@ -10,10 +10,11 @@
  *   LOCAL_DEV_PASSWORD (default: LocalDev2026!)
  */
 import { db } from "@connect/db";
+import { resolveLocalDevEmail, resolveLocalDevPassword } from "@connect/shared";
 import bcrypt from "bcryptjs";
 
-const email = (process.env.LOCAL_DEV_EMAIL || "imwog@gmail.com").trim().toLowerCase();
-const password = process.env.LOCAL_DEV_PASSWORD || "LocalDev2026!";
+const email = resolveLocalDevEmail();
+const password = resolveLocalDevPassword();
 const tenantName = process.env.LOCAL_DEV_TENANT_NAME || "Local Dev Workspace";
 
 const LOCAL_QUEUE_CAMPAIGN_NAME = "Local Queue Demo";

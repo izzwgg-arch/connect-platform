@@ -9,6 +9,7 @@ import { useSidebarRail } from "../hooks/useSidebarRail";
 import { isNavItemVisibleForUser, navItems } from "../navigation/navConfig";
 import { SidebarNav } from "./SidebarNav";
 import { Topbar } from "./Topbar";
+import { isLocalhostDev } from "../lib/localDev";
 
 function titleFromPath(pathname: string): string {
   const match = [...navItems]
@@ -18,14 +19,6 @@ function titleFromPath(pathname: string): string {
   const fallback = pathname.split("/").filter(Boolean).pop() || "Dashboard";
   return fallback.charAt(0).toUpperCase() + fallback.slice(1).replace(/-/g, " ");
 }
-
-function isLocalhostDev(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(window.location.host)
-  );
-}
-
 export function PageShell({ children, banners }: { children: ReactNode; banners?: ReactNode }) {
   const pathname = usePathname();
   const { can, backendJwtRole, permissionsHydrated } = useAppContext();

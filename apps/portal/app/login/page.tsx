@@ -1,5 +1,6 @@
 "use client";
 
+import { LOCAL_DEV_EMAIL, LOCAL_DEV_PASSWORD } from "@connect/shared";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -7,17 +8,8 @@ import { ApiError, apiPost } from "../../services/apiClient";
 import { applyPortalPermissionsFromLogin } from "../../services/portalPermissionHydration";
 import { writeAuthToken } from "../../services/session";
 import { clearStaleVisualQaSession } from "../../services/visualQaMode";
+import { isLocalhostDev } from "../../lib/localDev";
 import type { Permission } from "../../types/app";
-
-const LOCAL_DEV_EMAIL = "imwogg@gmail.com";
-const LOCAL_DEV_PASSWORD = "LocalDev2026!";
-
-function isLocalhostDev(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(window.location.host)
-  );
-}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -68,7 +60,7 @@ export default function LoginPage() {
         if (e.status === 401) {
           setError(
             isLocalhostDev()
-              ? "Invalid email or password on localhost. This is not production — use the local dev account (see terminal output from pnpm bootstrap:local). Default: imwog@gmail.com or imwogg@gmail.com with password LocalDev2026!"
+              ? "Invalid email or password on localhost. This is not production — use the local dev account (see terminal output from pnpm bootstrap:local). Default: imwog@gmail.com with password LocalDev2026!"
               : "Invalid email or password.",
           );
           return;
@@ -96,7 +88,7 @@ export default function LoginPage() {
       const looksLikeHtml = /<!DOCTYPE|Expected JSON from API/i.test(raw);
       setError(
         looksLikeHtml
-          ? "Cannot reach the API. Start it on port 3001 (e.g. pnpm --filter @connect/api dev) and restart the portal dev server."
+          ? "Cannot reach the Connect API (got HTML instead of JSON). Start the API (pnpm --filter @connect/api dev) and ensure port 3001 is free — another app may be using it. Restart the portal dev server after fixing."
           : raw,
       );
     } finally {

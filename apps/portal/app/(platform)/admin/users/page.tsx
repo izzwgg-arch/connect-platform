@@ -37,6 +37,7 @@ type AdminUser = {
   notes: string;
   role: string;
   roleLabel: string;
+  customRoles?: { id: string; name: string }[];
   status: "INVITED" | "ACTIVE" | "DISABLED";
   lastLoginAt: string | null;
   createdAt: string;
@@ -301,7 +302,16 @@ export default function AdminUsersPage() {
                     <td><strong>{u.displayName}</strong><div className="muted">{u.email}</div></td>
                     <td>{u.tenantName || "Tenant"}</td>
                     <td>{u.extension ? `${u.extension.extNumber} · ${u.extension.displayName}` : "Unassigned"}</td>
-                    <td>{ROLE_LABEL[u.role] || u.role}</td>
+                    <td>
+                      {ROLE_LABEL[u.role] || u.role}
+                      {u.customRoles && u.customRoles.length > 0 ? (
+                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                          {u.customRoles.map((cr) => (
+                            <span key={cr.id} className="chip" style={{ fontSize: 11 }}>{cr.name}</span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </td>
                     <td><span className={`chip ${statusTone(u.status)}`}>{u.status.toLowerCase()}</span></td>
                     <td>{formatDate(u.lastLoginAt)}</td>
                     <td onClick={(e) => e.stopPropagation()}>
@@ -386,6 +396,9 @@ function UserPanel({ user, onClose, onEdit }: { user: AdminUser; onClose: () => 
           <Info label="Tenant" value={user.tenantName || user.tenantId} />
           <Info label="Extension" value={user.extension ? `${user.extension.extNumber} · ${user.extension.displayName}` : "Unassigned"} />
           <Info label="Role" value={ROLE_LABEL[user.role] || user.role} />
+          {user.customRoles && user.customRoles.length > 0 ? (
+            <Info label="Custom roles" value={user.customRoles.map((cr) => cr.name).join(", ")} />
+          ) : null}
           <Info label="Status" value={user.status} />
           <Info label="Invite" value={user.invite ? `Expires ${formatDate(user.invite.expiresAt)}` : "No open invite"} />
           <Info label="Last Login" value={formatDate(user.lastLoginAt)} />
@@ -1028,6 +1041,11 @@ function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
   const tenants: TenantOption[] = tenantOptions.map((t) => ({ id: t.id, name: t.name, status: "ACTIVE" }));
   const [roles, setRoles] = useState<RoleOption[]>(DEFAULT_PORTAL_ROLES);
   const [customRoles, setCustomRoles] = useState<RoleOption[]>([]);
+  // Tracks whether the custom-role catalog has finished loading. Without this,
+  // the "reset stale custom selection" effect can fire while customRoles is
+  // still the initial [] (the assignment fetch resolved first) and wrongly snap
+  // the picker back to the platform role even though a custom role is assigned.
+  const [customRolesLoaded, setCustomRolesLoaded] = useState(false);
   const [customRoleIds, setCustomRoleIds] = useState<string[]>([]);
   const [rolePicker, setRolePicker] = useState(() => user ? portalBucketForRole(user.role) : "END_USER");
   const [userFacingOnly, setUserFacingOnly] = useState(true);
@@ -1067,6 +1085,7 @@ function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
         if (!active) return;
         if (r.roles?.length) setRoles(r.roles);
         setCustomRoles(r.customRoles ?? []);
+        setCustomRolesLoaded(true);
       })
       .catch((e: any) => { if (active) setError(e?.message || "Failed to load roles"); });
     return () => { active = false; };
@@ -1099,13 +1118,17 @@ function UserModal({ mode, user, defaultTenantId, onClose, onSaved }: {
   }, [mode, user?.id, user?.role, form.tenantId]);
 
   useEffect(() => {
+    // Wait until the custom-role catalog has actually loaded. Resetting while
+    // customRoles is still the initial [] would clobber a valid assignment that
+    // the assignment fetch set first (the "role jumps back to End User" bug).
+    if (!customRolesLoaded) return;
     if (!isCustomRolePickerValue(rolePicker)) return;
     const selectedId = customRoleIdFromPickerValue(rolePicker);
     if (!customRoles.some((r) => r.id === selectedId)) {
       setRolePicker(form.role);
       setCustomRoleIds([]);
     }
-  }, [customRoles, rolePicker, form.role]);
+  }, [customRolesLoaded, customRoles, rolePicker, form.role]);
 
   // Set default tenantId once tenant options have loaded (handles async hook).
   useEffect(() => {
