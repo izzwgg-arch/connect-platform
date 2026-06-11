@@ -311,6 +311,62 @@ export function expandLegacyPortalPermissions(input: readonly string[]): PortalP
   return [...out];
 }
 
+/**
+ * Hidden legacy "page-visibility" keys.
+ *
+ * These keys are NOT shown in the custom-role editor's Action Permissions panel
+ * (they live in HIDDEN_ACTION_KEYS there) because they are pure page-shell
+ * visibility flags, not capabilities. For built-in role buckets they are kept in
+ * sync with the granular sidebar section/item keys via expandLegacyPortalPermissions.
+ *
+ * Custom roles, however, are resolved LITERALLY (no expansion), so a role built by
+ * toggling only the granular nav items would have e.g. can_view_workspace_call_history
+ * but NOT can_view_calls — and every page still gated on the legacy can_view_calls
+ * would 403 even though the sidebar link shows. backfillLegacyPageVisibility re-derives
+ * ONLY these page-visibility keys from the granular nav items the admin actually
+ * granted. It deliberately excludes privileged action keys (can_manage_*,
+ * can_view_reports, etc.), and actual data access remains independently enforced by
+ * the granular PORTAL_API_PERMISSION_RULES server-side — so this can never widen
+ * capability or data access, only whether the page chrome renders.
+ */
+export const PAGE_VISIBILITY_LEGACY_KEYS = [
+  "can_view_dashboard",
+  "can_view_team",
+  "can_view_calls",
+  "can_view_voicemail",
+  "can_view_chat",
+  "can_view_contacts",
+  "can_view_settings",
+  "can_view_apps",
+  "can_view_admin",
+  "can_view_ivr_routing",
+  "can_view_moh",
+  "can_view_did_routing",
+] as const;
+
+/**
+ * Re-derive hidden page-visibility legacy keys from the granular nav keys present
+ * in an (already literal) custom-role permission set. Adds a legacy page key only
+ * when the set contains one of that page's NON-section expansion targets (its own
+ * nav item/companion). Section keys are never used as triggers (too broad), and
+ * only the curated PAGE_VISIBILITY_LEGACY_KEYS are ever added.
+ */
+export function backfillLegacyPageVisibility(input: readonly string[]): PortalPermissionKey[] {
+  const set = new Set<string>(input.map((k) => String(k || "").trim()).filter(Boolean));
+  for (const legacy of PAGE_VISIBILITY_LEGACY_KEYS) {
+    if (set.has(legacy)) continue;
+    const targets = LEGACY_PERMISSION_EXPANSIONS[legacy] || [];
+    for (const t of targets) {
+      if (String(t).startsWith("can_view_section_")) continue;
+      if (set.has(t)) {
+        set.add(legacy);
+        break;
+      }
+    }
+  }
+  return [...set] as PortalPermissionKey[];
+}
+
 /** Legacy + expanded keys for CRM sidebar/pages (role buckets must not grant CRM without CrmUserAccess). */
 export const CRM_PORTAL_PERMISSION_KEYS: PortalPermissionKey[] = [
   ...new Set<PortalPermissionKey>([

@@ -7,23 +7,31 @@ import type { PortalPermissionKey } from "@connect/shared";
  * Proves the authoritative custom-role decision used by
  * resolvePortalPermissionsWithCrmUserAccess:
  *
- *  1. A non-SUPER_ADMIN user with custom-role permissions resolves to EXACTLY
- *     those permissions — the built-in bucket leaks nothing extra (OFF = hidden).
+ *  1. A non-SUPER_ADMIN user with custom-role permissions resolves to the role's
+ *     permissions (the built-in bucket leaks no extra capability — OFF = hidden),
+ *     PLUS re-derived hidden page-visibility keys so a page gated on a legacy key
+ *     still loads when only the granular nav item was granted.
  *  2. A user with NO custom roles falls back to the normal bucket logic (null).
  *  3. SUPER_ADMIN is never weakened by a custom role (always null -> keeps full set).
  */
 
 const sorted = (a: readonly string[]) => [...a].sort();
 
-test("authoritative: END_USER with a custom role resolves to EXACTLY the role's permissions", () => {
+test("authoritative: END_USER custom role keeps granted keys + re-derives the page-visibility key", () => {
   const customPerms = [
     "can_view_section_workspace",
     "can_view_workspace_overview",
   ] as PortalPermissionKey[];
   const out = computeAuthoritativePortalPermissions("END_USER", customPerms);
   assert.ok(out, "should be authoritative");
-  assert.deepEqual(sorted(out!), sorted(customPerms));
+  // Original granted keys are preserved...
+  for (const k of customPerms) assert.ok(out!.includes(k), `keeps ${k}`);
+  // ...and the dashboard page-visibility key is re-derived from can_view_workspace_overview
+  // so the /dashboard shell (gated on can_view_dashboard) loads.
+  assert.ok(out!.includes("can_view_dashboard" as PortalPermissionKey), "page-visibility backfill");
+  // No privileged/capability leakage from the bucket.
   assert.ok(!out!.includes("can_view_admin_users" as PortalPermissionKey), "no bucket admin leakage");
+  assert.ok(!out!.includes("can_manage_global_settings" as PortalPermissionKey), "no capability escalation");
 });
 
 test("authoritative: deduplicates the role's permissions", () => {

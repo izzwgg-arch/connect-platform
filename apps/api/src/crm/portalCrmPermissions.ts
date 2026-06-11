@@ -1,5 +1,6 @@
 import { db } from "@connect/db";
 import {
+  backfillLegacyPageVisibility,
   crmLegacyPermissionKeysForAccess,
   expandLegacyPortalPermissions,
   isCrmPortalPermissionKey,
@@ -26,7 +27,13 @@ export function computeAuthoritativePortalPermissions(
   customPerms: readonly PortalPermissionKey[],
 ): PortalPermissionKey[] | null {
   if (bucket !== "SUPER_ADMIN" && customPerms.length > 0) {
-    return [...new Set(customPerms)] as PortalPermissionKey[];
+    // Literal union of the granted keys (no legacy expansion — a sibling toggled
+    // OFF must stay off), PLUS re-derived hidden page-visibility keys so a page
+    // gated on a legacy key (e.g. can_view_calls) still loads when the admin
+    // granted only the granular nav item (e.g. can_view_workspace_call_history).
+    // This never widens capability/data access (those use granular keys at the
+    // API layer); it only keeps page shells consistent with nav visibility.
+    return backfillLegacyPageVisibility([...new Set(customPerms)]);
   }
   return null;
 }
