@@ -745,8 +745,8 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
 
     if (!(await assertCrmCampaignAllowed(user, campaignId, reply))) return;
 
-    const page = Math.max(1, parseInt(q.page ?? "1"));
-    const limit = Math.min(200, Math.max(1, parseInt(q.limit ?? "50")));
+    const page = parseBoundedInt(q.page, 1, 1, 100_000);
+    const limit = parseBoundedInt(q.limit, 50, 1, 250);
 
     const statusFilter = q.status ? (q.status.split(",") as any[]) : undefined;
     // ?unassigned=true → only members with no assignee
@@ -802,7 +802,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       db.crmCampaignMember.count({ where: baseWhere }),
     ]);
 
-    return { members: members.map(formatMember), total, page, limit };
+    return { members: members.map(formatMember), total, page, limit, hasMore: page * limit < total };
   });
 
   // ── PATCH /crm/campaigns/:id/members/:memberId ────────────────────────────
@@ -874,8 +874,8 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     if (!(await assertCrmCampaignAllowed(user, campaignId, reply))) return;
 
     const search = (q.q ?? "").trim();
-    const limit = Math.min(50, Math.max(1, parseInt(q.limit ?? "20")));
-    const page = Math.max(1, parseInt(q.page ?? "1"));
+    const limit = parseBoundedInt(q.limit, 20, 1, 250);
+    const page = parseBoundedInt(q.page, 1, 1, 100_000);
 
     // Get contact IDs already in campaign
     const existingMembers = await db.crmCampaignMember.findMany({
@@ -930,6 +930,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       total,
       page,
       limit,
+      hasMore: page * limit < total,
     };
   });
 

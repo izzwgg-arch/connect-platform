@@ -219,6 +219,8 @@ const PREVIEW_SAMPLE_BUCKET_LABEL: Record<PreviewSampleBucket, string> = {
   invalid_row: "Invalid / missing phone & email",
   unknown: "Other sample rows",
 };
+const CAMPAIGN_MEMBER_PAGE_SIZE = 250;
+const ADD_CONTACTS_PAGE_SIZE = 250;
 
 function importPreviewContextKey(file: File | null, assigneeId: string): string | null {
   if (!file) return null;
@@ -424,14 +426,13 @@ function AddContactsModal({ campaignId, onClose, onAdded }: {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const LIMIT = 20;
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
 
   const fetchContacts = useCallback(async (q: string, pg: number) => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ limit: String(LIMIT), page: String(pg) });
+      const params = new URLSearchParams({ limit: String(ADD_CONTACTS_PAGE_SIZE), page: String(pg) });
       if (q) params.set("q", q);
       const res = await apiGet<{ contacts: AvailableContact[]; total: number }>(
         `/crm/campaigns/${campaignId}/contacts/available?${params}`,
@@ -476,7 +477,7 @@ function AddContactsModal({ campaignId, onClose, onAdded }: {
     }
   }
 
-  const totalPages = Math.ceil(total / LIMIT);
+  const totalPages = Math.ceil(total / ADD_CONTACTS_PAGE_SIZE);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -586,6 +587,7 @@ export default function CampaignDetailPage() {
   const [membersLoading, setMembersLoading] = useState(false);
   const [showAddContacts, setShowAddContacts] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>("");
+  const [membersPage, setMembersPage] = useState(1);
   // "" = all agents, "UNASSIGNED" = null, else userId
   const [assigneeFilter, setAssigneeFilter] = useState<string>("");
   const [search, setSearch] = useState("");
@@ -696,11 +698,15 @@ export default function CampaignDetailPage() {
     }
   }, [campaignId, token]);
 
-  const loadMembers = useCallback(async (overrideAssignee?: string) => {
+  const loadMembers = useCallback(async (overrideAssignee?: string, requestedPage?: number) => {
     setMembersLoading(true);
     try {
       const af = overrideAssignee !== undefined ? overrideAssignee : assigneeFilter;
-      const queryParams = new URLSearchParams({ limit: "100" });
+      const activePage = requestedPage ?? membersPage;
+      const queryParams = new URLSearchParams({
+        limit: String(CAMPAIGN_MEMBER_PAGE_SIZE),
+        page: String(activePage),
+      });
       if (statusFilter) queryParams.set("status", statusFilter);
       if (af === "UNASSIGNED") queryParams.set("unassigned", "true");
       else if (af) queryParams.set("assignedToUserId", af);
@@ -712,7 +718,7 @@ export default function CampaignDetailPage() {
       setMembersTotal(res.total);
     } catch {}
     setMembersLoading(false);
-  }, [campaignId, statusFilter, assigneeFilter, token]);
+  }, [campaignId, statusFilter, assigneeFilter, membersPage, token]);
 
   const loadWorkload = useCallback(async () => {
     if (!isAdmin) return;
@@ -969,6 +975,9 @@ export default function CampaignDetailPage() {
   });
 
   const bulkSelectableMembers = filteredMembers.filter((m) => isAdmin || m.queueWorkEligible !== false);
+  const membersTotalPages = Math.max(1, Math.ceil(membersTotal / CAMPAIGN_MEMBER_PAGE_SIZE));
+  const membersPageStart = membersTotal > 0 ? (membersPage - 1) * CAMPAIGN_MEMBER_PAGE_SIZE + 1 : 0;
+  const membersPageEnd = Math.min(membersPage * CAMPAIGN_MEMBER_PAGE_SIZE, membersTotal);
 
   const queueFilteredHref = `/crm/queue?campaignId=${encodeURIComponent(campaignId)}`;
 
@@ -1509,7 +1518,10 @@ export default function CampaignDetailPage() {
                   </div>
                   <ConnectSelect
                     value={statusFilter}
-                    onChange={(value) => setStatusFilter(value)}
+                    onChange={(value) => {
+                      setMembersPage(1);
+                      setStatusFilter(value);
+                    }}
                     size="sm"
                     className="funders-control"
                     options={[
@@ -1520,8 +1532,8 @@ export default function CampaignDetailPage() {
                   <ConnectSelect
                     value={assigneeFilter}
                     onChange={(value) => {
+                      setMembersPage(1);
                       setAssigneeFilter(value);
-                      loadMembers(value);
                     }}
                     size="sm"
                     className="funders-control"
@@ -1657,11 +1669,11 @@ export default function CampaignDetailPage() {
                             onChange={toggleSelectAll}
                             title="Select all visible members"
                           />
-                          <span>Select active on this page</span>
+                          <span>Select active on this page (up to {CAMPAIGN_MEMBER_PAGE_SIZE})</span>
                         </label>
                         <div className="flex items-center gap-2">
                           <span className="text-[10px] font-semibold text-crm-muted tabular-nums">
-                            {filteredMembers.length} shown · {membersTotal} total
+                            Showing {membersPageStart}-{membersPageEnd} of {membersTotal}
                           </span>
                         </div>
                       </div>
@@ -1677,7 +1689,7 @@ export default function CampaignDetailPage() {
                               member={m}
                               campaignId={campaignId}
                               rowMode
-                              rowNumber={index + 1}
+                              rowNumber={(membersPage - 1) * CAMPAIGN_MEMBER_PAGE_SIZE + index + 1}
                               selected={selected.has(m.id)}
                               readOnly={agentCannotAct}
                               onSelect={(checked) => {
@@ -1693,6 +1705,31 @@ export default function CampaignDetailPage() {
                           );
                         })}
                       </div>
+                      {membersTotalPages > 1 ? (
+                        <div className="flex items-center justify-between gap-3 border-t border-crm-border/60 px-4 py-2.5 text-xs text-crm-muted/80">
+                          <span>
+                            Page {membersPage} of {membersTotalPages}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              className="campaigns-btn-secondary px-3 py-1.5 text-xs"
+                              disabled={membersLoading || membersPage <= 1}
+                              onClick={() => setMembersPage((p) => Math.max(1, p - 1))}
+                            >
+                              Previous
+                            </button>
+                            <button
+                              type="button"
+                              className="campaigns-btn-primary px-3 py-1.5 text-xs"
+                              disabled={membersLoading || membersPage >= membersTotalPages}
+                              onClick={() => setMembersPage((p) => Math.min(membersTotalPages, p + 1))}
+                            >
+                              Next
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   </>
                 )}
