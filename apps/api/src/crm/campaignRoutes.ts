@@ -149,6 +149,12 @@ function withQueueTimezoneContactFilter(
   };
 }
 
+function parseBoundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {
+  const parsed = Number.parseInt(raw ?? "", 10);
+  const value = Number.isFinite(parsed) ? parsed : fallback;
+  return Math.min(max, Math.max(min, value));
+}
+
 function formatMember(m: any) {
   const phone = m.contact?.phones?.[0]?.numberRaw ?? null;
   const email = m.contact?.emails?.[0]?.email ?? null;
@@ -1221,8 +1227,8 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
   //                 soon → fresh leads → low-attempt leads → older leads).
   //                 On filter=pending, smart sort also pulls in CALLBACK members
   //                 so overdue/due callbacks surface above zero-attempt leads.
-  //                 Candidate cap: 500 rows fetched, ranked in-process, then sliced
-  //                 to the requested limit.  Safe for per-user tenant-scoped queues.
+  //                 Candidate cap: 5000 rows fetched, ranked in-process, then sliced
+  //                 by offset/limit. Safe for per-user tenant-scoped queues.
   // ?sort=original — stable DB order (existing behaviour, default for manual mode)
   app.get("/crm/queue", async (req, reply) => {
     const user = await requireCrmAccess(req, reply);
@@ -1230,7 +1236,8 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     const { tenantId, sub: userId, role } = user;
     const q = req.query as Record<string, string>;
 
-    const limit = Math.min(200, Math.max(1, parseInt(q.limit ?? "50")));
+    const limit = parseBoundedInt(q.limit, 50, 1, 250);
+    const offset = parseBoundedInt(q.offset, 0, 0, 100_000);
     const filter = q.filter ?? "pending";
     const sortMode = q.sort === "smart" ? "smart" : "original";
 
@@ -1338,19 +1345,26 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       return 50 + pOffset;
     }
 
-    const SMART_CANDIDATE_CAP = 500;
+    const SMART_CANDIDATE_CAP = 5000;
 
     if (sortMode === "smart") {
-      // Fetch candidates up to the cap, then rank in-process, then slice.
-      const candidates = await db.crmCampaignMember.findMany({
-        where: whereClause,
-        orderBy: [{ sortOrder: "asc" as const }, { createdAt: "asc" as const }],
-        take: SMART_CANDIDATE_CAP,
-        include: {
-          ...MEMBER_INCLUDE,
-          campaign: { select: { id: true, name: true, priority: true, scriptId: true, checklistId: true } },
-        },
-      });
+      // Fetch candidates up to the requested page end, then rank in-process and
+      // slice. Smart sort cannot use DB skip safely because priority is computed
+      // from callback timing + attempts + campaign priority.
+      const total = await db.crmCampaignMember.count({ where: whereClause });
+      const candidateTake = Math.min(SMART_CANDIDATE_CAP, Math.max(limit, offset + limit));
+      const candidates =
+        offset >= SMART_CANDIDATE_CAP
+          ? []
+          : await db.crmCampaignMember.findMany({
+              where: whereClause,
+              orderBy: [{ sortOrder: "asc" as const }, { createdAt: "asc" as const }],
+              take: candidateTake,
+              include: {
+                ...MEMBER_INCLUDE,
+                campaign: { select: { id: true, name: true, priority: true, scriptId: true, checklistId: true } },
+              },
+            });
 
       candidates.sort((a, b) => {
         const ta = smartTier(a);
@@ -1364,8 +1378,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
         return a.createdAt.getTime() - b.createdAt.getTime();
       });
 
-      const total = candidates.length;
-      const page = candidates.slice(0, limit);
+      const page = candidates.slice(offset, offset + limit);
       const formatted = page.map((m) => ({
         ...formatMember(m),
         campaign: m.campaign ? {
@@ -1389,6 +1402,9 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       return {
         queue: formatted,
         total,
+        limit,
+        offset,
+        hasMore: offset + formatted.length < total && offset + limit < SMART_CANDIDATE_CAP,
         sort: "smart",
         campaignId: campaignIdParam ?? null,
         counts: { pending: pendingCount, due: dueCount, overdue: overdueCount, upcoming: upcomingCount },
@@ -1405,6 +1421,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       db.crmCampaignMember.findMany({
         where: whereClause,
         orderBy,
+        skip: offset,
         take: limit,
         include: {
           ...MEMBER_INCLUDE,
@@ -1438,6 +1455,9 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     return {
       queue: formatted,
       total,
+      limit,
+      offset,
+      hasMore: offset + formatted.length < total,
       sort: "original",
       campaignId: campaignIdParam ?? null,
       counts: { pending: pendingCount, due: dueCount, overdue: overdueCount, upcoming: upcomingCount },

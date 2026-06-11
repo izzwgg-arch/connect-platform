@@ -82,6 +82,7 @@ type CrmSettingsDefaults = { defaultQueueSort: string; defaultQueueFilter: strin
 const SORT_MODE_KEY = "crm_queue_sort_mode";
 const CAMPAIGN_FILTER_KEY = "crm_queue_campaign_id";
 const DEV_ROW_PREVIEW_COUNT = 18;
+const QUEUE_PAGE_SIZE = 250;
 
 type SortMode = "smart" | "original";
 
@@ -191,8 +192,11 @@ function QueuePageInner() {
 
   const [queue, setQueue] = useState<QueueMember[]>([]);
   const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [counts, setCounts] = useState<QueueCounts>({ pending: 0, due: 0, overdue: 0, upcoming: 0 });
   const [filter, setFilter] = useState<QueueFilter>(() => initialManualFilter);
+  const [page, setPage] = useState(0);
+  const pageRef = useRef(0);
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState(false);
   const [error, setError] = useState("");
@@ -303,29 +307,41 @@ function QueuePageInner() {
 
   const token = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
 
+  useEffect(() => {
+    pageRef.current = page;
+  }, [page]);
+
   const load = useCallback(async (
     f?: QueueFilter,
     s?: SortMode,
     cid?: string | null,
     tz?: TimezoneZoneFilter,
+    requestedPage?: number,
   ) => {
     const activeFilter = f ?? filter;
     const activeSort = s ?? sortMode;
     // cid=undefined means "use current state", cid=null means "clear", cid=string means "use it"
     const activeCampaignId = cid !== undefined ? cid : campaignId;
     const activeTz = tz ?? timezoneZone;
+    const activePage = Math.max(0, requestedPage ?? pageRef.current);
     setLoading(true);
     setError("");
     try {
-      const params = new URLSearchParams({ filter: activeFilter, sort: activeSort });
+      const params = new URLSearchParams({
+        filter: activeFilter,
+        sort: activeSort,
+        limit: String(QUEUE_PAGE_SIZE),
+        offset: String(activePage * QUEUE_PAGE_SIZE),
+      });
       if (activeCampaignId) params.set("campaignId", activeCampaignId);
       if (activeTz !== "all") params.set("timezoneZone", activeTz);
-      const res = await apiGet<{ queue: QueueMember[]; total: number; counts: QueueCounts; sort?: string }>(
+      const res = await apiGet<{ queue: QueueMember[]; total: number; counts: QueueCounts; sort?: string; hasMore?: boolean }>(
         `/crm/queue?${params.toString()}`,
         token
       );
       setQueue(res.queue);
       setTotal(res.total);
+      setHasMore(res.hasMore ?? (activePage * QUEUE_PAGE_SIZE + res.queue.length < res.total));
       if (res.counts) setCounts(res.counts);
     } catch (err: unknown) {
       setError((err as Error)?.message ?? "Failed to load queue");
@@ -347,13 +363,15 @@ function QueuePageInner() {
 
   function switchFilter(f: QueueFilter) {
     setFilter(f);
-    load(f, sortMode);
+    setPage(0);
+    load(f, sortMode, undefined, undefined, 0);
   }
 
   function toggleSortMode() {
     const next: SortMode = sortMode === "smart" ? "original" : "smart";
     setSortMode(next);
-    load(undefined, next);
+    setPage(0);
+    load(undefined, next, undefined, undefined, 0);
   }
 
   function switchCampaign(newCampaignId: string | null) {
@@ -363,12 +381,21 @@ function QueuePageInner() {
     if (newCampaignId) params.set("campaignId", newCampaignId);
     else params.delete("campaignId");
     router.replace(`/crm/queue?${params.toString()}`);
-    load(undefined, undefined, newCampaignId);
+    setPage(0);
+    load(undefined, undefined, newCampaignId, undefined, 0);
   }
 
   function switchTimezoneZone(zone: TimezoneZoneFilter) {
     setTimezoneZone(zone);
-    load(undefined, undefined, undefined, zone);
+    setPage(0);
+    load(undefined, undefined, undefined, zone, 0);
+  }
+
+  function switchPage(nextPage: number) {
+    const safePage = Math.max(0, nextPage);
+    setPage(safePage);
+    setActiveIndex(0);
+    load(undefined, undefined, undefined, undefined, safePage);
   }
 
   async function handleAction(memberId: string, action: string, extra?: Record<string, unknown>) {
@@ -399,6 +426,10 @@ function QueuePageInner() {
   }, [searchParams]);
 
   const activeMember = previewQueue[activeIndex] ?? null;
+  const pageStart = queue.length > 0 ? page * QUEUE_PAGE_SIZE + 1 : 0;
+  const pageEnd = page * QUEUE_PAGE_SIZE + queue.length;
+  const hasPreviousPage = page > 0;
+  const hasNextPage = hasMore;
   const completedToday = opStats?.dispositionsToday ?? 0;
   const callsToday = opStats?.callsLinkedToday ?? 0;
   const sessionEfficiency = callsToday > 0 ? Math.round((completedToday / callsToday) * 100) : 0;
@@ -532,12 +563,12 @@ function QueuePageInner() {
             <div className="crm-queue-list-head">
               <h2>
                 {filter === "pending"
-                  ? `Queue · ${queue.length} shown`
+                  ? `Queue · ${pageStart}-${pageEnd} of ${total}`
                   : filter === "overdue"
-                    ? `Overdue · ${queue.length} shown`
+                    ? `Overdue · ${pageStart}-${pageEnd} of ${total}`
                     : filter === "due"
-                      ? `Due today · ${queue.length} shown`
-                      : `Upcoming · ${queue.length} shown`}
+                      ? `Due today · ${pageStart}-${pageEnd} of ${total}`
+                      : `Upcoming · ${pageStart}-${pageEnd} of ${total}`}
               </h2>
               {timezoneZone !== "all" ? (
                 <span className="text-[10px] font-semibold text-crm-accent">
@@ -550,18 +581,37 @@ function QueuePageInner() {
                 <QueueOperationalRow
                   key={`${m.id}-${i}`}
                   member={m}
-                  rank={i + 1}
-                  isTop={i === 0}
+                  rank={page * QUEUE_PAGE_SIZE + i + 1}
+                  isTop={page === 0 && i === 0}
                   isSelected={activeIndex === i}
                   onSelect={() => setActiveIndex(i)}
                 />
               ))}
             </div>
-            {total > queue.length && (
-              <p className="border-t border-crm-border/60 py-2.5 text-center text-xs text-crm-muted/80">
-                + {total - queue.length} more in queue (adjust filters or refresh)
-              </p>
-            )}
+            <div className="flex items-center justify-between gap-3 border-t border-crm-border/60 px-4 py-2.5 text-xs text-crm-muted/80">
+              <span>
+                Showing {pageStart}-{pageEnd} of {total}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="campaigns-btn-secondary px-3 py-1.5 text-xs"
+                  disabled={loading || !hasPreviousPage}
+                  onClick={() => switchPage(page - 1)}
+                >
+                  Previous
+                </button>
+                <span className="font-semibold text-crm-text">Page {page + 1}</span>
+                <button
+                  type="button"
+                  className="campaigns-btn-primary px-3 py-1.5 text-xs"
+                  disabled={loading || !hasNextPage}
+                  onClick={() => switchPage(page + 1)}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
           </div>
         )}
             </CRMWorkspaceScrollRegion>
@@ -571,8 +621,8 @@ function QueuePageInner() {
               {activeMember ? (
                 <QueueLeadDetailPanel
                   member={activeMember}
-                  rank={activeIndex + 1}
-                  total={previewQueue.length}
+                  rank={page * QUEUE_PAGE_SIZE + activeIndex + 1}
+                  total={total}
                   queueReturnTo={queueReturnTo}
                   acting={acting}
                   sipReady={sipReady}
