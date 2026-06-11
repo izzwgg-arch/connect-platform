@@ -4,6 +4,8 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+      args:
+        BUILD_COMMIT: ${BUILD_COMMIT:-}
     env_file:
       - /opt/connectcomms/env/.env.platform
     environment:
@@ -139,6 +141,8 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+      args:
+        BUILD_COMMIT: ${BUILD_COMMIT:-}
     container_name: app-api-candidate-1
     env_file:
       - /opt/connectcomms/env/.env.platform

@@ -69,8 +69,17 @@ deploy_common_emit_stage "git-sync"
 LOCK_BEFORE="$(deploy_common_lock_hash)"
 PKG_BEFORE="$(deploy_common_pkg_hash)"
 # Track what *this service* last shipped, not the checkout HEAD — a prior deploy
-# job may have already advanced the shared working tree to the new commit.
+# job (or a `--dry-run` that synced the shared clone) may have already advanced
+# the working tree to the new commit, which would make PRE_SYNC_HEAD == NEW_HEAD
+# and trigger a false "no_changes" skip that silently ships stale code.
 PERSISTED_OLD_HEAD="$(deploy_common_last_deployed_commit "$SERVICE" || true)"
+# Fallback (mirrors deploy-portal.sh): when no state-dir marker exists — e.g.
+# direct deploys without DEPLOY_QUEUE_STATE_DIR — read the commit baked into the
+# currently-running container so change-detection compares against what is
+# actually deployed, not the (possibly pre-advanced) clone HEAD.
+if [[ -z "$PERSISTED_OLD_HEAD" ]]; then
+  PERSISTED_OLD_HEAD="$(docker exec app-api-1 sh -lc 'cat /app/.build-commit 2>/dev/null | tr -d "\r\n"' 2>/dev/null || true)"
+fi
 PRE_SYNC_HEAD=""
 deploy_common_git_sync "$ROOT" "${BRANCH:-main}" "$COMMIT" PRE_SYNC_HEAD
 OLD_HEAD="${PERSISTED_OLD_HEAD:-$PRE_SYNC_HEAD}"
@@ -135,13 +144,13 @@ BUILD_START="$(deploy_common_stopwatch_start)"
 if [[ "${DEPLOY_API_BLUEGREEN:-1}" == "1" ]]; then
   log "docker build api + api_candidate (shared Dockerfile; candidate uses profile)"
   deploy_common_run_heavy "deploy-queue:${SERVICE}:compose-build-api" \
-    docker compose -f "$COMPOSE" build api
+    docker compose -f "$COMPOSE" build --build-arg BUILD_COMMIT="$NEW_HEAD" api
   deploy_common_run_heavy "deploy-queue:${SERVICE}:compose-build-api-candidate" \
-    docker compose -f "$COMPOSE" --profile api_rollout build api_candidate
+    docker compose -f "$COMPOSE" --profile api_rollout build --build-arg BUILD_COMMIT="$NEW_HEAD" api_candidate
 else
   log "docker build ${SERVICE}"
   deploy_common_run_heavy "deploy-queue:${SERVICE}:compose-build" \
-    docker compose -f "$COMPOSE" build "$SERVICE"
+    docker compose -f "$COMPOSE" build --build-arg BUILD_COMMIT="$NEW_HEAD" "$SERVICE"
 fi
 deploy_common_log_timing "build" "$(deploy_common_stopwatch_elapsed_ms "$BUILD_START")"
 
@@ -175,6 +184,25 @@ if ! deploy_common_wait_http_ok "http://127.0.0.1:3001/health" 150 2; then
   fail "health check failed after deploy (requested by ${REQ})"
 fi
 deploy_common_log_timing "health" "$(deploy_common_stopwatch_elapsed_ms "$HEALTH_START")"
+
+# Verify the running container actually carries the target commit. This catches
+# the "deploy reported success but shipped stale code" failure mode (e.g. a
+# false no_changes skip) automatically instead of relying on a manual grep.
+# Older images predate /app/.build-commit, so a *missing* file is tolerated; a
+# *mismatching* commit is a hard failure.
+VERIFY_START="$(deploy_common_stopwatch_start)"
+deploy_common_emit_stage "verify"
+container_commit="$(docker exec app-api-1 sh -lc 'cat /app/.build-commit 2>/dev/null | tr -d "\r\n"' || true)"
+if [[ -z "$container_commit" ]]; then
+  log "verify: /app/.build-commit absent (pre-marker image) — skipping commit assertion"
+elif [[ "$container_commit" != "$NEW_HEAD" ]]; then
+  log "verify: commit mismatch (/app/.build-commit='${container_commit:0:12}', expected ${NEW_HEAD:0:12})"
+  rollback
+  fail "api verification failed: container commit ${container_commit:0:12} != ${NEW_HEAD:0:12} (requested by ${REQ})"
+else
+  log "verify: container commit ${container_commit:0:12} matches target"
+fi
+deploy_common_log_timing "verify" "$(deploy_common_stopwatch_elapsed_ms "$VERIFY_START")"
 
 trap - ERR
 deploy_common_mark_deployed "$SERVICE" "$NEW_HEAD"

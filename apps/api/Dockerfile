@@ -23,4 +23,11 @@ RUN --mount=type=cache,id=connect-pnpm-store,target=/pnpm/store \
 RUN pnpm --filter @connect/db exec prisma generate --schema prisma/schema.prisma
 COPY . .
 RUN pnpm --filter @connect/integrations build
+# Bake the deployed commit into the image so deploy-api.sh can read it back from
+# the running container as a reliable OLD_HEAD for change-detection (mirrors the
+# portal image). Kept as the last layer so per-commit changes never bust the
+# expensive install/build layers above.
+ARG BUILD_COMMIT=""
+LABEL org.opencontainers.image.revision=$BUILD_COMMIT
+RUN printf '%s\n' "$BUILD_COMMIT" > /app/.build-commit
 CMD ["sh", "-c", "pnpm --filter @connect/api start"]
