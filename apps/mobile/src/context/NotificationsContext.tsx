@@ -892,14 +892,18 @@ export function NotificationsProvider({
   // made the gate read false and let the false "answered_on_another_device"
   // teardown through (observed: store had ringing:[6eefbb6a…] at teardown).
   const liveInboundRingingRef = useRef<boolean>(false);
+  // True once a live inbound SIP leg has appeared for the CURRENT invite, and
+  // stays true after it disappears — the cancel bridge uses this to distinguish
+  // "the call's SIP leg ended (stop ringing)" from "the SIP INVITE hasn't
+  // arrived yet (keep waiting)". Reset per invite id.
+  const hadLiveInboundSipRef = useRef<boolean>(false);
+  const trackedInviteIdRef = useRef<string | null>(null);
   const multiCallInboundRinging = callSessions.ringingCalls.some(
     (cs) => !!cs.sipSessionId,
   );
-  useEffect(() => {
-    const sipRinging =
-      sip.callState === "ringing" && sip.callDirection === "inbound";
-    liveInboundRingingRef.current = sipRinging || multiCallInboundRinging;
-  }, [sip.callState, sip.callDirection, multiCallInboundRinging]);
+  // NOTE: the effect that maintains these refs lives just after the
+  // `incomingInvite` state declaration below, because it reads `incomingInvite`
+  // to reset the per-call latch.
 
   // Latest authoritative disposition observed by the invite poll for the
   // in-flight inbound call. The SIP cancel bridge reads this so that, if the
@@ -909,6 +913,15 @@ export function NotificationsProvider({
   const lastPollDispositionRef = useRef<
     'unknown' | 'answered_elsewhere' | 'voicemail'
   >('unknown');
+
+  // Snapshot of the most recent poll's telephony signals, so the SIP cancel
+  // bridge can classify WHY the leg ended (voicemail vs answered-elsewhere vs
+  // caller-hangup) even when the leg dies between poll ticks.
+  const lastPollStatusRef = useRef<{
+    telephonyState: string;
+    pbxAnswered: boolean;
+    extensionAnswered: boolean;
+  } | null>(null);
 
   const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
   // iOS VoIP push token (hex, delivered by PushKit). Null on Android and on
@@ -925,6 +938,21 @@ export function NotificationsProvider({
     inviteId: null,
     error: null,
   });
+
+  // Maintain the live-inbound-SIP latch (declared above) for the current invite.
+  // Kept here, after `incomingInvite`, so it can reset the latch per invite id.
+  useEffect(() => {
+    const currentId = incomingInvite?.id ?? null;
+    if (currentId !== trackedInviteIdRef.current) {
+      trackedInviteIdRef.current = currentId;
+      hadLiveInboundSipRef.current = false;
+    }
+    const sipRinging =
+      sip.callState === "ringing" && sip.callDirection === "inbound";
+    const live = sipRinging || multiCallInboundRinging;
+    liveInboundRingingRef.current = live;
+    if (live) hadLiveInboundSipRef.current = true;
+  }, [sip.callState, sip.callDirection, multiCallInboundRinging, incomingInvite]);
   const [callReadiness, setCallReadiness] = useState<CallReadiness>({
     notificationPermission: "undetermined",
     pushTokenRegistered: false,
@@ -2735,6 +2763,11 @@ export function NotificationsProvider({
         const status = await getMobileInviteAnswerStatus(token, inviteId);
         if (cancelled) return;
         const inviteStatus = (status?.inviteStatus || "").toUpperCase();
+        lastPollStatusRef.current = {
+          telephonyState: (status?.telephonyState || "").toUpperCase(),
+          pbxAnswered: !!status?.pbxAnswered,
+          extensionAnswered: status?.extensionAnswered === true,
+        };
         const elapsed = Date.now() - tickStartedAt;
         const httpMs = Date.now() - tickStart;
         console.log(
@@ -2907,6 +2940,7 @@ export function NotificationsProvider({
     // Reset the cached disposition for this fresh call so a previous call's
     // "answered_elsewhere"/"voicemail" can never leak into this one's label.
     lastPollDispositionRef.current = 'unknown';
+    lastPollStatusRef.current = null;
     console.log('[INVITE_POLL] started inviteId=' + inviteId);
     // Kick off immediately so we catch fast cancels (e.g. caller hangs up
     // within the first second of ringing).
@@ -2925,30 +2959,34 @@ export function NotificationsProvider({
   ]);
 
   // ── SIP → incoming-UI cancel bridge ────────────────────────────────────────
-  // When the remote caller hangs up while we are still ringing (the user has
-  // NOT tapped Answer), JsSIP surfaces the CANCEL as a session `ended`/`failed`
-  // event. That translates to `sip.callState === "ended"` in SipContext. The
-  // /mobile/call-invites/:id/answer-status poll will also eventually catch
-  // this via a terminal telephonyState, but the poll runs at 800 ms intervals
-  // plus an HTTP round-trip, so on a fast same-LAN cancel it can lag ~1.5 s.
-  // Meanwhile the IncomingCallScreen keeps showing the "incoming" UI and the
-  // native ringtone keeps playing — that's the bug the user reported.
+  // When our inbound SIP leg goes away while we are still ringing (caller hung
+  // up, the call rolled to voicemail, or another device answered and the PBX
+  // CANCELed our fork), there is nothing left to answer here, so the incoming
+  // UI + ringtone must stop immediately.
   //
-  // This effect fires the same teardown as the poll's killAll, immediately,
-  // the moment JsSIP reports the inbound call has ended while we are still
-  // in the "incoming" phase (i.e. the user never tapped Answer). The two
-  // paths are idempotent: if the poll happens to win the race it's a no-op
-  // that just updates the visible "Call ended" message.
+  // CRITICAL: this is keyed on the MULTI-CALL store (`multiCallInboundRinging`),
+  // NOT the legacy single-call `sip.callState`/`sip.callDirection`. Ring groups
+  // are driven through the multi-call store and the legacy fields are unreliable
+  // for forked re-INVITE legs. Keying on the legacy state previously made this
+  // bridge silently never fire for a ring group: the SIP leg was CANCELed at
+  // ~29 s (multi-call sessions → 0) but the UI kept ringing 16 s more until the
+  // invite EXPIRED at ~45 s — the "it didn't stop at voicemail" bug.
+  //
+  // The poll's killAll and this teardown are idempotent; whichever wins, the
+  // other is a no-op that just refreshes the visible end-state message.
   useEffect(() => {
     if (!incomingInvite) return;
-    if (sip.callDirection !== "inbound") return;
-    // Only fire when the SIP state has terminated and the user has NOT
-    // handed the invite off to the answer pipeline. "connecting" is the
-    // phase during answer handoff; during that window the normal answer
-    // flow (or its failure branch) owns the UI and we must not preempt it.
+    // Only while the user is still being presented the incoming call and has
+    // NOT handed off to the answer pipeline ("connecting" is the answer phase).
     if (incomingCallUiState.phase !== "incoming") return;
     if (answerHandoffInviteIdRef.current === incomingInvite.id) return;
-    if (sip.callState !== "ended" && sip.callState !== "idle") return;
+    // Don't tear down before the SIP INVITE has even arrived: only fire once a
+    // live inbound SIP leg existed for this invite and is now gone.
+    if (!hadLiveInboundSipRef.current) return;
+    const hasLiveInboundSip =
+      multiCallInboundRinging ||
+      (sip.callState === "ringing" && sip.callDirection === "inbound");
+    if (hasLiveInboundSip) return;
 
     const invite = incomingInvite;
     const inviteId = invite.id;
@@ -2958,15 +2996,15 @@ export function NotificationsProvider({
     // immediately re-INVITE (observed ~140 ms apart in the field). Tearing the
     // incoming UI down on the first leg's CANCEL flashes "Call ended" before
     // the replacement INVITE lands, so the user sees the screen appear then
-    // vanish. Mirror the answer path's ghost poll: wait briefly before
-    // teardown. If a replacement INVITE arrives, sip.callState flips back to
-    // "ringing", this effect re-runs, and the cleanup below clears the pending
-    // teardown so the incoming screen stays up for the live re-INVITE.
+    // vanish. Wait briefly before teardown: if a replacement INVITE arrives,
+    // `multiCallInboundRinging` flips back true, this effect re-runs, and the
+    // cleanup below clears the pending teardown so the screen stays up.
     const GHOST_CANCEL_WAIT_MS = 600;
     console.log(
-      '[SIP_CANCEL_BRIDGE] cancel_while_ringing — debouncing ' +
+      '[SIP_CANCEL_BRIDGE] inbound_sip_leg_gone — debouncing ' +
         GHOST_CANCEL_WAIT_MS + 'ms for re-INVITE inviteId=' + inviteId +
-        ' sipCallState=' + sip.callState,
+        ' sipCallState=' + sip.callState +
+        ' multiCallRinging=' + multiCallInboundRinging,
     );
 
     const teardownTimer = setTimeout(() => {
@@ -3033,8 +3071,24 @@ export function NotificationsProvider({
       // resolved during the wait is reflected). A SIP CANCEL alone is ambiguous
       // — it fires for answered-elsewhere, voicemail, AND caller-hangup — so we
       // only upgrade past the neutral "Call ended" when the telephony signals
-      // told us a real extension answered.
-      const disposition = lastPollDispositionRef.current;
+      // tell us why. Classify from the last poll snapshot when the poll didn't
+      // already tag it: a real extension answered ⇒ answered-elsewhere; the
+      // trunk still up + answered by a non-extension ⇒ voicemail; otherwise the
+      // caller hung up / missed.
+      let disposition = lastPollDispositionRef.current;
+      if (disposition === 'unknown') {
+        const ls = lastPollStatusRef.current;
+        if (ls?.extensionAnswered) {
+          disposition = 'answered_elsewhere';
+        } else if (ls?.pbxAnswered && (ls.telephonyState === 'UP' || ls.telephonyState === '')) {
+          disposition = 'voicemail';
+        }
+      }
+      console.log(
+        '[SIP_CANCEL_BRIDGE] teardown_classified inviteId=' + inviteId +
+          ' disposition=' + disposition +
+          ' lastPoll=' + JSON.stringify(lastPollStatusRef.current),
+      );
       const reason =
         disposition === 'answered_elsewhere'
           ? 'sip_cancel_answered_elsewhere'
@@ -3077,6 +3131,7 @@ export function NotificationsProvider({
       clearTimeout(teardownTimer);
     };
   }, [
+    multiCallInboundRinging,
     sip.callState,
     sip.callDirection,
     incomingInvite,
