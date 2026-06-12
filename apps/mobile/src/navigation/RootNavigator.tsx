@@ -22,6 +22,7 @@ import { moveAppToBackground } from '../sip/callkeep';
 import type { CallDirection, CallState } from '../types';
 import { findCallModalNavigator } from './callStackNav';
 import { getCallReturnTab, recordFocusedRoute } from './callOrigin';
+import { shouldShowIncomingCallCover } from './incomingCallCover';
 import { MobileNotificationRoute, notificationDataToRoute } from '../notifications/notificationRouting';
 
 function hasActiveOrPendingCall(
@@ -89,13 +90,25 @@ function TabsWrapper() {
 
   const appStackNav = () => findCallModalNavigator(nav) ?? stackNav();
 
-  const navigateOnce = (screen: 'IncomingCall' | 'ActiveCall') => {
+  const navigateOnce = (screen: 'IncomingCall' | 'ActiveCall'): boolean => {
     try {
       const target = appStackNav();
+      if (!target?.navigate) {
+        console.warn('[CALL_NAV] navigateOnce: no app stack navigator for', screen);
+        return false;
+      }
       const routeName = target.getCurrentRoute?.()?.name;
-      if (routeName === screen) return;
+      if (routeName === screen) return true;
+      console.log('[CALL_NAV] navigating to', screen, 'from', routeName ?? 'unknown');
       target.navigate(screen);
-    } catch {}
+      return true;
+    } catch (e) {
+      console.warn(
+        '[CALL_NAV] navigateOnce failed screen=' + screen + ':',
+        e instanceof Error ? e.message : String(e),
+      );
+      return false;
+    }
   };
 
   const returnToDefaultTab = () => {
@@ -214,6 +227,7 @@ function TabsWrapper() {
     prevIncoming.current = incomingInvite;
     const answering = !!answerHandoffInviteIdRef.current;
     const hasOngoingCall = hasActiveOrPendingCall(callState, callDirection, answering);
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
     if (
       (incomingInvite && !answering) ||
@@ -224,15 +238,18 @@ function TabsWrapper() {
       // reads from CallSessionManager.ringingCalls[].
       if (hasMultiCallActive) {
         console.log('[MULTICALL] skip_incoming_nav — active call present, banner will handle');
-        return;
+      } else if (!navigateOnce('IncomingCall')) {
+        retryTimer = setTimeout(() => {
+          navigateOnce('IncomingCall');
+        }, 50);
       }
-      navigateOnce('IncomingCall');
-      return;
-    }
-
-    if (!incomingInvite && prev && !hasOngoingCall) {
+    } else if (!incomingInvite && prev && !hasOngoingCall) {
       returnToDefaultTab();
     }
+
+    return () => {
+      if (retryTimer !== null) clearTimeout(retryTimer);
+    };
   }, [
     answerHandoffInviteIdRef,
     answerHandoffTick,
@@ -244,20 +261,20 @@ function TabsWrapper() {
     nav,
   ]);
 
-  // If an incoming invite exists or we're in any active-call UI phase, paint a
-  // black cover over the tabs. Purpose: MainActivity resumes from the keyguard
-  // with its prior route (e.g. Keypad / the last visited tab) visible for
-  // ~50 ms before React-Navigation mounts IncomingCallScreen. The cover
-  // prevents that flash.
+  // When an incoming invite exists (or answer handoff / transient ended UI),
+  // paint a black cover over the tabs until IncomingCallScreen mounts. Do NOT
+  // cover on raw SIP ringing alone — JsSIP fires before ForegroundInvite sets
+  // incomingInvite, which produced a blank screen with no modal on top.
   // IncomingCallScreen / ActiveCallScreen are fullScreen modals pushed on top
   // of TabsWrapper, so they render above this cover — the cover only masks the
   // tabs. pointerEvents="none" keeps taps falling through when the cover is
   // showing alone (shouldn't happen, but it's a safety net).
   const answering = !!answerHandoffInviteIdRef.current;
-  const coverTabs =
-    !!incomingInvite ||
-    answering ||
-    (callDirection === 'inbound' && callState === 'ringing');
+  const coverTabs = shouldShowIncomingCallCover({
+    hasIncomingInvite: !!incomingInvite,
+    answering,
+    incomingUiPhase: incomingCallUiState.phase,
+  });
   return (
     <>
       <TabNavigator />

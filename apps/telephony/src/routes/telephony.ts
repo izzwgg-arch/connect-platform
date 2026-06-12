@@ -7,6 +7,7 @@ import { normalizeExtensionForClient } from "../telephony/normalizers/normalizeE
 import { normalizeQueueForClient } from "../telephony/normalizers/normalizeQueueEvent";
 import { selectPlaybackChannelName } from "./telephonyPlaybackHelpers";
 import { classifyVoicemailDropLegs } from "./voicemailDropLegs";
+import { looksDivertedToVoicemail } from "../telephony/services/MobilePushNotifier";
 
 export function registerTelephonyRoutes(
   router: Router,
@@ -233,6 +234,8 @@ export function registerTelephonyRoutes(
         exists: false,
         state: null,
         answeredAt: null,
+        extensionAnsweredAt: null,
+        voicemail: false,
         channels: [],
       });
       return;
@@ -244,6 +247,16 @@ export function registerTelephonyRoutes(
       exists: true,
       state: call.state,
       answeredAt: call.answeredAt,
+      // Authoritative "a real tenant extension actually answered" timestamp.
+      // Null for inbound-trunk early media / ringback (which still sets
+      // answeredAt), IVR-only journeys, and voicemail. This is what lets the
+      // mobile distinguish a genuine "answered on another device" from the
+      // ring-group ringback that previously caused false teardowns.
+      extensionAnsweredAt: call.extensionAnsweredAt,
+      // Heuristic voicemail-divert flag (channel/dcontext name match). The
+      // VoiceMail() app answers the channel so answeredAt alone can't tell
+      // voicemail from a human pickup — this disambiguates it.
+      voicemail: looksDivertedToVoicemail(call),
       channels: [...call.channels],
     });
   });

@@ -814,6 +814,15 @@ export async function getMobileInviteAnswerStatus(token: string, inviteId: strin
     inviteStatus: string;
     pbxAnswered: boolean;
     answeredAt: string | null;
+    // Authoritative "a real extension answered" signal from telephony. Unlike
+    // pbxAnswered (true for inbound-trunk early media / ringback the whole time
+    // a ring group rings), these are set ONLY when a real PJSIP extension leg
+    // picks up. Optional for backward-compat with telephony builds that predate
+    // the field. See apps/telephony status route.
+    extensionAnswered?: boolean;
+    extensionAnsweredAt?: string | null;
+    // True when the PBX diverted the call to voicemail.
+    reachedVoicemail?: boolean;
     telephonyState: string | null;
     activeChannels: string[];
   };

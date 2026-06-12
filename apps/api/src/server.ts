@@ -2773,6 +2773,8 @@ async function requestTelephonyInviteStatus(input: {
   exists: boolean;
   state: string | null;
   answeredAt: string | null;
+  extensionAnsweredAt: string | null;
+  voicemail: boolean;
   channels: string[];
 }> {
   const linkedId = String(input.linkedId || "").trim();
@@ -2782,6 +2784,8 @@ async function requestTelephonyInviteStatus(input: {
       exists: false,
       state: null,
       answeredAt: null,
+      extensionAnsweredAt: null,
+      voicemail: false,
       channels: [],
     };
   }
@@ -2806,6 +2810,9 @@ async function requestTelephonyInviteStatus(input: {
     exists: !!json?.exists,
     state: typeof json?.state === "string" ? json.state : null,
     answeredAt: typeof json?.answeredAt === "string" ? json.answeredAt : null,
+    extensionAnsweredAt:
+      typeof json?.extensionAnsweredAt === "string" ? json.extensionAnsweredAt : null,
+    voicemail: !!json?.voicemail,
     channels: Array.isArray(json?.channels) ? json.channels.map((v: unknown) => String(v)) : [],
   };
 }
@@ -13759,6 +13766,8 @@ app.get("/mobile/call-invites/:id/answer-status", async (req, reply) => {
     exists: false,
     state: null,
     answeredAt: null,
+    extensionAnsweredAt: null,
+    voicemail: false,
     channels: [],
     error: err instanceof Error ? err.message : String(err),
   }));
@@ -13770,6 +13779,14 @@ app.get("/mobile/call-invites/:id/answer-status", async (req, reply) => {
     extension: invite.toExtension,
     pbxAnswered: !!telephony.answeredAt,
     answeredAt: telephony.answeredAt,
+    // Authoritative "a real extension answered" signal (NOT inbound-trunk early
+    // media). The mobile uses this to declare "Answered on another device"
+    // without the ring-group ringback false positives that pbxAnswered causes.
+    extensionAnswered: !!telephony.extensionAnsweredAt,
+    extensionAnsweredAt: telephony.extensionAnsweredAt,
+    // True when the call diverted to the VoiceMail app — mobile stops ringing
+    // immediately and labels it as ended rather than "answered elsewhere".
+    reachedVoicemail: !!telephony.voicemail,
     telephonyState: telephony.state,
     activeChannels: telephony.channels,
     telephonyLookupError: "error" in telephony ? telephony.error : null,

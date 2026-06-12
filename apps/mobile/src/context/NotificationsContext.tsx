@@ -876,6 +876,40 @@ export function NotificationsProvider({
     hasOngoingCallRef.current = callSessions.hasAnyOngoingCall;
   }, [callSessions.hasAnyOngoingCall]);
 
+  // Mirror whether a live inbound SIP INVITE is currently ringing. The invite
+  // poll uses this to tell a genuine "answered on another device" (our SIP leg
+  // was CANCELed → no live session) from ring-group early media (our INVITE is
+  // still ringing, so the call is answerable here regardless of the PBX
+  // inbound-leg "up"/pbxAnswered signal). Read synchronously inside the poll
+  // tick so it never gates on a stale closure value.
+  //
+  // We must consult the multi-call store's ringing sessions, NOT just the
+  // legacy `sip.callState`. Ring groups fork into multiple simultaneous INVITE
+  // legs; JsSIP only drives the legacy `sip.callState` for the FIRST leg, so
+  // after the first leg is CANCELed and replaced by re-INVITE legs the legacy
+  // state can read "ended" while live `ringing_inbound` sessions (each with a
+  // real sipSessionId) still exist in the store. Keying only on sip.callState
+  // made the gate read false and let the false "answered_on_another_device"
+  // teardown through (observed: store had ringing:[6eefbb6a…] at teardown).
+  const liveInboundRingingRef = useRef<boolean>(false);
+  const multiCallInboundRinging = callSessions.ringingCalls.some(
+    (cs) => !!cs.sipSessionId,
+  );
+  useEffect(() => {
+    const sipRinging =
+      sip.callState === "ringing" && sip.callDirection === "inbound";
+    liveInboundRingingRef.current = sipRinging || multiCallInboundRinging;
+  }, [sip.callState, sip.callDirection, multiCallInboundRinging]);
+
+  // Latest authoritative disposition observed by the invite poll for the
+  // in-flight inbound call. The SIP cancel bridge reads this so that, if the
+  // PBX CANCEL beats the next poll tick, it still renders the correct end-state
+  // label ("Answered on another device" vs the neutral "Call ended") instead of
+  // always falling back to "Call ended". Reset to 'unknown' per call.
+  const lastPollDispositionRef = useRef<
+    'unknown' | 'answered_elsewhere' | 'voicemail'
+  >('unknown');
+
   const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
   // iOS VoIP push token (hex, delivered by PushKit). Null on Android and on
   // iOS until the device registers with Apple — the register event can take
@@ -2771,22 +2805,66 @@ export function NotificationsProvider({
           );
           return;
         }
-        // Tertiary signal: the call has been ANSWERED, but not by this
-        // device (if WE had answered, the answerHandoff guard at the top of
-        // tick would have stopped this poll already). That means another of
-        // the user's devices / a desk phone in the same ring group picked up,
-        // OR the call rolled to voicemail (Asterisk's VoiceMail app answers
-        // the channel, so answeredAt is set the instant it diverts). In every
-        // one of these cases the mobile must stop ringing immediately instead
-        // of ringing on while someone else talks / leaves a voicemail.
-        if (status?.pbxAnswered) {
-          const reachedVoicemail = channelsLookLikeVoicemail(status?.activeChannels);
+        // Tertiary signal: the call ended somewhere OTHER than this device.
+        // (If WE had answered, the answerHandoff guard at the top of tick would
+        // have stopped this poll already.) We classify using the telephony
+        // service's AUTHORITATIVE signals rather than the ambiguous pbxAnswered:
+        //
+        //  - reachedVoicemail: the PBX diverted to the VoiceMail app. Stop
+        //    ringing immediately and label as ended — no human picked up here.
+        //  - extensionAnswered: a real PJSIP extension leg actually answered.
+        //    The telephony store sets this ONLY for genuine extension pickups,
+        //    NEVER for inbound-trunk IVR `Answer()` / ring-back early media. So
+        //    a true value means another device / desk phone in the ring group
+        //    genuinely answered → "Answered on another device".
+        //
+        // pbxAnswered alone is deliberately NOT a teardown trigger anymore: it
+        // is true for early-media ringback the ENTIRE time a ring group rings
+        // (observed pbxAnswered=true from ~1.5 s through 17 s while the call was
+        // never answered), which caused repeated false teardowns.
+        const backendKnowsAnswered =
+          typeof status?.extensionAnswered === "boolean";
+        const reachedVoicemail =
+          status?.reachedVoicemail === true ||
+          channelsLookLikeVoicemail(status?.activeChannels);
+        const extensionAnsweredElsewhere = status?.extensionAnswered === true;
+
+        // Cache the latest disposition for the SIP cancel bridge's label.
+        if (reachedVoicemail) {
+          lastPollDispositionRef.current = 'voicemail';
+        } else if (extensionAnsweredElsewhere) {
+          lastPollDispositionRef.current = 'answered_elsewhere';
+        }
+
+        let teardownReason:
+          | 'reached_voicemail'
+          | 'answered_on_another_device'
+          | null = null;
+        if (reachedVoicemail) {
+          teardownReason = 'reached_voicemail';
+        } else if (backendKnowsAnswered) {
+          // New telephony build: trust extensionAnswered exclusively. No live
+          // SIP guard needed — extensionAnswered is never set by ringback.
+          if (extensionAnsweredElsewhere) {
+            teardownReason = 'answered_on_another_device';
+          }
+        } else if (status?.pbxAnswered) {
+          // Legacy fallback for telephony builds that predate extensionAnswered:
+          // retain the previous live-INVITE guard so old servers don't regress.
+          if (!liveInboundRingingRef.current) {
+            teardownReason = 'answered_on_another_device';
+          }
+        }
+
+        if (teardownReason) {
           cancelled = true;
           if (timer !== null) {
             clearTimeout(timer);
             timer = null;
           }
-          if (!reachedVoicemail && incomingInvite) {
+          const answeredElsewhere =
+            teardownReason === 'answered_on_another_device';
+          if (answeredElsewhere && incomingInvite) {
             // Stamp a local call-history entry so Recent shows "Answered on
             // another device" for this call. mergeCallRecords lets this
             // device-only signal override the server record's disposition.
@@ -2803,11 +2881,21 @@ export function NotificationsProvider({
             }).catch(() => undefined);
           }
           killAll(
-            reachedVoicemail ? 'reached_voicemail' : 'answered_on_another_device',
-            reachedVoicemail ? 'Call ended' : 'Answered on another device',
+            teardownReason,
+            answeredElsewhere ? 'Answered on another device' : 'Call ended',
             700,
           );
           return;
+        }
+        if (status?.pbxAnswered) {
+          console.log(
+            '[INVITE_POLL] pbxAnswered=true but no extension answered yet' +
+              ' (backendKnowsAnswered=' + backendKnowsAnswered +
+              ', extensionAnswered=' + extensionAnsweredElsewhere +
+              ', reachedVoicemail=' + reachedVoicemail +
+              ', elapsedMs=' + elapsed +
+              ') — ring-group early media, keep ringing',
+          );
         }
       } catch (e: any) {
         console.warn('[INVITE_POLL] error tick=' + tickCount + ' inviteId=' + inviteId + ' msg=' + (e?.message || String(e)));
@@ -2816,6 +2904,9 @@ export function NotificationsProvider({
       timer = setTimeout(tick, 800);
     };
 
+    // Reset the cached disposition for this fresh call so a previous call's
+    // "answered_elsewhere"/"voicemail" can never leak into this one's label.
+    lastPollDispositionRef.current = 'unknown';
     console.log('[INVITE_POLL] started inviteId=' + inviteId);
     // Kick off immediately so we catch fast cancels (e.g. caller hangs up
     // within the first second of ringing).
@@ -2861,81 +2952,130 @@ export function NotificationsProvider({
 
     const invite = incomingInvite;
     const inviteId = invite.id;
-    const reason = "sip_cancel_while_ringing";
-    const friendly = "Call ended";
     const delayMs = 900;
 
+    // Ghost-cancel debounce. Ring groups CANCEL the first INVITE leg and
+    // immediately re-INVITE (observed ~140 ms apart in the field). Tearing the
+    // incoming UI down on the first leg's CANCEL flashes "Call ended" before
+    // the replacement INVITE lands, so the user sees the screen appear then
+    // vanish. Mirror the answer path's ghost poll: wait briefly before
+    // teardown. If a replacement INVITE arrives, sip.callState flips back to
+    // "ringing", this effect re-runs, and the cleanup below clears the pending
+    // teardown so the incoming screen stays up for the live re-INVITE.
+    const GHOST_CANCEL_WAIT_MS = 600;
     console.log(
-      '[SIP_CANCEL_BRIDGE] teardown inviteId=' + inviteId +
-      ' sipCallState=' + sip.callState +
-      ' uiPhase=' + incomingCallUiState.phase,
+      '[SIP_CANCEL_BRIDGE] cancel_while_ringing — debouncing ' +
+        GHOST_CANCEL_WAIT_MS + 'ms for re-INVITE inviteId=' + inviteId +
+        ' sipCallState=' + sip.callState,
     );
 
-    // Remember whether this invite was presented on the lock screen so the
-    // post-teardown moveAppToBackground uses the authoritative signal —
-    // same rationale as `answeredFromLockScreenRef` for the answered path.
-    let presentedOnLockScreen = answeredFromLockScreenRef.current;
-    if (Platform.OS === "android") {
-      try {
-        const mod = (NativeModules as any)?.IncomingCallUi;
-        // consumeLaunchedFromIncomingCall is a one-shot: if the invite was
-        // surfaced via the PendingIntent and the user never tapped Answer,
-        // the flag is still set here. Consuming it also prevents a stale
-        // true leaking into the next, unrelated call.
-        const launchedFlag =
-          mod && typeof mod.consumeLaunchedFromIncomingCall === "function"
-            ? !!mod.consumeLaunchedFromIncomingCall()
-            : false;
-        const liveLocked =
-          mod && typeof mod.isDeviceLocked === "function"
-            ? !!mod.isDeviceLocked()
-            : false;
-        presentedOnLockScreen = presentedOnLockScreen || launchedFlag || liveLocked;
-        console.log(
-          '[LOCK_RETURN] sip_cancel_bridge inviteId=' + inviteId +
-          ' launchedFlag=' + launchedFlag +
-          ' liveLocked=' + liveLocked +
-          ' answeredFromLockRef=' + answeredFromLockScreenRef.current +
-          ' willReturnToLockScreen=' + presentedOnLockScreen,
-        );
-      } catch {
-        /* ignore — fall back to false */
-      }
-    }
+    const teardownTimer = setTimeout(() => {
+      console.log(
+        '[SIP_CANCEL_BRIDGE] teardown inviteId=' + inviteId +
+          ' sipCallState=' + sip.callState +
+          ' uiPhase=' + incomingCallUiState.phase,
+      );
 
-    try {
-      const mod = (NativeModules as any)?.IncomingCallUi;
-      if (mod && typeof mod.stopRingtone === "function") mod.stopRingtone(inviteId);
-      if (mod && typeof mod.dismiss === "function") mod.dismiss(inviteId);
-    } catch {
-      /* ignore */
-    }
-    try {
-      stopAllTelephonyAudio().catch(() => undefined);
-    } catch {
-      /* ignore */
-    }
-    suppressedIncomingInviteIdsRef.current.add(inviteId);
-    endNativeCall(inviteId);
-    AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
-    try {
-      callSessions.removeInboundInvite(inviteId, "sip_cancel_bridge");
-    } catch {
-      /* ignore */
-    }
-    showEndedState(invite, friendly, { reason }, delayMs);
-    if (presentedOnLockScreen) {
-      setTimeout(() => {
+      // Remember whether this invite was presented on the lock screen so the
+      // post-teardown moveAppToBackground uses the authoritative signal —
+      // same rationale as `answeredFromLockScreenRef` for the answered path.
+      let presentedOnLockScreen = answeredFromLockScreenRef.current;
+      if (Platform.OS === "android") {
         try {
-          moveAppToBackground();
+          const mod = (NativeModules as any)?.IncomingCallUi;
+          // consumeLaunchedFromIncomingCall is a one-shot: if the invite was
+          // surfaced via the PendingIntent and the user never tapped Answer,
+          // the flag is still set here. Consuming it also prevents a stale
+          // true leaking into the next, unrelated call.
+          const launchedFlag =
+            mod && typeof mod.consumeLaunchedFromIncomingCall === "function"
+              ? !!mod.consumeLaunchedFromIncomingCall()
+              : false;
+          const liveLocked =
+            mod && typeof mod.isDeviceLocked === "function"
+              ? !!mod.isDeviceLocked()
+              : false;
+          presentedOnLockScreen = presentedOnLockScreen || launchedFlag || liveLocked;
           console.log(
-            '[LOCK_RETURN] moveAppToBackground after sip_cancel_bridge inviteId=' + inviteId,
+            '[LOCK_RETURN] sip_cancel_bridge inviteId=' + inviteId +
+              ' launchedFlag=' + launchedFlag +
+              ' liveLocked=' + liveLocked +
+              ' answeredFromLockRef=' + answeredFromLockScreenRef.current +
+              ' willReturnToLockScreen=' + presentedOnLockScreen,
           );
         } catch {
-          /* ignore */
+          /* ignore — fall back to false */
         }
-      }, delayMs + 80);
-    }
+      }
+
+      try {
+        const mod = (NativeModules as any)?.IncomingCallUi;
+        if (mod && typeof mod.stopRingtone === "function") mod.stopRingtone(inviteId);
+        if (mod && typeof mod.dismiss === "function") mod.dismiss(inviteId);
+      } catch {
+        /* ignore */
+      }
+      try {
+        stopAllTelephonyAudio().catch(() => undefined);
+      } catch {
+        /* ignore */
+      }
+      suppressedIncomingInviteIdsRef.current.add(inviteId);
+      endNativeCall(inviteId);
+      AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
+      try {
+        callSessions.removeInboundInvite(inviteId, "sip_cancel_bridge");
+      } catch {
+        /* ignore */
+      }
+      // Resolve the end-state label from the latest authoritative disposition
+      // the poll observed (read NOW, after the debounce, so a disposition that
+      // resolved during the wait is reflected). A SIP CANCEL alone is ambiguous
+      // — it fires for answered-elsewhere, voicemail, AND caller-hangup — so we
+      // only upgrade past the neutral "Call ended" when the telephony signals
+      // told us a real extension answered.
+      const disposition = lastPollDispositionRef.current;
+      const reason =
+        disposition === 'answered_elsewhere'
+          ? 'sip_cancel_answered_elsewhere'
+          : disposition === 'voicemail'
+            ? 'sip_cancel_voicemail'
+            : 'sip_cancel_while_ringing';
+      const friendly =
+        disposition === 'answered_elsewhere'
+          ? 'Answered on another device'
+          : 'Call ended';
+      if (disposition === 'answered_elsewhere') {
+        appendCallRecord({
+          id: 'invite:' + inviteId,
+          linkedId: invite.pbxCallId || null,
+          direction: 'inbound',
+          fromNumber: invite.fromNumber || '',
+          fromName: invite.fromDisplay || null,
+          toNumber: invite.toExtension || '',
+          startedAt: new Date((invite as any)?._pushReceivedAt || Date.now()).toISOString(),
+          durationSec: 0,
+          disposition: 'answered_elsewhere',
+        }).catch(() => undefined);
+      }
+      showEndedState(invite, friendly, { reason }, delayMs);
+      if (presentedOnLockScreen) {
+        setTimeout(() => {
+          try {
+            moveAppToBackground();
+            console.log(
+              '[LOCK_RETURN] moveAppToBackground after sip_cancel_bridge inviteId=' + inviteId,
+            );
+          } catch {
+            /* ignore */
+          }
+        }, delayMs + 80);
+      }
+    }, GHOST_CANCEL_WAIT_MS);
+
+    return () => {
+      clearTimeout(teardownTimer);
+    };
   }, [
     sip.callState,
     sip.callDirection,

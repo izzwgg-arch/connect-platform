@@ -216,6 +216,16 @@ export function CallSessionProvider({ children }: { children: React.ReactNode })
   // outbound call.
   const STALE_RINGING_MS = 15_000;
 
+  // Absolute backstop for a ringing_inbound row whose SIP session is still
+  // reported ALIVE by JsSIP. We must NOT reuse the 15 s phantom window here:
+  // a genuine inbound call legitimately rings for 30–60 s before voicemail /
+  // dial-timeout, and ring groups stay PENDING the whole time. Killing a live
+  // ringing session at 15 s tore the incoming screen down mid-ring and made
+  // the invite poll mis-read "no live INVITE → answered elsewhere" (a false
+  // positive). 120 s is longer than any real ring-to-voicemail timeout, so it
+  // only ever catches a true JsSIP zombie that never fired ended/failed.
+  const STALE_RINGING_WITH_SIP_MS = 120_000;
+
   /**
    * Garbage-collect CallSession rows whose underlying SIP session has
    * quietly died without firing 'ended'/'failed'. Also clears old
@@ -246,11 +256,13 @@ export function CallSessionProvider({ children }: { children: React.ReactNode })
         toRemove.push(id);
         continue;
       }
-      // 3) Ringing-inbound WITH a dead SIP session older than STALE_RINGING_MS.
+      // 3) Ringing-inbound whose SIP session is still ALIVE (branch 1 already
+      // removed dead ones) only gets swept past an absolute zombie backstop —
+      // never at the 15 s phantom window, which would kill a normal long ring.
       if (
         cs.state === "ringing_inbound" &&
         cs.sipSessionId &&
-        now - cs.startedAt > STALE_RINGING_MS
+        now - cs.startedAt > STALE_RINGING_WITH_SIP_MS
       ) {
         toRemove.push(id);
       }
