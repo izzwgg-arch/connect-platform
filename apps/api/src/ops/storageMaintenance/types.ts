@@ -180,6 +180,153 @@ export type StorageDashboardSummary = {
   protectedAssets: ProtectedAssetRow[];
   distribution: StorageDistributionSlice[];
   cleanupReadiness: CleanupReadinessRow[];
+  operationsCenter: StorageOperationsCenter | null;
+};
+
+export type ConfidenceLabel = "SAFE" | "LIKELY_SAFE" | "REVIEW_REQUIRED" | "BLOCKED" | "UNKNOWN";
+
+export type BuildCacheEntryRow = {
+  cacheId: string;
+  sizeBytes: number;
+  createdAt: string | null;
+  lastUsedAt: string | null;
+  ageDays: number | null;
+  buildStage: string | null;
+  sourceDockerfile: string | null;
+  relatedImage: string | null;
+  referencedByActiveImage: boolean;
+  referencedByRunningContainer: boolean;
+  referencedByRollbackImage: boolean;
+  confidencePct: number;
+  confidenceLabel: ConfidenceLabel;
+};
+
+export type BuildCacheAnalysis = {
+  totalEntries: number;
+  totalBytes: number;
+  referencedBytes: number;
+  unusedBytes: number;
+  unknownBytes: number;
+  entries: BuildCacheEntryRow[];
+  topEntries: BuildCacheEntryRow[];
+};
+
+export type DependencyGraphNode = {
+  service: string;
+  containerName: string;
+  containerId: string;
+  image: string;
+  imageId: string | null;
+  state: string;
+  sizeBytes: number | null;
+  classification: StorageClassification;
+  protectedByRunningContainer: boolean;
+  layerCount: number | null;
+};
+
+export type DependencyGraphSummary = {
+  nodes: DependencyGraphNode[];
+  runningContainerCount: number;
+  mappedServiceCount: number;
+  incomplete: boolean;
+  incompleteReason: string | null;
+};
+
+export type RollbackCoverageRow = {
+  service: string;
+  image: string;
+  tag: string;
+  sizeBytes: number | null;
+  classification: StorageClassification;
+  rollbackAvailable: boolean;
+  deploymentHint: string | null;
+};
+
+export type ApkForensicsRow = {
+  filename: string;
+  path: string;
+  sizeBytes: number;
+  buildDate: string | null;
+  version: string | null;
+  releaseDate: string | null;
+  isLatestRelease: boolean;
+  referencedByDownloadPage: boolean;
+};
+
+export type ApkForensicsSummary = {
+  totalBytes: number;
+  latestReleases: ApkForensicsRow[];
+  historicalReleases: ApkForensicsRow[];
+  entries: ApkForensicsRow[];
+};
+
+export type LogForensicsRow = {
+  path: string;
+  label: string;
+  sizeBytes: number | null;
+  oldestFile: string | null;
+  newestFile: string | null;
+  oldestDate: string | null;
+  newestDate: string | null;
+  growthRateBytesPerDay: number | null;
+};
+
+export type LogForensicsSummary = {
+  totalBytes: number;
+  locations: LogForensicsRow[];
+};
+
+export type ConfidenceDistributionSlice = {
+  label: ConfidenceLabel;
+  count: number;
+  sizeBytes: number;
+  pct: number;
+};
+
+export type CleanupCandidateRow = {
+  id: string;
+  label: string;
+  pathOrRef: string;
+  sizeBytes: number | null;
+  classification: StorageClassification;
+  confidencePct: number;
+  confidenceLabel: ConfidenceLabel;
+  kind: StorageItemKind;
+};
+
+export type SafetyGateResult = {
+  blocked: boolean;
+  reasons: string[];
+};
+
+export type SnapshotStatus = {
+  available: boolean;
+  latestPath: string | null;
+  latestTimestamp: string | null;
+  latestScanId: string | null;
+  storageRoot: string;
+};
+
+export type StorageOperationsCenter = {
+  buildCacheAnalysis: BuildCacheAnalysis;
+  dependencyGraph: DependencyGraphSummary;
+  rollbackCoverage: RollbackCoverageRow[];
+  apkForensics: ApkForensicsSummary;
+  logForensics: LogForensicsSummary;
+  confidenceDistribution: ConfidenceDistributionSlice[];
+  cleanupCandidates: CleanupCandidateRow[];
+  readinessScorePct: number;
+  readinessLabel: "READY_FOR_REVIEW" | "BLOCKED" | "HIGH_RISK" | "INCOMPLETE";
+  readinessDetail: string;
+  safetyGates: SafetyGateResult;
+  snapshotStatus: SnapshotStatus;
+  riskMatrix: Array<{
+    category: string;
+    risk: ConsumerRiskLevel;
+    sizeBytes: number;
+    confidenceLabel: ConfidenceLabel;
+    blocked: boolean;
+  }>;
 };
 
 export type StorageScanSnapshot = {
@@ -265,6 +412,8 @@ export type StorageHealthSnapshot = {
   dashboard: StorageDashboardSummary | null;
   scanning: boolean;
   scanError: string | null;
+  snapshotGenerating: boolean;
+  snapshotError: string | null;
 };
 
 export type StorageMaintenanceConfig = {
@@ -290,4 +439,5 @@ export type StorageMaintenanceConfig = {
   journalRoot: string;
   deployLogsRoot: string;
   hostInventoryRoot: string;
+  preflightSnapshotRoot: string;
 };

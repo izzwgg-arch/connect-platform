@@ -1,8 +1,8 @@
 # STORAGE_MAINTENANCE
 
 > Safe storage cleanup controller for Connect production hosts.
-> **Phase 1 / 1.5 / 1.6 (current): read-only scanner + classifier + dry-run plan + operations dashboard + host visibility.**
-> No deletes, prunes, restarts, or execution.
+> **Phase 1 / 1.5 / 1.6 / 2 (current): read-only scanner + classifier + dry-run plan + operations dashboard + host visibility + proof/dependency/readiness system.**
+> No deletes, prunes, restarts, or execution. Approve **501** / execute **403** unchanged.
 
 Read `SERVER_OPERATIONS.md` for the 2026-06-14 forensic baseline and `AGENTS.md` for forbidden server commands.
 
@@ -22,7 +22,18 @@ API  /admin/storage-health/*
         ├── dashboard (KPIs, distribution, consumers, simulation, trends)
         ├── planBuilder (dry-run commands, command guard)
         ├── auditLog (in-memory ring buffer)
-        └── executor (Phase 2 — currently refuses all execution)
+        ├── proofSystem/ (Phase 2 — forensics, dependency graph, confidence, readiness)
+        │     ├── buildKitForensics.ts
+        │     ├── dependencyGraph.ts
+        │     ├── rollbackAudit.ts
+        │     ├── apkForensics.ts
+        │     ├── logForensics.ts
+        │     ├── confidenceEngine.ts
+        │     ├── readinessScoring.ts
+        │     ├── safetyGates.ts
+        │     ├── snapshotGenerator.ts
+        │     └── operationsCenter.ts
+        └── executor (future — currently refuses all execution)
 ```
 
 ### Phase 1.6 — Host visibility layer (read-only)
@@ -36,6 +47,7 @@ Phase 1.6 adds **read-only inventory mounts** on `api` and `api_candidate` in `d
 | `/var/lib/containerd` | `/host-inventory/var/lib/containerd` | `ro` |
 | `/opt/connectcomms` | `/host-inventory/opt/connectcomms` | `ro` |
 | `/var/log` | `/host-inventory/var/log` | `ro` |
+| `/opt/connectcomms/backups/storage-preflight` | `/var/lib/connect/storage-preflight` | `rw` (JSON snapshots only) |
 
 `STORAGE_HOST_INVENTORY_ROOT=/host-inventory` remaps scanner config paths so the UI displays
 familiar host paths (`/var/lib/containerd`, `/opt/connectcomms/...`) via `toHostDisplayPath()`.
@@ -62,7 +74,7 @@ flowchart LR
 ```
 
 **Docker inventory:** HTTP `GET` over the Unix socket — no `docker` CLI required.
-Allowed paths are whitelisted in `hostVisibility.ts` (`/system/df`, `/images/json`, `/containers/json`, `/volumes`, `/info`, `/version`).
+Allowed paths are whitelisted in `hostVisibility.ts` (`/system/df`, `/images/json`, `/images/{id}/json`, `/containers/json`, `/volumes`, `/info`, `/version`).
 Any other path throws `storage_host_visibility_forbidden_docker_path`.
 
 **Filesystem sizing:** `du -sb` on mounted inventory paths (180s timeout for large trees like containerd).
@@ -102,9 +114,10 @@ A compromised API process could theoretically bypass the whitelist — treat soc
 | GET | `/admin/storage-health/audit` | Audit events |
 | POST | `/admin/storage-health/plan` | Generate dry-run cleanup plan |
 | GET | `/admin/storage-health/plan` | Latest plan |
+| POST | `/admin/storage-health/snapshot` | **202** — write read-only preflight JSON to host (no restore/cleanup) |
 | POST | `/admin/storage-health/approve` | **501** — not implemented |
-| POST | `/admin/storage-health/execute` | **403** — forbidden Phase 1 |
-| GET | `/admin/storage-health/executions` | Empty (Phase 2) |
+| POST | `/admin/storage-health/execute` | **403** — forbidden |
+| GET | `/admin/storage-health/executions` | Empty (execution phase) |
 
 Permission: `can_view_admin_storage_health` (super-admin via `can_manage_global_settings`).
 
@@ -178,15 +191,114 @@ Env vars: `STORAGE_DISK_WARNING_PCT`, `STORAGE_BUILDKIT_CRITICAL_BYTES`, etc. (s
 
 ---
 
-## Phase 2 (requires manual approval — not implemented)
+## Phase 2 — Proof, dependency analysis, and pre-cleanup readiness (read-only)
+
+Phase 2 adds an **Operations Center** on `/admin/storage-health` that answers what consumes storage, what depends on it, what is safe/unsafe, and whether cleanup should be blocked — **without executing any cleanup**.
+
+```mermaid
+flowchart TB
+  subgraph scan [Read-only scan]
+    SC[scanner.ts]
+    BK[buildKitForensics]
+    DG[dependencyGraph]
+    RB[rollbackAudit]
+    APK[apkForensics]
+    LOG[logForensics]
+  end
+  subgraph score [Scoring]
+    CE[confidenceEngine]
+    RS[readinessScoring]
+    SG[safetyGates]
+  end
+  subgraph persist [Preflight only]
+    SN[snapshotGenerator]
+    DIR[/opt/connectcomms/backups/storage-preflight/]
+  end
+  SC --> BK & DG & RB & APK & LOG
+  BK & DG & RB --> CE --> RS --> SG
+  SG --> OC[operationsCenter.ts]
+  OC --> Portal[Portal Operations Center UI]
+  OC --> SN --> DIR
+```
+
+### Build cache analysis (Phase A)
+
+Per BuildKit cache entry from Docker `GET /system/df` JSON:
+
+| Field | Source |
+|-------|--------|
+| cache ID, size, created/last-used, age | `BuildCache[]` in `/system/df` |
+| build stage / Dockerfile | `Description` field when present |
+| referenced by active image / running container / rollback | dependency graph + image inspect |
+| confidence score | `confidenceEngine.ts` |
+
+Dashboard totals: **Total Entries**, **Total Size**, **Referenced Size**, **Unused Size**, **Unknown Size**. Any **Unknown** size automatically blocks cleanup readiness.
+
+### Dependency graph (Phase B)
+
+Maps **Container → Image → Layers → Build cache** for all running services (`api`, `portal`, `worker`, `telephony`, `realtime`, `postgres`, `redis`, `minio`, `grafana`, `loki`, `prometheus`, `kamailio`, `rtpengine`, and others). Anything referenced by a running container is classified **`ACTIVE_REQUIRED`**.
+
+### Rollback coverage (Phase C)
+
+Inventories active, candidate, and superseded deploy images per core service. Classifications: `ACTIVE_REQUIRED`, `ROLLBACK_CANDIDATE`, `SAFE_CANDIDATE`, `UNKNOWN`. Dashboard shows per-service rollback availability (API, Portal, Worker, Telephony, …).
+
+### APK forensics (Phase D)
+
+Read-only inventory of `/opt/connectcomms/downloads`: filename, size, build date, version, latest vs historical, referenced-by-download-page flag.
+
+### Log forensics (Phase E)
+
+Read-only sizing of `/var/log`, `/opt/connectcomms/monitoring/logs`, and other configured log roots: total size, oldest/newest file, estimated growth rate.
+
+### Preflight snapshot system (Phase F)
+
+`POST /admin/storage-health/snapshot` queues async generation of a timestamped JSON bundle under:
+
+`/opt/connectcomms/backups/storage-preflight/<ISO-timestamp>/`
+
+Contents: docker images/containers/volumes inventory, dependency graph, rollback inventory, reclaim candidates, protected assets, operations-center summary. **No restore actions. No cleanup.**
+
+Env: `STORAGE_PREFLIGHT_SNAPSHOT_ROOT` (default `/var/lib/connect/storage-preflight` in container).
+
+### Confidence engine (Phase G)
+
+Every cleanup candidate receives a score and label:
+
+| Score | Label | Meaning |
+|-------|-------|---------|
+| ≥ 99.9% | `SAFE` | Not referenced by container, image, or rollback; fully understood |
+| ≥ 95% | `LIKELY_SAFE` | Minor uncertainty |
+| < 95% | `REVIEW_REQUIRED` | Human review before any future action |
+| — | `BLOCKED` / `UNKNOWN` | Missing dependency data — blocks readiness |
+
+Criteria: not referenced by container/image/rollback, not used recently, classification complete.
+
+### Cleanup readiness score (Phase H)
+
+Informational 0–100% score with label (`READY FOR REVIEW`, `BLOCKED`, `HIGH RISK`). Factors: unknown assets, active references, rollback coverage, snapshot availability, dependency completeness, confidence distribution. **Does not enable cleanup.**
+
+### Safety gates (Phase I)
+
+Readiness is automatically **blocked** when any of:
+
+- Unknown assets exist (unknown BuildKit size, unmapped containers, `UNKNOWN` classifications)
+- Dependency graph incomplete (missing image inspect, scan in progress)
+- No preflight snapshot on disk
+- Rollback inventory missing for a core service
+- Mean confidence below threshold
+- Protected asset appears in candidate set
+
+Dashboard lists exact blocking reasons.
+
+### Future execution phase (not implemented)
 
 - Approval token issuance (`can_approve_storage_cleanup`)
 - Pre/post service health checks
 - Audited execution of **non-blocked** plan actions only
 - Persistent execution history
-- Optional scheduled scan + alert webhook
 
 ---
+
 
 ## Phase 1.5 operations dashboard
 
@@ -238,6 +350,7 @@ Portal: `/admin/storage-health` → Scan Now → Cleanup Plan (read-only).
 | `apps/api/src/ops/storageMaintenance/planBuilder.ts` | Dry-run plan |
 | `apps/api/src/ops/storageMaintenance/alerts.ts` | Threshold alerts |
 | `apps/api/src/ops/storageMaintenance/auditLog.ts` | Audit ring buffer |
-| `apps/api/src/ops/storageMaintenance/service.ts` | Orchestration |
+| `apps/api/src/ops/storageMaintenance/proofSystem/*` | Phase 2 forensics, scoring, snapshots |
+| `apps/api/src/ops/storageMaintenance/service.ts` | Orchestration + snapshot queue |
 | `apps/api/src/ops/storageMaintenance/routes.ts` | HTTP routes |
-| `apps/portal/app/(platform)/admin/storage-health/page.tsx` | Admin UI |
+| `apps/portal/app/(platform)/admin/storage-health/page.tsx` | Operations Center UI |

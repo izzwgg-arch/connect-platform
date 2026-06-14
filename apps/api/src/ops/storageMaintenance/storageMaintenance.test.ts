@@ -163,6 +163,28 @@ function mockDeps(overrides: Partial<StorageScannerDeps> = {}): StorageScannerDe
         source: "docker_system_df",
       },
     }),
+    getSystemDfJson: async () => ({
+      BuildCache: [
+        {
+          ID: "cache1",
+          Size: 400 * 1e9,
+          Reclaimable: true,
+          InUse: false,
+          CreatedAt: "2024-01-01T00:00:00Z",
+          Description: "COPY . . Dockerfile",
+        },
+        { ID: "cache2", Size: 100 * 1e9, Reclaimable: false, InUse: true },
+      ],
+    }),
+    inspectImages: async () => [
+      {
+        id: "sha256:activeimage0001",
+        repoTags: ["app-api:latest"],
+        size: 1e9,
+        containers: 1,
+        rootFSLayers: 12,
+      },
+    ],
     statPathBytes: async (path) => (path.includes("containerd") ? 400 * 1e9 : 1e6),
     listFilesInDir: async () => [
       { name: "a.apk", path: "/opt/connectcomms/downloads/a.apk", sizeBytes: 1e8, mtimeMs: 3 },
@@ -407,6 +429,7 @@ test("parseDockerSystemDfJson extracts build cache from Docker API", () => {
 
 test("host visibility guard blocks non-readonly docker API paths", () => {
   assert.doesNotThrow(() => assertReadOnlyDockerApiPath("/system/df"));
+  assert.doesNotThrow(() => assertReadOnlyDockerApiPath("/images/sha256:abc123/json"));
   assert.throws(() => assertReadOnlyDockerApiPath("/containers/abc/stop"));
   assert.throws(() => assertReadOnlyDockerApiPath("/images/prune"));
 });
@@ -438,4 +461,94 @@ test("queueStorageScan returns immediately while scan runs in background", async
   await new Promise((r) => setTimeout(r, 300));
   assert.ok(getStorageHealthSnapshot().dashboard != null || getStorageHealthSnapshot().scanning);
   resetStorageMaintenanceStateForTests();
+});
+
+test("operations center includes build cache analysis and readiness score", async () => {
+  const scan = await executeStorageScan(mockDeps(), "ops-test");
+  const ops = scan.dashboard.operationsCenter;
+  assert.ok(ops);
+  assert.ok(ops!.buildCacheAnalysis.totalEntries >= 2);
+  assert.ok(ops!.dependencyGraph.nodes.length >= 1);
+  assert.ok(ops!.rollbackCoverage.some((r) => r.service === "api"));
+  assert.ok(ops!.readinessScorePct >= 0);
+  assert.equal(typeof ops!.safetyGates.blocked, "boolean");
+});
+
+test("confidence engine scores safe candidates highly", async () => {
+  const { scoreConfidence } = await import("./proofSystem/confidenceEngine");
+  const safe = scoreConfidence({
+    classification: "SAFE_CANDIDATE",
+    sizeBytes: 1e9,
+    reclaimable: true,
+    knownKind: true,
+    metadataComplete: true,
+  });
+  assert.equal(safe.confidenceLabel, "SAFE");
+  assert.ok(safe.confidencePct >= 99);
+});
+
+test("dependency graph marks running containers as protected", async () => {
+  const { buildDependencyGraph } = await import("./proofSystem/dependencyGraph");
+  const graph = buildDependencyGraph(
+    [{ Id: "c1", Names: ["/app-api-1"], Image: "app-api:latest", State: "running" }],
+    [{ Id: "sha1", RepoTags: ["app-api:latest"], Size: 1e9, Containers: 1 }],
+    [{ id: "sha1", repoTags: ["app-api:latest"], size: 1e9, containers: 1, rootFSLayers: 5 }],
+  );
+  assert.equal(graph.nodes[0]!.protectedByRunningContainer, true);
+  assert.equal(graph.nodes[0]!.classification, "ACTIVE_REQUIRED");
+});
+
+test("rollback audit reports candidate images", async () => {
+  const { buildRollbackCoverage } = await import("./proofSystem/rollbackAudit");
+  const rows = buildRollbackCoverage([
+    { Id: "sha1", RepoTags: ["app-api:latest"], Size: 1e9, Containers: 1 },
+    { Id: "sha2", RepoTags: ["app-api_candidate:latest"], Size: 1e9, Containers: 0 },
+  ]);
+  assert.ok(rows.some((r) => r.service === "api" && r.rollbackAvailable));
+});
+
+test("safety gates block when unknown build cache bytes present", async () => {
+  const { evaluateSafetyGates } = await import("./proofSystem/safetyGates");
+  const gates = evaluateSafetyGates({
+    scan: {
+      scanId: "s",
+      timestamp: new Date().toISOString(),
+      hostname: "h",
+      durationMs: 1,
+      readOnly: true,
+      diskMounts: [],
+      docker: { imagesCount: 0, imagesBytes: null, imagesReclaimableBytes: null, containersCount: 0, containersBytes: null, volumesCount: 0, volumesBytes: null, buildCache: { entryCount: 0, totalBytes: null, reclaimableBytes: null, source: "unavailable" } },
+      items: [],
+      reclaimEstimateBytes: 0,
+      alerts: [],
+      unknownCount: 1,
+      protectedCount: 0,
+      hostVisibility: { hostInventoryRoot: null, dockerSocket: "/var/run/docker.sock", dockerSocketReachable: false, containerdMount: false, connectcommsMount: false, varLogMount: false },
+      containerd: { totalBytes: null, overlaySnapshotsBytes: null, contentBlobsBytes: null, snapshotCount: null },
+      dashboard: null as never,
+    },
+    buildCache: { totalEntries: 1, totalBytes: 100, referencedBytes: 0, unusedBytes: 0, unknownBytes: 50, entries: [], topEntries: [] },
+    dependencyGraph: { nodes: [], runningContainerCount: 0, mappedServiceCount: 0, incomplete: false, incompleteReason: null },
+    snapshotStatus: { available: false, latestPath: null, latestTimestamp: null, latestScanId: null, storageRoot: "/tmp" },
+    candidates: [],
+  });
+  assert.equal(gates.blocked, true);
+  assert.ok(gates.reasons.some((r) => r.includes("unknown")));
+});
+
+test("preflight snapshot writes read-only JSON artifact", async () => {
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "sh-snap-"));
+  const snapConfig = { ...config, preflightSnapshotRoot: tmp };
+  const scan = await executeStorageScan(mockDeps(), "snap-test");
+  const { writePreflightSnapshot, resetSnapshotStateForTests } = await import("./proofSystem/snapshotGenerator");
+  resetSnapshotStateForTests();
+  const result = await writePreflightSnapshot(snapConfig, scan);
+  const raw = await fs.readFile(result.path, "utf8");
+  const parsed = JSON.parse(raw);
+  assert.equal(parsed.readOnly, true);
+  assert.equal(parsed.phase, "preflight_proof");
+  assert.equal(parsed.scanId, scan.scanId);
 });

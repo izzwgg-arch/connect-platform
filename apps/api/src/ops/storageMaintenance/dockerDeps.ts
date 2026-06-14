@@ -17,6 +17,7 @@ import {
   type StorageScannerDeps,
 } from "./scanner";
 import type { DockerSystemSummary, StorageMaintenanceConfig } from "./types";
+import type { ImageInspectRow } from "./proofSystem/dependencyGraph";
 
 const execFileAsync = promisify(execFile);
 const DOCKER_SOCKET = (process.env.STORAGE_DOCKER_SOCKET || process.env.SERVER_HEALTH_DOCKER_SOCKET || "/var/run/docker.sock").trim();
@@ -162,7 +163,42 @@ export function loadStorageMaintenanceConfig(): StorageMaintenanceConfig {
     containerdRoot: process.env.STORAGE_CONTAINERD_ROOT || hostPath(hostRoot, "/var/lib/containerd"),
     journalRoot: process.env.STORAGE_JOURNAL_ROOT || hostPath(hostRoot, "/var/log/journal"),
     deployLogsRoot: process.env.STORAGE_DEPLOY_LOGS_ROOT || hostPath(hostRoot, "/var/log/connect-deploys"),
+    preflightSnapshotRoot:
+      process.env.STORAGE_PREFLIGHT_SNAPSHOT_ROOT || "/var/lib/connect/storage-preflight",
   };
+}
+
+async function getSystemDfJson(): Promise<unknown> {
+  if (!(await dockerSocketAvailable())) return {};
+  const raw = await dockerHttpGet("/system/df");
+  return JSON.parse(raw);
+}
+
+async function inspectImages(): Promise<ImageInspectRow[]> {
+  const images = await listImages();
+  const out: ImageInspectRow[] = [];
+  for (const img of images) {
+    try {
+      const raw = await dockerHttpGet(`/images/${img.Id}/json`);
+      const parsed = JSON.parse(raw) as { RootFS?: { Layers?: string[] } };
+      out.push({
+        id: img.Id,
+        repoTags: img.RepoTags ?? [],
+        size: img.Size,
+        containers: img.Containers,
+        rootFSLayers: parsed.RootFS?.Layers?.length ?? null,
+      });
+    } catch {
+      out.push({
+        id: img.Id,
+        repoTags: img.RepoTags ?? [],
+        size: img.Size,
+        containers: img.Containers,
+        rootFSLayers: null,
+      });
+    }
+  }
+  return out;
 }
 
 export function createProductionStorageScannerDeps(
@@ -176,6 +212,8 @@ export function createProductionStorageScannerDeps(
     listContainers,
     listVolumes,
     getDockerSystemDf,
+    getSystemDfJson,
+    inspectImages,
     statPathBytes: async (path) => {
       if (useDu) return duPathBytes(path);
       return statDirectoryBytes(path);

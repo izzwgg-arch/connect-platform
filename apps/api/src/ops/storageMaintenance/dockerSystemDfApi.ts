@@ -1,10 +1,24 @@
 import type { DockerSystemSummary } from "./types";
 
+export type DockerBuildCacheRaw = {
+  ID?: string;
+  Parent?: string;
+  Type?: string;
+  Description?: string;
+  InUse?: boolean;
+  Shared?: boolean;
+  Size?: number;
+  CreatedAt?: string;
+  LastUsedAt?: string;
+  UsageCount?: number;
+  Reclaimable?: boolean;
+};
+
 type DockerSystemDfJson = {
   Images?: Array<{ Size?: number; SharedSize?: number; UniqueSize?: number }>;
   Containers?: Array<{ SizeRw?: number; SizeRootFs?: number }>;
   Volumes?: Array<{ UsageData?: { Size?: number } }>;
-  BuildCache?: Array<{ Size?: number; Reclaimable?: boolean }>;
+  BuildCache?: DockerBuildCacheRaw[];
 };
 
 export function parseDockerSystemDfJson(raw: DockerSystemDfJson): DockerSystemSummary {
@@ -36,4 +50,8 @@ export function parseDockerSystemDfJson(raw: DockerSystemDfJson): DockerSystemSu
       source: buildCache.length ? "docker_system_df" : "unavailable",
     },
   };
+}
+
+export function extractBuildCacheRaw(raw: DockerSystemDfJson): DockerBuildCacheRaw[] {
+  return raw.BuildCache ?? [];
 }

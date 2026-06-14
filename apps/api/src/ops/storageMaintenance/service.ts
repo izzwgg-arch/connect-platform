@@ -2,6 +2,11 @@ import { loadStorageMaintenanceConfig } from "./dockerDeps";
 import { appendStorageAuditEvent, listStorageAuditEvents } from "./auditLog";
 import { buildStorageDashboardSummary, buildTrendSeries } from "./dashboard";
 import { buildCleanupPlan } from "./planBuilder";
+import {
+  loadLatestSnapshotFromDisk,
+  resetSnapshotStateForTests,
+  writePreflightSnapshot,
+} from "./proofSystem/snapshotGenerator";
 import { runStorageScan } from "./scanner";
 import type { StorageScannerDeps } from "./scanner";
 import type {
@@ -18,6 +23,15 @@ let latestPlan: CleanupPlan | null = null;
 const history: StorageTrendPoint[] = [];
 let scanning = false;
 let scanError: string | null = null;
+let snapshotGenerating = false;
+let snapshotError: string | null = null;
+let snapshotBootstrapped = false;
+
+async function bootstrapSnapshots(): Promise<void> {
+  if (snapshotBootstrapped) return;
+  snapshotBootstrapped = true;
+  await loadLatestSnapshotFromDisk(loadStorageMaintenanceConfig()).catch(() => undefined);
+}
 
 function rootMountFromScan(scan: StorageScanSnapshot | null) {
   if (!scan?.diskMounts?.length) return null;
@@ -55,6 +69,7 @@ function buildHealthAlerts(scan: StorageScanSnapshot | null): StorageHealthSnaps
 }
 
 export function getStorageHealthSnapshot(): StorageHealthSnapshot {
+  void bootstrapSnapshots();
   const trends = (["24h", "7d", "30d"] as const).map((window) => buildTrendSeries(history, window));
   return {
     timestamp: new Date().toISOString(),
@@ -66,6 +81,8 @@ export function getStorageHealthSnapshot(): StorageHealthSnapshot {
     dashboard: latestScan?.dashboard ?? null,
     scanning,
     scanError,
+    snapshotGenerating,
+    snapshotError,
   };
 }
 
@@ -168,9 +185,13 @@ export function generateCleanupPlanFromLatestScan(
   const plan = buildCleanupPlan(latestScan, config);
   latestPlan = plan;
   if (latestScan) {
+    const ops = latestScan.dashboard?.operationsCenter ?? null;
     latestScan = {
       ...latestScan,
-      dashboard: buildStorageDashboardSummary(latestScan, config, plan),
+      dashboard: {
+        ...buildStorageDashboardSummary(latestScan, config, plan),
+        operationsCenter: ops,
+      },
     };
   }
   appendStorageAuditEvent({
@@ -215,10 +236,61 @@ export function getStorageAuditHistory(limit = 50) {
   return listStorageAuditEvents(limit);
 }
 
+export type SnapshotQueueResult = { accepted: boolean; generating: boolean };
+
+export function queuePreflightSnapshot(actorUserId: string | null): SnapshotQueueResult {
+  if (!latestScan) {
+    snapshotError = "storage_scan_required";
+    return { accepted: false, generating: false };
+  }
+  if (snapshotGenerating) return { accepted: true, generating: true };
+  snapshotGenerating = true;
+  snapshotError = null;
+  const config = loadStorageMaintenanceConfig();
+  void (async () => {
+    try {
+      const result = await writePreflightSnapshot(config, latestScan!);
+      appendStorageAuditEvent({
+        type: "scan_completed",
+        actorUserId,
+        scanId: latestScan!.scanId,
+        detail: `preflight_snapshot_written path=${result.path}`,
+      });
+      if (latestScan?.dashboard?.operationsCenter) {
+        latestScan = {
+          ...latestScan,
+          dashboard: {
+            ...latestScan.dashboard,
+            operationsCenter: {
+              ...latestScan.dashboard.operationsCenter,
+              snapshotStatus: {
+                available: true,
+                latestPath: result.path,
+                latestTimestamp: result.timestamp,
+                latestScanId: latestScan.scanId,
+                storageRoot: config.preflightSnapshotRoot,
+              },
+            },
+          },
+        };
+      }
+    } catch (err) {
+      snapshotError = err instanceof Error ? err.message : "snapshot_failed";
+    } finally {
+      snapshotGenerating = false;
+    }
+  })();
+  return { accepted: true, generating: true };
+}
+
 export function resetStorageMaintenanceStateForTests(): void {
   latestScan = null;
   latestPlan = null;
   history.length = 0;
   scanning = false;
   scanError = null;
+  snapshotGenerating = false;
+  snapshotError = null;
+  snapshotBootstrapped = false;
+  resetSnapshotStateForTests();
 }

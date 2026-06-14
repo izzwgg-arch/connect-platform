@@ -52,6 +52,33 @@ type StorageDashboard = {
     status: string;
     classification: string;
   }>;
+  operationsCenter?: OperationsCenter | null;
+};
+
+type OperationsCenter = {
+  readinessScorePct: number;
+  readinessLabel: string;
+  readinessDetail: string;
+  safetyGates: { blocked: boolean; reasons: string[] };
+  snapshotStatus: { available: boolean; latestPath: string | null; latestTimestamp: string | null };
+  buildCacheAnalysis: {
+    totalEntries: number;
+    totalBytes: number;
+    referencedBytes: number;
+    unusedBytes: number;
+    unknownBytes: number;
+    topEntries: Array<{ cacheId: string; sizeBytes: number; confidenceLabel: string; confidencePct: number }>;
+  };
+  dependencyGraph: {
+    nodes: Array<{ service: string; containerName: string; image: string; state: string; protectedByRunningContainer: boolean }>;
+    runningContainerCount: number;
+    incomplete: boolean;
+  };
+  rollbackCoverage: Array<{ service: string; image: string; rollbackAvailable: boolean; classification: string }>;
+  apkForensics: { totalBytes: number; latestReleases: Array<{ filename: string; sizeBytes: number }>; historicalReleases: Array<{ filename: string; sizeBytes: number }> };
+  logForensics: { totalBytes: number; locations: Array<{ label: string; path: string; sizeBytes: number | null }> };
+  confidenceDistribution: Array<{ label: string; count: number; sizeBytes: number; pct: number }>;
+  riskMatrix: Array<{ category: string; risk: string; sizeBytes: number; confidenceLabel: string; blocked: boolean }>;
 };
 
 type StorageAlert = {
@@ -86,6 +113,8 @@ type StorageHealth = {
   dashboard: StorageDashboard | null;
   scanning?: boolean;
   scanError?: string | null;
+  snapshotGenerating?: boolean;
+  snapshotError?: string | null;
 };
 
 const SCAN_POLL_MS = 5000;
@@ -349,11 +378,13 @@ export default function StorageHealthPage() {
   const [health, setHealth] = useState<StorageHealth | null>(null);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
+  const [snapshotting, setSnapshotting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [trendWindow, setTrendWindow] = useState<"24h" | "7d" | "30d">("7d");
 
   const dash = health?.dashboard ?? null;
+  const ops = dash?.operationsCenter ?? null;
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -373,6 +404,24 @@ export default function StorageHealthPage() {
       if (!silent) setLoading(false);
     }
   }, []);
+
+  const runSnapshot = useCallback(async () => {
+    setSnapshotting(true);
+    setError(null);
+    try {
+      await apiPost("/admin/storage-health/snapshot", {}, undefined, { timeoutMs: 30_000 });
+      const started = Date.now();
+      while (Date.now() - started < 120_000) {
+        const data = await load(true);
+        if (!data?.snapshotGenerating && data?.dashboard?.operationsCenter?.snapshotStatus?.available) return;
+        await sleep(3000);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Snapshot failed");
+    } finally {
+      setSnapshotting(false);
+    }
+  }, [load]);
 
   const runScan = useCallback(async () => {
     setScanning(true);
@@ -505,6 +554,14 @@ export default function StorageHealthPage() {
             </button>
             <button
               type="button"
+              onClick={() => void runSnapshot()}
+              disabled={scanning || snapshotting || !dash}
+              style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, color: C.text, cursor: "pointer", fontSize: 13, fontWeight: 600 }}
+            >
+              {snapshotting ? "Generating…" : "Generate Snapshot"}
+            </button>
+            <button
+              type="button"
               onClick={() => void runScan()}
               disabled={scanning}
               style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: C.blue, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 700 }}
@@ -557,7 +614,105 @@ export default function StorageHealthPage() {
                   sub="Based on disk, cache & unknowns"
                   accent={riskColor(C, dash.riskLevel)}
                 />
+                {ops ? (
+                  <KpiCard
+                    C={C}
+                    label="CLEANUP READINESS"
+                    value={`${ops.readinessScorePct}%`}
+                    sub={ops.readinessLabel.replace(/_/g, " ")}
+                    accent={ops.readinessScorePct >= 70 && !ops.safetyGates.blocked ? C.ok : C.warn}
+                  />
+                ) : null}
               </div>
+
+              {ops ? (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+                  <div style={cardStyle}>
+                    <div style={sectionTitle}>BUILD CACHE ANALYSIS</div>
+                    <div style={{ display: "grid", gap: 8, fontSize: 13 }}>
+                      <div>Total: <strong>{fmtBytes(ops.buildCacheAnalysis.totalBytes)}</strong> ({ops.buildCacheAnalysis.totalEntries} entries)</div>
+                      <div>Referenced: <strong>{fmtBytes(ops.buildCacheAnalysis.referencedBytes)}</strong></div>
+                      <div>Unused: <strong>{fmtBytes(ops.buildCacheAnalysis.unusedBytes)}</strong></div>
+                      <div>Unknown: <strong style={{ color: ops.buildCacheAnalysis.unknownBytes > 0 ? C.crit : C.text }}>{fmtBytes(ops.buildCacheAnalysis.unknownBytes)}</strong></div>
+                    </div>
+                  </div>
+                  <div style={cardStyle}>
+                    <div style={sectionTitle}>SNAPSHOT STATUS</div>
+                    <div style={{ fontSize: 13, display: "grid", gap: 8 }}>
+                      <div>{ops.snapshotStatus.available ? "Preflight snapshot available" : "No snapshot yet — click Generate Snapshot"}</div>
+                      {ops.snapshotStatus.latestTimestamp ? <div style={{ color: C.textMuted }}>{ops.snapshotStatus.latestTimestamp}</div> : null}
+                    </div>
+                  </div>
+                  <div style={cardStyle}>
+                    <div style={sectionTitle}>SAFETY GATES</div>
+                    <Badge C={C} label={ops.safetyGates.blocked ? "BLOCKED" : "PASS"} tone={ops.safetyGates.blocked ? "crit" : "ok"} />
+                    {ops.safetyGates.reasons.length ? (
+                      <ul style={{ margin: "10px 0 0", paddingLeft: 18, fontSize: 12, color: C.textMuted }}>
+                        {ops.safetyGates.reasons.map((r) => <li key={r}>{r}</li>)}
+                      </ul>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+
+              {ops ? (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+                  <div style={cardStyle}>
+                    <div style={sectionTitle}>DEPENDENCY GRAPH</div>
+                    <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 10 }}>{ops.dependencyGraph.runningContainerCount} running containers mapped</div>
+                    {ops.dependencyGraph.nodes.slice(0, 12).map((n) => (
+                      <div key={n.containerName} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px solid ${C.border}44`, fontSize: 12 }}>
+                        <span><strong>{n.service}</strong> · {n.containerName}</span>
+                        <Badge C={C} label={n.protectedByRunningContainer ? "Protected" : n.state} tone={n.protectedByRunningContainer ? "crit" : "info"} />
+                      </div>
+                    ))}
+                  </div>
+                  <div style={cardStyle}>
+                    <div style={sectionTitle}>ROLLBACK COVERAGE</div>
+                    {ops.rollbackCoverage.slice(0, 10).map((r) => (
+                      <div key={r.service} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px solid ${C.border}44`, fontSize: 12 }}>
+                        <span>{r.service} · {r.image}</span>
+                        <Badge C={C} label={r.rollbackAvailable ? "Available" : "Missing"} tone={r.rollbackAvailable ? "ok" : "warn"} />
+                      </div>
+                    ))}
+                  </div>
+                  <div style={cardStyle}>
+                    <div style={sectionTitle}>CONFIDENCE DISTRIBUTION</div>
+                    {ops.confidenceDistribution.map((c) => (
+                      <div key={c.label} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 12 }}>
+                        <span>{c.label}</span>
+                        <span>{c.pct}% · {fmtBytes(c.sizeBytes)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {ops ? (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+                  <div style={cardStyle}>
+                    <div style={sectionTitle}>APK ANALYSIS</div>
+                    <div style={{ marginBottom: 8 }}>Total: <strong>{fmtBytes(ops.apkForensics.totalBytes)}</strong></div>
+                    <div style={{ fontSize: 12, color: C.textMuted }}>Latest: {ops.apkForensics.latestReleases.map((a) => a.filename).join(", ") || "—"}</div>
+                  </div>
+                  <div style={cardStyle}>
+                    <div style={sectionTitle}>LOG STORAGE ANALYSIS</div>
+                    <div style={{ marginBottom: 8 }}>Total: <strong>{fmtBytes(ops.logForensics.totalBytes)}</strong></div>
+                    {ops.logForensics.locations.map((l) => (
+                      <div key={l.path} style={{ fontSize: 12, padding: "4px 0" }}>{l.label}: {fmtBytes(l.sizeBytes)}</div>
+                    ))}
+                  </div>
+                  <div style={cardStyle}>
+                    <div style={sectionTitle}>RISK MATRIX</div>
+                    {ops.riskMatrix.map((r) => (
+                      <div key={r.category} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 12 }}>
+                        <span>{r.category}</span>
+                        <span>{fmtBytes(r.sizeBytes)} · {r.confidenceLabel}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
 
               {health?.alerts?.length ? (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>

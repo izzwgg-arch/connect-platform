@@ -5,6 +5,7 @@ import {
   getLatestCleanupPlan,
   getStorageAuditHistory,
   getStorageHealthSnapshot,
+  queuePreflightSnapshot,
   queueStorageScan,
   refuseStorageCleanupApproval,
   refuseStorageCleanupExecution,
@@ -66,6 +67,16 @@ export function registerStorageMaintenanceRoutes(
     const plan = getLatestCleanupPlan();
     if (!plan) return reply.status(404).send({ error: "no_cleanup_plan", detail: "Generate a plan after scanning." });
     return reply.send(plan);
+  });
+
+  app.post("/admin/storage-health/snapshot", async (req, reply) => {
+    const admin = await requireSuperAdmin(req, reply);
+    if (!admin) return;
+    const result = queuePreflightSnapshot(admin.sub);
+    if (!result.accepted) {
+      return reply.status(409).send({ error: "storage_scan_required", detail: "Run Scan Now before generating a snapshot." });
+    }
+    return reply.status(202).send(result);
   });
 
   app.post("/admin/storage-health/approve", async (req, reply) => {

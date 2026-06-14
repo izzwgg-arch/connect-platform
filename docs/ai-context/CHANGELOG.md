@@ -4,6 +4,25 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-14 — Storage cleanup proof system (Phase 2)
+
+**Task:** Build proof, dependency mapping, confidence scoring, rollback verification, and pre-cleanup readiness before any storage reclamation.
+**Risk:** critical scope — read-only except timestamped JSON preflight snapshots; no prune, delete, restart, or execution.
+
+- Added `apps/api/src/ops/storageMaintenance/proofSystem/*` — BuildKit forensics, container→image dependency graph, rollback audit, APK/log forensics, confidence engine, readiness scoring, safety gates, preflight snapshot generator.
+- Extended scanner + dashboard with `operationsCenter` payload (build cache analysis, dependency coverage, rollback coverage, confidence distribution, risk matrix, protected assets).
+- Added `POST /admin/storage-health/snapshot` (202 async) — writes read-only JSON to `/opt/connectcomms/backups/storage-preflight/`.
+- Added writable preflight mount on `api` / `api_candidate` in `docker-compose.app.yml` (`STORAGE_PREFLIGHT_SNAPSHOT_ROOT`).
+- Redesigned portal `/admin/storage-health` as Operations Center: Cleanup Readiness KPI, Generate Snapshot, safety gate blockers, dependency/rollback/confidence sections.
+- Extended Docker API whitelist for `/images/{id}/json` image inspect.
+- 30 unit tests (confidence, dependency, rollback, readiness, snapshot, safety gates, protected/unknown blocking).
+
+**Documentation:** `STORAGE_MAINTENANCE.md` § Phase 2, `SERVER_OPERATIONS.md`, `DEPLOYMENT.md`.
+
+**No cleanup executed.** Approve **501** / execute **403** unchanged.
+
+---
+
 ## 2026-06-14 — Storage Health host visibility layer (Phase 1.6)
 
 **Task:** Enable Storage Health scanner to see real Docker host inventory from inside the API container.

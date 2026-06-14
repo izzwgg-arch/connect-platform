@@ -4,6 +4,7 @@
  */
 const ALLOWED_DOCKER_GET_PREFIXES = [
   "/images/json",
+  "/images/",
   "/containers/json",
   "/volumes",
   "/system/df",
@@ -13,9 +14,13 @@ const ALLOWED_DOCKER_GET_PREFIXES = [
 
 export function assertReadOnlyDockerApiPath(path: string): void {
   const normalized = path.startsWith("/") ? path : `/${path}`;
-  const allowed = ALLOWED_DOCKER_GET_PREFIXES.some(
-    (prefix) => normalized === prefix || normalized.startsWith(`${prefix}?`) || normalized.startsWith(`${prefix}&`),
-  );
+  const allowed = ALLOWED_DOCKER_GET_PREFIXES.some((prefix) => {
+    if (normalized === prefix || normalized.startsWith(`${prefix}?`)) return true;
+    if (prefix === "/images/" && normalized.startsWith("/images/") && !normalized.includes("/push")) {
+      return /^\/images\/(sha256:[a-f0-9]+|[a-f0-9]{64})(\/json)?$/i.test(normalized.split("?")[0] ?? normalized);
+    }
+    return false;
+  });
   if (!allowed) {
     throw new Error(`storage_host_visibility_forbidden_docker_path:${normalized}`);
   }

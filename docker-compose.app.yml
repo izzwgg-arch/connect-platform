@@ -111,7 +111,7 @@ services:
       STORAGE_CONTAINERD_ROOT: ${STORAGE_CONTAINERD_ROOT:-/host-inventory/var/lib/containerd}
       STORAGE_JOURNAL_ROOT: ${STORAGE_JOURNAL_ROOT:-/host-inventory/var/log/journal}
       STORAGE_DEPLOY_LOGS_ROOT: ${STORAGE_DEPLOY_LOGS_ROOT:-/host-inventory/var/log/connect-deploys}
-    # Migrations run in scripts/deploy-api.sh before containers; boot should listen quickly.
+      STORAGE_PREFLIGHT_SNAPSHOT_ROOT: ${STORAGE_PREFLIGHT_SNAPSHOT_ROOT:-/var/lib/connect/storage-preflight}
     command: sh -lc "pnpm --filter @connect/api start"
     ports:
       - "127.0.0.1:3001:3001"
@@ -147,6 +147,8 @@ services:
       - /var/lib/containerd:/host-inventory/var/lib/containerd:ro
       - /opt/connectcomms:/host-inventory/opt/connectcomms:ro
       - /var/log:/host-inventory/var/log:ro
+      # Writable preflight snapshot store (Phase 2 proof JSON only — no cleanup)
+      - /opt/connectcomms/backups/storage-preflight:/var/lib/connect/storage-preflight
     networks:
       - default
       - infra_default
@@ -227,6 +229,7 @@ services:
       STORAGE_CONTAINERD_ROOT: ${STORAGE_CONTAINERD_ROOT:-/host-inventory/var/lib/containerd}
       STORAGE_JOURNAL_ROOT: ${STORAGE_JOURNAL_ROOT:-/host-inventory/var/log/journal}
       STORAGE_DEPLOY_LOGS_ROOT: ${STORAGE_DEPLOY_LOGS_ROOT:-/host-inventory/var/log/connect-deploys}
+      STORAGE_PREFLIGHT_SNAPSHOT_ROOT: ${STORAGE_PREFLIGHT_SNAPSHOT_ROOT:-/var/lib/connect/storage-preflight}
     command: sh -lc "pnpm --filter @connect/api start"
     ports:
       - "127.0.0.1:3004:3001"
@@ -249,6 +252,7 @@ services:
       - /var/lib/containerd:/host-inventory/var/lib/containerd:ro
       - /opt/connectcomms:/host-inventory/opt/connectcomms:ro
       - /var/log:/host-inventory/var/log:ro
+      - /opt/connectcomms/backups/storage-preflight:/var/lib/connect/storage-preflight
     networks:
       - default
       - infra_default

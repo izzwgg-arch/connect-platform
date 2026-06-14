@@ -5,6 +5,7 @@ import { collectHostMetrics } from "../hostMetrics";
 import { buildInventoryItem } from "./classifier";
 import { deriveStorageAlerts } from "./alerts";
 import { buildStorageDashboardSummary } from "./dashboard";
+import { buildOperationsCenter, fetchBuildCacheRaw } from "./proofSystem/operationsCenter";
 import type {
   ContainerdBreakdown,
   DockerSystemSummary,
@@ -40,6 +41,8 @@ export type StorageScannerDeps = {
   listContainers: () => Promise<DockerContainerRow[]>;
   listVolumes: () => Promise<DockerVolumeRow[]>;
   getDockerSystemDf: () => Promise<DockerSystemSummary>;
+  getSystemDfJson?: () => Promise<unknown>;
+  inspectImages?: () => Promise<import("./proofSystem/dependencyGraph").ImageInspectRow[]>;
   statPathBytes: (path: string) => Promise<number | null>;
   listFilesInDir: (dir: string) => Promise<Array<{ name: string; path: string; sizeBytes: number; mtimeMs: number }>>;
   pathExists: (path: string) => Promise<boolean>;
@@ -335,7 +338,8 @@ export async function runStorageScan(deps: StorageScannerDeps): Promise<StorageS
     ? await deps.probeHostVisibility().catch(() => EMPTY_HOST_VISIBILITY)
     : EMPTY_HOST_VISIBILITY;
 
-  const [images, containers, volumes, dockerSummary, fsItems, apkItems, containerdScan] = await Promise.all([
+  const [images, containers, volumes, dockerSummary, fsItems, apkItems, containerdScan, buildCacheRaw, imageInspects] =
+    await Promise.all([
     deps.listImages().catch(() => [] as DockerImageRow[]),
     deps.listContainers().catch(() => [] as DockerContainerRow[]),
     deps.listVolumes().catch(() => [] as DockerVolumeRow[]),
@@ -354,6 +358,10 @@ export async function runStorageScan(deps: StorageScannerDeps): Promise<StorageS
     scanFilesystemPaths(deps),
     scanApkDownloads(deps),
     scanContainerdBreakdown(deps),
+    deps.getSystemDfJson
+      ? fetchBuildCacheRaw(deps.getSystemDfJson)
+      : Promise.resolve([]),
+    deps.inspectImages ? deps.inspectImages().catch(() => []) : Promise.resolve([]),
   ]);
 
   const items: StorageInventoryItem[] = [
@@ -416,9 +424,20 @@ export async function runStorageScan(deps: StorageScannerDeps): Promise<StorageS
     containerd: containerdScan.breakdown,
   };
 
+  const baseDashboard = buildStorageDashboardSummary(scanWithoutDashboard, deps.config);
+  const operationsCenter = buildOperationsCenter({
+    scan: scanWithoutDashboard,
+    config: deps.config,
+    buildCacheRaw,
+    images,
+    containers,
+    imageInspects,
+  });
+
   return {
     ...scanWithoutDashboard,
-    dashboard: buildStorageDashboardSummary(scanWithoutDashboard, deps.config),
+    durationMs: Date.now() - started,
+    dashboard: { ...baseDashboard, operationsCenter },
   };
 }
 

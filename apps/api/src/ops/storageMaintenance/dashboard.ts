@@ -395,6 +395,7 @@ export function buildStorageDashboardSummary(
     protectedAssets: buildProtectedAssets(scan.items, config),
     distribution: buildStorageDistribution(scan, config),
     cleanupReadiness: buildCleanupReadiness(scan, plan),
+    operationsCenter: null,
   };
 }
 
