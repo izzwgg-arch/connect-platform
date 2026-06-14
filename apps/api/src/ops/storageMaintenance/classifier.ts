@@ -22,11 +22,11 @@ function classifyFilesystemPath(path: string, config: StorageMaintenanceConfig):
   if (isProtectedPath(path, config)) return "PROTECTED_NEVER_DELETE";
   const normalized = path.replace(/\\/g, "/");
   if (normalized.startsWith(`${config.appRoot}/app`)) return "ACTIVE_REQUIRED";
+  if (normalized.startsWith(config.containerdRoot)) return "ACTIVE_REQUIRED";
   if (normalized.startsWith(config.downloadsRoot)) return "SAFE_CANDIDATE";
   if (normalized.startsWith(config.monitoringLogsRoot)) return "SAFE_CANDIDATE";
   if (normalized.includes("/var/log/journal")) return "SAFE_CANDIDATE";
   if (normalized.startsWith("/var/log/connect-deploys")) return "UNKNOWN_REQUIRES_REVIEW";
-  if (normalized.startsWith(config.containerdRoot)) return "SAFE_CANDIDATE";
   if (normalized.startsWith("/var/lib/docker")) return "UNKNOWN_REQUIRES_REVIEW";
   return "UNKNOWN_REQUIRES_REVIEW";
 }
@@ -105,16 +105,43 @@ export function classifyStorageItem(
       evidence = "unhandled_kind";
   }
 
-  const reclaimable =
-    classification === "SAFE_CANDIDATE" || classification === "ROLLBACK_CANDIDATE"
-      ? input.sizeBytes
-      : null;
-
   return {
     classification,
     evidence,
-    reclaimableBytes: reclaimable,
+    reclaimableBytes: reclaimableBytesForItem(input, classification, config),
   };
+}
+
+function reclaimableBytesForItem(
+  input: ClassifyInput,
+  classification: StorageClassification,
+  config: StorageMaintenanceConfig,
+): number | null {
+  const { kind, pathOrRef, metadata = {}, sizeBytes } = input;
+  const normalized = pathOrRef.replace(/\\/g, "/");
+
+  if (kind === "docker_build_cache") {
+    const reclaim = metadata.reclaimableBytes;
+    return typeof reclaim === "number" ? reclaim : null;
+  }
+
+  if (kind === "filesystem_path" || kind === "log_directory" || kind === "diagnostic_dump") {
+    return null;
+  }
+
+  if (kind === "apk_download") {
+    return null;
+  }
+
+  if (kind === "docker_image" && (classification === "SAFE_CANDIDATE" || classification === "ROLLBACK_CANDIDATE")) {
+    return sizeBytes;
+  }
+
+  if (normalized.startsWith(config.downloadsRoot)) {
+    return null;
+  }
+
+  return null;
 }
 
 export function buildInventoryItem(

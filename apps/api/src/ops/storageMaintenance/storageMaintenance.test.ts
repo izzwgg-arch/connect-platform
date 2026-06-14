@@ -34,6 +34,7 @@ import {
   rankLargestConsumers,
 } from "./dashboard";
 import { parseDockerSystemDfText, type StorageScannerDeps } from "./scanner";
+import { computeReclaimEstimate } from "./reclaimEstimate";
 import type { DockerSystemSummary, StorageScanSnapshot } from "./types";
 
 const config = loadStorageMaintenanceConfig();
@@ -195,6 +196,52 @@ function mockDeps(overrides: Partial<StorageScannerDeps> = {}): StorageScannerDe
     ...overrides,
   };
 }
+
+test("reclaim estimate does not double-count containerd and build cache", async () => {
+  const scan = await executeStorageScan(mockDeps(), "reclaim-dedupe");
+  const root = scan.diskMounts.find((m) => m.path === "/" || m.path === "C:\\") ?? scan.diskMounts[0];
+  const { breakdown } = computeReclaimEstimate(scan.items, scan.docker, scan.diskMounts, config);
+  assert.equal(breakdown.buildKitCacheBytes, 480e9);
+  assert.equal(breakdown.unusedImageBytes, 4e8);
+  assert.equal(breakdown.rollbackImageBytes, 1e9);
+  assert.ok(scan.reclaimEstimateBytes <= (root?.usedBytes ?? Number.MAX_SAFE_INTEGER));
+  assert.ok(scan.reclaimEstimateBytes < 600e9);
+  const containerdItem = scan.items.find((i) => i.pathOrRef.includes("containerd") && i.kind === "filesystem_path");
+  if (containerdItem) {
+    assert.equal(containerdItem.reclaimableBytes, null);
+    assert.equal(containerdItem.classification, "ACTIVE_REQUIRED");
+  }
+});
+
+test("computeReclaimEstimate caps total at disk used", () => {
+  const items = [
+    {
+      id: "buildcache:aggregate",
+      kind: "docker_build_cache" as const,
+      label: "cache",
+      pathOrRef: "docker_buildkit_cache",
+      sizeBytes: 600e9,
+      classification: "SAFE_CANDIDATE" as const,
+      evidence: "test",
+      reclaimableBytes: 600e9,
+      metadata: { reclaimableBytes: 600e9 },
+    },
+  ];
+  const docker: DockerSystemSummary = {
+    imagesCount: 0,
+    imagesBytes: null,
+    imagesReclaimableBytes: null,
+    containersCount: 0,
+    containersBytes: null,
+    volumesCount: 0,
+    volumesBytes: null,
+    buildCache: { entryCount: 1, totalBytes: 600e9, reclaimableBytes: 600e9, source: "docker_system_df" },
+  };
+  const mounts = [{ path: "/", totalBytes: 678e9, usedBytes: 547e9, freeBytes: 131e9, usedPct: 81 }];
+  const { reclaimEstimateBytes, breakdown } = computeReclaimEstimate(items, docker, mounts, config);
+  assert.equal(reclaimEstimateBytes, 547e9);
+  assert.equal(breakdown.cappedToUsedDisk, true);
+});
 
 test("dry-run scan produces inventory without mutation hooks", async () => {
   clearStorageAuditEventsForTests();

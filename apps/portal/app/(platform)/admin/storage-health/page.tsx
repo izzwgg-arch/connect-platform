@@ -605,7 +605,7 @@ export default function StorageHealthPage() {
                   }
                   accent={C.info}
                 />
-                <KpiCard C={C} label="RECLAIMABLE" value={fmtBytes(dash.reclaimableBytes)} sub="Safe + rollback candidates" accent={C.ok} />
+                <KpiCard C={C} label="RECLAIMABLE" value={fmtBytes(dash.reclaimableBytes)} sub="BuildKit + unused/rollback images + old APKs" accent={C.ok} />
                 <KpiCard C={C} label="PROTECTED DATA" value={fmtBytes(dash.protectedDataBytes)} sub="Production assets locked" accent={C.crit} />
                 <KpiCard
                   C={C}

@@ -5,6 +5,7 @@ import { collectHostMetrics } from "../hostMetrics";
 import { buildInventoryItem } from "./classifier";
 import { deriveStorageAlerts } from "./alerts";
 import { buildStorageDashboardSummary } from "./dashboard";
+import { computeReclaimEstimate } from "./reclaimEstimate";
 import { buildOperationsCenter, fetchBuildCacheRaw } from "./proofSystem/operationsCenter";
 import type {
   ContainerdBreakdown,
@@ -392,7 +393,7 @@ export async function runStorageScan(deps: StorageScannerDeps): Promise<StorageS
     );
   }
 
-  const reclaimEstimateBytes = items.reduce((sum, item) => sum + (item.reclaimableBytes ?? 0), 0);
+  const { reclaimEstimateBytes } = computeReclaimEstimate(items, dockerSummary, host.storage, deps.config);
   const unknownCount = items.filter((i) => i.classification === "UNKNOWN_REQUIRES_REVIEW").length;
   const protectedCount = items.filter((i) => i.classification === "PROTECTED_NEVER_DELETE").length;
   const containerdBytes =
