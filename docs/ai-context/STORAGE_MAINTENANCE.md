@@ -90,6 +90,7 @@ A compromised API process could theoretically bypass the whitelist — treat soc
 - Growth trends require multiple scans over time (in-memory history ring).
 - Worker/telephony hosts are not scanned — app host only.
 - Build cache reclaimable estimate depends on Docker Engine `/system/df` reclaimable flags.
+- **Containerd `du` walks take 15–20 minutes** on production (~500 GB trees). First scan after deploy may leave overlay/total null until the 20-minute path timeout completes; subsequent scans reuse in-memory results until the API container restarts.
 
 ### API routes (super-admin JWT)
 
