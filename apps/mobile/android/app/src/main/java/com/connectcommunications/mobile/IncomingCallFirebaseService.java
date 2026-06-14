@@ -20,12 +20,16 @@ import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.service.notification.StatusBarNotification;
 import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
+import androidx.core.app.Person;
+import androidx.core.app.RemoteInput;
 
 import com.facebook.react.bridge.Arguments;
 import com.google.firebase.messaging.FirebaseMessagingService;
@@ -104,6 +108,24 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
      */
     private static final int MISSED_CALL_NOTIF_ID_BASE = 52000;
     private static final int USER_ALERT_NOTIF_ID_BASE = 53000;
+    /**
+     * Stable, single-slot notification ids for the "collapse + count up" alert
+     * families. Every new voicemail re-uses {@link #VOICEMAIL_NOTIF_ID} and
+     * increments the running count stored in the notification's extras, so the
+     * user sees ONE "N new voicemails" entry instead of a tray full of them.
+     * Chat threads are keyed per-conversation (see
+     * {@link #messageNotifIdForConversation(String)}) and use MessagingStyle,
+     * which natively shows the latest message when there is one and "N new
+     * messages" when there are several. The message group summary nests every
+     * conversation under a single "Messages" bundle.
+     */
+    private static final int VOICEMAIL_NOTIF_ID = USER_ALERT_NOTIF_ID_BASE + 1;
+    private static final int MISSED_CALL_ALERT_NOTIF_ID = USER_ALERT_NOTIF_ID_BASE + 2;
+    private static final int MESSAGES_GROUP_SUMMARY_ID = USER_ALERT_NOTIF_ID_BASE + 3;
+    private static final int MESSAGE_NOTIF_ID_BASE = USER_ALERT_NOTIF_ID_BASE + 100;
+    private static final String MESSAGES_GROUP_KEY = "connect_messages_group";
+    /** Custom notification extra carrying the running per-type alert count. */
+    private static final String EXTRA_CC_COUNT = "cc_count";
     /**
      * If no real INCOMING_CALL FCM ever arrives within this window the
      * placeholder self-dismisses so the user is not left staring at a
@@ -387,6 +409,27 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
      * notification natively (Expo's JS listener does not run for strict data-only).
      */
     private void handleUserAlertDataPushNative(String type, Map<String, String> data) {
+        // FCM path: honour the foreground skip (JS presents its own banner while
+        // the app is open). The JS foreground path calls postUserAlertNotification
+        // directly with bypassForegroundSkip=true.
+        postUserAlertNotification(this, type, data, false);
+    }
+
+    /**
+     * Single source of truth for posting voicemail / missed-call / chat tray
+     * notifications. Used by the FCM handler (background/killed) and by the JS
+     * foreground path (via IncomingCallUiModule.postUserAlert) so grouping and
+     * count-up behaviour is identical in every app state.
+     *
+     * Behaviour:
+     *  - voicemail / missed_call → ONE stable notification per type whose count
+     *    increments ("3 new voicemails"). A single one shows the real detail.
+     *  - dm_message / sms_message → MessagingStyle keyed per conversation. One
+     *    message shows its text; several collapse to "N new messages" and expand
+     *    to show them. Carries an inline Reply action + tap-to-open, and nests
+     *    under a "Messages" group summary.
+     */
+    static void postUserAlertNotification(Context ctx, String type, Map<String, String> data, boolean bypassForegroundSkip) {
         String channelId = data.get("androidChannelId");
         if (channelId == null || channelId.isEmpty()) {
             if ("voicemail".equals(type)) {
@@ -408,61 +451,207 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             + " messageId=" + (messageId != null ? messageId : "")
             + " voicemailId=" + (voicemailId != null ? voicemailId : ""));
 
-        String appState = lastPushReceivedAppState;
-        if ("FOREGROUND".equals(appState) || "VISIBLE".equals(appState)) {
-            Log.i(TAG, "[CONNECT_USER_ALERT] foreground_skip_native_tray type=" + type);
-            return;
+        if (!bypassForegroundSkip) {
+            String appState = lastPushReceivedAppState;
+            if ("FOREGROUND".equals(appState) || "VISIBLE".equals(appState)) {
+                Log.i(TAG, "[CONNECT_USER_ALERT] foreground_skip_native_tray type=" + type);
+                return;
+            }
         }
 
-        ensureUserAlertChannel(channelId);
-
-        String dedupeKey = type + ":" + (messageId != null ? messageId : "")
-            + ":" + (voicemailId != null ? voicemailId : "")
-            + ":" + (data.get("callId") != null ? data.get("callId") : "");
-        int notifHash = Math.abs(dedupeKey.hashCode() % 8000);
-        int notifId = USER_ALERT_NOTIF_ID_BASE + notifHash;
-
-        android.net.Uri tapUri;
-        if ("voicemail".equals(type)) {
-            String vm = voicemailId != null ? voicemailId : "";
-            tapUri = android.net.Uri.parse(
-                "com.connectcommunications.mobile://voicemail?voicemailId=" + android.net.Uri.encode(vm));
-        } else if ("missed_call".equals(type)) {
-            tapUri = android.net.Uri.parse("com.connectcommunications.mobile://missed-call");
-        } else {
-            String conv = data.get("conversationId") != null ? data.get("conversationId") : "";
-            String mid = messageId != null ? messageId : "";
-            tapUri = android.net.Uri.parse(
-                "com.connectcommunications.mobile://chat?conversationId=" + android.net.Uri.encode(conv)
-                    + "&messageId=" + android.net.Uri.encode(mid));
-        }
-        Intent tapIntent = new Intent(Intent.ACTION_VIEW, tapUri);
-        tapIntent.setClass(this, MainActivity.class);
-        tapIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        int piFlags = PendingIntent.FLAG_UPDATE_CURRENT;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            piFlags |= PendingIntent.FLAG_IMMUTABLE;
-        }
-        PendingIntent tapPi = PendingIntent.getActivity(this, notifId, tapIntent, piFlags);
+        ensureUserAlertChannel(ctx, channelId);
 
         try {
-            NotificationCompat.Builder b = new NotificationCompat.Builder(this, channelId)
-                .setSmallIcon(R.drawable.notification_icon)
-                .setContentTitle(title.isEmpty() ? "Connect" : title)
-                .setContentText(body.isEmpty() ? " " : body)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setAutoCancel(true)
-                .setContentIntent(tapPi);
-            NotificationManagerCompat.from(this).notify(notifId, b.build());
-            Log.i(TAG, "[CONNECT_USER_ALERT] posted_tray notifId=" + notifId + " type=" + type);
+            if ("dm_message".equals(type) || "sms_message".equals(type)) {
+                String conversationId = data.get("conversationId") != null ? data.get("conversationId") : "";
+                String senderName = !title.isEmpty() ? title : "Message";
+                String messageText = !body.isEmpty() ? body : "New message";
+                postChatMessageNotification(ctx, channelId, conversationId, messageId, senderName, messageText, false);
+            } else {
+                boolean voicemail = "voicemail".equals(type);
+                int notifId = voicemail ? VOICEMAIL_NOTIF_ID : MISSED_CALL_ALERT_NOTIF_ID;
+                int count = readExistingCount(ctx, notifId) + 1;
+                String contentTitle;
+                String contentText;
+                if (count <= 1) {
+                    contentTitle = title.isEmpty() ? "Connect" : title;
+                    contentText = body.isEmpty() ? " " : body;
+                } else if (voicemail) {
+                    contentTitle = "Voicemail";
+                    contentText = count + " new voicemails";
+                } else {
+                    contentTitle = "Missed calls";
+                    contentText = count + " missed calls";
+                }
+                android.net.Uri tapUri = voicemail
+                    ? android.net.Uri.parse("com.connectcommunications.mobile://voicemail?voicemailId="
+                        + android.net.Uri.encode(voicemailId != null ? voicemailId : ""))
+                    : android.net.Uri.parse("com.connectcommunications.mobile://missed-call");
+                PendingIntent tapPi = buildActivityTapPendingIntent(ctx, tapUri, notifId);
+
+                Bundle extras = new Bundle();
+                extras.putInt(EXTRA_CC_COUNT, count);
+                NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, channelId)
+                    .setSmallIcon(R.drawable.notification_icon)
+                    .setContentTitle(contentTitle)
+                    .setContentText(contentText)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setAutoCancel(true)
+                    .setOnlyAlertOnce(false)
+                    .setNumber(count)
+                    .addExtras(extras)
+                    .setContentIntent(tapPi);
+                if (count > 1) {
+                    b.setStyle(new NotificationCompat.BigTextStyle().bigText(contentText));
+                }
+                NotificationManagerCompat.from(ctx).notify(notifId, b.build());
+                Log.i(TAG, "[CONNECT_USER_ALERT] posted_tray notifId=" + notifId + " type=" + type + " count=" + count);
+            }
         } catch (Throwable t) {
             Log.w(TAG, "[CONNECT_USER_ALERT] post_failed: " + t.getMessage());
         }
     }
 
-    private void ensureUserAlertChannel(String channelId) {
+    /**
+     * Post (or update) the per-conversation chat notification using
+     * MessagingStyle. Each incoming message is appended to the conversation's
+     * existing style (extracted from the live notification) so Android renders
+     * the natural "one message → text, many → N new messages, expandable list"
+     * behaviour. {@code fromSelf} appends a reply the user just sent.
+     */
+    static void postChatMessageNotification(Context ctx, String channelId, String conversationId,
+                                            String messageId, String senderName, String messageText,
+                                            boolean fromSelf) {
+        ensureUserAlertChannel(ctx, channelId);
+        int notifId = messageNotifIdForConversation(conversationId);
+
+        Person self = new Person.Builder().setName("You").setKey("self").build();
+        NotificationCompat.MessagingStyle style = null;
+        StatusBarNotification existing = findActiveNotification(ctx, notifId);
+        if (existing != null) {
+            style = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(existing.getNotification());
+        }
+        if (style == null) {
+            style = new NotificationCompat.MessagingStyle(self).setGroupConversation(false);
+        }
+        if (fromSelf) {
+            style.addMessage(messageText, System.currentTimeMillis(), (Person) null);
+        } else {
+            Person sender = new Person.Builder()
+                .setName(senderName != null && !senderName.isEmpty() ? senderName : "Message")
+                .setKey(conversationId != null && !conversationId.isEmpty() ? conversationId : "conv")
+                .build();
+            style.addMessage(messageText, System.currentTimeMillis(), sender);
+        }
+
+        PendingIntent tapPi = buildActivityTapPendingIntent(ctx,
+            android.net.Uri.parse("com.connectcommunications.mobile://chat?conversationId="
+                + android.net.Uri.encode(conversationId != null ? conversationId : "")
+                + "&messageId=" + android.net.Uri.encode(messageId != null ? messageId : "")),
+            notifId);
+
+        NotificationCompat.Builder b = new NotificationCompat.Builder(ctx, channelId)
+            .setSmallIcon(R.drawable.notification_icon)
+            .setStyle(style)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setAutoCancel(true)
+            .setGroup(MESSAGES_GROUP_KEY)
+            .setContentIntent(tapPi)
+            .addAction(buildReplyAction(ctx, notifId, channelId, conversationId, senderName));
+
+        NotificationManagerCompat.from(ctx).notify(notifId, b.build());
+        postMessagesGroupSummary(ctx, channelId);
+        Log.i(TAG, "[CONNECT_USER_ALERT] posted_chat notifId=" + notifId
+            + " conv=" + conversationId + " fromSelf=" + fromSelf
+            + " msgs=" + style.getMessages().size());
+    }
+
+    /**
+     * Group summary so multiple conversations bundle under one "Messages" entry.
+     * AutoCancel + group-summary semantics keep it tidy as threads are opened.
+     */
+    private static void postMessagesGroupSummary(Context ctx, String channelId) {
+        try {
+            NotificationCompat.Builder summary = new NotificationCompat.Builder(ctx, channelId)
+                .setSmallIcon(R.drawable.notification_icon)
+                .setContentTitle("Messages")
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setGroup(MESSAGES_GROUP_KEY)
+                .setGroupSummary(true)
+                .setAutoCancel(true);
+            NotificationManagerCompat.from(ctx).notify(MESSAGES_GROUP_SUMMARY_ID, summary.build());
+        } catch (Throwable t) {
+            Log.w(TAG, "[CONNECT_USER_ALERT] summary_failed: " + t.getMessage());
+        }
+    }
+
+    /** Inline "Reply" action wired to {@link ChatReplyReceiver} via RemoteInput. */
+    private static NotificationCompat.Action buildReplyAction(Context ctx, int notifId, String channelId,
+                                                              String conversationId, String senderName) {
+        RemoteInput remoteInput = new RemoteInput.Builder(ChatReplyReceiver.KEY_TEXT_REPLY)
+            .setLabel("Reply")
+            .build();
+        Intent replyIntent = new Intent(ctx, ChatReplyReceiver.class)
+            .setAction(ChatReplyReceiver.ACTION_REPLY)
+            .putExtra(ChatReplyReceiver.EXTRA_CONVERSATION_ID, conversationId)
+            .putExtra(ChatReplyReceiver.EXTRA_NOTIF_ID, notifId)
+            .putExtra(ChatReplyReceiver.EXTRA_CHANNEL_ID, channelId)
+            .putExtra(ChatReplyReceiver.EXTRA_SENDER_NAME, senderName);
+        // RemoteInput requires a MUTABLE PendingIntent on Android 12+ so the OS
+        // can inject the typed reply text into the broadcast.
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= 31) {
+            flags |= PendingIntent.FLAG_MUTABLE;
+        }
+        PendingIntent replyPi = PendingIntent.getBroadcast(ctx, notifId, replyIntent, flags);
+        return new NotificationCompat.Action.Builder(R.drawable.notification_icon, "Reply", replyPi)
+            .addRemoteInput(remoteInput)
+            .setAllowGeneratedReplies(true)
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
+            .build();
+    }
+
+    private static PendingIntent buildActivityTapPendingIntent(Context ctx, android.net.Uri tapUri, int requestCode) {
+        Intent tapIntent = new Intent(Intent.ACTION_VIEW, tapUri);
+        tapIntent.setClass(ctx, MainActivity.class);
+        tapIntent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        int piFlags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            piFlags |= PendingIntent.FLAG_IMMUTABLE;
+        }
+        return PendingIntent.getActivity(ctx, requestCode, tapIntent, piFlags);
+    }
+
+    static int messageNotifIdForConversation(String conversationId) {
+        String key = conversationId != null ? conversationId : "";
+        return MESSAGE_NOTIF_ID_BASE + Math.abs(key.hashCode() % 5000);
+    }
+
+    /** Find a currently-posted notification by id (API 23+), else null. */
+    static StatusBarNotification findActiveNotification(Context ctx, int notifId) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return null;
+        try {
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) return null;
+            for (StatusBarNotification sbn : nm.getActiveNotifications()) {
+                if (sbn.getId() == notifId) return sbn;
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    /** Read the running count carried in the live notification's extras. */
+    private static int readExistingCount(Context ctx, int notifId) {
+        StatusBarNotification sbn = findActiveNotification(ctx, notifId);
+        if (sbn == null || sbn.getNotification() == null || sbn.getNotification().extras == null) return 0;
+        return sbn.getNotification().extras.getInt(EXTRA_CC_COUNT, 0);
+    }
+
+    static void ensureUserAlertChannel(Context ctx, String channelId) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
-        NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm == null) return;
         if (nm.getNotificationChannel(channelId) != null) return;
         String name;

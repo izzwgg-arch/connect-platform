@@ -23315,8 +23315,12 @@ app.post("/internal/voicemail-notify", async (req, reply) => {
           listened: folder !== "inbox",
         },
       });
-      // Opt-in only: unset or false disables push (SEV-1 containment default).
-      const pushEnabled = (process.env.VOICEMAIL_PUSH_NOTIFICATIONS_ENABLED || "").toLowerCase() === "true";
+      // Enabled by default now that voicemail-notify targeting is proven safe
+      // (resolveExtensionForVoicemailNotify isolates by mailbox + AMI context +
+      // tenant directory — never a cross-tenant findFirst). Set
+      // VOICEMAIL_PUSH_NOTIFICATIONS_ENABLED=false on api to re-arm the SEV-1
+      // containment if targeting ever regresses.
+      const pushEnabled = (process.env.VOICEMAIL_PUSH_NOTIFICATIONS_ENABLED || "").toLowerCase() !== "false";
       if (
         pushEnabled &&
         !existingVoicemail &&

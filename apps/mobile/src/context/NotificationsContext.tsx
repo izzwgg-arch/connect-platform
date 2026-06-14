@@ -4205,15 +4205,33 @@ export function NotificationsProvider({
         const hasOsContent = !!(evt.request.content.title || evt.request.content.body);
         if (shouldPresentForegroundUserAlert(data, hasOsContent)) {
           const channelId = userAlertChannelId(data);
-          Notifications.scheduleNotificationAsync({
-            content: {
-              title: String((data as any).alertTitle),
-              body: (data as any)?.alertBody ? String((data as any).alertBody) : undefined,
-              data: { ...(data as any), _localPresented: true },
-              sound: "default",
-            },
-            trigger: Platform.OS === "android" ? ({ channelId } as any) : null,
-          }).catch(() => undefined);
+          // Android: post through the native grouping/MessagingStyle engine so
+          // foreground alerts collapse + count up and carry the inline Reply
+          // action exactly like background pushes. iOS keeps the Expo path.
+          // Only post natively when the app is genuinely active. When it's
+          // backgrounded the native FCM service already posted the grouped
+          // notification, so posting again here would double-count.
+          const nativeMod: any =
+            Platform.OS === "android" && AppState.currentState === "active"
+              ? (NativeModules as any)?.IncomingCallUi
+              : null;
+          if (nativeMod?.postUserAlert) {
+            try {
+              nativeMod.postUserAlert({ ...(data as any), androidChannelId: channelId });
+            } catch {
+              /* fall through to Expo scheduling on any native failure */
+            }
+          } else if (Platform.OS !== "android" || AppState.currentState === "active") {
+            Notifications.scheduleNotificationAsync({
+              content: {
+                title: String((data as any).alertTitle),
+                body: (data as any)?.alertBody ? String((data as any).alertBody) : undefined,
+                data: { ...(data as any), _localPresented: true },
+                sound: "default",
+              },
+              trigger: Platform.OS === "android" ? ({ channelId } as any) : null,
+            }).catch(() => undefined);
+          }
         }
       }
 

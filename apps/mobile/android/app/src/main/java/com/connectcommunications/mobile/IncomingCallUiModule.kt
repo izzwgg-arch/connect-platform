@@ -18,6 +18,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.modules.core.DeviceEventManagerModule
@@ -232,6 +233,75 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
     } else {
       Log.i(TAG, "setKeepAliveEnabled(false) — stopping SipKeepAliveService")
       SipKeepAliveService.stop(ctx)
+    }
+  }
+
+  /**
+   * Mirror the signed-in user's API auth token + API base URL into a private
+   * SharedPreferences file so the native ChatReplyReceiver can send inline
+   * notification replies even when the JS runtime / React process is not alive
+   * (background or killed). Called from AuthContext on login and on token load.
+   * Token never leaves app-private storage (MODE_PRIVATE).
+   */
+  @ReactMethod
+  fun setAuthMirror(token: String?, apiBase: String?) {
+    try {
+      val ctx = reactApplicationContext.applicationContext
+      val prefs = ctx.getSharedPreferences(ChatReplyReceiver.AUTH_PREFS, Context.MODE_PRIVATE)
+      val editor = prefs.edit()
+      if (token.isNullOrEmpty()) {
+        editor.remove(ChatReplyReceiver.PREF_TOKEN)
+      } else {
+        editor.putString(ChatReplyReceiver.PREF_TOKEN, token)
+      }
+      if (!apiBase.isNullOrEmpty()) {
+        editor.putString(ChatReplyReceiver.PREF_API_BASE, apiBase)
+      }
+      editor.apply()
+      Log.i(TAG, "setAuthMirror updated (hasToken=${!token.isNullOrEmpty()})")
+    } catch (t: Throwable) {
+      Log.w(TAG, "setAuthMirror failed: ${t.message}")
+    }
+  }
+
+  /** Clear the mirrored auth token on logout. */
+  @ReactMethod
+  fun clearAuthMirror() {
+    try {
+      val ctx = reactApplicationContext.applicationContext
+      ctx.getSharedPreferences(ChatReplyReceiver.AUTH_PREFS, Context.MODE_PRIVATE)
+        .edit().remove(ChatReplyReceiver.PREF_TOKEN).apply()
+      Log.i(TAG, "clearAuthMirror done")
+    } catch (t: Throwable) {
+      Log.w(TAG, "clearAuthMirror failed: ${t.message}")
+    }
+  }
+
+  /**
+   * Post a user-alert notification (voicemail / missed_call / dm_message /
+   * sms_message) through the SAME native grouping + count-up + MessagingStyle
+   * engine used for background pushes. The JS foreground handler calls this so
+   * grouping/reply behaviour is identical whether the app is open or not.
+   */
+  @ReactMethod
+  fun postUserAlert(data: ReadableMap?) {
+    if (data == null) return
+    try {
+      val ctx = reactApplicationContext.applicationContext
+      val map = HashMap<String, String>()
+      val it = data.keySetIterator()
+      while (it.hasNextKey()) {
+        val k = it.nextKey()
+        try {
+          if (data.getType(k) == com.facebook.react.bridge.ReadableType.String) {
+            data.getString(k)?.let { v -> map[k] = v }
+          }
+        } catch (_: Throwable) { /* skip non-string key */ }
+      }
+      val type = map["type"] ?: return
+      IncomingCallFirebaseService.postUserAlertNotification(ctx, type, map, true)
+    } catch (t: Throwable) {
+      Log.w(TAG, "postUserAlert failed: ${t.message}")
     }
   }
 

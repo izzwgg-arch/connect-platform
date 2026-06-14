@@ -1,9 +1,28 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { NativeModules, Platform } from "react-native";
 import * as SecureStore from "expo-secure-store";
-import { login as apiLogin, unregisterMobileDevice } from "../api/client";
+import { API_BASE, login as apiLogin, unregisterMobileDevice } from "../api/client";
 
 const TOKEN_KEY = "cc_mobile_token";
 const EXPO_PUSH_TOKEN_KEY = "cc_mobile_expo_push_token";
+
+/**
+ * Mirror the auth token + API base into native storage so the Android
+ * ChatReplyReceiver can send inline notification replies even when the JS
+ * runtime is not alive (background / killed). No-op on iOS and when the native
+ * module is unavailable. Best-effort — never throws into auth flow.
+ */
+function mirrorAuthToNative(token: string | null) {
+  if (Platform.OS !== "android") return;
+  try {
+    const mod: any = (NativeModules as any)?.IncomingCallUi;
+    if (!mod) return;
+    if (token) mod.setAuthMirror?.(token, API_BASE);
+    else mod.clearAuthMirror?.();
+  } catch {
+    /* ignore */
+  }
+}
 
 type AuthState = {
   token: string | null;
@@ -27,6 +46,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsLoading(false);
     })();
   }, []);
+
+  // Keep the native auth mirror in lockstep with the JS token so background
+  // notification replies always use a valid credential.
+  useEffect(() => {
+    mirrorAuthToNative(token);
+  }, [token]);
 
   const value = useMemo<AuthState>(
     () => ({

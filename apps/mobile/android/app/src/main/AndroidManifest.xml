@@ -84,6 +84,15 @@
       the SIP BYE. Not exported — only the app itself can send to it.
     -->
     <receiver android:name="com.connectcommunications.mobile.InCallNotificationReceiver" android:enabled="true" android:exported="false"/>
+    <!--
+      ChatReplyReceiver handles the inline "Reply" action on chat/SMS
+      notifications. It runs in the MAIN process, reads the RemoteInput text and
+      the auth token mirrored by JS (connect_auth_mirror prefs), and POSTs the
+      reply to the Connect chat API directly — so replies work even when the app
+      is killed. Not exported — only the app's own notification PendingIntent
+      can trigger it.
+    -->
+    <receiver android:name="com.connectcommunications.mobile.ChatReplyReceiver" android:enabled="true" android:exported="false"/>
     <receiver android:name="com.connectcommunications.mobile.BootReceiver" android:enabled="true" android:exported="true">
       <intent-filter>
         <action android:name="android.intent.action.BOOT_COMPLETED"/>
