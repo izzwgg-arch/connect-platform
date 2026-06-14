@@ -5,7 +5,6 @@ import Constants from "expo-constants";
 import * as Device from "expo-device";
 import { createSipClient } from "../sip";
 import { postCallQualityReport, postCallQualityPing, clearCallQualityPing, postWebrtcCallDebug } from "../api/client";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { appendCallRecord } from "../storage/callHistory";
 import type { CallDirection, CallState, CallRecord, ProvisioningBundle, SipRegistrationState } from "../types";
 import type { SipAnswerTraceEvent, SipSessionInfo, SipAnswerDeadlineHandle, OutboundTraceEvent } from "../sip/types";
@@ -809,22 +808,19 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // lifetime per ready transition; if the user denies we surface that
   // via callReadiness for diagnostics but do not nag again — the answer
   // pipeline still has a defensive re-request as last-line-of-defense.
-  const recordAudioRequestedRef = useRef<boolean>(false);
-  useEffect(() => {
+  // Request the call-critical runtime permissions (microphone + Android 13+
+  // notifications) in front of the user. Called on startup once SIP is ready
+  // AND again right after a re-provision, so a freshly provisioned device (or
+  // one whose permissions were revoked) always gets prompted before the next
+  // incoming call rather than silently failing.
+  const ensureCallPermissions = useCallback(async (reason: string) => {
     if (Platform.OS !== "android") return;
-    if (!authToken || !hasProvisioning) return;
-    if (recordAudioRequestedRef.current) return;
-    recordAudioRequestedRef.current = true;
-    void (async () => {
-      try {
-        const already = await PermissionsAndroid.check(
-          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-        ).catch(() => false);
-        if (already) {
-          console.log('[SIP_PERM] RECORD_AUDIO already granted at startup');
-          return;
-        }
-        console.log('[SIP_PERM] RECORD_AUDIO not yet granted — requesting proactively');
+    try {
+      const micGranted = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+      ).catch(() => false);
+      if (!micGranted) {
+        console.log(`[SIP_PERM] RECORD_AUDIO not granted (${reason}) — requesting`);
         const result = await PermissionsAndroid.request(
           PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
           {
@@ -836,11 +832,43 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           },
         );
         console.log('[SIP_PERM] RECORD_AUDIO request result:', result);
-      } catch (e) {
-        console.warn('[SIP_PERM] RECORD_AUDIO request threw:', e);
       }
-    })();
-  }, [authToken, hasProvisioning]);
+    } catch (e) {
+      console.warn('[SIP_PERM] RECORD_AUDIO request threw:', e);
+    }
+
+    // POST_NOTIFICATIONS only exists on Android 13 (API 33)+.
+    const postNotif = (PermissionsAndroid.PERMISSIONS as any).POST_NOTIFICATIONS;
+    if (postNotif) {
+      try {
+        const notifGranted = await PermissionsAndroid.check(postNotif).catch(() => false);
+        if (!notifGranted) {
+          console.log(`[SIP_PERM] POST_NOTIFICATIONS not granted (${reason}) — requesting`);
+          const result = await PermissionsAndroid.request(postNotif, {
+            title: 'Allow notifications',
+            message:
+              'Connect needs notification permission to ring and show incoming calls. Calls will not alert you without it.',
+            buttonPositive: 'Allow',
+            buttonNegative: 'Not now',
+          });
+          console.log('[SIP_PERM] POST_NOTIFICATIONS request result:', result);
+        }
+      } catch (e) {
+        console.warn('[SIP_PERM] POST_NOTIFICATIONS request threw:', e);
+      }
+    }
+  }, []);
+  const ensureCallPermissionsRef = useRef(ensureCallPermissions);
+  useEffect(() => { ensureCallPermissionsRef.current = ensureCallPermissions; }, [ensureCallPermissions]);
+
+  const recordAudioRequestedRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    if (!authToken || !hasProvisioning) return;
+    if (recordAudioRequestedRef.current) return;
+    recordAudioRequestedRef.current = true;
+    void ensureCallPermissions('startup');
+  }, [authToken, hasProvisioning, ensureCallPermissions]);
 
   // ── Push-wake (Option 2) — react to native Sip.WakeRegister event ───────
   // Native IncomingCallFirebaseService fires this event when an
@@ -1020,23 +1048,25 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // "phoneCall". The single reliable knob that stops this is the system
   // "Not optimized" / "Don't optimize battery" toggle for our package.
   //
-  // We prompt the user exactly once, the first time they are both
-  // authenticated and provisioned, and only if the OS says we are still
-  // subject to battery optimization. The result is persisted in
-  // AsyncStorage so we don't nag on every launch; if the user declines
-  // we will re-prompt in the app's Settings screen (future work).
+  // We prompt whenever the user is authenticated + provisioned and the OS
+  // still reports we are subject to battery optimization — on launch and on
+  // every return to the foreground — so the customer always knows it is not
+  // enabled and can fix it.
   //
   // Without this, the FGS keep-alive "works on paper" but gets killed
   // after ~16–24 s on Samsung, collapsing Stage 2 back to a cold start
   // on the next incoming call.
   // ─────────────────────────────────────────────────────────────────────
-  const batteryPromptAttemptedRef = useRef<boolean>(false);
-  useEffect(() => {
+  // Re-prompt on EVERY foreground while the app is still subject to battery
+  // optimization. Customers must clearly know it is not enabled and be able to
+  // fix it — so we surface an in-app alert that launches the system exemption
+  // dialog, rather than nagging silently once and giving up. A short cooldown
+  // prevents an infinite loop while the system dialog itself is on screen
+  // (which briefly backgrounds then re-foregrounds the app).
+  const lastBatteryPromptAtRef = useRef<number>(0);
+  const batteryPromptOpenRef = useRef<boolean>(false);
+  const maybePromptBatteryOptimization = useCallback(async () => {
     if (Platform.OS !== "android") return;
-    if (!authToken || !hasProvisioning) return;
-    if (batteryPromptAttemptedRef.current) return;
-    batteryPromptAttemptedRef.current = true;
-
     const mod: any = (NativeModules as any)?.IncomingCallUi;
     if (
       !mod ||
@@ -1046,42 +1076,59 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       console.warn('[BATT_OPT] bridge_missing — cannot request exemption');
       return;
     }
-
-    const PROMPT_KEY = "cc_mobile_batt_opt_prompted_v1";
-    let cancelled = false;
-    (async () => {
-      try {
-        const alreadyIgnored: boolean = await mod.isBatteryOptimizationIgnored();
-        if (cancelled) return;
-        if (alreadyIgnored) {
-          console.log('[BATT_OPT] already_ignored — no prompt needed');
-          return;
-        }
-        const previouslyPrompted = await AsyncStorage.getItem(PROMPT_KEY);
-        if (cancelled) return;
-        if (previouslyPrompted === "1") {
-          console.log('[BATT_OPT] previously_prompted_and_declined — skipping this launch');
-          return;
-        }
-        console.log('[BATT_OPT] requesting_exemption — launching system dialog');
-        try {
-          await mod.requestBatteryOptimizationExclusion();
-        } catch (e) {
-          console.warn('[BATT_OPT] request_threw:', e);
-        }
-        try {
-          await AsyncStorage.setItem(PROMPT_KEY, "1");
-        } catch {
-          // ignore — non-critical
-        }
-      } catch (e) {
-        console.warn('[BATT_OPT] flow_threw:', e);
+    if (batteryPromptOpenRef.current) return;
+    // Cooldown: avoid re-prompting within 45s (covers the round-trip to the
+    // system settings screen and back without looping).
+    if (Date.now() - lastBatteryPromptAtRef.current < 45_000) return;
+    try {
+      const alreadyIgnored: boolean = await mod.isBatteryOptimizationIgnored();
+      if (alreadyIgnored) {
+        console.log('[BATT_OPT] already_ignored — no prompt needed');
+        return;
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [authToken, hasProvisioning]);
+      lastBatteryPromptAtRef.current = Date.now();
+      batteryPromptOpenRef.current = true;
+      console.log('[BATT_OPT] not_exempt — prompting user');
+      showAppAlert(
+        "Turn off battery optimization",
+        "Battery optimization is ON for Connect. Incoming calls may not ring reliably until you disable it. Tap Enable and choose \"Don't optimize\".",
+        [
+          {
+            text: "Not now",
+            style: "cancel",
+            onPress: () => {
+              batteryPromptOpenRef.current = false;
+            },
+          },
+          {
+            text: "Enable",
+            onPress: async () => {
+              try {
+                await mod.requestBatteryOptimizationExclusion();
+              } catch (e) {
+                console.warn('[BATT_OPT] request_threw:', e);
+              } finally {
+                batteryPromptOpenRef.current = false;
+              }
+            },
+          },
+        ],
+      );
+    } catch (e) {
+      batteryPromptOpenRef.current = false;
+      console.warn('[BATT_OPT] flow_threw:', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    if (!authToken || !hasProvisioning) return;
+    void maybePromptBatteryOptimization();
+    const sub = AppState.addEventListener("change", (next) => {
+      if (next === "active") void maybePromptBatteryOptimization();
+    });
+    return () => sub.remove();
+  }, [authToken, hasProvisioning, maybePromptBatteryOptimization]);
 
   const prevCallStateRef = useRef<CallState>("idle");
   // Anchor for the in-call notification chronometer. Set when the call
@@ -1137,15 +1184,32 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       }
     }
     if (callState === "ended" && prev !== "ended") {
-      console.log("[CONNECT_CALL_UI] remote_hangup_cleanup or local_hangup_cleanup — callState=ended prev=" + prev);
+      // CRITICAL: only treat this as a real hangup when the call had actually
+      // CONNECTED. A ring group forks the INVITE to several contacts and rapidly
+      // CANCELs + re-INVITEs each fork; every time the last live fork CANCELs,
+      // jssip emits onCallState("ended") (siblings=0) even though the caller is
+      // still ringing and a replacement INVITE lands ~180ms later. The native
+      // incoming ringtone is owned by the dedicated teardown authorities for an
+      // UNANSWERED call (the SIP cancel-bridge fork-abandon timeout, the
+      // INVITE_POLL killAll, and the INVITE_CANCELED / MISSED_CALL FCM). Calling
+      // stopRingtone(null) here on a transient ringing→ended flap silenced the
+      // ring ~330ms in ("ringtone didn't ring"). So the native-ringtone +
+      // in-call-notification hangup cleanup runs ONLY for connected→ended.
+      const wasConnectedCall = prev === "connected" || callConnectedAtRef.current != null;
+      console.log(
+        "[CONNECT_CALL_UI] remote_hangup_cleanup or local_hangup_cleanup — callState=ended prev=" +
+          prev + " wasConnectedCall=" + wasConnectedCall,
+      );
       logCallFlow("SIP_CALL_STATE_ENDED", {
         inviteId: null,
-        extra: { previous: prev },
+        extra: { previous: prev, wasConnectedCall },
       });
       // Final safety net: any native ringtone MUST be silenced on call end
       // even if earlier hooks missed it. This guarantees the user never
-      // hears a leftover ringtone after hangup under any race.
-      if (Platform.OS === "android") {
+      // hears a leftover ringtone after hangup under any race — but ONLY for a
+      // call that actually connected (see above; unanswered rings have their own
+      // authoritative stop paths and must not be silenced on a fork flap).
+      if (Platform.OS === "android" && wasConnectedCall) {
         try {
           const mod = NativeModules.IncomingCallUi;
           if (mod && typeof mod.stopRingtone === "function") {
@@ -1247,6 +1311,9 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         await SecureStore.setItemAsync(PROVISION_KEY, JSON.stringify(bundle));
         clientRef.current.configure(bundle);
         setHasProvisioning(true);
+        // Re-provision is a fresh-device moment: prompt for the call-critical
+        // permissions again in front of the user (mic + notifications).
+        void ensureCallPermissionsRef.current('reprovision');
         // Immediately re-register with the new credentials
         await clientRef.current.register({ forceRestart: true }).catch((e) => {
           console.warn("[SIP] Re-register after provisioning failed:", e?.message);

@@ -54,6 +54,7 @@ import { initVoipPushListener, getCachedVoipPushToken } from "../sip/voipPush";
 // remote cancel. Static import guarantees the function exists before we
 // call it and keeps teardown fully synchronous.
 import { stopAllTelephonyAudio } from "../audio/telephonyAudio";
+import { syncMobileIncomingRingtoneToNative } from "../audio/ringtonePreferences";
 import { appendCallRecord } from "../storage/callHistory";
 import * as FileSystem from "expo-file-system";
 import type { CallInvite, MobilePushPayload } from "../types";
@@ -318,6 +319,41 @@ function channelsLookLikeVoicemail(channels: unknown): boolean {
     joined.includes("vmail") ||
     joined.includes("@vm") ||
     joined.includes("app-voicemail")
+  );
+}
+
+// Telephony channel states that mean the call is truly over. Anything else
+// (UP, RINGING, EARLY, …) means a ring group is still alerting.
+const TERMINAL_TELEPHONY_STATES = new Set([
+  "HUNGUP", "HANGUP", "CANCELED", "CANCELLED", "ENDED", "TERMINATED", "NONE", "",
+]);
+
+type PollStatusSnapshot = {
+  telephonyState: string;
+  pbxAnswered: boolean;
+  extensionAnswered: boolean;
+  inviteStatus: string;
+  reachedVoicemail: boolean;
+  at: number;
+};
+
+// True when the most recent backend INVITE_POLL still reports the call as a
+// live, ringing inbound call. This is the AUTHORITATIVE "is the call still
+// alive" signal — it stays PENDING + telephonyState=up the whole time a ring
+// group rings and only flips to voicemail / extensionAnswered / a terminal
+// telephony state when the call genuinely ends. Local SIP leg state is NOT
+// reliable here because ring groups fork + CANCEL + re-INVITE rapidly.
+function pollSnapshotSaysLive(
+  poll: PollStatusSnapshot | null,
+  maxAgeMs = 3_500,
+): boolean {
+  if (!poll) return false;
+  if (Date.now() - poll.at >= maxAgeMs) return false;
+  return (
+    poll.inviteStatus === "PENDING" &&
+    !poll.reachedVoicemail &&
+    !poll.extensionAnswered &&
+    !TERMINAL_TELEPHONY_STATES.has(poll.telephonyState)
   );
 }
 
@@ -917,11 +953,19 @@ export function NotificationsProvider({
   // Snapshot of the most recent poll's telephony signals, so the SIP cancel
   // bridge can classify WHY the leg ended (voicemail vs answered-elsewhere vs
   // caller-hangup) even when the leg dies between poll ticks.
-  const lastPollStatusRef = useRef<{
-    telephonyState: string;
-    pbxAnswered: boolean;
-    extensionAnswered: boolean;
-  } | null>(null);
+  const lastPollStatusRef = useRef<PollStatusSnapshot | null>(null);
+
+  // Wall-clock time the current incoming-call UI was first shown in JS. Used by
+  // the app-resume orphan reconcile to avoid clearing a brand-new call whose
+  // SIP INVITE simply hasn't landed yet (FCM-first race). Robust regardless of
+  // whether the invite payload carried a push timestamp.
+  const incomingInviteShownAtRef = useRef<number>(0);
+  // Timestamp the inbound SIP leg FIRST went away (0 = currently live / no call).
+  // The cancel-bridge teardown fires at this + the fork-abandon window so that
+  // legacy sip.callState micro-transitions (ringing→ended→idle) re-running the
+  // effect cannot keep pushing the teardown later — it stays anchored to when
+  // the PBX actually stopped offering us the call.
+  const inboundLegGoneAtRef = useRef<number>(0);
 
   const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
   // iOS VoIP push token (hex, delivered by PushKit). Null on Android and on
@@ -1335,6 +1379,11 @@ export function NotificationsProvider({
         return;
       }
 
+      // Reaching here means a fresh invite is being shown (the duplicate guard
+      // above already returned for repeats). Stamp the show time so the
+      // app-resume orphan reconcile can tell a brand-new call (SIP INVITE still
+      // in transit) from a genuinely stale leftover UI.
+      incomingInviteShownAtRef.current = Date.now();
       setIncomingInvite(invite);
       setIncomingCallUiState((prev) =>
         prev.inviteId === invite.id && prev.phase === "connecting"
@@ -2583,6 +2632,41 @@ export function NotificationsProvider({
       const sipBusy = sip.callState === "ringing" || sip.callState === "dialing" || sip.callState === "connected";
       const uiShowing = incomingInvite !== null || incomingCallUiState.phase === "incoming" || incomingCallUiState.phase === "connecting";
       if (!sipBusy && uiShowing) {
+        // Do NOT treat a FRESH incoming call as orphaned. In the FCM-first
+        // architecture the native ForegroundInvite mounts IncomingCallScreen
+        // BEFORE the SIP INVITE arrives, and tapping the lock-screen call to
+        // open it flips AppState→active in that same window — so sipState is
+        // legitimately "idle" for the first ~1-3s of a real, live call. Ring
+        // groups also drop sipState to idle transiently during fork CANCEL+re-
+        // INVITE storms. Clearing here races the SIP INVITE and flashes the
+        // screen away on a live call (observed: orphan clear 27ms after mount).
+        // Only clear once the invite is old enough that no SIP leg is plausibly
+        // still in transit AND the backend poll is not actively reporting the
+        // call as live. The INVITE_POLL + 45s expire timer remain the real
+        // teardown authorities.
+        const shownAt = incomingInviteShownAtRef.current;
+        const inviteAgeMs = shownAt ? Date.now() - shownAt : Number.MAX_SAFE_INTEGER;
+        const ORPHAN_MIN_AGE_MS = 12_000;
+        // Never clear before the answer-status poll has returned even once: until
+        // it has, we cannot know the call is dead, and the SIP INVITE is often
+        // still in transit (the FCM/native UI mounts before SIP arrives). Field
+        // logs showed this firing 72 ms after the poll started — clearing a
+        // perfectly live call — because the snapshot was still null. The poll +
+        // 45 s expiry + SIP cancel-bridge are the real teardown authorities.
+        const pollHasNotResolvedYet = lastPollStatusRef.current === null;
+        if (
+          inviteAgeMs < ORPHAN_MIN_AGE_MS ||
+          pollHasNotResolvedYet ||
+          pollSnapshotSaysLive(lastPollStatusRef.current)
+        ) {
+          console.log(
+            '[CALL_RECONCILE] orphan_ui_kept_fresh_or_live sipState=' + sip.callState +
+              ' phase=' + incomingCallUiState.phase +
+              ' inviteAgeMs=' + (inviteAgeMs === Number.MAX_SAFE_INTEGER ? 'unknown' : inviteAgeMs) +
+              ' inviteId=' + (incomingInvite?.id || 'n/a'),
+          );
+          return;
+        }
         console.warn('[CALL_RECONCILE] orphan_ui_detected sipState=' + sip.callState + ' phase=' + incomingCallUiState.phase + ' inviteId=' + (incomingInvite?.id || 'n/a') + ' — clearing stale incoming UI');
         // Poison the id so a race with a push listener cannot immediately re-open.
         if (incomingInvite?.id) suppressedIncomingInviteIdsRef.current.add(incomingInvite.id);
@@ -2767,6 +2851,11 @@ export function NotificationsProvider({
           telephonyState: (status?.telephonyState || "").toUpperCase(),
           pbxAnswered: !!status?.pbxAnswered,
           extensionAnswered: status?.extensionAnswered === true,
+          inviteStatus,
+          reachedVoicemail:
+            status?.reachedVoicemail === true ||
+            channelsLookLikeVoicemail(status?.activeChannels),
+          at: Date.now(),
         };
         const elapsed = Date.now() - tickStartedAt;
         const httpMs = Date.now() - tickStart;
@@ -2975,7 +3064,12 @@ export function NotificationsProvider({
   // The poll's killAll and this teardown are idempotent; whichever wins, the
   // other is a no-op that just refreshes the visible end-state message.
   useEffect(() => {
-    if (!incomingInvite) return;
+    if (!incomingInvite) {
+      // No active incoming call — clear the abandon clock so a stale timestamp
+      // from a previous call cannot trip an immediate teardown on the next one.
+      inboundLegGoneAtRef.current = 0;
+      return;
+    }
     // Only while the user is still being presented the incoming call and has
     // NOT handed off to the answer pipeline ("connecting" is the answer phase).
     if (incomingCallUiState.phase !== "incoming") return;
@@ -2986,32 +3080,76 @@ export function NotificationsProvider({
     const hasLiveInboundSip =
       multiCallInboundRinging ||
       (sip.callState === "ringing" && sip.callDirection === "inbound");
-    if (hasLiveInboundSip) return;
+    if (hasLiveInboundSip) {
+      // A live inbound leg exists (initial INVITE or a ring-group re-INVITE that
+      // landed inside the abandon window) — reset the abandon clock so the next
+      // gap is measured fresh.
+      inboundLegGoneAtRef.current = 0;
+      return;
+    }
 
     const invite = incomingInvite;
     const inviteId = invite.id;
     const delayMs = 900;
 
-    // Ghost-cancel debounce. Ring groups CANCEL the first INVITE leg and
-    // immediately re-INVITE (observed ~140 ms apart in the field). Tearing the
-    // incoming UI down on the first leg's CANCEL flashes "Call ended" before
-    // the replacement INVITE lands, so the user sees the screen appear then
-    // vanish. Wait briefly before teardown: if a replacement INVITE arrives,
-    // `multiCallInboundRinging` flips back true, this effect re-runs, and the
-    // cleanup below clears the pending teardown so the screen stays up.
-    const GHOST_CANCEL_WAIT_MS = 600;
+    // Anchor the teardown to when the leg FIRST went away, not to this effect
+    // run. Legacy sip.callState flaps ringing→ended→idle as the forks reap,
+    // re-running this effect several times; without anchoring, each re-run
+    // pushed the timer out another full window (observed +4.5 s instead of the
+    // intended window after the fork died).
+    if (inboundLegGoneAtRef.current === 0) {
+      inboundLegGoneAtRef.current = Date.now();
+    }
+
+    // ── Fork-abandon window (THE authoritative "stop ringing this device"
+    //    signal) ──────────────────────────────────────────────────────────────
+    // A live inbound SIP INVITE is the PBX actively offering THIS device the
+    // call. While a ring group rings us, that INVITE dialog stays up
+    // continuously; at fork handoff it is CANCELed and re-INVITEd within
+    // ~500 ms (measured in the field). When the call leaves us for good —
+    // rolled to voicemail, answered on another device, or the caller hung up —
+    // the PBX CANCELs our fork and never re-offers it.
+    //
+    // So the single robust rule is: if NO live inbound SIP leg has existed for
+    // longer than this window, the call is no longer being offered here and the
+    // incoming UI + ringtone must stop. The window is sized far above the
+    // ~500 ms fork-handoff gap so legitimate ring-group flapping never trips it
+    // (a re-INVITE inside the window re-runs this effect and the cleanup clears
+    // the pending teardown), while voicemail/answered-elsewhere stop within
+    // ~3 s instead of hanging until the 45 s invite EXPIRED (the "it didn't
+    // stop at voicemail" bug: field logs showed the fork dying at +32 s but the
+    // screen ringing until +45 s because teardown was skipped while the backend
+    // poll still reported telephonyState=up).
+    const GHOST_CANCEL_WAIT_MS = 1500;
+    const remainingMs = Math.max(
+      0,
+      inboundLegGoneAtRef.current + GHOST_CANCEL_WAIT_MS - Date.now(),
+    );
     console.log(
       '[SIP_CANCEL_BRIDGE] inbound_sip_leg_gone — debouncing ' +
-        GHOST_CANCEL_WAIT_MS + 'ms for re-INVITE inviteId=' + inviteId +
+        GHOST_CANCEL_WAIT_MS + 'ms (remaining ' + remainingMs + 'ms) for re-INVITE inviteId=' + inviteId +
         ' sipCallState=' + sip.callState +
         ' multiCallRinging=' + multiCallInboundRinging,
     );
 
     const teardownTimer = setTimeout(() => {
+      // The full fork-abandon window elapsed with NO live inbound SIP leg and
+      // no replacement re-INVITE (a re-INVITE would have re-run this effect and
+      // cleared this timer via the cleanup below). The PBX is no longer offering
+      // this call to this device, so there is nothing left to answer here —
+      // tear down regardless of what the backend poll reports. The poll keeps
+      // saying telephonyState=up while the call sits in voicemail, so deferring
+      // to it (the old behaviour) left the screen ringing until the 45 s invite
+      // EXPIRED. The poll snapshot is still read below, but only to LABEL the
+      // end state (voicemail vs answered-elsewhere vs caller-hangup), never to
+      // veto the teardown.
+      inboundLegGoneAtRef.current = 0;
       console.log(
         '[SIP_CANCEL_BRIDGE] teardown inviteId=' + inviteId +
+          ' forkAbandonedMs=' + GHOST_CANCEL_WAIT_MS +
           ' sipCallState=' + sip.callState +
-          ' uiPhase=' + incomingCallUiState.phase,
+          ' uiPhase=' + incomingCallUiState.phase +
+          ' lastPoll=' + JSON.stringify(lastPollStatusRef.current),
       );
 
       // Remember whether this invite was presented on the lock screen so the
@@ -3125,7 +3263,7 @@ export function NotificationsProvider({
           }
         }, delayMs + 80);
       }
-    }, GHOST_CANCEL_WAIT_MS);
+    }, remainingMs);
 
     return () => {
       clearTimeout(teardownTimer);
@@ -3775,6 +3913,11 @@ export function NotificationsProvider({
 
     (async () => {
       await ensureCallChannel();
+
+      // Mirror the saved incoming-ringtone choice to the native ring path so
+      // it honours "Classic Ring" (phone ringtone) vs "Connect Default" even
+      // on the very first FCM ring after launch.
+      void syncMobileIncomingRingtoneToNative();
 
       // ── Check & request notification permission ─────────────────────────
       const permResult = await Notifications.getPermissionsAsync().catch(() => null);

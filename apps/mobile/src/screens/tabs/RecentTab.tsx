@@ -784,6 +784,24 @@ const CallCard = memo(function CallCard({
     return kindLabel(group.kind);
   }, [group]);
 
+  // Special dispositions render as a compact colored status tag (not plain
+  // meta text) so the full phrase stays on one row with a clean 2026 look.
+  const dispositionTag = useMemo<
+    { label: string; icon: keyof typeof Ionicons.glyphMap; color: string; bg: string; border: string } | null
+  >(() => {
+    if (group.count > 1) return null;
+    if (group.kind === 'answered_elsewhere') {
+      return {
+        label: 'Answered on another device',
+        icon: 'swap-horizontal',
+        color: '#a5b4fc',
+        bg: 'rgba(99,102,241,0.14)',
+        border: 'rgba(99,102,241,0.34)',
+      };
+    }
+    return null;
+  }, [group.kind, group.count]);
+
   const primaryCall = group.calls[0];
   const primaryName = group.displayName;
 
@@ -839,10 +857,20 @@ const CallCard = memo(function CallCard({
               </Text>
             ) : null}
             <View style={styles.metaRow}>
-              <Ionicons name={kindIcon(group.kind)} size={13} color={accent} style={styles.kindIcon} />
-              <Text style={[styles.metaText, { color: colors.textSecondary }]} numberOfLines={1}>
-                {subtitle}
-              </Text>
+              {dispositionTag ? (
+                <View style={[styles.statusTag, { backgroundColor: dispositionTag.bg, borderColor: dispositionTag.border }]}>
+                  <Text style={[styles.statusTagText, { color: dispositionTag.color }]} numberOfLines={1}>
+                    {dispositionTag.label}
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  <Ionicons name={kindIcon(group.kind)} size={13} color={accent} style={styles.kindIcon} />
+                  <Text style={[styles.metaText, { color: colors.textSecondary }]} numberOfLines={1}>
+                    {subtitle}
+                  </Text>
+                </>
+              )}
             </View>
           </View>
 
@@ -854,22 +882,22 @@ const CallCard = memo(function CallCard({
               <TouchableOpacity
                 onPress={onMessage}
                 activeOpacity={0.74}
-                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 style={[styles.actionBtn, { backgroundColor: colors.tealMuted, borderColor: colors.teal + '33' }]}
               >
-                <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.teal} />
+                <Ionicons name="chatbubble-ellipses-outline" size={15} color={colors.teal} />
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={onCall}
                 activeOpacity={0.74}
-                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 style={[
                   styles.actionBtn,
                   styles.actionBtnPrimary,
                   { backgroundColor: colors.primary, borderColor: colors.primary, shadowColor: colors.primary },
                 ]}
               >
-                <Ionicons name="call" size={17} color="#fff" />
+                <Ionicons name="call" size={16} color="#fff" />
               </TouchableOpacity>
             </View>
           </View>
@@ -1168,6 +1196,23 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     opacity: 0.8,
   },
+  statusTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2.5,
+  },
+  statusTagText: {
+    flexShrink: 1,
+    fontSize: 10.5,
+    lineHeight: 14,
+    fontWeight: '700',
+    letterSpacing: -0.1,
+  },
 
   kindBadge: {
     flexDirection: 'row',
@@ -1202,21 +1247,21 @@ const styles = StyleSheet.create({
   actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
     marginTop: 6,
   },
   actionBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
   actionBtnPrimary: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     shadowOpacity: 0.25,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },

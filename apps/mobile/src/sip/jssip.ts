@@ -404,6 +404,13 @@ export class JsSipClient implements SipClient {
         const toUser = this.getSessionTo(e.session);
         const inviteArrivedAt = Date.now();
         (e.session as any)._inviteArrivedAt = inviteArrivedAt;
+        // Authoritative per-session "this is an inbound ring leg" marker. The
+        // closure-captured `isOutboundSession` in bindSession proved unreliable
+        // for ring-group forks (1 of 3 forks mis-classified), letting a fork
+        // CANCEL stop the native ringtone ~1s into the ring. This marker is set
+        // the instant the INVITE arrives and never mutates, so the failed/ended
+        // handlers can decide "keep the native ringtone alive" deterministically.
+        (e.session as any)._inboundRingLeg = true;
         const rawUser = this.getSessionFromUser(e.session);
         const rawDisplayName = this.getSessionFromDisplayName(e.session);
         console.log('[SIP] Incoming SIP INVITE —', JSON.stringify({
@@ -679,12 +686,25 @@ export class JsSipClient implements SipClient {
           " rawMapSize=" + this.sessionsById.size +
           " last=" + isLastLiveSession,
       );
-      if (isLastLiveSession) {
+      // See the `failed` handler: an unanswered inbound fork that ENDs (BYE on
+      // a fork the PBX is reaping) must not stop the native ringtone mid-ring
+      // while the ring group is still alerting. Leave it to the authoritative
+      // stop paths on Android.
+      const endedWasUnansweredInbound =
+        ((session as any)._inboundRingLeg === true || !isOutboundSession) &&
+        !this.sessionConfirmedAt.has(session);
+      const endedKeepRingtoneAlive =
+        Platform.OS === "android" && endedWasUnansweredInbound;
+      if (isLastLiveSession && !endedKeepRingtoneAlive) {
         stopAllTelephonyAudio().catch(() => undefined);
         this.stopLivePing();
         ICM.stop();
         audioRouteManager.noteCallEnded();
         restoreAudioSession().catch(() => undefined);
+      } else if (endedKeepRingtoneAlive) {
+        console.log(
+          "[MULTICALL] session_ended_cleanup keep_ringtone_alive — unanswered inbound fork end, leaving native ringtone to authoritative stop paths",
+        );
       }
       this.collectAndSubmitQualityReport(cause).catch(() => {});
       if (this.session === session) this.session = null;
@@ -724,12 +744,30 @@ export class JsSipClient implements SipClient {
           " rawMapSize=" + this.sessionsById.size +
           " last=" + isLastLiveSession,
       );
-      if (isLastLiveSession) {
+      // Ring-group fork storm: a forked inbound INVITE that is CANCELed before
+      // it was ever answered must NOT stop the native ringtone. The PBX forks
+      // the call to multiple contacts and rapidly CANCELs + re-INVITEs each
+      // fork while the caller is still ringing; calling stopAllTelephonyAudio
+      // on every fork CANCEL kills the native ring ~1-2s in even though the
+      // call is still live. On Android the native incoming-call service owns
+      // the ringtone — leave it to the authoritative stop paths (answer /
+      // decline / INVITE_CANCELED FCM / INVITE_POLL killAll). Outbound and
+      // already-answered (confirmed) inbound legs are unaffected.
+      const wasUnansweredInbound =
+        ((session as any)._inboundRingLeg === true || !isOutboundSession) &&
+        !this.sessionConfirmedAt.has(session);
+      const keepRingtoneAlive =
+        Platform.OS === "android" && wasUnansweredInbound;
+      if (isLastLiveSession && !keepRingtoneAlive) {
         stopAllTelephonyAudio().catch(() => undefined);
         this.stopLivePing();
         ICM.stop();
         audioRouteManager.noteCallEnded();
         restoreAudioSession().catch(() => undefined);
+      } else if (keepRingtoneAlive) {
+        console.log(
+          "[MULTICALL] session_failed_cleanup keep_ringtone_alive — unanswered inbound fork cancel, leaving native ringtone to authoritative stop paths",
+        );
       }
       this.collectAndSubmitQualityReport(cause).catch(() => {});
       if (this.session === session) this.session = null;

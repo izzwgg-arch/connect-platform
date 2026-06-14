@@ -132,6 +132,20 @@ function dateMatches(vm: Voicemail, filter: DateFilter): boolean {
   return age <= 7 * 24 * 60 * 60 * 1000;
 }
 
+/**
+ * Stable content signature for a voicemail list. Used to skip redundant
+ * `setRows` calls when a background refetch returns the same content (a new
+ * array reference but identical data), which otherwise churns the whole list
+ * and the audio-preload effect on every 15s poll.
+ */
+function voicemailListSignature(list: Voicemail[]): string {
+  let sig = String(list.length);
+  for (const v of list) {
+    sig += `|${v.id}:${v.listened ? 1 : 0}:${v.folder}:${v.transcription ? 1 : 0}`;
+  }
+  return sig;
+}
+
 export function VoicemailTab() {
   const route = useRoute<RouteProp<TabParamList, 'Voicemail'>>();
   const insets = useSafeAreaInsets();
@@ -154,6 +168,17 @@ export function VoicemailTab() {
   const [menuVm, setMenuVm] = useState<Voicemail | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  // Spinner state that ONLY reflects a user-initiated pull-to-refresh. Background
+  // polls/refetches must not flash the RefreshControl while the user is reading
+  // or playing a voicemail.
+  const [userRefreshing, setUserRefreshing] = useState(false);
+  // Latest activeId, read inside the polling callback without re-subscribing.
+  const activeIdRef = useRef<string | null>(null);
+  useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
+  // Throttles playback progress writes to once per whole second.
+  const lastProgressRef = useRef<{ position: number; duration: number }>({ position: -1, duration: -1 });
+  // Last list content actually applied to `rows`, to drop no-op refetches.
+  const appliedVmSigRef = useRef<string>('');
 
   // Bounded audio preload/cache: downloads top-5 unread/newest voicemails to
   // cacheDirectory so Play starts from a local file instead of a cold API fetch.
@@ -168,6 +193,23 @@ export function VoicemailTab() {
         const p = prev as { voicemails?: Voicemail[]; totals?: Record<string, number> };
         if (!Array.isArray(p.voicemails)) return prev;
         return { ...p, voicemails: p.voicemails.filter((v) => v.id !== id) };
+      });
+    },
+    [queryClient, token],
+  );
+
+  // Patch the cached voicemail list in place (read flag, etc.) instead of
+  // invalidating the whole query. Invalidation forces a full multi-folder
+  // network refetch — and firing it on Play is exactly why playback "loads"
+  // before it plays. A cache patch keeps the UI consistent with no refetch.
+  const patchVoicemailCache = useCallback(
+    (predicate: (v: Voicemail) => boolean, patch: Partial<Voicemail>) => {
+      if (!token) return;
+      queryClient.setQueryData(mobileQueryKeys.voicemails('all', token), (prev: unknown) => {
+        if (!prev || typeof prev !== 'object') return prev;
+        const p = prev as { voicemails?: Voicemail[] };
+        if (!Array.isArray(p.voicemails)) return prev;
+        return { ...p, voicemails: p.voicemails.map((v) => (predicate(v) ? { ...v, ...patch } : v)) };
       });
     },
     [queryClient, token],
@@ -197,7 +239,14 @@ export function VoicemailTab() {
 
   useEffect(() => {
     const nextRows = voicemailQuery.data?.voicemails;
-    if (nextRows !== undefined) setRows(nextRows);
+    if (nextRows === undefined) return;
+    // Skip if a background refetch returned identical content (new array ref,
+    // same data). This prevents the list + audio-preload churn that surfaced as
+    // repeated "loading" flashes while reading/playing.
+    const sig = voicemailListSignature(nextRows);
+    if (sig === appliedVmSigRef.current) return;
+    appliedVmSigRef.current = sig;
+    setRows(nextRows);
   }, [voicemailQuery.data]);
 
   // Hydrate from the on-disk cache so the list paints instantly on open.
@@ -246,11 +295,16 @@ export function VoicemailTab() {
   }, [notifVoicemailId, rows]);
 
   const loading = voicemailQuery.isLoading && rows.length === 0;
-  const refreshing = voicemailQuery.isRefetching;
+  const refreshing = userRefreshing;
   const error = voicemailQuery.error && rows.length === 0 ? 'Could not load voicemail.' : null;
   const refetchVoicemail = voicemailQuery.refetch;
   const load = useCallback(() => {
     refetchVoicemail().catch(() => undefined);
+  }, [refetchVoicemail]);
+  // Explicit pull-to-refresh: shows the spinner, then clears it when done.
+  const onUserRefresh = useCallback(() => {
+    setUserRefreshing(true);
+    refetchVoicemail().catch(() => undefined).finally(() => setUserRefreshing(false));
   }, [refetchVoicemail]);
 
   useFocusEffect(
@@ -261,7 +315,12 @@ export function VoicemailTab() {
 
   useEffect(() => {
     if (!token) return undefined;
-    return subscribeToVoicemail(() => load());
+    return subscribeToVoicemail(() => {
+      // Never refetch while a voicemail is actively playing — it churns the
+      // list and interrupts playback. The poll resumes once playback stops.
+      if (activeIdRef.current) return;
+      load();
+    });
   }, [load, token]);
 
   useEffect(() => () => {
@@ -308,7 +367,13 @@ export function VoicemailTab() {
     if (!status?.isLoaded) return;
     const duration = Math.max(0, Math.floor((status.durationMillis || 0) / 1000));
     const position = Math.max(0, Math.floor((status.positionMillis || 0) / 1000));
-    setProgress({ position, duration });
+    // expo-av fires this several times per second; only re-render when the
+    // whole-second position (or duration) actually changes.
+    const last = lastProgressRef.current;
+    if (position !== last.position || duration !== last.duration) {
+      lastProgressRef.current = { position, duration };
+      setProgress({ position, duration });
+    }
     if (status.didJustFinish) setActiveId(null);
   }, []);
 
@@ -345,10 +410,9 @@ export function VoicemailTab() {
 
     const markListened = () => {
       if (!vm.listened) {
-        markVoicemailListened(token, vm.id, true)
-          .then(() => queryClient.invalidateQueries({ queryKey: ['mobile', 'voicemails'] }).catch(() => undefined))
-          .catch(() => undefined);
+        markVoicemailListened(token, vm.id, true).catch(() => undefined);
         setRows((current) => current.map((row) => row.id === vm.id ? { ...row, listened: true } : row));
+        patchVoicemailCache((row) => row.id === vm.id, { listened: true });
       }
     };
 
@@ -391,25 +455,25 @@ export function VoicemailTab() {
       setPlaybackError('Could not play voicemail audio.');
       setActiveId(null);
     }
-  }, [activeId, audioCache, queryClient, removeVoicemailRowEverywhere, sound, token, updatePlayback]);
+  }, [activeId, audioCache, patchVoicemailCache, removeVoicemailRowEverywhere, sound, token, updatePlayback]);
 
   const toggleListened = useCallback((vm: Voicemail) => {
     if (!token) return;
     const next = !vm.listened;
-    markVoicemailListened(token, vm.id, next)
-      .then(() => queryClient.invalidateQueries({ queryKey: ['mobile', 'voicemails'] }).catch(() => undefined))
-      .catch(() => undefined);
+    markVoicemailListened(token, vm.id, next).catch(() => undefined);
     setRows((current) => current.map((row) => row.id === vm.id ? { ...row, listened: next } : row));
-  }, [queryClient, token]);
+    patchVoicemailCache((row) => row.id === vm.id, { listened: next });
+  }, [patchVoicemailCache, token]);
 
   const markSelectedRead = useCallback(async () => {
     if (!token || selectedIds.length === 0) return;
-    const selected = rows.filter((vm) => selectedIds.includes(vm.id) && !vm.listened);
-    setRows((current) => current.map((row) => selectedIds.includes(row.id) ? { ...row, listened: true } : row));
+    const ids = selectedIds;
+    const selected = rows.filter((vm) => ids.includes(vm.id) && !vm.listened);
+    setRows((current) => current.map((row) => ids.includes(row.id) ? { ...row, listened: true } : row));
+    patchVoicemailCache((row) => ids.includes(row.id), { listened: true });
     setSelectedIds([]);
     await Promise.all(selected.map((vm) => markVoicemailListened(token, vm.id, true).catch(() => undefined)));
-    queryClient.invalidateQueries({ queryKey: ['mobile', 'voicemails'] }).catch(() => undefined);
-  }, [queryClient, rows, selectedIds, token]);
+  }, [patchVoicemailCache, rows, selectedIds, token]);
 
   const callBack = useCallback((vm: Voicemail) => {
     if (sip.registrationState === 'registered' && vm.callerId) sip.dial(vm.callerId);
@@ -506,7 +570,7 @@ export function VoicemailTab() {
           bounces={false}
           alwaysBounceVertical={false}
           overScrollMode="never"
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} tintColor={VM.primary} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onUserRefresh} tintColor={VM.primary} />}
           contentContainerStyle={[styles.list, { paddingBottom: spacing['5'] }]}
           renderItem={({ item }) => (
             <VoicemailCard
@@ -627,26 +691,30 @@ function VoicemailFilterChips({
   ];
 
   return (
-    <View style={styles.chipWrap}>
-      {options.map((item) => (
-        <FilterChip
-          key={item.id}
-          label={item.label}
-          count={item.count}
-          active={value === item.id}
-          color={item.color}
-          onPress={() => onChange(item.id)}
-        />
-      ))}
+    <>
+      <View style={styles.chipWrap}>
+        {options.map((item) => (
+          <FilterChip
+            key={item.id}
+            label={item.label}
+            count={item.count}
+            active={value === item.id}
+            color={item.color}
+            onPress={() => onChange(item.id)}
+          />
+        ))}
+      </View>
       {(transcriptOnly || dateFilter !== 'any') && (
-        <TouchableOpacity style={styles.advancedChip} onPress={onClearAdvanced} activeOpacity={0.8}>
-          <Ionicons name="close-circle" size={14} color={VM.cyan} />
-          <Text style={styles.advancedChipText}>
-            {transcriptOnly ? 'Transcript' : ''}{transcriptOnly && dateFilter !== 'any' ? ' · ' : ''}{dateFilter !== 'any' ? (dateFilter === 'today' ? 'Today' : '7 days') : ''}
-          </Text>
-        </TouchableOpacity>
+        <View style={styles.advancedChipRow}>
+          <TouchableOpacity style={styles.advancedChip} onPress={onClearAdvanced} activeOpacity={0.8}>
+            <Ionicons name="close-circle" size={14} color={VM.cyan} />
+            <Text style={styles.advancedChipText}>
+              {transcriptOnly ? 'Transcript' : ''}{transcriptOnly && dateFilter !== 'any' ? ' · ' : ''}{dateFilter !== 'any' ? (dateFilter === 'today' ? 'Today' : '7 days') : ''}
+            </Text>
+          </TouchableOpacity>
+        </View>
       )}
-    </View>
+    </>
   );
 }
 
@@ -1135,31 +1203,38 @@ function makeStyles(VM: VmPalette) {
   },
   chipWrap: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: spacing['2'],
     paddingHorizontal: spacing['5'],
     marginBottom: spacing['3'],
   },
   filterChip: {
+    flex: 1,
     minHeight: 38,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: VM.borderSoft,
     backgroundColor: VM.cardMuted,
-    paddingHorizontal: spacing['3'],
+    paddingHorizontal: spacing['2'],
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing['2'],
+    justifyContent: 'center',
+    gap: 5,
   },
   filterLabel: {
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: '800',
     includeFontPadding: false,
   },
   filterCount: {
-    fontSize: 12,
+    fontSize: 11.5,
     fontWeight: '800',
     includeFontPadding: false,
+  },
+  advancedChipRow: {
+    flexDirection: 'row',
+    paddingHorizontal: spacing['5'],
+    marginBottom: spacing['3'],
+    marginTop: -spacing['1'],
   },
   advancedChip: {
     minHeight: 38,

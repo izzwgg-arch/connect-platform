@@ -331,6 +331,18 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
     IncomingCallFirebaseService.stopIncomingCallRingtone("js_stop_ringtone", inviteId)
   }
 
+  /**
+   * Persist the user's incoming-ringtone choice so the native FCM ring path
+   * (IncomingCallFirebaseService) can honour it before JS is even running.
+   *   • "connect-default" → bundled Connect ringtone
+   *   • "classic"         → the phone's own default ringtone
+   */
+  @ReactMethod
+  fun setIncomingRingtone(id: String?) {
+    val ctx = reactApplicationContext.applicationContext
+    IncomingCallFirebaseService.setIncomingRingtonePreference(ctx, id ?: "connect-default")
+  }
+
   /** Clears show-when-locked / turn-screen-on after a call so hangup does not leave a blank stage. */
   @ReactMethod
   fun clearLockScreenCallPresentation() {

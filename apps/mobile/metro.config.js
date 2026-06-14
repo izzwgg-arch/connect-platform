@@ -6,8 +6,21 @@ const monorepoRoot = path.resolve(projectRoot, '../..');
 
 const config = getDefaultConfig(projectRoot);
 
-// Watch the entire monorepo so Metro can resolve packages from the root
-config.watchFolders = [monorepoRoot];
+// Watch ONLY the folders the mobile bundle actually needs, NOT the whole
+// monorepo. On Windows with no Watchman installed, Metro falls back to the
+// Node recursive file watcher, which must finish crawling every watched root
+// within metro-file-map's MAX_WAIT_TIME (240s) or it throws
+// "Failed to start watch mode." and every bundle request 500s (the device
+// hangs on "loading"). Watching `monorepoRoot` made it crawl all of
+// apps/api, apps/portal, apps/telephony, .git, docs, and every node_modules
+// tree — far more than 240s. Restricting to the app, the shared packages, and
+// the hoisted root node_modules keeps resolution intact while making the crawl
+// finish quickly.
+config.watchFolders = [
+  projectRoot,
+  path.resolve(monorepoRoot, 'packages'),
+  path.resolve(monorepoRoot, 'node_modules'),
+];
 
 // Tell Metro to look for node_modules in both the app and monorepo root
 config.resolver.nodeModulesPaths = [

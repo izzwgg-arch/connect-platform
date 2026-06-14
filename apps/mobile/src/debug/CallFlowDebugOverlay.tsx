@@ -7,6 +7,7 @@ import {
   ScrollView,
   Modal,
   Platform,
+  Keyboard,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Constants from "expo-constants";
@@ -46,9 +47,23 @@ export function CallFlowDebugOverlay() {
   const enabled = overlayEnabled();
   const [open, setOpen] = useState(false);
   const [, tick] = useState(0);
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
   const bump = useCallback(() => tick((n) => n + 1), []);
 
   useEffect(() => subscribeCallFlowDebug(bump), [bump]);
+
+  // Hide the floating quick-action button while the keyboard is open so it
+  // doesn't float over the composer.
+  useEffect(() => {
+    const showEvt = Platform.OS === "android" ? "keyboardDidShow" : "keyboardWillShow";
+    const hideEvt = Platform.OS === "android" ? "keyboardDidHide" : "keyboardWillHide";
+    const showSub = Keyboard.addListener(showEvt, () => setKeyboardVisible(true));
+    const hideSub = Keyboard.addListener(hideEvt, () => setKeyboardVisible(false));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const sip = useSip();
   const { incomingInvite, incomingCallUiState } = useIncomingNotifications();
@@ -71,14 +86,16 @@ export function CallFlowDebugOverlay() {
 
   return (
     <>
-      <TouchableOpacity
-        style={[styles.fab, { bottom: fabBottom }]}
-        onPress={() => setOpen(true)}
-        activeOpacity={0.85}
-        accessibilityLabel="Open call flow debug"
-      >
-        <Text style={styles.fabText}>DBG</Text>
-      </TouchableOpacity>
+      {!keyboardVisible && (
+        <TouchableOpacity
+          style={[styles.fab, { bottom: fabBottom }]}
+          onPress={() => setOpen(true)}
+          activeOpacity={0.85}
+          accessibilityLabel="Open call flow debug"
+        >
+          <Text style={styles.fabText}>DBG</Text>
+        </TouchableOpacity>
+      )}
 
       <Modal visible={open} animationType="slide" transparent>
         <View style={styles.modalBackdrop}>

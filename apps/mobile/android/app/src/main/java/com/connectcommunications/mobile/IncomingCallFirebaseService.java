@@ -1598,8 +1598,55 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
      * Notification stream and respects Do Not Disturb / silent mode like a
      * proper incoming call.
      */
+    /** SharedPreferences file + key holding the user's incoming-ringtone choice. */
+    private static final String RINGTONE_PREFS = "connect_ringtone_prefs";
+    private static final String RINGTONE_PREF_KEY = "incoming_ringtone_id";
+
+    /**
+     * Persist the incoming-ringtone preference so the native FCM ring path
+     * (which runs before any JS) can honour it. Mirrored from JS via
+     * {@code IncomingCallUiModule.setIncomingRingtone(id)}.
+     */
+    public static void setIncomingRingtonePreference(Context ctx, String id) {
+        if (ctx == null || id == null) return;
+        try {
+            ctx.getApplicationContext()
+                .getSharedPreferences(RINGTONE_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(RINGTONE_PREF_KEY, id)
+                .apply();
+            Log.i(TAG, "[CALL_INCOMING] incoming ringtone preference set to " + id);
+        } catch (Exception e) {
+            Log.w(TAG, "[CALL_INCOMING] setIncomingRingtonePreference failed: " + e.getMessage());
+        }
+    }
+
+    /** True when the user picked "Classic Ring" (use the phone's own ringtone). */
+    private static boolean isClassicRingtonePreferred(Context ctx) {
+        try {
+            String id = ctx.getApplicationContext()
+                .getSharedPreferences(RINGTONE_PREFS, Context.MODE_PRIVATE)
+                .getString(RINGTONE_PREF_KEY, "connect-default");
+            return "classic".equals(id);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private synchronized void startIncomingCallRingtone(String inviteIdForRing) {
         stopIncomingCallRingtone("restart_before_new_call");
+
+        // Honour the user's ringtone choice (Settings → Incoming Ringtone).
+        //   • "connect-default" → bundled Connect ringtone (default, below).
+        //   • "classic"         → hand control back to the phone's own default
+        //                          ringtone (RingtoneManager system ringtone).
+        if (isClassicRingtonePreferred(getApplicationContext())) {
+            Log.i(TAG, "[CALL_INCOMING] ringtone preference=classic — using phone default ringtone");
+            requestRingtoneAudioFocus();
+            startSystemDefaultRingtoneFallback(inviteIdForRing);
+            return;
+        }
+
         AssetFileDescriptor afd = null;
         try {
             requestRingtoneAudioFocus();

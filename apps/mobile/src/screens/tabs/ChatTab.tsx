@@ -65,6 +65,14 @@ import type {
 } from '../../types';
 import { radius, spacing } from '../../theme/spacing';
 import { setActiveNotificationChatThread } from '../../notifications/notificationRouting';
+import {
+  EMOJI_CATALOG,
+  loadRecentEmojis,
+  recentToEntries,
+  recordRecentEmoji,
+  searchEmojis,
+  type EmojiEntry,
+} from '../../chat/emojiCatalog';
 
 type ChatFilter = 'all' | 'unread' | 'sms' | 'dms';
 type ComposerMode = 'dm' | 'sms' | null;
@@ -73,7 +81,6 @@ type MediaPreview = { type: 'image' | 'video' | 'file' | 'location'; url?: strin
 const CHAT_MEDIA_MAX_WIDTH = Math.round(Dimensions.get('window').width * 0.7);
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
-const EMOJIS = ['😀', '😄', '😂', '😊', '😍', '😘', '😎', '🤔', '😢', '😡', '👍', '👏', '🙏', '🔥', '🎉', '❤️', '💙', '✅', '⭐', '🚀', '📞', '💬', '📎', '📍'];
 
 function formatThreadTime(iso: string): string {
   const date = new Date(iso);
@@ -312,6 +319,10 @@ export function ChatTab() {
   // new content when the user is already at the bottom, so reading older
   // messages isn't interrupted by background refetches or incoming messages.
   const atBottomRef = useRef(true);
+  // True from the moment a thread is opened until its messages have been placed
+  // at the bottom once. While true we only ever jump (never animate) so opening
+  // a chat lands flat at the newest message instead of visibly rolling down.
+  const pendingInitialScrollRef = useRef(false);
 
   const scrollToBottom = useCallback((animated: boolean) => {
     requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated }));
@@ -398,15 +409,22 @@ export function ChatTab() {
   useEffect(() => {
     if (activeThread) {
       atBottomRef.current = true;
+      pendingInitialScrollRef.current = true;
       if (messages.length > 0) scrollToBottom(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeThread?.id]);
 
   // New content (incoming message / background refetch): only follow to the
-  // bottom when the user is already pinned there.
+  // bottom when the user is already pinned there. The very first time a thread's
+  // messages land we jump instantly (no animation) so the chat opens flat at the
+  // bottom; only later live messages animate.
   useEffect(() => {
-    if (activeThread && messages.length > 0 && atBottomRef.current) {
+    if (!activeThread || messages.length === 0) return;
+    if (pendingInitialScrollRef.current) {
+      pendingInitialScrollRef.current = false;
+      scrollToBottom(false);
+    } else if (atBottomRef.current) {
       scrollToBottom(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -420,9 +438,15 @@ export function ChatTab() {
     const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
     const showSub = Keyboard.addListener(showEvt, () => {
       setKeyboardOpen(true);
-      setEmojiOpen(false);
+      // NOTE: do NOT close the emoji panel here — the panel has its own search
+      // box that needs the keyboard. The panel is closed instead when the
+      // message composer input gains focus (see Composer onInputFocus).
       atBottomRef.current = true;
-      scrollToBottom(true);
+      // Keep the newest message above the keyboard. Jump immediately and again
+      // after the window has finished resizing (Android adjustResize / iOS
+      // padding) so the last bubble is never left hidden behind the keyboard.
+      scrollToBottom(false);
+      setTimeout(() => scrollToBottom(false), 120);
     });
     const hideSub = Keyboard.addListener(hideEvt, () => setKeyboardOpen(false));
     return () => {
@@ -755,6 +779,14 @@ export function ChatTab() {
     typingTimerRef.current = setTimeout(() => setChatTyping(token, activeThread.id, false).catch(() => undefined), 1800);
   }, [activeThread, token]);
 
+  // Stable handlers so the (memoized) emoji panel never re-renders when `draft`
+  // changes — that re-render was what made emoji insertion feel laggy.
+  const handleEmojiPick = useCallback((emoji: string) => {
+    setDraft((current) => `${current}${emoji}`);
+  }, []);
+  const closeEmojiPanel = useCallback(() => setEmojiOpen(false), []);
+  const focusClosesEmoji = useCallback(() => setEmojiOpen(false), []);
+
   const react = useCallback(async (message: ChatMessage, emoji: string) => {
     if (!token || !activeThread) return;
     await reactToChatMessage(token, activeThread.id, message.id, emoji).catch((err) => showToast(err?.message || 'Reaction failed.'));
@@ -864,6 +896,28 @@ export function ChatTab() {
       return hay.includes(q);
     });
   }, [messageSearch, messages]);
+
+  // Stable renderItem so typing/emoji insertion (which only changes `draft`)
+  // never forces the message list to re-render its visible bubbles.
+  const renderMessageItem = useCallback(
+    ({ item, index }: { item: ChatMessage; index: number }) => {
+      const prev = displayedMessages[index - 1];
+      const grouped = Boolean(prev && prev.senderId === item.senderId && prev.mine === item.mine);
+      return (
+        <MessageBubble
+          message={item}
+          grouped={grouped}
+          search={messageSearch.trim()}
+          onOpenMedia={setMediaPreview}
+          onAction={() => setSelectedMessage(item)}
+          onReply={() => setReplyingTo(item)}
+          onRemoveReaction={(emoji) => removeReaction(item, emoji)}
+          onRetry={() => retryMessage(item)}
+        />
+      );
+    },
+    [displayedMessages, messageSearch, removeReaction, retryMessage],
+  );
 
   return (
     <KeyboardAvoidingView style={[styles.container, { backgroundColor: colors.bg }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -981,22 +1035,7 @@ export function ChatTab() {
               maxToRenderPerBatch={12}
               windowSize={9}
               removeClippedSubviews={Platform.OS === 'android'}
-              renderItem={({ item, index }) => {
-                const prev = displayedMessages[index - 1];
-                const grouped = Boolean(prev && prev.senderId === item.senderId && prev.mine === item.mine);
-                return (
-                  <MessageBubble
-                    message={item}
-                    grouped={grouped}
-                    search={messageSearch.trim()}
-                    onOpenMedia={setMediaPreview}
-                    onAction={() => setSelectedMessage(item)}
-                    onReply={() => setReplyingTo(item)}
-                    onRemoveReaction={(emoji) => removeReaction(item, emoji)}
-                    onRetry={() => retryMessage(item)}
-                  />
-                );
-              }}
+              renderItem={renderMessageItem}
             />
           )}
           {mediaLinkError && activeThread?.type === 'SMS' ? (
@@ -1014,7 +1053,16 @@ export function ChatTab() {
             onCancelReply={() => setReplyingTo(null)}
             onAttach={() => setAttachOpen(true)}
             onCamera={() => captureCamera(false)}
-            onEmoji={() => setEmojiOpen((v) => !v)}
+            onEmoji={() => {
+              // Open the picker over the keyboard's space: dismiss the keyboard
+              // first so all 1,000 emojis are visible instead of being hidden
+              // behind it. Toggling closed just hides the panel.
+              setEmojiOpen((open) => {
+                if (!open) Keyboard.dismiss();
+                return !open;
+              });
+            }}
+            onInputFocus={focusClosesEmoji}
             onSend={send}
             onRecordStart={startRecording}
             onRecordEnd={stopRecording}
@@ -1077,7 +1125,7 @@ export function ChatTab() {
           setContactPickerOpen(false);
         }}
       />
-      <EmojiPanel visible={emojiOpen} onPick={(emoji) => setDraft((v) => `${v}${emoji}`)} onClose={() => setEmojiOpen(false)} />
+      <EmojiPanel visible={emojiOpen} onPick={handleEmojiPick} onClose={closeEmojiPanel} />
       <MessageActions
         thread={activeThread}
         message={selectedMessage}
@@ -1441,6 +1489,7 @@ function Composer({
   onAttach,
   onCamera,
   onEmoji,
+  onInputFocus,
   onSend,
   onRecordStart,
   onRecordEnd,
@@ -1458,6 +1507,7 @@ function Composer({
   onAttach: () => void;
   onCamera: () => void;
   onEmoji: () => void;
+  onInputFocus: () => void;
   onSend: () => void;
   onRecordStart: () => void;
   onRecordEnd: () => void;
@@ -1606,29 +1656,24 @@ function Composer({
       ) : null}
       <View style={styles.composeRow}>
         <View style={[styles.composerField, { borderColor: colors.border }]}>
-          {!compact ? (
-            <TouchableOpacity style={styles.composerIcon} onPress={onEmoji}>
-              <Ionicons name="happy-outline" size={25} color={colors.textSecondary} />
-            </TouchableOpacity>
-          ) : null}
+          <TouchableOpacity style={styles.composerIcon} onPress={onEmoji}>
+            <Ionicons name="happy-outline" size={25} color={colors.textSecondary} />
+          </TouchableOpacity>
           <TextInput
             value={draft}
             onChangeText={onDraft}
+            onFocus={onInputFocus}
             placeholder="Message"
             placeholderTextColor={colors.textTertiary}
             style={[styles.composerInput, { color: colors.text }]}
             multiline
           />
-          {!compact ? (
-            <>
-              <TouchableOpacity style={styles.composerIcon} onPress={onAttach}>
-                <Ionicons name="attach-outline" size={25} color={colors.textSecondary} />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.composerIcon} onPress={onCamera}>
-                <Ionicons name="camera-outline" size={25} color={colors.textSecondary} />
-              </TouchableOpacity>
-            </>
-          ) : null}
+          <TouchableOpacity style={styles.composerIcon} onPress={onAttach}>
+            <Ionicons name="attach-outline" size={25} color={colors.textSecondary} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.composerIcon} onPress={onCamera}>
+            <Ionicons name="camera-outline" size={25} color={colors.textSecondary} />
+          </TouchableOpacity>
         </View>
         {canSend ? (
           <TouchableOpacity style={[styles.sendBtn, { backgroundColor: colors.primary }]} onPress={onSend}><Ionicons name="send" size={18} color="#fff" /></TouchableOpacity>
@@ -1845,25 +1890,123 @@ function ContactPicker({ visible, users, loading, onClose, onPick }: {
   );
 }
 
-function EmojiPanel({ visible, onPick, onClose }: { visible: boolean; onPick: (emoji: string) => void; onClose: () => void }) {
-  const { colors } = useTheme();
-  if (!visible) return null;
+const EMOJI_COLUMNS = 8;
+const EMOJI_CELL_HEIGHT = 38;
+
+const EmojiCell = memo(function EmojiCell({ emoji, onPick }: { emoji: string; onPick: (emoji: string) => void }) {
   return (
-    <View style={[styles.emojiPanel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+    <TouchableOpacity style={styles.emojiCell} onPress={() => onPick(emoji)}>
+      <Text style={styles.emojiLarge}>{emoji}</Text>
+    </TouchableOpacity>
+  );
+});
+
+const getEmojiItemLayout = (_data: ArrayLike<EmojiEntry> | null | undefined, index: number) => ({
+  length: EMOJI_CELL_HEIGHT,
+  offset: EMOJI_CELL_HEIGHT * Math.floor(index / EMOJI_COLUMNS),
+  index,
+});
+
+const EmojiPanel = memo(function EmojiPanel({ visible, onPick, onClose }: { visible: boolean; onPick: (emoji: string) => void; onClose: () => void }) {
+  const { colors } = useTheme();
+  const [query, setQuery] = useState('');
+  const [recents, setRecents] = useState<string[]>([]);
+
+  // Preload recents once on mount so the panel is fully warm before it's ever
+  // opened — opening then only flips a style, never mounts/measures the list.
+  useEffect(() => {
+    let alive = true;
+    loadRecentEmojis().then((list) => {
+      if (alive) setRecents(list);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Reset the search query each time the panel is reopened.
+  useEffect(() => {
+    if (visible) setQuery('');
+  }, [visible]);
+
+  const handlePick = useCallback(
+    (emoji: string) => {
+      onPick(emoji);
+      // Defer the storage write + recents refresh so the emoji lands in the
+      // draft instantly instead of waiting on AsyncStorage / a re-render.
+      setTimeout(() => {
+        recordRecentEmoji(emoji).then(setRecents).catch(() => undefined);
+      }, 0);
+    },
+    [onPick],
+  );
+
+  const data: EmojiEntry[] = useMemo(() => (query.trim() ? searchEmojis(query) : EMOJI_CATALOG), [query]);
+  const recentEntries = useMemo(() => recentToEntries(recents), [recents]);
+  const renderItem = useCallback(({ item }: { item: EmojiEntry }) => <EmojiCell emoji={item.emoji} onPick={handlePick} />, [handlePick]);
+  const keyExtractor = useCallback((item: EmojiEntry, index: number) => `${item.emoji}:${index}`, []);
+
+  const header = useMemo(
+    () =>
+      !query.trim() && recentEntries.length ? (
+        <View style={styles.emojiRecentWrap}>
+          <Text style={[styles.emojiSectionLabel, { color: colors.textSecondary }]}>Recently used</Text>
+          <View style={styles.emojiGrid}>
+            {recentEntries.map((item, index) => (
+              <EmojiCell key={`recent:${item.emoji}:${index}`} emoji={item.emoji} onPick={handlePick} />
+            ))}
+          </View>
+          <Text style={[styles.emojiSectionLabel, { color: colors.textSecondary }]}>All emoji</Text>
+        </View>
+      ) : null,
+    [query, recentEntries, handlePick, colors.textSecondary],
+  );
+
+  return (
+    <View
+      style={[styles.emojiPanel, { backgroundColor: colors.surface, borderColor: colors.border }, !visible && styles.emojiPanelHidden]}
+      pointerEvents={visible ? 'auto' : 'none'}
+    >
       <View style={styles.emojiHeader}>
         <Text style={[styles.emojiTitle, { color: colors.text }]}>Emoji</Text>
         <TouchableOpacity onPress={onClose}><Ionicons name="close" size={18} color={colors.textSecondary} /></TouchableOpacity>
       </View>
-      <View style={styles.emojiGrid}>
-        {EMOJIS.map((emoji) => (
-          <TouchableOpacity key={emoji} style={styles.emojiCell} onPress={() => onPick(emoji)}>
-            <Text style={styles.emojiLarge}>{emoji}</Text>
+      <View style={[styles.emojiSearch, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>
+        <Ionicons name="search" size={15} color={colors.textTertiary} />
+        <TextInput
+          value={query}
+          onChangeText={setQuery}
+          placeholder="Search emoji"
+          placeholderTextColor={colors.textTertiary}
+          style={[styles.emojiSearchInput, { color: colors.text }]}
+          autoCorrect={false}
+          autoCapitalize="none"
+        />
+        {query ? (
+          <TouchableOpacity onPress={() => setQuery('')}>
+            <Ionicons name="close-circle" size={16} color={colors.textTertiary} />
           </TouchableOpacity>
-        ))}
+        ) : null}
       </View>
+      <FlatList
+        data={data}
+        keyExtractor={keyExtractor}
+        numColumns={EMOJI_COLUMNS}
+        style={styles.emojiScroll}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator
+        initialNumToRender={64}
+        maxToRenderPerBatch={64}
+        windowSize={9}
+        getItemLayout={getEmojiItemLayout}
+        removeClippedSubviews
+        ListHeaderComponent={header}
+        ListEmptyComponent={<Text style={[styles.emojiEmpty, { color: colors.textTertiary }]}>No emoji found</Text>}
+        renderItem={renderItem}
+      />
     </View>
   );
-}
+});
 
 function MessageActions({ thread, message, onClose, onCopy, onReply, onReact, onDelete }: {
   thread: ChatThread | null;
@@ -2078,7 +2221,14 @@ const styles = StyleSheet.create({
   emojiPanel: { position: 'absolute', left: spacing['4'], right: spacing['4'], bottom: 96, borderRadius: 22, borderWidth: 1, padding: spacing['3'] },
   emojiHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
   emojiTitle: { fontSize: 14, fontWeight: '900' },
-  emojiGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  emojiPanelHidden: { opacity: 0, transform: [{ translateY: 1000 }] },
+  emojiScroll: { maxHeight: 256 },
+  emojiSearch: { flexDirection: 'row', alignItems: 'center', gap: 7, height: 38, borderRadius: 12, borderWidth: 1, paddingHorizontal: 10, marginBottom: 8 },
+  emojiSearchInput: { flex: 1, fontSize: 14, paddingVertical: 0 },
+  emojiRecentWrap: { paddingBottom: 2 },
+  emojiSectionLabel: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 4, marginBottom: 4, marginLeft: 2 },
+  emojiEmpty: { textAlign: 'center', paddingVertical: 24, fontSize: 13, fontWeight: '700' },
+  emojiGrid: { flexDirection: 'row', flexWrap: 'wrap', paddingBottom: 4 },
   emojiCell: { width: '12.5%', height: 38, alignItems: 'center', justifyContent: 'center' },
   emojiLarge: { fontSize: 24 },
   actionCard: { marginTop: 'auto', borderRadius: 24, borderWidth: 1, padding: spacing['4'] },

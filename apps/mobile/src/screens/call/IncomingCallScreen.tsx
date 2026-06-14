@@ -462,8 +462,8 @@ export function IncomingCallScreen() {
 
         {(isEnded || hasFailure) ? (
           <View style={[styles.statusPill, styles.statusPillError]}>
-            <Ionicons name="checkmark-circle-outline" size={14} color="#bfdbfe" />
-            <Text style={[typography.caption, styles.statusPillErrorText]}>
+            <Ionicons name="checkmark-circle-outline" size={14} color="#bfdbfe" style={{ flexShrink: 0 }} />
+            <Text style={[typography.caption, styles.statusPillErrorText, { flexShrink: 1, textAlign: 'center' }]}>
               {hasFailure ? failureSubtitle : terminalMessage}
             </Text>
           </View>
@@ -578,6 +578,7 @@ const styles = StyleSheet.create({
   statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 8,
     backgroundColor: 'rgba(30,45,71,0.75)',
     borderColor: 'rgba(147,197,253,0.25)',
@@ -586,6 +587,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 7,
     marginTop: 12,
+    maxWidth: '100%',
   },
   statusPillError: {
     backgroundColor: 'rgba(127,29,29,0.5)',

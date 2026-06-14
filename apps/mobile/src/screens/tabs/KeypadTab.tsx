@@ -548,17 +548,24 @@ export function KeypadTab() {
         </View>
       ) : null}
 
-      {/* ── Live suggestions (contacts + recents) ── */}
-      {suggestions.length > 0 && (
-        <View style={styles.suggestionsWrap}>
-          {suggestions.map((s) => (
-            <SuggestionRow key={s.id} suggestion={s} onPress={handleSuggestion} />
-          ))}
-        </View>
-      )}
-
-      {/* Flex spacer — absorbs free vertical space above the keypad. */}
-      <View style={styles.spacer} />
+      {/* ── Live suggestions (contacts + recents) ──
+         Lives in a flexible, scrollable middle region so a long suggestion
+         list can never push the keypad / call / backspace row off the bottom
+         of the screen. The keypad below stays pinned and always visible. */}
+      <View style={styles.middleFlex}>
+        {suggestions.length > 0 && (
+          <ScrollView
+            style={styles.suggestionsScroll}
+            contentContainerStyle={styles.suggestionsWrap}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {suggestions.map((s) => (
+              <SuggestionRow key={s.id} suggestion={s} onPress={handleSuggestion} />
+            ))}
+          </ScrollView>
+        )}
+      </View>
 
       {/* ── Display Area: sits directly above the keypad ── */}
       <View style={styles.displayArea}>
@@ -765,12 +772,19 @@ const styles = StyleSheet.create({
   },
 
   // ── Suggestions ─────────────────────────────────────
+  middleFlex: {
+    flex: 1,
+    minHeight: 10,
+  },
+  suggestionsScroll: {
+    flex: 1,
+    width: '100%',
+  },
   suggestionsWrap: {
     paddingHorizontal: PAD_H_PADDING,
     paddingTop: 12,
     paddingBottom: 2,
     gap: 6,
-    minHeight: SHORT_SCREEN ? 84 : 118,
   },
   suggestion: {
     flexDirection: 'row',
@@ -811,11 +825,6 @@ const styles = StyleSheet.create({
 
   // Flex spacer — absorbs all free vertical space and pushes the keypad block
   // down toward the bottom navigation bar for ergonomic thumb reach.
-  spacer: {
-    flex: 1,
-    minHeight: 10,
-  },
-
   // ── Keys ─────────────────────────────────────────────
   keypad: {
     // No flex — height determined by content; spacer above handles positioning

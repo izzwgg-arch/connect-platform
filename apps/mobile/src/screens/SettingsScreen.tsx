@@ -250,13 +250,6 @@ export function SettingsScreen() {
             iconColor={colors.primary}
             onPress={handleReprovision}
           />
-          <SettingRow
-            icon="refresh-outline"
-            label="Re-register"
-            subtitle="Reconnect to the PBX"
-            iconColor={colors.teal}
-            onPress={() => sip.register()}
-          />
         </SectionCard>
 
         {/* Preferences */}
@@ -273,20 +266,6 @@ export function SettingsScreen() {
             icon="notifications-outline"
             label="Notifications"
             iconColor={colors.warning}
-            onPress={() => {}}
-          />
-          <SettingRow
-            icon="volume-medium-outline"
-            label="Ringtone"
-            value="Default"
-            iconColor={colors.teal}
-            onPress={() => {}}
-          />
-          <SettingRow
-            icon="phone-landscape-outline"
-            label="Audio Route"
-            value="Auto"
-            iconColor={colors.success}
             onPress={() => {}}
           />
         </SectionCard>
