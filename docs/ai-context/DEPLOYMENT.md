@@ -105,6 +105,56 @@ log file; concurrent direct + queue deploy of the same service is blocked when q
 
 ---
 
+## Storage capacity (production app host)
+
+> Forensic snapshot: **2026-06-14**, read-only. Full detail in `SERVER_OPERATIONS.md`.
+> **No cleanup was performed during this investigation.**
+
+### Current state
+
+| Metric | Value |
+|--------|-------|
+| Disk | 678 GB total, **545 GB used (81%)**, 133 GB free |
+| Primary consumer | **Docker BuildKit build cache: ~534 GB** |
+| Production data | **~1 GB** (Postgres, Redis, named volumes) |
+| Inode pressure | **11%** — not a constraint |
+
+### Why build cache grows
+
+Routine `api` / `portal` direct deploys run `docker build` with BuildKit layer caching.
+Each blue/green deploy creates new cached layers (~2.1 GB `COPY . .`, ~2.1 GB `pnpm install`
+per service). Over months of deploys, **2,744 cache entries** accumulated under
+`/var/lib/containerd` without automatic pruning.
+
+Top cache layer types: full-repo `COPY . .` (247 GB), `pnpm install` (103 GB),
+portal `.next/cache` (45 GB), portal build artifacts (~100 GB combined).
+
+### What is NOT consuming disk
+
+- Live Postgres database: **262 MB** (bind mount at `/opt/connectcomms/data/postgres`)
+- Docker named volumes: **~820 MB** total (all attached, all small)
+- Container writable layers: **< 80 MB** combined
+- Stopped containers: **0**
+- Dangling images: **0**
+
+### Reclaim estimate (simulation only — not executed)
+
+| Category | Est. size | Safe to reclaim? |
+|----------|-----------|------------------|
+| BuildKit cache | ~523 GB | Yes — next deploy rebuilds (slower) |
+| Inactive candidate images | ~4.9 GB | Yes — stable images remain |
+| Unused base images (`postgres:16-alpine`, `promtail:2.9.8`) | ~680 MB | Yes |
+| Old APK downloads / monitoring logs / journal | ~10 GB | Partially |
+
+**Dangerous to remove:** Postgres bind mount, Redis bind mount, any attached Docker volume,
+running production images, `/opt/connectcomms/app` deploy clone.
+
+**Agents must not run prune/cleanup commands without explicit human approval.** See
+`AGENTS.md` forbidden commands, `SERVER_OPERATIONS.md`, and **`STORAGE_MAINTENANCE.md`**
+for the guarded cleanup controller (Phase 1: read-only scan + dry-run plan only).
+
+---
+
 ## Safe diagnostics (deploy + verification)
 
 - Do not paste raw `printenv`, `.env`, or entire `docker logs` into chats/docs. Summarize.

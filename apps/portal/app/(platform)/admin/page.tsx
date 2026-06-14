@@ -43,6 +43,11 @@ export default function AdminPage() {
               summary="Live CPU, RAM, storage, and service health for the Connect app host with light and dark themes."
               href="/admin/server-health"
             />
+            <AdminModuleCard
+              title="Storage Health"
+              summary="Read-only disk forensics, classification, and guarded cleanup planning. No automatic deletes."
+              href="/admin/storage-health"
+            />
             <AdminModuleCard title="Global Tenant Management" summary="Create, suspend, and impersonate tenants with safe context switching." href="/admin/tenants" />
             <AdminModuleCard
               title="Call Flight Recorder"

@@ -40,6 +40,7 @@ import {
   startServerHealthRefresh,
   stopServerHealthRefresh,
 } from "./ops/serverHealthCache";
+import { registerStorageMaintenanceRoutes } from "./ops/storageMaintenance/routes";
 import { shouldSkipJwtVerification } from "./jwtPublicRouteBypass";
 import { fetchAriSliceForPbxLiveFromRedisOrAri } from "./pbxLiveAriSlice";
 import { buildVoiceProvisioningBundleFromIdentity, resolveWebrtcSipIdentity } from "./voiceProvisioningBundle";
@@ -2428,6 +2429,7 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/admin/cdr-tenant-map", permission: "can_view_admin_cdr_tenant_map" },
   { prefix: "/admin/ops", permission: "can_view_admin_ops_center" },
   { prefix: "/admin/server-health", permission: "can_view_admin_server_health" },
+  { prefix: "/admin/storage-health", permission: "can_view_admin_storage_health" },
   { prefix: "/admin/deploy", permission: "can_view_admin_deploy_center" },
   { prefix: "/admin/incidents", permission: "can_view_admin_incidents" },
   { prefix: "/admin/webrtc-incidents", permission: "can_view_admin" },
@@ -32769,6 +32771,8 @@ app.get("/admin/server-health", async (req, reply) => {
   }
   return reply.send(getCachedServerHealthSnapshot());
 });
+
+registerStorageMaintenanceRoutes(app, requireSuperAdmin);
 
 // GET /admin/deploy/status
 app.get("/admin/deploy/status", async (req, reply) => {

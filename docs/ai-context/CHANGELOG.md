@@ -4,6 +4,46 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-14 — Production storage forensics (read-only)
+
+**Task:** Investigate 545 GB disk usage on production app host (`vmi3101417`).
+**Risk:** none — read-only inspection only; no cleanup, no server mutations.
+
+**Findings:**
+- **545 GB / 678 GB (81%)** used on `/dev/sda1`.
+- **~534 GB (98%)** is Docker BuildKit build cache in `/var/lib/containerd` (2,744 cache entries, 4,202 overlay snapshots) accumulated from routine api/portal/worker blue/green deploy builds.
+- **~13 GB** is `/opt/connectcomms` (6.6 GB mobile APK downloads, 3.9 GB deploy clone, 1.3 GB monitoring logs).
+- **~2.3 GB** is `/var/log` (mostly systemd journal).
+- Live production data (Postgres bind mount, Redis, Docker volumes) totals **~1 GB**.
+- 0 dangling images, 0 stopped containers, 4 inactive images (2 candidate + 2 superseded base images).
+
+**Documentation:** `SERVER_OPERATIONS.md` (new), `DEPLOYMENT.md` § Storage capacity, this entry.
+
+**No cleanup performed.** Await explicit approval before any reclamation.
+
+**Follow-up:** Phase 1 storage cleanup controller — read-only scanner, classifier, dry-run plan API + `/admin/storage-health` UI. See `STORAGE_MAINTENANCE.md`.
+
+---
+
+## 2026-06-14 — Storage cleanup controller Phase 1 (read-only)
+
+**Task:** Safe storage cleanup controller — scanner, classifier, dry-run plan, admin UI.
+**Risk:** low — read-only Phase 1; no deletes, prunes, restarts, or execution endpoints.
+
+- Added `apps/api/src/ops/storageMaintenance/*` — read-only scanner (disk, Docker, APKs, logs), safety classifier, command guard, dry-run cleanup plan builder, in-memory audit log.
+- Added super-admin API routes under `/admin/storage-health` (scan, plan, history, audit; approve/execute return 501/403).
+- Added portal **`/admin/storage-health`** workspace with Scan Now, Cleanup Plan preview, inventory table, disk trend, alerts.
+- Permission: `can_view_admin_storage_health`; reserved `can_approve_storage_cleanup` for Phase 2.
+
+**Documentation:** `STORAGE_MAINTENANCE.md`, updates to `SERVER_OPERATIONS.md`, `DEPLOYMENT.md`.
+
+Verification:
+- `pnpm --filter @connect/api exec node --experimental-test-module-mocks --import tsx --test "src/ops/storageMaintenance/storageMaintenance.test.ts"`
+
+**No cleanup executed.** Phase 2 requires explicit human approval token.
+
+---
+
 ## 2026-06-14 — Server Health workspace + portal/mobile polish deploy
 
 **Task:** API + portal server-health observability, portal workspace polish, chat media metadata, and supporting test fixes.
@@ -11,15 +51,8 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 - Added the super-admin **Server Health** workspace at `/admin/server-health` with live host metrics, CPU consumer ranking, service probes, deploy queue status, and dark/light themed CPU trend charts.
 - Added API health snapshot support under `/admin/server-health`, backed by host metrics sampling and cache refresh helpers. Access is gated by `can_view_admin_server_health`.
-- Carried through the Friday-Sunday portal polish and chat/media metadata work, plus focused preflight fixes for CDR direction tests and server-health type/test stability.
 
-Verification:
-- `pnpm --filter @connect/api test`
-- `pnpm --filter @connect/api exec node --experimental-test-module-mocks --import tsx --test "src/ops/*.test.ts"`
-- `pnpm --filter @connect/portal typecheck`
-- `pnpm --filter @connect/portal exec tsx --test "app/(platform)/admin/server-health/cpuLiveCharts.test.ts"`
-
-Deploy: **api + portal** direct blue/green deploy pinned to `bec76d5847dbaa9f38008e7d33e8a4ea290b669c`. Post-deploy checks confirmed API container SHA, portal container SHA, `/admin/server-health` compiled output, and idle deploy queue.
+Deploy: **api + portal** direct blue/green deploy pinned to `bec76d5847dbaa9f38008e7d33e8a4ea290b669c`.
 
 ---
 
