@@ -1,5 +1,5 @@
 /**
- * One-time local bootstrap: tenant + admin user for portal login on localhost.
+ * One-time local bootstrap: tenant + SUPER_ADMIN user for portal login on localhost.
  * Requires Postgres (connectcomms DB) synced via `pnpm db:push` or migrate deploy.
  *
  * Usage (from repo root):
@@ -144,7 +144,7 @@ async function main() {
   if (user) {
     user = await db.user.update({
       where: { id: user.id },
-      data: { passwordHash, status: "ACTIVE", role: "TENANT_ADMIN" },
+      data: { passwordHash, status: "ACTIVE", role: "SUPER_ADMIN" },
     });
     console.log("Updated existing user:", user.email, "role:", user.role);
   } else {
@@ -166,7 +166,7 @@ async function main() {
         tenantId: tenant.id,
         email,
         passwordHash,
-        role: "TENANT_ADMIN",
+        role: "SUPER_ADMIN",
         status: "ACTIVE",
         displayName: "Local Dev",
         emailVerifiedAt: new Date(),

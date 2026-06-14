@@ -13,8 +13,8 @@ import type { Permission } from "../types/app";
  * IS exactly their custom role's toggles), this guarantees every single toggle
  * in the editor maps to a real, deterministic show/hide outcome.
  *
- * backendJwtRole is set to SUPER_ADMIN so the two JWT-gated special cases
- * (admin.billing, crm.diagnostics) don't force-hide — isolating the test to the
+ * backendJwtRole is set to SUPER_ADMIN so the JWT-gated special cases
+ * (admin.billing, admin.server_health, crm.diagnostics) don't force-hide — isolating the test to the
  * permission wiring that custom roles control.
  */
 const can = (set: Set<string>) => ((p: Permission) => set.has(p as string)) as (p: Permission) => boolean;

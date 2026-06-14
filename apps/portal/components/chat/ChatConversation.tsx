@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Phone, RefreshCcw } from "lucide-react";
+import { Phone, RefreshCcw, X } from "lucide-react";
 import { useLayoutEffect, useRef } from "react";
 import { useSipPhone } from "../../hooks/useSipPhone";
 import { isNearScrollBottom, shouldAutoScroll, shouldPreserveScrollOffset, type ChatScrollIntent } from "./chatState";
@@ -112,7 +112,7 @@ export function ChatConversation({
   return (
     <main className="cc-conversation">
       <header className="cc-conv-head">
-        <button type="button" className="cc-icon-btn cc-mobile-back" onClick={onBack}><ArrowLeft size={18} /></button>
+        <button type="button" className="cc-icon-btn cc-panel-close" onClick={onBack} title="Close chat"><X size={18} /></button>
         <span className="cc-avatar large">{initials(thread.participantName)}</span>
         <div className="cc-conv-title">
           <h2>{thread.participantName}</h2>

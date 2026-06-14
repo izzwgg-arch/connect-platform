@@ -126,6 +126,12 @@ const mockChecklists = [
   },
 ];
 
+const mockVoicemails = [
+  voicemail("vm-visual-001", "inbox", false, "Jordan Ellis", "+15550101101", "201", -2, 74),
+  voicemail("vm-visual-002", "urgent", false, "Priya Shah", "+15550101102", "202", -5, 46),
+  voicemail("vm-visual-003", "old", true, "Marcus Lee", "+15550101103", "203", -220, 92),
+];
+
 let mockScriptSeq = 1;
 let mockChecklistSeq = 1;
 
@@ -270,6 +276,16 @@ export function getVisualQaMockResponse(
         role: "SUPER_ADMIN",
         avatarUrl: null,
         portalPermissionSet: [
+          "can_view_section_workspace",
+          "can_view_workspace_overview",
+          "can_view_workspace_team_directory",
+          "can_view_workspace_call_history",
+          "can_view_workspace_voicemail",
+          "can_view_workspace_chat",
+          "can_view_workspace_contacts",
+          "can_view_calls",
+          "can_view_recordings",
+          "can_download_recordings",
           "can_view_crm",
           "can_view_section_crm",
           "can_view_crm_dashboard",
@@ -341,6 +357,13 @@ export function getVisualQaMockResponse(
     });
 
     return { handled: true, data: { rows: rows.slice(0, limit), total: rows.length, page: 0, limit } };
+  }
+
+  if (pathname === "/voice/voicemail") {
+    const folder = parsed.searchParams.get("folder");
+    const page = Number(parsed.searchParams.get("page") ?? "1") || 1;
+    const rows = folder ? mockVoicemails.filter((entry) => entry.folder === folder) : mockVoicemails;
+    return { handled: true, data: { voicemails: rows, total: rows.length, page } };
   }
 
   if (pathname === "/crm/reports/daily") {
@@ -713,6 +736,32 @@ function hoursFromNow(hours: number): string {
 
 function hoursFromNowDate(hours: number): Date {
   return new Date(now.getTime() + hours * 3600_000);
+}
+
+function voicemail(
+  id: string,
+  folder: "inbox" | "urgent" | "old",
+  listened: boolean,
+  callerName: string,
+  callerId: string,
+  extension: string,
+  hoursOffset: number,
+  durationSec: number,
+) {
+  return {
+    id,
+    callerId,
+    callerName,
+    receivedAt: hoursFromNow(hoursOffset),
+    durationSec,
+    folder,
+    listened,
+    extension,
+    tenantId: "visual-qa-tenant",
+    tenantName: "Visual QA Workspace",
+    transcription: "Visual QA voicemail preview for layout verification.",
+    streamUrl: "",
+  };
 }
 
 function startOfVisualQaDay(): Date {

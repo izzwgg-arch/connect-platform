@@ -2,7 +2,7 @@ import type { Permission } from "../types/app";
 import { readJwtPayload } from "./session";
 
 /** Bump when permission shape changes (e.g. CRM bootstrap) to drop stale session caches. */
-const CACHE_KEY = "cc-portal-permissions-v2";
+const CACHE_KEY = "cc-portal-permissions-v3";
 export const PORTAL_PERMISSIONS_HYDRATED_EVENT = "cc-portal-permissions-hydrated";
 
 type CachedPermissions = {

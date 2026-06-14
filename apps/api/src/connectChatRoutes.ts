@@ -34,6 +34,7 @@ import {
 } from "./chatAttachmentStorage";
 import { fetchVoipMsMmsToChatFile, mediaKindFromMime } from "../../../packages/shared/src/voipMsInboundMms";
 import { upsertSmsThreadParticipants } from "./smsInboxParticipants";
+import { probeChatMedia } from "./chatMediaProbe";
 export type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
 function staff(user: JwtUser): string {
@@ -85,7 +86,16 @@ async function getOrCreateGlobalVoipConfig() {
 }
 
 type VoipMsStoredCreds = { username: string; password: string; apiBaseUrl?: string };
-type ChatAttachmentInput = { storageKey: string; mimeType: string; sizeBytes: number; fileName: string };
+type ChatAttachmentInput = {
+  storageKey: string;
+  mimeType: string;
+  sizeBytes: number;
+  fileName: string;
+  mediaKind?: string | null;
+  durationMs?: number | null;
+  width?: number | null;
+  height?: number | null;
+};
 type ChatDirectoryExtension = { id: string; extNumber: string; displayName: string; ownerUserId: string | null };
 
 async function loadVoipMsCreds(): Promise<VoipMsStoredCreds | null> {
@@ -317,7 +327,7 @@ async function persistMessageAttachments(
   tenantId: string,
   threadId: string,
   messageId: string,
-  rows: Array<{ storageKey: string; mimeType: string; sizeBytes: number; fileName: string }>,
+  rows: ChatAttachmentInput[],
 ): Promise<void> {
   for (const row of rows) {
     assertStorageKeyForThread(row.storageKey, tenantId, threadId);
@@ -333,7 +343,10 @@ async function persistMessageAttachments(
         sizeBytes: row.sizeBytes,
         storageKey: row.storageKey,
         scanStatus: "pending",
-        mediaKind: mediaKindFromMime(row.mimeType),
+        mediaKind: row.mediaKind ?? mediaKindFromMime(row.mimeType),
+        durationMs: row.durationMs ?? undefined,
+        width: row.width ?? undefined,
+        height: row.height ?? undefined,
       },
     });
   }
@@ -1105,7 +1118,8 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         mimeType,
         maxBytes: maxB,
       });
-      return { ok: true, ...written };
+      const metadata = await probeChatMedia(fileBuf, written.mimeType);
+      return { ok: true, ...written, ...metadata };
     } catch (e: any) {
       const m = String(e?.message || e);
       if (m === "mime_not_allowed") {
@@ -1290,6 +1304,10 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       mimeType: z.string().min(1).max(128),
       sizeBytes: z.number().int().positive().max(60_000_000),
       fileName: z.string().min(1).max(256),
+      mediaKind: z.enum(["image", "audio", "video", "file"]).nullable().optional(),
+      durationMs: z.number().int().positive().nullable().optional(),
+      width: z.number().int().positive().nullable().optional(),
+      height: z.number().int().positive().nullable().optional(),
     });
 
     const input = z

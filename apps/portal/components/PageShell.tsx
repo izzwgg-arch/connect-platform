@@ -95,6 +95,13 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
                     <code>pnpm bootstrap:local</code> then sign in again.
                   </p>
                 ) : null}
+                {isLocalhostDev() && activeNavItem?.section === "admin" ? (
+                  <p className="muted" style={{ marginTop: 12, fontSize: 13 }}>
+                    Local dev: Admin pages require JWT role <strong>SUPER_ADMIN</strong>. Sign out, run{" "}
+                    <code>pnpm exec tsx scripts/promote-local-super-admin.ts</code>, then sign in again with{" "}
+                    <strong>Local dev sign-in</strong>.
+                  </p>
+                ) : null}
               </div>
             ) : (
               children

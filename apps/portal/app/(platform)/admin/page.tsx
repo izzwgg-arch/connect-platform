@@ -38,6 +38,11 @@ export default function AdminPage() {
           </section>
           <section className="grid three">
             <AdminModuleCard title="Deploy Center" summary="Enqueue, monitor, and manage production deployments through the safe deploy queue. View logs and cancel jobs." href="/admin/deploy-center" />
+            <AdminModuleCard
+              title="Server Health"
+              summary="Live CPU, RAM, storage, and service health for the Connect app host with light and dark themes."
+              href="/admin/server-health"
+            />
             <AdminModuleCard title="Global Tenant Management" summary="Create, suspend, and impersonate tenants with safe context switching." href="/admin/tenants" />
             <AdminModuleCard
               title="Call Flight Recorder"

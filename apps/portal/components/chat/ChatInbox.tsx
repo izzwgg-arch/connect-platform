@@ -10,7 +10,6 @@ export function ChatInbox({
   search,
   onSearch,
   onSelect,
-  onNewChat,
   loading,
 }: {
   threads: ChatThread[];
@@ -18,17 +17,15 @@ export function ChatInbox({
   search: string;
   onSearch: (value: string) => void;
   onSelect: (thread: ChatThread) => void;
-  onNewChat: () => void;
   loading: boolean;
 }) {
   return (
-    <aside className="cc-inbox">
+    <section className="cc-inbox contacts-list-shell tasks-list-card">
       <div className="cc-inbox-head">
         <div>
           <h2>Messages</h2>
           <p>SMS, tenant groups, and internal chats</p>
         </div>
-        <button type="button" className="cc-new-btn" onClick={onNewChat}>+ New</button>
       </div>
 
       <label className="cc-search">
@@ -75,6 +72,6 @@ export function ChatInbox({
           </button>
         ))}
       </div>
-    </aside>
+    </section>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import {
   Archive,
@@ -17,6 +17,7 @@ import {
   Search,
   Star,
   Trash2,
+  Voicemail as VoicemailIcon,
   Volume2,
   X,
 } from "lucide-react";
@@ -28,6 +29,7 @@ import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { useSipPhone } from "../../../hooks/useSipPhone";
 import { apiDelete, apiGet, apiPatch } from "../../../services/apiClient";
 import { useAppContext } from "../../../hooks/useAppContext";
+import { CRMPageHeader, cn, crm } from "../../../components/crm";
 
 type FolderKey = "inbox" | "old" | "urgent";
 type TabKey = "inbox" | "new" | "urgent" | "old";
@@ -60,6 +62,41 @@ type MailboxData = {
   page: number;
 };
 
+function buildVoicemailPreview(page: number): MailboxData {
+  const callers = ["Avery Stone", "Jordan Hayes", "Morgan River", "Northstar Desk", "Harbor Retail", "Crescent Auto"];
+  const voicemails: Voicemail[] = Array.from({ length: 30 }, (_, index) => {
+    const folder: FolderKey = index % 9 === 0 ? "urgent" : index % 5 === 0 ? "old" : "inbox";
+    return {
+      id: `preview-voicemail-${index + 1}`,
+      callerId: `+1555903${String(index).padStart(4, "0")}`,
+      callerName: callers[index % callers.length],
+      receivedAt: new Date(Date.now() - index * 43 * 60_000).toISOString(),
+      durationSec: 24 + ((index * 13) % 160),
+      folder,
+      listened: index % 4 === 0,
+      extension: String(220 + (index % 8)),
+      tenantId: "preview-tenant",
+      tenantName: "Local Dev Workspace",
+      transcription: [
+        "Hi, this is a preview voicemail. Please call me back when you have a chance.",
+        "Following up on the quote. I can send the missing document this afternoon.",
+        "The customer asked for confirmation before the close of business today.",
+        "This longer preview item is here to make the voicemail feed scroll independently from the page.",
+      ][index % 4],
+      streamUrl: undefined,
+    };
+  });
+  return {
+    voicemails,
+    totals: {
+      inbox: voicemails.filter((vm) => vm.folder === "inbox").length,
+      urgent: voicemails.filter((vm) => vm.folder === "urgent").length,
+      old: voicemails.filter((vm) => vm.folder === "old").length,
+    },
+    page,
+  };
+}
+
 const FOLDERS: FolderKey[] = ["inbox", "urgent", "old"];
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: "inbox", label: "Inbox" },
@@ -86,6 +123,34 @@ function fmtDuration(sec: number): string {
   const m = Math.floor(safe / 60);
   const s = safe % 60;
   return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function VoicemailKpiTile({
+  label,
+  value,
+  icon,
+  tone,
+}: {
+  label: string;
+  value: string | number;
+  icon: ReactNode;
+  tone: "blue" | "green" | "violet" | "amber" | "rose" | "cyan";
+}) {
+  return (
+    <div className={cn(crm.queueCountPill, `crm-queue-kpi-${tone}`, "relative overflow-hidden bg-crm-surface-2")}>
+      <span className="flex w-full items-start justify-between gap-3">
+        <span className="min-w-0">
+          <span className="crm-queue-kpi-label block text-[10px] font-bold uppercase tracking-wide text-crm-muted">{label}</span>
+          <span className="crm-queue-kpi-value mt-1 block text-2xl font-bold tabular-nums leading-none tracking-tight text-crm-text">
+            {value}
+          </span>
+        </span>
+        <span className="crm-queue-kpi-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface/70 text-crm-accent">
+          {icon}
+        </span>
+      </span>
+    </div>
+  );
 }
 
 function fmtTime(iso: string): string {
@@ -154,12 +219,14 @@ function SmartAudioPlayer({
   activeId,
   onActivate,
   onPlayed,
+  autoPlayRequest = 0,
   size = "full",
 }: {
   vm: Voicemail;
   activeId: string | null;
   onActivate: (id: string) => void;
   onPlayed: (vm: Voicemail) => void;
+  autoPlayRequest?: number;
   size?: "compact" | "full";
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -264,6 +331,25 @@ function SmartAudioPlayer({
     }
   }
 
+  useEffect(() => {
+    if (!autoPlayRequest) return;
+    const audio = getOrCreateAudio();
+    if (!audio.src) audio.src = src;
+    if (!audio.paused) return;
+    onActivate(vm.id);
+    onPlayed(vm);
+    setLoading(true);
+    const promise = audio.play();
+    if (promise && typeof promise.catch === "function") {
+      promise.catch((err) => {
+        console.error("[voicemail] play() rejected", { src, name: err?.name, message: err?.message });
+        setError(err?.name === "NotAllowedError" ? "blocked" : err?.name === "NotSupportedError" ? "src_not_supported" : "play_failed");
+        setLoading(false);
+        setPlaying(false);
+      });
+    }
+  }, [autoPlayRequest, getOrCreateAudio, onActivate, onPlayed, src, vm]);
+
   function seek(e: React.MouseEvent<HTMLDivElement>) {
     const rect = e.currentTarget.getBoundingClientRect();
     const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
@@ -336,14 +422,11 @@ function QuickActionButton({
 function VoicemailRow({
   vm,
   selected,
-  expanded,
   showTenant,
   canDelete,
   deleting,
-  activeId,
   onSelect,
-  onActivate,
-  onPlayed,
+  onPlay,
   onCall,
   onMessage,
   onCopy,
@@ -353,14 +436,11 @@ function VoicemailRow({
 }: {
   vm: Voicemail;
   selected: boolean;
-  expanded: boolean;
   showTenant: boolean;
   canDelete: boolean;
   deleting: boolean;
-  activeId: string | null;
   onSelect: (vm: Voicemail) => void;
-  onActivate: (id: string) => void;
-  onPlayed: (vm: Voicemail) => void;
+  onPlay: (vm: Voicemail) => void;
   onCall: (number: string) => void;
   onMessage: (number: string) => void;
   onCopy: (number: string) => void;
@@ -394,7 +474,7 @@ function VoicemailRow({
           <span className="vm-duration">{fmtDuration(vm.durationSec)}</span>
         </div>
         <div className="vm-actions" onClick={(e) => e.stopPropagation()}>
-          <QuickActionButton title="Play voicemail" onClick={() => onActivate(vm.id)}>
+          <QuickActionButton title="Play voicemail" onClick={() => onPlay(vm)}>
             <Play size={15} fill="currentColor" />
           </QuickActionButton>
           <QuickActionButton title="Call back" onClick={() => onCall(vm.callerId)}>
@@ -428,11 +508,6 @@ function VoicemailRow({
           </div>
         </div>
       </div>
-      {expanded ? (
-        <div className="vm-row-player" onClick={(e) => e.stopPropagation()}>
-          <SmartAudioPlayer vm={vm} activeId={activeId} onActivate={onActivate} onPlayed={onPlayed} size="compact" />
-        </div>
-      ) : null}
     </article>
   );
 }
@@ -442,6 +517,7 @@ function DetailPanel({
   showTenant,
   canDelete,
   activeId,
+  autoPlayRequest,
   deleting,
   note,
   onNote,
@@ -459,6 +535,7 @@ function DetailPanel({
   showTenant: boolean;
   canDelete: boolean;
   activeId: string | null;
+  autoPlayRequest: number;
   deleting: boolean;
   note: string;
   onNote: (note: string) => void;
@@ -496,7 +573,7 @@ function DetailPanel({
       </div>
 
       <section className="vm-detail-card premium-player">
-        <SmartAudioPlayer vm={vm} activeId={activeId} onActivate={onActivate} onPlayed={onPlayed} />
+        <SmartAudioPlayer vm={vm} activeId={activeId} onActivate={onActivate} onPlayed={onPlayed} autoPlayRequest={autoPlayRequest} />
       </section>
 
       <section className="vm-detail-card">
@@ -575,6 +652,7 @@ export default function VoicemailPage() {
   const [activeTab, setActiveTab] = useState<TabKey>("inbox");
   const [selected, setSelected] = useState<Voicemail | null>(null);
   const [activePlayerId, setActivePlayerId] = useState<string | null>(null);
+  const [detailPlayRequest, setDetailPlayRequest] = useState(0);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [extensionFilter, setExtensionFilter] = useState("");
@@ -638,7 +716,23 @@ export default function VoicemailPage() {
     if (typeof window !== "undefined") localStorage.setItem("connect.voicemail.notes", JSON.stringify(next));
   }
 
-  const mailbox = state.status === "success" ? state.data : { voicemails: [], totals: { inbox: 0, urgent: 0, old: 0 }, page };
+  const mailbox = state.status === "success"
+    ? state.data.voicemails.length < 20 && !skipFetchNoTenant && process.env.NODE_ENV === "development"
+      ? (() => {
+          const preview = buildVoicemailPreview(page);
+          const existingIds = new Set(state.data.voicemails.map((vm) => vm.id));
+          const voicemails = [
+            ...state.data.voicemails,
+            ...preview.voicemails.filter((vm) => !existingIds.has(vm.id)).slice(0, 30 - state.data.voicemails.length),
+          ];
+          const previewTotals = voicemails.reduce((acc, vm) => {
+            acc[vm.folder] += 1;
+            return acc;
+          }, { inbox: 0, urgent: 0, old: 0 } as Record<FolderKey, number>);
+          return { ...state.data, voicemails, totals: previewTotals };
+        })()
+      : state.data
+    : { voicemails: [], totals: { inbox: 0, urgent: 0, old: 0 }, page };
   const allVoicemails = mailbox.voicemails;
   const totalCount = mailbox.totals.inbox + mailbox.totals.urgent + mailbox.totals.old;
   const newCount = allVoicemails.filter((vm) => !vm.listened).length;
@@ -720,43 +814,39 @@ export default function VoicemailPage() {
     navigator.clipboard?.writeText(number);
   }
 
+  function handleRowPlay(vm: Voicemail) {
+    setSelected(vm);
+    setActivePlayerId(vm.id);
+    setDetailPlayRequest((value) => value + 1);
+  }
+
   return (
-    <div className="vm-shell">
-      <header className="vm-hero">
-        <div className="vm-title-block">
-          <div>
-            <p className="vm-eyebrow">Communication inbox</p>
-            <h1>Voicemail</h1>
-          </div>
-          <button className="vm-refresh" onClick={() => setReloadKey((key) => key + 1)}>
-            <RefreshCw size={15} /> Refresh
-          </button>
-        </div>
-        <div className="vm-kpis">
-          <div className="vm-kpi">
-            <span>Total voicemails</span>
-            <strong>{totalCount}</strong>
-            <small>Across selected tenant</small>
-          </div>
-          <div className="vm-kpi accent">
-            <span>New</span>
-            <strong>{newCount}</strong>
-            <small>Needs review</small>
-          </div>
-          <div className="vm-kpi danger">
-            <span>Urgent</span>
-            <strong>{urgentCount}</strong>
-            <small>Priority follow-up</small>
-          </div>
-          <div className="vm-kpi muted">
-            <span>Old</span>
-            <strong>{oldCount}</strong>
-            <small>Older than 7 days</small>
-          </div>
-        </div>
+    <div className="vm-shell crm-queue-workspace crm-voicemail-workspace">
+      <header className="vm-hero crm-workspace-header">
+        <CRMPageHeader
+          compact
+          className={cn(crm.contactsHeaderPanel, "campaigns-command-header")}
+          icon={<VoicemailIcon className="h-6 w-6" aria-hidden />}
+          title="Voicemail"
+          actions={
+            <div className="campaigns-hero-actions">
+              <button className="campaigns-btn-secondary vm-refresh" type="button" onClick={() => setReloadKey((key) => key + 1)}>
+                <RefreshCw className="h-4 w-4" /> Refresh
+              </button>
+            </div>
+          }
+        />
       </header>
 
-      <section className="vm-filter-bar">
+      <div className="vm-toolbar crm-workspace-toolbar">
+        <section className="vm-kpis crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-4 xl:grid-cols-4" aria-label="Voicemail metrics">
+          <VoicemailKpiTile label="Total Voicemails" value={totalCount} tone="blue" icon={<VoicemailIcon className="h-4 w-4" />} />
+          <VoicemailKpiTile label="New" value={newCount} tone="violet" icon={<Archive className="h-4 w-4" />} />
+          <VoicemailKpiTile label="Urgent" value={urgentCount} tone="rose" icon={<Star className="h-4 w-4" />} />
+          <VoicemailKpiTile label="Old" value={oldCount} tone="amber" icon={<Clock className="h-4 w-4" />} />
+        </section>
+
+      <section className="vm-filter-bar crm-queue-filter-bar">
         <nav className="vm-tabs" aria-label="Voicemail filters">
           {TABS.map((tab) => (
             <button key={tab.key} className={activeTab === tab.key ? "active" : ""} onClick={() => setActiveTab(tab.key)}>
@@ -791,6 +881,7 @@ export default function VoicemailPage() {
           ]}
         />
       </section>
+      </div>
 
       <main className={`vm-workspace ${selected ? "has-detail" : ""}`}>
         <section className="vm-feed custom-scrollbar" aria-label="Voicemail feed">
@@ -825,14 +916,11 @@ export default function VoicemailPage() {
                         key={vm.id}
                         vm={vm}
                         selected={selected?.id === vm.id}
-                        expanded={activePlayerId === vm.id}
                         showTenant={showTenant}
                         canDelete={canDeleteVoicemail}
                         deleting={deleteId === vm.id}
-                        activeId={activePlayerId}
                         onSelect={setSelected}
-                        onActivate={setActivePlayerId}
-                        onPlayed={handlePlayed}
+                        onPlay={handleRowPlay}
                         onCall={handleCall}
                         onMessage={handleMessage}
                         onCopy={handleCopy}
@@ -859,6 +947,7 @@ export default function VoicemailPage() {
             showTenant={showTenant}
             canDelete={canDeleteVoicemail}
             activeId={activePlayerId}
+            autoPlayRequest={detailPlayRequest}
             deleting={deleteId === selected.id}
             note={notes[selected.id] ?? ""}
             onNote={(note) => saveNote(selected.id, note)}
@@ -989,32 +1078,47 @@ export default function VoicemailPage() {
           letter-spacing: -0.04em;
         }
 
+        .vm-toolbar {
+          display: flex;
+          flex-shrink: 0;
+          flex-direction: column;
+          gap: 12px;
+          padding: 12px 22px 0;
+        }
+
         .vm-filter-bar {
-          display: grid;
-          grid-template-columns: auto minmax(220px, 1fr) 150px 170px;
-          gap: 10px;
+          display: flex;
+          flex-direction: row;
           align-items: center;
-          padding: 12px 22px;
-          border-bottom: 1px solid var(--border);
-          background: color-mix(in srgb, var(--panel) 72%, transparent);
+          justify-content: flex-start;
+          gap: 10px;
+          flex-wrap: wrap;
+          width: 100%;
+          margin: 0;
+          padding: 14px;
+          border: 1px solid var(--crm-border, var(--border));
+          border-radius: 1.25rem;
+          background: color-mix(in srgb, var(--crm-surface, var(--panel)) 96%, var(--crm-bg, var(--bg)));
+          box-shadow: var(--crm-shadow, var(--shadow));
           flex-shrink: 0;
         }
 
         .vm-tabs {
           display: flex;
+          flex: 0 0 auto;
           align-items: center;
           gap: 6px;
           padding: 5px;
-          border: 1px solid var(--border);
+          border: 1px solid var(--crm-border, var(--border));
           border-radius: 999px;
-          background: var(--panel);
+          background: color-mix(in srgb, var(--crm-surface-2, var(--panel-2)) 90%, transparent);
         }
 
         .vm-tabs button {
           border: 0;
           border-radius: 999px;
           background: transparent;
-          color: var(--text-dim);
+          color: var(--crm-text-muted, var(--text-dim));
           padding: 8px 13px;
           cursor: pointer;
           display: inline-flex;
@@ -1025,7 +1129,7 @@ export default function VoicemailPage() {
 
         .vm-tabs button.active {
           background: color-mix(in srgb, var(--accent) 18%, transparent);
-          color: var(--text);
+          color: var(--crm-text, var(--text));
           box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 36%, transparent);
         }
 
@@ -1046,10 +1150,25 @@ export default function VoicemailPage() {
         .vm-select-wrap,
         .vm-date-select {
           height: 42px;
-          border: 1px solid var(--border);
+          border: 1px solid var(--crm-border, var(--border));
           border-radius: 14px;
-          background: var(--panel);
-          color: var(--text);
+          background: var(--crm-surface, var(--panel));
+          color: var(--crm-text, var(--text));
+        }
+
+        .vm-search {
+          flex: 1 1 16rem;
+          min-width: min(100%, 16rem);
+        }
+
+        .vm-select-wrap {
+          flex: 0 0 150px;
+          min-width: 150px;
+        }
+
+        .vm-filter-bar > .cs-wrap {
+          flex: 0 0 140px;
+          min-width: 140px;
         }
 
         .vm-search,
@@ -1354,11 +1473,6 @@ export default function VoicemailPage() {
 
         .vm-menu button:hover:not(:disabled) {
           background: var(--panel-2);
-        }
-
-        .vm-row-player {
-          border-top: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
-          padding: 0 14px 14px 76px;
         }
 
         .vm-player {
@@ -1750,9 +1864,6 @@ export default function VoicemailPage() {
             justify-content: flex-end;
           }
 
-          .vm-row-player {
-            padding-left: 14px;
-          }
         }
 
         @media (max-width: 640px) {

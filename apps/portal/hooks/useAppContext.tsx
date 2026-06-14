@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { hasPermission } from "../permissions/permissionMap";
-import { mapBackendRole, readJwtPayload } from "../services/session";
+import { mapBackendRole, readJwtPayload, writeAuthToken } from "../services/session";
 import { ApiError, apiGet, apiPost } from "../services/apiClient";
 import { loadTenantOptions } from "../services/tenantData";
 import { PBX_TENANTS_REFRESHED_EVENT, PBX_SYNC_COMPLETE_EVENT } from "./useTenantOptions";
@@ -158,12 +158,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       tenantName?: string | null;
       avatarUrl?: string | null;
       role?: string | null;
+      token?: string | null;
       id?: string | null;
       name?: string | null;
       email?: string | null;
       extension?: MeExtension;
     }) => {
       if (!active) return;
+      if (me.token) {
+        writeAuthToken(me.token);
+      }
       if (Array.isArray(me.portalPermissionSet)) {
         const perms = me.portalPermissionSet as Permission[];
         setPortalPermissionOverride(perms);
@@ -217,6 +221,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         tenantName?: string | null;
         avatarUrl?: string | null;
         role?: string | null;
+        token?: string | null;
         id?: string | null;
         name?: string | null;
         email?: string | null;
@@ -237,7 +242,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         });
     };
     load();
-    const onSaved = () => load();
+    const onSaved = () => {
+      const jwt = readJwtPayload();
+      if (jwt?.role) {
+        setRole(mapBackendRole(jwt.role));
+        setBackendJwtRole(String(jwt.role));
+      }
+      load();
+    };
     const onHydrated = (event: Event) => {
       const detail = (event as CustomEvent<Permission[] | null>).detail;
       if (!active) return;
@@ -258,12 +270,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const canPermission = useMemo(
     () => (permission: Permission) => {
+      // Platform SUPER_ADMIN always has the full portal map — stale cached override lists must not weaken them.
+      if (role === "SUPER_ADMIN" || backendJwtRole === "SUPER_ADMIN") {
+        return hasPermission("SUPER_ADMIN", permission);
+      }
       if (Array.isArray(portalPermissionOverride)) {
         return portalPermissionOverride.includes(permission);
       }
       return hasPermission(role, permission);
     },
-    [portalPermissionOverride, role],
+    [portalPermissionOverride, role, backendJwtRole],
   );
 
   const reloadTenantOptions = useCallback(async () => {

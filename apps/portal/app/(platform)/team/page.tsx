@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Activity,
   Copy,
@@ -27,6 +27,7 @@ import { loadPbxResource } from "../../../services/pbxData";
 import { callsForTenant as scopeLiveCallsForTenant, extensionSetsFromCalls, liveExtensionForTenant } from "../../../services/liveCallState";
 import { ConnectSelect } from "../../../components/ConnectSelect";
 import { AdminExtensionPairingQrModal } from "../../../components/AdminExtensionPairingQrModal";
+import { CRMActionBar, CRMPageHeader, cn, crm } from "../../../components/crm";
 import type { AdminScope } from "../../../types/app";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -88,6 +89,37 @@ function mapAmiPresence(
 
 function mkInitials(name: string): string {
   return name.trim().split(/\s+/).map((w) => w[0] ?? "").join("").slice(0, 2).toUpperCase() || "??";
+}
+
+function TeamDirectoryKpiTile({
+  label,
+  value,
+  micro,
+  icon,
+  accent,
+}: {
+  label: string;
+  value: number;
+  micro: string;
+  icon: ReactNode;
+  accent: "blue" | "green" | "amber" | "rose" | "cyan" | "violet";
+}) {
+  return (
+    <div className={cn(crm.queueCountPill, `crm-queue-kpi-${accent}`, "relative overflow-hidden bg-crm-surface-2")}>
+      <span className="flex w-full items-start justify-between gap-3">
+        <span className="min-w-0">
+          <span className="crm-queue-kpi-label block text-[10px] font-bold uppercase tracking-wide text-crm-muted">{label}</span>
+          <span className="crm-queue-kpi-value mt-1 block text-2xl font-bold tabular-nums leading-none tracking-tight text-crm-text">
+            {value}
+          </span>
+        </span>
+        <span className="crm-queue-kpi-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface/70 text-crm-accent">
+          {icon}
+        </span>
+      </span>
+      <span className="crm-queue-kpi-micro text-[10px] font-medium text-crm-muted">{micro}</span>
+    </div>
+  );
 }
 
 function readString(row: Record<string, unknown>, keys: string[]): string | undefined {
@@ -154,6 +186,24 @@ function isSystemExtensionName(name: string): boolean {
 function byExtensionAsc(a: TeamMember, b: TeamMember): number {
   return Number(a.extension) - Number(b.extension);
 }
+
+const TEAM_PREVIEW_MEMBERS: TeamMember[] = Array.from({ length: 28 }, (_, index) => {
+  const names = [
+    "Alex Morgan", "Jordan Lee", "Taylor Brooks", "Sam Rivera", "Avery Stone", "Casey Hart",
+    "Riley Chen", "Morgan Patel", "Jamie Carter", "Drew Bennett", "Cameron Price", "Skylar Reed",
+  ];
+  const statuses: PresenceState[] = ["available", "on_call", "ringing", "offline", "available", "busy", "away"];
+  return {
+    id: `preview-member-${index + 1}`,
+    name: names[index % names.length],
+    extension: String(220 + index),
+    email: `${names[index % names.length].toLowerCase().replace(/\s+/g, ".")}@connect.local`,
+    department: ["Sales", "Support", "Operations", "Billing"][index % 4],
+    title: ["Account Executive", "Support Agent", "Queue Lead", "Coordinator"][index % 4],
+    presence: statuses[index % statuses.length],
+    callerId: `+1555901${String(index).padStart(4, "0")}`,
+  };
+});
 
 /** Align with API `canManageUsers` — not portal-mapped roles (e.g. SUPPORT → TENANT_ADMIN). */
 function canShowAdminExtensionPairingQr(jwtRoleRaw: string | undefined, adminScope: AdminScope): boolean {
@@ -682,6 +732,13 @@ export default function TeamDirectoryPage() {
       }];
     });
 
+    if (process.env.NODE_ENV === "development" && mapped.length < 18) {
+      const usedExtensions = new Set(mapped.map((member) => member.extension));
+      return [
+        ...mapped,
+        ...TEAM_PREVIEW_MEMBERS.filter((member) => !usedExtensions.has(member.extension)).slice(0, 28 - mapped.length),
+      ].sort(byExtensionAsc);
+    }
     return mapped.sort(byExtensionAsc);
   }, [activeExts, extensionRows, ringingExts, tenant?.name, tenantId, telephony.extensionList]);
 
@@ -755,7 +812,7 @@ export default function TeamDirectoryPage() {
   const isInitialLoad = directoryTenantPending || (extState.status === "loading" && members.length === 0);
 
   return (
-    <div className="td-page">
+    <div className="td-page crm-queue-workspace crm-contacts-workspace">
       {/* Presence unavailable banner */}
       {!presenceLive && members.length > 0 ? (
         <div className="td-presence-banner">
@@ -764,118 +821,114 @@ export default function TeamDirectoryPage() {
         </div>
       ) : null}
 
-      <section className="td-hub-hero">
-        <div className="td-hub-title">
-          <span className="td-kicker"><Activity size={14} /> Live Team Hub</span>
-          <h1>Team Directory</h1>
-          <p>Every extension is an active communication node with live state, instant actions, and tenant-scoped presence.</p>
-        </div>
-        <div className="td-hub-metrics">
-          <div className="td-hub-metric">
-            <strong>{counts.available}</strong>
-            <span>Available</span>
-          </div>
-          <div className="td-hub-metric danger">
-            <strong>{counts.on_call}</strong>
-            <span>On call</span>
-          </div>
-          <div className="td-hub-metric warning">
-            <strong>{counts.ringing}</strong>
-            <span>Ringing</span>
-          </div>
-        </div>
+      <section className="td-hub-hero crm-workspace-header">
+        <CRMPageHeader
+          compact
+          className={cn(crm.contactsHeaderPanel, "campaigns-command-header")}
+          icon={<Activity className="h-6 w-6" aria-hidden />}
+          title="Team Directory"
+        />
       </section>
 
       {/* Toolbar */}
-      <div className="td-toolbar">
-        <div className="td-toolbar-left">
-          {/* Search */}
-          <div className="td-search-wrap">
-            <Search className="td-search-icon" size={15} strokeWidth={2} aria-hidden />
-            <input
-              className="td-search"
-              placeholder="Search name, extension, email…"
-              value={rawSearch}
-              onChange={(e) => setRawSearch(e.target.value)}
-              autoComplete="off"
-              aria-label="Search team members"
-            />
-            {rawSearch ? (
-              <button className="td-search-clear" onClick={() => setRawSearch("")} aria-label="Clear search">
-                <X size={13} />
-              </button>
-            ) : null}
-          </div>
+      <div className="td-toolbar crm-workspace-toolbar">
+        <section className="crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-4 xl:grid-cols-4" aria-label="Team presence metrics">
+          <TeamDirectoryKpiTile label="Available" value={counts.available} micro="ready extensions" icon={<Wifi className="h-4 w-4" />} accent="green" />
+          <TeamDirectoryKpiTile label="On Call" value={counts.on_call} micro="active calls" icon={<Phone className="h-4 w-4" />} accent="rose" />
+          <TeamDirectoryKpiTile label="Ringing" value={counts.ringing} micro="inbound alerts" icon={<Activity className="h-4 w-4" />} accent="amber" />
+          <TeamDirectoryKpiTile label="Offline" value={counts.offline} micro="unavailable" icon={<WifiOff className="h-4 w-4" />} accent="cyan" />
+        </section>
 
-          {/* Status filter chips */}
-          <div className="td-filters" role="group" aria-label="Filter by status">
-            {STATUS_FILTERS.map((f) => {
-              const count = f.key === "all" ? counts.total : (counts[f.key as keyof typeof counts] ?? 0);
-              return (
-                <button
-                  key={f.key}
-                  type="button"
-                  className={`td-filter-chip${statusFilter === f.key ? " active" : ""}`}
-                  onClick={() => setStatusFilter(f.key)}
-                  aria-pressed={statusFilter === f.key}
-                >
-                  {f.label}
-                  <span className="td-filter-count">{count}</span>
+        <CRMActionBar className="crm-queue-filter-bar td-toolbar-filter-card">
+          <div className="td-toolbar-left">
+            {/* Search */}
+            <div className="td-search-wrap">
+              <Search className="td-search-icon" size={15} strokeWidth={2} aria-hidden />
+              <input
+                className="td-search crm-queue-filter-control"
+                placeholder="Search name, extension, email…"
+                value={rawSearch}
+                onChange={(e) => setRawSearch(e.target.value)}
+                autoComplete="off"
+                aria-label="Search team members"
+              />
+              {rawSearch ? (
+                <button className="td-search-clear" onClick={() => setRawSearch("")} aria-label="Clear search">
+                  <X size={13} />
                 </button>
-              );
-            })}
+              ) : null}
+            </div>
+
+            {/* Status filter chips */}
+            <div className="td-filters" role="group" aria-label="Filter by status">
+              {STATUS_FILTERS.map((f) => {
+                const count = f.key === "all" ? counts.total : (counts[f.key as keyof typeof counts] ?? 0);
+                return (
+                  <button
+                    key={f.key}
+                    type="button"
+                    className={`td-filter-chip${statusFilter === f.key ? " active" : ""}`}
+                    onClick={() => setStatusFilter(f.key)}
+                    aria-pressed={statusFilter === f.key}
+                  >
+                    {f.label}
+                    <span className="td-filter-count">{count}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
 
-        <div className="td-toolbar-right">
-          {/* Sort */}
-          <ConnectSelect
-            size="sm"
-            value={sortKey}
-            onChange={(v) => setSortKey(v as SortKey)}
-            style={{ minWidth: 120 }}
-            options={[
-              { value: "extension", label: "Extension" },
-              { value: "name", label: "Name" },
-              { value: "status", label: "Status" },
-            ]}
-          />
+          <div className="td-toolbar-right">
+            {/* Sort */}
+            <ConnectSelect
+              size="sm"
+              value={sortKey}
+              onChange={(v) => setSortKey(v as SortKey)}
+              style={{ minWidth: 120 }}
+              options={[
+                { value: "extension", label: "Extension" },
+                { value: "name", label: "Name" },
+                { value: "status", label: "Status" },
+              ]}
+            />
 
-          {/* View toggle */}
-          <div className="td-view-toggle" role="group" aria-label="View mode">
-            <button
-              type="button"
-              className={`td-view-btn${view === "card" ? " active" : ""}`}
-              onClick={() => setViewPersist("card")}
-              aria-pressed={view === "card"}
-              title="Card view"
+            {/* View toggle */}
+            <div className="td-view-toggle" role="group" aria-label="View mode">
+              <button
+                type="button"
+                className={`td-view-btn${view === "card" ? " active" : ""}`}
+                onClick={() => setViewPersist("card")}
+                aria-pressed={view === "card"}
+                title="Card view"
+              >
+                <LayoutGrid size={15} strokeWidth={2} />
+                <span>Cards</span>
+              </button>
+              <button
+                type="button"
+                className={`td-view-btn${view === "list" ? " active" : ""}`}
+                onClick={() => setViewPersist("list")}
+                aria-pressed={view === "list"}
+                title="List view"
+              >
+                <LayoutList size={15} strokeWidth={2} />
+                <span>List</span>
+              </button>
+            </div>
+
+            {/* Live badge */}
+            <div
+              className="td-live-badge"
+              style={{ color: presenceLive ? "var(--success)" : "var(--warning)" }}
+              title={presenceLive ? "Presence data live" : "Presence reconnecting"}
             >
-              <LayoutGrid size={15} strokeWidth={2} />
-              <span>Cards</span>
-            </button>
-            <button
-              type="button"
-              className={`td-view-btn${view === "list" ? " active" : ""}`}
-              onClick={() => setViewPersist("list")}
-              aria-pressed={view === "list"}
-              title="List view"
-            >
-              <LayoutList size={15} strokeWidth={2} />
-              <span>List</span>
-            </button>
+              {presenceLive
+                ? <><Wifi size={13} /><span>Live</span></>
+                : <><WifiOff size={13} /><span>Offline</span></>}
+            </div>
           </div>
-
-          {/* Live badge */}
-          <div
-            className="td-live-badge"
-            style={{ color: presenceLive ? "var(--success)" : "var(--warning)" }}
-            title={presenceLive ? "Presence data live" : "Presence reconnecting"}
-          >
-            {presenceLive
-              ? <><Wifi size={13} /><span>Live</span></>
-              : <><WifiOff size={13} /><span>Offline</span></>}
-          </div>
-        </div>
+        </CRMActionBar>
       </div>
 
       {/* Main content */}

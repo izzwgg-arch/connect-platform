@@ -74,6 +74,7 @@ export const SIDEBAR_ITEMS = [
   { id: "admin.billing", section: "admin", label: "Admin Billing", href: "/admin/billing", permission: "can_view_admin_billing" },
   { id: "admin.cdr_tenant_map", section: "admin", label: "CDR Tenant Map", href: "/admin/cdr-tenant-map", permission: "can_view_admin_cdr_tenant_map" },
   { id: "admin.ops_center", section: "admin", label: "Ops Center", href: "/admin/ops-center", permission: "can_view_admin_ops_center" },
+  { id: "admin.server_health", section: "admin", label: "Server Health", href: "/admin/server-health", permission: "can_view_admin_server_health" },
   { id: "admin.incidents", section: "admin", label: "Incident Center", href: "/admin/incidents", permission: "can_view_admin_incidents" },
   { id: "admin.audio_intelligence", section: "admin", label: "Audio Intelligence", href: "/admin/audio-intelligence", permission: "can_view_admin_audio_intelligence" },
   { id: "admin.call_timeline", section: "admin", label: "Call Timeline", href: "/admin/call-timeline", permission: "can_view_admin_call_timeline" },
@@ -236,6 +237,7 @@ export const LEGACY_PERMISSION_EXPANSIONS: Record<string, PortalPermissionKey[]>
     "can_view_admin_audio_intelligence",
     "can_view_admin_call_timeline",
     "can_view_admin_call_flight",
+    "can_view_admin_server_health",
   ],
   can_manage_deploys: [...ADMIN_SECTION, "can_view_admin_deploy_center"],
   // CRM — expanded for role buckets; API /me strips these unless CrmUserAccess.enabled

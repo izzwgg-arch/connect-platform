@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
+import { Inbox, MessageSquareText, Plus, Smartphone, UsersRound } from "lucide-react";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { ChatConversation } from "../../../components/chat/ChatConversation";
@@ -10,8 +11,106 @@ import { NewChatDialog } from "../../../components/chat/NewChatDialog";
 import { mergeChatMessages, resolveActiveThread, type ChatScrollIntent, type ChatScrollReason } from "../../../components/chat/chatState";
 import type { ChatDirectoryUser, ChatMessage, ChatThread, PendingAttachment } from "../../../components/chat/types";
 import { apiDelete, apiGet, apiPatch, apiPost, apiUploadChatAttachment, ApiError } from "../../../services/apiClient";
+import { CRMPageHeader, CRMWorkspaceMain, CRMWorkspaceRightRail, cn, crm } from "../../../components/crm";
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
+
+const CHAT_PREVIEW_ENABLED = process.env.NODE_ENV === "development";
+
+function minutesAgoIso(minutes: number): string {
+  return new Date(Date.now() - minutes * 60_000).toISOString();
+}
+
+const CHAT_PREVIEW_THREADS: ChatThread[] = Array.from({ length: 18 }, (_, index) => {
+  const sms = index % 3 !== 0;
+  const ext = `${220 + index}`;
+  return {
+    id: `preview-thread-${index + 1}`,
+    type: sms ? "SMS" : index % 2 === 0 ? "GROUP" : "DM",
+    participantName: sms
+      ? ["Avery Stone Forms Austin GA", "Jordan Hayes Retail", "Morgan River Capital", "Northstar Funding Desk", "Harbor Retail Group", "Crescent Auto Leads"][index % 6]
+      : ["Sales Floor", "Support Desk", "Local Dev Workspace", "Operations Team"][index % 4],
+    participantExtension: sms ? "" : ext,
+    externalSmsE164: sms ? `+1555${String(910000 + index).padStart(6, "0")}` : null,
+    smsInboxKind: sms ? (index % 2 === 0 ? "shared" : "personal") : null,
+    crmSms: sms,
+    isDefaultTenantGroup: !sms && index % 4 === 2,
+    lastMessage: [
+      "I have the signed docs ready when you are.",
+      "Can you call me after the next appointment?",
+      "Quick update: underwriting asked for one more statement.",
+      "The quote looks good. Send the next step.",
+      "Please confirm the delivery window.",
+      "Looping in the team so everyone has the latest.",
+    ][index % 6],
+    lastAt: minutesAgoIso(6 + index * 11),
+    unread: index % 5 === 0 ? 3 : index % 4 === 0 ? 1 : 0,
+  };
+});
+
+function buildPreviewMessages(thread: ChatThread | null): ChatMessage[] {
+  if (!thread) return [];
+  return Array.from({ length: 42 }, (_, index) => {
+    const mine = index % 3 === 2;
+    return {
+      id: `${thread.id}-message-${index + 1}`,
+      threadId: thread.id,
+      senderId: mine ? "preview-me" : "preview-peer",
+      senderName: mine ? "Local Dev" : thread.participantName,
+      body: mine
+        ? [
+            "Got it. I am checking that now.",
+            "Thanks, I will send the update shortly.",
+            "Confirmed. I added this to the customer notes.",
+            "I can call you back after the current queue clears.",
+          ][index % 4]
+        : [
+            "Can you take a look at this and let me know what is missing?",
+            "The customer just replied with the final document.",
+            "Please keep this thread open while we confirm the number.",
+            "This is another preview message to prove the message list scrolls independently.",
+          ][index % 4],
+      sentAt: minutesAgoIso(120 - index * 2),
+      mine,
+      type: "TEXT",
+      deliveryStatus: mine ? "sent" : null,
+      reactions: index % 9 === 0 ? [{ emoji: "👍", userId: "preview-peer" }] : [],
+      attachments: [],
+      mmsUrls: [],
+    };
+  });
+}
+
+function ChatKpiTile({
+  label,
+  value,
+  icon,
+  micro,
+  accent,
+}: {
+  label: string;
+  value: number;
+  icon: ReactNode;
+  micro: string;
+  accent: "blue" | "green" | "cyan" | "violet";
+}) {
+  return (
+    <div className={cn(crm.queueCountPill, `crm-queue-kpi-${accent}`, "relative overflow-hidden bg-crm-surface-2")}>
+      <span className="flex w-full items-start justify-between gap-3">
+        <span className="min-w-0">
+          <span className="crm-queue-kpi-label block text-[10px] font-bold uppercase tracking-wide text-crm-muted">{label}</span>
+          <span className="crm-queue-kpi-value mt-1 block text-2xl font-bold tabular-nums leading-none tracking-tight text-crm-text">
+            {value}
+          </span>
+        </span>
+        <span className="crm-queue-kpi-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface/70 text-crm-accent">
+          {icon}
+        </span>
+      </span>
+      <span className="crm-queue-kpi-micro text-[10px] font-medium text-crm-muted">{micro}</span>
+    </div>
+  );
+}
 
 export default function ChatPage() {
   const { tenantId, adminScope, can } = useAppContext();
@@ -45,9 +144,19 @@ export default function ChatPage() {
     [tenantId, adminScope]
   );
 
-  const threads: ChatThread[] = threadsState.status === "success"
-    ? (threadsState.data.threads ?? [])
-    : [];
+  const apiThreads: ChatThread[] = useMemo(
+    () => threadsState.status === "success" ? (threadsState.data.threads ?? []) : [],
+    [threadsState.status, threadsState.status === "success" ? threadsState.data.threads : null],
+  );
+  const threads: ChatThread[] = useMemo(() => {
+    if (!CHAT_PREVIEW_ENABLED) return apiThreads;
+    const existingIds = new Set(apiThreads.map((thread) => thread.id));
+    const needed = Math.max(0, 18 - apiThreads.length);
+    return [
+      ...apiThreads,
+      ...CHAT_PREVIEW_THREADS.filter((thread) => !existingIds.has(thread.id)).slice(0, needed),
+    ];
+  }, [apiThreads]);
 
   const users = directoryState.status === "success" ? directoryState.data.users ?? [] : [];
   const filtered = useMemo(() => {
@@ -69,6 +178,14 @@ export default function ChatPage() {
     const requestId = ++messageRequestSeq.current;
     const isThreadSwitch = loadedThreadId.current !== threadId;
     if (isThreadSwitch || messagesRef.current.length === 0) setMessageLoading(true);
+    if (threadId.startsWith("preview-thread-")) {
+      const previewThread = threads.find((thread) => thread.id === threadId) ?? null;
+      setMessages(buildPreviewMessages(previewThread));
+      loadedThreadId.current = threadId;
+      setScrollIntent({ reason: isThreadSwitch ? "initial" : reason, token: Date.now() });
+      setMessageLoading(false);
+      return;
+    }
     try {
       const res = await apiGet<{ messages: ChatMessage[] }>(`/chat/threads/${threadId}/messages`);
       if (requestId !== messageRequestSeq.current) return;
@@ -81,7 +198,7 @@ export default function ChatPage() {
     } finally {
       if (requestId === messageRequestSeq.current) setMessageLoading(false);
     }
-  }, []);
+  }, [threads]);
 
   useEffect(() => {
     if (!activeThread) return;
@@ -242,46 +359,79 @@ export default function ChatPage() {
   }
 
   const canSendInActiveThread = !activeThread || activeThread.type !== "SMS" || can("can_send_sms");
+  const unreadTotal = useMemo(() => threads.reduce((total, thread) => total + (thread.unread || 0), 0), [threads]);
+  const smsThreads = useMemo(() => threads.filter((thread) => thread.type === "SMS").length, [threads]);
+  const internalThreads = Math.max(threads.length - smsThreads, 0);
 
   return (
-    <div className={`cc-shell ${activeThread ? "has-active" : ""}`}>
-      <ChatInbox
-        threads={filtered}
-        activeThreadId={activeThread?.id}
-        search={search}
-        onSearch={setSearch}
-        onSelect={setActiveThread}
-        onNewChat={() => setShowNewChat(true)}
-        loading={threadsState.status === "loading"}
-      />
-      <ChatConversation
-        thread={activeThread}
-        messages={messages}
-        loading={messageLoading}
-        draft={draft}
-        onDraft={setDraft}
-        replyingTo={replyingTo}
-        onReply={setReplyingTo}
-        onCancelReply={() => setReplyingTo(null)}
-        onEdit={editMessage}
-        onDeleteMe={(message) => deleteMessage(message, "me")}
-        onDeleteEveryone={(message) => deleteMessage(message, "everyone")}
-        onReact={react}
-        onRemoveReaction={removeReaction}
-        pendingAttachments={pendingAttachments}
-        onAttachFiles={attachFiles}
-        onRemovePending={(index) => setPendingAttachments((prev) => prev.filter((_, i) => i !== index))}
-        onSend={sendMessage}
-        sending={sending}
-        onBack={() => setActiveThread(null)}
-        scrollIntent={scrollIntent}
-        onRefresh={() => {
-          setScrollIntent({ reason: "manual", token: Date.now() });
-          setMsgReload((k) => k + 1);
-          setThreadReload((k) => k + 1);
-        }}
-        canSendMessages={canSendInActiveThread}
-      />
+    <div className={`cc-shell crm-queue-workspace crm-contacts-workspace ${activeThread ? "has-active" : ""}`}>
+      <section className="cc-page-header crm-workspace-header">
+        <CRMPageHeader
+          compact
+          className={cn(crm.contactsHeaderPanel, "campaigns-command-header")}
+          icon={<MessageSquareText className="h-6 w-6" aria-hidden />}
+          title="Chat"
+          actions={(
+            <button type="button" className={cn(crm.btnPrimary, "cc-header-action")} onClick={() => setShowNewChat(true)}>
+              <Plus className="h-4 w-4" />
+              New chat
+            </button>
+          )}
+        />
+      </section>
+
+      <section className="cc-kpi-strip crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-4" aria-label="Chat metrics">
+        <ChatKpiTile label="Total threads" value={threads.length} icon={<Inbox className="h-4 w-4" />} micro="active conversations" accent="blue" />
+        <ChatKpiTile label="Unread" value={unreadTotal} icon={<MessageSquareText className="h-4 w-4" />} micro="needs reply" accent="violet" />
+        <ChatKpiTile label="SMS inboxes" value={smsThreads} icon={<Smartphone className="h-4 w-4" />} micro="customer threads" accent="green" />
+        <ChatKpiTile label="Internal" value={internalThreads} icon={<UsersRound className="h-4 w-4" />} micro="team conversations" accent="cyan" />
+      </section>
+
+      <section className={`cc-workspace crm-workspace-body ${activeThread ? "crm-workspace-body--split" : ""}`}>
+        <CRMWorkspaceMain className="cc-workspace-main">
+          <ChatInbox
+            threads={filtered}
+            activeThreadId={activeThread?.id}
+            search={search}
+            onSearch={setSearch}
+            onSelect={setActiveThread}
+            loading={threadsState.status === "loading"}
+          />
+        </CRMWorkspaceMain>
+
+        {activeThread ? (
+          <CRMWorkspaceRightRail className="cc-side-panel crm-queue-right-rail crm-queue-detail-rail flex flex-col min-h-0">
+            <ChatConversation
+              thread={activeThread}
+              messages={messages}
+              loading={messageLoading}
+              draft={draft}
+              onDraft={setDraft}
+              replyingTo={replyingTo}
+              onReply={setReplyingTo}
+              onCancelReply={() => setReplyingTo(null)}
+              onEdit={editMessage}
+              onDeleteMe={(message) => deleteMessage(message, "me")}
+              onDeleteEveryone={(message) => deleteMessage(message, "everyone")}
+              onReact={react}
+              onRemoveReaction={removeReaction}
+              pendingAttachments={pendingAttachments}
+              onAttachFiles={attachFiles}
+              onRemovePending={(index) => setPendingAttachments((prev) => prev.filter((_, i) => i !== index))}
+              onSend={sendMessage}
+              sending={sending}
+              onBack={() => setActiveThread(null)}
+              scrollIntent={scrollIntent}
+              onRefresh={() => {
+                setScrollIntent({ reason: "manual", token: Date.now() });
+                setMsgReload((k) => k + 1);
+                setThreadReload((k) => k + 1);
+              }}
+              canSendMessages={canSendInActiveThread}
+            />
+          </CRMWorkspaceRightRail>
+        ) : null}
+      </section>
       <NewChatDialog
         open={showNewChat}
         users={users}

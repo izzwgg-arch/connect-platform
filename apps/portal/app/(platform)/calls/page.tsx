@@ -7,22 +7,24 @@ import { PermissionGate } from "../../../components/PermissionGate";
 import { useAppContext } from "../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { apiGet } from "../../../services/apiClient";
+import { CRMPageHeader, cn, crm } from "../../../components/crm";
 import {
   ArrowDown, ArrowLeftRight, ArrowUp,
   Phone, PhoneOff, PhoneMissed, PhoneIncoming,
   ChevronDown, ChevronRight, Voicemail,
   Radio, CheckCircle2, XCircle, AlertCircle, Info,
-  X, Mic, Download,
+  X, Mic, Download, Pause, Play, Volume2,
   Search, MoreHorizontal, Copy, SlidersHorizontal, PhoneCall,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type CallDirection = "incoming" | "outgoing" | "internal";
 type CallStatus = "answered" | "missed" | "canceled" | "failed";
 type AnsweredByType = "human" | "ivr" | "voicemail" | "system" | null;
-type FeedTab = "all" | "answered" | "missed" | "voicemail" | "internal";
+type FeedTab = "all" | "answered" | "missed" | "voicemail";
+type DirectionFilter = "all" | CallDirection;
 type DatePreset = "today" | "yesterday" | "last7" | "custom";
 
 type JourneyStep = {
@@ -76,6 +78,64 @@ type CallHistoryResponse = {
   };
 };
 
+function buildCallHistoryPreview(): CallHistoryResponse {
+  const names = ["Avery Stone", "Jordan Hayes", "Morgan River", "Northstar Desk", "Harbor Retail", "Crescent Auto"];
+  const rows: CallHistoryRow[] = Array.from({ length: 36 }, (_, index) => {
+    const direction: CallDirection = index % 5 === 0 ? "outgoing" : index % 4 === 0 ? "internal" : "incoming";
+    const voicemailAnswered = index % 7 === 0;
+    const missed = index % 6 === 0 && !voicemailAnswered;
+    const status: CallStatus = missed ? "missed" : index % 11 === 0 ? "canceled" : "answered";
+    const startedAt = new Date(Date.now() - index * 37 * 60_000).toISOString();
+    const durationSec = status === "answered" ? 48 + ((index * 17) % 420) : 0;
+    return {
+      callId: `preview-call-${index + 1}`,
+      rowId: `preview-row-${index + 1}`,
+      linkedId: `preview-linked-${Math.floor(index / 2)}`,
+      fromNumber: direction === "outgoing" ? "220" : `+1555901${String(index).padStart(4, "0")}`,
+      fromName: direction === "outgoing" ? "Local Dev" : names[index % names.length],
+      toNumber: direction === "outgoing" ? `+1555902${String(index).padStart(4, "0")}` : index % 3 === 0 ? "Sales Queue" : "220",
+      direction,
+      status,
+      disposition: status === "answered" ? "ANSWERED" : status.toUpperCase(),
+      durationSec,
+      talkSec: Math.max(0, durationSec - 12),
+      startedAt,
+      answeredAt: status === "answered" ? new Date(new Date(startedAt).getTime() + 12_000).toISOString() : null,
+      endedAt: new Date(new Date(startedAt).getTime() + Math.max(25, durationSec) * 1000).toISOString(),
+      tenantId: "preview-tenant",
+      tenantName: "Local Dev Workspace",
+      rangExtension: direction === "incoming" ? String(220 + (index % 8)) : null,
+      recordingAvailable: status === "answered" && index % 3 !== 0,
+      recordingPath: status === "answered" && index % 3 !== 0 ? `/preview/recordings/${index + 1}.wav` : null,
+      answeredByType: voicemailAnswered ? "voicemail" : status === "answered" ? "human" : null,
+      humanAnswered: status === "answered" && !voicemailAnswered,
+      ivrAnswered: direction === "incoming" && index % 4 === 0,
+      voicemailAnswered,
+      attemptedExtensions: direction === "incoming" ? [String(220 + (index % 8)), String(230 + (index % 5))] : [],
+      journeySummary: voicemailAnswered ? "Caller reached voicemail after queue timeout" : status === "answered" ? "Connected to agent" : "No answer",
+      finalOutcomeReason: voicemailAnswered ? "voicemail" : status,
+      journeySteps: [
+        { label: "Call received", detail: direction, result: "info" },
+        { label: status === "answered" ? "Answered" : "No answer", detail: voicemailAnswered ? "Sent to voicemail" : undefined, result: status === "answered" ? "ok" : "missed" },
+      ],
+    };
+  });
+  return {
+    items: rows,
+    total: rows.length,
+    showing: rows.length,
+    page: 1,
+    pageSize: rows.length,
+    totalPages: 1,
+    totalsByDirection: {
+      incoming: rows.filter((row) => row.direction === "incoming").length,
+      outgoing: rows.filter((row) => row.direction === "outgoing").length,
+      internal: rows.filter((row) => row.direction === "internal").length,
+      total: rows.length,
+    },
+  };
+}
+
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 function todayDateInput(): string {
@@ -125,6 +185,34 @@ function formatPhone(num: string): string {
   if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
   if (d.length === 11 && d.startsWith("1")) return `+1 (${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7)}`;
   return num || "—";
+}
+
+function CallKpiTile({
+  label,
+  value,
+  icon,
+  tone,
+}: {
+  label: string;
+  value: string | number;
+  icon: ReactNode;
+  tone: "blue" | "green" | "violet" | "amber" | "rose" | "cyan";
+}) {
+  return (
+    <div className={cn(crm.queueCountPill, `crm-queue-kpi-${tone}`, "relative overflow-hidden bg-crm-surface-2")}>
+      <span className="flex w-full items-start justify-between gap-3">
+        <span className="min-w-0">
+          <span className="crm-queue-kpi-label block text-[10px] font-bold uppercase tracking-wide text-crm-muted">{label}</span>
+          <span className="crm-queue-kpi-value mt-1 block text-2xl font-bold tabular-nums leading-none tracking-tight text-crm-text">
+            {value}
+          </span>
+        </span>
+        <span className="crm-queue-kpi-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-crm border border-crm-border/55 bg-crm-surface/70 text-crm-accent">
+          {icon}
+        </span>
+      </span>
+    </div>
+  );
 }
 
 function callDescription(row: CallHistoryRow): string {
@@ -409,6 +497,9 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
   }
 
   const initials = heroInitials();
+  const recordingToken = typeof window !== "undefined" ? (localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "") : "";
+  const recordingStreamSrc = `/api/voice/recording/${encodeURIComponent(row.linkedId)}/stream?token=${recordingToken}`;
+  const recordingDownloadSrc = `/api/voice/recording/${encodeURIComponent(row.linkedId)}/download?token=${recordingToken}`;
 
   return (
       <aside className="call-detail-panel ch-detail-panel custom-scrollbar" aria-label="Call details">
@@ -555,19 +646,11 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
               Recording
             </h4>
             <div className="cdp-recording-player">
-              <audio
-                controls
-                preload="none"
-                style={{ width: "100%", height: 36 }}
-                src={`/api/voice/recording/${encodeURIComponent(row.linkedId)}/stream?token=${typeof window !== "undefined" ? (localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "") : ""}`}
-              >
-                Your browser does not support audio playback.
-              </audio>
+              <CallRecordingPlayer src={recordingStreamSrc} />
               {canDownloadRecording ? (
                 <a
-                  className="btn ghost btn-sm"
-                  style={{ marginTop: 6, display: "inline-flex", alignItems: "center", gap: 4 }}
-                  href={`/api/voice/recording/${encodeURIComponent(row.linkedId)}/download?token=${typeof window !== "undefined" ? (localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "") : ""}`}
+                  className="cdp-recording-download"
+                  href={recordingDownloadSrc}
                   download
                 >
                   <Download size={13} />
@@ -604,6 +687,73 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
   );
 }
 
+function formatPlayerTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "0:00";
+  const whole = Math.floor(seconds);
+  const mins = Math.floor(whole / 60);
+  const secs = whole % 60;
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+function CallRecordingPlayer({ src }: { src: string }) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [current, setCurrent] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  function togglePlayback() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (audio.paused) {
+      audio.play().catch(() => setPlaying(false));
+    } else {
+      audio.pause();
+    }
+  }
+
+  function seek(value: string) {
+    const next = Number(value);
+    const audio = audioRef.current;
+    setCurrent(next);
+    if (audio && Number.isFinite(next)) audio.currentTime = next;
+  }
+
+  const progress = duration > 0 ? (current / duration) * 100 : 0;
+
+  return (
+    <div className="cdp-custom-audio">
+      <audio
+        ref={audioRef}
+        preload="none"
+        src={src}
+        onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || 0)}
+        onTimeUpdate={(event) => setCurrent(event.currentTarget.currentTime || 0)}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+      />
+      <button type="button" className="cdp-custom-audio-play" onClick={togglePlayback} aria-label={playing ? "Pause recording" : "Play recording"}>
+        {playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
+      </button>
+      <span className="cdp-custom-audio-time">
+        {formatPlayerTime(current)} / {formatPlayerTime(duration)}
+      </span>
+      <label className="cdp-custom-audio-track" aria-label="Recording progress">
+        <span style={{ width: `${progress}%` }} />
+        <input
+          type="range"
+          min={0}
+          max={duration || 0}
+          step={0.1}
+          value={duration ? current : 0}
+          onChange={(event) => seek(event.currentTarget.value)}
+        />
+      </label>
+      <Volume2 className="cdp-custom-audio-volume" size={16} aria-hidden />
+    </div>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 const TABS: { id: FeedTab; label: string }[] = [
@@ -611,6 +761,12 @@ const TABS: { id: FeedTab; label: string }[] = [
   { id: "answered", label: "Answered" },
   { id: "missed",   label: "Missed" },
   { id: "voicemail",label: "Voicemail" },
+];
+
+const DIRECTION_FILTERS: { id: DirectionFilter; label: string }[] = [
+  { id: "all",      label: "All directions" },
+  { id: "incoming", label: "Incoming" },
+  { id: "outgoing", label: "Outgoing" },
   { id: "internal", label: "Internal" },
 ];
 
@@ -629,6 +785,7 @@ export default function CallsPage() {
   const [searchDraft, setSearchDraft]   = useState("");
   const [search, setSearch]             = useState("");
   const [activeTab, setActiveTab]       = useState<FeedTab>("all");
+  const [directionFilter, setDirectionFilter] = useState<DirectionFilter>("all");
   const [datePreset, setDatePreset]     = useState<DatePreset>("today");
   const [startDate, setStartDate]       = useState(todayDateInput());
   const [endDate, setEndDate]           = useState(todayDateInput());
@@ -646,7 +803,7 @@ export default function CallsPage() {
   }, [searchDraft]);
 
   // Reset page when filters change
-  useEffect(() => { setPage(1); }, [activeTab, hasRecording, startDate, endDate, adminScope, scopedTenantId]);
+  useEffect(() => { setPage(1); }, [activeTab, directionFilter, hasRecording, startDate, endDate, adminScope, scopedTenantId]);
 
   // Date preset → update date range
   useEffect(() => {
@@ -658,27 +815,38 @@ export default function CallsPage() {
   // Build API query — tenant filtering is preserved via scopedTenantId param
   const historyQuery = useMemo(() => {
     const { startIso, endIso } = toIsoRange(startDate, endDate);
-    const dir  = activeTab === "internal" ? "internal" : "all";
     const stat = activeTab === "missed" ? "missed"
       : (activeTab === "answered" || activeTab === "voicemail") ? "answered"
       : "all";
     const p = new URLSearchParams({
       startDate: startIso, endDate: endIso,
-      direction: dir, status: stat,
+      direction: directionFilter, status: stat,
       page: String(page), pageSize: String(pageSize),
     });
     if (search) p.set("search", search);
     if (scopedTenantId) p.set("tenantId", scopedTenantId);
     if (hasRecording !== "all") p.set("hasRecording", hasRecording);
     return p.toString();
-  }, [activeTab, endDate, hasRecording, page, pageSize, scopedTenantId, search, startDate]);
+  }, [activeTab, directionFilter, endDate, hasRecording, page, pageSize, scopedTenantId, search, startDate]);
 
   const historyState = useAsyncResource<CallHistoryResponse>(
     () => apiGet<CallHistoryResponse>(`/calls/history?${historyQuery}`),
     [historyQuery],
   );
 
-  const history = historyState.status === "success" ? historyState.data : null;
+  const history = historyState.status === "success"
+    ? historyState.data.items.length < 24 && process.env.NODE_ENV === "development"
+      ? (() => {
+          const preview = buildCallHistoryPreview();
+          const existingIds = new Set(historyState.data.items.map((row) => row.rowId));
+          const items = [
+            ...historyState.data.items,
+            ...preview.items.filter((row) => !existingIds.has(row.rowId)).slice(0, 36 - historyState.data.items.length),
+          ];
+          return { ...historyState.data, items, total: Math.max(historyState.data.total, items.length), showing: items.length, totalPages: Math.max(historyState.data.totalPages, 1) };
+        })()
+      : historyState.data
+    : null;
 
   // Client-side voicemail filter (API has no voicemail-only filter param)
   const rawItems    = history?.items ?? [];
@@ -731,57 +899,38 @@ export default function CallsPage() {
 
   return (
     <PermissionGate permission="can_view_calls" fallback={<div className="state-box">You do not have permission to view calls.</div>}>
-      <div className="ch-shell">
-        <header className="ch-hero">
-          <div className="ch-title-block">
-            <div>
-              <h1>Call History</h1>
-            </div>
-          </div>
+      <div className="ch-shell crm-queue-workspace crm-calls-workspace">
+        <header className="ch-hero crm-workspace-header">
+          <CRMPageHeader
+            compact
+            className={cn(crm.contactsHeaderPanel, "campaigns-command-header")}
+            icon={<PhoneCall className="h-6 w-6" aria-hidden />}
+            title="Call History"
+          />
+        </header>
 
+        <div className="ch-toolbar crm-workspace-toolbar">
           {/* ── KPI bar ── */}
           {historyState.status === "success" && kpiStats ? (
-            <div className="ch-kpi-bar" aria-label="Call statistics">
-              <div className="ch-kpi-card ch-kpi-total" style={{ animationDelay: "0ms" }}>
-                <span className="ch-kpi-label">Total Calls</span>
-                <span className="ch-kpi-value">{kpiStats.total.toLocaleString()}</span>
-                <small>Across selected tenant</small>
-              </div>
-              <div className="ch-kpi-card ch-kpi-answered" style={{ animationDelay: "55ms" }}>
-                <span className="ch-kpi-label">Answered</span>
-                <span className="ch-kpi-value">{kpiStats.answeredPct}%</span>
-                <small>Connected calls</small>
-              </div>
-              <div className="ch-kpi-card ch-kpi-missed" style={{ animationDelay: "110ms" }}>
-                <span className="ch-kpi-label">Missed</span>
-                <span className="ch-kpi-value">{kpiStats.missedPct}%</span>
-                <small>Needs follow-up</small>
-              </div>
-              <div className="ch-kpi-card ch-kpi-duration" style={{ animationDelay: "165ms" }}>
-                <span className="ch-kpi-label">Avg Duration</span>
-                <span className="ch-kpi-value">{formatDuration(kpiStats.avgDuration)}</span>
-                <small>Current page average</small>
-              </div>
-              <div className="ch-kpi-card ch-kpi-voicemail" style={{ animationDelay: "220ms" }}>
-                <span className="ch-kpi-label">Voicemail</span>
-                <span className="ch-kpi-value">{kpiStats.voicemails}</span>
-                <small>Recorded outcomes</small>
-              </div>
-            </div>
+            <section className="ch-kpi-bar crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-4 xl:grid-cols-4" aria-label="Call statistics">
+              <CallKpiTile label="Total Calls" value={kpiStats.total.toLocaleString()} tone="blue" icon={<PhoneCall className="h-4 w-4" />} />
+              <CallKpiTile label="Answered" value={`${kpiStats.answeredPct}%`} tone="green" icon={<CheckCircle2 className="h-4 w-4" />} />
+              <CallKpiTile label="Missed" value={`${kpiStats.missedPct}%`} tone="rose" icon={<PhoneMissed className="h-4 w-4" />} />
+              <CallKpiTile label="Avg Duration" value={formatDuration(kpiStats.avgDuration)} tone="amber" icon={<AlertCircle className="h-4 w-4" />} />
+            </section>
           ) : historyState.status === "loading" ? (
-            <div className="ch-kpi-bar ch-kpi-bar--loading" aria-hidden="true">
-              {[0, 1, 2, 3, 4].map((i) => (
-                <div key={i} className="ch-kpi-card ch-kpi-skeleton">
+            <div className="ch-kpi-bar ch-kpi-bar--loading crm-queue-kpi-strip" aria-hidden="true">
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} className={cn(crm.queueCountPill, "crm-queue-kpi-card ch-kpi-skeleton")}>
                   <div className="ch-kpi-skeleton-val" />
                   <div className="ch-kpi-skeleton-lbl" />
                 </div>
               ))}
             </div>
           ) : null}
-        </header>
 
         {/* ── Smart filter bar ── */}
-        <section className="ch-filter-bar" aria-label="Filters">
+        <section className="ch-filter-bar campaigns-filter-panel crm-queue-filter-bar" aria-label="Filters">
           <div className="ch-filter-top">
             {/* Search */}
             <div className="ch-search-wrap">
@@ -807,6 +956,21 @@ export default function CallsPage() {
                   aria-selected={activeTab === tab.id}
                 >
                   {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Direction tabs */}
+            <div className="ch-direction-row" role="group" aria-label="Filter by direction">
+              {DIRECTION_FILTERS.map((direction) => (
+                <button
+                  key={direction.id}
+                  className={`ch-direction-chip ${directionFilter === direction.id ? "active" : ""}`}
+                  onClick={() => setDirectionFilter(direction.id)}
+                  type="button"
+                  aria-pressed={directionFilter === direction.id}
+                >
+                  {direction.label}
                 </button>
               ))}
             </div>
@@ -895,6 +1059,7 @@ export default function CallsPage() {
             </div>
           ) : null}
         </section>
+        </div>
 
         <main className={`ch-workspace ${selectedRow ? "has-detail" : ""}`}>
           {/* ── Call feed ── */}
@@ -909,7 +1074,7 @@ export default function CallsPage() {
                 <EmptyState
                   title={activeTab === "voicemail" ? "No voicemails" : "No calls found"}
                   message={
-                    search || activeTab !== "all"
+                    search || activeTab !== "all" || directionFilter !== "all"
                       ? "Try adjusting your filters or search query."
                       : "No calls recorded for this period."
                   }

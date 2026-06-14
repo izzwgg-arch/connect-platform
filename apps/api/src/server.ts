@@ -31,6 +31,15 @@ import {
   shutdownRegisteredTimerCount,
 } from "./processLifecycle";
 import { installApiRequestProfiler } from "./apiRequestProfiler";
+import { HostMetricsCollector } from "./ops/hostMetrics";
+import { buildServerHealthSnapshot } from "./ops/serverHealth";
+import {
+  getCachedServerHealthSnapshot,
+  hasServerHealthCache,
+  refreshServerHealthSnapshot,
+  startServerHealthRefresh,
+  stopServerHealthRefresh,
+} from "./ops/serverHealthCache";
 import { shouldSkipJwtVerification } from "./jwtPublicRouteBypass";
 import { fetchAriSliceForPbxLiveFromRedisOrAri } from "./pbxLiveAriSlice";
 import { buildVoiceProvisioningBundleFromIdentity, resolveWebrtcSipIdentity } from "./voiceProvisioningBundle";
@@ -264,6 +273,9 @@ app.register(fastifyMultipart, {
 });
 
 const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
+const hostMetricsCollector = new HostMetricsCollector(
+  Math.max(3000, Number(process.env.SERVER_HEALTH_SAMPLE_MS || 5000)),
+);
 const PBX_ARI_SNAPSHOT_HOST = (process.env.TELEPHONY_ARI_SNAPSHOT_PBX_HOST || process.env.PBX_HOST || "209.145.60.79").trim();
 const PBX_ARI_SNAPSHOT_TTL_SEC_FOR_STALE = Number(process.env.TELEPHONY_ARI_SNAPSHOT_TTL_SEC || 15);
 const PBX_ARI_SNAPSHOT_STALE_MS = Number(
@@ -2415,6 +2427,7 @@ const PORTAL_API_PERMISSION_RULES: PortalApiPermissionRule[] = [
   { prefix: "/admin/billing", permission: "can_view_admin_billing" },
   { prefix: "/admin/cdr-tenant-map", permission: "can_view_admin_cdr_tenant_map" },
   { prefix: "/admin/ops", permission: "can_view_admin_ops_center" },
+  { prefix: "/admin/server-health", permission: "can_view_admin_server_health" },
   { prefix: "/admin/deploy", permission: "can_view_admin_deploy_center" },
   { prefix: "/admin/incidents", permission: "can_view_admin_incidents" },
   { prefix: "/admin/webrtc-incidents", permission: "can_view_admin" },
@@ -5036,11 +5049,12 @@ app.addHook("preHandler", async (req, reply) => {
   }
 });
 
-app.get("/me", async (req) => {
+app.get("/me", async (req, reply) => {
   const user = getUser(req);
   const row = await db.user.findUnique({
     where: { id: user.sub },
     select: {
+      role: true,
       firstName: true,
       lastName: true,
       displayName: true,
@@ -5056,8 +5070,19 @@ app.get("/me", async (req) => {
       },
     } as any,
   }).catch(() => null);
+  const effectiveRole = row?.role ?? user.role;
+  let refreshedToken: string | undefined;
+  if (row?.role && String(row.role) !== String(user.role)) {
+    refreshedToken = await reply.jwtSign({
+      sub: user.sub,
+      tenantId: user.tenantId,
+      email: user.email,
+      role: row.role,
+      name: displayNameForUser(row as any),
+    });
+  }
   const portalPermissionSet = await resolvePortalPermissionsWithCrmUserAccess(
-    user.role,
+    effectiveRole,
     user.sub,
     user.tenantId,
   );
@@ -5075,7 +5100,7 @@ app.get("/me", async (req) => {
     tenantId: user.tenantId,
     tenantName: tenantRow?.name ?? null,
     email: user.email,
-    role: user.role,
+    role: effectiveRole,
     name: row ? displayNameForUser(row as any) : user.email,
     extension: extension
       ? {
@@ -5088,6 +5113,7 @@ app.get("/me", async (req) => {
     status: (row as any)?.status || "ACTIVE",
     lastLoginAt: (row as any)?.lastLoginAt || null,
     avatarUrl: (row as any)?.avatarUrl ?? null,
+    ...(refreshedToken ? { token: refreshedToken } : {}),
     ...(portalPermissionSet ? { portalPermissionSet } : {}),
   };
 });
@@ -24977,17 +25003,36 @@ async function replaceContactChildren(contactId: string, tenantId: string, input
     (db as any).contactTagAssignment.deleteMany({ where: { contactId } }),
   ]);
   const tags = await ensureContactTags(tenantId, input.tags);
-  if (input.phones.length) await (db as any).contactPhone.createMany({
-    data: input.phones.map((phone, index) => ({
+  // Dedupe phones/emails by the value the DB enforces uniqueness on
+  // (numberNormalized / lowercased email). The same number can arrive in two
+  // formats (e.g. "845-555-1234" and "+1 845 555 1234") that the client treats
+  // as distinct but the server canonicalises to the same E.164 — inserting both
+  // would violate @@unique([contactId, numberNormalized]) and surface as a
+  // generic 500. Keeping the first occurrence preserves isPrimary ordering.
+  const seenPhones = new Set<string>();
+  const phoneRows = input.phones
+    .map((phone, index) => ({
       contactId, type: phone.type.toUpperCase(), numberRaw: phone.numberRaw,
       numberNormalized: normalizeContactPhone(phone.numberRaw), isPrimary: phone.isPrimary ?? index === 0,
-    })),
-  });
-  if (input.emails.length) await (db as any).contactEmail.createMany({
-    data: input.emails.map((email, index) => ({
+    }))
+    .filter((row) => {
+      const key = row.numberNormalized;
+      if (seenPhones.has(key)) return false;
+      seenPhones.add(key);
+      return true;
+    });
+  const seenEmails = new Set<string>();
+  const emailRows = input.emails
+    .map((email, index) => ({
       contactId, type: email.type.toUpperCase(), email: email.email.trim().toLowerCase(), isPrimary: email.isPrimary ?? index === 0,
-    })),
-  });
+    }))
+    .filter((row) => {
+      if (seenEmails.has(row.email)) return false;
+      seenEmails.add(row.email);
+      return true;
+    });
+  if (phoneRows.length) await (db as any).contactPhone.createMany({ data: phoneRows, skipDuplicates: true });
+  if (emailRows.length) await (db as any).contactEmail.createMany({ data: emailRows, skipDuplicates: true });
   if (input.addresses.length) await (db as any).contactAddress.createMany({
     data: input.addresses.map((address) => ({
       contactId, street: address.street || null, city: address.city || null,
@@ -25087,7 +25132,16 @@ app.post("/contacts", async (req, reply) => {
       favorite: input.favorite ?? false, active: input.active ?? true, source: "MANUAL", createdBy: user.sub,
     },
   });
-  await replaceContactChildren(contact.id, tenantId, input);
+  try {
+    await replaceContactChildren(contact.id, tenantId, input);
+  } catch (err: any) {
+    // Roll back the just-created parent so a failed child insert never leaves
+    // a phoneless/orphan contact, then surface unique-constraint races as a
+    // clean 409 (the importer treats that as "merged", not a hard failure).
+    await (db as any).contact.delete({ where: { id: contact.id } }).catch(() => {});
+    if (err?.code === "P2002") return reply.code(409).send({ error: "duplicate_phone" });
+    throw err;
+  }
   const row = await (db as any).contact.findUnique({ where: { id: contact.id }, include: CONTACT_INCLUDE });
   return reply.code(201).send({ contact: formatContact(row) });
 });
@@ -32665,12 +32719,16 @@ app.get("/admin/pbx/live/active-calls", async (req, reply) => {
 const deployQueueBase = (process.env.DEPLOY_QUEUE_URL ?? "http://127.0.0.1:3910").replace(/\/$/, "");
 const deployQueueToken = process.env.DEPLOY_QUEUE_TOKEN ?? "";
 
-async function dqFetch(path: string, opts: { method?: string; body?: string } = {}): Promise<{ ok: boolean; status: number; data: unknown }> {
+async function dqFetch(
+  path: string,
+  opts: { method?: string; body?: string; timeoutMs?: number } = {},
+): Promise<{ ok: boolean; status: number; data: unknown }> {
   if (!deployQueueToken) {
     return { ok: false, status: 503, data: { error: "deploy_queue_token_not_configured" } };
   }
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 10_000);
+  const timeoutMs = opts.timeoutMs ?? 10_000;
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(`${deployQueueBase}${path}`, {
       method: opts.method ?? "GET",
@@ -32694,6 +32752,23 @@ async function dqFetch(path: string, opts: { method?: string; body?: string } = 
     clearTimeout(t);
   }
 }
+
+const serverHealthDeps = {
+  collector: hostMetricsCollector,
+  db,
+  redis,
+  dqFetch: (path: string, timeoutMs?: number) => dqFetch(path, { timeoutMs }),
+};
+
+// GET /admin/server-health — returns cached snapshot (refreshed in background every 5s)
+app.get("/admin/server-health", async (req, reply) => {
+  const admin = await requireSuperAdmin(req, reply);
+  if (!admin) return;
+  if (!hasServerHealthCache()) {
+    void refreshServerHealthSnapshot(serverHealthDeps);
+  }
+  return reply.send(getCachedServerHealthSnapshot());
+});
 
 // GET /admin/deploy/status
 app.get("/admin/deploy/status", async (req, reply) => {
@@ -32914,6 +32989,8 @@ const port = Number(process.env.PORT || 3001);
   await registerCrmRoutes(app, { smsQueue });
   await app.listen({ host: "0.0.0.0", port });
   markListeningComplete();
+  hostMetricsCollector.start();
+  startServerHealthRefresh(serverHealthDeps);
 
   const shutdownBudgetMs = Math.min(Math.max(Number(process.env.CONNECT_API_SHUTDOWN_MS ?? 55000), 3000), 120_000);
   const shutdown = async (signal: NodeJS.Signals) => {
@@ -32923,6 +33000,8 @@ const port = Number(process.env.PORT || 3001);
       "api_sigterm_received",
     );
     markNotAcceptingTraffic();
+    stopServerHealthRefresh();
+    hostMetricsCollector.stop();
     try {
       await Promise.race([
         app.close(),

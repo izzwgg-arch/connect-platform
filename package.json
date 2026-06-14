@@ -5,6 +5,8 @@
   "packageManager": "pnpm@10.30.2",
   "scripts": {
     "dev": "turbo run dev --parallel",
+    "portal:dev:3002": "pnpm --filter @connect/portal dev:3002",
+    "dev:portal3002": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/dev-portal-3002-stack.ps1",
     "build": "turbo run build",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",

@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Archive,
-  CalendarClock,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -14,10 +13,8 @@ import {
   Mail,
   MoreHorizontal,
   Phone,
-  PhoneOff,
   Plus,
   Search,
-  Sparkles,
   Tag,
   UserCheck,
   UserPlus,
@@ -983,18 +980,18 @@ export default function CrmContactsPage() {
           <CRMWorkspaceHeader>
             <CRMPageHeader
               compact
-              className={crm.contactsHeaderPanel}
+              className={cn(crm.contactsHeaderPanel, "campaigns-command-header")}
               icon={<Users className="h-6 w-6" aria-hidden />}
               title="Contacts"
               actions={
                 <div className="contacts-hero-actions flex flex-wrap items-center gap-2">
                   <button type="button" onClick={handleExportCsv} className={cn(crm.btnSecondary, "contacts-export-button")} disabled={rows.length === 0}>
                     <Download className="h-4 w-4" />
-                    Export
+                    Export CSV
                   </button>
                   <button type="button" onClick={() => setShowAdd(true)} className={cn(crm.btnPrimary, "contacts-new-contact-cta")}>
                     <Plus className="h-4 w-4" />
-                    New contact
+                    Add Contact
                   </button>
                 </div>
               }
@@ -1002,13 +999,11 @@ export default function CrmContactsPage() {
           </CRMWorkspaceHeader>
           <CRMWorkspaceToolbar className="flex flex-col gap-3">
       {!loading && !error && (rows.length > 0 || total > 0) && (
-        <section className="crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-3 xl:grid-cols-6" aria-label="Contact metrics">
+        <section className="crm-queue-kpi-strip grid w-full grid-cols-2 items-stretch gap-3 md:grid-cols-4 xl:grid-cols-4" aria-label="Contact metrics">
           <ContactKpiTile label="Total Contacts" value={total} micro={`${sliceFrom}-${sliceTo} showing`} icon={<Users className="h-4 w-4" />} accent="blue" />
-          <ContactKpiTile label="New This 30 Days" value={summary.newThisMonth} micro="recently created" icon={<Sparkles className="h-4 w-4" />} accent="violet" />
           <ContactKpiTile label="Contacted" value={summary.contacted} micro="stage matched" icon={<Phone className="h-4 w-4" />} accent="cyan" />
           <ContactKpiTile label="Engaged" value={summary.engaged} micro={`${engagementRate}% of page`} icon={<CheckCircle2 className="h-4 w-4" />} accent="green" />
-          <ContactKpiTile label="Unreachable" value={summary.missingPhone + rows.filter((r) => r.doNotCall).length} micro="no phone or DNC" icon={<PhoneOff className="h-4 w-4" />} accent="rose" />
-          <ContactKpiTile label="Needs Follow Up" value={summary.needsFollowUp} micro="recent activity" icon={<CalendarClock className="h-4 w-4" />} accent="amber" />
+          <ContactKpiTile label="Needs Follow Up" value={summary.needsFollowUp} micro="recent activity" icon={<Archive className="h-4 w-4" />} accent="amber" />
         </section>
       )}
 
