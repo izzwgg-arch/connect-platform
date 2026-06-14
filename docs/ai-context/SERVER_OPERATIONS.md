@@ -168,9 +168,9 @@ sudo du -sh /opt/connectcomms/*
 
 Full raw report saved on server: `/tmp/storage_forensics_20260614T131434Z.txt`
 
-**No cleanup commands were run.** Await explicit human approval before any storage reclamation.
+**No cleanup commands were run.** Phase 5 controlled cleanup available when `STORAGE_CLEANUP_ENABLED=1` — see `STORAGE_MAINTENANCE.md` § Phase 5.
 
-### Storage cleanup controller (Phase 1 / 1.5 / 1.6 / 2)
+### Storage cleanup controller (Phase 1–5)
 
 Read-only scanner + classifier + dry-run cleanup plan + **operations dashboard** + **proof/dependency/readiness system** via API and portal **`/admin/storage-health`**.
 Phase 1.6 adds **host visibility**: read-only mounts of `docker.sock`, `/var/lib/containerd`, `/opt/connectcomms`, and `/var/log` into the API container so scans report real production inventory (~535 GB BuildKit cache, ~509 GB containerd, top consumers, image/volume counts).

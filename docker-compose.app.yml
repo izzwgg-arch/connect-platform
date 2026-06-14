@@ -112,8 +112,7 @@ services:
       STORAGE_JOURNAL_ROOT: ${STORAGE_JOURNAL_ROOT:-/host-inventory/var/log/journal}
       STORAGE_DEPLOY_LOGS_ROOT: ${STORAGE_DEPLOY_LOGS_ROOT:-/host-inventory/var/log/connect-deploys}
       STORAGE_PREFLIGHT_SNAPSHOT_ROOT: ${STORAGE_PREFLIGHT_SNAPSHOT_ROOT:-/var/lib/connect/storage-preflight}
-    command: sh -lc "pnpm --filter @connect/api start"
-    ports:
+      STORAGE_CLEANUP_ENABLED: ${STORAGE_CLEANUP_ENABLED:-0}
       - "127.0.0.1:3001:3001"
     stop_grace_period: 60s
     healthcheck:
@@ -230,8 +229,7 @@ services:
       STORAGE_JOURNAL_ROOT: ${STORAGE_JOURNAL_ROOT:-/host-inventory/var/log/journal}
       STORAGE_DEPLOY_LOGS_ROOT: ${STORAGE_DEPLOY_LOGS_ROOT:-/host-inventory/var/log/connect-deploys}
       STORAGE_PREFLIGHT_SNAPSHOT_ROOT: ${STORAGE_PREFLIGHT_SNAPSHOT_ROOT:-/var/lib/connect/storage-preflight}
-    command: sh -lc "pnpm --filter @connect/api start"
-    ports:
+      STORAGE_CLEANUP_ENABLED: ${STORAGE_CLEANUP_ENABLED:-0}
       - "127.0.0.1:3004:3001"
     stop_grace_period: 60s
     healthcheck:

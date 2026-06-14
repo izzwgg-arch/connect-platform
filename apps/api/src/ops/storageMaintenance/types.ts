@@ -515,9 +515,9 @@ export type CleanupPlan = {
   planId: string;
   createdAt: string;
   scanId: string;
-  phase: "dry_run_only";
+  phase: "dry_run_only" | "phase5_controlled";
   approvalRequired: true;
-  approvalToken: null;
+  approvalToken: string | null;
   actions: CleanupPlanAction[];
   totalEstimatedReclaimBytes: number;
   blocked: boolean;
@@ -527,13 +527,126 @@ export type CleanupPlan = {
   alerts: StorageAlert[];
 };
 
+export type CleanupStage = 1 | 2 | 3 | 4;
+
+export type HealthGateServiceRow = {
+  service: string;
+  label: string;
+  containerName: string | null;
+  running: boolean;
+  healthy: boolean;
+  detail: string;
+};
+
+export type HealthGateResult = {
+  passed: boolean;
+  checkedAt: string;
+  services: HealthGateServiceRow[];
+  failures: string[];
+};
+
+export type InventoryFingerprint = {
+  capturedAt: string;
+  diskUsedBytes: number | null;
+  diskFreeBytes: number | null;
+  diskTotalBytes: number | null;
+  imageRefs: string[];
+  containerNames: string[];
+  volumeNames: string[];
+  rollbackImageRefs: string[];
+  protectedImageRefs: string[];
+  dockerSystemDfExcerpt: string;
+};
+
+export type BuildKitCacheEntryStat = {
+  cacheId: string;
+  cacheType: string;
+  sizeBytes: number;
+  usageCount: number;
+  referenced: boolean;
+};
+
+export type BuildKitInvestigation = {
+  investigatedAt: string;
+  totalEntries: number;
+  activeReferences: number;
+  inactiveReferences: number;
+  unknownReferences: number;
+  totalBytes: number;
+  activeBytes: number;
+  inactiveBytes: number;
+  unknownBytes: number;
+  confidencePct: number;
+  confidenceLabel: "HIGH" | "MEDIUM" | "LOW";
+  whyNot99Plus: string[];
+  safeToPrune: boolean;
+  entries: BuildKitCacheEntryStat[];
+};
+
+export type CleanupStageResult = {
+  stage: CleanupStage;
+  label: string;
+  stopped: boolean;
+  stopReason: string | null;
+  reclaimedBytes: number | null;
+  commands: Array<{
+    command: string;
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+    durationMs: number;
+  }>;
+  warnings: string[];
+  buildKitInvestigation?: BuildKitInvestigation;
+};
+
+export type CleanupExecutionRecord = {
+  executionId: string;
+  startedAt: string;
+  completedAt: string | null;
+  actorUserId: string | null;
+  planId: string | null;
+  preCleanupSnapshotPath: string | null;
+  status: "running" | "completed" | "stopped" | "failed";
+  stoppedReason: string | null;
+  stages: CleanupStageResult[];
+  reclaimedBytes: number;
+  diskBefore: { usedBytes: number | null; freeBytes: number | null; totalBytes: number | null };
+  diskAfter: { usedBytes: number | null; freeBytes: number | null; totalBytes: number | null } | null;
+  healthBefore: HealthGateResult;
+  healthAfter: HealthGateResult | null;
+  inventoryBefore: InventoryFingerprint;
+  inventoryAfter: InventoryFingerprint | null;
+  inventoryCompareOk: boolean | null;
+  buildVerification: Array<{ service: string; ok: boolean; command: string; detail: string }>;
+  warnings: string[];
+};
+
+export type PreCleanupSnapshotPayload = {
+  generatedAt: string;
+  scanId: string;
+  phase: "precleanup_phase5";
+  readOnly: false;
+  healthGatePassed: boolean;
+  inventory: InventoryFingerprint;
+  scan: StorageScanSnapshot;
+  dependencyGraph: DependencyGraphSummary | null;
+  rollbackCoverage: RollbackCoverageRow[] | null;
+  reclaimCandidates: CleanupCandidateRow[];
+  safetyGates: SafetyGateResult | null;
+};
+
 export type StorageAuditEventType =
   | "scan_started"
   | "scan_completed"
   | "plan_generated"
   | "plan_blocked"
   | "approval_requested"
-  | "execution_refused";
+  | "approval_granted"
+  | "execution_refused"
+  | "execution_started"
+  | "execution_completed"
+  | "execution_stopped";
 
 export type StorageAuditEvent = {
   id: string;
@@ -552,12 +665,15 @@ export type StorageHealthSnapshot = {
   previousScans: StorageTrendPoint[];
   trends: StorageTrendSeries[];
   alerts: StorageAlert[];
-  executions: [];
+  executions: CleanupExecutionRecord[];
   dashboard: StorageDashboardSummary | null;
   scanning: boolean;
   scanError: string | null;
   snapshotGenerating: boolean;
   snapshotError: string | null;
+  cleanupEnabled: boolean;
+  approvedPlanId: string | null;
+  preCleanupSnapshotPath: string | null;
 };
 
 export type StorageMaintenanceConfig = {

@@ -1,8 +1,8 @@
 # STORAGE_MAINTENANCE
 
 > Safe storage cleanup controller for Connect production hosts.
-> **Phase 1 / 1.5 / 1.6 / 2 (current): read-only scanner + classifier + dry-run plan + operations dashboard + host visibility + proof/dependency/readiness system.**
-> No deletes, prunes, restarts, or execution. Approve **501** / execute **403** unchanged.
+> **Phase 5 (current):** Controlled staged cleanup executor when `STORAGE_CLEANUP_ENABLED=1`.
+> Phases 1–4 remain read-only by default. Execution requires pre-cleanup snapshot, health gate, plan approval, and per-stage POST.
 
 Read `SERVER_OPERATIONS.md` for the 2026-06-14 forensic baseline and `AGENTS.md` for forbidden server commands.
 
@@ -33,7 +33,14 @@ API  /admin/storage-health/*
         │     ├── safetyGates.ts
         │     ├── snapshotGenerator.ts
         │     └── operationsCenter.ts
-        └── executor (future — currently refuses all execution)
+        └── cleanupExecutor/ (Phase 5 — gated staged cleanup when STORAGE_CLEANUP_ENABLED=1)
+              ├── healthGate.ts
+              ├── inventoryFingerprint.ts
+              ├── buildKitInvestigation.ts
+              ├── commandRunner.ts
+              ├── stages.ts
+              ├── preCleanupSnapshot.ts
+              └── executor.ts
 ```
 
 ### Phase 1.6 — Host visibility layer (read-only)
@@ -335,6 +342,34 @@ Portal: `/admin/storage-health` → Scan Now → Cleanup Plan (read-only).
 
 ---
 
+## Phase 5 — Controlled cleanup executor
+
+**Enable:** `STORAGE_CLEANUP_ENABLED=1` on `api` / `api_candidate` (default `0` in `docker-compose.app.yml`).
+
+**Workflow (strict order):**
+
+1. **Scan Now** — inventory + operations center (0 unknowns, gates PASS).
+2. **Generate Snapshot** — preflight proof JSON.
+3. **Cleanup Plan** — dry-run actions.
+4. **Prepare Cleanup** — `POST /admin/storage-health/prepare-cleanup` writes `storage-precleanup-<ts>.json`, runs health gate (14 services).
+5. **Approve** — `POST /admin/storage-health/approve` with `{ planId }`.
+6. **Execute stages individually** — `POST /admin/storage-health/execute` with `{ stage: 1|2|3|4 }`.
+
+| Stage | Target | Method |
+|-------|--------|--------|
+| 1 | `postgres:16-alpine` | `docker image rm` |
+| 2 | Historical APKs (keep 5) | Ephemeral `alpine` container with rw bind on `/opt/connectcomms/downloads` |
+| 3 | systemd journal | Privileged `chroot` journal vacuum to 1G |
+| 4 | BuildKit cache | `docker builder prune --filter unused-for=<retention>` after investigation |
+
+**Stop conditions:** health gate fail, unknown assets, safety gates blocked, inventory fingerprint drift (containers/volumes/rollback images), command failure.
+
+**BuildKit investigation:** `GET /admin/storage-health/investigation/buildkit` — explains confidence &lt; 99 (incomplete `*` entries, cumulative layer accounting).
+
+**Never targeted:** protected data, running images, candidate rollback images, containerd content blobs, `/opt/connectcomms/app`, CRM/chat volumes.
+
+---
+
 ## Source files
 
 | Path | Role |
@@ -351,6 +386,6 @@ Portal: `/admin/storage-health` → Scan Now → Cleanup Plan (read-only).
 | `apps/api/src/ops/storageMaintenance/alerts.ts` | Threshold alerts |
 | `apps/api/src/ops/storageMaintenance/auditLog.ts` | Audit ring buffer |
 | `apps/api/src/ops/storageMaintenance/proofSystem/*` | Phase 2 forensics, scoring, snapshots |
-| `apps/api/src/ops/storageMaintenance/service.ts` | Orchestration + snapshot queue |
+| `apps/api/src/ops/storageMaintenance/cleanupExecutor/*` | Phase 5 staged executor |
 | `apps/api/src/ops/storageMaintenance/routes.ts` | HTTP routes |
 | `apps/portal/app/(platform)/admin/storage-health/page.tsx` | Operations Center UI |

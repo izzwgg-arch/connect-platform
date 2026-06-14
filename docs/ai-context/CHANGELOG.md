@@ -4,6 +4,21 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-14 — Storage Health Phase 5 (controlled cleanup executor)
+
+**Task:** First approved storage reclamation path — staged, gated, auditable cleanup only.
+
+**Changes:**
+- Added `apps/api/src/ops/storageMaintenance/cleanupExecutor/*` — health gate (14 services), inventory fingerprint, BuildKit investigation, staged command runner, pre-cleanup snapshot writer.
+- Enabled routes when `STORAGE_CLEANUP_ENABLED=1`: `prepare-cleanup`, `approve`, `execute` (stages 1–4), `investigation/buildkit`, `executions`.
+- Portal Phase 5 panel: Prepare → Approve → Stage 1–4 buttons.
+- Protected `/opt/connectcomms/app` clone root explicitly in `protectionRules`.
+- `docker-compose.app.yml`: `STORAGE_CLEANUP_ENABLED` (default `0`).
+
+**Tests:** 38 passing in `storageMaintenance.test.ts`.
+
+---
+
 ## 2026-06-14 — Storage Health Phase 3 (zero-unknown forensics)
 
 **Task:** Eliminate unknown inventory blockers with forensic proof; reach 95%+ readiness without cleanup.

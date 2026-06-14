@@ -132,6 +132,10 @@ type StorageHealth = {
   scanError?: string | null;
   snapshotGenerating?: boolean;
   snapshotError?: string | null;
+  cleanupEnabled?: boolean;
+  approvedPlanId?: string | null;
+  preCleanupSnapshotPath?: string | null;
+  executions?: Array<{ executionId: string; status: string; stages: Array<{ stage: number; label: string; reclaimedBytes: number | null }>; reclaimedBytes: number }>;
 };
 
 const SCAN_POLL_MS = 5000;
@@ -398,6 +402,7 @@ export default function StorageHealthPage() {
   const [snapshotting, setSnapshotting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [executingStage, setExecutingStage] = useState<number | null>(null);
   const [trendWindow, setTrendWindow] = useState<"24h" | "7d" | "30d">("7d");
 
   const dash = health?.dashboard ?? null;
@@ -468,6 +473,45 @@ export default function StorageHealthPage() {
       setScanning(false);
     }
   }, [load]);
+
+  const runPrepareCleanup = useCallback(async () => {
+    setError(null);
+    try {
+      await apiPost("/admin/storage-health/prepare-cleanup", {}, undefined, { timeoutMs: 120_000 });
+      await load(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Prepare cleanup failed");
+    }
+  }, [load]);
+
+  const runApprovePlan = useCallback(async () => {
+    setError(null);
+    try {
+      const plan = await apiGet<{ planId: string }>("/admin/storage-health/plan");
+      await apiPost("/admin/storage-health/approve", { planId: plan.planId }, undefined, { timeoutMs: 30_000 });
+      await load(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Approve failed");
+    }
+  }, [load]);
+
+  const runCleanupStage = useCallback(
+    async (stage: number) => {
+      setExecutingStage(stage);
+      setError(null);
+      try {
+        await apiPost("/admin/storage-health/execute", { stage }, undefined, { timeoutMs: 900_000 });
+        await apiPost("/admin/storage-health/scan", {}, undefined, { timeoutMs: 30_000 }).catch(() => null);
+        await load(true);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : `Stage ${stage} failed`);
+        await load(true);
+      } finally {
+        setExecutingStage(null);
+      }
+    },
+    [load],
+  );
 
   useEffect(() => {
     void load();
@@ -544,7 +588,7 @@ export default function StorageHealthPage() {
           <div style={{ flex: 1, minWidth: 200 }}>
             <div style={{ fontSize: 22, fontWeight: 800 }}>Storage Health</div>
             <div style={{ fontSize: 13, color: C.textMuted, marginTop: 4 }}>
-              Operations dashboard — read-only forensics &amp; reclaim simulation. Phase 1 does not delete anything.
+              Operations dashboard — Phase 5 controlled cleanup when enabled. Staged execution with safety gates.
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -600,6 +644,50 @@ export default function StorageHealthPage() {
             </div>
           ) : (
             <>
+              <div style={cardStyle}>
+                <div style={sectionTitle}>PHASE 5 — CONTROLLED CLEANUP</div>
+                <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 12 }}>
+                  {health?.cleanupEnabled
+                    ? "Cleanup enabled. Prepare → Approve plan → Execute stages 1–4 individually."
+                    : "Cleanup disabled (STORAGE_CLEANUP_ENABLED≠1). Deploy with flag to enable."}
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+                  <button type="button" disabled={!health?.cleanupEnabled || scanning} onClick={() => void runPrepareCleanup()} style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
+                    Prepare Cleanup
+                  </button>
+                  <button type="button" disabled={!health?.cleanupEnabled || scanning} onClick={() => void runApprovePlan()} style={{ padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, background: C.surface, cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
+                    Approve Plan
+                  </button>
+                  {[1, 2, 3, 4].map((stage) => (
+                    <button
+                      key={stage}
+                      type="button"
+                      disabled={!health?.cleanupEnabled || scanning || executingStage != null}
+                      onClick={() => void runCleanupStage(stage)}
+                      style={{ padding: "8px 12px", borderRadius: 8, border: "none", background: stage === 4 ? C.warn : C.blue, color: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 700 }}
+                    >
+                      {executingStage === stage ? `Stage ${stage}…` : `Stage ${stage}`}
+                    </button>
+                  ))}
+                </div>
+                {health?.preCleanupSnapshotPath ? (
+                  <div style={{ fontSize: 12, color: C.textMuted, fontFamily: "monospace" }}>Pre-cleanup snapshot: {health.preCleanupSnapshotPath}</div>
+                ) : null}
+                {health?.approvedPlanId ? (
+                  <div style={{ fontSize: 12, color: C.ok, marginTop: 6 }}>Approved plan: {health.approvedPlanId}</div>
+                ) : null}
+                {(health?.executions?.length ?? 0) > 0 ? (
+                  <div style={{ marginTop: 12, fontSize: 12 }}>
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>Recent executions</div>
+                    {health!.executions!.slice(0, 3).map((ex) => (
+                      <div key={ex.executionId} style={{ color: C.textMuted, marginBottom: 4 }}>
+                        {ex.status} — reclaimed {fmtBytes(ex.reclaimedBytes)} — stages {ex.stages.map((s) => s.stage).join(",")}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14 }}>
                 <KpiCard
                   C={C}

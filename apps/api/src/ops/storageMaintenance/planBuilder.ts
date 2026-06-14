@@ -18,7 +18,7 @@ function daysToDuration(days: number): string {
   return `${h}h`;
 }
 
-function selectApkRetentionCandidates(
+export function selectApkRetentionCandidates(
   items: StorageInventoryItem[],
   retentionCount: number,
 ): StorageInventoryItem[] {
@@ -195,12 +195,10 @@ export function buildCleanupPlan(
         kind: "journalctl_vacuum",
         label: "Vacuum systemd journal to 1G max",
         targetRef: "/var/log/journal",
-        estimatedReclaimBytes: null,
+        estimatedReclaimBytes: scan.items.find((i) => i.pathOrRef.includes("/var/log/journal"))?.sizeBytes ?? null,
         command: "journalctl --vacuum-size=1G",
         dryRunCommand: "journalctl --disk-usage",
         classification: "SAFE_CANDIDATE",
-        blocked: true,
-        blockReason: "journal_vacuum_requires_phase2_approval",
       },
       config,
     ),

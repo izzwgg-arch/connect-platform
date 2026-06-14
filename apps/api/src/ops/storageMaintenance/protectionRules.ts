@@ -49,6 +49,7 @@ export function buildProtectedPaths(config: StorageMaintenanceConfig): string[] 
   return [
     config.dataRoot,
     config.envRoot,
+    config.appCloneRoot,
     `${config.dataRoot}/postgres`,
     `${config.dataRoot}/redis`,
     `${config.dataRoot}/minio`,

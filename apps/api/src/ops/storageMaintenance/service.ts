@@ -3,6 +3,14 @@ import { appendStorageAuditEvent, listStorageAuditEvents } from "./auditLog";
 import { buildStorageDashboardSummary, buildTrendSeries } from "./dashboard";
 import { buildCleanupPlan } from "./planBuilder";
 import {
+  approveCleanupPlan,
+  investigateBuildKit,
+  isCleanupExecutionEnabled,
+  runCleanupStage,
+  runPreCleanupPreparation,
+  type ExecutorContext,
+} from "./cleanupExecutor/executor";
+import {
   loadLatestSnapshotFromDisk,
   resetSnapshotStateForTests,
   writePreflightSnapshot,
@@ -10,7 +18,9 @@ import {
 import { runStorageScan } from "./scanner";
 import type { StorageScannerDeps } from "./scanner";
 import type {
+  CleanupExecutionRecord,
   CleanupPlan,
+  CleanupStage,
   StorageHealthSnapshot,
   StorageMaintenanceConfig,
   StorageScanSnapshot,
@@ -21,6 +31,9 @@ const MAX_HISTORY = 48;
 let latestScan: StorageScanSnapshot | null = null;
 let latestPlan: CleanupPlan | null = null;
 const history: StorageTrendPoint[] = [];
+const executions: CleanupExecutionRecord[] = [];
+let approvedPlanId: string | null = null;
+let preCleanupSnapshotPath: string | null = null;
 let scanning = false;
 let scanError: string | null = null;
 let snapshotGenerating = false;
@@ -77,12 +90,51 @@ export function getStorageHealthSnapshot(): StorageHealthSnapshot {
     previousScans: [...history],
     trends,
     alerts: buildHealthAlerts(latestScan),
-    executions: [],
+    executions: [...executions],
     dashboard: latestScan?.dashboard ?? null,
     scanning,
     scanError,
     snapshotGenerating,
     snapshotError,
+    cleanupEnabled: isCleanupExecutionEnabled(),
+    approvedPlanId,
+    preCleanupSnapshotPath,
+  };
+}
+
+function buildExecutorContext(deps: StorageScannerDeps): ExecutorContext {
+  const config = deps.config;
+  return {
+    config,
+    deps,
+    getLatestScan: () => latestScan,
+    getApprovedPlanId: () => approvedPlanId,
+    setApprovedPlanId: (id) => {
+      approvedPlanId = id;
+    },
+    getPreCleanupSnapshotPath: () => preCleanupSnapshotPath,
+    setPreCleanupSnapshotPath: (p) => {
+      preCleanupSnapshotPath = p;
+    },
+    getExecutions: () => executions,
+    pushExecution: (r) => {
+      executions.unshift(r);
+      if (executions.length > 20) executions.length = 20;
+    },
+    updateExecution: (id, r) => {
+      const idx = executions.findIndex((e) => e.executionId === id);
+      if (idx >= 0) executions[idx] = r;
+    },
+    onAudit: (detail, metadata) => {
+      appendStorageAuditEvent({
+        type: "execution_started",
+        actorUserId: (metadata?.actorUserId as string) ?? null,
+        planId: latestPlan?.planId ?? null,
+        scanId: latestScan?.scanId ?? null,
+        detail,
+        metadata,
+      });
+    },
   };
 }
 
@@ -216,9 +268,74 @@ export function refuseStorageCleanupApproval(actorUserId: string | null): never 
     actorUserId,
     planId: latestPlan?.planId ?? null,
     scanId: latestScan?.scanId ?? null,
-    detail: "approval_refused_phase2_not_implemented",
+    detail: "approval_refused_cleanup_disabled",
   });
-  throw new Error("storage_cleanup_approval_not_implemented");
+  throw new Error("storage_cleanup_approval_not_enabled");
+}
+
+export function approveStorageCleanupPlan(
+  deps: StorageScannerDeps,
+  actorUserId: string | null,
+  planId: string,
+): { approved: boolean; planId: string } {
+  if (!latestPlan || latestPlan.planId !== planId) {
+    throw new Error("cleanup_plan_mismatch");
+  }
+  if (latestPlan.blocked) throw new Error("cleanup_plan_blocked");
+  const ctx = buildExecutorContext(deps);
+  approveCleanupPlan(ctx, planId, actorUserId);
+  appendStorageAuditEvent({
+    type: "approval_granted",
+    actorUserId,
+    planId,
+    scanId: latestScan?.scanId ?? null,
+    detail: "cleanup_plan_approved_phase5",
+  });
+  return { approved: true, planId };
+}
+
+export async function prepareStorageCleanup(
+  deps: StorageScannerDeps,
+  actorUserId: string | null,
+): Promise<{ snapshotPath: string }> {
+  const ctx = buildExecutorContext(deps);
+  const result = await runPreCleanupPreparation(ctx, actorUserId);
+  return { snapshotPath: result.snapshotPath };
+}
+
+export async function executeStorageCleanupStage(
+  deps: StorageScannerDeps,
+  actorUserId: string | null,
+  stage: CleanupStage,
+): Promise<CleanupExecutionRecord> {
+  const ctx = buildExecutorContext(deps);
+  try {
+    const record = await runCleanupStage(ctx, stage, actorUserId);
+    appendStorageAuditEvent({
+      type: "execution_completed",
+      actorUserId,
+      planId: latestPlan?.planId ?? null,
+      scanId: latestScan?.scanId ?? null,
+      detail: `cleanup_stage_${stage}_completed reclaimed=${record.reclaimedBytes}`,
+      metadata: { stage, executionId: record.executionId },
+    });
+    return record;
+  } catch (err) {
+    appendStorageAuditEvent({
+      type: "execution_stopped",
+      actorUserId,
+      planId: latestPlan?.planId ?? null,
+      scanId: latestScan?.scanId ?? null,
+      detail: err instanceof Error ? err.message : "cleanup_stage_failed",
+      metadata: { stage },
+    });
+    throw err;
+  }
+}
+
+export async function getBuildKitInvestigation(deps: StorageScannerDeps) {
+  const ctx = buildExecutorContext(deps);
+  return investigateBuildKit(ctx);
 }
 
 export function refuseStorageCleanupExecution(actorUserId: string | null): never {
@@ -287,6 +404,9 @@ export function resetStorageMaintenanceStateForTests(): void {
   latestScan = null;
   latestPlan = null;
   history.length = 0;
+  executions.length = 0;
+  approvedPlanId = null;
+  preCleanupSnapshotPath = null;
   scanning = false;
   scanError = null;
   snapshotGenerating = false;

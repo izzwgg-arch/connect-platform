@@ -635,3 +635,54 @@ test("preflight snapshot writes read-only JSON artifact", async () => {
   assert.equal(parsed.phase, "preflight_proof");
   assert.equal(parsed.scanId, scan.scanId);
 });
+
+test("health gate requires all production services running", async () => {
+  const { evaluateHealthGate } = await import("./cleanupExecutor/healthGate");
+  const gate = evaluateHealthGate([
+    { Id: "1", Names: ["/app-api-1"], Image: "app-api", State: "running" },
+    { Id: "2", Names: ["/app-portal-1"], Image: "app-portal", State: "running" },
+    { Id: "3", Names: ["/app-worker-1"], Image: "app-worker", State: "running" },
+    { Id: "4", Names: ["/app-telephony-1"], Image: "app-telephony", State: "running" },
+    { Id: "5", Names: ["/app-realtime-1"], Image: "app-realtime", State: "running" },
+    { Id: "6", Names: ["/connectcomms-postgres"], Image: "postgres:15", State: "running" },
+    { Id: "7", Names: ["/connectcomms-redis"], Image: "redis:7", State: "running" },
+    { Id: "8", Names: ["/connectcomms-minio"], Image: "minio/minio", State: "running" },
+    { Id: "9", Names: ["/sbc-kamailio"], Image: "kamailio/kamailio-ci", State: "running" },
+    { Id: "10", Names: ["/sbc-rtpengine"], Image: "drachtio/rtpengine", State: "running" },
+    { Id: "11", Names: ["/obs-grafana"], Image: "grafana/grafana", State: "running" },
+    { Id: "12", Names: ["/obs-prometheus"], Image: "prom/prometheus", State: "running" },
+    { Id: "13", Names: ["/obs-loki"], Image: "grafana/loki", State: "running" },
+    { Id: "14", Names: ["/obs-alertmanager"], Image: "prom/alertmanager", State: "running" },
+  ]);
+  assert.equal(gate.passed, true);
+});
+
+test("buildkit investigation parses cache usage from docker system df -v", async () => {
+  const { investigateBuildKitCache } = await import("./cleanupExecutor/buildKitInvestigation");
+  const sample = `
+Build cache usage: 10GB
+CACHE ID   CACHE TYPE   SIZE      CREATED   LAST USED   USAGE     SHARED
+abc123     regular      1.5GB     1h ago    1h ago      2         true
+def456     regular      2.0GB     2h ago                0         false
+ghi789*    regular      500MB     3h ago                0         false
+`;
+  const inv = investigateBuildKitCache(sample);
+  assert.equal(inv.totalEntries, 3);
+  assert.equal(inv.activeReferences, 1);
+  assert.equal(inv.inactiveReferences, 2);
+  assert.ok(inv.confidencePct > 0);
+  assert.ok(inv.whyNot99Plus.length > 0);
+});
+
+test("app clone root is protected from cleanup commands", () => {
+  assert.equal(isProtectedPath("/opt/connectcomms/app", config), true);
+  assert.equal(isProtectedPath("/opt/connectcomms/app/src", config), true);
+});
+
+test("cleanup execution disabled without STORAGE_CLEANUP_ENABLED", async () => {
+  const prev = process.env.STORAGE_CLEANUP_ENABLED;
+  delete process.env.STORAGE_CLEANUP_ENABLED;
+  const { isCleanupExecutionEnabled } = await import("./cleanupExecutor/executor");
+  assert.equal(isCleanupExecutionEnabled(), false);
+  process.env.STORAGE_CLEANUP_ENABLED = prev;
+});
