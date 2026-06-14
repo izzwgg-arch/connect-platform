@@ -33,7 +33,7 @@ import { consumeScheduledPlanChange } from "../../api/src/billing/billingSchedul
 import { processConnectChatSmsJob } from "./connectChatSmsJob";
 import { runVoicemailSyncCycle } from "./voicemailSyncCycle";
 import { startVoicemailSpoolReconcileLoop } from "./voicemailSpoolReconcileCycle";
-import { runVoipMsInboundSyncCycle, SmsPushInput } from "./voipMsInboundSyncJob";
+import { runVoipMsInboundSyncCycle, runVoipMsMmsMirrorBackfill, SmsPushInput } from "./voipMsInboundSyncJob";
 import { buildBillingSchedule, type BillingSchedule } from "./billingSchedule";
 import {
   isConnectMohRuntimeClass,
@@ -1609,6 +1609,15 @@ setInterval(() => {
 }, Number(process.env.VOIPMS_INBOUND_SYNC_INTERVAL_MS || 60_000));
 
 runVoipMsInboundSyncCycle({ sendSmsPush: sendSmsPushNotification }).catch((err) => console.error("initial voipms inbound sms sync failed", err?.message || err));
+
+// Retry mirroring any recent inbound MMS still stranded on expiring VoIP.ms
+// media URLs into permanent local storage, so received photos/videos/files do
+// not "disappear after a week" when the carrier deletes the source.
+setInterval(() => {
+  runVoipMsMmsMirrorBackfill().catch((err) => console.error("voipms mms mirror backfill failed", err?.message || err));
+}, Number(process.env.VOIPMS_MMS_MIRROR_BACKFILL_INTERVAL_MS || 10 * 60_000));
+
+runVoipMsMmsMirrorBackfill().catch((err) => console.error("initial voipms mms mirror backfill failed", err?.message || err));
 
 setInterval(() => {
   runPbxCdrSyncCycle().catch((err) => console.error("pbx cdr sync failed", err?.message || err));

@@ -277,6 +277,24 @@ async function upsertParticipants(input: { threadId: string; tenantId: string; i
   await upsertSmsThreadParticipants(input);
 }
 
+/**
+ * Download one VoIP.ms MMS URL with a couple of quick retries. The carrier's
+ * media endpoint is occasionally flaky; a transient miss here is what later
+ * leaves a message stranded on an expiring VoIP.ms URL, so we retry before
+ * giving up on this cycle.
+ */
+async function fetchVoipMsMmsWithRetry(
+  input: { tenantId: string; threadId: string; sourceUrl: string; isSmsThread: boolean },
+  attempts = 3,
+): Promise<Awaited<ReturnType<typeof fetchVoipMsMmsToChatFile>>> {
+  for (let i = 0; i < attempts; i++) {
+    const written = await fetchVoipMsMmsToChatFile(input).catch(() => null);
+    if (written) return written;
+    if (i < attempts - 1) await new Promise((r) => setTimeout(r, 600 * (i + 1)));
+  }
+  return null;
+}
+
 async function mirrorInboundMmsToAttachments(input: {
   tenantId: string;
   threadId: string;
@@ -288,7 +306,7 @@ async function mirrorInboundMmsToAttachments(input: {
   const existing = await db.connectChatMessageAttachment.count({ where: { messageId: input.messageId } });
   if (existing > 0) return;
   for (const url of urls) {
-    const written = await fetchVoipMsMmsToChatFile({
+    const written = await fetchVoipMsMmsWithRetry({
       tenantId: input.tenantId,
       threadId: input.threadId,
       sourceUrl: url,
@@ -514,6 +532,66 @@ async function importInboundMessage(input: {
     messageId: msg.id,
     smsProviderMessageId: (msg as any).smsProviderMessageId ?? null,
   }).catch(() => {});
+}
+
+/**
+ * Re-mirror recent inbound SMS/MMS that is still stranded on VoIP.ms-hosted
+ * media URLs into permanent local storage.
+ *
+ * Why this exists: the live sync only re-tries mirroring for messages inside
+ * its ~2-day getSMS/getMMS poll window, but VoIP.ms keeps the underlying media
+ * reachable for roughly a week. A transient mirror failure during those first
+ * two days would otherwise never be retried, and the carrier URL then expires
+ * ~7 days later — making the photo/video/file "disappear after a week". This
+ * sweep keeps retrying every un-mirrored inbound MMS for the whole window the
+ * source is alive, so once it succeeds the media is stored forever.
+ */
+export async function runVoipMsMmsMirrorBackfill(opts?: { lookbackDays?: number; maxMessages?: number }): Promise<void> {
+  const lookbackDays = Math.max(1, opts?.lookbackDays ?? Number(process.env.VOIPMS_MMS_MIRROR_LOOKBACK_DAYS || 6));
+  const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000);
+  let candidates: Array<{ id: string; tenantId: string; threadId: string; metadata: unknown }>;
+  try {
+    candidates = await db.connectChatMessage.findMany({
+      where: {
+        direction: "INBOUND",
+        createdAt: { gte: since },
+        attachments: { none: {} },
+        thread: { type: "SMS" },
+      },
+      select: { id: true, tenantId: true, threadId: true, metadata: true },
+      orderBy: { createdAt: "desc" },
+      take: Math.max(1, opts?.maxMessages ?? 300),
+    });
+  } catch (err: any) {
+    console.warn("[voipms-mirror-backfill] query failed", err?.message || err);
+    return;
+  }
+
+  let attempted = 0;
+  let mirrored = 0;
+  for (const m of candidates) {
+    const meta = (m.metadata && typeof m.metadata === "object" ? m.metadata : {}) as { mms?: { urls?: string[] } };
+    const urls = Array.isArray(meta.mms?.urls)
+      ? meta.mms!.urls!.filter((u) => /^https?:\/\//i.test(String(u || "").trim()))
+      : [];
+    if (!urls.length) continue;
+    attempted++;
+    const before = await db.connectChatMessageAttachment.count({ where: { messageId: m.id } });
+    await mirrorInboundMmsToAttachments({
+      tenantId: m.tenantId,
+      threadId: m.threadId,
+      messageId: m.id,
+      externalUrls: urls,
+    }).catch((err: any) => console.warn("[voipms-mirror-backfill] mirror failed", m.id, err?.message || err));
+    const after = await db.connectChatMessageAttachment.count({ where: { messageId: m.id } });
+    if (after > before) mirrored++;
+  }
+
+  if (attempted) {
+    console.info(
+      JSON.stringify({ event: "voipms_mms_mirror_backfill", scanned: candidates.length, attempted, mirrored, lookbackDays }),
+    );
+  }
 }
 
 let running = false;
