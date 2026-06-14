@@ -13346,20 +13346,34 @@ app.post("/mobile/devices/register", async (req, reply) => {
     "[CALL_WAKE] DEVICE_REGISTERED"
   );
 
-  // Remove any OLD device registrations for this user that have a different
-  // push token. A user's phone gets a new token after each APK reinstall, so
-  // old tokens pile up and cause "answered on another device" false-positives
-  // (both tokens get the push, the first claim triggers an INVITE_CLAIMED
-  // notification to the "other" device which is the same physical phone).
-  // We keep only the registration we just upserted.
-  await db.mobileDevice.updateMany({
-    where: {
-      tenantId: user.tenantId,
-      userId: user.sub,
-      expoPushToken: { not: input.expoPushToken },
-    },
-    data: { active: false, deactivatedAt: new Date() } as any,
-  });
+  // Retire superseded push tokens for THIS SAME physical device only. A phone
+  // mints a new Expo token after token rotation / an app update, so the old
+  // token belonging to the same deviceId must be deactivated to avoid
+  // "answered on another device" false-positives (the same physical phone
+  // receiving the push twice, where the first claim notifies the "other"
+  // token which is really the same handset).
+  //
+  // CRITICAL: scope this to `deviceId`, NOT `userId`. The previous userId-wide
+  // sweep deactivated EVERY other phone the user owned, so two real devices on
+  // the same extension could never both be active — only whichever opened the
+  // app last would ring. That defeats simultaneous multi-device ringing and
+  // the entire "answered on another device" feature. A different physical
+  // phone (different stable deviceId) must stay active and keep ringing.
+  //
+  // When the client doesn't send a deviceId (older builds) we skip the sweep
+  // entirely and let the Expo `DeviceNotRegistered` cleanup retire dead tokens,
+  // rather than risk knocking a genuine second device offline.
+  if (input.deviceId) {
+    await db.mobileDevice.updateMany({
+      where: {
+        tenantId: user.tenantId,
+        userId: user.sub,
+        deviceId: input.deviceId,
+        expoPushToken: { not: input.expoPushToken },
+      },
+      data: { active: false, deactivatedAt: new Date() } as any,
+    });
+  }
 
   await audit({ tenantId: user.tenantId, actorUserId: user.sub, action: "MOBILE_DEVICE_REGISTERED", entityType: "MobileDevice", entityId: saved.id });
   return { ok: true, id: saved.id, platform: saved.platform, lastSeenAt: saved.lastSeenAt };
