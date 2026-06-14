@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildConsumerTracks, cpuHeatColor } from "./CpuLiveCharts";
+import { buildConsumerTracks, cpuHeatColor, type CpuConsumerRow } from "./CpuLiveCharts";
 
 test("cpuHeatColor maps low to green and high to red", () => {
   assert.equal(cpuHeatColor(0), "rgb(34, 197, 94)");
@@ -13,7 +13,7 @@ test("buildConsumerTracks records rank positions over samples", () => {
   const c1 = { kind: "process" as const, id: "1", name: "node", cpuPct: 40, memoryBytes: null, detail: null };
   const c2 = { kind: "process" as const, id: "2", name: "postgres", cpuPct: 20, memoryBytes: null, detail: null };
   const first = buildConsumerTracks([c1, c2], {});
-  const state: Record<string, { cpuSeries: number[]; rankSeries: number[]; name: string; kind: "process" }> = {};
+  const state: Record<string, { cpuSeries: number[]; rankSeries: number[]; name: string; kind: CpuConsumerRow["kind"] }> = {};
   for (const t of first) {
     state[t.key] = { cpuSeries: t.cpuSeries, rankSeries: t.rankSeries, name: t.name, kind: t.kind };
   }

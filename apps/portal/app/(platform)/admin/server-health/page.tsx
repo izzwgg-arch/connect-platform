@@ -36,7 +36,7 @@ type ServiceProbe = {
 type CpuConsumersSnapshot = {
   scope: "host_processes" | "container_processes" | "docker_containers" | "unavailable";
   scopeNote: string;
-  consumers: CpuConsumer[];
+  consumers: CpuConsumerRow[];
   sampledAt: string;
 };
 

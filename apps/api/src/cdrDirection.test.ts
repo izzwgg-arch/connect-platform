@@ -90,11 +90,11 @@ test("wouldOverride: false when no pattern applies", () => {
   assert.equal(wouldOverride(null, null, "incoming"), false);
 });
 
-test("7-digit 'to': ambiguous local PSTN, not counted as external → keep stored", () => {
-  assert.equal(canonicalDirection("105", "5551234", "incoming"), "incoming");
+test("7-digit 'to': local PSTN dial from extension is outgoing", () => {
+  assert.equal(canonicalDirection("105", "5551234", "incoming"), "outgoing");
 });
-test("9-digit 'to': not in external range → keep stored", () => {
-  assert.equal(canonicalDirection("105", "123456789", "incoming"), "incoming");
+test("9-digit 'to': local PSTN dial from extension is outgoing", () => {
+  assert.equal(canonicalDirection("105", "123456789", "incoming"), "outgoing");
 });
 test("1-digit 'from': not in extension range → no pattern", () => {
   assert.equal(canonicalDirection("5", "8453519000", "incoming"), "incoming");
