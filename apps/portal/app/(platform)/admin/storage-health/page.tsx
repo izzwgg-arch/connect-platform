@@ -84,7 +84,16 @@ type StorageHealth = {
   trends: StorageTrendSeries[];
   alerts: StorageAlert[];
   dashboard: StorageDashboard | null;
+  scanning?: boolean;
+  scanError?: string | null;
 };
+
+const SCAN_POLL_MS = 5000;
+const SCAN_POLL_MAX_MS = 25 * 60 * 1000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 type ThemeTokens = {
   bg: string;
@@ -353,11 +362,15 @@ export default function StorageHealthPage() {
       const data = await apiGet<StorageHealth>("/admin/storage-health", undefined, { timeoutMs: 30_000 });
       setHealth(data);
       setLastUpdated(new Date().toLocaleTimeString());
+      if (data.scanning) setScanning(true);
+      else if (!silent) setScanning(false);
+      if (data.scanError) setError(data.scanError);
+      return data;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load storage health");
+      return null;
     } finally {
-      setLoading(false);
-      setScanning(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -365,11 +378,27 @@ export default function StorageHealthPage() {
     setScanning(true);
     setError(null);
     try {
-      await apiPost("/admin/storage-health/scan", {});
-      await apiPost("/admin/storage-health/plan", {}).catch(() => null);
-      await load(true);
+      await apiPost("/admin/storage-health/scan", {}, undefined, { timeoutMs: 30_000 });
+      const started = Date.now();
+      while (Date.now() - started < SCAN_POLL_MAX_MS) {
+        const data = await load(true);
+        if (!data) break;
+        if (data.scanError) {
+          throw new Error(data.scanError);
+        }
+        if (!data.scanning && data.dashboard) {
+          await apiPost("/admin/storage-health/plan", {}, undefined, { timeoutMs: 120_000 }).catch(() => null);
+          await load(true);
+          return;
+        }
+        await sleep(SCAN_POLL_MS);
+      }
+      if (Date.now() - started >= SCAN_POLL_MAX_MS) {
+        throw new Error("Scan is still running — refresh in a few minutes to see results.");
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Scan failed");
+    } finally {
       setScanning(false);
     }
   }, [load]);
@@ -377,6 +406,29 @@ export default function StorageHealthPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!health?.scanning) return;
+    let cancelled = false;
+    setScanning(true);
+    void (async () => {
+      const started = Date.now();
+      while (!cancelled && Date.now() - started < SCAN_POLL_MAX_MS) {
+        await sleep(SCAN_POLL_MS);
+        const data = await load(true);
+        if (!data) break;
+        if (data.scanError) {
+          setError(data.scanError);
+          break;
+        }
+        if (!data.scanning && data.dashboard) break;
+      }
+      if (!cancelled) setScanning(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [health?.scanning, load]);
 
   const activeTrend = useMemo(
     () => health?.trends?.find((t) => t.window === trendWindow),
@@ -430,7 +482,11 @@ export default function StorageHealthPage() {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            {scanning && <span style={{ fontSize: 12, color: C.textMuted }}>Scanning…</span>}
+            {scanning && (
+              <span style={{ fontSize: 12, color: C.textMuted }}>
+                Inventory scan in progress — may take up to 20 minutes on first run…
+              </span>
+            )}
             {lastUpdated && <span style={{ fontSize: 12, color: C.textDim }}>Updated {lastUpdated}</span>}
             <button
               type="button"

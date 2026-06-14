@@ -1,13 +1,11 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { createProductionStorageScannerDeps } from "./dockerDeps";
 import {
-  executeStorageScan,
   generateCleanupPlanFromLatestScan,
   getLatestCleanupPlan,
-  getLatestStorageScan,
   getStorageAuditHistory,
   getStorageHealthSnapshot,
-  isStorageScanInProgress,
+  queueStorageScan,
   refuseStorageCleanupApproval,
   refuseStorageCleanupExecution,
 } from "./service";
@@ -29,17 +27,8 @@ export function registerStorageMaintenanceRoutes(
   app.post("/admin/storage-health/scan", async (req, reply) => {
     const admin = await requireSuperAdmin(req, reply);
     if (!admin) return;
-    if (isStorageScanInProgress()) {
-      const existing = getLatestStorageScan();
-      if (existing) return reply.send(existing);
-    }
-    try {
-      const scan = await executeStorageScan(scannerDeps, admin.sub);
-      return reply.send(scan);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "scan_failed";
-      return reply.status(500).send({ error: "storage_scan_failed", detail: msg });
-    }
+    const result = queueStorageScan(scannerDeps, admin.sub);
+    return reply.status(202).send(result);
   });
 
   app.get("/admin/storage-health/history", async (req, reply) => {

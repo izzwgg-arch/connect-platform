@@ -263,6 +263,8 @@ export type StorageHealthSnapshot = {
   alerts: StorageAlert[];
   executions: [];
   dashboard: StorageDashboardSummary | null;
+  scanning: boolean;
+  scanError: string | null;
 };
 
 export type StorageMaintenanceConfig = {

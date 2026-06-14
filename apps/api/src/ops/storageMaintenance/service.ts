@@ -17,6 +17,7 @@ let latestScan: StorageScanSnapshot | null = null;
 let latestPlan: CleanupPlan | null = null;
 const history: StorageTrendPoint[] = [];
 let scanning = false;
+let scanError: string | null = null;
 
 function rootMountFromScan(scan: StorageScanSnapshot | null) {
   if (!scan?.diskMounts?.length) return null;
@@ -63,6 +64,8 @@ export function getStorageHealthSnapshot(): StorageHealthSnapshot {
     alerts: buildHealthAlerts(latestScan),
     executions: [],
     dashboard: latestScan?.dashboard ?? null,
+    scanning,
+    scanError,
   };
 }
 
@@ -82,8 +85,11 @@ export async function executeStorageScan(
   deps: StorageScannerDeps,
   actorUserId: string | null,
 ): Promise<StorageScanSnapshot> {
-  if (scanning && latestScan) return latestScan;
+  if (scanning) {
+    throw new Error("storage_scan_in_progress");
+  }
   scanning = true;
+  scanError = null;
   appendStorageAuditEvent({
     type: "scan_started",
     actorUserId,
@@ -101,9 +107,55 @@ export async function executeStorageScan(
       metadata: { durationMs: scan.durationMs, unknownCount: scan.unknownCount },
     });
     return scan;
+  } catch (err) {
+    scanError = err instanceof Error ? err.message : "scan_failed";
+    throw err;
   } finally {
     scanning = false;
   }
+}
+
+export type StorageScanQueueResult = {
+  accepted: boolean;
+  scanning: boolean;
+};
+
+/** Fire-and-forget scan for long-running host inventory (avoids HTTP/nginx timeouts). */
+export function queueStorageScan(deps: StorageScannerDeps, actorUserId: string | null): StorageScanQueueResult {
+  if (scanning) {
+    return { accepted: true, scanning: true };
+  }
+  scanning = true;
+  scanError = null;
+  appendStorageAuditEvent({
+    type: "scan_started",
+    actorUserId,
+    detail: "read_only_storage_scan_started_async",
+  });
+  void (async () => {
+    try {
+      const scan = await runStorageScan(deps);
+      latestScan = scan;
+      pushHistory(scan);
+      appendStorageAuditEvent({
+        type: "scan_completed",
+        actorUserId,
+        scanId: scan.scanId,
+        detail: `read_only_storage_scan_completed items=${scan.items.length} reclaim_estimate=${scan.reclaimEstimateBytes}`,
+        metadata: { durationMs: scan.durationMs, unknownCount: scan.unknownCount },
+      });
+    } catch (err) {
+      scanError = err instanceof Error ? err.message : "scan_failed";
+      appendStorageAuditEvent({
+        type: "scan_completed",
+        actorUserId,
+        detail: `read_only_storage_scan_failed ${scanError}`,
+      });
+    } finally {
+      scanning = false;
+    }
+  })();
+  return { accepted: true, scanning: true };
 }
 
 export function generateCleanupPlanFromLatestScan(
@@ -168,4 +220,5 @@ export function resetStorageMaintenanceStateForTests(): void {
   latestPlan = null;
   history.length = 0;
   scanning = false;
+  scanError = null;
 }

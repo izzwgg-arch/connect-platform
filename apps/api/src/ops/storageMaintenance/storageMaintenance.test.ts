@@ -418,3 +418,24 @@ test("toHostDisplayPath strips inventory mount prefix", () => {
   );
   assert.equal(toHostDisplayPath("/opt/connectcomms/app", ""), "/opt/connectcomms/app");
 });
+
+test("queueStorageScan returns immediately while scan runs in background", async () => {
+  const { queueStorageScan, getStorageHealthSnapshot, resetStorageMaintenanceStateForTests } = await import("./service");
+  resetStorageMaintenanceStateForTests();
+  let duCalls = 0;
+  const slowDeps: StorageScannerDeps = {
+    ...mockDeps(),
+    statPathBytes: async (path) => {
+      duCalls += 1;
+      await new Promise((r) => setTimeout(r, 50));
+      return path.includes("containerd") ? 400 * 1e9 : 1e6;
+    },
+  };
+  const queued = queueStorageScan(slowDeps, "async-test");
+  assert.equal(queued.accepted, true);
+  assert.equal(queued.scanning, true);
+  assert.equal(getStorageHealthSnapshot().scanning, true);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.ok(getStorageHealthSnapshot().dashboard != null || getStorageHealthSnapshot().scanning);
+  resetStorageMaintenanceStateForTests();
+});
