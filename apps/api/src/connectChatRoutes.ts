@@ -1003,14 +1003,25 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
             lastMessageAt: new Date(),
           },
         });
-        for (const [uid, pk] of [
-          [user.sub, `u:${user.sub}`],
-          [peer.id, `u:${peer.id}`],
-        ] as const) {
-          await db.connectChatParticipant.create({
-            data: { threadId: thread.id, participantKey: pk, userId: uid, role: "MEMBER" },
-          });
-        }
+      }
+      // Ensure both participants exist. Deduplicate by participantKey (a
+      // self-DM has peer.id === user.sub → identical keys) and upsert instead
+      // of create so retries / concurrent requests / rejoins never trip the
+      // (threadId, participantKey) unique constraint. Previously this used
+      // `create` inside the `if (!thread)` block, which 500'd with P2002 the
+      // moment someone messaged their own extension.
+      const seenKeys = new Set<string>();
+      for (const [uid, pk] of [
+        [user.sub, `u:${user.sub}`],
+        [peer.id, `u:${peer.id}`],
+      ] as const) {
+        if (seenKeys.has(pk)) continue;
+        seenKeys.add(pk);
+        await db.connectChatParticipant.upsert({
+          where: { threadId_participantKey: { threadId: thread.id, participantKey: pk } },
+          create: { threadId: thread.id, participantKey: pk, userId: uid, role: "MEMBER" },
+          update: { leftAt: null },
+        });
       }
       return { threadId: thread.id };
     }
