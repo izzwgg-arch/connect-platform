@@ -1,7 +1,7 @@
 # STORAGE_MAINTENANCE
 
 > Safe storage cleanup controller for Connect production hosts.
-> **Phase 1 (current): read-only scanner + classifier + dry-run plan only.**
+> **Phase 1 / 1.5 (current): read-only scanner + classifier + dry-run plan + operations dashboard.**
 > No deletes, prunes, restarts, or execution.
 
 Read `SERVER_OPERATIONS.md` for the 2026-06-14 forensic baseline and `AGENTS.md` for forbidden server commands.
@@ -18,6 +18,7 @@ API  /admin/storage-health/*
         │
         ├── scanner (read-only: disk, docker, APKs, logs)
         ├── classifier (PROTECTED / ACTIVE / ROLLBACK / SAFE / UNKNOWN)
+        ├── dashboard (KPIs, distribution, consumers, simulation, trends)
         ├── planBuilder (dry-run commands, command guard)
         ├── auditLog (in-memory ring buffer)
         └── executor (Phase 2 — currently refuses all execution)
@@ -27,7 +28,7 @@ API  /admin/storage-health/*
 
 | Method | Path | Phase 1 behavior |
 |--------|------|------------------|
-| GET | `/admin/storage-health` | Latest snapshot + trend + alerts |
+| GET | `/admin/storage-health` | Dashboard snapshot: KPIs, distribution, trends, alerts |
 | POST | `/admin/storage-health/scan` | Run read-only inventory |
 | GET | `/admin/storage-health/history` | Scan trend rows |
 | GET | `/admin/storage-health/audit` | Audit events |
@@ -119,6 +120,29 @@ Env vars: `STORAGE_DISK_WARNING_PCT`, `STORAGE_BUILDKIT_CRITICAL_BYTES`, etc. (s
 
 ---
 
+## Phase 1.5 operations dashboard
+
+Portal `/admin/storage-health` answers in under 10 seconds:
+
+| Question | Source |
+|----------|--------|
+| Total / used / free disk | `dashboard.totalDiskBytes`, `usedBytes`, `freeBytes` |
+| Build cache & reclaimable | `buildCacheBytes`, `reclaimableBytes` |
+| Protected data total | `protectedDataBytes` |
+| Risk level | `riskLevel` (low / medium / high / critical) |
+| Largest consumers (top 20) | `largestConsumers[]` |
+| Distribution by category | `distribution[]` (Build Cache, Application, Downloads, Logs, Database, Redis, Docker Volumes, Other) |
+| Protected assets | `protectedAssets[]` |
+| Reclaim simulation | `projectedUsageAfterCleanupBytes`, `projectedRecoveryBytes` (estimate only) |
+| Disk trend | `trends[]` windows 24h / 7d / 30d with direction |
+| Cleanup readiness | `cleanupReadiness[]` (eligible / review / blocked) |
+
+API module: `apps/api/src/ops/storageMaintenance/dashboard.ts`
+
+Execution remains blocked: approve **501**, execute **403**.
+
+---
+
 ## Verification
 
 ```bash
@@ -137,6 +161,7 @@ Portal: `/admin/storage-health` → Scan Now → Cleanup Plan (read-only).
 | `apps/api/src/ops/storageMaintenance/protectionRules.ts` | Hard guards |
 | `apps/api/src/ops/storageMaintenance/classifier.ts` | Classification |
 | `apps/api/src/ops/storageMaintenance/scanner.ts` | Read-only inventory |
+| `apps/api/src/ops/storageMaintenance/dashboard.ts` | KPIs, distribution, simulation, trends |
 | `apps/api/src/ops/storageMaintenance/planBuilder.ts` | Dry-run plan |
 | `apps/api/src/ops/storageMaintenance/alerts.ts` | Threshold alerts |
 | `apps/api/src/ops/storageMaintenance/auditLog.ts` | Audit ring buffer |

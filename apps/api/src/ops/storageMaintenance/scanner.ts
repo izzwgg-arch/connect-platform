@@ -4,6 +4,7 @@ import os from "node:os";
 import { collectHostMetrics } from "../hostMetrics";
 import { buildInventoryItem } from "./classifier";
 import { deriveStorageAlerts } from "./alerts";
+import { buildStorageDashboardSummary } from "./dashboard";
 import type {
   DockerSystemSummary,
   StorageInventoryItem,
@@ -290,12 +291,12 @@ export async function runStorageScan(deps: StorageScannerDeps): Promise<StorageS
     containerdBytes: fsItems.find((i) => i.pathOrRef === deps.config.containerdRoot)?.sizeBytes ?? null,
   });
 
-  return {
+  const scanWithoutDashboard = {
     scanId,
     timestamp: new Date().toISOString(),
     hostname: os.hostname(),
     durationMs: Date.now() - started,
-    readOnly: true,
+    readOnly: true as const,
     diskMounts: host.storage,
     docker: dockerSummary,
     items,
@@ -303,6 +304,11 @@ export async function runStorageScan(deps: StorageScannerDeps): Promise<StorageS
     alerts,
     unknownCount,
     protectedCount,
+  };
+
+  return {
+    ...scanWithoutDashboard,
+    dashboard: buildStorageDashboardSummary(scanWithoutDashboard, deps.config),
   };
 }
 

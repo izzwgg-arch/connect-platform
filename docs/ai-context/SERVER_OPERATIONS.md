@@ -170,7 +170,8 @@ Full raw report saved on server: `/tmp/storage_forensics_20260614T131434Z.txt`
 
 **No cleanup commands were run.** Await explicit human approval before any storage reclamation.
 
-### Storage cleanup controller (Phase 1)
+### Storage cleanup controller (Phase 1 / 1.5)
 
-Read-only scanner + classifier + dry-run cleanup plan via API and portal **`/admin/storage-health`**.
+Read-only scanner + classifier + dry-run cleanup plan + **operations dashboard** via API and portal **`/admin/storage-health`**.
+Phase 1.5 dashboard surfaces KPIs, distribution chart, top consumers, protected assets, reclaim simulation, and trend history — all from live scan data.
 See **`STORAGE_MAINTENANCE.md`** for architecture, guards, and Phase 2 approval requirements.

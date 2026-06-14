@@ -4,6 +4,22 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-14 — Storage Health operations dashboard (Phase 1.5)
+
+**Task:** Upgrade `/admin/storage-health` from basic tables to production-grade operations dashboard.
+**Risk:** low — read-only UI + API analytics; no execution, prune, or delete.
+
+- Added `dashboard.ts` — KPI summary, distribution breakdown, top-20 consumers, protected assets, reclaim simulation, risk scoring, trend series (24h/7d/30d), cleanup readiness rows.
+- Expanded `GET /admin/storage-health` and scan responses with `dashboard` payload (actual scan data, not placeholders).
+- Redesigned portal page: premium KPI cards, distribution chart, alert center, trend graphs, consumer table, protection status, reclaim simulation, cleanup readiness (approve 501 / execute 403 unchanged).
+- 20 unit tests covering dashboard analytics and API contracts.
+
+**Documentation:** `STORAGE_MAINTENANCE.md` § Phase 1.5, `SERVER_OPERATIONS.md`, `DEPLOYMENT.md`.
+
+**No cleanup executed.**
+
+---
+
 ## 2026-06-14 — Production storage forensics (read-only)
 
 **Task:** Investigate 545 GB disk usage on production app host (`vmi3101417`).

@@ -147,7 +147,9 @@ portal `.next/cache` (45 GB), portal build artifacts (~100 GB combined).
 | Old APK downloads / monitoring logs / journal | ~10 GB | Partially |
 
 **Dangerous to remove:** Postgres bind mount, Redis bind mount, any attached Docker volume,
-running production images, `/opt/connectcomms/app` deploy clone.
+`/opt/connectcomms/env`, CRM/chat/IVR/MOH assets, running production images, `/opt/connectcomms/app` deploy clone.
+
+**Operations dashboard:** `/admin/storage-health` (Phase 1.5) displays these categories visually with reclaim simulation — read-only, no execution.
 
 **Agents must not run prune/cleanup commands without explicit human approval.** See
 `AGENTS.md` forbidden commands, `SERVER_OPERATIONS.md`, and **`STORAGE_MAINTENANCE.md`**

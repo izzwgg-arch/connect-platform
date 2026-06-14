@@ -15,8 +15,20 @@ import {
   generateCleanupPlanFromLatestScan,
   resetStorageMaintenanceStateForTests,
 } from "./service";
-import { parseDockerSystemDfText } from "./scanner";
-import type { StorageScannerDeps } from "./scanner";
+import {
+  buildCleanupReadiness,
+  buildProtectedAssets,
+  buildStorageDashboardSummary,
+  buildStorageDistribution,
+  buildTrendSeries,
+  classificationActionability,
+  classificationRisk,
+  computeReclaimSimulation,
+  computeRiskLevel,
+  computeTrendDirection,
+  rankLargestConsumers,
+} from "./dashboard";
+import { parseDockerSystemDfText, type StorageScannerDeps } from "./scanner";
 import type { DockerSystemSummary, StorageScanSnapshot } from "./types";
 
 const config = loadStorageMaintenanceConfig();
@@ -168,12 +180,12 @@ test("dry-run scan produces inventory without mutation hooks", async () => {
 });
 
 test("unknown item blocks cleanup plan", () => {
-  const scan: StorageScanSnapshot = {
+  const scanBase = {
     scanId: "scan-1",
     timestamp: new Date().toISOString(),
     hostname: "test",
     durationMs: 1,
-    readOnly: true,
+    readOnly: true as const,
     diskMounts: [{ path: "/", totalBytes: 1e12, usedBytes: 800e9, freeBytes: 200e9, usedPct: 80 }],
     docker: {
       imagesCount: 0,
@@ -187,27 +199,27 @@ test("unknown item blocks cleanup plan", () => {
         entryCount: 10,
         totalBytes: 500e9,
         reclaimableBytes: 480e9,
-        source: "docker_system_df",
+        source: "docker_system_df" as const,
       },
     },
     items: [
       {
         id: "unknown:1",
-        kind: "filesystem_path",
+        kind: "filesystem_path" as const,
         label: "mystery",
         pathOrRef: "/var/lib/docker/unknown",
         sizeBytes: 100,
-        classification: "UNKNOWN_REQUIRES_REVIEW",
+        classification: "UNKNOWN_REQUIRES_REVIEW" as const,
         evidence: "test",
         reclaimableBytes: null,
       },
       {
         id: "buildcache:aggregate",
-        kind: "docker_build_cache",
+        kind: "docker_build_cache" as const,
         label: "cache",
         pathOrRef: "docker_buildkit_cache",
         sizeBytes: 500e9,
-        classification: "SAFE_CANDIDATE",
+        classification: "SAFE_CANDIDATE" as const,
         evidence: "test",
         reclaimableBytes: 480e9,
         metadata: { reclaimableBytes: 480e9 },
@@ -217,6 +229,10 @@ test("unknown item blocks cleanup plan", () => {
     alerts: [],
     unknownCount: 1,
     protectedCount: 0,
+  };
+  const scan: StorageScanSnapshot = {
+    ...scanBase,
+    dashboard: buildStorageDashboardSummary(scanBase, config),
   };
   const plan = buildCleanupPlan(scan, { ...config, apkRetentionCount: 1 });
   assert.equal(plan.blocked, true);
@@ -256,4 +272,99 @@ test("audit log created for scan and plan", async () => {
   const events = getStorageAuditHistory();
   assert.ok(events.some((e) => e.type === "scan_completed"));
   assert.ok(events.some((e) => e.type === "plan_generated" || e.type === "plan_blocked"));
+});
+
+test("rankLargestConsumers returns top paths by size", async () => {
+  const scan = await executeStorageScan(mockDeps(), "rank-test");
+  const ranked = rankLargestConsumers(scan.items, 5);
+  assert.ok(ranked.length > 0);
+  assert.equal(ranked[0]!.rank, 1);
+  assert.ok((ranked[0]!.sizeBytes ?? 0) >= (ranked[ranked.length - 1]!.sizeBytes ?? 0));
+});
+
+test("reclaim simulation uses actual scan totals", async () => {
+  const scan = await executeStorageScan(mockDeps(), "sim-test");
+  const sim = computeReclaimSimulation(scan);
+  assert.equal(sim.projectedRecoveryBytes, scan.reclaimEstimateBytes);
+  const root = scan.diskMounts.find((m) => m.path === "/" || m.path === "C:\\") ?? scan.diskMounts[0];
+  if (root?.usedBytes != null) {
+    assert.equal(sim.projectedUsageAfterCleanupBytes, Math.max(0, root.usedBytes - scan.reclaimEstimateBytes));
+  }
+});
+
+test("risk scoring reflects disk pressure", () => {
+  const highDiskScan = {
+    scanId: "r1",
+    timestamp: new Date().toISOString(),
+    hostname: "t",
+    durationMs: 1,
+    readOnly: true as const,
+    diskMounts: [{ path: "/", totalBytes: 678e9, usedBytes: 545e9, freeBytes: 133e9, usedPct: 81 }],
+    docker: {
+      imagesCount: 0,
+      imagesBytes: null,
+      imagesReclaimableBytes: null,
+      containersCount: 0,
+      containersBytes: null,
+      volumesCount: 0,
+      volumesBytes: null,
+      buildCache: { entryCount: 100, totalBytes: 537e9, reclaimableBytes: 523e9, source: "docker_system_df" as const },
+    },
+    items: [],
+    reclaimEstimateBytes: 523e9,
+    alerts: [],
+    unknownCount: 0,
+    protectedCount: 0,
+  };
+  const risk = computeRiskLevel(highDiskScan, config);
+  assert.ok(risk === "high" || risk === "critical");
+});
+
+test("classification badges map risk and actionability", () => {
+  assert.equal(classificationRisk("PROTECTED_NEVER_DELETE"), "critical");
+  assert.equal(classificationRisk("SAFE_CANDIDATE"), "low");
+  assert.equal(classificationActionability("PROTECTED_NEVER_DELETE"), "locked");
+  assert.equal(classificationActionability("SAFE_CANDIDATE"), "eligible");
+});
+
+test("protected asset detection includes postgres paths", async () => {
+  const scan = await executeStorageScan(mockDeps(), "prot-test");
+  const assets = buildProtectedAssets(scan.items, config);
+  assert.ok(assets.some((a) => a.label.toLowerCase().includes("postgres") || a.pathOrRef.includes("postgres")));
+});
+
+test("projected usage calculations on dashboard summary", async () => {
+  const scan = await executeStorageScan(mockDeps(), "dash-test");
+  const dash = buildStorageDashboardSummary(scan, config);
+  assert.ok(dash.totalDiskBytes != null);
+  assert.ok(dash.largestConsumers.length > 0);
+  assert.ok(dash.distribution.length > 0);
+  assert.ok(dash.cleanupReadiness.some((r) => r.category === "BuildKit Cache"));
+  assert.equal(dash.projectedRecoveryBytes, scan.reclaimEstimateBytes);
+});
+
+test("trend direction and API contract fields", () => {
+  const points = [
+    { timestamp: new Date(Date.now() - 3600_000).toISOString(), scanId: "a", diskUsedPct: 78, usedBytes: 500e9, freeBytes: 140e9, totalBytes: 640e9, reclaimEstimateBytes: 100e9 },
+    { timestamp: new Date().toISOString(), scanId: "b", diskUsedPct: 81, usedBytes: 545e9, freeBytes: 133e9, totalBytes: 678e9, reclaimEstimateBytes: 523e9 },
+  ];
+  const dir = computeTrendDirection(points);
+  assert.equal(dir.direction, "increasing");
+  const series = buildTrendSeries(points, "24h");
+  assert.equal(series.window, "24h");
+  assert.ok(series.points.length >= 2);
+});
+
+test("storage distribution categories sum from scan items", async () => {
+  const scan = await executeStorageScan(mockDeps(), "dist-test");
+  const dist = buildStorageDistribution(scan, config);
+  assert.ok(dist.some((d) => d.category === "build_cache"));
+  const buildSlice = dist.find((d) => d.category === "build_cache");
+  assert.ok((buildSlice?.sizeBytes ?? 0) > 0);
+});
+
+test("cleanup readiness rows include blocked protected data", async () => {
+  const scan = await executeStorageScan(mockDeps(), "ready-test");
+  const readiness = buildCleanupReadiness(scan, null);
+  assert.ok(readiness.some((r) => r.category === "BuildKit Cache" && r.status === "eligible"));
 });

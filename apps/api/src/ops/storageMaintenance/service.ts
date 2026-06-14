@@ -1,5 +1,6 @@
 import { loadStorageMaintenanceConfig } from "./dockerDeps";
 import { appendStorageAuditEvent, listStorageAuditEvents } from "./auditLog";
+import { buildStorageDashboardSummary, buildTrendSeries } from "./dashboard";
 import { buildCleanupPlan } from "./planBuilder";
 import { runStorageScan } from "./scanner";
 import type { StorageScannerDeps } from "./scanner";
@@ -8,37 +9,60 @@ import type {
   StorageHealthSnapshot,
   StorageMaintenanceConfig,
   StorageScanSnapshot,
+  StorageTrendPoint,
 } from "./types";
 
 const MAX_HISTORY = 48;
 let latestScan: StorageScanSnapshot | null = null;
 let latestPlan: CleanupPlan | null = null;
-const history: StorageHealthSnapshot["previousScans"] = [];
+const history: StorageTrendPoint[] = [];
 let scanning = false;
 
-function diskUsedPct(scan: StorageScanSnapshot | null): number | null {
+function rootMountFromScan(scan: StorageScanSnapshot | null) {
   if (!scan?.diskMounts?.length) return null;
-  const root = scan.diskMounts.find((m) => m.path === "/") ?? scan.diskMounts[0];
-  return root?.usedPct ?? null;
+  return scan.diskMounts.find((m) => m.path === "/" || m.path === "C:\\") ?? scan.diskMounts[0] ?? null;
+}
+
+function diskUsedPct(scan: StorageScanSnapshot | null): number | null {
+  return rootMountFromScan(scan)?.usedPct ?? null;
 }
 
 function pushHistory(scan: StorageScanSnapshot): void {
+  const root = rootMountFromScan(scan);
   history.unshift({
     scanId: scan.scanId,
     timestamp: scan.timestamp,
-    diskUsedPct: diskUsedPct(scan),
+    diskUsedPct: root?.usedPct ?? null,
+    usedBytes: root?.usedBytes ?? null,
+    freeBytes: root?.freeBytes ?? null,
+    totalBytes: root?.totalBytes ?? null,
     reclaimEstimateBytes: scan.reclaimEstimateBytes,
   });
   if (history.length > MAX_HISTORY) history.length = MAX_HISTORY;
 }
 
+function buildHealthAlerts(scan: StorageScanSnapshot | null): StorageHealthSnapshot["alerts"] {
+  const alerts = [...(scan?.alerts ?? [])];
+  if (scan) {
+    alerts.push({
+      code: "scan_completed" as StorageHealthSnapshot["alerts"][number]["code"],
+      severity: "ok",
+      message: `Storage scan completed — ${scan.items.length} items inventoried in ${scan.durationMs}ms`,
+    });
+  }
+  return alerts;
+}
+
 export function getStorageHealthSnapshot(): StorageHealthSnapshot {
+  const trends = (["24h", "7d", "30d"] as const).map((window) => buildTrendSeries(history, window));
   return {
     timestamp: new Date().toISOString(),
     latestScan,
     previousScans: [...history],
-    alerts: latestScan?.alerts ?? [],
+    trends,
+    alerts: buildHealthAlerts(latestScan),
     executions: [],
+    dashboard: latestScan?.dashboard ?? null,
   };
 }
 
@@ -91,6 +115,12 @@ export function generateCleanupPlanFromLatestScan(
   }
   const plan = buildCleanupPlan(latestScan, config);
   latestPlan = plan;
+  if (latestScan) {
+    latestScan = {
+      ...latestScan,
+      dashboard: buildStorageDashboardSummary(latestScan, config, plan),
+    };
+  }
   appendStorageAuditEvent({
     type: plan.blocked ? "plan_blocked" : "plan_generated",
     actorUserId,

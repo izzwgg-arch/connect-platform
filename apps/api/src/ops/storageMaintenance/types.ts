@@ -44,7 +44,8 @@ export type StorageAlertCode =
   | "free_space_critical"
   | "protected_item_in_plan"
   | "cleanup_failed"
-  | "unknown_items_present";
+  | "unknown_items_present"
+  | "scan_completed";
 
 export type StorageAlert = {
   code: StorageAlertCode;
@@ -73,6 +74,95 @@ export type DockerSystemSummary = {
   buildCache: DockerBuildCacheSummary;
 };
 
+export type StorageRiskLevel = "low" | "medium" | "high" | "critical";
+
+export type ConsumerRiskLevel = "low" | "medium" | "high" | "critical";
+
+export type ConsumerActionability = "locked" | "review" | "eligible" | "blocked";
+
+export type StorageDistributionCategory =
+  | "build_cache"
+  | "application"
+  | "downloads"
+  | "logs"
+  | "database"
+  | "redis"
+  | "docker_volumes"
+  | "other";
+
+export type StorageConsumerRow = {
+  rank: number;
+  path: string;
+  label: string;
+  sizeBytes: number | null;
+  classification: StorageClassification;
+  risk: ConsumerRiskLevel;
+  actionability: ConsumerActionability;
+  kind: StorageItemKind;
+};
+
+export type StorageDistributionSlice = {
+  category: StorageDistributionCategory;
+  label: string;
+  sizeBytes: number;
+  pct: number;
+};
+
+export type ProtectedAssetRow = {
+  id: string;
+  label: string;
+  category: "volume" | "image" | "path" | "database" | "bind_mount" | "service";
+  pathOrRef: string;
+  sizeBytes: number | null;
+  status: "protected" | "locked";
+  detail: string;
+};
+
+export type CleanupReadinessRow = {
+  category: string;
+  sizeBytes: number;
+  risk: ConsumerRiskLevel;
+  status: "eligible" | "review_required" | "blocked";
+  classification: StorageClassification;
+};
+
+export type TrendDirection = "increasing" | "stable" | "decreasing";
+
+export type StorageTrendPoint = {
+  timestamp: string;
+  scanId: string;
+  diskUsedPct: number | null;
+  usedBytes: number | null;
+  freeBytes: number | null;
+  totalBytes: number | null;
+  reclaimEstimateBytes: number;
+};
+
+export type StorageTrendSeries = {
+  window: "24h" | "7d" | "30d";
+  direction: TrendDirection;
+  directionPctDelta: number | null;
+  points: StorageTrendPoint[];
+};
+
+export type StorageDashboardSummary = {
+  totalDiskBytes: number | null;
+  usedBytes: number | null;
+  freeBytes: number | null;
+  usedPct: number | null;
+  buildCacheBytes: number | null;
+  reclaimableBytes: number;
+  protectedDataBytes: number;
+  riskLevel: StorageRiskLevel;
+  projectedUsageAfterCleanupBytes: number | null;
+  projectedRecoveryBytes: number;
+  projectedFreeBytesAfterCleanup: number | null;
+  largestConsumers: StorageConsumerRow[];
+  protectedAssets: ProtectedAssetRow[];
+  distribution: StorageDistributionSlice[];
+  cleanupReadiness: CleanupReadinessRow[];
+};
+
 export type StorageScanSnapshot = {
   scanId: string;
   timestamp: string;
@@ -86,6 +176,7 @@ export type StorageScanSnapshot = {
   alerts: StorageAlert[];
   unknownCount: number;
   protectedCount: number;
+  dashboard: StorageDashboardSummary;
 };
 
 export type CleanupPlanActionKind =
@@ -146,14 +237,11 @@ export type StorageAuditEvent = {
 export type StorageHealthSnapshot = {
   timestamp: string;
   latestScan: StorageScanSnapshot | null;
-  previousScans: Array<{
-    scanId: string;
-    timestamp: string;
-    diskUsedPct: number | null;
-    reclaimEstimateBytes: number;
-  }>;
+  previousScans: StorageTrendPoint[];
+  trends: StorageTrendSeries[];
   alerts: StorageAlert[];
   executions: [];
+  dashboard: StorageDashboardSummary | null;
 };
 
 export type StorageMaintenanceConfig = {
