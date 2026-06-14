@@ -29,7 +29,7 @@ function scoreBuildCacheEntry(
   runningContainerImages: Set<string>,
 ): { confidencePct: number; confidenceLabel: ConfidenceLabel } {
   const inUse = entry.InUse === true;
-  const reclaimable = entry.Reclaimable === true;
+  const reclaimable = entry.Reclaimable === true || (!inUse && Boolean(entry.ID));
   const relatedImage = entry.Description?.match(/\[([^\]]+)\]/)?.[1] ?? null;
   const referencedByActiveImage =
     inUse ||
@@ -43,7 +43,7 @@ function scoreBuildCacheEntry(
     return { confidencePct: 0, confidenceLabel: "UNKNOWN" };
   }
   return scoreConfidence({
-    classification: reclaimable && !inUse ? "SAFE_CANDIDATE" : "ACTIVE_REQUIRED",
+    classification: inUse ? "ACTIVE_REQUIRED" : reclaimable ? "SAFE_CANDIDATE" : "ACTIVE_REQUIRED",
     sizeBytes: entry.Size ?? null,
     referencedByRunningContainer,
     referencedByActiveImage,

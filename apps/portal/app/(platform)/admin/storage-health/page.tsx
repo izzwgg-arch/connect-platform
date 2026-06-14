@@ -59,7 +59,7 @@ type OperationsCenter = {
   readinessScorePct: number;
   readinessLabel: string;
   readinessDetail: string;
-  safetyGates: { blocked: boolean; reasons: string[] };
+  safetyGates: { blocked: boolean; reasons: string[]; blockers: Array<{ id: string; label: string; pathOrRef: string; reason: string; sizeBytes: number | null }> };
   snapshotStatus: { available: boolean; latestPath: string | null; latestTimestamp: string | null };
   buildCacheAnalysis: {
     totalEntries: number;
@@ -79,6 +79,23 @@ type OperationsCenter = {
   logForensics: { totalBytes: number; locations: Array<{ label: string; path: string; sizeBytes: number | null }> };
   confidenceDistribution: Array<{ label: string; count: number; sizeBytes: number; pct: number }>;
   riskMatrix: Array<{ category: string; risk: string; sizeBytes: number; confidenceLabel: string; blocked: boolean }>;
+  unknownItemsPanel: Array<{ itemId: string; item: string; sizeBytes: number | null; reasonUnknown: string; risk: string; confidencePct: number; actionNeeded: string }>;
+  dependencyProofPanel: Array<{ asset: string; referencedBy: string[]; evidence: string[]; confidencePct: number }>;
+  orphanAnalysisPanel: Array<{ item: string; sizeBytes: number | null; reason: string; proof: string[]; confidencePct: number; runtimeUsage: string }>;
+  readinessBreakdown: { overallPct: number; categories: Array<{ category: string; readinessPct: number; unknownCount: number; blocked: boolean; detail: string }> };
+  containerdForensics: { totalBytes: number; overlayBytes: number; contentBytes: number; buildCacheBytes: number; categories: Array<{ label: string; category: string; sizeBytes: number; entryCount: number }> };
+  buildCacheGroups: Array<{ group: string; sizeBytes: number; entryCount: number; productionDependent: boolean; confidencePct: number }>;
+  forensicReport: {
+    totalInventoryCount: number;
+    unknownInventoryCount: number;
+    unknownInventorySizeBytes: number;
+    readinessScorePct: number;
+    safetyGatesPass: boolean;
+    stepsToReach95: string[];
+    stepsToReach100: string[];
+    buildKitIndependentOfProduction: { proven: boolean; evidence: string };
+    containerdIndependentOfProduction: { proven: boolean; evidence: string };
+  };
 };
 
 type StorageAlert = {
@@ -644,13 +661,21 @@ export default function StorageHealthPage() {
                     </div>
                   </div>
                   <div style={cardStyle}>
-                    <div style={sectionTitle}>SAFETY GATES</div>
+                    <div style={sectionTitle}>BLOCKERS PANEL</div>
                     <Badge C={C} label={ops.safetyGates.blocked ? "BLOCKED" : "PASS"} tone={ops.safetyGates.blocked ? "crit" : "ok"} />
-                    {ops.safetyGates.reasons.length ? (
-                      <ul style={{ margin: "10px 0 0", paddingLeft: 18, fontSize: 12, color: C.textMuted }}>
-                        {ops.safetyGates.reasons.map((r) => <li key={r}>{r}</li>)}
-                      </ul>
-                    ) : null}
+                    {ops.safetyGates.blockers?.length ? (
+                      <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                        {ops.safetyGates.blockers.map((b) => (
+                          <div key={b.id} style={{ fontSize: 12, padding: 8, borderRadius: 8, background: C.surface, border: `1px solid ${C.border}` }}>
+                            <div><strong>{b.label}</strong> · {fmtBytes(b.sizeBytes)}</div>
+                            <div style={{ color: C.textMuted }}>{b.pathOrRef}</div>
+                            <div style={{ color: C.warn }}>{b.reason}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ marginTop: 8, fontSize: 12, color: C.ok }}>All safety gates pass</div>
+                    )}
                   </div>
                 </div>
               ) : null}
@@ -710,6 +735,89 @@ export default function StorageHealthPage() {
                         <span>{fmtBytes(r.sizeBytes)} · {r.confidenceLabel}</span>
                       </div>
                     ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {ops ? (
+                <div style={cardStyle}>
+                  <div style={sectionTitle}>CLEANUP READINESS BREAKDOWN</div>
+                  <div style={{ marginBottom: 12, fontSize: 14 }}>Overall: <strong>{ops.readinessBreakdown.overallPct}%</strong> · Score: <strong>{ops.readinessScorePct}%</strong></div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10 }}>
+                    {ops.readinessBreakdown.categories.map((c) => (
+                      <div key={c.category} style={{ padding: 10, borderRadius: 8, background: C.surface, border: `1px solid ${C.border}` }}>
+                        <div style={{ fontSize: 11, color: C.textMuted }}>{c.category}</div>
+                        <div style={{ fontSize: 20, fontWeight: 800, color: c.readinessPct >= 95 ? C.ok : c.blocked ? C.crit : C.warn }}>{c.readinessPct}%</div>
+                        <div style={{ fontSize: 11, color: C.textDim }}>{c.detail}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {ops ? (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 16 }}>
+                  <div style={cardStyle}>
+                    <div style={sectionTitle}>UNKNOWN ITEMS ({ops.forensicReport.unknownInventoryCount})</div>
+                    {ops.unknownItemsPanel.length === 0 ? (
+                      <div style={{ fontSize: 13, color: C.ok }}>Zero unknown inventory items — all classified with proof.</div>
+                    ) : (
+                      ops.unknownItemsPanel.map((u) => (
+                        <div key={u.itemId} style={{ padding: "8px 0", borderBottom: `1px solid ${C.border}44`, fontSize: 12 }}>
+                          <div><strong>{u.item}</strong> · {fmtBytes(u.sizeBytes)} · {u.confidencePct}%</div>
+                          <div style={{ color: C.textMuted }}>{u.reasonUnknown}</div>
+                          <div style={{ color: C.warn }}>{u.actionNeeded}</div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  <div style={cardStyle}>
+                    <div style={sectionTitle}>DEPENDENCY PROOF</div>
+                    {ops.dependencyProofPanel.slice(0, 10).map((d) => (
+                      <div key={d.asset} style={{ padding: "6px 0", borderBottom: `1px solid ${C.border}44`, fontSize: 12 }}>
+                        <div><strong>{d.asset}</strong> · {d.confidencePct}%</div>
+                        <div style={{ color: C.textMuted }}>{d.referencedBy.join(" · ")}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={cardStyle}>
+                    <div style={sectionTitle}>ORPHAN ANALYSIS</div>
+                    {ops.orphanAnalysisPanel.slice(0, 8).map((o) => (
+                      <div key={o.item} style={{ padding: "6px 0", borderBottom: `1px solid ${C.border}44`, fontSize: 12 }}>
+                        <div><strong>{o.item.slice(0, 24)}</strong> · {fmtBytes(o.sizeBytes)} · {o.confidencePct}%</div>
+                        <div style={{ color: C.textMuted }}>{o.reason} · {o.runtimeUsage}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {ops ? (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+                  <div style={cardStyle}>
+                    <div style={sectionTitle}>CONTAINERD FORENSICS</div>
+                    <div style={{ fontSize: 13, marginBottom: 8 }}>Total: <strong>{fmtBytes(ops.containerdForensics.totalBytes)}</strong></div>
+                    {ops.containerdForensics.categories.map((c) => (
+                      <div key={c.label} style={{ fontSize: 12, padding: "4px 0" }}>{c.label}: {fmtBytes(c.sizeBytes)} ({c.entryCount} entries, {c.category})</div>
+                    ))}
+                  </div>
+                  <div style={cardStyle}>
+                    <div style={sectionTitle}>BUILD CACHE GROUPS</div>
+                    {ops.buildCacheGroups.slice(0, 8).map((g) => (
+                      <div key={g.group} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 12 }}>
+                        <span>{g.group}</span>
+                        <span>{fmtBytes(g.sizeBytes)} · {g.confidencePct}%</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={cardStyle}>
+                    <div style={sectionTitle}>FORENSIC REPORT</div>
+                    <div style={{ fontSize: 12, display: "grid", gap: 6 }}>
+                      <div>Inventory: <strong>{ops.forensicReport.totalInventoryCount}</strong> items</div>
+                      <div>Unknowns: <strong>{ops.forensicReport.unknownInventoryCount}</strong> ({fmtBytes(ops.forensicReport.unknownInventorySizeBytes)})</div>
+                      <div>Gates: <strong>{ops.forensicReport.safetyGatesPass ? "PASS" : "BLOCKED"}</strong></div>
+                      <div style={{ color: C.textMuted, marginTop: 6 }}>{ops.forensicReport.buildKitIndependentOfProduction.evidence}</div>
+                    </div>
                   </div>
                 </div>
               ) : null}

@@ -294,9 +294,26 @@ export type CleanupCandidateRow = {
   kind: StorageItemKind;
 };
 
+export type RuntimeUsageProof =
+  | "USED_NOW"
+  | "USED_DURING_DEPLOY"
+  | "USED_FOR_ROLLBACK"
+  | "USED_FOR_RECOVERY"
+  | "NOT_USED"
+  | "LIKELY_SAFE";
+
+export type BlockerRow = {
+  id: string;
+  label: string;
+  pathOrRef: string;
+  reason: string;
+  sizeBytes: number | null;
+};
+
 export type SafetyGateResult = {
   blocked: boolean;
   reasons: string[];
+  blockers: BlockerRow[];
 };
 
 export type SnapshotStatus = {
@@ -305,6 +322,126 @@ export type SnapshotStatus = {
   latestTimestamp: string | null;
   latestScanId: string | null;
   storageRoot: string;
+};
+
+export type BlockerRow = {
+  id: string;
+  label: string;
+  pathOrRef: string;
+  reason: string;
+  sizeBytes: number | null;
+};
+
+export type ForensicDossier = {
+  path: string;
+  sizeBytes: number | null;
+  firstDiscoveredAt: string | null;
+  lastModifiedAt: string | null;
+  owner: string | null;
+  filesystem: string | null;
+  mountPoint: string | null;
+  containerDependency: string[];
+  dockerDependency: string[];
+  imageDependency: string[];
+  serviceDependency: string[];
+  processDependency: string[];
+  runtimeDependency: RuntimeUsageProof;
+  rollbackDependency: string[];
+  backupDependency: string[];
+  deploymentDependency: string[];
+  classificationFailureReason: string | null;
+  activeReferenceProof: string[];
+};
+
+export type UnknownItemForensicRow = {
+  itemId: string;
+  item: string;
+  sizeBytes: number | null;
+  reasonUnknown: string;
+  risk: ConsumerRiskLevel;
+  dependencies: string[];
+  confidencePct: number;
+  confidenceLabel: ConfidenceLabel;
+  actionNeeded: string;
+  forensic: ForensicDossier;
+};
+
+export type DependencyProofRow = {
+  asset: string;
+  referencedBy: string[];
+  evidence: string[];
+  confidencePct: number;
+};
+
+export type OrphanAnalysisRow = {
+  item: string;
+  sizeBytes: number | null;
+  reason: string;
+  proof: string[];
+  confidencePct: number;
+  runtimeUsage: RuntimeUsageProof;
+};
+
+export type ReadinessCategoryBreakdown = {
+  category: string;
+  readinessPct: number;
+  itemCount: number;
+  unknownCount: number;
+  blocked: boolean;
+  detail: string;
+};
+
+export type ReadinessBreakdownSummary = {
+  categories: ReadinessCategoryBreakdown[];
+  overallPct: number;
+};
+
+export type ContainerdCategory = "ACTIVE" | "ROLLBACK" | "ORPHANED" | "UNKNOWN";
+
+export type ContainerdForensicsSummary = {
+  totalBytes: number;
+  overlayBytes: number;
+  contentBytes: number;
+  snapshotCount: number | null;
+  buildCacheBytes: number;
+  buildCacheEntries: number;
+  categories: Array<{
+    category: ContainerdCategory;
+    label: string;
+    sizeBytes: number;
+    entryCount: number;
+    referencedCount: number;
+    unreferencedCount: number;
+    activeDependencyCount: number;
+  }>;
+};
+
+export type BuildCacheGroupRow = {
+  group: string;
+  sizeBytes: number;
+  entryCount: number;
+  oldestAgeDays: number | null;
+  newestAgeDays: number | null;
+  lastUsedAgeDays: number | null;
+  referenceCount: number;
+  productionDependent: boolean;
+  confidencePct: number;
+};
+
+export type ForensicFinalReport = {
+  totalInventoryCount: number;
+  unknownInventoryCount: number;
+  unknownInventorySizeBytes: number;
+  largestUnknownItem: string | null;
+  largestUnknownSizeBytes: number | null;
+  readinessScorePct: number;
+  safetyGatesPass: boolean;
+  stepsToReach95: string[];
+  stepsToReach100: string[];
+  buildKitIndependentOfProduction: { proven: boolean; evidence: string };
+  containerdIndependentOfProduction: { proven: boolean; evidence: string };
+  candidateImagesUnnecessary: { proven: boolean; evidence: string };
+  oldApksUnnecessary: { proven: boolean; evidence: string };
 };
 
 export type StorageOperationsCenter = {
@@ -327,6 +464,13 @@ export type StorageOperationsCenter = {
     confidenceLabel: ConfidenceLabel;
     blocked: boolean;
   }>;
+  unknownItemsPanel: UnknownItemForensicRow[];
+  dependencyProofPanel: DependencyProofRow[];
+  orphanAnalysisPanel: OrphanAnalysisRow[];
+  readinessBreakdown: ReadinessBreakdownSummary;
+  containerdForensics: ContainerdForensicsSummary;
+  buildCacheGroups: BuildCacheGroupRow[];
+  forensicReport: ForensicFinalReport;
 };
 
 export type StorageScanSnapshot = {

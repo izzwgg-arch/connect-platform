@@ -4,7 +4,22 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
-## 2026-06-14 — Storage cleanup proof system (Phase 2)
+## 2026-06-14 — Storage Health Phase 3 (zero-unknown forensics)
+
+**Task:** Eliminate unknown inventory blockers with forensic proof; reach 95%+ readiness without cleanup.
+**Risk:** read-only — classification fixes and dashboard panels only.
+
+- Fixed 3 production unknowns: `/opt/connectcomms` app root → `ACTIVE_REQUIRED`; deploy logs → `SAFE_CANDIDATE`; anonymous rtpengine volume → `ACTIVE_REQUIRED` via container mount cross-reference (Docker RefCount=0 proof).
+- Added `volumeMountIndex`, `forensicInvestigation`, `containerdForensics`, `buildCacheGrouping`, `readinessBreakdown` proof modules.
+- Dashboard: Unknown Items, Dependency Proof, Orphan Analysis, Blockers, Readiness Breakdown, Containerd/Build cache forensics panels.
+- Safety gates now list exact blocker IDs/paths (not generic counts).
+- 34 unit tests.
+
+**No cleanup executed.**
+
+---
+
+## 2026-06-14 — Storage reclaim estimate dedupe fix
 
 **Task:** Build proof, dependency mapping, confidence scoring, rollback verification, and pre-cleanup readiness before any storage reclamation.
 **Risk:** critical scope — read-only except timestamped JSON preflight snapshots; no prune, delete, restart, or execution.

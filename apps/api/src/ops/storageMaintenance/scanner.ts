@@ -7,6 +7,7 @@ import { deriveStorageAlerts } from "./alerts";
 import { buildStorageDashboardSummary } from "./dashboard";
 import { computeReclaimEstimate } from "./reclaimEstimate";
 import { buildOperationsCenter, fetchBuildCacheRaw } from "./proofSystem/operationsCenter";
+import { buildVolumeMountIndex } from "./proofSystem/volumeMountIndex";
 import type {
   ContainerdBreakdown,
   DockerSystemSummary,
@@ -23,12 +24,20 @@ export type DockerImageRow = {
   Containers: number;
 };
 
+export type DockerContainerMount = {
+  Type: string;
+  Name?: string;
+  Source?: string;
+  Destination?: string;
+};
+
 export type DockerContainerRow = {
   Id: string;
   Names: string[];
   Image: string;
   State: string;
   SizeRw?: number;
+  Mounts?: DockerContainerMount[];
 };
 
 export type DockerVolumeRow = {
@@ -309,20 +318,31 @@ function scanDockerContainers(rows: DockerContainerRow[], config: StorageMainten
   });
 }
 
-function scanDockerVolumes(rows: DockerVolumeRow[], config: StorageMaintenanceConfig): StorageInventoryItem[] {
-  return rows.map((row) =>
-    buildInventoryItem(
+function scanDockerVolumes(
+  rows: DockerVolumeRow[],
+  config: StorageMaintenanceConfig,
+  volumeMountIndex: Map<string, import("./proofSystem/volumeMountIndex").VolumeMountRef[]>,
+): StorageInventoryItem[] {
+  return rows.map((row) => {
+    const mounts = volumeMountIndex.get(row.Name) ?? [];
+    const mountedBy = mounts.map((m) => `${m.containerName}@${m.mountDestination}`).join(",");
+    return buildInventoryItem(
       `volume:${row.Name}`,
       {
         kind: "docker_volume",
         label: row.Name,
         pathOrRef: row.Name,
         sizeBytes: row.UsageData?.Size ?? null,
-        metadata: { links: row.UsageData?.RefCount ?? 0 },
+        metadata: {
+          links: row.UsageData?.RefCount ?? 0,
+          mountedBy: mountedBy || null,
+          mountServices: mounts.map((m) => m.service).join(",") || null,
+          anonymous: row.Name.length === 64,
+        },
       },
       config,
-    ),
-  );
+    );
+  });
 }
 
 export async function runStorageScan(deps: StorageScannerDeps): Promise<StorageScanSnapshot> {
@@ -365,12 +385,14 @@ export async function runStorageScan(deps: StorageScannerDeps): Promise<StorageS
     deps.inspectImages ? deps.inspectImages().catch(() => []) : Promise.resolve([]),
   ]);
 
+  const volumeMountIndex = buildVolumeMountIndex(containers);
+
   const items: StorageInventoryItem[] = [
     ...fsItems,
     ...containerdScan.items,
     ...scanDockerImages(images, deps.config),
     ...scanDockerContainers(containers, deps.config),
-    ...scanDockerVolumes(volumes, deps.config),
+    ...scanDockerVolumes(volumes, deps.config, volumeMountIndex),
     ...apkItems,
   ];
 

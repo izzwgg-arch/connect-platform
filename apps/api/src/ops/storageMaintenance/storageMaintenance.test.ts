@@ -143,11 +143,26 @@ function mockDeps(overrides: Partial<StorageScannerDeps> = {}): StorageScannerDe
       },
     ],
     listContainers: async () => [
-      { Id: "c1", Names: ["/app-api-1"], Image: "app-api", State: "running", SizeRw: 1000 },
+      { Id: "c1", Names: ["/app-api-1"], Image: "app-api", State: "running", SizeRw: 1000, Mounts: [] },
+      {
+        Id: "c2",
+        Names: ["/sbc-rtpengine"],
+        Image: "drachtio/rtpengine",
+        State: "running",
+        SizeRw: 1000,
+        Mounts: [
+          {
+            Type: "volume",
+            Name: "2336590b0ac45999824732def617ea493fdb6cf0c1d05da51944216e426c799d",
+            Destination: "/tmp",
+          },
+        ],
+      },
     ],
     listVolumes: async () => [
       { Name: "app_chat-attachments", UsageData: { Size: 1000, RefCount: 2 } },
       { Name: "orphan_volume_123", UsageData: { Size: 500, RefCount: 0 } },
+      { Name: "2336590b0ac45999824732def617ea493fdb6cf0c1d05da51944216e426c799d", UsageData: { Size: 20000, RefCount: 0 } },
     ],
     getDockerSystemDf: async (): Promise<DockerSystemSummary> => ({
       imagesCount: 3,
@@ -554,6 +569,26 @@ test("rollback audit reports candidate images", async () => {
   assert.ok(rows.some((r) => r.service === "api" && r.rollbackAvailable));
 });
 
+test("anonymous volume with container mount proof is ACTIVE_REQUIRED not unknown", async () => {
+  const scan = await executeStorageScan(mockDeps(), "vol-mount-proof");
+  const vol = scan.items.find((i) => i.pathOrRef.includes("2336590b0ac4"));
+  assert.ok(vol);
+  assert.equal(vol!.classification, "ACTIVE_REQUIRED");
+  assert.equal(scan.unknownCount, 1);
+});
+
+test("phase3 operations center includes forensic panels", async () => {
+  const scan = await executeStorageScan(mockDeps(), "phase3-panels");
+  const ops = scan.dashboard.operationsCenter;
+  assert.ok(ops);
+  assert.ok(Array.isArray(ops!.unknownItemsPanel));
+  assert.ok(Array.isArray(ops!.dependencyProofPanel));
+  assert.ok(Array.isArray(ops!.orphanAnalysisPanel));
+  assert.ok(ops!.readinessBreakdown.categories.length >= 5);
+  assert.ok(ops!.forensicReport.totalInventoryCount > 0);
+  assert.ok(Array.isArray(ops!.safetyGates.blockers));
+});
+
 test("safety gates block when unknown build cache bytes present", async () => {
   const { evaluateSafetyGates } = await import("./proofSystem/safetyGates");
   const gates = evaluateSafetyGates({
@@ -581,6 +616,7 @@ test("safety gates block when unknown build cache bytes present", async () => {
   });
   assert.equal(gates.blocked, true);
   assert.ok(gates.reasons.some((r) => r.includes("unknown")));
+  assert.ok(gates.blockers.length > 0);
 });
 
 test("preflight snapshot writes read-only JSON artifact", async () => {

@@ -67,29 +67,69 @@ export function evaluateSafetyGates(input: {
   candidates: CleanupCandidateRow[];
 }): SafetyGateResult {
   const reasons: string[] = [];
+  const blockers: BlockerRow[] = [];
 
   if (input.buildCache.unknownBytes > 0) {
     reasons.push(`build_cache_unknown_bytes:${input.buildCache.unknownBytes}`);
+    blockers.push({
+      id: "build_cache_unknown",
+      label: "BuildKit cache unknown bytes",
+      pathOrRef: "docker_buildkit_cache",
+      reason: `build_cache_unknown_bytes:${input.buildCache.unknownBytes}`,
+      sizeBytes: input.buildCache.unknownBytes,
+    });
   }
-  if (input.scan.unknownCount > 0) {
+  for (const item of input.scan.items.filter((i) => i.classification === "UNKNOWN_REQUIRES_REVIEW")) {
+    reasons.push(`unknown_inventory_item:${item.id}`);
+    blockers.push({
+      id: item.id,
+      label: item.label,
+      pathOrRef: item.pathOrRef,
+      reason: item.evidence,
+      sizeBytes: item.sizeBytes,
+    });
+  }
+  if (input.scan.unknownCount > 0 && !reasons.some((r) => r.startsWith("unknown_inventory_item:"))) {
     reasons.push(`unknown_inventory_items:${input.scan.unknownCount}`);
   }
   if (input.dependencyGraph.incomplete) {
-    reasons.push(`dependency_graph_incomplete:${input.dependencyGraph.incompleteReason ?? "unknown"}`);
+    const reason = `dependency_graph_incomplete:${input.dependencyGraph.incompleteReason ?? "unknown"}`;
+    reasons.push(reason);
+    blockers.push({
+      id: "dependency_graph_incomplete",
+      label: "Dependency graph incomplete",
+      pathOrRef: "dependency_graph",
+      reason,
+      sizeBytes: null,
+    });
   }
   if (!input.snapshotStatus.available) {
     reasons.push("preflight_snapshot_missing");
+    blockers.push({
+      id: "preflight_snapshot_missing",
+      label: "Preflight snapshot",
+      pathOrRef: input.snapshotStatus.storageRoot,
+      reason: "preflight_snapshot_missing",
+      sizeBytes: null,
+    });
   }
   if (input.candidates.some((c) => c.confidenceLabel === "UNKNOWN")) {
     reasons.push("cleanup_candidates_include_unknown");
   }
   if (input.candidates.some((c) => c.classification === "PROTECTED_NEVER_DELETE")) {
     reasons.push("protected_assets_in_candidate_set");
+    blockers.push({
+      id: "protected_in_candidates",
+      label: "Protected asset in candidate set",
+      pathOrRef: "cleanup_candidates",
+      reason: "protected_assets_in_candidate_set",
+      sizeBytes: null,
+    });
   }
   const lowConfidence = input.candidates.filter((c) => c.confidencePct < 95 && c.confidenceLabel !== "BLOCKED");
   if (lowConfidence.length > 0) {
     reasons.push(`low_confidence_candidates:${lowConfidence.length}`);
   }
 
-  return { blocked: reasons.length > 0, reasons };
+  return { blocked: reasons.length > 0, reasons, blockers };
 }

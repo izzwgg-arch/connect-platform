@@ -21,13 +21,20 @@ export type ClassifyInput = {
 function classifyFilesystemPath(path: string, config: StorageMaintenanceConfig): StorageClassification {
   if (isProtectedPath(path, config)) return "PROTECTED_NEVER_DELETE";
   const normalized = path.replace(/\\/g, "/");
-  if (normalized.startsWith(`${config.appRoot}/app`)) return "ACTIVE_REQUIRED";
+  const appRoot = config.appRoot.replace(/\/+$/, "");
+  if (normalized === appRoot || normalized.startsWith(`${appRoot}/`)) {
+    if (normalized.startsWith(config.dataRoot) || normalized.startsWith(config.envRoot) || normalized.startsWith(config.backupsRoot)) {
+      return "PROTECTED_NEVER_DELETE";
+    }
+    return "ACTIVE_REQUIRED";
+  }
+  if (normalized.startsWith(config.appCloneRoot)) return "ACTIVE_REQUIRED";
   if (normalized.startsWith(config.containerdRoot)) return "ACTIVE_REQUIRED";
   if (normalized.startsWith(config.downloadsRoot)) return "SAFE_CANDIDATE";
   if (normalized.startsWith(config.monitoringLogsRoot)) return "SAFE_CANDIDATE";
   if (normalized.includes("/var/log/journal")) return "SAFE_CANDIDATE";
-  if (normalized.startsWith("/var/log/connect-deploys")) return "UNKNOWN_REQUIRES_REVIEW";
-  if (normalized.startsWith("/var/lib/docker")) return "UNKNOWN_REQUIRES_REVIEW";
+  if (normalized.startsWith(config.deployLogsRoot)) return "SAFE_CANDIDATE";
+  if (normalized.startsWith("/var/lib/docker")) return "ACTIVE_REQUIRED";
   return "UNKNOWN_REQUIRES_REVIEW";
 }
 
@@ -79,7 +86,13 @@ export function classifyStorageItem(
     }
     case "docker_volume": {
       const links = Number(metadata.links ?? 0);
+      const mountedBy = String(metadata.mountedBy ?? "");
       const name = pathOrRef;
+      if (mountedBy) {
+        classification = "ACTIVE_REQUIRED";
+        evidence = `volume_container_mount_proof:${mountedBy}`;
+        break;
+      }
       if (isProtectedVolumeName(name)) {
         classification = links > 0 ? "ACTIVE_REQUIRED" : "PROTECTED_NEVER_DELETE";
         evidence = `protected_volume_name links=${links}`;

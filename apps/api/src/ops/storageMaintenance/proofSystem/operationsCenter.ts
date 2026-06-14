@@ -15,7 +15,18 @@ import { buildLogForensics } from "./logForensics";
 import { averageConfidence, computeReadinessScore } from "./readinessScoring";
 import { buildRollbackCoverage } from "./rollbackAudit";
 import { isRollbackImageRef } from "./serviceMapping";
+import { buildCacheGroups } from "./buildCacheGrouping";
+import { buildContainerdForensics } from "./containerdForensics";
+import {
+  buildDependencyProofPanel,
+  buildForensicFinalReport,
+  buildOrphanAnalysisPanel,
+  buildUnknownItemsPanel,
+} from "./forensicInvestigation";
+import { computeReadinessBreakdown } from "./readinessBreakdown";
+import { computeReclaimEstimate } from "../reclaimEstimate";
 import { getSnapshotStatus } from "./snapshotGenerator";
+import { buildVolumeMountIndex } from "./volumeMountIndex";
 
 export function buildOperationsCenter(input: {
   scan: Omit<StorageScanSnapshot, "dashboard">;
@@ -49,6 +60,8 @@ export function buildOperationsCenter(input: {
   const cleanupCandidates = buildCleanupCandidates(input.scan.items);
   const confidenceDistribution = buildConfidenceDistribution(cleanupCandidates, buildCacheAnalysis);
   const snapshotStatus = getSnapshotStatus(input.config, input.scan.scanId);
+  const volumeMountIndex = buildVolumeMountIndex(input.containers);
+  const pathStats = new Map<string, import("./forensicInvestigation").PathForensicStat>();
 
   const safetyGates = evaluateSafetyGates({
     scan: { ...input.scan, dashboard: null as never },
@@ -107,6 +120,42 @@ export function buildOperationsCenter(input: {
     },
   ];
 
+  const unknownItemsPanel = buildUnknownItemsPanel(
+    input.scan.items,
+    { ...input.scan, dashboard: null as never },
+    input.config,
+    volumeMountIndex,
+    pathStats,
+    dependencyGraph,
+  );
+  const dependencyProofPanel = buildDependencyProofPanel(input.scan.items, dependencyGraph);
+  const orphanAnalysisPanel = buildOrphanAnalysisPanel(input.scan.items, volumeMountIndex);
+  const readinessBreakdown = computeReadinessBreakdown({
+    scan: { ...input.scan, dashboard: null as never },
+    buildCache: buildCacheAnalysis,
+    dependencyGraph,
+    snapshotStatus,
+    safetyGates,
+  });
+  const containerdForensics = buildContainerdForensics(input.scan.containerd, buildCacheAnalysis, input.scan.items);
+  const cacheGroups = buildCacheGroups(buildCacheAnalysis.entries);
+  const reclaimBreakdown = computeReclaimEstimate(
+    input.scan.items,
+    input.scan.docker,
+    input.scan.diskMounts,
+    input.config,
+  );
+
+  const forensicReport = buildForensicFinalReport({
+    scan: { ...input.scan, dashboard: null as never },
+    readinessScorePct: readiness.readinessScorePct,
+    safetyGatesPass: !safetyGates.blocked,
+    unknownPanel: unknownItemsPanel,
+    buildCacheReclaimableBytes: reclaimBreakdown.breakdown.buildKitCacheBytes,
+    rollbackCandidateBytes: reclaimBreakdown.breakdown.rollbackImageBytes,
+    historicalApkBytes: reclaimBreakdown.breakdown.historicalApkBytes,
+  });
+
   return {
     buildCacheAnalysis,
     dependencyGraph,
@@ -121,6 +170,13 @@ export function buildOperationsCenter(input: {
     safetyGates,
     snapshotStatus,
     riskMatrix,
+    unknownItemsPanel,
+    dependencyProofPanel,
+    orphanAnalysisPanel,
+    readinessBreakdown,
+    containerdForensics,
+    buildCacheGroups: cacheGroups.slice(0, 20),
+    forensicReport,
   };
 }
 
