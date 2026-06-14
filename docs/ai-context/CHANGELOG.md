@@ -4,6 +4,25 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-14 — Server Health workspace + portal/mobile polish deploy
+
+**Task:** API + portal server-health observability, portal workspace polish, chat media metadata, and supporting test fixes.
+**Risk:** medium — API + portal blue/green production deploy; no Prisma migration.
+
+- Added the super-admin **Server Health** workspace at `/admin/server-health` with live host metrics, CPU consumer ranking, service probes, deploy queue status, and dark/light themed CPU trend charts.
+- Added API health snapshot support under `/admin/server-health`, backed by host metrics sampling and cache refresh helpers. Access is gated by `can_view_admin_server_health`.
+- Carried through the Friday-Sunday portal polish and chat/media metadata work, plus focused preflight fixes for CDR direction tests and server-health type/test stability.
+
+Verification:
+- `pnpm --filter @connect/api test`
+- `pnpm --filter @connect/api exec node --experimental-test-module-mocks --import tsx --test "src/ops/*.test.ts"`
+- `pnpm --filter @connect/portal typecheck`
+- `pnpm --filter @connect/portal exec tsx --test "app/(platform)/admin/server-health/cpuLiveCharts.test.ts"`
+
+Deploy: **api + portal** direct blue/green deploy pinned to `bec76d5847dbaa9f38008e7d33e8a4ea290b669c`. Post-deploy checks confirmed API container SHA, portal container SHA, `/admin/server-health` compiled output, and idle deploy queue.
+
+---
+
 ## 2026-06-10 — Mobile Add-to-Contacts form + foreground notification presentation
 
 **Task:** Mobile app — make Add-to-Contacts an editable, pre-filled form; make

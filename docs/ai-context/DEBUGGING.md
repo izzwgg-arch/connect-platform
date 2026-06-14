@@ -22,6 +22,16 @@
 | `apps/telephony` | `GET /metrics` | Prometheus. |
 | `apps/telephony` | `GET /telephony/health` | Same as `/health`, JWT-authed. |
 
+## Server Health workspace (`/admin/server-health`)
+
+Use this when the API host, portal, Redis, deploy queue, or container/process CPU looks unhealthy and you need a quick read before SSH-heavy diagnostics.
+
+- **Portal:** `/admin/server-health` is super-admin only and requires `can_view_admin_server_health`.
+- **API:** the page reads the admin server-health endpoints from `apps/api/src/server.ts`; the snapshot includes host CPU/memory/storage, process memory, deploy queue state, and service probes.
+- **CPU consumers:** `apps/api/src/ops/cpuConsumers.ts` prefers Docker container stats when the Docker socket is available, otherwise falls back to host/container process samples. The first sample can be a warm-up with zero CPU; wait for the next refresh before concluding there are no hot processes.
+- **Cache:** `apps/api/src/ops/serverHealthCache.ts` keeps a short-lived snapshot so the dashboard does not re-probe every service on every render.
+- **When to escalate:** if the workspace shows sustained high API CPU or request pressure, continue with the API CPU profiling sections below; if deploy queue counts are non-zero, inspect queue status/logs before any deploy.
+
 ## Local CRM visual QA screenshots
 
 Use this only for portal UI screenshot verification. It is not a backend/API diagnostic and it does not prove production auth or tenant behavior.

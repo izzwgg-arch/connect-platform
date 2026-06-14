@@ -174,8 +174,9 @@ they have no working backend or are public by design: `can_manage_call_forwardin
 
 Additionally, `TENANT_ADMIN` cannot grant `SUPER_ADMIN`-only keys
 (`can_switch_tenants`, `can_manage_deploys`, `can_sync_voip_ms_numbers`,
-`can_view_admin_deploy_center`) because these are absent from the TENANT_ADMIN
-default permission set and therefore outside their grantable set.
+`can_view_admin_deploy_center`, `can_view_admin_server_health`) because these
+are absent from the TENANT_ADMIN default permission set and therefore outside
+their grantable set.
 
 Cross-tenant privilege escalation is prevented by scoping every write to the
 actor's own `tenantId` (or, for `SUPER_ADMIN`, to the explicitly supplied
