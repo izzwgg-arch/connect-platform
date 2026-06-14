@@ -1,4 +1,5 @@
 import { buildProtectedPaths } from "./protectionRules";
+import { toHostDisplayPath } from "./hostVisibility";
 import type {
   CleanupPlan,
   StorageClassification,
@@ -37,6 +38,7 @@ export function classificationActionability(c: StorageClassification): ConsumerA
 export function rankLargestConsumers(
   items: StorageInventoryItem[],
   limit = 20,
+  hostInventoryRoot = "",
 ): StorageDashboardSummary["largestConsumers"] {
   const sorted = [...items]
     .filter((i) => i.sizeBytes != null && i.sizeBytes > 0)
@@ -51,7 +53,7 @@ export function rankLargestConsumers(
     seen.add(key);
     rows.push({
       rank: rows.length + 1,
-      path: item.pathOrRef,
+      path: toHostDisplayPath(item.pathOrRef, hostInventoryRoot),
       label: item.label,
       sizeBytes: item.sizeBytes,
       classification: item.classification,
@@ -380,13 +382,16 @@ export function buildStorageDashboardSummary(
     freeBytes: root?.freeBytes ?? null,
     usedPct: root?.usedPct ?? null,
     buildCacheBytes: scan.docker.buildCache.totalBytes,
+    containerdBytes: scan.containerd?.totalBytes ?? null,
+    containerdOverlayBytes: scan.containerd?.overlaySnapshotsBytes ?? null,
+    containerdContentBytes: scan.containerd?.contentBlobsBytes ?? null,
     reclaimableBytes: scan.reclaimEstimateBytes,
     protectedDataBytes,
     riskLevel: computeRiskLevel(scan, config),
     projectedUsageAfterCleanupBytes: simulation.projectedUsageAfterCleanupBytes,
     projectedRecoveryBytes: simulation.projectedRecoveryBytes,
     projectedFreeBytesAfterCleanup: simulation.projectedFreeBytesAfterCleanup,
-    largestConsumers: rankLargestConsumers(scan.items),
+    largestConsumers: rankLargestConsumers(scan.items, 20, config.hostInventoryRoot),
     protectedAssets: buildProtectedAssets(scan.items, config),
     distribution: buildStorageDistribution(scan, config),
     cleanupReadiness: buildCleanupReadiness(scan, plan),

@@ -15,6 +15,11 @@ import {
   generateCleanupPlanFromLatestScan,
   resetStorageMaintenanceStateForTests,
 } from "./service";
+import { parseDockerSystemDfJson } from "./dockerSystemDfApi";
+import {
+  assertReadOnlyDockerApiPath,
+  toHostDisplayPath,
+} from "./hostVisibility";
 import {
   buildCleanupReadiness,
   buildProtectedAssets,
@@ -229,6 +234,20 @@ test("unknown item blocks cleanup plan", () => {
     alerts: [],
     unknownCount: 1,
     protectedCount: 0,
+    hostVisibility: {
+      hostInventoryRoot: null,
+      dockerSocket: "/var/run/docker.sock",
+      dockerSocketReachable: false,
+      containerdMount: false,
+      connectcommsMount: false,
+      varLogMount: false,
+    },
+    containerd: {
+      totalBytes: null,
+      overlaySnapshotsBytes: null,
+      contentBlobsBytes: null,
+      snapshotCount: null,
+    },
   };
   const scan: StorageScanSnapshot = {
     ...scanBase,
@@ -367,4 +386,35 @@ test("cleanup readiness rows include blocked protected data", async () => {
   const scan = await executeStorageScan(mockDeps(), "ready-test");
   const readiness = buildCleanupReadiness(scan, null);
   assert.ok(readiness.some((r) => r.category === "BuildKit Cache" && r.status === "eligible"));
+});
+
+test("parseDockerSystemDfJson extracts build cache from Docker API", () => {
+  const summary = parseDockerSystemDfJson({
+    Images: [{ Size: 1e9 }],
+    Containers: [{ SizeRw: 1000, SizeRootFs: 2000 }],
+    Volumes: [{ UsageData: { Size: 5000 } }],
+    BuildCache: [
+      { Size: 500e9, Reclaimable: true },
+      { Size: 35e9, Reclaimable: false },
+    ],
+  });
+  assert.equal(summary.buildCache.entryCount, 2);
+  assert.equal(summary.buildCache.totalBytes, 535e9);
+  assert.equal(summary.buildCache.reclaimableBytes, 500e9);
+  assert.equal(summary.imagesCount, 1);
+  assert.equal(summary.volumesCount, 1);
+});
+
+test("host visibility guard blocks non-readonly docker API paths", () => {
+  assert.doesNotThrow(() => assertReadOnlyDockerApiPath("/system/df"));
+  assert.throws(() => assertReadOnlyDockerApiPath("/containers/abc/stop"));
+  assert.throws(() => assertReadOnlyDockerApiPath("/images/prune"));
+});
+
+test("toHostDisplayPath strips inventory mount prefix", () => {
+  assert.equal(
+    toHostDisplayPath("/host-inventory/var/lib/containerd", "/host-inventory"),
+    "/var/lib/containerd",
+  );
+  assert.equal(toHostDisplayPath("/opt/connectcomms/app", ""), "/opt/connectcomms/app");
 });

@@ -1,7 +1,7 @@
 # STORAGE_MAINTENANCE
 
 > Safe storage cleanup controller for Connect production hosts.
-> **Phase 1 / 1.5 (current): read-only scanner + classifier + dry-run plan + operations dashboard.**
+> **Phase 1 / 1.5 / 1.6 (current): read-only scanner + classifier + dry-run plan + operations dashboard + host visibility.**
 > No deletes, prunes, restarts, or execution.
 
 Read `SERVER_OPERATIONS.md` for the 2026-06-14 forensic baseline and `AGENTS.md` for forbidden server commands.
@@ -16,13 +16,80 @@ Portal /admin/storage-health
         ▼
 API  /admin/storage-health/*
         │
-        ├── scanner (read-only: disk, docker, APKs, logs)
+        ├── hostVisibility (mount probes, Docker API GET whitelist)
+        ├── scanner (read-only: disk, docker, containerd, APKs, logs)
         ├── classifier (PROTECTED / ACTIVE / ROLLBACK / SAFE / UNKNOWN)
         ├── dashboard (KPIs, distribution, consumers, simulation, trends)
         ├── planBuilder (dry-run commands, command guard)
         ├── auditLog (in-memory ring buffer)
         └── executor (Phase 2 — currently refuses all execution)
 ```
+
+### Phase 1.6 — Host visibility layer (read-only)
+
+The API container previously could not see host storage (no `docker.sock`, no host paths).
+Phase 1.6 adds **read-only inventory mounts** on `api` and `api_candidate` in `docker-compose.app.yml`:
+
+| Host path | Container mount | Mode |
+|-----------|-----------------|------|
+| `/var/run/docker.sock` | `/var/run/docker.sock` | `ro` |
+| `/var/lib/containerd` | `/host-inventory/var/lib/containerd` | `ro` |
+| `/opt/connectcomms` | `/host-inventory/opt/connectcomms` | `ro` |
+| `/var/log` | `/host-inventory/var/log` | `ro` |
+
+`STORAGE_HOST_INVENTORY_ROOT=/host-inventory` remaps scanner config paths so the UI displays
+familiar host paths (`/var/lib/containerd`, `/opt/connectcomms/...`) via `toHostDisplayPath()`.
+
+```mermaid
+flowchart LR
+  subgraph host [Production host]
+    DS[docker.sock]
+    CTD[/var/lib/containerd]
+    CC[/opt/connectcomms]
+    LOG[/var/log]
+  end
+  subgraph api [API container]
+    HV[hostVisibility.ts]
+    SC[scanner.ts]
+    DD[dockerDeps.ts]
+  end
+  DS -->|GET /system/df only| DD
+  CTD -->|du -sb ro mount| SC
+  CC -->|du -sb ro mount| SC
+  LOG -->|du -sb ro mount| SC
+  HV --> SC
+  DD --> SC
+```
+
+**Docker inventory:** HTTP `GET` over the Unix socket — no `docker` CLI required.
+Allowed paths are whitelisted in `hostVisibility.ts` (`/system/df`, `/images/json`, `/containers/json`, `/volumes`, `/info`, `/version`).
+Any other path throws `storage_host_visibility_forbidden_docker_path`.
+
+**Filesystem sizing:** `du -sb` on mounted inventory paths (180s timeout for large trees like containerd).
+
+**Containerd breakdown:** overlay snapshots (`io.containerd.snapshotter.v1.overlayfs`) and content blobs (`io.containerd.content.v1.content`) reported separately.
+
+### Security model (read-only guarantees)
+
+| Layer | Guarantee |
+|-------|-----------|
+| Compose mounts | All host inventory mounts are `:ro` — kernel-enforced read-only |
+| Docker API | Code-level GET whitelist; no POST/DELETE/prune endpoints callable |
+| Scanner | No `rm`, `prune`, `truncate`, `journalctl --vacuum`, or write syscalls |
+| HTTP routes | `POST /approve` → **501**, `POST /execute` → **403** (unchanged) |
+| Plan validator | Rejects wildcard and destructive commands (Phase 1) |
+
+**Caveat:** A read-only `docker.sock` mount still exposes the full Engine API at the socket level.
+Mitigation is the application whitelist plus super-admin JWT on all `/admin/storage-health/*` routes.
+A compromised API process could theoretically bypass the whitelist — treat socket access as privileged.
+
+### Limitations (Phase 1.6)
+
+- First scan after deploy may take **1–3 minutes** while `du` walks ~500 GB containerd tree.
+- Disk totals use container root filesystem (`df`) — may differ slightly from host `df` on `/`.
+- Growth trends require multiple scans over time (in-memory history ring).
+- Worker/telephony hosts are not scanned — app host only.
+- Build cache reclaimable estimate depends on Docker Engine `/system/df` reclaimable flags.
 
 ### API routes (super-admin JWT)
 
@@ -122,20 +189,22 @@ Env vars: `STORAGE_DISK_WARNING_PCT`, `STORAGE_BUILDKIT_CRITICAL_BYTES`, etc. (s
 
 ## Phase 1.5 operations dashboard
 
-Portal `/admin/storage-health` answers in under 10 seconds:
+Portal `/admin/storage-health` answers in under 10 seconds (after initial slow scan):
 
 | Question | Source |
 |----------|--------|
 | Total / used / free disk | `dashboard.totalDiskBytes`, `usedBytes`, `freeBytes` |
 | Build cache & reclaimable | `buildCacheBytes`, `reclaimableBytes` |
+| Containerd total / overlay / blobs | `containerdBytes`, `containerdOverlayBytes`, `containerdContentBytes` |
 | Protected data total | `protectedDataBytes` |
 | Risk level | `riskLevel` (low / medium / high / critical) |
-| Largest consumers (top 20) | `largestConsumers[]` |
+| Largest consumers (top 20) | `largestConsumers[]` (host paths, not mount prefixes) |
 | Distribution by category | `distribution[]` (Build Cache, Application, Downloads, Logs, Database, Redis, Docker Volumes, Other) |
 | Protected assets | `protectedAssets[]` |
 | Reclaim simulation | `projectedUsageAfterCleanupBytes`, `projectedRecoveryBytes` (estimate only) |
 | Disk trend | `trends[]` windows 24h / 7d / 30d with direction |
 | Cleanup readiness | `cleanupReadiness[]` (eligible / review / blocked) |
+| Host visibility status | `scan.hostVisibility` — mount and docker.sock probe |
 
 API module: `apps/api/src/ops/storageMaintenance/dashboard.ts`
 
@@ -160,7 +229,10 @@ Portal: `/admin/storage-health` → Scan Now → Cleanup Plan (read-only).
 | `apps/api/src/ops/storageMaintenance/types.ts` | Types + config |
 | `apps/api/src/ops/storageMaintenance/protectionRules.ts` | Hard guards |
 | `apps/api/src/ops/storageMaintenance/classifier.ts` | Classification |
-| `apps/api/src/ops/storageMaintenance/scanner.ts` | Read-only inventory |
+| `apps/api/src/ops/storageMaintenance/hostVisibility.ts` | Mount probes, Docker GET whitelist, display path remap |
+| `apps/api/src/ops/storageMaintenance/dockerSystemDfApi.ts` | Parse Docker Engine `/system/df` JSON |
+| `apps/api/src/ops/storageMaintenance/dockerDeps.ts` | Production deps: HTTP docker API, `du` sizing, config |
+| `apps/api/src/ops/storageMaintenance/scanner.ts` | Read-only inventory (containerd breakdown) |
 | `apps/api/src/ops/storageMaintenance/dashboard.ts` | KPIs, distribution, simulation, trends |
 | `apps/api/src/ops/storageMaintenance/planBuilder.ts` | Dry-run plan |
 | `apps/api/src/ops/storageMaintenance/alerts.ts` | Threshold alerts |

@@ -145,12 +145,31 @@ export type StorageTrendSeries = {
   points: StorageTrendPoint[];
 };
 
+export type ContainerdBreakdown = {
+  totalBytes: number | null;
+  overlaySnapshotsBytes: number | null;
+  contentBlobsBytes: number | null;
+  snapshotCount: number | null;
+};
+
+export type HostVisibilitySnapshot = {
+  hostInventoryRoot: string | null;
+  dockerSocket: string;
+  dockerSocketReachable: boolean;
+  containerdMount: boolean;
+  connectcommsMount: boolean;
+  varLogMount: boolean;
+};
+
 export type StorageDashboardSummary = {
   totalDiskBytes: number | null;
   usedBytes: number | null;
   freeBytes: number | null;
   usedPct: number | null;
   buildCacheBytes: number | null;
+  containerdBytes: number | null;
+  containerdOverlayBytes: number | null;
+  containerdContentBytes: number | null;
   reclaimableBytes: number;
   protectedDataBytes: number;
   riskLevel: StorageRiskLevel;
@@ -177,6 +196,8 @@ export type StorageScanSnapshot = {
   unknownCount: number;
   protectedCount: number;
   dashboard: StorageDashboardSummary;
+  hostVisibility: HostVisibilitySnapshot;
+  containerd: ContainerdBreakdown;
 };
 
 export type CleanupPlanActionKind =
@@ -257,10 +278,14 @@ export type StorageMaintenanceConfig = {
   apkRetentionCount: number;
   diagnosticLogRetentionDays: number;
   appRoot: string;
+  appCloneRoot: string;
   dataRoot: string;
   envRoot: string;
   backupsRoot: string;
   downloadsRoot: string;
   monitoringLogsRoot: string;
   containerdRoot: string;
+  journalRoot: string;
+  deployLogsRoot: string;
+  hostInventoryRoot: string;
 };

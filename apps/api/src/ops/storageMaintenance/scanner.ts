@@ -6,7 +6,9 @@ import { buildInventoryItem } from "./classifier";
 import { deriveStorageAlerts } from "./alerts";
 import { buildStorageDashboardSummary } from "./dashboard";
 import type {
+  ContainerdBreakdown,
   DockerSystemSummary,
+  HostVisibilitySnapshot,
   StorageInventoryItem,
   StorageMaintenanceConfig,
   StorageScanSnapshot,
@@ -41,6 +43,7 @@ export type StorageScannerDeps = {
   statPathBytes: (path: string) => Promise<number | null>;
   listFilesInDir: (dir: string) => Promise<Array<{ name: string; path: string; sizeBytes: number; mtimeMs: number }>>;
   pathExists: (path: string) => Promise<boolean>;
+  probeHostVisibility?: () => Promise<HostVisibilitySnapshot>;
 };
 
 function parseDockerSize(raw: string): number | null {
@@ -117,13 +120,15 @@ async function scanFilesystemPaths(
 ): Promise<StorageInventoryItem[]> {
   const { config } = deps;
   const paths = [
+    { path: config.containerdRoot, label: "containerd storage (/var/lib/containerd)" },
     { path: config.appRoot, label: "App root (/opt/connectcomms)" },
+    { path: config.appCloneRoot, label: "Deploy clone (/opt/connectcomms/app)" },
     { path: config.downloadsRoot, label: "Mobile APK downloads" },
     { path: config.monitoringLogsRoot, label: "Monitoring logs" },
     { path: config.backupsRoot, label: "Backups" },
-    { path: config.containerdRoot, label: "containerd storage" },
-    { path: "/var/log/journal", label: "systemd journal" },
-    { path: "/var/log/connect-deploys", label: "Deploy logs" },
+    { path: config.dataRoot, label: "Production data (/opt/connectcomms/data)" },
+    { path: config.journalRoot, label: "systemd journal" },
+    { path: config.deployLogsRoot, label: "Deploy logs" },
   ];
   const items: StorageInventoryItem[] = [];
   for (const entry of paths) {
@@ -133,7 +138,7 @@ async function scanFilesystemPaths(
       buildInventoryItem(
         `fs:${entry.path}`,
         {
-          kind: entry.path.includes("log") ? "log_directory" : "filesystem_path",
+          kind: entry.path.includes("log") || entry.label.includes("journal") ? "log_directory" : "filesystem_path",
           label: entry.label,
           pathOrRef: entry.path,
           sizeBytes,
@@ -144,6 +149,93 @@ async function scanFilesystemPaths(
   }
   return items;
 }
+
+async function countOverlaySnapshots(snapshotsDir: string): Promise<number | null> {
+  try {
+    const entries = await fs.readdir(snapshotsDir, { withFileTypes: true });
+    return entries.filter((e) => e.isDirectory()).length;
+  } catch {
+    return null;
+  }
+}
+
+async function scanContainerdBreakdown(
+  deps: StorageScannerDeps,
+): Promise<{ breakdown: ContainerdBreakdown; items: StorageInventoryItem[] }> {
+  const { config } = deps;
+  const root = config.containerdRoot;
+  const overlayRoot = `${root.replace(/\/+$/, "")}/io.containerd.snapshotter.v1.overlayfs`;
+  const contentRoot = `${root.replace(/\/+$/, "")}/io.containerd.content.v1.content`;
+  const snapshotsDir = `${overlayRoot}/snapshots`;
+
+  const empty: ContainerdBreakdown = {
+    totalBytes: null,
+    overlaySnapshotsBytes: null,
+    contentBlobsBytes: null,
+    snapshotCount: null,
+  };
+
+  if (!(await deps.pathExists(root))) {
+    return { breakdown: empty, items: [] };
+  }
+
+  const [totalBytes, overlayBytes, contentBytes, snapshotCount] = await Promise.all([
+    deps.statPathBytes(root),
+    deps.pathExists(overlayRoot) ? deps.statPathBytes(overlayRoot) : Promise.resolve(null),
+    deps.pathExists(contentRoot) ? deps.statPathBytes(contentRoot) : Promise.resolve(null),
+    deps.pathExists(snapshotsDir) ? countOverlaySnapshots(snapshotsDir) : Promise.resolve(null),
+  ]);
+
+  const items: StorageInventoryItem[] = [];
+  if (overlayBytes != null) {
+    items.push(
+      buildInventoryItem(
+        "containerd:overlay",
+        {
+          kind: "filesystem_path",
+          label: "containerd overlay snapshots",
+          pathOrRef: overlayRoot,
+          sizeBytes: overlayBytes,
+          metadata: { snapshotCount: snapshotCount ?? 0 },
+        },
+        config,
+      ),
+    );
+  }
+  if (contentBytes != null) {
+    items.push(
+      buildInventoryItem(
+        "containerd:content",
+        {
+          kind: "filesystem_path",
+          label: "containerd content blobs",
+          pathOrRef: contentRoot,
+          sizeBytes: contentBytes,
+        },
+        config,
+      ),
+    );
+  }
+
+  return {
+    breakdown: {
+      totalBytes,
+      overlaySnapshotsBytes: overlayBytes,
+      contentBlobsBytes: contentBytes,
+      snapshotCount,
+    },
+    items,
+  };
+}
+
+const EMPTY_HOST_VISIBILITY: HostVisibilitySnapshot = {
+  hostInventoryRoot: null,
+  dockerSocket: "/var/run/docker.sock",
+  dockerSocketReachable: false,
+  containerdMount: false,
+  connectcommsMount: false,
+  varLogMount: false,
+};
 
 async function scanApkDownloads(deps: StorageScannerDeps): Promise<StorageInventoryItem[]> {
   const { config } = deps;
@@ -233,7 +325,11 @@ export async function runStorageScan(deps: StorageScannerDeps): Promise<StorageS
     sampledAt: new Date().toISOString(),
   });
 
-  const [images, containers, volumes, dockerSummary, fsItems, apkItems] = await Promise.all([
+  const hostVisibility = deps.probeHostVisibility
+    ? await deps.probeHostVisibility().catch(() => EMPTY_HOST_VISIBILITY)
+    : EMPTY_HOST_VISIBILITY;
+
+  const [images, containers, volumes, dockerSummary, fsItems, apkItems, containerdScan] = await Promise.all([
     deps.listImages().catch(() => [] as DockerImageRow[]),
     deps.listContainers().catch(() => [] as DockerContainerRow[]),
     deps.listVolumes().catch(() => [] as DockerVolumeRow[]),
@@ -251,10 +347,12 @@ export async function runStorageScan(deps: StorageScannerDeps): Promise<StorageS
     ),
     scanFilesystemPaths(deps),
     scanApkDownloads(deps),
+    scanContainerdBreakdown(deps),
   ]);
 
   const items: StorageInventoryItem[] = [
     ...fsItems,
+    ...containerdScan.items,
     ...scanDockerImages(images, deps.config),
     ...scanDockerContainers(containers, deps.config),
     ...scanDockerVolumes(volumes, deps.config),
@@ -283,12 +381,16 @@ export async function runStorageScan(deps: StorageScannerDeps): Promise<StorageS
   const reclaimEstimateBytes = items.reduce((sum, item) => sum + (item.reclaimableBytes ?? 0), 0);
   const unknownCount = items.filter((i) => i.classification === "UNKNOWN_REQUIRES_REVIEW").length;
   const protectedCount = items.filter((i) => i.classification === "PROTECTED_NEVER_DELETE").length;
+  const containerdBytes =
+    containerdScan.breakdown.totalBytes ??
+    fsItems.find((i) => i.pathOrRef === deps.config.containerdRoot)?.sizeBytes ??
+    null;
   const alerts = deriveStorageAlerts({
     config: deps.config,
     diskMounts: host.storage,
     docker: dockerSummary,
     items,
-    containerdBytes: fsItems.find((i) => i.pathOrRef === deps.config.containerdRoot)?.sizeBytes ?? null,
+    containerdBytes,
   });
 
   const scanWithoutDashboard = {
@@ -304,6 +406,8 @@ export async function runStorageScan(deps: StorageScannerDeps): Promise<StorageS
     alerts,
     unknownCount,
     protectedCount,
+    hostVisibility,
+    containerd: containerdScan.breakdown,
   };
 
   return {

@@ -4,6 +4,25 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-14 — Storage Health host visibility layer (Phase 1.6)
+
+**Task:** Enable Storage Health scanner to see real Docker host inventory from inside the API container.
+**Risk:** low — read-only mounts and GET-only Docker API access; no cleanup, prune, delete, or restart.
+
+- Added read-only host inventory mounts to `api` / `api_candidate` in `docker-compose.app.yml`:
+  `docker.sock`, `/var/lib/containerd`, `/opt/connectcomms`, `/var/log` under `/host-inventory`.
+- Added `hostVisibility.ts` — mount probes, Docker Engine GET whitelist, host path display remap.
+- Added `dockerSystemDfApi.ts` — parse `/system/df` JSON (BuildKit cache, reclaimable estimate).
+- Rewrote `dockerDeps.ts` — HTTP Docker API over socket (no CLI), `du -sb` sizing for large paths.
+- Extended `scanner.ts` — containerd overlay/content breakdown, host visibility snapshot on scan.
+- Extended dashboard + portal Containerd KPI card; 23 unit tests (3 new).
+
+**Documentation:** `STORAGE_MAINTENANCE.md` § Phase 1.6, `SERVER_OPERATIONS.md`, `DEPLOYMENT.md`.
+
+**No cleanup executed.** Approve **501** / execute **403** unchanged.
+
+---
+
 ## 2026-06-14 — Storage Health operations dashboard (Phase 1.5)
 
 **Task:** Upgrade `/admin/storage-health` from basic tables to production-grade operations dashboard.

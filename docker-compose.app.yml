@@ -98,6 +98,19 @@ services:
       # CRM voicemail drop converted WAV storage. Must be volume-backed so
       # previews and PBX pushes survive API rebuilds and blue/green rollouts.
       CRM_VOICEMAIL_DROP_STORAGE_DIR: ${CRM_VOICEMAIL_DROP_STORAGE_DIR:-/var/lib/connect/crm-voicemail-drops}
+      # ── Storage Health host visibility (Phase 1.6, read-only inventory) ───
+      STORAGE_HOST_INVENTORY_ROOT: ${STORAGE_HOST_INVENTORY_ROOT:-/host-inventory}
+      STORAGE_DOCKER_SOCKET: ${STORAGE_DOCKER_SOCKET:-/var/run/docker.sock}
+      STORAGE_APP_ROOT: ${STORAGE_APP_ROOT:-/host-inventory/opt/connectcomms}
+      STORAGE_APP_CLONE_ROOT: ${STORAGE_APP_CLONE_ROOT:-/host-inventory/opt/connectcomms/app}
+      STORAGE_DATA_ROOT: ${STORAGE_DATA_ROOT:-/host-inventory/opt/connectcomms/data}
+      STORAGE_ENV_ROOT: ${STORAGE_ENV_ROOT:-/host-inventory/opt/connectcomms/env}
+      STORAGE_BACKUPS_ROOT: ${STORAGE_BACKUPS_ROOT:-/host-inventory/opt/connectcomms/backups}
+      STORAGE_DOWNLOADS_ROOT: ${STORAGE_DOWNLOADS_ROOT:-/host-inventory/opt/connectcomms/downloads}
+      STORAGE_MONITORING_LOGS_ROOT: ${STORAGE_MONITORING_LOGS_ROOT:-/host-inventory/opt/connectcomms/monitoring/logs}
+      STORAGE_CONTAINERD_ROOT: ${STORAGE_CONTAINERD_ROOT:-/host-inventory/var/lib/containerd}
+      STORAGE_JOURNAL_ROOT: ${STORAGE_JOURNAL_ROOT:-/host-inventory/var/log/journal}
+      STORAGE_DEPLOY_LOGS_ROOT: ${STORAGE_DEPLOY_LOGS_ROOT:-/host-inventory/var/log/connect-deploys}
     # Migrations run in scripts/deploy-api.sh before containers; boot should listen quickly.
     command: sh -lc "pnpm --filter @connect/api start"
     ports:
@@ -129,6 +142,11 @@ services:
       - crm-lead-docs:/var/lib/connect/crm-lead-docs
       # Persistent CRM voicemail drop WAV storage for preview and PBX sync.
       - crm-voicemail-drops:/var/lib/connect/crm-voicemail-drops
+      # Read-only host inventory for Storage Health scanner (Phase 1.6). No writes.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/containerd:/host-inventory/var/lib/containerd:ro
+      - /opt/connectcomms:/host-inventory/opt/connectcomms:ro
+      - /var/log:/host-inventory/var/log:ro
     networks:
       - default
       - infra_default
@@ -197,6 +215,18 @@ services:
       ANDROID_APK_DOWNLOAD_URL_BASE: ${ANDROID_APK_DOWNLOAD_URL_BASE:-}
       CRM_DOC_STORAGE_DIR: ${CRM_DOC_STORAGE_DIR:-/var/lib/connect/crm-lead-docs}
       CRM_VOICEMAIL_DROP_STORAGE_DIR: ${CRM_VOICEMAIL_DROP_STORAGE_DIR:-/var/lib/connect/crm-voicemail-drops}
+      STORAGE_HOST_INVENTORY_ROOT: ${STORAGE_HOST_INVENTORY_ROOT:-/host-inventory}
+      STORAGE_DOCKER_SOCKET: ${STORAGE_DOCKER_SOCKET:-/var/run/docker.sock}
+      STORAGE_APP_ROOT: ${STORAGE_APP_ROOT:-/host-inventory/opt/connectcomms}
+      STORAGE_APP_CLONE_ROOT: ${STORAGE_APP_CLONE_ROOT:-/host-inventory/opt/connectcomms/app}
+      STORAGE_DATA_ROOT: ${STORAGE_DATA_ROOT:-/host-inventory/opt/connectcomms/data}
+      STORAGE_ENV_ROOT: ${STORAGE_ENV_ROOT:-/host-inventory/opt/connectcomms/env}
+      STORAGE_BACKUPS_ROOT: ${STORAGE_BACKUPS_ROOT:-/host-inventory/opt/connectcomms/backups}
+      STORAGE_DOWNLOADS_ROOT: ${STORAGE_DOWNLOADS_ROOT:-/host-inventory/opt/connectcomms/downloads}
+      STORAGE_MONITORING_LOGS_ROOT: ${STORAGE_MONITORING_LOGS_ROOT:-/host-inventory/opt/connectcomms/monitoring/logs}
+      STORAGE_CONTAINERD_ROOT: ${STORAGE_CONTAINERD_ROOT:-/host-inventory/var/lib/containerd}
+      STORAGE_JOURNAL_ROOT: ${STORAGE_JOURNAL_ROOT:-/host-inventory/var/log/journal}
+      STORAGE_DEPLOY_LOGS_ROOT: ${STORAGE_DEPLOY_LOGS_ROOT:-/host-inventory/var/log/connect-deploys}
     command: sh -lc "pnpm --filter @connect/api start"
     ports:
       - "127.0.0.1:3004:3001"
@@ -214,6 +244,11 @@ services:
       - chat-attachments:/var/lib/connect/chat-attachments
       - crm-lead-docs:/var/lib/connect/crm-lead-docs
       - crm-voicemail-drops:/var/lib/connect/crm-voicemail-drops
+      # Read-only host inventory for Storage Health scanner (Phase 1.6). No writes.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/containerd:/host-inventory/var/lib/containerd:ro
+      - /opt/connectcomms:/host-inventory/opt/connectcomms:ro
+      - /var/log:/host-inventory/var/log:ro
     networks:
       - default
       - infra_default

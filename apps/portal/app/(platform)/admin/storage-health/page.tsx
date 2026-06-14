@@ -16,6 +16,9 @@ type StorageDashboard = {
   freeBytes: number | null;
   usedPct: number | null;
   buildCacheBytes: number | null;
+  containerdBytes: number | null;
+  containerdOverlayBytes: number | null;
+  containerdContentBytes: number | null;
   reclaimableBytes: number;
   protectedDataBytes: number;
   riskLevel: StorageRiskLevel;
@@ -478,6 +481,17 @@ export default function StorageHealthPage() {
                 />
                 <KpiCard C={C} label="AVAILABLE SPACE" value={fmtBytes(dash.freeBytes)} sub="Root filesystem free" accent={C.ok} />
                 <KpiCard C={C} label="BUILD CACHE" value={fmtBytes(dash.buildCacheBytes)} sub="Docker BuildKit cache" accent={C.purple} />
+                <KpiCard
+                  C={C}
+                  label="CONTAINERD"
+                  value={fmtBytes(dash.containerdBytes)}
+                  sub={
+                    dash.containerdOverlayBytes != null
+                      ? `Overlay ${fmtBytes(dash.containerdOverlayBytes)} · blobs ${fmtBytes(dash.containerdContentBytes)}`
+                      : "Host container runtime storage"
+                  }
+                  accent={C.info}
+                />
                 <KpiCard C={C} label="RECLAIMABLE" value={fmtBytes(dash.reclaimableBytes)} sub="Safe + rollback candidates" accent={C.ok} />
                 <KpiCard C={C} label="PROTECTED DATA" value={fmtBytes(dash.protectedDataBytes)} sub="Production assets locked" accent={C.crit} />
                 <KpiCard

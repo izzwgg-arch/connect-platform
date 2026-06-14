@@ -149,7 +149,7 @@ portal `.next/cache` (45 GB), portal build artifacts (~100 GB combined).
 **Dangerous to remove:** Postgres bind mount, Redis bind mount, any attached Docker volume,
 `/opt/connectcomms/env`, CRM/chat/IVR/MOH assets, running production images, `/opt/connectcomms/app` deploy clone.
 
-**Operations dashboard:** `/admin/storage-health` (Phase 1.5) displays these categories visually with reclaim simulation — read-only, no execution.
+**Operations dashboard:** `/admin/storage-health` (Phase 1.5 UI, Phase 1.6 host visibility) displays these categories visually with reclaim simulation — read-only, no execution. API container mounts host paths read-only (`docker-compose.app.yml` § `api` volumes) and queries Docker Engine via `GET /system/df` only.
 
 **Agents must not run prune/cleanup commands without explicit human approval.** See
 `AGENTS.md` forbidden commands, `SERVER_OPERATIONS.md`, and **`STORAGE_MAINTENANCE.md`**

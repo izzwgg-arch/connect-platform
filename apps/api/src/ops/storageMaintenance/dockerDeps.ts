@@ -2,6 +2,11 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import http from "node:http";
 import { promisify } from "node:util";
+import { parseDockerSystemDfJson } from "./dockerSystemDfApi";
+import {
+  assertReadOnlyDockerApiPath,
+  probeHostVisibility,
+} from "./hostVisibility";
 import {
   listDirectoryFiles,
   parseDockerSystemDfText,
@@ -17,9 +22,10 @@ const execFileAsync = promisify(execFile);
 const DOCKER_SOCKET = (process.env.STORAGE_DOCKER_SOCKET || process.env.SERVER_HEALTH_DOCKER_SOCKET || "/var/run/docker.sock").trim();
 
 function dockerHttpGet(path: string): Promise<string> {
+  assertReadOnlyDockerApiPath(path);
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { socketPath: DOCKER_SOCKET, path, method: "GET", timeout: 8000 },
+      { socketPath: DOCKER_SOCKET, path, method: "GET", timeout: 30_000 },
       (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (c) => chunks.push(c));
@@ -51,6 +57,19 @@ async function dockerSocketAvailable(): Promise<boolean> {
   }
 }
 
+async function duPathBytes(path: string, timeoutMs = 180_000): Promise<number | null> {
+  try {
+    const { stdout } = await execFileAsync("du", ["-sb", path], {
+      timeout: timeoutMs,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    const n = Number(String(stdout).split("\t")[0]?.trim());
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 async function listImages(): Promise<DockerImageRow[]> {
   if (!(await dockerSocketAvailable())) return [];
   const raw = await dockerHttpGet("/images/json");
@@ -72,39 +91,47 @@ async function listVolumes(): Promise<DockerVolumeRow[]> {
 
 async function getDockerSystemDf(): Promise<DockerSystemSummary> {
   if (!(await dockerSocketAvailable())) {
-    return {
-      imagesCount: 0,
-      imagesBytes: null,
-      imagesReclaimableBytes: null,
-      containersCount: 0,
-      containersBytes: null,
-      volumesCount: 0,
-      volumesBytes: null,
-      buildCache: { entryCount: null, totalBytes: null, reclaimableBytes: null, source: "unavailable" },
-    };
+    return emptyDockerSummary();
   }
   try {
-    const { stdout } = await execFileAsync("docker", ["system", "df"], {
-      timeout: 30_000,
-      maxBuffer: 2 * 1024 * 1024,
-    });
-    return parseDockerSystemDfText(stdout);
+    const raw = await dockerHttpGet("/system/df");
+    const parsed = JSON.parse(raw) as Parameters<typeof parseDockerSystemDfJson>[0];
+    return parseDockerSystemDfJson(parsed);
   } catch {
-    return {
-      imagesCount: 0,
-      imagesBytes: null,
-      imagesReclaimableBytes: null,
-      containersCount: 0,
-      containersBytes: null,
-      volumesCount: 0,
-      volumesBytes: null,
-      buildCache: { entryCount: null, totalBytes: null, reclaimableBytes: null, source: "unavailable" },
-    };
+    try {
+      const { stdout } = await execFileAsync("docker", ["system", "df"], {
+        timeout: 30_000,
+        maxBuffer: 2 * 1024 * 1024,
+      });
+      return parseDockerSystemDfText(stdout);
+    } catch {
+      return emptyDockerSummary();
+    }
   }
+}
+
+function emptyDockerSummary(): DockerSystemSummary {
+  return {
+    imagesCount: 0,
+    imagesBytes: null,
+    imagesReclaimableBytes: null,
+    containersCount: 0,
+    containersBytes: null,
+    volumesCount: 0,
+    volumesBytes: null,
+    buildCache: { entryCount: null, totalBytes: null, reclaimableBytes: null, source: "unavailable" },
+  };
+}
+
+function hostPath(hostRoot: string, absolutePath: string): string {
+  const root = hostRoot.replace(/\/+$/, "");
+  if (!root) return absolutePath;
+  return `${root}${absolutePath}`;
 }
 
 export function loadStorageMaintenanceConfig(): StorageMaintenanceConfig {
   const gb = (n: number) => n * 1024 * 1024 * 1024;
+  const hostRoot = (process.env.STORAGE_HOST_INVENTORY_ROOT || "").trim();
   return {
     diskWarningPct: Number(process.env.STORAGE_DISK_WARNING_PCT || 70),
     diskCriticalPct: Number(process.env.STORAGE_DISK_CRITICAL_PCT || 80),
@@ -117,26 +144,36 @@ export function loadStorageMaintenanceConfig(): StorageMaintenanceConfig {
     buildCacheRetentionDays: Number(process.env.STORAGE_BUILD_CACHE_RETENTION_DAYS || 14),
     apkRetentionCount: Number(process.env.STORAGE_APK_RETENTION_COUNT || 5),
     diagnosticLogRetentionDays: Number(process.env.STORAGE_DIAG_LOG_RETENTION_DAYS || 30),
-    appRoot: process.env.STORAGE_APP_ROOT || "/opt/connectcomms",
-    dataRoot: process.env.STORAGE_DATA_ROOT || "/opt/connectcomms/data",
-    envRoot: process.env.STORAGE_ENV_ROOT || "/opt/connectcomms/env",
-    backupsRoot: process.env.STORAGE_BACKUPS_ROOT || "/opt/connectcomms/backups",
-    downloadsRoot: process.env.STORAGE_DOWNLOADS_ROOT || "/opt/connectcomms/downloads",
-    monitoringLogsRoot: process.env.STORAGE_MONITORING_LOGS_ROOT || "/opt/connectcomms/monitoring/logs",
-    containerdRoot: process.env.STORAGE_CONTAINERD_ROOT || "/var/lib/containerd",
+    hostInventoryRoot: hostRoot,
+    appRoot: process.env.STORAGE_APP_ROOT || hostPath(hostRoot, "/opt/connectcomms"),
+    appCloneRoot: process.env.STORAGE_APP_CLONE_ROOT || hostPath(hostRoot, "/opt/connectcomms/app"),
+    dataRoot: process.env.STORAGE_DATA_ROOT || hostPath(hostRoot, "/opt/connectcomms/data"),
+    envRoot: process.env.STORAGE_ENV_ROOT || hostPath(hostRoot, "/opt/connectcomms/env"),
+    backupsRoot: process.env.STORAGE_BACKUPS_ROOT || hostPath(hostRoot, "/opt/connectcomms/backups"),
+    downloadsRoot: process.env.STORAGE_DOWNLOADS_ROOT || hostPath(hostRoot, "/opt/connectcomms/downloads"),
+    monitoringLogsRoot:
+      process.env.STORAGE_MONITORING_LOGS_ROOT || hostPath(hostRoot, "/opt/connectcomms/monitoring/logs"),
+    containerdRoot: process.env.STORAGE_CONTAINERD_ROOT || hostPath(hostRoot, "/var/lib/containerd"),
+    journalRoot: process.env.STORAGE_JOURNAL_ROOT || hostPath(hostRoot, "/var/log/journal"),
+    deployLogsRoot: process.env.STORAGE_DEPLOY_LOGS_ROOT || hostPath(hostRoot, "/var/log/connect-deploys"),
   };
 }
 
 export function createProductionStorageScannerDeps(
   config: StorageMaintenanceConfig = loadStorageMaintenanceConfig(),
 ): StorageScannerDeps {
+  const useDu = Boolean(config.hostInventoryRoot);
+
   return {
     config,
     listImages,
     listContainers,
     listVolumes,
     getDockerSystemDf,
-    statPathBytes: statDirectoryBytes,
+    statPathBytes: async (path) => {
+      if (useDu) return duPathBytes(path);
+      return statDirectoryBytes(path);
+    },
     listFilesInDir: listDirectoryFiles,
     pathExists: async (path) => {
       try {
@@ -146,5 +183,14 @@ export function createProductionStorageScannerDeps(
         return false;
       }
     },
+    probeHostVisibility: async () =>
+      probeHostVisibility(config.hostInventoryRoot, DOCKER_SOCKET, async (path) => {
+        try {
+          await fs.access(path);
+          return true;
+        } catch {
+          return false;
+        }
+      }, dockerSocketAvailable),
   };
 }
