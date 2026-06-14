@@ -179,12 +179,18 @@ async function scanContainerdBreakdown(
     return { breakdown: empty, items: [] };
   }
 
-  const [totalBytes, overlayBytes, contentBytes, snapshotCount] = await Promise.all([
-    deps.statPathBytes(root),
-    deps.pathExists(overlayRoot) ? deps.statPathBytes(overlayRoot) : Promise.resolve(null),
-    deps.pathExists(contentRoot) ? deps.statPathBytes(contentRoot) : Promise.resolve(null),
-    deps.pathExists(snapshotsDir) ? countOverlaySnapshots(snapshotsDir) : Promise.resolve(null),
+  const hasContent = await deps.pathExists(contentRoot);
+  const hasOverlay = await deps.pathExists(overlayRoot);
+  const hasSnapshots = await deps.pathExists(snapshotsDir);
+
+  const [contentBytes, snapshotCount] = await Promise.all([
+    hasContent ? deps.statPathBytes(contentRoot) : Promise.resolve(null),
+    hasSnapshots ? countOverlaySnapshots(snapshotsDir) : Promise.resolve(null),
   ]);
+  const overlayBytes = hasOverlay ? await deps.statPathBytes(overlayRoot) : null;
+  const totalBytes =
+    (await deps.statPathBytes(root)) ??
+    (overlayBytes != null && contentBytes != null ? overlayBytes + contentBytes : null);
 
   const items: StorageInventoryItem[] = [];
   if (overlayBytes != null) {

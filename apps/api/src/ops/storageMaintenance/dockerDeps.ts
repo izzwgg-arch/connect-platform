@@ -57,10 +57,16 @@ async function dockerSocketAvailable(): Promise<boolean> {
   }
 }
 
-async function duPathBytes(path: string, timeoutMs = 180_000): Promise<number | null> {
+function duTimeoutForPath(path: string): number {
+  if (path.includes("containerd")) return 1_200_000;
+  return 180_000;
+}
+
+async function duPathBytes(path: string, timeoutMs?: number): Promise<number | null> {
+  const effectiveTimeout = timeoutMs ?? duTimeoutForPath(path);
   try {
     const { stdout } = await execFileAsync("du", ["-sb", path], {
-      timeout: timeoutMs,
+      timeout: effectiveTimeout,
       maxBuffer: 4 * 1024 * 1024,
     });
     const n = Number(String(stdout).split("\t")[0]?.trim());
