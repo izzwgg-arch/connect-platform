@@ -27,6 +27,13 @@ export interface NormalizedCall {
   from: string | null;
   /** Caller name (CNAM) from AMI CallerIDName. Null when unavailable or generic. */
   fromName: string | null;
+  /**
+   * Ring-group CID prefix the VitalPBX dialplan prepended to CallerID(name)
+   * (e.g. `Set(CALLERID(name)=Estimates:${CALLERID(name)})`), collapsed to a
+   * single label. Kept SEPARATE from {@link fromName} so clients can render it
+   * as a tag without polluting the caller name. Null for non-ring-group calls.
+   */
+  fromPrefix: string | null;
   to: string | null;
   connectedLine: string | null;
   source_extension: string | null;

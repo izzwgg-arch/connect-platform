@@ -2,6 +2,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { apiGet, apiPost, ApiError } from "../services/apiClient";
+import { splitRingGroupPrefix } from "../lib/ringGroupPrefix";
 import { useTelephonyAudio } from "./useTelephonyAudio";
 import {
   summarizeOfferSdp,
@@ -1241,7 +1242,12 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
             sessionsByIdRef.current.set(mcId, data.session);
 
             if (data.originator === "remote") {
-              const party = data.request.from.display_name || data.request.from.uri.user;
+              // Strip the VitalPBX ring-group prefix the SIP From display-name
+              // carries (e.g. "Estimates:Estimates:Caller") so the softphone shows
+              // a clean caller; the prefix is surfaced as a tag from the matched
+              // live call's fromPrefix instead.
+              const rawParty = data.request.from.display_name || data.request.from.uri.user;
+              const party = splitRingGroupPrefix(rawParty).rest || rawParty;
               console.log(`[MULTICALL] web incoming call=${mcId} from=${party} activeBefore=${activeSessionIdRef.current ?? "none"}`);
               registerSessionMeta(mcId, {
                 remoteParty: party,

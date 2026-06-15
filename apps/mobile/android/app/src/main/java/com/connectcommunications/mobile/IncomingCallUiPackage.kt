@@ -7,7 +7,10 @@ import com.facebook.react.uimanager.ViewManager
 
 class IncomingCallUiPackage : ReactPackage {
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
-    return listOf(IncomingCallUiModule(reactContext))
+    return listOf(
+      IncomingCallUiModule(reactContext),
+      DeviceContactsModule(reactContext),
+    )
   }
 
   override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> {

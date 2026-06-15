@@ -25,6 +25,7 @@ import {
   phonesLikelyMatch,
   shouldShowCrmLiveWorkspaceShortcut,
 } from "../lib/crmInboundCallDisplay";
+import { ringGroupPrefixOf } from "../lib/ringGroupPrefix";
 
 type PresenceState = "available" | "ringing" | "on_call" | "offline";
 
@@ -586,6 +587,12 @@ export function FloatingDialer() {
     if (!num || num === inboundCallerTitle) return matchedInboundCall.crmCompanyName ?? null;
     return num;
   }, [matchedInboundCall, phone.remoteParty, inboundCallerTitle]);
+  // Ring-group prefix tag for the inbound caller: prefer the authoritative
+  // fromPrefix from the matched live call, else parse it out of the SIP party.
+  const inboundPrefixTag = useMemo(
+    () => matchedInboundCall?.fromPrefix?.trim() || ringGroupPrefixOf(phone.remoteParty),
+    [matchedInboundCall, phone.remoteParty],
+  );
 
   const isInCall = phone.callState !== "idle" && phone.callState !== "ended";
   const isActive = phone.callState === "connected";
@@ -1057,6 +1064,9 @@ export function FloatingDialer() {
                 <span className="fd-eyebrow">Incoming call</span>
                 <MiniAvatar party={inboundCallerTitle} />
                 <strong>{inboundCallerTitle}</strong>
+                {inboundPrefixTag ? (
+                  <span className="fd-prefix-tag">{inboundPrefixTag}</span>
+                ) : null}
                 {inboundCallerSubtitle ? (
                   <span className="fd-caller-sub">{inboundCallerSubtitle}</span>
                 ) : null}
@@ -1088,6 +1098,9 @@ export function FloatingDialer() {
                     <strong>
                       {phone.callDirection === "inbound" ? inboundCallerTitle : (phone.remoteParty ?? "Connected")}
                     </strong>
+                    {phone.callDirection === "inbound" && inboundPrefixTag ? (
+                      <span className="fd-prefix-tag">{inboundPrefixTag}</span>
+                    ) : null}
                     {phone.callDirection === "inbound" && inboundCallerSubtitle ? (
                       <span className="fd-caller-sub">{inboundCallerSubtitle}</span>
                     ) : null}
@@ -1284,6 +1297,7 @@ const DIALER_CSS = `
 .fd-active-party strong, .fd-active-party span { display: block; }
 .fd-active-party span { color: #22c55e; font-weight: 900; font-size: 13px; margin-top: 3px; }
 .fd-caller-sub { display: block; font-size: 12px; font-weight: 600; color: var(--fd-muted, #94a3b8); margin-top: 2px; font-family: ui-monospace, monospace; }
+.fd-prefix-tag { display: inline-flex; align-items: center; margin-top: 6px; padding: 2px 10px; font-size: 11px; font-weight: 700; letter-spacing: 0.3px; color: #93c5fd; background: rgba(59,130,246,0.18); border: 1px solid rgba(59,130,246,0.42); border-radius: 999px; }
 .fd-crm-open { margin: 6px 0 2px; width: 100%; min-height: 32px; border-radius: 10px; border: 1px solid rgba(99, 102, 241, 0.35); background: rgba(99, 102, 241, 0.12); color: #4f46e5; font-weight: 800; font-size: 12px; cursor: pointer; }
 .fd-crm-open-compact { width: auto; margin: 0 0 0 auto; padding: 0 10px; flex-shrink: 0; }
 .fd-crm-open:hover { background: rgba(99, 102, 241, 0.2); }

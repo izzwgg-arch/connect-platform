@@ -39,6 +39,8 @@ type CallHistoryRow = {
   linkedId: string;
   fromNumber: string;
   fromName: string | null;
+  /** Ring-group CID prefix (deduped, e.g. "Estimates") — shown as a tag. */
+  fromPrefix: string | null;
   toNumber: string;
   direction: CallDirection;
   status: CallStatus;
@@ -93,6 +95,7 @@ function buildCallHistoryPreview(): CallHistoryResponse {
       linkedId: `preview-linked-${Math.floor(index / 2)}`,
       fromNumber: direction === "outgoing" ? "220" : `+1555901${String(index).padStart(4, "0")}`,
       fromName: direction === "outgoing" ? "Local Dev" : names[index % names.length],
+      fromPrefix: direction === "incoming" && index % 4 === 0 ? "Estimates" : null,
       toNumber: direction === "outgoing" ? `+1555902${String(index).padStart(4, "0")}` : index % 3 === 0 ? "Sales Queue" : "220",
       direction,
       status,
@@ -375,6 +378,9 @@ function CallFeedItem({
       <div className="ch-item-main">
         <div className="ch-item-name">
           {displayName}
+          {row.direction === "incoming" && row.fromPrefix ? (
+            <span className="ch-item-prefix-tag">{row.fromPrefix}</span>
+          ) : null}
           {isGlobal && row.tenantName !== "Unassigned" ? (
             <span className="ch-item-tenant"> · {row.tenantName}</span>
           ) : null}
@@ -525,7 +531,12 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
             {initials ? initials : <Phone size={22} />}
           </div>
           <div className="cdp-hero-body">
-            <div className="cdp-hero-name">{contactName}</div>
+            <div className="cdp-hero-name">
+              {contactName}
+              {dir === "incoming" && row.fromPrefix ? (
+                <span className="ch-item-prefix-tag">{row.fromPrefix}</span>
+              ) : null}
+            </div>
             <div className="cdp-hero-number">{formatPhone(contactNumber)}</div>
             <div className="cdp-hero-time">{formatAbsTime(row.startedAt)}</div>
             <div className="cdp-hero-actions">

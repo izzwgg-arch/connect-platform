@@ -718,6 +718,7 @@ function payloadToInvite(
     pbxSipUsername: data.pbxSipUsername || null,
     sipCallTarget: data.sipCallTarget || null,
     fromDisplay: data.fromDisplay || null,
+    fromPrefix: data.fromPrefix || null,
     fromNumber,
     toExtension: data.toExtension,
     status: "PENDING",

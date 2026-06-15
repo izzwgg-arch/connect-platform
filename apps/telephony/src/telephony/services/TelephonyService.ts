@@ -288,6 +288,15 @@ export class TelephonyService {
         break;
       }
 
+      case "NewCallerid": {
+        this.calls.onNewCallerid({
+          linkedId: effectiveLinkedId(typed.linkedid, typed.uniqueid),
+          uniqueid: typed.uniqueid,
+          callerIDName: typed.callerIDName,
+        });
+        break;
+      }
+
       case "Newstate": {
         const linkedId = effectiveLinkedId(typed.linkedid, typed.uniqueid);
         this.calls.updateChannelState({

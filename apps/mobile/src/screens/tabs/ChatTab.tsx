@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -111,6 +111,22 @@ function threadKind(thread: ChatThread): string {
   if (thread.type === 'DM') return 'DM';
   if (isGroupThread(thread)) return 'Group';
   return thread.type;
+}
+
+/** Turn raw server error codes from /chat/threads into human-readable toasts. */
+function friendlyComposeError(code?: string): string {
+  switch (code) {
+    case 'NO_SMS_NUMBER':
+      return 'No SMS number is set up for your account — ask your admin to assign one.';
+    case 'INVALID_PHONE':
+      return "Can't message this number — it isn't textable.";
+    case 'FORBIDDEN':
+      return "You don't have permission to send messages to this contact.";
+    case 'PEER_NOT_FOUND':
+      return 'That person is no longer available to chat.';
+    default:
+      return 'Could not open chat. Please try again.';
+  }
 }
 
 function threadTarget(thread: ChatThread): string {
@@ -281,6 +297,127 @@ function fileNameFromUri(uri: string, fallback: string): string {
   return part || fallback;
 }
 
+/**
+ * Shared voice-note player. The whole thread uses ONE Audio.Sound at a time so
+ * that:
+ *   - a note plays through once and STOPS (no looping), and
+ *   - when it finishes, the next voice note in the thread auto-plays, chaining
+ *     through every later note until they have each played once, then stops.
+ * Tapping play/pause on the active note, or starting a different note, takes
+ * over the chain. Pausing stops the chain (no `didJustFinish` fires).
+ */
+type VoiceNotePlayer = {
+  activeId: string | null;
+  playing: boolean;
+  progress: number;
+  durationMs: number | null;
+  toggle: (id: string, url: string) => void;
+};
+const VoiceNotePlayerContext = createContext<VoiceNotePlayer | null>(null);
+
+function useVoiceNotePlayerController(order: { id: string; url: string }[]): VoiceNotePlayer {
+  const soundRef = useRef<Audio.Sound | null>(null);
+  const activeIdRef = useRef<string | null>(null);
+  const orderRef = useRef(order);
+  orderRef.current = order;
+
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [durationMs, setDurationMs] = useState<number | null>(null);
+
+  const teardownSound = useCallback(async () => {
+    const s = soundRef.current;
+    soundRef.current = null;
+    if (s) {
+      try { s.setOnPlaybackStatusUpdate(null); } catch { /* ignore */ }
+      await s.unloadAsync().catch(() => undefined);
+    }
+  }, []);
+
+  const stop = useCallback(async () => {
+    activeIdRef.current = null;
+    setActiveId(null);
+    setPlaying(false);
+    setProgress(0);
+    await teardownSound();
+  }, [teardownSound]);
+
+  const playId = useCallback(async (id: string, url: string) => {
+    await teardownSound();
+    activeIdRef.current = id;
+    setActiveId(id);
+    setPlaying(true);
+    setProgress(0);
+    setDurationMs(null);
+    let sound: Audio.Sound;
+    try {
+      ({ sound } = await Audio.Sound.createAsync(
+        { uri: url },
+        { shouldPlay: true, progressUpdateIntervalMillis: 120 },
+      ));
+    } catch {
+      if (activeIdRef.current === id) await stop();
+      return;
+    }
+    // A newer note may have started while we were loading — discard this one.
+    if (activeIdRef.current !== id) {
+      await sound.unloadAsync().catch(() => undefined);
+      return;
+    }
+    soundRef.current = sound;
+    sound.setOnPlaybackStatusUpdate((status) => {
+      if (!status.isLoaded || activeIdRef.current !== id) return;
+      setPlaying(Boolean(status.isPlaying));
+      const dur = status.durationMillis || 0;
+      if (dur > 0) {
+        setDurationMs(dur);
+        setProgress(Math.max(0, Math.min(1, (status.positionMillis || 0) / dur)));
+      }
+      if (status.didJustFinish) {
+        // Played through once. Advance to the next voice note in the thread,
+        // or stop if this was the last one. We never reset+replay the same
+        // sound (that is what caused the infinite loop).
+        const ord = orderRef.current;
+        const idx = ord.findIndex((o) => o.id === id);
+        const next = idx >= 0 ? ord[idx + 1] : undefined;
+        if (next) {
+          void playId(next.id, next.url);
+        } else {
+          void stop();
+        }
+      }
+    });
+  }, [stop, teardownSound]);
+
+  const toggle = useCallback(async (id: string, url: string) => {
+    if (activeIdRef.current === id && soundRef.current) {
+      try {
+        const status = await soundRef.current.getStatusAsync();
+        if (status.isLoaded && status.isPlaying) {
+          // User stop → halt the auto-play chain (no didJustFinish fires).
+          await soundRef.current.pauseAsync().catch(() => undefined);
+          setPlaying(false);
+          return;
+        }
+        if (status.isLoaded) {
+          await soundRef.current.playAsync().catch(() => undefined);
+          setPlaying(true);
+          return;
+        }
+      } catch { /* fall through to reload */ }
+    }
+    await playId(id, url);
+  }, [playId]);
+
+  useEffect(() => () => { void teardownSound(); }, [teardownSound]);
+
+  return useMemo(
+    () => ({ activeId, playing, progress, durationMs, toggle }),
+    [activeId, playing, progress, durationMs, toggle],
+  );
+}
+
 export function ChatTab() {
   const { colors } = useTheme();
   const nav = useNavigation<any>();
@@ -325,14 +462,14 @@ export function ChatTab() {
   const pendingInitialScrollRef = useRef(false);
 
   const scrollToBottom = useCallback((animated: boolean) => {
-    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated }));
+    // Inverted list: the newest message lives at offset 0 (the visual bottom).
+    requestAnimationFrame(() => listRef.current?.scrollToOffset({ offset: 0, animated }));
   }, []);
 
   const handleListScroll = useCallback(
-    (e: { nativeEvent: { layoutMeasurement: { height: number }; contentOffset: { y: number }; contentSize: { height: number } } }) => {
-      const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
-      const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
-      atBottomRef.current = distanceFromBottom < 120;
+    (e: { nativeEvent: { contentOffset: { y: number } } }) => {
+      // Inverted list: contentOffset.y ~0 means pinned to the newest message.
+      atBottomRef.current = e.nativeEvent.contentOffset.y < 120;
     },
     [],
   );
@@ -488,9 +625,15 @@ export function ChatTab() {
 
   const showToast = useCallback((message: string) => setToast(message), []);
 
+  // Pull-to-refresh spinner is shown ONLY for a user-initiated pull. Background
+  // polling (refetchInterval) must stay invisible — never flash the wheel.
+  const [manualRefreshing, setManualRefreshing] = useState(false);
   const refreshChat = useCallback(() => {
-    threadsQuery.refetch().catch(() => undefined);
-    if (activeThread) messagesQuery.refetch().catch(() => undefined);
+    setManualRefreshing(true);
+    Promise.all([
+      threadsQuery.refetch().catch(() => undefined),
+      activeThread ? messagesQuery.refetch().catch(() => undefined) : Promise.resolve(),
+    ]).finally(() => setManualRefreshing(false));
   }, [activeThread, messagesQuery, threadsQuery]);
 
   const openThreadById = useCallback(async (threadId: string) => {
@@ -517,6 +660,65 @@ export function ChatTab() {
     openThreadById(threadId).catch(() => undefined);
     nav.setParams?.({ threadId: undefined });
   }, [nav, openThreadById, route.params?.threadId, token]);
+
+  // Deep-link from elsewhere in the app (Team / Contacts / Recent / Voicemail
+  // "Message" buttons) to open a chat with a given number/extension. Resolution:
+  //   • internal extension (kind 'internal', or a 2–6 digit number that maps to
+  //     a directory user) → opens a DM with that user.
+  //   • anything else → opens an SMS thread keyed on the number.
+  // Reuses the same create-or-reuse endpoint as the New Chat sheet, so an
+  // existing thread is returned instead of duplicated.
+  const composeWithNumber = useCallback(
+    async (rawNumber: string, kind?: 'internal' | 'external') => {
+      if (!token) return;
+      const number = rawNumber.trim();
+      if (!number) {
+        showToast('No number is available for this contact.');
+        return;
+      }
+      const digits = number.replace(/\D/g, '');
+      const looksInternal = kind === 'internal' || (kind !== 'external' && /^\d{2,6}$/.test(number));
+      try {
+        let peerUserId: string | null = null;
+        if (looksInternal) {
+          const dir = await getChatDirectoryFull(token).catch(() => null);
+          const ext = (dir?.extensions ?? []).find((e) => String(e.extNumber) === digits);
+          if (ext?.ownerUserId) {
+            // Messaging your own extension is a no-op DM-with-yourself — guard
+            // it with a clear message instead of opening an empty self-thread.
+            const me = (dir?.users ?? []).find((u) => u.self);
+            if (me && ext.ownerUserId === me.id) {
+              showToast("That's your own extension — you can't message yourself.");
+              return;
+            }
+            peerUserId = ext.ownerUserId;
+          }
+          // An explicitly-internal caller with no linked chat user can't be a
+          // DM and must NOT fall through to SMS (that would fail with an
+          // INVALID_PHONE on an extension number). Tell the user plainly.
+          if (!peerUserId && kind === 'internal') {
+            showToast(`No chat user is linked to extension ${digits}.`);
+            return;
+          }
+        }
+        const res = peerUserId
+          ? await createChatThread(token, { type: 'dm', peerUserId })
+          : await createChatThread(token, { type: 'sms', externalPhone: number });
+        await openThreadById(res.threadId);
+      } catch (err: any) {
+        showToast(friendlyComposeError(err?.message));
+      }
+    },
+    [openThreadById, showToast, token],
+  );
+
+  useEffect(() => {
+    const composeNumber = String(route.params?.composeNumber || '');
+    if (!composeNumber || !token) return;
+    const composeKind = route.params?.composeKind;
+    nav.setParams?.({ composeNumber: undefined, composeName: undefined, composeKind: undefined });
+    composeWithNumber(composeNumber, composeKind).catch(() => undefined);
+  }, [nav, composeWithNumber, route.params?.composeNumber, route.params?.composeKind, token]);
 
   const startDm = useCallback(async (user: ChatDirectoryUser) => {
     if (!token) return;
@@ -897,11 +1099,39 @@ export function ChatTab() {
     });
   }, [messageSearch, messages]);
 
+  // The message list renders INVERTED (newest at offset 0 == the visual bottom).
+  // That makes a chat always open flat at the latest message with zero scroll
+  // timing, and keeps the newest bubble pinned above the keyboard. The data must
+  // therefore be newest-first.
+  const invertedMessages = useMemo(() => displayedMessages.slice().reverse(), [displayedMessages]);
+
+  // Ordered list of every voice note in the thread (oldest → newest). Drives the
+  // shared player's auto-advance: when one note ends, the next in this list plays.
+  const voiceNoteOrder = useMemo(() => {
+    const out: { id: string; url: string }[] = [];
+    for (const message of messages) {
+      const attachments = message.attachments || [];
+      const mmsSource =
+        attachments.length > 0
+          ? []
+          : (message.mmsUrls || []).map((u) => String(u || '').trim()).filter((u) => /^https?:\/\//i.test(u));
+      const mmsDerived = mmsSource.map((url, index) => mmsUrlToAttachment(url, message.id, index));
+      const combined = [...attachments, ...mmsDerived].filter((a) => Boolean(a.downloadUrl));
+      for (const a of combined) {
+        if (isAudioAttachment(a, message.type) && a.downloadUrl) out.push({ id: a.id, url: a.downloadUrl });
+      }
+    }
+    return out;
+  }, [messages]);
+  const voiceNotePlayer = useVoiceNotePlayerController(voiceNoteOrder);
+
   // Stable renderItem so typing/emoji insertion (which only changes `draft`)
   // never forces the message list to re-render its visible bubbles.
   const renderMessageItem = useCallback(
     ({ item, index }: { item: ChatMessage; index: number }) => {
-      const prev = displayedMessages[index - 1];
+      // Inverted data: the bubble visually ABOVE this one is the older message,
+      // which sits at index + 1 in the reversed array.
+      const prev = invertedMessages[index + 1];
       const grouped = Boolean(prev && prev.senderId === item.senderId && prev.mine === item.mine);
       return (
         <MessageBubble
@@ -916,10 +1146,11 @@ export function ChatTab() {
         />
       );
     },
-    [displayedMessages, messageSearch, removeReaction, retryMessage],
+    [invertedMessages, messageSearch, removeReaction, retryMessage],
   );
 
   return (
+    <VoiceNotePlayerContext.Provider value={voiceNotePlayer}>
     <KeyboardAvoidingView style={[styles.container, { backgroundColor: colors.bg }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       {!activeThread ? (
         <View style={styles.container}>
@@ -965,7 +1196,7 @@ export function ChatTab() {
               bounces={false}
               alwaysBounceVertical={false}
               overScrollMode="never"
-              refreshControl={<RefreshControl refreshing={threadsQuery.isRefetching} onRefresh={refreshChat} tintColor={colors.primary} />}
+              refreshControl={<RefreshControl refreshing={manualRefreshing} onRefresh={refreshChat} tintColor={colors.primary} />}
               contentContainerStyle={styles.threadList}
               renderItem={({ item }) => <ThreadRow thread={item} onPress={() => setActiveThread(item)} />}
             />
@@ -1018,7 +1249,8 @@ export function ChatTab() {
           ) : (
             <FlatList
               ref={listRef}
-              data={displayedMessages}
+              data={invertedMessages}
+              inverted
               keyExtractor={(item) => item.id}
               bounces={false}
               alwaysBounceVertical={false}
@@ -1028,13 +1260,10 @@ export function ChatTab() {
               keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
               onScroll={handleListScroll}
               scrollEventThrottle={64}
-              onContentSizeChange={() => {
-                if (atBottomRef.current) listRef.current?.scrollToEnd({ animated: false });
-              }}
               initialNumToRender={18}
               maxToRenderPerBatch={12}
               windowSize={9}
-              removeClippedSubviews={Platform.OS === 'android'}
+              removeClippedSubviews={false}
               renderItem={renderMessageItem}
             />
           )}
@@ -1142,6 +1371,7 @@ export function ChatTab() {
         </View>
       ) : null}
     </KeyboardAvoidingView>
+    </VoiceNotePlayerContext.Provider>
   );
 }
 
@@ -1400,40 +1630,16 @@ function ImageGrid({
 
 function VoiceNoteBubble({ attachment, mine, failed, onRetry }: { attachment: ChatAttachment; mine: boolean; failed: boolean; onRetry: () => void }) {
   const { colors } = useTheme();
-  const soundRef = useRef<Audio.Sound | null>(null);
-  const [playing, setPlaying] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [durationMs, setDurationMs] = useState<number | null>(attachment.durationMs ?? null);
+  const player = useContext(VoiceNotePlayerContext);
+  const isActive = player?.activeId === attachment.id;
+  const playing = Boolean(isActive && player?.playing);
+  const progress = isActive ? (player?.progress ?? 0) : 0;
+  const durationMs = isActive && player?.durationMs ? player.durationMs : (attachment.durationMs ?? null);
 
-  useEffect(() => () => {
-    soundRef.current?.unloadAsync().catch(() => undefined);
-    soundRef.current = null;
-  }, []);
-
-  const toggle = useCallback(async () => {
+  const toggle = useCallback(() => {
     if (!attachment.downloadUrl) return;
-    if (!soundRef.current) {
-      const { sound } = await Audio.Sound.createAsync({ uri: attachment.downloadUrl }, { shouldPlay: false });
-      soundRef.current = sound;
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (!status.isLoaded) return;
-        setPlaying(Boolean(status.isPlaying));
-        const dur = status.durationMillis || durationMs || 0;
-        if (dur > 0) {
-          setDurationMs(dur);
-          setProgress(Math.max(0, Math.min(1, (status.positionMillis || 0) / dur)));
-        }
-        if (status.didJustFinish) {
-          setPlaying(false);
-          setProgress(0);
-          sound.setPositionAsync(0).catch(() => undefined);
-        }
-      });
-    }
-    const status = await soundRef.current.getStatusAsync();
-    if (status.isLoaded && status.isPlaying) await soundRef.current.pauseAsync();
-    else await soundRef.current.playAsync();
-  }, [attachment.downloadUrl, durationMs]);
+    player?.toggle(attachment.id, attachment.downloadUrl);
+  }, [attachment.downloadUrl, attachment.id, player]);
 
   return (
     <View style={[styles.voiceBubble, { backgroundColor: mine ? colors.primary : colors.surfaceElevated, borderColor: mine ? 'transparent' : colors.borderSubtle }]}>

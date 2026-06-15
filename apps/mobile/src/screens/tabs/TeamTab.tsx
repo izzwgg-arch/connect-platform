@@ -1,7 +1,7 @@
 import React, { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, FlatList, PanResponder, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { useTheme } from '../../context/ThemeContext';
@@ -129,6 +129,7 @@ export function TeamTab() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { token } = useAuth();
+  const nav = useNavigation<any>();
   const sip = useSip();
   const [live, setLive] = useState<LiveTelephonyState | null>(null);
   const [query, setQuery] = useState('');
@@ -149,11 +150,16 @@ export function TeamTab() {
 
   const members = teamQuery.data ?? [];
   const loading = teamQuery.isLoading && members.length === 0;
-  const refreshing = teamQuery.isRefetching;
+  // Spinner shows ONLY on a user pull-to-refresh; background/focus refetches stay silent.
+  const [refreshing, setRefreshing] = useState(false);
   const error = teamQuery.error && members.length === 0 ? 'Could not load team directory.' : null;
   const refetchTeam = teamQuery.refetch;
   const load = useCallback(() => {
     refetchTeam().catch(() => undefined);
+  }, [refetchTeam]);
+  const onUserRefresh = useCallback(() => {
+    setRefreshing(true);
+    refetchTeam().catch(() => undefined).finally(() => setRefreshing(false));
   }, [refetchTeam]);
 
   useFocusEffect(
@@ -212,8 +218,14 @@ export function TeamTab() {
   }, [sip]);
 
   const messageMember = useCallback((member: TeamDirectoryMember) => {
-    showAppAlert('Message', `Chat actions for ${member.name} will open from Chat.`);
-  }, []);
+    const ext = (member.extension || '').trim();
+    if (!ext) {
+      showAppAlert('Message', `No extension is available for ${member.name}.`);
+      return;
+    }
+    // Team members are always internal users → open a DM via their extension.
+    nav.navigate('Chat', { composeNumber: ext, composeName: member.name, composeKind: 'internal' });
+  }, [nav]);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
@@ -267,7 +279,7 @@ export function TeamTab() {
           bounces={false}
           alwaysBounceVertical={false}
           overScrollMode="never"
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} tintColor={colors.primary} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onUserRefresh} tintColor={colors.primary} />}
           contentContainerStyle={styles.list}
           renderItem={({ item }) => {
             return (

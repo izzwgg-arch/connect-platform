@@ -126,6 +126,9 @@ const config: ExpoConfig = {
         // an *explicit* user-initiated import. The plugin block below also
         // adds NSContactsUsageDescription on iOS.
         'READ_CONTACTS',
+        // Mirror newly-created Connect contacts into the device address book
+        // (primary Google account) so they back up & sync like WhatsApp.
+        'WRITE_CONTACTS',
       ],
   },
   extra: {

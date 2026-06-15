@@ -111,6 +111,8 @@ export type MobilePushRingPayload = {
   toExtension: string;
   fromNumber: string | null;
   fromDisplay: string | null;
+  /** Ring-group CID prefix (deduped), rendered as a tag on the ring screen. */
+  fromPrefix?: string | null;
   connectTenantId: string | null;
   pbxVitalTenantId: string | null;
   state?: "ringing" | "hungup" | "diverted_to_voicemail";
@@ -326,6 +328,7 @@ export class MobilePushNotifier {
         toExtension: ext,
         fromNumber: call.from ?? null,
         fromDisplay: call.fromName ?? null,
+        fromPrefix: call.fromPrefix ?? null,
         connectTenantId: call.tenantId ?? null,
         pbxVitalTenantId,
       };

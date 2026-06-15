@@ -290,6 +290,7 @@ export function IncomingCallScreen() {
     direction: 'inbound',
     selfNames: selfExtNames,
     selfExtensionNumbers: selfExtNumbers,
+    ringGroupPrefix: (displayInvite as any)?.fromPrefix ?? null,
   });
   const callerLines = callerDisplayLines(callerIdentity);
   const callerName = callerLines.primary;

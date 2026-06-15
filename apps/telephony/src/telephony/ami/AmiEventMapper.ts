@@ -2,6 +2,7 @@ import type { AmiFrame } from "./AmiTypes";
 import type {
   AmiCoreShowChannel,
   AmiNewchannel,
+  AmiNewCallerid,
   AmiNewstate,
   AmiDialBegin,
   AmiDialEnd,
@@ -67,6 +68,18 @@ export function mapAmiFrame(frame: AmiFrame): TypedAmiEvent | null {
         exten: g("Exten"),
         priority: g("Priority"),
       } satisfies AmiCoreShowChannel;
+
+    // NewCallerid fires when CALLERID(name/num) changes mid-call — e.g. when the
+    // VitalPBX ring-group dialplan prepends its prefix via Set(CALLERID(name)=…).
+    case "NewCallerid":
+      return {
+        event: "NewCallerid",
+        channel: g("Channel"),
+        uniqueid: g("Uniqueid"),
+        linkedid: g("Linkedid"),
+        callerIDNum: g("CallerIDNum"),
+        callerIDName: g("CallerIDName"),
+      } satisfies AmiNewCallerid;
 
     case "Newstate":
       return {

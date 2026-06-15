@@ -235,3 +235,46 @@ test("splitRingGroupPrefix ignores numeric pseudo-prefix", () => {
   assert.deepEqual(splitRingGroupPrefix("Sales:Bob"), { prefix: "Sales", rest: "Bob" });
   assert.deepEqual(splitRingGroupPrefix("Sales:"), { prefix: "Sales", rest: "" });
 });
+
+test("splitRingGroupPrefix collapses a repeated (tripled) prefix to one label", () => {
+  // VitalPBX prepends the prefix on every ring-group pass.
+  assert.deepEqual(
+    splitRingGroupPrefix("Estimates:Estimates:Estimates:A PLUS CENTER TEST"),
+    { prefix: "Estimates", rest: "A PLUS CENTER TEST" },
+  );
+  assert.deepEqual(
+    splitRingGroupPrefix("New Tires:New Tires:8453050021"),
+    { prefix: "New Tires", rest: "8453050021" },
+  );
+});
+
+test("explicit ringGroupPrefix field (server-provided) is used and name stays clean", () => {
+  // New wire shape: fromName is the bare CNAM, the prefix arrives separately.
+  const id = normalizeCallerIdentity({
+    direction: "inbound",
+    number: "8455577768",
+    displayName: "A PLUS CENTER TEST",
+    ringGroupPrefix: "Estimates",
+  });
+  assert.equal(id.ringGroupPrefix, "Estimates");
+  assert.equal(id.displayName, "A PLUS CENTER TEST");
+  assert.equal(id.externalNumber, "8455577768");
+  const lines = callerDisplayLines(id);
+  assert.equal(lines.prefixBadge, "Estimates");
+  assert.equal(lines.primary, "A PLUS CENTER TEST");
+  assert.equal(lines.secondary, "8455577768");
+});
+
+test("explicit ringGroupPrefix overrides any prefix parsed from the display name", () => {
+  const id = normalizeCallerIdentity({
+    direction: "inbound",
+    number: "8455551212",
+    displayName: "Estimates:Estimates:John Smith",
+    ringGroupPrefix: "Estimates",
+  });
+  assert.equal(id.ringGroupPrefix, "Estimates");
+  assert.equal(id.displayName, "John Smith");
+  const lines = callerDisplayLines(id);
+  assert.equal(lines.prefixBadge, "Estimates");
+  assert.equal(lines.primary, "John Smith");
+});

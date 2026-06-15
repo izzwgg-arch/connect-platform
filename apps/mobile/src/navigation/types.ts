@@ -6,7 +6,16 @@ export type TabParamList = {
   Contact: undefined;
   Keypad: undefined;
   Recent: undefined;
-  Chat: { threadId?: string } | undefined;
+  Chat:
+    | {
+        threadId?: string;
+        composeNumber?: string;
+        composeName?: string;
+        /** 'internal' forces a DM (extension → directory user); 'external'
+         *  forces an SMS thread. Omitted = auto-detect from the number shape. */
+        composeKind?: 'internal' | 'external';
+      }
+    | undefined;
   Voicemail: undefined;
   Settings: undefined;
 };

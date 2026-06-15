@@ -55,6 +55,29 @@ function digitsOnly(value: string | null | undefined): string {
   return /^1\d{10}$/.test(digits) ? digits.slice(1) : digits;
 }
 
+/**
+ * Extract the ring-group CID prefix the VitalPBX dialplan prepends to
+ * CALLERID(name) — `Set(CALLERID(name)=Estimates:${CALLERID(name)})`. The
+ * dialplan prepends it on every ring-group pass, so the name frequently arrives
+ * tripled (e.g. "Estimates:Estimates:Estimates:A PLUS CENTER TEST"). We return
+ * just the single label ("Estimates"), or null when the name has no prefix.
+ *
+ * Only the leading label is treated as a prefix: a numeric leading segment (a
+ * bare caller number after the colon) or an overly-long segment (a real CNAM
+ * that happens to contain a colon) yields null so we never mistake caller data
+ * for a ring-group tag.
+ */
+export function extractRingGroupPrefix(rawName: string | null | undefined): string | null {
+  const name = String(rawName ?? "").trim();
+  const firstColon = name.indexOf(":");
+  if (firstColon <= 0) return null;
+  const token = name.slice(0, firstColon).trim();
+  if (!token) return null;
+  if (/^\+?[\d\s\-().]{4,}$/.test(token)) return null; // numeric → a number, not a label
+  if (token.length > 40) return null; // too long → a real CNAM, not a ring-group label
+  return token;
+}
+
 function isShortExtensionValue(value: string | null | undefined): boolean {
   const digits = digitsOnly(value);
   return digits.length >= 2 && digits.length <= 6;
@@ -480,6 +503,16 @@ export class CallStateStore extends EventEmitter {
       call.fromName = params.callerIDName;
     }
 
+    // Capture the ring-group CID prefix as a SEPARATE field (never merged into
+    // fromName/number). The bare inbound trunk leg has no prefix; the ring-group
+    // member-dial legs (e.g. PJSIP/T2_103) carry the prefixed CallerIDName like
+    // "Estimates:Caller". First non-null wins. This is what feeds the prefix tag
+    // shown on the live ring screen and call history.
+    if (!call.fromPrefix) {
+      const pfx = extractRingGroupPrefix(params.callerIDName);
+      if (pfx) call.fromPrefix = pfx;
+    }
+
     if (!call.channels.includes(params.channel)) {
       call.channels.push(params.channel);
     }
@@ -555,6 +588,23 @@ export class CallStateStore extends EventEmitter {
     this.drainPendingRecordingPath(params.linkedId);
     this.emit("callUpsert", { ...call });
     return call;
+  }
+
+  // Called on NewCallerid — VitalPBX fires this exactly when the ring-group
+  // dialplan runs `Set(CALLERID(name)=Prefix:...)`. This is the most direct
+  // signal of the prefix; we capture it into the separate fromPrefix tag field.
+  onNewCallerid(params: { linkedId: string; uniqueid: string; callerIDName: string }): void {
+    let call = this.calls.get(params.linkedId);
+    if (!call) {
+      const cid = this.channelIndex.get(params.uniqueid);
+      call = cid ? this.calls.get(cid) : undefined;
+    }
+    if (!call || call.state === "hungup") return;
+    if (call.fromPrefix) return;
+    const pfx = extractRingGroupPrefix(params.callerIDName);
+    if (!pfx) return;
+    call.fromPrefix = pfx;
+    this.emit("callUpsert", { ...call });
   }
 
   // Called on Newstate
@@ -1184,6 +1234,7 @@ export class CallStateStore extends EventEmitter {
       tenantSlug,
       tenantName: null,
       fromName: null,
+      fromPrefix: null,
       direction,
       state: "unknown",
       from: null,

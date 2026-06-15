@@ -12,6 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { createContact } from '../api/client';
+import { saveContactToDevice } from '../contacts/deviceContactsWrite';
 import { showAppAlert } from './ui/appAlert';
 import { spacing } from '../theme/spacing';
 
@@ -89,6 +90,16 @@ export function AddContactModal({
         notes: notes.trim() || undefined,
         phones: phone.trim() ? [{ type: 'mobile', numberRaw: phone.trim(), isPrimary: true }] : [],
         emails: email.trim() ? [{ type: 'work', email: email.trim(), isPrimary: true }] : [],
+      });
+      // Also mirror into the device address book (Google/iCloud) so it backs
+      // up & syncs like WhatsApp. Best-effort — never blocks the save flow.
+      void saveContactToDevice({
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        displayName,
+        company: company.trim(),
+        phones: phone.trim() ? [{ numberRaw: phone.trim(), type: 'mobile' }] : [],
+        emails: email.trim() ? [{ email: email.trim(), type: 'work' }] : [],
       });
       onCreated({ displayName });
     } catch (e: any) {

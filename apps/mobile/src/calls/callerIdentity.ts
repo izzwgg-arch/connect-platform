@@ -66,6 +66,14 @@ export interface CallerIdentityInput {
   selfExtensionNumbers?: ReadonlyArray<string>;
   /** The logged-in user's own display names (user/extension names). */
   selfNames?: ReadonlyArray<string>;
+  /**
+   * Ring-group CID prefix captured server-side (telephony → CDR / push), already
+   * deduplicated to a single label. When provided it takes precedence over any
+   * prefix parsed out of {@link displayName}. This is the authoritative source
+   * now that the PBX prefix is carried in its own field rather than inlined into
+   * the caller name.
+   */
+  ringGroupPrefix?: string | null;
 }
 
 const PSTN_MIN_DIGITS = 7;
@@ -91,8 +99,13 @@ export function looksLikePstn(v: string | null | undefined): boolean {
 
 /**
  * Split a PBX display-name into its ring-group prefix and the remaining caller
- * info. Only the FIRST colon is treated as the prefix separator. A trailing
- * colon (the "New Tires:" empty-CNAM shape) is stripped from the remainder.
+ * info. The VitalPBX dialplan prepends the prefix on EVERY ring-group pass
+ * (`Set(CALLERID(name)=Estimates:${CALLERID(name)})`), so the name frequently
+ * arrives with the label repeated, e.g.
+ * "Estimates:Estimates:Estimates:A PLUS CENTER TEST". We collapse the repeated
+ * identical leading label and return a single prefix ("Estimates") plus the
+ * caller remainder. A trailing colon (the "New Tires:" empty-CNAM shape) is
+ * stripped from the remainder.
  *
  * Returns prefix=null when there is no colon, or when the part before the colon
  * is itself a phone number (so we don't mistake "1:2" style junk for a prefix).
@@ -102,16 +115,34 @@ export function splitRingGroupPrefix(rawDisplayName: string | null | undefined):
   rest: string;
 } {
   const name = clean(rawDisplayName);
-  const colonIdx = name.indexOf(":");
-  if (colonIdx <= 0) return { prefix: null, rest: name };
-  const prefix = name.slice(0, colonIdx).trim();
+  const firstColon = name.indexOf(":");
+  if (firstColon <= 0) return { prefix: null, rest: name };
+  const token = name.slice(0, firstColon).trim();
   // A numeric "prefix" is not a ring-group label — treat whole thing as caller.
-  if (!prefix || looksLikePstn(prefix)) return { prefix: null, rest: name };
-  const rest = name
-    .slice(colonIdx + 1)
-    .replace(/:\s*$/, "")
-    .trim();
-  return { prefix, rest };
+  if (!token || looksLikePstn(token)) return { prefix: null, rest: name };
+  // Strip every repeated leading "token:" group so a tripled prefix collapses
+  // to one. Only identical leading labels are stripped; a different label after
+  // the first is treated as the start of the caller remainder.
+  const tokenLc = token.toLowerCase();
+  let rest = name;
+  for (;;) {
+    const idx = rest.indexOf(":");
+    if (idx <= 0) break;
+    if (rest.slice(0, idx).trim().toLowerCase() !== tokenLc) break;
+    rest = rest.slice(idx + 1);
+  }
+  rest = rest.replace(/:\s*$/, "").trim();
+  return { prefix: token, rest };
+}
+
+/** Collapse a possibly-repeated prefix label ("Estimates:Estimates" / "Estimates
+ *  Estimates") down to a single clean label. Used for the server-provided
+ *  fromPrefix field as a defensive measure. */
+function dedupePrefixLabel(raw: string | null | undefined): string | null {
+  const v = clean(raw);
+  if (!v) return null;
+  const first = v.split(/[:]/)[0]!.trim();
+  return first || null;
 }
 
 function matchesAny(value: string, list: ReadonlyArray<string> | undefined): boolean {
@@ -143,7 +174,11 @@ export function normalizeCallerIdentity(input: CallerIdentityInput): NormalizedC
   const rawSipCallerId = clean(input.number) || null;
   const rawPbxCallerId = clean(input.displayName) || null;
   const direction: CallerDirection = input.direction ?? "unknown";
-  const { prefix, rest } = splitRingGroupPrefix(input.displayName);
+  const { prefix: parsedPrefix, rest } = splitRingGroupPrefix(input.displayName);
+  // The authoritative prefix now arrives in its own field (telephony → CDR /
+  // push). Fall back to the prefix parsed out of the display name for legacy
+  // rows / the SIP-INVITE path where the prefix is still inlined.
+  const prefix = dedupePrefixLabel(input.ringGroupPrefix) ?? parsedPrefix;
 
   const base: NormalizedCallerIdentity = {
     externalNumber: null,

@@ -65,8 +65,19 @@ class SipKeepAliveService : Service() {
 
   companion object {
     private const val TAG = "SipKeepAliveService"
-    private const val CHANNEL_ID = "connect_sip_keepalive"
+    // Bumped to a fresh id so the IMPORTANCE_MIN setting below actually applies.
+    // Android locks a channel's importance at first-create — apps cannot lower
+    // it afterwards — so the legacy "connect_sip_keepalive" channel kept whatever
+    // (higher) importance it was first created with, which is why the
+    // "Ready to receive calls" entry stayed visible in the status bar / shade on
+    // existing installs. A new channel id is the only way to re-apply MIN without
+    // the user editing channel settings by hand. NOTE: this is a notification-only
+    // change — the foreground service / keep-alive logic is untouched.
+    private const val CHANNEL_ID = "connect_bg_keepalive_v2"
     private const val CHANNEL_NAME = "Connect background service"
+    /** Pre-v2 channel id — deleted on channel setup so its stale, higher-importance
+     *  "Ready to receive calls" notification disappears after upgrade. */
+    private const val LEGACY_CHANNEL_ID = "connect_sip_keepalive"
     /**
      * Separate channel for the in-call ongoing notification so we can give it
      * a higher importance + visible category — the keep-alive idle channel
@@ -624,13 +635,18 @@ class SipKeepAliveService : Service() {
   private fun ensureChannel() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+    // Drop the legacy channel so its stale higher-importance "Ready to receive
+    // calls" entry stops appearing in the status bar / shade after upgrade.
+    try { nm.deleteNotificationChannel(LEGACY_CHANNEL_ID) } catch (_: Throwable) {}
     if (nm.getNotificationChannel(CHANNEL_ID) != null) return
     val channel = NotificationChannel(
       CHANNEL_ID,
       CHANNEL_NAME,
-      // MIN so it collapses into the "Connect is running in the background"
-      // group without distracting the user. The user can still hide it
-      // entirely via app notification settings if desired.
+      // MIN: no status-bar icon, no heads-up, no sound — the OS collapses it
+      // into the silent/minimized section so the user effectively never sees
+      // it during normal use. This is the quietest a foreground-service
+      // notification can be; Android does not allow a persistent FGS with no
+      // notification at all, so we make it as invisible as the platform permits.
       NotificationManager.IMPORTANCE_MIN,
     ).apply {
       description = "Keeps Connect ready to receive calls when the screen is off."
@@ -638,6 +654,8 @@ class SipKeepAliveService : Service() {
       setSound(null, null)
       enableVibration(false)
       enableLights(false)
+      // Hide it from the lock screen entirely.
+      lockscreenVisibility = Notification.VISIBILITY_SECRET
     }
     nm.createNotificationChannel(channel)
   }
@@ -760,13 +778,15 @@ class SipKeepAliveService : Service() {
     return NotificationCompat.Builder(this, CHANNEL_ID)
       .setSmallIcon(R.drawable.notification_icon)
       .setContentTitle("Connect")
-      .setContentText("Ready to receive calls")
       .setOngoing(true)
       .setPriority(NotificationCompat.PRIORITY_MIN)
       .setCategory(NotificationCompat.CATEGORY_SERVICE)
       .setShowWhen(false)
+      .setVisibility(NotificationCompat.VISIBILITY_SECRET)
       .setContentIntent(pi)
-      .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+      // DEFERRED lets the OS hold the FGS notification back (up to 10s) instead
+      // of flashing it on every service (re)start, so it doesn't pop into view.
+      .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_DEFERRED)
       .build()
   }
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   FlatList,
@@ -17,7 +17,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useFocusEffect, useRoute } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import type { RouteProp } from '@react-navigation/native';
 import type { TabParamList } from '../../navigation/types';
 import { useAuth } from '../../context/AuthContext';
@@ -53,13 +53,20 @@ const VM_LIST_CACHE_MAX = 300;
 // Theme-driven palette. Derived from the app theme so the screen follows
 // light/dark mode instead of being hardcoded dark. The keys mirror the old
 // `VM` constant so every existing `VM.*` / `styles.*` reference keeps working.
-function makeVmPalette(c: AppColors) {
+function makeVmPalette(c: AppColors, isDark: boolean) {
   return {
     bg: c.bg,
     bg2: c.bgSecondary,
     card: c.surface,
     card2: c.surfaceElevated,
     cardMuted: c.surfaceHigh,
+    // SOLID (fully opaque) state fills for cards. Translucent tints let the
+    // card's elevation shadow bleed through the body, which renders as an ugly
+    // muddy "card-behind-a-card" frame in light mode. These stay opaque.
+    cardNewBg: isDark ? '#13203b' : '#eaf1fd',
+    cardUrgentBg: isDark ? '#2c2012' : '#fff3e6',
+    cardOldBg: isDark ? '#0e1626' : '#f3f6fb',
+    cardSelectedBg: isDark ? '#16284c' : '#e3edfc',
     border: c.border,
     borderSoft: c.borderSubtle,
     text: c.text,
@@ -77,6 +84,9 @@ function makeVmPalette(c: AppColors) {
     orangeSoft: c.warningMuted,
     purple: c.purple,
     shadow: c.black,
+    // Unplayed waveform bars — a soft, neutral track that the accent fill
+    // reveals over as audio plays.
+    waveTrack: isDark ? 'rgba(148, 163, 184, 0.30)' : 'rgba(100, 116, 139, 0.24)',
   };
 }
 
@@ -148,17 +158,22 @@ function voicemailListSignature(list: Voicemail[]): string {
 
 export function VoicemailTab() {
   const route = useRoute<RouteProp<TabParamList, 'Voicemail'>>();
+  const nav = useNavigation<any>();
   const insets = useSafeAreaInsets();
   const { token } = useAuth();
   const sip = useSip();
-  const { colors } = useTheme();
-  const VM = useMemo(() => makeVmPalette(colors), [colors]);
+  const { colors, isDark } = useTheme();
+  const VM = useMemo(() => makeVmPalette(colors, isDark), [colors, isDark]);
   const styles = useMemo(() => makeStyles(VM), [VM]);
   const queryClient = useQueryClient();
   const [rows, setRows] = useState<Voicemail[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [sound, setSound] = useState<Audio.Sound | null>(null);
-  const [progress, setProgress] = useState<{ position: number; duration: number }>({ position: 0, duration: 0 });
+  // A single shared 0→1 progress value driven directly by the audio status
+  // callback. The fill is animated on the JS thread between status ticks so it
+  // tracks the real playback position smoothly and exactly in sync — no
+  // optimistic guessing, no per-second jumps.
+  const progressAnim = useRef(new Animated.Value(0)).current;
   const [primaryFilter, setPrimaryFilter] = useState<PrimaryFilter>('all');
   const [dateFilter, setDateFilter] = useState<DateFilter>('any');
   const [transcriptOnly, setTranscriptOnly] = useState(false);
@@ -175,8 +190,11 @@ export function VoicemailTab() {
   // Latest activeId, read inside the polling callback without re-subscribing.
   const activeIdRef = useRef<string | null>(null);
   useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
-  // Throttles playback progress writes to once per whole second.
-  const lastProgressRef = useRef<{ position: number; duration: number }>({ position: -1, duration: -1 });
+  // Latest loaded sound, mirrored into a ref so `play` can stay referentially
+  // stable (so memoized VoicemailCards don't all re-render every time the
+  // active sound changes) while still reading the current player synchronously.
+  const soundRef = useRef<Audio.Sound | null>(null);
+  useEffect(() => { soundRef.current = sound; }, [sound]);
   // Last list content actually applied to `rows`, to drop no-op refetches.
   const appliedVmSigRef = useRef<string>('');
 
@@ -363,19 +381,35 @@ export function VoicemailTab() {
 
   const selectionMode = selectedIds.length > 0;
 
-  const updatePlayback = useCallback((status: any) => {
+  // Build a status listener bound to a specific voicemail. The audio engine is
+  // the single source of truth: we flip to "playing" the instant the audio
+  // actually starts, advance the fill to the real position on every tick, and
+  // clear everything the instant it finishes — so the visuals can never drift
+  // out of sync with the sound.
+  const makeStatusHandler = useCallback((vmId: string, fallbackDurationSec: number) => (status: any) => {
     if (!status?.isLoaded) return;
-    const duration = Math.max(0, Math.floor((status.durationMillis || 0) / 1000));
-    const position = Math.max(0, Math.floor((status.positionMillis || 0) / 1000));
-    // expo-av fires this several times per second; only re-render when the
-    // whole-second position (or duration) actually changes.
-    const last = lastProgressRef.current;
-    if (position !== last.position || duration !== last.duration) {
-      lastProgressRef.current = { position, duration };
-      setProgress({ position, duration });
+    const durMs = status.durationMillis || fallbackDurationSec * 1000 || 1;
+    const posMs = status.positionMillis || 0;
+    const pct = Math.max(0, Math.min(1, posMs / Math.max(1, durMs)));
+    // Glide to the latest position over roughly one update interval so the fill
+    // moves continuously instead of stepping.
+    Animated.timing(progressAnim, {
+      toValue: pct,
+      duration: status.isPlaying ? 90 : 0,
+      useNativeDriver: false,
+    }).start();
+
+    if (status.isPlaying && activeIdRef.current !== vmId) {
+      activeIdRef.current = vmId;
+      setActiveId(vmId);
     }
-    if (status.didJustFinish) setActiveId(null);
-  }, []);
+
+    if (status.didJustFinish) {
+      activeIdRef.current = null;
+      setActiveId(null);
+      Animated.timing(progressAnim, { toValue: 0, duration: 200, useNativeDriver: false }).start();
+    }
+  }, [progressAnim]);
 
   const play = useCallback(async (vm: Voicemail) => {
     if (!token) {
@@ -383,30 +417,27 @@ export function VoicemailTab() {
       return;
     }
 
-    // Toggle-off: tap the active voicemail to pause
-    if (activeId === vm.id && sound) {
-      await sound.pauseAsync();
+    // Toggle-off: tap the active voicemail to pause. Read live values from
+    // refs so this callback can stay referentially stable.
+    const currentSound = soundRef.current;
+    if (activeIdRef.current === vm.id && currentSound) {
+      await currentSound.pauseAsync().catch(() => undefined);
+      activeIdRef.current = null;
       setActiveId(null);
       return;
     }
 
-    if (sound) await sound.unloadAsync().catch(() => undefined);
+    // Tear down the previous sound in the background — do NOT await it, or the
+    // next (cached) load is needlessly delayed by the old player's release.
+    if (currentSound) {
+      currentSound.setOnPlaybackStatusUpdate(null);
+      currentSound.unloadAsync().catch(() => undefined);
+    }
 
     const localUri  = audioCache.getLocalUri(vm.id);
     const remoteUri = buildVoicemailStreamUri(token, vm.id);
     const startMs   = Date.now();
     console.log(`[VOICEMAIL_AUDIO] play_tap vmId=${vm.id} hasCache=${!!localUri}`);
-
-    const tryLoadUri = async (uri: string, isLocal: boolean): Promise<Audio.Sound> => {
-      console.log(`[VOICEMAIL_AUDIO] load_async_start vmId=${vm.id} isLocal=${isLocal} uriScheme=${uri.slice(0, 8)} elapsedMs=${Date.now() - startMs}`);
-      const next = new Audio.Sound();
-      const source = isLocal
-        ? { uri }
-        : { uri, headers: { Authorization: `Bearer ${token}` } };
-      await next.loadAsync(source, { shouldPlay: true });
-      console.log(`[VOICEMAIL_AUDIO] load_async_done vmId=${vm.id} isLocal=${isLocal} elapsedMs=${Date.now() - startMs}`);
-      return next;
-    };
 
     const markListened = () => {
       if (!vm.listened) {
@@ -416,46 +447,112 @@ export function VoicemailTab() {
       }
     };
 
+    // Empty voicemails (zero-duration, no recording on the server) have no
+    // audio to play. Streaming one would just hang on a tiny error body for
+    // seconds. A 0:00 duration is a reliable signal, so fail fast instantly —
+    // no spinner, no doomed network attempt. (We also bail if the preloader
+    // already probed and found no valid audio.)
+    if (!localUri && ((vm.durationSec ?? 0) <= 0 || audioCache.preloadStatus(vm.id) === 'error')) {
+      console.log(`[VOICEMAIL_AUDIO] play_skip_empty vmId=${vm.id}`);
+      setPlaybackError('This voicemail has no audio to play.');
+      return;
+    }
+
+    progressAnim.setValue(0);
+
+    // Flip to the playing state the instant the button is tapped — for EVERY
+    // path (pre-warmed, cached, or remote stream). There is no spinner: the
+    // pause icon shows immediately and the waveform fill begins moving as soon
+    // as the audio engine reports a real position. If a load ultimately fails,
+    // the catch blocks below revert this optimistic state.
+    activeIdRef.current = vm.id;
+    setActiveId(vm.id);
+
+    const onStatus = makeStatusHandler(vm.id, vm.durationSec ?? 0);
+
+    const loadFrom = async (uri: string, isLocal: boolean, timeoutMs: number) => {
+      console.log(`[VOICEMAIL_AUDIO] load_async_start vmId=${vm.id} isLocal=${isLocal} elapsedMs=${Date.now() - startMs}`);
+      const next = new Audio.Sound();
+      next.setOnPlaybackStatusUpdate(onStatus);
+      const source = isLocal ? { uri } : { uri, headers: { Authorization: `Bearer ${token}` } };
+      try {
+        await Promise.race([
+          next.loadAsync(source, { shouldPlay: true, progressUpdateIntervalMillis: 80 }),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('load_timeout')), timeoutMs)),
+        ]);
+      } catch (err) {
+        next.setOnPlaybackStatusUpdate(null);
+        next.unloadAsync().catch(() => undefined);
+        throw err;
+      }
+      console.log(`[VOICEMAIL_AUDIO] load_async_done vmId=${vm.id} isLocal=${isLocal} elapsedMs=${Date.now() - startMs}`);
+      soundRef.current = next;
+      setSound(next);
+      markListened();
+      return next;
+    };
+
+    // ── Path A0: a fully-decoded sound was pre-warmed → play INSTANTLY ─────────
+    // No loadAsync, no decode wait: just attach the listener and replay from 0.
+    const warm = audioCache.takeSound(vm.id);
+    if (warm) {
+      warm.setOnPlaybackStatusUpdate(onStatus);
+      soundRef.current = warm;
+      setSound(warm);
+      markListened();
+      try {
+        // Already decoded and sitting at position 0 — playAsync starts it
+        // immediately (no stop/seek round-trip like replayAsync). Fire it
+        // without awaiting so nothing blocks the audio from starting.
+        warm.playAsync().catch(() => undefined);
+        console.log(`[VOICEMAIL_AUDIO] play_prewarmed vmId=${vm.id} elapsedMs=${Date.now() - startMs}`);
+        return;
+      } catch (warmErr: any) {
+        // Pre-warmed instance went bad — discard and fall through to a load.
+        // Keep the optimistic active state; the load paths below continue it.
+        warm.setOnPlaybackStatusUpdate(null);
+        warm.unloadAsync().catch(() => undefined);
+        soundRef.current = null;
+        console.warn(`[VOICEMAIL_AUDIO] prewarm_play_failed vmId=${vm.id} error=${String(warmErr?.message ?? warmErr)}`);
+      }
+    }
+
     // ── Path A: play from preloaded local file ────────────────────────────────
+    // Cached audio loads in ~100ms. The active state is already set above, so
+    // the pause icon is already showing; the status handler drives the fill
+    // once the audio engine reports the real position a moment later.
     if (localUri) {
       try {
-        const next = await tryLoadUri(localUri, true);
-        next.setOnPlaybackStatusUpdate(updatePlayback);
-        setSound(next);
-        setActiveId(vm.id);
-        setProgress({ position: 0, duration: vm.durationSec });
-        markListened();
-        console.log(`[VOICEMAIL_AUDIO] play_from_cache vmId=${vm.id} elapsedMs=${Date.now() - startMs}`);
+        await loadFrom(localUri, true, 6000);
         return;
       } catch (cacheErr: any) {
-        // Cached file is corrupt / missing — fall through to remote stream
+        // Corrupt cache — fall back to the (slower) remote stream. Keep the
+        // optimistic active state; the remote catch reverts it only on failure.
         console.warn(`[VOICEMAIL_AUDIO] cache_play_failed vmId=${vm.id} error=${String(cacheErr?.message ?? cacheErr)}`);
       }
     } else {
-      const status = audioCache.preloadStatus(vm.id);
-      console.log(`[VOICEMAIL_AUDIO] play_stream_fallback vmId=${vm.id} preloadStatus=${status} elapsedMs=${Date.now() - startMs}`);
+      console.log(`[VOICEMAIL_AUDIO] play_stream_fallback vmId=${vm.id} preloadStatus=${audioCache.preloadStatus(vm.id)} elapsedMs=${Date.now() - startMs}`);
     }
 
     // ── Path B: stream from remote (cache miss or cache_play_failed) ──────────
+    // No local file: this fetches over the network. The pause state is already
+    // showing (set optimistically above) and the fill stays at 0 until the
+    // audio actually starts — no spinner. We only revert the active state if
+    // the stream genuinely fails.
     try {
-      const next = await tryLoadUri(remoteUri, false);
-      next.setOnPlaybackStatusUpdate(updatePlayback);
-      setSound(next);
-      setActiveId(vm.id);
-      setProgress({ position: 0, duration: vm.durationSec });
-      markListened();
+      await loadFrom(remoteUri, false, 8000);
     } catch {
+      activeIdRef.current = null;
+      setActiveId(null);
       const st = await probeVoicemailStreamStatus(token, vm.id);
       if (st === 403) {
         setPlaybackError('This voicemail is not available for your account.');
         removeVoicemailRowEverywhere(vm.id);
-        setActiveId(null);
         return;
       }
       setPlaybackError('Could not play voicemail audio.');
-      setActiveId(null);
     }
-  }, [activeId, audioCache, patchVoicemailCache, removeVoicemailRowEverywhere, sound, token, updatePlayback]);
+  }, [audioCache, makeStatusHandler, patchVoicemailCache, progressAnim, removeVoicemailRowEverywhere, token]);
 
   const toggleListened = useCallback((vm: Voicemail) => {
     if (!token) return;
@@ -480,8 +577,17 @@ export function VoicemailTab() {
   }, [sip]);
 
   const messageCaller = useCallback((vm: Voicemail) => {
-    showAppAlert('Message', `Open Chat to message ${callerLabel(vm)}.`);
-  }, []);
+    const number = vm.callerId?.trim();
+    if (!number) {
+      showAppAlert('Message', 'No number is available for this caller.');
+      return;
+    }
+    // Hand off to the Chat tab, which resolves the number to an existing/new
+    // SMS thread (external numbers) or DM (internal extensions) and opens it.
+    // A short digit-only caller id is an internal extension → force a DM.
+    const kind = /^\d{2,6}$/.test(number) ? 'internal' : 'external';
+    nav.navigate('Chat', { composeNumber: number, composeName: vm.callerName ?? undefined, composeKind: kind });
+  }, [nav]);
 
   const downloadVoicemail = useCallback(async (vm: Voicemail) => {
     if (!token) return;
@@ -579,7 +685,7 @@ export function VoicemailTab() {
               selected={selectedIds.includes(item.id)}
               selectionMode={selectionMode}
               expanded={expandedId === item.id}
-              progress={activeId === item.id ? progress : { position: 0, duration: item.durationSec }}
+              progressAnim={progressAnim}
               onPress={() => {
                 if (selectionMode) toggleSelected(item.id);
                 else setExpandedId((current) => current === item.id ? null : item.id);
@@ -741,7 +847,10 @@ type VoicemailCardProps = {
   selected: boolean;
   selectionMode: boolean;
   expanded: boolean;
-  progress: { position: number; duration: number };
+  // The shared progress driver, handed only to the active card. It's a stable
+  // ref so the card re-renders just once (when it becomes active) while the
+  // fill keeps animating off-thread in sync with the audio.
+  progressAnim: Animated.Value;
   onPress: () => void;
   onLongPress: () => void;
   onPlay: () => void;
@@ -750,13 +859,13 @@ type VoicemailCardProps = {
   onMore: () => void;
 };
 
-function VoicemailCard({
+const VoicemailCard = memo(function VoicemailCard({
   vm,
   active,
   selected,
   selectionMode,
   expanded,
-  progress,
+  progressAnim,
   onPress,
   onLongPress,
   onPlay,
@@ -769,7 +878,10 @@ function VoicemailCard({
   const urgent = status === 'urgent';
   const unread = status === 'new';
   const muted = status === 'old';
-  const accent = urgent ? VM.orange : unread ? VM.primary : VM.text3;
+  // Played-portion color. Urgent stays orange; everything else (incl. already
+  // heard) uses the brand blue so the fill always reads clearly against the
+  // neutral track instead of washing out to gray.
+  const accent = urgent ? VM.orange : VM.primary;
   const transcript = vm.transcription?.trim();
 
   return (
@@ -820,7 +932,7 @@ function VoicemailCard({
         >
           <Ionicons name={active ? 'pause' : 'play'} size={17} color={active ? VM.text : VM.primary} />
         </TouchableOpacity>
-        <Waveform active={active} progress={progress} duration={vm.durationSec} accent={accent} />
+        <Waveform active={active} progressAnim={progressAnim} accent={accent} />
       </View>
 
       {transcript && (
@@ -842,7 +954,17 @@ function VoicemailCard({
       </View>
     </TouchableOpacity>
   );
-}
+}, (a, b) =>
+  // Re-render only when this card's own visual data changes. Callback props are
+  // intentionally excluded: they're either referentially stable (play/callBack)
+  // or close over the immutable `vm`, so skipping on their identity is safe and
+  // is what keeps the active player's waveform in sync with the audio.
+  a.vm === b.vm &&
+  a.active === b.active &&
+  a.selected === b.selected &&
+  a.selectionMode === b.selectionMode &&
+  a.expanded === b.expanded,
+);
 
 function StatusBadge({ status }: { status: 'urgent' | 'new' | 'old' }) {
   const { VM, styles } = useVm();
@@ -855,62 +977,67 @@ function StatusBadge({ status }: { status: 'urgent' | 'new' | 'old' }) {
   );
 }
 
+// A fixed, organic-looking bar pattern (normalised 0..1 heights). Static by
+// design — a real audio player shows a steady waveform and reveals the
+// "played" portion left-to-right, rather than randomly jiggling.
+const WAVE_BARS = [
+  0.30, 0.55, 0.42, 0.78, 0.60, 0.88, 0.50, 0.70, 0.38, 0.62, 0.82, 0.46,
+  0.66, 0.92, 0.54, 0.74, 0.40, 0.58, 0.84, 0.48, 0.68, 0.36, 0.60, 0.50,
+];
+
 function Waveform({
   active,
-  progress,
-  duration,
+  progressAnim,
   accent,
 }: {
   active: boolean;
-  progress: { position: number; duration: number };
-  duration: number;
+  progressAnim: Animated.Value;
   accent: string;
 }) {
-  const { styles } = useVm();
-  const pulse = useRef(new Animated.Value(0)).current;
+  const { VM, styles } = useVm();
+  const [width, setWidth] = useState(0);
 
-  useEffect(() => {
-    if (!active) {
-      pulse.setValue(0);
-      return undefined;
-    }
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 480, useNativeDriver: false }),
-        Animated.timing(pulse, { toValue: 0, duration: 480, useNativeDriver: false }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [active, pulse]);
-
-  const pct = active
-    ? Math.min(1, (progress.position || 0) / Math.max(1, progress.duration || duration || 1))
-    : 0;
-  const bars = [0.42, 0.72, 0.5, 0.9, 0.58, 0.78, 0.44, 0.62, 0.86, 0.52, 0.74, 0.48, 0.66, 0.82, 0.46, 0.7];
+  const bars = (color: string, dim: boolean) =>
+    WAVE_BARS.map((h, idx) => (
+      <View
+        key={idx}
+        style={[
+          styles.waveBar,
+          {
+            height: 4 + h * 24,
+            backgroundColor: color,
+            opacity: dim ? 0.9 : 1,
+          },
+        ]}
+      />
+    ));
 
   return (
-    <View style={styles.waveBars}>
-      {bars.map((height, idx) => {
-        const filled = idx / bars.length <= pct;
-        const animatedHeight = pulse.interpolate({
-          inputRange: [0, 1],
-          outputRange: [10 + height * 15, 8 + ((idx % 4) + 1) * 5],
-        });
-        return (
-          <Animated.View
-            key={`${idx}-${height}`}
-            style={[
-              styles.waveBar,
-              {
-                height: active && filled ? animatedHeight : 10 + height * 15,
-                backgroundColor: filled || active ? accent : 'rgba(148, 163, 184, 0.24)',
-                opacity: filled ? 0.95 : 0.55,
-              },
-            ]}
-          />
-        );
-      })}
+    <View
+      style={styles.waveBars}
+      onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
+    >
+      {/* Unplayed track */}
+      <View style={styles.waveRow}>{bars(VM.waveTrack, true)}</View>
+
+      {/* Played portion, clipped to the live playback position. Driven by the
+          shared Animated value so it glides in lockstep with the audio. */}
+      {active && width > 0 && (
+        <Animated.View
+          style={[
+            styles.waveOverlay,
+            {
+              width: progressAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, width],
+                extrapolate: 'clamp',
+              }),
+            },
+          ]}
+        >
+          <View style={[styles.waveRow, { width }]}>{bars(accent, false)}</View>
+        </Animated.View>
+      )}
     </View>
   );
 }
@@ -1305,26 +1432,25 @@ function makeStyles(VM: VmPalette) {
     padding: spacing['4'],
     marginBottom: spacing['3'],
     shadowColor: VM.shadow,
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.16,
-    shadowRadius: 24,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 2,
   },
   cardNew: {
     borderColor: `${VM.primary}44`,
-    backgroundColor: VM.primarySoft,
+    backgroundColor: VM.cardNewBg,
   },
   cardUrgent: {
     borderColor: `${VM.orange}66`,
-    backgroundColor: VM.orangeSoft,
+    backgroundColor: VM.cardUrgentBg,
   },
   cardMuted: {
-    backgroundColor: VM.cardMuted,
-    opacity: 0.92,
+    backgroundColor: VM.cardOldBg,
   },
   cardSelected: {
     borderColor: VM.primary,
-    backgroundColor: VM.primarySoft,
+    backgroundColor: VM.cardSelectedBg,
   },
   cardTop: {
     flexDirection: 'row',
@@ -1422,14 +1548,27 @@ function makeStyles(VM: VmPalette) {
   waveBars: {
     flex: 1,
     height: 34,
+    justifyContent: 'center',
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  waveRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    height: '100%',
+    gap: 3,
+  },
+  waveOverlay: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    overflow: 'hidden',
+    justifyContent: 'center',
   },
   waveBar: {
     flex: 1,
-    maxWidth: 6,
-    borderRadius: 3,
+    borderRadius: 2,
   },
   transcriptPreview: {
     marginTop: spacing['3'],

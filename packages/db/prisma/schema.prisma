@@ -2680,6 +2680,7 @@ model ConnectCdr {
   tenantResolutionSource String? // audit: how tenantId was chosen
   fromNumber             String?
   fromName               String? // CNAM from AMI CallerIDName (caller's display name)
+  fromPrefix             String? // ring-group CID prefix (deduped, e.g. "Estimates") — kept separate from fromName so the UI can render it as a tag
   toNumber               String?
   direction              String // "incoming" | "outgoing" | "internal" | "unknown"
   disposition            String // "answered" | "missed" | "busy" | "failed" | "canceled" | "unknown"
@@ -3014,6 +3015,7 @@ model CallInvite {
   pbxSipUsername     String?
   sipCallTarget      String?
   fromDisplay        String?
+  fromPrefix         String? // ring-group CID prefix (deduped) for the incoming-call tag
   createdByEventId   String?
   fromNumber         String
   toExtension        String

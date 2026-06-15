@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
@@ -205,6 +205,7 @@ function callIdentity(call: CallRecord, self?: SelfIdentity): NormalizedCallerId
     direction: callDirectionKind(call),
     selfNames: self?.names,
     selfExtensionNumbers: self?.numbers,
+    ringGroupPrefix: call.fromPrefix,
   });
 }
 
@@ -314,6 +315,7 @@ function buildGroups(
 export function RecentTab() {
   const { colors } = useTheme();
   const { token } = useAuth();
+  const nav = useNavigation<any>();
   const sip = useSip();
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
@@ -398,11 +400,16 @@ export function RecentTab() {
 
   const calls = callHistoryQuery.data ?? [];
   const loading = callHistoryQuery.isLoading && calls.length === 0;
-  const refreshing = callHistoryQuery.isRefetching;
+  // Spinner shows ONLY on a user pull-to-refresh; background/focus refetches stay silent.
+  const [refreshing, setRefreshing] = useState(false);
   const error = callHistoryQuery.error && calls.length === 0 ? 'Could not load call history from server.' : null;
   const refetchCallHistory = callHistoryQuery.refetch;
   const load = useCallback(() => {
     refetchCallHistory().catch(() => undefined);
+  }, [refetchCallHistory]);
+  const onUserRefresh = useCallback(() => {
+    setRefreshing(true);
+    refetchCallHistory().catch(() => undefined).finally(() => setRefreshing(false));
   }, [refetchCallHistory]);
 
   useFocusEffect(
@@ -431,8 +438,15 @@ export function RecentTab() {
   }, [sip]);
 
   const handleMessage = useCallback((group: CallGroup) => {
-    showAppAlert('Message', `Open Chat to message ${group.displayName}.`);
-  }, []);
+    const number = (group.canonicalNumber || '').trim();
+    if (!number) {
+      showAppAlert('Message', `No number is available for ${group.displayName}.`);
+      return;
+    }
+    // Internal calls (extension ↔ extension) open a DM; everything else SMS.
+    const kind = group.kind === 'internal' ? 'internal' : 'external';
+    nav.navigate('Chat', { composeNumber: number, composeName: group.displayName, composeKind: kind });
+  }, [nav]);
 
   const handleAddContact = useCallback(
     (group: CallGroup) => {
@@ -609,7 +623,7 @@ export function RecentTab() {
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
-              onRefresh={load}
+              onRefresh={onUserRefresh}
               tintColor={colors.primary}
               colors={[colors.primary]}
             />

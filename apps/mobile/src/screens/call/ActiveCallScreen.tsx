@@ -23,6 +23,7 @@ import { logCallFlow } from '../../debug/callFlowDebug';
 import { markCallLatency, summarizeCallLatency } from '../../debug/callLatency';
 import { useTheme } from '../../context/ThemeContext';
 import { CallTimer } from '../../components/call/CallTimer';
+import { splitRingGroupPrefix } from '../../calls/callerIdentity';
 // The CallWaitingBanner is a dedicated, high-visibility Answer/Decline
 // prompt that slides in when a SECOND call arrives mid-call. It sits next
 // to (not instead of) the CallsDrawer so the user ALWAYS has a one-tap
@@ -186,7 +187,11 @@ export function ActiveCallScreen() {
     primarySession?.remoteName?.trim() || primarySession?.remoteNumber || '';
   const rawParty = multiCallParty || (sip.remoteParty ?? '');
   const inviteParty = incomingNotif.answerInviteRef.current?.fromNumber ?? '';
-  const effectiveParty = rawParty || inviteParty;
+  // Strip the VitalPBX ring-group prefix the SIP From display-name carries
+  // (e.g. "Estimates:Estimates:Caller") so the in-call name is clean and the
+  // prefix shows as a tag instead. Plain numbers/names have no colon → untouched.
+  const { prefix: callPrefixBadge, rest: partyRest } = splitRingGroupPrefix(rawParty || inviteParty);
+  const effectiveParty = (partyRest || rawParty || inviteParty);
   const displayName = effectiveParty || (
     isAnswerInFlight
       ? ''
@@ -497,6 +502,14 @@ export function ActiveCallScreen() {
           {isEnded ? 'Call Ended' : displayName}
         </Text>
 
+        {callPrefixBadge && !isEnded && (
+          <View style={styles.callPrefixBadge}>
+            <Text style={styles.callPrefixBadgeText} numberOfLines={1}>
+              {callPrefixBadge}
+            </Text>
+          </View>
+        )}
+
         {displayNumber && !isEnded && (
           <Text style={styles.callerNumber}>{displayNumber}</Text>
         )}
@@ -742,6 +755,23 @@ const styles = StyleSheet.create({
     fontSize: 15,
     marginTop: 5,
     fontWeight: '400',
+  },
+
+  callPrefixBadge: {
+    marginTop: 10,
+    alignSelf: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(59,130,246,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(59,130,246,0.38)',
+  },
+  callPrefixBadgeText: {
+    color: '#9ec1ff',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
 
   controlsCard: {

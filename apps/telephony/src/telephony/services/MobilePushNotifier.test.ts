@@ -62,6 +62,7 @@ function makeCall(overrides: Partial<NormalizedCall> & { linkedId: string }): No
     state: "up" as CallState,
     from: null,
     fromName: null,
+    fromPrefix: null,
     to: null,
     connectedLine: null,
     source_extension: null,

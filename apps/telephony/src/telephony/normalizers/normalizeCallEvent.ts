@@ -61,6 +61,7 @@ export function normalizeCallForClient(call: NormalizedCall): NormalizedCall {
     state: call.state,
     from: call.from ?? null,
     fromName: call.fromName ?? null,
+    fromPrefix: call.fromPrefix ?? null,
     to: call.to ?? null,
     connectedLine: call.connectedLine,
     source_extension: call.source_extension,

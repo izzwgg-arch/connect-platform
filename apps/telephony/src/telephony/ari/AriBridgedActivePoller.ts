@@ -115,6 +115,7 @@ function bridgeRowsToNormalizedCalls(
       state: "up" as const,
       from: b.caller === "—" ? null : b.caller,
       fromName: null,
+      fromPrefix: null,
       to: toField,
       connectedLine: null,
       source_extension: extensions[0] ?? null,

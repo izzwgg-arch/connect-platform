@@ -20,6 +20,8 @@ export interface LiveCall {
   from: string | null;
   /** Caller name (CNAM) from AMI CallerIDName. Null when unavailable. */
   fromName: string | null;
+  /** Ring-group CID prefix (deduped, e.g. "Estimates"), separate from fromName. */
+  fromPrefix?: string | null;
   to: string | null;
   connectedLine: string | null;
   source_extension: string | null;

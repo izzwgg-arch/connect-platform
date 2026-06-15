@@ -51,8 +51,16 @@ const KEYS = [
 const PAD_H_PADDING = 14;
 const KEY_GAP = 8;
 const KEY_CELL_WIDTH = Math.floor((width - PAD_H_PADDING * 2 - KEY_GAP * 2) / 3);
-const KEY_SIZE = 70;
+// Key height flexes between these bounds so the live-suggestion area above the
+// keypad always has room for two rows. When even the smallest keypad can't fit
+// two rows, we fall back to showing a single suggestion instead.
+const KEY_MAX = 70;
+const KEY_MIN = 46;
 const SHORT_SCREEN = screenHeight < 740;
+// One suggestion row's footprint (avatar/text height + vertical padding + border).
+const SUGGESTION_ROW_H = 50;
+const SUGGESTION_GAP = 6;
+const SUGGESTION_PAD_V = 14; // paddingTop(12) + paddingBottom(2) of the list
 
 type Suggestion = {
   id: string;
@@ -68,12 +76,16 @@ function DialKey({
   onPress,
   onLongPress,
   disabled,
+  size,
+  digitFontSize,
 }: {
   digit: string;
   sub: string;
   onPress: (d: string) => void;
   onLongPress?: (d: string) => void;
   disabled?: boolean;
+  size: number;
+  digitFontSize: number;
 }) {
   const { colors } = useTheme();
   const scaleAnim = useRef(new Animated.Value(1)).current;
@@ -137,13 +149,13 @@ function DialKey({
           styles.key,
           {
             width: KEY_CELL_WIDTH,
-            height: KEY_SIZE,
+            height: size,
             transform: [{ scale: scaleAnim }],
             opacity: opacityAnim,
           },
         ]}
       >
-        <Text style={[styles.keyDigit, { color: colors.text }]}>{digit}</Text>
+        <Text style={[styles.keyDigit, { color: colors.text, fontSize: digitFontSize, lineHeight: digitFontSize + 3 }]}>{digit}</Text>
         {sub ? (
           <Text style={[styles.keySub, { color: colors.textTertiary }]}>{sub}</Text>
         ) : null}
@@ -219,6 +231,9 @@ export function KeypadTab() {
   const [outboundRoutes, setOutboundRoutes] = useState<OutboundDialRoute[]>([]);
   const [selectedOutboundRouteId, setSelectedOutboundRouteId] = useState('');
   const [dndConfirmOpen, setDndConfirmOpen] = useState(false);
+  // Measured height of the whole tab — drives adaptive keypad sizing so the
+  // suggestion list always has room for (ideally) two rows.
+  const [tabHeight, setTabHeight] = useState(screenHeight);
   const prevCallStateRef = useRef(sip.callState);
 
   // Load suggestion sources on focus. Network call is best-effort — failure
@@ -449,6 +464,47 @@ export function KeypadTab() {
     return out.slice(0, SHORT_SCREEN ? 2 : 3);
   }, [number, contacts, recent, callActive]);
 
+  const outboundVisible = outboundRoutes.length > 0 && !callActive;
+
+  // Adaptive sizing. Reserve vertical room for up to two suggestion rows and
+  // shrink the keypad keys (down to KEY_MIN) to make that room. If even the
+  // smallest keypad can't fit two rows (e.g. tiny screen + outbound chips
+  // present), drop to a single suggestion so it's never clipped.
+  const { keySize, keyFontSize, singleSuggestionOnly } = useMemo(() => {
+    const desiredRows = Math.min(suggestions.length, 2);
+    const suggHeight = (rows: number) =>
+      rows <= 0 ? 0 : SUGGESTION_PAD_V + SUGGESTION_ROW_H * rows + SUGGESTION_GAP * (rows - 1) + 8;
+
+    // Fixed (non-keypad, non-suggestion) vertical consumers, generously rounded
+    // so the real leftover never undershoots the reserved suggestion space.
+    const topBarH = insets.top + 48;
+    const outboundH = outboundVisible ? 58 : 0;
+    const displayH = 64;
+    const callRowH = 64 + insets.bottom + 16;
+    const gridFixed = KEY_GAP * 3 + 10; // row gaps + grid marginBottom
+
+    const budget = tabHeight - topBarH - outboundH - displayH - callRowH - gridFixed;
+    const keyForRows = (rows: number) => (budget - suggHeight(rows)) / 4;
+
+    let rows = desiredRows;
+    let singleSuggestionOnly = false;
+    let rawKey = keyForRows(rows);
+    if (rows >= 2 && rawKey < KEY_MIN) {
+      // Can't fit two rows even at the minimum key size → reserve one row only.
+      rows = 1;
+      singleSuggestionOnly = true;
+      rawKey = keyForRows(rows);
+    }
+    const keySize = Math.max(KEY_MIN, Math.min(KEY_MAX, Math.floor(rawKey)));
+    const keyFontSize = Math.max(23, Math.round(keySize * 0.49));
+    return { keySize, keyFontSize, singleSuggestionOnly };
+  }, [tabHeight, insets.top, insets.bottom, outboundVisible, suggestions.length]);
+
+  const visibleSuggestions = useMemo(
+    () => (singleSuggestionOnly ? suggestions.slice(0, 1) : suggestions),
+    [suggestions, singleSuggestionOnly],
+  );
+
   const handleSuggestion = (s: Suggestion) => {
     Haptics.selectionAsync().catch(() => {});
     setNumber(s.value);
@@ -480,7 +536,13 @@ export function KeypadTab() {
   const userLabel = voice?.displayName?.trim() || 'Connect User';
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.bg }]}>
+    <View
+      style={[styles.container, { backgroundColor: colors.bg }]}
+      onLayout={(e) => {
+        const h = e.nativeEvent.layout.height;
+        if (h > 0 && Math.abs(h - tabHeight) > 1) setTabHeight(h);
+      }}
+    >
       {/* ── Top bar ── */}
       <View style={[styles.topBar, { paddingTop: insets.top + 12 }]}>
         <TouchableOpacity
@@ -506,7 +568,7 @@ export function KeypadTab() {
         </TouchableOpacity>
       </View>
 
-      {outboundRoutes.length > 0 && !callActive ? (
+      {outboundVisible ? (
         <View style={styles.outboundWrap}>
           <Text style={[styles.outboundLabel, { color: colors.textTertiary }]}>Outbound</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.outboundScroller}>
@@ -553,14 +615,14 @@ export function KeypadTab() {
          list can never push the keypad / call / backspace row off the bottom
          of the screen. The keypad below stays pinned and always visible. */}
       <View style={styles.middleFlex}>
-        {suggestions.length > 0 && (
+        {visibleSuggestions.length > 0 && (
           <ScrollView
             style={styles.suggestionsScroll}
             contentContainerStyle={styles.suggestionsWrap}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-            {suggestions.map((s) => (
+            {visibleSuggestions.map((s) => (
               <SuggestionRow key={s.id} suggestion={s} onPress={handleSuggestion} />
             ))}
           </ScrollView>
@@ -617,6 +679,8 @@ export function KeypadTab() {
               onPress={handleKey}
               onLongPress={handleLongPress}
               disabled={dialing}
+              size={keySize}
+              digitFontSize={keyFontSize}
             />
           ))}
         </View>

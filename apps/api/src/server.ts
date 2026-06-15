@@ -125,6 +125,7 @@ import {
 } from "@connect/integrations";
 import { assessSmsRisk, normalizeSmsWithStop, tenDlcSubmissionSchema, twilioSettingsSchema } from "./validation";
 import { canonicalDirection, cdrCanonicalDirectionSql } from "./cdrDirection";
+import { Prisma } from "@prisma/client";
 import { sendBufferWithOptionalRange } from "./httpVoicemailRange";
 import {
   buildVoicemailListWhere,
@@ -2682,7 +2683,7 @@ async function decideCampaignPolicy(params: { tenant: any; tenantId: string; act
 
 
 type MobilePushPayload =
-  | { type: "INCOMING_CALL"; inviteId: string; pbxCallId?: string | null; fromNumber: string; fromDisplay?: string | null; toExtension: string; sipCallTarget?: string | null; pbxSipUsername?: string | null; tenantId: string; timestamp: string }
+  | { type: "INCOMING_CALL"; inviteId: string; pbxCallId?: string | null; fromNumber: string; fromDisplay?: string | null; fromPrefix?: string | null; toExtension: string; sipCallTarget?: string | null; pbxSipUsername?: string | null; tenantId: string; timestamp: string }
   // Push-wake (Option 2 architecture). Sent BY the PBX dialplan via
   // /internal/pbx/wake-extension BEFORE the PBX attempts Dial() on the target
   // extension. The mobile native FCM service silently wakes the JS process and
@@ -2690,7 +2691,7 @@ type MobilePushPayload =
   // arrives ~6 seconds later. Carries no UI obligations — the actual ringing
   // UI is driven by either (a) the SIP INVITE itself or (b) a follow-up
   // INCOMING_CALL push from the telephony service.
-  | { type: "INCOMING_CALL_WAKE"; pbxCallId: string; fromNumber: string; fromDisplay?: string | null; toExtension: string; tenantId: string; pbxVitalTenantId?: string | null; timestamp: string; wakeRequestedAt: string }
+  | { type: "INCOMING_CALL_WAKE"; pbxCallId: string; fromNumber: string; fromDisplay?: string | null; fromPrefix?: string | null; toExtension: string; tenantId: string; pbxVitalTenantId?: string | null; timestamp: string; wakeRequestedAt: string }
   | { type: "INVITE_CLAIMED"; inviteId: string; tenantId: string; timestamp: string }
   | { type: "INVITE_CANCELED"; inviteId: string; pbxCallId?: string | null; reason?: string | null; tenantId: string; timestamp: string }
   | { type: "MISSED_CALL"; inviteId: string; fromNumber: string; fromDisplay?: string | null; toExtension: string; tenantId: string; timestamp: string }
@@ -3381,6 +3382,7 @@ async function upsertInviteFromPbxEvent(evt: NormalizedWirePbxEvent, source: "WE
         inviteId: invite.id,
         fromNumber: invite.fromNumber,
         fromDisplay: invite.fromDisplay,
+        fromPrefix: invite.fromPrefix,
         toExtension: invite.toExtension,
         pbxCallId: invite.pbxCallId,
         sipCallTarget: invite.sipCallTarget,
@@ -9021,6 +9023,7 @@ app.get("/voice/me/calls", async (req, reply) => {
       direction: true,
       fromNumber: true,
       fromName: true,
+      fromPrefix: true,
       toNumber: true,
       startedAt: true,
       talkSec: true,
@@ -9040,6 +9043,7 @@ app.get("/voice/me/calls", async (req, reply) => {
       direction: normaliseDirection(r.direction),
       fromNumber: r.fromNumber ?? "",
       fromName: r.fromName ?? null,
+      fromPrefix: r.fromPrefix ?? null,
       toNumber: r.toNumber ?? "",
       startedAt: r.startedAt.toISOString(),
       durationSec: r.talkSec > 0 ? r.talkSec : r.durationSec,
@@ -9062,6 +9066,7 @@ app.get("/voice/me/calls", async (req, reply) => {
     direction: normaliseDirection(r.direction),
     fromNumber: r.fromNumber,
     fromName: null,
+    fromPrefix: null,
     toNumber: r.toNumber,
     startedAt: r.startedAt instanceof Date ? r.startedAt.toISOString() : String(r.startedAt),
     durationSec: r.durationSec,
@@ -13882,6 +13887,7 @@ app.post("/mobile/call-invites/test", async (req, reply) => {
       inviteId: invite.id,
       fromNumber: invite.fromNumber,
       fromDisplay: invite.fromDisplay,
+      fromPrefix: invite.fromPrefix,
       toExtension: invite.toExtension,
       pbxCallId: invite.pbxCallId,
       sipCallTarget: invite.sipCallTarget,
@@ -23521,6 +23527,7 @@ app.get("/calls/history", async (req, reply) => {
         linkedId: true,
         fromNumber: true,
         fromName: true,
+        fromPrefix: true,
         toNumber: true,
         dcontext: true,
         dcontextsSeen: true,
@@ -24005,6 +24012,7 @@ app.get("/calls/history", async (req, reply) => {
       linkedId: r.linkedId,
       fromNumber: r.fromNumber || "",
       fromName: r.fromName || null,
+      fromPrefix: r.fromPrefix || null,
       toNumber: r.toNumber || "",
       direction: (["incoming", "outgoing", "internal"].includes(r.direction) ? r.direction : "incoming") as "incoming" | "outgoing" | "internal",
       status: mapDispositionToHistoryStatus(r.disposition),
@@ -26613,6 +26621,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
     tenantId:    z.string().nullable().optional(),
     fromNumber:  z.string().nullable().optional(),
     fromName:    z.string().nullable().optional(),
+    fromPrefix:  z.string().nullable().optional(),
     toNumber:    z.string().nullable().optional(),
     direction:   z.enum(["incoming", "outgoing", "internal", "unknown"]),
     disposition: z.enum(["answered", "missed", "busy", "failed", "canceled", "unknown"]),
@@ -26743,6 +26752,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         tenantResolutionSource: tenantPack.tenantResolutionSource,
         fromNumber:  d.fromNumber ?? null,
         fromName:    d.fromName ?? null,
+        fromPrefix:  d.fromPrefix ?? null,
         toNumber:    d.toNumber ?? null,
         direction:   resolvedDirection,
         disposition: d.disposition,
@@ -26767,6 +26777,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         tenantResolutionSource: tenantPack.tenantResolutionSource != null ? tenantPack.tenantResolutionSource : undefined,
         fromNumber:  d.fromNumber ?? undefined,
         fromName:    d.fromName ?? undefined,
+        fromPrefix:  d.fromPrefix ?? undefined,
         toNumber:    d.toNumber ?? undefined,
         direction:   resolvedDirection !== "unknown" ? resolvedDirection : undefined,
         disposition: d.disposition !== "unknown" ? d.disposition : undefined,
@@ -26954,6 +26965,7 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
     toExtension: z.string().min(0).optional().default(""),
     fromNumber: z.string().nullable().optional(),
     fromDisplay: z.string().nullable().optional(),
+    fromPrefix: z.string().nullable().optional(),
     connectTenantId: z.string().nullable().optional(),
     pbxVitalTenantId: z.string().nullable().optional(),
     state: z.enum(["ringing", "hungup", "diverted_to_voicemail"]).optional(),
@@ -27108,6 +27120,7 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
           extensionId: target.extensionId,
           fromNumber: input.fromNumber || "unknown",
           fromDisplay: input.fromDisplay ?? null,
+          fromPrefix: input.fromPrefix ?? null,
           toExtension: input.toExtension,
           status: "PENDING",
           expiresAt: new Date(Date.now() + 45_000),
@@ -27125,6 +27138,7 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
           pbxCallId: input.linkedId,
           fromNumber: input.fromNumber || "unknown",
           fromDisplay: input.fromDisplay ?? null,
+          fromPrefix: input.fromPrefix ?? null,
           toExtension: input.toExtension,
           status: "PENDING",
           expiresAt: new Date(Date.now() + 45_000),
@@ -27142,6 +27156,7 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
         pbxCallId: invite.pbxCallId ?? input.linkedId,
         fromNumber: invite.fromNumber,
         fromDisplay: invite.fromDisplay,
+        fromPrefix: invite.fromPrefix,
         toExtension: invite.toExtension,
         tenantId: target.tenantId,
         pbxVitalTenantId: input.pbxVitalTenantId,
@@ -27173,6 +27188,7 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
       inviteId: invite.id,
       fromNumber: invite.fromNumber,
       fromDisplay: invite.fromDisplay,
+      fromPrefix: invite.fromPrefix,
       toExtension: invite.toExtension,
       pbxCallId: invite.pbxCallId,
       sipCallTarget: invite.sipCallTarget,

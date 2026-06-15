@@ -48,6 +48,8 @@ export type CallRecord = {
   direction: string; // "inbound" | "outbound" | "internal" | "unknown"
   fromNumber: string;
   fromName?: string | null;
+  /** Ring-group CID prefix (deduped, e.g. "Estimates") — rendered as a tag. */
+  fromPrefix?: string | null;
   toNumber: string;
   startedAt: string;
   durationSec: number;
@@ -261,6 +263,8 @@ export type CallInvite = {
   pbxSipUsername?: string | null;
   sipCallTarget?: string | null;
   fromDisplay?: string | null;
+  /** Ring-group CID prefix (deduped) — rendered as a tag on the ring screen. */
+  fromPrefix?: string | null;
   fromNumber: string;
   toExtension: string;
   status: "PENDING" | "ACCEPTED" | "DECLINED" | "EXPIRED" | "CANCELED";
@@ -305,6 +309,7 @@ export type IncomingCallPushPayload = {
   pbxCallId?: string | null;
   fromNumber: string;
   fromDisplay?: string | null;
+  fromPrefix?: string | null;
   toExtension: string;
   sipCallTarget?: string | null;
   pbxSipUsername?: string | null;

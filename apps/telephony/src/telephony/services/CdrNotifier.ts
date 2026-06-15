@@ -99,6 +99,8 @@ export type CdrPayload = {
   tenantId: string | null;
   fromNumber: string | null;
   fromName: string | null;
+  /** Ring-group CID prefix (deduped), kept separate from fromName. */
+  fromPrefix: string | null;
   toNumber: string | null;
   direction: string;
   disposition: string;
@@ -243,6 +245,7 @@ export class CdrNotifier {
       tenantId: call.tenantId ?? null,
       fromNumber: call.from ?? null,
       fromName: call.fromName ?? null,
+      fromPrefix: call.fromPrefix ?? null,
       toNumber: call.to ?? null,
       direction: dir,
       disposition,
@@ -322,6 +325,7 @@ export class CdrNotifier {
           tenantId:         payload.tenantId,
           fromNumber:       leg.source      || null,
           fromName:         null,
+          fromPrefix:       null,
           toNumber:         leg.destination || null,
           direction:        "outgoing",
           disposition:      legDisposition,

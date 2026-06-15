@@ -48,6 +48,15 @@ export interface AmiNewchannel {
   priority: string;
 }
 
+export interface AmiNewCallerid {
+  event: "NewCallerid";
+  channel: string;
+  uniqueid: string;
+  linkedid: string;
+  callerIDNum: string;
+  callerIDName: string;
+}
+
 export interface AmiNewstate {
   event: "Newstate";
   channel: string;
@@ -274,6 +283,7 @@ export interface AmiMessageWaiting {
 export type TypedAmiEvent =
   | AmiCoreShowChannel
   | AmiNewchannel
+  | AmiNewCallerid
   | AmiNewstate
   | AmiDialBegin
   | AmiDialEnd

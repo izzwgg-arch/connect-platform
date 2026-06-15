@@ -17,7 +17,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { useSip } from '../../context/SipContext';
@@ -37,6 +37,7 @@ import {
   requestContactsPermission,
   type PermissionState,
 } from '../../contacts/phoneContactsImport';
+import { saveContactToDevice } from '../../contacts/deviceContactsWrite';
 
 type ContactFilter = 'all' | 'extensions' | 'external' | 'favorites';
 type ContactListItem =
@@ -64,6 +65,7 @@ export function ContactTab() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { token } = useAuth();
+  const nav = useNavigation<any>();
   const sip = useSip();
   const queryClient = useQueryClient();
   const [query, setQuery] = useState('');
@@ -86,11 +88,16 @@ export function ContactTab() {
 
   const contacts = contactsQuery.data?.rows ?? [];
   const loading = contactsQuery.isLoading && contacts.length === 0;
-  const refreshing = contactsQuery.isRefetching;
+  // Spinner shows ONLY on a user pull-to-refresh; background/focus refetches stay silent.
+  const [refreshing, setRefreshing] = useState(false);
   const error = contactsQuery.error && contacts.length === 0 ? 'Could not load contacts.' : null;
   const refetchContacts = contactsQuery.refetch;
   const load = useCallback(() => {
     refetchContacts().catch(() => undefined);
+  }, [refetchContacts]);
+  const onUserRefresh = useCallback(() => {
+    setRefreshing(true);
+    refetchContacts().catch(() => undefined).finally(() => setRefreshing(false));
   }, [refetchContacts]);
 
   useFocusEffect(
@@ -174,8 +181,22 @@ export function ContactTab() {
   }, [sip]);
 
   const messageContact = useCallback((contact: Contact) => {
-    showAppAlert('Message', `Open Chat to message ${contact.displayName}.`);
-  }, []);
+    if (contact.type === 'internal_extension') {
+      const ext = (contact.extension || '').trim();
+      if (!ext) {
+        showAppAlert('Message', `No extension is available for ${contact.displayName}.`);
+        return;
+      }
+      nav.navigate('Chat', { composeNumber: ext, composeName: contact.displayName, composeKind: 'internal' });
+      return;
+    }
+    const number = (contact.primaryPhone?.numberRaw || '').trim();
+    if (!number) {
+      showAppAlert('Message', `No phone number is available for ${contact.displayName}.`);
+      return;
+    }
+    nav.navigate('Chat', { composeNumber: number, composeName: contact.displayName, composeKind: 'external' });
+  }, [nav]);
 
   const emailContact = useCallback((contact: Contact) => {
     const email = contact.primaryEmail?.email || contact.emails?.[0]?.email;
@@ -277,7 +298,7 @@ export function ContactTab() {
           bounces={false}
           alwaysBounceVertical={false}
           overScrollMode="never"
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={load} tintColor={colors.primary} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onUserRefresh} tintColor={colors.primary} />}
           contentContainerStyle={styles.list}
           renderItem={({ item }) => item.type === 'section' ? (
             <View style={styles.sectionHeader}>
@@ -544,6 +565,16 @@ function AddContactModal({
         notes: notes.trim() || undefined,
         phones: phone.trim() ? [{ type: 'mobile', numberRaw: phone.trim(), isPrimary: true }] : [],
         emails: email.trim() ? [{ type: 'work', email: email.trim(), isPrimary: true }] : [],
+      });
+      // Mirror into the device address book (Google/iCloud) so it backs up &
+      // syncs like WhatsApp. Best-effort — never blocks the save flow.
+      void saveContactToDevice({
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        displayName: `${firstName.trim()} ${lastName.trim()}`.trim() || phone.trim(),
+        company: company.trim(),
+        phones: phone.trim() ? [{ numberRaw: phone.trim(), type: 'mobile' }] : [],
+        emails: email.trim() ? [{ email: email.trim(), type: 'work' }] : [],
       });
       reset();
       onCreated();
