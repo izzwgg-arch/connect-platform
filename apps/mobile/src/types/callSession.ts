@@ -21,6 +21,10 @@ export type CallSession = {
   direction: CallDirection;
   remoteNumber: string;
   remoteName: string | null;
+  /** Ring-group CID prefix (deduped, e.g. "Estimates") the PBX prepended, kept
+   *  separate from {@link remoteName} so the UI can render it as a tag. Null for
+   *  non-ring-group / outbound calls. */
+  fromPrefix: string | null;
   state: CallSessionState;
   startedAt: number;
   answeredAt: number | null;

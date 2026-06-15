@@ -34,6 +34,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useCallSessions } from "../../context/CallSessionManager";
+import { splitRingGroupPrefix } from "../../calls/callerIdentity";
 
 export function CallWaitingBanner() {
   const { ringingCalls, answerWaiting, declineWaiting, activeCall } =
@@ -133,8 +134,13 @@ export function CallWaitingBanner() {
 
   if (!shouldShow || !incoming) return null;
 
-  const name = incoming.remoteName?.trim() || incoming.remoteNumber || "Unknown";
-  const subtitle = incoming.remoteName && incoming.remoteNumber && incoming.remoteName !== incoming.remoteNumber
+  // Ring-group prefix tag: prefer the authoritative captured prefix, else parse
+  // it out of the (possibly prefix-inlined) display name. Strip it from the name.
+  const nameSplit = splitRingGroupPrefix(incoming.remoteName);
+  const prefixTag = incoming.fromPrefix?.trim() || nameSplit.prefix;
+  const cleanName = nameSplit.rest?.trim() || incoming.remoteName?.trim() || "";
+  const name = cleanName || incoming.remoteNumber || "Unknown";
+  const subtitle = cleanName && incoming.remoteNumber && cleanName !== incoming.remoteNumber
     ? incoming.remoteNumber
     : null;
 
@@ -193,6 +199,11 @@ export function CallWaitingBanner() {
         <View style={styles.textCol}>
           <Text style={styles.label}>CALL WAITING</Text>
           <Text style={styles.name} numberOfLines={1}>{name}</Text>
+          {prefixTag ? (
+            <View style={styles.prefixTag}>
+              <Text style={styles.prefixTagText} numberOfLines={1}>{prefixTag}</Text>
+            </View>
+          ) : null}
           {subtitle ? (
             <Text style={styles.sub} numberOfLines={1}>{subtitle}</Text>
           ) : null}
@@ -291,6 +302,23 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginTop: 2,
     letterSpacing: -0.1,
+  },
+  prefixTag: {
+    alignSelf: "flex-start",
+    marginTop: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: "rgba(56, 189, 248, 0.18)",
+    borderWidth: 1,
+    borderColor: "rgba(56, 189, 248, 0.45)",
+  },
+  prefixTagText: {
+    color: "#7dd3fc",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
   },
   sub: {
     color: "rgba(148, 163, 184, 0.85)",

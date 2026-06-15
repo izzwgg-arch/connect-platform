@@ -1351,6 +1351,7 @@ export function NotificationsProvider({
           callId: invite.id,
           remoteNumber: invite.fromNumber || "Unknown",
           remoteName: (invite as any).fromDisplay ?? null,
+          fromPrefix: (invite as any).fromPrefix ?? null,
           pbxCallId: (invite as any).pbxCallId ?? null,
         });
       } catch (err) {

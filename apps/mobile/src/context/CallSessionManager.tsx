@@ -50,6 +50,7 @@ import {
   INITIAL_MULTI_CALL_STATE,
   MAX_CONCURRENT_CALLS,
 } from "../types/callSession";
+import { splitRingGroupPrefix } from "../calls/callerIdentity";
 import type { SipSessionInfo, SipSessionState } from "../sip/types";
 
 // ---------- Logging helpers ----------
@@ -146,6 +147,7 @@ type CallSessionManagerContextValue = {
     callId: string;
     remoteNumber: string;
     remoteName?: string | null;
+    fromPrefix?: string | null;
     pbxCallId: string | null;
   }) => void;
 
@@ -408,6 +410,9 @@ export function CallSessionProvider({ children }: { children: React.ReactNode })
         direction: info.direction,
         remoteNumber: info.callerNumber || "Unknown",
         remoteName: info.callerDisplayName,
+        // SIP INVITE display name may carry the inlined ring-group prefix
+        // ("Estimates:Estimates:Caller"); extract the deduped tag.
+        fromPrefix: splitRingGroupPrefix(info.callerDisplayName).prefix,
         state: sipToSessionState(info.state, info.isHeld),
         startedAt: Date.now(),
         answeredAt: null,
@@ -799,6 +804,7 @@ export function CallSessionProvider({ children }: { children: React.ReactNode })
         direction: "outbound",
         remoteNumber,
         remoteName: null,
+        fromPrefix: null,
         state: "dialing_outbound",
         startedAt: now,
         answeredAt: null,
@@ -829,11 +835,13 @@ export function CallSessionProvider({ children }: { children: React.ReactNode })
       callId,
       remoteNumber,
       remoteName,
+      fromPrefix,
       pbxCallId,
     }: {
       callId: string;
       remoteNumber: string;
       remoteName?: string | null;
+      fromPrefix?: string | null;
       pbxCallId: string | null;
     }) => {
       // Prune any phantom rows first so the concurrency check below and the
@@ -882,6 +890,8 @@ export function CallSessionProvider({ children }: { children: React.ReactNode })
         direction: "inbound",
         remoteNumber,
         remoteName: remoteName ?? null,
+        fromPrefix:
+          (fromPrefix ?? null) || splitRingGroupPrefix(remoteName).prefix,
         state: "ringing_inbound",
         startedAt: Date.now(),
         answeredAt: null,
