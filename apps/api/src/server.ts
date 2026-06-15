@@ -4087,58 +4087,40 @@ function renderAndroidApkDownloadPage(input: {
   versionCode?: number | null;
   buildId?: string | null;
 }): string {
-  const versionText = input.version ? `Version ${input.version}` : "Latest Android build";
-  const sizeText = input.sizeBytes ? `${(input.sizeBytes / 1024 / 1024).toFixed(2)} MB` : "APK download";
-  const releasedLine =
-    input.releasedAt && input.releasedAt.length > 0
-      ? `<div class="meta" style="margin-top:6px;">Build ${escapeHtmlForApkPage(input.releasedAt)}</div>`
-      : "";
-  const vc = typeof input.versionCode === "number" && Number.isFinite(input.versionCode) ? input.versionCode : null;
-  const bid = input.buildId && input.buildId.trim().length > 0 ? input.buildId.trim() : "";
-  const nativeMetaLine =
-    vc !== null || bid.length > 0
-      ? `<div class="meta" style="margin-top:8px;">${vc !== null ? `versionCode ${vc}` : ""}${
-          vc !== null && bid.length > 0 ? " · " : ""
-        }${bid.length > 0 ? `build ${escapeHtmlForApkPage(bid)}` : ""}</div>`
-      : "";
-  const commitLine =
-    input.commitSha && input.commitSha.length > 0
-      ? `<div class="meta" style="margin-top:8px;">Commit ${escapeHtmlForApkPage(input.commitSha)}</div>`
-      : "";
-  const notesBlock =
-    input.releaseNotes && input.releaseNotes.length > 0
-      ? `<p class="hint" style="margin-top:14px;line-height:1.5;">${escapeHtmlForApkPage(input.releaseNotes)}</p>`
-      : "";
+  const versionText = input.version ? `Version ${input.version}` : "Latest build";
+  // Clean human date (e.g. "June 15, 2026") from the publish manifest / APK mtime.
+  let dateText = "";
+  if (input.releasedAt && input.releasedAt.length > 0) {
+    const d = new Date(input.releasedAt);
+    if (!Number.isNaN(d.getTime())) {
+      dateText = d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+    }
+  }
+  const dateLine = dateText ? `<div class="date">${escapeHtmlForApkPage(dateText)}</div>` : "";
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Download Connect Android App</title>
+  <title>Connect for Android</title>
   <style>
     :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0b1120; color: #e5e7eb; }
-    main { width: min(440px, calc(100vw - 40px)); padding: 30px 24px; border: 1px solid rgba(148, 163, 184, .24); border-radius: 24px; background: linear-gradient(180deg, rgba(15, 23, 42, .96), rgba(15, 23, 42, .88)); box-shadow: 0 24px 80px rgba(0, 0, 0, .38); }
-    .mark { width: 52px; height: 52px; border-radius: 16px; display: grid; place-items: center; margin-bottom: 18px; background: rgba(37, 99, 235, .18); color: #93c5fd; font-size: 28px; }
-    h1 { margin: 0 0 10px; font-size: 25px; line-height: 1.15; letter-spacing: -.03em; }
-    p { margin: 0; color: #aeb8ca; line-height: 1.55; font-size: 15px; }
-    .meta { margin-top: 18px; color: #94a3b8; font-size: 13px; }
-    a.button { margin-top: 24px; display: flex; align-items: center; justify-content: center; min-height: 52px; border-radius: 16px; background: #2563eb; color: white; font-weight: 700; text-decoration: none; box-shadow: 0 16px 32px rgba(37, 99, 235, .28); }
-    .hint { margin-top: 18px; font-size: 13px; color: #8fa0b8; }
+    main { width: min(400px, calc(100vw - 40px)); padding: 40px 28px; text-align: center; border: 1px solid rgba(148, 163, 184, .22); border-radius: 26px; background: linear-gradient(180deg, rgba(15, 23, 42, .96), rgba(15, 23, 42, .88)); box-shadow: 0 24px 80px rgba(0, 0, 0, .38); }
+    .mark { width: 60px; height: 60px; border-radius: 18px; display: grid; place-items: center; margin: 0 auto 22px; background: rgba(37, 99, 235, .18); color: #93c5fd; font-size: 30px; }
+    h1 { margin: 0; font-size: 24px; line-height: 1.15; letter-spacing: -.03em; }
+    .version { margin-top: 18px; font-size: 17px; font-weight: 700; color: #e5e7eb; letter-spacing: -.01em; }
+    .date { margin-top: 6px; font-size: 14px; color: #94a3b8; }
+    a.button { margin-top: 28px; display: flex; align-items: center; justify-content: center; min-height: 54px; border-radius: 16px; background: #2563eb; color: #fff; font-weight: 700; font-size: 16px; text-decoration: none; box-shadow: 0 16px 32px rgba(37, 99, 235, .28); }
   </style>
 </head>
 <body>
   <main>
     <div class="mark">↓</div>
-    <h1>Download Connect for Android</h1>
-    <p>Tap the button below to download the Android app directly from Connect.</p>
-    <div class="meta">${versionText} · ${sizeText}</div>
-    ${releasedLine}
-    ${nativeMetaLine}
-    ${commitLine}
-    ${notesBlock}
-    <a class="button" href="${input.apkUrl}" download>Download Android App</a>
-    <p class="hint">After the download finishes, Android may ask you to allow installs from this source the first time.</p>
+    <h1>Connect for Android</h1>
+    <div class="version">${escapeHtmlForApkPage(versionText)}</div>
+    ${dateLine}
+    <a class="button" href="${input.apkUrl}" download>Download</a>
   </main>
 </body>
 </html>`;
