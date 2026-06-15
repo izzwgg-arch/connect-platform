@@ -34969,12 +34969,18 @@ table tr:hover {
 
 @media (max-width: 1279px) {
   .cc-shell.crm-queue-workspace .cc-workspace.crm-workspace-body--split {
-    display: grid;
-    grid-template-rows: minmax(0, 1fr) minmax(18rem, 42%);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .cc-shell.crm-queue-workspace.has-active .cc-workspace-main {
+    display: none;
   }
 
   .cc-shell.crm-queue-workspace .cc-side-panel {
     min-height: 0;
+    flex: 1 1 auto;
+    width: 100%;
   }
 }
 
