@@ -4,6 +4,19 @@ Tracks notable product and agent-delivered changes. Newest entry first.
 
 ---
 
+## 2026-06-14 — Storage Health Phase 5B (BuildKit inventory visibility)
+
+**Task:** Fix API scanner returning 0 BuildKit entries while host reports ~535.6 GB cache.
+
+- **Root cause:** `GET /system/df` over the Docker socket returns 2,781 `BuildCache` entries but took ~90s; the API HTTP client timed out at 30s and fell back silently to empty inventory. The investigation endpoint also invoked `docker system df -v` CLI, which is not installed in the `app-api` image.
+- Added `buildKitInventory.ts` — unified collector via Docker socket API with `STORAGE_DOCKER_SYSTEM_DF_TIMEOUT_MS` (default 600s), optional `docker builder du` / `docker system df -v` fallbacks when host `docker` CLI is available.
+- Scanner dedupes to a single `/system/df` fetch per scan; surfaces `inventoryStatus` + explicit error instead of silent 0 entries.
+- Safety gates + dry plan block BuildKit prune when inventory is not `OK`.
+- Portal: **BUILDKIT INVENTORY (PHASE 5B)** panel on `/admin/storage-health`.
+- **No cleanup executed** — read-only inventory fix only.
+
+---
+
 ## 2026-06-14 — Storage Health Phase 5 (controlled cleanup executor)
 
 **Task:** First approved storage reclamation path — staged, gated, auditable cleanup only.

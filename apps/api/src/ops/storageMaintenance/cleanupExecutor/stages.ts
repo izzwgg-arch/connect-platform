@@ -1,4 +1,5 @@
 import type {
+  BuildKitInvestigation,
   CleanupExecutionRecord,
   CleanupStage,
   CleanupStageResult,
@@ -7,7 +8,6 @@ import type {
 } from "../types";
 import { selectApkRetentionCandidates } from "../planBuilder";
 import { isProtectedImageRef } from "../protectionRules";
-import { investigateBuildKitCache } from "./buildKitInvestigation";
 import {
   dockerBuilderPruneDryRun,
   dockerBuilderPruneUnusedOnly,
@@ -156,15 +156,14 @@ export async function executeStage3(): Promise<CleanupStageResult> {
 export async function executeStage4(
   scan: StorageScanSnapshot,
   config: StorageMaintenanceConfig,
-  systemDfVText: string,
+  investigation: BuildKitInvestigation,
 ): Promise<CleanupStageResult> {
-  const investigation = investigateBuildKitCache(systemDfVText);
   if (!investigation.safeToPrune) {
     return {
       stage: 4,
       label: stageLabel(4),
       stopped: true,
-      stopReason: `buildkit_not_safe:confidence=${investigation.confidencePct}`,
+      stopReason: investigation.cleanupBlockedReason ?? `buildkit_not_safe:confidence=${investigation.confidencePct}`,
       reclaimedBytes: 0,
       commands: [],
       warnings: investigation.whyNot99Plus,

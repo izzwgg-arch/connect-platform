@@ -173,7 +173,7 @@ Full raw report saved on server: `/tmp/storage_forensics_20260614T131434Z.txt`
 ### Storage cleanup controller (Phase 1–5)
 
 Read-only scanner + classifier + dry-run cleanup plan + **operations dashboard** + **proof/dependency/readiness system** via API and portal **`/admin/storage-health`**.
-Phase 1.6 adds **host visibility**: read-only mounts of `docker.sock`, `/var/lib/containerd`, `/opt/connectcomms`, and `/var/log` into the API container so scans report real production inventory (~535 GB BuildKit cache, ~509 GB containerd, top consumers, image/volume counts).
+Phase 1.6 adds **host visibility**: read-only mounts of `docker.sock`, `/var/lib/containerd`, `/opt/connectcomms`, and `/var/log` into the API container so scans report real production inventory (~535 GB BuildKit cache, ~509 GB containerd, top consumers, image/volume counts). **Phase 5B (2026-06-14):** BuildKit per-entry inventory uses Docker socket `GET /system/df` with extended timeout (`STORAGE_DOCKER_SYSTEM_DF_TIMEOUT_MS`, default 10 min) — the API container has the socket but not the `docker` CLI binary.
 Phase 2 adds BuildKit forensics, container→image dependency graph, rollback coverage audit, APK/log analysis, confidence scoring, cleanup readiness score, safety gates, and read-only preflight snapshots under `/opt/connectcomms/backups/storage-preflight/` (writable mount for JSON only — no cleanup).
 Phase 1.5 dashboard surfaces KPIs, distribution chart, top consumers, protected assets, reclaim simulation, and trend history — all from live scan data.
 See **`STORAGE_MAINTENANCE.md`** for architecture, confidence/dependency/rollback models, snapshot system, safety gates, and future approval requirements.

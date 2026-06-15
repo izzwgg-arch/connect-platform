@@ -1,3 +1,4 @@
+import type { DockerBuildCacheRaw } from "../dockerSystemDfApi";
 import type { BuildKitInvestigation, BuildKitCacheEntryStat } from "../types";
 
 function parseSizeBytes(raw: string): number {
@@ -18,26 +19,61 @@ export function parseBuildKitCacheFromSystemDfV(text: string): BuildKitCacheEntr
   for (let i = start + 1; i < lines.length; i++) {
     const line = lines[i]!.trim();
     if (!line || line.startsWith("REPOSITORY") || line.startsWith("CONTAINER ID")) break;
+    if (!/^[a-z0-9]{5,}/i.test(line)) continue;
     const parts = line.split(/\s{2,}/).map((p) => p.trim());
     if (parts.length < 4) continue;
-    const [cacheId, cacheType, sizeRaw, , , usageRaw] = parts;
-    const usage = Number(usageRaw ?? "0");
+    const cacheId = parts[0] ?? "";
+    const cacheType = parts[1] ?? "unknown";
+    const sizeRaw = parts[2] ?? "0";
+    const usageRaw = parts[parts.length - 2] ?? "0";
+    const usage = Number(usageRaw);
+    const incomplete = cacheId.endsWith("*") || cacheType.includes("*");
     entries.push({
-      cacheId: cacheId ?? "",
-      cacheType: cacheType ?? "unknown",
-      sizeBytes: parseSizeBytes(sizeRaw ?? "0"),
+      cacheId: cacheId.replace(/\*$/, ""),
+      cacheType,
+      sizeBytes: parseSizeBytes(sizeRaw),
       usageCount: Number.isFinite(usage) ? usage : 0,
-      referenced: usage > 0,
+      referenced: Number.isFinite(usage) ? usage > 0 : false,
+      incomplete,
     });
   }
   return entries;
 }
 
+export function mapRawBuildCacheToStats(raw: DockerBuildCacheRaw[]): BuildKitCacheEntryStat[] {
+  return raw.map((entry) => {
+    const usageCount = entry.UsageCount ?? (entry.InUse ? 1 : 0);
+    const incomplete = entry.Type === "incomplete" || (entry.ID ?? "").endsWith("*");
+    return {
+      cacheId: entry.ID ?? "",
+      cacheType: entry.Type ?? "unknown",
+      sizeBytes: entry.Size ?? 0,
+      usageCount,
+      referenced: entry.InUse === true || usageCount > 0,
+      incomplete,
+      reclaimable: entry.Reclaimable === true,
+      lastUsedAt: entry.LastUsedAt ?? null,
+      createdAt: entry.CreatedAt ?? null,
+    };
+  });
+}
+
+export function investigateBuildKitFromRaw(rawEntries: DockerBuildCacheRaw[]): BuildKitInvestigation {
+  const entries = mapRawBuildCacheToStats(rawEntries);
+  return buildInvestigationFromStats(entries);
+}
+
 export function investigateBuildKitCache(systemDfVText: string): BuildKitInvestigation {
   const entries = parseBuildKitCacheFromSystemDfV(systemDfVText);
+  return buildInvestigationFromStats(entries);
+}
+
+function buildInvestigationFromStats(entries: BuildKitCacheEntryStat[]): BuildKitInvestigation {
   const active = entries.filter((e) => e.referenced);
   const inactive = entries.filter((e) => !e.referenced);
-  const unknown = entries.filter((e) => e.cacheType.includes("*") && e.usageCount === 0);
+  const unknown = entries.filter(
+    (e) => e.incomplete === true || (e.cacheType.includes("*") && e.usageCount === 0) || !e.cacheId,
+  );
 
   const totalBytes = entries.reduce((s, e) => s + e.sizeBytes, 0);
   const activeBytes = active.reduce((s, e) => s + e.sizeBytes, 0);
@@ -85,7 +121,16 @@ export function investigateBuildKitCache(systemDfVText: string): BuildKitInvesti
     confidencePct: Math.max(0, Math.min(100, confidencePct)),
     confidenceLabel: confidencePct >= 95 ? "HIGH" : confidencePct >= 85 ? "MEDIUM" : "LOW",
     whyNot99Plus: confidenceReasons,
-    safeToPrune: unknown.length === 0 && inactiveBytes > 0,
+    safeToPrune: entries.length > 0 && unknown.length === 0 && inactiveBytes > 0,
+    inventoryStatus: entries.length > 0 ? "OK" : "UNAVAILABLE",
+    inventoryError: entries.length > 0 ? null : "build_cache_inventory_unavailable",
+    collectionSource: entries.length > 0 ? "docker_system_df_api" : "none",
+    cleanupBlockedReason:
+      entries.length > 0 && unknown.length === 0 && inactiveBytes > 0
+        ? "cleanup_blocked_pending_approval"
+        : entries.length === 0
+          ? "buildkit_inventory_unavailable"
+          : `buildkit_not_safe:confidence=${Math.max(0, Math.min(100, confidencePct))}`,
     entries: entries.slice(0, 200),
   };
 }

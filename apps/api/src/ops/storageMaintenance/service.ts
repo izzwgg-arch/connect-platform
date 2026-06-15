@@ -84,6 +84,24 @@ function buildHealthAlerts(scan: StorageScanSnapshot | null): StorageHealthSnaps
 export function getStorageHealthSnapshot(): StorageHealthSnapshot {
   void bootstrapSnapshots();
   const trends = (["24h", "7d", "30d"] as const).map((window) => buildTrendSeries(history, window));
+  const buildCache = latestScan?.docker.buildCache;
+  const opsBuildCache = latestScan?.dashboard?.operationsCenter?.buildCacheAnalysis;
+  const inventoryStatus = buildCache?.inventoryStatus ?? "UNAVAILABLE";
+  const apiEntryCount = opsBuildCache?.totalEntries ?? buildCache?.entryCount ?? 0;
+  const safeToPrune =
+    inventoryStatus === "OK" &&
+    apiEntryCount > 0 &&
+    (opsBuildCache?.unknownBytes ?? 0) === 0;
+  const cleanupBlockedReason =
+    inventoryStatus !== "OK"
+      ? `buildkit_inventory_${inventoryStatus.toLowerCase()}:${buildCache?.inventoryError ?? "unknown"}`
+      : apiEntryCount === 0
+        ? "buildkit_inventory_empty"
+        : !safeToPrune
+          ? "buildkit_not_safe_pending_review"
+          : isCleanupExecutionEnabled()
+            ? "cleanup_blocked_pending_approval"
+            : "cleanup_disabled";
   return {
     timestamp: new Date().toISOString(),
     latestScan,
@@ -99,6 +117,17 @@ export function getStorageHealthSnapshot(): StorageHealthSnapshot {
     cleanupEnabled: isCleanupExecutionEnabled(),
     approvedPlanId,
     preCleanupSnapshotPath,
+    buildKitInventory: latestScan
+      ? {
+          hostDetectedTotalBytes: buildCache?.hostDetectedTotalBytes ?? buildCache?.totalBytes ?? null,
+          apiEntryCount,
+          inventoryStatus,
+          inventoryError: buildCache?.inventoryError ?? null,
+          collectionSource: buildCache?.collectionSource ?? "none",
+          cleanupBlockedReason,
+          safeToPrune,
+        }
+      : undefined,
   };
 }
 

@@ -206,6 +206,7 @@ function callIdentity(call: CallRecord, self?: SelfIdentity): NormalizedCallerId
     selfNames: self?.names,
     selfExtensionNumbers: self?.numbers,
     ringGroupPrefix: call.fromPrefix,
+    tenantId: call.tenantId,
   });
 }
 

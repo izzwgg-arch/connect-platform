@@ -6,7 +6,8 @@ import { buildInventoryItem } from "./classifier";
 import { deriveStorageAlerts } from "./alerts";
 import { buildStorageDashboardSummary } from "./dashboard";
 import { computeReclaimEstimate } from "./reclaimEstimate";
-import { buildOperationsCenter, fetchBuildCacheRaw } from "./proofSystem/operationsCenter";
+import { buildOperationsCenter } from "./proofSystem/operationsCenter";
+import type { DockerSystemDfPayload } from "./buildKitInventory";
 import { buildVolumeMountIndex } from "./proofSystem/volumeMountIndex";
 import type {
   ContainerdBreakdown,
@@ -51,6 +52,7 @@ export type StorageScannerDeps = {
   listContainers: () => Promise<DockerContainerRow[]>;
   listVolumes: () => Promise<DockerVolumeRow[]>;
   getDockerSystemDf: () => Promise<DockerSystemSummary>;
+  fetchDockerSystemDfPayload?: () => Promise<DockerSystemDfPayload>;
   getSystemDfJson?: () => Promise<unknown>;
   inspectImages?: () => Promise<import("./proofSystem/dependencyGraph").ImageInspectRow[]>;
   statPathBytes: (path: string) => Promise<number | null>;
@@ -359,31 +361,62 @@ export async function runStorageScan(deps: StorageScannerDeps): Promise<StorageS
     ? await deps.probeHostVisibility().catch(() => EMPTY_HOST_VISIBILITY)
     : EMPTY_HOST_VISIBILITY;
 
-  const [images, containers, volumes, dockerSummary, fsItems, apkItems, containerdScan, buildCacheRaw, imageInspects] =
+  const [images, containers, volumes, dfPayload, fsItems, apkItems, containerdScan, imageInspects] =
     await Promise.all([
     deps.listImages().catch(() => [] as DockerImageRow[]),
     deps.listContainers().catch(() => [] as DockerContainerRow[]),
     deps.listVolumes().catch(() => [] as DockerVolumeRow[]),
-    deps.getDockerSystemDf().catch(
-      (): DockerSystemSummary => ({
-        imagesCount: 0,
-        imagesBytes: null,
-        imagesReclaimableBytes: null,
-        containersCount: 0,
-        containersBytes: null,
-        volumesCount: 0,
-        volumesBytes: null,
-        buildCache: { entryCount: null, totalBytes: null, reclaimableBytes: null, source: "unavailable" },
+    (deps.fetchDockerSystemDfPayload
+      ? deps.fetchDockerSystemDfPayload()
+      : deps.getDockerSystemDf().then((summary) => ({
+          status: summary.buildCache.inventoryStatus ?? ("UNAVAILABLE" as const),
+          errorMessage: summary.buildCache.inventoryError ?? null,
+          collectionSource: summary.buildCache.collectionSource ?? ("none" as const),
+          hostDetectedTotalBytes: summary.buildCache.hostDetectedTotalBytes ?? summary.buildCache.totalBytes,
+          hostDetectedEntryCount: summary.buildCache.hostDetectedEntryCount ?? summary.buildCache.entryCount,
+          rawEntries: [] as import("./dockerSystemDfApi").DockerBuildCacheRaw[],
+          summary,
+          durationMs: 0,
+        }))
+    ).catch(
+      (): DockerSystemDfPayload => ({
+        status: "UNAVAILABLE",
+        errorMessage: "docker_system_df_fetch_failed",
+        collectionSource: "none",
+        hostDetectedTotalBytes: null,
+        hostDetectedEntryCount: null,
+        rawEntries: [],
+        summary: {
+          imagesCount: 0,
+          imagesBytes: null,
+          imagesReclaimableBytes: null,
+          containersCount: 0,
+          containersBytes: null,
+          volumesCount: 0,
+          volumesBytes: null,
+          buildCache: {
+            entryCount: null,
+            totalBytes: null,
+            reclaimableBytes: null,
+            source: "unavailable",
+            inventoryStatus: "UNAVAILABLE",
+            inventoryError: "docker_system_df_fetch_failed",
+            hostDetectedTotalBytes: null,
+            hostDetectedEntryCount: null,
+            collectionSource: "none",
+          },
+        },
+        durationMs: 0,
       }),
     ),
     scanFilesystemPaths(deps),
     scanApkDownloads(deps),
     scanContainerdBreakdown(deps),
-    deps.getSystemDfJson
-      ? fetchBuildCacheRaw(deps.getSystemDfJson)
-      : Promise.resolve([]),
     deps.inspectImages ? deps.inspectImages().catch(() => []) : Promise.resolve([]),
   ]);
+
+  const dockerSummary = dfPayload.summary;
+  const buildCacheRaw = dfPayload.rawEntries;
 
   const volumeMountIndex = buildVolumeMountIndex(containers);
 
@@ -406,8 +439,11 @@ export async function runStorageScan(deps: StorageScannerDeps): Promise<StorageS
           pathOrRef: "docker_buildkit_cache",
           sizeBytes: dockerSummary.buildCache.totalBytes,
           metadata: {
-            entryCount: dockerSummary.buildCache.entryCount ?? 0,
+            entryCount: dockerSummary.buildCache.entryCount ?? buildCacheRaw.length,
             reclaimableBytes: dockerSummary.buildCache.reclaimableBytes ?? 0,
+            inventoryStatus: dockerSummary.buildCache.inventoryStatus ?? dfPayload.status,
+            inventoryError: dockerSummary.buildCache.inventoryError ?? dfPayload.errorMessage,
+            collectionSource: dockerSummary.buildCache.collectionSource ?? dfPayload.collectionSource,
           },
         },
         deps.config,

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildCrmContactWorkspaceHref,
   buildCrmLiveWorkspaceHref,
+  cleanIncomingCallerName,
   inboundCallerDisplayName,
   phonesLikelyMatch,
   shouldShowCrmInboundQuickAction,
@@ -21,6 +22,28 @@ test("inboundCallerDisplayName prefers CRM name over PBX fromName", () => {
       from: "+15125550100",
     }),
     "Jane Lead",
+  );
+});
+
+test("cleanIncomingCallerName strips leading tenant label and keeps caller remainder", () => {
+  assert.equal(
+    cleanIncomingCallerName("A PLUS CENTER WIRELESS CALLER", { tenantName: "A plus center" }),
+    "WIRELESS CALLER",
+  );
+  assert.equal(
+    cleanIncomingCallerName("A+ Center: Jane Smith", { tenantId: "vpbx:a_plus_center" }),
+    "Jane Smith",
+  );
+});
+
+test("inboundCallerDisplayName falls back to number when only tenant name remains", () => {
+  assert.equal(
+    inboundCallerDisplayName({
+      fromName: "TRIMPRO INC",
+      from: "9172421944",
+      tenantId: "vpbx:trimpro",
+    }),
+    "9172421944",
   );
 });
 

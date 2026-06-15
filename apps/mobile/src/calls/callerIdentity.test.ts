@@ -89,6 +89,33 @@ test("plain CNAM, no ring group prefix (no colon)", () => {
   assert.equal(lines.secondary, "8455551212");
 });
 
+test("inbound: tenant label is stripped from caller name, prefix badge untouched", () => {
+  const id = normalizeCallerIdentity({
+    direction: "inbound",
+    number: "8454226997",
+    displayName: "A PLUS CENTER WIRELESS CALLER",
+    ringGroupPrefix: "Main",
+    tenantId: "vpbx:a_plus_center",
+  });
+  assert.equal(id.ringGroupPrefix, "Main");
+  assert.equal(id.displayName, "WIRELESS CALLER");
+  const lines = callerDisplayLines(id);
+  assert.equal(lines.prefixBadge, "Main");
+  assert.equal(lines.primary, "WIRELESS CALLER");
+  assert.equal(lines.secondary, "8454226997");
+});
+
+test("inbound: exact tenant CNAM falls back to caller number", () => {
+  const id = normalizeCallerIdentity({
+    direction: "inbound",
+    number: "9172421944",
+    displayName: "TRIMPRO INC",
+    tenantId: "vpbx:trimpro",
+  });
+  assert.equal(id.displayName, null);
+  assert.equal(callerDisplayLines(id).primary, "9172421944");
+});
+
 test("internal extension call: extension number + name, no external number", () => {
   const id = normalizeCallerIdentity({
     direction: "internal",

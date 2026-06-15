@@ -74,6 +74,9 @@ export interface CallerIdentityInput {
    * the caller name.
    */
   ringGroupPrefix?: string | null;
+  tenantId?: string | null;
+  tenantName?: string | null;
+  tenantSlug?: string | null;
 }
 
 const PSTN_MIN_DIGITS = 7;
@@ -143,6 +146,59 @@ function dedupePrefixLabel(raw: string | null | undefined): string | null {
   if (!v) return null;
   const first = v.split(/[:]/)[0]!.trim();
   return first || null;
+}
+
+type LabelToken = { value: string; start: number; end: number };
+
+const LEGAL_SUFFIX_ONLY = new Set(["INC", "LLC", "LTD", "CORP", "CORPORATION", "CO", "COMPANY"]);
+
+function tokenizeLabel(value: string): LabelToken[] {
+  const tokens: LabelToken[] = [];
+  const re = /[A-Za-z0-9]+|[+&]/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(value)) !== null) {
+    const raw = match[0]!;
+    const normalized = raw === "+" ? "PLUS" : raw === "&" ? "AND" : raw.toUpperCase();
+    tokens.push({ value: normalized, start: match.index, end: match.index + raw.length });
+  }
+  return tokens;
+}
+
+function tenantLabelCandidates(input: CallerIdentityInput): string[] {
+  const raw = [input.tenantName, input.tenantSlug, input.tenantId]
+    .map((value) => clean(value))
+    .filter(Boolean);
+  const labels = new Set<string>();
+  for (const value of raw) {
+    const withoutPrefix = value.startsWith("vpbx:") ? value.slice(5) : value;
+    labels.add(withoutPrefix);
+    labels.add(withoutPrefix.replace(/[_-]+/g, " "));
+  }
+  return [...labels].filter((label) => tokenizeLabel(label).length > 0);
+}
+
+function stripLeadingTenantLabel(rawName: string | null, input: CallerIdentityInput): string | null {
+  const name = clean(rawName);
+  if (!name) return null;
+  const nameTokens = tokenizeLabel(name);
+  if (nameTokens.length === 0) return null;
+
+  let bestCut = 0;
+  for (const label of tenantLabelCandidates(input)) {
+    const labelTokens = tokenizeLabel(label).map((token) => token.value);
+    if (labelTokens.length === 0 || labelTokens.length > nameTokens.length) continue;
+    const matches = labelTokens.every((token, index) => nameTokens[index]?.value === token);
+    if (matches) bestCut = Math.max(bestCut, nameTokens[labelTokens.length - 1]!.end);
+  }
+  if (bestCut === 0) return name;
+
+  const remainder = name.slice(bestCut).replace(/^[\s:|·,\-–—]+/, "").trim();
+  if (!remainder) return null;
+  const remainderTokens = tokenizeLabel(remainder).map((token) => token.value);
+  if (remainderTokens.length > 0 && remainderTokens.every((token) => LEGAL_SUFFIX_ONLY.has(token))) {
+    return null;
+  }
+  return remainder;
 }
 
 function matchesAny(value: string, list: ReadonlyArray<string> | undefined): boolean {
@@ -253,6 +309,7 @@ export function normalizeCallerIdentity(input: CallerIdentityInput): NormalizedC
   if (!prefix && rawPbxCallerId && !looksLikePstn(rawPbxCallerId)) {
     displayName = rawPbxCallerId;
   }
+  displayName = stripLeadingTenantLabel(displayName, input);
 
   // Guard: never present the logged-in user's own extension/name as the
   // inbound external caller. Drop it and fall back to the external number.

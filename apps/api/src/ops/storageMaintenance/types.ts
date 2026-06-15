@@ -56,11 +56,23 @@ export type StorageAlert = {
   observedBytes?: number;
 };
 
+export type BuildKitInventoryStatus =
+  | "OK"
+  | "UNAVAILABLE"
+  | "PERMISSION_DENIED"
+  | "PARSE_FAILED"
+  | "TIMEOUT";
+
 export type DockerBuildCacheSummary = {
   entryCount: number | null;
   totalBytes: number | null;
   reclaimableBytes: number | null;
   source: "docker_system_df" | "unavailable";
+  inventoryStatus?: BuildKitInventoryStatus;
+  inventoryError?: string | null;
+  hostDetectedTotalBytes?: number | null;
+  hostDetectedEntryCount?: number | null;
+  collectionSource?: "docker_system_df_api" | "docker_system_df_cli" | "docker_builder_du" | "none";
 };
 
 export type DockerSystemSummary = {
@@ -564,6 +576,10 @@ export type BuildKitCacheEntryStat = {
   sizeBytes: number;
   usageCount: number;
   referenced: boolean;
+  incomplete?: boolean;
+  reclaimable?: boolean;
+  lastUsedAt?: string | null;
+  createdAt?: string | null;
 };
 
 export type BuildKitInvestigation = {
@@ -580,6 +596,10 @@ export type BuildKitInvestigation = {
   confidenceLabel: "HIGH" | "MEDIUM" | "LOW";
   whyNot99Plus: string[];
   safeToPrune: boolean;
+  inventoryStatus: BuildKitInventoryStatus;
+  inventoryError: string | null;
+  collectionSource: DockerBuildCacheSummary["collectionSource"];
+  cleanupBlockedReason: string | null;
   entries: BuildKitCacheEntryStat[];
 };
 
@@ -674,6 +694,15 @@ export type StorageHealthSnapshot = {
   cleanupEnabled: boolean;
   approvedPlanId: string | null;
   preCleanupSnapshotPath: string | null;
+  buildKitInventory?: {
+    hostDetectedTotalBytes: number | null;
+    apiEntryCount: number;
+    inventoryStatus: BuildKitInventoryStatus;
+    inventoryError: string | null;
+    collectionSource: DockerBuildCacheSummary["collectionSource"];
+    cleanupBlockedReason: string | null;
+    safeToPrune: boolean;
+  };
 };
 
 export type StorageMaintenanceConfig = {

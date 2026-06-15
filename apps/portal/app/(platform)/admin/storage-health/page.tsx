@@ -136,6 +136,15 @@ type StorageHealth = {
   approvedPlanId?: string | null;
   preCleanupSnapshotPath?: string | null;
   executions?: Array<{ executionId: string; status: string; stages: Array<{ stage: number; label: string; reclaimedBytes: number | null }>; reclaimedBytes: number }>;
+  buildKitInventory?: {
+    hostDetectedTotalBytes: number | null;
+    apiEntryCount: number;
+    inventoryStatus: "OK" | "UNAVAILABLE" | "PERMISSION_DENIED" | "PARSE_FAILED" | "TIMEOUT";
+    inventoryError: string | null;
+    collectionSource: string | null;
+    cleanupBlockedReason: string | null;
+    safeToPrune: boolean;
+  };
 };
 
 const SCAN_POLL_MS = 5000;
@@ -644,6 +653,51 @@ export default function StorageHealthPage() {
             </div>
           ) : (
             <>
+              <div style={cardStyle}>
+                <div style={sectionTitle}>BUILDKIT INVENTORY (PHASE 5B)</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: C.textDim, marginBottom: 4 }}>Host BuildKit cache detected</div>
+                    <div style={{ fontSize: 16, fontWeight: 700 }}>{fmtBytes(health?.buildKitInventory?.hostDetectedTotalBytes ?? dash.buildCacheBytes)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: C.textDim, marginBottom: 4 }}>API inventory entries</div>
+                    <div style={{ fontSize: 16, fontWeight: 700 }}>{health?.buildKitInventory?.apiEntryCount ?? ops?.buildCacheAnalysis.totalEntries ?? 0}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: C.textDim, marginBottom: 4 }}>Inventory status</div>
+                    <Badge
+                      C={C}
+                      label={health?.buildKitInventory?.inventoryStatus ?? "UNAVAILABLE"}
+                      tone={
+                        health?.buildKitInventory?.inventoryStatus === "OK"
+                          ? "ok"
+                          : health?.buildKitInventory?.inventoryStatus === "PERMISSION_DENIED"
+                            ? "crit"
+                            : "warn"
+                      }
+                    />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: C.textDim, marginBottom: 4 }}>Safe to prune</div>
+                    <Badge C={C} label={health?.buildKitInventory?.safeToPrune ? "YES" : "NO"} tone={health?.buildKitInventory?.safeToPrune ? "ok" : "crit"} />
+                  </div>
+                </div>
+                {health?.buildKitInventory?.inventoryError ? (
+                  <div style={{ fontSize: 12, color: C.warn, marginBottom: 8, fontFamily: "monospace" }}>
+                    Error: {health.buildKitInventory.inventoryError}
+                  </div>
+                ) : null}
+                {health?.buildKitInventory?.cleanupBlockedReason ? (
+                  <div style={{ fontSize: 12, color: C.textMuted }}>
+                    Cleanup blocked: <span style={{ fontFamily: "monospace", color: C.crit }}>{health.buildKitInventory.cleanupBlockedReason}</span>
+                  </div>
+                ) : null}
+                {health?.buildKitInventory?.collectionSource ? (
+                  <div style={{ fontSize: 11, color: C.textDim, marginTop: 6 }}>Collection source: {health.buildKitInventory.collectionSource}</div>
+                ) : null}
+              </div>
+
               <div style={cardStyle}>
                 <div style={sectionTitle}>PHASE 5 — CONTROLLED CLEANUP</div>
                 <div style={{ fontSize: 13, color: C.textMuted, marginBottom: 12 }}>

@@ -2,7 +2,8 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import http from "node:http";
 import { promisify } from "node:util";
-import { parseDockerSystemDfJson } from "./dockerSystemDfApi";
+import { collectBuildKitInventory } from "./buildKitInventory";
+import { parseDockerSystemDfJson, type DockerBuildCacheRaw } from "./dockerSystemDfApi";
 import {
   assertReadOnlyDockerApiPath,
   probeHostVisibility,
@@ -21,12 +22,13 @@ import type { ImageInspectRow } from "./proofSystem/dependencyGraph";
 
 const execFileAsync = promisify(execFile);
 const DOCKER_SOCKET = (process.env.STORAGE_DOCKER_SOCKET || process.env.SERVER_HEALTH_DOCKER_SOCKET || "/var/run/docker.sock").trim();
+const DOCKER_SYSTEM_DF_TIMEOUT_MS = Number(process.env.STORAGE_DOCKER_SYSTEM_DF_TIMEOUT_MS || 600_000);
 
-function dockerHttpGet(path: string): Promise<string> {
+function dockerHttpGet(path: string, timeoutMs = 30_000): Promise<string> {
   assertReadOnlyDockerApiPath(path);
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { socketPath: DOCKER_SOCKET, path, method: "GET", timeout: 30_000 },
+      { socketPath: DOCKER_SOCKET, path, method: "GET", timeout: timeoutMs },
       (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (c) => chunks.push(c));
@@ -96,25 +98,28 @@ async function listVolumes(): Promise<DockerVolumeRow[]> {
   return parsed.Volumes ?? [];
 }
 
-async function getDockerSystemDf(): Promise<DockerSystemSummary> {
-  if (!(await dockerSocketAvailable())) {
-    return emptyDockerSummary();
-  }
+async function hostHasDockerCli(): Promise<boolean> {
   try {
-    const raw = await dockerHttpGet("/system/df");
-    const parsed = JSON.parse(raw) as Parameters<typeof parseDockerSystemDfJson>[0];
-    return parseDockerSystemDfJson(parsed);
+    await execFileAsync("docker", ["--version"], { timeout: 5_000 });
+    return true;
   } catch {
-    try {
-      const { stdout } = await execFileAsync("docker", ["system", "df"], {
-        timeout: 30_000,
-        maxBuffer: 2 * 1024 * 1024,
-      });
-      return parseDockerSystemDfText(stdout);
-    } catch {
-      return emptyDockerSummary();
-    }
+    return false;
   }
+}
+
+async function fetchDockerSystemDfPayload(): Promise<import("./buildKitInventory").DockerSystemDfPayload> {
+  return collectBuildKitInventory({
+    dockerHttpGet,
+    dockerSocket: DOCKER_SOCKET,
+    dockerSocketReachable: await dockerSocketAvailable(),
+    systemDfTimeoutMs: DOCKER_SYSTEM_DF_TIMEOUT_MS,
+    hostHasDockerCli: await hostHasDockerCli(),
+  });
+}
+
+async function getDockerSystemDf(): Promise<DockerSystemSummary> {
+  const payload = await fetchDockerSystemDfPayload();
+  return payload.summary;
 }
 
 function emptyDockerSummary(): DockerSystemSummary {
@@ -126,7 +131,17 @@ function emptyDockerSummary(): DockerSystemSummary {
     containersBytes: null,
     volumesCount: 0,
     volumesBytes: null,
-    buildCache: { entryCount: null, totalBytes: null, reclaimableBytes: null, source: "unavailable" },
+    buildCache: {
+      entryCount: null,
+      totalBytes: null,
+      reclaimableBytes: null,
+      source: "unavailable",
+      inventoryStatus: "UNAVAILABLE",
+      inventoryError: "docker_socket_unavailable",
+      hostDetectedTotalBytes: null,
+      hostDetectedEntryCount: null,
+      collectionSource: "none",
+    },
   };
 }
 
@@ -169,10 +184,11 @@ export function loadStorageMaintenanceConfig(): StorageMaintenanceConfig {
 }
 
 async function getSystemDfJson(): Promise<unknown> {
-  if (!(await dockerSocketAvailable())) return {};
-  const raw = await dockerHttpGet("/system/df");
-  return JSON.parse(raw);
+  const payload = await fetchDockerSystemDfPayload();
+  return { BuildCache: payload.rawEntries };
 }
+
+export { fetchDockerSystemDfPayload, DOCKER_SOCKET, DOCKER_SYSTEM_DF_TIMEOUT_MS };
 
 async function inspectImages(): Promise<ImageInspectRow[]> {
   const images = await listImages();
@@ -212,6 +228,7 @@ export function createProductionStorageScannerDeps(
     listContainers,
     listVolumes,
     getDockerSystemDf,
+    fetchDockerSystemDfPayload,
     getSystemDfJson,
     inspectImages,
     statPathBytes: async (path) => {

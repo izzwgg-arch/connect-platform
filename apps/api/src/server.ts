@@ -126,6 +126,11 @@ import {
 import { assessSmsRisk, normalizeSmsWithStop, tenDlcSubmissionSchema, twilioSettingsSchema } from "./validation";
 import { canonicalDirection, cdrCanonicalDirectionSql } from "./cdrDirection";
 import { Prisma } from "@prisma/client";
+import {
+  PBX_EVENT_INGEST_SECRET_ENV,
+  isPbxEventIngestEnabled,
+  normalizePbxEventBatch,
+} from "./pbxEventIngest";
 import { sendBufferWithOptionalRange } from "./httpVoicemailRange";
 import {
   buildVoicemailListWhere,
@@ -8982,6 +8987,10 @@ app.get("/voice/me/calls", async (req, reply) => {
   const userExtensions = await getUserExtensionNumbers(user);
   if (userExtensions.length === 0) return [];
   const tenantIdSet = await resolveTenantIdFilterSet(user.tenantId);
+  const userTenant = await db.tenant.findUnique({
+    where: { id: user.tenantId },
+    select: { name: true },
+  }).catch(() => null);
 
   const normaliseDirection = (dir: string): string => {
     if (dir === "incoming") return "inbound";
@@ -9002,6 +9011,7 @@ app.get("/voice/me/calls", async (req, reply) => {
     select: {
       id: true,
       linkedId: true,
+      tenantId: true,
       direction: true,
       fromNumber: true,
       fromName: true,
@@ -9022,9 +9032,10 @@ app.get("/voice/me/calls", async (req, reply) => {
     return visibleCdrRows.map((r) => ({
       id: r.id,
       linkedId: r.linkedId,
+      tenantId: r.tenantId ?? null,
       direction: normaliseDirection(r.direction),
       fromNumber: r.fromNumber ?? "",
-      fromName: r.fromName ?? null,
+      fromName: cleanIncomingCallerNameForTenant(r.fromName, r.direction, [userTenant?.name, r.tenantId, user.tenantId]),
       fromPrefix: r.fromPrefix ?? null,
       toNumber: r.toNumber ?? "",
       startedAt: r.startedAt.toISOString(),
@@ -15328,6 +15339,64 @@ function prettifyTenantSlugFromId(tenantId: string): string {
   return slug
     .replace(/[_-]+/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+type CallerLabelToken = { value: string; start: number; end: number };
+
+const CALLER_NAME_LEGAL_SUFFIX_ONLY = new Set(["INC", "LLC", "LTD", "CORP", "CORPORATION", "CO", "COMPANY"]);
+
+function tokenizeCallerLabel(value: string): CallerLabelToken[] {
+  const tokens: CallerLabelToken[] = [];
+  const re = /[A-Za-z0-9]+|[+&]/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(value)) !== null) {
+    const raw = match[0]!;
+    const normalized = raw === "+" ? "PLUS" : raw === "&" ? "AND" : raw.toUpperCase();
+    tokens.push({ value: normalized, start: match.index, end: match.index + raw.length });
+  }
+  return tokens;
+}
+
+function callerTenantLabelCandidates(labels: Array<string | null | undefined>): string[] {
+  const out = new Set<string>();
+  for (const rawLabel of labels) {
+    const raw = String(rawLabel || "").trim();
+    if (!raw) continue;
+    const value = raw.startsWith("vpbx:") ? raw.slice(5) : raw;
+    out.add(value);
+    out.add(value.replace(/[_-]+/g, " "));
+    if (raw.startsWith("vpbx:")) out.add(prettifyTenantSlugFromId(raw));
+  }
+  return [...out].filter((label) => tokenizeCallerLabel(label).length > 0);
+}
+
+function cleanIncomingCallerNameForTenant(
+  rawName: string | null | undefined,
+  direction: string | null | undefined,
+  labels: Array<string | null | undefined>,
+): string | null {
+  const name = String(rawName || "").trim();
+  if (!name) return null;
+  if (direction !== "incoming" && direction !== "inbound") return name;
+  const nameTokens = tokenizeCallerLabel(name);
+  if (nameTokens.length === 0) return null;
+
+  let bestCut = 0;
+  for (const label of callerTenantLabelCandidates(labels)) {
+    const labelTokens = tokenizeCallerLabel(label).map((token) => token.value);
+    if (labelTokens.length === 0 || labelTokens.length > nameTokens.length) continue;
+    const matches = labelTokens.every((token, index) => nameTokens[index]?.value === token);
+    if (matches) bestCut = Math.max(bestCut, nameTokens[labelTokens.length - 1]!.end);
+  }
+  if (bestCut === 0) return name;
+
+  const remainder = name.slice(bestCut).replace(/^[\s:|·,\-–—]+/, "").trim();
+  if (!remainder) return null;
+  const remainderTokens = tokenizeCallerLabel(remainder).map((token) => token.value);
+  if (remainderTokens.length > 0 && remainderTokens.every((token) => CALLER_NAME_LEGAL_SUFFIX_ONLY.has(token))) {
+    return null;
+  }
+  return remainder;
 }
 
 function mapDispositionToHistoryStatus(disposition: string | null | undefined): "answered" | "missed" | "canceled" | "failed" {
@@ -23979,6 +24048,11 @@ app.get("/calls/history", async (req, reply) => {
       const dn = dirDisplayByVital.get(r.pbxVitalTenantId.trim());
       if (dn) tenantName = dn;
     }
+    const fromName = cleanIncomingCallerNameForTenant(
+      r.fromName,
+      r.direction,
+      [tenantName, inferredTenantId, r.tenantId, r.pbxTenantCode],
+    );
     const outcome = deriveCallOutcome({
       disposition: r.disposition,
       direction: r.direction,
@@ -23993,7 +24067,7 @@ app.get("/calls/history", async (req, reply) => {
       rowId: r.id,
       linkedId: r.linkedId,
       fromNumber: r.fromNumber || "",
-      fromName: r.fromName || null,
+      fromName,
       fromPrefix: r.fromPrefix || null,
       toNumber: r.toNumber || "",
       direction: (["incoming", "outgoing", "internal"].includes(r.direction) ? r.direction : "incoming") as "incoming" | "outgoing" | "internal",
@@ -26702,6 +26776,11 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
     channelNames: mergedCh,
     telephonyDirectionHint: d.direction,
   });
+  const storedFromName = cleanIncomingCallerNameForTenant(
+    d.fromName,
+    resolvedDirection,
+    [tenantPack.tenantId, d.tenantId, d.pbxTenantCode],
+  );
 
   const lastDcontext = mergedDcx.length > 0 ? mergedDcx[mergedDcx.length - 1]! : d.dcontext ?? null;
 
@@ -26733,7 +26812,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         pbxTenantCode: tenantPack.pbxTenantCode,
         tenantResolutionSource: tenantPack.tenantResolutionSource,
         fromNumber:  d.fromNumber ?? null,
-        fromName:    d.fromName ?? null,
+        fromName:    storedFromName,
         fromPrefix:  d.fromPrefix ?? null,
         toNumber:    d.toNumber ?? null,
         direction:   resolvedDirection,
@@ -26758,7 +26837,7 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
         pbxTenantCode: tenantPack.pbxTenantCode != null ? tenantPack.pbxTenantCode : undefined,
         tenantResolutionSource: tenantPack.tenantResolutionSource != null ? tenantPack.tenantResolutionSource : undefined,
         fromNumber:  d.fromNumber ?? undefined,
-        fromName:    d.fromName ?? undefined,
+        fromName:    d.fromName !== undefined ? storedFromName : undefined,
         fromPrefix:  d.fromPrefix ?? undefined,
         toNumber:    d.toNumber ?? undefined,
         direction:   resolvedDirection !== "unknown" ? resolvedDirection : undefined,
@@ -26924,6 +27003,71 @@ app.post("/internal/cdr-ingest", async (req, reply) => {
   }
 });
 
+// ─── PBX Observability — Phase 1 event ingest (READ-ONLY diagnostics) ─────────
+// Internal endpoint: the (future, flag-gated) telephony collector POSTs batches of
+// already-mapped PBX events here. This NEVER writes back to the PBX/AstDB/ombutel —
+// it only persists normalized, redacted events into the PbxEvent table.
+//
+// Safety:
+//   - Disabled unless PBX_EVENT_INGEST_ENABLED is explicitly truthy (default OFF).
+//   - Secret-authenticated via PBX_EVENT_INGEST_SECRET (x-pbx-event-secret header),
+//     same constant-time pattern as /internal/cdr-ingest.
+//   - Redaction-before-insert + payload/batch limits live in ./pbxEventIngest.
+//   - Idempotent: createMany(skipDuplicates) on the unique eventKey.
+app.post("/internal/pbx-event-ingest", async (req, reply) => {
+  // Default-off kill switch — the collector is not enabled in Phase 1 Step 0/1.
+  if (!isPbxEventIngestEnabled(process.env)) {
+    return reply.code(404).send({ error: "disabled" });
+  }
+
+  const secret = process.env[PBX_EVENT_INGEST_SECRET_ENV]?.trim();
+  const incoming = String(
+    (req.headers as Record<string, string | undefined>)["x-pbx-event-secret"] || "",
+  ).trim();
+  if (!secret) {
+    app.log.warn(
+      { endpoint: "/internal/pbx-event-ingest" },
+      "PBX_EVENT_INGEST_SECRET not set — refusing ingest while enabled",
+    );
+    return reply.code(503).send({ error: "secret_not_configured" });
+  }
+  if (!incoming) return reply.code(401).send({ error: "missing secret" });
+  const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
+  const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
+  if (!timingSafeEqual(a, b)) {
+    app.log.warn(
+      { ip: req.ip, endpoint: "/internal/pbx-event-ingest" },
+      "pbx_event_ingest_secret_mismatch",
+    );
+    return reply.code(403).send({ error: "forbidden" });
+  }
+
+  const normalized = normalizePbxEventBatch(req.body);
+  if (!normalized.ok) {
+    return reply.code(400).send({ error: normalized.error, issues: normalized.issues });
+  }
+
+  try {
+    const result = await db.pbxEvent.createMany({
+      // Prisma nullable Json columns need Prisma.JsonNull, not a literal JS null.
+      data: normalized.rows.map((r) => ({
+        ...r,
+        metadata: r.metadata == null ? Prisma.JsonNull : (r.metadata as Prisma.InputJsonValue),
+      })),
+      skipDuplicates: true, // idempotent re-delivery
+    });
+    return reply.code(200).send({
+      ok: true,
+      received: normalized.received,
+      stored: result.count,
+      dedupedInBatch: normalized.deduped,
+    });
+  } catch (err: any) {
+    app.log.error({ err: err?.message }, "pbx-event-ingest: db error");
+    return reply.code(500).send({ error: "db_error" });
+  }
+});
+
 // Internal: telephony service POSTs when an inbound call rings at an extension.
 // Creates a CallInvite and sends an Expo push to the owner's mobile devices.
 // Secured by the same CDR_INGEST_SECRET shared header.
@@ -26954,6 +27098,11 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
     /** When state is hungup, optional override for INVITE_CANCELED `reason` (default pbx_hangup). */
     cancelReason: z.string().max(120).optional().nullable(),
   }).parse(req.body || {});
+  const cleanedFromDisplay = cleanIncomingCallerNameForTenant(
+    input.fromDisplay,
+    "incoming",
+    [input.connectTenantId, input.pbxVitalTenantId],
+  );
 
   app.log.info(
     { linkedId: input.linkedId, toExtension: input.toExtension, connectTenantId: input.connectTenantId, state: input.state || "ringing" },
@@ -27101,7 +27250,7 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
           userId: target.userId,
           extensionId: target.extensionId,
           fromNumber: input.fromNumber || "unknown",
-          fromDisplay: input.fromDisplay ?? null,
+          fromDisplay: cleanedFromDisplay,
           fromPrefix: input.fromPrefix ?? null,
           toExtension: input.toExtension,
           status: "PENDING",
@@ -27119,7 +27268,7 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
           extensionId: target.extensionId,
           pbxCallId: input.linkedId,
           fromNumber: input.fromNumber || "unknown",
-          fromDisplay: input.fromDisplay ?? null,
+          fromDisplay: cleanedFromDisplay,
           fromPrefix: input.fromPrefix ?? null,
           toExtension: input.toExtension,
           status: "PENDING",

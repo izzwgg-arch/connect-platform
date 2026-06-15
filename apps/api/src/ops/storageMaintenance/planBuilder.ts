@@ -88,6 +88,8 @@ export function buildCleanupPlan(
   const actions: CleanupPlanAction[] = [];
 
   const buildCache = scan.items.find((i) => i.kind === "docker_build_cache");
+  const inventoryStatus = scan.docker.buildCache.inventoryStatus ?? "UNAVAILABLE";
+  const inventoryOk = inventoryStatus === "OK" && (scan.docker.buildCache.entryCount ?? 0) > 0;
   if (buildCache?.sizeBytes) {
     const filter = `until=${daysToDuration(config.buildCacheRetentionDays)}`;
     const dryRunCommand = `docker builder prune --filter ${filter} --dry-run`;
@@ -103,6 +105,10 @@ export function buildCleanupPlan(
           command,
           dryRunCommand,
           classification: buildCache.classification,
+          blocked: !inventoryOk,
+          blockReason: inventoryOk
+            ? null
+            : `build_cache_inventory_${inventoryStatus.toLowerCase()}:${scan.docker.buildCache.inventoryError ?? "incomplete"}`,
         },
         config,
       ),

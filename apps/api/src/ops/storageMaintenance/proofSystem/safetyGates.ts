@@ -79,6 +79,31 @@ export function evaluateSafetyGates(input: {
       sizeBytes: input.buildCache.unknownBytes,
     });
   }
+  const buildCacheInventoryStatus = input.scan.docker.buildCache.inventoryStatus;
+  if (buildCacheInventoryStatus && buildCacheInventoryStatus !== "OK") {
+    const reason = `build_cache_inventory_${buildCacheInventoryStatus.toLowerCase()}:${input.scan.docker.buildCache.inventoryError ?? "unknown"}`;
+    reasons.push(reason);
+    blockers.push({
+      id: "build_cache_inventory",
+      label: "BuildKit inventory incomplete",
+      pathOrRef: "docker_buildkit_cache",
+      reason,
+      sizeBytes: input.scan.docker.buildCache.totalBytes,
+    });
+  } else if (
+    (input.scan.docker.buildCache.totalBytes ?? 0) > 0 &&
+    input.buildCache.totalEntries === 0
+  ) {
+    const reason = "build_cache_inventory_empty_with_host_total";
+    reasons.push(reason);
+    blockers.push({
+      id: "build_cache_inventory_empty",
+      label: "BuildKit inventory empty",
+      pathOrRef: "docker_buildkit_cache",
+      reason,
+      sizeBytes: input.scan.docker.buildCache.totalBytes,
+    });
+  }
   for (const item of input.scan.items.filter((i) => i.classification === "UNKNOWN_REQUIRES_REVIEW")) {
     reasons.push(`unknown_inventory_item:${item.id}`);
     blockers.push({

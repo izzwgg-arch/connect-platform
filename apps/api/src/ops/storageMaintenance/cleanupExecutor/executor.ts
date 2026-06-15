@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
+import http from "node:http";
 import { promisify } from "node:util";
 import type { StorageScannerDeps } from "../scanner";
 import type {
@@ -15,7 +16,9 @@ import {
   compareInventoryFingerprints,
   readRootDiskBytes,
 } from "./inventoryFingerprint";
-import { investigateBuildKitCache } from "./buildKitInvestigation";
+import { investigateFromCollection, collectBuildKitInventory, type BuildKitInventoryCollection } from "../buildKitInventory";
+import { DOCKER_SOCKET, DOCKER_SYSTEM_DF_TIMEOUT_MS } from "../dockerDeps";
+import { assertReadOnlyDockerApiPath } from "../hostVisibility";
 import { verifyBuildDryRun } from "./commandRunner";
 import { writePreCleanupSnapshot } from "./preCleanupSnapshot";
 import {
@@ -46,11 +49,60 @@ export type ExecutorContext = {
   onAudit: (detail: string, metadata?: Record<string, unknown>) => void;
 };
 
+async function collectBuildKitInventoryForExecutor(): Promise<BuildKitInventoryCollection> {
+  let dockerSocketReachable = false;
+  try {
+    const fs = await import("node:fs/promises");
+    await fs.access(DOCKER_SOCKET);
+    dockerSocketReachable = true;
+  } catch {
+    dockerSocketReachable = false;
+  }
+  return collectBuildKitInventory({
+    dockerHttpGet,
+    dockerSocket: DOCKER_SOCKET,
+    dockerSocketReachable,
+    systemDfTimeoutMs: DOCKER_SYSTEM_DF_TIMEOUT_MS,
+    hostHasDockerCli: false,
+  });
+}
+
+function dockerHttpGet(path: string, timeoutMs: number): Promise<string> {
+  assertReadOnlyDockerApiPath(path);
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { socketPath: DOCKER_SOCKET, path, method: "GET", timeout: timeoutMs },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c) => chunks.push(c));
+        res.on("end", () => {
+          const body = Buffer.concat(chunks).toString("utf8");
+          if (res.statusCode && res.statusCode >= 400) {
+            reject(new Error(`docker_http_${res.statusCode}`));
+            return;
+          }
+          resolve(body);
+        });
+      },
+    );
+    req.on("error", reject);
+    req.on("timeout", () => {
+      req.destroy();
+      reject(new Error("docker_timeout"));
+    });
+    req.end();
+  });
+}
+
 async function getSystemDfVText(): Promise<string> {
+  const collection = await collectBuildKitInventoryForExecutor();
+  if (collection.status === "OK" && collection.rawEntries.length > 0) {
+    return `Build cache usage: ${collection.hostDetectedTotalBytes ?? collection.summary.buildCache.totalBytes ?? 0}\nCACHE ID\n${collection.rawEntries.map((e) => `${e.ID}\t${e.Type}\t${e.Size}`).join("\n")}`;
+  }
   try {
     const { stdout } = await execFileAsync("docker", ["system", "df", "-v"], {
-      timeout: 300_000,
-      maxBuffer: 8 * 1024 * 1024,
+      timeout: DOCKER_SYSTEM_DF_TIMEOUT_MS,
+      maxBuffer: 32 * 1024 * 1024,
     });
     return String(stdout);
   } catch {
@@ -157,7 +209,6 @@ export async function runCleanupStage(
   ctx.onAudit(`cleanup_stage_${stage}_started`, { executionId, actorUserId });
 
   let stageResult;
-  const systemDfV = stage === 4 ? await getSystemDfVText() : "";
   switch (stage) {
     case 1:
       stageResult = await executeStage1(scan, ctx.config);
@@ -168,9 +219,11 @@ export async function runCleanupStage(
     case 3:
       stageResult = await executeStage3();
       break;
-    case 4:
-      stageResult = await executeStage4(scan, ctx.config, systemDfV);
+    case 4: {
+      const investigation = await investigateBuildKit(ctx);
+      stageResult = await executeStage4(scan, ctx.config, investigation);
       break;
+    }
     default:
       throw new Error("invalid_cleanup_stage");
   }
@@ -233,6 +286,10 @@ export async function runCleanupStage(
 }
 
 export async function investigateBuildKit(ctx: ExecutorContext): Promise<BuildKitInvestigation> {
-  const text = await getSystemDfVText();
-  return investigateBuildKitCache(text);
+  if (ctx.deps.fetchDockerSystemDfPayload) {
+    const collection = await ctx.deps.fetchDockerSystemDfPayload();
+    return investigateFromCollection(collection);
+  }
+  const collection = await collectBuildKitInventoryForExecutor();
+  return investigateFromCollection(collection);
 }

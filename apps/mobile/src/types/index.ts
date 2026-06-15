@@ -45,6 +45,7 @@ export type OutboundDialRoute = {
 export type CallRecord = {
   id: string;
   linkedId?: string | null;
+  tenantId?: string | null;
   direction: string; // "inbound" | "outbound" | "internal" | "unknown"
   fromNumber: string;
   fromName?: string | null;

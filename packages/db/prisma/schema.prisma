@@ -5401,3 +5401,156 @@ model CrmAiSettings {
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
+
+// ─── PBX Observability & Diagnostics (Phase 1 — read-only) ─────────────────────
+// See docs/pbx/connect-pbx-observability-phase1-blueprint.md and
+// docs/pbx/connect-pbx-observability-diagnostics-platform.md.
+// These tables ONLY store mapped PBX signals Connect already receives. They never
+// drive any write back to the PBX/AstDB/ombutel. All five models are additive.
+
+/// Normalized, redacted single PBX event — the Phase 1 ingest buffer + forensic tail.
+/// `tenantId` is a plain string (Connect Tenant.id | "vpbx:<slug>" | null) and is
+/// intentionally NOT a foreign key, mirroring ConnectCdr.tenantId, so event ingest
+/// never blocks on tenant resolution and never cascades.
+/// This is the highest-volume diagnostics table — it gets the SHORTEST retention
+/// (default 7d). `occurredAt` is the retention/partition pruning key.
+model PbxEvent {
+  id               String   @id @default(cuid())
+  /// Idempotent dedupe key: sha256(source|eventType|linkedId|uniqueId|channel|occurredAt).
+  eventKey         String   @unique
+  source           String // "ami" | "ari" | "cdr" | "system"
+  eventType        String // e.g. "Newchannel" | "DialBegin" | "Hangup"
+  occurredAt       DateTime // event time as reported by the PBX/Asterisk
+  ingestedAt       DateTime @default(now())
+  /// NOT globally 1:1 with a call — attended/blind transfers create multiple linkedIds.
+  linkedId         String?
+  uniqueId         String?
+  channel          String?
+  bridgeId         String?
+  tenantId         String? // Connect Tenant.id | "vpbx:<slug>" | null (no FK by design)
+  tenantSlug       String?
+  extension        String?
+  did              String?
+  callerNumber     String?
+  calleeNumber     String?
+  /// Redacted residual fields only — never SIP secrets/passwords/tokens.
+  metadata         Json?
+  redactionVersion Int      @default(1)
+  pbxInstanceId    String?
+  createdAt        DateTime @default(now())
+
+  @@index([linkedId])
+  @@index([uniqueId])
+  @@index([tenantId, occurredAt])
+  @@index([source, eventType])
+  @@index([occurredAt])
+}
+
+/// One logical call. `rootLinkedId` is the primary correlation key, but a single
+/// call can span MULTIPLE linkedIds after attended/blind transfers — hence
+/// `linkedIds[]` + `completeness`. Populated by the Phase 1 assembler (NOT Step 0/1).
+model PbxCallTrace {
+  id                  String    @id @default(cuid())
+  rootLinkedId        String    @unique
+  /// All linkedIds stitched into this call (transfer correlation).
+  linkedIds           String[]
+  tenantId            String?
+  tenantSlug          String?
+  direction           String?
+  /// Axis A terminal disposition: answered|voicemail|missed|busy|canceled|failed|unknown.
+  disposition         String?
+  /// Axis B optional failure class (e.g. queue_abandoned, ring_group_no_answer).
+  failureClass        String?
+  did                 String?
+  callerNumber        String?
+  callerIdName        String?
+  destinationNumber   String?
+  connectedNumber     String?
+  trunk               String?
+  answeredByExtension String?
+  hangupCause         String?
+  /// "partial" | "complete" | "stitched"
+  completeness        String    @default("partial")
+  cdrId               String?
+  startedAt           DateTime?
+  answeredAt          DateTime?
+  endedAt             DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  participants PbxCallParticipant[]
+  routeSteps   PbxCallRouteStep[]
+
+  @@index([tenantId, startedAt])
+  @@index([did])
+  @@index([callerNumber])
+  @@index([destinationNumber])
+  @@index([trunk])
+  @@index([failureClass])
+  @@index([hangupCause])
+  @@index([startedAt])
+}
+
+/// A leg/participant of a call trace (caller, callee, trunk, queue member).
+model PbxCallParticipant {
+  id          String    @id @default(cuid())
+  traceId     String
+  role        String // "caller" | "callee" | "trunk" | "queue_member"
+  extension   String?
+  deviceName  String?
+  sipUsername String?
+  channel     String?
+  uniqueId    String?
+  linkedId    String?
+  connectedAt DateTime?
+  hangupCause String?
+  createdAt   DateTime  @default(now())
+
+  trace PbxCallTrace @relation(fields: [traceId], references: [id], onDelete: Cascade)
+
+  @@index([traceId])
+  @@index([extension])
+  @@index([sipUsername])
+  @@index([deviceName])
+}
+
+/// An ordered step in a call's route (did_matched, tenant_resolved, ivr, dtmf,
+/// queue, ringgroup, dial, bridge, voicemail, hangup, ...).
+model PbxCallRouteStep {
+  id            String   @id @default(cuid())
+  traceId       String
+  seq           Int
+  stepType      String
+  occurredAt    DateTime
+  ivrName       String?
+  queueName     String?
+  ringGroup     String?
+  routeRef      String?
+  details       Json?
+  sourceEventId String?
+  createdAt     DateTime @default(now())
+
+  trace PbxCallTrace @relation(fields: [traceId], references: [id], onDelete: Cascade)
+
+  @@index([traceId, seq])
+  @@index([stepType])
+  @@index([queueName])
+  @@index([ringGroup])
+}
+
+/// Per-instance / per-data-class retention + disk guardrail config for the
+/// diagnostics store. Connect-owned configuration only — never a PBX write.
+model PbxStorageRetentionPolicy {
+  id                   String   @id @default(cuid())
+  pbxInstanceId        String?
+  dataClass            String // "pbx_event" | "call_trace" | "route_step" | "participant"
+  retentionDays        Int
+  archiveEnabled       Boolean  @default(false)
+  diskHighWatermarkPct Int      @default(85)
+  diskLowWatermarkPct  Int      @default(75)
+  updatedBy            String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@unique([pbxInstanceId, dataClass])
+}

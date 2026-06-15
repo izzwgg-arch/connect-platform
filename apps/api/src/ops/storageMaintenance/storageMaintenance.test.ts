@@ -192,6 +192,48 @@ function mockDeps(overrides: Partial<StorageScannerDeps> = {}): StorageScannerDe
         { ID: "cache2", Size: 100 * 1e9, Reclaimable: false, InUse: true },
       ],
     }),
+    fetchDockerSystemDfPayload: async () => {
+      const summary: DockerSystemSummary = {
+        imagesCount: 3,
+        imagesBytes: 2e9,
+        imagesReclaimableBytes: 1e9,
+        containersCount: 1,
+        containersBytes: 1000,
+        volumesCount: 2,
+        volumesBytes: 1500,
+        buildCache: {
+          entryCount: 2,
+          totalBytes: 500 * 1e9,
+          reclaimableBytes: 480 * 1e9,
+          source: "docker_system_df",
+          inventoryStatus: "OK",
+          inventoryError: null,
+          hostDetectedTotalBytes: 500 * 1e9,
+          hostDetectedEntryCount: 2,
+          collectionSource: "docker_system_df_api",
+        },
+      };
+      return {
+        status: "OK" as const,
+        errorMessage: null,
+        collectionSource: "docker_system_df_api" as const,
+        hostDetectedTotalBytes: 500 * 1e9,
+        hostDetectedEntryCount: 2,
+        rawEntries: [
+          {
+            ID: "cache1",
+            Size: 400 * 1e9,
+            Reclaimable: true,
+            InUse: false,
+            CreatedAt: "2024-01-01T00:00:00Z",
+            Description: "COPY . . Dockerfile",
+          },
+          { ID: "cache2", Size: 100 * 1e9, Reclaimable: false, InUse: true },
+        ],
+        summary,
+        durationMs: 5,
+      };
+    },
     inspectImages: async () => [
       {
         id: "sha256:activeimage0001",
@@ -672,6 +714,161 @@ ghi789*    regular      500MB     3h ago                0         false
   assert.equal(inv.inactiveReferences, 2);
   assert.ok(inv.confidencePct > 0);
   assert.ok(inv.whyNot99Plus.length > 0);
+  assert.equal(inv.safeToPrune, false);
+});
+
+test("buildkit investigation from raw docker API entries returns non-zero inventory", async () => {
+  const { investigateBuildKitFromRaw } = await import("./cleanupExecutor/buildKitInvestigation");
+  const inv = investigateBuildKitFromRaw([
+    { ID: "cache-a", Size: 400e9, Reclaimable: true, InUse: false, UsageCount: 0, Type: "regular" },
+    { ID: "cache-b", Size: 100e9, Reclaimable: false, InUse: true, UsageCount: 2, Type: "regular" },
+  ]);
+  assert.equal(inv.totalEntries, 2);
+  assert.equal(inv.inventoryStatus, "OK");
+  assert.ok(inv.totalBytes > 0);
+});
+
+test("buildkit inventory marks safeToPrune false when collection unavailable", async () => {
+  const { investigateFromCollection } = await import("./buildKitInventory");
+  const inv = investigateFromCollection({
+    status: "TIMEOUT",
+    errorMessage: "Docker API request timed out",
+    collectionSource: "none",
+    hostDetectedTotalBytes: 535.6e9,
+    hostDetectedEntryCount: null,
+    rawEntries: [],
+    summary: {
+      imagesCount: 0,
+      imagesBytes: null,
+      imagesReclaimableBytes: null,
+      containersCount: 0,
+      containersBytes: null,
+      volumesCount: 0,
+      volumesBytes: null,
+      buildCache: {
+        entryCount: null,
+        totalBytes: 535.6e9,
+        reclaimableBytes: null,
+        source: "unavailable",
+        inventoryStatus: "TIMEOUT",
+        inventoryError: "Docker API request timed out",
+      },
+    },
+    durationMs: 30000,
+  });
+  assert.equal(inv.totalEntries, 0);
+  assert.equal(inv.safeToPrune, false);
+  assert.equal(inv.inventoryStatus, "TIMEOUT");
+  assert.match(inv.cleanupBlockedReason ?? "", /timeout/i);
+});
+
+test("buildkit parser handles permission denied collection result", async () => {
+  const { investigateFromCollection } = await import("./buildKitInventory");
+  const inv = investigateFromCollection({
+    status: "PERMISSION_DENIED",
+    errorMessage: "Docker socket permission denied",
+    collectionSource: "none",
+    hostDetectedTotalBytes: null,
+    hostDetectedEntryCount: null,
+    rawEntries: [],
+    summary: {
+      imagesCount: 0,
+      imagesBytes: null,
+      imagesReclaimableBytes: null,
+      containersCount: 0,
+      containersBytes: null,
+      volumesCount: 0,
+      volumesBytes: null,
+      buildCache: {
+        entryCount: null,
+        totalBytes: null,
+        reclaimableBytes: null,
+        source: "unavailable",
+        inventoryStatus: "PERMISSION_DENIED",
+        inventoryError: "Docker socket permission denied",
+      },
+    },
+    durationMs: 1,
+  });
+  assert.equal(inv.safeToPrune, false);
+  assert.equal(inv.inventoryStatus, "PERMISSION_DENIED");
+});
+
+test("cleanup plan blocks buildkit prune when inventory unavailable", () => {
+  const scanBase = {
+    scanId: "scan-1",
+    timestamp: new Date().toISOString(),
+    hostname: "test",
+    durationMs: 1,
+    readOnly: true as const,
+    diskMounts: [{ path: "/", totalBytes: 1e12, usedBytes: 800e9, freeBytes: 200e9, usedPct: 80 }],
+    docker: {
+      imagesCount: 0,
+      imagesBytes: null,
+      imagesReclaimableBytes: null,
+      containersCount: 0,
+      containersBytes: null,
+      volumesCount: 0,
+      volumesBytes: null,
+      buildCache: {
+        entryCount: 0,
+        totalBytes: 535e9,
+        reclaimableBytes: 520e9,
+        source: "docker_system_df" as const,
+        inventoryStatus: "TIMEOUT" as const,
+        inventoryError: "docker_timeout",
+      },
+    },
+    items: [
+      {
+        id: "buildcache:aggregate",
+        kind: "docker_build_cache" as const,
+        label: "cache",
+        pathOrRef: "docker_buildkit_cache",
+        sizeBytes: 535e9,
+        classification: "SAFE_CANDIDATE" as const,
+        evidence: "test",
+        reclaimableBytes: 520e9,
+        metadata: { reclaimableBytes: 520e9 },
+      },
+    ],
+    reclaimEstimateBytes: 520e9,
+    alerts: [],
+    unknownCount: 0,
+    protectedCount: 0,
+    hostVisibility: {
+      hostInventoryRoot: null,
+      dockerSocket: "/var/run/docker.sock",
+      dockerSocketReachable: true,
+      containerdMount: false,
+      connectcommsMount: false,
+      varLogMount: false,
+    },
+    containerd: {
+      totalBytes: null,
+      overlaySnapshotsBytes: null,
+      contentBlobsBytes: null,
+      snapshotCount: null,
+    },
+    dashboard: null,
+  };
+  const plan = buildCleanupPlan(scanBase, config);
+  const buildAction = plan.actions.find((a) => a.kind === "docker_builder_prune_filtered");
+  assert.ok(buildAction);
+  assert.equal(buildAction!.blocked, true);
+  assert.match(buildAction!.blockReason ?? "", /build_cache_inventory_timeout/);
+});
+
+test("parseBuildKitCacheFromSystemDfV handles production docker system df -v rows", async () => {
+  const { parseBuildKitCacheFromSystemDfV } = await import("./cleanupExecutor/buildKitInvestigation");
+  const sample = `CACHE ID       CACHE TYPE        SIZE      CREATED             LAST USED           USAGE     SHARED
+rrby9l7uvs00   regular           72.9kB    3 months ago        3 months ago        1         false
+eprvp63yecie   regular           166MB     3 months ago        3 months ago        1         false
+abc000000000   regular           1.5GB     1 month ago                             0         false`;
+  const rows = parseBuildKitCacheFromSystemDfV(sample);
+  assert.equal(rows.length, 3);
+  assert.equal(rows[0]!.usageCount, 1);
+  assert.equal(rows[2]!.usageCount, 0);
 });
 
 test("app clone root is protected from cleanup commands", () => {

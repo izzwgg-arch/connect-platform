@@ -364,7 +364,20 @@ Portal: `/admin/storage-health` → Scan Now → Cleanup Plan (read-only).
 
 **Stop conditions:** health gate fail, unknown assets, safety gates blocked, inventory fingerprint drift (containers/volumes/rollback images), command failure.
 
-**BuildKit investigation:** `GET /admin/storage-health/investigation/buildkit` — explains confidence &lt; 99 (incomplete `*` entries, cumulative layer accounting).
+**BuildKit investigation:** `GET /admin/storage-health/investigation/buildkit` — per-entry inventory from Docker Engine `GET /system/df` JSON (not host `docker` CLI inside the API container). Explains confidence &lt; 99 (incomplete `*` entries, cumulative layer accounting).
+
+**Phase 5B — BuildKit inventory visibility (2026-06-14):**
+
+| Symptom | Root cause | Fix |
+|---------|------------|-----|
+| Host `docker system df -v` shows ~535 GB | Works on host | — |
+| API investigation returned 0 entries | (1) `GET /system/df` took ~90s with 2,781 entries but HTTP client timeout was 30s; (2) investigation path called `docker system df -v` CLI but API image has no `docker` binary | `STORAGE_DOCKER_SYSTEM_DF_TIMEOUT_MS` default **600000** (10 min); collector uses socket HTTP API only; single deduped fetch per scan |
+
+**Inventory status** (`OK` | `UNAVAILABLE` | `PERMISSION_DENIED` | `PARSE_FAILED` | `TIMEOUT`) surfaced on `GET /admin/storage-health` → `buildKitInventory` and portal **BUILDKIT INVENTORY (PHASE 5B)** panel.
+
+**Rules:** `safeToPrune` stays **false** unless `inventoryStatus === OK` and per-entry parse succeeded. BuildKit prune actions in dry plan are **blocked** when inventory incomplete. Cleanup remains gated behind Prepare → Approve → Execute.
+
+**Env:** `STORAGE_DOCKER_SYSTEM_DF_TIMEOUT_MS` (optional, default `600000`).
 
 **Never targeted:** protected data, running images, candidate rollback images, containerd content blobs, `/opt/connectcomms/app`, CRM/chat volumes.
 
@@ -379,6 +392,7 @@ Portal: `/admin/storage-health` → Scan Now → Cleanup Plan (read-only).
 | `apps/api/src/ops/storageMaintenance/classifier.ts` | Classification |
 | `apps/api/src/ops/storageMaintenance/hostVisibility.ts` | Mount probes, Docker GET whitelist, display path remap |
 | `apps/api/src/ops/storageMaintenance/dockerSystemDfApi.ts` | Parse Docker Engine `/system/df` JSON |
+| `apps/api/src/ops/storageMaintenance/buildKitInventory.ts` | Phase 5B — BuildKit cache collector (socket API, fallbacks, status) |
 | `apps/api/src/ops/storageMaintenance/dockerDeps.ts` | Production deps: HTTP docker API, `du` sizing, config |
 | `apps/api/src/ops/storageMaintenance/scanner.ts` | Read-only inventory (containerd breakdown) |
 | `apps/api/src/ops/storageMaintenance/dashboard.ts` | KPIs, distribution, simulation, trends |

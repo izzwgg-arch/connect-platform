@@ -8,6 +8,7 @@ import { useAppContext } from "../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../hooks/useAsyncResource";
 import { apiGet } from "../../../services/apiClient";
 import { CRMPageHeader, cn, crm } from "../../../components/crm";
+import { cleanIncomingCallerName } from "../../../lib/crmInboundCallDisplay";
 import {
   ArrowDown, ArrowLeftRight, ArrowUp,
   Phone, PhoneOff, PhoneMissed, PhoneIncoming,
@@ -300,8 +301,11 @@ function StepIcon({ result }: { result: JourneyStep["result"] }) {
 // ─── Avatar ───────────────────────────────────────────────────────────────────
 
 function CallAvatar({ row }: { row: CallHistoryRow }) {
-  const { direction, fromName, voicemailAnswered, status } = row;
+  const { direction, voicemailAnswered, status } = row;
   const dotClass = voicemailAnswered ? "voicemail" : status === "missed" ? "missed" : direction;
+  const fromName = direction === "incoming"
+    ? cleanIncomingCallerName(row.fromName, { tenantName: row.tenantName, tenantId: row.tenantId })
+    : row.fromName;
 
   let initials: string | null = null;
   if (direction === "incoming" && fromName) {
@@ -342,10 +346,11 @@ function CallFeedItem({
   const menuRef = useRef<HTMLDivElement>(null);
 
   const contactNumber = row.direction === "outgoing" ? row.toNumber : row.fromNumber;
+  const incomingName = cleanIncomingCallerName(row.fromName, { tenantName: row.tenantName, tenantId: row.tenantId });
 
   const displayName =
-    row.direction === "incoming" && row.fromName
-      ? row.fromName
+    row.direction === "incoming" && incomingName
+      ? incomingName
       : row.direction === "outgoing"
         ? formatPhone(row.toNumber)
         : formatPhone(row.fromNumber);
@@ -476,18 +481,19 @@ function CallDetailPanel({ row, onClose }: { row: CallHistoryRow; onClose: () =>
   const [techExpanded, setTechExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const dir = row.direction;
+  const incomingName = cleanIncomingCallerName(row.fromName, { tenantName: row.tenantName, tenantId: row.tenantId });
 
   const contactName = dir === "incoming"
-    ? (row.fromName || formatPhone(row.fromNumber))
+    ? (incomingName || formatPhone(row.fromNumber))
     : formatPhone(row.toNumber);
   const contactNumber = dir === "outgoing" ? row.toNumber : row.fromNumber;
 
   function heroInitials(): string | null {
-    if (dir !== "incoming" || !row.fromName) return null;
-    const parts = row.fromName.trim().split(/\s+/);
+    if (dir !== "incoming" || !incomingName) return null;
+    const parts = incomingName.trim().split(/\s+/);
     return parts.length >= 2
       ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
-      : row.fromName.slice(0, 2).toUpperCase();
+      : incomingName.slice(0, 2).toUpperCase();
   }
 
   function copyNumber() {
