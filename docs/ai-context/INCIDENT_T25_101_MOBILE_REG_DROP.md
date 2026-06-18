@@ -1,6 +1,9 @@
 # Incident: T25 / ext 101 / device F25 — "Not Registered" when backgrounded
 
-**Status:** Root cause **PROVEN** with live production evidence. Hardening in progress.
+**Status:** Root cause **PROVEN** with live production evidence. Server-side
+detection layer (H4–H7) **BUILT, DEPLOYED & VERIFIED** (commit `dd54d04c`,
+2026-06-18). Mobile-native fixes (H1–H3) + on-device F25 validation **pending a
+physical S25 Ultra** (see §6/§7).
 **Date investigated:** 2026-06-17
 **Tenant:** T25 = **Relax Tires** (`cmnlgryme000up9paz1w40fg0`)
 **Extension:** 101 (`Extension.id = cmnmd7orq003tp9b023qj90vs`)
@@ -173,10 +176,13 @@ when foregrounded or wake-pushed.
 | H1 | mobile (JS) | Background→foreground + periodic background re-register verification; safe reconnect when transitioning, without the netinfo crash |
 | H2 | mobile (JS) | Registration watchdog that, on repeated stale, re-arms the native FGS (`setKeepAliveEnabled(false→true)`) and reports FGS health |
 | H3 | mobile (native) | After `startForegroundSafely()`, verify foreground state landed; if not, retry via AlarmManager/JobScheduler and surface a hard diagnostic |
-| H4 | api | `POST /mobile/devices/registration-state` heartbeat + persist per-device reg state & history |
-| H5 | telephony | Ingest AMI `ContactStatus` into a persistent `DeviceRegistrationEvent` table keyed by endpoint/device |
-| H6 | worker/api | Alert when an `active` mobile device endpoint has 0 contacts > threshold |
-| H7 | portal | Admin "Device Registration" dashboard: per-device state + timeline of why it went Not Registered |
+| H4 | api/db | **DONE** — `PbxEndpointRegistration` + `PbxEndpointRegistrationEvent` Prisma models (migration `20260617200000`); `POST /internal/pbx/contact-status` ingest (shared `CDR_INGEST_SECRET`) |
+| H5 | telephony | **DONE** — `RegistrationStatusNotifier` forwards AMI `ContactStatus`/`PeerStatus` (coalesced; reuses `CDR_INGEST_URL`) → API persistence |
+| H6 | worker | **DONE** — 60 s cycle alerts (`db.alert` `DEVICE_REGISTRATION` HIGH) when an `active` mobile WebRTC endpoint is `UNREGISTERED`/`UNREACHABLE` > `DEVICE_REG_NOT_REGISTERED_ALERT_SEC` (default 300 s) and a device was seen in 24 h; 6 h prune of events > 14 d |
+| H7 | portal | **DONE** — admin "Device Registration" dashboard (`/admin/device-registration`) + per-endpoint timeline; `GET /admin/pbx/registrations[/:endpoint/events]` |
+| H1 | mobile (JS) | **PENDING** — background→foreground + periodic background re-register verification; safe reconnect on transition without the netinfo crash |
+| H2 | mobile (JS) | **PENDING** — watchdog re-arms native FGS (`setKeepAliveEnabled(false→true)`) on repeated stale + reports FGS health |
+| H3 | mobile (native) | **PENDING** — after `startForegroundSafely()`, verify foreground landed; retry via AlarmManager/JobScheduler + hard diagnostic |
 
 ### Validation gate (do not close until)
 F25 can: register → background → stay reachable → receive + answer incoming →
@@ -198,3 +204,54 @@ physical S25 Ultra in hand** for the on-device portion.
    0 contacts → network/Doze recovery gap.
 
 Proof artifacts saved under `_latency_logs/incident_t25_101/`.
+
+---
+
+## 6. Server-side detection layer — deployed & verified (2026-06-18)
+
+**Commit:** `dd54d04c` ("feat(telephony,api,worker,portal): PBX
+device-registration observability"), shipped to all four services via the
+AGENTS.md-sanctioned paths:
+
+| Service | Path | Result |
+|---------|------|--------|
+| api | `scripts/deploy-direct.sh api --branch main` (blue/green) | `done dd54d04c`; **migration `20260617200000` applied** (both tables exist); routes present in container |
+| portal | `scripts/deploy-direct.sh portal --branch main` (blue/green) | `done dd54d04c` |
+| telephony | deploy queue job `a7aaf9fc…` | `done dd54d04c`, `/health` OK |
+| worker | deploy queue job `20ac2727…` | `done dd54d04c`, container healthy |
+
+**Live pipeline proof (minutes after deploy):**
+- Telephony log: `RegistrationStatusNotifier ready url=http://api:3001/internal/pbx/contact-status`.
+- `PbxEndpointRegistration` populated to **20 endpoints** from live AMI
+  `ContactStatus` events; `PbxEndpointRegistrationEvent` recording transitions
+  (e.g. `T21_101_1 REGISTERED Reachable`).
+- Internal `POST → API → Postgres` path confirmed end-to-end.
+
+**Known nuance:** `T25_101_1` (F25) does **not** appear until it next registers,
+because AMI `ContactStatus` only fires when a contact exists/changes — a
+permanently-cold endpoint emits nothing. The layer captures the real F25 pattern
+(registers on foreground, then a `Reachable→Unreachable→Removed` transition when
+backgrounded) and the worker alert fires off those transitions. A future
+enhancement could bootstrap "expected but never-seen" endpoints from
+`PbxExtensionLink` to flag cold devices proactively.
+
+Data model: `packages/db/prisma/schema.prisma` (`PbxEndpointRegistration`,
+`PbxEndpointRegistrationEvent`). Ingest/admin: `apps/api/src/server.ts`. Source:
+`apps/telephony/.../RegistrationStatusNotifier.ts`,
+`apps/worker/src/main.ts` (`runDeviceRegistrationAlertCycle`,
+`runPbxRegistrationEventPrune`),
+`apps/portal/app/(platform)/admin/device-registration/page.tsx`.
+
+---
+
+## 7. Remaining risks / not-yet-done
+
+- **H1–H3 mobile-native fixes are NOT shipped.** Until then F25 still drops
+  registration when backgrounded without the battery exemption; the immediate
+  workaround (§3) stands. The server layer **detects** it but does not fix the
+  device.
+- **On-device F25 validation gate (§4) is unmet** — requires the physical S25
+  Ultra to prove register→background→reachable→answer→survive Wi-Fi/LTE+lock and
+  show continuous heartbeat. **This issue stays open** until that passes.
+- The watchdog only alerts for endpoints that have registered at least once
+  (see §6 nuance).
