@@ -25,6 +25,8 @@ import {
   normalizeMobileDialTarget,
 } from "../sip/mobileOutboundDial";
 import { shouldForceRestartOnWake } from "../sip/mobileWakeRegistration";
+import { getCallWakeNativeState } from "../diagnostics/callWakeDiagnostics";
+import { evaluateKeepAliveHealth } from "../sip/keepAliveWatchdog";
 
 const PROVISION_KEY = "cc_mobile_provision";
 const LAST_DIALED_KEY = "cc_mobile_last_dialed";
@@ -706,6 +708,11 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           }
           if (keepAliveFailureStreakRef.current >= MAX_FAILURE_STREAK) {
             scheduleReconnect('keepalive_stale');
+            // A stale SIP socket while backgrounded is the classic symptom of
+            // the OS having frozen/killed the process the FGS should have
+            // protected. Re-verify (and re-arm) the keep-alive FGS in lockstep
+            // so the next reconnect lands in a protected process.
+            try { verifyAndArmKeepAliveRef.current?.('keepalive_stale'); } catch { /* ignore */ }
           }
         } catch (e) {
           console.warn('[SIP_KEEPALIVE] tick_threw:', e);
@@ -773,6 +780,100 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // only helps while the process is alive; Stage 2 is what keeps the
   // process alive in the first place.
   const keepAliveWantedRef = useRef<boolean>(false);
+  // ── H2: FGS watchdog / re-arm state ──────────────────────────────────────
+  // Number of re-arms performed in the current unhealthy streak. Reset to 0 the
+  // moment we observe a healthy keep-alive so a later drop gets a fresh budget.
+  const keepAliveRearmStreakRef = useRef<number>(0);
+  // Guards against overlapping verify passes (each schedules its own re-check).
+  const keepAliveVerifyInFlightRef = useRef<boolean>(false);
+
+  /**
+   * Read the AUTHORITATIVE native keep-alive state and decide whether the
+   * foreground service truly armed. If it did not (service never created, or
+   * startForeground never landed, or it is not running) we re-arm via the
+   * native bridge — up to MAX_REARMS times per unhealthy streak — and report
+   * the failure so the backend device dashboard can show it. We NEVER treat a
+   * `serviceCreatedAtMs=0` / `isRunning=false` / no-foreground-landed snapshot
+   * as healthy.
+   */
+  const verifyAndArmKeepAlive = useCallback((reason: string) => {
+    if (Platform.OS !== "android") return;
+    if (!keepAliveWantedRef.current) return; // keep-alive not wanted (logged out)
+    if (keepAliveVerifyInFlightRef.current) return;
+    const mod: any = (NativeModules as any)?.IncomingCallUi;
+    if (!mod || typeof mod.getCallWakeDiagnostics !== "function") return;
+
+    const MAX_REARMS = 3;
+    keepAliveVerifyInFlightRef.current = true;
+    try {
+      const state = getCallWakeNativeState();
+      const health = evaluateKeepAliveHealth(state);
+      if (health.healthy) {
+        if (keepAliveRearmStreakRef.current !== 0) {
+          console.log('[SIP_KEEPALIVE_FGS] recovered', JSON.stringify({ reason, process: health.process, rearmCount: health.rearmCount }));
+        }
+        keepAliveRearmStreakRef.current = 0;
+        flightRecord("SIP", "KEEPALIVE_FGS_HEALTHY", {
+          payload: { reason, process: health.process, rearmCount: health.rearmCount },
+        });
+        return;
+      }
+
+      console.warn(
+        '[SIP_KEEPALIVE_FGS] unhealthy',
+        JSON.stringify({
+          reason,
+          healthReason: health.reason,
+          process: health.process,
+          streak: keepAliveRearmStreakRef.current,
+          isRunning: health.isRunning,
+          foregroundLanded: health.foregroundLanded,
+          serviceCreated: health.serviceCreated,
+        }),
+      );
+      flightRecord("SIP", "KEEPALIVE_FGS_UNHEALTHY", {
+        severity: "error",
+        payload: {
+          reason,
+          healthReason: health.reason,
+          process: health.process,
+          rearmStreak: keepAliveRearmStreakRef.current,
+          lastForegroundResult: state.keepAliveLastForegroundResult,
+          lastForegroundErrorClass: state.keepAliveLastForegroundErrorClass,
+        },
+      });
+
+      if (keepAliveRearmStreakRef.current >= MAX_REARMS) {
+        // Out of budget — stop hammering. The FGS genuinely cannot foreground on
+        // this device/OS right now (e.g. One UI hard refusal). Stage 1 + FCM
+        // wake remain the fallback; the backend now has the unhealthy report.
+        console.warn('[SIP_KEEPALIVE_FGS] rearm_budget_exhausted', JSON.stringify({ reason, healthReason: health.reason }));
+        return;
+      }
+
+      if (typeof mod.restartKeepAlive === "function") {
+        keepAliveRearmStreakRef.current += 1;
+        const attempt = keepAliveRearmStreakRef.current;
+        console.log('[SIP_KEEPALIVE_FGS] rearm', JSON.stringify({ reason, attempt }));
+        Promise.resolve(mod.restartKeepAlive())
+          .catch(() => undefined)
+          .finally(() => {
+            // Re-verify after the OS has had time to (re)create + foreground the
+            // service. Backoff grows with each attempt so a hostile OEM is not
+            // hammered: ~4s, 8s, 12s.
+            const delay = 4_000 * attempt;
+            setTimeout(() => verifyAndArmKeepAlive(reason + ":rearm" + attempt), delay);
+          });
+      }
+    } catch (e) {
+      console.warn('[SIP_KEEPALIVE_FGS] verify_threw:', e);
+    } finally {
+      keepAliveVerifyInFlightRef.current = false;
+    }
+  }, []);
+  const verifyAndArmKeepAliveRef = useRef(verifyAndArmKeepAlive);
+  useEffect(() => { verifyAndArmKeepAliveRef.current = verifyAndArmKeepAlive; }, [verifyAndArmKeepAlive]);
+
   useEffect(() => {
     if (Platform.OS !== "android") return;
     const mod: any = (NativeModules as any)?.IncomingCallUi;
@@ -788,10 +889,80 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     try {
       console.log('[SIP_KEEPALIVE_FGS]', want ? 'start_requested' : 'stop_requested');
       mod.setKeepAliveEnabled(want);
+      if (want) {
+        // H2: verify the service actually reached foreground state. Give the OS
+        // a few seconds to create + foreground the service, then check the
+        // authoritative native snapshot and re-arm if it did not land.
+        keepAliveRearmStreakRef.current = 0;
+        setTimeout(() => verifyAndArmKeepAliveRef.current('post_enable'), 3_500);
+      } else {
+        keepAliveRearmStreakRef.current = 0;
+      }
     } catch (e) {
       console.warn('[SIP_KEEPALIVE_FGS] bridge_threw:', e);
     }
   }, [authToken, hasProvisioning]);
+
+  // ── H3: network-regain SIP reconnect (netinfo-free) ──────────────────────
+  // Replaces the removed @react-native-community/netinfo trigger with a core-
+  // Android ConnectivityManager callback bridged via IncomingCallUiModule
+  // (event "Sip.NetworkChanged"). On connectivity regain we fire a debounced
+  // reconnect AND re-verify the keep-alive FGS (a network change often
+  // coincides with the OS having frozen/thawed our process). No JS dependency
+  // is required, so the Hermes "Requiring unknown module 'undefined'" crash
+  // that killed the old netinfo path cannot recur.
+  const lastNetworkRegainAtRef = useRef<number>(0);
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const sub = DeviceEventEmitter.addListener(
+      "Sip.NetworkChanged",
+      (evt: { available?: boolean; transport?: string }) => {
+        const available = !!evt?.available;
+        const transport = String(evt?.transport || "");
+        console.log('[SIP_NETWORK] change', JSON.stringify({ available, transport }));
+        if (!available) return;
+        // Debounce rapid Wi-Fi⇄LTE flaps: at most one regain-driven reconnect
+        // per 3s. scheduleReconnect itself is single-flight, but this stops a
+        // handover storm from queueing many redundant heals.
+        const now = Date.now();
+        if (now - lastNetworkRegainAtRef.current < 3_000) {
+          console.log('[SIP_NETWORK] regain_debounced');
+          return;
+        }
+        lastNetworkRegainAtRef.current = now;
+        flightRecord("SIP", "NETWORK_REGAINED", { payload: { transport } });
+        scheduleReconnect('network_regained:' + transport);
+        verifyAndArmKeepAliveRef.current('network_regained');
+      },
+    );
+    return () => sub.remove();
+  }, [scheduleReconnect]);
+
+  // ── H3 instrumentation: app background / foreground transitions ──────────
+  // Records a background timestamp (surfaced in logs + flight recorder) and, on
+  // return to foreground, re-verifies the keep-alive FGS. The SIP re-register
+  // on foreground is handled by the AppState listener in the main boot effect;
+  // here we only add the keep-alive re-verification + instrumentation so the
+  // two concerns stay independent.
+  const lastBackgroundAtRef = useRef<number>(0);
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const sub = AppState.addEventListener("change", (next) => {
+      if (next === "background" || next === "inactive") {
+        lastBackgroundAtRef.current = Date.now();
+        console.log('[SIP_LIFECYCLE] backgrounded', JSON.stringify({ at: lastBackgroundAtRef.current }));
+        flightRecord("SIP", "APP_BACKGROUNDED", { payload: { at: lastBackgroundAtRef.current } });
+      } else if (next === "active") {
+        const bgMs = lastBackgroundAtRef.current ? Date.now() - lastBackgroundAtRef.current : 0;
+        console.log('[SIP_LIFECYCLE] foregrounded', JSON.stringify({ backgroundedForMs: bgMs }));
+        flightRecord("SIP", "APP_FOREGROUNDED", { payload: { backgroundedForMs: bgMs } });
+        // Re-verify keep-alive on resume — Android may have killed the FGS while
+        // we were away, and process-resume is the earliest safe moment to heal.
+        verifyAndArmKeepAliveRef.current('app_foregrounded');
+      }
+    });
+    return () => sub.remove();
+  }, []);
 
   // ── Proactive RECORD_AUDIO permission preflight ────────────────────────
   // Until now this was only requested from KeypadTab on the dial-out path.
@@ -1021,6 +1192,9 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
             regState: registrationStateRef.current,
           },
         });
+        // Cold FCM wake spawns a fresh main process; confirm the keep-alive FGS
+        // re-armed in it so the registration we just refreshed stays protected.
+        try { verifyAndArmKeepAliveRef.current?.('fcm_wake'); } catch { /* ignore */ }
       } catch (e: any) {
         console.warn("[CALL_WAKE] register({forceRestart:" + needsForceRestart + "}) threw:", e?.message);
         await postWakeEvent(authToken, {

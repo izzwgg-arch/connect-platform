@@ -80,6 +80,20 @@ export type CallWakeNativeState = {
   keepAliveLastForegroundTypeUsed: string;
   keepAliveLastForegroundErrorClass: string;
   keepAliveLastForegroundErrorMessage: string;
+  /**
+   * 2026-06-17 hardening additions:
+   *   • keepAliveForegroundLandedAtMs — authoritative ms at which
+   *     startForeground() last *succeeded*. 0 = the FGS never actually reached
+   *     foreground state, so keep-alive is NOT working no matter what
+   *     keepAliveIsRunning claims. The watchdog treats 0 as unhealthy.
+   *   • keepAliveProcess — the process the FGS runs in. After the :keepalive
+   *     removal this should equal the package name (main process); anything
+   *     else means the FGS is protecting the wrong process.
+   *   • keepAliveRearmCount — how many times the watchdog re-armed the service.
+   */
+  keepAliveForegroundLandedAtMs: number;
+  keepAliveProcess: string;
+  keepAliveRearmCount: number;
 };
 
 export type CallWakePermissionState = {
@@ -119,6 +133,9 @@ const EMPTY_NATIVE_STATE: CallWakeNativeState = {
   keepAliveLastForegroundTypeUsed: "",
   keepAliveLastForegroundErrorClass: "",
   keepAliveLastForegroundErrorMessage: "",
+  keepAliveForegroundLandedAtMs: 0,
+  keepAliveProcess: "",
+  keepAliveRearmCount: 0,
 };
 
 const EMPTY_DEVICE_INFO: CallWakeDeviceInfo = {
@@ -171,6 +188,9 @@ export function getCallWakeNativeState(): CallWakeNativeState {
       keepAliveLastForegroundTypeUsed: String(raw.keepAliveLastForegroundTypeUsed ?? ""),
       keepAliveLastForegroundErrorClass: String(raw.keepAliveLastForegroundErrorClass ?? ""),
       keepAliveLastForegroundErrorMessage: String(raw.keepAliveLastForegroundErrorMessage ?? ""),
+      keepAliveForegroundLandedAtMs: Number(raw.keepAliveForegroundLandedAtMs) || 0,
+      keepAliveProcess: String(raw.keepAliveProcess ?? ""),
+      keepAliveRearmCount: Number(raw.keepAliveRearmCount) || 0,
     };
   } catch {
     return EMPTY_NATIVE_STATE;

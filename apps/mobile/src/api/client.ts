@@ -594,6 +594,10 @@ export async function registerMobileDevice(token: string, input: {
     lastForegroundResult?: string;
     lastForegroundTypeUsed?: string;
     lastForegroundErrorClass?: string;
+    foregroundLandedAtMs?: number;
+    process?: string;
+    rearmCount?: number;
+    batteryOptimizationIgnored?: boolean;
   };
 }) {
   const res = await fetch(`${API_BASE}/mobile/devices/register`, {

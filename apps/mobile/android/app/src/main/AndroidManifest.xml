@@ -75,9 +75,23 @@
       type and Android 14+ will keep the WebRTC mic capture alive even when
       the app is backgrounded. `phoneCall` keeps CallKeep / Telecom integration
       happy; `dataSync` is the always-safe fallback when PHONE_CALL is rejected.
+
+      PROCESS NOTE (2026-06-17, incident T25/101 S25 background reg drop):
+      This service runs in the DEFAULT (main) process — NO android:process
+      attribute. It was previously isolated in ":keepalive". That isolation was
+      actively harmful: JsSIP's WebSocket + the WebRTC mic capture both live in
+      the MAIN process (the Hermes JS runtime). A foreground service only raises
+      the OOM-importance of ITS OWN process, so a ":keepalive" FGS kept an empty
+      helper process alive while One UI 8 / Android 16 froze and killed the main
+      process in the background — dropping the SIP registration (and silencing
+      the mic mid-call). Running the FGS in the main process is what actually
+      pins the socket-owning process at FOREGROUND_SERVICE importance. It also
+      makes the MICROPHONE foreground type apply to the process that captures
+      audio, and lets SipKeepAliveService.* diagnostics be read truthfully by
+      IncomingCallUiModule (same process). Do NOT re-add android:process here.
     -->
-    <service android:name="com.connectcommunications.mobile.SipKeepAliveService" android:exported="false" android:foregroundServiceType="phoneCall|dataSync|microphone" android:process=":keepalive"/>
-    <receiver android:name="com.connectcommunications.mobile.KeepAliveRestartReceiver" android:enabled="true" android:exported="false" android:process=":keepalive"/>
+    <service android:name="com.connectcommunications.mobile.SipKeepAliveService" android:exported="false" android:foregroundServiceType="phoneCall|dataSync|microphone"/>
+    <receiver android:name="com.connectcommunications.mobile.KeepAliveRestartReceiver" android:enabled="true" android:exported="false"/>
     <!--
       InCallNotificationReceiver runs in the MAIN process (no android:process attribute).
       It receives NOTIF_ACTION_HANGUP_RELAY from SipKeepAliveService (:keepalive process)

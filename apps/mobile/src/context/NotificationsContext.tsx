@@ -515,12 +515,26 @@ async function mobileDeviceRegistrationMetadata() {
         lastForegroundResult?: string;
         lastForegroundTypeUsed?: string;
         lastForegroundErrorClass?: string;
+        // 2026-06-17 hardening additions.
+        foregroundLandedAtMs?: number;
+        process?: string;
+        rearmCount?: number;
+        batteryOptimizationIgnored?: boolean;
       }
     | undefined;
   if (Platform.OS === "android") {
     try {
-      const diag = (NativeModules as any).IncomingCallUi?.getCallWakeDiagnostics?.();
+      const mod = (NativeModules as any).IncomingCallUi;
+      const diag = mod?.getCallWakeDiagnostics?.();
       if (diag && typeof diag === "object") {
+        let batteryIgnored: boolean | undefined;
+        try {
+          if (typeof mod?.isBatteryOptimizationIgnored === "function") {
+            batteryIgnored = Boolean(await mod.isBatteryOptimizationIgnored());
+          }
+        } catch {
+          batteryIgnored = undefined;
+        }
         keepAlive = {
           isRunning: Boolean(diag.keepAliveIsRunning),
           serviceCreatedAtMs: Number(diag.keepAliveServiceCreatedAtMs) || 0,
@@ -530,6 +544,10 @@ async function mobileDeviceRegistrationMetadata() {
           lastForegroundResult: String(diag.keepAliveLastForegroundResult ?? ""),
           lastForegroundTypeUsed: String(diag.keepAliveLastForegroundTypeUsed ?? ""),
           lastForegroundErrorClass: String(diag.keepAliveLastForegroundErrorClass ?? ""),
+          foregroundLandedAtMs: Number(diag.keepAliveForegroundLandedAtMs) || 0,
+          process: String(diag.keepAliveProcess ?? ""),
+          rearmCount: Number(diag.keepAliveRearmCount) || 0,
+          ...(batteryIgnored !== undefined ? { batteryOptimizationIgnored: batteryIgnored } : {}),
         };
       }
     } catch {
@@ -4506,6 +4524,41 @@ export function NotificationsProvider({
     }, 65_000);
     return () => clearInterval(t);
   }, [token, sip.registrationState, sip.callState]);
+
+  // ── Device keep-alive health heartbeat (Android) ───────────────────────────
+  // Periodically refresh MobileDevice.keepAliveSnapshot so the admin Device
+  // Registration dashboard shows a CONTINUOUS health signal (FGS running?
+  // startForeground landed? which process? battery exempt? re-arm count) rather
+  // than only the snapshot captured once at launch. Reuses the already-issued
+  // Expo push token (no token re-fetch) and the backend upsert is idempotent by
+  // token, so this is cheap and safe to run alongside the diag heartbeat.
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    if (!token || !expoPushToken) return;
+    let cancelled = false;
+    const push = async () => {
+      try {
+        const metadata = await mobileDeviceRegistrationMetadata();
+        if (cancelled) return;
+        await registerMobileDevice(token, {
+          platform: "ANDROID",
+          expoPushToken,
+          ...metadata,
+        }).catch(() => undefined);
+      } catch {
+        // best-effort — never block on a health refresh
+      }
+    };
+    const interval = setInterval(() => void push(), 60_000);
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "active") void push();
+    });
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      sub.remove();
+    };
+  }, [token, expoPushToken]);
 
   // ─────────────────────────────────────────────────────────────────────────
 

@@ -183,6 +183,13 @@ class SipKeepAliveService : Service() {
       lastStartAttemptAtMs = System.currentTimeMillis()
       lastStartErrorClass = ""
       lastStartErrorMessage = ""
+      // Mirror the dispatch attempt to the durable diagnostics store BEFORE the
+      // call, so even if startForegroundService() throws asynchronously or the
+      // process is killed before onCreate, the JS bridge can still read
+      // "we tried at <ts> and the result was <x>".
+      KeepAliveDiag.putLong(context, KeepAliveDiag.K_START_ATTEMPT, lastStartAttemptAtMs)
+      KeepAliveDiag.putString(context, KeepAliveDiag.K_START_ERR_CLASS, "")
+      KeepAliveDiag.putString(context, KeepAliveDiag.K_START_ERR_MSG, "")
       val intent = Intent(context, SipKeepAliveService::class.java)
       try {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -191,11 +198,20 @@ class SipKeepAliveService : Service() {
           context.startService(intent)
         }
         lastStartResult = "dispatched"
+        KeepAliveDiag.putString(context, KeepAliveDiag.K_START_RESULT, "dispatched")
         Log.i(TAG, "start: dispatched startForegroundService")
       } catch (t: Throwable) {
+        // Android 12+ throws ForegroundServiceStartNotAllowedException here when
+        // start() is invoked from the background without an exemption. Capture
+        // the exact class so the watchdog + admin dashboard can distinguish
+        // "OS refused to even start the service" from "service started but
+        // could not enter foreground state".
         lastStartResult = "threw"
         lastStartErrorClass = t.javaClass.simpleName
         lastStartErrorMessage = t.message ?: ""
+        KeepAliveDiag.putString(context, KeepAliveDiag.K_START_RESULT, "threw")
+        KeepAliveDiag.putString(context, KeepAliveDiag.K_START_ERR_CLASS, t.javaClass.simpleName)
+        KeepAliveDiag.putString(context, KeepAliveDiag.K_START_ERR_MSG, t.message ?: "")
         Log.w(TAG, "start failed (${t.javaClass.simpleName}): ${t.message}")
       }
     }
@@ -319,12 +335,35 @@ class SipKeepAliveService : Service() {
 
   override fun onCreate() {
     super.onCreate()
-    Log.i(TAG, "onCreate")
     serviceCreatedAtMs = System.currentTimeMillis()
     serviceDestroyedAtMs = 0
+    val proc = currentProcessName()
+    Log.i(TAG, "onCreate process=$proc")
+    // Durable mirror — proves the service object was actually instantiated by
+    // the OS (vs. start() merely being dispatched). serviceCreatedAtMs=0 in the
+    // snapshot used to be ambiguous (start never landed OR cross-process blind
+    // read); persisting it here removes the ambiguity.
+    KeepAliveDiag.putLong(applicationContext, KeepAliveDiag.K_SVC_CREATED, serviceCreatedAtMs)
+    KeepAliveDiag.putLong(applicationContext, KeepAliveDiag.K_SVC_DESTROYED, 0L)
+    KeepAliveDiag.putString(applicationContext, KeepAliveDiag.K_PROCESS, proc)
     ensureChannel()
     ensureInCallChannel()
     registerNotifReceiver()
+  }
+
+  /** Best-effort name of the process this service is running in. */
+  private fun currentProcessName(): String {
+    return try {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        android.app.Application.getProcessName() ?: packageName
+      } else {
+        val am = getSystemService(ACTIVITY_SERVICE) as? ActivityManager
+        am?.runningAppProcesses?.firstOrNull { it.pid == android.os.Process.myPid() }?.processName
+          ?: packageName
+      }
+    } catch (_: Throwable) {
+      packageName
+    }
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -388,6 +427,7 @@ class SipKeepAliveService : Service() {
     val foregrounded = startForegroundSafely()
     if (foregrounded) {
       isRunning = true
+      KeepAliveDiag.putBool(applicationContext, KeepAliveDiag.K_IS_RUNNING, true)
       acquireWakeLock()
       if (action == ACTION_EXIT_CALL) {
         Log.i(TAG, "[CONNECT_CALL_UI] foreground_service_idle — idle notification reposted after call exit")
@@ -399,6 +439,7 @@ class SipKeepAliveService : Service() {
       // and the diagnostics surface lastForegroundResult="threw"), and let JS
       // fall back to the wake-then-dial path entirely.
       isRunning = false
+      KeepAliveDiag.putBool(applicationContext, KeepAliveDiag.K_IS_RUNNING, false)
       Log.w(TAG, "onStartCommand: startForeground failed, stopping service to avoid silent restart loop")
       if (action == ACTION_EXIT_CALL) {
         Log.w(TAG, "[CONNECT_CALL_UI] foreground_service_stopped — could not re-enter FGS after call exit")
@@ -413,6 +454,8 @@ class SipKeepAliveService : Service() {
     Log.i(TAG, "onDestroy")
     serviceDestroyedAtMs = System.currentTimeMillis()
     isRunning = false
+    KeepAliveDiag.putBool(applicationContext, KeepAliveDiag.K_IS_RUNNING, false)
+    KeepAliveDiag.putLong(applicationContext, KeepAliveDiag.K_SVC_DESTROYED, serviceDestroyedAtMs)
     if (isKeepAliveEnabled(applicationContext)) {
       scheduleSelfRestart("onDestroy")
     }
@@ -531,6 +574,7 @@ class SipKeepAliveService : Service() {
     lastForegroundAttemptAtMs = System.currentTimeMillis()
     lastForegroundErrorClass = ""
     lastForegroundErrorMessage = ""
+    KeepAliveDiag.putLong(applicationContext, KeepAliveDiag.K_FG_ATTEMPT, lastForegroundAttemptAtMs)
 
     // Pre-Android 8 has no foreground service type concept.
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
@@ -613,11 +657,20 @@ class SipKeepAliveService : Service() {
   }
 
   /** Wraps a single startForeground attempt and records its outcome. */
-  private inline fun tryFg(label: String, block: () -> Unit): Boolean {
+  private fun tryFg(label: String, block: () -> Unit): Boolean {
     return try {
       block()
       lastForegroundResult = "ok"
       lastForegroundTypeUsed = label
+      val landedAt = System.currentTimeMillis()
+      KeepAliveDiag.putString(applicationContext, KeepAliveDiag.K_FG_RESULT, "ok")
+      KeepAliveDiag.putString(applicationContext, KeepAliveDiag.K_FG_TYPE, label)
+      KeepAliveDiag.putString(applicationContext, KeepAliveDiag.K_FG_ERR_CLASS, "")
+      KeepAliveDiag.putString(applicationContext, KeepAliveDiag.K_FG_ERR_MSG, "")
+      // Authoritative "we actually reached foreground state" signal. The JS
+      // watchdog reads this to decide whether the keep-alive truly armed (vs.
+      // merely dispatched), and never claims keep-alive is healthy without it.
+      KeepAliveDiag.putLong(applicationContext, KeepAliveDiag.K_FG_LANDED, landedAt)
       Log.i(TAG, "startForeground posted ongoing notification id=$NOTIFICATION_ID type=$label")
       true
     } catch (t: Throwable) {
@@ -627,6 +680,10 @@ class SipKeepAliveService : Service() {
       lastForegroundTypeUsed = label
       lastForegroundErrorClass = t.javaClass.simpleName
       lastForegroundErrorMessage = t.message ?: ""
+      KeepAliveDiag.putString(applicationContext, KeepAliveDiag.K_FG_RESULT, "threw")
+      KeepAliveDiag.putString(applicationContext, KeepAliveDiag.K_FG_TYPE, label)
+      KeepAliveDiag.putString(applicationContext, KeepAliveDiag.K_FG_ERR_CLASS, t.javaClass.simpleName)
+      KeepAliveDiag.putString(applicationContext, KeepAliveDiag.K_FG_ERR_MSG, t.message ?: "")
       Log.w(TAG, "startForeground type=$label failed (${t.javaClass.simpleName}): ${t.message}")
       false
     }

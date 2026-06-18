@@ -8,6 +8,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
@@ -50,6 +53,44 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
     } catch (t: Throwable) {
       Log.w(TAG, "TelecomBridge.drainPendingEvents failed: ${t.message}")
     }
+    try {
+      registerNetworkCallback(reactApplicationContext.applicationContext)
+    } catch (t: Throwable) {
+      Log.w(TAG, "registerNetworkCallback failed: ${t.message}")
+    }
+  }
+
+  /**
+   * Registers a process-wide default-network callback so we can tell JS the
+   * instant connectivity is regained (Wi-Fi⇄LTE handover, airplane-mode off,
+   * tunnel re-established). Idempotent — only the first call registers.
+   */
+  private fun registerNetworkCallback(ctx: Context) {
+    if (networkCallbackRegistered) return
+    val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+    // The callback only references companion (static) helpers + its own params,
+    // so it does NOT capture this module instance — safe to hold in a static
+    // field for the app's lifetime without leaking the React module across
+    // dev-reload instance churn.
+    val cb = object : ConnectivityManager.NetworkCallback() {
+      override fun onAvailable(network: Network) {
+        emitNetworkChanged(true, transportLabel(cm, network))
+      }
+      override fun onLost(network: Network) {
+        emitNetworkChanged(false, "none")
+      }
+      override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+        emitNetworkChanged(true, transportLabel(caps))
+      }
+    }
+    try {
+      cm.registerDefaultNetworkCallback(cb)
+      networkCallback = cb
+      networkCallbackRegistered = true
+      Log.i(TAG, "registerNetworkCallback: default-network callback registered")
+    } catch (t: Throwable) {
+      Log.w(TAG, "registerDefaultNetworkCallback threw: ${t.message}")
+    }
   }
 
   companion object {
@@ -70,8 +111,29 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
      */
     private const val EVENT_IN_CALL_ACTION = "Sip.InCallNotificationAction"
 
+    /**
+     * Connectivity-change event. Fired by the ConnectivityManager default
+     * network callback registered in initialize(). Payload:
+     *   { available: Boolean, transport: "wifi" | "cellular" | "ethernet" | "other" | "none" }
+     * SipContext listens and, on regain, fires a debounced SIP reconnect. This
+     * is the deliberately netinfo-FREE replacement for the
+     * @react-native-community/netinfo trigger that was removed because the
+     * package is not installed (it baked require(undefined) into the Hermes
+     * bundle and crashed every cold start). Everything here is core-Android, so
+     * there is no JS dependency to mis-bundle.
+     */
+    private const val EVENT_NETWORK_CHANGED = "Sip.NetworkChanged"
+
     @JvmStatic
     private var lastReactContext: WeakReference<ReactApplicationContext>? = null
+
+    /** Guards against registering the default-network callback more than once. */
+    @JvmStatic
+    @Volatile
+    private var networkCallbackRegistered: Boolean = false
+
+    @JvmStatic
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     /**
      * Emits a "foreground incoming call" event to JavaScript carrying the
@@ -167,6 +229,51 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
         Log.i(TAG, "emitTelecomEvent: dispatched $name to JS")
       } catch (t: Throwable) {
         Log.w(TAG, "emitTelecomEvent($name) failed: ${t.message}")
+      }
+    }
+
+    @JvmStatic @Volatile private var lastNetAvailable: Boolean? = null
+    @JvmStatic @Volatile private var lastNetTransport: String = ""
+
+    @JvmStatic
+    private fun transportLabel(cm: ConnectivityManager, network: Network): String {
+      return try {
+        transportLabel(cm.getNetworkCapabilities(network))
+      } catch (_: Throwable) {
+        "other"
+      }
+    }
+
+    @JvmStatic
+    private fun transportLabel(caps: NetworkCapabilities?): String {
+      if (caps == null) return "other"
+      return when {
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+        else -> "other"
+      }
+    }
+
+    @JvmStatic
+    fun emitNetworkChanged(available: Boolean, transport: String) {
+      // Dedupe: onCapabilitiesChanged fires constantly (signal-strength / metered
+      // flaps). Only forward a genuine (available, transport) transition so the
+      // JS reconnect path is not woken dozens of times a minute.
+      if (lastNetAvailable == available && lastNetTransport == transport) return
+      lastNetAvailable = available
+      lastNetTransport = transport
+      val ctx = lastReactContext?.get() ?: return
+      if (!ctx.hasActiveReactInstance()) return
+      try {
+        val payload = Arguments.createMap()
+        payload.putBoolean("available", available)
+        payload.putString("transport", transport)
+        ctx.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+          .emit(EVENT_NETWORK_CHANGED, payload)
+        Log.i(TAG, "emitNetworkChanged available=$available transport=$transport")
+      } catch (t: Throwable) {
+        Log.w(TAG, "emitNetworkChanged failed: ${t.message}")
       }
     }
 
@@ -945,19 +1052,70 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
     // actually running" or "no, startForeground threw <X> because Android 15
     // / One UI 7 rejects PHONE_CALL FGS without an active call". Without
     // these fields the only way to find out was logcat — useless for users.
-    map.putBoolean("keepAliveIsRunning", SipKeepAliveService.isRunning)
-    map.putDouble("keepAliveServiceCreatedAtMs", SipKeepAliveService.serviceCreatedAtMs.toDouble())
-    map.putDouble("keepAliveServiceDestroyedAtMs", SipKeepAliveService.serviceDestroyedAtMs.toDouble())
-    map.putDouble("keepAliveLastStartAttemptAtMs", SipKeepAliveService.lastStartAttemptAtMs.toDouble())
-    map.putString("keepAliveLastStartResult", SipKeepAliveService.lastStartResult)
-    map.putString("keepAliveLastStartErrorClass", SipKeepAliveService.lastStartErrorClass)
-    map.putString("keepAliveLastStartErrorMessage", SipKeepAliveService.lastStartErrorMessage)
-    map.putDouble("keepAliveLastForegroundAttemptAtMs", SipKeepAliveService.lastForegroundAttemptAtMs.toDouble())
-    map.putString("keepAliveLastForegroundResult", SipKeepAliveService.lastForegroundResult)
-    map.putString("keepAliveLastForegroundTypeUsed", SipKeepAliveService.lastForegroundTypeUsed)
-    map.putString("keepAliveLastForegroundErrorClass", SipKeepAliveService.lastForegroundErrorClass)
-    map.putString("keepAliveLastForegroundErrorMessage", SipKeepAliveService.lastForegroundErrorMessage)
+    //
+    // SOURCE OF TRUTH: KeepAliveDiag (SharedPreferences), NOT the service's
+    // @JvmStatic companion fields. The statics are per-process and survive only
+    // as long as the process; the durable store is correct across process death
+    // and (historically) across the ":keepalive" process split that made these
+    // fields permanently read 0/false from the main process. We fall back to
+    // the live statics only when the durable store has no value yet.
+    val ctx = reactApplicationContext.applicationContext
+    val diagCreated = KeepAliveDiag.getLong(ctx, KeepAliveDiag.K_SVC_CREATED)
+    val diagFgLanded = KeepAliveDiag.getLong(ctx, KeepAliveDiag.K_FG_LANDED)
+    map.putBoolean(
+      "keepAliveIsRunning",
+      if (diagCreated > 0L) KeepAliveDiag.getBool(ctx, KeepAliveDiag.K_IS_RUNNING) else SipKeepAliveService.isRunning,
+    )
+    map.putDouble(
+      "keepAliveServiceCreatedAtMs",
+      (if (diagCreated > 0L) diagCreated else SipKeepAliveService.serviceCreatedAtMs).toDouble(),
+    )
+    map.putDouble("keepAliveServiceDestroyedAtMs", KeepAliveDiag.getLong(ctx, KeepAliveDiag.K_SVC_DESTROYED).toDouble())
+    map.putDouble("keepAliveLastStartAttemptAtMs", KeepAliveDiag.getLong(ctx, KeepAliveDiag.K_START_ATTEMPT).toDouble())
+    map.putString("keepAliveLastStartResult", KeepAliveDiag.getString(ctx, KeepAliveDiag.K_START_RESULT))
+    map.putString("keepAliveLastStartErrorClass", KeepAliveDiag.getString(ctx, KeepAliveDiag.K_START_ERR_CLASS))
+    map.putString("keepAliveLastStartErrorMessage", KeepAliveDiag.getString(ctx, KeepAliveDiag.K_START_ERR_MSG))
+    map.putDouble("keepAliveLastForegroundAttemptAtMs", KeepAliveDiag.getLong(ctx, KeepAliveDiag.K_FG_ATTEMPT).toDouble())
+    map.putString("keepAliveLastForegroundResult", KeepAliveDiag.getString(ctx, KeepAliveDiag.K_FG_RESULT))
+    map.putString("keepAliveLastForegroundTypeUsed", KeepAliveDiag.getString(ctx, KeepAliveDiag.K_FG_TYPE))
+    map.putString("keepAliveLastForegroundErrorClass", KeepAliveDiag.getString(ctx, KeepAliveDiag.K_FG_ERR_CLASS))
+    map.putString("keepAliveLastForegroundErrorMessage", KeepAliveDiag.getString(ctx, KeepAliveDiag.K_FG_ERR_MSG))
+    // New (2026-06-17 hardening): the authoritative "reached foreground" ts, the
+    // process the FGS runs in (should be the package name = main process after
+    // the :keepalive removal), and how many times the watchdog re-armed it.
+    map.putDouble("keepAliveForegroundLandedAtMs", diagFgLanded.toDouble())
+    map.putString("keepAliveProcess", KeepAliveDiag.getString(ctx, KeepAliveDiag.K_PROCESS))
+    map.putInt("keepAliveRearmCount", KeepAliveDiag.getRearm(ctx))
     return map
+  }
+
+  /**
+   * H2 watchdog re-arm. Stops then re-starts SipKeepAliveService so a fresh
+   * startForeground attempt is made. Called from the JS keep-alive watchdog when
+   * it detects the service did not actually reach foreground state
+   * (keepAliveForegroundLandedAtMs stale / keepAliveIsRunning=false) after an
+   * enable. Bumps the durable re-arm counter so we can see in the dashboard how
+   * often a device needs re-arming (a high count on one model = OEM hostility).
+   *
+   * Returns the new re-arm count via the promise so JS can cap retries.
+   */
+  @ReactMethod
+  fun restartKeepAlive(promise: Promise) {
+    try {
+      val ctx = reactApplicationContext.applicationContext
+      val count = KeepAliveDiag.incrementRearm(ctx)
+      Log.i(TAG, "restartKeepAlive — re-arm #$count")
+      // Re-dispatch start() WITHOUT toggling the enabled flag off first. If the
+      // previous attempt failed, the old instance already stopSelf()'d, so this
+      // creates a fresh one and retries the foreground ladder. If it is running,
+      // onStartCommand simply re-posts the idle notification (idempotent). This
+      // leaves no unprotected gap and never clears the keepalive-enabled flag.
+      SipKeepAliveService.start(ctx)
+      promise.resolve(count)
+    } catch (t: Throwable) {
+      Log.w(TAG, "restartKeepAlive failed: ${t.message}")
+      promise.resolve(-1)
+    }
   }
 
   /**

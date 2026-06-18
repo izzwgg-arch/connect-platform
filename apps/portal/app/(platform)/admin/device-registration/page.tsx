@@ -22,6 +22,11 @@ interface RegDevice {
     lastForegroundResult?: string;
     lastForegroundTypeUsed?: string;
     lastForegroundErrorClass?: string;
+    // 2026-06-17 hardening additions.
+    foregroundLandedAtMs?: number;
+    process?: string;
+    rearmCount?: number;
+    batteryOptimizationIgnored?: boolean;
   } | null;
 }
 
@@ -217,13 +222,25 @@ function DeviceRegistrationInner() {
           <tbody>
             {rows.map((r) => {
               const fgs = r.devices[0]?.keepAliveSnapshot;
-              const fgsLabel = fgs
-                ? fgs.lastForegroundResult === "ok"
-                  ? `ok (${fgs.lastForegroundTypeUsed || "?"})`
-                  : fgs.isRunning === false
-                    ? `not running${fgs.lastForegroundErrorClass ? ` (${fgs.lastForegroundErrorClass})` : ""}`
-                    : (fgs.lastForegroundResult || "—")
-                : "—";
+              // Honest health: the FGS is only truly armed when startForeground
+              // actually LANDED (foregroundLandedAtMs > 0) AND it claims running.
+              // A snapshot with isRunning=true but no foregroundLandedAtMs (or
+              // serviceCreatedAtMs=0) is NOT healthy — that exact false-positive
+              // is what hid the T25/101 S25 drop. Older app builds that don't
+              // report foregroundLandedAtMs fall back to the legacy heuristic.
+              const hasLandedField = fgs?.foregroundLandedAtMs !== undefined;
+              const fgsHealthy = hasLandedField
+                ? Boolean(fgs?.foregroundLandedAtMs && fgs?.isRunning && fgs?.serviceCreatedAtMs)
+                : fgs?.lastForegroundResult === "ok";
+              const fgsLabel = !fgs
+                ? "—"
+                : fgsHealthy
+                  ? `ok (${fgs.lastForegroundTypeUsed || "?"})${fgs.rearmCount ? ` ×${fgs.rearmCount}` : ""}`
+                  : hasLandedField && !fgs.foregroundLandedAtMs
+                    ? `never foregrounded${fgs.lastForegroundErrorClass ? ` (${fgs.lastForegroundErrorClass})` : fgs.lastForegroundResult ? ` (${fgs.lastForegroundResult})` : ""}`
+                    : fgs.isRunning === false
+                      ? `not running${fgs.lastForegroundErrorClass ? ` (${fgs.lastForegroundErrorClass})` : ""}`
+                      : (fgs.lastForegroundResult || "—");
               return (
                 <tr key={r.endpoint} style={{ borderBottom: "1px solid #eaeef2" }}>
                   <td style={{ padding: "8px 6px", fontFamily: "monospace" }}>{r.endpoint}</td>
@@ -252,7 +269,15 @@ function DeviceRegistrationInner() {
                           </div>
                         ))}
                   </td>
-                  <td style={{ padding: "8px 6px", fontSize: 12 }}>{fgsLabel}</td>
+                  <td style={{ padding: "8px 6px", fontSize: 12, color: !fgs ? "#8c959f" : fgsHealthy ? "#1a7f37" : "#cf222e" }}>
+                    {fgsLabel}
+                    {fgs?.process && fgs.process.includes(":") && (
+                      <div style={{ fontSize: 10, color: "#cf222e" }}>proc={fgs.process}</div>
+                    )}
+                    {fgs?.batteryOptimizationIgnored === false && (
+                      <div style={{ fontSize: 10, color: "#bf8700" }}>battery-opt ON</div>
+                    )}
+                  </td>
                   <td style={{ padding: "8px 6px", fontSize: 12 }}>{fmtTime(r.lastEventAt)}</td>
                   <td style={{ padding: "8px 6px" }}>
                     <button onClick={() => void loadEvents(r.endpoint)} style={{ padding: "2px 8px", fontSize: 12 }}>

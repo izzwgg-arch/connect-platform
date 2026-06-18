@@ -246,12 +246,174 @@ Data model: `packages/db/prisma/schema.prisma` (`PbxEndpointRegistration`,
 
 ## 7. Remaining risks / not-yet-done
 
-- **H1–H3 mobile-native fixes are NOT shipped.** Until then F25 still drops
-  registration when backgrounded without the battery exemption; the immediate
-  workaround (§3) stands. The server layer **detects** it but does not fix the
-  device.
 - **On-device F25 validation gate (§4) is unmet** — requires the physical S25
   Ultra to prove register→background→reachable→answer→survive Wi-Fi/LTE+lock and
   show continuous heartbeat. **This issue stays open** until that passes.
 - The watchdog only alerts for endpoints that have registered at least once
   (see §6 nuance).
+
+---
+
+## 8. H1–H3 mobile-native fixes — IMPLEMENTED (2026-06-17), pending native build + F25 validation
+
+> ⚠️ These are **native** Android changes (manifest + Kotlin). They **cannot**
+> ship via `eas update` (OTA) — they require a fresh `eas build` / dev-client
+> install. The §4 test gate is therefore unmet until a native build is run on the
+> physical F25.
+
+### 8.1 What actually caused the FGS failure (corrected root cause)
+
+The original §1 conclusion ("S25 OS kills the app, FGS start fails") was directionally
+right but the telemetry that "proved" it was **itself broken**, and the deeper
+cause is architectural:
+
+1. **`SipKeepAliveService` ran in a separate `:keepalive` process**
+   (`android:process=":keepalive"` in the manifest). A foreground service only
+   raises the OOM-importance of **its own process**. JsSIP's WebSocket **and** the
+   WebRTC mic capture both live in the **main** process (the Hermes JS runtime).
+   So the `:keepalive` FGS kept an *empty helper process* pinned while One UI 8 /
+   Android 16 froze and killed the **main** process in the background — dropping
+   the SIP registration (WSS 1006 ~10 s after lock) and muting the mic mid-call.
+   The FGS was "working" and protecting the wrong process.
+
+2. **The FGS diagnostics were read cross-process and were permanently blind.**
+   `IncomingCallUiModule.getCallWakeDiagnostics()` runs in the **main** process and
+   read `SipKeepAliveService`'s `@JvmStatic` companion fields. Statics are
+   *per-process*; the service wrote them in `:keepalive`. Result: every F25
+   snapshot read `serviceCreatedAtMs=0 / isRunning=false / lastForegroundResult=""`
+   with only `lastStartResult="dispatched"` (the one field `start()` sets in the
+   main process). That is **exactly** the F25 snapshot — it was a measurement
+   artifact, not proof the FGS failed. F24's "ok" snapshot came from an older build
+   before the `:keepalive` split. We never actually knew if F25's FGS started.
+
+### 8.2 What was fixed
+
+**H1 — FGS hardening + correct process**
+- **Moved `SipKeepAliveService` + `KeepAliveRestartReceiver` to the main process**
+  (removed `android:process=":keepalive"` in `AndroidManifest.xml`). The FGS now
+  pins the process that owns the socket + mic. This is the core fix.
+- `startForeground()` is still called immediately and synchronously in
+  `onStartCommand` via the `startForegroundSafely()` ladder
+  (`PHONE_CALL|DATA_SYNC` → `PHONE_CALL` → `DATA_SYNC` idle;
+  `MICROPHONE|PHONE_CALL|DATA_SYNC` … in-call). `DATA_SYNC` is never refused on
+  permission grounds, so the ladder always lands when the OS allows any FGS.
+- Exact start/foreground results (including the throwing exception class, e.g.
+  `ForegroundServiceStartNotAllowedException`) are recorded.
+
+**Cross-process-safe, durable diagnostics** (`KeepAliveDiag.kt`, new)
+- All FGS lifecycle outcomes are mirrored to `SharedPreferences(MODE_PRIVATE)`,
+  which is shared across processes and survives process death. New authoritative
+  field **`foregroundLandedAtMs`** = wall-clock ms at which `startForeground()`
+  last *succeeded*. `0` ⇒ the FGS never reached foreground state, **no matter what
+  `isRunning` claims**. Also persists `keepAliveProcess` (should be the package
+  name now) and `keepAliveRearmCount`.
+
+**H2 — FGS watchdog / re-arm** (`SipContext.tsx` + `keepAliveWatchdog.ts`)
+- `evaluateKeepAliveHealth()` only reports healthy when **serviceCreated &&
+  isRunning && foregroundLanded** — it refuses to claim OK on `serviceCreatedAtMs=0`
+  or `isRunning=false` or no foreground-landed.
+- After enabling keep-alive, on app-foreground, on network-regain, and when the
+  30 s SIP health watchdog sees a stale socket, the app verifies the *authoritative*
+  native snapshot and, if unhealthy, re-arms via the new
+  `IncomingCallUi.restartKeepAlive()` bridge (≤3 re-arms per unhealthy streak,
+  backoff 4/8/12 s). Every unhealthy verdict is reported (`flightRecord`
+  `KEEPALIVE_FGS_UNHEALTHY` + the snapshot is pushed to the backend).
+
+**H3 — background / network SIP re-register (netinfo-free)**
+- New core-Android `ConnectivityManager.registerDefaultNetworkCallback` in
+  `IncomingCallUiModule.initialize()` emits a deduped `Sip.NetworkChanged`
+  DeviceEventEmitter event (`{available, transport}`). `SipContext` listens and, on
+  regain, fires a debounced (`3 s`) `scheduleReconnect` + keep-alive re-verify.
+  **No JS package** is added, so the Hermes `Requiring unknown module 'undefined'`
+  crash that forced removal of `@react-native-community/netinfo` cannot recur.
+- Re-register triggers now cover: **app→active** (existing AppState handler),
+  **FCM wake** (existing `Sip.WakeRegister`), **WebSocket close**
+  (`onSocketDisconnected → scheduleReconnect`), **network regain** (new), and
+  **process resume** (AppState active). All funnel through the existing
+  single-flight + exponential-backoff `runReconnect`, so there are no duplicate
+  registrations or storms.
+
+**Validation instrumentation**
+- App background/foreground timestamps (`APP_BACKGROUNDED`/`APP_FOREGROUNDED`
+  flight events), FGS created + `foregroundLandedAtMs`, startForeground result +
+  error class, JS socket close reason (`SIP_SOCKET`/`SIP_RECONNECT` logs), SIP
+  register attempt/result, wake-push register result (existing `CallWakeEvent`),
+  PBX reachable/unreachable (existing server detection layer §6), and battery-
+  optimization status. The device snapshot (now incl. `foregroundLandedAtMs`,
+  `process`, `rearmCount`, `batteryOptimizationIgnored`) is re-reported every 60 s
+  + on foreground via `registerMobileDevice`, so `/admin/device-registration`
+  shows **continuous** health, colour-coded, with a red `proc=…:keepalive` flag if
+  the FGS ever lands in the wrong process again and a `battery-opt ON` warning.
+
+### 8.3 Exact files changed (H1–H3)
+
+| File | Change |
+|------|--------|
+| `apps/mobile/android/app/src/main/AndroidManifest.xml` | Removed `android:process=":keepalive"` from `SipKeepAliveService` + `KeepAliveRestartReceiver` (FGS now in main process). |
+| `apps/mobile/android/.../KeepAliveDiag.kt` | **New.** Durable, cross-process SharedPreferences mirror of FGS health incl. `foregroundLandedAtMs`, process, re-arm count. |
+| `apps/mobile/android/.../SipKeepAliveService.kt` | Mirror start/create/foreground/destroy outcomes to `KeepAliveDiag`; record `foregroundLandedAtMs`; record process name. |
+| `apps/mobile/android/.../IncomingCallUiModule.kt` | `getCallWakeDiagnostics()` now reads the durable store (truth) + new fields; new `restartKeepAlive()` bridge (H2); `ConnectivityManager` default-network callback → `Sip.NetworkChanged` (H3). |
+| `apps/mobile/src/diagnostics/callWakeDiagnostics.ts` | New native fields (`keepAliveForegroundLandedAtMs`, `keepAliveProcess`, `keepAliveRearmCount`). |
+| `apps/mobile/src/sip/keepAliveWatchdog.ts` | **New.** Honest `evaluateKeepAliveHealth()`. |
+| `apps/mobile/src/context/SipContext.tsx` | H2 verify+re-arm; H3 `Sip.NetworkChanged` listener + bg/fg lifecycle instrumentation; stale-watchdog re-arm; wake re-verify. |
+| `apps/mobile/src/context/NotificationsContext.tsx` | Richer keep-alive snapshot (+battery) and 60 s/foreground device-health re-report. |
+| `apps/mobile/src/api/client.ts` | `registerMobileDevice` keepAlive payload widened. |
+| `apps/api/src/server.ts` | `/mobile/devices/register` zod accepts new keepAlive fields (stored in existing `keepAliveSnapshot` JSON). |
+| `apps/portal/app/(platform)/admin/device-registration/page.tsx` | Honest FGS health (uses `foregroundLandedAtMs`), colour coding, wrong-process + battery warnings. |
+
+### 8.4 Proof to capture during F25 validation (test gate §4)
+
+These are the exact signals to confirm the fix worked — collect them on the
+physical S25 and paste into this doc when run:
+
+1. **Device log (logcat):** `SipKeepAliveService: onCreate process=com.connectcommunications.mobile`
+   (must be the package name, **not** `…:keepalive`) and
+   `startForeground posted ongoing notification id=4242 type=PHONE_CALL|DATA_SYNC`.
+2. **In-app Diagnostics / `/admin/device-registration`:** `keepAliveProcess` = package
+   name, `keepAliveForegroundLandedAtMs` > 0, FGS cell green, no `proc=` warning,
+   `battery-opt ON` absent (exemption granted). Heartbeat keeps `lastSeenAt` fresh.
+3. **PBX contact state (authoritative):**
+   `node _latency_logs/incident_t25_101/ami_probe_t25.js` → `T25_101_1` shows
+   `TotalContacts: 1`, `DeviceState` not `Unavailable`, and **stays** reachable >5
+   min after backgrounding + screen-lock.
+4. **Server timeline:** `PbxEndpointRegistration.status=REGISTERED` for `T25_101_1`
+   with no `Reachable→Unreachable→Removed` transitions while idle/backgrounded.
+5. **Wi-Fi↔LTE handover:** logcat `emitNetworkChanged available=true transport=…`
+   then `[SIP_RECONNECT] success reason=network_regained:…`; PBX contact recovers
+   automatically within a few seconds.
+6. **No Hermes regression:** clean cold start, no
+   `Requiring unknown module 'undefined'` in logcat.
+7. **F24 vs F25:** after the fix both should show `keepAliveForegroundLandedAtMs>0`,
+   main-process FGS, and continuous `REGISTERED`.
+
+### 8.5 Remaining risk
+
+- **Process move blast radius:** running the FGS in the main process is the
+  correct fix but changes call-time behaviour app-wide (mic-typed FGS, hangup
+  relay now in-process). It is backward compatible (the cross-process hangup relay
+  still works as an in-process broadcast) but **must be regression-tested on F24 +
+  at least one Pixel/OnePlus** for in-call audio + notification actions, not just
+  F25.
+- **Hostile OEM kill under memory pressure:** even a main-process FGS can be killed
+  on extreme One UI memory pressure without the battery-optimization exemption.
+  Mitigations remain: battery-exemption prompt, `onTaskRemoved`/`onDestroy`
+  self-restart alarm, FCM wake, and the watchdog re-arm (capped). A high
+  `keepAliveRearmCount` on a model in the dashboard is the early-warning signal.
+- **DATA_SYNC FGS time limits:** Android 15+ imposes a daily runtime budget on
+  `dataSync` FGS. When `PHONE_CALL` is accepted (the usual case) this does not
+  apply; if a device only ever lands on `DATA_SYNC`, long-idle survival may still
+  degrade — visible as `keepAliveLastForegroundTypeUsed=DATA_SYNC` in the dashboard.
+
+### 8.6 How to debug the next registration drop
+
+1. `/admin/device-registration` → find the endpoint. FGS cell red? Read the label:
+   `never foregrounded (<ExceptionClass>)` = FGS start refused;
+   `not running` = killed after starting; `proc=…:keepalive` = process-move
+   regressed.
+2. Cross-check PBX truth: `ami_probe_t25.js` (TotalContacts) and the
+   `PbxEndpointRegistration` timeline (§6).
+3. On-device: logcat tags `SipKeepAliveService`, `[SIP_KEEPALIVE_FGS]`,
+   `[SIP_RECONNECT]`, `[SIP_NETWORK]`, `emitNetworkChanged`.
+4. If FGS healthy (green, `foregroundLandedAtMs>0`) but PBX still shows 0 contacts
+   when backgrounded → network/Doze recovery gap, not FGS; check
+   `[SIP_RECONNECT]` cadence and battery exemption.

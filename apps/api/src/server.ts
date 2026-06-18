@@ -13253,6 +13253,14 @@ app.post("/mobile/devices/register", async (req, reply) => {
       lastForegroundResult: z.string().max(120).optional(),
       lastForegroundTypeUsed: z.string().max(120).optional(),
       lastForegroundErrorClass: z.string().max(160).optional(),
+      // 2026-06-17 hardening additions. foregroundLandedAtMs is the
+      // authoritative "FGS actually reached foreground state" timestamp:
+      // 0 means keep-alive is NOT working regardless of isRunning. process
+      // should be the package name (main process) after the :keepalive removal.
+      foregroundLandedAtMs: z.number().optional(),
+      process: z.string().max(160).optional(),
+      rearmCount: z.number().optional(),
+      batteryOptimizationIgnored: z.boolean().optional(),
     }).optional(),
   }).parse(req.body || {});
   const extension = await db.extension.findFirst({
