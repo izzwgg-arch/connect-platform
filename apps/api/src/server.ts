@@ -13261,6 +13261,12 @@ app.post("/mobile/devices/register", async (req, reply) => {
       process: z.string().max(160).optional(),
       rearmCount: z.number().optional(),
       batteryOptimizationIgnored: z.boolean().optional(),
+      // Adaptive activation gate. gateNeeded=false ⇒ FGS intentionally dormant
+      // (device has not observed a background-delivery failure), NOT a fault.
+      gateNeeded: z.boolean().optional(),
+      gateReason: z.string().max(160).optional(),
+      gateLatchedAtMs: z.number().optional(),
+      gateDropCount: z.number().optional(),
     }).optional(),
   }).parse(req.body || {});
   const extension = await db.extension.findFirst({

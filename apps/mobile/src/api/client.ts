@@ -598,6 +598,10 @@ export async function registerMobileDevice(token: string, input: {
     process?: string;
     rearmCount?: number;
     batteryOptimizationIgnored?: boolean;
+    gateNeeded?: boolean;
+    gateReason?: string;
+    gateLatchedAtMs?: number;
+    gateDropCount?: number;
   };
 }) {
   const res = await fetch(`${API_BASE}/mobile/devices/register`, {

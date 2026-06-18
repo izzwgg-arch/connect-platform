@@ -27,6 +27,11 @@ interface RegDevice {
     process?: string;
     rearmCount?: number;
     batteryOptimizationIgnored?: boolean;
+    // Adaptive activation gate.
+    gateNeeded?: boolean;
+    gateReason?: string;
+    gateLatchedAtMs?: number;
+    gateDropCount?: number;
   } | null;
 }
 
@@ -229,18 +234,25 @@ function DeviceRegistrationInner() {
               // is what hid the T25/101 S25 drop. Older app builds that don't
               // report foregroundLandedAtMs fall back to the legacy heuristic.
               const hasLandedField = fgs?.foregroundLandedAtMs !== undefined;
+              // Adaptive gate: when gateNeeded===false the keep-alive FGS is
+              // INTENTIONALLY off (this device delivers calls fine in the
+              // background and has not observed a drop). That is the healthy
+              // default — render it neutral, not as a failure.
+              const gateDormant = fgs?.gateNeeded === false;
               const fgsHealthy = hasLandedField
                 ? Boolean(fgs?.foregroundLandedAtMs && fgs?.isRunning && fgs?.serviceCreatedAtMs)
                 : fgs?.lastForegroundResult === "ok";
               const fgsLabel = !fgs
                 ? "—"
-                : fgsHealthy
-                  ? `ok (${fgs.lastForegroundTypeUsed || "?"})${fgs.rearmCount ? ` ×${fgs.rearmCount}` : ""}`
-                  : hasLandedField && !fgs.foregroundLandedAtMs
-                    ? `never foregrounded${fgs.lastForegroundErrorClass ? ` (${fgs.lastForegroundErrorClass})` : fgs.lastForegroundResult ? ` (${fgs.lastForegroundResult})` : ""}`
-                    : fgs.isRunning === false
-                      ? `not running${fgs.lastForegroundErrorClass ? ` (${fgs.lastForegroundErrorClass})` : ""}`
-                      : (fgs.lastForegroundResult || "—");
+                : gateDormant
+                  ? "dormant (not needed)"
+                  : fgsHealthy
+                    ? `ok (${fgs.lastForegroundTypeUsed || "?"})${fgs.rearmCount ? ` ×${fgs.rearmCount}` : ""}`
+                    : hasLandedField && !fgs.foregroundLandedAtMs
+                      ? `never foregrounded${fgs.lastForegroundErrorClass ? ` (${fgs.lastForegroundErrorClass})` : fgs.lastForegroundResult ? ` (${fgs.lastForegroundResult})` : ""}`
+                      : fgs.isRunning === false
+                        ? `not running${fgs.lastForegroundErrorClass ? ` (${fgs.lastForegroundErrorClass})` : ""}`
+                        : (fgs.lastForegroundResult || "—");
               return (
                 <tr key={r.endpoint} style={{ borderBottom: "1px solid #eaeef2" }}>
                   <td style={{ padding: "8px 6px", fontFamily: "monospace" }}>{r.endpoint}</td>
@@ -269,12 +281,15 @@ function DeviceRegistrationInner() {
                           </div>
                         ))}
                   </td>
-                  <td style={{ padding: "8px 6px", fontSize: 12, color: !fgs ? "#8c959f" : fgsHealthy ? "#1a7f37" : "#cf222e" }}>
+                  <td style={{ padding: "8px 6px", fontSize: 12, color: !fgs ? "#8c959f" : gateDormant ? "#8c959f" : fgsHealthy ? "#1a7f37" : "#cf222e" }}>
                     {fgsLabel}
-                    {fgs?.process && fgs.process.includes(":") && (
+                    {!gateDormant && fgs?.gateNeeded && fgs?.gateReason && (
+                      <div style={{ fontSize: 10, color: "#57606a" }}>latched: {fgs.gateReason}</div>
+                    )}
+                    {!gateDormant && fgs?.process && fgs.process.includes(":") && (
                       <div style={{ fontSize: 10, color: "#cf222e" }}>proc={fgs.process}</div>
                     )}
-                    {fgs?.batteryOptimizationIgnored === false && (
+                    {!gateDormant && fgs?.batteryOptimizationIgnored === false && (
                       <div style={{ fontSize: 10, color: "#bf8700" }}>battery-opt ON</div>
                     )}
                   </td>

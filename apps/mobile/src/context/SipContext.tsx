@@ -27,6 +27,13 @@ import {
 import { shouldForceRestartOnWake } from "../sip/mobileWakeRegistration";
 import { getCallWakeNativeState } from "../diagnostics/callWakeDiagnostics";
 import { evaluateKeepAliveHealth } from "../sip/keepAliveWatchdog";
+import {
+  loadKeepAliveGate,
+  recordBackgroundDrop,
+  recordBackgroundTimestamp,
+  SLOW_WAKE_MS,
+  type KeepAliveGateState,
+} from "../sip/keepAliveGate";
 
 const PROVISION_KEY = "cc_mobile_provision";
 const LAST_DIALED_KEY = "cc_mobile_last_dialed";
@@ -780,6 +787,58 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
   // only helps while the process is alive; Stage 2 is what keeps the
   // process alive in the first place.
   const keepAliveWantedRef = useRef<boolean>(false);
+
+  // ── Adaptive activation gate ─────────────────────────────────────────────
+  // The keep-alive FGS does NOT run on every device. It starts dormant and
+  // latches on only after THIS device proves (at runtime) that it fails to
+  // deliver / hold registration in the background — see keepAliveGate.ts. A
+  // phone whose FCM wake works fine never trips a trigger, so it never shows
+  // the persistent notification. `keepAliveNeeded` drives the enable effect;
+  // the ref lets event callbacks read/flip it without stale closures.
+  const [keepAliveNeeded, setKeepAliveNeeded] = useState<boolean>(false);
+  const keepAliveNeededRef = useRef<boolean>(false);
+  useEffect(() => { keepAliveNeededRef.current = keepAliveNeeded; }, [keepAliveNeeded]);
+
+  // Load the persisted latch once on mount (survives process death). If this
+  // device already proved it needs keep-alive in a prior session, arm immediately.
+  useEffect(() => {
+    let cancelled = false;
+    loadKeepAliveGate()
+      .then((s: KeepAliveGateState) => {
+        if (cancelled) return;
+        if (s.needed && !keepAliveNeededRef.current) {
+          console.log('[SIP_KEEPALIVE_GATE] restored latch', JSON.stringify({ reason: s.reason, dropCount: s.dropCount }));
+          keepAliveNeededRef.current = true;
+          setKeepAliveNeeded(true);
+        }
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
+
+  // Record one confirmed background-delivery failure. Flips the gate on (and
+  // persists it) once the threshold is reached, which re-runs the enable effect
+  // and starts the FGS. No-op cost once already latched.
+  const triggerKeepAliveDrop = useCallback((reason: string) => {
+    recordBackgroundDrop(reason)
+      .then((s) => {
+        if (s.needed && !keepAliveNeededRef.current) {
+          console.warn('[SIP_KEEPALIVE_GATE] latched ON', JSON.stringify({ reason, dropCount: s.dropCount }));
+          flightRecord("SIP", "KEEPALIVE_GATE_LATCHED", {
+            severity: "warn",
+            payload: { reason, dropCount: s.dropCount },
+          });
+          keepAliveNeededRef.current = true;
+          setKeepAliveNeeded(true);
+        } else {
+          console.log('[SIP_KEEPALIVE_GATE] drop recorded', JSON.stringify({ reason, dropCount: s.dropCount, alreadyNeeded: s.needed }));
+        }
+      })
+      .catch(() => undefined);
+  }, []);
+  const triggerKeepAliveDropRef = useRef(triggerKeepAliveDrop);
+  useEffect(() => { triggerKeepAliveDropRef.current = triggerKeepAliveDrop; }, [triggerKeepAliveDrop]);
+
   // ── H2: FGS watchdog / re-arm state ──────────────────────────────────────
   // Number of re-arms performed in the current unhealthy streak. Reset to 0 the
   // moment we observe a healthy keep-alive so a later drop gets a fresh budget.
@@ -883,7 +942,12 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       console.warn('[SIP_KEEPALIVE_FGS] bridge_missing — native keep-alive disabled');
       return;
     }
-    const want = !!(authToken && hasProvisioning);
+    // Adaptive gate: only run the FGS once this device has proven it needs it.
+    // Logged-in + provisioned is necessary but NOT sufficient — keepAliveNeeded
+    // must also be latched (see keepAliveGate.ts). This is what keeps phones
+    // that deliver calls fine in the background (no observed drop) from ever
+    // showing the persistent keep-alive notification.
+    const want = !!(authToken && hasProvisioning) && keepAliveNeeded;
     if (keepAliveWantedRef.current === want) return;
     keepAliveWantedRef.current = want;
     try {
@@ -901,7 +965,7 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
     } catch (e) {
       console.warn('[SIP_KEEPALIVE_FGS] bridge_threw:', e);
     }
-  }, [authToken, hasProvisioning]);
+  }, [authToken, hasProvisioning, keepAliveNeeded]);
 
   // ── H3: network-regain SIP reconnect (netinfo-free) ──────────────────────
   // Replaces the removed @react-native-community/netinfo trigger with a core-
@@ -952,6 +1016,9 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
         lastBackgroundAtRef.current = Date.now();
         console.log('[SIP_LIFECYCLE] backgrounded', JSON.stringify({ at: lastBackgroundAtRef.current }));
         flightRecord("SIP", "APP_BACKGROUNDED", { payload: { at: lastBackgroundAtRef.current } });
+        // Persist for the adaptive gate so a cold FCM-wake process can reason
+        // about how long we were backgrounded before a call arrived.
+        void recordBackgroundTimestamp(lastBackgroundAtRef.current);
       } else if (next === "active") {
         const bgMs = lastBackgroundAtRef.current ? Date.now() - lastBackgroundAtRef.current : 0;
         console.log('[SIP_LIFECYCLE] foregrounded', JSON.stringify({ backgroundedForMs: bgMs }));
@@ -1192,6 +1259,16 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
             regState: registrationStateRef.current,
           },
         });
+        // Adaptive gate: a real incoming call arrived and our standing
+        // registration was NOT alive (we had to (re)register on the wake push).
+        // If recovering it took long enough that the caller likely gave up, this
+        // device is not delivering calls reliably in the background — latch the
+        // keep-alive FGS on. A healthy phone whose wake register lands quickly
+        // (well under SLOW_WAKE_MS) does not trip this.
+        const wakeTotalMs = completedAt - t0;
+        if (!sipStackHealthy && wakeTotalMs > SLOW_WAKE_MS) {
+          triggerKeepAliveDropRef.current('wake_register_slow:' + wakeTotalMs + 'ms');
+        }
         // Cold FCM wake spawns a fresh main process; confirm the keep-alive FGS
         // re-armed in it so the registration we just refreshed stays protected.
         try { verifyAndArmKeepAliveRef.current?.('fcm_wake'); } catch { /* ignore */ }
@@ -1207,6 +1284,10 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
           severity: "error",
           payload: { error: e?.message, regState: registrationStateRef.current },
         });
+        // Adaptive gate: an incoming-call wake could not re-register at all —
+        // the clearest possible proof this device drops calls in the background.
+        // Latch the keep-alive FGS on so the next background spell is protected.
+        triggerKeepAliveDropRef.current('wake_register_failed');
       }
     });
 

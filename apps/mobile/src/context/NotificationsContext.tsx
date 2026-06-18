@@ -88,6 +88,7 @@ import {
   createSipAnswerDeadline,
 } from "../sip/mobileAnswerTiming";
 import type { SipAnswerTraceEvent } from "../sip/types";
+import { loadKeepAliveGate } from "../sip/keepAliveGate";
 import {
   shouldSuppressForegroundPush,
   shouldPresentForegroundUserAlert,
@@ -520,6 +521,13 @@ async function mobileDeviceRegistrationMetadata() {
         process?: string;
         rearmCount?: number;
         batteryOptimizationIgnored?: boolean;
+        // Adaptive activation gate (keepAliveGate.ts). `gateNeeded=false` means
+        // the FGS is intentionally dormant on this device because it has not yet
+        // observed a background-delivery failure — NOT a fault.
+        gateNeeded?: boolean;
+        gateReason?: string;
+        gateLatchedAtMs?: number;
+        gateDropCount?: number;
       }
     | undefined;
   if (Platform.OS === "android") {
@@ -552,6 +560,21 @@ async function mobileDeviceRegistrationMetadata() {
       }
     } catch {
       // Native module not available (older builds, iOS, etc.) — leave undefined.
+    }
+    // Adaptive activation gate — report regardless of the native diag so the
+    // dashboard can distinguish "FGS dormant because not needed" from "FGS
+    // failed to start". Independent of `diag` availability.
+    try {
+      const gate = await loadKeepAliveGate();
+      keepAlive = {
+        ...(keepAlive ?? {}),
+        gateNeeded: gate.needed,
+        gateReason: gate.reason,
+        gateLatchedAtMs: gate.latchedAtMs,
+        gateDropCount: gate.dropCount,
+      };
+    } catch {
+      /* gate optional */
     }
   }
 

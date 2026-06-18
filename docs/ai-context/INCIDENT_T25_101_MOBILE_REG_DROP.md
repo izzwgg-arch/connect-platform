@@ -417,3 +417,64 @@ physical S25 and paste into this doc when run:
 4. If FGS healthy (green, `foregroundLandedAtMs>0`) but PBX still shows 0 contacts
    when backgrounded → network/Doze recovery gap, not FGS; check
    `[SIP_RECONNECT]` cadence and battery exemption.
+
+---
+
+## 9. Adaptive activation gate — keep-alive runs ONLY where needed (2026-06-18)
+
+### 9.1 Why
+Always-on keep-alive is correct for an aggressive-OEM phone (S25 / new One UI)
+but pure cost — a permanent notification + battery — on a phone that already
+delivers background calls fine via the FCM wake-push path (e.g. the F24 / S24 on
+older One UI, Pixels). Requirement: **one APK, but the FGS must self-activate
+only on devices that prove they need it; dormant everywhere else.**
+
+### 9.2 Design (adaptive, client-observed, sticky)
+- New `apps/mobile/src/sip/keepAliveGate.ts` persists a tiny latch in
+  AsyncStorage (`cc.keepalive.gate.v1`): `{ needed, reason, latchedAtMs,
+  dropCount, lastBackgroundAtMs }`. Default `needed=false`.
+- `SipContext` gates the FGS: `want = authToken && hasProvisioning && keepAliveNeeded`.
+  When `needed=false` the FGS, persistent notification, wake lock and watchdog
+  never start. The lightweight network-regain re-register stays on for everyone
+  (cheap, no notification), and the **FCM wake-push path is unchanged** — dormant
+  phones still receive calls exactly as they do today.
+- **Latch triggers** (each = a confirmed "did not deliver in background when it
+  mattered"; threshold = 1, since the user accepted the first drop may slip
+  through). A healthy phone whose FCM wake lands quickly trips NONE of these:
+  - `wake_register_failed` — an incoming-call FCM wake could not re-register at all.
+  - `wake_register_slow:<ms>` — wake re-register succeeded but took
+    > `SLOW_WAKE_MS` (8 s) from a not-already-healthy stack, i.e. the caller
+    likely gave up.
+  - (`forceKeepAliveNeeded()` exists for a future automatic server-observed-drop
+    signal feeding the same latch; not yet wired to a server response.)
+- Latch is **sticky** across launches/process death, so a device that proved it
+  needs keep-alive keeps it. `resetKeepAliveGate()` clears it for support.
+
+Rationale for NOT using "socket closed while backgrounded": healthy phones idle-
+close the socket in the background too and recover via FCM wake, so that signal
+would false-activate the F24. The triggers above fire only on a real failed/slow
+**call delivery**, which is precisely what distinguishes F25 (fails/slow) from
+F24 (fast successful wake).
+
+### 9.3 Files changed (gate)
+| File | Change |
+|------|--------|
+| `apps/mobile/src/sip/keepAliveGate.ts` | **NEW** — persisted sticky latch + triggers. |
+| `apps/mobile/src/context/SipContext.tsx` | Gate `want`; load latch on mount; `triggerKeepAliveDrop` on wake fail/slow; persist bg timestamp. |
+| `apps/mobile/src/context/NotificationsContext.tsx` | Report `gateNeeded/gateReason/gateLatchedAtMs/gateDropCount` in the keep-alive snapshot. |
+| `apps/mobile/src/api/client.ts`, `apps/api/src/server.ts` | Widen register payload/zod for the gate fields (stored in `keepAliveSnapshot` JSON). |
+| `apps/portal/app/(platform)/admin/device-registration/page.tsx` | Render `dormant (not needed)` neutral-grey when `gateNeeded=false`; show `latched: <reason>` when active. |
+
+### 9.4 Observability
+`/admin/device-registration` now distinguishes three states in the FGS cell:
+**`dormant (not needed)`** (grey — healthy default, gate off), **`ok (<type>)`**
+(green — needed + foreground-landed), and the red failure labels from §8.6 (needed
+but not foregrounded / wrong process). Battery + wrong-process warnings only show
+when the gate is active (they are meaningless while dormant).
+
+### 9.5 Validation delta vs §8
+The F25 test gate is unchanged EXCEPT step 1 expectation: on a fresh install the
+S25 starts **dormant**; keep-alive activates after the first background call that
+fails/is slow (`KEEPALIVE_GATE_LATCHED` flight event + dashboard `latched:
+wake_register_*`). Confirm the F24 stays **dormant** throughout (never latches) —
+that is the proof the gate spares phones that don't need it.
