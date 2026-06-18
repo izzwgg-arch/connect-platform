@@ -919,6 +919,7 @@ model User {
   completedCustomerTasks         CustomerTask[]                    @relation("CustomerTaskCompletedBy")
   createdAutomationRules         AutomationRule[]                  @relation("AutomationRuleCreatedBy")
   tenantSmsNumbersAssigned       TenantSmsNumber[]                 @relation("TenantSmsNumberAssignUser")
+  tenantSmsNumberMultiAssignments TenantSmsNumberUser[]            @relation("TenantSmsNumberMultiUser")
   outboundRoutePermissions       UserOutboundRoutePermission[]     @relation("UserOutboundRoutePermissionUser")
   connectChatParticipants        ConnectChatParticipant[]
   connectChatMessages            ConnectChatMessage[]              @relation("ConnectChatMessageSenderUser")
@@ -3731,7 +3732,7 @@ model GlobalVoipMsConfig {
   updatedAt              DateTime  @updatedAt
 }
 
-/// VoIP.ms SMS-capable number assigned to a tenant (optionally to one user/extension).
+/// VoIP.ms SMS-capable number assigned to a tenant (optionally to one user/extension or a specific set of users).
 model TenantSmsNumber {
   id                  String              @id @default(cuid())
   /// Null until assigned to a Connect tenant (synced inventory row).
@@ -3752,9 +3753,26 @@ model TenantSmsNumber {
   tenant              Tenant?             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   assignedUser        User?               @relation("TenantSmsNumberAssignUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
   assignedExtension   Extension?          @relation("TenantSmsNumberAssignExtension", fields: [assignedExtensionId], references: [id], onDelete: SetNull)
+  /// Explicit multi-user assignments (mutually exclusive with assignedExtensionId).
+  assignedUsers       TenantSmsNumberUser[]
 
   @@index([tenantId, active])
   @@index([tenantId, isTenantDefault])
+}
+
+/// Join table: a specific set of users explicitly assigned to a VoIP.ms SMS number.
+/// When entries exist, inbound threads fan out only to these users (not the whole tenant).
+model TenantSmsNumberUser {
+  id                String          @id @default(cuid())
+  tenantSmsNumberId String
+  userId            String
+  createdAt         DateTime        @default(now())
+  tenantSmsNumber   TenantSmsNumber @relation(fields: [tenantSmsNumberId], references: [id], onDelete: Cascade)
+  user              User            @relation("TenantSmsNumberMultiUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantSmsNumberId, userId])
+  @@index([tenantSmsNumberId])
+  @@index([userId])
 }
 
 model ConnectChatThread {

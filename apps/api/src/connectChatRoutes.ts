@@ -409,6 +409,13 @@ async function resolveOutboundSmsNumber(
     select: { id: true, phoneE164: true },
   });
   if (byUser) return { row: byUser };
+  // Check the multi-user join table — if this user is explicitly assigned to a number, prefer it.
+  const byMultiUser = await (db as any).tenantSmsNumberUser.findFirst({
+    where: { userId, tenantSmsNumber: { tenantId, active: true } },
+    include: { tenantSmsNumber: { select: { id: true, phoneE164: true } } },
+    orderBy: { createdAt: "asc" },
+  });
+  if (byMultiUser?.tenantSmsNumber) return { row: byMultiUser.tenantSmsNumber };
   const tenantDefault = await db.tenantSmsNumber.findFirst({
     where: { tenantId, active: true, isTenantDefault: true },
     select: { id: true, phoneE164: true },
@@ -516,10 +523,11 @@ export async function findOrCreateConnectChatSmsThread(input: {
   const fromPick = await resolveOutboundSmsNumber(input.tenantId, input.userId, extLink?.id ?? null);
   if ("error" in fromPick) return { ok: false, status: 400, error: "NO_SMS_NUMBER", message: fromPick.error };
 
-  const assign = await db.tenantSmsNumber.findFirst({
+  const assign = await (db as any).tenantSmsNumber.findFirst({
     where: { id: fromPick.row.id, tenantId: input.tenantId },
-    select: { assignedUserId: true, assignedExtensionId: true },
+    select: { assignedUserId: true, assignedExtensionId: true, assignedUsers: { select: { userId: true } } },
   });
+  const multiAssignedUserIds: string[] = (assign?.assignedUsers ?? []).map((u: any) => u.userId);
   const inboxScope = await resolveSmsInboxOwnerUserId({
     tenantId: input.tenantId,
     assignedUserId: assign?.assignedUserId || null,
@@ -551,6 +559,7 @@ export async function findOrCreateConnectChatSmsThread(input: {
     tenantId: input.tenantId,
     inboxOwnerUserId: inboxScope,
     assignedExtensionId: assign?.assignedExtensionId || null,
+    multiAssignedUserIds,
     ensureUserIds: [input.userId],
   });
   return { ok: true, threadId: thread.id, normalizedTo: extNorm.e164, fromNumber: fromPick.row.phoneE164 };
@@ -1800,10 +1809,11 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         tenant: { select: { name: true } },
         assignedUser: { select: { email: true } },
         assignedExtension: { select: { extNumber: true } },
+        assignedUsers: { include: { user: { select: { email: true } } }, orderBy: { createdAt: "asc" } },
       },
-    });
+    } as any) as any[];
     return {
-      numbers: rows.map((r) => ({
+      numbers: rows.map((r: any) => ({
         id: r.id,
         phoneE164: r.phoneE164,
         phoneRaw: r.phoneRaw,
@@ -1817,6 +1827,8 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         assignedUserEmail: r.assignedUser?.email || null,
         assignedExtensionId: r.assignedExtensionId,
         assignedExtensionNumber: r.assignedExtension?.extNumber || null,
+        assignedUserIds: (r.assignedUsers as any[]).map((u: any) => u.userId),
+        assignedUserEmails: (r.assignedUsers as any[]).map((u: any) => u.user?.email || null).filter(Boolean),
       })),
     };
   });
@@ -1831,6 +1843,8 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         tenantId: z.string().nullable().optional(),
         assignedUserId: z.string().nullable().optional(),
         assignedExtensionId: z.string().nullable().optional(),
+        /** Explicit multi-user assignment. Empty array = clear all; undefined = no change. */
+        assignedUserIds: z.array(z.string()).optional(),
         isTenantDefault: z.boolean().optional(),
         active: z.boolean().optional(),
       })
@@ -1855,17 +1869,34 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       });
     }
 
+    // When setting multi-user assignments, clear the single-user and extension fields.
+    const hasMultiUsers = Array.isArray(body.assignedUserIds) && body.assignedUserIds.length > 0;
     await db.tenantSmsNumber.update({
       where: { id },
       data: {
         ...(body.tenantId !== undefined ? { tenantId: body.tenantId } : {}),
-        ...(body.assignedUserId !== undefined ? { assignedUserId: body.assignedUserId } : {}),
-        ...(body.assignedExtensionId !== undefined ? { assignedExtensionId: body.assignedExtensionId } : {}),
+        ...(hasMultiUsers
+          ? { assignedUserId: null, assignedExtensionId: null }
+          : {
+              ...(body.assignedUserId !== undefined ? { assignedUserId: body.assignedUserId } : {}),
+              ...(body.assignedExtensionId !== undefined ? { assignedExtensionId: body.assignedExtensionId } : {}),
+            }),
         ...(body.isTenantDefault !== undefined ? { isTenantDefault: body.isTenantDefault } : {}),
         ...(body.active !== undefined ? { active: body.active } : {}),
         updatedAt: new Date(),
       },
-    });
+    } as any);
+
+    // Set-replace the multi-user join table when assignedUserIds is provided.
+    if (Array.isArray(body.assignedUserIds)) {
+      await (db as any).tenantSmsNumberUser.deleteMany({ where: { tenantSmsNumberId: id } });
+      if (body.assignedUserIds.length > 0) {
+        await (db as any).tenantSmsNumberUser.createMany({
+          data: body.assignedUserIds.map((uid: string) => ({ tenantSmsNumberId: id, userId: uid })),
+          skipDuplicates: true,
+        });
+      }
+    }
     return { ok: true };
   });
 
@@ -1920,6 +1951,26 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       orderBy: { extNumber: "asc" },
     });
     return { extensions: rows };
+  });
+
+  app.get("/admin/apps/voip-ms/users", async (req, reply) => {
+    const user = req.user as JwtUser;
+    if (!isSuper(user) && !isTenantAdmin(user)) return reply.status(403).send({ error: "FORBIDDEN" });
+    const { tenantId } = z.object({ tenantId: z.string().min(1) }).parse(req.query || {});
+    const effTenant = isSuper(user) ? tenantId : effectiveChatTenantId(req, user);
+    const rows = await db.user.findMany({
+      where: { tenantId: effTenant },
+      select: { id: true, email: true, firstName: true, lastName: true },
+      orderBy: { email: "asc" },
+      take: 300,
+    });
+    return {
+      users: rows.map((u) => ({
+        id: u.id,
+        email: u.email,
+        displayName: [u.firstName, u.lastName].filter(Boolean).join(" ") || u.email,
+      })),
+    };
   });
 
   // ── Send test SMS ───────────────────────────────────────────────────────────
@@ -2007,7 +2058,10 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
 
     const num = await db.tenantSmsNumber.findUnique({
       where: { phoneE164: nt.e164 },
-      include: { assignedExtension: { select: { id: true, ownerUserId: true } } },
+      include: {
+        assignedExtension: { select: { id: true, ownerUserId: true } },
+        assignedUsers: { select: { userId: true }, orderBy: { createdAt: "asc" } },
+      },
     } as any) as any;
     if (!num || !num.tenantId) {
       await db.smsRoutingLog.create({
@@ -2055,6 +2109,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       tenantId: num.tenantId,
       inboxOwnerUserId: inboxScope,
       assignedExtensionId: num.assignedExtensionId || null,
+      multiAssignedUserIds: (num.assignedUsers as any[] | undefined)?.map((u: any) => u.userId) ?? [],
     });
 
     const msg = await db.connectChatMessage.create({

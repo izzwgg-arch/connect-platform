@@ -273,7 +273,13 @@ async function resolveInboxOwnerUserId(input: { tenantId: string; assignedUserId
   return resolveSmsInboxScope({ assignedUserId: input.assignedUserId, extensionOwnerUserId });
 }
 
-async function upsertParticipants(input: { threadId: string; tenantId: string; inboxOwnerUserId: string; assignedExtensionId?: string | null }) {
+async function upsertParticipants(input: {
+  threadId: string;
+  tenantId: string;
+  inboxOwnerUserId: string;
+  assignedExtensionId?: string | null;
+  multiAssignedUserIds?: string[];
+}) {
   await upsertSmsThreadParticipants(input);
 }
 
@@ -348,6 +354,8 @@ async function importInboundMessage(input: {
   tenantDidE164: string;
   assignedUserId?: string | null;
   assignedExtensionId?: string | null;
+  /** Users explicitly assigned via TenantSmsNumberUser join table. */
+  multiAssignedUserIds?: string[];
   row: InboundRow;
   sendSmsPush?: SmsPushFn;
 }) {
@@ -431,6 +439,7 @@ async function importInboundMessage(input: {
     tenantId: input.tenantId,
     inboxOwnerUserId: inboxScope,
     assignedExtensionId: input.assignedExtensionId || null,
+    multiAssignedUserIds: input.multiAssignedUserIds ?? [],
   });
 
   const msg = await db.connectChatMessage.create({
@@ -605,13 +614,14 @@ export async function runVoipMsInboundSyncCycle(opts?: { sendSmsPush?: SmsPushFn
       console.warn("[voipms-inbound] no credentials found — skipping sync");
       return;
     }
-    const numbers = await db.tenantSmsNumber.findMany({
+    const numbers = await (db as any).tenantSmsNumber.findMany({
       where: { tenantId: { not: null }, active: true, smsCapable: true },
       select: {
         tenantId: true,
         phoneE164: true,
         assignedUserId: true,
         assignedExtensionId: true,
+        assignedUsers: { select: { userId: true }, orderBy: { createdAt: "asc" } },
       },
       orderBy: { updatedAt: "desc" },
       take: 500,
@@ -632,6 +642,7 @@ export async function runVoipMsInboundSyncCycle(opts?: { sendSmsPush?: SmsPushFn
             tenantDidE164: n.phoneE164,
             assignedUserId: n.assignedUserId,
             assignedExtensionId: n.assignedExtensionId,
+            multiAssignedUserIds: ((n as any).assignedUsers ?? []).map((u: any) => u.userId),
             row,
             sendSmsPush: opts?.sendSmsPush,
           });

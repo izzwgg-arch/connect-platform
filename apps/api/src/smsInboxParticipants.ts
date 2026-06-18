@@ -72,12 +72,20 @@ export async function upsertSmsThreadParticipants(input: {
   tenantId: string;
   inboxOwnerUserId: string;
   assignedExtensionId?: string | null;
+  /** Explicit multi-user list from TenantSmsNumberUser join table. When non-empty and
+   *  inboxOwnerUserId is "" (shared scope), only these users receive the thread. */
+  multiAssignedUserIds?: string[];
   /** Always include these user ids (e.g. outbound thread creator). */
   ensureUserIds?: string[];
 }): Promise<void> {
-  const userIds = input.inboxOwnerUserId
-    ? [input.inboxOwnerUserId]
-    : await listSharedSmsInboxParticipantUserIds(input.tenantId);
+  let userIds: string[];
+  if (input.inboxOwnerUserId) {
+    userIds = [input.inboxOwnerUserId];
+  } else if (input.multiAssignedUserIds && input.multiAssignedUserIds.length > 0) {
+    userIds = input.multiAssignedUserIds;
+  } else {
+    userIds = await listSharedSmsInboxParticipantUserIds(input.tenantId);
+  }
 
   const allUserIds = [...new Set([...userIds, ...(input.ensureUserIds ?? [])])];
   for (const uid of allUserIds) {

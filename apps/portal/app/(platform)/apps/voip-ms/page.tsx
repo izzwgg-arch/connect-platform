@@ -36,10 +36,13 @@ type SmsRow = {
   assignedUserEmail: string | null;
   assignedExtensionId: string | null;
   assignedExtensionNumber: string | null;
+  assignedUserIds: string[];
+  assignedUserEmails: string[];
 };
 
 type TenantRow = { id: string; name: string };
 type ExtRow = { id: string; extNumber: string; displayName: string };
+type UserRow = { id: string; email: string; displayName: string };
 
 /** Always build the webhook URL from the current browser origin + /api */
 function buildWebhookUrl(): string {
@@ -91,7 +94,11 @@ export default function VoipMsIntegrationPage() {
         apiGet<{ numbers: SmsRow[] }>("/admin/apps/voip-ms/numbers"),
       ]);
       setOverview(o);
-      setNumbers(n.numbers ?? []);
+      setNumbers((n.numbers ?? []).map((r) => ({
+        ...r,
+        assignedUserIds: r.assignedUserIds ?? [],
+        assignedUserEmails: r.assignedUserEmails ?? [],
+      })));
       if (superOnly) {
         const t = await apiGet<{ tenants: TenantRow[] }>("/admin/apps/voip-ms/tenants").catch(() => ({ tenants: [] }));
         setTenants(t.tenants ?? []);
@@ -490,7 +497,15 @@ export default function VoipMsIntegrationPage() {
                         </td>
                         <td>{r.isTenantDefault ? <span style={{ color: "var(--brand)" }}>✓</span> : "—"}</td>
                         <td>{r.active ? <span style={{ color: "var(--success, green)" }}>yes</span> : <span style={{ opacity: 0.5 }}>no</span>}</td>
-                        <td style={{ fontSize: 12 }}>{r.assignedExtensionNumber ? `Ext ${r.assignedExtensionNumber}` : r.assignedExtensionId ? r.assignedExtensionId.slice(0, 8) + "…" : "—"}</td>
+                        <td style={{ fontSize: 12 }}>
+                          {r.assignedExtensionNumber
+                            ? `Ext ${r.assignedExtensionNumber}`
+                            : r.assignedExtensionId
+                              ? r.assignedExtensionId.slice(0, 8) + "…"
+                              : (r.assignedUserIds?.length ?? 0) > 0
+                                ? <span title={r.assignedUserEmails?.join(", ")}>{r.assignedUserIds.length} user{r.assignedUserIds.length === 1 ? "" : "s"}</span>
+                                : "—"}
+                        </td>
                         {can("can_assign_sms_numbers") ? (
                           <td>
                             <NumberAssignForm row={r} tenants={tenants} superOnly={superOnly} onSaved={load} />
@@ -570,16 +585,21 @@ function NumberAssignForm({
 }) {
   const [tenantId, setTenantId] = useState(row.tenantId || "");
   const [extId, setExtId] = useState(row.assignedExtensionId || "");
+  const [assignedUserIds, setAssignedUserIds] = useState<string[]>(row.assignedUserIds ?? []);
   const [isDef, setIsDef] = useState(row.isTenantDefault);
   const [active, setActive] = useState(row.active);
   const [extensions, setExtensions] = useState<ExtRow[]>([]);
+  const [users, setUsers] = useState<UserRow[]>([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!tenantId) { setExtensions([]); return; }
+    if (!tenantId) { setExtensions([]); setUsers([]); return; }
     apiGet<{ extensions: ExtRow[] }>(`/admin/apps/voip-ms/extensions?tenantId=${encodeURIComponent(tenantId)}`)
       .then((r) => setExtensions(r.extensions ?? []))
       .catch(() => setExtensions([]));
+    apiGet<{ users: UserRow[] }>(`/admin/apps/voip-ms/users?tenantId=${encodeURIComponent(tenantId)}`)
+      .then((r) => setUsers(r.users ?? []))
+      .catch(() => setUsers([]));
   }, [tenantId]);
 
   async function save() {
@@ -589,6 +609,7 @@ function NumberAssignForm({
         tenantId: tenantId || null,
         assignedUserId: null,
         assignedExtensionId: extId || null,
+        assignedUserIds: extId ? [] : assignedUserIds,
         isTenantDefault: isDef,
         active,
       });
@@ -599,13 +620,13 @@ function NumberAssignForm({
   }
 
   return (
-    <div className="stack" style={{ minWidth: 180, gap: 6 }}>
+    <div className="stack" style={{ minWidth: 200, gap: 6 }}>
       {superOnly && tenants.length > 0 ? (
         <select
           className="input"
           style={{ fontSize: 12 }}
           value={tenantId}
-          onChange={(e) => { setTenantId(e.target.value); setExtId(""); }}
+          onChange={(e) => { setTenantId(e.target.value); setExtId(""); setAssignedUserIds([]); }}
         >
           <option value="">— unassigned —</option>
           {tenants.map((t) => (
@@ -625,7 +646,7 @@ function NumberAssignForm({
       {extensions.length > 0 ? (
         <ConnectSelect
           value={extId}
-          onChange={setExtId}
+          onChange={(v) => { setExtId(v); if (v) setAssignedUserIds([]); }}
           searchable
           style={{ width: "100%", fontSize: 12 }}
           options={[
@@ -641,6 +662,34 @@ function NumberAssignForm({
           value={extId}
           onChange={(e) => setExtId(e.target.value)}
         />
+      )}
+
+      {tenantId && !extId && users.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          <div style={{ fontSize: 11, color: "var(--text-2, #666)", marginBottom: 1 }}>
+            Specific users{assignedUserIds.length > 0 ? ` (${assignedUserIds.length} selected)` : " (optional — blank = all)"}:
+          </div>
+          <select
+            multiple
+            size={Math.min(6, users.length)}
+            style={{ width: "100%", fontSize: 12, borderRadius: 4, border: "1px solid var(--border, #ccc)", padding: 2 }}
+            value={assignedUserIds}
+            onChange={(e) => setAssignedUserIds([...e.target.selectedOptions].map((o) => o.value))}
+          >
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>{u.displayName || u.email}</option>
+            ))}
+          </select>
+          {assignedUserIds.length > 0 && (
+            <button
+              type="button"
+              style={{ fontSize: 11, background: "none", border: "none", cursor: "pointer", color: "var(--text-2, #666)", textAlign: "left", padding: 0 }}
+              onClick={() => setAssignedUserIds([])}
+            >
+              ✕ Clear selection (back to shared)
+            </button>
+          )}
+        </div>
       )}
 
       <div style={{ display: "flex", gap: 10, fontSize: 12 }}>
