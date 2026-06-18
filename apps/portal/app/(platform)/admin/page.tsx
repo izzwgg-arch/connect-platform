@@ -69,6 +69,11 @@ export default function AdminPage() {
               summary="Per-device wake-then-dial timeline + auto-triage. Use when a user reports 'phone goes to voicemail' or 'calls only ring with the app open'."
               href="/admin/call-wake-diagnostics"
             />
+            <AdminModuleCard
+              title="Device Registration"
+              summary="Authoritative PBX-side registration state per mobile/WebRTC endpoint, with not-registered duration, keep-alive FGS health, and a transition timeline. Use when a device shows 'Not Registered'."
+              href="/admin/device-registration"
+            />
           </section>
         </RoleGate>
       </div>

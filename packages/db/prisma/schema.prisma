@@ -5554,3 +5554,71 @@ model PbxStorageRetentionPolicy {
 
   @@unique([pbxInstanceId, dataClass])
 }
+
+/// Current PBX registration state for a single pjsip endpoint / AOR (e.g.
+/// "T25_101_1"). Populated by the telephony service forwarding AMI
+/// ContactStatus / PeerStatus events to POST /internal/pbx/contact-status.
+/// This is the authoritative, app-independent "is this device registered at
+/// the PBX right now" signal used by the device-registration watchdog,
+/// admin dashboard, and alerting. Plain scalar FKs (no relations) to keep the
+/// write path cheap and avoid coupling to Tenant/Extension/MobileDevice.
+model PbxEndpointRegistration {
+  id                 String   @id @default(cuid())
+  /// pjsip endpoint / AOR name, e.g. "T25_101_1". Globally unique on the PBX.
+  endpoint           String   @unique
+  /// Connect tenant id, resolved from the endpoint prefix when possible.
+  tenantId           String?
+  /// Connect Extension.id, resolved from the endpoint when possible.
+  extensionId        String?
+  /// VitalPBX numeric tenant id parsed from the "T<n>_" prefix.
+  pbxTenantNumber    String?
+  /// Extension number parsed from the endpoint (e.g. "101").
+  extNumber          String?
+  /// True when the endpoint name carries a device suffix (WebRTC/mobile, e.g. "_1").
+  isWebrtcDevice     Boolean  @default(false)
+  /// Normalized state: "REGISTERED" | "UNREACHABLE" | "UNREGISTERED" | "UNKNOWN".
+  status             String   @default("UNKNOWN")
+  /// Last raw AMI ContactStatus value (Reachable/Unreachable/Removed/Created/NonQualified...).
+  rawStatus          String?
+  /// Most-recent contact URI seen for this endpoint.
+  contactUri         String?
+  /// Most-recent SIP User-Agent reported by the contact.
+  userAgent          String?
+  /// Last qualify round-trip in microseconds (0/empty when not measured).
+  roundtripUsec      String?
+  lastRegisteredAt   DateTime?
+  lastUnreachableAt  DateTime?
+  lastUnregisteredAt DateTime?
+  /// Timestamp of the most recent status event of any kind.
+  lastEventAt        DateTime @default(now())
+  /// Source of the last update: "ami_contactstatus" | "ami_peerstatus" | "ami_bootstrap".
+  source             String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([status])
+  @@index([tenantId, status])
+  @@index([extensionId])
+  @@index([lastEventAt])
+}
+
+/// Append-only history of PBX registration state transitions for an endpoint.
+/// Powers the "why did this device go Not Registered" timeline in the admin UI.
+/// Pruned by the worker after ~14 days.
+model PbxEndpointRegistrationEvent {
+  id          String   @id @default(cuid())
+  endpoint    String
+  tenantId    String?
+  extensionId String?
+  /// Normalized status at this event ("REGISTERED" | "UNREACHABLE" | "UNREGISTERED" | "UNKNOWN").
+  status      String
+  rawStatus   String?
+  contactUri  String?
+  userAgent   String?
+  details     Json?
+  occurredAt  DateTime @default(now())
+
+  @@index([endpoint, occurredAt])
+  @@index([tenantId, occurredAt])
+  @@index([occurredAt])
+}

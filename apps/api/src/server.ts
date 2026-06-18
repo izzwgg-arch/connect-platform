@@ -13528,6 +13528,150 @@ app.get("/admin/mobile/devices", async (req, reply) => {
   };
 });
 
+// ── Per-device PBX registration state (device-registration dashboard) ──────────
+// Authoritative PBX-side registration state per pjsip endpoint, joined to the
+// Connect extension + owner. Powers /admin/device-registration in the portal.
+app.get("/admin/pbx/registrations", async (req, reply) => {
+  const user = getUser(req);
+  if (user.role !== "SUPER_ADMIN" && user.role !== "TENANT_ADMIN") {
+    return reply.status(403).send({ error: "FORBIDDEN" });
+  }
+  const q = z.object({
+    tenantId: z.string().optional(),
+    status: z.enum(["REGISTERED", "UNREACHABLE", "UNREGISTERED", "UNKNOWN"]).optional(),
+    webrtcOnly: z.union([z.boolean(), z.string()]).optional(),
+    limit: z.coerce.number().int().min(1).max(500).optional(),
+  }).parse((req.query as any) || {});
+
+  const tenantScope = user.role === "SUPER_ADMIN"
+    ? (q.tenantId ? { tenantId: q.tenantId } : {})
+    : { tenantId: user.tenantId };
+  const webrtcOnly = q.webrtcOnly === true || q.webrtcOnly === "1" || q.webrtcOnly === "true";
+
+  const rows = (await (db as any).pbxEndpointRegistration.findMany({
+    where: {
+      ...tenantScope,
+      ...(q.status ? { status: q.status } : {}),
+      ...(webrtcOnly ? { isWebrtcDevice: true } : {}),
+    },
+    orderBy: [{ status: "asc" }, { lastEventAt: "desc" }],
+    take: q.limit ?? 200,
+  })) as any[];
+
+  // Enrich with extension display + owner + linked active mobile devices.
+  const extIds = [...new Set(rows.map((r) => r.extensionId).filter(Boolean))] as string[];
+  const exts = extIds.length
+    ? await db.extension.findMany({
+        where: { id: { in: extIds } },
+        select: {
+          id: true, extNumber: true, displayName: true, ownerUserId: true,
+          ownerUser: { select: { id: true, email: true, displayName: true, firstName: true, lastName: true } },
+        },
+      })
+    : [];
+  const extById = new Map(exts.map((e: any) => [e.id, e]));
+  const devices = extIds.length
+    ? await (db.mobileDevice as any).findMany({
+        where: { extensionId: { in: extIds }, active: true },
+        select: { id: true, extensionId: true, model: true, manufacturer: true, osVersion: true, appVersion: true, lastSeenAt: true, keepAliveSnapshot: true },
+      })
+    : [];
+  const devsByExt = new Map<string, any[]>();
+  for (const dv of devices) {
+    const list = devsByExt.get(dv.extensionId) ?? [];
+    list.push(dv);
+    devsByExt.set(dv.extensionId, list);
+  }
+
+  const now = Date.now();
+  return {
+    count: rows.length,
+    registrations: rows.map((r) => {
+      const ext: any = r.extensionId ? extById.get(r.extensionId) : null;
+      const notRegisteredForSec = r.status === "REGISTERED"
+        ? 0
+        : Math.max(0, Math.round((now - new Date(r.lastEventAt).getTime()) / 1000));
+      return {
+        endpoint: r.endpoint,
+        status: r.status,
+        rawStatus: r.rawStatus,
+        tenantId: r.tenantId,
+        extNumber: r.extNumber,
+        pbxTenantNumber: r.pbxTenantNumber,
+        isWebrtcDevice: r.isWebrtcDevice,
+        contactUri: r.contactUri,
+        userAgent: r.userAgent,
+        roundtripUsec: r.roundtripUsec,
+        lastRegisteredAt: r.lastRegisteredAt,
+        lastUnreachableAt: r.lastUnreachableAt,
+        lastUnregisteredAt: r.lastUnregisteredAt,
+        lastEventAt: r.lastEventAt,
+        notRegisteredForSec,
+        extension: ext
+          ? {
+              id: ext.id,
+              extNumber: ext.extNumber,
+              displayName: ext.displayName,
+              owner: ext.ownerUser
+                ? {
+                    id: ext.ownerUser.id,
+                    email: ext.ownerUser.email,
+                    name: ext.ownerUser.displayName
+                      || [ext.ownerUser.firstName, ext.ownerUser.lastName].filter(Boolean).join(" ").trim()
+                      || ext.ownerUser.email,
+                  }
+                : null,
+            }
+          : null,
+        devices: (r.extensionId ? devsByExt.get(r.extensionId) ?? [] : []).map((dv: any) => ({
+          id: dv.id,
+          model: dv.model,
+          manufacturer: dv.manufacturer,
+          osVersion: dv.osVersion,
+          appVersion: dv.appVersion,
+          lastSeenAt: dv.lastSeenAt,
+          keepAliveSnapshot: dv.keepAliveSnapshot ?? null,
+        })),
+      };
+    }),
+  };
+});
+
+app.get("/admin/pbx/registrations/:endpoint/events", async (req, reply) => {
+  const user = getUser(req);
+  if (user.role !== "SUPER_ADMIN" && user.role !== "TENANT_ADMIN") {
+    return reply.status(403).send({ error: "FORBIDDEN" });
+  }
+  const endpoint = String((req.params as any)?.endpoint || "").trim();
+  if (!endpoint) return reply.status(400).send({ error: "endpoint_required" });
+
+  const current = await (db as any).pbxEndpointRegistration.findUnique({ where: { endpoint } });
+  if (!current) return reply.status(404).send({ error: "NOT_FOUND" });
+  if (user.role !== "SUPER_ADMIN" && current.tenantId !== user.tenantId) {
+    return reply.status(403).send({ error: "FORBIDDEN" });
+  }
+
+  const events = (await (db as any).pbxEndpointRegistrationEvent.findMany({
+    where: { endpoint },
+    orderBy: { occurredAt: "desc" },
+    take: 100,
+  })) as any[];
+
+  return {
+    endpoint,
+    current,
+    events: events.map((e) => ({
+      id: e.id,
+      status: e.status,
+      rawStatus: e.rawStatus,
+      contactUri: e.contactUri,
+      userAgent: e.userAgent,
+      details: e.details ?? null,
+      occurredAt: e.occurredAt,
+    })),
+  };
+});
+
 app.get("/mobile/call-invites/pending", async (req, reply) => {
   const user = getUser(req);
   if (!checkBillingRateLimit(`call-invites-poll:${user.sub}`, 60, 60 * 1000)) {
@@ -26651,6 +26795,143 @@ function resolveTenantFromDcontext(dcontext: string | null | undefined, tenantMa
 
   return null;
 }
+
+// ─── PBX endpoint registration-state ingest ──────────────────────────────────
+// Internal endpoint: the telephony service forwards AMI ContactStatus /
+// PeerStatus here so we can track per-device PBX registration state (the
+// authoritative "is this device Registered at the PBX" signal). Secured by the
+// same CDR_INGEST_SECRET header as /internal/cdr-ingest. Drives the device
+// registration watchdog, admin dashboard, and Not-Registered alerting.
+function parsePbxEndpointName(endpoint: string): {
+  pbxTenantNumber: string | null;
+  extNumber: string | null;
+  isWebrtcDevice: boolean;
+} {
+  const m = /^T(\d+)_(\d+)(?:_(\d+))?$/i.exec(String(endpoint || "").trim());
+  if (!m) return { pbxTenantNumber: null, extNumber: null, isWebrtcDevice: false };
+  return {
+    pbxTenantNumber: m[1] ?? null,
+    extNumber: m[2] ?? null,
+    isWebrtcDevice: Boolean(m[3]),
+  };
+}
+
+app.post("/internal/pbx/contact-status", async (req, reply) => {
+  const secret = process.env.CDR_INGEST_SECRET?.trim();
+  const incoming = String((req.headers as Record<string, string | undefined>)["x-cdr-secret"] || "").trim();
+  if (secret) {
+    if (!incoming) return reply.code(401).send({ error: "missing secret" });
+    const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
+    const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
+    if (!timingSafeEqual(a, b)) {
+      app.log.warn({ ip: req.ip, endpoint: "/internal/pbx/contact-status" }, "internal_secret_mismatch");
+      return reply.code(403).send({ error: "forbidden" });
+    }
+  }
+
+  const schema = z.object({
+    endpoint: z.string().min(1).max(128),
+    status: z.enum(["REGISTERED", "UNREACHABLE", "UNREGISTERED", "UNKNOWN"]),
+    rawStatus: z.string().max(64).nullable().optional(),
+    contactUri: z.string().max(512).nullable().optional(),
+    userAgent: z.string().max(256).nullable().optional(),
+    roundtripUsec: z.string().max(32).nullable().optional(),
+    tenantId: z.string().max(64).nullable().optional(),
+    source: z.string().max(48).optional(),
+    statusChanged: z.boolean().optional(),
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) {
+    return reply.code(400).send({ error: "invalid payload", issues: parsed.error.issues });
+  }
+  const d = parsed.data;
+  const endpoint = d.endpoint.trim();
+  const { pbxTenantNumber, extNumber, isWebrtcDevice } = parsePbxEndpointName(endpoint);
+
+  // Resolve Connect tenant + extension from the canonical PBX device name when possible.
+  let tenantId: string | null = d.tenantId ?? null;
+  let extensionId: string | null = null;
+  try {
+    const link = await (db as any).pbxExtensionLink.findFirst({
+      where: { pbxDeviceName: endpoint },
+      select: { tenantId: true, extensionId: true },
+    });
+    if (link) {
+      tenantId = link.tenantId ?? tenantId;
+      extensionId = link.extensionId ?? null;
+    }
+  } catch { /* resolution is best-effort */ }
+
+  const now = new Date();
+  try {
+    const prev = await (db as any).pbxEndpointRegistration.findUnique({
+      where: { endpoint },
+      select: { status: true },
+    });
+    // The DB previous state is authoritative for whether this is a real
+    // transition worth logging to the history table.
+    const transition = !prev || prev.status !== d.status;
+
+    await (db as any).pbxEndpointRegistration.upsert({
+      where: { endpoint },
+      create: {
+        endpoint,
+        tenantId,
+        extensionId,
+        pbxTenantNumber,
+        extNumber,
+        isWebrtcDevice,
+        status: d.status,
+        rawStatus: d.rawStatus ?? null,
+        contactUri: d.contactUri ?? null,
+        userAgent: d.userAgent ?? null,
+        roundtripUsec: d.roundtripUsec ?? null,
+        lastRegisteredAt: d.status === "REGISTERED" ? now : null,
+        lastUnreachableAt: d.status === "UNREACHABLE" ? now : null,
+        lastUnregisteredAt: d.status === "UNREGISTERED" ? now : null,
+        lastEventAt: now,
+        source: d.source ?? null,
+      },
+      update: {
+        tenantId,
+        extensionId,
+        pbxTenantNumber,
+        extNumber,
+        isWebrtcDevice,
+        status: d.status,
+        rawStatus: d.rawStatus ?? null,
+        contactUri: d.contactUri ?? undefined,
+        userAgent: d.userAgent ?? undefined,
+        roundtripUsec: d.roundtripUsec ?? undefined,
+        ...(d.status === "REGISTERED" ? { lastRegisteredAt: now } : {}),
+        ...(d.status === "UNREACHABLE" ? { lastUnreachableAt: now } : {}),
+        ...(d.status === "UNREGISTERED" ? { lastUnregisteredAt: now } : {}),
+        lastEventAt: now,
+        source: d.source ?? undefined,
+      },
+    });
+
+    // Append an event row only on real transitions to keep the history table lean.
+    if (transition) {
+      await (db as any).pbxEndpointRegistrationEvent.create({
+        data: {
+          endpoint,
+          tenantId,
+          extensionId,
+          status: d.status,
+          rawStatus: d.rawStatus ?? null,
+          contactUri: d.contactUri ?? null,
+          userAgent: d.userAgent ?? null,
+          details: { source: d.source ?? null, roundtripUsec: d.roundtripUsec ?? null },
+        },
+      });
+    }
+  } catch (e: any) {
+    app.log.warn({ endpoint, err: e?.message }, "pbx contact-status persist failed");
+    return reply.code(500).send({ error: "persist_failed" });
+  }
+  return { ok: true, endpoint, status: d.status };
+});
 
 // ─── Connect CDR ingest ──────────────────────────────────────────────────────
 // Internal endpoint: the telephony service POSTs completed call data here.

@@ -10,6 +10,11 @@ import type { QueueStateStore } from "../state/QueueStateStore";
 import { TenantResolver } from "../state/TenantResolver";
 import type { AmiFrame } from "../ami/AmiTypes";
 import { inferLiveCallDirection } from "../inferLiveCallDirection";
+import {
+  RegistrationStatusNotifier,
+  normalizeContactStatus,
+  normalizePeerStatus,
+} from "./RegistrationStatusNotifier";
 
 const log = childLogger("TelephonyService");
 const HOLD_DIAGNOSTIC_EVENTS = new Set([
@@ -33,6 +38,8 @@ export class TelephonyService {
   private readonly outboundMohByLinkedId = new Map<string, { tenantId: string; tenantSlug: string; mohClass: string }>();
   /** Cleared on AMI disconnect to avoid stacked bootstraps across reconnect churn. */
   private amiBootstrapTimers: NodeJS.Timeout[] = [];
+  /** Forwards pjsip endpoint registration state to the API for per-device tracking. */
+  private readonly regNotifier = new RegistrationStatusNotifier();
 
   constructor(
     private readonly ami: AmiClient,
@@ -480,6 +487,15 @@ export class TelephonyService {
           peerStatus: typed.peerStatus,
           tenantId,
         });
+        // Forward per-endpoint registration state to the API. PeerStatus.peer
+        // is "PJSIP/T25_101_1" — strip the tech prefix to get the endpoint.
+        this.regNotifier.notify({
+          endpoint: String(typed.peer || "").replace(/^PJSIP\//i, ""),
+          normalizedStatus: normalizePeerStatus(typed.peerStatus),
+          rawStatus: typed.peerStatus,
+          tenantId,
+          source: "ami_peerstatus",
+        });
         break;
       }
 
@@ -489,6 +505,18 @@ export class TelephonyService {
           peer: `PJSIP/${typed.aor}`,
           peerStatus: contactStatusToPeerStatus(typed.contactStatus),
           tenantId,
+        });
+        // Authoritative per-device signal: the AOR (e.g. "T25_101_1") maps 1:1
+        // to a single mobile/WebRTC device endpoint.
+        this.regNotifier.notify({
+          endpoint: String(typed.aor || ""),
+          normalizedStatus: normalizeContactStatus(typed.contactStatus),
+          rawStatus: typed.contactStatus,
+          contactUri: typed.uri,
+          userAgent: typed.userAgent,
+          roundtripUsec: typed.roundtripUsec,
+          tenantId,
+          source: "ami_contactstatus",
         });
         break;
       }

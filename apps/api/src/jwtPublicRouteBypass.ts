@@ -18,6 +18,9 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || path.endsWith("/internal/pbx/wake-extension")
     || path === "/internal/pbx/publish-wake-config"
     || path.endsWith("/internal/pbx/publish-wake-config");
+  const isInternalPbxContactStatusPath =
+    path === "/internal/pbx/contact-status"
+    || path.endsWith("/internal/pbx/contact-status");
   const isInternalTelephonyPath =
     path === "/internal/telephony/pbx-tenant-map"
     || path.endsWith("/internal/telephony/pbx-tenant-map")
@@ -55,6 +58,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || isInternalCdrIngestPath
     || isInternalMobileRingPath
     || isInternalPbxWakePath
+    || isInternalPbxContactStatusPath
     || isInternalTelephonyPath
     || isInternalVoicemailNotifyPath
     || isIvrPromptSyncPath

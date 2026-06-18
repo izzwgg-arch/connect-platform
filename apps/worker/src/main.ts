@@ -842,6 +842,115 @@ async function runVoiceDiagAlertCycle(): Promise<void> {
   }
 }
 
+// ── Device registration watchdog ───────────────────────────────────────────────
+// Raises an alert when a WebRTC/mobile pjsip endpoint (e.g. T25_101_1) has been
+// UNREGISTERED / UNREACHABLE at the PBX for longer than the threshold *while*
+// the owning user still has an active mobile device that was seen recently.
+// This is the automatic detection for the T25/ext101/S25 background-registration
+// class of incident — see docs/ai-context/INCIDENT_T25_101_MOBILE_REG_DROP.md.
+const DEVICE_REG_NOT_REGISTERED_ALERT_SEC = Number(
+  process.env.DEVICE_REG_ALERT_THRESHOLD_SEC || 300,
+);
+const DEVICE_REG_RECENT_DEVICE_MS = 24 * 60 * 60 * 1000;
+const DEVICE_REG_REALERT_MS = 30 * 60 * 1000;
+
+async function runDeviceRegistrationAlertCycle(): Promise<void> {
+  const thresholdMs = DEVICE_REG_NOT_REGISTERED_ALERT_SEC * 1000;
+  const staleBefore = new Date(Date.now() - thresholdMs);
+  const recentDeviceSince = new Date(Date.now() - DEVICE_REG_RECENT_DEVICE_MS);
+  const reAlertSince = new Date(Date.now() - DEVICE_REG_REALERT_MS);
+
+  let downEndpoints: any[] = [];
+  try {
+    downEndpoints = await (db as any).pbxEndpointRegistration.findMany({
+      where: {
+        isWebrtcDevice: true,
+        status: { in: ["UNREGISTERED", "UNREACHABLE"] },
+        lastEventAt: { lte: staleBefore },
+        extensionId: { not: null },
+        tenantId: { not: null },
+      },
+      take: 500,
+    });
+  } catch (err: any) {
+    console.error("device registration alert: query failed", err?.message || err);
+    return;
+  }
+  if (!downEndpoints.length) return;
+
+  for (const reg of downEndpoints) {
+    // Only alert when the user actually has an in-use device that *should* be
+    // registered — avoids noise from extensions whose owner uninstalled the app.
+    const activeDevices = await (db.mobileDevice as any).findMany({
+      where: {
+        extensionId: reg.extensionId,
+        active: true,
+        lastSeenAt: { gte: recentDeviceSince },
+      },
+      select: { model: true, osVersion: true, lastSeenAt: true },
+    });
+    if (!activeDevices.length) continue;
+
+    const notRegisteredForSec = Math.max(
+      0,
+      Math.round((Date.now() - new Date(reg.lastEventAt).getTime()) / 1000),
+    );
+    const message = `Mobile device Not Registered at PBX: ${reg.endpoint} (${reg.status}) for ${notRegisteredForSec}s`;
+
+    const exists = await db.alert.findFirst({
+      where: {
+        tenantId: reg.tenantId,
+        category: "DEVICE_REGISTRATION",
+        message,
+        createdAt: { gte: reAlertSince },
+      },
+    });
+    if (exists) continue;
+
+    await db.alert.create({
+      data: {
+        tenantId: reg.tenantId,
+        severity: "HIGH",
+        category: "DEVICE_REGISTRATION",
+        message,
+        metadata: {
+          endpoint: reg.endpoint,
+          status: reg.status,
+          rawStatus: reg.rawStatus ?? null,
+          extNumber: reg.extNumber ?? null,
+          notRegisteredForSec,
+          lastRegisteredAt: reg.lastRegisteredAt ?? null,
+          devices: activeDevices.map((d: any) => ({
+            model: d.model ?? null,
+            osVersion: d.osVersion ?? null,
+            lastSeenAt: d.lastSeenAt,
+          })),
+        } as any,
+      },
+    });
+    await db.auditLog.create({
+      data: {
+        tenantId: reg.tenantId,
+        action: "DEVICE_REGISTRATION_ALERT",
+        entityType: "Alert",
+        entityId: reg.endpoint,
+      },
+    }).catch(() => undefined);
+  }
+}
+
+// Prune PBX registration history older than ~14 days so the table stays bounded.
+async function runPbxRegistrationEventPrune(): Promise<void> {
+  const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+  try {
+    await (db as any).pbxEndpointRegistrationEvent.deleteMany({
+      where: { occurredAt: { lt: cutoff } },
+    });
+  } catch (err: any) {
+    console.error("pbx registration event prune failed", err?.message || err);
+  }
+}
+
 
 async function runTurnValidationMaintenanceCycle(): Promise<void> {
   const now = new Date();
@@ -1634,6 +1743,14 @@ setInterval(() => {
 setInterval(() => {
   runVoiceDiagAlertCycle().catch((err) => console.error("voice diag alert cycle failed", err?.message || err));
 }, 5 * 60 * 1000);
+
+setInterval(() => {
+  runDeviceRegistrationAlertCycle().catch((err) => console.error("device registration alert cycle failed", err?.message || err));
+}, 60 * 1000);
+
+setInterval(() => {
+  runPbxRegistrationEventPrune().catch((err) => console.error("pbx registration event prune failed", err?.message || err));
+}, 6 * 60 * 60 * 1000);
 
 setInterval(() => {
   runTurnValidationMaintenanceCycle().catch((err) => console.error("turn validation maintenance failed", err?.message || err));
