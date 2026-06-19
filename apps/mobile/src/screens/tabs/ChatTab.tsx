@@ -98,8 +98,42 @@ function formatMessageTime(iso: string): string {
   return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
+/**
+ * Formats a phone number for display in chat. US/NANP numbers render as
+ * (XXX) XXX-XXXX with the "+1" country code dropped — we never show "+1"
+ * anywhere in chat. Non-NANP inputs only have a leading "+1"/"1" country code
+ * stripped; anything unexpected is returned unchanged.
+ */
+function formatChatPhone(raw: string): string {
+  if (!raw) return raw;
+  const digits = raw.replace(/\D/g, '');
+  let local = digits;
+  if (digits.length === 11 && digits.startsWith('1')) local = digits.slice(1);
+  if (local.length === 10) {
+    return `(${local.slice(0, 3)}) ${local.slice(3, 6)}-${local.slice(6)}`;
+  }
+  return raw.replace(/^\+?1(?=\d)/, '').trim();
+}
+
+/**
+ * Display label for an SMS/phone contact. Strips the redundant leading "SMS "
+ * tag (the SMS pill already conveys the type) and formats any phone number so
+ * the "+1" country code is never shown. Real names (group titles, DM names,
+ * saved contacts) are returned untouched.
+ */
+function prettyContactLabel(raw: string | null | undefined): string {
+  if (!raw) return raw ?? '';
+  const stripped = raw.replace(/^\s*SMS\s+/i, '').trim();
+  const isPhoneLike =
+    /^\+?[\d\s().-]+$/.test(stripped) && stripped.replace(/\D/g, '').length >= 7;
+  return isPhoneLike ? formatChatPhone(stripped) : raw;
+}
+
 function displayThreadName(thread: ChatThread): string {
-  return thread.isDefaultTenantGroup ? thread.title || 'Tenant Group Chat' : thread.title || thread.participantName || 'Chat';
+  const base = thread.isDefaultTenantGroup
+    ? thread.title || 'Tenant Group Chat'
+    : thread.title || thread.participantName || 'Chat';
+  return prettyContactLabel(base);
 }
 
 function isGroupThread(thread: ChatThread): boolean {
@@ -130,12 +164,12 @@ function friendlyComposeError(code?: string): string {
 }
 
 function threadTarget(thread: ChatThread): string {
-  return thread.type === 'SMS' ? thread.externalSmsE164 || '' : thread.participantExtension || '';
+  return thread.type === 'SMS' ? formatChatPhone(thread.externalSmsE164 || '') : thread.participantExtension || '';
 }
 
 function previewText(thread: ChatThread): string {
   if (thread.lastMessage) return thread.lastMessage;
-  if (thread.type === 'SMS') return thread.externalSmsE164 || 'SMS conversation';
+  if (thread.type === 'SMS') return formatChatPhone(thread.externalSmsE164 || '') || 'SMS conversation';
   return thread.participantExtension ? `Ext ${thread.participantExtension}` : threadKind(thread);
 }
 
@@ -1495,12 +1529,12 @@ const MessageBubble = memo(function MessageBubble({
     <Animated.View style={[styles.messageRow, message.mine ? styles.messageRowMine : styles.messageRowTheirs, grouped ? styles.messageGrouped : null, { transform: [{ translateX }] }]} {...panResponder.panHandlers}>
       <View style={styles.messageStack}>
         <TouchableOpacity activeOpacity={0.86} onPress={onAction} onLongPress={onAction} style={mediaOnly ? [styles.bubbleMediaOnly, message.mine ? styles.bubbleMine : styles.bubbleTheirs] : bubbleStyle}>
-          {!message.mine && !grouped ? <Text style={[styles.senderName, { color: colors.teal }]}>{message.senderName}</Text> : null}
+          {!message.mine && !grouped ? <Text style={[styles.senderName, { color: colors.teal }]}>{prettyContactLabel(message.senderName)}</Text> : null}
           {message.replyTo ? (
             <View style={[styles.replyInline, { backgroundColor: message.mine ? 'rgba(255,255,255,0.16)' : colors.bgSecondary }]}>
               <Ionicons name="return-up-back-outline" size={12} color={message.mine ? '#fff' : colors.primary} />
               <Text style={[styles.replyInlineText, { color: message.mine ? '#eaf2ff' : colors.textSecondary }]} numberOfLines={1}>
-                {message.replyTo.senderName}: {message.replyTo.body || message.replyTo.type}
+                {prettyContactLabel(message.replyTo.senderName)}: {message.replyTo.body || message.replyTo.type}
               </Text>
             </View>
           ) : null}
@@ -1815,7 +1849,7 @@ function Composer({
       {replyingTo ? (
         <View style={[styles.replyPreview, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>
           <Ionicons name="return-up-back-outline" size={15} color={colors.primary} />
-          <Text style={[styles.replyPreviewText, { color: colors.textSecondary }]} numberOfLines={1}>Replying to {replyingTo.senderName}: {replyingTo.body || replyingTo.type}</Text>
+          <Text style={[styles.replyPreviewText, { color: colors.textSecondary }]} numberOfLines={1}>Replying to {prettyContactLabel(replyingTo.senderName)}: {replyingTo.body || replyingTo.type}</Text>
           <TouchableOpacity onPress={onCancelReply}><Ionicons name="close" size={17} color={colors.textTertiary} /></TouchableOpacity>
         </View>
       ) : null}

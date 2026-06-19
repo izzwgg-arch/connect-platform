@@ -1,0 +1,19 @@
+<!--
+  Fully transparent notification icon used ONLY for the always-on keep-alive
+  foreground-service notification ("Connect"). Android requires a foreground
+  service to post a notification with a small icon, and the status bar renders
+  that small icon as a tinted alpha mask. A transparent icon therefore keeps the
+  notification present in the shade while drawing nothing in the status bar — the
+  closest we can get to "no status-bar icon" for an FGS on OEMs (e.g. Samsung
+  One UI) that force foreground-service icons to stay visible despite
+  IMPORTANCE_MIN. All other Connect notifications keep their real icon.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,0h24v24H0z" />
+</vector>

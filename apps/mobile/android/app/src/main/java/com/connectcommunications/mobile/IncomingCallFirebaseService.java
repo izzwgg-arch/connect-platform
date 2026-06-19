@@ -23,6 +23,10 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.VibrationAttributes;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.service.notification.StatusBarNotification;
 import android.util.Log;
 
@@ -140,6 +144,16 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
     private static final String PRESENTATION_FOREGROUND_JS = "foreground_js";
     private static MediaPlayer ringtonePlayer = null;
     private static android.media.Ringtone systemRingtoneFallback = null;
+    /**
+     * Continuous incoming-call vibration. Runs in lock-step with the ringtone
+     * (started in the same paths, cancelled in {@link #stopIncomingCallRingtone}).
+     * Crucially it OUTLIVES a volume-key ringer-silence: pressing volume up/down
+     * while ringing stops the audio via {@link #silenceRingerKeepVibrating} but
+     * leaves this vibrator running, mirroring the stock phone app.
+     */
+    private static Vibrator incomingVibrator = null;
+    /** True once the user hushed the ringer audio via a volume key this call. */
+    private static volatile boolean ringerSilencedByUser = false;
     private static PowerManager.WakeLock incomingRingWakeLock = null;
     /**
      * Screen-on wake lock held briefly to force the display on when an incoming
@@ -1937,6 +1951,7 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             });
             player.start();
             ringtonePlayer = player;
+            startIncomingVibration();
             acquireIncomingRingWakeLock();
             lastRingtoneInviteId = inviteIdForRing;
             ringtoneStartedAtMs = System.currentTimeMillis();
@@ -1997,6 +2012,7 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             }
             rt.play();
             systemRingtoneFallback = rt;
+            startIncomingVibration();
             acquireIncomingRingWakeLock();
             lastRingtoneInviteId = inviteIdForRing;
             ringtoneStartedAtMs = System.currentTimeMillis();
@@ -2046,6 +2062,113 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             }
         } catch (Exception ignored) {
         }
+    }
+
+    /** Resolves the system vibrator across API levels (VibratorManager on S+). */
+    private Vibrator getVibratorCompat() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                VibratorManager vm =
+                    (VibratorManager) getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+                return vm != null ? vm.getDefaultVibrator() : null;
+            }
+            return (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Starts the looping incoming-call vibration. Skipped when the phone is in
+     * full silent mode (RINGER_MODE_SILENT) so a deliberately silenced device
+     * stays still, matching system behaviour. In normal + vibrate ringer modes
+     * the device buzzes; the pattern repeats until the call is answered,
+     * declined, times out, or otherwise stops the ringtone.
+     */
+    @SuppressWarnings("deprecation")
+    private void startIncomingVibration() {
+        try {
+            AudioManager am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+            if (am != null && am.getRingerMode() == AudioManager.RINGER_MODE_SILENT) {
+                return;
+            }
+            Vibrator vib = getVibratorCompat();
+            if (vib == null || !vib.hasVibrator()) {
+                return;
+            }
+            // Buzz ~800ms, rest ~800ms, repeat from index 0 — a steady call-style pulse.
+            long[] pattern = new long[] { 0, 800, 800 };
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                VibrationEffect effect = VibrationEffect.createWaveform(pattern, 0);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    VibrationAttributes va = new VibrationAttributes.Builder()
+                        .setUsage(VibrationAttributes.USAGE_RINGTONE)
+                        .build();
+                    vib.vibrate(effect, va);
+                } else {
+                    vib.vibrate(effect);
+                }
+            } else {
+                vib.vibrate(pattern, 0);
+            }
+            incomingVibrator = vib;
+            Log.i(TAG, "[CALL_INCOMING] incoming vibration started");
+        } catch (Exception e) {
+            Log.w(TAG, "[CALL_INCOMING] startIncomingVibration failed: " + e.getMessage());
+        }
+    }
+
+    private static void stopIncomingVibration() {
+        try {
+            if (incomingVibrator != null) {
+                incomingVibrator.cancel();
+                incomingVibrator = null;
+                Log.i(TAG, "[CALL_INCOMING] incoming vibration stopped");
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /**
+     * True while a native incoming ring is in progress — either the ringtone
+     * audio is still playing OR the vibration is running after a volume-key
+     * silence. {@link MainActivity} uses this to decide whether a volume-key
+     * press should be swallowed and treated as "hush the ringer" instead of
+     * adjusting the ring volume.
+     */
+    public static synchronized boolean isIncomingRingActive() {
+        return ringtonePlayer != null || systemRingtoneFallback != null || incomingVibrator != null;
+    }
+
+    /**
+     * Volume-key silence: stop the ringtone AUDIO immediately but KEEP the
+     * vibration running and the call ringing (watchdog/Telecom untouched). This
+     * mirrors the stock phone app, where pressing volume up/down during an
+     * incoming call hushes the ringer without answering or rejecting. Idempotent
+     * — once the audio is already gone this is a no-op so the vibration is never
+     * disturbed by repeated presses.
+     */
+    public static synchronized void silenceRingerKeepVibrating(String reason) {
+        boolean hadAudio = ringtonePlayer != null || systemRingtoneFallback != null;
+        if (!hadAudio) {
+            return;
+        }
+        if (systemRingtoneFallback != null) {
+            try { systemRingtoneFallback.stop(); } catch (Exception ignored) { }
+            systemRingtoneFallback = null;
+        }
+        if (ringtonePlayer != null) {
+            try {
+                if (ringtonePlayer.isPlaying()) {
+                    ringtonePlayer.stop();
+                }
+            } catch (Exception ignored) { }
+            try { ringtonePlayer.release(); } catch (Exception ignored) { }
+            ringtonePlayer = null;
+        }
+        abandonRingtoneAudioFocus();
+        ringerSilencedByUser = true;
+        Log.i(TAG, "[CALL_INCOMING] ringer hushed by user (vibration continues) reason=" + reason);
     }
 
     public static synchronized void stopIncomingCallRingtone() {
@@ -2101,6 +2224,8 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             }
             ringtonePlayer = null;
         }
+        stopIncomingVibration();
+        ringerSilencedByUser = false;
         releaseIncomingRingWakeLock();
         releaseIncomingScreenWakeLock();
         abandonRingtoneAudioFocus();

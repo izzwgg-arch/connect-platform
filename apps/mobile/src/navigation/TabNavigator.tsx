@@ -7,12 +7,16 @@ import {
   Animated,
   Platform,
   Keyboard,
+  AppState,
 } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useQueryClient } from '@tanstack/react-query';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { useTheme } from '../context/ThemeContext';
+import { useAuth } from '../context/AuthContext';
+import { getChatThreads, mobileQueryKeys } from '../api/client';
 import { TeamTab } from '../screens/tabs/TeamTab';
 import { ContactTab } from '../screens/tabs/ContactTab';
 import { KeypadTab } from '../screens/tabs/KeypadTab';
@@ -187,7 +191,43 @@ function CustomTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   );
 }
 
+/**
+ * Warms the chat thread list into the React Query cache before the Chat tab is
+ * ever opened. The bottom-tab navigator uses `lazy: true`, so `ChatTab` (and its
+ * `threadsQuery`) does not mount until the user first taps Chat — which is why
+ * the list used to flash a loading spinner on first open every app session. By
+ * prefetching here (TabNavigator is always mounted while signed in) the same
+ * cached data is ready the instant ChatTab mounts, so its `threadsQuery`
+ * (refetchOnMount:false) shows it immediately and never spins. Re-warmed on
+ * foreground so the preloaded list isn't stale. Keys/options mirror ChatTab so
+ * it is literally the same cache entry.
+ */
+function useChatThreadsPreload() {
+  const { token } = useAuth();
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (!token) return;
+    const prefetch = () => {
+      queryClient
+        .prefetchQuery({
+          queryKey: mobileQueryKeys.chatThreads,
+          queryFn: () => getChatThreads(token),
+          staleTime: 30 * 1000,
+          gcTime: 20 * 60 * 1000,
+        })
+        .catch(() => undefined);
+    };
+    prefetch();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') prefetch();
+    });
+    return () => sub.remove();
+  }, [token, queryClient]);
+}
+
 export function TabNavigator() {
+  useChatThreadsPreload();
   return (
     <Tab.Navigator
       tabBar={(props) => <CustomTabBar {...props} />}

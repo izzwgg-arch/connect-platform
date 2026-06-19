@@ -915,7 +915,15 @@ class SipKeepAliveService : Service() {
       PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
     return NotificationCompat.Builder(this, CHANNEL_ID)
-      .setSmallIcon(R.drawable.notification_icon)
+      // Transparent small icon: the status bar draws the small icon as a tinted
+      // alpha mask, so a fully-transparent icon keeps this FGS notification
+      // present in the shade while showing NOTHING in the status bar. Samsung
+      // One UI forces foreground-service icons to stay visible even on an
+      // IMPORTANCE_MIN channel, so this is the only reliable way to hide just
+      // this one icon. Every other Connect notification (calls, SMS, voicemail)
+      // keeps R.drawable.notification_icon — see buildInCallNotification + the
+      // push notifications, which are unaffected.
+      .setSmallIcon(R.drawable.ic_keepalive_silent)
       .setContentTitle("Connect")
       .setOngoing(true)
       .setPriority(NotificationCompat.PRIORITY_MIN)

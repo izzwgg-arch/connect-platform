@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.KeyEvent
 import android.view.WindowManager
 
 import com.facebook.react.ReactActivity
@@ -77,6 +78,40 @@ class MainActivity : ReactActivity() {
     super.onResume()
     hostActivityResumed = true
     Log.i(TAG, "[LOCK_CALL_STATE] onResume hostActivityResumed=true")
+  }
+
+  /**
+   * While a native incoming call is ringing, a volume up/down/mute press must
+   * hush the RINGER (stop the ringtone audio) while the vibration keeps going —
+   * exactly like the stock phone app — and must NOT change the ring/media
+   * volume. We intercept the key here and swallow it so the system volume UI
+   * never appears. Once the audio is already silenced, repeated presses are a
+   * no-op on the native side but are still consumed so the vibration is never
+   * disturbed and the volume panel stays hidden for the rest of the ring.
+   *
+   * Outside of an active incoming ring this is a pure pass-through, so normal
+   * in-call / in-app volume control is unaffected.
+   */
+  private fun isVolumeKey(keyCode: Int): Boolean =
+    keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
+      keyCode == KeyEvent.KEYCODE_VOLUME_DOWN ||
+      keyCode == KeyEvent.KEYCODE_VOLUME_MUTE
+
+  override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+    if (isVolumeKey(keyCode) && IncomingCallFirebaseService.isIncomingRingActive()) {
+      Log.i(TAG, "[LOCK_CALL] volume key during ring — hushing ringer, vibration continues")
+      IncomingCallFirebaseService.silenceRingerKeepVibrating("volume_key")
+      return true
+    }
+    return super.onKeyDown(keyCode, event)
+  }
+
+  override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+    // Swallow the matching key-up too so the system volume panel never surfaces.
+    if (isVolumeKey(keyCode) && IncomingCallFirebaseService.isIncomingRingActive()) {
+      return true
+    }
+    return super.onKeyUp(keyCode, event)
   }
 
   override fun onPause() {
