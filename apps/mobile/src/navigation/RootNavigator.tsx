@@ -25,6 +25,7 @@ import { getCallReturnTab, recordFocusedRoute } from './callOrigin';
 import { shouldShowIncomingCallCover } from './incomingCallCover';
 import { MobileNotificationRoute, notificationDataToRoute } from '../notifications/notificationRouting';
 import { useFullScreenCallPermissionPrompt } from '../hooks/useFullScreenCallPermissionPrompt';
+import { useBatteryOptimizationPrompt } from '../hooks/useBatteryOptimizationPrompt';
 
 function hasActiveOrPendingCall(
   callState: CallState,
@@ -75,10 +76,13 @@ function TabsWrapper() {
     answeredFromLockScreenRef,
   } = useIncomingNotifications();
   const callSessions = useCallSessions();
-  // First-run nudge to enable the Android 14+ full-screen-intent permission so
-  // incoming calls take over the screen. Armed here because TabsWrapper only
-  // mounts once the user is authenticated (i.e. device setup is complete).
+  // First-run nudges, armed here because TabsWrapper only mounts once the user
+  // is authenticated (i.e. device setup is complete):
+  //  - full-screen-intent (Android 14+) so incoming calls take over the screen
+  //  - battery-optimization exemption so the keep-alive service survives in the
+  //    background and calls keep ringing on aggressive OEMs.
   useFullScreenCallPermissionPrompt(true);
+  useBatteryOptimizationPrompt(true);
   // Multi-call guard: if another call is already active, new inbound INVITEs
   // are routed to the CallWaitingBanner inside ActiveCallScreen instead of
   // the full-screen IncomingCallScreen.

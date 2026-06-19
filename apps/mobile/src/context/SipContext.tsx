@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, DeviceEventEmitter, NativeModules, PermissionsAndroid, Platform } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import Constants from "expo-constants";
 import * as Device from "expo-device";
@@ -34,6 +35,7 @@ import {
   SLOW_WAKE_MS,
   type KeepAliveGateState,
 } from "../sip/keepAliveGate";
+import { BATTERY_OPT_ONBOARD_PROMPTED_KEY } from "../hooks/useBatteryOptimizationPrompt";
 
 const PROVISION_KEY = "cc_mobile_provision";
 const LAST_DIALED_KEY = "cc_mobile_last_dialed";
@@ -1332,6 +1334,11 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     if (batteryPromptOpenRef.current) return;
+    // First-run is owned by useBatteryOptimizationPrompt (a clean one-time
+    // setup popup). Defer to it until it has run — only take over the recurring
+    // "still optimized" reminder afterwards, so the two never double-prompt.
+    const onboardPrompted = await AsyncStorage.getItem(BATTERY_OPT_ONBOARD_PROMPTED_KEY).catch(() => null);
+    if (!onboardPrompted) return;
     // Cooldown: avoid re-prompting within 45s (covers the round-trip to the
     // system settings screen and back without looping).
     if (Date.now() - lastBatteryPromptAtRef.current < 45_000) return;
