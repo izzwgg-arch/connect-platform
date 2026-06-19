@@ -28,9 +28,14 @@ export function ChatInbox({
         </div>
       </div>
 
-      <label className="cc-search">
+      <label className="cc-search" style={{ border: "none", outline: "none", boxShadow: "none" }}>
         <Search size={15} />
-        <input value={search} onChange={(e) => onSearch(e.target.value)} placeholder="Search chats..." />
+        <input
+          value={search}
+          onChange={(e) => onSearch(e.target.value)}
+          placeholder="Search chats..."
+          style={{ border: "none", outline: "none", boxShadow: "none" }}
+        />
       </label>
 
       <div className="cc-thread-list">

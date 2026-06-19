@@ -8998,17 +8998,13 @@ app.get("/voice/me/calls", async (req, reply) => {
     return dir; // "internal" | "unknown" pass through
   };
 
-  // Primary source: ConnectCdr (authoritative, populated by telephony ingest)
-  const cdrRows = await db.connectCdr.findMany({
-    where: {
-      ...(tenantIdSet && tenantIdSet.length > 0
-        ? tenantIdSet.length === 1 ? { tenantId: tenantIdSet[0] } : { tenantId: { in: tenantIdSet } }
-        : { tenantId: user.tenantId }),
-      isForwarded: false,
-    },
-    orderBy: { startedAt: "desc" },
-    take: 1000,
-    select: {
+  const cdrWhere = {
+    ...(tenantIdSet && tenantIdSet.length > 0
+      ? tenantIdSet.length === 1 ? { tenantId: tenantIdSet[0] } : { tenantId: { in: tenantIdSet } }
+      : { tenantId: user.tenantId }),
+    isForwarded: false,
+  };
+  const cdrSelect = {
       id: true,
       linkedId: true,
       tenantId: true,
@@ -9024,7 +9020,44 @@ app.get("/voice/me/calls", async (req, reply) => {
       channelsSeen: true,
       dcontextsSeen: true,
       dcontext: true,
-    },
+  } as const;
+  const cdrSelectWithoutFromPrefix = {
+      id: true,
+      linkedId: true,
+      tenantId: true,
+      direction: true,
+      fromNumber: true,
+      fromName: true,
+      toNumber: true,
+      startedAt: true,
+      talkSec: true,
+      durationSec: true,
+      disposition: true,
+      channelsSeen: true,
+      dcontextsSeen: true,
+      dcontext: true,
+  } as const;
+  const isMissingFromPrefixColumn = (err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err || "");
+    const code = typeof err === "object" && err && "code" in err ? String((err as { code?: unknown }).code) : "";
+    return message.includes("ConnectCdr.fromPrefix") && (code === "P2022" || message.includes("does not exist"));
+  };
+
+  // Primary source: ConnectCdr (authoritative, populated by telephony ingest)
+  const cdrRows = await db.connectCdr.findMany({
+    where: cdrWhere,
+    orderBy: { startedAt: "desc" },
+    take: 1000,
+    select: cdrSelect,
+  }).catch(async (err) => {
+    if (!isMissingFromPrefixColumn(err)) throw err;
+    const fallbackRows = await db.connectCdr.findMany({
+      where: cdrWhere,
+      orderBy: { startedAt: "desc" },
+      take: 1000,
+      select: cdrSelectWithoutFromPrefix,
+    });
+    return fallbackRows.map((row) => ({ ...row, fromPrefix: null }));
   });
   const visibleCdrRows = cdrRows.filter((r) => cdrRowMatchesExtensions(r, userExtensions)).slice(0, 150);
 
@@ -17078,6 +17111,28 @@ async function streamVoicemailAudio(
   await finishVoicemailStreamFromBuffer(req, vm, reply, asAttachment, mailbox, sourceBuf, fileExt, skipTranscode);
 }
 
+// ── GET /voice/voicemail/unread-count ────────────────────────────────────────
+app.get("/voice/voicemail/unread-count", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+
+  // For unread count we always use the per-user owned scope (extensions they own).
+  // Super-admins see 0 unless they have an owned mailbox — intentional (no cross-tenant count).
+  const ownedScope = await resolveVoicemailOwnedScopeForJwtUser(user);
+  if (!ownedScope.ok || ownedScope.extensions.length === 0) return { count: 0 };
+
+  const count = await db.voicemail.count({
+    where: {
+      deletedAt: null,
+      listened: false,
+      folder: "inbox",
+      tenantId: ownedScope.tenantIds.length === 1 ? ownedScope.tenantIds[0] : { in: ownedScope.tenantIds },
+      extension: ownedScope.extensions.length === 1 ? ownedScope.extensions[0] : { in: ownedScope.extensions },
+    },
+  });
+  return { count };
+});
+
 // ── GET /voice/voicemail/:id/stream ─────────────────────────────────────────
 app.get("/voice/voicemail/:id/stream", async (req, reply) => {
   // <audio> elements pass the JWT as a query param since they can't set headers.
@@ -23756,6 +23811,44 @@ app.get("/calls/history", async (req, reply) => {
         hangupCause: true,
         recordingPath: true,
   } as const;
+  const selectWithoutFromPrefix = {
+        id: true,
+        linkedId: true,
+        fromNumber: true,
+        fromName: true,
+        toNumber: true,
+        dcontext: true,
+        dcontextsSeen: true,
+        channelsSeen: true,
+        direction: true,
+        disposition: true,
+        durationSec: true,
+        talkSec: true,
+        startedAt: true,
+        answeredAt: true,
+        endedAt: true,
+        tenantId: true,
+        pbxVitalTenantId: true,
+        pbxTenantCode: true,
+        tenantResolutionSource: true,
+        queueId: true,
+        hangupCause: true,
+        recordingPath: true,
+  } as const;
+  const isMissingFromPrefixColumn = (err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err || "");
+    const code = typeof err === "object" && err && "code" in err ? String((err as { code?: unknown }).code) : "";
+    return message.includes("ConnectCdr.fromPrefix") && (code === "P2022" || message.includes("does not exist"));
+  };
+  const findConnectCdrRows = async (args: { where: any; orderBy: any; take: number; skip?: number }) => {
+    try {
+      return await db.connectCdr.findMany({ ...args, select });
+    } catch (err) {
+      if (!isMissingFromPrefixColumn(err)) throw err;
+      const fallbackRows = await db.connectCdr.findMany({ ...args, select: selectWithoutFromPrefix });
+      return fallbackRows.map((row) => ({ ...row, fromPrefix: null }));
+    }
+  };
   let total = 0;
   let rows: any[] = [];
   let incoming = 0;
@@ -23763,11 +23856,10 @@ app.get("/calls/history", async (req, reply) => {
   let internal = 0;
 
   if (extensionScoped) {
-    const allVisibleRows = (await db.connectCdr.findMany({
+    const allVisibleRows = (await findConnectCdrRows({
       where,
       orderBy: { startedAt: "desc" },
       take: 5000,
-      select,
     })).filter((r) => cdrRowMatchesExtensions(r, userExtensions));
     total = allVisibleRows.length;
     rows = allVisibleRows.slice(skip, skip + query.pageSize);
@@ -23777,12 +23869,11 @@ app.get("/calls/history", async (req, reply) => {
   } else {
     [total, rows, incoming, outgoing, internal] = await Promise.all([
       db.connectCdr.count({ where }),
-      db.connectCdr.findMany({
+      findConnectCdrRows({
         where,
         orderBy: { startedAt: "desc" },
         skip,
         take: query.pageSize,
-        select,
     }),
     db.connectCdr.count({ where: { ...where, direction: "incoming" } }),
     db.connectCdr.count({ where: { ...where, direction: "outgoing" } }),

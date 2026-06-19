@@ -1,0 +1,68 @@
+# EAS Build archive ignore list.
+# NOTE: when this file exists EAS uses it INSTEAD of .gitignore, so it must
+# mirror .gitignore AND additionally exclude untracked scratch that would
+# otherwise bloat the upload (the monorepo archive is rooted at the git root).
+
+# ── mirror of .gitignore ────────────────────────────────────────────────
+# build outputs
+dist/
+build/
+.out/
+.next/
+.turbo/
+coverage/
+**/dist
+**/build
+**/.next
+**/.turbo
+**/coverage
+.pnpm-store
+**/.pnpm-store
+
+# logs
+logs/
+*.log
+**/*.log
+ops/logs
+**/ops/logs
+ops/snapshots
+**/ops/snapshots
+
+# env
+.env
+.env.*
+scripts/pbx-connect-observe.env
+
+# deps
+node_modules/
+**/node_modules/
+node_modules
+**/node_modules
+
+# prisma local db
+prisma/dev.db
+
+# scratch
+tmp-link-repair-*.sql
+_tmp_diag/
+_tmp_*/
+
+# ── EAS-only additions: heavy untracked scratch (NOT in .gitignore) ──────
+# IMPORTANT: EAS resolves *anchored* patterns (those with an internal "/")
+# relative to the project dir (apps/mobile), NOT the git root, so a pattern
+# like "docs/pbx-brain/" silently does nothing. Non-anchored patterns
+# (no leading path, or **/-prefixed) match anywhere — use those.
+_latency_logs/
+.expo/
+**/pbx-brain/
+**/*.tar.gz
+**/*.apk
+**/*.aab
+
+# native build caches (not needed for cloud build; EAS regenerates them)
+**/.gradle/
+**/.cxx/
+android/build/
+android/app/build/
+ios/Pods/
+ios/build/

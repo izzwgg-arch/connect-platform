@@ -94,4 +94,22 @@ export async function crmInboundSmsHook(input: InboundSmsHookInput): Promise<voi
       },
     },
   });
+
+  // 6. Notify the contact's assigned user (best-effort, never throws).
+  const meta = await db.crmContactMeta.findFirst({
+    where: { contactId: phoneMatch.contactId, tenantId },
+    select: { assignedToUserId: true },
+  });
+  if (meta?.assignedToUserId) {
+    await db.crmUserNotification.create({
+      data: {
+        tenantId,
+        userId: meta.assignedToUserId,
+        title: "SMS reply",
+        body: body.substring(0, 160),
+        route: `/crm/contacts/${phoneMatch.contactId}`,
+        kind: "CRM_INBOUND_SMS",
+      },
+    }).catch(() => undefined);
+  }
 }

@@ -894,6 +894,22 @@ export function FloatingDialer() {
     void openMini().then(() => setOpen(false));
   }, []);
 
+  const backHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleBackPointerDown = useCallback(() => {
+    backHoldTimerRef.current = setTimeout(() => {
+      phone.setDialpadInput("");
+      backHoldTimerRef.current = null;
+    }, 500);
+  }, [phone]);
+
+  const handleBackPointerUp = useCallback(() => {
+    if (backHoldTimerRef.current) {
+      clearTimeout(backHoldTimerRef.current);
+      backHoldTimerRef.current = null;
+    }
+  }, []);
+
   const requestClose = useCallback(() => {
     if (!isInCall) setOpen(false);
   }, [isInCall]);
@@ -1010,7 +1026,13 @@ export function FloatingDialer() {
                     }}
                   />
                   {phone.dialpadInput && (
-                    <button type="button" onClick={() => phone.setDialpadInput((value) => value.slice(0, -1))}>
+                    <button
+                      type="button"
+                      onClick={() => phone.setDialpadInput((value) => value.slice(0, -1))}
+                      onPointerDown={handleBackPointerDown}
+                      onPointerUp={handleBackPointerUp}
+                      onPointerLeave={handleBackPointerUp}
+                    >
                       Back
                     </button>
                   )}

@@ -132,6 +132,21 @@ function withManifest(config) {
             console.log(`[withIncomingCallService] added ${SERVICE_CLASS_FULL}`);
         }
 
+        // Add the SIP pre-register HeadlessJS service (only once). Started by
+        // IncomingCallFirebaseService during the ring of a killed/swiped app so
+        // SIP registers before the user answers (see SipPreRegisterTaskService.kt).
+        const preRegServiceFull = `${APP_PACKAGE}.SipPreRegisterTaskService`;
+        const preRegAdded = services.some((s) => s.$?.['android:name'] === preRegServiceFull);
+        if (!preRegAdded) {
+            services.push({
+                $: {
+                    'android:name': preRegServiceFull,
+                    'android:exported': 'false',
+                },
+            });
+            console.log(`[withIncomingCallService] added ${preRegServiceFull}`);
+        }
+
         // Add a tools:node="remove" entry for ExpoFirebaseMessagingService so the
         // Gradle manifest merger removes it from the final merged manifest. This
         // prevents the two services from competing for MESSAGING_EVENT.

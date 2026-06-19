@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
+  CalendarClock,
   CheckCircle2,
+  ExternalLink,
   Loader2,
   Mail,
+  Plus,
   Send,
   Tag,
   Users,
@@ -77,7 +80,32 @@ type BulkJobResult = {
   totalCount: number;
   queuedCount: number;
   skippedCount: number;
+  scheduledAt?: string | null;
 };
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** ISO local datetime string for <input type="datetime-local"> min value (now + 5 min). */
+function minDatetimeLocal(): string {
+  const d = new Date(Date.now() + 5 * 60 * 1000);
+  d.setSeconds(0, 0);
+  return d.toISOString().slice(0, 16);
+}
+
+/** Format an ISO string for display (e.g. "Jun 22, 2026 · 9:00 AM"). */
+function formatScheduledAt(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -104,12 +132,18 @@ export function BulkEmailModal({
   const [tagsLoading, setTagsLoading] = useState(true);
   const [localTagId, setLocalTagId] = useState<string>(audience.tagId ?? "");
   // "all-with-tag" scope: when true, send to all contacts/funders with selected tag
-  // (not just the explicitly selected rows).  Only available for CONTACTS and FUNDERS.
   const [sendToAllWithTag, setSendToAllWithTag] = useState(false);
 
+  // ── Scheduling ──────────────────────────────────────────────────────────────
+  // Each entry is a datetime-local string (e.g. "2026-06-22T09:00")
+  const [scheduledSlots, setScheduledSlots] = useState<string[]>([]);
+  const addSlotRef = useRef<HTMLButtonElement>(null);
+
   const [submitting, setSubmitting] = useState(false);
+  const [schedulingInProgress, setSchedulingInProgress] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<BulkJobResult | null>(null);
+  // null = not submitted yet; array = results (first entry is immediate if sent, rest are scheduled)
+  const [results, setResults] = useState<BulkJobResult[] | null>(null);
 
   const selectedTemplate = templates.find((t) => t.id === templateId) ?? null;
   const selectedSender = senders.find((s) => s.id === senderId) ?? null;
@@ -138,7 +172,7 @@ export function BulkEmailModal({
       .finally(() => setTemplatesLoading(false));
   }, []);
 
-  // Load tags — contact tags for CONTACTS/CAMPAIGN, funder tags for FUNDERS
+  // Load tags
   useEffect(() => {
     const endpoint =
       audience.sourceType === "FUNDERS" ? "/crm/funder-tags" : "/crm/contact-tags";
@@ -179,54 +213,53 @@ export function BulkEmailModal({
     return "Unknown audience";
   };
 
-  const handleSubmit = async () => {
-    if (!templateId) {
-      setError("Please choose an email template.");
-      return;
-    }
-    if (!senderId) {
-      setError("Please choose a sender.");
-      return;
-    }
-    if (sendToAllWithTag && !localTagId) {
-      setError("Please choose a tag to send to all contacts with that tag.");
-      return;
-    }
+  // Build the shared POST payload (without scheduledAt)
+  const buildPayload = (): Record<string, unknown> => {
+    const payload: Record<string, unknown> = {
+      templateId,
+      connectionId: senderId,
+    };
+    const effectiveTagId = localTagId || undefined;
+    const effectiveSelectAll = sendToAllWithTag;
 
+    if (audience.sourceType === "CONTACTS") {
+      payload.sourceType = "CONTACTS";
+      payload.selectAll = effectiveSelectAll || (audience.selectAll ?? false);
+      if (!effectiveSelectAll) payload.contactIds = audience.contactIds;
+      if (effectiveTagId) payload.tagId = effectiveTagId;
+      if (audience.stage) payload.stage = audience.stage;
+    } else if (audience.sourceType === "CAMPAIGN") {
+      payload.sourceType = "CAMPAIGN";
+      payload.campaignId = audience.campaignId;
+      if (!effectiveSelectAll && audience.contactIds && audience.contactIds.length > 0) {
+        payload.contactIds = audience.contactIds;
+      }
+      if (effectiveTagId) payload.tagId = effectiveTagId;
+    } else if (audience.sourceType === "FUNDERS") {
+      payload.sourceType = "FUNDERS";
+      payload.selectAll = effectiveSelectAll || (audience.selectAll ?? false);
+      if (!effectiveSelectAll) payload.contactIds = audience.funderIds;
+      if (effectiveTagId) payload.tagId = effectiveTagId;
+    }
+    return payload;
+  };
+
+  const validate = (): string | null => {
+    if (!templateId) return "Please choose an email template.";
+    if (!senderId) return "Please choose a sender.";
+    if (sendToAllWithTag && !localTagId) return "Please choose a tag.";
+    return null;
+  };
+
+  // Send immediately (no scheduledAt)
+  const handleSendNow = async () => {
+    const err = validate();
+    if (err) { setError(err); return; }
     setSubmitting(true);
     setError(null);
     try {
-      const payload: Record<string, unknown> = {
-        templateId,
-        connectionId: senderId,
-      };
-
-      // When "send to all with tag" is on, override to selectAll=true with the chosen tag.
-      const effectiveTagId = localTagId || undefined;
-      const effectiveSelectAll = sendToAllWithTag;
-
-      if (audience.sourceType === "CONTACTS") {
-        payload.sourceType = "CONTACTS";
-        payload.selectAll = effectiveSelectAll || (audience.selectAll ?? false);
-        if (!effectiveSelectAll) payload.contactIds = audience.contactIds;
-        if (effectiveTagId) payload.tagId = effectiveTagId;
-        if (audience.stage) payload.stage = audience.stage;
-      } else if (audience.sourceType === "CAMPAIGN") {
-        payload.sourceType = "CAMPAIGN";
-        payload.campaignId = audience.campaignId;
-        if (!effectiveSelectAll && audience.contactIds && audience.contactIds.length > 0) {
-          payload.contactIds = audience.contactIds;
-        }
-        if (effectiveTagId) payload.tagId = effectiveTagId;
-      } else if (audience.sourceType === "FUNDERS") {
-        payload.sourceType = "FUNDERS";
-        payload.selectAll = effectiveSelectAll || (audience.selectAll ?? false);
-        if (!effectiveSelectAll) payload.contactIds = audience.funderIds;
-        if (effectiveTagId) payload.tagId = effectiveTagId;
-      }
-
-      const res = await apiPost<BulkJobResult>("/crm/email/bulk-jobs", payload);
-      setResult(res);
+      const res = await apiPost<BulkJobResult>("/crm/email/bulk-jobs", buildPayload());
+      setResults([res]);
       onQueued?.(res);
     } catch (err: unknown) {
       setError((err as Error)?.message || "Failed to queue bulk email");
@@ -234,8 +267,59 @@ export function BulkEmailModal({
     }
   };
 
+  // Schedule one job per slot
+  const handleSchedule = async () => {
+    const err = validate();
+    if (err) { setError(err); return; }
+    if (scheduledSlots.length === 0) return;
+
+    // Validate all slots are in the future
+    const now = Date.now();
+    const invalid = scheduledSlots.find((s) => new Date(s).getTime() <= now + 60_000);
+    if (invalid) {
+      setError("All scheduled times must be at least 1 minute in the future.");
+      return;
+    }
+
+    setSchedulingInProgress(true);
+    setError(null);
+    const allResults: BulkJobResult[] = [];
+    try {
+      for (const slot of scheduledSlots) {
+        const payload = { ...buildPayload(), scheduledAt: new Date(slot).toISOString() };
+        const res = await apiPost<BulkJobResult>("/crm/email/bulk-jobs", payload);
+        allResults.push({ ...res, scheduledAt: slot });
+      }
+      setResults(allResults);
+      onQueued?.(allResults[0]!);
+    } catch (err: unknown) {
+      setError((err as Error)?.message || "Failed to schedule bulk email");
+      setSchedulingInProgress(false);
+    }
+  };
+
+  const addSlot = () => {
+    setScheduledSlots((prev) => [...prev, ""]);
+    // Focus the new input after render
+    setTimeout(() => {
+      const inputs = document.querySelectorAll<HTMLInputElement>(".bulk-email-schedule-slot");
+      inputs[inputs.length - 1]?.focus();
+    }, 50);
+  };
+
+  const updateSlot = (index: number, value: string) => {
+    setScheduledSlots((prev) => prev.map((s, i) => (i === index ? value : s)));
+  };
+
+  const removeSlot = (index: number) => {
+    setScheduledSlots((prev) => prev.filter((_, i) => i !== index));
+  };
+
   // ── Post-success view ──────────────────────────────────────────────────────
-  if (result) {
+  if (results) {
+    const immediateResult = results.find((r) => !r.scheduledAt);
+    const scheduledResults = results.filter((r) => r.scheduledAt);
+
     return (
       <div
         className={crm.contactsModalBackdrop}
@@ -245,37 +329,70 @@ export function BulkEmailModal({
           <div className="flex items-start justify-between mb-4">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="h-5 w-5 text-crm-success" />
-              <h3 className="text-base font-semibold text-crm-text">Bulk email queued</h3>
+              <h3 className="text-base font-semibold text-crm-text">
+                {scheduledResults.length > 0 && !immediateResult
+                  ? `${scheduledResults.length} send${scheduledResults.length !== 1 ? "s" : ""} scheduled`
+                  : "Bulk email queued"}
+              </h3>
             </div>
             <button type="button" onClick={onClose} className="rounded p-1 text-crm-muted hover:bg-crm-surface-2">
               <X className="h-4 w-4" />
             </button>
           </div>
 
-          <div className="space-y-3 rounded-crm border border-crm-border bg-crm-surface-2 p-4 text-sm">
-            <div className="flex items-center justify-between">
-              <span className="text-crm-muted">Job ID</span>
-              <span className="font-mono text-xs text-crm-text">{result.jobId.slice(-8)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-crm-muted">Queued to send</span>
-              <span className="font-bold text-crm-text">{result.queuedCount}</span>
-            </div>
-            {result.skippedCount > 0 && (
-              <div className="flex items-center justify-between">
-                <span className="text-amber-600 dark:text-amber-400">Skipped (missing email / duplicate)</span>
-                <span className="font-bold text-amber-600 dark:text-amber-400">{result.skippedCount}</span>
-              </div>
-            )}
-            <div className="flex items-center justify-between">
-              <span className="text-crm-muted">Total resolved</span>
-              <span className="text-crm-text">{result.totalCount}</span>
-            </div>
+          {/* Audience summary */}
+          <div className="mb-3 flex items-center gap-2 rounded-crm border border-crm-border bg-crm-surface-2 px-3 py-2.5">
+            <Users className="h-4 w-4 shrink-0 text-crm-accent" />
+            <span className="text-sm font-medium text-crm-text">{audienceLabel()}</span>
           </div>
 
-          <p className="mt-3 text-xs text-crm-muted">
-            Emails are sent in the background. Check{" "}
-            <strong>CRM → Email → Bulk Jobs</strong> for progress and results.
+          {/* Immediate result */}
+          {immediateResult && (
+            <div className="space-y-2 rounded-crm border border-crm-border bg-crm-surface-2 p-4 text-sm mb-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-crm-muted mb-2">Sent now</p>
+              <div className="flex items-center justify-between">
+                <span className="text-crm-muted">Job ID</span>
+                <span className="font-mono text-xs text-crm-text">{immediateResult.jobId.slice(-8)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-crm-muted">Queued to send</span>
+                <span className="font-bold text-crm-text">{immediateResult.queuedCount}</span>
+              </div>
+              {immediateResult.skippedCount > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-amber-600 dark:text-amber-400">Skipped</span>
+                  <span className="font-bold text-amber-600 dark:text-amber-400">{immediateResult.skippedCount}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Scheduled results */}
+          {scheduledResults.length > 0 && (
+            <div className="space-y-1.5 rounded-crm border border-crm-border bg-crm-surface-2 p-4 text-sm mb-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-crm-muted mb-2">Scheduled sends</p>
+              {scheduledResults.map((r, i) => (
+                <div key={r.jobId} className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-crm-muted">
+                    <CalendarClock className="h-3.5 w-3.5 shrink-0 text-crm-accent" />
+                    <span>{r.scheduledAt ? formatScheduledAt(r.scheduledAt) : `Schedule ${i + 1}`}</span>
+                  </div>
+                  <span className="font-mono text-xs text-crm-muted">{r.jobId.slice(-8)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <p className="text-xs text-crm-muted">
+            Emails are sent in the background.{" "}
+            <a
+              href="/crm/email"
+              className="inline-flex items-center gap-0.5 text-crm-accent underline-offset-2 hover:underline"
+            >
+              View bulk jobs
+              <ExternalLink className="h-3 w-3" />
+            </a>{" "}
+            for progress and results.
           </p>
 
           <div className="mt-4 flex justify-end">
@@ -289,6 +406,9 @@ export function BulkEmailModal({
   }
 
   // ── Main modal ────────────────────────────────────────────────────────────
+  const isReady = !!templateId && !!senderId && connectedSenders.length > 0;
+  const validSlots = scheduledSlots.filter((s) => s.length > 0 && new Date(s).getTime() > Date.now() + 60_000);
+
   return (
     <div
       className={crm.contactsModalBackdrop}
@@ -367,7 +487,6 @@ export function BulkEmailModal({
                 />
               )}
 
-              {/* Scope toggle — only for CONTACTS and FUNDERS where "all with tag" makes sense */}
               {localTagId && audience.sourceType !== "CAMPAIGN" && (
                 <label className="flex cursor-pointer items-center gap-2.5 rounded-crm border border-crm-border bg-crm-surface-2 px-3 py-2.5 text-sm">
                   <input
@@ -467,8 +586,76 @@ export function BulkEmailModal({
             )}
           </section>
 
+          {/* ── Schedule sends section ── */}
+          <section>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <CalendarClock className="h-3.5 w-3.5 text-crm-muted" />
+                <span className="text-xs font-semibold uppercase tracking-wide text-crm-muted">
+                  Scheduled sends
+                  {scheduledSlots.length > 0 && (
+                    <span className="ml-1 rounded-full bg-crm-accent/15 px-1.5 py-0.5 text-crm-accent">
+                      {scheduledSlots.length}
+                    </span>
+                  )}
+                </span>
+              </div>
+              <button
+                ref={addSlotRef}
+                type="button"
+                onClick={addSlot}
+                className={cn(crm.btnGhost, "gap-1 py-1 text-xs")}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add scheduled send
+              </button>
+            </div>
+
+            {scheduledSlots.length === 0 ? (
+              <p className="text-xs text-crm-muted">
+                No schedules added. Use "Queue bulk send" to send immediately, or add one or more
+                scheduled times to send later.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {scheduledSlots.map((slot, i) => {
+                  const isValid = slot.length > 0 && new Date(slot).getTime() > Date.now() + 60_000;
+                  return (
+                    <div key={i} className="flex items-center gap-2">
+                      <CalendarClock className="h-4 w-4 shrink-0 text-crm-accent" />
+                      <input
+                        type="datetime-local"
+                        value={slot}
+                        min={minDatetimeLocal()}
+                        onChange={(e) => updateSlot(i, e.target.value)}
+                        className={cn(
+                          crm.input,
+                          "bulk-email-schedule-slot flex-1 !py-1 text-sm",
+                          slot && !isValid && "border-crm-danger/60 focus:border-crm-danger",
+                        )}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeSlot(i)}
+                        className="rounded p-1 text-crm-muted hover:bg-crm-surface-2 hover:text-crm-danger"
+                        aria-label="Remove schedule"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+                {scheduledSlots.some((s) => s && new Date(s).getTime() <= Date.now() + 60_000) && (
+                  <p className="text-xs text-crm-danger">
+                    Scheduled times must be at least 1 minute in the future.
+                  </p>
+                )}
+              </div>
+            )}
+          </section>
+
           {/* Safety notice */}
-          {templateId && senderId && (
+          {isReady && (
             <div className="rounded-crm border border-amber-300/40 bg-amber-50/60 p-3 text-xs text-amber-700 dark:border-amber-700/30 dark:bg-amber-900/10 dark:text-amber-400">
               <strong>Before sending:</strong> Emails are queued and sent one at a time in the background.
               Recipients with missing or duplicate email addresses are automatically skipped.
@@ -485,15 +672,37 @@ export function BulkEmailModal({
         </div>
 
         {/* Footer actions */}
-        <div className="mt-6 flex justify-end gap-2">
-          <button type="button" onClick={onClose} className={crm.btnSecondary} disabled={submitting}>
+        <div className="mt-6 flex flex-wrap justify-end gap-2">
+          <button type="button" onClick={onClose} className={crm.btnSecondary} disabled={submitting || schedulingInProgress}>
             Cancel
           </button>
+          {/* Schedule button — only shown when slots are added */}
+          {scheduledSlots.length > 0 && (
+            <button
+              type="button"
+              onClick={handleSchedule}
+              disabled={schedulingInProgress || submitting || !isReady || validSlots.length === 0}
+              className={cn(crm.btnSecondary, "gap-1.5 disabled:opacity-50")}
+            >
+              {schedulingInProgress ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Scheduling…
+                </>
+              ) : (
+                <>
+                  <CalendarClock className="h-4 w-4" />
+                  Schedule ({validSlots.length})
+                </>
+              )}
+            </button>
+          )}
+          {/* Immediate send button */}
           <button
             type="button"
-            onClick={handleSubmit}
-            disabled={submitting || !templateId || !senderId || connectedSenders.length === 0}
-            className={cn(crm.btnPrimary, "disabled:opacity-50")}
+            onClick={handleSendNow}
+            disabled={submitting || schedulingInProgress || !isReady}
+            className={cn(crm.btnPrimary, "gap-1.5 disabled:opacity-50")}
           >
             {submitting ? (
               <>

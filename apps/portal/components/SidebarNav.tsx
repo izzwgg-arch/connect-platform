@@ -18,6 +18,8 @@ type SidebarNavProps = {
   isMobile: boolean;
   railMode: boolean;
   onToggleRail: () => void;
+  /** Unread count badges keyed by NavItem.badgeKey (e.g. "chat", "voicemail"). */
+  badges?: Record<string, number>;
 };
 
 function navLinkActive(pathname: string, href: string) {
@@ -33,7 +35,8 @@ export function SidebarNav({
   onCloseMobile,
   isMobile,
   railMode,
-  onToggleRail
+  onToggleRail,
+  badges = {},
 }: SidebarNavProps) {
   const pathname = usePathname();
   const { user, setUserAvatarUrl } = useAppContext();
@@ -93,6 +96,7 @@ export function SidebarNav({
                   {sectionItems.map((item) => {
                     const active = navLinkActive(pathname, item.href);
                     const Icon = item.lucide;
+                    const badgeCount = item.badgeKey ? (badges[item.badgeKey] ?? 0) : 0;
                     return (
                       <Link
                         key={item.href}
@@ -103,8 +107,33 @@ export function SidebarNav({
                         title={item.label}
                         onClick={onCloseMobile}
                       >
-                        <span className="drawer-nav-icon drawer-nav-icon-lucide">
+                        <span className="drawer-nav-icon drawer-nav-icon-lucide" style={{ position: "relative" }}>
                           <Icon size={18} strokeWidth={1.85} />
+                          {badgeCount > 0 && (
+                            <span
+                              aria-label={`${badgeCount} unread`}
+                              style={{
+                                position: "absolute",
+                                top: -4,
+                                right: -4,
+                                minWidth: "1rem",
+                                height: "1rem",
+                                borderRadius: "9999px",
+                                background: "var(--danger)",
+                                color: "#fff",
+                                fontSize: "9px",
+                                fontWeight: 700,
+                                lineHeight: "1rem",
+                                textAlign: "center",
+                                padding: "0 2px",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                              }}
+                            >
+                              {badgeCount > 99 ? "99+" : badgeCount}
+                            </span>
+                          )}
                         </span>
                       </Link>
                     );
@@ -131,6 +160,7 @@ export function SidebarNav({
                 {sectionItems.map((item) => {
                   const active = navLinkActive(pathname, item.href);
                   const Icon = item.lucide;
+                  const badgeCount = item.badgeKey ? (badges[item.badgeKey] ?? 0) : 0;
                   return (
                     <Link
                       key={item.href}
@@ -144,6 +174,30 @@ export function SidebarNav({
                         <Icon size={18} strokeWidth={1.85} />
                       </span>
                       <span className="drawer-nav-label">{item.label}</span>
+                      {badgeCount > 0 && (
+                        <span
+                          aria-label={`${badgeCount} unread`}
+                          style={{
+                            marginLeft: "auto",
+                            minWidth: "1.25rem",
+                            height: "1.25rem",
+                            borderRadius: "9999px",
+                            background: "var(--danger)",
+                            color: "#fff",
+                            fontSize: "10px",
+                            fontWeight: 700,
+                            lineHeight: "1.25rem",
+                            textAlign: "center",
+                            padding: "0 4px",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            flexShrink: 0,
+                          }}
+                        >
+                          {badgeCount > 99 ? "99+" : badgeCount}
+                        </span>
+                      )}
                     </Link>
                   );
                 })}

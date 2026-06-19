@@ -856,17 +856,14 @@ export default function VoicemailPage() {
             </button>
           ))}
         </nav>
-        <div className="vm-search">
+        <div className="vm-search" style={{ border: "none", outline: "none", boxShadow: "none", background: "transparent" }}>
           <Search size={16} />
-          <input placeholder="Search name, number, extension..." value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
-        <div className="vm-select-wrap">
           <input
-            placeholder="Extension"
-            value={extensionFilter}
-            onChange={(e) => { setExtensionFilter(e.target.value); setPage(1); }}
+            placeholder="Search name, number, extension..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ border: "none", outline: "none", boxShadow: "none" }}
           />
-          <ChevronDown size={14} />
         </div>
         <ConnectSelect
           size="sm"

@@ -1018,7 +1018,7 @@ export default function CrmContactsPage() {
                     value={search}
                     onChange={(e) => handleSearchChange(e.target.value)}
                     placeholder="Name, phone, email, company…"
-                    className={cn(crm.input, "crm-queue-filter-control min-w-[10rem] flex-1 py-1.5")}
+                    className={cn(crm.input, "crm-queue-filter-control min-w-[10rem] flex-1 !py-1")}
                     aria-label="Search contacts"
                   />
                   {search ? (

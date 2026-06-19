@@ -1032,15 +1032,19 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
     const user = await requireCrmAccess(req, reply); if (!user) return;
     const includeDismissed = String((req.query as any)?.includeDismissed || "") === "1";
     const limit = Math.min(50, Math.max(1, Number((req.query as any)?.limit ?? 20)));
-    const rows = await (db as any).crmUserNotification.findMany({
-      where: {
-        tenantId: user.tenantId,
-        userId: user.sub,
-        ...(includeDismissed ? {} : { dismissedAt: null }),
-      },
-      orderBy: { createdAt: "desc" },
-      take: limit,
-    });
+    const where = {
+      tenantId: user.tenantId,
+      userId: user.sub,
+      ...(includeDismissed ? {} : { dismissedAt: null }),
+    };
+    const [rows, total] = await Promise.all([
+      (db as any).crmUserNotification.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take: limit,
+      }),
+      (db as any).crmUserNotification.count({ where }),
+    ]);
     return {
       notifications: rows.map((n: any) => ({
         id: n.id,
@@ -1052,6 +1056,7 @@ export async function registerCrmEmailRoutes(app: FastifyInstance) {
         dismissedAt: n.dismissedAt ?? null,
         createdAt: n.createdAt,
       })),
+      total,
     };
   });
 

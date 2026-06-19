@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useAppContext } from "../hooks/useAppContext";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useSidebarRail } from "../hooks/useSidebarRail";
+import { useNavBadges } from "../hooks/useNavBadges";
 import { isNavItemVisibleForUser, navItems } from "../navigation/navConfig";
 import { SidebarNav } from "./SidebarNav";
 import { Topbar } from "./Topbar";
@@ -24,6 +25,7 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
   const { can, backendJwtRole, permissionsHydrated } = useAppContext();
   const isMobile = useMediaQuery("(max-width: 1080px)");
   const { railMode, toggleRail } = useSidebarRail();
+  const rawBadges = useNavBadges();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const visibleItems = useMemo(
     () => navItems.filter((item) => isNavItemVisibleForUser(item, can, backendJwtRole)),
@@ -81,6 +83,10 @@ export function PageShell({ children, banners }: { children: ReactNode; banners?
           isMobile={isMobile}
           railMode={railMode}
           onToggleRail={toggleRail}
+          badges={{
+            chat: pathname.startsWith("/chat") ? 0 : rawBadges.chat,
+            voicemail: pathname.startsWith("/voicemail") ? 0 : rawBadges.voicemail,
+          }}
         />
         <div className="console-workspace">
           {banners ? <div className="workspace-banners">{banners}</div> : null}

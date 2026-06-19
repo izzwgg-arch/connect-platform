@@ -185,6 +185,20 @@ export async function registerCrmBulkEmailRoutes(app: FastifyInstance) {
       }
     }
 
+    // Optional scheduledAt — must be a future datetime if provided
+    const scheduledAtRaw: string | undefined = body.scheduledAt ? String(body.scheduledAt) : undefined;
+    let scheduledAt: Date | null = null;
+    if (scheduledAtRaw) {
+      const parsed = new Date(scheduledAtRaw);
+      if (isNaN(parsed.getTime())) {
+        return reply.code(400).send({ error: "invalid_payload", detail: "scheduledAt must be a valid ISO datetime" });
+      }
+      if (parsed.getTime() <= Date.now() + 30_000) {
+        return reply.code(400).send({ error: "invalid_payload", detail: "scheduledAt must be at least 30 seconds in the future" });
+      }
+      scheduledAt = parsed;
+    }
+
     const campaignId = body.campaignId ? String(body.campaignId) : null;
     const tagId = body.tagId ? String(body.tagId) : null;
     const selectAll = body.selectAll === true;
@@ -437,6 +451,7 @@ export async function registerCrmBulkEmailRoutes(app: FastifyInstance) {
           templateId,
           connectionId: connectionId ?? null,
           status: "QUEUED",
+          scheduledAt: scheduledAt ?? null,
           totalCount,
           queuedCount,
           skippedCount,
@@ -461,12 +476,14 @@ export async function registerCrmBulkEmailRoutes(app: FastifyInstance) {
       return created;
     });
 
-    // Enqueue a single worker job to process all recipients
+    // Enqueue a single worker job to process all recipients (with optional BullMQ delay for scheduling)
+    const delayMs = scheduledAt ? Math.max(0, scheduledAt.getTime() - Date.now()) : 0;
     await bulkEmailQueue.add(
       "process",
       { jobId: job.id, tenantId: user.tenantId },
       {
         jobId: `bulk:${job.id}`,
+        delay: delayMs,
         removeOnComplete: 200,
         removeOnFail: 200,
       },
@@ -517,6 +534,7 @@ export async function registerCrmBulkEmailRoutes(app: FastifyInstance) {
         failedCount: true,
         skippedCount: true,
         errorSummary: true,
+        scheduledAt: true,
         createdAt: true,
         startedAt: true,
         completedAt: true,

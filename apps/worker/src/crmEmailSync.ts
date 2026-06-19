@@ -366,6 +366,21 @@ export async function processCrmEmailSyncJob(job: { tenantId: string; connection
               createdByUserId: null,
             },
           }).catch(() => undefined);
+
+          // Notify the connection owner / thread user about the reply (best-effort).
+          const notifyUserId = t.userId ?? conn.userId ?? conn.managedByUserId ?? null;
+          if (notifyUserId) {
+            await db.crmUserNotification.create({
+              data: {
+                tenantId,
+                userId: notifyUserId,
+                title: "Email reply",
+                body: snippet || subject || "Email reply received",
+                route: `/crm/contacts/${t.contactId}`,
+                kind: "CRM_EMAIL_REPLY",
+              },
+            }).catch(() => undefined);
+          }
         }
       } catch {
         // Unique conflict or validation error — skip silently (metadata only)

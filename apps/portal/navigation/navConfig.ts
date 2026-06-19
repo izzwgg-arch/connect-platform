@@ -67,14 +67,16 @@ export type NavItem = {
   sectionPermission: Permission;
   permission: Permission;
   download?: boolean;
+  /** Key used to look up a numeric unread badge from the badges map in SidebarNav. */
+  badgeKey?: "chat" | "voicemail";
 };
 
 export const navItems: NavItem[] = [
   { id: "workspace.overview", href: "/dashboard", label: "Overview", icon: "OV", lucide: LayoutDashboard, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_overview" },
   { id: "workspace.team", href: "/team", label: "Team Directory", icon: "TM", lucide: Users, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_team_directory" },
   { id: "workspace.calls", href: "/calls", label: "Call History", icon: "CL", lucide: Phone, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_call_history" },
-  { id: "workspace.voicemail", href: "/voicemail", label: "Voicemail", icon: "VM", lucide: Voicemail, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_voicemail" },
-  { id: "workspace.chat", href: "/chat", label: "Chat", icon: "CH", lucide: MessagesSquare, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_chat" },
+  { id: "workspace.voicemail", href: "/voicemail", label: "Voicemail", icon: "VM", lucide: Voicemail, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_voicemail", badgeKey: "voicemail" },
+  { id: "workspace.chat", href: "/chat", label: "Chat", icon: "CH", lucide: MessagesSquare, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_chat", badgeKey: "chat" },
   { id: "workspace.contacts", href: "/contacts", label: "Contacts", icon: "CO", lucide: Contact, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_contacts" },
   { id: "workspace.install", href: "/downloads/Connect-Setup-0.1.0.exe", label: "Install", icon: "IN", lucide: Download, section: "workspace", sectionPermission: "can_view_section_workspace", permission: "can_view_workspace_contacts", download: true },
 

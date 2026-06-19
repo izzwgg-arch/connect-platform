@@ -194,6 +194,23 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
     }
 
     /**
+     * True when a live React instance exists in this process (the app's JS is
+     * already running). IncomingCallFirebaseService uses this to decide whether
+     * it must boot the HeadlessJS SIP pre-register task during the ring — only
+     * needed when the app is killed/swiped and no JS is running yet. When JS is
+     * alive the running SipContext already holds (or will refresh) registration.
+     */
+    @JvmStatic
+    fun hasLiveReactContext(): Boolean {
+      val ctx = lastReactContext?.get() ?: return false
+      return try {
+        ctx.hasActiveReactInstance()
+      } catch (t: Throwable) {
+        false
+      }
+    }
+
+    /**
      * Forwards a tap on one of the in-call notification action buttons to
      * the JS layer. Wrapped in a try/catch so a missing React context
      * (extremely unlikely while a call is active, but possible during a

@@ -827,6 +827,27 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
   app.get("/chat/a/:attachmentId/:fileName", handleAttachmentIdDownload);
 
   // ── Chat threads (JWT) ─────────────────────────────────────────────────────
+  app.get("/chat/unread-count", async (req, reply) => {
+    const user = req.user as JwtUser;
+    // Count threads where this user is an active participant and has unread messages.
+    const participants = await db.connectChatParticipant.findMany({
+      where: { userId: user.sub, leftAt: null, archivedForUser: false },
+      select: { threadId: true, lastReadAt: true },
+    });
+    let count = 0;
+    for (const p of participants) {
+      const unread = await db.connectChatMessage.count({
+        where: {
+          threadId: p.threadId,
+          direction: { not: "OUTBOUND" },
+          ...(p.lastReadAt ? { createdAt: { gt: p.lastReadAt } } : {}),
+        },
+      });
+      if (unread > 0) count++;
+    }
+    return { count };
+  });
+
   app.get("/chat/threads", async (req, reply) => {
     const user = req.user as JwtUser;
     const tenantId = effectiveChatTenantId(req, user);

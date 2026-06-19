@@ -166,6 +166,27 @@ export async function fireCrmCdrHook(params: CdrHookParams): Promise<void> {
           data: { lastActivityAt: startedAt },
         });
 
+        // Notify assigned user on inbound calls (best-effort).
+        if (eventType === "CDR_INBOUND") {
+          const contactMeta = await (db as any).crmContactMeta.findFirst({
+            where: { contactId, tenantId },
+            select: { assignedToUserId: true },
+          });
+          if (contactMeta?.assignedToUserId) {
+            const callLabel = disposition === "missed" ? "Missed call" : "Inbound call";
+            await db.crmUserNotification.create({
+              data: {
+                tenantId,
+                userId: contactMeta.assignedToUserId,
+                title: callLabel,
+                body: fromNumber ?? undefined,
+                route: `/crm/contacts/${contactId}`,
+                kind: "CRM_INBOUND_CALL",
+              },
+            }).catch(() => undefined);
+          }
+        }
+
         if (settings.transcriptionEnabled && recordingAvailable) {
           enqueueAndProcessCallTranscription({ tenantId, contactId, linkedId }).catch((err) => {
             console.error("[CRM][cdrHook] Failed to enqueue call transcription", {

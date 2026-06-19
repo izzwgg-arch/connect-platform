@@ -4817,6 +4817,7 @@ model CrmBulkEmailJob {
   failedCount     Int       @default(0)
   skippedCount    Int       @default(0)
   errorSummary    String?
+  scheduledAt     DateTime?
   createdAt       DateTime  @default(now())
   startedAt       DateTime?
   completedAt     DateTime?

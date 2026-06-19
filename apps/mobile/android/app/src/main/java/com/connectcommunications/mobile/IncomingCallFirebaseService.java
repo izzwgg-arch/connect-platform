@@ -314,6 +314,12 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
                 JSONObject fcmMeta = new JSONObject();
                 fcmMeta.put("fcmType", type);
                 emitCallFlowNative("FCM_DATA_INCOMING_CALL", inviteForRing, fcmMeta);
+                // Pre-register SIP during the ring when the app is killed/swiped
+                // (no live JS). Boots a HeadlessJS task so the JsSIP UA registers
+                // BEFORE the user answers — the same singleton client SipContext
+                // attaches to at answer, so the answer is instant instead of
+                // cold-registering and waiting for the PBX to re-deliver the INVITE.
+                startSipPreRegisterIfKilled(inviteForRing, appData.get("pbxCallId"));
                 // Multi-call: when the JS side already has an active call, skip
                 // the native ringtone + full-screen UI. The CallWaitingBanner
                 // inside ActiveCallScreen handles the waiting invite instead.
@@ -400,6 +406,41 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             || "missed_call".equals(type)
             || "dm_message".equals(type)
             || "sms_message".equals(type);
+    }
+
+    /**
+     * Boot the HeadlessJS SIP pre-register task during the ring — but ONLY when
+     * the app is killed/swiped (no live React instance). When JS is already
+     * running its SipContext owns registration, so spinning up a headless task
+     * would be redundant.
+     *
+     * <p>Safe to call from onMessageReceived: a high-priority FCM message grants
+     * a short window in which a background service start is permitted, and
+     * {@link HeadlessJsTaskService#acquireWakeLockNow} keeps the CPU awake while
+     * the JS engine boots and registers. Any failure is swallowed — we simply
+     * fall back to the legacy cold-register-on-answer behaviour (no worse).
+     */
+    private void startSipPreRegisterIfKilled(String inviteId, String pbxCallId) {
+        try {
+            boolean reactAlive = false;
+            try {
+                reactAlive = IncomingCallUiModule.hasLiveReactContext();
+            } catch (Throwable ignored) {
+                // module not loaded yet → app is killed → treat as not alive
+            }
+            if (reactAlive) {
+                Log.i(TAG, "[CALL_PREREG] live React instance — skipping headless pre-register");
+                return;
+            }
+            com.facebook.react.HeadlessJsTaskService.acquireWakeLockNow(getApplicationContext());
+            Intent svc = new Intent(getApplicationContext(), SipPreRegisterTaskService.class);
+            if (inviteId != null && !inviteId.isEmpty()) svc.putExtra("inviteId", inviteId);
+            if (pbxCallId != null && !pbxCallId.isEmpty()) svc.putExtra("pbxCallId", pbxCallId);
+            getApplicationContext().startService(svc);
+            Log.i(TAG, "[CALL_PREREG] started SipPreRegisterTaskService inviteId=" + inviteId);
+        } catch (Throwable t) {
+            Log.w(TAG, "[CALL_PREREG] startService(SipPreRegisterTaskService) failed: " + t.getMessage());
+        }
     }
 
     /**

@@ -4,7 +4,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import Constants from "expo-constants";
 import * as Device from "expo-device";
-import { createSipClient } from "../sip";
+import { getSipClient } from "../sip/sipClientSingleton";
 import { postCallQualityReport, postCallQualityPing, clearCallQualityPing, postWebrtcCallDebug } from "../api/client";
 import { appendCallRecord } from "../storage/callHistory";
 import type { CallDirection, CallState, CallRecord, ProvisioningBundle, SipRegistrationState } from "../types";
@@ -150,7 +150,11 @@ const SipContext = createContext<SipState | undefined>(undefined);
 
 export function SipProvider({ children }: { children: React.ReactNode }) {
   const { token: authToken } = useAuth();
-  const clientRef = useRef(createSipClient());
+  // Shared process-wide client so a registration the headless push task
+  // established during ring is the SAME UA that answers here (see
+  // sipClientSingleton.ts). createSipClient() previously made a fresh UA per
+  // mount, which is why killed-app answers cold-registered and stalled.
+  const clientRef = useRef(getSipClient());
   const [registrationState, setRegistrationState] = useState<SipRegistrationState>("idle");
   const [callState, setCallState] = useState<CallState>("idle");
   const [callDirection, setCallDirection] = useState<CallDirection>(null);

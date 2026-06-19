@@ -320,6 +320,19 @@ export async function processCrmBulkEmailJob(jobData: {
       },
     });
 
+    if (job.createdByUserId) {
+      await db.crmUserNotification.create({
+        data: {
+          tenantId,
+          userId: job.createdByUserId,
+          title: "Bulk email sent",
+          body: `${sentCount} sent${failedCount > 0 ? `, ${failedCount} failed` : ""}`,
+          route: "/crm/email",
+          kind: "CRM_BULK_EMAIL_COMPLETED",
+        },
+      }).catch(() => undefined);
+    }
+
     console.log(
       `[crm-bulk-email] Job ${jobId} completed: sent=${sentCount} failed=${failedCount}`,
     );
