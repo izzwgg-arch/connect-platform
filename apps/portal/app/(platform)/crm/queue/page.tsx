@@ -81,6 +81,7 @@ type CrmSettingsDefaults = { defaultQueueSort: string; defaultQueueFilter: strin
 
 const SORT_MODE_KEY = "crm_queue_sort_mode";
 const CAMPAIGN_FILTER_KEY = "crm_queue_campaign_id";
+const ACTIVE_INDEX_KEY = "crm_queue_active_index";
 const DEV_ROW_PREVIEW_COUNT = 18;
 const QUEUE_PAGE_SIZE = 250;
 
@@ -239,7 +240,16 @@ function QueuePageInner() {
   const sortModeSetFromTenantDefault = useRef(false);
 
   const [callbackModalMember, setCallbackModalMember] = useState<QueueMember | null>(null);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [activeIndex, setActiveIndex] = useState(() => {
+    if (typeof window === "undefined") return 0;
+    const stored = parseInt(sessionStorage.getItem(ACTIVE_INDEX_KEY) ?? "0", 10);
+    return Number.isFinite(stored) && stored >= 0 ? stored : 0;
+  });
+
+  // Ref to the scroll region so we can scroll the active row into view on return.
+  const scrollRegionRef = useRef<HTMLDivElement>(null);
+  // Only auto-scroll once per mount (not on every filter change).
+  const didScrollOnMount = useRef(false);
 
   // Persist sort mode
   useEffect(() => {
@@ -356,10 +366,38 @@ function QueuePageInner() {
 
   useEffect(() => {
     setActiveIndex((idx) => {
-      if (previewQueue.length === 0) return 0;
+      if (previewQueue.length === 0) return idx;
       return Math.min(idx, previewQueue.length - 1);
     });
   }, [previewQueue]);
+
+  // Persist active index so we can restore scroll position when navigating back.
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem(ACTIVE_INDEX_KEY, String(activeIndex));
+    }
+  }, [activeIndex]);
+
+  // After the first load on this mount, scroll the selected row into view.
+  useEffect(() => {
+    if (loading || previewQueue.length === 0 || didScrollOnMount.current) return;
+    didScrollOnMount.current = true;
+    requestAnimationFrame(() => {
+      // Target the actual scroll container (.crm-queue-row-list has overflow:auto).
+      // CRMWorkspaceScrollRegion uses overflow:hidden so scrollIntoView can't
+      // traverse it; set scrollTop on the list container directly instead.
+      const rowList = document.querySelector<HTMLElement>(".crm-queue-row-list");
+      if (!rowList) return;
+      const rows = rowList.querySelectorAll<HTMLElement>(".crm-queue-row");
+      const target = rows[activeIndex];
+      if (target) {
+        rowList.scrollTop = target.offsetTop;
+      }
+    });
+  // activeIndex intentionally omitted: we capture it via the stale closure of
+  // the render that triggered this effect (first render after data loads).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, previewQueue.length]);
 
   function switchFilter(f: QueueFilter) {
     setFilter(f);
@@ -546,7 +584,7 @@ function QueuePageInner() {
 
         <CRMWorkspaceBody split={!loading && !error}>
           <CRMWorkspaceMain className="crm-queue-main-workspace">
-            <CRMWorkspaceScrollRegion className="crm-queue-center-workspace flex min-w-0 flex-col gap-3">
+            <CRMWorkspaceScrollRegion ref={scrollRegionRef} className="crm-queue-center-workspace flex min-w-0 flex-col gap-3">
         {loading ? (
           <div className="py-24 text-center text-crm-muted/80 text-sm">Loading…</div>
         ) : error ? (
@@ -632,6 +670,7 @@ function QueuePageInner() {
                   onNext={() => setActiveIndex((i) => Math.min(previewQueue.length - 1, i + 1))}
                   onAction={(action, extra) => handleAction(activeMember.id, action, extra)}
                   onDial={() => handleDial(activeMember)}
+                  queueCtx={{ filter, sort: sortMode, timezone: timezoneZone }}
                 />
               ) : (
                 <QueueLeadDetailPlaceholder />

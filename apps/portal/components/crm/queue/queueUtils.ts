@@ -99,10 +99,17 @@ export type QueueWorkspaceDeepLink = {
   action?: "call";
 };
 
+export type QueueWorkspaceCtx = {
+  filter?: string;
+  sort?: string;
+  timezone?: string;
+};
+
 export function buildQueueContactWorkspaceHref(
   member: QueueMember,
   returnTo: string,
   deepLink?: QueueWorkspaceDeepLink,
+  queueCtx?: QueueWorkspaceCtx,
 ): string {
   const params = new URLSearchParams({
     memberId: member.id,
@@ -111,5 +118,10 @@ export function buildQueueContactWorkspaceHref(
   if (member.campaign) params.set("campaignId", member.campaign.id);
   if (deepLink?.workspace) params.set("workspace", deepLink.workspace);
   if (deepLink?.action) params.set("action", deepLink.action);
+  // Carry queue filter context so the workspace "Next" button respects the
+  // same sort order and filters that were active when the user opened it.
+  if (queueCtx?.filter) params.set("queueFilter", queueCtx.filter);
+  if (queueCtx?.sort) params.set("queueSort", queueCtx.sort);
+  if (queueCtx?.timezone && queueCtx.timezone !== "all") params.set("queueTimezone", queueCtx.timezone);
   return `/crm/contacts/${member.contactId}?${params}`;
 }

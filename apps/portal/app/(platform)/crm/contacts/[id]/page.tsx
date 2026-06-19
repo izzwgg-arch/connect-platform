@@ -243,6 +243,22 @@ function phoneDigits(value: string | null | undefined): string {
   return String(value || "").replace(/\D/g, "");
 }
 
+/** Returns true when the contact's local time is before 8 AM or at/after 8 PM. */
+function isContactOutsideBusinessHours(timezoneIana: string | null | undefined): boolean {
+  if (!timezoneIana) return false;
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezoneIana,
+      hour: "numeric",
+      hour12: false,
+    }).formatToParts(new Date());
+    const hour = parseInt(parts.find((p) => p.type === "hour")?.value ?? "12", 10);
+    return hour < 8 || hour >= 20;
+  } catch {
+    return false;
+  }
+}
+
 export default function CrmContactDetailPage() {
   return (
     <Suspense fallback={<ContactPageFallback />}>
@@ -1653,6 +1669,14 @@ function CrmContactDetailInner() {
   const urlMemberId = searchParams.get("memberId");
   const urlCampaignId = searchParams.get("campaignId");
 
+  // Queue filter context — passed from the queue page when "Open workspace" is
+  // clicked. When present, the campaign lead nav uses the filtered/sorted queue
+  // order instead of raw campaign member order.
+  const urlQueueFilter = searchParams.get("queueFilter") ?? null;
+  const urlQueueSort = searchParams.get("queueSort") ?? null;
+  const urlQueueTimezone = searchParams.get("queueTimezone") ?? null;
+  const hasQueueCtx = !!(urlQueueFilter || urlQueueSort || urlQueueTimezone);
+
   const [campaignNavMembers, setCampaignNavMembers] = useState<CampaignNavMember[]>([]);
   const [campaignNavLoading, setCampaignNavLoading] = useState(false);
   const [outreachStarting, setOutreachStarting] = useState(false);
@@ -1667,6 +1691,7 @@ function CrmContactDetailInner() {
     backendJwtRole === "SUPER_ADMIN";
   const canManageContacts = can("can_view_crm_contacts");
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [outsideHoursConfirmOpen, setOutsideHoursConfirmOpen] = useState(false);
 
   // ── Contact state ──────────────────────────────────────────────────────────
   const [contact, setContact] = useState<CrmContactDetail | null>(null);
@@ -2061,12 +2086,44 @@ function CrmContactDetailInner() {
 
   useEffect(() => {
     const cid = urlCampaignId ?? queueMember?.campaign?.id;
-    if (!cid) {
-      setCampaignNavMembers([]);
-      return;
-    }
     let cancelled = false;
     setCampaignNavLoading(true);
+
+    if (hasQueueCtx) {
+      // Queue-context navigation: fetch the filtered/sorted queue so "Next"
+      // respects the same filter, sort, and timezone the user had on My Queue.
+      const qp = new URLSearchParams({
+        filter: urlQueueFilter ?? "pending",
+        limit: "250",
+      });
+      if (urlQueueSort) qp.set("sort", urlQueueSort);
+      if (urlQueueTimezone) qp.set("timezoneZone", urlQueueTimezone);
+      if (cid) qp.set("campaignId", cid);
+      (async () => {
+        try {
+          const data = await apiGet<{ queue: { id: string; contactId: string }[] }>(`/crm/queue?${qp}`);
+          if (cancelled) return;
+          const members = (data.queue ?? []).map((m, i) => ({
+            id: m.id,
+            contactId: m.contactId,
+            sortOrder: i,
+          }));
+          setCampaignNavMembers(members);
+        } catch {
+          if (!cancelled) setCampaignNavMembers([]);
+        } finally {
+          if (!cancelled) setCampaignNavLoading(false);
+        }
+      })();
+      return () => { cancelled = true; };
+    }
+
+    // Default: fetch campaign members by sort order.
+    if (!cid) {
+      setCampaignNavMembers([]);
+      setCampaignNavLoading(false);
+      return;
+    }
     (async () => {
       try {
         const data = await apiGet<{ members: { id: string; contactId: string; sortOrder: number }[] }>(
@@ -2080,10 +2137,8 @@ function CrmContactDetailInner() {
         if (!cancelled) setCampaignNavLoading(false);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
-  }, [urlCampaignId, queueMember?.campaign?.id]);
+    return () => { cancelled = true; };
+  }, [hasQueueCtx, urlQueueFilter, urlQueueSort, urlQueueTimezone, urlCampaignId, queueMember?.campaign?.id]);
 
   useEffect(() => {
     const cid = urlCampaignId ?? queueMember?.campaign?.id;
@@ -2117,10 +2172,27 @@ function CrmContactDetailInner() {
 
   const navigateCampaignLead = useCallback(
     (target: CampaignNavMember | null) => {
-      if (!target || !campaignIdForNav) return;
-      router.push(buildCampaignContactHref(target.contactId, campaignIdForNav, target.id, returnTo));
+      if (!target) return;
+      let href: string;
+      if (campaignIdForNav) {
+        href = buildCampaignContactHref(target.contactId, campaignIdForNav, target.id, returnTo);
+      } else {
+        // Queue-only navigation (filtered by timezone/sort but no campaign).
+        const p = new URLSearchParams({ memberId: target.id });
+        if (returnTo) p.set("returnTo", returnTo);
+        href = `/crm/contacts/${encodeURIComponent(target.contactId)}?${p}`;
+      }
+      // Carry queue context so the next contact also navigates with the same filters.
+      if (hasQueueCtx) {
+        const url = new URL(href, "http://x");
+        if (urlQueueFilter) url.searchParams.set("queueFilter", urlQueueFilter);
+        if (urlQueueSort) url.searchParams.set("queueSort", urlQueueSort);
+        if (urlQueueTimezone) url.searchParams.set("queueTimezone", urlQueueTimezone);
+        href = url.pathname + url.search;
+      }
+      router.push(href);
     },
-    [campaignIdForNav, returnTo, router],
+    [campaignIdForNav, returnTo, router, hasQueueCtx, urlQueueFilter, urlQueueSort, urlQueueTimezone],
   );
 
   const showWorkspaceToast = useCallback((kind: "ok" | "err", text: string, sticky = false) => {
@@ -2140,7 +2212,7 @@ function CrmContactDetailInner() {
       const tgt = e.target as HTMLElement;
       if (["INPUT", "TEXTAREA", "SELECT"].includes(tgt.tagName)) return;
       if (tgt.getAttribute("contenteditable") === "true") return;
-      if (!campaignIdForNav || campaignNavMembers.length <= 1) return;
+      if ((!campaignIdForNav && !hasQueueCtx) || campaignNavMembers.length <= 1) return;
       if (e.key === "ArrowLeft") {
         e.preventDefault();
         navigateCampaignLead(campaignNav.previous);
@@ -2154,6 +2226,7 @@ function CrmContactDetailInner() {
     return () => window.removeEventListener("keydown", onLeadNavKey);
   }, [
     campaignIdForNav,
+    hasQueueCtx,
     campaignNavMembers.length,
     campaignNav.previous,
     campaignNav.next,
@@ -2585,7 +2658,7 @@ function CrmContactDetailInner() {
     window.dispatchEvent(new CustomEvent("crm:dial", { detail: { target: num } }));
   };
 
-  const beginCall = () => {
+  const executeBeginCall = () => {
     const resolution = resolvePhoneAction(contact.phones);
     if (resolution.kind === "disabled") return;
     if (resolution.kind === "execute") {
@@ -2594,6 +2667,14 @@ function CrmContactDetailInner() {
       return;
     }
     setPhonePickerIntent("call");
+  };
+
+  const beginCall = () => {
+    if (isContactOutsideBusinessHours(contact.timezoneIana)) {
+      setOutsideHoursConfirmOpen(true);
+      return;
+    }
+    executeBeginCall();
   };
 
   const beginSms = () => {
@@ -2924,6 +3005,15 @@ function CrmContactDetailInner() {
           onCancel={() => setDeleteConfirmOpen(false)}
         />
 
+        <CrmConfirmModal
+          open={outsideHoursConfirmOpen}
+          title="Outside business hours"
+          description={`This lead is currently outside business hours (8 AM – 8 PM) in their timezone. Are you sure you want to call?`}
+          confirmLabel="Call anyway"
+          onConfirm={() => { setOutsideHoursConfirmOpen(false); executeBeginCall(); }}
+          onCancel={() => setOutsideHoursConfirmOpen(false)}
+        />
+
         <ContactCampaignStickyHeader
           displayName={contact.displayName}
           company={contact.company ?? null}
@@ -2932,6 +3022,9 @@ function CrmContactDetailInner() {
           email={primaryEmailRow?.email ?? null}
           stage={stage}
           campaignName={campaignName}
+          timezoneIana={contact.timezoneIana}
+          timezoneLabel={contact.timezoneLabel}
+          timezoneResolutionStatus={contact.timezoneResolutionStatus}
           isArchived={isArchived}
           onCall={beginCall}
           callDisabled={!primaryPhone || isArchived}
@@ -3803,7 +3896,7 @@ function CrmContactDetailInner() {
       </div>
 
       <ContactCampaignLeadNav
-        visible={!!campaignIdForNav}
+        visible={!!campaignIdForNav || hasQueueCtx}
         position={campaignNav.position}
         total={campaignNav.total}
         previousLabel={null}

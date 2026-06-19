@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { forwardRef, type ReactNode } from "react";
 import { cn } from "./cn";
 import { crm } from "./crmClasses";
 
@@ -85,15 +85,12 @@ export function CRMWorkspaceContent({
 }
 
 /** Independent vertical scroll for lists, tables, and library panels. */
-export function CRMWorkspaceScrollRegion({
-  children,
-  className,
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
-  return <div className={cn(crm.workspaceScrollRegion, className)}>{children}</div>;
-}
+export const CRMWorkspaceScrollRegion = forwardRef<
+  HTMLDivElement,
+  { children: ReactNode; className?: string }
+>(function CRMWorkspaceScrollRegion({ children, className }, ref) {
+  return <div ref={ref} className={cn(crm.workspaceScrollRegion, className)}>{children}</div>;
+});
 
 /** Right-side summary rail — stays visible; inner region scrolls when tall. */
 export function CRMWorkspaceRightRail({

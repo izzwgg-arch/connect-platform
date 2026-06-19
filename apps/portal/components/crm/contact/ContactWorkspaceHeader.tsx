@@ -28,6 +28,7 @@ import {
   stageColor,
   stageLabel,
 } from "./contactFormatters";
+import { leadTimezoneBadgeShort, leadTimezoneBadgeTitle } from "./leadTimezoneDisplay";
 
 export function ContactWorkspaceHeader({
   contact,
@@ -94,6 +95,8 @@ export function ContactWorkspaceHeader({
   const freshness = contact.lastActivityAt
     ? formatTimeAgo(contact.lastActivityAt)
     : "No touch yet";
+  const tzBadge = leadTimezoneBadgeShort(contact);
+  const tzTitle = leadTimezoneBadgeTitle(contact);
 
   return (
     <CRMCard padding="lg" className="overflow-hidden">
@@ -167,6 +170,9 @@ export function ContactWorkspaceHeader({
               {(campaignName || queueMember?.campaign?.name) && (
                 <span className={crm.chip}>{campaignName ?? queueMember?.campaign?.name}</span>
               )}
+              {tzBadge ? (
+                <span className={crm.chip} title={tzTitle}>{tzBadge}</span>
+              ) : null}
               <span className={crm.chip}>
                 SMS {contact.doNotSms ? "opt-out" : "allowed"}
               </span>

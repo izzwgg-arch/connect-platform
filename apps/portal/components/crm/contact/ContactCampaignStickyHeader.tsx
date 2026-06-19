@@ -4,6 +4,7 @@ import { Mail, Megaphone, Pencil, Phone, Star, Trash2, Voicemail } from "lucide-
 import { cn } from "../cn";
 import { crm } from "../crmClasses";
 import { stageLabel } from "./contactFormatters";
+import { leadTimezoneBadgeShort, leadTimezoneBadgeTitle } from "./leadTimezoneDisplay";
 import type { CrmStage } from "./contactTypes";
 
 export function ContactCampaignStickyHeader({
@@ -14,6 +15,9 @@ export function ContactCampaignStickyHeader({
   email,
   stage,
   campaignName,
+  timezoneIana,
+  timezoneLabel,
+  timezoneResolutionStatus,
   isArchived,
   onCall,
   callDisabled,
@@ -34,6 +38,9 @@ export function ContactCampaignStickyHeader({
   email: string | null;
   stage: CrmStage;
   campaignName: string | null;
+  timezoneIana?: string | null;
+  timezoneLabel?: string | null;
+  timezoneResolutionStatus?: "RESOLVED" | "NEEDS_REVIEW" | "MISSING_LOCATION" | null;
   isArchived: boolean;
   onCall: () => void;
   callDisabled?: boolean;
@@ -47,6 +54,8 @@ export function ContactCampaignStickyHeader({
   restorePosting?: boolean;
   children?: React.ReactNode;
 }) {
+  const tzBadge = leadTimezoneBadgeShort({ timezoneIana, timezoneLabel, timezoneResolutionStatus });
+  const tzTitle = leadTimezoneBadgeTitle({ timezoneIana, timezoneLabel, timezoneResolutionStatus });
   return (
     <header className="crm-contact-sticky-header crm-contact-header-card relative shrink-0 overflow-hidden rounded-crm-lg border border-crm-border/70 bg-crm-surface/95 shadow-crm backdrop-blur-md">
       <div className="crm-contact-header-glow pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.14),transparent_38%),linear-gradient(135deg,rgba(56,189,248,0.08),rgba(124,58,237,0.06)_52%,transparent)]" aria-hidden />
@@ -91,6 +100,11 @@ export function ContactCampaignStickyHeader({
                 <span className={cn(crm.chip, "crm-contact-header-campaign-chip py-0.5 text-[10px]")}>
                   <Megaphone className="h-3 w-3" />
                   {campaignName}
+                </span>
+              ) : null}
+              {tzBadge ? (
+                <span className={cn(crm.chip, "crm-contact-header-tz-chip py-0.5 text-[10px]")} title={tzTitle}>
+                  {tzBadge}
                 </span>
               ) : null}
             </div>

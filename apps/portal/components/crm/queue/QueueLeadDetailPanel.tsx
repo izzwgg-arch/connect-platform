@@ -36,6 +36,7 @@ import {
   MEMBER_STATUS_LABELS,
   priorityReason,
   relativeTime,
+  type QueueWorkspaceCtx,
 } from "./queueUtils";
 
 const CHANNEL_ACTIONS = [
@@ -57,6 +58,7 @@ export function QueueLeadDetailPanel({
   onNext,
   onAction,
   onDial,
+  queueCtx,
 }: {
   member: QueueMember;
   rank: number;
@@ -70,6 +72,7 @@ export function QueueLeadDetailPanel({
   onNext: () => void;
   onAction: (action: string, extra?: Record<string, unknown>) => void;
   onDial: () => void;
+  queueCtx?: QueueWorkspaceCtx;
 }) {
   const router = useRouter();
   const contact = member.contact;
@@ -82,7 +85,7 @@ export function QueueLeadDetailPanel({
   const tzDetail = contact ? leadTimezoneDetailLabel(contact) : null;
 
   function openWorkspace(deepLink?: Parameters<typeof buildQueueContactWorkspaceHref>[2]) {
-    router.push(buildQueueContactWorkspaceHref(member, queueReturnTo, deepLink));
+    router.push(buildQueueContactWorkspaceHref(member, queueReturnTo, deepLink, queueCtx));
   }
 
   return (

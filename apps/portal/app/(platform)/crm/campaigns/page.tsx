@@ -689,7 +689,8 @@ export default function CampaignsPage() {
     backendJwtRole === "ADMIN" ||
     backendJwtRole === "TENANT_ADMIN" ||
     backendJwtRole === "SUPER_ADMIN" ||
-    can("can_manage_crm");
+    can("can_manage_crm") ||
+    can("can_view_crm_campaigns");
 
   const canManageCampaigns = can("can_view_crm_campaigns");
 

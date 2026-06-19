@@ -192,11 +192,7 @@
 }
 
 :root[data-theme="light"] .crm-email-shell .console-nav {
-  border-right-color: rgba(207, 191, 171, 0.56);
-  background:
-    linear-gradient(180deg, rgba(255, 250, 242, 0.94), rgba(247, 242, 236, 0.9)),
-    radial-gradient(circle at 50% 0%, rgba(79, 70, 229, 0.08), transparent 35%);
-  box-shadow: 18px 0 44px rgba(82, 64, 43, 0.06);
+  /* inherits standard console-nav background */
 }
 
 :root[data-theme="light"] .crm-email-shell .drawer-nav-link {
@@ -228,9 +224,7 @@
 }
 
 :root[data-theme="light"] .crm-email-shell .topbar {
-  border-bottom-color: rgba(202, 189, 172, 0.5);
-  background: rgba(255, 250, 243, 0.78);
-  box-shadow: 0 18px 42px rgba(75, 58, 43, 0.07);
+  /* inherits standard topbar background */
   backdrop-filter: blur(18px);
 }
 
@@ -22045,11 +22039,7 @@ table tr:hover {
 }
 
 :root[data-theme="light"] .crm-dashboard-shell .console-nav {
-  background:
-    linear-gradient(180deg, rgba(255, 250, 242, 0.94), rgba(247, 242, 236, 0.9)),
-    radial-gradient(circle at 0% 0%, rgba(55, 125, 255, 0.16), transparent 36%);
-  border-right-color: rgba(187, 172, 151, 0.48);
-  box-shadow: 18px 0 44px rgba(82, 64, 43, 0.06);
+  /* inherits standard console-nav background */
 }
 
 :root[data-theme="light"] .crm-dashboard-shell .drawer-nav-link {
@@ -22081,16 +22071,12 @@ table tr:hover {
 }
 
 :root[data-theme="light"] .crm-dashboard-shell .topbar {
-  background: rgba(255, 250, 243, 0.78);
-  border-bottom-color: rgba(202, 189, 172, 0.5);
-  box-shadow: 0 18px 42px rgba(75, 58, 43, 0.07);
+  /* inherits standard topbar background */
   backdrop-filter: blur(22px);
 }
 
 :root[data-theme="light"] .crm-dashboard-shell .topbar-brand {
-  background: rgba(255, 255, 255, 0.72);
-  border-color: rgba(207, 191, 171, 0.62);
-  box-shadow: 0 12px 26px rgba(68, 58, 43, 0.07);
+  /* inherits standard topbar-brand styling */
 }
 
 :root[data-theme="light"] .crm-dashboard-shell .topbar-center .global-search .input {
@@ -24029,10 +24015,7 @@ table tr:hover {
 }
 
 :root[data-theme="light"] .crm-queue-shell .console-nav {
-  background:
-    linear-gradient(180deg, rgba(255, 250, 242, 0.94), rgba(247, 242, 236, 0.9)),
-    radial-gradient(circle at 50% 0%, rgba(37, 99, 235, 0.08), transparent 35%);
-  border-right-color: rgba(207, 191, 171, 0.56);
+  /* inherits standard console-nav background */
 }
 
 :root[data-theme="light"] .crm-queue-shell .drawer-nav-link {
@@ -24060,8 +24043,7 @@ table tr:hover {
 }
 
 :root[data-theme="light"] .crm-queue-shell .topbar {
-  background: rgba(255, 250, 243, 0.78);
-  border-bottom-color: rgba(202, 189, 172, 0.5);
+  /* inherits standard topbar background */
   backdrop-filter: blur(18px);
 }
 
@@ -25372,11 +25354,7 @@ table tr:hover {
 }
 
 :root[data-theme="light"] .crm-live-shell .console-nav {
-  border-right-color: rgba(207, 191, 171, 0.56);
-  background:
-    linear-gradient(180deg, rgba(255, 250, 242, 0.94), rgba(247, 242, 236, 0.9)),
-    radial-gradient(circle at 50% 0%, rgba(79, 70, 229, 0.08), transparent 35%);
-  box-shadow: 18px 0 44px rgba(82, 64, 43, 0.06);
+  /* inherits standard console-nav background */
 }
 
 :root[data-theme="light"] .crm-live-shell .drawer-nav-link {
@@ -25406,9 +25384,7 @@ table tr:hover {
 }
 
 :root[data-theme="light"] .crm-live-shell .topbar {
-  border-bottom-color: rgba(202, 189, 172, 0.5);
-  background: rgba(255, 250, 243, 0.78);
-  box-shadow: 0 18px 42px rgba(75, 58, 43, 0.07);
+  /* inherits standard topbar background */
   backdrop-filter: blur(18px);
 }
 

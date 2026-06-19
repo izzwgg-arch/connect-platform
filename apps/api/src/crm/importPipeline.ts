@@ -84,6 +84,7 @@ export type CrmImportField =
   | "title"
   | "phone"
   | "phone2"
+  | "phone3"
   | "email"
   | "address"
   | "city"
@@ -149,6 +150,11 @@ const COLUMN_ALIASES: Record<string, CrmImportField> = {
   "other phone": "phone2",
   "second phone": "phone2",
   "phone #2": "phone2",
+  // Third phone aliases
+  phone3: "phone3",
+  "phone 3": "phone3",
+  "third phone": "phone3",
+  "phone #3": "phone3",
   email: "email",
   "email address": "email",
   "e-mail": "email",
@@ -193,7 +199,12 @@ export function autoMapHeaders(headers: string[]): Record<number, CrmImportField
 
 export function mappingHasPhoneOrEmail(colMapping: Record<number, CrmImportField>): boolean {
   const mappedFields = Object.values(colMapping);
-  return mappedFields.includes("phone") || mappedFields.includes("email");
+  return (
+    mappedFields.includes("phone") ||
+    mappedFields.includes("phone2") ||
+    mappedFields.includes("phone3") ||
+    mappedFields.includes("email")
+  );
 }
 
 export type RowData = Partial<Record<CrmImportField, string>>;
@@ -206,6 +217,27 @@ export interface ProcessRowResult {
 
 function normalisePhone(raw: string): string {
   return raw.replace(/\D/g, "");
+}
+
+/**
+ * Collect all phone columns from a row in order (Phone 1, Phone 2, Phone 3),
+ * skipping blanks and de-duplicating by normalized value.
+ * The first entry is the primary phone. If Phone 1 is blank, Phone 2 (or 3)
+ * is automatically promoted to primary position.
+ */
+function collectPhones(data: RowData): Array<{ raw: string; norm: string }> {
+  const candidates = [data.phone, data.phone2, data.phone3];
+  const result: Array<{ raw: string; norm: string }> = [];
+  const seenNorms = new Set<string>();
+  for (const raw of candidates) {
+    const trimmed = raw?.trim() ?? "";
+    if (!trimmed) continue;
+    const norm = normalisePhone(trimmed);
+    if (!norm || seenNorms.has(norm)) continue;
+    seenNorms.add(norm);
+    result.push({ raw: trimmed, norm });
+  }
+  return result;
 }
 
 /**
@@ -310,9 +342,11 @@ export async function previewCampaignImportRow(
   wouldAddMemberIfNotYetEnrolled: boolean;
   alreadyInCampaign: boolean;
 }> {
-  const phoneRaw = data.phone?.trim() ?? "";
+  const phonePairs = collectPhones(data);
+  const primaryPhone = phonePairs[0] ?? null;
+  const phoneRaw = primaryPhone?.raw ?? "";
+  const phoneNorm = primaryPhone?.norm ?? "";
   const emailRaw = data.email?.trim().toLowerCase() ?? "";
-  const phoneNorm = normalisePhone(phoneRaw);
 
   if (!phoneNorm && !emailRaw) {
     return {
@@ -484,9 +518,12 @@ export async function processImportRow(
   userId: string,
   data: RowData,
 ): Promise<ProcessRowResult> {
-  const phoneRaw = data.phone?.trim() ?? "";
+  const phonePairs = collectPhones(data);
+  const primaryPhone = phonePairs[0] ?? null;
+  const phoneRaw = primaryPhone?.raw ?? "";
+  const phoneNorm = primaryPhone?.norm ?? "";
+  const secondaryPhones = phonePairs.slice(1);
   const emailRaw = data.email?.trim().toLowerCase() ?? "";
-  const phoneNorm = normalisePhone(phoneRaw);
 
   if (!phoneNorm && !emailRaw) {
     return { action: "skipped", reason: "no_contact_info", contactId: null };
@@ -499,10 +536,6 @@ export async function processImportRow(
     [firstName, lastName].filter(Boolean).join(" ") ||
     phoneRaw ||
     emailRaw;
-
-  // Secondary phone
-  const phone2Raw = data.phone2?.trim() ?? "";
-  const phone2Norm = normalisePhone(phone2Raw);
 
   // Address fields
   const addrStreet = data.address?.trim() ?? "";
@@ -560,19 +593,19 @@ export async function processImportRow(
       }
     }
 
-    // Secondary phone: add only if not already on the contact
-    if (phone2Norm && phone2Raw) {
-      const phone2Exists = await db.contactPhone.findFirst({
-        where: { contactId: existingContactId, numberNormalized: phone2Norm },
+    // Secondary phones: add any that are not already on the contact
+    for (const sp of secondaryPhones) {
+      const exists = await db.contactPhone.findFirst({
+        where: { contactId: existingContactId, numberNormalized: sp.norm },
         select: { id: true },
       });
-      if (!phone2Exists) {
+      if (!exists) {
         await db.contactPhone.create({
           data: {
             contactId: existingContactId,
             type: "OTHER",
-            numberRaw: phone2Raw,
-            numberNormalized: phone2Norm,
+            numberRaw: sp.raw,
+            numberNormalized: sp.norm,
             isPrimary: false,
           },
         });
@@ -645,16 +678,12 @@ export async function processImportRow(
                 numberNormalized: phoneNorm,
                 isPrimary: true,
               },
-              ...(phone2Norm && phone2Norm !== phoneNorm
-                ? [
-                    {
-                      type: "OTHER" as const,
-                      numberRaw: phone2Raw,
-                      numberNormalized: phone2Norm,
-                      isPrimary: false,
-                    },
-                  ]
-                : []),
+              ...secondaryPhones.map((sp) => ({
+                type: "OTHER" as const,
+                numberRaw: sp.raw,
+                numberNormalized: sp.norm,
+                isPrimary: false,
+              })),
             ],
           }
         : undefined,
