@@ -144,6 +144,15 @@ type SipState = {
   }) => void;
   /** Repoint legacy single-session methods (hold/hangup/setMute) at a session. */
   setActiveSipSession: (sessionId: string) => boolean;
+  /**
+   * Report that a background/cold incoming call could not be delivered over the
+   * live SIP socket (e.g. the answer pipeline had to fall back to the backend
+   * claim/requeue path because no INVITE arrived). This is proof THIS device
+   * failed to hold its registration in the background, so it latches the
+   * adaptive keep-alive gate — arming the persistent foreground service so the
+   * next killed-state call keeps the process resident and connects instantly.
+   */
+  markBackgroundDeliveryFailure: (reason: string) => void;
 };
 
 const SipContext = createContext<SipState | undefined>(undefined);
@@ -948,12 +957,23 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       console.warn('[SIP_KEEPALIVE_FGS] bridge_missing — native keep-alive disabled');
       return;
     }
-    // Adaptive gate: only run the FGS once this device has proven it needs it.
-    // Logged-in + provisioned is necessary but NOT sufficient — keepAliveNeeded
-    // must also be latched (see keepAliveGate.ts). This is what keeps phones
-    // that deliver calls fine in the background (no observed drop) from ever
-    // showing the persistent keep-alive notification.
-    const want = !!(authToken && hasProvisioning) && keepAliveNeeded;
+    // Keep-alive arming policy.
+    //
+    // We arm the FGS PROACTIVELY: as soon as the user is logged in + provisioned,
+    // regardless of the adaptive `keepAliveNeeded` latch. Rationale (decided
+    // 2026-06-19 after on-device validation): the adaptive gate only latched
+    // AFTER one slow background/swiped-away call proved the device drops calls,
+    // and that latch is wiped on every (re)install — so on aggressive OEMs
+    // (Samsung One UI) the FGS was never running at the moment the task was
+    // swiped, the process sat at adj 905 (cached) and was killed on "remove
+    // task", and the next call cold-booted (~2s). Arming on launch keeps the
+    // process resident from the first call. The persistent notification is the
+    // quietest the platform allows (IMPORTANCE_MIN, VISIBILITY_SECRET).
+    //
+    // `keepAliveNeeded` / the gate plumbing is retained for diagnostics + flight
+    // records but no longer gates whether the FGS runs.
+    const KEEPALIVE_PROACTIVE = true;
+    const want = !!(authToken && hasProvisioning) && (KEEPALIVE_PROACTIVE || keepAliveNeeded);
     if (keepAliveWantedRef.current === want) return;
     keepAliveWantedRef.current = want;
     try {
@@ -1589,6 +1609,18 @@ export function SipProvider({ children }: { children: React.ReactNode }) {
       register: async (options) => {
         await ensureProvisioningLoaded();
         await clientRef.current.register(options);
+      },
+
+      // Latches the adaptive keep-alive gate when a cold/background call had to
+      // be rescued via the backend claim path (no SIP INVITE arrived on a live
+      // socket). Uses the ref so this method stays stable across renders and
+      // does not need to be a useMemo dependency.
+      markBackgroundDeliveryFailure: (reason: string) => {
+        try {
+          triggerKeepAliveDropRef.current?.(reason);
+        } catch {
+          /* never let diagnostics latch crash the call path */
+        }
       },
 
       unregister: async () => {

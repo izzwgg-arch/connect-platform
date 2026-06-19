@@ -138,7 +138,9 @@ if (-not (Ensure-Jdk)) {
   exit 1
 }
 Write-Host "JAVA_HOME=$env:JAVA_HOME"
-& java -version
+# `java -version` prints to stderr; with ErrorActionPreference=Stop that surfaces
+# as a fatal NativeCommandError. Capture both streams and print as plain text.
+(& cmd /c "java -version 2>&1") | ForEach-Object { Write-Host $_ }
 
 Write-Step "Android SDK (adb)"
 $adb = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
@@ -169,8 +171,17 @@ if (-not (Test-Path (Join-Path $androidDir "gradlew.bat"))) {
 
 Write-Step "Gradle assembleRelease (arm64-v8a, no daemon)"
 Set-Location $androidDir
-& .\gradlew.bat --no-daemon assembleRelease "-PreactNativeArchitectures=arm64-v8a"
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+# gradlew.bat (and javac / the Metro bundler it invokes) prints notes+warnings
+# to stderr. Under ErrorActionPreference=Stop, Windows PowerShell escalates those
+# native stderr writes into a fatal NativeCommandError mid-build — which aborted
+# this script before `adb install` ever ran (the APK had built fine). Drop to
+# Continue ONLY around the gradle call and gate purely on the real exit code.
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+& .\gradlew.bat --no-daemon assembleRelease "-PreactNativeArchitectures=arm64-v8a" 2>&1 | ForEach-Object { Write-Host $_ }
+$gradleExit = $LASTEXITCODE
+$ErrorActionPreference = $prevEAP
+if ($gradleExit -ne 0) { exit $gradleExit }
 
 $apk = Join-Path $buildRoot "apps\mobile\android\app\build\outputs\apk\release\app-release.apk"
 if (-not (Test-Path $apk)) {

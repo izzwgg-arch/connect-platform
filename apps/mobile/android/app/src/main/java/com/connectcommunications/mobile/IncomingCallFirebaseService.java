@@ -314,12 +314,25 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
                 JSONObject fcmMeta = new JSONObject();
                 fcmMeta.put("fcmType", type);
                 emitCallFlowNative("FCM_DATA_INCOMING_CALL", inviteForRing, fcmMeta);
-                // Pre-register SIP during the ring when the app is killed/swiped
-                // (no live JS). Boots a HeadlessJS task so the JsSIP UA registers
-                // BEFORE the user answers — the same singleton client SipContext
-                // attaches to at answer, so the answer is instant instead of
-                // cold-registering and waiting for the PBX to re-deliver the INVITE.
-                startSipPreRegisterIfKilled(inviteForRing, appData.get("pbxCallId"));
+                // NOTE (2026-06-19): headless SIP pre-register is intentionally
+                // DISABLED. It assumed the HeadlessJS push task and MainActivity
+                // share one JS runtime/singleton, but on-device traces proved Expo
+                // boots them in SEPARATE JS runtimes (registerGlobals ran twice in
+                // one PID; the answer UA reported wasAlreadyRegistered:false). The
+                // pre-register therefore registered a UA in a throwaway runtime that
+                // the answer path could not use — and worse, the PBX delivered the
+                // INVITE to that dead-end contact, forcing the answering runtime to
+                // fall back to the slow backend claim path. The correct fix is the
+                // adaptive keep-alive gate (keepAliveGate.ts): a cold-answer claim
+                // now latches the persistent FGS so the process stays resident and
+                // the next killed-state call connects instantly. Method kept (no
+                // manifest/plugin churn) but not invoked.
+                // RE-CONFIRMED 2026-06-19 in a RELEASE build (pid 6255): the headless
+                // task registered + received the INVITE (sawSession:true) while the
+                // answer UA was still cold (wasAlreadyRegistered:false, invite wait
+                // timed out). Two JS runtimes in one process is an Expo behaviour, not
+                // a dev-mode artifact — do NOT re-enable without fixing runtime sharing.
+                // startSipPreRegisterIfKilled(inviteForRing, appData.get("pbxCallId"));
                 // Multi-call: when the JS side already has an active call, skip
                 // the native ringtone + full-screen UI. The CallWaitingBanner
                 // inside ActiveCallScreen handles the waiting invite instead.

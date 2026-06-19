@@ -92,6 +92,26 @@ class SipKeepAliveService : Service() {
     private const val PREF_KEEPALIVE_ENABLED = "enabled"
     private const val ACTION_RESTART_KEEPALIVE = "com.connectcommunications.mobile.SipKeepAlive.RESTART"
 
+    /**
+     * Periodic watchdog alarm action. Distinct from the one-shot RESTART so the
+     * receiver can tell a "process died, come back now" restart from the
+     * recurring "still alive? re-affirm + re-arm" heartbeat.
+     */
+    const val ACTION_HEARTBEAT_KEEPALIVE = "com.connectcommunications.mobile.SipKeepAlive.HEARTBEAT"
+    /**
+     * Heartbeat cadence. On aggressive OEMs (Samsung One UI) the process can be
+     * SIGKILLed on recents-swipe under memory pressure WITHOUT onTaskRemoved /
+     * onDestroy ever running — so the lifecycle self-restart never gets
+     * scheduled, and ActivityManager's own START_STICKY restart is deferred
+     * (observed ~30 s "mem-pressure-event"). A pending AlarmManager alarm is held
+     * by the system independently of our process, so it still fires after a
+     * SIGKILL and resurrects the registered process. Each fire re-arms the next,
+     * so the chain survives repeated kills. 60 s trades a small wake cost for a
+     * worst-case ~60 s dead window instead of indefinite.
+     */
+    private const val HEARTBEAT_INTERVAL_MS = 60_000L
+    private const val HEARTBEAT_REQUEST_CODE = 24425
+
     // ── Foreground state intents ─────────────────────────────────────────────
     /**
      * Sent to onStartCommand to swap the service into in-call mode:
@@ -218,12 +238,70 @@ class SipKeepAliveService : Service() {
 
     fun stop(context: Context) {
       setKeepAliveEnabledFlag(context, false)
+      cancelHeartbeat(context)
       try {
         context.stopService(Intent(context, SipKeepAliveService::class.java))
         Log.i(TAG, "stop: dispatched stopService")
       } catch (t: Throwable) {
         Log.w(TAG, "stop failed: ${t.message}")
       }
+    }
+
+    /**
+     * (Re)arm the periodic watchdog alarm. One-shot alarms only — we re-arm on
+     * every fire (in KeepAliveRestartReceiver) so the chain keeps going and,
+     * crucially, survives the process being SIGKILLed between fires (the system
+     * AlarmManager holds the pending alarm independently of our process).
+     *
+     * No-op when keepalive is disabled (logged out / user requested stop).
+     */
+    @JvmStatic
+    fun scheduleHeartbeat(context: Context) {
+      try {
+        if (!isKeepAliveEnabled(context)) return
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+        val pi = heartbeatPendingIntent(context, create = true) ?: return
+        val triggerAtMs = SystemClock.elapsedRealtime() + HEARTBEAT_INTERVAL_MS
+        try {
+          alarmManager.setExactAndAllowWhileIdle(
+            AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMs, pi,
+          )
+        } catch (sec: SecurityException) {
+          // Some OS builds gate setExact* behind SCHEDULE_EXACT_ALARM when the
+          // battery-optimization exemption is revoked. Inexact-while-idle never
+          // needs the permission and is fine for a watchdog cadence.
+          alarmManager.setAndAllowWhileIdle(
+            AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMs, pi,
+          )
+          Log.w(TAG, "scheduleHeartbeat: fell back to inexact (${sec.message})")
+        }
+        Log.i(TAG, "scheduleHeartbeat in=${HEARTBEAT_INTERVAL_MS}ms")
+      } catch (t: Throwable) {
+        Log.w(TAG, "scheduleHeartbeat failed: ${t.message}")
+      }
+    }
+
+    @JvmStatic
+    fun cancelHeartbeat(context: Context) {
+      try {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return
+        val pi = heartbeatPendingIntent(context, create = false) ?: return
+        alarmManager.cancel(pi)
+        pi.cancel()
+        Log.i(TAG, "cancelHeartbeat")
+      } catch (t: Throwable) {
+        Log.w(TAG, "cancelHeartbeat failed: ${t.message}")
+      }
+    }
+
+    private fun heartbeatPendingIntent(context: Context, create: Boolean): PendingIntent? {
+      val intent = Intent(context, KeepAliveRestartReceiver::class.java).apply {
+        action = ACTION_HEARTBEAT_KEEPALIVE
+      }
+      val baseFlags = PendingIntent.FLAG_IMMUTABLE
+      val flags = if (create) baseFlags or PendingIntent.FLAG_UPDATE_CURRENT
+                  else baseFlags or PendingIntent.FLAG_NO_CREATE
+      return PendingIntent.getBroadcast(context, HEARTBEAT_REQUEST_CODE, intent, flags)
     }
 
     /**
@@ -429,6 +507,10 @@ class SipKeepAliveService : Service() {
       isRunning = true
       KeepAliveDiag.putBool(applicationContext, KeepAliveDiag.K_IS_RUNNING, true)
       acquireWakeLock()
+      // (Re)arm the watchdog heartbeat so the process is resurrected if an OEM
+      // SIGKILLs us before the next fire. Idempotent — FLAG_UPDATE_CURRENT keeps
+      // a single pending alarm.
+      scheduleHeartbeat(applicationContext)
       if (action == ACTION_EXIT_CALL) {
         Log.i(TAG, "[CONNECT_CALL_UI] foreground_service_idle — idle notification reposted after call exit")
       }

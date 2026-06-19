@@ -20,6 +20,7 @@ import {
   getPendingInvites,
   heartbeatVoiceDiagSession,
   postVoiceDiagEvent,
+  postWakeEvent,
   registerMobileDevice,
   reportMediaTest,
   respondInvite,
@@ -84,6 +85,7 @@ import {
 } from "../diagnostics/CallFlightRecorder";
 import {
   MOBILE_SIP_ANSWER_INITIAL_WAIT_MS,
+  MOBILE_SIP_ANSWER_PRECLAIM_WAIT_MS,
   MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS,
   createSipAnswerDeadline,
 } from "../sip/mobileAnswerTiming";
@@ -1061,6 +1063,9 @@ export function NotificationsProvider({
 
   // Tracks inviteId currently shown to prevent duplicates
   const shownInviteIdRef = useRef<string | null>(null);
+  // Invites we have already asked the backend to pre-deliver (ring-time
+  // INVITE requeue). Prevents firing the requeue more than once per call.
+  const preDeliverRequeuedRef = useRef<Set<string>>(new Set());
   // Holds the 45-second stale-invite auto-expire timer
   const inviteExpireTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Auto-dismisses transient ended/failure UI after a short polished delay.
@@ -1382,6 +1387,60 @@ export function NotificationsProvider({
       } catch (e) {
         // Never let instrumentation / pre-register crash the notification path.
         console.warn("[ANSWER_PIPELINE] eager_preregister threw:", e);
+      }
+
+      // ══════════════════════════════════════════════════════════════════
+      // RING-TIME INVITE PRE-DELIVERY (eliminates the answer-time claim)
+      //
+      // On this PBX the SIP INVITE is NOT pushed to the registered endpoint
+      // on its own — it is only (re)queued to the device after the backend
+      // is told the device is ready (DEVICE_REGISTER_COMPLETE → server-side
+      // `register_complete` requeue, server.ts) or after the answer-time
+      // ACCEPT/claim. The FCM wake handler in SipContext posts
+      // DEVICE_REGISTER_COMPLETE, but on a cold call that native event is
+      // DROPPED ("no ReactApplicationContext cached — JS not booted"), so the
+      // requeue never fires during the ring and EVERY answer pays the
+      // ~800 ms claim round-trip (the dominant remaining answer latency).
+      //
+      // Fire the requeue HERE — the moment the invite is observed in JS (ring
+      // start) — once registration is complete (the requeue needs a live
+      // Contact to deliver to). The INVITE then arrives over the live socket
+      // DURING the ring; CallSessionManager.onSipSessionAdded correlates it to
+      // this ringing invite by caller number (no double-ring), and at answer
+      // findIncoming() returns it immediately so the claim is SKIPPED and the
+      // connect is effectively instant. If the user answers before the INVITE
+      // lands (very fast tap / short ring), the answer pipeline still falls
+      // back to the claim path, so this is strictly an optimisation.
+      // ══════════════════════════════════════════════════════════════════
+      try {
+        const pbxCallId = (invite.pbxCallId ?? "").trim();
+        const tok = tokenRef.current;
+        if (pbxCallId && tok && !preDeliverRequeuedRef.current.has(invite.id)) {
+          preDeliverRequeuedRef.current.add(invite.id);
+          // register() is idempotent and resolves once REGISTERED.
+          void sip
+            .register()
+            .then(() => {
+              console.log(
+                "[ANSWER_PIPELINE] ring_predeliver_requeue inviteId=" +
+                  invite.id + " pbxCallId=" + pbxCallId,
+              );
+              return postWakeEvent(tok, {
+                pbxCallId,
+                stage: "DEVICE_REGISTER_COMPLETE",
+                deviceId: deviceIdRef.current,
+                details: { source: "ring_predeliver", inviteId: invite.id },
+              });
+            })
+            .catch((e) => {
+              console.warn(
+                "[ANSWER_PIPELINE] ring_predeliver_requeue failed:",
+                e instanceof Error ? e.message : String(e),
+              );
+            });
+        }
+      } catch (e) {
+        console.warn("[ANSWER_PIPELINE] ring_predeliver threw:", e);
       }
 
       // Register with the multi-call manager regardless of whether this is the
@@ -1959,9 +2018,14 @@ export function NotificationsProvider({
         // (state ≠ "registered" ∧ ≠ "registering"). This mirrors the
         // SipContext AppState handler.
         const t0_sipReg = Date.now();
+        // Regression fix (2026-06-19): use a SHORT pre-claim grace, not the 8 s
+        // MOBILE_SIP_ANSWER_INITIAL_WAIT_MS. On this PBX the INVITE only arrives
+        // after the backend ACCEPT (claim), so a long pre-claim wait was wasted
+        // on every answer. The post-accept extension below still gives the
+        // requeued leg the full window to land. See MOBILE_SIP_ANSWER_PRECLAIM_WAIT_MS.
         const answerDeadline = createSipAnswerDeadline(
           answerTappedAt,
-          MOBILE_SIP_ANSWER_INITIAL_WAIT_MS,
+          MOBILE_SIP_ANSWER_PRECLAIM_WAIT_MS,
         );
         const sipRegisterPromise: Promise<boolean> = (async () => {
           let registered = false;
@@ -2279,6 +2343,23 @@ export function NotificationsProvider({
             sinceAnswerMs: t2_claimStart - answerTappedAt,
             reason: 'no_invite_before_initial_wait',
           }));
+          // No SIP INVITE arrived on the live socket before the initial wait —
+          // i.e. this device did not hold its registration in the background and
+          // had to be rescued via the backend claim path (the dominant cause of
+          // the "sat on answering for ages" cold-call symptom). This is the
+          // definitive proof the adaptive keep-alive gate is watching for, but
+          // the gate previously only latched on slow *registration*, never on a
+          // slow *answer* when registration itself was fast — so this failure
+          // mode slipped through and every killed-state call stayed slow. Latch
+          // now so the persistent FGS arms and the next killed call keeps the
+          // process resident → instant connect.
+          try {
+            sip.markBackgroundDeliveryFailure(
+              'cold_answer_no_sip_invite:' + (t2_claimStart - answerTappedAt) + 'ms',
+            );
+          } catch {
+            /* diagnostics latch must never break the answer path */
+          }
           const resp = await respondInvite(
             authToken,
             invite.id,
@@ -2383,84 +2464,105 @@ export function NotificationsProvider({
           return;
         }
 
+        // ══════════════════════════════════════════════════════════════════
+        // WARM ANSWER (INVITE already on the live socket) — instant connect.
+        //
+        // When the device held its registration in the background, Asterisk
+        // dialed it directly and the INVITE arrived during the ring
+        // (`waitForIncomingInvite` returned true on the first wait, so
+        // `backendClaimed` is still false here). Bridging is PURE SIP — the
+        // backend ACCEPT is only bookkeeping (atomic DB claim + INVITE_CLAIMED
+        // stop-ring for sibling devices) and, on the cold path, an AMI requeue.
+        //
+        // Historically we awaited the full ACCEPT round-trip (~1.2s — it awaits
+        // a server-side AMI requeue) BEFORE sending the SIP 200 OK, so every
+        // app-open/registered call paid that latency for nothing. Now we send
+        // the 200 OK FIRST and fire ACCEPT async. By the time the server would
+        // run the requeue, Asterisk has observed our 200 OK and set
+        // `extensionAnsweredAt`, so `requeueLiveCallToDialplan` skips the
+        // (here-redundant, potentially disruptive) AMI Redirect via its guard.
+        // Verified safe against telephony code; the cold/requeue path below is
+        // unchanged.
+        // ══════════════════════════════════════════════════════════════════
+        let answered: boolean;
         if (!backendClaimed) {
-          const t2_claimStart = Date.now();
-          console.log('[ANSWER_PIPELINE] CLAIM_START (invite ready)', JSON.stringify({
+          const t2_warm = Date.now();
+          console.log('[ANSWER_PIPELINE] WARM_ANSWER (invite present, accept async)', JSON.stringify({
             inviteId: invite.id,
             pbxCallId: invite.pbxCallId,
-            sinceAnswerMs: t2_claimStart - answerTappedAt,
+            sinceAnswerMs: t2_warm - answerTappedAt,
           }));
-          const resp = await respondInvite(
+          answerDeadline.handle.extend(MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS);
+          consumedInviteActionRef.current.add(acceptKey);
+          emitAnswerFlowEvent("SIP_ANSWER_REQUESTED", invite, {
+            sinceAnswerMs: t2_warm - answerTappedAt,
+          });
+
+          // SIP 200 OK first — this is what actually bridges the call.
+          answered = await sip
+            .answerIncomingInvite(
+              inviteMatch,
+              MOBILE_SIP_ANSWER_INITIAL_WAIT_MS,
+              recordSipAnswerTrace,
+              answerDeadline.handle,
+            )
+            .catch(() => false);
+
+          // Fire-and-forget backend bookkeeping: atomic DB claim + INVITE_CLAIMED
+          // push so sibling devices stop ringing. Never blocks the connect. The
+          // server-side requeue is skipped because our 200 OK already set
+          // `extensionAnsweredAt`. Asterisk arbitrates multi-device races by
+          // first-200-OK-wins, so INVITE_ALREADY_HANDLED needs no teardown here.
+          void respondInvite(
             authToken,
             invite.id,
             "ACCEPT",
             deviceIdRef.current || undefined,
-          ).catch(() => null);
-          const t3_claimDone = Date.now();
-          console.log('[ANSWER_PIPELINE] CLAIM_DONE', JSON.stringify({
-            code: resp?.code,
-            status: resp?.status,
-            tookMs: t3_claimDone - t2_claimStart,
-            sinceAnswerMs: t3_claimDone - answerTappedAt,
-          }));
-
-          if (!resp || resp.code !== "INVITE_CLAIMED_OK") {
-            const reason = resp?.code || "unknown";
-            if (reason === "INVITE_ALREADY_HANDLED" && resp?.status === "ACCEPTED") {
-              console.log("[Notif] Invite already claimed by another handler, leaving screen active");
-              answerHandoffInviteIdRef.current = null;
-              setAnswerHandoffTick((n) => n + 1);
-              answerFlowCommitted = true;
-              return;
-            }
-            sip.rejectIncomingInvite({
-              inviteId: invite.id,
-              fromNumber: invite.fromNumber,
-              toExtension: invite.toExtension,
-              pbxCallId: invite.pbxCallId,
-              sipCallTarget: invite.sipCallTarget,
-            }).catch(() => undefined);
-            if (reason === "TURN_REQUIRED_NOT_VERIFIED" || reason === "MEDIA_TEST_REQUIRED_NOT_PASSED") {
-              await respondInvite(authToken, invite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
-            }
-            showEndedState(
-              invite,
-              "Call ended",
-              { reason: `respond_invite_failed:${reason}` },
-              1200,
-            );
-            endNativeCall(callId);
-            AsyncStorage.removeItem(PENDING_CALL_STORAGE_KEY).catch(() => {});
-            return;
-          }
-
-          backendClaimed = true;
-          answerDeadline.handle.extend(MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS);
-          flightRecord('BACKEND', 'INVITE_CLAIMED', {
-            inviteId: invite.id,
-            pbxCallId: invite.pbxCallId ?? null,
-            payload: {
-              sinceAnswerMs: t3_claimDone - answerTappedAt,
-              answerWaitExtendedMs: MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS,
-              answerWaitUntilMs: answerDeadline.handle.getUntilMs(),
-              path: 'after_invite_found',
-            },
-          });
-          consumedInviteActionRef.current.add(acceptKey);
-        }
-
-        emitAnswerFlowEvent("SIP_ANSWER_REQUESTED", invite, {
-          sinceAnswerMs: Date.now() - answerTappedAt,
-        });
-
-        const answered = await sip
-          .answerIncomingInvite(
-            inviteMatch,
-            MOBILE_SIP_ANSWER_INITIAL_WAIT_MS,
-            recordSipAnswerTrace,
-            answerDeadline.handle,
           )
-          .catch(() => false);
+            .then((resp) => {
+              console.log('[ANSWER_PIPELINE] WARM_ACCEPT_DONE', JSON.stringify({
+                code: resp?.code,
+                status: resp?.status,
+                sinceAnswerMs: Date.now() - answerTappedAt,
+              }));
+              const reason = resp?.code;
+              // Gated tenants can reject the accept after we answered. Honour the
+              // policy by tearing the call down (rare; ungated tenants always OK).
+              if (
+                reason === "TURN_REQUIRED_NOT_VERIFIED" ||
+                reason === "MEDIA_TEST_REQUIRED_NOT_PASSED"
+              ) {
+                sip.hangup().catch(() => undefined);
+                respondInvite(authToken, invite.id, "DECLINE", deviceIdRef.current || undefined).catch(() => undefined);
+              }
+            })
+            .catch(() => undefined);
+
+          if (answered) {
+            backendClaimed = true;
+            flightRecord('BACKEND', 'INVITE_CLAIMED', {
+              inviteId: invite.id,
+              pbxCallId: invite.pbxCallId ?? null,
+              payload: {
+                sinceAnswerMs: Date.now() - answerTappedAt,
+                path: 'warm_answer_first',
+              },
+            });
+          }
+        } else {
+          // Cold / requeue path: ACCEPT was already awaited above; answer now.
+          emitAnswerFlowEvent("SIP_ANSWER_REQUESTED", invite, {
+            sinceAnswerMs: Date.now() - answerTappedAt,
+          });
+          answered = await sip
+            .answerIncomingInvite(
+              inviteMatch,
+              MOBILE_SIP_ANSWER_INITIAL_WAIT_MS,
+              recordSipAnswerTrace,
+              answerDeadline.handle,
+            )
+            .catch(() => false);
+        }
 
         if (!answered) {
           setCallFlowLastError("sip_answer_not_confirmed");
