@@ -156,13 +156,40 @@ export function AppConfirmDialog({
 export function AppAlertHost() {
   const { colors } = useTheme();
   const [current, setCurrent] = useState<AppAlertOptions | null>(null);
+  // FIFO queue so multiple showAppAlert() calls are shown one-at-a-time instead
+  // of clobbering each other. Previously a second alert replaced the first
+  // (e.g. on first-run the full-screen-intent and battery-optimization prompts
+  // fire ~1s apart) — the earlier prompt was silently dropped before the user
+  // could act on it. currentRef mirrors `current` so the handler can decide
+  // synchronously whether to present or enqueue.
+  const queueRef = useRef<AppAlertOptions[]>([]);
+  const currentRef = useRef<AppAlertOptions | null>(null);
+
+  const present = (opts: AppAlertOptions | null) => {
+    currentRef.current = opts;
+    setCurrent(opts);
+  };
 
   useEffect(() => {
-    registerAppAlertHandler((opts) => setCurrent(opts));
-    return () => registerAppAlertHandler(null);
+    registerAppAlertHandler((opts) => {
+      if (currentRef.current) {
+        const dup =
+          (currentRef.current.title === opts.title && currentRef.current.message === opts.message) ||
+          queueRef.current.some((q) => q.title === opts.title && q.message === opts.message);
+        if (!dup) queueRef.current.push(opts);
+        return;
+      }
+      present(opts);
+    });
+    return () => {
+      registerAppAlertHandler(null);
+      queueRef.current = [];
+      currentRef.current = null;
+    };
   }, []);
 
-  const close = () => setCurrent(null);
+  // Advance to the next queued alert (or dismiss when the queue is empty).
+  const close = () => present(queueRef.current.shift() ?? null);
 
   const buttons =
     current?.buttons && current.buttons.length > 0
