@@ -32,6 +32,7 @@ import {
   callerDisplayLines,
   callbackNumber,
   suggestedContactName,
+  phoneMatchKey,
   type CallerDirection,
   type NormalizedCallerIdentity,
 } from '../../calls/callerIdentity';
@@ -351,18 +352,23 @@ export function RecentTab() {
     queryFn: () => getContacts(token!, ''),
     staleTime: 3 * 60 * 1000,
     gcTime: 20 * 60 * 1000,
-    refetchOnMount: false,
+    // Refetch on mount when stale so a contact added elsewhere (Contacts tab /
+    // Add-to-Contacts) — which invalidates this same key — shows its name on the
+    // recent-call rows the next time the tab opens, instead of waiting for gc.
+    refetchOnMount: true,
     refetchOnWindowFocus: false,
   });
 
-  // digits → saved contact display name. Keyed by phone digits so formatting
-  // differences (spaces, +1, dashes) still match.
+  // canonical phone key → saved contact display name. Using phoneMatchKey (not a
+  // raw digit string) means a contact stored as "+1 347-971-8687" still matches a
+  // CDR's national "3479718687" — the directory holds a mix of 10- and 11-digit
+  // forms, so an exact digit match would silently fail to resolve the name.
   const contactNameByDigits = useMemo(() => {
     const map = new Map<string, string>();
     for (const c of contactsQuery.data?.rows ?? []) {
       for (const p of c.phones ?? []) {
-        const digits = String(p.numberRaw ?? '').replace(/\D/g, '');
-        if (digits.length >= 7 && !map.has(digits)) map.set(digits, c.displayName);
+        const key = phoneMatchKey(p.numberRaw);
+        if (key && !map.has(key)) map.set(key, c.displayName);
       }
     }
     return map;
@@ -370,10 +376,9 @@ export function RecentTab() {
 
   const resolveContactName = useCallback(
     (number: string | null): string | null => {
-      if (!number) return null;
-      const digits = number.replace(/\D/g, '');
-      if (digits.length < 7) return null;
-      return contactNameByDigits.get(digits) ?? null;
+      const key = phoneMatchKey(number);
+      if (!key) return null;
+      return contactNameByDigits.get(key) ?? null;
     },
     [contactNameByDigits],
   );

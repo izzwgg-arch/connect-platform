@@ -372,6 +372,69 @@ export async function createContact(token: string, input: CreateContactInput): P
   return json as { contact: any };
 }
 
+export type ContactImportItemStatus = "created" | "duplicate" | "invalid" | "error";
+export type ContactImportBatchResult = {
+  summary: { created: number; duplicates: number; invalid: number; failed: number };
+  results: Array<{ index: number; status: ContactImportItemStatus; id?: string; error?: string }>;
+};
+
+/** Max contacts per POST /contacts/import call (must stay <= server cap of 200). */
+export const CONTACT_IMPORT_BATCH_SIZE = 100;
+const CONTACT_IMPORT_TIMEOUT_MS = 60_000;
+
+function toContactWriteBody(input: CreateContactInput) {
+  return {
+    type: "external" as const,
+    firstName: input.firstName?.trim() || undefined,
+    lastName: input.lastName?.trim() || undefined,
+    displayName: input.displayName?.trim() || undefined,
+    company: input.company?.trim() || undefined,
+    notes: input.notes?.trim() || undefined,
+    favorite: input.favorite ?? false,
+    active: true,
+    phones: (input.phones || [])
+      .map((p) => ({ type: p.type || "mobile", numberRaw: String(p.numberRaw ?? "").trim(), isPrimary: p.isPrimary }))
+      .filter((p) => p.numberRaw.length > 0),
+    emails: (input.emails || [])
+      .map((e) => ({ type: e.type || "work", email: String(e.email ?? "").trim(), isPrimary: e.isPrimary }))
+      .filter((e) => e.email.length > 0),
+  };
+}
+
+/**
+ * Create up to {@link CONTACT_IMPORT_BATCH_SIZE} contacts in a SINGLE request.
+ * The phone-book importer uses this instead of one POST /contacts per contact
+ * so a large import is a handful of requests, not thousands — the latter
+ * tripped the nginx auto-ban (HTTP 403 storm) mid-import.
+ */
+export async function importContactsBatch(
+  token: string,
+  inputs: CreateContactInput[],
+): Promise<ContactImportBatchResult> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), CONTACT_IMPORT_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/contacts/import`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ contacts: inputs.map(toContactWriteBody) }),
+      signal: ctrl.signal,
+    });
+  } catch (e: any) {
+    if (e?.name === "AbortError") throw new Error("CONTACT_IMPORT_TIMEOUT");
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+  const json = await parseJson(res);
+  if (!res.ok) {
+    const code = typeof json?.error === "string" ? json.error : "CONTACT_IMPORT_FAILED";
+    throw new Error(code === "CONTACT_IMPORT_FAILED" ? `${code}_${res.status}` : code);
+  }
+  return json as ContactImportBatchResult;
+}
+
 export async function getChatThreads(token: string): Promise<ChatThread[]> {
   const res = await fetch(`${API_BASE}/chat/threads`, {
     headers: { Authorization: `Bearer ${token}` },

@@ -10,18 +10,23 @@
  *   friendly message with a button to open Settings.
  * • Phone numbers are normalised to digit-only (with optional leading +)
  *   strings. Two contacts collide if any normalised number matches.
- * • The server's `POST /contacts/import` endpoint is currently a stub
- *   (`501 import_not_implemented`), so we fall back to repeated
- *   `POST /contacts` calls — exactly what the existing "Add contact"
- *   modal already uses. Each call is wrapped in try/catch so a
- *   server-side `409 duplicate_phone` becomes a "merged/skipped" entry
- *   rather than a hard failure.
+ * • Uploads go through the server's batch endpoint `POST /contacts/import`
+ *   in chunks (see {@link importContacts}). The server reports each item's
+ *   outcome, so a `duplicate_phone` becomes a "merged" entry and an invalid
+ *   row becomes a counted failure — neither aborts the batch. Batching keeps
+ *   a large import to a few dozen requests instead of thousands, which used
+ *   to trip the nginx auto-ban (HTTP 403 storm) mid-import.
  * • All requests stay scoped to the user's tenant via the existing JWT
  *   auth — the server resolves tenantId from the token.
  */
 import * as Contacts from 'expo-contacts';
 import { Linking, Platform } from 'react-native';
-import { createContact, getContacts, type CreateContactInput } from '../api/client';
+import {
+  CONTACT_IMPORT_BATCH_SIZE,
+  getContacts,
+  importContactsBatch,
+  type CreateContactInput,
+} from '../api/client';
 import type { Contact, ContactPhone } from '../types';
 
 const log = (tag: string, payload?: unknown) => {
@@ -298,19 +303,28 @@ export async function buildImportPreview(authToken: string): Promise<ImportPrevi
 
 export type ImportProgressCallback = (progress: { done: number; total: number; currentName: string }) => void;
 
-/** Parallel uploads — avoids one hung POST blocking all progress updates. */
-const IMPORT_UPLOAD_CONCURRENCY = 4;
+/** Small pause between batches — gentle on the API, irrelevant to total time. */
+const IMPORT_BATCH_PAUSE_MS = 120;
+
+function friendlyImportError(msg: string): string {
+  if (msg === 'forbidden' || msg.includes('forbidden') || msg.includes('_403')) {
+    return 'Your account cannot add contacts (or the server is rate-limiting). Ask a tenant admin to grant contact-management access, or try again shortly.';
+  }
+  if (msg.includes('CONTACT_IMPORT_TIMEOUT')) {
+    return 'Network timed out while saving a batch of contacts. Check your connection and try again.';
+  }
+  return msg;
+}
 
 /**
- * Import the given candidates into Connect. Each candidate becomes one
- * `POST /contacts` call. The server enforces tenant isolation via the
- * JWT, and rejects duplicate phones with `409 duplicate_phone` — we
- * count those as "duplicates merged" so the user sees a clean summary
- * instead of a wall of errors.
+ * Import the given candidates into Connect via the batch endpoint
+ * (`POST /contacts/import`). Candidates are uploaded in chunks of
+ * {@link CONTACT_IMPORT_BATCH_SIZE} so a ~3000-contact phone book is a few
+ * dozen requests rather than thousands — the old one-POST-per-contact flood
+ * tripped the nginx auto-ban (HTTP 403 storm) mid-import.
  *
- * Progress: `completed` increments only after each contact is fully
- * processed (so the UI does not sit at "0" while the first slow network
- * round-trip is in flight). A small pool runs uploads in parallel.
+ * The server reports each item's outcome, so a duplicate phone counts as
+ * "merged" and an invalid row counts as a failure, without aborting the batch.
  */
 export async function importContacts(
   authToken: string,
@@ -325,69 +339,58 @@ export async function importContacts(
     failureMessages: [],
   };
 
-  const total = candidates.length;
+  const importable: PhoneContactCandidate[] = [];
+  for (const c of candidates) {
+    if (c.skipReason === 'no_phone' || c.phones.length === 0) result.skippedNoPhone++;
+    else importable.push(c);
+  }
+
+  const total = importable.length;
   let completed = 0;
+  onProgress?.({ done: 0, total, currentName: 'Starting import…' });
 
-  const bumpProgress = (currentName: string) => {
-    onProgress?.({ done: completed, total, currentName });
-  };
-
-  bumpProgress('Starting import…');
-
-  const queue = candidates.slice();
-
-  const processOne = async (c: PhoneContactCandidate): Promise<void> => {
-    if (c.skipReason === 'no_phone' || c.phones.length === 0) {
-      result.skippedNoPhone++;
-      return;
-    }
-
-    const input: CreateContactInput = {
+  for (let start = 0; start < importable.length; start += CONTACT_IMPORT_BATCH_SIZE) {
+    const chunk = importable.slice(start, start + CONTACT_IMPORT_BATCH_SIZE);
+    const inputs: CreateContactInput[] = chunk.map((c) => ({
       firstName: c.firstName || undefined,
       lastName: c.lastName || undefined,
       displayName: c.displayName || undefined,
       company: c.company || undefined,
       phones: c.phones.map((p) => ({ type: p.type, numberRaw: p.numberRaw, isPrimary: p.isPrimary })),
       emails: c.emails.map((e) => ({ type: e.type, email: e.email, isPrimary: e.isPrimary })),
-    };
+    }));
 
     try {
-      await createContact(authToken, input);
-      result.imported++;
-    } catch (err: any) {
-      const msg = String(err?.message || err);
-      if (msg.includes('duplicate_phone')) {
-        result.duplicatesMerged++;
-      } else {
-        result.failures++;
-        let detail = msg;
-        if (msg === 'forbidden' || msg.includes('forbidden')) {
-          detail =
-            'Your account cannot add contacts. Ask a tenant admin to grant contact-management access, or try again as a different role.';
-        } else if (msg.includes('CONTACT_CREATE_TIMEOUT')) {
-          detail = 'Network timed out while saving this contact. Check your connection and try again.';
+      const batch = await importContactsBatch(authToken, inputs);
+      result.imported += batch.summary.created;
+      result.duplicatesMerged += batch.summary.duplicates;
+      const failedItems = batch.summary.invalid + batch.summary.failed;
+      result.failures += failedItems;
+      for (const r of batch.results) {
+        if ((r.status === 'invalid' || r.status === 'error') && result.failureMessages.length < 8) {
+          const name = chunk[r.index]?.displayName ?? `Contact #${start + r.index + 1}`;
+          result.failureMessages.push(`${name}: ${r.error || r.status}`);
         }
-        if (result.failureMessages.length < 8) {
-          result.failureMessages.push(`${c.displayName}: ${detail}`);
-        }
-        log('import_failed', { name: c.displayName, err: msg });
       }
+    } catch (err: any) {
+      // Whole-batch failure (network, timeout, ban): count every item in this
+      // chunk as a failure but keep going so later chunks can still succeed.
+      const msg = String(err?.message || err);
+      result.failures += chunk.length;
+      if (result.failureMessages.length < 8) {
+        result.failureMessages.push(`${chunk.length} contacts in this batch: ${friendlyImportError(msg)}`);
+      }
+      log('import_batch_failed', { start, size: chunk.length, err: msg });
     }
-  };
 
-  async function worker(): Promise<void> {
-    for (;;) {
-      const c = queue.shift();
-      if (!c) return;
-      await processOne(c);
-      completed++;
-      log('import_contact_done', { completed, total, name: c.displayName });
-      bumpProgress(c.displayName);
+    completed += chunk.length;
+    onProgress?.({ done: completed, total, currentName: chunk[chunk.length - 1]?.displayName ?? '' });
+    log('import_batch_done', { completed, total });
+
+    if (start + CONTACT_IMPORT_BATCH_SIZE < importable.length && IMPORT_BATCH_PAUSE_MS > 0) {
+      await new Promise((resolve) => setTimeout(resolve, IMPORT_BATCH_PAUSE_MS));
     }
   }
-
-  const pool = Math.max(1, Math.min(IMPORT_UPLOAD_CONCURRENCY, candidates.length));
-  await Promise.all(Array.from({ length: pool }, () => worker()));
 
   log('import_complete', result);
   return result;

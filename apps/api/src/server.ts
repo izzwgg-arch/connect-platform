@@ -25137,6 +25137,20 @@ const contactEmailInput = z.object({
   email: z.string().email(),
   isPrimary: z.boolean().optional(),
 });
+/** Loose, defensive check used to DROP junk emails before strict validation —
+ *  phone-book imports routinely carry malformed addresses, and one bad email
+ *  must not fail (500) the whole contact. */
+function looksLikeEmail(value: unknown): boolean {
+  return typeof value === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+/** Drop email entries that would fail strict validation so the rest of the
+ *  contact still saves. Leaves all other fields untouched. */
+function sanitizeContactBody<T>(body: T): T {
+  if (body && typeof body === "object" && Array.isArray((body as any).emails)) {
+    (body as any).emails = (body as any).emails.filter((e: any) => looksLikeEmail(e?.email));
+  }
+  return body;
+}
 const contactAddressInput = z.object({
   street: z.string().optional().nullable(),
   city: z.string().optional().nullable(),
@@ -25357,21 +25371,43 @@ app.get("/contacts", async (req, reply) => {
   });
 });
 
-app.post("/contacts", async (req, reply) => {
-  const user = await requirePortalActionPermission(req, reply, "can_manage_contacts");
-  if (!user) return;
-  const tenantId = effectiveContactsTenantId(req, user);
-  if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
-  const input = contactWriteInput.parse(req.body || {});
+type CreateContactOutcome =
+  | { status: "created"; contact: any }
+  | { status: "duplicate" }
+  | { status: "invalid"; error: string }
+  | { status: "error"; error: string };
+
+/**
+ * Create a single contact + its children. Shared by POST /contacts (single) and
+ * POST /contacts/import (batch). Never throws for the expected outcomes — a
+ * duplicate phone, an empty contact, or a unique-constraint race all map to a
+ * structured result so the batch importer can keep going instead of aborting.
+ */
+async function createOneContact(
+  tenantId: string,
+  createdBy: string,
+  rawBody: unknown,
+): Promise<CreateContactOutcome> {
+  const parsed = contactWriteInput.safeParse(sanitizeContactBody(rawBody ?? {}));
+  if (!parsed.success) {
+    return { status: "invalid", error: parsed.error.issues[0]?.message || "invalid_contact_input" };
+  }
+  const input = parsed.data;
   const displayName = buildContactDisplayName(input);
-  if (!displayName.trim() && input.phones.length === 0 && input.emails.length === 0) return reply.code(400).send({ error: "name_phone_or_email_required" });
-  try { await assertNoDuplicateContactPhones(tenantId, input.phones); } catch { return reply.code(409).send({ error: "duplicate_phone" }); }
+  if (!displayName.trim() && input.phones.length === 0 && input.emails.length === 0) {
+    return { status: "invalid", error: "name_phone_or_email_required" };
+  }
+  try {
+    await assertNoDuplicateContactPhones(tenantId, input.phones);
+  } catch {
+    return { status: "duplicate" };
+  }
   const contact = await (db as any).contact.create({
     data: {
       tenantId, type: input.type === "company" ? "COMPANY" : "EXTERNAL",
       firstName: input.firstName || null, lastName: input.lastName || null, displayName,
       company: input.company || null, title: input.title || null, notes: input.notes || null,
-      favorite: input.favorite ?? false, active: input.active ?? true, source: "MANUAL", createdBy: user.sub,
+      favorite: input.favorite ?? false, active: input.active ?? true, source: "MANUAL", createdBy,
     },
   });
   try {
@@ -25379,24 +25415,73 @@ app.post("/contacts", async (req, reply) => {
   } catch (err: any) {
     // Roll back the just-created parent so a failed child insert never leaves
     // a phoneless/orphan contact, then surface unique-constraint races as a
-    // clean 409 (the importer treats that as "merged", not a hard failure).
+    // duplicate (the importer treats that as "merged", not a hard failure).
     await (db as any).contact.delete({ where: { id: contact.id } }).catch(() => {});
-    if (err?.code === "P2002") return reply.code(409).send({ error: "duplicate_phone" });
-    throw err;
+    if (err?.code === "P2002") return { status: "duplicate" };
+    return { status: "error", error: String(err?.message || "create_failed") };
   }
   const row = await (db as any).contact.findUnique({ where: { id: contact.id }, include: CONTACT_INCLUDE });
-  return reply.code(201).send({ contact: formatContact(row) });
-});
+  return { status: "created", contact: formatContact(row) };
+}
 
-app.post("/contacts/import", async (req, reply) => {
-  const user = await requirePermission(req, reply, canManageCustomerWorkflow);
+app.post("/contacts", async (req, reply) => {
+  const user = await requirePortalActionPermission(req, reply, "can_manage_contacts");
   if (!user) return;
   const tenantId = effectiveContactsTenantId(req, user);
   if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
-  return reply.code(501).send({
-    error: "import_not_implemented",
-    message: "CSV import endpoint is scaffolded; manual contact creation is available through POST /contacts.",
-  });
+  const result = await createOneContact(tenantId, user.sub, req.body);
+  if (result.status === "invalid") return reply.code(400).send({ error: result.error });
+  if (result.status === "duplicate") return reply.code(409).send({ error: "duplicate_phone" });
+  if (result.status === "error") return reply.code(500).send({ error: "internal_error" });
+  return reply.code(201).send({ contact: result.contact });
+});
+
+const CONTACTS_IMPORT_MAX_BATCH = 200;
+const contactImportInput = z.object({
+  contacts: z.array(z.any()).min(1).max(CONTACTS_IMPORT_MAX_BATCH),
+});
+
+/**
+ * Batch contact creator. The mobile phone-book import sends contacts here in
+ * chunks instead of firing one POST /contacts per contact — thousands of
+ * individual requests previously tripped the nginx auto-ban (HTTP 403 storms)
+ * mid-import. Each item is processed independently and reported back so a bad
+ * row never aborts the batch.
+ */
+app.post("/contacts/import", async (req, reply) => {
+  const user = await requirePortalActionPermission(req, reply, "can_manage_contacts");
+  if (!user) return;
+  const tenantId = effectiveContactsTenantId(req, user);
+  if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
+  const parsed = contactImportInput.safeParse(req.body || {});
+  if (!parsed.success) {
+    return reply.code(400).send({
+      error: "invalid_import_payload",
+      message: parsed.error.issues[0]?.message || `contacts must be an array of 1–${CONTACTS_IMPORT_MAX_BATCH} items`,
+    });
+  }
+  const results: Array<{ index: number; status: CreateContactOutcome["status"]; id?: string; error?: string }> = [];
+  const summary = { created: 0, duplicates: 0, invalid: 0, failed: 0 };
+  // Sequential on purpose: a single batch HTTP request, modest DB write
+  // concurrency. Avoids re-introducing the request flood this endpoint exists
+  // to eliminate.
+  for (let i = 0; i < parsed.data.contacts.length; i++) {
+    const outcome = await createOneContact(tenantId, user.sub, parsed.data.contacts[i]);
+    if (outcome.status === "created") {
+      summary.created++;
+      results.push({ index: i, status: "created", id: outcome.contact.id });
+    } else if (outcome.status === "duplicate") {
+      summary.duplicates++;
+      results.push({ index: i, status: "duplicate" });
+    } else if (outcome.status === "invalid") {
+      summary.invalid++;
+      results.push({ index: i, status: "invalid", error: outcome.error });
+    } else {
+      summary.failed++;
+      results.push({ index: i, status: "error", error: outcome.error });
+    }
+  }
+  return reply.code(200).send({ tenantId, summary, results });
 });
 
 app.get("/contacts/:id", async (req, reply) => {

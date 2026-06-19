@@ -101,6 +101,21 @@ export function looksLikePstn(v: string | null | undefined): boolean {
 }
 
 /**
+ * Canonical key for matching two phone numbers that may be stored/delivered in
+ * different formats. Contacts are saved in a mix of national ("3479718687") and
+ * country-coded ("+1 347-971-8687" → "13479718687") forms, while inbound CDRs
+ * usually carry the national form. A naive digits-only equality misses these,
+ * so we collapse a leading North-American "1" country code to the 10-digit
+ * national number. Returns null when there are too few digits to match on.
+ */
+export function phoneMatchKey(v: string | null | undefined): string | null {
+  let d = digitsOnly(v);
+  if (d.length < PSTN_MIN_DIGITS) return null;
+  if (d.length === 11 && d.startsWith("1")) d = d.slice(1);
+  return d;
+}
+
+/**
  * Split a PBX display-name into its ring-group prefix and the remaining caller
  * info. The VitalPBX dialplan prepends the prefix on EVERY ring-group pass
  * (`Set(CALLERID(name)=Estimates:${CALLERID(name)})`), so the name frequently
