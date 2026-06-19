@@ -36964,3 +36964,512 @@ table tr:hover {
   box-shadow: var(--crm-light-shadow, 0 20px 52px rgba(31, 53, 78, 0.1)) !important;
   backdrop-filter: none !important;
 }
+
+/* CRM KPI light mode: every operational KPI strip uses the exact ChatKpiTile card formula. */
+:root[data-theme="light"] :is(
+  .cc-shell.crm-queue-workspace .cc-kpi-strip,
+  .ch-shell.crm-calls-workspace .ch-kpi-bar,
+  .vm-shell.crm-voicemail-workspace .vm-kpis,
+  .td-page.crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-contacts-workspace .crm-queue-kpi-strip,
+  .crm-checklist-workspace .crm-queue-kpi-strip,
+  .crm-scripts-workspace .crm-queue-kpi-strip,
+  .crm-forms-workspace .crm-queue-kpi-strip,
+  .crm-voicemail-drops-workspace .crm-queue-kpi-strip,
+  .crm-tasks-workspace .crm-queue-kpi-strip,
+  .crm-funders-workspace .crm-queue-kpi-strip,
+  .workspace-overview .crm-queue-kpi-strip,
+  .campaigns-page-shell .crm-queue-kpi-strip
+) .crm-queue-kpi-card {
+  border: 1px solid rgba(194, 211, 231, 0.92) !important;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.99), rgba(247, 250, 255, 0.96)),
+    radial-gradient(circle at 100% 0%, rgba(211, 229, 255, 0.52), transparent 35%) !important;
+  box-shadow: 0 20px 52px rgba(31, 53, 78, 0.1) !important;
+  backdrop-filter: none !important;
+}
+
+:root[data-theme="light"] :is(
+  .crm-dashboard-workspace,
+  .crm-queue-workspace,
+  .crm-contacts-workspace,
+  .crm-forms-workspace,
+  .crm-funders-workspace,
+  .crm-email-workspace,
+  .crm-tasks-workspace,
+  .crm-scripts-workspace,
+  .crm-checklist-workspace,
+  .crm-voicemail-drops-workspace,
+  .crm-wallboard-workspace,
+  .campaigns-page-shell,
+  .campaign-detail-shell,
+  .crm-contact-detail-workspace
+) :is(
+  .crm-dashboard-kpi-card,
+  .tasks-kpi-card,
+  .campaigns-kpi-card,
+  .campaign-detail-kpi,
+  .crm-email-kpi-card,
+  .crm-cinema-kpi-card,
+  .crm-cinema-detail-kpi,
+  .crm-contact-header-metric,
+  .crm-contact-right-rail-kpi,
+  .dash-v2-ivr-stat,
+  .checklist-kpi-tile,
+  .scripts-kpi-tile
+) {
+  border: 1px solid rgba(194, 211, 231, 0.92) !important;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.99), rgba(247, 250, 255, 0.96)),
+    radial-gradient(circle at 100% 0%, rgba(211, 229, 255, 0.52), transparent 35%) !important;
+  box-shadow: 0 20px 52px rgba(31, 53, 78, 0.1) !important;
+  backdrop-filter: none !important;
+}
+
+/* CRM KPI light mode: extend Chat's colored number/icon layer to every CRM KPI strip. */
+:root[data-theme="light"] :is(
+  .cc-shell.crm-queue-workspace .cc-kpi-strip,
+  .ch-shell.crm-calls-workspace .ch-kpi-bar,
+  .vm-shell.crm-voicemail-workspace .vm-kpis,
+  .td-page.crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-contacts-workspace .crm-queue-kpi-strip,
+  .crm-checklist-workspace .crm-queue-kpi-strip,
+  .crm-scripts-workspace .crm-queue-kpi-strip,
+  .crm-forms-workspace .crm-queue-kpi-strip,
+  .crm-voicemail-drops-workspace .crm-queue-kpi-strip,
+  .crm-tasks-workspace .crm-queue-kpi-strip,
+  .crm-funders-workspace .crm-queue-kpi-strip,
+  .workspace-overview .crm-queue-kpi-strip,
+  .campaigns-page-shell .crm-queue-kpi-strip
+) .crm-queue-kpi-card {
+  position: relative;
+  overflow: hidden;
+  padding-left: 1.15rem !important;
+  border-radius: 1.15rem !important;
+}
+
+:root[data-theme="light"] :is(
+  .cc-shell.crm-queue-workspace .cc-kpi-strip,
+  .ch-shell.crm-calls-workspace .ch-kpi-bar,
+  .vm-shell.crm-voicemail-workspace .vm-kpis,
+  .td-page.crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-contacts-workspace .crm-queue-kpi-strip,
+  .crm-checklist-workspace .crm-queue-kpi-strip,
+  .crm-scripts-workspace .crm-queue-kpi-strip,
+  .crm-forms-workspace .crm-queue-kpi-strip,
+  .crm-voicemail-drops-workspace .crm-queue-kpi-strip,
+  .crm-tasks-workspace .crm-queue-kpi-strip,
+  .crm-funders-workspace .crm-queue-kpi-strip,
+  .workspace-overview .crm-queue-kpi-strip,
+  .campaigns-page-shell .crm-queue-kpi-strip
+) .crm-queue-kpi-card:nth-child(1) {
+  --kpi-accent: #2563eb;
+  --kpi-accent-soft: rgba(37, 99, 235, 0.14);
+}
+
+:root[data-theme="light"] :is(
+  .cc-shell.crm-queue-workspace .cc-kpi-strip,
+  .ch-shell.crm-calls-workspace .ch-kpi-bar,
+  .vm-shell.crm-voicemail-workspace .vm-kpis,
+  .td-page.crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-contacts-workspace .crm-queue-kpi-strip,
+  .crm-checklist-workspace .crm-queue-kpi-strip,
+  .crm-scripts-workspace .crm-queue-kpi-strip,
+  .crm-forms-workspace .crm-queue-kpi-strip,
+  .crm-voicemail-drops-workspace .crm-queue-kpi-strip,
+  .crm-tasks-workspace .crm-queue-kpi-strip,
+  .crm-funders-workspace .crm-queue-kpi-strip,
+  .workspace-overview .crm-queue-kpi-strip,
+  .campaigns-page-shell .crm-queue-kpi-strip
+) .crm-queue-kpi-card:nth-child(2) {
+  --kpi-accent: #7c3aed;
+  --kpi-accent-soft: rgba(124, 58, 237, 0.14);
+}
+
+:root[data-theme="light"] :is(
+  .cc-shell.crm-queue-workspace .cc-kpi-strip,
+  .ch-shell.crm-calls-workspace .ch-kpi-bar,
+  .vm-shell.crm-voicemail-workspace .vm-kpis,
+  .td-page.crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-contacts-workspace .crm-queue-kpi-strip,
+  .crm-checklist-workspace .crm-queue-kpi-strip,
+  .crm-scripts-workspace .crm-queue-kpi-strip,
+  .crm-forms-workspace .crm-queue-kpi-strip,
+  .crm-voicemail-drops-workspace .crm-queue-kpi-strip,
+  .crm-tasks-workspace .crm-queue-kpi-strip,
+  .crm-funders-workspace .crm-queue-kpi-strip,
+  .workspace-overview .crm-queue-kpi-strip,
+  .campaigns-page-shell .crm-queue-kpi-strip
+) .crm-queue-kpi-card:nth-child(3) {
+  --kpi-accent: #0d9488;
+  --kpi-accent-soft: rgba(13, 148, 136, 0.14);
+}
+
+:root[data-theme="light"] :is(
+  .cc-shell.crm-queue-workspace .cc-kpi-strip,
+  .ch-shell.crm-calls-workspace .ch-kpi-bar,
+  .vm-shell.crm-voicemail-workspace .vm-kpis,
+  .td-page.crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-contacts-workspace .crm-queue-kpi-strip,
+  .crm-checklist-workspace .crm-queue-kpi-strip,
+  .crm-scripts-workspace .crm-queue-kpi-strip,
+  .crm-forms-workspace .crm-queue-kpi-strip,
+  .crm-voicemail-drops-workspace .crm-queue-kpi-strip,
+  .crm-tasks-workspace .crm-queue-kpi-strip,
+  .crm-funders-workspace .crm-queue-kpi-strip,
+  .workspace-overview .crm-queue-kpi-strip,
+  .campaigns-page-shell .crm-queue-kpi-strip
+) .crm-queue-kpi-card:nth-child(4) {
+  --kpi-accent: #e0a200;
+  --kpi-accent-soft: rgba(217, 119, 6, 0.16);
+}
+
+:root[data-theme="light"] :is(
+  .cc-shell.crm-queue-workspace .cc-kpi-strip,
+  .ch-shell.crm-calls-workspace .ch-kpi-bar,
+  .vm-shell.crm-voicemail-workspace .vm-kpis,
+  .td-page.crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-contacts-workspace .crm-queue-kpi-strip,
+  .crm-checklist-workspace .crm-queue-kpi-strip,
+  .crm-scripts-workspace .crm-queue-kpi-strip,
+  .crm-forms-workspace .crm-queue-kpi-strip,
+  .crm-voicemail-drops-workspace .crm-queue-kpi-strip,
+  .crm-tasks-workspace .crm-queue-kpi-strip,
+  .crm-funders-workspace .crm-queue-kpi-strip,
+  .workspace-overview .crm-queue-kpi-strip,
+  .campaigns-page-shell .crm-queue-kpi-strip
+) .crm-queue-kpi-card:nth-child(5) {
+  --kpi-accent: #475569;
+  --kpi-accent-soft: rgba(71, 85, 105, 0.12);
+}
+
+:root[data-theme="light"] :is(
+  .cc-shell.crm-queue-workspace .cc-kpi-strip,
+  .ch-shell.crm-calls-workspace .ch-kpi-bar,
+  .vm-shell.crm-voicemail-workspace .vm-kpis,
+  .td-page.crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-contacts-workspace .crm-queue-kpi-strip,
+  .crm-checklist-workspace .crm-queue-kpi-strip,
+  .crm-scripts-workspace .crm-queue-kpi-strip,
+  .crm-forms-workspace .crm-queue-kpi-strip,
+  .crm-voicemail-drops-workspace .crm-queue-kpi-strip,
+  .crm-tasks-workspace .crm-queue-kpi-strip,
+  .crm-funders-workspace .crm-queue-kpi-strip,
+  .workspace-overview .crm-queue-kpi-strip,
+  .campaigns-page-shell .crm-queue-kpi-strip
+) .crm-queue-kpi-card:nth-child(6) {
+  --kpi-accent: #4f46e5;
+  --kpi-accent-soft: rgba(79, 70, 229, 0.13);
+}
+
+:root[data-theme="light"] :is(
+  .cc-shell.crm-queue-workspace .cc-kpi-strip,
+  .ch-shell.crm-calls-workspace .ch-kpi-bar,
+  .vm-shell.crm-voicemail-workspace .vm-kpis,
+  .td-page.crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-contacts-workspace .crm-queue-kpi-strip,
+  .crm-checklist-workspace .crm-queue-kpi-strip,
+  .crm-scripts-workspace .crm-queue-kpi-strip,
+  .crm-forms-workspace .crm-queue-kpi-strip,
+  .crm-voicemail-drops-workspace .crm-queue-kpi-strip,
+  .crm-tasks-workspace .crm-queue-kpi-strip,
+  .crm-funders-workspace .crm-queue-kpi-strip,
+  .workspace-overview .crm-queue-kpi-strip,
+  .campaigns-page-shell .crm-queue-kpi-strip
+) .crm-queue-kpi-card:nth-child(7) {
+  --kpi-accent: #db2777;
+  --kpi-accent-soft: rgba(219, 39, 119, 0.12);
+}
+
+:root[data-theme="light"] :is(
+  .cc-shell.crm-queue-workspace .cc-kpi-strip,
+  .ch-shell.crm-calls-workspace .ch-kpi-bar,
+  .vm-shell.crm-voicemail-workspace .vm-kpis,
+  .td-page.crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-contacts-workspace .crm-queue-kpi-strip,
+  .crm-checklist-workspace .crm-queue-kpi-strip,
+  .crm-scripts-workspace .crm-queue-kpi-strip,
+  .crm-forms-workspace .crm-queue-kpi-strip,
+  .crm-voicemail-drops-workspace .crm-queue-kpi-strip,
+  .crm-tasks-workspace .crm-queue-kpi-strip,
+  .crm-funders-workspace .crm-queue-kpi-strip,
+  .workspace-overview .crm-queue-kpi-strip,
+  .campaigns-page-shell .crm-queue-kpi-strip
+) .crm-queue-kpi-card:nth-child(8) {
+  --kpi-accent: #059669;
+  --kpi-accent-soft: rgba(5, 150, 105, 0.12);
+}
+
+:root[data-theme="light"] :is(
+  .cc-shell.crm-queue-workspace .cc-kpi-strip,
+  .ch-shell.crm-calls-workspace .ch-kpi-bar,
+  .vm-shell.crm-voicemail-workspace .vm-kpis,
+  .td-page.crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-contacts-workspace .crm-queue-kpi-strip,
+  .crm-checklist-workspace .crm-queue-kpi-strip,
+  .crm-scripts-workspace .crm-queue-kpi-strip,
+  .crm-forms-workspace .crm-queue-kpi-strip,
+  .crm-voicemail-drops-workspace .crm-queue-kpi-strip,
+  .crm-tasks-workspace .crm-queue-kpi-strip,
+  .crm-funders-workspace .crm-queue-kpi-strip,
+  .workspace-overview .crm-queue-kpi-strip,
+  .campaigns-page-shell .crm-queue-kpi-strip
+) .crm-queue-kpi-card::before {
+  display: none !important;
+}
+
+:root[data-theme="light"] :is(
+  .cc-shell.crm-queue-workspace .cc-kpi-strip,
+  .ch-shell.crm-calls-workspace .ch-kpi-bar,
+  .vm-shell.crm-voicemail-workspace .vm-kpis,
+  .td-page.crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-contacts-workspace .crm-queue-kpi-strip,
+  .crm-checklist-workspace .crm-queue-kpi-strip,
+  .crm-scripts-workspace .crm-queue-kpi-strip,
+  .crm-forms-workspace .crm-queue-kpi-strip,
+  .crm-voicemail-drops-workspace .crm-queue-kpi-strip,
+  .crm-tasks-workspace .crm-queue-kpi-strip,
+  .crm-funders-workspace .crm-queue-kpi-strip,
+  .workspace-overview .crm-queue-kpi-strip,
+  .campaigns-page-shell .crm-queue-kpi-strip
+) .crm-queue-kpi-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: radial-gradient(circle at 115% -10%, var(--kpi-accent-soft), transparent 62%);
+}
+
+:root[data-theme="light"] :is(
+  .cc-shell.crm-queue-workspace .cc-kpi-strip,
+  .ch-shell.crm-calls-workspace .ch-kpi-bar,
+  .vm-shell.crm-voicemail-workspace .vm-kpis,
+  .td-page.crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-contacts-workspace .crm-queue-kpi-strip,
+  .crm-checklist-workspace .crm-queue-kpi-strip,
+  .crm-scripts-workspace .crm-queue-kpi-strip,
+  .crm-forms-workspace .crm-queue-kpi-strip,
+  .crm-voicemail-drops-workspace .crm-queue-kpi-strip,
+  .crm-tasks-workspace .crm-queue-kpi-strip,
+  .crm-funders-workspace .crm-queue-kpi-strip,
+  .workspace-overview .crm-queue-kpi-strip,
+  .campaigns-page-shell .crm-queue-kpi-strip
+) .crm-queue-kpi-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+:root[data-theme="light"] :is(
+  .cc-shell.crm-queue-workspace .cc-kpi-strip,
+  .ch-shell.crm-calls-workspace .ch-kpi-bar,
+  .vm-shell.crm-voicemail-workspace .vm-kpis,
+  .td-page.crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-contacts-workspace .crm-queue-kpi-strip,
+  .crm-checklist-workspace .crm-queue-kpi-strip,
+  .crm-scripts-workspace .crm-queue-kpi-strip,
+  .crm-forms-workspace .crm-queue-kpi-strip,
+  .crm-voicemail-drops-workspace .crm-queue-kpi-strip,
+  .crm-tasks-workspace .crm-queue-kpi-strip,
+  .crm-funders-workspace .crm-queue-kpi-strip,
+  .workspace-overview .crm-queue-kpi-strip,
+  .campaigns-page-shell .crm-queue-kpi-strip
+) .crm-queue-kpi-card .crm-queue-kpi-value {
+  color: var(--kpi-accent) !important;
+}
+
+:root[data-theme="light"] :is(
+  .cc-shell.crm-queue-workspace .cc-kpi-strip,
+  .ch-shell.crm-calls-workspace .ch-kpi-bar,
+  .vm-shell.crm-voicemail-workspace .vm-kpis,
+  .td-page.crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-contacts-workspace .crm-queue-kpi-strip,
+  .crm-checklist-workspace .crm-queue-kpi-strip,
+  .crm-scripts-workspace .crm-queue-kpi-strip,
+  .crm-forms-workspace .crm-queue-kpi-strip,
+  .crm-voicemail-drops-workspace .crm-queue-kpi-strip,
+  .crm-tasks-workspace .crm-queue-kpi-strip,
+  .crm-funders-workspace .crm-queue-kpi-strip,
+  .workspace-overview .crm-queue-kpi-strip,
+  .campaigns-page-shell .crm-queue-kpi-strip
+) .crm-queue-kpi-card .crm-queue-kpi-icon {
+  color: var(--kpi-accent) !important;
+  border-color: color-mix(in srgb, var(--kpi-accent) 32%, transparent) !important;
+  background: color-mix(in srgb, var(--kpi-accent) 13%, transparent) !important;
+}
+
+/* KPI rows must not create a second page background behind the cards. */
+:root[data-theme="light"] :is(
+  .cc-shell.crm-queue-workspace .cc-kpi-strip,
+  .ch-shell.crm-calls-workspace .ch-kpi-bar,
+  .vm-shell.crm-voicemail-workspace .vm-kpis,
+  .td-page.crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-queue-workspace .crm-queue-kpi-strip,
+  .crm-contacts-workspace .crm-queue-kpi-strip,
+  .crm-checklist-workspace .crm-queue-kpi-strip,
+  .crm-scripts-workspace .crm-queue-kpi-strip,
+  .crm-forms-workspace .crm-queue-kpi-strip,
+  .crm-voicemail-drops-workspace .crm-queue-kpi-strip,
+  .crm-tasks-workspace .crm-queue-kpi-strip,
+  .crm-funders-workspace .crm-queue-kpi-strip,
+  .workspace-overview .crm-queue-kpi-strip,
+  .campaigns-page-shell .crm-queue-kpi-strip
+) {
+  border: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* KPI toolbars sit on the page canvas; only the KPI cards should be visible surfaces. */
+:root[data-theme="light"] :is(
+  .crm-queue-workspace,
+  .crm-contacts-workspace,
+  .crm-checklist-workspace,
+  .crm-scripts-workspace,
+  .crm-forms-workspace,
+  .crm-voicemail-drops-workspace,
+  .crm-tasks-workspace,
+  .crm-funders-workspace,
+  .campaigns-page-shell,
+  .workspace-overview
+) :is(.crm-workspace-toolbar, .crm-workspace-header):has(.crm-queue-kpi-strip) {
+  border: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+/* Final CRM KPI canvas lock: no outer console gradient should show behind KPI rows. */
+:root[data-theme="light"] .console-shell:has(:is(
+  .cc-shell.crm-queue-workspace,
+  .vm-shell.crm-voicemail-workspace,
+  .ch-shell.crm-calls-workspace,
+  .td-page.crm-queue-workspace,
+  .crm-dashboard-workspace,
+  .crm-queue-workspace,
+  .crm-contacts-workspace,
+  .crm-funders-workspace,
+  .crm-tasks-workspace,
+  .crm-checklist-workspace,
+  .crm-scripts-workspace,
+  .crm-forms-workspace,
+  .crm-voicemail-drops-workspace,
+  .campaigns-page-shell
+)),
+:root[data-theme="light"] .console-shell:has(:is(
+  .cc-shell.crm-queue-workspace,
+  .vm-shell.crm-voicemail-workspace,
+  .ch-shell.crm-calls-workspace,
+  .td-page.crm-queue-workspace,
+  .crm-dashboard-workspace,
+  .crm-queue-workspace,
+  .crm-contacts-workspace,
+  .crm-funders-workspace,
+  .crm-tasks-workspace,
+  .crm-checklist-workspace,
+  .crm-scripts-workspace,
+  .crm-forms-workspace,
+  .crm-voicemail-drops-workspace,
+  .campaigns-page-shell
+)) .console-body,
+:root[data-theme="light"] .console-shell:has(:is(
+  .cc-shell.crm-queue-workspace,
+  .vm-shell.crm-voicemail-workspace,
+  .ch-shell.crm-calls-workspace,
+  .td-page.crm-queue-workspace,
+  .crm-dashboard-workspace,
+  .crm-queue-workspace,
+  .crm-contacts-workspace,
+  .crm-funders-workspace,
+  .crm-tasks-workspace,
+  .crm-checklist-workspace,
+  .crm-scripts-workspace,
+  .crm-forms-workspace,
+  .crm-voicemail-drops-workspace,
+  .campaigns-page-shell
+)) .console-workspace,
+:root[data-theme="light"] .console-shell:has(:is(
+  .cc-shell.crm-queue-workspace,
+  .vm-shell.crm-voicemail-workspace,
+  .ch-shell.crm-calls-workspace,
+  .td-page.crm-queue-workspace,
+  .crm-dashboard-workspace,
+  .crm-queue-workspace,
+  .crm-contacts-workspace,
+  .crm-funders-workspace,
+  .crm-tasks-workspace,
+  .crm-checklist-workspace,
+  .crm-scripts-workspace,
+  .crm-forms-workspace,
+  .crm-voicemail-drops-workspace,
+  .campaigns-page-shell
+)) .console-content,
+:root[data-theme="light"] .console-content:has(:is(
+  .cc-shell.crm-queue-workspace,
+  .vm-shell.crm-voicemail-workspace,
+  .ch-shell.crm-calls-workspace,
+  .td-page.crm-queue-workspace,
+  .crm-dashboard-workspace,
+  .crm-queue-workspace,
+  .crm-contacts-workspace,
+  .crm-funders-workspace,
+  .crm-tasks-workspace,
+  .crm-checklist-workspace,
+  .crm-scripts-workspace,
+  .crm-forms-workspace,
+  .crm-voicemail-drops-workspace,
+  .campaigns-page-shell
+)),
+:root[data-theme="light"] .crm-route-background:has(:is(
+  .crm-dashboard-workspace,
+  .crm-queue-workspace,
+  .crm-contacts-workspace,
+  .crm-funders-workspace,
+  .crm-tasks-workspace,
+  .crm-checklist-workspace,
+  .crm-scripts-workspace,
+  .crm-forms-workspace,
+  .crm-voicemail-drops-workspace,
+  .campaigns-page-shell
+)),
+:root[data-theme="light"] :is(
+  .crm-dashboard-workspace,
+  .crm-queue-workspace,
+  .crm-contacts-workspace,
+  .crm-funders-workspace,
+  .crm-tasks-workspace,
+  .crm-checklist-workspace,
+  .crm-scripts-workspace,
+  .crm-forms-workspace,
+  .crm-voicemail-drops-workspace,
+  .campaigns-page-shell
+) :is(
+  .crm-queue-inner,
+  .crm-workspace-shell,
+  .crm-workspace-chrome,
+  .crm-workspace-body,
+  .crm-workspace-main,
+  .crm-workspace-scroll-region
+) {
+  --crm-bg: #eff1f5;
+  background: #eff1f5 !important;
+  background-color: #eff1f5 !important;
+  background-image: none !important;
+}
