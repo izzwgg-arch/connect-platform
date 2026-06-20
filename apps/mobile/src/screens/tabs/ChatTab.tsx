@@ -235,9 +235,53 @@ function isImageAttachment(attachment: ChatAttachment, messageType?: ChatMessage
 function isAudioAttachment(attachment: ChatAttachment, messageType?: ChatMessageType): boolean {
   const kind = String(attachment.mediaKind || '').toLowerCase();
   const mime = String(attachment.mimeType || '').toLowerCase();
-  if (kind === 'video' || mime.startsWith('video/')) return false;
   const name = String(attachment.fileName || '').toLowerCase();
+  // A voice note (incl. the carrier MP4 copy) always plays as a voice note,
+  // never as a video — Audio.Sound plays the MP4's audio track.
+  if (isVoiceNoteFileName(name)) return true;
+  if (kind === 'video' || mime.startsWith('video/')) return false;
   return kind === 'audio' || mime.startsWith('audio/') || messageType === 'AUDIO' || messageType === 'VOICE_NOTE' || /\.(m4a|aac|mp3|wav|ogg|webm)$/i.test(name);
+}
+
+/** Connect voice notes are stored as `voice-note-*` files. */
+function isVoiceNoteFileName(name?: string | null): boolean {
+  return /voice-note/i.test(String(name || ''));
+}
+
+function attachmentBaseName(name?: string | null): string {
+  return String(name || '').toLowerCase().replace(/\.[a-z0-9]+$/i, '');
+}
+
+function isTrueAudioAttachment(a: ChatAttachment): boolean {
+  const kind = String(a.mediaKind || '').toLowerCase();
+  const mime = String(a.mimeType || '').toLowerCase();
+  const name = String(a.fileName || '').toLowerCase();
+  return kind === 'audio' || mime.startsWith('audio/') || /\.(m4a|aac|mp3|wav|ogg|opus|amr|webm)$/i.test(name);
+}
+
+/** A video/MP4 (or legacy MP3) attachment that could be the carrier MMS copy of a voice note. */
+function isTransportMediaCandidate(a: ChatAttachment): boolean {
+  const kind = String(a.mediaKind || '').toLowerCase();
+  const mime = String(a.mimeType || '').toLowerCase();
+  const name = String(a.fileName || '').toLowerCase();
+  return kind === 'video' || mime.startsWith('video/') || /\.(mp4|3gp|3gpp|mpeg|mp3)$/i.test(name);
+}
+
+/**
+ * Drop the carrier MP4/MP3 copy of a voice note when its audio original is
+ * present (the worker names the copy after the original's basename), so a sent
+ * voice note shows ONE voice-note bubble — never a video.
+ */
+function dropVoiceTransportDuplicates(attachments: ChatAttachment[]): ChatAttachment[] {
+  const originalAudioBaseNames = new Set(
+    attachments
+      .filter((a) => isTrueAudioAttachment(a) && !isTransportMediaCandidate(a))
+      .map((a) => attachmentBaseName(a.fileName)),
+  );
+  if (originalAudioBaseNames.size === 0) return attachments;
+  return attachments.filter(
+    (a) => !(isTransportMediaCandidate(a) && originalAudioBaseNames.has(attachmentBaseName(a.fileName))),
+  );
 }
 
 /** Inbound MMS URLs (e.g. VoIP.ms media.php) — infer kind so we do not feed video/audio into Image. */
@@ -1150,7 +1194,7 @@ export function ChatTab() {
           ? []
           : (message.mmsUrls || []).map((u) => String(u || '').trim()).filter((u) => /^https?:\/\//i.test(u));
       const mmsDerived = mmsSource.map((url, index) => mmsUrlToAttachment(url, message.id, index));
-      const combined = [...attachments, ...mmsDerived].filter((a) => Boolean(a.downloadUrl));
+      const combined = dropVoiceTransportDuplicates([...attachments, ...mmsDerived].filter((a) => Boolean(a.downloadUrl)));
       for (const a of combined) {
         if (isAudioAttachment(a, message.type) && a.downloadUrl) out.push({ id: a.id, url: a.downloadUrl });
       }
@@ -1510,7 +1554,7 @@ const MessageBubble = memo(function MessageBubble({
       ? []
       : (message.mmsUrls || []).map((u) => String(u || '').trim()).filter((u) => /^https?:\/\//i.test(u));
   const mmsDerived = mmsSource.map((url, index) => mmsUrlToAttachment(url, message.id, index));
-  const combined = [...attachments, ...mmsDerived].filter((a) => Boolean(a.downloadUrl));
+  const combined = dropVoiceTransportDuplicates([...attachments, ...mmsDerived].filter((a) => Boolean(a.downloadUrl)));
   const audioAttachments = combined.filter((attachment) => isAudioAttachment(attachment, message.type));
   const audioIds = new Set(audioAttachments.map((a) => a.id));
   const imageAttachments = combined.filter(

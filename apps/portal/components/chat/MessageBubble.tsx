@@ -3,7 +3,7 @@
 import { Check, MoreHorizontal, Pencil, Reply, Smile, Trash2 } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { AttachmentPreview } from "./AttachmentPreview";
-import { messageBubbleClass, messageRowClass, splitMessageBody } from "./chatPresentation";
+import { dropVoiceTransportDuplicates, messageBubbleClass, messageRowClass, splitMessageBody } from "./chatPresentation";
 import { fmtChatTime, mapUrl } from "./formatting";
 import type { ChatAttachment, ChatMessage } from "./types";
 import { QUICK_REACTIONS } from "./types";
@@ -82,6 +82,11 @@ export const MessageBubble = memo(function MessageBubble({
   const wrapRef = useRef<HTMLDivElement>(null);
   const deleted = Boolean(message.deletedForEveryoneAt);
   const bodyParts = useMemo(() => splitMessageBody(message.body), [message.body]);
+  /** Hide the carrier MP4 copy of a voice note; the audio original renders as a voice note. */
+  const displayAttachments = useMemo(
+    () => dropVoiceTransportDuplicates(message.attachments || []),
+    [message.attachments],
+  );
   /** Raw VoIP.ms MMS URLs are redundant once mirrored into `attachments` — avoid double stack + empty image cells. */
   const mmsUrlsEffective =
     (message.attachments?.length ?? 0) > 0
@@ -144,9 +149,9 @@ export const MessageBubble = memo(function MessageBubble({
                   ))}
                 </div>
               ) : null}
-              {message.attachments?.length ? (
+              {displayAttachments.length ? (
                 <div className="cc-attach-stack">
-                  {message.attachments.map((attachment) => <AttachmentPreview key={attachment.id} attachment={attachment} />)}
+                  {displayAttachments.map((attachment) => <AttachmentPreview key={attachment.id} attachment={attachment} />)}
                 </div>
               ) : null}
             </>

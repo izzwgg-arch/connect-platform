@@ -2,7 +2,7 @@
 
 import { Download, FileText, Mic, Pause, Play, Video } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { attachmentToneClass } from "./chatPresentation";
+import { attachmentToneClass, isVoiceNoteFileName } from "./chatPresentation";
 import type { ChatAttachment } from "./types";
 import { formatBytes } from "./formatting";
 
@@ -144,9 +144,12 @@ export function AttachmentPreview({ attachment, compact = false }: { attachment:
   const kind = (attachment.mediaKind || "").toLowerCase();
   const name = (attachment.fileName || "").toLowerCase();
   const soundsLikeAudio = /\.(m4a|aac|mp3|wav|ogg|opus|amr|webm)$/i.test(name);
-  const isAudio = kind === "audio" || mime.startsWith("audio/") || soundsLikeAudio;
-  const isVideo = kind === "video" || mime.startsWith("video/");
-  const isImage = !soundsLikeAudio && !mime.startsWith("audio/") && (kind === "image" || mime.startsWith("image/"));
+  // A voice note (incl. the carrier MP4 copy) always plays as a voice note,
+  // never as a video — the <audio> element plays the MP4's audio track.
+  const isVoiceNote = isVoiceNoteFileName(name);
+  const isAudio = isVoiceNote || kind === "audio" || mime.startsWith("audio/") || soundsLikeAudio;
+  const isVideo = !isVoiceNote && (kind === "video" || mime.startsWith("video/"));
+  const isImage = !isVoiceNote && !soundsLikeAudio && !mime.startsWith("audio/") && (kind === "image" || mime.startsWith("image/"));
 
   if (href && isAudio) return <VoiceNotePlayer attachment={attachment} />;
   if (href && isImage) return <ImageBubble attachment={attachment} />;
