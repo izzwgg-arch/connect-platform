@@ -21,7 +21,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { Audio, ResizeMode, Video } from 'expo-av';
+import { Audio, InterruptionModeAndroid, ResizeMode, Video } from 'expo-av';
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
@@ -971,24 +971,71 @@ export function ChatTab() {
 
   const startRecording = useCallback(async () => {
     if (!activeThread || !token || recording) return;
+    // Guard against a silently-stalled audio session: if any step hangs
+    // (e.g. WebRTC/SIP still owns the mic), reject instead of hanging forever.
+    const withTimeout = <T,>(p: Promise<T>, ms: number, label: string): Promise<T> =>
+      Promise.race([
+        p,
+        new Promise<T>((_, reject) =>
+          setTimeout(() => reject(new Error(`timed out: ${label} (${ms}ms)`)), ms),
+        ),
+      ]);
+    let rec: Audio.Recording | null = null;
     try {
+      console.log('[VOICE_NOTE] startRecording: begin');
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
-      const perm = await Audio.requestPermissionsAsync();
+
+      console.log('[VOICE_NOTE] requesting permission');
+      const perm = await withTimeout(Audio.requestPermissionsAsync(), 8000, 'requestPermissions');
+      console.log('[VOICE_NOTE] permission granted=', perm.granted);
       if (!perm.granted) {
-        showToast('Microphone permission is required.');
+        showAppAlert('Microphone needed', 'Please allow microphone access to record a voice note.');
         return;
       }
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      const rec = new Audio.Recording();
-      await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      await rec.startAsync();
+
+      console.log('[VOICE_NOTE] setAudioMode');
+      await withTimeout(
+        Audio.setAudioModeAsync({
+          allowsRecordingIOS: true,
+          playsInSilentModeIOS: true,
+          interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
+          shouldDuckAndroid: false,
+          playThroughEarpieceAndroid: false,
+        }),
+        8000,
+        'setAudioMode',
+      );
+
+      console.log('[VOICE_NOTE] prepare');
+      rec = new Audio.Recording();
+      await withTimeout(
+        rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY),
+        8000,
+        'prepareToRecord',
+      );
+
+      console.log('[VOICE_NOTE] start');
+      await withTimeout(rec.startAsync(), 8000, 'startAsync');
+
       recordingRef.current = rec;
       setRecording(true);
+      console.log('[VOICE_NOTE] recording started OK');
     } catch (err: any) {
+      console.log('[VOICE_NOTE] FAILED:', err?.message || String(err));
       setRecording(false);
-      showToast(err?.message || 'Could not start recording.');
+      // Best-effort cleanup of a half-initialised recorder so the next
+      // attempt isn't blocked by a lingering native session.
+      if (rec) {
+        try {
+          await rec.stopAndUnloadAsync();
+        } catch {
+          /* ignore — may never have started */
+        }
+      }
+      recordingRef.current = null;
+      showAppAlert('Could not start recording', err?.message || 'Please try again.');
     }
-  }, [activeThread, recording, showToast, token]);
+  }, [activeThread, recording, token]);
 
   const stopRecording = useCallback(async () => {
     const rec = recordingRef.current;
@@ -1007,9 +1054,29 @@ export function ChatTab() {
           if (Number.isFinite(ms) && ms > 0) durationMs = Math.round(ms);
         }
       } catch {
-        /* non-fatal — server-side ffprobe will fill in durationMs */
+        /* non-fatal — read it back from the finished file below */
       }
       await rec.stopAndUnloadAsync();
+      // On some devices (e.g. the Oplus AudioRecord retry path) the live
+      // recorder status reports no duration even though the saved file is
+      // fine. Read the true duration straight from the finished file so the
+      // voice note never shows "0:00".
+      if (durationMs === undefined) {
+        const finishedUri = rec.getURI();
+        if (finishedUri) {
+          try {
+            const { sound, status } = await Audio.Sound.createAsync(
+              { uri: finishedUri },
+              { shouldPlay: false },
+            );
+            const ms = Number((status as any)?.durationMillis);
+            if (Number.isFinite(ms) && ms > 0) durationMs = Math.round(ms);
+            await sound.unloadAsync().catch(() => undefined);
+          } catch {
+            /* non-fatal — server-side ffprobe will fill in durationMs */
+          }
+        }
+      }
       // Discard ultra-short taps (under 600ms) — almost certainly an
       // accidental press, not a voice note.
       if (durationMs !== undefined && durationMs < 600) {

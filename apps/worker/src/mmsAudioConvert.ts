@@ -151,51 +151,98 @@ async function convertSingleAttachment(
   };
 }
 
+/**
+ * Probe the real audio duration (seconds) so we can hard-cap the generated
+ * video track. `-shortest` alone does NOT reliably stop the infinite lavfi
+ * `color` source — confirmed on the worker container it kept generating ~49s
+ * of black frames for a 3.8s voice note, so the recipient saw a "49 second
+ * video". Returns null when probing fails; the caller then falls back to
+ * `-shortest` only.
+ */
+async function probeAudioDurationSeconds(filePath: string): Promise<number | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      "ffprobe",
+      [
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        filePath,
+      ],
+      { timeout: 15_000 },
+    );
+    const seconds = Number.parseFloat(String(stdout).trim());
+    return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+  } catch {
+    return null;
+  }
+}
+
 async function ffmpegToMmsMp4(input: Buffer): Promise<Buffer> {
   const id = crypto.randomBytes(6).toString("hex");
   const inPath = path.join(os.tmpdir(), `cc-mms-in-${id}`);
   const outPath = path.join(os.tmpdir(), `cc-mms-out-${id}.mp4`);
   await fs.promises.writeFile(inPath, input);
   try {
-    await execFileAsync(
-      "ffmpeg",
-      [
-        "-y",
-        "-loglevel",
-        "error",
-        "-i",
-        inPath,
-        "-f",
-        "lavfi",
-        "-i",
-        "color=c=black:s=160x90:r=1",
-        "-shortest",
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "24k",
-        "-c:v",
-        "libx264",
-        "-tune",
-        "stillimage",
-        "-profile:v",
-        "baseline",
-        "-level",
-        "3.0",
-        "-pix_fmt",
-        "yuv420p",
-        "-b:v",
-        "8k",
-        "-movflags",
-        "+faststart",
-        outPath,
-      ],
-      { timeout: 30_000, maxBuffer: 8 * 1024 * 1024 },
+    const durationSeconds = await probeAudioDurationSeconds(inPath);
+    const args = [
+      "-y",
+      "-loglevel",
+      "error",
+      "-i",
+      inPath,
+      "-f",
+      "lavfi",
+      "-i",
+      "color=c=black:s=160x90:r=15",
+      // Explicitly map the audio + the generated black video so stream order
+      // can't surprise us.
+      "-map",
+      "0:a:0",
+      "-map",
+      "1:v:0",
+    ];
+    // Hard-cap output to the real audio length (with `-shortest` as a
+    // belt-and-suspenders fallback). Without this the black video track runs
+    // far longer than the audio.
+    if (durationSeconds) {
+      args.push("-t", durationSeconds.toFixed(3));
+    }
+    args.push(
+      "-shortest",
+      "-ac",
+      "1",
+      "-ar",
+      "16000",
+      "-c:a",
+      "aac",
+      "-b:a",
+      "24k",
+      "-c:v",
+      "libx264",
+      "-tune",
+      "stillimage",
+      "-profile:v",
+      "baseline",
+      "-level",
+      "3.0",
+      "-pix_fmt",
+      "yuv420p",
+      "-r",
+      "15",
+      "-b:v",
+      "8k",
+      "-movflags",
+      "+faststart",
+      outPath,
     );
+    await execFileAsync("ffmpeg", args, {
+      timeout: 30_000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
     return await fs.promises.readFile(outPath);
   } finally {
     fs.promises.unlink(inPath).catch(() => undefined);
