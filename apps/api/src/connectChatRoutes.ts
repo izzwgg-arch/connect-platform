@@ -35,6 +35,7 @@ import {
 import { fetchVoipMsMmsToChatFile, mediaKindFromMime } from "../../../packages/shared/src/voipMsInboundMms";
 import { upsertSmsThreadParticipants } from "./smsInboxParticipants";
 import { probeChatMedia } from "./chatMediaProbe";
+import { denoiseVoiceNote, isVoiceNoteUpload } from "./chatVoiceNoteDenoise";
 export type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
 function staff(user: JwtUser): string {
@@ -1150,16 +1151,28 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
     if (!isAllowedChatMime(mimeType)) return reply.status(400).send({ error: "MIME_NOT_ALLOWED" });
 
     const maxB = maxBytesForThread(part.thread.type === "SMS");
+    // Light, voice-preserving noise reduction for voice notes — applied to the
+    // stored original so in-app playback and the MMS copy (derived from it) are
+    // both clean. Falls back to the raw upload if ffmpeg fails.
+    let uploadBuf = fileBuf;
+    if (isVoiceNoteUpload(originalFilename, mimeType)) {
+      try {
+        const cleaned = await denoiseVoiceNote(fileBuf);
+        if (cleaned && cleaned.length > 0) uploadBuf = cleaned;
+      } catch {
+        /* keep original on any failure */
+      }
+    }
     try {
       const written = await writeChatAttachmentFile({
         tenantKey: tenantId,
         threadId,
         originalFilename,
-        buffer: fileBuf,
+        buffer: uploadBuf,
         mimeType,
         maxBytes: maxB,
       });
-      const metadata = await probeChatMedia(fileBuf, written.mimeType);
+      const metadata = await probeChatMedia(uploadBuf, written.mimeType);
       return { ok: true, ...written, ...metadata };
     } catch (e: any) {
       const m = String(e?.message || e);
