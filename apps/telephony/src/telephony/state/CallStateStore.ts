@@ -204,6 +204,22 @@ export class CallStateStore extends EventEmitter {
     return linkedId ? this.calls.get(linkedId) : undefined;
   }
 
+  /**
+   * Resolve the canonical AMI callId (linkedId) that owns a given Asterisk
+   * bridge. The bridge unique id is the SAME value AMI reports as
+   * `BridgeUniqueid` and ARI reports as `bridge.id`, so this lets the ARI-sourced
+   * WS snapshot reuse the AMI call's id. Keeping one id namespace across the
+   * initial snapshot and the live upsert/remove deltas is what lets a hang-up
+   * (`callRemove(linkedId)`) actually clear the row a client received in its
+   * snapshot. Returns undefined when AMI hasn't tracked this bridge.
+   */
+  getCallIdByBridgeId(bridgeId: string): string | undefined {
+    if (!bridgeId) return undefined;
+    const callId = this.bridgeIndex.get(bridgeId);
+    if (callId && this.calls.has(callId)) return callId;
+    return undefined;
+  }
+
   /** Returns true if any channelIndex entry points to this callId (i.e. the call has a live Asterisk channel). */
   hasLiveChannelIndex(callId: string): boolean {
     for (const lid of this.channelIndex.values()) {

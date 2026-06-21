@@ -138,7 +138,19 @@ export function createTelephonyModule(server: http.Server) {
     tenantAliasMatcher,
     () => {
       const ariCalls = ariBridgedPoller.getCallsForSnapshot();
-      return ariCalls.length > 0 ? ariCalls : callStore.getActive();
+      if (ariCalls.length === 0) return callStore.getActive();
+      // Reconcile each ARI bridge row to the AMI call that owns its bridge so the
+      // initial snapshot shares ONE id namespace with the live upsert/remove
+      // deltas. Without this the snapshot ships `bridge:<id>` while AMI removes by
+      // `linkedId`, so a hung-up call the client received at page-load never gets
+      // cleared (and can show duplicated). See CallStateStore.getCallIdByBridgeId.
+      return ariCalls.map((c) => {
+        for (const bridgeId of c.bridgeIds) {
+          const amiCallId = callStore.getCallIdByBridgeId(bridgeId);
+          if (amiCallId) return { ...c, id: amiCallId };
+        }
+        return c;
+      });
     },
   );
   const userExtensionsUrl = env.CDR_INGEST_URL
@@ -190,6 +202,27 @@ export function createTelephonyModule(server: http.Server) {
     tenantAliasMatcher,
     crmEnricher,
   );
+
+  // Safety net for calls AMI never tracked (e.g. during an AMI reconnect gap):
+  // such calls reach the client only via the ARI snapshot under a `bridge:<id>`
+  // id, so AMI Hangup/reconcileActiveBridges (which key off linkedId) can never
+  // clear them. Diff the ARI bridge set between polls and broadcast an explicit
+  // remove for any `bridge:<id>` that disappeared so the portal/mobile list stays
+  // exactly in sync with ARI. This is NOT a periodic full-snapshot replacement
+  // (it only removes vanished bridges, never ringing/unbridged calls), so it does
+  // not reintroduce the ringing-flicker regression.
+  let prevAriBridgeIds = new Set<string>();
+  ariBridgedPoller.on("update", (result) => {
+    if (!ari._isConnected) return;
+    const currentBridgeIds = new Set(result.bridges.map((bridge) => bridge.bridgeId));
+    for (const bridgeId of prevAriBridgeIds) {
+      if (!currentBridgeIds.has(bridgeId)) {
+        socketServer.broadcast("telephony.call.remove", { callId: `bridge:${bridgeId}` }, undefined);
+      }
+    }
+    prevAriBridgeIds = currentBridgeIds;
+  });
+
   const ariActions = new AriActions(ari);
   const healingEngine = new HealingEngine(callStore, extStore, healthService, ami, ari);
 
