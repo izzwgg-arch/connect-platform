@@ -716,6 +716,62 @@ test("ring leg abandoned (no voicemail channel) fires one diverted_to_voicemail 
   }
 });
 
+test("answered on another device (same ext still live) fires answered_elsewhere stop", async () => {
+  const { calls, restore } = installFetchSpy();
+  try {
+    const notifier = new MobilePushNotifier();
+    // 1) Ring: mobile companion leg + desk leg of the SAME extension.
+    notifier.notify(
+      makeCall({
+        linkedId: "answered.1",
+        direction: "inbound",
+        state: "ringing",
+        from: "5622096644",
+        to: "8455577768",
+        extensions: ["T21_101"],
+        channels: [
+          "PJSIP/344022_Comfortcont-0000f2a5",
+          "PJSIP/T21_101_1-0000f2a6", // mobile companion AOR
+          "PJSIP/T21_101-0000f2a7", // desk AOR
+        ],
+        tenantId: "vpbx:landau_home",
+        metadata: { pbxVitalTenantId: "21" },
+      }),
+    );
+    await flush();
+    assert.equal(calls.length, 1, "expected the initial ring push");
+
+    // 2) Desk answers: mobile companion leg gone, desk leg now UP (ext 101 still
+    //    has a live channel), extensionAnsweredAt is set.
+    notifier.notify(
+      makeCall({
+        linkedId: "answered.1",
+        direction: "inbound",
+        state: "up",
+        from: "5622096644",
+        to: "8455577768",
+        extensions: ["T21_101"],
+        channels: ["PJSIP/344022_Comfortcont-0000f2a5", "PJSIP/T21_101-0000f2a7"],
+        answeredAt: new Date().toISOString(),
+        extensionAnsweredAt: new Date().toISOString(),
+        tenantId: "vpbx:landau_home",
+        metadata: { pbxVitalTenantId: "21" },
+      }),
+    );
+    await flush();
+    assert.equal(calls.length, 1, "must NOT fire before the debounce window");
+
+    await wait(ABANDON_WAIT_MS);
+    await flush();
+    assert.equal(calls.length, 2, "exactly one stop after debounce");
+    assert.equal(calls[1].body.state, "hungup");
+    assert.equal(calls[1].body.cancelReason, "answered_elsewhere");
+    assert.equal(calls[1].body.linkedId, "answered.1");
+  } finally {
+    restore();
+  }
+});
+
 test("fork re-INVITE within debounce window cancels the stop (no false diverted)", async () => {
   const { calls, restore } = installFetchSpy();
   try {

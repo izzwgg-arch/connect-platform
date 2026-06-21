@@ -139,6 +139,8 @@ export type MobilePushRingPayload = {
   connectTenantId: string | null;
   pbxVitalTenantId: string | null;
   state?: "ringing" | "hungup" | "diverted_to_voicemail";
+  /** Overrides the INVITE_CANCELED `reason` (e.g. "answered_elsewhere") on stop. */
+  cancelReason?: string;
 };
 
 /**
@@ -232,22 +234,30 @@ export class MobilePushNotifier {
         { linkedId: call.linkedId, connectTenantId: call.tenantId },
         "mobile-ring: notifying API of diverted_to_voicemail (stop ring)",
       );
-      this.postDivertedStop(call);
+      this.postStopRing(call, { state: "diverted_to_voicemail" });
     }
 
-    // Ring-leg-abandon detection (the reliable, PBX-channel-name-independent path).
+    // Ring-leg-abandon / answered-elsewhere detection (the reliable, PBX-channel-
+    // name-independent path).
     //
     // The legacy `looksDivertedToVoicemail` check above only fires when Asterisk
     // exposes a channel/context literally containing "voicemail". Many dialplans
     // (e.g. VitalPBX T<id>_cos-all ring groups) roll to voicemail WITHOUT such a
-    // channel, so the killed app kept ringing until the caller hung up. Instead,
-    // watch the LIVE channel set: once every extension we rang has lost its leg
-    // (voicemail answered the trunk, or another endpoint answered) while the call
-    // is still up, the call has left this device — stop the native ring.
+    // channel, so the killed app kept ringing until the caller hung up. Two live
+    // signals replace it:
+    //   • voicemail  — every extension we rang has lost its leg from the LIVE
+    //     channel set while the call is still up (no human picked up here).
+    //   • answered elsewhere — `extensionAnsweredAt` is set: a real extension leg
+    //     answered (desk phone, web portal, another device). This is never set by
+    //     inbound-trunk IVR `Answer()` / ringback, so it is a truthful "someone
+    //     answered" signal even when the answering endpoint shares our short
+    //     extension (so its leg still appears live).
     //
-    // Debounced by RING_LEG_ABANDON_MS so a ring-group fork's brief cancel + re-
-    // INVITE doesn't trip a false stop. The API only cancels PENDING invites, so a
-    // device that actually answered (invite ACCEPTED) is never affected.
+    // Debounced by RING_LEG_ABANDON_MS so (a) a ring-group fork's brief cancel +
+    // re-INVITE doesn't trip a false voicemail stop and (b) a device answering
+    // here has time to land its invite CLAIM (ACCEPTED) before we notify. The API
+    // only cancels PENDING invites, so the device that actually answered is never
+    // affected — only its still-ringing siblings stop.
     // (call.state is already narrowed to non-"hungup" by the early return above.)
     if (
       this.pushed.has(call.linkedId) &&
@@ -257,8 +267,9 @@ export class MobilePushNotifier {
       if (rung && rung.size > 0) {
         const liveExts = liveExtensionsFromChannels(call);
         const anyStillLive = [...rung].some((ext) => liveExts.has(ext));
-        if (anyStillLive) {
-          // At least one rung extension still has a live leg — cancel any pending stop.
+        const answeredSomewhere = call.extensionAnsweredAt != null;
+        if (!answeredSomewhere && anyStillLive) {
+          // Still ringing here and nobody answered — cancel any pending stop.
           this.clearDivertTimer(call.linkedId);
         } else if (!this.divertTimers.has(call.linkedId)) {
           const timer = setTimeout(() => {
@@ -427,10 +438,15 @@ export class MobilePushNotifier {
   }
 
   /**
-   * Fire the diverted_to_voicemail stop-ring to the API. The API only cancels
-   * PENDING invites and pushes INVITE_CANCELED, so an answered call is untouched.
+   * Fire a stop-ring to the API. The API only cancels PENDING invites and pushes
+   * INVITE_CANCELED, so a device that actually answered (invite ACCEPTED) is
+   * untouched. `cancelReason` rides through to the INVITE_CANCELED `reason` so
+   * the mobile can distinguish voicemail vs answered-elsewhere.
    */
-  private postDivertedStop(call: NormalizedCall): void {
+  private postStopRing(
+    call: NormalizedCall,
+    opts: { state: "diverted_to_voicemail" | "hungup"; cancelReason?: string },
+  ): void {
     const payload: MobilePushRingPayload = {
       linkedId: call.linkedId,
       toExtension: "",
@@ -438,20 +454,24 @@ export class MobilePushNotifier {
       fromDisplay: call.fromName ?? null,
       connectTenantId: call.tenantId ?? null,
       pbxVitalTenantId: (call.metadata?.pbxVitalTenantId as string | undefined) ?? null,
-      state: "diverted_to_voicemail",
+      state: opts.state,
+      ...(opts.cancelReason ? { cancelReason: opts.cancelReason } : {}),
     };
     this.postAsync(payload).catch((err: unknown) => {
       log.warn(
         { linkedId: call.linkedId, err: (err as Error)?.message },
-        "mobile-ring: voicemail divert notify failed",
+        "mobile-ring: stop-ring notify failed",
       );
     });
   }
 
   /**
-   * Re-evaluate after the debounce window: if every rung extension still has no
-   * live leg and the call is neither answered-here nor hung up, the ring has been
-   * abandoned (voicemail / answered elsewhere) — tell the API to stop the ring.
+   * Re-evaluate after the debounce window and, if the ring has genuinely left
+   * this device, tell the API to stop it. Distinguishes:
+   *   • answered elsewhere (`extensionAnsweredAt` set) → reason answered_elsewhere
+   *   • voicemail / abandon (no rung extension has a live leg) → diverted_to_voicemail
+   * If neither still holds (a fork re-INVITE brought our leg back and nobody
+   * answered), do nothing.
    */
   private confirmRingLegAbandon(linkedId: string): void {
     const call = this.lastCall.get(linkedId);
@@ -461,15 +481,29 @@ export class MobilePushNotifier {
     if (call.state === "hungup") return; // hangup path already handles this
     const rung = this.pushedExts.get(linkedId);
     if (!rung || rung.size === 0) return;
+
+    const answeredSomewhere = call.extensionAnsweredAt != null;
     const liveExts = liveExtensionsFromChannels(call);
-    if ([...rung].some((ext) => liveExts.has(ext))) return; // a leg came back
+    const anyStillLive = [...rung].some((ext) => liveExts.has(ext));
+
+    if (answeredSomewhere) {
+      this.voicemailStopSent.add(linkedId);
+      log.info(
+        { linkedId, rungExts: [...rung], extensionAnsweredAt: call.extensionAnsweredAt },
+        "mobile-ring: extension answered elsewhere — notifying API to stop ring (answered_elsewhere)",
+      );
+      this.postStopRing(call, { state: "hungup", cancelReason: "answered_elsewhere" });
+      return;
+    }
+
+    if (anyStillLive) return; // a leg came back and nobody answered — keep ringing
 
     this.voicemailStopSent.add(linkedId);
     log.info(
       { linkedId, rungExts: [...rung], channels: call.channels, state: call.state },
       "mobile-ring: ring leg abandoned (no live extension leg) — notifying API of diverted_to_voicemail (stop ring)",
     );
-    this.postDivertedStop(call);
+    this.postStopRing(call, { state: "diverted_to_voicemail" });
   }
 
   private async postAsync(payload: MobilePushRingPayload): Promise<void> {
