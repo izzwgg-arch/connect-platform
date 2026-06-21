@@ -43,7 +43,7 @@ import {
 import { registerStorageMaintenanceRoutes } from "./ops/storageMaintenance/routes";
 import { shouldSkipJwtVerification } from "./jwtPublicRouteBypass";
 import { fetchAriSliceForPbxLiveFromRedisOrAri } from "./pbxLiveAriSlice";
-import { buildVoiceProvisioningBundleFromIdentity, resolveWebrtcSipIdentity } from "./voiceProvisioningBundle";
+import { buildVoiceProvisioningBundleFromIdentity, resolveWebrtcSipIdentity, deriveCanonicalPbxHost, normalizeSipWsUrlHost, isIpLiteralHost } from "./voiceProvisioningBundle";
 import {
   buildIceServers as buildIceServerList,
   expandTurnHostToUrls,
@@ -316,8 +316,21 @@ if (!canUseCredentialCrypto) app.log.warn("Provider credential endpoints disable
   } else if (!ws.startsWith("wss://") && !ws.startsWith("ws://")) {
     app.log.warn({ context: "telephony-env", value: ws }, "PBX_WS_ENDPOINT must start with wss:// or ws://");
   } else {
+    // An IP-literal wss:// endpoint can never pass mobile/browser TLS hostname
+    // verification (the PBX cert is issued for its FQDN). Provisioning now
+    // rewrites it to the canonical PBX host at runtime, but flag it loudly so
+    // the env gets corrected to the FQDN. Set PBX_WS_PUBLIC_HOST as a fallback
+    // FQDN source if the endpoint must stay IP-based for some reason.
+    let wsHostIsIp = false;
+    try { wsHostIsIp = ws.startsWith("wss://") && isIpLiteralHost(new URL(ws).hostname); } catch { /* ignore */ }
+    if (wsHostIsIp) {
+      app.log.warn(
+        { context: "telephony-env", value: ws, pbxWsPublicHost: process.env.PBX_WS_PUBLIC_HOST || null },
+        "PBX_WS_ENDPOINT uses a raw IP over wss:// — mobile/browser TLS hostname verification will reject it. Provisioning will rewrite it to the PBX FQDN when derivable; set PBX_WS_ENDPOINT (or PBX_WS_PUBLIC_HOST) to the certificate hostname.",
+      );
+    }
     app.log.info(
-      { pbxWsEndpoint: ws, pbxHost: process.env.PBX_HOST || "209.145.60.79", hasTurn: !!process.env.TURN_SERVER },
+      { pbxWsEndpoint: ws, pbxHost: process.env.PBX_HOST || "209.145.60.79", hasTurn: !!process.env.TURN_SERVER, wsHostIsIp },
       "Telephony WebRTC config loaded",
     );
   }
@@ -641,10 +654,22 @@ function resolveWebrtcConfig(tenant: any, link: any, turnCfg: any = null) {
   const fallbackSipWsUrl = tenant?.webrtcRouteViaSbc
     ? "wss://app.connectcomunications.com/sip"
     : pbxWsEndpoint;  // uses module-level pbxWsEndpoint (from PBX_WS_ENDPOINT env var)
+  // Rewrite any IP-literal WS host to the PBX's canonical FQDN. A `wss://<ip>`
+  // URL can never pass mobile/browser TLS hostname verification (the PBX cert is
+  // issued for its FQDN), which silently blocks SIP REGISTER. This guard makes
+  // provisioning self-correct even if an IP got persisted in env or the tenant
+  // row — so the IP-vs-cert mismatch can't strand a whole tenant again.
+  const canonicalHost = deriveCanonicalPbxHost({
+    sipDomain: tenant?.sipDomain,
+    pbxDomain: link?.pbxDomain,
+    pbxInstanceBaseUrl: link?.pbxInstance?.baseUrl,
+    envPublicHost: process.env.PBX_WS_PUBLIC_HOST,
+  });
+  const sipWsUrl = normalizeSipWsUrlHost(explicitSipWsUrl || fallbackSipWsUrl, canonicalHost);
   return {
     webrtcEnabled: !!tenant?.webrtcEnabled,
     webrtcRouteViaSbc: !!tenant?.webrtcRouteViaSbc,
-    sipWsUrl: explicitSipWsUrl || fallbackSipWsUrl,
+    sipWsUrl,
     sipDomain: domain,
     outboundProxy: tenant?.outboundProxy || null,
     iceServers: resolveClientIceServers(tenant, turnCfg),
@@ -7739,9 +7764,18 @@ app.post("/pbx/link", async (req, reply) => {
     select: { webrtcEnabled: true, sipWsUrl: true, sipDomain: true },
   });
   if (tenantRow && !tenantRow.webrtcEnabled) {
-    const rawWsEndpoint = pbxWsEndpoint || null; // module-level const from PBX_WS_ENDPOINT
+    // Never bake a raw-IP WS URL into the tenant row: rewrite it to the PBX's
+    // canonical FQDN first (the PBX cert host). Persisting an IP here is exactly
+    // what stranded tenants on a `wss://<ip>` URL that fails mobile TLS.
+    const canonicalHost = deriveCanonicalPbxHost({
+      pbxDomain: input.pbxDomain,
+      pbxInstanceBaseUrl: instance.baseUrl,
+      envPublicHost: process.env.PBX_WS_PUBLIC_HOST,
+    });
+    const rawWsEndpoint = normalizeSipWsUrlHost(pbxWsEndpoint || null, canonicalHost); // module-level const from PBX_WS_ENDPOINT
     const resolvedDomain =
       input.pbxDomain ||
+      canonicalHost ||
       (rawWsEndpoint
         ? (() => { try { return new URL(rawWsEndpoint.replace(/^wss?:\/\//, "https://")).hostname; } catch { return null; } })()
         : null);
