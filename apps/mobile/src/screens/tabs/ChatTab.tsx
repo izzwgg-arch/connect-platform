@@ -22,6 +22,13 @@ import {
   View,
 } from 'react-native';
 import { Audio, InterruptionModeAndroid, ResizeMode, Video } from 'expo-av';
+import {
+  GestureHandlerRootView,
+  PanGestureHandler,
+  PinchGestureHandler,
+  State as GestureState,
+  TapGestureHandler,
+} from 'react-native-gesture-handler';
 import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
@@ -130,9 +137,13 @@ function prettyContactLabel(raw: string | null | undefined): string {
 }
 
 function displayThreadName(thread: ChatThread): string {
-  const base = thread.isDefaultTenantGroup
-    ? thread.title || 'Tenant Group Chat'
-    : thread.title || thread.participantName || 'Chat';
+  if (thread.isDefaultTenantGroup) {
+    // Server stores the title as "<Tenant> — Tenant Group Chat"; show only the
+    // tenant/group name (everything before the em-dash suffix).
+    const title = thread.title || 'Team Chat';
+    return title.split(/\s*—\s*/)[0].trim() || title;
+  }
+  const base = thread.title || thread.participantName || 'Chat';
   return prettyContactLabel(base);
 }
 
@@ -143,8 +154,28 @@ function isGroupThread(thread: ChatThread): boolean {
 function threadKind(thread: ChatThread): string {
   if (thread.type === 'SMS') return 'SMS';
   if (thread.type === 'DM') return 'DM';
-  if (isGroupThread(thread)) return 'Group';
+  if (isGroupThread(thread)) return 'Team chat';
   return thread.type;
+}
+
+/** Turn server media placeholders ("[audio]", "[image]", …) into friendly text. */
+function prettyPreview(text: string): string {
+  const key = text.trim().toLowerCase();
+  switch (key) {
+    case '[audio]':
+    case '[voice_note]':
+      return 'Voice note';
+    case '[image]':
+      return 'Photo';
+    case '[video]':
+      return 'Video';
+    case '[file]':
+      return 'Attachment';
+    case '[location]':
+      return 'Location';
+    default:
+      return text;
+  }
 }
 
 /** Turn raw server error codes from /chat/threads into human-readable toasts. */
@@ -168,7 +199,7 @@ function threadTarget(thread: ChatThread): string {
 }
 
 function previewText(thread: ChatThread): string {
-  if (thread.lastMessage) return thread.lastMessage;
+  if (thread.lastMessage) return prettyPreview(thread.lastMessage);
   if (thread.type === 'SMS') return formatChatPhone(thread.externalSmsE164 || '') || 'SMS conversation';
   return thread.participantExtension ? `Ext ${thread.participantExtension}` : threadKind(thread);
 }
@@ -241,6 +272,17 @@ function isAudioAttachment(attachment: ChatAttachment, messageType?: ChatMessage
   if (isVoiceNoteFileName(name)) return true;
   if (kind === 'video' || mime.startsWith('video/')) return false;
   return kind === 'audio' || mime.startsWith('audio/') || messageType === 'AUDIO' || messageType === 'VOICE_NOTE' || /\.(m4a|aac|mp3|wav|ogg|webm)$/i.test(name);
+}
+
+/** A playable video attachment (never a voice note, which is handled as audio). */
+function isVideoAttachment(attachment: ChatAttachment, messageType?: ChatMessageType): boolean {
+  const name = String(attachment.fileName || '').toLowerCase();
+  if (isVoiceNoteFileName(name)) return false;
+  const kind = String(attachment.mediaKind || '').toLowerCase();
+  const mime = String(attachment.mimeType || '').toLowerCase();
+  if (kind === 'video' || mime.startsWith('video/')) return true;
+  if (messageType === 'VIDEO') return true;
+  return /\.(mp4|mov|webm|3gp|3gpp|m4v)$/i.test(name);
 }
 
 /** Connect voice notes are stored as `voice-note-*` files. */
@@ -338,11 +380,94 @@ function mmsUrlToAttachment(url: string, messageId: string, index: number): Chat
   };
 }
 
+/**
+ * The API issues a fresh HMAC-signed download URL (new `exp`/`sig`) on every
+ * messages fetch. Because the chat polls every 5s, an unstabilised URL changes
+ * on each poll, which makes <Image> re-download and visibly flash. We cache the
+ * first URL seen per attachment id and keep reusing it until it is close to
+ * expiry, so the `uri` string stays identical across refetches (no flash).
+ */
+const stableAttachmentUrlCache = new Map<string, string>();
+
+function signedUrlExpSeconds(url: string): number {
+  const m = url.match(/[?&](?:exp|e)=(\d+)/);
+  return m ? Number(m[1]) : 0;
+}
+
+function stabilizeAttachmentUrl(attachmentId: string, url: string | null | undefined): string | null {
+  if (!url) return url ?? null;
+  // Only stabilise our own signed URLs; external (MMS) URLs are already stable.
+  if (!/[?&](?:exp|e)=\d+/.test(url)) return url;
+  const cached = stableAttachmentUrlCache.get(attachmentId);
+  if (cached) {
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (signedUrlExpSeconds(cached) - nowSec > 120) return cached;
+  }
+  stableAttachmentUrlCache.set(attachmentId, url);
+  return url;
+}
+
+function stabilizeMessageAttachmentUrls(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((m) => {
+    if (!m.attachments || m.attachments.length === 0) return m;
+    let changed = false;
+    const attachments = m.attachments.map((a) => {
+      const stable = stabilizeAttachmentUrl(a.id, a.downloadUrl);
+      if (stable === a.downloadUrl) return a;
+      changed = true;
+      return { ...a, downloadUrl: stable };
+    });
+    return changed ? { ...m, attachments } : m;
+  });
+}
+
 function formatVoiceDuration(ms?: number | null): string {
   const total = Math.max(0, Math.round(Number(ms || 0) / 1000));
   const min = Math.floor(total / 60);
   const sec = total % 60;
   return `${min}:${sec.toString().padStart(2, '0')}`;
+}
+
+/** Friendly label for a message kind when there is no text body to show. */
+function friendlyTypeLabel(type?: string | null): string {
+  switch (String(type || '').toUpperCase()) {
+    case 'VOICE_NOTE':
+    case 'AUDIO':
+      return 'Voice note';
+    case 'IMAGE':
+      return 'Photo';
+    case 'VIDEO':
+      return 'Video';
+    case 'FILE':
+      return 'Attachment';
+    case 'LOCATION':
+      return 'Location';
+    default:
+      return 'Message';
+  }
+}
+
+type ReplyPreviewMeta = { label: string; duration: string | null; thumbUri: string | null; thumbIsVideo: boolean };
+
+/** Describe a message being replied to: friendly label, voice-note duration, and a photo/video thumbnail. */
+function describeReplyTarget(msg: ChatMessage): ReplyPreviewMeta {
+  const atts = msg.attachments || [];
+  const audio = atts.find((a) => isAudioAttachment(a, msg.type));
+  if (audio || msg.type === 'VOICE_NOTE' || msg.type === 'AUDIO') {
+    const ms = audio?.durationMs ?? null;
+    return { label: 'Voice note', duration: ms && ms > 0 ? formatVoiceDuration(ms) : null, thumbUri: null, thumbIsVideo: false };
+  }
+  const video = atts.find((a) => isVideoAttachment(a, msg.type));
+  if (video || msg.type === 'VIDEO') {
+    return { label: 'Video', duration: null, thumbUri: video?.downloadUrl ?? null, thumbIsVideo: true };
+  }
+  const image = atts.find((a) => isImageAttachment(a, msg.type));
+  if (image || msg.type === 'IMAGE') {
+    return { label: 'Photo', duration: null, thumbUri: image?.downloadUrl ?? null, thumbIsVideo: false };
+  }
+  const body = (msg.body || '').trim();
+  if (body) return { label: body, duration: null, thumbUri: null, thumbIsVideo: false };
+  return { label: friendlyTypeLabel(msg.type), duration: null, thumbUri: null, thumbIsVideo: false };
 }
 
 function bodyWithoutMediaLinks(body: string, hasRenderedMedia: boolean): string {
@@ -428,6 +553,16 @@ function useVoiceNotePlayerController(order: { id: string; url: string }[]): Voi
     setPlaying(true);
     setProgress(0);
     setDurationMs(null);
+    // Always play voice notes out of the loudspeaker, never the earpiece.
+    // Recording leaves the global audio mode in a record/earpiece-routed
+    // state, so reset it here before every playback.
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      playsInSilentModeIOS: true,
+      interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
+      shouldDuckAndroid: true,
+      playThroughEarpieceAndroid: false,
+    }).catch(() => undefined);
     let sound: Audio.Sound;
     try {
       ({ sound } = await Audio.Sound.createAsync(
@@ -505,6 +640,7 @@ export function ChatTab() {
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
   const listRef = useRef<FlatList<ChatMessage>>(null);
+  const invertedMessagesRef = useRef<ChatMessage[]>([]);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -544,6 +680,22 @@ export function ChatTab() {
     requestAnimationFrame(() => listRef.current?.scrollToOffset({ offset: 0, animated }));
   }, []);
 
+  // Tapping a reply quote scrolls to (and briefly highlights) the original message.
+  const [flashMessageId, setFlashMessageId] = useState<string | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const jumpToMessage = useCallback((id: string) => {
+    const idx = invertedMessagesRef.current.findIndex((m) => m.id === id);
+    if (idx < 0) return;
+    try {
+      listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.5 });
+    } catch {
+      /* onScrollToIndexFailed handles the unmeasured case */
+    }
+    setFlashMessageId(id);
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => setFlashMessageId(null), 1400);
+  }, []);
+
   const handleListScroll = useCallback(
     (e: { nativeEvent: { contentOffset: { y: number } } }) => {
       // Inverted list: contentOffset.y ~0 means pinned to the newest message.
@@ -580,6 +732,7 @@ export function ChatTab() {
     refetchOnMount: false,
     refetchOnWindowFocus: false,
     refetchInterval: activeThread ? 5000 : false,
+    select: stabilizeMessageAttachmentUrls,
   });
 
   const typingQuery = useQuery({
@@ -927,10 +1080,28 @@ export function ChatTab() {
         replyToMessageId: reply?.id,
         attachments,
       });
-      setLocalMessages((current) => current.filter((m) => m.id !== localId));
-      await queryClient.invalidateQueries({ queryKey: mobileQueryKeys.chatMessages(activeThread.id) });
-      await queryClient.invalidateQueries({ queryKey: mobileQueryKeys.chatThreads });
-      if (sent.deliveryStatus === 'queued') showToast('Message queued.');
+      const realId = sent.messageId;
+      if (realId) {
+        // Promote the optimistic bubble to the confirmed server id and keep
+        // it on screen. The merge in `messages` dedupes it the moment the
+        // background refetch returns the same id, so the bubble never blinks
+        // out-and-back (the previous filter-then-refetch caused a flash).
+        setLocalMessages((current) =>
+          current.map((m) =>
+            m.id === localId
+              ? { ...m, id: realId, clientStatus: undefined, deliveryStatus: sent.deliveryStatus ?? m.deliveryStatus }
+              : m,
+          ),
+        );
+        void queryClient.invalidateQueries({ queryKey: mobileQueryKeys.chatMessages(activeThread.id) });
+      } else {
+        // No server id to dedupe against — wait for the refetch to land the
+        // real message, *then* drop the optimistic so it never disappears
+        // (no gap) and never duplicates.
+        await queryClient.invalidateQueries({ queryKey: mobileQueryKeys.chatMessages(activeThread.id) });
+        setLocalMessages((current) => current.filter((m) => m.id !== localId));
+      }
+      void queryClient.invalidateQueries({ queryKey: mobileQueryKeys.chatThreads });
       setMediaLinkError(false);
     } catch (err: any) {
       const msg = String(err?.message || '');
@@ -1037,6 +1208,93 @@ export function ChatTab() {
     }
   }, [activeThread, recording, token]);
 
+  // Send a finished voice note. Shows the bubble *immediately* using the
+  // local file, then uploads + sends in the background and promotes the
+  // optimistic bubble to the real server id so the refetch dedupes it in
+  // place — no "dead second" with nothing on screen and no flash.
+  const commitVoiceNote = useCallback(
+    async (localUri: string, durationMs?: number) => {
+      if (!token || !activeThread) return;
+      const threadId = activeThread.id;
+      const localId = `local:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+      const fileName = `voice-note-${Date.now()}.m4a`;
+      const optimistic: ChatMessage = {
+        id: localId,
+        threadId,
+        senderId: 'me',
+        senderName: 'You',
+        body: '',
+        sentAt: new Date().toISOString(),
+        mine: true,
+        type: 'VOICE_NOTE',
+        clientStatus: 'sending',
+        replyTo: null,
+        attachments: [
+          {
+            id: `${localId}:att:0`,
+            fileName,
+            mimeType: 'audio/mp4',
+            sizeBytes: 0,
+            downloadUrl: localUri,
+            mediaKind: 'audio',
+            durationMs: durationMs ?? null,
+            width: null,
+            height: null,
+          },
+        ],
+        location: null,
+      };
+      setLocalMessages((current) => [...current, optimistic]);
+      scrollToBottom(true);
+      try {
+        const uploaded = await uploadChatAttachment(token, threadId, {
+          uri: localUri,
+          name: fileName,
+          type: 'audio/mp4',
+        });
+        const enriched: PendingChatAttachment = {
+          ...uploaded,
+          mediaKind: uploaded.mediaKind ?? 'audio',
+          durationMs: uploaded.durationMs ?? durationMs ?? null,
+        };
+        const sent = await sendChatMessage(token, threadId, {
+          body: '',
+          type: 'VOICE_NOTE',
+          attachments: [enriched],
+        });
+        const realId = sent.messageId;
+        if (realId) {
+          setLocalMessages((current) =>
+            current.map((m) =>
+              m.id === localId
+                ? { ...m, id: realId, clientStatus: undefined, deliveryStatus: sent.deliveryStatus ?? m.deliveryStatus }
+                : m,
+            ),
+          );
+          void queryClient.invalidateQueries({ queryKey: mobileQueryKeys.chatMessages(threadId) });
+        } else {
+          await queryClient.invalidateQueries({ queryKey: mobileQueryKeys.chatMessages(threadId) });
+          setLocalMessages((current) => current.filter((m) => m.id !== localId));
+        }
+        void queryClient.invalidateQueries({ queryKey: mobileQueryKeys.chatThreads });
+      } catch (err: any) {
+        const msg = String(err?.message || '');
+        if (msg === 'MEDIA_LINK_BASE_UNAVAILABLE') {
+          setLocalMessages((current) => current.filter((m) => m.id !== localId));
+          showToast('Cannot send media over SMS.');
+        } else {
+          setLocalMessages((current) =>
+            current.map((m) =>
+              m.id === localId ? { ...m, clientStatus: 'failed', deliveryError: msg || 'Send failed' } : m,
+            ),
+          );
+          showToast(msg || 'Could not send voice note.');
+        }
+      }
+    },
+    [activeThread, queryClient, scrollToBottom, showToast, token],
+  );
+
   const stopRecording = useCallback(async () => {
     const rec = recordingRef.current;
     if (!rec) return;
@@ -1057,6 +1315,15 @@ export function ChatTab() {
         /* non-fatal — read it back from the finished file below */
       }
       await rec.stopAndUnloadAsync();
+      // Hand the audio session back to playback (loudspeaker) so the voice
+      // note we just recorded doesn't play out of the earpiece.
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      }).catch(() => undefined);
       // On some devices (e.g. the Oplus AudioRecord retry path) the live
       // recorder status reports no duration even though the saved file is
       // fine. Read the true duration straight from the finished file so the
@@ -1086,19 +1353,13 @@ export function ChatTab() {
       }
       const uri = rec.getURI();
       if (!uri) return;
-      const attachment = await uploadLocalFile({ uri, name: `voice-note-${Date.now()}.m4a`, type: 'audio/mp4' });
-      if (attachment) {
-        const enriched: PendingChatAttachment = {
-          ...attachment,
-          mediaKind: attachment.mediaKind ?? 'audio',
-          durationMs: attachment.durationMs ?? durationMs ?? null,
-        };
-        await sendPreparedMessage({ body: '', type: 'VOICE_NOTE', attachments: [enriched] });
-      }
+      // Fire-and-forget: shows the bubble instantly and uploads in the
+      // background so releasing the mic feels immediate.
+      void commitVoiceNote(uri, durationMs);
     } catch (err: any) {
       showToast(err?.message || 'Could not send voice note.');
     }
-  }, [sendPreparedMessage, showToast, uploadLocalFile]);
+  }, [commitVoiceNote, showToast]);
 
   const cancelRecording = useCallback(async () => {
     const rec = recordingRef.current;
@@ -1115,6 +1376,14 @@ export function ChatTab() {
     } catch {
       /* recorder already torn down */
     }
+    // Restore loudspeaker playback routing after the record session.
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      playsInSilentModeIOS: true,
+      interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
+      shouldDuckAndroid: true,
+      playThroughEarpieceAndroid: false,
+    }).catch(() => undefined);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
   }, []);
 
@@ -1249,6 +1518,13 @@ export function ChatTab() {
   // timing, and keeps the newest bubble pinned above the keyboard. The data must
   // therefore be newest-first.
   const invertedMessages = useMemo(() => displayedMessages.slice().reverse(), [displayedMessages]);
+  invertedMessagesRef.current = invertedMessages;
+  // id → message lookup so a reply bubble can resolve the original it quotes.
+  const messageById = useMemo(() => {
+    const map = new Map<string, ChatMessage>();
+    for (const m of displayedMessages) map.set(m.id, m);
+    return map;
+  }, [displayedMessages]);
 
   // Ordered list of every voice note in the thread (oldest → newest). Drives the
   // shared player's auto-advance: when one note ends, the next in this list plays.
@@ -1278,11 +1554,18 @@ export function ChatTab() {
       // which sits at index + 1 in the reversed array.
       const prev = invertedMessages[index + 1];
       const grouped = Boolean(prev && prev.senderId === item.senderId && prev.mine === item.mine);
+      // Resolve the replied-to message (usually still loaded in this thread) so
+      // the quote can show a media thumbnail / voice-note duration, not just text.
+      const replySource = item.replyTo ? messageById.get(item.replyTo.id) : null;
+      const replyPreview = replySource ? describeReplyTarget(replySource) : null;
       return (
         <MessageBubble
           message={item}
           grouped={grouped}
           search={messageSearch.trim()}
+          replyPreview={replyPreview}
+          flashing={flashMessageId === item.id}
+          onJumpToReply={jumpToMessage}
           onOpenMedia={setMediaPreview}
           onAction={() => setSelectedMessage(item)}
           onReply={() => setReplyingTo(item)}
@@ -1291,7 +1574,7 @@ export function ChatTab() {
         />
       );
     },
-    [invertedMessages, messageSearch, removeReaction, retryMessage],
+    [invertedMessages, messageById, messageSearch, removeReaction, retryMessage, flashMessageId, jumpToMessage],
   );
 
   return (
@@ -1410,6 +1693,16 @@ export function ChatTab() {
               windowSize={9}
               removeClippedSubviews={false}
               renderItem={renderMessageItem}
+              onScrollToIndexFailed={(info) => {
+                listRef.current?.scrollToOffset({ offset: Math.max(0, info.averageItemLength * info.index), animated: true });
+                setTimeout(() => {
+                  try {
+                    listRef.current?.scrollToIndex({ index: info.index, animated: true, viewPosition: 0.5 });
+                  } catch {
+                    /* give up silently if still unmeasured */
+                  }
+                }, 320);
+              }}
             />
           )}
           {mediaLinkError && activeThread?.type === 'SMS' ? (
@@ -1584,6 +1877,9 @@ const MessageBubble = memo(function MessageBubble({
   onOpenMedia,
   onRemoveReaction,
   onRetry,
+  replyPreview,
+  onJumpToReply,
+  flashing,
 }: {
   message: ChatMessage;
   grouped: boolean;
@@ -1593,6 +1889,9 @@ const MessageBubble = memo(function MessageBubble({
   onOpenMedia: (preview: MediaPreview) => void;
   onRemoveReaction: (emoji: string) => void;
   onRetry: () => void;
+  replyPreview?: ReplyPreviewMeta | null;
+  onJumpToReply?: (id: string) => void;
+  flashing?: boolean;
 }) {
   const { colors } = useTheme();
   const translateX = useRef(new Animated.Value(0)).current;
@@ -1628,26 +1927,47 @@ const MessageBubble = memo(function MessageBubble({
     (attachment) => isImageAttachment(attachment, message.type) && !audioIds.has(attachment.id),
   );
   const imageIds = new Set(imageAttachments.map((a) => a.id));
+  const videoAttachments = combined.filter(
+    (attachment) => !audioIds.has(attachment.id) && !imageIds.has(attachment.id) && isVideoAttachment(attachment, message.type),
+  );
+  const videoIds = new Set(videoAttachments.map((a) => a.id));
   const otherAttachments = combined.filter(
-    (attachment) => !audioIds.has(attachment.id) && !imageIds.has(attachment.id),
+    (attachment) => !audioIds.has(attachment.id) && !imageIds.has(attachment.id) && !videoIds.has(attachment.id),
   );
   const renderedImages = imageAttachments;
-  const visibleBody = bodyWithoutMediaLinks(message.body || '', renderedImages.length > 0 || audioAttachments.length > 0 || otherAttachments.length > 0);
-  const mediaOnly = !deleted && !visibleBody && !message.location && (renderedImages.length > 0 || audioAttachments.length > 0) && otherAttachments.length === 0;
-  const metaColor = mediaOnly ? colors.textTertiary : (message.mine ? 'rgba(255,255,255,0.75)' : colors.textTertiary);
-  const statusColor = mediaOnly ? colors.textTertiary : 'rgba(255,255,255,0.7)';
+  const hasVisualMedia = renderedImages.length > 0 || videoAttachments.length > 0;
+  const visibleBody = bodyWithoutMediaLinks(message.body || '', hasVisualMedia || audioAttachments.length > 0 || otherAttachments.length > 0);
+  const mediaOnly = !deleted && !visibleBody && !message.location && (hasVisualMedia || audioAttachments.length > 0) && otherAttachments.length === 0;
   return (
     <Animated.View style={[styles.messageRow, message.mine ? styles.messageRowMine : styles.messageRowTheirs, grouped ? styles.messageGrouped : null, { transform: [{ translateX }] }]} {...panResponder.panHandlers}>
       <View style={styles.messageStack}>
-        <TouchableOpacity activeOpacity={0.86} onPress={onAction} onLongPress={onAction} style={mediaOnly ? [styles.bubbleMediaOnly, message.mine ? styles.bubbleMine : styles.bubbleTheirs] : bubbleStyle}>
+        <TouchableOpacity activeOpacity={0.86} onPress={onAction} onLongPress={onAction} style={[mediaOnly ? [styles.bubbleMediaOnly, message.mine ? styles.bubbleMine : styles.bubbleTheirs] : bubbleStyle, flashing ? { borderColor: colors.primary, borderWidth: 2 } : null]}>
           {!message.mine && !grouped ? <Text style={[styles.senderName, { color: colors.teal }]}>{prettyContactLabel(message.senderName)}</Text> : null}
           {message.replyTo ? (
-            <View style={[styles.replyInline, { backgroundColor: message.mine ? 'rgba(255,255,255,0.16)' : colors.bgSecondary }]}>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => message.replyTo && onJumpToReply?.(message.replyTo.id)}
+              onLongPress={onAction}
+              delayLongPress={280}
+              style={[styles.replyInline, { backgroundColor: message.mine ? 'rgba(255,255,255,0.16)' : colors.bgSecondary }]}
+            >
               <Ionicons name="return-up-back-outline" size={12} color={message.mine ? '#fff' : colors.primary} />
+              {replyPreview?.thumbUri ? (
+                <View style={styles.replyInlineThumbWrap}>
+                  {replyPreview.thumbIsVideo ? (
+                    <Video source={{ uri: replyPreview.thumbUri }} style={styles.replyInlineThumb} resizeMode={ResizeMode.COVER} shouldPlay={false} isMuted positionMillis={1} useNativeControls={false} />
+                  ) : (
+                    <Image source={{ uri: replyPreview.thumbUri }} style={styles.replyInlineThumb} />
+                  )}
+                  {replyPreview.thumbIsVideo ? (
+                    <View style={styles.replyInlineThumbPlay}><Ionicons name="play" size={7} color="#fff" style={{ marginLeft: 1 }} /></View>
+                  ) : null}
+                </View>
+              ) : null}
               <Text style={[styles.replyInlineText, { color: message.mine ? '#eaf2ff' : colors.textSecondary }]} numberOfLines={1}>
-                {prettyContactLabel(message.replyTo.senderName)}: {message.replyTo.body || message.replyTo.type}
+                {prettyContactLabel(message.replyTo.senderName)}: {replyPreview?.label || message.replyTo.body || friendlyTypeLabel(message.replyTo.type)}{replyPreview?.duration ? ` · ${replyPreview.duration}` : ''}
               </Text>
-            </View>
+            </TouchableOpacity>
           ) : null}
           {deleted ? (
             <Text style={[styles.messageText, { color: textColor, fontStyle: 'italic', opacity: 0.75 }]}>This message was deleted</Text>
@@ -1670,9 +1990,21 @@ const MessageBubble = memo(function MessageBubble({
                   failed={message.clientStatus === 'failed' || String(message.deliveryStatus || '').toLowerCase() === 'failed'}
                   sending={message.clientStatus === 'sending' || String(message.deliveryStatus || '').toLowerCase() === 'queued'}
                   onOpen={(attachment) => onOpenMedia({ type: 'image', url: attachment.downloadUrl, title: attachment.fileName || 'Image', subtitle: attachment.mimeType })}
+                  onLongPress={onAction}
                   onRetry={onRetry}
                 />
               ) : null}
+              {videoAttachments.map((attachment) => (
+                <VideoThumb
+                  key={attachment.id}
+                  attachment={attachment}
+                  failed={message.clientStatus === 'failed' || String(message.deliveryStatus || '').toLowerCase() === 'failed'}
+                  sending={message.clientStatus === 'sending' || String(message.deliveryStatus || '').toLowerCase() === 'queued'}
+                  onOpen={() => onOpenMedia({ type: 'video', url: attachment.downloadUrl, title: attachment.fileName || 'Video', subtitle: attachment.mimeType })}
+                  onLongPress={onAction}
+                  onRetry={onRetry}
+                />
+              ))}
               {audioAttachments.map((attachment) => (
                 <VoiceNoteBubble key={attachment.id} attachment={attachment} mine={message.mine} failed={message.clientStatus === 'failed'} onRetry={onRetry} />
               ))}
@@ -1694,16 +2026,6 @@ const MessageBubble = memo(function MessageBubble({
               ))}
             </>
           )}
-          <View style={[styles.bubbleMeta, mediaOnly ? styles.bubbleMetaMediaOnly : null]}>
-            <Text style={[styles.timeText, { color: metaColor }]}>{formatMessageTime(message.sentAt)}</Text>
-            {message.mine ? <Ionicons name={statusIcon(message.deliveryStatus, message.clientStatus)} size={12} color={message.clientStatus === 'failed' ? colors.danger : (mediaOnly ? colors.textTertiary : '#dbeafe')} /> : null}
-            {message.clientStatus === 'failed' ? (
-              <TouchableOpacity onPress={onRetry}>
-                <Text style={[styles.retryText, { color: message.mine ? '#fff' : colors.danger }]}>Retry</Text>
-              </TouchableOpacity>
-            ) : null}
-          </View>
-          {message.mine ? <Text style={[styles.statusTiny, { color: statusColor }]}>{statusLabel(message.deliveryStatus, message.clientStatus)}</Text> : null}
         </TouchableOpacity>
         {Object.keys(reactionCounts).length ? (
           <View style={[styles.reactionSummary, message.mine ? styles.reactionMine : styles.reactionTheirs, { backgroundColor: colors.surfaceElevated, borderColor: colors.borderSubtle }]}>
@@ -1714,6 +2036,17 @@ const MessageBubble = memo(function MessageBubble({
             ))}
           </View>
         ) : null}
+        {/* Timestamp + delivery status live OUTSIDE the bubble, on the chat background. */}
+        <View style={[styles.metaOutside, message.mine ? styles.metaOutsideMine : styles.metaOutsideTheirs]}>
+          <Text style={[styles.timeText, { color: colors.textTertiary }]}>{formatMessageTime(message.sentAt)}</Text>
+          {message.mine ? <Ionicons name={statusIcon(message.deliveryStatus, message.clientStatus)} size={11} color={message.clientStatus === 'failed' ? colors.danger : colors.textTertiary} /> : null}
+          {message.mine ? <Text style={[styles.statusTiny, { color: colors.textTertiary }]}>{statusLabel(message.deliveryStatus, message.clientStatus)}</Text> : null}
+          {message.clientStatus === 'failed' ? (
+            <TouchableOpacity onPress={onRetry}>
+              <Text style={[styles.retryText, { color: colors.danger }]}>Retry</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
       </View>
     </Animated.View>
   );
@@ -1725,6 +2058,7 @@ function ImageGrid({
   failed,
   sending,
   onOpen,
+  onLongPress,
   onRetry,
 }: {
   attachments: ChatAttachment[];
@@ -1732,6 +2066,7 @@ function ImageGrid({
   failed: boolean;
   sending: boolean;
   onOpen: (attachment: ChatAttachment) => void;
+  onLongPress?: () => void;
   onRetry: () => void;
 }) {
   const shown = attachments.slice(0, 4);
@@ -1746,6 +2081,8 @@ function ImageGrid({
             key={attachment.id}
             activeOpacity={0.88}
             onPress={() => onOpen(attachment)}
+            onLongPress={onLongPress}
+            delayLongPress={280}
             style={[
               styles.imageCell,
               shown.length === 1 ? { width: CHAT_MEDIA_MAX_WIDTH, aspectRatio: aspect } : null,
@@ -1773,13 +2110,117 @@ function ImageGrid({
   );
 }
 
+// Video attachments render like a photo: the first frame as a still poster
+// (expo-av Video paused) with a centered play button, opening the full player
+// on tap. Long-press bubbles up to the message reaction menu.
+function VideoThumb({
+  attachment,
+  failed,
+  sending,
+  onOpen,
+  onLongPress,
+  onRetry,
+}: {
+  attachment: ChatAttachment;
+  failed: boolean;
+  sending: boolean;
+  onOpen: () => void;
+  onLongPress?: () => void;
+  onRetry: () => void;
+}) {
+  const aspect =
+    attachment.width && attachment.height
+      ? Math.max(0.56, Math.min(1.8, attachment.width / attachment.height))
+      : 4 / 3;
+  return (
+    <TouchableOpacity
+      activeOpacity={0.9}
+      onPress={onOpen}
+      onLongPress={onLongPress}
+      delayLongPress={280}
+      style={[styles.imageCell, { width: CHAT_MEDIA_MAX_WIDTH, aspectRatio: aspect }]}
+    >
+      {attachment.downloadUrl ? (
+        <Video
+          source={{ uri: attachment.downloadUrl }}
+          style={styles.imageBubble}
+          resizeMode={ResizeMode.COVER}
+          shouldPlay={false}
+          isMuted
+          positionMillis={1}
+          useNativeControls={false}
+        />
+      ) : (
+        <View style={[styles.imageBubble, { backgroundColor: 'rgba(15,23,42,0.35)' }]} />
+      )}
+      {!sending && !failed ? (
+        <View pointerEvents="none" style={styles.videoPlayOverlay}>
+          <View style={styles.videoPlayButton}>
+            <Ionicons name="play" size={26} color="#fff" style={{ marginLeft: 3 }} />
+          </View>
+        </View>
+      ) : null}
+      {sending || failed ? (
+        <TouchableOpacity activeOpacity={failed ? 0.8 : 1} onPress={failed ? onRetry : undefined} style={styles.imageStateOverlay}>
+          {sending ? <ActivityIndicator color="#fff" /> : <Ionicons name="alert-circle" size={22} color="#fff" />}
+          <Text style={styles.imageStateText}>{sending ? 'Sending' : 'Retry'}</Text>
+        </TouchableOpacity>
+      ) : null}
+    </TouchableOpacity>
+  );
+}
+
+// Incoming voice notes (e.g. MMS) often arrive without a stored duration, so
+// the bubble would show "0:00". Read the real duration from the audio file
+// once and cache it across renders/bubbles.
+const voiceDurationCache = new Map<string, number>();
+
+function useResolvedVoiceDuration(attachment: ChatAttachment, stored: number | null): number | null {
+  const [resolved, setResolved] = useState<number | null>(
+    () => (stored && stored > 0 ? stored : voiceDurationCache.get(attachment.id) ?? null),
+  );
+  useEffect(() => {
+    if (stored && stored > 0) {
+      setResolved(stored);
+      return;
+    }
+    const cached = voiceDurationCache.get(attachment.id);
+    if (cached) {
+      setResolved(cached);
+      return;
+    }
+    const url = attachment.downloadUrl;
+    if (!url) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { sound, status } = await Audio.Sound.createAsync({ uri: url }, { shouldPlay: false });
+        const ms = Number((status as any)?.durationMillis);
+        await sound.unloadAsync().catch(() => undefined);
+        if (Number.isFinite(ms) && ms > 0) {
+          const rounded = Math.round(ms);
+          voiceDurationCache.set(attachment.id, rounded);
+          if (!cancelled) setResolved(rounded);
+        }
+      } catch {
+        /* ignore — leave duration unknown */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [attachment.id, attachment.downloadUrl, stored]);
+  return resolved;
+}
+
 function VoiceNoteBubble({ attachment, mine, failed, onRetry }: { attachment: ChatAttachment; mine: boolean; failed: boolean; onRetry: () => void }) {
   const { colors } = useTheme();
   const player = useContext(VoiceNotePlayerContext);
   const isActive = player?.activeId === attachment.id;
   const playing = Boolean(isActive && player?.playing);
   const progress = isActive ? (player?.progress ?? 0) : 0;
-  const durationMs = isActive && player?.durationMs ? player.durationMs : (attachment.durationMs ?? null);
+  const resolvedDuration = useResolvedVoiceDuration(attachment, attachment.durationMs ?? null);
+  const durationMs = isActive && player?.durationMs ? player.durationMs : (attachment.durationMs ?? resolvedDuration ?? null);
 
   const toggle = useCallback(() => {
     if (!attachment.downloadUrl) return;
@@ -1957,13 +2398,30 @@ function Composer({
 
   return (
     <View style={[styles.composerShell, { paddingBottom: bottomInset }]}>
-      {replyingTo ? (
-        <View style={[styles.replyPreview, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>
-          <Ionicons name="return-up-back-outline" size={15} color={colors.primary} />
-          <Text style={[styles.replyPreviewText, { color: colors.textSecondary }]} numberOfLines={1}>Replying to {prettyContactLabel(replyingTo.senderName)}: {replyingTo.body || replyingTo.type}</Text>
-          <TouchableOpacity onPress={onCancelReply}><Ionicons name="close" size={17} color={colors.textTertiary} /></TouchableOpacity>
-        </View>
-      ) : null}
+      {replyingTo ? (() => {
+        const meta = describeReplyTarget(replyingTo);
+        return (
+          <View style={[styles.replyPreview, { backgroundColor: colors.surfaceElevated, borderColor: colors.border }]}>
+            <Ionicons name="return-up-back-outline" size={15} color={colors.primary} />
+            {meta.thumbUri ? (
+              <View style={styles.replyThumbWrap}>
+                {meta.thumbIsVideo ? (
+                  <Video source={{ uri: meta.thumbUri }} style={styles.replyThumb} resizeMode={ResizeMode.COVER} shouldPlay={false} isMuted positionMillis={1} useNativeControls={false} />
+                ) : (
+                  <Image source={{ uri: meta.thumbUri }} style={styles.replyThumb} />
+                )}
+                {meta.thumbIsVideo ? (
+                  <View style={styles.replyThumbPlay}><Ionicons name="play" size={9} color="#fff" style={{ marginLeft: 1 }} /></View>
+                ) : null}
+              </View>
+            ) : null}
+            <Text style={[styles.replyPreviewText, { color: colors.textSecondary }]} numberOfLines={1}>
+              Replying to {prettyContactLabel(replyingTo.senderName)}: {meta.label}{meta.duration ? ` · ${meta.duration}` : ''}
+            </Text>
+            <TouchableOpacity onPress={onCancelReply}><Ionicons name="close" size={17} color={colors.textTertiary} /></TouchableOpacity>
+          </View>
+        );
+      })() : null}
       {pending.length ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} bounces={false} overScrollMode="never" style={styles.pendingRow}>
           {pending.map((item, index) => (
@@ -2402,27 +2860,140 @@ function ActionRow({ icon, label, destructive, onPress }: { icon: keyof typeof I
   );
 }
 
+// Pinch-to-zoom + pan + double-tap for the fullscreen photo viewer. Uses the
+// gesture-handler legacy component API driven by RN's Animated (no reanimated
+// dependency). Must live under a GestureHandlerRootView (Android modals render
+// in their own view tree, so MediaViewer wraps its content in one).
+function ZoomableImage({ uri }: { uri: string }) {
+  const pinchRef = useRef(null);
+  const panRef = useRef(null);
+  const doubleTapRef = useRef(null);
+
+  const baseScale = useRef(new Animated.Value(1)).current;
+  const pinchScale = useRef(new Animated.Value(1)).current;
+  const scale = useRef(Animated.multiply(baseScale, pinchScale)).current;
+  const lastScale = useRef(1);
+
+  const baseTransX = useRef(new Animated.Value(0)).current;
+  const baseTransY = useRef(new Animated.Value(0)).current;
+  const panX = useRef(new Animated.Value(0)).current;
+  const panY = useRef(new Animated.Value(0)).current;
+  const translateX = useRef(Animated.add(baseTransX, panX)).current;
+  const translateY = useRef(Animated.add(baseTransY, panY)).current;
+  const lastTrans = useRef({ x: 0, y: 0 });
+
+  const onPinchEvent = useRef(
+    Animated.event([{ nativeEvent: { scale: pinchScale } }], { useNativeDriver: true }),
+  ).current;
+  const onPanEvent = useRef(
+    Animated.event([{ nativeEvent: { translationX: panX, translationY: panY } }], { useNativeDriver: true }),
+  ).current;
+
+  const reset = useCallback(() => {
+    lastScale.current = 1;
+    lastTrans.current = { x: 0, y: 0 };
+    pinchScale.setValue(1);
+    panX.setValue(0);
+    panY.setValue(0);
+    Animated.parallel([
+      Animated.spring(baseScale, { toValue: 1, useNativeDriver: true }),
+      Animated.spring(baseTransX, { toValue: 0, useNativeDriver: true }),
+      Animated.spring(baseTransY, { toValue: 0, useNativeDriver: true }),
+    ]).start();
+  }, [baseScale, baseTransX, baseTransY, panX, panY, pinchScale]);
+
+  const onPinchStateChange = useCallback((e: any) => {
+    if (e.nativeEvent.oldState === GestureState.ACTIVE) {
+      lastScale.current *= e.nativeEvent.scale;
+      pinchScale.setValue(1);
+      if (lastScale.current <= 1.01) {
+        reset();
+      } else {
+        if (lastScale.current > 4) lastScale.current = 4;
+        baseScale.setValue(lastScale.current);
+      }
+    }
+  }, [baseScale, pinchScale, reset]);
+
+  const onPanStateChange = useCallback((e: any) => {
+    if (e.nativeEvent.oldState === GestureState.ACTIVE) {
+      lastTrans.current = {
+        x: lastTrans.current.x + e.nativeEvent.translationX,
+        y: lastTrans.current.y + e.nativeEvent.translationY,
+      };
+      baseTransX.setValue(lastTrans.current.x);
+      baseTransY.setValue(lastTrans.current.y);
+      panX.setValue(0);
+      panY.setValue(0);
+    }
+  }, [baseTransX, baseTransY, panX, panY]);
+
+  const onDoubleTap = useCallback((e: any) => {
+    if (e.nativeEvent.state === GestureState.ACTIVE) {
+      if (lastScale.current > 1.01) {
+        reset();
+      } else {
+        lastScale.current = 2.5;
+        baseScale.setValue(2.5);
+      }
+    }
+  }, [baseScale, reset]);
+
+  return (
+    <TapGestureHandler ref={doubleTapRef} numberOfTaps={2} onHandlerStateChange={onDoubleTap}>
+      <Animated.View style={styles.viewerZoomArea}>
+        <PanGestureHandler
+          ref={panRef}
+          simultaneousHandlers={pinchRef}
+          minPointers={1}
+          maxPointers={2}
+          avgTouches
+          onGestureEvent={onPanEvent}
+          onHandlerStateChange={onPanStateChange}
+        >
+          <Animated.View style={styles.viewerZoomArea}>
+            <PinchGestureHandler
+              ref={pinchRef}
+              simultaneousHandlers={panRef}
+              onGestureEvent={onPinchEvent}
+              onHandlerStateChange={onPinchStateChange}
+            >
+              <Animated.Image
+                source={{ uri }}
+                resizeMode="contain"
+                style={[styles.viewerImage, { transform: [{ translateX }, { translateY }, { scale }] }]}
+              />
+            </PinchGestureHandler>
+          </Animated.View>
+        </PanGestureHandler>
+      </Animated.View>
+    </TapGestureHandler>
+  );
+}
+
 function MediaViewer({ preview, onClose }: { preview: MediaPreview | null; onClose: () => void }) {
   const { colors } = useTheme();
   if (!preview) return null;
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      <View style={[styles.viewer, { backgroundColor: 'rgba(0,0,0,0.92)' }]}>
-        <TouchableOpacity style={styles.viewerClose} onPress={onClose}>
-          <Ionicons name="close" size={26} color="#fff" />
-        </TouchableOpacity>
-        {preview.type === 'image' && preview.url ? (
-          <Image source={{ uri: preview.url }} style={styles.viewerImage} resizeMode="contain" />
-        ) : preview.type === 'video' && preview.url ? (
-          <Video source={{ uri: preview.url }} style={styles.viewerVideo} useNativeControls resizeMode={ResizeMode.CONTAIN} />
-        ) : (
-          <View style={[styles.viewerFile, { backgroundColor: colors.surface }]}>
-            <Ionicons name={preview.type === 'location' ? 'location-outline' : 'document-text-outline'} size={34} color={colors.primary} />
-            <Text style={[styles.viewerTitle, { color: colors.text }]}>{preview.title}</Text>
-            {preview.subtitle ? <Text style={[styles.viewerSub, { color: colors.textSecondary }]}>{preview.subtitle}</Text> : null}
-          </View>
-        )}
-      </View>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <View style={[styles.viewer, { backgroundColor: 'rgba(0,0,0,0.92)' }]}>
+          <TouchableOpacity style={styles.viewerClose} onPress={onClose}>
+            <Ionicons name="close" size={26} color="#fff" />
+          </TouchableOpacity>
+          {preview.type === 'image' && preview.url ? (
+            <ZoomableImage uri={preview.url} />
+          ) : preview.type === 'video' && preview.url ? (
+            <Video source={{ uri: preview.url }} style={styles.viewerVideo} useNativeControls resizeMode={ResizeMode.CONTAIN} />
+          ) : (
+            <View style={[styles.viewerFile, { backgroundColor: colors.surface }]}>
+              <Ionicons name={preview.type === 'location' ? 'location-outline' : 'document-text-outline'} size={34} color={colors.primary} />
+              <Text style={[styles.viewerTitle, { color: colors.text }]}>{preview.title}</Text>
+              {preview.subtitle ? <Text style={[styles.viewerSub, { color: colors.textSecondary }]}>{preview.subtitle}</Text> : null}
+            </View>
+          )}
+        </View>
+      </GestureHandlerRootView>
     </Modal>
   );
 }
@@ -2499,7 +3070,10 @@ const styles = StyleSheet.create({
   senderName: { fontSize: 11, fontWeight: '900', marginBottom: 3 },
   messageText: { fontSize: 14, lineHeight: 20 },
   replyInline: { borderRadius: 12, padding: 8, marginBottom: 7, flexDirection: 'row', alignItems: 'center', gap: 5 },
-  replyInlineText: { flex: 1, fontSize: 11.5, fontWeight: '700' },
+  replyInlineText: { flexShrink: 1, fontSize: 11.5, fontWeight: '700' },
+  replyInlineThumbWrap: { width: 26, height: 26, borderRadius: 6, overflow: 'hidden', backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
+  replyInlineThumb: { width: 26, height: 26, borderRadius: 6 },
+  replyInlineThumbPlay: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center' },
   locationCard: { marginTop: 7, borderRadius: 14, padding: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
   locationText: { fontSize: 13, fontWeight: '800' },
   imageGrid: { marginTop: 0, width: CHAT_MEDIA_MAX_WIDTH, flexDirection: 'row', flexWrap: 'wrap', gap: 4, overflow: 'hidden', borderRadius: 20 },
@@ -2513,6 +3087,8 @@ const styles = StyleSheet.create({
   imageOverflowText: { color: '#fff', fontSize: 24, fontWeight: '900' },
   imageStateOverlay: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', gap: 5, backgroundColor: 'rgba(2,6,23,0.45)' },
   imageStateText: { color: '#fff', fontSize: 11, fontWeight: '900' },
+  videoPlayOverlay: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
+  videoPlayButton: { width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(2,6,23,0.55)', borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.85)', alignItems: 'center', justifyContent: 'center' },
   voiceBubble: { marginTop: 7, width: Math.min(CHAT_MEDIA_MAX_WIDTH, 260), borderRadius: 18, borderWidth: 1, padding: 9, flexDirection: 'row', alignItems: 'center', gap: 10 },
   voicePlay: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   voiceTrackWrap: { flex: 1, minWidth: 0, gap: 5 },
@@ -2528,10 +3104,16 @@ const styles = StyleSheet.create({
   bubbleMetaMediaOnly: { marginTop: 4, paddingHorizontal: 4 },
   timeText: { fontSize: 10, fontWeight: '700', letterSpacing: 0.2 },
   retryText: { fontSize: 10, fontWeight: '900', marginLeft: 4 },
-  statusTiny: { marginTop: 2, alignSelf: 'flex-end', fontSize: 9, fontWeight: '800' },
-  reactionSummary: { marginTop: -3, borderRadius: 12, borderWidth: 1, paddingHorizontal: 7, paddingVertical: 3, flexDirection: 'row', gap: 5 },
-  reactionMine: { alignSelf: 'flex-end', marginRight: 8 },
-  reactionTheirs: { alignSelf: 'flex-start', marginLeft: 8 },
+  statusTiny: { fontSize: 9, fontWeight: '800' },
+  // Timestamp/status sit outside the bubble on the chat background.
+  metaOutside: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2, paddingHorizontal: 3 },
+  metaOutsideMine: { alignSelf: 'flex-end' },
+  metaOutsideTheirs: { alignSelf: 'flex-start' },
+  // The pill lifts up to overlap the bubble's bottom edge (half in / half out),
+  // sitting on the opposite side from the timestamp.
+  reactionSummary: { marginTop: -14, borderRadius: 12, borderWidth: 1, paddingHorizontal: 7, paddingVertical: 2, flexDirection: 'row', gap: 5, zIndex: 5, elevation: 4, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 3, shadowOffset: { width: 0, height: 1 } },
+  reactionMine: { alignSelf: 'flex-start', marginLeft: 12 },
+  reactionTheirs: { alignSelf: 'flex-end', marginRight: 12 },
   reactionSummaryText: { fontSize: 12 },
   composerShell: { paddingHorizontal: spacing['2'], paddingTop: 8, gap: 7, backgroundColor: 'transparent' },
   composeRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
@@ -2541,6 +3123,9 @@ const styles = StyleSheet.create({
   sendBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
   replyPreview: { borderRadius: 16, borderWidth: 1, padding: 9, flexDirection: 'row', alignItems: 'center', gap: 8 },
   replyPreviewText: { flex: 1, fontSize: 12, fontWeight: '800' },
+  replyThumbWrap: { width: 34, height: 34, borderRadius: 7, overflow: 'hidden', backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' },
+  replyThumb: { width: 34, height: 34, borderRadius: 7 },
+  replyThumbPlay: { position: 'absolute', width: 18, height: 18, borderRadius: 9, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center' },
   pendingRow: { flexGrow: 0 },
   pendingChip: { height: 32, borderRadius: 16, borderWidth: 1, paddingHorizontal: 10, marginRight: 8, flexDirection: 'row', alignItems: 'center', gap: 6 },
   pendingText: { maxWidth: 180, fontSize: 12, fontWeight: '800' },
@@ -2589,6 +3174,7 @@ const styles = StyleSheet.create({
   actionRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 12 },
   actionText: { fontSize: 14, fontWeight: '900' },
   viewer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  viewerZoomArea: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center' },
   viewerClose: { position: 'absolute', top: 50, right: 22, zIndex: 3 },
   viewerImage: { width: '100%', height: '82%' },
   viewerVideo: { width: '100%', height: '72%' },

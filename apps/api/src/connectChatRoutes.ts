@@ -182,6 +182,36 @@ function smsDedupeKey(tenantId: string, tenantE164: string, externalE164: string
   return buildSmsDedupeKey(tenantId, tenantE164, externalE164, inboxOwnerUserId);
 }
 
+/** Human-readable thread-list preview for a non-text last message. */
+function lastMessagePreview(last: {
+  body?: string | null;
+  type?: string | null;
+  attachments?: Array<{ durationMs?: number | null; mediaKind?: string | null; mimeType?: string | null }>;
+} | undefined | null): string {
+  if (!last) return "";
+  if (last.body) return last.body;
+  const type = String(last.type || "").toUpperCase();
+  if (type === "TEXT" || !type) return "";
+  const atts = last.attachments || [];
+  const isAudio = (a: { mediaKind?: string | null; mimeType?: string | null }) =>
+    String(a.mediaKind || "").toLowerCase() === "audio" || String(a.mimeType || "").toLowerCase().startsWith("audio/");
+  if (type === "AUDIO" || type === "VOICE_NOTE" || atts.some(isAudio)) {
+    const ms = atts.find((a) => (a.durationMs ?? 0) > 0)?.durationMs ?? null;
+    if (ms && ms > 0) {
+      const total = Math.round(ms / 1000);
+      const m = Math.floor(total / 60);
+      const s = total % 60;
+      return `Voice note · ${m}:${String(s).padStart(2, "0")}`;
+    }
+    return "Voice note";
+  }
+  if (type === "IMAGE") return "Photo";
+  if (type === "VIDEO") return "Video";
+  if (type === "LOCATION") return "Location";
+  if (type === "FILE") return "Attachment";
+  return `[${type.toLowerCase()}]`;
+}
+
 async function ensureDefaultTenantGroup(tenantId: string, tenantName: string, currentUserId?: string) {
   const dk = `tg:${tenantId}`;
   let thread = await db.connectChatThread.findUnique({ where: { dedupeKey: dk } });
@@ -864,7 +894,16 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         where: { deletedForEveryoneAt: null },
         orderBy: { createdAt: "desc" },
         take: 1,
-        select: { id: true, body: true, createdAt: true, type: true, senderUserId: true, deliveryStatus: true, deliveryError: true },
+        select: {
+          id: true,
+          body: true,
+          createdAt: true,
+          type: true,
+          senderUserId: true,
+          deliveryStatus: true,
+          deliveryError: true,
+          attachments: { select: { durationMs: true, mediaKind: true, mimeType: true }, orderBy: { createdAt: "asc" } },
+        },
       },
       participants: {
         where: { leftAt: null },
@@ -934,7 +973,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         isDefaultTenantGroup: t.isDefaultTenantGroup,
         participantName,
         participantExtension,
-        lastMessage: last?.body || (last?.type && last.type !== "TEXT" ? `[${String(last.type).toLowerCase()}]` : ""),
+        lastMessage: lastMessagePreview(last),
         lastAt: (last?.createdAt || t.lastMessageAt).toISOString(),
         unread,
         tenantSmsE164: t.tenantSmsE164,

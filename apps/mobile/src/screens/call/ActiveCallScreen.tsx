@@ -24,6 +24,7 @@ import { markCallLatency, summarizeCallLatency } from '../../debug/callLatency';
 import { useTheme } from '../../context/ThemeContext';
 import { CallTimer } from '../../components/call/CallTimer';
 import { splitRingGroupPrefix } from '../../calls/callerIdentity';
+import { useContactNameResolver } from '../../contacts/useContactNameResolver';
 // The CallWaitingBanner is a dedicated, high-visibility Answer/Decline
 // prompt that slides in when a SECOND call arrives mid-call. It sits next
 // to (not instead of) the CallsDrawer so the user ALWAYS has a one-tap
@@ -192,7 +193,12 @@ export function ActiveCallScreen() {
   // prefix shows as a tag instead. Plain numbers/names have no colon → untouched.
   const { prefix: callPrefixBadge, rest: partyRest } = splitRingGroupPrefix(rawParty || inviteParty);
   const effectiveParty = (partyRest || rawParty || inviteParty);
-  const displayName = effectiveParty || (
+  // If the remote party is a bare number that's saved in the user's contacts,
+  // show the contact name (with the number beneath) — matching call history.
+  const resolveContactName = useContactNameResolver();
+  const resolvedContactName = resolveContactName(effectiveParty);
+  const partyOrName = resolvedContactName || effectiveParty;
+  const displayName = partyOrName || (
     isAnswerInFlight
       ? ''
       : isDialing
@@ -201,11 +207,13 @@ export function ActiveCallScreen() {
       ? 'Ringing…'
       : 'Connecting…'
   );
-  const displayNumber = effectiveParty && effectiveParty !== displayName ? effectiveParty : '';
-
-  // Initials for avatar
-  const initials = effectiveParty
+  const displayNumber = resolvedContactName
     ? effectiveParty
+    : (effectiveParty && effectiveParty !== displayName ? effectiveParty : '');
+
+  // Initials for avatar (from the resolved name when available)
+  const initials = partyOrName
+    ? partyOrName
         .split(/[\s-]/)
         .filter(Boolean)
         .slice(0, 2)

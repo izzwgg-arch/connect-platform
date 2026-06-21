@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../context/ThemeContext';
 import { typography } from '../../theme/typography';
 
@@ -44,11 +45,23 @@ function colorForName(name: string): [string, string] {
 }
 
 function initials(name: string): string {
-  const parts = name.trim().split(/\s+/);
+  const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length >= 2) {
     return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
   }
-  return (name.slice(0, 2) || '??').toUpperCase();
+  // One word → first two letters of that word.
+  return (parts[0]?.slice(0, 2) || '??').toUpperCase();
+}
+
+/**
+ * A name with no letters (a raw phone number, or an empty/placeholder string)
+ * means the party is not saved as a contact — show a generic person glyph
+ * instead of meaningless digits.
+ */
+function isUnsavedNumber(name: string): boolean {
+  const s = (name || '').trim();
+  if (!s) return true;
+  return !/[a-zA-Z]/.test(s);
 }
 
 type Props = {
@@ -62,6 +75,7 @@ export function Avatar({ name, size = 'md', online, status }: Props) {
   const { colors } = useTheme();
   const dim = SIZES[size];
   const fontSize = FONT_SIZES[size];
+  const unsaved = isUnsavedNumber(name);
   const [bg] = colorForName(name);
 
   const statusColor = status
@@ -89,13 +103,17 @@ export function Avatar({ name, size = 'md', online, status }: Props) {
             width: dim,
             height: dim,
             borderRadius: dim / 2,
-            backgroundColor: bg,
+            backgroundColor: unsaved ? '#64748b' : bg,
           },
         ]}
       >
-        <Text style={{ fontSize, fontWeight: '700', color: '#fff', letterSpacing: 0.5 }}>
-          {initials(name)}
-        </Text>
+        {unsaved ? (
+          <Ionicons name="person" size={Math.round(dim * 0.55)} color="#fff" />
+        ) : (
+          <Text style={{ fontSize, fontWeight: '700', color: '#fff', letterSpacing: 0.5 }}>
+            {initials(name)}
+          </Text>
+        )}
       </View>
       {statusColor && (
         <View
