@@ -106,6 +106,29 @@ export function looksDivertedToVoicemail(call: NormalizedCall): boolean {
   return false;
 }
 
+/**
+ * Short extensions that currently have a LIVE leg on the call (derived from the
+ * live `call.channels` list, which {@link CallStateStore.onHangup} prunes as each
+ * leg drops — unlike the cumulative `call.extensions`). Used to detect when a
+ * rung extension has no remaining ring/talk leg (voicemail divert or answered on
+ * another endpoint).
+ */
+function liveExtensionsFromChannels(call: NormalizedCall): Set<string> {
+  const out = new Set<string>();
+  for (const ch of call.channels ?? []) {
+    const ex = normalizeExtensionFromChannel(ch);
+    if (ex) out.add(ex);
+  }
+  return out;
+}
+
+/**
+ * Debounce window before declaring a rung extension's ring leg abandoned. Matches
+ * the mobile native `FORK_ABANDON_STOP_MS` so ring-group fork re-INVITEs (leg
+ * cancel + re-offer within ~500ms) don't trip a false stop.
+ */
+const RING_LEG_ABANDON_MS = 1500;
+
 export type MobilePushRingPayload = {
   linkedId: string;
   toExtension: string;
@@ -133,6 +156,12 @@ export class MobilePushNotifier {
   private readonly pushed = new Set<string>();
   /** One-shot stop-ring notify per call so we do not spam /internal/mobile-ring-notify. */
   private readonly voicemailStopSent = new Set<string>();
+  /** Short extensions we have actually rung (pushed) per linkedId. */
+  private readonly pushedExts = new Map<string, Set<string>>();
+  /** Latest call snapshot per linkedId, for re-evaluating after the debounce. */
+  private readonly lastCall = new Map<string, NormalizedCall>();
+  /** Pending ring-leg-abandon debounce timers per linkedId. */
+  private readonly divertTimers = new Map<string, NodeJS.Timeout>();
 
   constructor() {
     const base = env.CDR_INGEST_URL
@@ -154,11 +183,18 @@ export class MobilePushNotifier {
     // Verbose entry log so we can trace every call through the push pipeline.
     log.info({ linkedId: call.linkedId, state: call.state, dir: call.direction, exts: call.extensions, from: call.from, tenantId: call.tenantId }, "mobile-ring: notify-entry");
 
+    // Keep the freshest snapshot so the debounced ring-leg-abandon check re-evaluates
+    // against current state (a fork re-INVITE that arrives during the window must win).
+    this.lastCall.set(call.linkedId, call);
+
     // Hangup path: notify API so it can mark the invite CANCELED + send an
     // INVITE_CANCELED push. This is the ONLY real-time hangup signal we get
     // before CDR ingest (which arrives 20–60s later), so it's critical for
     // stopping the native ringtone the moment the caller hangs up.
     if (call.state === "hungup") {
+      this.clearDivertTimer(call.linkedId);
+      this.pushedExts.delete(call.linkedId);
+      this.lastCall.delete(call.linkedId);
       this.voicemailStopSent.delete(call.linkedId);
       this.pushed.delete(call.linkedId);
       const payload: MobilePushRingPayload = {
@@ -191,25 +227,48 @@ export class MobilePushNotifier {
       looksDivertedToVoicemail(call)
     ) {
       this.voicemailStopSent.add(call.linkedId);
-      const payload: MobilePushRingPayload = {
-        linkedId: call.linkedId,
-        toExtension: "",
-        fromNumber: call.from ?? null,
-        fromDisplay: call.fromName ?? null,
-        connectTenantId: call.tenantId ?? null,
-        pbxVitalTenantId: (call.metadata?.pbxVitalTenantId as string | undefined) ?? null,
-        state: "diverted_to_voicemail",
-      };
+      this.clearDivertTimer(call.linkedId);
       log.info(
         { linkedId: call.linkedId, connectTenantId: call.tenantId },
         "mobile-ring: notifying API of diverted_to_voicemail (stop ring)",
       );
-      this.postAsync(payload).catch((err: unknown) => {
-        log.warn(
-          { linkedId: call.linkedId, err: (err as Error)?.message },
-          "mobile-ring: voicemail divert notify failed",
-        );
-      });
+      this.postDivertedStop(call);
+    }
+
+    // Ring-leg-abandon detection (the reliable, PBX-channel-name-independent path).
+    //
+    // The legacy `looksDivertedToVoicemail` check above only fires when Asterisk
+    // exposes a channel/context literally containing "voicemail". Many dialplans
+    // (e.g. VitalPBX T<id>_cos-all ring groups) roll to voicemail WITHOUT such a
+    // channel, so the killed app kept ringing until the caller hung up. Instead,
+    // watch the LIVE channel set: once every extension we rang has lost its leg
+    // (voicemail answered the trunk, or another endpoint answered) while the call
+    // is still up, the call has left this device — stop the native ring.
+    //
+    // Debounced by RING_LEG_ABANDON_MS so a ring-group fork's brief cancel + re-
+    // INVITE doesn't trip a false stop. The API only cancels PENDING invites, so a
+    // device that actually answered (invite ACCEPTED) is never affected.
+    // (call.state is already narrowed to non-"hungup" by the early return above.)
+    if (
+      this.pushed.has(call.linkedId) &&
+      !this.voicemailStopSent.has(call.linkedId)
+    ) {
+      const rung = this.pushedExts.get(call.linkedId);
+      if (rung && rung.size > 0) {
+        const liveExts = liveExtensionsFromChannels(call);
+        const anyStillLive = [...rung].some((ext) => liveExts.has(ext));
+        if (anyStillLive) {
+          // At least one rung extension still has a live leg — cancel any pending stop.
+          this.clearDivertTimer(call.linkedId);
+        } else if (!this.divertTimers.has(call.linkedId)) {
+          const timer = setTimeout(() => {
+            this.divertTimers.delete(call.linkedId);
+            this.confirmRingLegAbandon(call.linkedId);
+          }, RING_LEG_ABANDON_MS);
+          if (typeof timer.unref === "function") timer.unref();
+          this.divertTimers.set(call.linkedId, timer);
+        }
+      }
     }
 
     // Push for inbound (PSTN→extension) AND internal (extension→extension) ringing calls.
@@ -319,6 +378,12 @@ export class MobilePushNotifier {
     // Mark pushed BEFORE async calls so concurrent callUpsert events don't double-send.
     this.pushed.add(call.linkedId);
 
+    // Record which short extensions we actually rang so the ring-leg-abandon check
+    // knows whose live legs to watch for in call.channels.
+    const rungSet = this.pushedExts.get(call.linkedId) ?? new Set<string>();
+    for (const e of toExtensions) rungSet.add(e);
+    this.pushedExts.set(call.linkedId, rungSet);
+
     const pbxVitalTenantId =
       (call.metadata?.pbxVitalTenantId as string | undefined) ?? null;
 
@@ -350,6 +415,61 @@ export class MobilePushNotifier {
         );
       });
     }
+  }
+
+  /** Cancel a pending ring-leg-abandon debounce timer for a call. */
+  private clearDivertTimer(linkedId: string): void {
+    const t = this.divertTimers.get(linkedId);
+    if (t) {
+      clearTimeout(t);
+      this.divertTimers.delete(linkedId);
+    }
+  }
+
+  /**
+   * Fire the diverted_to_voicemail stop-ring to the API. The API only cancels
+   * PENDING invites and pushes INVITE_CANCELED, so an answered call is untouched.
+   */
+  private postDivertedStop(call: NormalizedCall): void {
+    const payload: MobilePushRingPayload = {
+      linkedId: call.linkedId,
+      toExtension: "",
+      fromNumber: call.from ?? null,
+      fromDisplay: call.fromName ?? null,
+      connectTenantId: call.tenantId ?? null,
+      pbxVitalTenantId: (call.metadata?.pbxVitalTenantId as string | undefined) ?? null,
+      state: "diverted_to_voicemail",
+    };
+    this.postAsync(payload).catch((err: unknown) => {
+      log.warn(
+        { linkedId: call.linkedId, err: (err as Error)?.message },
+        "mobile-ring: voicemail divert notify failed",
+      );
+    });
+  }
+
+  /**
+   * Re-evaluate after the debounce window: if every rung extension still has no
+   * live leg and the call is neither answered-here nor hung up, the ring has been
+   * abandoned (voicemail / answered elsewhere) — tell the API to stop the ring.
+   */
+  private confirmRingLegAbandon(linkedId: string): void {
+    const call = this.lastCall.get(linkedId);
+    if (!call) return;
+    if (!this.pushed.has(linkedId)) return;
+    if (this.voicemailStopSent.has(linkedId)) return;
+    if (call.state === "hungup") return; // hangup path already handles this
+    const rung = this.pushedExts.get(linkedId);
+    if (!rung || rung.size === 0) return;
+    const liveExts = liveExtensionsFromChannels(call);
+    if ([...rung].some((ext) => liveExts.has(ext))) return; // a leg came back
+
+    this.voicemailStopSent.add(linkedId);
+    log.info(
+      { linkedId, rungExts: [...rung], channels: call.channels, state: call.state },
+      "mobile-ring: ring leg abandoned (no live extension leg) — notifying API of diverted_to_voicemail (stop ring)",
+    );
+    this.postDivertedStop(call);
   }
 
   private async postAsync(payload: MobilePushRingPayload): Promise<void> {
