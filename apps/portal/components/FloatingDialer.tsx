@@ -649,8 +649,37 @@ export function FloatingDialer() {
       linkedId: activeWorkspaceCall.linkedId || activeWorkspaceCall.id,
     });
   const canDial = phone.regState === "registered" && phone.dialpadInput.trim().length > 0;
-  const status = statusFromRegistration(phone.regState, Boolean(phone.error));
-  const cleanError = friendlyError(phone.error, phone.diag.micPermission, phone.regState);
+
+  // Grace window: the softphone now self-heals brief WebSocket blips (keepalive +
+  // backoff reconnect). Don't flash a red "Connection issue" for a sub-grace blip —
+  // show a transient yellow "Reconnecting" and only surface the hard error if the
+  // problem persists past the grace period.
+  const REG_PROBLEM_GRACE_MS = 3_500;
+  const isRegProblem = phone.regState === "failed" || Boolean(phone.error);
+  const [regProblemConfirmed, setRegProblemConfirmed] = useState(false);
+  const regProblemTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (isRegProblem) {
+      if (!regProblemConfirmed && !regProblemTimerRef.current) {
+        regProblemTimerRef.current = setTimeout(() => {
+          regProblemTimerRef.current = null;
+          setRegProblemConfirmed(true);
+        }, REG_PROBLEM_GRACE_MS);
+      }
+    } else {
+      if (regProblemTimerRef.current) { clearTimeout(regProblemTimerRef.current); regProblemTimerRef.current = null; }
+      if (regProblemConfirmed) setRegProblemConfirmed(false);
+    }
+  }, [isRegProblem, regProblemConfirmed]);
+  useEffect(() => () => { if (regProblemTimerRef.current) clearTimeout(regProblemTimerRef.current); }, []);
+
+  const inRegGrace = isRegProblem && !regProblemConfirmed;
+  const status = inRegGrace
+    ? { label: "Reconnecting", tone: "yellow" }
+    : statusFromRegistration(phone.regState, Boolean(phone.error));
+  const cleanError = inRegGrace
+    ? null
+    : friendlyError(phone.error, phone.diag.micPermission, phone.regState);
 
   // ── Voicemail Drop (CRM-gated) ─────────────────────────────────────────────
   // Only available when the user's account has CRM enabled. Drops the tenant's

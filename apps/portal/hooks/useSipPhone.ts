@@ -671,6 +671,18 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
   const diagRef = useRef<SipDiagnostics>(DEFAULT_DIAG);
   /** Stale-hangup confirmation timer: fires 10 s after hangup to force-clean PBX if needed. */
   const staleHangupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** WebSocket keepalive interval — sends RFC5626 CRLF pings so an idle SIP/WSS
+   *  socket on cellular/5G NAT never gets reaped (the root cause of registration flapping). */
+  const keepAliveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** Liveness watchdog interval — proactively detects a dead/closed socket or a
+   *  dropped registration and triggers recovery instead of waiting for expiry. */
+  const watchdogTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** Single-flight reconnect timer (backoff+jitter). */
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Consecutive reconnect attempts, for exponential backoff. Reset on register. */
+  const reconnectAttemptRef = useRef<number>(0);
+  /** Set by the active UA so network/visibility listeners can force a fast recovery. */
+  const forceReconnectRef = useRef<(() => void) | null>(null);
   /** Timestamp when the local hangup was initiated (for the stale-report). */
   const hangupAtRef = useRef<string | null>(null);
   /** Guard: prevents duplicate CALL_QUALITY_REPORT when both user_hangup and the
@@ -1107,7 +1119,15 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
           authorization_user: ext.authUsername || ext.sipUsername,
           display_name: ext.displayName || ext.sipUsername,
           register: true,
-          register_expires: 300,
+          // Shorter expiry is a secondary safety net on top of the CRLF keepalive:
+          // a dead contact self-expires fast and the periodic REGISTER refresh adds
+          // a second stream of keepalive traffic. JsSIP refreshes well before expiry;
+          // Asterisk's minimum-expiration (423) is handled transparently by JsSIP.
+          register_expires: 120,
+          // Bound JsSIP's built-in transport auto-recovery so a dropped WS reconnects
+          // quickly (cellular/5G handoff) without hammering the PBX.
+          connection_recovery_min_interval: 2,
+          connection_recovery_max_interval: 15,
           session_timers: false,
           pcConfig: {
             iceServers: ext.iceServers?.length
@@ -1124,19 +1144,79 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         const ua = new JsSIP.UA(uaConfig);
         uaRef.current = ua;
         let regFailCount = 0;
-        let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-        const queueReconnect = (delayMs = 2_500) => {
-          if (reconnectTimer) return;
-          reconnectTimer = setTimeout(() => {
-            reconnectTimer = null;
+
+        // A fresh UA may be created by a re-init; clear any timers from a prior one.
+        if (keepAliveTimerRef.current) { clearInterval(keepAliveTimerRef.current); keepAliveTimerRef.current = null; }
+        if (watchdogTimerRef.current) { clearInterval(watchdogTimerRef.current); watchdogTimerRef.current = null; }
+        if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
+
+        const RECONNECT_BASE_MS = 1_000;
+        const RECONNECT_MAX_MS = 15_000;
+        // Single-flight reconnect with capped exponential backoff + jitter. Cooperates
+        // with JsSIP's own transport recovery (the ref guard prevents stacked starts).
+        const queueReconnect = (immediate = false) => {
+          if (reconnectTimerRef.current) return;
+          if (cancelled || uaRef.current !== ua) return;
+          const attempt = reconnectAttemptRef.current;
+          const backoff = immediate
+            ? 0
+            : Math.min(RECONNECT_BASE_MS * 2 ** attempt, RECONNECT_MAX_MS);
+          const jitter = backoff > 0 ? Math.floor(Math.random() * 500) : 0;
+          reconnectTimerRef.current = setTimeout(() => {
+            reconnectTimerRef.current = null;
             if (cancelled || uaRef.current !== ua) return;
+            reconnectAttemptRef.current = Math.min(attempt + 1, 6);
             try {
               setRegState("connecting");
               ua.start();
             } catch (err) {
               console.warn("[SipPhone] reconnect start failed", err);
+              queueReconnect();
             }
-          }, delayMs);
+          }, backoff + jitter);
+        };
+
+        // RFC 5626 double-CRLF keepalive over the WSS socket. Keeps the NAT/proxy
+        // path warm from the client side so an idle softphone never gets reaped —
+        // independent of whether Asterisk qualifies the contact server-side.
+        const sendKeepAlive = () => {
+          try {
+            if (uaRef.current === ua && ua.isConnected?.()) {
+              socket.send("\r\n\r\n");
+            }
+          } catch (err) {
+            console.warn("[SipPhone] keepalive send failed", err);
+          }
+        };
+        keepAliveTimerRef.current = setInterval(sendKeepAlive, 25_000);
+
+        // Proactive liveness watchdog: if the socket is dead, kick a reconnect;
+        // if the socket is open but registration lapsed, refresh it.
+        const runWatchdog = () => {
+          if (cancelled || uaRef.current !== ua) return;
+          const connected = !!ua.isConnected?.();
+          const registered = !!ua.isRegistered?.();
+          if (!connected) {
+            queueReconnect();
+          } else if (!registered) {
+            try { ua.register(); } catch { /* ignore */ }
+          }
+        };
+        watchdogTimerRef.current = setInterval(runWatchdog, 15_000);
+
+        // Exposed to the window 'online' / 'visibilitychange' listeners so a
+        // regained network or a woken tab recovers immediately (handles 5G dynamic
+        // IP handoffs and laptop sleep) rather than waiting for the next backoff.
+        forceReconnectRef.current = () => {
+          if (cancelled || uaRef.current !== ua) return;
+          reconnectAttemptRef.current = 0;
+          if (!ua.isConnected?.()) {
+            queueReconnect(true);
+          } else if (!ua.isRegistered?.()) {
+            try { ua.register(); } catch { /* ignore */ }
+          } else {
+            sendKeepAlive();
+          }
         };
 
         ua.on("connecting", () => { if (!cancelled) setRegState("connecting"); });
@@ -1148,13 +1228,14 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
             const msg = "SIP WebSocket disconnected. Check PBX WSS transport on port 8089.";
             setError(msg);
             patchDiag({ lastRegError: msg });
-            queueReconnect(2_500);
+            queueReconnect();
           }
         });
 
         ua.on("registered", () => {
           if (!cancelled) {
             regFailCount = 0;
+            reconnectAttemptRef.current = 0;
             setRegState("registered");
             setError(null);
             patchDiag({ lastRegError: null });
@@ -1182,7 +1263,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
           // unregistered after login/reload, trigger a reconnect instead of idling
           // forever (which shows as "Offline" in the mini dialer).
           setRegState("registering");
-          queueReconnect(1_000);
+          queueReconnect();
         });
 
         ua.on("registrationFailed", (e: { cause: string; response?: { status_code?: number } }) => {
@@ -1198,7 +1279,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
             // Keep retrying in desktop so users do not get stuck on Offline after reload.
             if (regFailCount >= 3) {
               setError(`SIP registration failed: ${e.cause}. Reconnecting...`);
-              queueReconnect(3_000);
+              queueReconnect();
             }
           }
         });
@@ -1304,10 +1385,28 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
 
     init();
 
+    // Network/visibility-aware recovery: a regained connection or a tab becoming
+    // visible again (laptop wake, cellular/5G handoff with a new source IP) kicks
+    // the SIP transport back to life immediately instead of waiting for backoff.
+    const handleOnline = () => { forceReconnectRef.current?.(); };
+    const handleVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        forceReconnectRef.current?.();
+      }
+    };
+    if (typeof window !== "undefined") window.addEventListener("online", handleOnline);
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", handleVisible);
+
     return () => {
       cancelled = true;
       stopStatsPolling();
       stopLocalStream();
+      if (typeof window !== "undefined") window.removeEventListener("online", handleOnline);
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", handleVisible);
+      if (keepAliveTimerRef.current) { clearInterval(keepAliveTimerRef.current); keepAliveTimerRef.current = null; }
+      if (watchdogTimerRef.current) { clearInterval(watchdogTimerRef.current); watchdogTimerRef.current = null; }
+      if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }
+      forceReconnectRef.current = null;
       if (staleHangupTimerRef.current) { clearTimeout(staleHangupTimerRef.current); staleHangupTimerRef.current = null; }
       if (uaRef.current) {
         try { uaRef.current.stop(); } catch { /* ignore */ }
