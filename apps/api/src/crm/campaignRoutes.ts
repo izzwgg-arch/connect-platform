@@ -33,6 +33,7 @@ import {
   type CrmImportField,
   type RowData,
 } from "./importPipeline";
+import { normalizeForMatch } from "./driveMatchService";
 
 // ── Shared campaign member include ────────────────────────────────────────────
 
@@ -624,6 +625,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     let updatedCount = 0;
     let skippedCount = 0;
     let errorCount = 0;
+    let auditErrorCount = 0;
     let addedMembers = 0;
     let skippedExistingMembers = 0;
     const errors: { row: number; reason: string }[] = [];
@@ -648,6 +650,29 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
         } else {
           skippedCount++;
           errors.push({ row: i + 2, reason: result.reason ?? "skipped" });
+        }
+
+        // Write per-row audit record for Drive matching. Mirrors importRoutes.ts.
+        // Drive match engine reads these rows to find company names.
+        const companyName = rowData.company?.trim() || null;
+        try {
+          await db.crmImportBatchRow.create({
+            data: {
+              tenantId,
+              batchId: batch.id,
+              rowNumber: i + 2,
+              contactId: result.contactId ?? null,
+              companyName,
+              companyNameNormalized: companyName ? normalizeForMatch(companyName) || null : null,
+              action: result.action,
+            },
+          });
+        } catch (auditErr: any) {
+          auditErrorCount++;
+          app.log.error(
+            { batchId: batch.id, rowNumber: i + 2, err: auditErr?.message },
+            "crm_import_audit_row_write_failed",
+          );
         }
       } catch (err: any) {
         errorCount++;
@@ -711,6 +736,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
         updatedCount,
         skippedCount,
         errorCount,
+        auditErrorCount,
         errors: errors as any,
         completedAt: new Date(),
       },
@@ -728,6 +754,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       addedMembers,
       skippedExistingMembers,
       errorCount,
+      auditErrorCount,
       errors: errors.slice(0, 50),
       detectedHeaders: headers,
       mapping: colMapping,

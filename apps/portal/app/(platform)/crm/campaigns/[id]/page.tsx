@@ -153,6 +153,7 @@ type CampaignImportSummary = {
   addedMembers: number;
   skippedExistingMembers: number;
   errorCount: number;
+  auditErrorCount?: number;
   errors: { row: number; reason: string }[];
   detectedHeaders?: string[];
   mapping?: Record<string, string>;
@@ -1386,6 +1387,14 @@ export default function CampaignDetailPage() {
                           <li key={`${er.row}-${er.reason}`}>Row {er.row}: {er.reason}</li>
                         ))}
                       </ul>
+                    )}
+                    {(importSummary.status === "DONE" || importSummary.status === "PARTIAL") && (
+                      <a
+                        href={`/crm/drive/match/${encodeURIComponent(importSummary.batchId)}`}
+                        style={{ fontSize: "0.8125rem", color: "var(--accent)", fontWeight: 600, textDecoration: "none" }}
+                      >
+                        Match Drive documents →
+                      </a>
                     )}
                   </div>
                 )}
