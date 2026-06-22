@@ -173,11 +173,18 @@ export function resetApnsProviderTokenCache(): void {
 
 // ── Send ─────────────────────────────────────────────────────────────────────
 
-const APNS_INVALID_TOKEN_REASONS = new Set([
-  "BadDeviceToken",
-  "Unregistered",
-  "DeviceTokenNotForTopic",
-]);
+// Reasons that mean the *token itself* is permanently dead and must be nulled so
+// we stop pushing to it. Keep this DELIBERATELY narrow: only `Unregistered`
+// (paired with HTTP 410) is a true "this token will never work again" signal.
+//
+// `BadDeviceToken` (400) and `DeviceTokenNotForTopic` (400) are NOT included on
+// purpose — they are server-side *configuration/environment* errors (sandbox vs
+// production host, or wrong apns-topic), where the device token is perfectly
+// valid and would succeed once the server config is corrected. Auto-nulling on
+// those destroys a good token, forces the user to reopen the app to re-register,
+// and masks the real misconfiguration (exactly what happened during Phase 7b
+// when APNS_PRODUCTION was set to sandbox for a production-environment token).
+const APNS_INVALID_TOKEN_REASONS = new Set(["Unregistered"]);
 
 /**
  * Send a single VoIP push to one device token.
