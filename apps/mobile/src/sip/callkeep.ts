@@ -135,14 +135,18 @@ export async function setupNativeCalling() {
 }
 
 export function showIncomingNativeCall(callId: string, from: string) {
-  // Dedupe: iOS may receive both an Expo push and a VoIP push for the same
-  // call. Report to CallKit at most once per callId until it is ended.
-  if (reportedIncomingCallIds.has(callId)) {
-    console.log("[CALL_INCOMING] showIncomingNativeCall: duplicate callId ignored callId=", callId);
-    return;
+  // iOS ONLY: dedupe (an iPhone may receive both an Expo push and a VoIP push
+  // for the same call → report to CallKit at most once per callId) and map the
+  // callId to a real CallKit UUID. Android must run its original path untouched,
+  // so none of this executes on Android — it falls straight through to the raw
+  // callId, byte-for-byte identical to the pre-iOS behavior.
+  if (Platform.OS === "ios") {
+    if (reportedIncomingCallIds.has(callId)) {
+      console.log("[CALL_INCOMING] showIncomingNativeCall: duplicate callId ignored callId=", callId);
+      return;
+    }
+    reportedIncomingCallIds.add(callId);
   }
-  reportedIncomingCallIds.add(callId);
-  // CallKit needs a real UUID; Android keeps using the raw callId (map empty).
   const uuid = Platform.OS === "ios" ? callKitUuidForCallId(callId) : callId;
   console.log("[CALL_INCOMING] showIncomingNativeCall (foreground) callId=", callId, "uuid=", uuid, "from=", from);
   logCallFlow("CALLKEEP_DISPLAY_BEGIN", {

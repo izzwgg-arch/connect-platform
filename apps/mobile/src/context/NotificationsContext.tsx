@@ -3965,9 +3965,12 @@ export function NotificationsProvider({
           if (invite) {
             safeSetInvite(invite);
             await handleAcceptInvite(invite, evt.callUUID);
-          } else {
-            // Same cold-start deferral as the live onAnswer path.
+          } else if (Platform.OS === "ios") {
+            // iOS ONLY: same cold-start deferral as the live onAnswer path.
             await deferNativeAcceptUntilReady(evt.callUUID);
+          } else {
+            // Android: original behavior, untouched.
+            endNativeCall(evt.callUUID);
           }
         } else if (evt.type === "end") {
           await handleDeclineInvite(null, evt.callUUID);
@@ -4056,12 +4059,18 @@ export function NotificationsProvider({
         }
 
         if (!invite) {
-          // Cold-killed launch: the invite metadata isn't resolvable yet (memory
-          // empty, token not hydrated, AsyncStorage/native-cache not yet written).
-          // Do NOT drop the tap — defer the accept and replay it once the invite
-          // resolves and SIP registers. Preserves the foreground fast path above.
-          console.warn('[CALLKEEP_ANSWER] no invite yet for callId=' + callId + ', deferring accept until SIP/invite ready');
-          await deferNativeAcceptUntilReady(callId);
+          // iOS ONLY (cold-killed launch): the invite metadata isn't resolvable
+          // yet (memory empty, token not hydrated, AsyncStorage/native-cache not
+          // yet written). Don't drop the tap — defer and replay once the invite
+          // resolves and SIP registers.
+          if (Platform.OS === "ios") {
+            console.warn('[CALLKEEP_ANSWER] no invite yet for callId=' + callId + ', deferring accept until SIP/invite ready');
+            await deferNativeAcceptUntilReady(callId);
+            return;
+          }
+          // Android: original behavior, untouched — end the native call.
+          console.warn('[CALLKEEP_ANSWER] no invite found for callId=' + callId + ', ending native call');
+          endNativeCall(callId);
           return;
         }
 
