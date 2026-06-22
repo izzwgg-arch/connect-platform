@@ -1009,7 +1009,12 @@ export async function postVoiceDiagEvent(token: string, input: {
     | "PBX_STILL_RINGING_AFTER_ANSWER"
     | "ANSWER_DESYNC_DETECTED"
     | "UI_SWITCHED_TO_CONNECTING"
-    | "UI_SWITCHED_TO_ACTIVE";
+    | "UI_SWITCHED_TO_ACTIVE"
+    // Phase 7c cold-start answer-deferral lifecycle
+    | "ANSWER_DEFERRED_AWAITING_SIP"
+    | "ANSWER_DEFERRED_EXECUTED"
+    | "ANSWER_DEFERRED_TIMEOUT"
+    | "ANSWER_DEFERRED_STALE_CALL";
   payload?: any;
 }) {
   const res = await fetch(`${API_BASE}/voice/diag/event`, {

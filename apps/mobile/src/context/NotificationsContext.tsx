@@ -87,6 +87,7 @@ import {
   MOBILE_SIP_ANSWER_INITIAL_WAIT_MS,
   MOBILE_SIP_ANSWER_PRECLAIM_WAIT_MS,
   MOBILE_SIP_ANSWER_POST_ACCEPT_EXTRA_MS,
+  MOBILE_SIP_ANSWER_MAX_WAIT_MS,
   createSipAnswerDeadline,
 } from "../sip/mobileAnswerTiming";
 import type { SipAnswerTraceEvent } from "../sip/types";
@@ -276,7 +277,12 @@ type AnswerFlowEventType =
   | "UI_SWITCHED_TO_ACTIVE"
   | "RINGTONE_STOPPED"
   | "CALL_ENDED_UI_SHOWN"
-  | "RETURNED_TO_QUICK_ACTION";
+  | "RETURNED_TO_QUICK_ACTION"
+  // Phase 7c — cold-start answer-deferral lifecycle
+  | "ANSWER_DEFERRED_AWAITING_SIP"
+  | "ANSWER_DEFERRED_EXECUTED"
+  | "ANSWER_DEFERRED_TIMEOUT"
+  | "ANSWER_DEFERRED_STALE_CALL";
 
 const NotificationsCtx = createContext<NotificationsState | undefined>(
   undefined,
@@ -1093,6 +1099,18 @@ export function NotificationsProvider({
   // call. This prevents stale AsyncStorage/native-cache recovery from remounting
   // the incoming screen after the call has already connected.
   const suppressedIncomingInviteIdsRef = useRef<Set<string>>(new Set());
+  // Phase 7c — cold-start answer-deferral queue. When CallKit's `answerCall`
+  // fires before the invite metadata is resolvable (cold-killed launch: in-memory
+  // state empty, auth token not yet hydrated, AsyncStorage/native-cache not yet
+  // written by the VoIP listener), we MUST NOT drop the tap (the pre-7c bug:
+  // `endNativeCall` + return). Instead we record the accepted callId here and a
+  // background loop replays the real answer (`handleAcceptInvite`) the instant the
+  // invite resolves and SIP is (being) registered. Keyed by callId; `running`
+  // guards against launching two loops for the same tap (iOS can redeliver
+  // `answerCall`).
+  const pendingNativeAcceptRef = useRef<
+    Map<string, { tappedAt: number; running: boolean }>
+  >(new Map());
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -3800,6 +3818,140 @@ export function NotificationsProvider({
     [incomingInvite, safeSetInvite, sip, token],
   );
 
+  // Phase 7c — cold-start answer deferral.
+  //
+  // Invoked when a native CallKit answer fires but the invite metadata cannot yet
+  // be resolved (cold-killed launch). Rather than dropping the tap, we keep the
+  // CallKit call up and poll until either (a) the invite resolves — then we run
+  // the full `handleAcceptInvite` pipeline (which itself awaits SIP registration
+  // and performs the backend claim/PBX-requeue), (b) the call goes stale
+  // (canceled / answered elsewhere → suppressed), or (c) a hard timeout elapses.
+  // Foreground/warm answers never reach here because the caller only defers when
+  // `resolveInviteForAction` already returned null twice — so this adds zero
+  // latency to the proven fast path.
+  const deferNativeAcceptUntilReady = useCallback(
+    async (callId: string) => {
+      if (!callId) {
+        endNativeCall(callId);
+        return;
+      }
+      const existing = pendingNativeAcceptRef.current.get(callId);
+      if (existing?.running) {
+        // A defer loop is already running for this exact CallKit tap — never
+        // start a second (would risk a double-accept). iOS can redeliver the
+        // answerCall event.
+        return;
+      }
+      pendingNativeAcceptRef.current.set(callId, {
+        tappedAt: Date.now(),
+        running: true,
+      });
+
+      const postDiag = (
+        type:
+          | "ANSWER_DEFERRED_AWAITING_SIP"
+          | "ANSWER_DEFERRED_EXECUTED"
+          | "ANSWER_DEFERRED_TIMEOUT"
+          | "ANSWER_DEFERRED_STALE_CALL",
+        payload: Record<string, unknown>,
+      ) => {
+        const sid = diagSessionIdRef.current;
+        if (token && sid) {
+          postVoiceDiagEvent(token, {
+            sessionId: sid,
+            type,
+            payload: { callId, ...payload },
+          }).catch(() => undefined);
+        }
+      };
+
+      const startedAt = Date.now();
+      const deadline = startedAt + MOBILE_SIP_ANSWER_MAX_WAIT_MS;
+      const POLL_MS = 300;
+
+      emitAnswerFlowEvent("ANSWER_DEFERRED_AWAITING_SIP", { id: callId } as any, {
+        reason: "invite_unresolved_on_native_answer",
+        sipReg: sip.registrationState,
+      });
+      postDiag("ANSWER_DEFERRED_AWAITING_SIP", {
+        reason: "invite_unresolved_on_native_answer",
+        sipReg: sip.registrationState,
+      });
+
+      // Kick SIP registration immediately so it is (or is becoming) ready by the
+      // time the invite resolves. `handleAcceptInvite` also awaits registration,
+      // but starting now shaves cold-start latency. Fire-and-forget.
+      try {
+        void sip.register?.();
+      } catch {
+        /* non-fatal — handleAcceptInvite re-attempts registration */
+      }
+
+      try {
+        let resolved: CallInvite | null = null;
+        while (Date.now() < deadline) {
+          // Stale: the call was canceled or answered on another device while we
+          // were waiting → tear down CallKit and stop.
+          if (suppressedIncomingInviteIdsRef.current.has(callId)) {
+            emitAnswerFlowEvent("ANSWER_DEFERRED_STALE_CALL", { id: callId } as any, {
+              reason: "suppressed_while_deferred",
+              waitedMs: Date.now() - startedAt,
+            });
+            postDiag("ANSWER_DEFERRED_STALE_CALL", {
+              reason: "suppressed_while_deferred",
+              waitedMs: Date.now() - startedAt,
+            });
+            endNativeCall(callId);
+            return;
+          }
+          resolved = await resolveInviteForAction(callId).catch(() => null);
+          if (resolved) break;
+          await new Promise<void>((r) => setTimeout(r, POLL_MS));
+        }
+
+        if (!resolved) {
+          // Timed out waiting for the invite/PBX. Clear CallKit and log the exact
+          // failure so the cold-start path is debuggable server-side.
+          emitAnswerFlowEvent("ANSWER_DEFERRED_TIMEOUT", { id: callId } as any, {
+            waitedMs: Date.now() - startedAt,
+            sipReg: sip.registrationState,
+          });
+          postDiag("ANSWER_DEFERRED_TIMEOUT", {
+            waitedMs: Date.now() - startedAt,
+            sipReg: sip.registrationState,
+          });
+          endNativeCall(callId);
+          return;
+        }
+
+        emitAnswerFlowEvent("ANSWER_DEFERRED_EXECUTED", resolved, {
+          waitedMs: Date.now() - startedAt,
+          sipReg: sip.registrationState,
+        });
+        postDiag("ANSWER_DEFERRED_EXECUTED", {
+          inviteId: resolved.id,
+          waitedMs: Date.now() - startedAt,
+          sipReg: sip.registrationState,
+        });
+        safeSetInvite(resolved);
+        // `handleAcceptInvite` carries its own `accept:<id>` in-flight dedupe plus
+        // its own register-await + backend claim/requeue, so this is safe against
+        // a concurrent foreground answer and completes the real connect.
+        await handleAcceptInvite(resolved, callId);
+      } finally {
+        pendingNativeAcceptRef.current.delete(callId);
+      }
+    },
+    [
+      emitAnswerFlowEvent,
+      handleAcceptInvite,
+      resolveInviteForAction,
+      safeSetInvite,
+      sip,
+      token,
+    ],
+  );
+
   // ── CallKeep native action subscriptions ─────────────────────────────────
 
   useEffect(() => {
@@ -3814,7 +3966,8 @@ export function NotificationsProvider({
             safeSetInvite(invite);
             await handleAcceptInvite(invite, evt.callUUID);
           } else {
-            endNativeCall(evt.callUUID);
+            // Same cold-start deferral as the live onAnswer path.
+            await deferNativeAcceptUntilReady(evt.callUUID);
           }
         } else if (evt.type === "end") {
           await handleDeclineInvite(null, evt.callUUID);
@@ -3903,8 +4056,12 @@ export function NotificationsProvider({
         }
 
         if (!invite) {
-          console.warn('[CALLKEEP_ANSWER] no invite found for callId=' + callId + ', ending native call');
-          endNativeCall(callId);
+          // Cold-killed launch: the invite metadata isn't resolvable yet (memory
+          // empty, token not hydrated, AsyncStorage/native-cache not yet written).
+          // Do NOT drop the tap — defer the accept and replay it once the invite
+          // resolves and SIP registers. Preserves the foreground fast path above.
+          console.warn('[CALLKEEP_ANSWER] no invite yet for callId=' + callId + ', deferring accept until SIP/invite ready');
+          await deferNativeAcceptUntilReady(callId);
           return;
         }
 
@@ -3927,7 +4084,7 @@ export function NotificationsProvider({
       try { unsubscribeVoip(); } catch { /* ignore — unmount racing teardown */ }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, emitAnswerFlowEvent, handleAcceptInvite, handleDeclineInvite, resolveInviteForAction, safeSetInvite]);
+  }, [token, emitAnswerFlowEvent, handleAcceptInvite, handleDeclineInvite, resolveInviteForAction, safeSetInvite, deferNativeAcceptUntilReady]);
 
   // Re-register the backend MobileDevice when the VoIP push token arrives
   // late (normal on a fresh iOS install — PushKit issues the token async,

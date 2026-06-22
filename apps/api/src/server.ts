@@ -9452,7 +9452,12 @@ app.post("/voice/diag/event", async (req, reply) => {
   const user = getUser(req);
   const input = z.object({
     sessionId: z.string(),
-    type: z.enum(["SESSION_START", "SESSION_HEARTBEAT", "SIP_REGISTER", "SIP_UNREGISTER", "WS_CONNECTED", "WS_DISCONNECTED", "WS_RECONNECT", "ICE_GATHERING", "ICE_SELECTED_PAIR", "TURN_TEST_RESULT", "INCOMING_INVITE", "ANSWER_TAPPED", "CALL_CONNECTED", "CALL_ENDED", "ERROR", "MEDIA_TEST_RUN", "PUSH_RECEIVED", "UI_SHOWN"]),
+    // Keep in sync with the Prisma enum VoiceDiagEventType (packages/db) and the
+    // client union in apps/mobile/src/api/client.ts. The cold-start answer events
+    // (CALLKEEP_*, INVITE_RESTORE*, SIP_ANSWER_*, PBX_*, ANSWER_DEFERRED_*) were
+    // previously absent here (→ 400) or in Prisma (→ 500), dropping the telemetry
+    // needed to debug the iOS cold-killed "answers but doesn't connect" path.
+    type: z.enum(["SESSION_START", "SESSION_HEARTBEAT", "SIP_REGISTER", "SIP_UNREGISTER", "WS_CONNECTED", "WS_DISCONNECTED", "WS_RECONNECT", "ICE_GATHERING", "ICE_SELECTED_PAIR", "TURN_TEST_RESULT", "INCOMING_INVITE", "ANSWER_TAPPED", "CALL_CONNECTED", "CALL_ENDED", "ERROR", "MEDIA_TEST_RUN", "CALL_QUALITY_REPORT", "PUSH_RECEIVED", "UI_SHOWN", "INCOMING_PUSH_RECEIVED", "CALLKEEP_UI_SHOWN", "CALLKEEP_ANSWER_TAPPED", "APP_FOREGROUNDED_FROM_CALL", "INVITE_RESTORED", "INVITE_RESTORE_FAILED", "SIP_ANSWER_REQUESTED", "SIP_ANSWER_SENT", "SIP_ANSWER_CONFIRMED", "SIP_ANSWER_FAILED", "PBX_CALL_ANSWERED", "PBX_STILL_RINGING_AFTER_ANSWER", "ANSWER_DESYNC_DETECTED", "UI_SWITCHED_TO_CONNECTING", "UI_SWITCHED_TO_ACTIVE", "ANSWER_DEFERRED_AWAITING_SIP", "ANSWER_DEFERRED_EXECUTED", "ANSWER_DEFERRED_TIMEOUT", "ANSWER_DEFERRED_STALE_CALL"]),
     payload: z.any().optional()
   }).parse(req.body || {});
 
