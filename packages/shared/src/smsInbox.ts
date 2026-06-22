@@ -1,5 +1,12 @@
 import type { PortalPermissionKey } from "./portalPermissions";
 
+export const SMS_INBOX_ASSIGNMENT_MODES = ["SHARED", "PERSONAL"] as const;
+export type SmsInboxAssignmentMode = (typeof SMS_INBOX_ASSIGNMENT_MODES)[number];
+
+export function normalizeSmsInboxAssignmentMode(value: unknown): SmsInboxAssignmentMode {
+  return String(value || "").toUpperCase() === "PERSONAL" ? "PERSONAL" : "SHARED";
+}
+
 /** Dedupe key suffix: empty string = tenant-wide shared SMS inbox. */
 export function resolveSmsInboxScope(input: {
   assignedUserId?: string | null;
@@ -22,6 +29,13 @@ export function buildSmsDedupeKey(
 /** True when the thread routes to all eligible tenant users (not a personal inbox). */
 export function isSharedTenantSmsInbox(inboxScope: string): boolean {
   return inboxScope === "";
+}
+
+export function smsInboxScopeForAssignedUser(input: {
+  userId: string;
+  inboxMode?: unknown;
+}): string {
+  return normalizeSmsInboxAssignmentMode(input.inboxMode) === "PERSONAL" ? input.userId : "";
 }
 
 /**

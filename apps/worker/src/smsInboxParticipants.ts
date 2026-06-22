@@ -73,7 +73,7 @@ export async function listSharedSmsInboxParticipantUserIds(tenantId: string): Pr
     }),
     loadBucketPermissions(),
     db.userCustomRole.findMany({
-      where: { tenantId, customRole: { active: true } },
+      where: { user: { tenantId }, customRole: { active: true } },
       select: { userId: true, customRole: { select: { permissions: true } } },
     }),
   ]);

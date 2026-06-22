@@ -12,7 +12,16 @@ import { db } from "@connect/db";
 import { Prisma } from "@prisma/client";
 import { decryptJson, encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import { hasEffectivePortalPermission } from "./platformRolePermissions";
-import { buildVoipMsSmsWebhookCallbackUrl, canonicalSmsPhone, buildSmsDedupeKey, isSharedTenantSmsInbox, resolveSmsInboxScope, validateOutboundSmsText } from "@connect/shared";
+import {
+  buildVoipMsSmsWebhookCallbackUrl,
+  canonicalSmsPhone,
+  buildSmsDedupeKey,
+  isSharedTenantSmsInbox,
+  normalizeSmsInboxAssignmentMode,
+  resolveSmsInboxScope,
+  smsInboxScopeForAssignedUser,
+  validateOutboundSmsText,
+} from "@connect/shared";
 import {
   buildChatAttachmentIdSignedDownloadUrl,
   buildChatSignedDownloadUrl,
@@ -515,15 +524,22 @@ async function ensureSmsThreadParticipantForSend(input: {
   const smsRow = input.thread.tenantSmsE164
     ? await db.tenantSmsNumber.findFirst({
         where: { tenantId: input.tenantId, phoneE164: input.thread.tenantSmsE164, active: true },
-        select: { assignedExtensionId: true },
+        select: { assignedExtensionId: true, assignedUsers: { select: { userId: true, inboxMode: true } } },
       })
     : null;
+  const sharedAssignedUserIds = ((smsRow as any)?.assignedUsers ?? [])
+    .filter((u: any) => normalizeSmsInboxAssignmentMode(u.inboxMode) === "SHARED")
+    .map((u: any) => u.userId);
+  if (sharedAssignedUserIds.length > 0 && !sharedAssignedUserIds.includes(input.user.sub)) {
+    return { ok: false, status: 404, error: "THREAD_NOT_FOUND" };
+  }
 
   await upsertSmsThreadParticipants({
     threadId: input.thread.id,
     tenantId: input.tenantId,
     inboxOwnerUserId: "",
     assignedExtensionId: smsRow?.assignedExtensionId ?? null,
+    multiAssignedUserIds: sharedAssignedUserIds,
     ensureUserIds: [input.user.sub],
   });
   return { ok: true };
@@ -556,14 +572,21 @@ export async function findOrCreateConnectChatSmsThread(input: {
 
   const assign = await (db as any).tenantSmsNumber.findFirst({
     where: { id: fromPick.row.id, tenantId: input.tenantId },
-    select: { assignedUserId: true, assignedExtensionId: true, assignedUsers: { select: { userId: true } } },
+    select: { assignedUserId: true, assignedExtensionId: true, assignedUsers: { select: { userId: true, inboxMode: true } } },
   });
-  const multiAssignedUserIds: string[] = (assign?.assignedUsers ?? []).map((u: any) => u.userId);
-  const inboxScope = await resolveSmsInboxOwnerUserId({
+  const assignedRows = (assign?.assignedUsers ?? []) as Array<{ userId: string; inboxMode?: string | null }>;
+  const sharedAssignedUserIds = assignedRows
+    .filter((u) => normalizeSmsInboxAssignmentMode(u.inboxMode) === "SHARED")
+    .map((u) => u.userId);
+  const explicitUserAssignment = assignedRows.find((u) => u.userId === input.userId);
+  let inboxScope = await resolveSmsInboxOwnerUserId({
     tenantId: input.tenantId,
     assignedUserId: assign?.assignedUserId || null,
     assignedExtensionId: assign?.assignedExtensionId || null,
   });
+  if (!assign?.assignedUserId && !assign?.assignedExtensionId && explicitUserAssignment) {
+    inboxScope = smsInboxScopeForAssignedUser(explicitUserAssignment);
+  }
 
   const dk = smsDedupeKey(input.tenantId, fromPick.row.phoneE164, extNorm.e164, inboxScope);
   let thread = await db.connectChatThread.findUnique({ where: { dedupeKey: dk } });
@@ -590,7 +613,7 @@ export async function findOrCreateConnectChatSmsThread(input: {
     tenantId: input.tenantId,
     inboxOwnerUserId: inboxScope,
     assignedExtensionId: assign?.assignedExtensionId || null,
-    multiAssignedUserIds,
+    multiAssignedUserIds: sharedAssignedUserIds,
     ensureUserIds: [input.userId],
   });
   return { ok: true, threadId: thread.id, normalizedTo: extNorm.e164, fromNumber: fromPick.row.phoneE164 };
@@ -1902,6 +1925,11 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         assignedExtensionNumber: r.assignedExtension?.extNumber || null,
         assignedUserIds: (r.assignedUsers as any[]).map((u: any) => u.userId),
         assignedUserEmails: (r.assignedUsers as any[]).map((u: any) => u.user?.email || null).filter(Boolean),
+        assignedUsers: (r.assignedUsers as any[]).map((u: any) => ({
+          userId: u.userId,
+          email: u.user?.email || null,
+          inboxMode: normalizeSmsInboxAssignmentMode(u.inboxMode),
+        })),
       })),
     };
   });
@@ -1918,6 +1946,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         assignedExtensionId: z.string().nullable().optional(),
         /** Explicit multi-user assignment. Empty array = clear all; undefined = no change. */
         assignedUserIds: z.array(z.string()).optional(),
+        assignedUserInboxMode: z.enum(["SHARED", "PERSONAL"]).optional(),
         isTenantDefault: z.boolean().optional(),
         active: z.boolean().optional(),
       })
@@ -1965,7 +1994,11 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
       await (db as any).tenantSmsNumberUser.deleteMany({ where: { tenantSmsNumberId: id } });
       if (body.assignedUserIds.length > 0) {
         await (db as any).tenantSmsNumberUser.createMany({
-          data: body.assignedUserIds.map((uid: string) => ({ tenantSmsNumberId: id, userId: uid })),
+          data: body.assignedUserIds.map((uid: string) => ({
+            tenantSmsNumberId: id,
+            userId: uid,
+            inboxMode: normalizeSmsInboxAssignmentMode(body.assignedUserInboxMode),
+          })),
           skipDuplicates: true,
         });
       }

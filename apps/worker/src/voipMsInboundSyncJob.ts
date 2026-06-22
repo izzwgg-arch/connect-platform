@@ -1,6 +1,12 @@
 import { db } from "@connect/db";
 import { decryptJson } from "@connect/security";
-import { canonicalSmsPhone, buildSmsDedupeKey, resolveSmsInboxScope } from "@connect/shared";
+import {
+  canonicalSmsPhone,
+  buildSmsDedupeKey,
+  normalizeSmsInboxAssignmentMode,
+  resolveSmsInboxScope,
+  smsInboxScopeForAssignedUser,
+} from "@connect/shared";
 import { upsertSmsThreadParticipants } from "./smsInboxParticipants";
 import { crmInboundSmsHook } from "./crmInboundSmsHook";
 import { fetchVoipMsMmsToChatFile, mediaKindFromMime } from "../../../packages/shared/src/voipMsInboundMms";
@@ -28,6 +34,7 @@ type InboundRow = {
   mediaUrls: string[];
   createdAt?: Date;
 };
+type SmsAssignedUser = { userId: string; inboxMode?: string | null };
 
 const DEFAULT_VOIPMS_API = "https://voip.ms/api/v1/rest.php";
 
@@ -355,7 +362,7 @@ async function importInboundMessage(input: {
   assignedUserId?: string | null;
   assignedExtensionId?: string | null;
   /** Users explicitly assigned via TenantSmsNumberUser join table. */
-  multiAssignedUserIds?: string[];
+  multiAssignedUsers?: SmsAssignedUser[];
   row: InboundRow;
   sendSmsPush?: SmsPushFn;
 }) {
@@ -397,20 +404,56 @@ async function importInboundMessage(input: {
     return;
   }
 
-  const inboxScope = await resolveInboxOwnerUserId(input);
+  const assignedUsers = input.multiAssignedUsers ?? [];
+  const sharedAssignedUserIds = assignedUsers
+    .filter((u) => normalizeSmsInboxAssignmentMode(u.inboxMode) === "SHARED")
+    .map((u) => u.userId);
+  const personalAssignedUserIds = assignedUsers
+    .filter((u) => normalizeSmsInboxAssignmentMode(u.inboxMode) === "PERSONAL")
+    .map((u) => u.userId);
+
+  let inboxScope = await resolveInboxOwnerUserId(input);
+  let sharedParticipantUserIds = sharedAssignedUserIds;
+  if (!input.assignedUserId && !input.assignedExtensionId && personalAssignedUserIds.length > 0) {
+    const existingPersonalThreads = await db.connectChatThread.findMany({
+      where: {
+        tenantId: input.tenantId,
+        tenantSmsE164: input.tenantDidE164,
+        externalSmsE164: input.row.from,
+        type: "SMS",
+        active: true,
+        smsInboxOwnerUserId: { in: personalAssignedUserIds },
+      },
+      orderBy: { lastMessageAt: "desc" },
+      take: 2,
+      select: { id: true, smsInboxOwnerUserId: true },
+    });
+    if (existingPersonalThreads.length === 1) {
+      inboxScope = existingPersonalThreads[0]?.smsInboxOwnerUserId || "";
+    } else if (existingPersonalThreads.length === 0 && personalAssignedUserIds.length === 1 && sharedAssignedUserIds.length === 0) {
+      inboxScope = smsInboxScopeForAssignedUser({ userId: personalAssignedUserIds[0]!, inboxMode: "PERSONAL" });
+    } else {
+      // Ambiguous inbound replies to the same DID/contact cannot identify one private mailbox.
+      // Route to a shared assigned-users thread rather than guessing the wrong owner.
+      inboxScope = "";
+      sharedParticipantUserIds = [...new Set([...sharedAssignedUserIds, ...personalAssignedUserIds])];
+    }
+  }
   const dedupeKey = buildSmsDedupeKey(input.tenantId, input.tenantDidE164, input.row.from, inboxScope);
 
-  // Search by number pair first (any dedupeKey variant) to avoid creating duplicate threads
-  // when the existing thread was created by the webhook with a different suffix.
-  let thread = await db.connectChatThread.findFirst({
-    where: {
-      tenantId: input.tenantId,
-      tenantSmsE164: input.tenantDidE164,
-      externalSmsE164: input.row.from,
-      type: "SMS",
-    },
-    orderBy: { createdAt: "asc" },
-  });
+  let thread = await db.connectChatThread.findUnique({ where: { dedupeKey } });
+  if (!thread) {
+    thread = await db.connectChatThread.findFirst({
+      where: {
+        tenantId: input.tenantId,
+        tenantSmsE164: input.tenantDidE164,
+        externalSmsE164: input.row.from,
+        type: "SMS",
+        smsInboxOwnerUserId: inboxScope,
+      },
+      orderBy: { createdAt: "asc" },
+    });
+  }
 
   if (!thread) {
     thread = await db.connectChatThread.create({
@@ -427,19 +470,13 @@ async function importInboundMessage(input: {
         lastMessageAt: input.row.createdAt || new Date(),
       },
     });
-  } else if (!thread.smsInboxOwnerUserId && inboxScope) {
-    // Backfill the inbox owner if the thread was created without one
-    await db.connectChatThread.update({
-      where: { id: thread.id },
-      data: { smsInboxOwnerUserId: inboxScope, updatedAt: new Date() },
-    });
   }
   await upsertParticipants({
     threadId: thread.id,
     tenantId: input.tenantId,
     inboxOwnerUserId: inboxScope,
     assignedExtensionId: input.assignedExtensionId || null,
-    multiAssignedUserIds: input.multiAssignedUserIds ?? [],
+    multiAssignedUserIds: sharedParticipantUserIds,
   });
 
   const msg = await db.connectChatMessage.create({
@@ -621,7 +658,7 @@ export async function runVoipMsInboundSyncCycle(opts?: { sendSmsPush?: SmsPushFn
         phoneE164: true,
         assignedUserId: true,
         assignedExtensionId: true,
-        assignedUsers: { select: { userId: true }, orderBy: { createdAt: "asc" } },
+        assignedUsers: { select: { userId: true, inboxMode: true }, orderBy: { createdAt: "asc" } },
       },
       orderBy: { updatedAt: "desc" },
       take: 500,
@@ -642,7 +679,10 @@ export async function runVoipMsInboundSyncCycle(opts?: { sendSmsPush?: SmsPushFn
             tenantDidE164: n.phoneE164,
             assignedUserId: n.assignedUserId,
             assignedExtensionId: n.assignedExtensionId,
-            multiAssignedUserIds: ((n as any).assignedUsers ?? []).map((u: any) => u.userId),
+            multiAssignedUsers: ((n as any).assignedUsers ?? []).map((u: any) => ({
+              userId: u.userId,
+              inboxMode: u.inboxMode,
+            })),
             row,
             sendSmsPush: opts?.sendSmsPush,
           });

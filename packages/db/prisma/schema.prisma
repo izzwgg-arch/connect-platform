@@ -3796,12 +3796,15 @@ model TenantSmsNumberUser {
   id                String          @id @default(cuid())
   tenantSmsNumberId String
   userId            String
+  /// SHARED = one shared thread for this DID; PERSONAL = this user gets their own scoped thread using the same DID.
+  inboxMode         String          @default("SHARED") @db.VarChar(16)
   createdAt         DateTime        @default(now())
   tenantSmsNumber   TenantSmsNumber @relation(fields: [tenantSmsNumberId], references: [id], onDelete: Cascade)
   user              User            @relation("TenantSmsNumberMultiUser", fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([tenantSmsNumberId, userId])
   @@index([tenantSmsNumberId])
+  @@index([tenantSmsNumberId, inboxMode])
   @@index([userId])
 }
 

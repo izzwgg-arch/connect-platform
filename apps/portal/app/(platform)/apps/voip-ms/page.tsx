@@ -38,6 +38,7 @@ type SmsRow = {
   assignedExtensionNumber: string | null;
   assignedUserIds: string[];
   assignedUserEmails: string[];
+  assignedUsers?: Array<{ userId: string; email: string | null; inboxMode: "SHARED" | "PERSONAL" }>;
 };
 
 type TenantRow = { id: string; name: string };
@@ -98,6 +99,7 @@ export default function VoipMsIntegrationPage() {
         ...r,
         assignedUserIds: r.assignedUserIds ?? [],
         assignedUserEmails: r.assignedUserEmails ?? [],
+        assignedUsers: r.assignedUsers ?? [],
       })));
       if (superOnly) {
         const t = await apiGet<{ tenants: TenantRow[] }>("/admin/apps/voip-ms/tenants").catch(() => ({ tenants: [] }));
@@ -503,7 +505,11 @@ export default function VoipMsIntegrationPage() {
                             : r.assignedExtensionId
                               ? r.assignedExtensionId.slice(0, 8) + "…"
                               : (r.assignedUserIds?.length ?? 0) > 0
-                                ? <span title={r.assignedUserEmails?.join(", ")}>{r.assignedUserIds.length} user{r.assignedUserIds.length === 1 ? "" : "s"}</span>
+                                ? (
+                                  <span title={r.assignedUserEmails?.join(", ")}>
+                                    {r.assignedUserIds.length} user{r.assignedUserIds.length === 1 ? "" : "s"} · {r.assignedUsers?.some((u) => u.inboxMode === "PERSONAL") ? "personal" : "shared"}
+                                  </span>
+                                )
                                 : "—"}
                         </td>
                         {can("can_assign_sms_numbers") ? (
@@ -586,6 +592,9 @@ function NumberAssignForm({
   const [tenantId, setTenantId] = useState(row.tenantId || "");
   const [extId, setExtId] = useState(row.assignedExtensionId || "");
   const [assignedUserIds, setAssignedUserIds] = useState<string[]>(row.assignedUserIds ?? []);
+  const [assignedUserInboxMode, setAssignedUserInboxMode] = useState<"SHARED" | "PERSONAL">(
+    row.assignedUsers?.some((u) => u.inboxMode === "PERSONAL") ? "PERSONAL" : "SHARED",
+  );
   const [isDef, setIsDef] = useState(row.isTenantDefault);
   const [active, setActive] = useState(row.active);
   const [extensions, setExtensions] = useState<ExtRow[]>([]);
@@ -610,6 +619,7 @@ function NumberAssignForm({
         assignedUserId: null,
         assignedExtensionId: extId || null,
         assignedUserIds: extId ? [] : assignedUserIds,
+        assignedUserInboxMode,
         isTenantDefault: isDef,
         active,
       });
@@ -669,6 +679,15 @@ function NumberAssignForm({
           <div style={{ fontSize: 11, color: "var(--text-2, #666)", marginBottom: 1 }}>
             Specific users{assignedUserIds.length > 0 ? ` (${assignedUserIds.length} selected)` : " (optional — blank = all)"}:
           </div>
+          <ConnectSelect
+            value={assignedUserInboxMode}
+            onChange={(v) => setAssignedUserInboxMode(v === "PERSONAL" ? "PERSONAL" : "SHARED")}
+            style={{ width: "100%", fontSize: 12 }}
+            options={[
+              { value: "SHARED", label: "Shared mailbox for selected users" },
+              { value: "PERSONAL", label: "Personal mailbox per selected user" },
+            ]}
+          />
           <select
             multiple
             size={Math.min(6, users.length)}

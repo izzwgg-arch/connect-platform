@@ -47,6 +47,8 @@ function seedSmsNumber(input: {
   phoneE164: string;
   assignedUserId?: string | null;
   assignedExtensionId?: string | null;
+  assignedUsers?: Array<{ userId: string; inboxMode?: "SHARED" | "PERSONAL" }>;
+  isTenantDefault?: boolean;
 }) {
   state.smsNumbers.set(input.phoneE164, { active: true, smsCapable: true, mmsCapable: false, isTenantDefault: false, ...input });
 }
@@ -97,7 +99,9 @@ mock.module("./smsInboxParticipants", {
       state.participantUpserts.push(input);
       const userIds = input.inboxOwnerUserId
         ? [input.inboxOwnerUserId]
-        : (sharedEligibleUserIds ?? [...state.users.values()].filter((u) => u.tenantId === input.tenantId && u.id !== "u_no_sms").map((u) => u.id));
+        : input.multiAssignedUserIds?.length
+          ? input.multiAssignedUserIds
+          : (sharedEligibleUserIds ?? [...state.users.values()].filter((u) => u.tenantId === input.tenantId && u.id !== "u_no_sms").map((u) => u.id));
       const all = [...new Set([...userIds, ...(input.ensureUserIds ?? [])])];
       for (const uid of all) {
         if (!state.parts.some((p) => p.threadId === input.threadId && p.userId === uid)) {
@@ -136,10 +140,14 @@ mock.module("@connect/db", {
         findMany: async ({ where }: any) =>
           [...state.extensions.values()].filter((e) => e.tenantId === where.tenantId && e.status === where.status),
         findFirst: async ({ where }: any) => {
-          const e = state.extensions.get(where.id);
-          if (!e) return null;
-          if (where.tenantId && e.tenantId !== where.tenantId) return null;
-          return e;
+          const rows = [...state.extensions.values()].filter((e) => {
+            if (where.id && e.id !== where.id) return false;
+            if (where.tenantId && e.tenantId !== where.tenantId) return false;
+            if (where.ownerUserId && e.ownerUserId !== where.ownerUserId) return false;
+            if (where.status && e.status !== where.status) return false;
+            return true;
+          });
+          return rows[0] || null;
         },
       },
       tenantSmsNumber: {
@@ -151,13 +159,26 @@ mock.module("@connect/db", {
             if (where.phoneE164 && row.phoneE164 !== where.phoneE164) continue;
             if (where.active === true && !row.active) continue;
             if (where.assignedExtensionId && row.assignedExtensionId !== where.assignedExtensionId) continue;
+            if (where.assignedUserId && row.assignedUserId !== where.assignedUserId) continue;
             if (where.assignedUserId === null && row.assignedUserId != null) continue;
             if (where.assignedExtensionId === null && row.assignedExtensionId != null) continue;
+            if (where.isTenantDefault === true && !row.isTenantDefault) continue;
             return row;
           }
           return null;
         },
         findUnique: async ({ where }: any) => state.smsNumbers.get(where.phoneE164) || null,
+      },
+      tenantSmsNumberUser: {
+        findFirst: async ({ where }: any) => {
+          for (const row of state.smsNumbers.values()) {
+            if (where.tenantSmsNumber?.tenantId && row.tenantId !== where.tenantSmsNumber.tenantId) continue;
+            if (where.tenantSmsNumber?.active === true && !row.active) continue;
+            const assigned = (row.assignedUsers ?? []).find((u: any) => u.userId === where.userId);
+            if (assigned) return { ...assigned, tenantSmsNumber: { id: row.id, phoneE164: row.phoneE164 } };
+          }
+          return null;
+        },
       },
       connectChatThread: {
         findMany: async ({ where, include }: any) => {
@@ -317,6 +338,49 @@ test("outbound-first shared tenant SMS fans out eligible participants", async ()
   await app.close();
 });
 
+test("multi-user personal assignment creates separate scoped threads for the same DID", async () => {
+  await loadRoutes();
+  reset();
+  allowSendSms = true;
+  seedTenant("t1");
+  seedUser("u1", "t1");
+  seedUser("u2", "t1");
+  seedSmsNumber({
+    id: "n1",
+    tenantId: "t1",
+    phoneE164: "+15551111111",
+    assignedUsers: [
+      { userId: "u1", inboxMode: "PERSONAL" },
+      { userId: "u2", inboxMode: "PERSONAL" },
+    ],
+  });
+
+  const app1 = buildApp({ sub: "u1", tenantId: "t1", role: "USER" });
+  const res1 = await app1.inject({
+    method: "POST",
+    url: "/chat/threads",
+    payload: { type: "sms", externalPhone: "+15559998888" },
+  });
+  assert.equal(res1.statusCode, 200);
+  const body1 = JSON.parse(res1.body);
+  assert.equal(state.threads.get(body1.threadId).smsInboxOwnerUserId, "u1");
+  assert.deepEqual(state.parts.filter((p) => p.threadId === body1.threadId).map((p) => p.userId), ["u1"]);
+  await app1.close();
+
+  const app2 = buildApp({ sub: "u2", tenantId: "t1", role: "USER" });
+  const res2 = await app2.inject({
+    method: "POST",
+    url: "/chat/threads",
+    payload: { type: "sms", externalPhone: "+15559998888" },
+  });
+  assert.equal(res2.statusCode, 200);
+  const body2 = JSON.parse(res2.body);
+  assert.notEqual(body2.threadId, body1.threadId);
+  assert.equal(state.threads.get(body2.threadId).smsInboxOwnerUserId, "u2");
+  assert.deepEqual(state.parts.filter((p) => p.threadId === body2.threadId).map((p) => p.userId), ["u2"]);
+  await app2.close();
+});
+
 test("personal extension SMS keeps single-owner inboxScope", async () => {
   await loadRoutes();
   reset();
@@ -348,7 +412,7 @@ test("extension without owner falls back to shared tenant inbox", async () => {
   seedTenant("t1");
   seedUser("u1", "t1");
   seedExtension("e1", "t1", null);
-  seedSmsNumber({ id: "n1", tenantId: "t1", phoneE164: "+15551111111", assignedExtensionId: "e1" });
+  seedSmsNumber({ id: "n1", tenantId: "t1", phoneE164: "+15551111111", assignedExtensionId: "e1", isTenantDefault: true });
 
   const app = buildApp({ sub: "u1", tenantId: "t1", role: "USER" });
   const res = await app.inject({
