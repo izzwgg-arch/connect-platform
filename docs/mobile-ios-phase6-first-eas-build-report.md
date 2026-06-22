@@ -49,6 +49,139 @@ A real run of the command would, in sequence:
 
 All four are interactive and/or require the physical device + the user's Apple account. Per the task's "Ask before using real Apple credentials" rule, the build is paused for the user.
 
+### 3a. Update — credentials provided; device registration handed to user terminal
+
+- User chose **App Store Connect API key** auth + **QR device-registration flow**.
+- API key configured via env vars (key contents never printed):
+  `EXPO_ASC_API_KEY_PATH` → `…/Downloads/AuthKey_KLM264D4Z8.p8.txt` (valid PKCS#8
+  PEM, EC P-256), `EXPO_ASC_KEY_ID=KLM264D4Z8`,
+  `EXPO_ASC_ISSUER_ID=c7b93db6-da90-460c-ba20-10d76f015a40`.
+- Phase 4/5 work committed to `main` as `63f4d6e0` so the build includes it.
+- **`eas device:create` cannot be run by the agent**: it requires an interactive
+  TTY (failed immediately with `Input is required, but stdin is not readable` at
+  the *"use the izz8457s-organization account?"* prompt) and the QR must be
+  scanned on the physical iPhone. → Handed to the user as a copy-paste terminal
+  block (env vars + `npx eas device:create`, choose **Website** method, scan QR
+  on the iPhone 15).
+- After the device shows registered, the agent ran
+  `eas build --profile ios-dev-device --platform ios --non-interactive`. It
+  progressed through environment resolution, created the `dev` update
+  channel/branch, and selected **remote (Expo-managed) iOS credentials**, then
+  failed with:
+  `Failed to set up credentials. You're in non-interactive mode. EAS CLI couldn't
+  find any credentials suitable for internal distribution. Run this command again
+  in interactive mode.`
+- **Root cause (not a code defect):** this is the **first** iOS build, so no
+  Apple **Distribution Certificate** or **ad-hoc provisioning profile** exists
+  yet. EAS deliberately refuses to *create* a new distribution certificate in
+  `--non-interactive` mode (distribution certs are a hard-limited Apple resource,
+  max ~2–3 per account, so creation requires an interactive confirmation). The
+  ASC API-key env vars handle Apple **authentication** fine (proven by the
+  successful `device:create`), but they do **not** bypass the interactive
+  cert-creation gate.
+- **Resolution:** run the build **once in interactive mode** in the user's
+  terminal so EAS generates + stores the managed cert + profile (which will
+  include the registered iPhone 15). That interactive run also produces the build
+  artifact, so no extra build is needed. Subsequent builds can then be
+  `--non-interactive`. A non-trivial config nit surfaced too: EAS warns
+  `app.config.ts is missing ios.infoPlist.ITSAppUsesNonExemptEncryption` — not a
+  build blocker for a dev build, but should be set to avoid a manual App Store
+  Connect step later (added to remaining items).
+
+### 3b. Update — Apple 401 diagnosed; root cause = empty team + missing env vars
+
+The user reported the interactive build failed with **Apple 401 "Authentication
+credentials are missing or invalid."** Investigated directly (signed an ASC API
+JWT with the provided key and called the App Store Connect API; key contents /
+token never printed):
+
+| Probe | Result |
+|-------|--------|
+| `GET /v1/devices` with key `KLM264D4Z8` + issuer `c7b93db6…` | **HTTP 200** → key, issuer, signing, and permissions are **VALID**. |
+| Device count on this team | **0** |
+| Certificate count on this team | **0** |
+| Bundle IDs matching `com.connectcommunications.mobile` | **0** |
+
+Confirmed via eas-cli source (`SetUpInternalProvisioningProfile.js`,
+`ConfigureProvisioningProfile.js`) that the correct env var names are exactly
+`EXPO_ASC_API_KEY_PATH` / `EXPO_ASC_KEY_ID` / `EXPO_ASC_ISSUER_ID` (the ones we
+set), and that **eas-cli auto-treats a non-TTY shell as non-interactive** — so
+the agent's shell cannot create first-time credentials regardless of flags.
+
+**Conclusions:**
+1. The **401 was an auth-fallback artifact**, not a bad key: the user's
+   interactive terminal did not have the ASC env vars set, so EAS fell back to a
+   stale/absent Apple ID session and got 401. With the env vars set (key proven
+   valid) EAS authenticates via the key — no Apple ID, no 2FA.
+2. The key's Apple team is **empty** (0 devices / 0 certs / 0 bundle IDs). The
+   earlier `device:create` "success" therefore registered the iPhone on a
+   **different** Apple team than this key's team. Everything must be done on the
+   **same** team or the adhoc profile will contain no device and the `.ipa` won't
+   install.
+
+**Fix handed to user (single TTY terminal, env vars set):**
+```powershell
+$env:EXPO_ASC_API_KEY_PATH = "$env:USERPROFILE\Downloads\AuthKey_KLM264D4Z8.p8.txt"
+$env:EXPO_ASC_KEY_ID = "KLM264D4Z8"
+$env:EXPO_ASC_ISSUER_ID = "c7b93db6-da90-460c-ba20-10d76f015a40"
+cd "c:\dev\projects\Connect 2\apps\mobile"
+npx eas device:create   # QR flow → registers iPhone 15 on THIS key's team
+npx eas build --profile ios-dev-device --platform ios   # creates bundleId+cert+profile on THIS team, includes device, builds
+```
+Because the env vars pin auth to the key's team, both the device and the build
+land on the same team, resolving both the 401 and the empty-profile risk.
+
+### 3c. Update — build #1 reached Xcode; failed on a plugin selector defect (FIXED)
+
+Build: `https://expo.dev/accounts/izz8457s-organization/projects/connect-mobile/builds/e39849a0-a866-43de-aaec-584f19be2e1c`
+
+With the env vars set, the build **authenticated (no 401), created credentials,
+uploaded, and ran fastlane/Xcode on the macOS worker** — then failed compiling
+the injected AppDelegate:
+
+```
+no known class method for selector 'didInvalidatePushTokenForType:'
+```
+
+**Root cause (plugin defect):** `withIosVoipPush.js` forwarded the optional
+PKPushRegistryDelegate `didInvalidatePushTokenForType:` to
+`[RNVoipPushNotificationManager didInvalidatePushTokenForType:]`, **but that
+class method does not exist** in `react-native-voip-push-notification@3.3.x`.
+Verified the real class API from the installed header:
+
+```
++ voipRegistration
++ didUpdatePushCredentials:forType:
++ didReceiveIncomingPushWithPayload:forType:
++ addCompletionHandler:completionHandler:
++ removeCompletionHandler:
+```
+
+**Fix:** made the `didInvalidatePushTokenForType:` delegate body a documented
+no-op (iOS re-registers and delivers a fresh token via `didUpdatePushCredentials`
+on next launch). The other three forwarded calls (`voipRegistration`,
+`didUpdatePushCredentials:forType:`, `didReceiveIncomingPushWithPayload:forType:`)
+all match the confirmed API.
+
+**What this failure already PROVED (Task-4 verification, partial):**
+- **AppDelegate language = Objective-C++** — the failure is an Obj-C *selector*
+  error inside the patched AppDelegate, so the `.mm` patch was generated and
+  applied (Swift would not have produced this, and the plugin would have logged
+  its Swift warning instead). The SDK-51 assumption holds.
+- **`withIosVoipPush.js` patch applied** — the failing line is our injected
+  delegate method.
+- **`#import "RNCallKeep.h"` resolved + `reportNewIncomingCall` compiled** — the
+  build stopped at the `didInvalidatePushTokenForType:` line with no
+  "file not found" for `RNCallKeep.h` and no error on `[RNCallKeep
+  reportNewIncomingCall:…]`, so the CallKeep import/quote form and the native
+  report call are good (the `<RNCallKeep/RNCallKeep.h>` fallback was not needed).
+- **Credentials/provisioning succeeded** — the build got past credential setup to
+  Xcode, so cert + ad-hoc profile were created on the key's team.
+
+Remaining to confirm on the **next** build (after the fix ships): a green Xcode
+compile, then on-device install of `aps-environment`, `UIBackgroundModes`, PushKit
+token registration, and `voipPushToken` persistence.
+
 ## 4. Native-output verification — deferred to the cloud build (Windows cannot prebuild iOS)
 
 Attempted locally: `npx expo prebuild -p ios --no-install` →

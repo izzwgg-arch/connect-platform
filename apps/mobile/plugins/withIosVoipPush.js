@@ -108,7 +108,11 @@ ${PATCH_BEGIN}
 
 - (void)pushRegistry:(PKPushRegistry *)registry didInvalidatePushTokenForType:(PKPushType)type
 {
-  [RNVoipPushNotificationManager didInvalidatePushTokenForType:(NSString *)type];
+  // Optional PKPushRegistryDelegate hook. react-native-voip-push-notification
+  // (3.3.x) exposes NO class method for token invalidation, so there is nothing
+  // to forward to JS — iOS re-registers and delivers a fresh token via
+  // didUpdatePushCredentials on the next registration. (Calling a non-existent
+  // +didInvalidatePushTokenForType: is what failed the first Xcode build.)
 }
 
 - (void)pushRegistry:(PKPushRegistry *)registry didReceiveIncomingPushWithPayload:(PKPushPayload *)payload forType:(PKPushType)type withCompletionHandler:(void (^)(void))completion
