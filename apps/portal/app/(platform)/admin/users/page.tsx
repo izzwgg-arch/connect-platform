@@ -671,7 +671,24 @@ type PhoneStatus = {
   endpointName: string | null;
   extensionNumber: string | null;
   lastProvisionedAt: string | null;
+  liveRegistration: "LIVE" | "OFFLINE" | "NEVER_REGISTERED" | "UNKNOWN" | string;
+  registrationStatus: string | null;
+  lastRegisteredAt: string | null;
+  healthWarning: string | null;
 };
+
+function liveRegistrationLabel(v: string | null | undefined): string {
+  switch (v) {
+    case "LIVE":
+      return "Registered (live on PBX)";
+    case "OFFLINE":
+      return "Not registered right now";
+    case "NEVER_REGISTERED":
+      return "Never registered with PBX";
+    default:
+      return "Unknown";
+  }
+}
 
 function provisionTone(status: string): string {
   if (status === "PROVISIONED") return "success";
@@ -696,6 +713,10 @@ function PhoneProvisioningPanel({ userId }: { userId: string }) {
         endpointName: r.endpointName || null,
         extensionNumber: r.extensionNumber || null,
         lastProvisionedAt: r.lastProvisionedAt || null,
+        liveRegistration: r.liveRegistration || "UNKNOWN",
+        registrationStatus: r.registrationStatus || null,
+        lastRegisteredAt: r.lastRegisteredAt || null,
+        healthWarning: r.healthWarning || null,
       });
     } catch {
       setStatus(null);
@@ -738,8 +759,20 @@ function PhoneProvisioningPanel({ userId }: { userId: string }) {
     <section className="panel" style={{ marginTop: 18, padding: 14 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <h3 style={{ margin: 0 }}>Portal Phone</h3>
-        {status ? <span className={`chip ${provisionTone(status.provisionStatus)}`}>{String(status.provisionStatus).toLowerCase()}</span> : null}
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {status ? <span className={`chip ${provisionTone(status.provisionStatus)}`}>{String(status.provisionStatus).toLowerCase()}</span> : null}
+          {status && status.healthWarning ? <span className="chip warning">not live</span> : null}
+        </div>
       </div>
+      {status && status.healthWarning ? (
+        <div
+          className="chip warning"
+          role="alert"
+          style={{ marginTop: 10, padding: "10px 12px", whiteSpace: "normal", lineHeight: 1.4, display: "block" }}
+        >
+          ⚠️ {status.healthWarning}
+        </div>
+      ) : null}
       {status ? (
         <div className="stack" style={{ gap: 6, marginTop: 10 }}>
           <Info label="Endpoint" value={status.endpointName || "—"} />
@@ -747,6 +780,8 @@ function PhoneProvisioningPanel({ userId }: { userId: string }) {
           <Info label="WebRTC" value={status.webrtcEnabled ? "Enabled" : "Disabled"} />
           <Info label="SIP password" value={status.hasSipPassword ? "Encrypted at rest" : "Not set"} />
           <Info label="Source" value={status.provisionSource ? status.provisionSource.toLowerCase() : "—"} />
+          <Info label="PBX registration" value={liveRegistrationLabel(status.liveRegistration)} />
+          <Info label="Last registered" value={status.lastRegisteredAt ? formatDate(status.lastRegisteredAt) : "Never"} />
           <Info label="Last sync" value={formatDate(status.lastProvisionedAt)} />
         </div>
       ) : (

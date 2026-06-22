@@ -33,7 +33,7 @@ import {
   portalBucketLabel,
   type PortalRoleBucket,
 } from "./userManagementRoles";
-import { resolveWebrtcSipIdentity } from "./voiceProvisioningBundle";
+import { resolveWebrtcSipIdentity, computeEndpointLiveHealth } from "./voiceProvisioningBundle";
 
 // These types are intentionally loose (`any`) because the actual getUser /
 // requirePermission / canManageUsers in server.ts are typed with the server's
@@ -312,14 +312,41 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
       where: { ownerUserId: ctx.user.id, tenantId: ctx.user.tenantId },
       select: { extNumber: true },
     });
+
+    // Liveness safeguard: a link can be PROVISIONED in our DB while the PBX has
+    // never actually reported the endpoint registering (e.g. a VitalPBX device
+    // that exists in config but was never applied to the live Asterisk config).
+    // Cross-check the authoritative PbxEndpointRegistration signal so we never
+    // present such a device as fully healthy on DB-existence alone.
+    const endpointName = (ctx.link as any).pbxDeviceName || ctx.link.pbxSipUsername || null;
+    let registration: { status?: string | null; lastRegisteredAt?: Date | null } | null = null;
+    if (endpointName) {
+      registration = await (db as any).pbxEndpointRegistration
+        .findUnique({
+          where: { endpoint: endpointName },
+          select: { status: true, lastRegisteredAt: true, lastEventAt: true },
+        })
+        .catch(() => null);
+    }
+    const health = computeEndpointLiveHealth({
+      provisionStatus: (ctx.link as any).provisionStatus,
+      endpoint: endpointName,
+      registration,
+    });
+
     return {
       provisionStatus: (ctx.link as any).provisionStatus || "PENDING",
       provisionSource: (ctx.link as any).provisionSource || null,
       hasSipPassword: !!(ctx.link as any).sipPasswordEncrypted,
       webrtcEnabled: !!ctx.link.webrtcEnabled,
-      endpointName: (ctx.link as any).pbxDeviceName || ctx.link.pbxSipUsername || null,
+      endpointName,
       extensionNumber: ext?.extNumber || null,
       lastProvisionedAt: (ctx.link as any).lastProvisionedAt || null,
+      // Live-registration health (PBX-reported, not DB-assumed).
+      liveRegistration: health.liveRegistration,
+      registrationStatus: registration?.status || null,
+      lastRegisteredAt: registration?.lastRegisteredAt || null,
+      healthWarning: health.healthWarning,
     };
   });
 

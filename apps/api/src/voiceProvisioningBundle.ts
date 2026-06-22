@@ -142,3 +142,67 @@ export function normalizeSipWsUrlHost(
   u.hostname = canonicalHost;
   return u.toString();
 }
+
+// ── Provisioning liveness safeguard ───────────────────────────────────────────
+// Connect marks a PbxExtensionLink "PROVISIONED" as soon as VitalPBX *reports*
+// a WebRTC device with a secret. But VitalPBX can hold a device in its config
+// database that was never pushed into the live Asterisk config (the "Apply
+// Changes" button in the VitalPBX UI was never clicked, or a device was created
+// out-of-band). In that state the softphone registers against an endpoint that
+// does not exist at runtime, so it silently never connects while Connect shows
+// a healthy "provisioned" badge.
+//
+// The authoritative "is this device actually live on the PBX" signal is the
+// PbxEndpointRegistration row, fed by AMI ContactStatus events forwarded from
+// the telephony service. This helper turns "provisioned in our DB" + "what the
+// PBX has actually reported" into an honest health verdict so the admin UI can
+// warn instead of claiming healthy on DB-device-existence alone.
+
+export type EndpointLiveHealth = {
+  /**
+   * "LIVE"             — the PBX currently reports this endpoint registered.
+   * "OFFLINE"          — it registered before but is not registered right now
+   *                      (normal when the phone/app is simply closed).
+   * "NEVER_REGISTERED" — the PBX has never reported a successful registration
+   *                      for this endpoint (the Apply-Changes gap, or a brand
+   *                      new device that has not connected yet).
+   * "UNKNOWN"          — no endpoint name to check against.
+   */
+  liveRegistration: "LIVE" | "OFFLINE" | "NEVER_REGISTERED" | "UNKNOWN";
+  /** True once the PBX has ever reported this endpoint registered. */
+  everRegistered: boolean;
+  /**
+   * Non-null when Connect marks the link PROVISIONED but the PBX has never
+   * reported a successful registration — the classic "device exists in VitalPBX
+   * but was never applied to the live config" situation. This is the safeguard:
+   * never present a provisioned-but-never-live device as fully healthy.
+   */
+  healthWarning: string | null;
+};
+
+export function computeEndpointLiveHealth(input: {
+  provisionStatus?: string | null;
+  endpoint?: string | null;
+  registration?: { status?: string | null; lastRegisteredAt?: Date | string | null } | null;
+}): EndpointLiveHealth {
+  const endpoint = String(input.endpoint ?? "").trim();
+  const provisioned = String(input.provisionStatus ?? "").trim().toUpperCase() === "PROVISIONED";
+  if (!endpoint) {
+    return { liveRegistration: "UNKNOWN", everRegistered: false, healthWarning: null };
+  }
+  const reg = input.registration ?? null;
+  const currentlyRegistered = String(reg?.status ?? "").trim().toUpperCase() === "REGISTERED";
+  const everRegistered =
+    currentlyRegistered ||
+    (reg?.lastRegisteredAt != null && String(reg.lastRegisteredAt).trim() !== "");
+  const liveRegistration: EndpointLiveHealth["liveRegistration"] = currentlyRegistered
+    ? "LIVE"
+    : everRegistered
+      ? "OFFLINE"
+      : "NEVER_REGISTERED";
+  const healthWarning =
+    provisioned && !everRegistered
+      ? `Device created in VitalPBX but not applied/live yet — click Apply Changes in VitalPBX. (Endpoint ${endpoint} has never registered with the PBX.)`
+      : null;
+  return { liveRegistration, everRegistered, healthWarning };
+}

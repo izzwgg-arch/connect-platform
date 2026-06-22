@@ -8,6 +8,7 @@ import {
   hostnameIfFqdn,
   deriveCanonicalPbxHost,
   normalizeSipWsUrlHost,
+  computeEndpointLiveHealth,
 } from "./voiceProvisioningBundle";
 
 const webrtcCfg = {
@@ -118,4 +119,69 @@ test("normalizeSipWsUrlHost leaves FQDN URLs untouched", () => {
 
 test("normalizeSipWsUrlHost is a no-op when no canonical host is known", () => {
   assert.equal(normalizeSipWsUrlHost("wss://209.145.60.79:8089/ws", null), "wss://209.145.60.79:8089/ws");
+});
+
+// ── computeEndpointLiveHealth: provisioned-but-never-live safeguard ────────────
+
+test("PROVISIONED but PBX never reported a registration → warns to Apply Changes (the ext 104 / T30_104_1 case)", () => {
+  const h = computeEndpointLiveHealth({
+    provisionStatus: "PROVISIONED",
+    endpoint: "T30_104_1",
+    registration: null,
+  });
+  assert.equal(h.liveRegistration, "NEVER_REGISTERED");
+  assert.equal(h.everRegistered, false);
+  assert.ok(h.healthWarning, "expected a health warning");
+  assert.match(h.healthWarning ?? "", /Apply Changes/i);
+  assert.match(h.healthWarning ?? "", /T30_104_1/);
+});
+
+test("PROVISIONED and currently REGISTERED → live, no warning", () => {
+  const h = computeEndpointLiveHealth({
+    provisionStatus: "PROVISIONED",
+    endpoint: "T21_101_1",
+    registration: { status: "REGISTERED", lastRegisteredAt: new Date() },
+  });
+  assert.equal(h.liveRegistration, "LIVE");
+  assert.equal(h.everRegistered, true);
+  assert.equal(h.healthWarning, null);
+});
+
+test("PROVISIONED, registered before but offline now → no Apply-Changes warning (phone is just closed)", () => {
+  const h = computeEndpointLiveHealth({
+    provisionStatus: "PROVISIONED",
+    endpoint: "T33_102_1",
+    registration: { status: "UNREACHABLE", lastRegisteredAt: new Date(Date.now() - 3600_000) },
+  });
+  assert.equal(h.liveRegistration, "OFFLINE");
+  assert.equal(h.everRegistered, true);
+  assert.equal(h.healthWarning, null);
+});
+
+test("not PROVISIONED (PENDING) and never registered → no warning (nothing claims healthy)", () => {
+  const h = computeEndpointLiveHealth({
+    provisionStatus: "PENDING",
+    endpoint: "T30_105_1",
+    registration: null,
+  });
+  assert.equal(h.liveRegistration, "NEVER_REGISTERED");
+  assert.equal(h.healthWarning, null);
+});
+
+test("no endpoint name → UNKNOWN, no warning", () => {
+  const h = computeEndpointLiveHealth({ provisionStatus: "PROVISIONED", endpoint: null, registration: null });
+  assert.equal(h.liveRegistration, "UNKNOWN");
+  assert.equal(h.everRegistered, false);
+  assert.equal(h.healthWarning, null);
+});
+
+test("status REGISTERED without lastRegisteredAt still counts as ever-registered (no false warning)", () => {
+  const h = computeEndpointLiveHealth({
+    provisionStatus: "PROVISIONED",
+    endpoint: "T30_104_1",
+    registration: { status: "REGISTERED", lastRegisteredAt: null },
+  });
+  assert.equal(h.liveRegistration, "LIVE");
+  assert.equal(h.everRegistered, true);
+  assert.equal(h.healthWarning, null);
 });
