@@ -27,10 +27,18 @@ import { Platform } from 'react-native';
 
 export interface VoipPushIncomingPayload {
   /** Connect-specific invite id. Set server-side when constructing the push
-   *  so we can correlate CallKit / SIP / in-app UI with the same UUID. */
+   *  so we can correlate CallKit / SIP / in-app UI with the same id. The worker
+   *  sends this as `callId`; older/foreground paths may use `inviteId`. */
   inviteId?: string;
+  /** Backend canonical field name for the invite/call id (apps/worker APNs VoIP). */
+  callId?: string;
+  tenantId?: string;
+  /** Target extension/user the call is ringing. */
+  toExtension?: string;
   callerName?: string;
   callerNumber?: string;
+  /** ISO-8601 timestamp of the originating call event. */
+  timestamp?: string;
   // The library passes the raw APNs payload through as an arbitrary object;
   // keep it `any` so future server-side fields work without a schema bump.
   [key: string]: any;

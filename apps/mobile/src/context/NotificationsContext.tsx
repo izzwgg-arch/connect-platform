@@ -2738,6 +2738,11 @@ export function NotificationsProvider({
       try {
         const lingerId = answerInviteRef.current?.id || incomingInvite?.id || null;
         if (lingerId) terminateTelecomCall(lingerId, "remote_hangup");
+        // iOS: terminateTelecomCall is Android-only, so end the matching CallKit
+        // call here when SIP goes idle (remote/local hangup, voicemail rollover)
+        // so the iPhone doesn't keep showing a dead call. No-op on a call that
+        // CallKit already ended. Android is unaffected (handled by Telecom above).
+        if (Platform.OS === "ios" && lingerId) endNativeCall(lingerId);
       } catch (e) {
         console.warn("[TELECOM] terminateTelecomCall on idle threw:", e instanceof Error ? e.message : String(e));
       }
@@ -3829,14 +3834,57 @@ export function NotificationsProvider({
         setVoipPushToken(hexToken);
       },
       onIncoming: (payload) => {
-        console.log("[VOIP_PUSH] incoming notification, inviteId:", payload?.inviteId ?? "(none)");
-        // We intentionally do NOT call showIncomingNativeCall here today —
-        // the AppDelegate path invokes CallKit BEFORE JS runs for killed/
-        // background launches, and NotificationsContext's existing Expo
-        // push listener handles the foreground case. When the worker-side
-        // APNs VoIP delivery lands, this is the hook point to add the
-        // post-native-UI JS reconciliation (e.g. prefetching the invite
-        // record, setting inflight state) without duplicating CallKit.
+        // iOS-only (this listener is installed only on iOS). When an APNs VoIP
+        // push arrives we MUST report the call to CallKit promptly, then persist
+        // the invite so the EXISTING answer/decline pipeline (CallKeep
+        // answerCall/endCall → handleAcceptInvite/handleDeclineInvite) can act
+        // on it. We deliberately DO NOT connect SIP/WebRTC here — that only
+        // happens after the user taps Answer.
+        try {
+          const callId = String(payload?.inviteId || (payload as any)?.callId || "");
+          console.log("[VOIP_PUSH] incoming notification, callId:", callId || "(none)");
+          if (!callId) {
+            console.warn("[VOIP_PUSH] onIncoming missing callId — cannot report to CallKit");
+            return;
+          }
+          // If this call was already canceled/answered-elsewhere, don't resurrect
+          // it; make sure CallKit clears any stale report instead.
+          if (suppressedIncomingInviteIdsRef.current.has(callId)) {
+            console.log("[VOIP_PUSH] callId already suppressed — ending CallKit:", callId);
+            endNativeCall(callId);
+            return;
+          }
+          // Map the minimal VoIP payload (callId/callerNumber/callerName/…) onto
+          // the same CallInvite shape the Expo/FCM path produces, so downstream
+          // dedupe + answer logic is identical across both push transports.
+          const invite = payloadToInvite({
+            type: "INCOMING_CALL",
+            ...(payload as any),
+            inviteId: callId,
+            callId,
+            fromNumber:
+              (payload as any)?.callerNumber ??
+              (payload as any)?.fromNumber ??
+              (payload as any)?.from ??
+              "",
+            fromDisplay: (payload as any)?.callerName ?? (payload as any)?.fromDisplay ?? null,
+            _pushReceivedAt: Date.now(),
+          } as any);
+
+          timingsRef.current[`push_${invite.id}`] = Date.now();
+          emitAnswerFlowEvent("INCOMING_PUSH_RECEIVED", invite, { source: "ios_voip_push" });
+
+          // 1) Report to CallKit FIRST (idempotent — deduped in callkeep.ts).
+          showIncomingNativeCall(invite.id, invite.fromDisplay || invite.fromNumber);
+          // 2) Persist invite state so resolveInviteForAction can answer/decline
+          //    without a race (safeSetInvite also dedupes via shownInviteIdRef).
+          safeSetInvite(invite);
+        } catch (e) {
+          console.warn(
+            "[VOIP_PUSH] onIncoming handler error:",
+            e instanceof Error ? e.message : String(e),
+          );
+        }
       },
     });
 

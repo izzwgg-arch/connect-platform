@@ -43,6 +43,11 @@ import {
   pickCanonicalTenantSlug,
   buildExpoPushV2Item,
 } from "@connect/shared";
+import {
+  isApnsVoipConfigured,
+  sendApnsVoipPush,
+  type ApnsVoipCallPayload,
+} from "./apnsVoipPush";
 import { processCrmEmailSendJob } from "./crmEmailSend";
 import { processCrmEmailSyncJob } from "./crmEmailSync";
 import { processCrmBulkEmailJob } from "./crmBulkEmailJob";
@@ -313,6 +318,159 @@ type WorkerMobilePushPayload =
   | { type: "INVITE_CANCELED"; inviteId: string; pbxCallId?: string | null; reason?: string | null; tenantId: string; timestamp: string }
   | { type: "MISSED_CALL"; inviteId: string; fromNumber: string; toExtension: string; tenantId: string; timestamp: string };
 
+/**
+ * iOS VoIP push fan-out for INCOMING_CALL only.
+ *
+ * VoIP pushes are CALL-ONLY. They wake a killed/backgrounded iPhone so the app
+ * can report the call to CallKit. We never send VoIP for INVITE_CANCELED /
+ * MISSED_CALL / SMS / voicemail — those stay on the Expo/APNs alert path.
+ *
+ * This runs IN ADDITION to the existing Expo send (which is unchanged and still
+ * covers Android). The JS side dedupes by callId, so a device receiving both an
+ * Expo data push and a VoIP push is harmless.
+ *
+ * Token invalidation: on APNs 410 / BadDeviceToken / Unregistered we null the
+ * device's `voipPushToken` and stamp `lastPushStatus`/`lastPushError` so we stop
+ * pushing to a dead token. We do NOT deactivate the device row — the Android
+ * Expo path may still be valid, and the existing project pattern only ever
+ * nulls/stamps push fields rather than hard-deleting devices here.
+ */
+async function sendVoipPushesForIncomingCall(input: {
+  tenantId: string;
+  userId: string;
+  devices: Array<{ id: string; platform: string; voipPushToken: string | null }>;
+  payload: Extract<WorkerMobilePushPayload, { type: "INCOMING_CALL" }>;
+}): Promise<void> {
+  const iosDevices = input.devices.filter(
+    (d) => d.platform === "IOS" && !!d.voipPushToken,
+  );
+  if (!iosDevices.length) return;
+
+  if (!isApnsVoipConfigured()) {
+    console.warn(
+      JSON.stringify({
+        event: "apns_voip_skipped_unconfigured",
+        source: "worker",
+        tenantId: input.tenantId,
+        userId: input.userId,
+        callId: input.payload.inviteId,
+        iosDeviceCount: iosDevices.length,
+        note: "APNs VoIP credentials not set; iOS devices will not wake for calls",
+      }),
+    );
+    return;
+  }
+
+  const voipPayload: ApnsVoipCallPayload = {
+    callId: input.payload.inviteId,
+    tenantId: input.payload.tenantId,
+    toExtension: input.payload.toExtension,
+    callerNumber: input.payload.fromNumber,
+    callerName: null,
+    timestamp: input.payload.timestamp,
+  };
+
+  for (const device of iosDevices) {
+    const tokenTail = (device.voipPushToken || "").slice(-6);
+    console.info(
+      JSON.stringify({
+        event: "apns_voip_token_selected",
+        source: "worker",
+        tenantId: input.tenantId,
+        userId: input.userId,
+        callId: input.payload.inviteId,
+        deviceId: device.id,
+        voipPushTokenTail: tokenTail,
+      }),
+    );
+    console.info(
+      JSON.stringify({
+        event: "apns_voip_send_attempt",
+        source: "worker",
+        callId: input.payload.inviteId,
+        deviceId: device.id,
+        voipPushTokenTail: tokenTail,
+      }),
+    );
+
+    const result = await sendApnsVoipPush(device.voipPushToken as string, voipPayload);
+
+    if (result.ok) {
+      console.info(
+        JSON.stringify({
+          event: "apns_voip_send_success",
+          source: "worker",
+          callId: input.payload.inviteId,
+          deviceId: device.id,
+          apnsId: result.apnsId,
+          status: result.status,
+        }),
+      );
+      await db.mobileDevice
+        .update({
+          where: { id: device.id },
+          data: {
+            lastPushSentAt: new Date(),
+            lastPushType: "VOIP_INCOMING_CALL",
+            lastPushStatus: "APNS_VOIP_OK",
+            lastPushError: null,
+          },
+        })
+        .catch(() => undefined);
+      continue;
+    }
+
+    console.error(
+      JSON.stringify({
+        event: "apns_voip_send_failure",
+        source: "worker",
+        callId: input.payload.inviteId,
+        deviceId: device.id,
+        status: result.status,
+        reason: result.reason,
+        error: result.error ?? null,
+        tokenInvalid: result.tokenInvalid,
+      }),
+    );
+
+    if (result.tokenInvalid) {
+      console.warn(
+        JSON.stringify({
+          event: "apns_voip_token_invalidation_candidate",
+          source: "worker",
+          callId: input.payload.inviteId,
+          deviceId: device.id,
+          reason: result.reason,
+          status: result.status,
+          action: "null_voip_push_token",
+        }),
+      );
+      await db.mobileDevice
+        .update({
+          where: { id: device.id },
+          data: {
+            voipPushToken: null,
+            lastPushType: "VOIP_INCOMING_CALL",
+            lastPushStatus: "APNS_VOIP_TOKEN_INVALID",
+            lastPushError: result.reason ?? `status_${result.status ?? "unknown"}`,
+          },
+        })
+        .catch(() => undefined);
+    } else {
+      await db.mobileDevice
+        .update({
+          where: { id: device.id },
+          data: {
+            lastPushType: "VOIP_INCOMING_CALL",
+            lastPushStatus: "APNS_VOIP_FAILED",
+            lastPushError: result.reason ?? result.error ?? `status_${result.status ?? "unknown"}`,
+          },
+        })
+        .catch(() => undefined);
+    }
+  }
+}
+
 async function sendPushToUserDevices(input: {
   tenantId: string;
   userId: string;
@@ -417,6 +575,27 @@ async function sendPushToUserDevices(input: {
       actorUserId: input.userId
     }
   });
+
+  // iOS VoIP wake — CALL-ONLY, in addition to (not replacing) the Expo send
+  // above. Only INCOMING_CALL wakes the device for CallKit; cancel/missed stay
+  // on the Expo/alert path. See sendVoipPushesForIncomingCall.
+  if (input.payload.type === "INCOMING_CALL") {
+    await sendVoipPushesForIncomingCall({
+      tenantId: input.tenantId,
+      userId: input.userId,
+      devices,
+      payload: input.payload,
+    }).catch((err) =>
+      console.error(
+        JSON.stringify({
+          event: "apns_voip_fanout_error",
+          source: "worker",
+          callId: input.payload.inviteId,
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      ),
+    );
+  }
 
   return { queued: messages.length, simulated: false };
 }

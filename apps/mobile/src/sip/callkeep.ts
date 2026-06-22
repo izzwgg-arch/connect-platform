@@ -1,6 +1,65 @@
 import { NativeModules, Platform } from "react-native";
 import RNCallKeep from "react-native-callkeep";
 import { logCallFlow } from "../debug/callFlowDebug";
+import { deterministicCallKitUuid } from "./callkitUuid";
+
+// ── iOS CallKit identity mapping ─────────────────────────────────────────────
+// CallKit (iOS) requires a valid RFC-4122 UUID for every call. The Connect
+// backend identifies a call by `callId`/`inviteId` (a cuid like "clx…"), which
+// is NOT a valid UUID — passing it straight to CallKit makes
+// `[[NSUUID alloc] initWithUUIDString:]` return nil and the call report
+// silently fails. We therefore keep a bidirectional, in-process map so:
+//   • outgoing CallKit calls use a generated UUID, and
+//   • the `answerCall` / `endCall` events (which carry the UUID) are translated
+//     back to the original callId before reaching the shared answer/decline
+//     pipeline.
+//
+// On Android these maps stay EMPTY (showIncomingNativeCall is only ever invoked
+// on iOS), so every lookup falls through to the raw callId and Android behavior
+// is byte-for-byte unchanged.
+const callIdToCallKitUuid = new Map<string, string>();
+const callKitUuidToCallId = new Map<string, string>();
+
+// callIds already reported to CallKit — dedupe so a device that receives BOTH
+// an Expo push and a VoIP push (or repeated VoIP retries) does not create two
+// CallKit calls / two visible incoming UIs.
+const reportedIncomingCallIds = new Set<string>();
+
+/** Stable CallKit UUID for a backend callId.
+ *
+ *  DETERMINISTIC: derived from callId via deterministicCallKitUuid so the native
+ *  PushKit handler (plugins/withIosVoipPush.js) and JS compute the SAME UUID for
+ *  a fully cold-killed call — no shared runtime state required. We still cache
+ *  both directions so callIdForCallKitUuid() can reverse a CallKit answer/end
+ *  event (which only carries the UUID) back to the backend callId. */
+export function callKitUuidForCallId(callId: string): string {
+  let uuid = callIdToCallKitUuid.get(callId);
+  if (!uuid) {
+    uuid = deterministicCallKitUuid(callId);
+    callIdToCallKitUuid.set(callId, uuid);
+    callKitUuidToCallId.set(uuid, callId);
+  }
+  return uuid;
+}
+
+/** Translate a CallKit UUID back to the backend callId (null if unmapped, e.g.
+ *  Android, where the raw callId is used directly). */
+export function callIdForCallKitUuid(uuid: string): string | null {
+  return callKitUuidToCallId.get(uuid) ?? null;
+}
+
+function forgetCallKitMapping(callIdOrUuid: string): void {
+  const mappedUuid = callIdToCallKitUuid.get(callIdOrUuid);
+  if (mappedUuid) {
+    callIdToCallKitUuid.delete(callIdOrUuid);
+    callKitUuidToCallId.delete(mappedUuid);
+  }
+  const mappedCallId = callKitUuidToCallId.get(callIdOrUuid);
+  if (mappedCallId) {
+    callKitUuidToCallId.delete(callIdOrUuid);
+    callIdToCallKitUuid.delete(mappedCallId);
+  }
+}
 
 /** Android: cancel native incoming notification + stop native ringtone immediately. */
 export function dismissNativeIncomingUi(callId: string | null | undefined) {
@@ -76,13 +135,22 @@ export async function setupNativeCalling() {
 }
 
 export function showIncomingNativeCall(callId: string, from: string) {
-  console.log("[CALL_INCOMING] showIncomingNativeCall (foreground) callId=", callId, "from=", from);
+  // Dedupe: iOS may receive both an Expo push and a VoIP push for the same
+  // call. Report to CallKit at most once per callId until it is ended.
+  if (reportedIncomingCallIds.has(callId)) {
+    console.log("[CALL_INCOMING] showIncomingNativeCall: duplicate callId ignored callId=", callId);
+    return;
+  }
+  reportedIncomingCallIds.add(callId);
+  // CallKit needs a real UUID; Android keeps using the raw callId (map empty).
+  const uuid = Platform.OS === "ios" ? callKitUuidForCallId(callId) : callId;
+  console.log("[CALL_INCOMING] showIncomingNativeCall (foreground) callId=", callId, "uuid=", uuid, "from=", from);
   logCallFlow("CALLKEEP_DISPLAY_BEGIN", {
     inviteId: callId,
-    extra: { from, source: "showIncomingNativeCall" },
+    extra: { from, source: "showIncomingNativeCall", uuid },
   });
   try {
-    RNCallKeep.displayIncomingCall(callId, from, from, "number", false);
+    RNCallKeep.displayIncomingCall(uuid, from, from, "number", false);
     console.log("[CALL_INCOMING] showIncomingNativeCall: displayIncomingCall returned");
     logCallFlow("CALLKEEP_DISPLAY_DONE", {
       inviteId: callId,
@@ -98,23 +166,37 @@ export function showIncomingNativeCall(callId: string, from: string) {
 }
 
 export function endNativeCall(callId: string) {
+  reportedIncomingCallIds.delete(callId);
   dismissNativeIncomingUi(callId);
+  // iOS: ALWAYS resolve to the deterministic CallKit UUID so we end the exact
+  // call the native PushKit handler reported — even on a cold-killed cancel
+  // where JS never populated the map yet (callKitUuidForCallId recomputes the
+  // same deterministic value the native side used).
+  // Android: the map stays empty, so this is the raw callId — unchanged behavior.
+  const uuid =
+    Platform.OS === "ios"
+      ? callIdToCallKitUuid.get(callId) ?? callKitUuidForCallId(callId)
+      : callIdToCallKitUuid.get(callId) ?? callId;
   try {
-    RNCallKeep.endCall(callId);
+    RNCallKeep.endCall(uuid);
   } catch {
     // ignore
   }
+  forgetCallKitMapping(callId);
 }
 
 export function subscribeNativeCallActions(params: {
   onAnswer: (callId: string) => void;
   onEnd: (callId: string) => void;
 }) {
+  // Translate the CallKit UUID back to the backend callId before handing it to
+  // the shared answer/decline pipeline. On Android the map is empty, so the raw
+  // value (already the callId) passes straight through unchanged.
   const answerSub = RNCallKeep.addEventListener("answerCall", ({ callUUID }: any) => {
-    params.onAnswer(callUUID);
+    params.onAnswer(callIdForCallKitUuid(callUUID) ?? callUUID);
   });
   const endSub = RNCallKeep.addEventListener("endCall", ({ callUUID }: any) => {
-    params.onEnd(callUUID);
+    params.onEnd(callIdForCallKitUuid(callUUID) ?? callUUID);
   });
   return () => {
     try { answerSub.remove(); } catch {}

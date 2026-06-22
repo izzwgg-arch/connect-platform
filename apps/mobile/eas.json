@@ -21,6 +21,19 @@
         "EXPO_PUBLIC_LOG_LEVEL": "debug"
       }
     },
+    "ios-dev-device": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "channel": "dev",
+      "ios": {
+        "simulator": false,
+        "resourceClass": "m-medium"
+      },
+      "env": {
+        "EXPO_PUBLIC_VOICE_SIMULATE": "false",
+        "EXPO_PUBLIC_LOG_LEVEL": "debug"
+      }
+    },
     "preview": {
       "distribution": "internal",
       "channel": "preview",
