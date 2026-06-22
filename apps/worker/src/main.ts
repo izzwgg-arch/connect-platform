@@ -47,7 +47,7 @@ import {
   isApnsVoipConfigured,
   sendApnsVoipPush,
   type ApnsVoipCallPayload,
-} from "./apnsVoipPush";
+} from "@connect/shared/apnsVoipPush";
 import { processCrmEmailSendJob } from "./crmEmailSend";
 import { processCrmEmailSyncJob } from "./crmEmailSync";
 import { processCrmBulkEmailJob } from "./crmBulkEmailJob";

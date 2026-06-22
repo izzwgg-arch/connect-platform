@@ -1,5 +1,10 @@
 // APNs VoIP push sender (token-based, .p8 ES256 JWT auth).
 //
+// SHARED MODULE — imported by BOTH `apps/worker` (PBX-poll fallback path) and
+// `apps/api` (the live CallInvite path that fires on real inbound calls). It used
+// to live in `apps/worker/src/apnsVoipPush.ts`; it was promoted here in Phase 7a so
+// the fragile ES256/JWT signing logic exists in exactly one place. Do not fork it.
+//
 // This module delivers **VoIP** pushes to iOS devices so the Connect app can
 // wake from a killed/backgrounded state and report an incoming call to CallKit.
 // It is intentionally:
