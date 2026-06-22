@@ -163,10 +163,11 @@ import {
   isMohAssetPbxReady,
   isNativeMohRuntimeClass,
   isValidMohRuntimeClass,
+  canonicalSmsPhone,
   normalizeMohRuntimeClass as normalizeSharedMohRuntimeClass,
 } from "@connect/shared";
 import * as fs from "node:fs";
-import { registerConnectChatRoutes } from "./connectChatRoutes";
+import { findOrCreateConnectChatSmsThread, registerConnectChatRoutes, sendConnectChatSmsMessage } from "./connectChatRoutes";
 import { registerCrmRoutes } from "./crm/routes";
 import { registerInboundCrmMatchInternalRoute } from "./crm/inboundCallerMatchRoutes";
 import { fireCrmCdrHook } from "./crm/cdrHook";
@@ -7805,10 +7806,88 @@ app.get("/sms/campaigns/:id", async (req, reply) => {
   };
 });
 
-app.get("/sms/messages", async (req) => {
+app.get("/sms/messages", async (req, reply) => {
   const user = getUser(req);
-  const query = z.object({ campaignId: z.string().optional() }).parse(req.query || {});
-  return db.smsMessage.findMany({ where: query.campaignId ? { campaignId: query.campaignId, campaign: { tenantId: user.tenantId } } : { campaign: { tenantId: user.tenantId } }, orderBy: { createdAt: "desc" } });
+  const query = z.object({ campaignId: z.string().optional(), phone: z.string().optional(), tenantId: z.string().optional() }).parse(req.query || {});
+  if (query.campaignId) {
+    return db.smsMessage.findMany({
+      where: { campaignId: query.campaignId, campaign: { tenantId: user.tenantId } },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
+  const tenantId = user.role === "SUPER_ADMIN" && query.tenantId
+    ? await resolveManagedTenant(user, query.tenantId).catch(() => null)
+    : user.tenantId;
+  if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
+
+  const phoneNorm = query.phone ? canonicalSmsPhone(query.phone) : null;
+  if (phoneNorm && !phoneNorm.ok) return reply.code(400).send({ error: "invalid_phone" });
+
+  const threadWhere: any = { tenantId, type: "SMS", active: true };
+  if (phoneNorm?.ok) threadWhere.externalSmsE164 = phoneNorm.e164;
+  if (user.role !== "SUPER_ADMIN") {
+    threadWhere.participants = { some: { userId: user.sub, leftAt: null } };
+  }
+
+  const threads = await db.connectChatThread.findMany({
+    where: threadWhere,
+    orderBy: { lastMessageAt: "desc" },
+    take: phoneNorm?.ok ? 1 : 30,
+    select: {
+      id: true,
+      tenantSmsE164: true,
+      externalSmsE164: true,
+      messages: {
+        orderBy: { createdAt: phoneNorm?.ok ? "asc" : "desc" },
+        take: phoneNorm?.ok ? 200 : 1,
+        select: { id: true, direction: true, body: true, deliveryStatus: true, deliveryError: true, createdAt: true, smsProviderMessageId: true },
+      },
+    },
+  });
+
+  return threads.flatMap((thread) =>
+    thread.messages.map((m) => ({
+      id: m.id,
+      threadId: thread.id,
+      direction: String(m.direction || "").toLowerCase(),
+      body: m.body || "",
+      message: m.body || "",
+      status: String(m.deliveryStatus || "queued").toUpperCase(),
+      error: m.deliveryError || null,
+      providerMessageId: m.smsProviderMessageId || null,
+      fromNumber: m.direction === "OUTBOUND" ? thread.tenantSmsE164 : thread.externalSmsE164,
+      toNumber: m.direction === "OUTBOUND" ? thread.externalSmsE164 : thread.tenantSmsE164,
+      createdAt: m.createdAt.toISOString(),
+      sentAt: m.createdAt.toISOString(),
+    })),
+  );
+});
+
+app.post("/sms/send", async (req, reply) => {
+  const user = getUser(req);
+  const input = z.object({ toNumber: z.string().min(3), body: z.string().min(1).max(1600), tenantId: z.string().optional() }).parse(req.body || {});
+  const tenantId = user.role === "SUPER_ADMIN" && input.tenantId
+    ? await resolveManagedTenant(user, input.tenantId).catch(() => null)
+    : user.tenantId;
+  if (!tenantId) return reply.code(400).send({ error: "tenant_required" });
+
+  const thread = await findOrCreateConnectChatSmsThread({
+    tenantId,
+    userId: user.sub,
+    externalPhone: input.toNumber,
+  });
+  if (!thread.ok) return reply.code(thread.status).send({ error: thread.error, message: thread.message });
+
+  const sent = await sendConnectChatSmsMessage({
+    deps: { smsQueue },
+    user,
+    tenantId,
+    threadId: thread.threadId,
+    body: input.body,
+  });
+  if (!sent.ok) return reply.code(sent.status).send({ error: sent.error, message: sent.message });
+  return { ok: true, threadId: thread.threadId, messageId: sent.messageId, status: sent.deliveryStatus };
 });
 
 app.get("/admin/sms/campaigns", async (req, reply) => {
@@ -30154,13 +30233,13 @@ app.get("/dashboard/communications", async (req, reply) => {
       // Resolve counterparty labels by looking up the thread title fallback.
       const threadRows = await (db as any).connectChatThread.findMany({
         where: { id: { in: previews.map((p) => p.threadId) } },
-        select: { id: true, title: true, kind: true, externalAddress: true },
+        select: { id: true, title: true, type: true, externalSmsE164: true },
       });
       const threadById = new Map<string, any>(threadRows.map((t: any) => [t.id, t]));
       for (const p of messageRecent) {
         const t = threadById.get(p.threadId);
         if (!t) continue;
-        p.counterpartyLabel = t.title || t.externalAddress || (t.kind ? String(t.kind).toLowerCase() : "Conversation");
+        p.counterpartyLabel = t.title || t.externalSmsE164 || (t.type ? String(t.type).toLowerCase() : "Conversation");
       }
 
       // Total unread = sum of inbound messages newer than lastReadAt across all my threads.
