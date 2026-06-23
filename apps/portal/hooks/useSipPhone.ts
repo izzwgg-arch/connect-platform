@@ -40,6 +40,37 @@ export type MicPermission = "unknown" | "granted" | "denied" | "prompt";
 
 export type IceCandidateType = "host" | "srflx" | "relay" | "prflx" | null;
 
+/**
+ * One transport/registration lifecycle event for the rolling connection log.
+ * This is the ground-truth telemetry for diagnosing WebSocket flapping on
+ * flaky / NAT-rotating networks (close code 1006 = abnormal/network drop,
+ * 1001 = endpoint going away/tab hidden, 1000 = normal). Persisted to
+ * localStorage so it survives reloads and can be copied from the diagnostics
+ * panel without server-side capture.
+ */
+export interface ConnectionEvent {
+  /** Epoch ms. */
+  at: number;
+  type:
+    | "connecting"
+    | "connected"
+    | "registered"
+    | "unregistered"
+    | "disconnected"
+    | "reconnect"
+    | "registrationFailed"
+    | "netchange"
+    | "online"
+    | "offline"
+    | "visible";
+  /** WebSocket close code when type === "disconnected". */
+  code?: number;
+  /** WebSocket close reason / cause text. */
+  reason?: string;
+  /** ms since the previous event — handy for spotting the ~30–60s flap cadence. */
+  sincePrevMs?: number;
+}
+
 export interface SipDiagnostics {
   sipWssUrl: string | null;
   sipDomain: string | null;
@@ -88,6 +119,8 @@ export interface SipDiagnostics {
   webrtcEnabled: boolean;
   sipWssConfigured: boolean;
   sipDomainConfigured: boolean;
+  /** Rolling transport/registration event log (most recent last). */
+  connectionEvents: ConnectionEvent[];
 }
 
 export type OutboundDialRoute = {
@@ -472,7 +505,47 @@ const DEFAULT_DIAG: SipDiagnostics = {
   webrtcEnabled: false,
   sipWssConfigured: false,
   sipDomainConfigured: false,
+  connectionEvents: [],
 };
+
+// ── Connection-event telemetry (client-side, localStorage-backed ring buffer) ──
+const CONN_LOG_KEY = "connect.sip.connlog.v1";
+const CONN_LOG_MAX = 50;
+
+/** Read the persisted connection-event ring buffer (safe on SSR / disabled storage). */
+function readConnLog(): ConnectionEvent[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(CONN_LOG_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as ConnectionEvent[]).slice(-CONN_LOG_MAX) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Append one event to the persisted ring buffer and return the new capped list. */
+function appendConnLog(ev: Omit<ConnectionEvent, "sincePrevMs">): ConnectionEvent[] {
+  const prev = readConnLog();
+  const last = prev[prev.length - 1];
+  const full: ConnectionEvent = {
+    ...ev,
+    sincePrevMs: last ? Math.max(0, ev.at - last.at) : undefined,
+  };
+  const next = [...prev, full].slice(-CONN_LOG_MAX);
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(CONN_LOG_KEY, JSON.stringify(next));
+    } catch {
+      /* storage full / disabled — telemetry must never break the phone */
+    }
+  }
+  // Mirror to console for live debugging on the affected machine.
+  const tag = ev.code != null ? `${ev.type} code=${ev.code}${ev.reason ? ` reason=${ev.reason}` : ""}` : ev.type;
+  console.log(`[SipPhone][conn] ${tag} (+${full.sincePrevMs ?? 0}ms)`);
+  return next;
+}
 
 // ── Local JsSIP engine hook ────────────────────────────────────────────────
 
@@ -741,6 +814,13 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         return next;
       });
     }
+  }
+
+  /** Record a transport/registration lifecycle event into the rolling log
+   *  (localStorage ring buffer + diag state for the diagnostics panel). */
+  function logConn(type: ConnectionEvent["type"], code?: number, reason?: string) {
+    const events = appendConnLog({ at: Date.now(), type, code, reason });
+    patchDiag({ connectionEvents: events });
   }
 
   function stopStatsPolling() {
@@ -1168,6 +1248,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
             reconnectAttemptRef.current = Math.min(attempt + 1, 6);
             try {
               setRegState("connecting");
+              logConn("reconnect");
               ua.start();
             } catch (err) {
               console.warn("[SipPhone] reconnect start failed", err);
@@ -1179,6 +1260,9 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
         // RFC 5626 double-CRLF keepalive over the WSS socket. Keeps the NAT/proxy
         // path warm from the client side so an idle softphone never gets reaped —
         // independent of whether Asterisk qualifies the contact server-side.
+        // 15s holds open consumer-router / CGNAT bindings that rotate aggressively
+        // (the failure mode seen on Rob Jacobs' T30_103_1: WiFi behind a
+        // rebinding NAT). Pairs with the server qualify_frequency=30.
         const sendKeepAlive = () => {
           try {
             if (uaRef.current === ua && ua.isConnected?.()) {
@@ -1188,7 +1272,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
             console.warn("[SipPhone] keepalive send failed", err);
           }
         };
-        keepAliveTimerRef.current = setInterval(sendKeepAlive, 25_000);
+        keepAliveTimerRef.current = setInterval(sendKeepAlive, 15_000);
 
         // Proactive liveness watchdog: if the socket is dead, kick a reconnect;
         // if the socket is open but registration lapsed, refresh it.
@@ -1219,18 +1303,28 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
           }
         };
 
-        ua.on("connecting", () => { if (!cancelled) setRegState("connecting"); });
-        ua.on("connected",  () => { if (!cancelled) setRegState("registering"); });
+        ua.on("connecting", () => { if (!cancelled) { setRegState("connecting"); logConn("connecting"); } });
+        ua.on("connected",  () => { if (!cancelled) { setRegState("registering"); logConn("connected"); } });
 
-        ua.on("disconnected", () => {
-          if (!cancelled) {
-            setRegState("failed");
-            const msg = "SIP WebSocket disconnected. Check PBX WSS transport on port 8089.";
-            setError(msg);
-            patchDiag({ lastRegError: msg });
-            queueReconnect();
-          }
-        });
+        // JsSIP emits `disconnected` with the underlying WebSocket close code /
+        // reason. Capturing it is the whole point of the telemetry: 1006 =
+        // abnormal/network drop (NAT rebind, ISP path change), 1001 = going away
+        // (tab hidden / navigated), 1000 = clean. This tells us *why* the socket
+        // dies on the affected machine without guessing.
+        ua.on(
+          "disconnected",
+          (e?: { code?: number; reason?: string; error?: boolean }) => {
+            if (!cancelled) {
+              setRegState("failed");
+              logConn("disconnected", e?.code, e?.reason);
+              const detail = e?.code != null ? ` (code ${e.code}${e.reason ? `: ${e.reason}` : ""})` : "";
+              const msg = `SIP WebSocket disconnected${detail}. Reconnecting…`;
+              setError(msg);
+              patchDiag({ lastRegError: msg });
+              queueReconnect();
+            }
+          },
+        );
 
         ua.on("registered", () => {
           if (!cancelled) {
@@ -1238,6 +1332,7 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
             reconnectAttemptRef.current = 0;
             setRegState("registered");
             setError(null);
+            logConn("registered");
             patchDiag({ lastRegError: null });
             // Probe mic permission immediately after registration so the browser
             // shows the "Allow microphone" prompt while the softphone is visible.
@@ -1263,10 +1358,12 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
           // unregistered after login/reload, trigger a reconnect instead of idling
           // forever (which shows as "Offline" in the mini dialer).
           setRegState("registering");
+          logConn("unregistered");
           queueReconnect();
         });
 
         ua.on("registrationFailed", (e: { cause: string; response?: { status_code?: number } }) => {
+          logConn("registrationFailed", e?.response?.status_code, e?.cause);
           if (!cancelled) {
             regFailCount += 1;
             const code = e.response?.status_code;
@@ -1385,24 +1482,47 @@ function useLocalSipPhone(): SipPhoneState & SipPhoneActions {
 
     init();
 
+    // Surface any persisted connection history (previous sessions / reloads) in
+    // the diagnostics panel immediately.
+    patchDiag({ connectionEvents: readConnLog() });
+
     // Network/visibility-aware recovery: a regained connection or a tab becoming
     // visible again (laptop wake, cellular/5G handoff with a new source IP) kicks
     // the SIP transport back to life immediately instead of waiting for backoff.
-    const handleOnline = () => { forceReconnectRef.current?.(); };
+    const handleOnline = () => { logConn("online"); forceReconnectRef.current?.(); };
+    const handleOffline = () => { logConn("offline"); };
     const handleVisible = () => {
       if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        logConn("visible");
         forceReconnectRef.current?.();
       }
     };
-    if (typeof window !== "undefined") window.addEventListener("online", handleOnline);
+    // Network Information API: fires when the active connection changes (Wi-Fi ⇄
+    // ethernet, interface switch, or a NAT-rotating link reporting a new type).
+    // This catches path changes the OS knows about *before* the WS even errors,
+    // so we re-register proactively on flaky / rebinding networks like Rob's.
+    const conn: { addEventListener?: (t: string, cb: () => void) => void; removeEventListener?: (t: string, cb: () => void) => void } | undefined =
+      typeof navigator !== "undefined"
+        ? (navigator as unknown as { connection?: typeof conn }).connection
+        : undefined;
+    const handleNetChange = () => { logConn("netchange"); forceReconnectRef.current?.(); };
+    if (typeof window !== "undefined") {
+      window.addEventListener("online", handleOnline);
+      window.addEventListener("offline", handleOffline);
+    }
     if (typeof document !== "undefined") document.addEventListener("visibilitychange", handleVisible);
+    conn?.addEventListener?.("change", handleNetChange);
 
     return () => {
       cancelled = true;
       stopStatsPolling();
       stopLocalStream();
-      if (typeof window !== "undefined") window.removeEventListener("online", handleOnline);
+      if (typeof window !== "undefined") {
+        window.removeEventListener("online", handleOnline);
+        window.removeEventListener("offline", handleOffline);
+      }
       if (typeof document !== "undefined") document.removeEventListener("visibilitychange", handleVisible);
+      conn?.removeEventListener?.("change", handleNetChange);
       if (keepAliveTimerRef.current) { clearInterval(keepAliveTimerRef.current); keepAliveTimerRef.current = null; }
       if (watchdogTimerRef.current) { clearInterval(watchdogTimerRef.current); watchdogTimerRef.current = null; }
       if (reconnectTimerRef.current) { clearTimeout(reconnectTimerRef.current); reconnectTimerRef.current = null; }

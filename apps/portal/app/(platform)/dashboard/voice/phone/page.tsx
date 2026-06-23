@@ -765,6 +765,38 @@ export default function VoicePhonePage() {
                 )}
                 {phone.error && <DiagRow label="Error" value={phone.error} tone="danger" />}
                 {phone.diag.lastRegError && <DiagRow label="Reg Error" value={phone.diag.lastRegError} tone="danger" />}
+
+                {phone.diag.connectionEvents.length > 0 && (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: T.textSec, marginBottom: 4 }}>
+                      Connection log (newest first) — share this if the phone keeps dropping
+                    </div>
+                    <div style={{
+                      maxHeight: 160, overflowY: "auto", borderRadius: 8,
+                      border: `1px solid ${T.border}`, fontSize: 11, fontFamily: "monospace",
+                    }}>
+                      {[...phone.diag.connectionEvents].slice(-12).reverse().map((e, i) => {
+                        const t = new Date(e.at);
+                        const hhmmss = t.toLocaleTimeString([], { hour12: false });
+                        const drop = e.type === "disconnected" || e.type === "offline" || e.type === "registrationFailed";
+                        const up = e.type === "registered" || e.type === "connected" || e.type === "online";
+                        const detail = e.code != null ? ` ${e.code}${e.reason ? `/${e.reason}` : ""}` : "";
+                        const gap = e.sincePrevMs != null ? ` (+${Math.round(e.sincePrevMs / 1000)}s)` : "";
+                        return (
+                          <div key={`${e.at}-${i}`} style={{
+                            display: "flex", justifyContent: "space-between", gap: 8,
+                            padding: "3px 8px",
+                            color: drop ? T.red : up ? T.green : T.textSec,
+                            borderTop: i === 0 ? "none" : `1px solid ${T.border}`,
+                          }}>
+                            <span>{hhmmss}{gap}</span>
+                            <span style={{ textAlign: "right" }}>{e.type}{detail}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
