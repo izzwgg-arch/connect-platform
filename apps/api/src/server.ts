@@ -17589,6 +17589,129 @@ async function resolvePbxInstanceForCdr(
   return instances[0] ?? null;
 }
 
+// Pull candidate recording filenames out of a VitalPBX CDR row. The PBX writes
+// the authoritative absolute path to CDR(recfile) at hangup (e.g.
+// "/var/spool/asterisk/monitor/<hash>/YYYY/MM/DD/<HHMMSS>-IN-Q...-<uniqueid>.wav").
+// Different VitalPBX/API versions expose it under slightly different keys, so we
+// probe a small set and keep anything that looks like an audio file path.
+function recfilePathsFromCdrRow(row: any): string[] {
+  const out: string[] = [];
+  for (const key of ["recfile", "recordingfile", "recording_file", "recording", "userfield", "monitor_file"]) {
+    const v = row?.[key];
+    if (typeof v === "string" && v.trim() && /\.(wav|wav49|mp3|ogg|gsm|g722|sln)$/i.test(v.trim())) {
+      out.push(v.trim());
+    }
+  }
+  return out;
+}
+
+/**
+ * Self-healing recording path recovery.
+ *
+ * Inbound calls routed through a queue/IVR record on a different channel leg than
+ * the trunk leg whose linkedId Connect stored at ingest, so the AMI-captured
+ * MIXMONITOR_FILENAME can drift from the file the PBX actually wrote → the stored
+ * recordingPath 404s. Rather than guess the filename, we ask VitalPBX for the
+ * truth: query the CDR for the call window, match rows sharing this linkedId (or
+ * uniqueid), read the authoritative CDR(recfile) absolute path, and try to fetch
+ * it. The first path that streams wins; the caller persists it so future plays
+ * are instant. Mirrors the proven voicemail recfile-refresh pattern. Read-only
+ * against the PBX; only runs on the rare 404 fallback (one user click).
+ */
+async function recoverRecordingFromPbxCdr(args: {
+  linkedId: string;
+  storedPath: string | null;
+  startedAt: Date | null;
+  durationSec: number | null;
+  pbxVitalTenantId: string | null;
+  pbxTenantCode: string | null;
+  pbxInstance: { baseUrl: string; apiAuthEncrypted: string };
+  appKey: string;
+  rangeHeader: string;
+}): Promise<{ correctedPath: string; resp: Response } | null> {
+  if (!args.startedAt) return null;
+  const startMs = new Date(args.startedAt).getTime();
+  if (!Number.isFinite(startMs)) return null;
+
+  const auth = decryptJson<{ token: string; secret?: string | null }>(args.pbxInstance.apiAuthEncrypted);
+  const client = getVitalPbxClient({ baseUrl: args.pbxInstance.baseUrl, token: auth.token, secret: auth.secret ?? undefined, timeoutMs: 15_000 });
+  const scope = args.pbxVitalTenantId || args.pbxTenantCode || undefined;
+
+  // Window: a little before the call start through start + duration + a margin
+  // (recfile is finalized at hangup). Bounded so even very long calls are covered.
+  const startSec = Math.floor(startMs / 1000) - 600;
+  const durMs = Math.max(0, Number(args.durationSec || 0)) * 1000;
+  const endSec = Math.floor((startMs + durMs) / 1000) + 900;
+
+  let rows: any[] = [];
+  try {
+    const pack = await client.getCdrRowsForWindow(scope, startSec, endSec, { maxPages: 6, pageLimit: 800 });
+    rows = Array.isArray(pack.allRawRows) && pack.allRawRows.length > 0 ? pack.allRawRows : pack.rows;
+  } catch (err: any) {
+    app.log.warn({ linkedId: args.linkedId, err: err?.message }, "recording: pbx cdr lookup failed during recovery");
+    return null;
+  }
+
+  const lid = String(args.linkedId);
+  // SECURITY: only ever consider rows that belong to THIS call (same linkedId or
+  // uniqueid). Never fall back to other rows in the window — serving a different
+  // call's audio would be a privacy breach. Better to 404 than to guess.
+  const matches = rows.filter((r) => {
+    const rl = String(r?.linkedid ?? r?.linkedId ?? "");
+    const ru = String(r?.uniqueid ?? r?.uniqueId ?? "");
+    return rl === lid || ru === lid;
+  });
+  if (matches.length === 0) return null;
+
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  for (const r of matches) {
+    for (const p of recfilePathsFromCdrRow(r)) {
+      if (p !== args.storedPath && !seen.has(p)) { seen.add(p); candidates.push(p); }
+    }
+  }
+  if (candidates.length === 0) return null;
+
+  for (const path of candidates) {
+    const url = buildRecordingUrl(args.pbxInstance.baseUrl, path);
+    const headers: Record<string, string> = { "app-key": args.appKey, Accept: "audio/*, */*" };
+    if (args.rangeHeader) headers.Range = args.rangeHeader;
+    try {
+      const resp = await fetch(url, { headers, signal: AbortSignal.timeout(20_000) });
+      if (resp.ok) {
+        app.log.info({ linkedId: args.linkedId, correctedPath: path }, "recording: recovered via pbx cdr recfile");
+        return { correctedPath: path, resp };
+      }
+    } catch { /* try next candidate */ }
+  }
+  return null;
+}
+
+/** Pipe a (200/206) PBX audio response through to the client reply. */
+function pipePbxRecordingResponse(
+  pbxResp: Response,
+  reply: any,
+  asAttachment: boolean,
+  rec: { pbxFilePath: string | null; linkedId: string },
+  buf: Buffer,
+): void {
+  const contentType = pbxResp.headers.get("content-type") || "audio/wav";
+  const contentLength = pbxResp.headers.get("content-length");
+  const contentRange  = pbxResp.headers.get("content-range");
+
+  reply.header("Content-Type", contentType);
+  reply.header("Accept-Ranges", "bytes");
+  reply.header("Cache-Control", "private, max-age=3600");
+  if (contentLength) reply.header("Content-Length", contentLength);
+  if (contentRange)  reply.header("Content-Range", contentRange);
+  if (asAttachment) {
+    const ext = contentType.includes("mpeg") ? "mp3" : contentType.includes("ogg") ? "ogg" : "wav";
+    const safeName = (rec.pbxFilePath || rec.linkedId).split("/").pop()!.replace(/[^\w.-]/g, "_");
+    reply.header("Content-Disposition", `attachment; filename="${safeName || `recording-${rec.linkedId}.${ext}`}"`);
+  }
+  reply.status(pbxResp.status === 206 ? 206 : 200).send(buf);
+}
+
 /**
  * Stream a call recording from PBX to the client.
  * Enforces permissions before proxying the audio.  Makes exactly ONE outbound
@@ -17596,7 +17719,7 @@ async function resolvePbxInstanceForCdr(
  * <audio> element can seek without re-fetching the whole file).
  */
 async function streamCallRecording(
-  rec: { id: string; linkedId: string; tenantId: string | null; extension: string | null; pbxFilePath: string | null; pbxFileDate: string | null; status: string },
+  rec: { id: string; linkedId: string; tenantId: string | null; extension: string | null; pbxFilePath: string | null; pbxFileDate: string | null; status: string; startedAt?: Date | null; durationSec?: number | null; pbxVitalTenantId?: string | null; pbxTenantCode?: string | null },
   user: { role?: string | null; tenantId?: string | null; extension?: string | null; id?: string },
   reply: any,
   asAttachment: boolean,
@@ -17608,8 +17731,20 @@ async function streamCallRecording(
 
   const isSuperAdmin = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
   if (!isSuperAdmin) {
-    if (rec.tenantId && user.tenantId !== rec.tenantId) {
-      reply.code(403).send({ error: "forbidden" }); return;
+    // CDR rows store tenantId as EITHER the Connect cuid OR "vpbx:{slug}"
+    // (e.g. "vpbx:ribit_capital"). The user's JWT carries the Connect cuid, so a
+    // naive `user.tenantId !== rec.tenantId` rejected every PBX-tenant recording
+    // for ordinary users — a 403 BEFORE permissions/owner were ever checked
+    // (confirmed against ribit ext 102). Resolve the full set of tenant-id forms
+    // that belong to this user's tenant (same helper /calls/history uses) and
+    // check membership instead.
+    if (rec.tenantId) {
+      const allowedTenantIds = user.tenantId
+        ? ((await resolveTenantIdFilterSet(user.tenantId).catch(() => null)) ?? [user.tenantId])
+        : [];
+      if (!allowedTenantIds.includes(rec.tenantId)) {
+        reply.code(403).send({ error: "forbidden" }); return;
+      }
     }
     let allowTenantWide = false;
     try {
@@ -17648,11 +17783,23 @@ async function streamCallRecording(
     } catch { isOwner = false; }
     let hasViewKey = false;
     try {
-      hasViewKey = await hasEffectivePortalPermission({
+      const permUser = {
         role: user.role,
         sub: (user as any)?.sub || String((user as any)?.id || ""),
         tenantId: user.tenantId,
-      } as any, "can_view_recordings" as any);
+      } as any;
+      // Accept EITHER the action key (can_view_recordings) OR the recordings
+      // page/nav key (can_view_pbx_call_recordings). Custom roles resolve
+      // permissions literally with no legacy expansion, so a role that exposes
+      // the recordings page but wasn't also given the action key would otherwise
+      // see the UI yet get 403 on play. Treating both as "this role may listen"
+      // closes that trap permanently — granting recordings access in any form
+      // means you can actually hear them.
+      const [viaAction, viaNav] = await Promise.all([
+        hasEffectivePortalPermission(permUser, "can_view_recordings" as any).catch(() => false),
+        hasEffectivePortalPermission(permUser, "can_view_pbx_call_recordings" as any).catch(() => false),
+      ]);
+      hasViewKey = Boolean(viaAction || viaNav);
     } catch { hasViewKey = false; }
     if (!decideActionGate({ isOwner, hasKey: hasViewKey })) {
       reply.code(403).send({ error: "forbidden" }); return;
@@ -17700,6 +17847,36 @@ async function streamCallRecording(
   });
 
   if (!pbxResp.ok) {
+    // The stored path 404'd — the PBX recorded the call under a different leg
+    // (common for inbound queue/IVR calls). Self-heal: ask VitalPBX's CDR for the
+    // authoritative recfile, stream it, and persist the corrected path so this
+    // call never has to recover again. Only on 404; other errors are transient.
+    if (pbxResp.status === 404) {
+      const recovered = await recoverRecordingFromPbxCdr({
+        linkedId: rec.linkedId,
+        storedPath: rec.pbxFilePath,
+        startedAt: rec.startedAt ?? null,
+        durationSec: rec.durationSec ?? null,
+        pbxVitalTenantId: rec.pbxVitalTenantId ?? null,
+        pbxTenantCode: rec.pbxTenantCode ?? null,
+        pbxInstance,
+        appKey: auth.token,
+        rangeHeader,
+      }).catch((err: any) => {
+        app.log.warn({ linkedId: rec.linkedId, err: err?.message }, "recording: recovery threw");
+        return null;
+      });
+
+      if (recovered) {
+        await (db as any).connectCdr
+          .update({ where: { linkedId: rec.linkedId }, data: { recordingPath: recovered.correctedPath } })
+          .catch(() => undefined);
+        app.log.info({ linkedId: rec.linkedId, user: (user as any).id, asAttachment, recovered: true }, "recording: access logged");
+        pipePbxRecordingResponse(recovered.resp, reply, asAttachment, rec, Buffer.from(await recovered.resp.arrayBuffer()));
+        return;
+      }
+    }
+
     app.log.warn({ linkedId: rec.linkedId, audioUrl, status: pbxResp.status }, "recording: fetch failed");
     reply.code(pbxResp.status === 404 ? 404 : 503).send({
       error: pbxResp.status === 404 ? "recording_file_missing" : "audio_fetch_failed",
@@ -17708,23 +17885,8 @@ async function streamCallRecording(
     return;
   }
 
-  const contentType = pbxResp.headers.get("content-type") || "audio/wav";
-  const contentLength = pbxResp.headers.get("content-length");
-  const contentRange  = pbxResp.headers.get("content-range");
-
-  reply.header("Content-Type", contentType);
-  reply.header("Accept-Ranges", "bytes");
-  reply.header("Cache-Control", "private, max-age=3600");
-  if (contentLength) reply.header("Content-Length", contentLength);
-  if (contentRange)  reply.header("Content-Range", contentRange);
-  if (asAttachment) {
-    const ext = contentType.includes("mpeg") ? "mp3" : contentType.includes("ogg") ? "ogg" : "wav";
-    const safeName = (rec.pbxFilePath || rec.linkedId).split("/").pop()!.replace(/[^\w.-]/g, "_");
-    reply.header("Content-Disposition", `attachment; filename="${safeName || `recording-${rec.linkedId}.${ext}`}"`);
-  }
-
   app.log.info({ linkedId: rec.linkedId, user: (user as any).id, asAttachment }, "recording: access logged");
-  reply.status(pbxResp.status === 206 ? 206 : 200).send(Buffer.from(await pbxResp.arrayBuffer()));
+  pipePbxRecordingResponse(pbxResp, reply, asAttachment, rec, Buffer.from(await pbxResp.arrayBuffer()));
 }
 
 // Helper: resolve a ConnectCdr row into a recording descriptor, enforcing permissions.
@@ -17742,6 +17904,10 @@ async function resolveRecordingForUser(
   pbxFileDate: string | null;
   status: string;
   id: string;
+  startedAt: Date | null;
+  durationSec: number | null;
+  pbxVitalTenantId: string | null;
+  pbxTenantCode: string | null;
 } | null> {
   const cdr = await (db as any).connectCdr.findUnique({
     where: { linkedId },
@@ -17753,6 +17919,10 @@ async function resolveRecordingForUser(
       fromNumber: true,
       toNumber: true,
       direction: true,
+      startedAt: true,
+      durationSec: true,
+      pbxVitalTenantId: true,
+      pbxTenantCode: true,
     },
   });
   if (!cdr) { reply.code(404).send({ error: "not_found" }); return null; }
@@ -17772,6 +17942,10 @@ async function resolveRecordingForUser(
     pbxFilePath: cdr.recordingPath,
     pbxFileDate: null,
     status: "ready",
+    startedAt: cdr.startedAt ?? null,
+    durationSec: cdr.durationSec ?? null,
+    pbxVitalTenantId: cdr.pbxVitalTenantId ?? null,
+    pbxTenantCode: cdr.pbxTenantCode ?? null,
   };
 }
 
