@@ -1386,7 +1386,7 @@ export default function CampaignDetailPage() {
           )}
 
           {/* Import CSV modal */}
-          {isAdmin && importOpen && (
+          {canImport && importOpen && (
             <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
               <div className="bg-crm-surface rounded-crm-lg shadow-2xl w-full max-w-4xl p-6 max-h-[90vh] overflow-y-auto">
                 <div className="flex items-center justify-between mb-4">
