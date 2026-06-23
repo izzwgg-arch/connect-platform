@@ -215,7 +215,7 @@ export async function listDriveFolderFiles(
   const params = new URLSearchParams({
     q,
     fields: `nextPageToken,files(${DRIVE_FILE_FIELDS})`,
-    pageSize: String(Math.min(opts.maxResults ?? 20, 50)),
+    pageSize: String(Math.min(opts.maxResults ?? 50, 1000)),
     orderBy: "modifiedTime desc",
   });
   if (opts.pageToken) params.set("pageToken", opts.pageToken);

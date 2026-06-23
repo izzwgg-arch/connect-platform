@@ -151,12 +151,22 @@ export async function runDriveMatchForBatch(
     typeof listDriveFolderFiles
   >[0];
 
-  // 4. List files from Drive folder (up to 200)
-  const { files } = await listDriveFolderFiles(
-    connection,
-    folderConfig.folderId,
-    { maxResults: 200 },
-  );
+  // 4. Paginate through ALL files in the Drive folder (up to 2000).
+  //    The old code fetched only one page (≤50 files), causing companies whose
+  //    files happened to fall on page 2+ to always appear as unmatched.
+  const files: Awaited<ReturnType<typeof listDriveFolderFiles>>["files"] = [];
+  let pageToken: string | undefined;
+  const PAGE_SIZE = 1000;
+  const MAX_FILES = 2000;
+  do {
+    const page = await listDriveFolderFiles(
+      connection,
+      folderConfig.folderId,
+      { maxResults: PAGE_SIZE, pageToken },
+    );
+    files.push(...page.files);
+    pageToken = page.nextPageToken ?? undefined;
+  } while (pageToken && files.length < MAX_FILES);
 
   // 5. Load import rows that have a normalised company name
   const importRows = await db.crmImportBatchRow.findMany({
