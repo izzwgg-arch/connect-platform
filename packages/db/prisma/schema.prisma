@@ -4063,6 +4063,9 @@ model CrmContactMeta {
   assignedToUserId  String?
   doNotCall         Boolean         @default(false)
   doNotSms          Boolean         @default(false)
+  externalId        String?
+  ssn               String?
+  monthlyRevenue    String?
   lastActivityAt    DateTime?
   lastDisposition   String?
   lastDispositionAt DateTime?

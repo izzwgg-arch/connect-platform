@@ -3836,6 +3836,25 @@ function CrmContactDetailInner() {
                 })}
               </>
             )}
+
+            {/* Lead details — imported overlay fields (ID, SSN, monthly revenue) */}
+            {(contact.externalId || contact.ssn || contact.monthlyRevenue) && (
+              <>
+                <div className="crm-contact-right-rail-divider" style={{ borderTop: "1px solid var(--border)", margin: "0.25rem 0" }} />
+                {([
+                  { label: "ID", value: contact.externalId },
+                  { label: "SSN", value: contact.ssn },
+                  { label: "Monthly revenue", value: contact.monthlyRevenue },
+                ] as { label: string; value?: string | null }[])
+                  .filter((row) => row.value)
+                  .map((row) => (
+                    <div key={row.label} className="crm-contact-right-rail-contact-row" style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "0.5rem" }}>
+                      <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.02em" }}>{row.label}</span>
+                      <span style={{ fontSize: "0.875rem", textAlign: "right", wordBreak: "break-word" }}>{row.value}</span>
+                    </div>
+                  ))}
+              </>
+            )}
           </div>
           </ContactCollapsibleSection>
               ),

@@ -90,6 +90,9 @@ export type CrmImportField =
   | "city"
   | "state"
   | "zip"
+  | "externalId"
+  | "ssn"
+  | "monthlyRevenue"
   | "notes"
   | "tags";
 
@@ -107,6 +110,9 @@ export const CRM_IMPORT_FIELD_VALUES: readonly CrmImportField[] = [
   "city",
   "state",
   "zip",
+  "externalId",
+  "ssn",
+  "monthlyRevenue",
   "notes",
   "tags",
 ];
@@ -199,6 +205,33 @@ const COLUMN_ALIASES: Record<string, CrmImportField> = {
   "zip code": "zip",
   "postal code": "zip",
   postcode: "zip",
+  // External / business identifier
+  id: "externalId",
+  "id #": "externalId",
+  "id number": "externalId",
+  "external id": "externalId",
+  "lead id": "externalId",
+  "merchant id": "externalId",
+  "account id": "externalId",
+  "customer id": "externalId",
+  "record id": "externalId",
+  // Social security number
+  ssn: "ssn",
+  "ssn #": "ssn",
+  "social security": "ssn",
+  "social security number": "ssn",
+  "social security #": "ssn",
+  "social #": "ssn",
+  tin: "ssn",
+  // Monthly revenue
+  "monthly revenue": "monthlyRevenue",
+  "monthly rev": "monthlyRevenue",
+  "monthly income": "monthlyRevenue",
+  "monthly sales": "monthlyRevenue",
+  "avg monthly revenue": "monthlyRevenue",
+  "average monthly revenue": "monthlyRevenue",
+  "gross monthly revenue": "monthlyRevenue",
+  revenue: "monthlyRevenue",
   notes: "notes",
   note: "notes",
   description: "notes",
@@ -658,6 +691,15 @@ export async function processImportRow(
   const addrZip = data.zip?.trim() ?? "";
   const hasAddress = addrStreet || addrCity || addrState || addrZip;
 
+  // Lead overlay fields stored on CrmContactMeta
+  const externalId = data.externalId?.trim() ?? "";
+  const ssn = data.ssn?.trim() ?? "";
+  const monthlyRevenue = data.monthlyRevenue?.trim() ?? "";
+  const leadMetaCreate: Record<string, unknown> = {};
+  if (externalId) leadMetaCreate.externalId = externalId;
+  if (ssn) leadMetaCreate.ssn = ssn;
+  if (monthlyRevenue) leadMetaCreate.monthlyRevenue = monthlyRevenue;
+
   const existingContactId = await findLiveContactIdByPhonesOrEmails(
     tenantId,
     phonePairs.map((p) => p.norm),
@@ -667,7 +709,14 @@ export async function processImportRow(
   if (existingContactId) {
     const existing = await db.contact.findUnique({
       where: { id: existingContactId },
-      select: { firstName: true, lastName: true, company: true, title: true, notes: true },
+      select: {
+        firstName: true,
+        lastName: true,
+        company: true,
+        title: true,
+        notes: true,
+        crmMeta: { select: { externalId: true, ssn: true, monthlyRevenue: true } },
+      },
     });
     if (!existing) {
       return { action: "skipped", reason: "contact_missing", contactId: null };
@@ -687,10 +736,15 @@ export async function processImportRow(
       });
     }
 
+    const leadMetaPatch: Record<string, unknown> = {};
+    if (!existing.crmMeta?.externalId && externalId) leadMetaPatch.externalId = externalId;
+    if (!existing.crmMeta?.ssn && ssn) leadMetaPatch.ssn = ssn;
+    if (!existing.crmMeta?.monthlyRevenue && monthlyRevenue) leadMetaPatch.monthlyRevenue = monthlyRevenue;
+
     await db.crmContactMeta.upsert({
       where: { contactId: existingContactId },
-      create: { contactId: existingContactId, tenantId, stage: "LEAD" },
-      update: {},
+      create: { contactId: existingContactId, tenantId, stage: "LEAD", ...leadMetaCreate },
+      update: leadMetaPatch,
     });
 
     if (phoneNorm && phoneRaw) {
@@ -834,7 +888,7 @@ export async function processImportRow(
           }
         : undefined,
       crmMeta: {
-        create: { tenantId, stage: "LEAD" },
+        create: { tenantId, stage: "LEAD", ...leadMetaCreate },
       },
     },
     select: { id: true },

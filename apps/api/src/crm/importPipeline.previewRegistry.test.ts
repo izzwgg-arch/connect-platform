@@ -228,6 +228,34 @@ test("buildImportRowData collects repeated phones and emails in column order", (
   assert.deepEqual(row.emails, ["owner@example.com", "ops@example.com"]);
 });
 
+test("autoMapHeaders maps ID / SSN / monthly revenue columns", () => {
+  const m = autoMapHeaders(["ID", "SSN", "Monthly Revenue"]);
+  assert.equal(m[0], "externalId");
+  assert.equal(m[1], "ssn");
+  assert.equal(m[2], "monthlyRevenue");
+});
+
+test("parseImportFieldMapping accepts externalId, ssn, monthlyRevenue", () => {
+  const m = parseImportFieldMapping(JSON.stringify({
+    0: "externalId",
+    1: "ssn",
+    2: "monthlyRevenue",
+    3: "phone",
+  }), 4);
+  assert.deepEqual(m, { 0: "externalId", 1: "ssn", 2: "monthlyRevenue", 3: "phone" });
+});
+
+test("buildImportRowData passes through lead overlay fields", () => {
+  const row = buildImportRowData(
+    ["L-1001", "123-45-6789", "$42,000", "908-111-1111"],
+    { 0: "externalId", 1: "ssn", 2: "monthlyRevenue", 3: "phone" },
+  );
+  assert.equal(row.externalId, "L-1001");
+  assert.equal(row.ssn, "123-45-6789");
+  assert.equal(row.monthlyRevenue, "$42,000");
+  assert.equal(row.phone, "908-111-1111");
+});
+
 // ── CampaignImportPreviewRegistry — campaign member dedup ───────────────────
 
 test("registry dedupes same contact id in enrolled set (mirrors campaign member dedup)", () => {

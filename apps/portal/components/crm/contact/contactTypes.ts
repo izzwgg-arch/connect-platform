@@ -44,6 +44,9 @@ export type CrmContactDetail = {
   assignedTo?: AssignedUser | null;
   doNotCall: boolean;
   doNotSms: boolean;
+  externalId?: string | null;
+  ssn?: string | null;
+  monthlyRevenue?: string | null;
   lastActivityAt?: string | null;
   lastDisposition?: string | null;
   lastDispositionAt?: string | null;
