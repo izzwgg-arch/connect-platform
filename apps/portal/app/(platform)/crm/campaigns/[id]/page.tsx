@@ -1044,11 +1044,11 @@ export default function CampaignDetailPage() {
       return;
     }
     const ctx = importPreviewContextKey(importFile, importAssigneeId, importMappingFingerprint);
-    if (!importPreview || !ctx || importPreviewContextKeyState !== ctx) {
+    if (!isAdmin && (!importPreview || !ctx || importPreviewContextKeyState !== ctx)) {
       setImportErr("Run “Preview import” first. If you changed the file or assignee, preview again.");
       return;
     }
-    const baseline = previewExpectationFromResponse(importPreview);
+    const baseline = importPreview ? previewExpectationFromResponse(importPreview) : null;
     setImporting(true);
     setImportErr("");
     setImportSummary(null);
@@ -1741,9 +1741,9 @@ export default function CampaignDetailPage() {
                     <button
                       type="button"
                       onClick={() => void handleCampaignImport()}
-                      disabled={importing || importPreviewing || !importReady}
+                      disabled={importing || importPreviewing || (!isAdmin && !importReady)}
                       className="px-4 py-2 text-sm bg-crm-accent text-white rounded-lg hover:brightness-110 disabled:opacity-50 flex items-center gap-1.5"
-                      title={!importReady ? "Preview import first for this file, mapping, and assignee" : undefined}
+                      title={!isAdmin && !importReady ? "Preview import first for this file, mapping, and assignee" : undefined}
                     >
                       <Upload className="h-3.5 w-3.5" />
                       {importing ? "Importing…" : "Run import"}
