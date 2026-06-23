@@ -61,7 +61,7 @@ function browserToken(): string {
   );
 }
 
-function browserTenantContext(): string {
+export function browserTenantContext(): string {
   if (typeof window === "undefined") return "";
   const scope = localStorage.getItem("cc-admin-scope") || "TENANT";
   if (scope === "GLOBAL") return "";

@@ -30,7 +30,7 @@ import { ConnectSelect } from "../../../../../components/ConnectSelect";
 import { mk } from "../../../../../components/crm/campaign/campaignCinemaClasses";
 import { cn } from "../../../../../components/crm/cn";
 import { BulkEmailModal } from "../../../../../components/crm/email/BulkEmailModal";
-import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../../services/apiClient";
+import { apiGet, apiPost, apiPatch, apiDelete, browserTenantContext } from "../../../../../services/apiClient";
 import { CrmConfirmModal } from "../../../../../components/crm/CrmConfirmModal";
 import { EditCampaignModal } from "../../../../../components/crm/campaign/EditCampaignModal";
 import { useAppContext } from "../../../../../hooks/useAppContext";
@@ -1056,9 +1056,13 @@ export default function CampaignDetailPage() {
       if (importAssigneeId) fd.append("assignedToUserId", importAssigneeId);
       const t = typeof window !== "undefined" ? localStorage.getItem("token") : null;
       const base = typeof window !== "undefined" ? window.location.origin : "";
+      const tenantCtx = browserTenantContext();
       const res = await fetch(`${base}/api/crm/campaigns/${campaignId}/import`, {
         method: "POST",
-        headers: t ? { Authorization: `Bearer ${t}` } : {},
+        headers: {
+          ...(t ? { Authorization: `Bearer ${t}` } : {}),
+          ...(tenantCtx ? { "x-tenant-context": tenantCtx } : {}),
+        },
         body: fd,
       });
       const data = await res.json().catch(() => ({}));
@@ -1098,9 +1102,13 @@ export default function CampaignDetailPage() {
       if (importAssigneeId) fd.append("assignedToUserId", importAssigneeId);
       const t = typeof window !== "undefined" ? localStorage.getItem("token") : null;
       const base = typeof window !== "undefined" ? window.location.origin : "";
+      const tenantCtx = browserTenantContext();
       const res = await fetch(`${base}/api/crm/campaigns/${campaignId}/import/preview`, {
         method: "POST",
-        headers: t ? { Authorization: `Bearer ${t}` } : {},
+        headers: {
+          ...(t ? { Authorization: `Bearer ${t}` } : {}),
+          ...(tenantCtx ? { "x-tenant-context": tenantCtx } : {}),
+        },
         body: fd,
       });
       const data = await res.json().catch(() => ({}));
@@ -1169,8 +1177,14 @@ export default function CampaignDetailPage() {
     const t = typeof window !== "undefined" ? localStorage.getItem("token") : null;
     const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
     const url = `${baseUrl}/api/crm/campaigns/${campaignId}/export.csv`;
+    const tenantCtx = browserTenantContext();
     try {
-      const resp = await fetch(url, { headers: { Authorization: `Bearer ${t}` } });
+      const resp = await fetch(url, {
+        headers: {
+          ...(t ? { Authorization: `Bearer ${t}` } : {}),
+          ...(tenantCtx ? { "x-tenant-context": tenantCtx } : {}),
+        },
+      });
       if (!resp.ok) throw new Error("Export failed");
       const blob = await resp.blob();
       const a = document.createElement("a");
