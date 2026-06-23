@@ -1075,10 +1075,24 @@ export default function CampaignDetailPage() {
           typeof data.detail === "string" ? data.detail : data.error || `Import failed (${res.status})`,
         );
       }
-      setImportSummary(data as CampaignImportSummary);
+      const summary = data as CampaignImportSummary;
+      setImportSummary(summary);
       setImportCompareBaseline(baseline);
       await Promise.all([loadCampaign(), loadMembers(), loadWorkload(), loadCampaignImports()]);
       resetImportFileState();
+      // Auto-run Drive match in the background. Silently ignore no_drive_folder
+      // (tenant hasn't configured a Drive inbox yet) — don't block the import UX.
+      if (summary.batchId) {
+        fetch(`${base}/api/crm/drive/match/run`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(t ? { Authorization: `Bearer ${t}` } : {}),
+            ...(tenantCtx ? { "x-tenant-context": tenantCtx } : {}),
+          },
+          body: JSON.stringify({ batchId: summary.batchId }),
+        }).catch(() => { /* silently ignore — Drive may not be configured */ });
+      }
     } catch (e: unknown) {
       setImportErr((e as Error)?.message ?? "Import failed");
     }
