@@ -6,7 +6,9 @@ import {
   displayFileNameFromCrmImportBatchStoredName,
   parseCrmImportBatchCampaignId,
   autoMapHeaders,
+  buildImportRowData,
   parseCsv,
+  parseImportFieldMapping,
   mappingHasPhoneOrEmail,
 } from "./importPipeline";
 
@@ -173,6 +175,57 @@ test("mappingHasPhoneOrEmail returns false for empty mapping", () => {
 test("mappingHasPhoneOrEmail returns true with both phone and email present", () => {
   const m = autoMapHeaders(["phone", "email", "city"]);
   assert.equal(mappingHasPhoneOrEmail(m), true);
+});
+
+test("parseImportFieldMapping allows repeated phone and email fields", () => {
+  const m = parseImportFieldMapping(JSON.stringify({
+    0: "company",
+    1: "phone",
+    2: "phone",
+    3: "email",
+    4: "email",
+  }), 5);
+
+  assert.deepEqual(m, {
+    0: "company",
+    1: "phone",
+    2: "phone",
+    3: "email",
+    4: "email",
+  });
+  assert.equal(mappingHasPhoneOrEmail(m!), true);
+});
+
+test("parseImportFieldMapping keeps only first non-repeatable field", () => {
+  const m = parseImportFieldMapping(JSON.stringify({
+    0: "company",
+    1: "company",
+    2: "displayName",
+  }), 3);
+
+  assert.deepEqual(m, {
+    0: "company",
+    2: "displayName",
+  });
+});
+
+test("buildImportRowData collects repeated phones and emails in column order", () => {
+  const row = buildImportRowData(
+    ["Acme", "908-111-1111", "908-222-2222", "owner@example.com", "ops@example.com"],
+    {
+      0: "company",
+      1: "phone",
+      2: "phone",
+      3: "email",
+      4: "email",
+    },
+  );
+
+  assert.equal(row.company, "Acme");
+  assert.equal(row.phone, "908-111-1111");
+  assert.equal(row.email, "owner@example.com");
+  assert.deepEqual(row.phones, ["908-111-1111", "908-222-2222"]);
+  assert.deepEqual(row.emails, ["owner@example.com", "ops@example.com"]);
 });
 
 // ── CampaignImportPreviewRegistry — campaign member dedup ───────────────────

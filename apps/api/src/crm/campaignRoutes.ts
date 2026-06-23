@@ -22,16 +22,17 @@ import { buildLeadTimezoneMetaFilter } from "./leadTimezoneResolver";
 import {
   CRM_IMPORT_MAX_FILE_BYTES,
   CRM_IMPORT_MAX_ROWS,
+  buildImportRowData,
   parseCsv,
   autoMapHeaders,
   mappingHasPhoneOrEmail,
+  parseImportFieldMapping,
   processImportRow,
   readCrmImportMultipart,
   runCampaignImportPreview,
   crmCampaignImportBatchFilePrefix,
   displayFileNameFromCrmImportBatchStoredName,
   type CrmImportField,
-  type RowData,
 } from "./importPipeline";
 import { normalizeForMatch } from "./driveMatchService";
 
@@ -482,6 +483,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "invalid_file_type", detail: "Only CSV files are supported." });
     }
 
+    const sourceFileName = ((fields.sourceFileName ?? fileName).trim().replace(/[\\/]/g, "_").slice(0, 160)) || fileName;
     const assignRaw = (fields.assignedToUserId ?? "").trim();
     let assigneeUserId: string | null = assignRaw || null;
     if (assigneeUserId) {
@@ -511,11 +513,16 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "csv_no_data_rows" });
     }
 
-    const colMapping = autoMapHeaders(headers);
+    let colMapping: Record<number, CrmImportField>;
+    try {
+      colMapping = parseImportFieldMapping(fields.mapping, headers.length) ?? autoMapHeaders(headers);
+    } catch (err: any) {
+      return reply.status(400).send({ error: "invalid_mapping", detail: err?.message ?? "Column mapping is invalid." });
+    }
     if (!mappingHasPhoneOrEmail(colMapping)) {
       return reply.status(400).send({
         error: "no_usable_columns",
-        detail: "CSV must have at least a 'phone' or 'email' column. Check column headers.",
+        detail: "Map at least one column to phone or email before importing.",
         detectedHeaders: headers,
         expectedHeaders: ["first name", "last name", "company", "phone", "email", "notes", "tags"],
       });
@@ -525,7 +532,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     return reply.send({
       ...preview,
       campaignId,
-      fileName,
+      fileName: sourceFileName,
       detectedHeaders: headers,
       mapping: colMapping,
       assignedToUserId: assigneeUserId,
@@ -571,6 +578,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "invalid_file_type", detail: "Only CSV files are supported." });
     }
 
+    const sourceFileName = ((fields.sourceFileName ?? fileName).trim().replace(/[\\/]/g, "_").slice(0, 160)) || fileName;
     const assignRaw = (fields.assignedToUserId ?? "").trim();
     let assigneeUserId: string | null = assignRaw || null;
     if (assigneeUserId) {
@@ -600,11 +608,16 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "csv_no_data_rows" });
     }
 
-    const colMapping = autoMapHeaders(headers);
+    let colMapping: Record<number, CrmImportField>;
+    try {
+      colMapping = parseImportFieldMapping(fields.mapping, headers.length) ?? autoMapHeaders(headers);
+    } catch (err: any) {
+      return reply.status(400).send({ error: "invalid_mapping", detail: err?.message ?? "Column mapping is invalid." });
+    }
     if (!mappingHasPhoneOrEmail(colMapping)) {
       return reply.status(400).send({
         error: "no_usable_columns",
-        detail: "CSV must have at least a 'phone' or 'email' column. Check column headers.",
+        detail: "Map at least one column to phone or email before importing.",
         detectedHeaders: headers,
         expectedHeaders: ["first name", "last name", "company", "phone", "email", "notes", "tags"],
       });
@@ -613,7 +626,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     const batch = await db.crmImportBatch.create({
       data: {
         tenantId,
-        fileName: `${crmCampaignImportBatchFilePrefix(campaignId)}${fileName}`,
+        fileName: `${crmCampaignImportBatchFilePrefix(campaignId)}${sourceFileName}`,
         status: "PROCESSING",
         totalRows: dataRows.length,
         mapping: colMapping as any,
@@ -633,11 +646,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
 
     for (let i = 0; i < dataRows.length; i++) {
       const rawRow = dataRows[i];
-      const rowData: RowData = {};
-      for (const [colIdx, fieldKey] of Object.entries(colMapping) as [string, CrmImportField][]) {
-        const val = rawRow[parseInt(colIdx, 10)]?.trim() ?? "";
-        if (val) rowData[fieldKey] = val;
-      }
+      const rowData = buildImportRowData(rawRow, colMapping);
 
       try {
         const result = await processImportRow(tenantId, userId, rowData);
@@ -745,7 +754,7 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     return {
       batchId: completed.id,
       campaignId,
-      fileName,
+      fileName: sourceFileName,
       status: completed.status,
       totalRows: completed.totalRows,
       createdContacts: createdCount,

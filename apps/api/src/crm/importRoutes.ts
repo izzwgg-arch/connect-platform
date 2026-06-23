@@ -5,6 +5,7 @@ import { assertCrmCampaignAllowed } from "./userCampaignAccess";
 import {
   CRM_IMPORT_MAX_FILE_BYTES,
   CRM_IMPORT_MAX_ROWS,
+  buildImportRowData,
   parseCsv,
   autoMapHeaders,
   mappingHasPhoneOrEmail,
@@ -12,8 +13,6 @@ import {
   readCrmImportMultipart,
   displayFileNameFromCrmImportBatchStoredName,
   parseCrmImportBatchCampaignId,
-  type CrmImportField,
-  type RowData,
 } from "./importPipeline";
 import { normalizeForMatch } from "./driveMatchService";
 
@@ -135,11 +134,7 @@ export async function registerCrmImportRoutes(app: FastifyInstance) {
 
     for (let i = 0; i < dataRows.length; i++) {
       const rawRow = dataRows[i];
-      const rowData: RowData = {};
-      for (const [colIdx, fieldKey] of Object.entries(colMapping) as [string, CrmImportField][]) {
-        const val = rawRow[parseInt(colIdx, 10)]?.trim() ?? "";
-        if (val) rowData[fieldKey] = val;
-      }
+      const rowData = buildImportRowData(rawRow, colMapping);
 
       try {
         const result = await processImportRow(tenantId, userId, rowData);

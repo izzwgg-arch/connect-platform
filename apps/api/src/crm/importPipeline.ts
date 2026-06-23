@@ -93,6 +93,32 @@ export type CrmImportField =
   | "notes"
   | "tags";
 
+export const CRM_IMPORT_FIELD_VALUES: readonly CrmImportField[] = [
+  "firstName",
+  "lastName",
+  "displayName",
+  "company",
+  "title",
+  "phone",
+  "phone2",
+  "phone3",
+  "email",
+  "address",
+  "city",
+  "state",
+  "zip",
+  "notes",
+  "tags",
+];
+
+const CRM_IMPORT_FIELD_SET = new Set<CrmImportField>(CRM_IMPORT_FIELD_VALUES);
+const CRM_IMPORT_PHONE_FIELDS = new Set<CrmImportField>(["phone", "phone2", "phone3"]);
+const CRM_IMPORT_REPEATABLE_FIELDS = new Set<CrmImportField>(["phone", "email"]);
+
+export function isCrmImportField(value: unknown): value is CrmImportField {
+  return typeof value === "string" && CRM_IMPORT_FIELD_SET.has(value as CrmImportField);
+}
+
 const COLUMN_ALIASES: Record<string, CrmImportField> = {
   "first name": "firstName",
   firstname: "firstName",
@@ -207,7 +233,69 @@ export function mappingHasPhoneOrEmail(colMapping: Record<number, CrmImportField
   );
 }
 
-export type RowData = Partial<Record<CrmImportField, string>>;
+export function parseImportFieldMapping(raw: string | undefined, columnCount: number): Record<number, CrmImportField> | null {
+  if (!raw?.trim()) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("mapping_invalid_json");
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("mapping_must_be_object");
+  }
+
+  const mapping: Record<number, CrmImportField> = {};
+  const usedSingleFields = new Set<CrmImportField>();
+  for (const [idxRaw, fieldRaw] of Object.entries(parsed)) {
+    if (!isCrmImportField(fieldRaw)) continue;
+
+    const idx = Number(idxRaw);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= columnCount) continue;
+
+    if (!CRM_IMPORT_REPEATABLE_FIELDS.has(fieldRaw)) {
+      if (usedSingleFields.has(fieldRaw)) continue;
+      usedSingleFields.add(fieldRaw);
+    }
+
+    mapping[idx] = fieldRaw;
+  }
+
+  return mapping;
+}
+
+export type RowData = Partial<Record<CrmImportField, string>> & {
+  phones?: string[];
+  emails?: string[];
+};
+
+export function buildImportRowData(rawRow: string[], colMapping: Record<number, CrmImportField>): RowData {
+  const rowData: RowData = {};
+
+  for (const [colIdx, fieldKey] of Object.entries(colMapping) as [string, CrmImportField][]) {
+    const val = rawRow[parseInt(colIdx, 10)]?.trim() ?? "";
+    if (!val) continue;
+
+    if (CRM_IMPORT_PHONE_FIELDS.has(fieldKey)) {
+      rowData.phones = [...(rowData.phones ?? []), val];
+      if (!rowData.phone) rowData.phone = val;
+      if (fieldKey !== "phone" && !rowData[fieldKey]) rowData[fieldKey] = val;
+      continue;
+    }
+
+    if (fieldKey === "email") {
+      rowData.emails = [...(rowData.emails ?? []), val];
+      if (!rowData.email) rowData.email = val;
+      continue;
+    }
+
+    if (!rowData[fieldKey]) rowData[fieldKey] = val;
+  }
+
+  return rowData;
+}
 
 export interface ProcessRowResult {
   action: "created" | "updated" | "skipped";
@@ -226,7 +314,7 @@ function normalisePhone(raw: string): string {
  * is automatically promoted to primary position.
  */
 function collectPhones(data: RowData): Array<{ raw: string; norm: string }> {
-  const candidates = [data.phone, data.phone2, data.phone3];
+  const candidates = [...(data.phones ?? []), data.phone, data.phone2, data.phone3];
   const result: Array<{ raw: string; norm: string }> = [];
   const seenNorms = new Set<string>();
   for (const raw of candidates) {
@@ -240,6 +328,19 @@ function collectPhones(data: RowData): Array<{ raw: string; norm: string }> {
   return result;
 }
 
+function collectEmails(data: RowData): string[] {
+  const candidates = [...(data.emails ?? []), data.email];
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of candidates) {
+    const email = raw?.trim().toLowerCase() ?? "";
+    if (!email || seen.has(email)) continue;
+    seen.add(email);
+    result.push(email);
+  }
+  return result;
+}
+
 /**
  * Find an active CRM contact in the tenant by normalized phone, then email
  * (same precedence as import processing).
@@ -249,7 +350,16 @@ export async function findLiveContactIdByPhoneOrEmail(
   phoneNorm: string,
   emailRaw: string,
 ): Promise<string | null> {
-  if (phoneNorm) {
+  const found = await findLiveContactIdByPhonesOrEmails(tenantId, phoneNorm ? [phoneNorm] : [], emailRaw ? [emailRaw] : []);
+  return found;
+}
+
+async function findLiveContactIdByPhonesOrEmails(
+  tenantId: string,
+  phoneNorms: string[],
+  emailRaws: string[],
+): Promise<string | null> {
+  for (const phoneNorm of phoneNorms) {
     const phoneMatch = await db.contactPhone.findFirst({
       where: {
         numberNormalized: phoneNorm,
@@ -259,7 +369,8 @@ export async function findLiveContactIdByPhoneOrEmail(
     });
     if (phoneMatch) return phoneMatch.contactId;
   }
-  if (emailRaw) {
+
+  for (const emailRaw of emailRaws) {
     const emailMatch = await db.contactEmail.findFirst({
       where: {
         email: emailRaw,
@@ -346,7 +457,8 @@ export async function previewCampaignImportRow(
   const primaryPhone = phonePairs[0] ?? null;
   const phoneRaw = primaryPhone?.raw ?? "";
   const phoneNorm = primaryPhone?.norm ?? "";
-  const emailRaw = data.email?.trim().toLowerCase() ?? "";
+  const emailRaws = collectEmails(data);
+  const emailRaw = emailRaws[0] ?? "";
 
   if (!phoneNorm && !emailRaw) {
     return {
@@ -356,7 +468,11 @@ export async function previewCampaignImportRow(
     };
   }
 
-  let existingContactId: string | null = await findLiveContactIdByPhoneOrEmail(tenantId, phoneNorm, emailRaw);
+  let existingContactId: string | null = await findLiveContactIdByPhonesOrEmails(
+    tenantId,
+    phonePairs.map((p) => p.norm),
+    emailRaws,
+  );
   let synthetic = false;
   if (!existingContactId) {
     const syn = reg.lookup(phoneNorm, emailRaw);
@@ -438,11 +554,7 @@ export async function runCampaignImportPreview(
 
   for (let i = 0; i < dataRows.length; i++) {
     const rawRow = dataRows[i];
-    const rowData: RowData = {};
-    for (const [colIdx, fieldKey] of Object.entries(colMapping) as [string, CrmImportField][]) {
-      const val = rawRow[parseInt(colIdx, 10)]?.trim() ?? "";
-      if (val) rowData[fieldKey] = val;
-    }
+    const rowData = buildImportRowData(rawRow, colMapping);
 
     const rowNum = i + 2;
     try {
@@ -523,7 +635,9 @@ export async function processImportRow(
   const phoneRaw = primaryPhone?.raw ?? "";
   const phoneNorm = primaryPhone?.norm ?? "";
   const secondaryPhones = phonePairs.slice(1);
-  const emailRaw = data.email?.trim().toLowerCase() ?? "";
+  const emailRaws = collectEmails(data);
+  const emailRaw = emailRaws[0] ?? "";
+  const secondaryEmails = emailRaws.slice(1);
 
   if (!phoneNorm && !emailRaw) {
     return { action: "skipped", reason: "no_contact_info", contactId: null };
@@ -544,7 +658,11 @@ export async function processImportRow(
   const addrZip = data.zip?.trim() ?? "";
   const hasAddress = addrStreet || addrCity || addrState || addrZip;
 
-  const existingContactId = await findLiveContactIdByPhoneOrEmail(tenantId, phoneNorm, emailRaw);
+  const existingContactId = await findLiveContactIdByPhonesOrEmails(
+    tenantId,
+    phonePairs.map((p) => p.norm),
+    emailRaws,
+  );
 
   if (existingContactId) {
     const existing = await db.contact.findUnique({
@@ -612,9 +730,9 @@ export async function processImportRow(
       }
     }
 
-    if (emailRaw) {
+    for (const email of emailRaws) {
       const emailExists = await db.contactEmail.findFirst({
-        where: { contactId: existingContactId, email: emailRaw },
+        where: { contactId: existingContactId, email },
         select: { id: true },
       });
       if (!emailExists) {
@@ -622,7 +740,7 @@ export async function processImportRow(
           data: {
             contactId: existingContactId,
             type: "WORK",
-            email: emailRaw,
+            email,
             isPrimary: false,
           },
         });
@@ -695,6 +813,11 @@ export async function processImportRow(
                 email: emailRaw,
                 isPrimary: true,
               },
+              ...secondaryEmails.map((email) => ({
+                type: "WORK" as const,
+                email,
+                isPrimary: false,
+              })),
             ],
           }
         : undefined,

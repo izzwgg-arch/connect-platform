@@ -222,10 +222,149 @@ const PREVIEW_SAMPLE_BUCKET_LABEL: Record<PreviewSampleBucket, string> = {
 };
 const CAMPAIGN_MEMBER_PAGE_SIZE = 250;
 const ADD_CONTACTS_PAGE_SIZE = 250;
+const SPREADSHEET_EXTS = /\.(xlsx|xls|ods|numbers)$/i;
 
-function importPreviewContextKey(file: File | null, assigneeId: string): string | null {
+const IMPORT_FIELD_OPTIONS = [
+  { value: "", label: "Do not import" },
+  { value: "company", label: "Company name" },
+  { value: "displayName", label: "Owner / contact name" },
+  { value: "firstName", label: "First name" },
+  { value: "lastName", label: "Last name" },
+  { value: "title", label: "Title" },
+  { value: "phone", label: "Phone number (repeatable)" },
+  { value: "email", label: "Email (repeatable)" },
+  { value: "address", label: "Address" },
+  { value: "city", label: "City" },
+  { value: "state", label: "State" },
+  { value: "zip", label: "Zip" },
+  { value: "notes", label: "Notes" },
+  { value: "tags", label: "Tags" },
+];
+
+const IMPORT_HEADER_ALIASES: Record<string, string> = {
+  company: "company",
+  "company name": "company",
+  business: "company",
+  "business name": "company",
+  organization: "company",
+  organisation: "company",
+  name: "displayName",
+  owner: "displayName",
+  "owner name": "displayName",
+  "owner nme": "displayName",
+  contact: "displayName",
+  "contact name": "displayName",
+  "first name": "firstName",
+  firstname: "firstName",
+  "last name": "lastName",
+  lastname: "lastName",
+  title: "title",
+  "job title": "title",
+  phone: "phone",
+  phone1: "phone",
+  phone2: "phone",
+  phone3: "phone",
+  mobile: "phone",
+  cell: "phone",
+  telephone: "phone",
+  "phone number": "phone",
+  "primary phone": "phone",
+  email: "email",
+  email1: "email",
+  email2: "email",
+  email3: "email",
+  "email address": "email",
+  "e-mail": "email",
+  address: "address",
+  "street address": "address",
+  city: "city",
+  state: "state",
+  st: "state",
+  zip: "zip",
+  zipcode: "zip",
+  "zip code": "zip",
+  notes: "notes",
+  note: "notes",
+  tags: "tags",
+};
+
+function parseCsvLocally(text: string): string[][] {
+  const rows: string[][] = [];
+  const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  let pos = 0;
+  while (pos < lines.length) {
+    const row: string[] = [];
+    while (pos < lines.length) {
+      if (lines[pos] === '"') {
+        pos++;
+        let field = "";
+        while (pos < lines.length) {
+          if (lines[pos] === '"') {
+            if (lines[pos + 1] === '"') {
+              field += '"';
+              pos += 2;
+            } else {
+              pos++;
+              break;
+            }
+          } else {
+            field += lines[pos++];
+          }
+        }
+        row.push(field);
+        if (lines[pos] === ",") pos++;
+      } else {
+        const start = pos;
+        while (pos < lines.length && lines[pos] !== "," && lines[pos] !== "\n") pos++;
+        row.push(lines.slice(start, pos).trim());
+        if (lines[pos] === ",") pos++;
+      }
+      if (lines[pos] === "\n") {
+        pos++;
+        break;
+      }
+    }
+    if (row.length > 0 && !(row.length === 1 && row[0] === "")) rows.push(row);
+  }
+  return rows;
+}
+
+async function readCampaignImportFile(file: File): Promise<{ uploadFile: File; csvText: string }> {
+  if (SPREADSHEET_EXTS.test(file.name)) {
+    const XLSX = await import("xlsx");
+    const buffer = await file.arrayBuffer();
+    const wb = XLSX.read(buffer, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0] ?? ""];
+    const csvText = XLSX.utils.sheet_to_csv(ws ?? {});
+    const uploadName = file.name.replace(/\.[^.]+$/, "") || "import";
+    return {
+      csvText,
+      uploadFile: new File([csvText], `${uploadName}.csv`, { type: "text/csv", lastModified: file.lastModified }),
+    };
+  }
+
+  const csvText = await file.text();
+  return { csvText, uploadFile: file };
+}
+
+function inferImportMapping(headers: string[]): Record<string, string> {
+  const mapping: Record<string, string> = {};
+  const usedSingleFields = new Set<string>();
+  for (let i = 0; i < headers.length; i++) {
+    const mapped = IMPORT_HEADER_ALIASES[headers[i]?.toLowerCase().trim() ?? ""];
+    if (!mapped) continue;
+    if (mapped !== "phone" && mapped !== "email") {
+      if (usedSingleFields.has(mapped)) continue;
+      usedSingleFields.add(mapped);
+    }
+    mapping[String(i)] = mapped;
+  }
+  return mapping;
+}
+
+function importPreviewContextKey(file: File | null, assigneeId: string, mappingFingerprint: string): string | null {
   if (!file) return null;
-  return `${file.name}:${file.size}:${file.lastModified}|assignee:${assigneeId || ""}`;
+  return `${file.name}:${file.size}:${file.lastModified}|assignee:${assigneeId || ""}|mapping:${mappingFingerprint}`;
 }
 
 function bucketPreviewSampleRow(s: CampaignImportPreview["sampleRows"][number]): PreviewSampleBucket {
@@ -619,6 +758,10 @@ export default function CampaignDetailPage() {
       : false,
   );
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [importDisplayFileName, setImportDisplayFileName] = useState("");
+  const [importHeaders, setImportHeaders] = useState<string[]>([]);
+  const [importSampleRow, setImportSampleRow] = useState<string[]>([]);
+  const [importColumnMapping, setImportColumnMapping] = useState<Record<string, string>>({});
   const [importAssigneeId, setImportAssigneeId] = useState("");
   const [importing, setImporting] = useState(false);
   const [importErr, setImportErr] = useState("");
@@ -668,6 +811,11 @@ export default function CampaignDetailPage() {
     setImportPreviewContextKeyState(null);
   }, [importFile, importAssigneeId]);
 
+  useEffect(() => {
+    setImportPreview(null);
+    setImportPreviewContextKeyState(null);
+  }, [importColumnMapping]);
+
   // Auto-open the import modal when the page is entered via ?openImport=1 (campaign-native import flow).
   useEffect(() => {
     if (pendingOpenImport && campaign && isAdmin) {
@@ -682,12 +830,26 @@ export default function CampaignDetailPage() {
       setImportErr("");
       setImportSummary(null);
       setImportFile(null);
+      setImportDisplayFileName("");
+      setImportHeaders([]);
+      setImportSampleRow([]);
+      setImportColumnMapping({});
       setImportAssigneeId("");
       setImportPreview(null);
       setImportPreviewContextKeyState(null);
       setImportCompareBaseline(null);
     }
   }, [pendingOpenImport, campaign, isAdmin]);
+
+  const resetImportFileState = useCallback(() => {
+    setImportFile(null);
+    setImportDisplayFileName("");
+    setImportHeaders([]);
+    setImportSampleRow([]);
+    setImportColumnMapping({});
+    setImportPreview(null);
+    setImportPreviewContextKeyState(null);
+  }, []);
 
   const loadCampaign = useCallback(async () => {
     try {
@@ -820,12 +982,46 @@ export default function CampaignDetailPage() {
     setDistributing(false);
   }
 
-  async function handleCampaignImport() {
-    if (!importFile) {
-      setImportErr("Choose a CSV file.");
+  async function handleImportFileChange(file: File | null) {
+    setImportErr("");
+    setImportSummary(null);
+    setImportCompareBaseline(null);
+    if (!file) {
+      resetImportFileState();
       return;
     }
-    const ctx = importPreviewContextKey(importFile, importAssigneeId);
+
+    try {
+      const { uploadFile, csvText } = await readCampaignImportFile(file);
+      const rows = parseCsvLocally(csvText);
+      if (rows.length < 2) {
+        throw new Error("File must have a header row and at least one data row.");
+      }
+
+      const headers = rows[0] ?? [];
+      setImportFile(uploadFile);
+      setImportDisplayFileName(file.name);
+      setImportHeaders(headers);
+      setImportSampleRow(rows[1] ?? []);
+      setImportColumnMapping(inferImportMapping(headers));
+      setImportPreview(null);
+      setImportPreviewContextKeyState(null);
+    } catch (err: unknown) {
+      resetImportFileState();
+      setImportErr((err as Error)?.message ?? "Could not read file. Please choose a CSV or Excel (.xlsx) file.");
+    }
+  }
+
+  async function handleCampaignImport() {
+    if (!importFile) {
+      setImportErr("Choose a CSV or Excel file.");
+      return;
+    }
+    if (!importMappingHasContactColumn) {
+      setImportErr("Map at least one column to Phone number or Email.");
+      return;
+    }
+    const ctx = importPreviewContextKey(importFile, importAssigneeId, importMappingFingerprint);
     if (!importPreview || !ctx || importPreviewContextKeyState !== ctx) {
       setImportErr("Run “Preview import” first. If you changed the file or assignee, preview again.");
       return;
@@ -837,6 +1033,8 @@ export default function CampaignDetailPage() {
     try {
       const fd = new FormData();
       fd.append("file", importFile);
+      fd.append("mapping", JSON.stringify(importMappingPayload));
+      if (importDisplayFileName) fd.append("sourceFileName", importDisplayFileName);
       if (importAssigneeId) fd.append("assignedToUserId", importAssigneeId);
       const t = typeof window !== "undefined" ? localStorage.getItem("token") : null;
       const base = typeof window !== "undefined" ? window.location.origin : "";
@@ -854,9 +1052,7 @@ export default function CampaignDetailPage() {
       setImportSummary(data as CampaignImportSummary);
       setImportCompareBaseline(baseline);
       await Promise.all([loadCampaign(), loadMembers(), loadWorkload(), loadCampaignImports()]);
-      setImportFile(null);
-      setImportPreview(null);
-      setImportPreviewContextKeyState(null);
+      resetImportFileState();
     } catch (e: unknown) {
       setImportErr((e as Error)?.message ?? "Import failed");
     }
@@ -865,7 +1061,11 @@ export default function CampaignDetailPage() {
 
   async function handleCampaignImportPreview() {
     if (!importFile) {
-      setImportErr("Choose a CSV file.");
+      setImportErr("Choose a CSV or Excel file.");
+      return;
+    }
+    if (!importMappingHasContactColumn) {
+      setImportErr("Map at least one column to Phone number or Email.");
       return;
     }
     setImportPreviewing(true);
@@ -875,6 +1075,8 @@ export default function CampaignDetailPage() {
     try {
       const fd = new FormData();
       fd.append("file", importFile);
+      fd.append("mapping", JSON.stringify(importMappingPayload));
+      if (importDisplayFileName) fd.append("sourceFileName", importDisplayFileName);
       if (importAssigneeId) fd.append("assignedToUserId", importAssigneeId);
       const t = typeof window !== "undefined" ? localStorage.getItem("token") : null;
       const base = typeof window !== "undefined" ? window.location.origin : "";
@@ -890,7 +1092,7 @@ export default function CampaignDetailPage() {
         );
       }
       setImportPreview(data as CampaignImportPreview);
-      setImportPreviewContextKeyState(importPreviewContextKey(importFile, importAssigneeId));
+      setImportPreviewContextKeyState(importPreviewContextKey(importFile, importAssigneeId, importMappingFingerprint));
     } catch (e: unknown) {
       setImportErr((e as Error)?.message ?? "Preview failed");
       setImportPreview(null);
@@ -987,7 +1189,18 @@ export default function CampaignDetailPage() {
     return deriveCampaignHealth(campaign, workload);
   }, [campaign, workload]);
 
-  const importCtxKey = importFile ? importPreviewContextKey(importFile, importAssigneeId) : null;
+  const importMappingPayload = useMemo(() => {
+    const entries = Object.entries(importColumnMapping)
+      .filter(([, field]) => field)
+      .sort(([a], [b]) => Number(a) - Number(b));
+    return Object.fromEntries(entries);
+  }, [importColumnMapping]);
+  const importMappingFingerprint = useMemo(() => JSON.stringify(importMappingPayload), [importMappingPayload]);
+  const importMappingHasContactColumn = useMemo(
+    () => Object.values(importMappingPayload).some((field) => field === "phone" || field === "email"),
+    [importMappingPayload],
+  );
+  const importCtxKey = importFile ? importPreviewContextKey(importFile, importAssigneeId, importMappingFingerprint) : null;
   const importReady =
     !!importFile && !!importPreview && !!importCtxKey && importPreviewContextKeyState === importCtxKey;
 
@@ -1032,10 +1245,8 @@ export default function CampaignDetailPage() {
     setImportOpen(true);
     setImportErr("");
     setImportSummary(null);
-    setImportFile(null);
+    resetImportFileState();
     setImportAssigneeId("");
-    setImportPreview(null);
-    setImportPreviewContextKeyState(null);
     setImportCompareBaseline(null);
   };
   const openDistributeModal = () => {
@@ -1141,7 +1352,7 @@ export default function CampaignDetailPage() {
           {/* Import CSV modal */}
           {isAdmin && importOpen && (
             <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-              <div className="bg-crm-surface rounded-crm-lg shadow-2xl w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
+              <div className="bg-crm-surface rounded-crm-lg shadow-2xl w-full max-w-4xl p-6 max-h-[90vh] overflow-y-auto">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="font-bold text-crm-text">Import leads to campaign</h3>
                   <button
@@ -1150,10 +1361,8 @@ export default function CampaignDetailPage() {
                       setImportOpen(false);
                       setImportErr("");
                       setImportSummary(null);
-                      setImportFile(null);
+                      resetImportFileState();
                       setImportAssigneeId("");
-                      setImportPreview(null);
-                      setImportPreviewContextKeyState(null);
                       setImportCompareBaseline(null);
                     }}
                     className="p-1 text-crm-muted/80 hover:text-crm-muted"
@@ -1162,20 +1371,81 @@ export default function CampaignDetailPage() {
                   </button>
                 </div>
                 <p className="text-sm text-crm-muted mb-3">
-                  Upload a CSV (max 5 MB, up to 5,000 rows). Headers are auto-detected — include at least a{" "}
-                  <strong>phone</strong> or <strong>email</strong> column (e.g. &quot;Phone&quot;, &quot;Mobile&quot;, &quot;Email&quot;).
+                  Upload a CSV or Excel file (max 5 MB, up to 5,000 rows). Map each spreadsheet column to the lead field it belongs to.
+                  Phone and email can be selected on as many columns as the sheet contains.
                   Existing contacts are matched by phone/email and updated (blank fields only); they are not duplicated.
                   Contacts already in this campaign are skipped for enrollment.
                 </p>
                 <div className="mb-4">
-                  <label className="block text-xs font-medium text-crm-muted mb-1">CSV file</label>
+                  <label className="block text-xs font-medium text-crm-muted mb-1">Lead file</label>
                   <input
                     type="file"
-                    accept=".csv,text/csv"
-                    onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
+                    accept=".csv,text/csv,.xlsx,.xls,.ods,.numbers,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                    onChange={(e) => void handleImportFileChange(e.currentTarget.files?.[0] ?? null)}
                     className="block w-full text-sm text-crm-muted file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-crm-accent/15 file:text-crm-accent"
                   />
+                  <p className="text-xs text-crm-muted/80 mt-1">
+                    Supported: CSV, XLSX, XLS, ODS. Excel files are converted locally before upload.
+                  </p>
                 </div>
+                {importHeaders.length > 0 && (
+                  <div className="mb-4 rounded-lg border border-crm-border bg-crm-surface-2/50 p-3">
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between mb-3">
+                      <div>
+                        <p className="text-sm font-semibold text-crm-text">Map columns to lead fields</p>
+                        <p className="text-xs text-crm-muted">
+                          {importDisplayFileName || "Selected file"} · {importHeaders.length} column{importHeaders.length === 1 ? "" : "s"} detected
+                        </p>
+                      </div>
+                      <span className={cn(
+                        "text-xs rounded-full border px-2 py-1",
+                        importMappingHasContactColumn
+                          ? "border-crm-success/30 bg-crm-success/10 text-crm-success"
+                          : "border-crm-warning/35 bg-crm-warning/10 text-crm-warning",
+                      )}>
+                        {importMappingHasContactColumn ? "Phone/email mapped" : "Map phone or email"}
+                      </span>
+                    </div>
+                    <div className="max-h-72 overflow-y-auto rounded-lg border border-crm-border bg-crm-surface">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-left text-crm-muted border-b border-crm-border bg-crm-surface-2/70">
+                            <th className="p-2 font-medium">Column</th>
+                            <th className="p-2 font-medium">Header</th>
+                            <th className="p-2 font-medium">Sample</th>
+                            <th className="p-2 font-medium min-w-[210px]">Lead field</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {importHeaders.map((header, idx) => (
+                            <tr key={`${idx}-${header}`} className="border-b border-crm-border/50">
+                              <td className="p-2 text-crm-muted whitespace-nowrap">Column {idx + 1}</td>
+                              <td className="p-2 text-crm-text max-w-[160px] truncate" title={header || `Column ${idx + 1}`}>
+                                {header || `Column ${idx + 1}`}
+                              </td>
+                              <td className="p-2 text-crm-muted max-w-[180px] truncate" title={importSampleRow[idx] ?? ""}>
+                                {importSampleRow[idx] || "—"}
+                              </td>
+                              <td className="p-2">
+                                <ConnectSelect
+                                  value={importColumnMapping[String(idx)] ?? ""}
+                                  onChange={(value) => {
+                                    setImportColumnMapping((prev) => ({ ...prev, [String(idx)]: value }));
+                                  }}
+                                  className="w-full"
+                                  options={IMPORT_FIELD_OPTIONS}
+                                />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="text-xs text-crm-muted/80 mt-2">
+                      Use Phone number or Email on every matching column. Company name is still written to the import audit rows used by Drive document matching.
+                    </p>
+                  </div>
+                )}
                 <div className="mb-4">
                   <label className="block text-xs font-medium text-crm-muted mb-1">Assign new members to (optional)</label>
                   <ConnectSelect
@@ -1193,14 +1463,16 @@ export default function CampaignDetailPage() {
                   <button
                     type="button"
                     onClick={() => void handleCampaignImportPreview()}
-                    disabled={importPreviewing || !importFile}
+                    disabled={importPreviewing || !importFile || !importMappingHasContactColumn}
                     className="px-4 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-surface-2 disabled:opacity-50"
                   >
                     {importPreviewing ? "Previewing…" : "Preview import"}
                   </button>
                 </div>
                 {importFile && !importPreview && !importPreviewing && (
-                  <p className="text-sm text-crm-muted mb-3">Select a CSV and run Preview import to see exactly what will happen.</p>
+                  <p className="text-sm text-crm-muted mb-3">
+                    Review the column mapping, then run Preview import to see exactly what will happen.
+                  </p>
                 )}
                 {importPreview && importFile && importCtxKey === importPreviewContextKeyState && (
                   <div className="mb-4 p-3 bg-crm-accent/15 border border-crm-accent/25 rounded-lg text-sm space-y-3">
@@ -1244,7 +1516,7 @@ export default function CampaignDetailPage() {
                       </div>
                     </div>
                     <p className="text-sm font-medium text-crm-success bg-crm-success/10 border border-crm-success/30 rounded-md px-2 py-1.5">
-                      Ready to import this file — preview matches the selected CSV and assignee.
+                      Ready to import this file — preview matches the selected file, mapping, and assignee.
                     </p>
                     {importSampleGroups.length > 0 ? (
                       <div className="space-y-3">
@@ -1421,10 +1693,8 @@ export default function CampaignDetailPage() {
                       setImportOpen(false);
                       setImportErr("");
                       setImportSummary(null);
-                      setImportFile(null);
+                      resetImportFileState();
                       setImportAssigneeId("");
-                      setImportPreview(null);
-                      setImportPreviewContextKeyState(null);
                       setImportCompareBaseline(null);
                     }}
                     className="px-4 py-2 text-sm border border-crm-border rounded-lg text-crm-text hover:bg-crm-surface-2"
@@ -1437,7 +1707,7 @@ export default function CampaignDetailPage() {
                       onClick={() => void handleCampaignImport()}
                       disabled={importing || importPreviewing || !importReady}
                       className="px-4 py-2 text-sm bg-crm-accent text-white rounded-lg hover:brightness-110 disabled:opacity-50 flex items-center gap-1.5"
-                      title={!importReady ? "Preview import first for this file and assignee" : undefined}
+                      title={!importReady ? "Preview import first for this file, mapping, and assignee" : undefined}
                     >
                       <Upload className="h-3.5 w-3.5" />
                       {importing ? "Importing…" : "Run import"}
@@ -1637,7 +1907,7 @@ export default function CampaignDetailPage() {
                     steps={
                       hd.total === 0
                         ? [
-                            { label: "Import leads", hint: "CSV with preview" },
+                            { label: "Import leads", hint: "CSV/XLSX with mapping preview" },
                             { label: "Add existing contacts", hint: "from CRM roster" },
                             { label: "Distribute work", hint: "assign agents" },
                           ]
