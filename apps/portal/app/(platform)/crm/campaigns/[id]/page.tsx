@@ -737,6 +737,10 @@ export default function CampaignDetailPage() {
 
   const canManageCampaigns = can("can_view_crm_campaigns");
 
+  // Lead import is allowed for every CRM-enabled user (backend: requireCrmManager → requireCrmAccess).
+  // Gate the button on the dedicated import permission so custom (non-admin) roles see it.
+  const canImport = isAdmin || can("can_view_crm_import");
+
   const [campaign, setCampaign] = useState<CampaignDetail | null>(null);
   const [members, setMembers] = useState<CampaignMember[]>([]);
   const [membersTotal, setMembersTotal] = useState(0);
@@ -1797,6 +1801,7 @@ export default function CampaignDetailPage() {
                 health={hd}
                 importHistory={importHistory}
                 isAdmin={isAdmin}
+                canImport={canImport}
                 editingName={editingName}
                 nameInput={nameInput}
                 onNameInput={setNameInput}
@@ -1947,7 +1952,7 @@ export default function CampaignDetailPage() {
                     }
                     action={
                       <>
-                        {isAdmin && hd.total === 0 ? (
+                        {canImport && hd.total === 0 ? (
                           <button type="button" onClick={openImportModal} className={crm.btnPrimary}>
                             Import leads
                           </button>

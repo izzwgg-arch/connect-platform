@@ -29,6 +29,7 @@ export function CampaignCommandHeader({
   campaign,
   importHistory,
   isAdmin,
+  canImport = false,
   editingName,
   nameInput,
   onNameInput,
@@ -49,6 +50,7 @@ export function CampaignCommandHeader({
   health: CampaignHealth;
   importHistory: CampaignImportHistoryRow[];
   isAdmin: boolean;
+  canImport?: boolean;
   editingName: boolean;
   nameInput: string;
   onNameInput: (v: string) => void;
@@ -168,7 +170,7 @@ export function CampaignCommandHeader({
                   <Pause className="h-3.5 w-3.5" /> Pause
                 </button>
               ) : null}
-              {canManageCampaignActions ? (
+              {canImport || canManageCampaignActions ? (
                 <button type="button" onClick={onImport} className={mk.menuItem}>
                   <Upload className="h-3.5 w-3.5" /> Import CSV
                 </button>
