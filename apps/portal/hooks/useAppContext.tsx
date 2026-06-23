@@ -138,7 +138,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setBackendJwtRole(undefined);
     }
     const storedTenant = typeof window !== "undefined" ? localStorage.getItem("cc-tenant-id") : null;
-    const resolvedTenantId = jwt?.tenantId || storedTenant || "local";
+    // For super-admins the stored value is their chosen workspace tenant, which must
+    // win over jwt.tenantId (their home/platform tenant). For regular users the JWT
+    // tenant is authoritative and storedTenant is a stable echo of it.
+    const isSuperAdmin = jwt?.role === "SUPER_ADMIN";
+    const resolvedTenantId = (isSuperAdmin ? storedTenant : null) ?? jwt?.tenantId ?? storedTenant ?? "local";
     setTenantId(resolvedTenantId);
   }, []);
 
@@ -388,11 +392,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (tenants.some((entry: Tenant) => entry.id === tenantId)) return;
     const jwt = readJwtPayload();
     const jwtTid = jwt?.tenantId;
-    const pick =
-      jwtTid && tenants.some((entry: Tenant) => entry.id === jwtTid)
-        ? jwtTid
-        : tenants[0]?.id || tenantId;
-    setTenantId(pick);
+    // Only fall back to the JWT home tenant if it's actually in the list.
+    // Never silently jump to tenants[0] — that would redirect super-admins to
+    // the first alphabetical tenant ("A Plus Center") whenever the stored ID
+    // briefly doesn't match (e.g. during initial hydration).
+    if (jwtTid && tenants.some((entry: Tenant) => entry.id === jwtTid)) {
+      setTenantId(jwtTid);
+    }
+    // else: keep the current tenantId and wait for it to resolve naturally.
   }, [tenantId, tenants]);
 
   const user = useMemo<User>(() => {
