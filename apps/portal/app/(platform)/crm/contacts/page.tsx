@@ -1251,7 +1251,7 @@ export default function CrmContactsPage() {
                 )}
               </>
             )}
-            {isAdmin && (
+            {(isAdmin || canManageContacts) && (
               <button
                 type="button"
                 onClick={() => setShowBulkEmail(true)}

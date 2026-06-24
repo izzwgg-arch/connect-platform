@@ -1916,7 +1916,7 @@ export default function CampaignDetailPage() {
                   >
                     {bulkAssigning ? "Assigning…" : "Assign Agent"}
                   </button>
-                  {isAdmin ? (
+                  {(isAdmin || canManageCampaigns) ? (
                     <button
                       type="button"
                       onClick={() => setShowBulkEmail(true)}

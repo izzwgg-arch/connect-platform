@@ -166,10 +166,13 @@ export function BulkEmailModal({
   useEffect(() => {
     apiGet<{ templates: EmailTemplate[] }>("/crm/email/templates")
       .then((data) => {
-        setTemplates(data.templates ?? []);
+        const list = data.templates ?? [];
+        setTemplates(list);
+        if (list.length > 0 && !templateId) setTemplateId(list[0].id);
       })
       .catch(() => undefined)
       .finally(() => setTemplatesLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- only run on mount; templateId excluded intentionally
   }, []);
 
   // Load tags
