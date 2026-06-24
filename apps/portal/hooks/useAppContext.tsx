@@ -307,7 +307,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         directoryDeleted?: number;
         extensionsFound?: number | null;
         extensionsUpserted?: number | null;
+        extensionsDeactivated?: number | null;
         extensionsSkippedTenants?: number | null;
+        extensionsAutoProvisioned?: number | null;
         linkedTenants?: number | null;
         didSource?: string | null;
         didTenantsProcessed?: number | null;
@@ -326,8 +328,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       const tenantChanged = Number(result.directoryCreated || 0) + Number(result.directoryUpdated || 0);
       const extParts: string[] = [];
-      if (result.extensionsFound != null) extParts.push(`${result.extensionsFound} extensions seen`);
-      if (result.extensionsUpserted != null && result.extensionsUpserted > 0) extParts.push(`${result.extensionsUpserted} updated`);
+      if (result.extensionsFound != null) extParts.push(`${result.extensionsFound} ext`);
+      if (result.extensionsUpserted != null && result.extensionsUpserted > 0) extParts.push(`${result.extensionsUpserted} synced`);
+      if (result.extensionsDeactivated != null && result.extensionsDeactivated > 0) extParts.push(`${result.extensionsDeactivated} deactivated`);
+      if (result.extensionsAutoProvisioned != null && result.extensionsAutoProvisioned > 0) extParts.push(`${result.extensionsAutoProvisioned} tenants auto-linked`);
       const extSummary = extParts.length ? ` | ${extParts.join(", ")}` : "";
       const didParts: string[] = [];
       if (result.didSource && result.didSource !== "skipped") {
@@ -337,7 +341,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const didSummary = didParts.length ? ` | ${didParts.join(", ")}` : "";
       return {
         ok: true as const,
-        message: `PBX sync complete — ${result.pbxTenantCount ?? "?"} tenants (${tenantChanged} changed, ${result.directoryDeleted || 0} deleted)${extSummary}${didSummary}.`,
+        message: `PBX sync complete — ${result.pbxTenantCount ?? "?"} tenants (${tenantChanged} changed, ${result.directoryDeleted || 0} removed)${extSummary}${didSummary}.`,
         detail: result,
       };
     } catch (err) {

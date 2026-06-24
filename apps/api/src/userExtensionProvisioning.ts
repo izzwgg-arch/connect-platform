@@ -177,7 +177,7 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
 
     const extensions = tenantId
       ? await db.extension.findMany({
-          where: { tenantId, status: { not: "DELETED" } },
+          where: { tenantId, status: { notIn: ["DELETED", "INACTIVE"] } },
           orderBy: { extNumber: "asc" },
           include: {
             pbxLink: {

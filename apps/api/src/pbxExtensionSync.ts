@@ -29,6 +29,8 @@ export interface ExtensionSyncTenantResult {
   connectTenantId: string | null;
   extensionsFound: number;
   extensionsUpserted: number;
+  extensionsDeactivated: number;
+  autoProvisioned: boolean;
   skipped: boolean;
   skipReason?: string;
   errors: string[];
@@ -39,8 +41,10 @@ export interface ExtensionSyncResult {
   tenantResults: ExtensionSyncTenantResult[];
   totalExtensions: number;
   totalUpserted: number;
+  totalDeactivated: number;
   totalSkipped: number;
   totalErrors: number;
+  totalAutoProvisioned: number;
 }
 
 /**
@@ -87,37 +91,77 @@ export async function syncExtensionsFromPbx(
     tenantResults: [],
     totalExtensions: 0,
     totalUpserted: 0,
+    totalDeactivated: 0,
     totalSkipped: 0,
     totalErrors: 0,
+    totalAutoProvisioned: 0,
   };
 
   for (const td of tenantDirs) {
     // Try numeric vitalTenantId first (canonical), then fall back to tenantSlug
     // (handles tenants whose TenantPbxLink.pbxTenantId was stored as the name rather than numeric id)
-    const connectTenantId =
+    let connectTenantId =
       vitalToConnect.get(td.vitalTenantId) ?? vitalToConnect.get(td.tenantSlug) ?? null;
 
+    let autoProvisioned = false;
     if (!connectTenantId) {
-      result.totalSkipped++;
-      result.tenantResults.push({
-        vitalTenantId: td.vitalTenantId,
-        displayName: td.displayName,
-        connectTenantId: null,
-        extensionsFound: 0,
-        extensionsUpserted: 0,
-        skipped: true,
-        skipReason: "no TenantPbxLink mapping for this vitalTenantId or tenantSlug",
-        errors: [],
-      });
-      continue;
+      // Auto-provision a Connect Tenant + TenantPbxLink for this PBX tenant so that
+      // every Refresh PBX brings in ALL extensions, not just those for pre-linked tenants.
+      try {
+        const displayName =
+          td.displayName ||
+          String(td.tenantSlug || "").replace(/[_-]/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()) ||
+          `PBX Tenant ${td.vitalTenantId}`;
+        const provisioned = await db.$transaction(async (tx) => {
+          const t = await (tx as any).tenant.create({
+            data: { name: displayName, kind: "CUSTOMER", isApproved: true },
+          });
+          await (tx as any).tenantPbxLink.create({
+            data: {
+              tenantId: t.id,
+              pbxInstanceId,
+              pbxTenantId: td.vitalTenantId,
+              pbxTenantCode: (td as any).tenantCode ?? null,
+              status: "LINKED",
+            },
+          });
+          return t;
+        });
+        connectTenantId = String(provisioned.id);
+        vitalToConnect.set(td.vitalTenantId, connectTenantId as string);
+        autoProvisioned = true;
+        result.totalAutoProvisioned++;
+      } catch (provisionErr: any) {
+        result.totalSkipped++;
+        result.tenantResults.push({
+          vitalTenantId: td.vitalTenantId,
+          displayName: td.displayName,
+          connectTenantId: null,
+          extensionsFound: 0,
+          extensionsUpserted: 0,
+          extensionsDeactivated: 0,
+          autoProvisioned: false,
+          skipped: true,
+          skipReason: `auto-provision failed: ${provisionErr?.message ?? String(provisionErr)}`,
+          errors: [],
+        });
+        continue;
+      }
     }
+
+    // connectTenantId is guaranteed non-null here: it was either already set at
+    // the top of the loop, or the auto-provision block just set it (the failure
+    // path always uses `continue` to skip to the next tenant).
+    const resolvedTenantId: string = connectTenantId as string;
 
     const tenantResult: ExtensionSyncTenantResult = {
       vitalTenantId: td.vitalTenantId,
       displayName: td.displayName,
-      connectTenantId,
+      connectTenantId: resolvedTenantId,
       extensionsFound: 0,
       extensionsUpserted: 0,
+      extensionsDeactivated: 0,
+      autoProvisioned,
       skipped: false,
       errors: [],
     };
@@ -132,6 +176,9 @@ export async function syncExtensionsFromPbx(
       result.totalExtensions += extensions.length;
 
       let syncFoundWebrtcExtension = false;
+      // Track extension numbers seen in this sync pass so we can deactivate any
+      // that VitalPBX no longer returns (i.e. they were deleted on the PBX side).
+      const seenExtNumbers = new Set<string>();
 
       for (const ext of extensions) {
         const pbxExtensionId = String(
@@ -225,13 +272,14 @@ export async function syncExtensionsFromPbx(
           rawSecret && hasCredentialsMasterKey() ? encryptJson(rawSecret) : null;
 
         if (!pbxExtensionId || !extNumber) continue;
+        seenExtNumbers.add(extNumber);
 
         try {
           // 4a. Upsert the Connect Extension record
           const connectExt = await db.extension.upsert({
-            where: { tenantId_extNumber: { tenantId: connectTenantId, extNumber } },
+            where: { tenantId_extNumber: { tenantId: resolvedTenantId, extNumber } },
             create: {
-              tenantId: connectTenantId,
+              tenantId: resolvedTenantId,
               extNumber,
               displayName: displayName || extNumber,
               pbxUserEmail,
@@ -252,7 +300,7 @@ export async function syncExtensionsFromPbx(
           await db.pbxExtensionLink.upsert({
             where: { extensionId: connectExt.id },
             create: {
-              tenantId: connectTenantId,
+              tenantId: resolvedTenantId,
               extensionId: connectExt.id,
               pbxExtensionId,
               pbxSipUsername,        // device's SIP auth username (e.g. "103_1")
@@ -282,7 +330,7 @@ export async function syncExtensionsFromPbx(
 
               if (existingUser) {
                 // Only link if they're in the same tenant
-                if (existingUser.tenantId === connectTenantId) {
+                if (existingUser.tenantId === resolvedTenantId) {
                   userId = existingUser.id;
                 }
                 // Different tenant: skip — don't hijack another tenant's user
@@ -293,7 +341,7 @@ export async function syncExtensionsFromPbx(
                 const passwordHash = await bcrypt.hash(tempPassword, 10);
                 const newUser = await db.user.create({
                   data: {
-                    tenantId: connectTenantId,
+                    tenantId: resolvedTenantId,
                     email: pbxUserEmail,
                     passwordHash,
                     role: "USER",
@@ -321,7 +369,29 @@ export async function syncExtensionsFromPbx(
           result.totalErrors++;
         }
       }
-      // 5. Auto-enable WebRTC on the tenant if it isn't already and we confirmed
+      // 5. Deactivate extensions that VitalPBX no longer returns for this tenant.
+      //    Only applies when VitalPBX returned at least one extension (guards against
+      //    an empty response from a transient API error wiping out real extensions).
+      if (seenExtNumbers.size > 0) {
+        try {
+          const deactivated = await db.extension.updateMany({
+            where: {
+              tenantId: resolvedTenantId,
+              status: "ACTIVE",
+              extNumber: { notIn: Array.from(seenExtNumbers) },
+            },
+            data: { status: "INACTIVE", updatedAt: new Date() },
+          });
+          if (deactivated.count > 0) {
+            tenantResult.extensionsDeactivated = deactivated.count;
+            result.totalDeactivated += deactivated.count;
+          }
+        } catch {
+          // Non-fatal — stale extensions will simply remain until the next sync
+        }
+      }
+
+      // 6. Auto-enable WebRTC on the tenant if it isn't already and we confirmed
       //    at least one WebRTC-capable extension exists on the PBX.  This prevents
       //    new tenants from being silently stuck: phone "not registered" / no QR code
       //    because Tenant.webrtcEnabled defaulted to false even though the PBX side
@@ -329,7 +399,7 @@ export async function syncExtensionsFromPbx(
       if (syncFoundWebrtcExtension) {
         try {
           const tenantRow = await db.tenant.findUnique({
-            where: { id: connectTenantId },
+            where: { id: resolvedTenantId },
             select: { webrtcEnabled: true, sipWsUrl: true, sipDomain: true },
           });
           if (tenantRow && !tenantRow.webrtcEnabled) {
@@ -340,7 +410,7 @@ export async function syncExtensionsFromPbx(
               ? (() => { try { return new URL(rawWsEndpoint.replace(/^wss?:\/\//, "https://")).hostname; } catch { return null; } })()
               : null;
             await db.tenant.update({
-              where: { id: connectTenantId },
+              where: { id: resolvedTenantId },
               data: {
                 webrtcEnabled: true,
                 ...(!tenantRow.sipWsUrl && rawWsEndpoint ? { sipWsUrl: rawWsEndpoint } : {}),

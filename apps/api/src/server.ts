@@ -14801,6 +14801,10 @@ const PBX_TENANT_LIST_CACHE = new Map<string, {
   payload: PbxTenantListPayload;
 }>();
 const PBX_TENANT_LIST_INFLIGHT = new Map<string, Promise<PbxTenantListPayload>>();
+// Tracks when a *manual* POST /admin/pbx/refresh-tenants last ran per instance.
+// Kept separate from PBX_TENANT_LIST_CACHE so that background GET /admin/pbx/tenants
+// page-load calls don't erroneously block the next manual refresh.
+const PBX_MANUAL_REFRESH_LAST_AT = new Map<string, number>();
 
 async function listPbxTenantsFromDirectory(instanceId: string): Promise<any[]> {
   const rows = await db.pbxTenantDirectory.findMany({
@@ -15042,17 +15046,21 @@ app.post("/admin/pbx/refresh-tenants", async (req, reply) => {
   const instance = await db.pbxInstance.findFirst({ where: { isEnabled: true }, orderBy: { updatedAt: "desc" } });
   if (!instance) return reply.status(404).send({ error: "PBX_INSTANCE_NOT_FOUND" });
   const cacheKey = instance.id;
-  const cached = PBX_TENANT_LIST_CACHE.get(cacheKey);
-  const cacheAgeMs = cached ? Date.now() - cached.at : null;
-  // Rate limit: at most one sync per 30 s (admins can still call GET /admin/pbx/tenants for cached data).
-  if (cached && cacheAgeMs !== null && cacheAgeMs < 30_000) {
+  // Rate limit: at most one *manual* POST refresh per 30 s.
+  // Uses a dedicated tracker (not PBX_TENANT_LIST_CACHE) so that background
+  // GET /admin/pbx/tenants page-load calls do not block the user from clicking
+  // the Refresh PBX button immediately after opening the tenant switcher.
+  const lastManualRefreshAt = PBX_MANUAL_REFRESH_LAST_AT.get(cacheKey);
+  const manualRefreshAgeMs = lastManualRefreshAt ? Date.now() - lastManualRefreshAt : null;
+  if (manualRefreshAgeMs !== null && manualRefreshAgeMs < 30_000) {
     return reply.status(429).send({
       error: "pbx_tenant_refresh_rate_limited",
       message: "Tenant directory was refreshed less than 30 seconds ago. Please wait before retrying.",
-      cacheAgeMs,
-      retryAfterMs: 30_000 - cacheAgeMs,
+      cacheAgeMs: manualRefreshAgeMs,
+      retryAfterMs: 30_000 - manualRefreshAgeMs,
     });
   }
+  PBX_MANUAL_REFRESH_LAST_AT.set(cacheKey, Date.now());
   const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
   const startedAt = Date.now();
   app.log.info(
@@ -15153,7 +15161,9 @@ app.post("/admin/pbx/refresh-tenants", async (req, reply) => {
     directoryDeleted: tenantSyncResult.deleted,
     extensionsFound: extensionSyncResult?.totalExtensions ?? null,
     extensionsUpserted: extensionSyncResult?.totalUpserted ?? null,
+    extensionsDeactivated: extensionSyncResult?.totalDeactivated ?? null,
     extensionsSkippedTenants: extensionSyncResult?.totalSkipped ?? null,
+    extensionsAutoProvisioned: extensionSyncResult?.totalAutoProvisioned ?? null,
     extensionErrors: extensionSyncResult?.totalErrors ?? null,
     linkedTenants: extensionSyncResult?.tenantResults.filter((r) => !r.skipped).length ?? null,
     didSource: didSyncResult?.source ?? null,
@@ -15167,8 +15177,8 @@ app.post("/admin/pbx/refresh-tenants", async (req, reply) => {
 
 /**
  * Sync VitalPBX extensions into Connect Extension + PbxExtensionLink tables.
- * Requires TenantPbxLink rows to already exist (i.e. tenants must be linked first).
- * Optional body: { vitalTenantId: "2" } to sync a single tenant.
+ * Tenants with no TenantPbxLink are auto-provisioned (a Connect Tenant + link
+ * is created automatically). Optional body: { vitalTenantId: "2" } to sync a single tenant.
  */
 app.post("/admin/pbx/instances/:id/sync-extensions", async (req, reply) => {
   const admin = await requireSuperAdmin(req, reply);
