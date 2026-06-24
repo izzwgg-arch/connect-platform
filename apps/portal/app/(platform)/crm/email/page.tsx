@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import {
@@ -18,6 +18,7 @@ import {
   Settings,
   ShieldCheck,
   Clock3,
+  Users,
   WifiOff,
   type LucideIcon,
 } from "lucide-react";
@@ -81,6 +82,25 @@ type RecentReply = {
   replyText?: string | null;
   receivedAt: string | null;
   contactId: string | null;
+};
+
+type BulkEmailJob = {
+  id: string;
+  sourceType: "CONTACTS" | "CAMPAIGN" | "FUNDERS" | string;
+  status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED" | string;
+  totalCount: number;
+  queuedCount: number;
+  sentCount: number;
+  failedCount: number;
+  skippedCount: number;
+  errorSummary: string | null;
+  scheduledAt: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  template: { id: string; name: string; subject: string } | null;
+  connection: { id: string; emailAddress: string } | null;
+  createdBy: { id: string; displayName: string | null; email: string } | null;
 };
 
 const DEV_PREVIEW_ENABLED = process.env.NODE_ENV === "development";
@@ -514,6 +534,24 @@ function EmailStatusRow({
   );
 }
 
+function bulkJobStatusBadge(status: string): { label: string; className: string } {
+  switch (status) {
+    case "QUEUED":    return { label: "Queued",    className: "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-400 dark:border-amber-700/30" };
+    case "RUNNING":   return { label: "Sending…",  className: "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-700/30" };
+    case "COMPLETED": return { label: "Completed", className: "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-400 dark:border-emerald-700/30" };
+    case "FAILED":    return { label: "Failed",    className: "bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-700/30" };
+    case "CANCELLED": return { label: "Cancelled", className: "bg-slate-100 text-slate-500 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-600" };
+    default:          return { label: status,      className: "bg-slate-100 text-slate-500 border-slate-200" };
+  }
+}
+
+function bulkSourceLabel(sourceType: string): string {
+  if (sourceType === "CONTACTS") return "Contacts";
+  if (sourceType === "CAMPAIGN") return "Campaign";
+  if (sourceType === "FUNDERS")  return "Funders";
+  return sourceType;
+}
+
 function ActivityPanel({
   title,
   icon,
@@ -553,6 +591,32 @@ export default function CrmEmailLandingPage() {
   const [diag, setDiag] = useState<ReplyTrackingDiag | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMoreSent, setLoadingMoreSent] = useState(false);
+
+  // Bulk email jobs
+  const [bulkJobs, setBulkJobs] = useState<BulkEmailJob[]>([]);
+  const [bulkLoading, setBulkLoading] = useState(true);
+  const bulkPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const loadBulkJobs = useCallback(async () => {
+    try {
+      const data = await apiGet<{ jobs: BulkEmailJob[] }>("/crm/email/bulk-jobs?limit=20");
+      setBulkJobs(data.jobs ?? []);
+      // Auto-poll while any job is actively processing
+      const hasActive = (data.jobs ?? []).some((j) => j.status === "QUEUED" || j.status === "RUNNING");
+      if (hasActive) {
+        bulkPollRef.current = setTimeout(() => void loadBulkJobs(), 5000);
+      }
+    } catch {
+      // non-fatal
+    } finally {
+      setBulkLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadBulkJobs();
+    return () => { if (bulkPollRef.current) clearTimeout(bulkPollRef.current); };
+  }, [loadBulkJobs]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -856,6 +920,104 @@ export default function CrmEmailLandingPage() {
                     )}
                   </ActivityPanel>
                 </div>
+
+                {/* ── Bulk email jobs ─────────────────────────────────────── */}
+                <ActivityPanel
+                  title="Bulk email jobs"
+                  icon={<Users className="h-4 w-4" />}
+                  action={
+                    <Link href="/crm/contacts" className="crm-email-action-link inline-flex items-center gap-1 text-xs font-bold text-crm-accent">
+                      Send bulk <ArrowRight className="h-3 w-3" />
+                    </Link>
+                  }
+                >
+                  {bulkLoading ? (
+                    <div className="flex items-center gap-2 text-sm text-crm-muted">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading…
+                    </div>
+                  ) : bulkJobs.length === 0 ? (
+                    <div className="crm-email-empty tasks-empty-state flex min-h-[10rem] flex-col items-center justify-center px-6 py-8 text-center">
+                      <span className="crm-email-empty-icon mb-3 flex h-11 w-11 items-center justify-center rounded-crm border border-crm-border/60 bg-crm-surface-2 text-crm-accent">
+                        <Users className="h-5 w-5" />
+                      </span>
+                      <h3 className="text-base font-semibold text-crm-text">No bulk sends yet</h3>
+                      <p className="mt-2 max-w-sm text-sm leading-relaxed text-crm-muted">
+                        Select contacts, funders, or campaign members and use "Send Email" to queue a bulk send.
+                      </p>
+                      <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+                        <Link href="/crm/contacts" className="campaigns-btn-secondary inline-flex items-center gap-2">
+                          Contacts
+                        </Link>
+                        <Link href="/crm/funders" className="campaigns-btn-secondary inline-flex items-center gap-2">
+                          Funders
+                        </Link>
+                      </div>
+                    </div>
+                  ) : (
+                    <ul className="m-0 flex list-none flex-col divide-y divide-crm-border/55 p-0">
+                      {bulkJobs.map((job) => {
+                        const badge = bulkJobStatusBadge(job.status);
+                        const isActive = job.status === "QUEUED" || job.status === "RUNNING";
+                        return (
+                          <li key={job.id} className="crm-email-sent-row py-3 first:pt-0">
+                            <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1.5">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide", badge.className)}>
+                                    {isActive && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
+                                    {badge.label}
+                                  </span>
+                                  <span className="text-xs font-semibold text-crm-text">
+                                    {job.template?.name ?? "Unknown template"}
+                                  </span>
+                                  <span className="text-[11px] text-crm-muted">
+                                    {bulkSourceLabel(job.sourceType)}
+                                  </span>
+                                </div>
+                                <div className="mt-1.5 flex flex-wrap items-center gap-3 text-[11px] text-crm-muted">
+                                  <span>
+                                    <span className="font-semibold text-crm-text">{job.sentCount}</span> sent
+                                  </span>
+                                  {job.failedCount > 0 && (
+                                    <span className="text-crm-danger">
+                                      <span className="font-semibold">{job.failedCount}</span> failed
+                                    </span>
+                                  )}
+                                  {job.skippedCount > 0 && (
+                                    <span>
+                                      <span className="font-semibold">{job.skippedCount}</span> skipped
+                                    </span>
+                                  )}
+                                  {isActive && (
+                                    <span>
+                                      <span className="font-semibold">{job.queuedCount - job.sentCount - job.failedCount}</span> remaining
+                                    </span>
+                                  )}
+                                </div>
+                                {job.errorSummary && (
+                                  <p className="mt-1 text-[11px] text-crm-danger line-clamp-1" title={job.errorSummary}>
+                                    {job.errorSummary}
+                                  </p>
+                                )}
+                              </div>
+                              <div className="shrink-0 text-right">
+                                <p className="text-[11px] text-crm-muted">
+                                  {job.scheduledAt
+                                    ? `Scheduled ${formatCompactWhen(job.scheduledAt)}`
+                                    : formatCompactWhen(job.createdAt)}
+                                </p>
+                                {job.connection && (
+                                  <p className="mt-0.5 text-[10px] text-crm-muted">{job.connection.emailAddress}</p>
+                                )}
+                              </div>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </ActivityPanel>
 
                 <section className="crm-email-quick-actions crm-queue-list-panel px-4 py-4 sm:px-5">
                   <p className="text-[10px] font-bold uppercase tracking-wide text-crm-muted">Gmail-first workflow</p>
