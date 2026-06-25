@@ -5626,7 +5626,10 @@ app.post("/admin/users", async (req, reply) => {
       const auth = decryptJson<{ token: string; secret?: string }>(tpLink.pbxInstance.apiAuthEncrypted);
       const vital = getVitalPbxClient({ baseUrl: tpLink.pbxInstance.baseUrl, token: auth.token, secret: auth.secret });
       const vitalTenantId = tpLink.pbxTenantId || undefined;
-      await syncExtensionsFromPbx(db, tpLink.pbxInstanceId, vital, vitalTenantId ? { vitalTenantId } : undefined);
+      await syncExtensionsFromPbx(db, tpLink.pbxInstanceId, vital, {
+        ...(vitalTenantId ? { vitalTenantId } : {}),
+        applyChangesForUnliveWebrtc: true,
+      });
     } catch {
       // sync failure is non-fatal — admin can click "Re-sync credentials" in the user panel
     }
@@ -15100,7 +15103,9 @@ app.post("/admin/pbx/refresh-tenants", async (req, reply) => {
   // Skipped tenants (no TenantPbxLink) are counted but do not cause errors.
   let extensionSyncResult: ExtensionSyncResult | null = null;
   try {
-    extensionSyncResult = await syncExtensionsFromPbx(db, instance.id, client!, {});
+    extensionSyncResult = await syncExtensionsFromPbx(db, instance.id, client!, {
+      applyChangesForUnliveWebrtc: true,
+    });
     app.log.info(
       {
         event: "extension_sync_complete",
@@ -15194,6 +15199,7 @@ app.post("/admin/pbx/instances/:id/sync-extensions", async (req, reply) => {
   const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
   const syncResult = await syncExtensionsFromPbx(db, instance.id, client, {
     vitalTenantId: input.vitalTenantId,
+    applyChangesForUnliveWebrtc: true,
   });
   return { ok: true, ...syncResult };
 });
@@ -34067,7 +34073,10 @@ const port = Number(process.env.PORT || 3001);
       const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
       const vital = getVitalPbxClient({ baseUrl: link.pbxInstance.baseUrl, token: auth.token, secret: auth.secret, timeoutMs: 45000 });
       const vitalTenantId = link.pbxTenantId || undefined;
-      return syncExtensionsFromPbx(db, link.pbxInstanceId, vital, vitalTenantId ? { vitalTenantId } : undefined);
+      return syncExtensionsFromPbx(db, link.pbxInstanceId, vital, {
+        ...(vitalTenantId ? { vitalTenantId } : {}),
+        applyChangesForUnliveWebrtc: true,
+      });
     },
     audit: audit as any,
     encryptJson,

@@ -4,6 +4,16 @@ import { encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import { randomBytes } from "crypto";
 import bcrypt from "bcryptjs";
 
+// ── Auto-apply cooldown ───────────────────────────────────────────────────────
+// When a sync detects a WebRTC endpoint that has never gone live (the "device
+// exists in VitalPBX's DB but was never pushed into the running Asterisk config"
+// gap), we automatically run VitalPBX "Apply Changes" so the endpoint becomes
+// registerable without a human clicking the button. To avoid reloading Asterisk
+// repeatedly for a tenant that stays un-live (e.g. a phantom device, or a phone
+// that simply hasn't been scanned yet), we rate-limit auto-apply per tenant.
+const AUTO_APPLY_COOLDOWN_MS = 10 * 60 * 1000;
+const AUTO_APPLY_LAST_AT = new Map<string, number>();
+
 /**
  * Fetch the set of profile_ids that are classified as WebRTC in VitalPBX for the given tenant.
  * Returns an empty set on error (so sync falls back gracefully).
@@ -34,6 +44,10 @@ export interface ExtensionSyncTenantResult {
   skipped: boolean;
   skipReason?: string;
   errors: string[];
+  /** True when this sync auto-triggered VitalPBX "Apply Changes" for the tenant. */
+  appliedChanges?: boolean;
+  /** Non-null when an auto-apply was attempted but failed (incl. "nothing to apply"). */
+  applyError?: string | null;
 }
 
 export interface ExtensionSyncResult {
@@ -45,6 +59,8 @@ export interface ExtensionSyncResult {
   totalSkipped: number;
   totalErrors: number;
   totalAutoProvisioned: number;
+  /** Number of tenants for which auto-apply (VitalPBX "Apply Changes") fired. */
+  totalAppliedChanges: number;
 }
 
 /**
@@ -59,12 +75,16 @@ export interface ExtensionSyncResult {
  * Tenants with no TenantPbxLink are skipped (not mapped to a Connect tenant yet).
  *
  * @param options.vitalTenantId - if provided, sync only that one VitalPBX tenant
+ * @param options.applyChangesForUnliveWebrtc - when true (admin-initiated refresh /
+ *   per-user provisioning only — never the periodic warm cycle), automatically run
+ *   VitalPBX "Apply Changes" for any tenant whose WebRTC endpoint has never gone
+ *   live, so a freshly-scanned phone can register without a manual Apply click.
  */
 export async function syncExtensionsFromPbx(
   db: PrismaClient,
   pbxInstanceId: string,
   client: VitalPbxClient,
-  options?: { vitalTenantId?: string },
+  options?: { vitalTenantId?: string; applyChangesForUnliveWebrtc?: boolean },
 ): Promise<ExtensionSyncResult> {
   // 1. Load all VitalPBX tenant directory entries for this instance
   const tenantDirs = await db.pbxTenantDirectory.findMany({
@@ -95,6 +115,7 @@ export async function syncExtensionsFromPbx(
     totalSkipped: 0,
     totalErrors: 0,
     totalAutoProvisioned: 0,
+    totalAppliedChanges: 0,
   };
 
   for (const td of tenantDirs) {
@@ -176,6 +197,9 @@ export async function syncExtensionsFromPbx(
       result.totalExtensions += extensions.length;
 
       let syncFoundWebrtcExtension = false;
+      // WebRTC endpoint names (e.g. "T34_101_1") seen this pass — used to check
+      // live registration and decide whether an auto-apply is warranted.
+      const webrtcEndpointNames: string[] = [];
       // Track extension numbers seen in this sync pass so we can deactivate any
       // that VitalPBX no longer returns (i.e. they were deleted on the PBX side).
       const seenExtNumbers = new Set<string>();
@@ -257,7 +281,11 @@ export async function syncExtensionsFromPbx(
           ? String(activeDevice.device_name).trim()
           : null;
         const webrtcEnabled: boolean = !!webrtcDevice;
-        if (webrtcEnabled) syncFoundWebrtcExtension = true;
+        if (webrtcEnabled) {
+          syncFoundWebrtcExtension = true;
+          const endpointName = pbxDeviceName || pbxSipUsername;
+          if (endpointName) webrtcEndpointNames.push(endpointName);
+        }
         const pbxDeviceIdFromSync: string | null = activeDevice?.device_id != null
           ? String(activeDevice.device_id)
           : null;
@@ -420,6 +448,60 @@ export async function syncExtensionsFromPbx(
           }
         } catch {
           // Non-fatal — tenant will work once an admin manually enables WebRTC
+        }
+      }
+
+      // 7. Auto-apply VitalPBX "Apply Changes" when this tenant has a WebRTC
+      //    endpoint that has NEVER gone live. This closes the recurring "new
+      //    tenant: SIP synced, phone won't register" gap: VitalPBX holds the
+      //    `_1` device in its config DB, but it is only pushed into the running
+      //    Asterisk config (so it becomes registerable) when "Apply Changes"
+      //    regenerates + reloads. Nothing in the provisioning pipeline triggered
+      //    that automatically before. We only apply when an endpoint is genuinely
+      //    un-live (so healthy tenants are never needlessly reloaded), the caller
+      //    opted in (admin refresh / per-user sync — never the warm cycle), and
+      //    not more often than the per-tenant cooldown.
+      if (
+        options?.applyChangesForUnliveWebrtc &&
+        syncFoundWebrtcExtension &&
+        webrtcEndpointNames.length > 0
+      ) {
+        try {
+          const regs = await db.pbxEndpointRegistration.findMany({
+            where: { endpoint: { in: webrtcEndpointNames } },
+            select: { endpoint: true, status: true, lastRegisteredAt: true },
+          });
+          const everLive = new Map<string, boolean>();
+          for (const r of regs) {
+            const live =
+              String(r.status ?? "").trim().toUpperCase() === "REGISTERED" ||
+              r.lastRegisteredAt != null;
+            everLive.set(r.endpoint, live);
+          }
+          const hasNeverLiveEndpoint = webrtcEndpointNames.some(
+            (name) => !everLive.get(name),
+          );
+          const cooldownKey = `${pbxInstanceId}:${td.vitalTenantId}`;
+          const lastAppliedAt = AUTO_APPLY_LAST_AT.get(cooldownKey) ?? 0;
+          const cooldownPassed = Date.now() - lastAppliedAt >= AUTO_APPLY_COOLDOWN_MS;
+          if (hasNeverLiveEndpoint && cooldownPassed) {
+            AUTO_APPLY_LAST_AT.set(cooldownKey, Date.now());
+            try {
+              await client.syncTenant(td.vitalTenantId);
+              tenantResult.appliedChanges = true;
+              tenantResult.applyError = null;
+              result.totalAppliedChanges++;
+            } catch (applyErr: any) {
+              // "Invalid Operation" = VitalPBX had nothing queued to apply (the
+              // device is in its DB but no pending change to flush). Non-fatal:
+              // the truthful health warning still surfaces so the admin knows to
+              // re-save the device in VitalPBX. Any other error is recorded too.
+              tenantResult.appliedChanges = false;
+              tenantResult.applyError = String(applyErr?.message ?? applyErr);
+            }
+          }
+        } catch {
+          // Non-fatal — registration lookup failed; skip auto-apply this pass.
         }
       }
     } catch (err: any) {

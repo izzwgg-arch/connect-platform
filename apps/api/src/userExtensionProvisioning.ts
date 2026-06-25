@@ -401,8 +401,15 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
     const ctx = await loadLinkForAdminAction(req, reply);
     if (!ctx) return;
 
+    let appliedChanges = false;
     try {
-      await deps.syncExtensionsFromPbx(ctx.user.tenantId);
+      const syncOutcome = (await deps.syncExtensionsFromPbx(ctx.user.tenantId)) as
+        | { tenantResults?: Array<{ appliedChanges?: boolean }> }
+        | null
+        | undefined;
+      appliedChanges = Array.isArray(syncOutcome?.tenantResults)
+        ? syncOutcome!.tenantResults.some((t) => t?.appliedChanges === true)
+        : false;
     } catch (err: any) {
       await deps.audit({
         tenantId: ctx.user.tenantId,
@@ -514,6 +521,28 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
       action: "USER_PHONE_SYNC_OK",
       entityType: "PbxExtensionLink",
       entityId: ctx.link.id,
+      metadata: { appliedChanges },
+    });
+
+    // Truthful live-registration health: the DB says PROVISIONED, but the
+    // authoritative signal is whether the PBX has ever reported this endpoint
+    // registering. If we just auto-applied changes the phone may take a few
+    // seconds to (re)register, so this can read NEVER_REGISTERED briefly — the
+    // admin UI should poll /phone/status to confirm it goes LIVE.
+    const endpointName = (refreshed as any)?.pbxDeviceName || (refreshed as any)?.pbxSipUsername || null;
+    let registration: { status?: string | null; lastRegisteredAt?: Date | null } | null = null;
+    if (endpointName) {
+      registration = await (db as any).pbxEndpointRegistration
+        .findUnique({
+          where: { endpoint: endpointName },
+          select: { status: true, lastRegisteredAt: true },
+        })
+        .catch(() => null);
+    }
+    const health = computeEndpointLiveHealth({
+      provisionStatus: "PROVISIONED",
+      endpoint: endpointName,
+      registration,
     });
 
     return {
@@ -522,7 +551,11 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
       hasSipPassword: true,
       webrtcEnabled: true,
       createdWebrtcDevice,
-      endpointName: (refreshed as any)?.pbxDeviceName || (refreshed as any)?.pbxSipUsername || null,
+      appliedChanges,
+      endpointName,
+      liveRegistration: health.liveRegistration,
+      registrationStatus: registration?.status || null,
+      healthWarning: health.healthWarning,
     };
   });
 
