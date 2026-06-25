@@ -50,6 +50,24 @@ export function isExtensionLegChannel(channel: string | null | undefined): boole
   return /^PJSIP\/T\d+_\d+/i.test(channel);
 }
 
+/**
+ * Set the durable `extensionLegSeen` flag the moment any real tenant-extension
+ * leg (`PJSIP/T<id>_<exten>...`, incl. the WebRTC `_<n>` sibling) is dialed or
+ * created for a call. Unlike `call.channels` (pruned on Hangup), this lives in
+ * `metadata` and survives the leg being torn down — so the mobile-invite requeue
+ * can tell "the app received the INVITE (and may have declined/hung up) — do NOT
+ * re-ring the dialplan" apart from "the app was asleep and never got the INVITE
+ * (genuine cold-start — requeue is safe)". This is what stops the ring-group
+ * voicemail loop when a DND/declined leg (fast 486) tears down before the live
+ * gate can see it.
+ */
+function markExtensionLegSeen(call: NormalizedCall, channel: string | null | undefined): void {
+  if (call.metadata["extensionLegSeen"]) return;
+  if (isExtensionLegChannel(channel)) {
+    call.metadata["extensionLegSeen"] = true;
+  }
+}
+
 function digitsOnly(value: string | null | undefined): string {
   const digits = String(value || "").replace(/\D/g, "");
   return /^1\d{10}$/.test(digits) ? digits.slice(1) : digits;
@@ -532,6 +550,7 @@ export class CallStateStore extends EventEmitter {
     if (!call.channels.includes(params.channel)) {
       call.channels.push(params.channel);
     }
+    markExtensionLegSeen(call, params.channel);
     // Accumulate all seen channels in metadata so they survive post-hangup channel clear.
     // CdrNotifier uses this for PJSIP endpoint → tenant resolution.
     const seen = (call.metadata["seenChannels"] as string[] | undefined) ?? [];
@@ -637,6 +656,7 @@ export class CallStateStore extends EventEmitter {
     const prevState = call.state;
     const newState = channelStateToCallState(params.channelState);
     const channel = this.channelByUniqueId.get(params.uniqueid);
+    markExtensionLegSeen(call, channel);
     if (shouldUpgradeState(call.state, newState)) {
       call.state = newState;
       // Mark answeredAt the first time a channel goes Up (state 6).
@@ -715,6 +735,12 @@ export class CallStateStore extends EventEmitter {
       call.metadata["trunkDialChannel"] = params.channel;
     }
 
+    // Earliest possible signal that the dialplan is delivering this call to a
+    // real extension endpoint (mobile/desk/WebRTC). Recording it here — before
+    // the leg's own Newchannel — closes the race where a DND/declined leg sends
+    // a fast 486 and is torn down before the live-leg gate can observe it.
+    markExtensionLegSeen(call, params.destination);
+
     const callerDigits = (params.callerIDNum ?? "").replace(/\D/g, "");
     const callerShort = callerDigits.length >= 2 && callerDigits.length <= 6;
 
@@ -770,6 +796,7 @@ export class CallStateStore extends EventEmitter {
       call.bridgeIds.push(bridgeId);
     }
     const bridgeChannel = this.channelByUniqueId.get(params.uniqueid);
+    markExtensionLegSeen(call, bridgeChannel);
     const bridgeExt = normalizeExtensionFromChannel(bridgeChannel);
     if (bridgeExt && !call.extensions.includes(bridgeExt)) {
       call.extensions.push(bridgeExt);
@@ -845,6 +872,9 @@ export class CallStateStore extends EventEmitter {
     if (fromCall.answeredAt && !intoCall.answeredAt) intoCall.answeredAt = fromCall.answeredAt;
     if (fromCall.extensionAnsweredAt && !intoCall.extensionAnsweredAt) {
       intoCall.extensionAnsweredAt = fromCall.extensionAnsweredAt;
+    }
+    if (fromCall.metadata["extensionLegSeen"]) {
+      intoCall.metadata["extensionLegSeen"] = true;
     }
     if (fromCall.state !== "hungup" && shouldUpgradeState(intoCall.state, fromCall.state)) {
       intoCall.state = fromCall.state;

@@ -980,6 +980,46 @@ export class TelephonyService {
       };
     }
 
+    // CRITICAL (DND / fast-decline race): the live-leg gate above only catches
+    // an extension leg that is STILL on `call.channels` at this instant. A leg
+    // that received the INVITE and immediately answered with a final response —
+    // most importantly SIP 486 Busy Here from a mobile/WebRTC endpoint in Do Not
+    // Disturb — is torn down within ~100ms (CallStateStore.onHangup prunes it
+    // from `call.channels`). The requeue then fires ~700ms later, sees no live
+    // leg, redirects the trunk back to the ring group at priority 1, and the
+    // group re-dials → "rings ~1s then loops, never reaches voicemail".
+    //
+    // `metadata.extensionLegSeen` is a DURABLE flag set the moment any
+    // `PJSIP/T<id>_<exten>...` leg is dialed/created (DialBegin/Newchannel/
+    // Newstate/BridgeEnter) and is NEVER cleared on hangup. If it is set, the
+    // app already RECEIVED this call (rang, declined, or hung up) — re-injecting
+    // it into the dialplan only loops. The genuine cold-start case the requeue
+    // exists for never creates an extension leg (app asleep, no contact), so the
+    // flag stays unset and the wake → register → requeue path is untouched.
+    //
+    // Proven root cause (RSBK ext 102, linkedId 1782427691.136899, 2026-06-25):
+    // ring-group DialEnd at 21.207 (app 486, ~100ms) → "AMI mobile invite requeue
+    // sent" Redirect to T34_ext-ringgroups,801 at 21.864 → group restarted → loop.
+    if (call.metadata["extensionLegSeen"] === true) {
+      log.info(
+        {
+          linkedId: params.linkedId,
+          state: call.state,
+          channels: call.channels,
+          extensionLegSeen: true,
+        },
+        "mobile invite requeue skipped — extension leg already delivered (rang/declined/hung up)",
+      );
+      return {
+        actionId: null,
+        channel: null,
+        exten: null,
+        context: null,
+        skipped: true,
+        skipReason: "extension_leg_already_delivered",
+      };
+    }
+
     // Prefer the trunk leg as the redirect channel — that's the leg the
     // dialplan needs to re-execute Dial() against. Fall back to the first
     // non-helper channel only if no trunk-recorded channel is known.
