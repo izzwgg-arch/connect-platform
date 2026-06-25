@@ -6110,16 +6110,34 @@ app.patch("/admin/users/:id", async (req, reply) => {
       nextExtension = null;
     }
   }
-  const updated = await db.$transaction(async (tx) => {
-    if (nextExtension !== undefined) {
-      await tx.extension.updateMany({ where: { ownerUserId: target.id }, data: { ownerUserId: null } });
-      if (nextExtension) await tx.extension.update({ where: { id: nextExtension.id }, data: { ownerUserId: target.id } });
+  // User.email is globally unique. Pre-check so we return a clean, actionable
+  // 409 instead of leaking a raw Prisma P2002 dump into the Edit User dialog.
+  let nextEmail: string | undefined = undefined;
+  if (input.email !== undefined) {
+    nextEmail = normalizeEmail(input.email);
+    if (nextEmail && nextEmail !== target.email) {
+      const clash = await db.user.findFirst({
+        where: { email: nextEmail, NOT: { id: target.id } },
+        select: { id: true, tenant: { select: { name: true } } },
+      });
+      if (clash) {
+        const msg = `That email (${nextEmail}) is already used by another user${clash.tenant?.name ? ` in tenant "${clash.tenant.name}"` : ""}. Choose a different email.`;
+        return reply.status(409).send({ error: "email_already_in_use", message: msg, detail: msg });
+      }
     }
-    return tx.user.update({
+  }
+  let updated;
+  try {
+    updated = await db.$transaction(async (tx) => {
+      if (nextExtension !== undefined) {
+        await tx.extension.updateMany({ where: { ownerUserId: target.id }, data: { ownerUserId: null } });
+        if (nextExtension) await tx.extension.update({ where: { id: nextExtension.id }, data: { ownerUserId: target.id } });
+      }
+      return tx.user.update({
       where: { id: target.id },
       data: {
         tenantId: nextTenantId,
-        email: input.email ? normalizeEmail(input.email) : undefined,
+        email: nextEmail,
         role: effectiveRole as any,
         status: input.status as any,
         firstName: input.firstName?.trim(),
@@ -6131,8 +6149,21 @@ app.patch("/admin/users/:id", async (req, reply) => {
         notes: input.notes === undefined ? undefined : input.notes?.trim() || null,
       } as any,
       include: { tenant: { select: { id: true, name: true } }, ownedExtensions: { take: 1 }, passwordTokens: { take: 1, orderBy: { createdAt: "desc" } } } as any,
+      });
     });
-  });
+  } catch (err: any) {
+    // Safety net for any unique collision that slipped past the pre-checks
+    // (race, or a field other than email) — never leak the raw Prisma dump.
+    if (String(err?.code) === "P2002") {
+      const fields = Array.isArray(err?.meta?.target) ? err.meta.target.join(", ") : String(err?.meta?.target ?? "");
+      const isEmail = /email/i.test(fields);
+      const msg = isEmail
+        ? "That email is already used by another user. Choose a different email."
+        : `That change conflicts with an existing record${fields ? ` (${fields})` : ""}.`;
+      return reply.status(409).send({ error: isEmail ? "email_already_in_use" : "duplicate_value", message: msg, detail: msg });
+    }
+    throw err;
+  }
   await audit({ tenantId: updated.tenantId, actorUserId: admin.sub, targetUserId: updated.id, action: "USER_UPDATED", entityType: "User", entityId: updated.id, metadata: { role: effectiveRole, status: input.status } });
   return { ok: true, user: formatAdminUser(updated) };
 });
