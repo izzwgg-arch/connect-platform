@@ -609,6 +609,34 @@ function getVitalPbxClient(config?: { baseUrl?: string; token?: string; secret?:
   });
 }
 
+/**
+ * Force VitalPBX to regenerate + reload a tenant's live Asterisk config by
+ * re-saving the tenant unchanged (no-op `tenants.update`). This is the only
+ * mechanism that materializes WebRTC `_1` devices which exist in VitalPBX's
+ * database but drifted out of the running config — `apply_changes` no-ops in
+ * that state ("Invalid Operation", nothing queued). Verified on tenant T34:
+ * the re-save brought `T34_101_1`/`T34_102_1` live. Uses a long timeout because
+ * VitalPBX runs the regenerate synchronously inside the PUT.
+ */
+async function forceRegeneratePbxTenant(
+  baseUrl: string,
+  auth: { token: string; secret?: string },
+  vitalTenantId: string,
+): Promise<void> {
+  const regenClient = getVitalPbxClient({
+    baseUrl,
+    token: auth.token,
+    secret: auth.secret,
+    timeoutMs: 90_000,
+  });
+  const t: any = await regenClient.getTenant(vitalTenantId);
+  await regenClient.updateTenant(vitalTenantId, {
+    name: t?.name,
+    description: t?.description,
+    settings: t?.settings,
+  });
+}
+
 async function queuePbxJob(input: { tenantId: string; pbxInstanceId?: string | null; type: string; payload: any; lastError?: string | null }) {
   return db.pbxJob.create({
     data: {
@@ -5629,6 +5657,7 @@ app.post("/admin/users", async (req, reply) => {
       await syncExtensionsFromPbx(db, tpLink.pbxInstanceId, vital, {
         ...(vitalTenantId ? { vitalTenantId } : {}),
         applyChangesForUnliveWebrtc: true,
+        forceRegenerateTenant: (vid) => forceRegeneratePbxTenant(tpLink.pbxInstance.baseUrl, auth, vid),
       });
     } catch {
       // sync failure is non-fatal — admin can click "Re-sync credentials" in the user panel
@@ -15105,6 +15134,7 @@ app.post("/admin/pbx/refresh-tenants", async (req, reply) => {
   try {
     extensionSyncResult = await syncExtensionsFromPbx(db, instance.id, client!, {
       applyChangesForUnliveWebrtc: true,
+      forceRegenerateTenant: (vid) => forceRegeneratePbxTenant(instance.baseUrl, auth, vid),
     });
     app.log.info(
       {
@@ -15200,6 +15230,7 @@ app.post("/admin/pbx/instances/:id/sync-extensions", async (req, reply) => {
   const syncResult = await syncExtensionsFromPbx(db, instance.id, client, {
     vitalTenantId: input.vitalTenantId,
     applyChangesForUnliveWebrtc: true,
+    forceRegenerateTenant: (vid) => forceRegeneratePbxTenant(instance.baseUrl, auth, vid),
   });
   return { ok: true, ...syncResult };
 });
@@ -34076,6 +34107,7 @@ const port = Number(process.env.PORT || 3001);
       return syncExtensionsFromPbx(db, link.pbxInstanceId, vital, {
         ...(vitalTenantId ? { vitalTenantId } : {}),
         applyChangesForUnliveWebrtc: true,
+        forceRegenerateTenant: (vid) => forceRegeneratePbxTenant(link.pbxInstance.baseUrl, auth, vid),
       });
     },
     audit: audit as any,

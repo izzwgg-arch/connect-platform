@@ -48,6 +48,12 @@ export interface ExtensionSyncTenantResult {
   appliedChanges?: boolean;
   /** Non-null when an auto-apply was attempted but failed (incl. "nothing to apply"). */
   applyError?: string | null;
+  /**
+   * True when this sync force-regenerated the tenant config (no-op tenant
+   * re-save) because the WebRTC endpoints existed in VitalPBX's DB but had
+   * drifted out of the live Asterisk config and `apply_changes` was a no-op.
+   */
+  forcedRegenerate?: boolean;
 }
 
 export interface ExtensionSyncResult {
@@ -61,6 +67,8 @@ export interface ExtensionSyncResult {
   totalAutoProvisioned: number;
   /** Number of tenants for which auto-apply (VitalPBX "Apply Changes") fired. */
   totalAppliedChanges: number;
+  /** Number of tenants force-regenerated (no-op tenant re-save) due to config drift. */
+  totalForcedRegenerate: number;
 }
 
 /**
@@ -84,7 +92,17 @@ export async function syncExtensionsFromPbx(
   db: PrismaClient,
   pbxInstanceId: string,
   client: VitalPbxClient,
-  options?: { vitalTenantId?: string; applyChangesForUnliveWebrtc?: boolean },
+  options?: {
+    vitalTenantId?: string;
+    applyChangesForUnliveWebrtc?: boolean;
+    /**
+     * Force a VitalPBX config regenerate for a drifted tenant (no-op tenant
+     * re-save). Wired by the server with a long-timeout client so the slow
+     * synchronous regenerate completes inside the HTTP call. When omitted, the
+     * drift path falls back to the (possibly short-timeout) sync client.
+     */
+    forceRegenerateTenant?: (vitalTenantId: string) => Promise<void>;
+  },
 ): Promise<ExtensionSyncResult> {
   // 1. Load all VitalPBX tenant directory entries for this instance
   const tenantDirs = await db.pbxTenantDirectory.findMany({
@@ -116,6 +134,7 @@ export async function syncExtensionsFromPbx(
     totalErrors: 0,
     totalAutoProvisioned: 0,
     totalAppliedChanges: 0,
+    totalForcedRegenerate: 0,
   };
 
   for (const td of tenantDirs) {
@@ -481,6 +500,14 @@ export async function syncExtensionsFromPbx(
           const hasNeverLiveEndpoint = webrtcEndpointNames.some(
             (name) => !everLive.get(name),
           );
+          // "Fully dark" = NONE of this tenant's WebRTC endpoints have ever
+          // registered. That is the strong drift signal (a new/never-working
+          // tenant), as opposed to one healthy tenant whose user simply has not
+          // scanned a phone yet. We only escalate to the heavier force-regenerate
+          // when the whole tenant is dark.
+          const allWebrtcNeverLive = webrtcEndpointNames.every(
+            (name) => !everLive.get(name),
+          );
           const cooldownKey = `${pbxInstanceId}:${td.vitalTenantId}`;
           const lastAppliedAt = AUTO_APPLY_LAST_AT.get(cooldownKey) ?? 0;
           const cooldownPassed = Date.now() - lastAppliedAt >= AUTO_APPLY_COOLDOWN_MS;
@@ -492,12 +519,50 @@ export async function syncExtensionsFromPbx(
               tenantResult.applyError = null;
               result.totalAppliedChanges++;
             } catch (applyErr: any) {
-              // "Invalid Operation" = VitalPBX had nothing queued to apply (the
-              // device is in its DB but no pending change to flush). Non-fatal:
-              // the truthful health warning still surfaces so the admin knows to
-              // re-save the device in VitalPBX. Any other error is recorded too.
+              // "Invalid Operation" = VitalPBX had nothing queued to apply. This
+              // is the *drift* case: the `_1` WebRTC device exists in VitalPBX's
+              // database (Connect synced it) but was never regenerated into the
+              // live Asterisk config, and there is no pending change for
+              // apply_changes to flush. Proven on T34 (RSBK): the device was
+              // byte-for-byte identical to a working tenant yet had no live
+              // endpoint. The fix that actually materializes it is a no-op
+              // tenant re-save, which forces VitalPBX to regenerate + reload
+              // PJSIP synchronously. We only do this when the entire tenant is
+              // dark (never any live WebRTC endpoint) so healthy tenants are
+              // never disturbed.
               tenantResult.appliedChanges = false;
               tenantResult.applyError = String(applyErr?.message ?? applyErr);
+              if (allWebrtcNeverLive) {
+                try {
+                  if (options?.forceRegenerateTenant) {
+                    // Preferred: long-timeout client wired by the server, so the
+                    // synchronous regenerate completes inside the HTTP call.
+                    await options.forceRegenerateTenant(td.vitalTenantId);
+                  } else {
+                    const t: any = await client.getTenant(td.vitalTenantId);
+                    await client
+                      .updateTenant(td.vitalTenantId, {
+                        name: t?.name,
+                        description: t?.description,
+                        settings: t?.settings,
+                      })
+                      .catch((regenErr: any) => {
+                        // VitalPBX runs the regenerate+reload synchronously inside
+                        // the PUT and can exceed the HTTP timeout; the reload still
+                        // completes server-side (verified on T34). Swallow only the
+                        // timeout — surface any other error.
+                        if (!/timed out|timeout/i.test(String(regenErr?.message ?? regenErr))) {
+                          throw regenErr;
+                        }
+                      });
+                  }
+                  tenantResult.forcedRegenerate = true;
+                  tenantResult.applyError = null;
+                  result.totalForcedRegenerate++;
+                } catch (regenErr: any) {
+                  tenantResult.applyError = `drift_regenerate_failed: ${String(regenErr?.message ?? regenErr)}`;
+                }
+              }
             }
           }
         } catch {

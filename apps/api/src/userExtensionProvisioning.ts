@@ -402,13 +402,17 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
     if (!ctx) return;
 
     let appliedChanges = false;
+    let forcedRegenerate = false;
     try {
       const syncOutcome = (await deps.syncExtensionsFromPbx(ctx.user.tenantId)) as
-        | { tenantResults?: Array<{ appliedChanges?: boolean }> }
+        | { tenantResults?: Array<{ appliedChanges?: boolean; forcedRegenerate?: boolean }> }
         | null
         | undefined;
       appliedChanges = Array.isArray(syncOutcome?.tenantResults)
         ? syncOutcome!.tenantResults.some((t) => t?.appliedChanges === true)
+        : false;
+      forcedRegenerate = Array.isArray(syncOutcome?.tenantResults)
+        ? syncOutcome!.tenantResults.some((t) => t?.forcedRegenerate === true)
         : false;
     } catch (err: any) {
       await deps.audit({
@@ -521,7 +525,7 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
       action: "USER_PHONE_SYNC_OK",
       entityType: "PbxExtensionLink",
       entityId: ctx.link.id,
-      metadata: { appliedChanges },
+      metadata: { appliedChanges, forcedRegenerate },
     });
 
     // Truthful live-registration health: the DB says PROVISIONED, but the
@@ -552,6 +556,7 @@ export function registerUserExtensionProvisioningRoutes(app: FastifyInstance, de
       webrtcEnabled: true,
       createdWebrtcDevice,
       appliedChanges,
+      forcedRegenerate,
       endpointName,
       liveRegistration: health.liveRegistration,
       registrationStatus: registration?.status || null,
