@@ -14,6 +14,15 @@ import bcrypt from "bcryptjs";
 const AUTO_APPLY_COOLDOWN_MS = 10 * 60 * 1000;
 const AUTO_APPLY_LAST_AT = new Map<string, number>();
 
+// Force-regenerate is the heavy lever (a synchronous tenant re-save + PJSIP
+// reload). PbxEndpointRegistration cannot tell "endpoint missing from live
+// config" (drift) apart from "endpoint exists but the phone is offline" — both
+// look like never-registered. To avoid reloading every tenant with an offline
+// phone on a full refresh, we only force-regenerate tenants whose WebRTC link
+// was provisioned recently (a genuinely new/just-set-up tenant). The deliberate
+// per-user "Sync SIP" path bypasses this age gate via forceRegenerateIgnoreAge.
+const FORCE_REGEN_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+
 /**
  * Fetch the set of profile_ids that are classified as WebRTC in VitalPBX for the given tenant.
  * Returns an empty set on error (so sync falls back gracefully).
@@ -102,6 +111,12 @@ export async function syncExtensionsFromPbx(
      * drift path falls back to the (possibly short-timeout) sync client.
      */
     forceRegenerateTenant?: (vitalTenantId: string) => Promise<void>;
+    /**
+     * Skip the "recently provisioned" age gate on force-regenerate. Set only by
+     * the deliberate per-user "Sync SIP" admin action, which targets a single
+     * tenant on purpose and should fix drift regardless of tenant age.
+     */
+    forceRegenerateIgnoreAge?: boolean;
   },
 ): Promise<ExtensionSyncResult> {
   // 1. Load all VitalPBX tenant directory entries for this instance
@@ -532,7 +547,31 @@ export async function syncExtensionsFromPbx(
               // never disturbed.
               tenantResult.appliedChanges = false;
               tenantResult.applyError = String(applyErr?.message ?? applyErr);
-              if (allWebrtcNeverLive) {
+              // Only force-regenerate genuinely new/just-provisioned tenants
+              // (or when the deliberate per-user path opts out of the age gate).
+              // This prevents a full Refresh PBX from reloading every tenant
+              // whose phone merely happens to be offline.
+              let regenAllowedByAge = options?.forceRegenerateIgnoreAge === true;
+              if (allWebrtcNeverLive && !regenAllowedByAge) {
+                try {
+                  const recentLinks = await db.pbxExtensionLink.findMany({
+                    where: { tenantId: resolvedTenantId, webrtcEnabled: true },
+                    select: { createdAt: true, sipPasswordIssuedAt: true, lastProvisionedAt: true },
+                  });
+                  const cutoff = Date.now() - FORCE_REGEN_MAX_AGE_MS;
+                  regenAllowedByAge = recentLinks.some((l: any) => {
+                    const ts = Math.max(
+                      l.createdAt ? new Date(l.createdAt).getTime() : 0,
+                      l.sipPasswordIssuedAt ? new Date(l.sipPasswordIssuedAt).getTime() : 0,
+                      l.lastProvisionedAt ? new Date(l.lastProvisionedAt).getTime() : 0,
+                    );
+                    return ts >= cutoff;
+                  });
+                } catch {
+                  regenAllowedByAge = false;
+                }
+              }
+              if (allWebrtcNeverLive && regenAllowedByAge) {
                 try {
                   if (options?.forceRegenerateTenant) {
                     // Preferred: long-timeout client wired by the server, so the

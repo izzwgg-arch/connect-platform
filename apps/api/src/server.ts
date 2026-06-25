@@ -34108,6 +34108,7 @@ const port = Number(process.env.PORT || 3001);
         ...(vitalTenantId ? { vitalTenantId } : {}),
         applyChangesForUnliveWebrtc: true,
         forceRegenerateTenant: (vid) => forceRegeneratePbxTenant(link.pbxInstance.baseUrl, auth, vid),
+        forceRegenerateIgnoreAge: true,
       });
     },
     audit: audit as any,
