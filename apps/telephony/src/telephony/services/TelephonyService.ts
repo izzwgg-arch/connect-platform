@@ -4,6 +4,7 @@ import type { AmiClient } from "../ami/AmiClient";
 import type { AriClient } from "../ari/AriClient";
 import { mapAmiFrame } from "../ami/AmiEventMapper";
 import type { CallStateStore } from "../state/CallStateStore";
+import { isExtensionLegChannel } from "../state/CallStateStore";
 import { isHelperChannel } from "../normalizers/normalizeCallEvent";
 import type { ExtensionStateStore } from "../state/ExtensionStateStore";
 import type { QueueStateStore } from "../state/QueueStateStore";
@@ -932,6 +933,50 @@ export class TelephonyService {
         context: null,
         skipped: true,
         skipReason: "extension_already_answered",
+      };
+    }
+
+    // CRITICAL: If an extension leg is ALREADY LIVE on this call (a real
+    // `PJSIP/T<id>_<exten>...` channel is currently ringing or up), the original
+    // Dial() already delivered a SIP INVITE to the device — it is ringing right
+    // now. Issuing the requeue Redirect here would re-execute the trunk leg's
+    // Dial() from the top, which TEARS DOWN the in-flight ring and (for ring
+    // groups) re-enters the group at priority 1 — an endless "rings ~1s then
+    // restarts" loop that never reaches voicemail.
+    //
+    // The requeue exists ONLY for the genuine mobile cold-start case: the app
+    // was asleep/unregistered when the group dialed, so `PJSIP/T<id>_<exten>_1`
+    // had no contact and NO extension-leg channel was ever created. In that case
+    // `call.channels` holds no extension leg and this gate passes, so the wake →
+    // register → requeue path still re-rings the now-awake app exactly as before.
+    //
+    // `call.channels` is pruned on Hangup (CallStateStore.onHangup), so a match
+    // here means the leg is live RIGHT NOW — not a stale prior attempt.
+    //
+    // Proven root cause (RSBK ext 102, linkedId 1782424010.136659, 2026-06-25):
+    // live AMI trace + telephony logs showed `PJSIP/T34_102_1` DialBegin/ringing
+    // at 069423, then "AMI mobile invite requeue sent" Redirect to
+    // T34_ext-ringgroups,801 at 069817 → DialEnd CANCEL → ring group restarted →
+    // loop. The device never rejected and the caller never hung up; the requeue
+    // Redirect was the sole trigger.
+    const liveExtensionLeg = call.channels.find((ch) => isExtensionLegChannel(ch));
+    if (liveExtensionLeg) {
+      log.info(
+        {
+          linkedId: params.linkedId,
+          state: call.state,
+          liveExtensionLeg,
+          channels: call.channels,
+        },
+        "mobile invite requeue skipped — extension leg already ringing/live",
+      );
+      return {
+        actionId: null,
+        channel: null,
+        exten: null,
+        context: null,
+        skipped: true,
+        skipReason: "extension_leg_already_live",
       };
     }
 

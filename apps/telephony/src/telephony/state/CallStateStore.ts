@@ -45,7 +45,7 @@ const VPBX_CTX_PREFIXES = ["ext-local-", "from-pstn-", "from-internal-", "from-t
  * extension is even rung) does NOT make the call appear "already answered by
  * the called extension" to the mobile-wake answer pipeline.
  */
-function isExtensionLegChannel(channel: string | null | undefined): boolean {
+export function isExtensionLegChannel(channel: string | null | undefined): boolean {
   if (!channel) return false;
   return /^PJSIP\/T\d+_\d+/i.test(channel);
 }
