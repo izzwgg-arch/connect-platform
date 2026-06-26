@@ -90,15 +90,28 @@ function isIdempotentRead(method: VitalPbxHttpMethod): boolean {
   return method === "GET";
 }
 
+/**
+ * PBX WRITE SAFEGUARD — global default.
+ *
+ * Connect must never modify the PBX without explicit, human-granted permission.
+ * Config-mutating endpoints (`pbxConfigMutation: true`) are blocked unless this
+ * returns true. The only way to flip it on is to set the env var deliberately on
+ * the server, scoped to the specific authorized operation.
+ */
+function envAllowsPbxConfigMutations(): boolean {
+  const v = String(process.env.PBX_ALLOW_CONFIG_MUTATIONS ?? "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes" || v === "on";
+}
+
 function hasPathParameter(path: string, token: string): boolean {
   return path.includes(`:${token}`);
 }
 
 export class VitalPbxClient {
   private cfg: Required<
-    Pick<VitalPbxConfig, "timeoutMs" | "simulate" | "tenantHeaderName" | "tenantQueryName" | "tenantTransport" | "retryCount" | "userAgent">
+    Pick<VitalPbxConfig, "timeoutMs" | "simulate" | "tenantHeaderName" | "tenantQueryName" | "tenantTransport" | "retryCount" | "userAgent" | "allowConfigMutations">
   > &
-    Omit<VitalPbxConfig, "timeoutMs" | "simulate" | "tenantHeaderName" | "tenantQueryName" | "tenantTransport" | "retryCount" | "userAgent">;
+    Omit<VitalPbxConfig, "timeoutMs" | "simulate" | "tenantHeaderName" | "tenantQueryName" | "tenantTransport" | "retryCount" | "userAgent" | "allowConfigMutations">;
 
   constructor(cfg: VitalPbxConfig) {
     this.cfg = {
@@ -109,7 +122,11 @@ export class VitalPbxClient {
       tenantTransport: cfg.tenantTransport || "header",
       retryCount: cfg.retryCount ?? 2,
       userAgent: cfg.userAgent || "connectcomms-vitalpbx-client/1.0",
-      ...cfg
+      ...cfg,
+      // Resolved LAST so the spread above can never silently re-enable writes.
+      // Default OFF: blocked unless the caller passed an explicit value or the
+      // operator set PBX_ALLOW_CONFIG_MUTATIONS on the server.
+      allowConfigMutations: cfg.allowConfigMutations ?? envAllowsPbxConfigMutations(),
     };
   }
 
@@ -243,6 +260,37 @@ export class VitalPbxClient {
     }
   ): Promise<VitalPbxApiEnvelope<T>> {
     const endpoint = getVitalPbxEndpoint(endpointKey);
+
+    // ── PBX WRITE SAFEGUARD ──────────────────────────────────────────────────
+    // Refuse any endpoint that CHANGES PBX CONFIGURATION unless writes have been
+    // explicitly authorized. This is the hard backstop that prevents Connect
+    // (any sync job, admin route, future code path, or agent) from modifying the
+    // PBX — creating/updating/deleting tenants, adding/removing inbound DIDs,
+    // regenerating config, queue/code CRUD — without deliberate operator consent.
+    // Root cause it guards: an automatic tenant re-save (PUT) silently wiped
+    // tenants' inbound DIDs in June 2026. Operational runtime actions
+    // (click-to-call, SMS/WhatsApp/fax send, voicemail message ops, agent queue
+    // login/pause) are NOT flagged pbxConfigMutation and pass through freely.
+    if (endpoint.pbxConfigMutation && !this.cfg.allowConfigMutations && !this.cfg.simulate) {
+      this.emit({
+        direction: "error",
+        method: endpoint.method,
+        path: endpoint.path,
+        errorCode: "PBX_MUTATION_BLOCKED",
+        message: `Blocked PBX config mutation '${endpointKey}' — Connect is in PBX read-only safe mode`,
+      });
+      throw makeVitalPbxError(
+        `Blocked PBX configuration change '${endpointKey}' (${endpoint.method} ${endpoint.path}). ` +
+          `Connect runs in PBX READ-ONLY SAFE MODE and must NOT modify the PBX without explicit operator permission. ` +
+          `To intentionally allow a specific, human-authorized operation, set PBX_ALLOW_CONFIG_MUTATIONS=1 on the server ` +
+          `(or construct the client with allowConfigMutations: true).`,
+        "PBX_MUTATION_BLOCKED",
+        403,
+        false,
+        { endpointKey, method: endpoint.method, path: endpoint.path },
+      );
+    }
+
     const headers: Record<string, string> = {};
     const query = { ...(input?.query || {}) };
     this.maybeInjectTenant(endpoint, input?.tenant, headers, query);

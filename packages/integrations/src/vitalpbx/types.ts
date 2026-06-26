@@ -14,6 +14,18 @@ export type VitalPbxConfig = {
   tenantTransport?: "header" | "query" | "both";
   retryCount?: number;
   userAgent?: string;
+  /**
+   * PBX WRITE SAFEGUARD. When false (the default), this client REFUSES every
+   * config-mutating VitalPBX endpoint (`pbxConfigMutation: true`) — tenant
+   * create/update/delete, inbound-number add/remove, apply_changes, queue and
+   * code CRUD, etc. — and throws `PBX_MUTATION_BLOCKED` instead of issuing the
+   * request. This exists because an automatic tenant re-save silently wiped
+   * tenants' inbound DIDs (June 2026). Connect must NOT modify the PBX without
+   * explicit, human-granted permission. Set to true ONLY for a specific,
+   * operator-authorized operation. Defaults from env `PBX_ALLOW_CONFIG_MUTATIONS`
+   * ("1"/"true"/"yes"/"on") when not passed explicitly.
+   */
+  allowConfigMutations?: boolean;
   logger?: (entry: VitalPbxLogEntry) => void;
 };
 
@@ -28,6 +40,7 @@ export type VitalPbxErrorCode =
   | "PBX_TENANT_CONTEXT_ERROR"
   | "PBX_UNREACHABLE"
   | "PBX_PARSE_ERROR"
+  | "PBX_MUTATION_BLOCKED"
   | "PBX_UNKNOWN_ERROR";
 
 export type VitalPbxApiError = Error & {
@@ -70,6 +83,15 @@ export type VitalPbxEndpointDefinition = {
   tenantAware?: boolean;
   capability?: string;
   notes?: string;
+  /**
+   * True for endpoints that CHANGE PBX CONFIGURATION (tenant lifecycle, inbound
+   * numbers/DIDs, apply_changes/regenerate, queue & code CRUD). The client
+   * blocks these unless `allowConfigMutations` is explicitly enabled. Runtime
+   * call/message actions (click-to-call, SMS, WhatsApp, fax, voicemail message
+   * ops, agent queue login/pause) are intentionally NOT flagged — they are
+   * operational, not configuration changes.
+   */
+  pbxConfigMutation?: boolean;
 };
 
 export type VitalPbxCapabilityMatrix = {

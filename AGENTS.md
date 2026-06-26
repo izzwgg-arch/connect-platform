@@ -4,6 +4,38 @@
 > agents (Composer, Background, CLI, subagents) and to any human running agent
 > commands on their behalf.
 
+## ⛔ ABSOLUTE RULE — Connect must NOT modify the PBX without explicit owner permission
+
+Connect (and any agent) has **no business modifying the VitalPBX in any shape,
+type, or form** — creating/updating/deleting tenants, adding/removing inbound
+DIDs, regenerating/applying tenant config, queue or code CRUD, or any other
+VitalPBX configuration write — **without the owner's specific, explicit
+permission for that specific operation.**
+
+This is enforced in code, not just by convention:
+
+- `VitalPbxClient` runs in **PBX READ-ONLY SAFE MODE by default**. Every endpoint
+  flagged `pbxConfigMutation: true` (`packages/integrations/src/vitalpbx/endpointRegistry.ts`)
+  throws `PBX_MUTATION_BLOCKED` unless writes are explicitly enabled.
+- The **only** way to permit a write is the env var
+  `PBX_ALLOW_CONFIG_MUTATIONS=1` (or constructing the client with
+  `allowConfigMutations: true`) — and only for a deliberate, human-authorized
+  action. Default unset = blocked.
+- Background: an automatic tenant re-save (`PUT /api/v2/tenants/:id` with only
+  `{name,description,settings}`) is a full-resource replace and **silently wiped
+  tenants' inbound DIDs** (June 2026). Inbound DIDs live in a separate
+  sub-collection, not in `settings`. Never re-introduce a tenant PUT for a
+  "config regenerate". `apply_changes` is the only regenerate trigger and is
+  itself gated.
+
+**Hard rules for agents:**
+1. Never set `PBX_ALLOW_CONFIG_MUTATIONS`, never pass `allowConfigMutations: true`,
+   and never weaken/remove the safeguard or the `pbxConfigMutation` flags without
+   the owner explicitly asking for that exact change.
+2. Never write code that mutates VitalPBX config on an automatic/background path
+   (sync, refresh, provisioning, cron). PBX config changes are owner-initiated only.
+3. Regression test `apps/api/src/pbxMutationSafeguard.test.ts` must stay green.
+
 ## Agent auto-enqueue (no token required)
 
 Agents can enqueue deployments **without knowing `DEPLOY_QUEUE_TOKEN`** using
