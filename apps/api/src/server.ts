@@ -28528,7 +28528,6 @@ app.post("/internal/mobile-prewake", async (req, reply) => {
       where: {
         tenantId,
         active: true,
-        expoPushToken: { not: null },
         OR: [
           { lastSeenAt: { lt: staleCutoff } },
           { lastSeenAt: null },
@@ -28536,7 +28535,10 @@ app.post("/internal/mobile-prewake", async (req, reply) => {
       } as any,
       select: { userId: true } as any,
       take: 500,
-    }).catch(() => [] as Array<{ userId: string | null }>);
+    }).catch((err: any) => {
+      app.log.warn({ err: err?.message, tenantId, linkedId: input.linkedId }, "mobile-prewake: asleep-device query failed");
+      return [] as Array<{ userId: string | null }>;
+    });
     candidateUserIds = Array.from(new Set(
       (asleepDevices as Array<{ userId: string | null }>)
         .map((d) => d.userId)
