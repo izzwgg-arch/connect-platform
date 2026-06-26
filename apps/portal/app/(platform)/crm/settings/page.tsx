@@ -1360,7 +1360,7 @@ export default function CrmSettingsPage() {
 
         {/* Existing positions list */}
         {positionsLoading ? (
-          <LoadingSkeleton lines={3} />
+          <LoadingSkeleton rows={3} />
         ) : positions.length === 0 ? (
           <div style={{ fontSize: "0.8125rem", color: "var(--text-dim)", marginBottom: "1rem" }}>
             No desk positions yet. Add one below.
