@@ -676,6 +676,8 @@ export default function PbxExtensionsPage() {
   const [editing, setEditing] = useState<{ id: string | null; form: ExtForm } | null>(null);
   const [assigning, setAssigning] = useState<{ id: string; extNumber: string; ownerId: string | null; hasSipPass: boolean; tenantId?: string } | null>(null);
   const [deleteError, setDeleteError] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const { tenantId, adminScope, tenant } = useAppContext();
   const canFetchTenantExtensions = adminScope === "TENANT" && tenantId && tenantId !== "local";
   const state = useAsyncResource(
@@ -687,6 +689,33 @@ export default function PbxExtensionsPage() {
     { keepPreviousData: false },
   );
   const telephony = useTelephony();
+
+  // Pull this tenant's extensions from VitalPBX (read-only — never modifies the
+  // PBX) and upsert them into Connect. The efficient per-tenant path to bring in
+  // a newly-added extension without the full all-tenant "Refresh PBX".
+  async function handleSyncFromPbx() {
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const res = await apiPost<{
+        ok?: boolean;
+        extensionsFound?: number;
+        extensionsUpserted?: number;
+        errors?: number;
+      }>("/pbx/extensions/sync", tenantId && tenantId !== "local" ? { tenantId } : {});
+      setSyncMsg({
+        text: `Synced from PBX — ${res.extensionsFound ?? 0} found, ${res.extensionsUpserted ?? 0} updated${
+          res.errors ? `, ${res.errors} error(s)` : ""
+        }.`,
+        ok: true,
+      });
+      setReloadKey((k) => k + 1);
+    } catch (e: any) {
+      setSyncMsg({ text: e?.message || "Sync from PBX failed.", ok: false });
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   // Invalidate extension list after a full PBX sync (tenant + extension sync).
   useEffect(() => {
@@ -773,12 +802,25 @@ export default function PbxExtensionsPage() {
               <SearchInput value={query} onChange={setQuery} placeholder="Search extensions..." />
               <button className="btn ghost" onClick={() => setReloadKey((k) => k + 1)}>Refresh</button>
               <button
+                className="btn ghost"
+                onClick={handleSyncFromPbx}
+                disabled={syncing}
+                title="Pull new/changed extensions for this tenant from VitalPBX. Read-only — never modifies the PBX."
+              >
+                {syncing ? "Syncing…" : "Sync from PBX"}
+              </button>
+              <button
                 className="btn"
                 onClick={() => setEditing({ id: null, form: defaultForm() })}
               >
                 + New Extension
               </button>
             </FilterBar>
+            {syncMsg ? (
+              <div className={`chip ${syncMsg.ok ? "success" : "danger"}`} style={{ marginTop: 4 }}>
+                {syncMsg.text}
+              </div>
+            ) : null}
           </div>
 
           {deleteError ? <div className="chip danger" style={{ marginBottom: 8 }}>{deleteError}</div> : null}

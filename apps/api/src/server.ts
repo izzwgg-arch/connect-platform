@@ -609,33 +609,12 @@ function getVitalPbxClient(config?: { baseUrl?: string; token?: string; secret?:
   });
 }
 
-/**
- * Force VitalPBX to regenerate + reload a tenant's live Asterisk config by
- * re-saving the tenant unchanged (no-op `tenants.update`). This is the only
- * mechanism that materializes WebRTC `_1` devices which exist in VitalPBX's
- * database but drifted out of the running config — `apply_changes` no-ops in
- * that state ("Invalid Operation", nothing queued). Verified on tenant T34:
- * the re-save brought `T34_101_1`/`T34_102_1` live. Uses a long timeout because
- * VitalPBX runs the regenerate synchronously inside the PUT.
- */
-async function forceRegeneratePbxTenant(
-  baseUrl: string,
-  auth: { token: string; secret?: string },
-  vitalTenantId: string,
-): Promise<void> {
-  const regenClient = getVitalPbxClient({
-    baseUrl,
-    token: auth.token,
-    secret: auth.secret,
-    timeoutMs: 90_000,
-  });
-  const t: any = await regenClient.getTenant(vitalTenantId);
-  await regenClient.updateTenant(vitalTenantId, {
-    name: t?.name,
-    description: t?.description,
-    settings: t?.settings,
-  });
-}
+// NOTE: A `forceRegeneratePbxTenant` helper used to live here. It re-saved a
+// VitalPBX tenant via PUT to force a config regenerate and silently WIPED
+// tenants' inbound DIDs (June 2026 incident). It has been removed entirely.
+// Connect must not regenerate/apply/modify PBX tenant config — that is an
+// owner-initiated action in VitalPBX. See AGENTS.md and the PBX read-only safe
+// mode enforced in VitalPbxClient.
 
 async function queuePbxJob(input: { tenantId: string; pbxInstanceId?: string | null; type: string; payload: any; lastError?: string | null }) {
   return db.pbxJob.create({
@@ -5656,8 +5635,6 @@ app.post("/admin/users", async (req, reply) => {
       const vitalTenantId = tpLink.pbxTenantId || undefined;
       await syncExtensionsFromPbx(db, tpLink.pbxInstanceId, vital, {
         ...(vitalTenantId ? { vitalTenantId } : {}),
-        applyChangesForUnliveWebrtc: true,
-        forceRegenerateTenant: (vid) => forceRegeneratePbxTenant(tpLink.pbxInstance.baseUrl, auth, vid),
       });
     } catch {
       // sync failure is non-fatal — admin can click "Re-sync credentials" in the user panel
@@ -8139,6 +8116,57 @@ app.get("/pbx/extensions", async (req, reply) => {
   if (!admin) return;
   const rows = await db.pbxExtensionLink.findMany({ where: { tenantId: admin.tenantId }, include: { extension: true }, orderBy: { createdAt: "desc" } });
   return rows;
+});
+
+/**
+ * READ-ONLY per-tenant extension sync. Pulls THIS tenant's extensions from
+ * VitalPBX (GET only) and upserts them into Connect — the efficient way to bring
+ * in a newly-added extension without the full all-tenant "Refresh PBX".
+ *
+ * This path NEVER modifies the PBX: it issues no apply_changes, no tenant write,
+ * no config regenerate. The VitalPbxClient is in read-only safe mode, so even a
+ * future accidental mutation would be blocked. Safe to call as often as needed.
+ */
+app.post("/pbx/extensions/sync", async (req, reply) => {
+  const admin = await requireAdmin(req, reply);
+  if (!admin) return;
+  if (!ensureCredentialCrypto(reply)) return;
+  const input = z.object({ tenantId: z.string().optional() }).parse(req.body || {});
+  const tenantId =
+    admin.role === "SUPER_ADMIN" && input.tenantId
+      ? await resolveManagedTenant(admin, input.tenantId).catch(() => null)
+      : admin.tenantId;
+  if (!tenantId) return reply.status(400).send({ error: "tenant_required" });
+
+  const link = await db.tenantPbxLink.findUnique({
+    where: { tenantId },
+    include: { pbxInstance: true },
+  });
+  if (!link || !link.pbxInstance) return reply.status(404).send({ error: "PBX_LINK_NOT_FOUND" });
+
+  const auth = decryptJson<{ token: string; secret?: string }>(link.pbxInstance.apiAuthEncrypted);
+  const client = getVitalPbxClient({
+    baseUrl: link.pbxInstance.baseUrl,
+    token: auth.token,
+    secret: auth.secret,
+    timeoutMs: 45000,
+  });
+  const vitalTenantId = link.pbxTenantId || undefined;
+  try {
+    const result = await syncExtensionsFromPbx(db, link.pbxInstanceId, client, {
+      ...(vitalTenantId ? { vitalTenantId } : {}),
+    });
+    return {
+      ok: true,
+      tenantId,
+      extensionsFound: result.totalExtensions,
+      extensionsUpserted: result.totalUpserted,
+      extensionsDeactivated: result.totalDeactivated,
+      errors: result.totalErrors,
+    };
+  } catch (e: any) {
+    return reply.status(502).send({ error: "PBX_SYNC_FAILED", message: String(e?.message || e) });
+  }
 });
 
 app.post("/pbx/extensions", async (req, reply) => {
@@ -15163,10 +15191,7 @@ app.post("/admin/pbx/refresh-tenants", async (req, reply) => {
   // Skipped tenants (no TenantPbxLink) are counted but do not cause errors.
   let extensionSyncResult: ExtensionSyncResult | null = null;
   try {
-    extensionSyncResult = await syncExtensionsFromPbx(db, instance.id, client!, {
-      applyChangesForUnliveWebrtc: true,
-      forceRegenerateTenant: (vid) => forceRegeneratePbxTenant(instance.baseUrl, auth, vid),
-    });
+    extensionSyncResult = await syncExtensionsFromPbx(db, instance.id, client!);
     app.log.info(
       {
         event: "extension_sync_complete",
@@ -15260,8 +15285,6 @@ app.post("/admin/pbx/instances/:id/sync-extensions", async (req, reply) => {
   const client = getVitalPbxClient({ baseUrl: instance.baseUrl, token: auth.token, secret: auth.secret });
   const syncResult = await syncExtensionsFromPbx(db, instance.id, client, {
     vitalTenantId: input.vitalTenantId,
-    applyChangesForUnliveWebrtc: true,
-    forceRegenerateTenant: (vid) => forceRegeneratePbxTenant(instance.baseUrl, auth, vid),
   });
   return { ok: true, ...syncResult };
 });
@@ -34137,9 +34160,6 @@ const port = Number(process.env.PORT || 3001);
       const vitalTenantId = link.pbxTenantId || undefined;
       return syncExtensionsFromPbx(db, link.pbxInstanceId, vital, {
         ...(vitalTenantId ? { vitalTenantId } : {}),
-        applyChangesForUnliveWebrtc: true,
-        forceRegenerateTenant: (vid) => forceRegeneratePbxTenant(link.pbxInstance.baseUrl, auth, vid),
-        forceRegenerateIgnoreAge: true,
       });
     },
     audit: audit as any,
