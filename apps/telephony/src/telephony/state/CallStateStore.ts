@@ -51,6 +51,51 @@ export function isExtensionLegChannel(channel: string | null | undefined): boole
 }
 
 /**
+ * Extract the resolved destination extension from a VitalPBX recording filename.
+ *
+ * IVR / DID-fronted inbound calls never expose the destination extension in the
+ * AMI channel/exten fields during the IVR greeting — the trunk leg is the only
+ * channel, so {@link normalizeExtensionFromChannel} yields null and the call's
+ * `extensions[]` stays empty. That means MobilePushNotifier sends NO per-extension
+ * "ring now" (INCOMING_CALL) push, so a mobile-only extension only rings if the
+ * device happened to still be SIP-registered. (Confirmed live 2026-06-26 for
+ * Luxure 101: DID → IVR-12 → ext 101, `extensions:[]` the whole call, only a
+ * tenant pre-wake fired, and the killed device never rang → voicemail.)
+ *
+ * VitalPBX names the recording for the LEG that actually answers/records using
+ *   {HHMMSS}-{TYPE}-{APP}-{SOURCE}-{DEST}-{RECORDING_ID}.wav
+ * where RECORDING_ID is the call linkedId and DEST is the resolved destination
+ * extension the dialplan routed to (set via `CALL_DESTINATION` the instant the
+ * IVR option / direct-dial chooses it). So the filename gives us the real
+ * destination — per call, after the caller's choice — well before (or as) the
+ * PBX dials the extension. We parse it and feed it into the push pipeline so the
+ * native ring push fires for IVR-fronted inbound calls too, for every tenant.
+ *
+ * We anchor on the known linkedId (which equals RECORDING_ID) so the captured
+ * token is unambiguously the DEST field and never a digit run inside SOURCE.
+ */
+export function parseDestExtenFromRecordingPath(
+  path: string | null | undefined,
+  linkedId: string | null | undefined,
+): string | null {
+  if (!path) return null;
+  const base = (path.split("/").pop() ?? path).trim();
+  if (!base) return null;
+  let m: RegExpExecArray | null = null;
+  if (linkedId) {
+    const esc = linkedId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    m = new RegExp(`-(\\d{2,6})-${esc}\\.wav$`, "i").exec(base);
+  }
+  if (!m) {
+    // Fallback when linkedId is not embedded verbatim: DEST is the 2–6 digit
+    // token immediately before the `<secs>.<seq>.wav` recording id tail.
+    m = /-(\d{2,6})-\d+\.\d+\.wav$/i.exec(base);
+  }
+  const ext = m?.[1] ?? null;
+  return ext && looksLikeExtension(ext) ? ext : null;
+}
+
+/**
  * Set the durable `extensionLegSeen` flag the moment any real tenant-extension
  * leg (`PJSIP/T<id>_<exten>...`, incl. the WebRTC `_<n>` sibling) is dialed or
  * created for a call. Unlike `call.channels` (pruned on Hangup), this lives in
@@ -1178,6 +1223,44 @@ export class CallStateStore extends EventEmitter {
         log.debug({ linkedId, path: chosen }, "recording: path_set");
       }
     }
+    // IVR/DID-fronted inbound calls expose the destination extension ONLY in the
+    // recording filename (the trunk leg never parses to an extension during the
+    // IVR). Resolve it and emit a callUpsert so MobilePushNotifier sends the
+    // native "ring now" push for mobile-only extensions that would otherwise
+    // silently drop to voicemail.
+    if (this.applyRecordingDestExtension(call, chosen ?? path)) {
+      this.emit("callUpsert", { ...call });
+    }
+  }
+
+  /**
+   * Resolve and attach the IVR/DID destination extension parsed from the
+   * recording filename. Returns true iff a new extension was added (so the
+   * caller should emit a callUpsert to re-run the mobile push pipeline).
+   *
+   * Default-on for all tenants; set PBX_IVR_DEST_RESOLVE=0 to disable. Only
+   * applied to inbound/internal calls — outbound recordings encode the dialed
+   * PSTN number, not a local extension, and must never be treated as a ring
+   * target. MobilePushNotifier still owns all caller/self-ring filtering, so
+   * adding the destination here is strictly additive.
+   */
+  private applyRecordingDestExtension(call: NormalizedCall, path: string | null): boolean {
+    if ((process.env.PBX_IVR_DEST_RESOLVE ?? "1") !== "1") return false;
+    if (call.direction !== "inbound" && call.direction !== "internal") return false;
+    const ext = parseDestExtenFromRecordingPath(path, call.linkedId);
+    if (!ext) return false;
+    if (call.extensions.includes(ext)) {
+      if (!call.destination_extension) call.destination_extension = ext;
+      return false;
+    }
+    call.extensions.push(ext);
+    if (!call.destination_extension) call.destination_extension = ext;
+    call.metadata["ivrDestExtenFromRecording"] = ext;
+    log.info(
+      { linkedId: call.linkedId, ext, dir: call.direction },
+      "recording: resolved IVR/DID destination extension for mobile ring push",
+    );
+    return true;
   }
 
   /** Return the "better" of two candidate paths: prefer the one with a deeper
@@ -1222,6 +1305,9 @@ export class CallStateStore extends EventEmitter {
       if (env.ENABLE_TELEPHONY_DEBUG) {
         log.debug({ linkedId, path: chosen }, "recording: pending_path_applied");
       }
+    }
+    if (this.applyRecordingDestExtension(call, chosen ?? pending)) {
+      this.emit("callUpsert", { ...call });
     }
     this.pendingRecordingPaths.delete(linkedId);
     const t = this.pendingRecTimers.get(linkedId);
