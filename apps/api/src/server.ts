@@ -29180,6 +29180,72 @@ app.post("/mobile/wake/event", async (req, reply) => {
         trigger: "register_complete",
         logContext: { pbxCallId: body.pbxCallId, deviceId: resolvedDeviceId },
       });
+    } else {
+      // ZERO-CONTACT COLD-START (both devices were asleep at dial time).
+      //
+      // When EVERY device on the target extension is asleep/unregistered, the
+      // PBX Dial() finds zero contacts and fails INSTANTLY — no extension leg
+      // is ever created, so `mobile-ring-notify` never fires and NO CallInvite
+      // row exists. The pre-wake push (sent the moment the inbound call hit the
+      // trunk) still woke this device; it has now finished REGISTER. The call
+      // is most likely sitting in the IVR/voicemail right now.
+      //
+      // Re-dial the still-live inbound call so the freshly-registered endpoint
+      // actually rings instead of staying in voicemail. This is the same AMI
+      // requeue that already makes the "one phone open" case ring the second
+      // device — we just additionally allow it when no invite row exists.
+      //
+      // SAFE FOR ALL TENANTS: requeueLiveCallToDialplan is loop-guarded — it
+      // SKIPS if the call already answered (`extensionAnsweredAt`), if an
+      // extension leg is live, or if any extension leg was ever seen
+      // (`extensionLegSeen`). The genuine zero-contact case trips none of
+      // those, so only the legitimately-stuck call is re-dialled. We probe
+      // telephony first purely to avoid pointless requeue calls.
+      try {
+        const liveStatus = await requestTelephonyInviteStatus({ linkedId: body.pbxCallId });
+        if (liveStatus.exists && liveStatus.state !== "hungup" && !liveStatus.extensionAnsweredAt) {
+          let fallbackExten: string | null = null;
+          if (resolvedDeviceId) {
+            const dev = await db.mobileDevice
+              .findFirst({
+                where: { id: resolvedDeviceId } as any,
+                select: { extension: { select: { extNumber: true } } } as any,
+              })
+              .catch(() => null);
+            fallbackExten = (dev as any)?.extension?.extNumber ?? null;
+          }
+          await tryRequeuePendingMobileInvite({
+            linkedId: body.pbxCallId,
+            exten: fallbackExten,
+            inviteId: null,
+            trigger: "register_complete",
+            logContext: {
+              pbxCallId: body.pbxCallId,
+              deviceId: resolvedDeviceId,
+              path: "zero_contact_coldstart",
+              telephonyState: liveStatus.state,
+            },
+          });
+        } else {
+          app.log.info(
+            {
+              pbxCallId: body.pbxCallId,
+              exists: liveStatus.exists,
+              state: liveStatus.state,
+              extensionAnsweredAt: liveStatus.extensionAnsweredAt,
+            },
+            "register-complete: zero-contact requeue skipped (call not live / already answered)",
+          );
+        }
+      } catch (err) {
+        app.log.warn(
+          {
+            err: err instanceof Error ? err.message : String(err),
+            pbxCallId: body.pbxCallId,
+          },
+          "register-complete: zero-contact requeue probe failed",
+        );
+      }
     }
   }
 
