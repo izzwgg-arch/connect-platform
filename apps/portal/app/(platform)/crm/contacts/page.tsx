@@ -472,6 +472,7 @@ export default function CrmContactsPage() {
   const [stage, setStage] = useState<CrmStage | "all">("all");
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
   const [dispositionFilter, setDispositionFilter] = useState("all");
+  const [tagFilter, setTagFilter] = useState("all");
   const [campaignFilter, setCampaignFilter] = useState("all");
   const [assignedToMe, setAssignedToMe] = useState(false);
   const [timezoneZone, setTimezoneZone] = useState<TimezoneZoneFilter>("all");
