@@ -29,12 +29,12 @@ if ($Branch -and $CommitHash) {
 $sshTarget = if ($env:DEPLOY_SSH_TARGET) { $env:DEPLOY_SSH_TARGET } else { "connect" }
 $sshKey = if ($env:DEPLOY_SSH_KEY) { $env:DEPLOY_SSH_KEY } else { Join-Path $env:USERPROFILE ".ssh\connect_ed25519" }
 
-$remoteParts = @("cd /opt/connectcomms/app", "git fetch origin --prune", "bash scripts/deploy-direct.sh $Service")
-if ($Branch) { $remoteParts += "--branch"; $remoteParts += $Branch }
-if ($CommitHash) { $remoteParts += "--commit"; $remoteParts += $CommitHash }
-if ($DryRun) { $remoteParts += "--dry-run" }
-if ($SkipQueueCheck) { $remoteParts += "--skip-queue-check" }
-$remoteCmd = ($remoteParts -join " ")
+$deployCmd = "bash scripts/deploy-direct.sh $Service"
+if ($Branch) { $deployCmd += " --branch $Branch" }
+if ($CommitHash) { $deployCmd += " --commit $CommitHash" }
+if ($DryRun) { $deployCmd += " --dry-run" }
+if ($SkipQueueCheck) { $deployCmd += " --skip-queue-check" }
+$remoteCmd = "cd /opt/connectcomms/app && git fetch origin --prune && $deployCmd"
 
 $sshArgs = @("-o", "ConnectTimeout=20", "-o", "BatchMode=yes")
 if (Test-Path -LiteralPath $sshKey) { $sshArgs += @("-i", $sshKey) }

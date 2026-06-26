@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { getDnd, hydrateDnd, setDnd, subscribeDnd } from '../sip/dndStore';
 
 export type PresenceStatus = 'available' | 'busy' | 'dnd' | 'away' | 'offline';
 
@@ -20,7 +21,41 @@ const LABELS: Record<PresenceStatus, string> = {
 };
 
 export function PresenceProvider({ children }: { children: React.ReactNode }) {
-  const [myStatus, setMyStatus] = useState<PresenceStatus>('available');
+  const [myStatus, setMyStatusState] = useState<PresenceStatus>(() =>
+    getDnd() ? 'dnd' : 'available'
+  );
+
+  // Hydrate persisted DND on mount and keep the UI in sync if the SIP layer (or
+  // another surface) flips DND. The store is the single source of truth that the
+  // non-React SIP `newRTCSession` handler reads to decline calls with 486.
+  useEffect(() => {
+    let active = true;
+    hydrateDnd()
+      .then((dnd) => {
+        if (active) setMyStatusState((prev) => (dnd ? 'dnd' : prev === 'dnd' ? 'available' : prev));
+      })
+      .catch(() => {});
+    const unsub = subscribeDnd((dnd) => {
+      setMyStatusState((prev) => {
+        if (dnd) return 'dnd';
+        return prev === 'dnd' ? 'available' : prev;
+      });
+    });
+    return () => {
+      active = false;
+      unsub();
+    };
+  }, []);
+
+  // Wrap setMyStatus so toggling presence also drives the shared DND store.
+  const setMyStatus = useMemo(
+    () =>
+      (status: PresenceStatus) => {
+        setMyStatusState(status);
+        setDnd(status === 'dnd');
+      },
+    []
+  );
 
   const value = useMemo<PresenceContextValue>(
     () => ({
@@ -29,7 +64,7 @@ export function PresenceProvider({ children }: { children: React.ReactNode }) {
       statusLabel: (s) => LABELS[s] ?? s,
       isDnd: myStatus === 'dnd',
     }),
-    [myStatus]
+    [myStatus, setMyStatus]
   );
 
   return (

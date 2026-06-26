@@ -526,6 +526,25 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
   }
 
   /**
+   * Bridged from JsSIP's failed/ended handlers when an unanswered inbound SIP
+   * leg goes away. JsSIP events still fire in the background where JS timers /
+   * React effects (INVITE_POLL, SIP_CANCEL_BRIDGE) do not, so this lets the
+   * native service stop the ringtone at voicemail / answered-elsewhere even
+   * when the floating/full-screen incoming UI is showing instead of the React
+   * screen. The native side debounces to survive ring-group fork handoffs.
+   */
+  @ReactMethod
+  fun notifyInboundLegGone() {
+    IncomingCallFirebaseService.notifyInboundLegGone(reactApplicationContext.applicationContext)
+  }
+
+  /** A ring-group fork re-INVITE arrived — cancel any pending native stop. */
+  @ReactMethod
+  fun notifyInboundLegAlive() {
+    IncomingCallFirebaseService.notifyInboundLegAlive()
+  }
+
+  /**
    * Persist the user's incoming-ringtone choice so the native FCM ring path
    * (IncomingCallFirebaseService) can honour it before JS is even running.
    *   • "connect-default" → bundled Connect ringtone
@@ -535,6 +554,19 @@ class IncomingCallUiModule(reactContext: ReactApplicationContext) :
   fun setIncomingRingtone(id: String?) {
     val ctx = reactApplicationContext.applicationContext
     IncomingCallFirebaseService.setIncomingRingtonePreference(ctx, id ?: "connect-default")
+  }
+
+  /**
+   * Mirror the user's Do-Not-Disturb state into native SharedPreferences so the
+   * FCM ring path (IncomingCallFirebaseService.onMessageReceived) can suppress
+   * the native ringtone + full-screen incoming UI BEFORE any JS runs — even when
+   * the app is killed. Called from the JS dndStore whenever DND is toggled and on
+   * hydrate so the native copy never drifts from the in-app state.
+   */
+  @ReactMethod
+  fun setDnd(enabled: Boolean) {
+    val ctx = reactApplicationContext.applicationContext
+    IncomingCallFirebaseService.setDndPreference(ctx, enabled)
   }
 
   /** Clears show-when-locked / turn-screen-on after a call so hangup does not leave a blank stage. */

@@ -16,6 +16,9 @@ import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.media.RingtoneManager;
+import android.media.VolumeProvider;
+import android.media.session.MediaSession;
+import android.media.session.PlaybackState;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
@@ -166,6 +169,30 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
     private static PowerManager.WakeLock incomingScreenWakeLock = null;
     private static AudioManager ringAudioManager = null;
     private static AudioFocusRequest ringFocusRequest = null;
+    /**
+     * Active only while the native ring is sounding. Holds a framework
+     * MediaSession with a remote {@link VolumeProvider} so hardware Volume
+     * up/down keys are routed to us (→ {@link #silenceRingerKeepVibrating})
+     * even when the app is backgrounded or the device is locked and
+     * {@link MainActivity#onKeyDown} can never fire. Released the instant the
+     * ring audio stops (hush or full stop) via {@link #abandonRingtoneAudioFocus}.
+     */
+    private static MediaSession incomingVolumeSession = null;
+    /**
+     * Pending "the inbound SIP leg went away and was not re-INVITEd" stop,
+     * scheduled by {@link #notifyInboundLegGone} and cancelled by
+     * {@link #notifyInboundLegAlive} (a ring-group fork re-INVITE). This is the
+     * background-safe replacement for the JS SIP_CANCEL_BRIDGE / INVITE_POLL,
+     * which never run when the floating/full-screen incoming UI is shown
+     * instead of the React incoming-call screen.
+     */
+    private static Runnable pendingForkAbandonStop = null;
+    /**
+     * Debounce before acting on a vanished inbound SIP leg. Sized above the
+     * ~500ms ring-group fork-handoff gap (CANCEL → re-INVITE) so legitimate
+     * forking never trips it, matching the JS bridge's GHOST_CANCEL_WAIT_MS.
+     */
+    private static final long FORK_ABANDON_STOP_MS = 1500L;
     /** Flight recorder: ringtone start/stop timestamps for JS to read after warm-up. */
     public static volatile long ringtoneStartedAtMs = 0;
     public static volatile long ringtoneStoppedAtMs = 0;
@@ -347,10 +374,26 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
                 // timed out). Two JS runtimes in one process is an Expo behaviour, not
                 // a dev-mode artifact — do NOT re-enable without fixing runtime sharing.
                 // startSipPreRegisterIfKilled(inviteForRing, appData.get("pbxCallId"));
+                // Do Not Disturb: the user flipped DND on in the app. Suppress the
+                // native ringtone AND the full-screen / heads-up incoming UI here —
+                // this is the ONLY surface that rings while the app is backgrounded
+                // or killed (the JS SIP layer already silent-handles the WS INVITE).
+                // We present nothing and ring nothing; the PBX dial simply goes
+                // unanswered → DIALSTATUS=NOANSWER → voicemail. (The telephony
+                // requeue is gated on a live extension leg, so no ring-group loop.)
+                if (isDndEnabled(getApplicationContext())) {
+                    Log.i(TAG, "[CALL_INCOMING][DND] DND on — suppressing native ringtone + incoming UI; call diverts to voicemail (NOANSWER)");
+                    fcmMeta.put("dnd_suppressed", true);
+                    emitCallFlowNative("FCM_INCOMING_SUPPRESSED_DND", inviteForRing, fcmMeta);
+                    // Intentionally do NOT call startIncomingCallRingtone or
+                    // handleIncomingCallNative — nothing is shown, nothing rings.
+                    // forwardToExpo() below still runs so a live JS process can
+                    // observe/record the missed call, but it never presents UI.
+                }
                 // Multi-call: when the JS side already has an active call, skip
                 // the native ringtone + full-screen UI. The CallWaitingBanner
                 // inside ActiveCallScreen handles the waiting invite instead.
-                if (inActiveCall) {
+                else if (inActiveCall) {
                     Log.i(TAG, "[MULTICALL] incoming INVITE while in_active_call=true — suppressing native ringtone+full-screen");
                     fcmMeta.put("multicall_suppressed", true);
                     emitCallFlowNative("FCM_INCOMING_SUPPRESSED_MULTICALL", inviteForRing, fcmMeta);
@@ -871,11 +914,20 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         //   • app is foregrounded — JS owns the UI
         //   • app already has an active call — multi-call banner handles it
         //   • wake payload had no caller info — heads-up would be useless
+        //   • Do Not Disturb is on — the user wants NOTHING to come in: no
+        //     ring, no full-screen UI, and no heads-up placeholder either. The
+        //     SIP wake bridge above still runs so the JS layer declines the
+        //     INVITE (486) and the call diverts to voicemail, but we present no
+        //     notification at all while DND is enabled.
         boolean appWasForeground = "active".equalsIgnoreCase(lastPushReceivedAppState);
         boolean haveCallerInfo =
             (fromNum != null && !fromNum.isEmpty()) ||
             (fromDisp != null && !fromDisp.isEmpty());
-        if (appWasForeground) {
+        boolean dndOn = isDndEnabled(getApplicationContext());
+        if (dndOn) {
+            lastWakePlaceholderResult = "skipped:dnd";
+            Log.i(TAG, "[CALL_WAKE][DND] DND on — suppressing wake placeholder notification");
+        } else if (appWasForeground) {
             lastWakePlaceholderResult = "skipped:app_foregrounded";
         } else if (inActiveCall) {
             lastWakePlaceholderResult = "skipped:in_active_call";
@@ -1756,9 +1808,70 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
         } catch (Exception e) {
             Log.w(TAG, "[CALL_INCOMING] requestRingtoneAudioFocus: " + e.getMessage());
         }
+        acquireVolumeButtonInterceptor();
+    }
+
+    /**
+     * Register an active MediaSession with a remote VolumeProvider so the
+     * framework routes hardware volume-key presses to us regardless of which
+     * app/activity has focus. This is the ONLY reliable way to hush the ringer
+     * from a volume key while the incoming call is shown over the launcher or
+     * lock screen (where {@link MainActivity#onKeyDown} never fires because our
+     * activity isn't focused). Mirrors the stock phone app: a volume press
+     * silences the ringer audio while the vibration keeps running.
+     */
+    private void acquireVolumeButtonInterceptor() {
+        final Context appCtx = getApplicationContext();
+        final Handler h = ensureMainHandler();
+        h.post(() -> {
+            try {
+                if (incomingVolumeSession != null) return;
+                MediaSession session = new MediaSession(appCtx, "ConnectIncomingRing");
+                // A no-op callback is required for the session to be considered
+                // a valid media controller target.
+                session.setCallback(new MediaSession.Callback() { });
+                // The session must advertise active PLAYING playback for the
+                // framework to treat it as the live media session and forward
+                // volume keys to its VolumeProvider.
+                PlaybackState ps = new PlaybackState.Builder()
+                    .setActions(PlaybackState.ACTION_PLAY_PAUSE)
+                    .setState(PlaybackState.STATE_PLAYING, 0L, 1.0f)
+                    .build();
+                session.setPlaybackState(ps);
+                VolumeProvider vp = new VolumeProvider(
+                    VolumeProvider.VOLUME_CONTROL_RELATIVE, 100, 50) {
+                    @Override
+                    public void onAdjustVolume(int direction) {
+                        if (direction != 0) {
+                            Log.i(TAG, "[CALL_INCOMING] volume key intercepted via MediaSession dir=" + direction);
+                            silenceRingerKeepVibrating("media_session_volume_key");
+                        }
+                    }
+                };
+                session.setPlaybackToRemote(vp);
+                session.setActive(true);
+                incomingVolumeSession = session;
+                Log.i(TAG, "[CALL_INCOMING] volume-button interceptor (MediaSession) active");
+            } catch (Exception e) {
+                Log.w(TAG, "[CALL_INCOMING] acquireVolumeButtonInterceptor failed: " + e.getMessage());
+            }
+        });
+    }
+
+    private static void releaseVolumeButtonInterceptor() {
+        try {
+            if (incomingVolumeSession != null) {
+                try { incomingVolumeSession.setActive(false); } catch (Exception ignored) { }
+                incomingVolumeSession.release();
+                incomingVolumeSession = null;
+                Log.i(TAG, "[CALL_INCOMING] volume-button interceptor released");
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     private static void abandonRingtoneAudioFocus() {
+        releaseVolumeButtonInterceptor();
         try {
             if (ringAudioManager == null) return;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && ringFocusRequest != null) {
@@ -1819,6 +1932,88 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
             mainHandler.removeCallbacks(r);
         }
         pendingRingtoneTimeout = null;
+    }
+
+    private static Handler ensureMainHandler() {
+        if (mainHandler == null) {
+            synchronized (IncomingCallFirebaseService.class) {
+                if (mainHandler == null) {
+                    mainHandler = new Handler(Looper.getMainLooper());
+                }
+            }
+        }
+        return mainHandler;
+    }
+
+    /**
+     * Bridged from JsSIP when the inbound SIP leg for the ringing call is
+     * CANCELed/ENDed without being answered. JsSIP event callbacks keep firing
+     * in the background (over the WebSocket) where JS setTimeout / React
+     * effects do NOT, so this is the authoritative "stop ringing this device"
+     * signal when the floating/full-screen native UI is showing instead of the
+     * React incoming-call screen (home screen / lock screen). We debounce by
+     * {@link #FORK_ABANDON_STOP_MS} because a ring-group fork handoff CANCELs
+     * and re-INVITEs within ~500ms — that re-INVITE calls
+     * {@link #notifyInboundLegAlive} and cancels the pending stop. If no
+     * re-INVITE arrives the call has rolled to voicemail / been answered
+     * elsewhere / the caller hung up, so the native ringtone must stop.
+     */
+    public static void notifyInboundLegGone(final Context context) {
+        final Handler h = ensureMainHandler();
+        h.post(() -> {
+            if (!isIncomingRingActive()) return;
+            cancelForkAbandonStop();
+            final Context appCtx = context != null ? context.getApplicationContext() : null;
+            final String inviteSnapshot = lastRingtoneInviteId;
+            Runnable r = new Runnable() {
+                @Override
+                public void run() {
+                    pendingForkAbandonStop = null;
+                    if (!isIncomingRingActive()) return;
+                    // Bail if a newer call replaced the ring in the meantime.
+                    if (inviteSnapshot != null && !inviteSnapshot.equals(lastRingtoneInviteId)) {
+                        return;
+                    }
+                    Log.i(
+                        TAG,
+                        "[CALL_INCOMING] inbound SIP leg abandoned (no re-INVITE within "
+                            + FORK_ABANDON_STOP_MS + "ms) — stopping ringtone inviteId=" + inviteSnapshot
+                    );
+                    if (appCtx != null) {
+                        dismissIncomingCallUi(appCtx, inviteSnapshot, "sip_fork_abandoned");
+                        deleteCacheFileStatic(appCtx);
+                    } else {
+                        stopIncomingCallRingtone("sip_fork_abandoned", inviteSnapshot);
+                    }
+                }
+            };
+            pendingForkAbandonStop = r;
+            h.postDelayed(r, FORK_ABANDON_STOP_MS);
+            Log.i(
+                TAG,
+                "[CALL_INCOMING] inbound SIP leg gone — debouncing " + FORK_ABANDON_STOP_MS
+                    + "ms for re-INVITE inviteId=" + inviteSnapshot
+            );
+        });
+    }
+
+    /** A ring-group fork re-INVITE arrived — keep ringing, cancel any pending stop. */
+    public static void notifyInboundLegAlive() {
+        final Handler h = ensureMainHandler();
+        h.post(() -> {
+            if (pendingForkAbandonStop != null) {
+                Log.i(TAG, "[CALL_INCOMING] inbound SIP re-INVITE — cancelling pending fork-abandon stop");
+            }
+            cancelForkAbandonStop();
+        });
+    }
+
+    private static void cancelForkAbandonStop() {
+        Runnable r = pendingForkAbandonStop;
+        if (r != null && mainHandler != null) {
+            mainHandler.removeCallbacks(r);
+        }
+        pendingForkAbandonStop = null;
     }
 
     private static void deleteCacheFileStatic(Context context) {
@@ -1885,6 +2080,45 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
                 .getSharedPreferences(RINGTONE_PREFS, Context.MODE_PRIVATE)
                 .getString(RINGTONE_PREF_KEY, "connect-default");
             return "classic".equals(id);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** SharedPreferences file + key holding the user's Do-Not-Disturb state. */
+    private static final String DND_PREFS = "connect_dnd_prefs";
+    private static final String DND_PREF_KEY = "dnd_enabled";
+
+    /**
+     * Persist the Do-Not-Disturb state so the native FCM ring path (which runs
+     * before — and independently of — any JS) can suppress the ringtone and the
+     * full-screen / heads-up incoming-call UI. Mirrored from JS via
+     * {@code IncomingCallUiModule.setDnd(enabled)} whenever the user toggles DND.
+     *
+     * commit() (not apply()) is deliberate: an INCOMING_CALL FCM can spawn a
+     * brand-new app process, and we need the value already flushed to disk so the
+     * fresh process reads the user's real DND state on the very first call.
+     */
+    public static void setDndPreference(Context ctx, boolean enabled) {
+        if (ctx == null) return;
+        try {
+            ctx.getApplicationContext()
+                .getSharedPreferences(DND_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(DND_PREF_KEY, enabled)
+                .commit();
+            Log.i(TAG, "[CALL_INCOMING][DND] do-not-disturb preference set to " + enabled);
+        } catch (Exception e) {
+            Log.w(TAG, "[CALL_INCOMING][DND] setDndPreference failed: " + e.getMessage());
+        }
+    }
+
+    /** True when Do-Not-Disturb is enabled — native ring + incoming UI must be suppressed. */
+    private static boolean isDndEnabled(Context ctx) {
+        try {
+            return ctx.getApplicationContext()
+                .getSharedPreferences(DND_PREFS, Context.MODE_PRIVATE)
+                .getBoolean(DND_PREF_KEY, false);
         } catch (Exception e) {
             return false;
         }
@@ -2185,6 +2419,7 @@ public class IncomingCallFirebaseService extends FirebaseMessagingService {
      */
     public static synchronized void stopIncomingCallRingtone(String reason, String inviteIdForLog) {
         cancelRingtoneTimeout();
+        cancelForkAbandonStop();
         try {
             String effectiveInvite = (inviteIdForLog != null && !inviteIdForLog.isEmpty())
                 ? inviteIdForLog

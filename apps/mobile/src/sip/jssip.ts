@@ -8,7 +8,7 @@ import type {
 } from "./types";
 import type { ProvisioningBundle } from "../types";
 import { registerGlobals as registerWebRTCGlobals } from "react-native-webrtc";
-import { Platform } from "react-native";
+import { Platform, NativeModules } from "react-native";
 import JsSIP from "jssip";
 import {
   startRingback,
@@ -38,8 +38,33 @@ import {
 } from "@connect/shared/webrtcBlackbox";
 import { MobileWebrtcBlackboxRecorder } from "./webrtcBlackboxRecorder";
 import { buildVoiceAudioConstraints } from "./voiceAudioConstraints";
+import { getDnd } from "./dndStore";
 
 const VOICE_AUDIO_CONSTRAINTS = buildVoiceAudioConstraints();
+
+/**
+ * Bridge the inbound SIP-leg lifecycle to the native incoming-call service so
+ * it can stop the ringtone at voicemail / answered-elsewhere even when the app
+ * is backgrounded and the floating/full-screen native UI is shown instead of
+ * the React incoming-call screen (where INVITE_POLL / SIP_CANCEL_BRIDGE run).
+ * JsSIP event callbacks keep firing in the background; JS timers do not — so
+ * the debounce that distinguishes a real teardown from a ring-group fork
+ * handoff lives natively. No-op off Android / when the module is absent.
+ */
+function notifyNativeInboundLeg(state: "gone" | "alive"): void {
+  if (Platform.OS !== "android") return;
+  try {
+    const mod = (NativeModules as any)?.IncomingCallUi;
+    if (!mod) return;
+    if (state === "gone") {
+      if (typeof mod.notifyInboundLegGone === "function") mod.notifyInboundLegGone();
+    } else if (typeof mod.notifyInboundLegAlive === "function") {
+      mod.notifyInboundLegAlive();
+    }
+  } catch {
+    /* ignore — native bridge best-effort */
+  }
+}
 
 /** Best-effort InCallManager helper — silently no-ops if the native module is absent. */
 const ICM = {
@@ -63,17 +88,29 @@ const ICM = {
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const m = require("react-native-incall-manager").default;
-      m.setSpeakerphoneOn(on);
-      // When speaker=false: Android routes to Bluetooth headset if one is
-      // connected, otherwise earpiece — this is the expected behaviour.
+      if (Platform.OS === "ios") {
+        // iOS: setSpeakerphoneOn is an Android-only no-op. The cross-platform
+        // API is setForceSpeakerphoneOn — true forces the loudspeaker, false
+        // releases the override so iOS routes to Bluetooth (if connected) or
+        // the earpiece. Without this, the speaker button does nothing on iOS.
+        m.setForceSpeakerphoneOn(on);
+      } else {
+        m.setSpeakerphoneOn(on);
+        // When speaker=false: Android routes to Bluetooth headset if one is
+        // connected, otherwise earpiece — this is the expected behaviour.
+      }
     } catch { /* module not linked */ }
   },
-  /** Explicitly route audio to a Bluetooth headset (Android only). */
+  /** Explicitly route audio to a Bluetooth headset. */
   routeToBluetooth() {
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const m = require("react-native-incall-manager").default;
-      if (typeof m.chooseAudioRoute === "function") {
+      if (Platform.OS === "ios") {
+        // iOS auto-selects a connected Bluetooth HFP device once the speaker
+        // override is released. There is no explicit "choose BT" on iOS.
+        m.setForceSpeakerphoneOn(false);
+      } else if (typeof m.chooseAudioRoute === "function") {
         m.chooseAudioRoute("BLUETOOTH");
       }
     } catch { /* ignore */ }
@@ -83,7 +120,9 @@ const ICM = {
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const m = require("react-native-incall-manager").default;
-      if (typeof m.chooseAudioRoute === "function") {
+      if (Platform.OS === "ios") {
+        m.setForceSpeakerphoneOn(false);
+      } else if (typeof m.chooseAudioRoute === "function") {
         m.chooseAudioRoute("EARPIECE");
       } else {
         m.setSpeakerphoneOn(false);
@@ -369,6 +408,31 @@ export class JsSipClient implements SipClient {
     });
 
     this.ua.on("newRTCSession", (e: any) => {
+      // ---- Do Not Disturb: decline the inbound INVITE IMMEDIATELY with a final
+      // response so the PBX diverts the call straight to voicemail — no ring, no
+      // ringback dragged out for the full ring-group timeout.
+      //
+      // History: an earlier attempt silenced the leg but kept sending 180 Ringing
+      // with no final response, so the call just rang out instead of going to
+      // voicemail (the user's "DND only mutes my phone, it never sends to
+      // voicemail" report). We previously feared 486 because it looped the ring
+      // group — but that loop was the telephony "mobile invite requeue" AMI
+      // Redirect (now gated on a live extension leg), NOT the 486 itself. With
+      // that fixed, an instant decline diverts to voicemail cleanly (confirmed
+      // live: the WebRTC desk's own decline reaches voicemail "right away" with
+      // no loop). A 486 is a final response, so the extension's Dial() leg ends
+      // immediately → DIALSTATUS busy/failover → voicemail. We never touch
+      // outbound or already-active calls.
+      if (e.originator === "remote" && getDnd()) {
+        console.log("[SIP][DND] inbound INVITE declined with 486 Busy (DND on) — diverting straight to voicemail");
+        try {
+          e.session?.terminate?.({ status_code: 486, reason_phrase: "Busy Here" });
+        } catch (err) {
+          console.warn("[SIP][DND] failed to send 486 on DND INVITE:", err);
+        }
+        return;
+      }
+
       // ---- multi-call: enforce the per-user concurrent session limit ---------
       // Reject with 486 Busy BEFORE registering the session. This keeps the UI
       // scannable and matches legacy desk-phone norms (1 active + 4 held). The
@@ -441,6 +505,10 @@ export class JsSipClient implements SipClient {
           initAudioSession().then(() => startRingtone()).catch(() => undefined);
         } else {
           console.log("[SIP] Android inbound INVITE received — leaving ringtone to native incoming-call flow");
+          // Tell the native service a live inbound leg exists (initial INVITE
+          // or a ring-group fork re-INVITE) so any pending fork-abandon stop is
+          // cancelled — the call is still being offered to this device.
+          notifyNativeInboundLeg("alive");
         }
       } else {
         // Outbound — dialing state will be set via `progress` handler shortly.
@@ -705,6 +773,10 @@ export class JsSipClient implements SipClient {
         console.log(
           "[MULTICALL] session_ended_cleanup keep_ringtone_alive — unanswered inbound fork end, leaving native ringtone to authoritative stop paths",
         );
+        // Background-safe teardown: the native service debounces this for a
+        // re-INVITE; if the call really rolled to voicemail / was answered
+        // elsewhere, it stops the ringtone where the JS poll never runs.
+        notifyNativeInboundLeg("gone");
       }
       this.collectAndSubmitQualityReport(cause).catch(() => {});
       if (this.session === session) this.session = null;
@@ -768,6 +840,10 @@ export class JsSipClient implements SipClient {
         console.log(
           "[MULTICALL] session_failed_cleanup keep_ringtone_alive — unanswered inbound fork cancel, leaving native ringtone to authoritative stop paths",
         );
+        // Background-safe teardown: the native service debounces this for a
+        // re-INVITE; if the call really rolled to voicemail / was answered
+        // elsewhere, it stops the ringtone where the JS poll never runs.
+        notifyNativeInboundLeg("gone");
       }
       this.collectAndSubmitQualityReport(cause).catch(() => {});
       if (this.session === session) this.session = null;

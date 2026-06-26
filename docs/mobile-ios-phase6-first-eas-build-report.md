@@ -1,6 +1,9 @@
 # Phase 6 — First iOS EAS Dev-Device Build & Native Verification
 
-Status: **Blocked on Apple Developer credentials + physical-device registration (awaiting user decision).** All safe, credential-free preflight and config verification is complete and green; the actual cloud build cannot proceed autonomously because it requires interactive Apple login (with 2FA on the user's device) and the physical iPhone 15 to register its UDID.
+Status: **✅ FIRST iOS BUILD SUCCEEDED.** Build `8cd8274e-b215-4a22-a35a-7ccfcdb3e35b` (profile `ios-dev-device`, SDK 51.0.0, commit `04a4f0cc`) finished and produced an installable `.ipa`. The native CallKit/PushKit plugin compiled on the macOS worker (Objective-C++ AppDelegate), and the ad-hoc provisioning profile includes the physical iPhone (UDID `00008110-001A34A10113801E`). Remaining work is on-device install + smoke test. (History of how we got here — auth/credential/compile blockers and fixes — retained in §3a–§3c below.)
+
+**Build artifact:** `https://expo.dev/artifacts/eas/R9JjJ7NMk5m9ZQAj3TAg-Tj7oyQLoyXkxU3zWzC8h4Q.ipa`
+**Install / logs:** `https://expo.dev/accounts/izz8457s-organization/projects/connect-mobile/builds/8cd8274e-b215-4a22-a35a-7ccfcdb3e35b`
 
 ---
 
@@ -182,80 +185,164 @@ Remaining to confirm on the **next** build (after the fix ships): a green Xcode
 compile, then on-device install of `aps-environment`, `UIBackgroundModes`, PushKit
 token registration, and `voipPushToken` persistence.
 
+### 3d. Update — build #2 SUCCEEDED ✅
+
+`eas build --profile ios-dev-device --platform ios --non-interactive` (run from
+the agent's PowerShell — now possible because build #1's credentials already
+exist on EAS, so non-interactive no longer needs to *create* them):
+
+| Field | Value |
+|-------|-------|
+| Build ID | `8cd8274e-b215-4a22-a35a-7ccfcdb3e35b` |
+| Status | **finished** |
+| Profile / Distribution / Channel | `ios-dev-device` / `internal` / `dev` |
+| SDK / Runtime / Version / Build # | `51.0.0` / `1.0.0` / `1.0.0` / `1` |
+| Commit | `04a4f0cc` (includes the selector fix) |
+| Apple Team | `PR63R6J84J` (israel weinstock — Individual) |
+| Provisioned device | iPhone UDID `00008110-001A34A10113801E` |
+| `.ipa` | `https://expo.dev/artifacts/eas/R9JjJ7NMk5m9ZQAj3TAg-Tj7oyQLoyXkxU3zWzC8h4Q.ipa` |
+| Install / logs | `https://expo.dev/accounts/izz8457s-organization/projects/connect-mobile/builds/8cd8274e-b215-4a22-a35a-7ccfcdb3e35b` |
+
+Note on credentials/team: the stored credentials (cert + ad-hoc profile +
+device) live on Apple Team **`PR63R6J84J`**, created during build #1's
+interactive run. The ASC API key the agent holds (`KLM264D4Z8`) belongs to a
+*different*, empty team — which is why the direct ASC probe saw 0 devices/certs.
+This is harmless for building (non-interactive uses the stored EAS credentials
+and skips Apple-server validation), but **`eas submit` / future credential
+changes should use an ASC API key from team `PR63R6J84J`**, not `KLM264D4Z8`.
+
+Note on archive size: EAS warned the project archive is **772 MB** (untracked
+artifacts under `_latency_logs/` etc. get swept into the git archive). Not a
+blocker, but a `.easignore` excluding `_latency_logs/`, `*.apk`, `*.ipa`, and
+screenshots would speed future uploads. (Left untouched — outside this phase's
+"fix only the direct blocker" scope.)
+
 ## 4. Native-output verification — deferred to the cloud build (Windows cannot prebuild iOS)
 
 Attempted locally: `npx expo prebuild -p ios --no-install` →
 **`⚠️ Skipping generating the iOS native project files. Run npx expo prebuild again from macOS or Linux to generate the iOS project.`** (Expo CLI blocks iOS prebuild on Windows.) No `ios/` folder was created and **no files were modified** (verified clean afterward).
 
-Therefore the following Task-4 items can only be confirmed from the **EAS build logs / generated project** on the macOS worker, not on this Windows host:
+Windows cannot prebuild iOS, so these Task-4 items were confirmed from the
+**EAS macOS build** instead (build #1 failure pinpointed the AppDelegate
+language; build #2 success confirmed the rest by compiling cleanly):
 
-| To verify on the build | Expectation (SDK 51 / RN 0.74.5) |
-|------------------------|----------------------------------|
-| AppDelegate language | **Objective-C++ `AppDelegate.mm`** (Swift AppDelegate is SDK 52+; SDK 51 emits `.mm`). |
-| `withIosVoipPush.js` applied | Build log should print `[withIosVoipPush] Objective-C++ AppDelegate patched: PushKit + native CallKit reportNewIncomingCall wired.` |
-| `#import "RNCallKeep.h"` resolves | Compiles under the generated Pods header search path; if it fails, switch the plugin import to `<RNCallKeep/RNCallKeep.h>`. |
-| PushKit delegate present | The three `PKPushRegistryDelegate` methods injected by the plugin. |
-| `reportNewIncomingCall` before completion | Injected `didReceiveIncomingPushWithPayload` calls `[RNCallKeep reportNewIncomingCall:…]` then `completion()`. |
-| `UIBackgroundModes` | `voip`, `remote-notification`, `audio` (already in Info.plist via app.config). |
-| `aps-environment` entitlement | `development` for this profile. |
+| Item | Result |
+|------|--------|
+| AppDelegate language | ✅ **Objective-C++ `.mm`** — proven by build #1's Obj-C *selector* error inside the patched delegate; build #2 compiled it. (SDK 51, as expected.) |
+| `withIosVoipPush.js` applied | ✅ The patched delegate methods are in the compiled binary (build #1 failed *on* our injected line; build #2 compiled them). |
+| `#import "RNCallKeep.h"` resolves | ✅ Compiled — no "file not found"; the quote-form import worked, `<RNCallKeep/RNCallKeep.h>` fallback **not** needed. |
+| PushKit delegate present | ✅ All three `PKPushRegistryDelegate` methods compiled. |
+| `reportNewIncomingCall` before completion | ✅ `[RNCallKeep reportNewIncomingCall:…]` compiled in `didReceiveIncomingPushWithPayload` ahead of `completion()`. |
+| `UIBackgroundModes` | ✅ `voip`, `remote-notification`, `audio` (introspect + app.config). |
+| `aps-environment` entitlement | ✅ `development` (introspect; profile is `development`). |
+| Bundle ID / `.voip` topic | ✅ `com.connectcommunications.mobile`; VoIP topic `com.connectcommunications.mobile.voip` (worker derives `<bundleId>.voip`). |
 
-## 5. Build failure diagnosis
+## 5. Build failure diagnosis (resolved)
 
-Not applicable yet — no build was run. The **pre-build blocker** is credentials/team linkage + device registration (not a code/config defect). Config and plugin are validated as far as Windows allows.
+Two real blockers were hit and fixed; neither was an app-logic defect:
 
-## 6–7. Device install + smoke test
+1. **Apple 401 at credential setup** — caused by the interactive terminal lacking
+   the ASC API-key env vars (EAS fell back to a stale Apple ID session). Fixed by
+   setting `EXPO_ASC_API_KEY_PATH/EXPO_ASC_KEY_ID/EXPO_ASC_ISSUER_ID`; the key
+   itself was proven valid (direct ASC API `200`). (§3a–§3b)
+2. **Xcode compile error** `no known class method for selector
+   'didInvalidatePushTokenForType:'` — the plugin forwarded to a
+   `RNVoipPushNotificationManager` class method that doesn't exist in 3.3.x.
+   Fixed by making that optional delegate a documented no-op (commit `04a4f0cc`).
+   (§3c)
 
-Not reached — depends on a successful build artifact. (App launch, permission prompts, mic/notification permissions, Expo push token + `voipPushToken` registration logs, `MobileDevice` record `platform: IOS` + `voipPushToken`, Metro `npx expo start --dev-client`, JS reload — all pending the build.)
+First-time credential *creation* also required an interactive (TTY) run, since
+eas-cli treats a non-TTY shell as non-interactive and won't create new
+distribution certs there; once build #1 created+stored them, the agent's
+non-interactive build #2 reused them and succeeded.
 
-## What worked / what's blocked
+## 6–7. Device install + smoke test (handed to user — needs the physical iPhone)
 
-**Worked (autonomous, safe):**
-- EAS CLI + login confirmed; project linkage confirmed.
-- `eas.json` `ios-dev-device` profile, bundle ID, background modes, push entitlement, plugin presence — all verified at config level.
-- Confirmed first-ever iOS build (no prior builds, no devices, no Apple team linked).
-- Confirmed Windows cannot locally prebuild iOS (documented).
-- Phase 5 code unchanged and intact; no working-tree damage from verification steps.
+The `.ipa` is built and the iPhone (UDID `00008110-001A34A10113801E`) is in the
+profile, so it will install. On the **iPhone 15**:
 
-**Blocked (needs the user):**
-- Apple Developer Program membership + interactive Apple login (2FA on the user's device) **or** an App Store Connect API key for non-interactive credential setup.
-- Physical iPhone 15 present to register its UDID via the EAS guided flow.
-- Committing the Phase 4/5 changes so the cloud build includes the native plugin + deterministic-UUID code (EAS archives the committed git tree).
+1. **Install:** open the build link (or scan its QR) and tap **Install**:
+   `https://expo.dev/accounts/izz8457s-organization/projects/connect-mobile/builds/8cd8274e-b215-4a22-a35a-7ccfcdb3e35b`
+   — then **Settings → General → VPN & Device Management → trust the developer
+   (israel weinstock)** so the dev build can launch.
+2. **Start Metro** (dev client) on the workstation:
+   ```powershell
+   cd "c:\dev\projects\Connect 2\apps\mobile"
+   npx expo start --dev-client
+   ```
+   Open the app on the iPhone; it should connect to Metro (same Wi-Fi / use
+   tunnel if needed).
+3. **Smoke checks to capture:** app launches without crash; login / QR-login
+   screen renders; UI parity with Android at a glance; **camera + microphone +
+   notifications** permission prompts; PushKit registration + **`voipPushToken`**
+   appears in logs; the backend `MobileDevice` row shows `platform: IOS` with a
+   non-null `voipPushToken`; JS fast-refresh works.
+
+These weren't run by the agent (they require the physical device); they are the
+content of the next phase.
+
+## What worked / what's outstanding
+
+**Worked:**
+- Full credential chain set up on Apple Team `PR63R6J84J`; first iOS build
+  **succeeded** with the native CallKit/PushKit plugin compiled.
+- All Task-4 native items verified via the build (table in §4).
+- Diagnosed + fixed the 401 (env vars) and the Xcode selector defect (commit
+  `04a4f0cc`); both committed on `main`.
+
+**Outstanding (next phase, needs the iPhone):**
+- On-device install + smoke test (§6–7).
+- Worker `APNS_*` env vars for the live inbound-call test.
+- Optional: `.easignore` to shrink the 772 MB archive; set
+  `ITSAppUsesNonExemptEncryption`; use an ASC key from team `PR63R6J84J` for
+  `eas submit`.
 
 ## Remaining blockers before first inbound-call test
 
-1. **Apple Developer team** linked to EAS (currently none) + **iPhone 15 UDID** registered.
-2. **Commit Phase 4/5 changes** (otherwise the build won't contain `withIosVoipPush.js` native CallKit reporting, `callkitUuid.ts`, or the `callkeep.ts` deterministic UUID).
-3. **Run the EAS build** and read the log to confirm AppDelegate language + plugin application + `RNCallKeep` compilation.
-4. **Worker `APNS_*` env vars** set so VoIP pushes actually send for the inbound-call test.
-5. Install on device, grant mic + notification permissions, confirm `voipPushToken` registers and the `MobileDevice` row updates.
+1. Install the dev build on the iPhone 15 and trust the developer profile.
+2. Grant microphone + notification permissions; confirm `voipPushToken`
+   registers and the `MobileDevice` row updates (`platform: IOS`).
+3. Set the worker `APNS_*` env vars (`APNS_TEAM_ID`, `APNS_KEY_ID`,
+   `APNS_AUTH_KEY_P8`/`_BASE64`, `APNS_BUNDLE_ID`, `APNS_VOIP_TOPIC`,
+   `APNS_PRODUCTION`) so a real incoming call fans out a VoIP push.
+4. Place a test call and confirm CallKit rings (foreground, background, and
+   cold-killed) and connects after answer.
 
 ---
 
 ## Status
 
-**Paused for user input.** Everything that can be verified without Apple credentials on a Windows host is done and green. The actual `eas build --profile ios-dev-device --platform ios` requires the user's Apple Developer login (with 2FA) and the physical iPhone 15 for device registration, so it was not run. No code or working-tree changes were made in Phase 6.
+**✅ Phase 6 core goal achieved: the first iOS dev-device build succeeded.**
+Apple auth, EAS-managed credentials (cert + ad-hoc profile incl. the iPhone),
+and the native Objective-C++ CallKit/PushKit plugin all compiled; an installable
+`.ipa` is published. Two blockers (Apple 401, Xcode selector error) were
+diagnosed and fixed (commit `04a4f0cc`). Remaining work is on-device install +
+smoke test, which requires the physical iPhone.
 
 ## Risks
 
-- **Apple account not yet linked / no membership:** if the Apple Developer Program isn't active, the build cannot create credentials. (Requires a paid membership.)
-- **Uncommitted changes excluded from build:** EAS archives committed git state by default — building before committing Phase 4/5 would silently test stale code. Commit first.
-- **AppDelegate language assumption:** strong evidence it's Obj-C++ (SDK 51), but only the build confirms it; the plugin fails loudly if Swift, so a wrong assumption is caught, not silent.
-- **`RNCallKeep.h` import form** may need `<RNCallKeep/RNCallKeep.h>` — a one-line fix discoverable only from the build.
+- **Two Apple teams in play:** stored EAS credentials + device are on team
+  `PR63R6J84J`; the agent's ASC API key (`KLM264D4Z8`) is on a different empty
+  team. Builds are fine (stored creds), but `eas submit` / future credential
+  edits must use a key from `PR63R6J84J`.
+- **772 MB archive:** untracked artifacts (e.g. `_latency_logs/`) inflate the
+  upload; add a `.easignore` to speed future builds.
+- **`ITSAppUsesNonExemptEncryption` unset:** harmless for dev, but set it to
+  avoid a manual App Store Connect step before TestFlight.
+- **Cold-killed call path still unproven on a real device** — the native report
+  compiled, but end-to-end ringing on a terminated app must be tested on the
+  iPhone with the worker sending APNs VoIP.
 
 ## Next recommended Cursor prompt
 
-> Phase 6b: complete the first iOS EAS dev-device build. I (the user) have an
-> active Apple Developer membership and my iPhone 15 in hand. Steps:
-> 1. Commit the Phase 4/5 mobile changes (callkitUuid.ts/.test.ts, callkeep.ts,
->    withIosVoipPush.js, NotificationsContext.tsx, docs) on `main` with a clear
->    message — iOS PushKit/CallKit cold-killed hardening.
-> 2. Walk me through `eas build --profile ios-dev-device --platform ios`,
->    including the Apple login + iPhone 15 device-registration prompts (I will
->    enter credentials / 2FA and scan the device-registration QR myself).
-> 3. When the build finishes, pull the build logs and verify: AppDelegate is
->    Obj-C++ `.mm`, the `[withIosVoipPush] Objective-C++ AppDelegate patched` line
->    appears, `RNCallKeep.h` compiled, PushKit delegate + reportNewIncomingCall
->    present, UIBackgroundModes + aps-environment correct.
-> 4. Help me install the build on the iPhone 15, run `npx expo start --dev-client`,
->    and capture `voipPushToken` registration logs + the `MobileDevice` row.
-> 5. Update docs/mobile-ios-phase6-first-eas-build-report.md with the results.
+> Phase 7: install the iOS dev build on the iPhone 15 and run the first
+> on-device smoke + push-registration test. The build is live at
+> `https://expo.dev/accounts/izz8457s-organization/projects/connect-mobile/builds/8cd8274e-b215-4a22-a35a-7ccfcdb3e35b`.
+> Steps: (1) install on the iPhone 15 and trust the developer profile; (2) start
+> `npx expo start --dev-client` and open the app; (3) verify launch, login/QR
+> screen, camera/mic/notification permission prompts, and capture the PushKit
+> `voipPushToken` registration logs + the `MobileDevice` row (`platform: IOS`,
+> non-null `voipPushToken`); (4) set the worker `APNS_*` env vars and place a test
+> inbound call to verify CallKit rings (foreground, background, cold-killed) and
+> connects after answer; (5) record results in a Phase 7 report. Do not deploy
+> production; do not change Android.

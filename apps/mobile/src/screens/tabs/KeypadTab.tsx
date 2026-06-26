@@ -231,6 +231,7 @@ export function KeypadTab() {
   const [outboundRoutes, setOutboundRoutes] = useState<OutboundDialRoute[]>([]);
   const [selectedOutboundRouteId, setSelectedOutboundRouteId] = useState('');
   const [dndConfirmOpen, setDndConfirmOpen] = useState(false);
+  const [dndOffConfirmOpen, setDndOffConfirmOpen] = useState(false);
   // Measured height of the whole tab — drives adaptive keypad sizing so the
   // suggestion list always has room for (ideally) two rows.
   const [tabHeight, setTabHeight] = useState(screenHeight);
@@ -326,8 +327,15 @@ export function KeypadTab() {
 
   const confirmDnd = useCallback(() => {
     if (sip.registrationState !== 'registered') return;
+    // Already in DND → tapping asks for confirmation before turning it OFF, so a
+    // stray tap can't silently re-open the phone to calls. (Turning DND ON also
+    // confirms, below.)
+    if (isDnd) {
+      setDndOffConfirmOpen(true);
+      return;
+    }
     setDndConfirmOpen(true);
-  }, [sip.registrationState]);
+  }, [sip.registrationState, isDnd]);
 
   const handleDial = async () => {
     const target = number.trim();
@@ -563,7 +571,7 @@ export function KeypadTab() {
             ]}
             numberOfLines={1}
           >
-            {userLabel}
+            {registered && isDnd ? `${userLabel}  ·  Do Not Disturb` : userLabel}
           </Text>
         </TouchableOpacity>
       </View>
@@ -733,12 +741,24 @@ export function KeypadTab() {
       <AppConfirmDialog
         visible={dndConfirmOpen}
         title="Enable Do Not Disturb?"
-        message="Would you like to put your phone into DND?"
+        message="Incoming calls won't ring this phone — they'll go straight to voicemail."
         cancelLabel="Cancel"
-        confirmLabel="Yes"
+        confirmLabel="Turn On"
         onClose={() => setDndConfirmOpen(false)}
         onConfirm={() => {
           setMyStatus('dnd');
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+        }}
+      />
+      <AppConfirmDialog
+        visible={dndOffConfirmOpen}
+        title="Turn off Do Not Disturb?"
+        message="Your phone will start ringing for incoming calls again."
+        cancelLabel="Cancel"
+        confirmLabel="Turn Off"
+        onClose={() => setDndOffConfirmOpen(false)}
+        onConfirm={() => {
+          setMyStatus('available');
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
         }}
       />

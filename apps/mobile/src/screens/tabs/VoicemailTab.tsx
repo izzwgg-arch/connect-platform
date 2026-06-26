@@ -460,6 +460,18 @@ export function VoicemailTab() {
 
     progressAnim.setValue(0);
 
+    // Ensure the iOS audio session is in a loud playback state before we start.
+    // A prior voice-note recording (allowsRecordingIOS) or the expo-av default
+    // (playsInSilentModeIOS:false) would otherwise route voicemail audio to the
+    // quiet earpiece / silence it under the Ring/Silent switch. Fire-and-forget
+    // so it never delays the instant-play paths below.
+    Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: false,
+      shouldDuckAndroid: true,
+    }).catch(() => undefined);
+
     // Flip to the playing state the instant the button is tapped — for EVERY
     // path (pre-warmed, cached, or remote stream). There is no spinner: the
     // pause icon shows immediately and the waveform fill begins moving as soon

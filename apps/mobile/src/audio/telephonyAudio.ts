@@ -217,13 +217,44 @@ export async function initAudioSession() {
   } catch { /* non-fatal */ }
 }
 
-/** Restore default audio session after a call ends (iOS only). */
+/**
+ * Configure the *default* playback audio session (iOS).
+ *
+ * Called once at app startup (and after a call ends) so that ALL expo-av
+ * playback — voicemail audio, chat voice notes, DTMF — uses the AVAudioSession
+ * `playback` category instead of expo-av's default `ambient`/`soloAmbient`.
+ *
+ * Why this matters: with the default category iOS silences app audio whenever
+ * the physical Ring/Silent switch is flipped to silent, and routes quietly.
+ * A phone app must keep playing voicemail/voice notes regardless of the ringer
+ * switch (this is how WhatsApp / native Phone behave), so we force
+ * `playsInSilentModeIOS: true` with recording OFF (→ speaker output).
+ */
+export async function initPlaybackAudioSession() {
+  if (Platform.OS !== "ios") return;
+  try {
+    await Audio.setAudioModeAsync({
+      allowsRecordingIOS: false,
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: false,
+      shouldDuckAndroid: true,
+    });
+  } catch { /* non-fatal */ }
+}
+
+/**
+ * Restore the default *playback* audio session after a call ends (iOS only).
+ *
+ * Intentionally keeps `playsInSilentModeIOS: true` so that voicemail / voice
+ * notes remain audible after a call — the previous value (`false`) re-broke
+ * playback whenever the user had the ringer switch on silent.
+ */
 export async function restoreAudioSession() {
   if (Platform.OS !== "ios") return;
   try {
     await Audio.setAudioModeAsync({
       allowsRecordingIOS: false,
-      playsInSilentModeIOS: false,
+      playsInSilentModeIOS: true,
       staysActiveInBackground: false,
       shouldDuckAndroid: true,
     });

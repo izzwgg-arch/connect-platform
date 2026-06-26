@@ -297,7 +297,15 @@ class AudioRouteManager {
       return;
     }
     try {
-      if (route === 'speaker') {
+      if (Platform.OS === 'ios') {
+        // iOS: setSpeakerphoneOn / chooseAudioRoute are Android-only no-ops.
+        // setForceSpeakerphoneOn is the only routing primitive that works:
+        //   true  → force loudspeaker
+        //   false → release override; iOS auto-routes to Bluetooth (if paired)
+        //           or the earpiece. So speaker=ON forces speaker; every other
+        //           route (earpiece / bluetooth / wired) just releases it.
+        icm.setForceSpeakerphoneOn?.(route === 'speaker');
+      } else if (route === 'speaker') {
         icm.setSpeakerphoneOn?.(true);
       } else if (route === 'bluetooth' && typeof icm.chooseAudioRoute === 'function') {
         icm.chooseAudioRoute('BLUETOOTH');

@@ -17,6 +17,7 @@ import { CallFlowDebugOverlay } from './src/debug/CallFlowDebugOverlay';
 import { ensureCallFlowAppStateHook, logCallFlowBootDiagnostics } from './src/debug/callFlowDebug';
 import { PENDING_CALL_STORAGE_KEY } from './src/notifications/backgroundCallTask';
 import { getCallHistory, getContacts, getTeamDirectory, getVoicemails, mobileQueryKeys } from './src/api/client';
+import { initPlaybackAudioSession } from './src/audio/telephonyAudio';
 
 const mobileQueryClient = new QueryClient({
   defaultOptions: {
@@ -100,6 +101,10 @@ export default function App() {
     void logCallFlowBootDiagnostics(() =>
       AsyncStorage.getItem(PENDING_CALL_STORAGE_KEY).catch(() => null),
     );
+    // Configure the iOS AVAudioSession for playback up front so voicemail
+    // audio and chat voice notes are audible even when the Ring/Silent switch
+    // is set to silent (and route to the loudspeaker, not the earpiece).
+    void initPlaybackAudioSession();
   }, []);
 
   return (
