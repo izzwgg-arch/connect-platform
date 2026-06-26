@@ -28524,23 +28524,22 @@ app.post("/internal/mobile-prewake", async (req, reply) => {
   if (candidateUserIds.length === 0) {
     // Tenant-wide: only users with an asleep device (stale lastSeenAt or never
     // seen). Already-online phones (fresh lastSeenAt) are intentionally skipped.
-    const asleepDevices = await db.mobileDevice.findMany({
-      where: {
-        tenantId,
-        active: true,
-        OR: [
-          { lastSeenAt: { lt: staleCutoff } },
-          { lastSeenAt: null },
-        ],
-      } as any,
-      select: { userId: true } as any,
+    // NOTE: do the stale-check in JS. Prisma's null-filter handling on
+    // `lastSeenAt` is fragile across client versions ({ not: null } and
+    // { lastSeenAt: null } both throw on 6.x) and a throw here silently
+    // returns zero devices -> no wake. Plain query + JS filter is version-proof.
+    const tenantDevices = await db.mobileDevice.findMany({
+      where: { tenantId, active: true } as any,
+      select: { userId: true, lastSeenAt: true } as any,
       take: 500,
     }).catch((err: any) => {
-      app.log.warn({ err: err?.message, tenantId, linkedId: input.linkedId }, "mobile-prewake: asleep-device query failed");
-      return [] as Array<{ userId: string | null }>;
+      app.log.warn({ err: err?.message, tenantId, linkedId: input.linkedId }, "mobile-prewake: device query failed");
+      return [] as Array<{ userId: string | null; lastSeenAt: Date | null }>;
     });
+    const staleMs = staleCutoff.getTime();
     candidateUserIds = Array.from(new Set(
-      (asleepDevices as Array<{ userId: string | null }>)
+      (tenantDevices as Array<{ userId: string | null; lastSeenAt: Date | null }>)
+        .filter((d) => !d.lastSeenAt || new Date(d.lastSeenAt).getTime() < staleMs)
         .map((d) => d.userId)
         .filter((u): u is string => typeof u === "string" && u.length > 0),
     ));
