@@ -13,6 +13,8 @@ export function shouldSkipJwtVerification(path: string): boolean {
     path === "/internal/cdr-ingest" || path.endsWith("/internal/cdr-ingest");
   const isInternalMobileRingPath =
     path === "/internal/mobile-ring-notify" || path.endsWith("/internal/mobile-ring-notify");
+  const isInternalMobilePrewakePath =
+    path === "/internal/mobile-prewake" || path.endsWith("/internal/mobile-prewake");
   const isInternalPbxWakePath =
     path === "/internal/pbx/wake-extension"
     || path.endsWith("/internal/pbx/wake-extension")
@@ -57,6 +59,7 @@ export function shouldSkipJwtVerification(path: string): boolean {
     || isDevObserveTokenPath
     || isInternalCdrIngestPath
     || isInternalMobileRingPath
+    || isInternalMobilePrewakePath
     || isInternalPbxWakePath
     || isInternalPbxContactStatusPath
     || isInternalTelephonyPath
