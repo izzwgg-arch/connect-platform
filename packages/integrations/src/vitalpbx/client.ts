@@ -90,15 +90,28 @@ function isIdempotentRead(method: VitalPbxHttpMethod): boolean {
   return method === "GET";
 }
 
+/**
+ * PBX WRITE SAFEGUARD — global default.
+ *
+ * Connect must never modify the PBX without explicit, human-granted permission.
+ * Config-mutating endpoints are blocked unless this returns true. The only way
+ * to flip it on is to set the env var deliberately on the server, scoped to the
+ * specific authorized operation.
+ */
+function envAllowsPbxConfigMutations(): boolean {
+  const v = String(process.env.PBX_ALLOW_CONFIG_MUTATIONS ?? "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes" || v === "on";
+}
+
 function hasPathParameter(path: string, token: string): boolean {
   return path.includes(`:${token}`);
 }
 
 export class VitalPbxClient {
   private cfg: Required<
-    Pick<VitalPbxConfig, "timeoutMs" | "simulate" | "tenantHeaderName" | "tenantQueryName" | "tenantTransport" | "retryCount" | "userAgent">
+    Pick<VitalPbxConfig, "timeoutMs" | "simulate" | "tenantHeaderName" | "tenantQueryName" | "tenantTransport" | "retryCount" | "userAgent" | "allowConfigMutations">
   > &
-    Omit<VitalPbxConfig, "timeoutMs" | "simulate" | "tenantHeaderName" | "tenantQueryName" | "tenantTransport" | "retryCount" | "userAgent">;
+    Omit<VitalPbxConfig, "timeoutMs" | "simulate" | "tenantHeaderName" | "tenantQueryName" | "tenantTransport" | "retryCount" | "userAgent" | "allowConfigMutations">;
 
   constructor(cfg: VitalPbxConfig) {
     this.cfg = {
@@ -109,7 +122,11 @@ export class VitalPbxClient {
       tenantTransport: cfg.tenantTransport || "header",
       retryCount: cfg.retryCount ?? 2,
       userAgent: cfg.userAgent || "connectcomms-vitalpbx-client/1.0",
-      ...cfg
+      ...cfg,
+      // Resolved LAST so the spread above can never silently re-enable writes.
+      // Default OFF: blocked unless the caller passed an explicit value or the
+      // operator set PBX_ALLOW_CONFIG_MUTATIONS on the server.
+      allowConfigMutations: cfg.allowConfigMutations ?? envAllowsPbxConfigMutations(),
     };
   }
 
@@ -243,6 +260,35 @@ export class VitalPbxClient {
     }
   ): Promise<VitalPbxApiEnvelope<T>> {
     const endpoint = getVitalPbxEndpoint(endpointKey);
+
+    // ── PBX WRITE SAFEGUARD ──────────────────────────────────────────────────
+    // Refuse any endpoint that CHANGES PBX configuration unless writes have been
+    // explicitly authorized. This is the hard backstop that prevents Connect
+    // (any sync job, admin route, future code path, or agent) from modifying the
+    // PBX — creating/updating/deleting tenants, adding/removing inbound DIDs,
+    // regenerating config, queue/code CRUD — without deliberate operator consent.
+    // Root cause it guards: an automatic tenant re-save (PUT) silently wiped
+    // tenants' inbound DIDs in June 2026.
+    if (endpoint.pbxConfigMutation && !this.cfg.allowConfigMutations && !this.cfg.simulate) {
+      this.emit({
+        direction: "error",
+        method: endpoint.method,
+        path: endpoint.path,
+        errorCode: "PBX_MUTATION_BLOCKED",
+        message: `Blocked PBX config mutation '${endpointKey}' — Connect is in PBX read-only safe mode`,
+      });
+      throw makeVitalPbxError(
+        `Blocked PBX configuration change '${endpointKey}' (${endpoint.method} ${endpoint.path}). ` +
+          `Connect runs in PBX READ-ONLY SAFE MODE and must NOT modify the PBX without explicit operator permission. ` +
+          `To intentionally allow a specific, human-authorized operation, set PBX_ALLOW_CONFIG_MUTATIONS=1 on the server ` +
+          `(or construct the client with allowConfigMutations: true).`,
+        "PBX_MUTATION_BLOCKED",
+        403,
+        false,
+        { endpointKey, method: endpoint.method, path: endpoint.path },
+      );
+    }
+
     const headers: Record<string, string> = {};
     const query = { ...(input?.query || {}) };
     this.maybeInjectTenant(endpoint, input?.tenant, headers, query);
@@ -431,8 +477,39 @@ export class VitalPbxClient {
 
   // ---- Extensions ----
   async listExtensions(tenantId?: string): Promise<any[]> {
-    const out = await this.callEndpoint<any[]>("extensions.list", { tenant: tenantId });
-    return Array.isArray(out.data) ? out.data : [];
+    const first = await this.callEndpoint<any[]>("extensions.list", { tenant: tenantId });
+    const rows: any[] = Array.isArray(first.data) ? first.data : [];
+    // VitalPBX caps list responses (same behaviour proven for tenants.list).
+    // Without paging, a tenant with more extensions than one page silently
+    // loses the overflow — and because the extension sync deactivates any
+    // ACTIVE extension it did not see this pass, a missed page would also flip
+    // real extensions to INACTIVE. Page until a short page or no new rows.
+    const pageSize = 200;
+    if (rows.length === pageSize) {
+      const keyOf = (e: any): string => String(e?.extension_id ?? e?.id ?? e?.extension ?? "");
+      const seen = new Set(rows.map(keyOf));
+      for (let page = 1; page < 50; page++) {
+        const next = await this.callEndpoint<any[]>("extensions.list", {
+          tenant: tenantId,
+          query: { limit: pageSize, offset: page * pageSize },
+        });
+        const chunk: any[] = Array.isArray(next.data) ? next.data : [];
+        if (chunk.length === 0) break;
+        let added = 0;
+        for (const e of chunk) {
+          const k = keyOf(e);
+          if (k && !seen.has(k)) {
+            seen.add(k);
+            rows.push(e);
+            added++;
+          }
+        }
+        // Stop on a short page, or if the API ignored offset (no new rows) to
+        // avoid an infinite loop on installs that don't honour pagination.
+        if (chunk.length < pageSize || added === 0) break;
+      }
+    }
+    return rows;
   }
   async getExtension(extensionId: string, tenantId?: string): Promise<any> {
     return unwrapData(await this.callEndpoint<any>("extensions.get", { tenant: tenantId, pathParams: { extensionId } }));

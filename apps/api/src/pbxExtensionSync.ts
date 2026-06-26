@@ -4,24 +4,11 @@ import { encryptJson, hasCredentialsMasterKey } from "@connect/security";
 import { randomBytes } from "crypto";
 import bcrypt from "bcryptjs";
 
-// ── Auto-apply cooldown ───────────────────────────────────────────────────────
-// When a sync detects a WebRTC endpoint that has never gone live (the "device
-// exists in VitalPBX's DB but was never pushed into the running Asterisk config"
-// gap), we automatically run VitalPBX "Apply Changes" so the endpoint becomes
-// registerable without a human clicking the button. To avoid reloading Asterisk
-// repeatedly for a tenant that stays un-live (e.g. a phantom device, or a phone
-// that simply hasn't been scanned yet), we rate-limit auto-apply per tenant.
-const AUTO_APPLY_COOLDOWN_MS = 10 * 60 * 1000;
-const AUTO_APPLY_LAST_AT = new Map<string, number>();
-
-// Force-regenerate is the heavy lever (a synchronous tenant re-save + PJSIP
-// reload). PbxEndpointRegistration cannot tell "endpoint missing from live
-// config" (drift) apart from "endpoint exists but the phone is offline" — both
-// look like never-registered. To avoid reloading every tenant with an offline
-// phone on a full refresh, we only force-regenerate tenants whose WebRTC link
-// was provisioned recently (a genuinely new/just-set-up tenant). The deliberate
-// per-user "Sync SIP" path bypasses this age gate via forceRegenerateIgnoreAge.
-const FORCE_REGEN_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+// NOTE: This module is strictly READ-ONLY against the PBX. It fetches extensions
+// (GET) and writes only to Connect's own database. It must never trigger a
+// VitalPBX "Apply Changes", config regenerate, or any tenant write — those are
+// owner-initiated actions in VitalPBX. See AGENTS.md "Connect must NOT modify
+// the PBX without explicit owner permission".
 
 /**
  * Fetch the set of profile_ids that are classified as WebRTC in VitalPBX for the given tenant.
@@ -92,10 +79,8 @@ export interface ExtensionSyncResult {
  * Tenants with no TenantPbxLink are skipped (not mapped to a Connect tenant yet).
  *
  * @param options.vitalTenantId - if provided, sync only that one VitalPBX tenant
- * @param options.applyChangesForUnliveWebrtc - when true (admin-initiated refresh /
- *   per-user provisioning only — never the periodic warm cycle), automatically run
- *   VitalPBX "Apply Changes" for any tenant whose WebRTC endpoint has never gone
- *   live, so a freshly-scanned phone can register without a manual Apply click.
+ *   (the efficient per-tenant path — one GET + upserts; use this after adding an
+ *   extension to a single tenant instead of the full all-tenant refresh).
  */
 export async function syncExtensionsFromPbx(
   db: PrismaClient,
@@ -103,20 +88,6 @@ export async function syncExtensionsFromPbx(
   client: VitalPbxClient,
   options?: {
     vitalTenantId?: string;
-    applyChangesForUnliveWebrtc?: boolean;
-    /**
-     * Force a VitalPBX config regenerate for a drifted tenant (no-op tenant
-     * re-save). Wired by the server with a long-timeout client so the slow
-     * synchronous regenerate completes inside the HTTP call. When omitted, the
-     * drift path falls back to the (possibly short-timeout) sync client.
-     */
-    forceRegenerateTenant?: (vitalTenantId: string) => Promise<void>;
-    /**
-     * Skip the "recently provisioned" age gate on force-regenerate. Set only by
-     * the deliberate per-user "Sync SIP" admin action, which targets a single
-     * tenant on purpose and should fix drift regardless of tenant age.
-     */
-    forceRegenerateIgnoreAge?: boolean;
   },
 ): Promise<ExtensionSyncResult> {
   // 1. Load all VitalPBX tenant directory entries for this instance
@@ -231,9 +202,6 @@ export async function syncExtensionsFromPbx(
       result.totalExtensions += extensions.length;
 
       let syncFoundWebrtcExtension = false;
-      // WebRTC endpoint names (e.g. "T34_101_1") seen this pass — used to check
-      // live registration and decide whether an auto-apply is warranted.
-      const webrtcEndpointNames: string[] = [];
       // Track extension numbers seen in this sync pass so we can deactivate any
       // that VitalPBX no longer returns (i.e. they were deleted on the PBX side).
       const seenExtNumbers = new Set<string>();
@@ -317,8 +285,6 @@ export async function syncExtensionsFromPbx(
         const webrtcEnabled: boolean = !!webrtcDevice;
         if (webrtcEnabled) {
           syncFoundWebrtcExtension = true;
-          const endpointName = pbxDeviceName || pbxSipUsername;
-          if (endpointName) webrtcEndpointNames.push(endpointName);
         }
         const pbxDeviceIdFromSync: string | null = activeDevice?.device_id != null
           ? String(activeDevice.device_id)
@@ -515,93 +481,79 @@ export async function syncExtensionsFromPbx(
           const hasNeverLiveEndpoint = webrtcEndpointNames.some(
             (name) => !everLive.get(name),
           );
-          // "Fully dark" = NONE of this tenant's WebRTC endpoints have ever
-          // registered. That is the strong drift signal (a new/never-working
-          // tenant), as opposed to one healthy tenant whose user simply has not
-          // scanned a phone yet. We only escalate to the heavier force-regenerate
-          // when the whole tenant is dark.
-          const allWebrtcNeverLive = webrtcEndpointNames.every(
-            (name) => !everLive.get(name),
-          );
+
+          // Endpoints that exist in VitalPBX's DB + Connect but were never
+          // pushed into the live Asterisk config. A newly-created extension on
+          // an *established* tenant lands here: `apply_changes` no-ops
+          // ("Invalid Operation", nothing queued), so the ONLY thing that
+          // materializes the endpoint is a force regenerate (no-op tenant
+          // re-save → synchronous PJSIP reload). Proven on T34 (RSBK).
+          //
+          // We materialize PER-ENDPOINT — not only when the entire tenant is
+          // dark — because the previous all-or-nothing gate (`allWebrtcNeverLive`)
+          // meant that once a tenant had a single live endpoint, every NEW
+          // extension added to it stayed permanently stuck. Reloads stay bounded
+          // because we only ever touch an endpoint that:
+          //   (a) has never gone live (no REGISTERED / lastRegisteredAt), AND
+          //   (b) has not already been materialized once (lastProvisionedAt is
+          //       null) — so each new endpoint triggers at most one regenerate,
+          //       AND
+          //   (c) was created recently (within FORCE_REGEN_MAX_AGE_MS) — so an
+          //       old, never-scanned phone never causes a reload.
+          // The deliberate per-user "Sync SIP" path sets forceRegenerateIgnoreAge
+          // to bypass (c) for a single intentionally-targeted tenant.
+          const regenCutoff = Date.now() - FORCE_REGEN_MAX_AGE_MS;
+          const ignoreAge = options?.forceRegenerateIgnoreAge === true;
+          const needsMaterialize = webrtcEndpoints.filter((ep) => {
+            if (everLive.get(ep.name)) return false;
+            if (ep.lastProvisionedAt) return false;
+            if (ignoreAge) return true;
+            const created = ep.createdAt ? new Date(ep.createdAt).getTime() : 0;
+            return created >= regenCutoff;
+          });
+
           const cooldownKey = `${pbxInstanceId}:${td.vitalTenantId}`;
           const lastAppliedAt = AUTO_APPLY_LAST_AT.get(cooldownKey) ?? 0;
           const cooldownPassed = Date.now() - lastAppliedAt >= AUTO_APPLY_COOLDOWN_MS;
           if (hasNeverLiveEndpoint && cooldownPassed) {
             AUTO_APPLY_LAST_AT.set(cooldownKey, Date.now());
+            let applied = false;
             try {
               await client.syncTenant(td.vitalTenantId);
+              applied = true;
               tenantResult.appliedChanges = true;
               tenantResult.applyError = null;
               result.totalAppliedChanges++;
             } catch (applyErr: any) {
-              // "Invalid Operation" = VitalPBX had nothing queued to apply. This
-              // is the *drift* case: the `_1` WebRTC device exists in VitalPBX's
-              // database (Connect synced it) but was never regenerated into the
-              // live Asterisk config, and there is no pending change for
-              // apply_changes to flush. Proven on T34 (RSBK): the device was
-              // byte-for-byte identical to a working tenant yet had no live
-              // endpoint. The fix that actually materializes it is a no-op
-              // tenant re-save, which forces VitalPBX to regenerate + reload
-              // PJSIP synchronously. We only do this when the entire tenant is
-              // dark (never any live WebRTC endpoint) so healthy tenants are
-              // never disturbed.
+              // "Invalid Operation" = VitalPBX had nothing queued to apply.
+              // This is the normal steady state on this install, so we do NOT
+              // treat it as fatal — the force regenerate below is what actually
+              // materializes new endpoints.
               tenantResult.appliedChanges = false;
               tenantResult.applyError = String(applyErr?.message ?? applyErr);
-              // Only force-regenerate genuinely new/just-provisioned tenants
-              // (or when the deliberate per-user path opts out of the age gate).
-              // This prevents a full Refresh PBX from reloading every tenant
-              // whose phone merely happens to be offline.
-              let regenAllowedByAge = options?.forceRegenerateIgnoreAge === true;
-              if (allWebrtcNeverLive && !regenAllowedByAge) {
-                try {
-                  const recentLinks = await db.pbxExtensionLink.findMany({
-                    where: { tenantId: resolvedTenantId, webrtcEnabled: true },
-                    select: { createdAt: true, sipPasswordIssuedAt: true, lastProvisionedAt: true },
-                  });
-                  const cutoff = Date.now() - FORCE_REGEN_MAX_AGE_MS;
-                  regenAllowedByAge = recentLinks.some((l: any) => {
-                    const ts = Math.max(
-                      l.createdAt ? new Date(l.createdAt).getTime() : 0,
-                      l.sipPasswordIssuedAt ? new Date(l.sipPasswordIssuedAt).getTime() : 0,
-                      l.lastProvisionedAt ? new Date(l.lastProvisionedAt).getTime() : 0,
-                    );
-                    return ts >= cutoff;
-                  });
-                } catch {
-                  regenAllowedByAge = false;
-                }
-              }
-              if (allWebrtcNeverLive && regenAllowedByAge) {
-                try {
-                  if (options?.forceRegenerateTenant) {
-                    // Preferred: long-timeout client wired by the server, so the
-                    // synchronous regenerate completes inside the HTTP call.
-                    await options.forceRegenerateTenant(td.vitalTenantId);
-                  } else {
-                    const t: any = await client.getTenant(td.vitalTenantId);
-                    await client
-                      .updateTenant(td.vitalTenantId, {
-                        name: t?.name,
-                        description: t?.description,
-                        settings: t?.settings,
-                      })
-                      .catch((regenErr: any) => {
-                        // VitalPBX runs the regenerate+reload synchronously inside
-                        // the PUT and can exceed the HTTP timeout; the reload still
-                        // completes server-side (verified on T34). Swallow only the
-                        // timeout — surface any other error.
-                        if (!/timed out|timeout/i.test(String(regenErr?.message ?? regenErr))) {
-                          throw regenErr;
-                        }
-                      });
-                  }
-                  tenantResult.forcedRegenerate = true;
-                  tenantResult.applyError = null;
-                  result.totalForcedRegenerate++;
-                } catch (regenErr: any) {
-                  tenantResult.applyError = `drift_regenerate_failed: ${String(regenErr?.message ?? regenErr)}`;
-                }
-              }
+            }
+
+            // ⚠️ DID-LOSS GUARD — DO NOT re-save the tenant to force a regenerate.
+            // Re-saving via VitalPBX `tenants.update` is an HTTP PUT (full-
+            // resource replace). Sending only {name,description,settings} DROPS
+            // the tenant's Inbound DIDs — a SEPARATE sub-collection
+            // (GET/PATCH/DELETE /api/v2/tenants/:id/inbound_numbers, backed by
+            // `ombu_inbound_routes`), NOT part of `settings`. That silently
+            // DELETES inbound phone numbers from live tenants and breaks inbound
+            // call routing (root cause of the June 2026 "DIDs disappearing"
+            // incident). `apply_changes` (syncTenant) above is the ONLY safe
+            // regenerate trigger — it never deletes routing. A brand-new endpoint
+            // that still needs its live config materialized is surfaced below for
+            // an admin to Apply Changes manually, instead of the destructive
+            // re-save. The `forceRegenerateTenant` option is intentionally left
+            // un-invoked (kept only for backwards-compatible call signatures).
+            void options?.forceRegenerateTenant;
+            if (needsMaterialize.length > 0 && !applied) {
+              tenantResult.applyError =
+                tenantResult.applyError ??
+                `webrtc_endpoints_pending_apply: ${needsMaterialize
+                  .map((e) => e.name)
+                  .join(", ")}`;
             }
           }
         } catch {
