@@ -10,6 +10,7 @@ import { PageHeader } from "../../../../components/PageHeader";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { useAsyncResource } from "../../../../hooks/useAsyncResource";
 import { apiGet } from "../../../../services/apiClient";
+import { downloadRecording } from "../../../../services/recordingDownload";
 
 // Recordings are sourced from ConnectCdr-backed call history (hasRecording=yes)
 // and play through /api/voice/recording/:linkedId/stream, which self-heals stale
@@ -113,11 +114,6 @@ export default function PbxCallRecordingsPage() {
           <EmptyState title="No recordings found" message="Adjust filters or verify the call was recorded." />
         ) : null}
         {rows.map((row) => {
-          const token =
-            typeof window !== "undefined"
-              ? window.localStorage.getItem("token") || window.localStorage.getItem("cc-token") || ""
-              : "";
-          const downloadHref = `/api/voice/recording/${encodeURIComponent(row.linkedId)}/download${token ? `?token=${encodeURIComponent(token)}` : ""}`;
           const party = row.direction === "outgoing"
             ? `${row.rangExtension || row.fromNumber} → ${row.toNumber}`
             : `${row.fromName || row.fromNumber} → ${row.rangExtension || row.toNumber}`;
@@ -131,7 +127,16 @@ export default function PbxCallRecordingsPage() {
               <div className="meta">{formatDuration(row.durationSec)}</div>
               <CrmRecordingPlayer linkedId={row.linkedId} />
               {canDownload ? (
-                <a className="btn ghost" href={downloadHref} target="_blank" rel="noreferrer">Download</a>
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={async () => {
+                    const ok = await downloadRecording(row.linkedId);
+                    if (!ok) window.alert("Download failed — the recording could not be retrieved. Please try again.");
+                  }}
+                >
+                  Download
+                </button>
               ) : null}
             </div>
           );
