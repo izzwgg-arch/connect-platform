@@ -42,6 +42,10 @@ process.env.ARI_PASSWORD = "test";
 process.env.NODE_ENV = "test";
 process.env.LOG_LEVEL = "fatal";
 process.env.CDR_INGEST_URL = "http://test.invalid/internal/cdr-ingest";
+// Existing regression tests pin observed-ring (/mobile-ring-notify) behavior and
+// assert an exact fetch count, so keep the inbound pre-wake OFF by default here.
+// The dedicated pre-wake tests below re-enable it per-test before constructing.
+process.env.PBX_INBOUND_PREWAKE = "0";
 
 // Late require so the env above is in place when the module's top-level
 // `loadEnv()` runs.
@@ -647,4 +651,154 @@ test("looksDivertedToVoicemail detects voicemail channels and dialplan context",
     true,
   );
   assert.equal(looksDivertedToVoicemail(makeCall({ linkedId: "no-vm", channels: ["PJSIP/T2_103-000"] })), false);
+});
+
+// ─── Inbound PRE-WAKE (server-side early wake, no PBX changes) ───────────────
+//
+// These pin the additive early-wake: the instant an inbound call is observed
+// for a known tenant, the notifier POSTs ONCE to /internal/mobile-prewake so
+// the API can wake the tenant's asleep mobile devices during the IVR window —
+// before the (possibly zero-contact) extension is dialed. The pre-wake must be
+// strictly additive and never replace the observed-ring path.
+
+/** Construct a notifier with the pre-wake feature explicitly enabled. */
+function makePrewakeNotifier(): InstanceType<typeof MobilePushNotifier> {
+  const prev = process.env.PBX_INBOUND_PREWAKE;
+  process.env.PBX_INBOUND_PREWAKE = "1";
+  try {
+    return new MobilePushNotifier();
+  } finally {
+    process.env.PBX_INBOUND_PREWAKE = prev;
+  }
+}
+
+function prewakeCalls(calls: FetchCall[]): FetchCall[] {
+  return calls.filter((c) => /\/internal\/mobile-prewake$/.test(c.url));
+}
+function ringNotifyCalls(calls: FetchCall[]): FetchCall[] {
+  return calls.filter((c) => /\/internal\/mobile-ring-notify$/.test(c.url));
+}
+
+test("pre-wake: inbound call with known tenant + no extension yet fires exactly one /mobile-prewake", async () => {
+  const { calls, restore } = installFetchSpy();
+  try {
+    const notifier = makePrewakeNotifier();
+    notifier.notify(
+      makeCall({
+        linkedId: "prewake-1",
+        direction: "inbound",
+        state: "ringing",
+        from: "8454226997",
+        to: "8457826775",
+        extensions: [], // target not resolved yet — caller still in IVR
+        tenantId: "vpbx:luxure_management",
+        metadata: { pbxVitalTenantId: "5" },
+      }),
+    );
+    await flush();
+    const pw = prewakeCalls(calls);
+    assert.equal(pw.length, 1, `expected exactly one /mobile-prewake POST, got ${pw.length}`);
+    assert.equal(pw[0].body.connectTenantId, "vpbx:luxure_management");
+    assert.equal(pw[0].body.pbxVitalTenantId, "5");
+    assert.equal(pw[0].body.linkedId, "prewake-1");
+    // No extension resolved → no observed-ring POST yet.
+    assert.equal(ringNotifyCalls(calls).length, 0, "no ring-notify before extension resolves");
+  } finally {
+    restore();
+  }
+});
+
+test("pre-wake: is one-shot per call across multiple upserts", async () => {
+  const { calls, restore } = installFetchSpy();
+  try {
+    const notifier = makePrewakeNotifier();
+    const base = {
+      linkedId: "prewake-oneshot",
+      direction: "inbound" as CallDirection,
+      from: "8454226997",
+      to: "8457826775",
+      tenantId: "vpbx:acme",
+      metadata: { pbxVitalTenantId: "7" },
+    };
+    notifier.notify(makeCall({ ...base, state: "ringing" as CallState, extensions: [] }));
+    notifier.notify(makeCall({ ...base, state: "up" as CallState, extensions: [] }));
+    notifier.notify(makeCall({ ...base, state: "up" as CallState, extensions: [] }));
+    await flush();
+    assert.equal(prewakeCalls(calls).length, 1, "pre-wake must fire only once per linkedId");
+  } finally {
+    restore();
+  }
+});
+
+test("pre-wake: skipped when no tenant identity is known", async () => {
+  const { calls, restore } = installFetchSpy();
+  try {
+    const notifier = makePrewakeNotifier();
+    notifier.notify(
+      makeCall({
+        linkedId: "prewake-no-tenant",
+        direction: "inbound",
+        state: "ringing",
+        from: "8454226997",
+        to: "8457826775",
+        extensions: [],
+        tenantId: null,
+        metadata: {}, // no pbxVitalTenantId
+      }),
+    );
+    await flush();
+    assert.equal(prewakeCalls(calls).length, 0, "no tenant → no pre-wake");
+  } finally {
+    restore();
+  }
+});
+
+test("pre-wake: internal (ext→ext) calls do not pre-wake", async () => {
+  const { calls, restore } = installFetchSpy();
+  try {
+    const notifier = makePrewakeNotifier();
+    notifier.notify(
+      makeCall({
+        linkedId: "prewake-internal",
+        direction: "internal",
+        state: "ringing",
+        from: "100",
+        source_extension: "100",
+        extensions: [],
+        tenantId: "vpbx:acme",
+        metadata: { pbxVitalTenantId: "7" },
+      }),
+    );
+    await flush();
+    assert.equal(prewakeCalls(calls).length, 0, "internal calls are not pre-woken");
+  } finally {
+    restore();
+  }
+});
+
+test("pre-wake: coexists with observed-ring (one pre-wake + one ring-notify)", async () => {
+  const { calls, restore } = installFetchSpy();
+  try {
+    const notifier = makePrewakeNotifier();
+    notifier.notify(
+      makeCall({
+        linkedId: "prewake-plus-ring",
+        direction: "inbound",
+        state: "up",
+        from: "8454226997",
+        to: "8457826775",
+        source_extension: "103",
+        extensions: ["T2_103"],
+        tenantId: "vpbx:a_plus_center",
+        metadata: { pbxVitalTenantId: "2" },
+      }),
+    );
+    await flush();
+    assert.equal(prewakeCalls(calls).length, 1, "exactly one pre-wake");
+    assert.equal(ringNotifyCalls(calls).length, 1, "observed-ring still fires");
+    // Pre-wake forwards the already-known extension so the API can wake surgically.
+    assert.equal(prewakeCalls(calls)[0].body.toExtension, "103");
+  } finally {
+    restore();
+  }
 });

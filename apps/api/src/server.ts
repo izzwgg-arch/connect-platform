@@ -28397,6 +28397,203 @@ app.post("/internal/mobile-ring-notify", async (req, reply) => {
   return { ok: true, inviteId: invite.id, push };
 });
 
+// ─── Inbound pre-wake (server-side; no PBX changes, every tenant) ────────────
+// Fired by the telephony service the MOMENT an inbound call is OBSERVED for a
+// known tenant — BEFORE the extension is dialed.
+//
+// Why this exists: when every mobile app on the target extension is asleep
+// (SIP unregistered), VitalPBX's Dial() finds zero contacts and drops the call
+// to voicemail in ~2s. No ringing leg is ever created, so Connect's normal
+// observed-ring wake (/internal/mobile-ring-notify) never fires — the call
+// dies before any device can be woken. The only lever that does NOT touch the
+// PBX, inbound routes, or dialplan is to wake the tenant's asleep devices the
+// instant the call is seen (while the caller is still in the IVR greeting), so
+// they re-register before the extension is dialed and the call rings normally.
+//
+// Strictly ADDITIVE and side-effect-free with respect to call routing:
+//   • Sends ONLY caller-less INCOMING_CALL_WAKE data pushes — identical to the
+//     proven /admin/mobile/devices/:id/force-reregister path. The native app
+//     suppresses the heads-up when caller info is absent, so there is no
+//     user-visible ring from this; it just kicks SIP re-registration.
+//   • Never creates/cancels a CallInvite, never redirects/originates a call,
+//     never writes to the PBX. If it does nothing, behavior is exactly as before.
+//   • Targets only devices that look ASLEEP (stale lastSeenAt) so already-online
+//     phones are left untouched — this is what makes the multi-device case work
+//     (the registered sibling is skipped; the asleep sibling is woken).
+//
+// Body (JSON):
+//   linkedId          — MANDATORY — PBX linkedid (dedup + wake-event correlation)
+//   connectTenantId   — OPTIONAL — Connect tenantId (preferred)
+//   pbxVitalTenantId  — OPTIONAL — VitalPBX tenant code (e.g. "T5") fallback
+//   toExtension       — OPTIONAL — if already known, wake only that ext's owner
+//
+// Auth: same x-cdr-secret header as the rest of /internal/*.
+const PREWAKE_USER_COOLDOWN_MS = Number.parseInt(process.env.PBX_PREWAKE_USER_COOLDOWN_MS ?? "12000", 10) || 12_000;
+const PREWAKE_DEVICE_STALE_MS = Number.parseInt(process.env.PBX_PREWAKE_DEVICE_STALE_MS ?? "45000", 10) || 45_000;
+const PREWAKE_MAX_USERS = Number.parseInt(process.env.PBX_PREWAKE_MAX_USERS ?? "25", 10) || 25;
+// In-memory per-(tenant,user) cooldown so repeated upserts for the same call —
+// or a burst of inbound calls — don't fan out wake pushes every few hundred ms.
+const prewakeUserCooldown = new Map<string, number>();
+function prewakeCooldownGate(tenantId: string, userId: string): boolean {
+  const key = `${tenantId}:${userId}`;
+  const now = Date.now();
+  const last = prewakeUserCooldown.get(key) ?? 0;
+  if (now - last < PREWAKE_USER_COOLDOWN_MS) return false;
+  prewakeUserCooldown.set(key, now);
+  // Opportunistic GC so the map can't grow unbounded on a busy PBX.
+  if (prewakeUserCooldown.size > 5000) {
+    for (const [k, ts] of prewakeUserCooldown) {
+      if (now - ts > PREWAKE_USER_COOLDOWN_MS * 4) prewakeUserCooldown.delete(k);
+    }
+  }
+  return true;
+}
+
+app.post("/internal/mobile-prewake", async (req, reply) => {
+  const secret = process.env.CDR_INGEST_SECRET?.trim();
+  const incoming = String((req.headers as Record<string, string | undefined>)["x-cdr-secret"] || "").trim();
+  if (!secret) {
+    app.log.warn({ endpoint: "/internal/mobile-prewake" }, "CDR_INGEST_SECRET not set — internal endpoint is unauthenticated");
+  } else {
+    if (!incoming) return reply.code(401).send({ error: "missing secret" });
+    const a = Buffer.from(incoming.padEnd(64, "\0").slice(0, 64));
+    const b = Buffer.from(secret.padEnd(64, "\0").slice(0, 64));
+    if (!timingSafeEqual(a, b)) {
+      app.log.warn({ ip: req.ip, endpoint: "/internal/mobile-prewake" }, "prewake_secret_mismatch");
+      return reply.code(403).send({ error: "forbidden" });
+    }
+  }
+
+  if ((process.env.PBX_INBOUND_PREWAKE ?? "1") !== "1") {
+    return { ok: false, disabled: true };
+  }
+
+  const input = z.object({
+    linkedId: z.string().min(1),
+    connectTenantId: z.string().nullable().optional(),
+    pbxVitalTenantId: z.string().nullable().optional(),
+    toExtension: z.string().nullable().optional(),
+  }).parse(req.body || {});
+
+  // ── Resolve Connect tenantId ──────────────────────────────────────────────
+  let tenantId: string | null = input.connectTenantId?.trim() || null;
+  if (!tenantId && input.pbxVitalTenantId) {
+    const code = input.pbxVitalTenantId.trim();
+    const numeric = code.replace(/^T/i, "");
+    const link = await db.tenantPbxLink.findFirst({
+      where: {
+        OR: [
+          { pbxTenantCode: code },
+          ...(numeric ? [{ pbxTenantId: numeric }] : []),
+        ],
+      },
+      select: { tenantId: true },
+    }).catch(() => null);
+    tenantId = link?.tenantId ?? null;
+  }
+  if (!tenantId) {
+    return { ok: false, reason: "tenant_not_resolved" };
+  }
+
+  // ── Pick the target users to wake ─────────────────────────────────────────
+  // Preferred: the specific extension's owner (surgical). Otherwise wake every
+  // user in the tenant that has at least one ASLEEP active mobile device — the
+  // staleness gate keeps this naturally bounded to phones that would miss the
+  // call.
+  const staleCutoff = new Date(Date.now() - PREWAKE_DEVICE_STALE_MS);
+  let candidateUserIds: string[] = [];
+
+  if (input.toExtension && input.toExtension.trim()) {
+    const ext = await db.extension.findFirst({
+      where: { tenantId, extNumber: input.toExtension.trim(), status: "ACTIVE" },
+      select: { id: true, ownerUserId: true },
+    }).catch(() => null);
+    let ownerUserId: string | null = ext?.ownerUserId ?? null;
+    if (!ownerUserId && ext?.id) {
+      const paired = await db.mobileDevice.findFirst({
+        where: { tenantId, extensionId: ext.id, active: true } as any,
+        orderBy: { lastSeenAt: "desc" } as any,
+        select: { userId: true } as any,
+      }).catch(() => null);
+      const pu = (paired as any)?.userId;
+      ownerUserId = typeof pu === "string" && pu.length > 0 ? pu : null;
+    }
+    if (ownerUserId) candidateUserIds = [ownerUserId];
+  }
+
+  if (candidateUserIds.length === 0) {
+    // Tenant-wide: only users with an asleep device (stale lastSeenAt or never
+    // seen). Already-online phones (fresh lastSeenAt) are intentionally skipped.
+    const asleepDevices = await db.mobileDevice.findMany({
+      where: {
+        tenantId,
+        active: true,
+        expoPushToken: { not: null },
+        OR: [
+          { lastSeenAt: { lt: staleCutoff } },
+          { lastSeenAt: null },
+        ],
+      } as any,
+      select: { userId: true } as any,
+      take: 500,
+    }).catch(() => [] as Array<{ userId: string | null }>);
+    candidateUserIds = Array.from(new Set(
+      (asleepDevices as Array<{ userId: string | null }>)
+        .map((d) => d.userId)
+        .filter((u): u is string => typeof u === "string" && u.length > 0),
+    ));
+  }
+
+  if (candidateUserIds.length === 0) {
+    return { ok: true, woken: 0, reason: "no_asleep_devices" };
+  }
+  if (candidateUserIds.length > PREWAKE_MAX_USERS) {
+    candidateUserIds = candidateUserIds.slice(0, PREWAKE_MAX_USERS);
+  }
+
+  const wakeRequestedAt = new Date().toISOString();
+  let woken = 0;
+  for (const userId of candidateUserIds) {
+    if (!prewakeCooldownGate(tenantId, userId)) continue;
+    try {
+      const res = await sendPushToUserDevices({
+        tenantId,
+        userId,
+        payload: {
+          // Caller-less wake — native app re-registers SIP without showing a
+          // heads-up (placeholder is suppressed when caller info is absent).
+          type: "INCOMING_CALL_WAKE",
+          pbxCallId: input.linkedId,
+          fromNumber: "",
+          fromDisplay: null,
+          toExtension: input.toExtension?.trim() || "",
+          tenantId,
+          pbxVitalTenantId: input.pbxVitalTenantId ?? null,
+          timestamp: wakeRequestedAt,
+          wakeRequestedAt,
+        },
+      });
+      if ((res?.queued ?? 0) > 0 || res?.simulated) woken += 1;
+      await recordWakeEvent({
+        tenantId,
+        pbxCallId: input.linkedId,
+        stage: "PREWAKE_PUSH_QUEUED",
+        source: "api",
+        userId,
+        details: { path: "mobile_prewake", queued: res?.queued ?? 0 },
+      }).catch(() => undefined);
+    } catch (err: any) {
+      app.log.warn({ err: err?.message, tenantId, userId, linkedId: input.linkedId }, "mobile-prewake: push failed (non-fatal)");
+    }
+  }
+
+  app.log.info(
+    { linkedId: input.linkedId, tenantId, candidates: candidateUserIds.length, woken, toExtension: input.toExtension ?? null },
+    "mobile-prewake: done",
+  );
+  return { ok: true, woken, candidates: candidateUserIds.length };
+});
+
 // ─── Push-wake config publisher (admin/internal) ─────────────────────────────
 // One-shot publisher for the AstDB keys the [connect-dial-with-wake] dialplan
 // context reads. Use this to bootstrap a PBX after deploying the new dialplan

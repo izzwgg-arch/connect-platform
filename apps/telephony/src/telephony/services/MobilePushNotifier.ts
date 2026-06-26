@@ -127,24 +127,31 @@ export type MobilePushRingPayload = {
  */
 export class MobilePushNotifier {
   private readonly url: string | undefined;
+  private readonly prewakeUrl: string | undefined;
   private readonly secret: string | undefined;
+  private readonly prewakeEnabled: boolean;
   // De-dupe set: once we have found extensions and sent a push for a linkedId,
   // skip subsequent callUpsert events for the same call.
   private readonly pushed = new Set<string>();
   /** One-shot stop-ring notify per call so we do not spam /internal/mobile-ring-notify. */
   private readonly voicemailStopSent = new Set<string>();
+  /** One-shot inbound pre-wake per call so we do not spam /internal/mobile-prewake. */
+  private readonly preWoken = new Set<string>();
 
   constructor() {
     const base = env.CDR_INGEST_URL
       ? env.CDR_INGEST_URL.replace(/\/[^/]+$/, "")
       : undefined;
     this.url = base ? `${base}/mobile-ring-notify` : undefined;
+    this.prewakeUrl = base ? `${base}/mobile-prewake` : undefined;
     this.secret = env.CDR_INGEST_SECRET;
+    // Default-on; flip PBX_INBOUND_PREWAKE=0 to disable the early-wake entirely.
+    this.prewakeEnabled = (process.env.PBX_INBOUND_PREWAKE ?? "1") === "1";
 
     if (!this.url) {
       log.info("CDR_INGEST_URL not set — mobile ring push disabled");
     } else {
-      log.info({ url: this.url }, "MobilePushNotifier ready");
+      log.info({ url: this.url, prewake: this.prewakeEnabled }, "MobilePushNotifier ready");
     }
   }
 
@@ -161,6 +168,7 @@ export class MobilePushNotifier {
     if (call.state === "hungup") {
       this.voicemailStopSent.delete(call.linkedId);
       this.pushed.delete(call.linkedId);
+      this.preWoken.delete(call.linkedId);
       const payload: MobilePushRingPayload = {
         linkedId: call.linkedId,
         toExtension: "",
@@ -221,6 +229,17 @@ export class MobilePushNotifier {
     const PUSH_ELIGIBLE_STATES = new Set(["ringing", "unknown", "dialing", "up"]);
     if (!PUSH_ELIGIBLE_STATES.has(call.state)) return;
     if (call.direction !== "inbound" && call.direction !== "internal") return;
+
+    // ── Inbound PRE-WAKE (fires BEFORE the extension is resolved) ─────────────
+    // The instant we observe an inbound call for a known tenant, kick the
+    // tenant's asleep mobile devices so they re-register during the IVR window —
+    // before VitalPBX dials the (possibly zero-contact) extension and drops to
+    // voicemail. One-shot per call. Strictly additive: the API only sends
+    // caller-less wake pushes; it never creates invites or alters routing, so an
+    // already-online extension is completely unaffected.
+    if (call.direction === "inbound") {
+      this.maybePreWake(call);
+    }
 
     // Already sent a push for this call — skip.
     if (this.pushed.has(call.linkedId)) return;
@@ -349,6 +368,79 @@ export class MobilePushNotifier {
           "mobile-ring: API notify failed",
         );
       });
+    }
+  }
+
+  /**
+   * One-shot inbound pre-wake. Fires only when:
+   *   • the early-wake feature is enabled (PBX_INBOUND_PREWAKE != "0"),
+   *   • we have a prewake URL, and
+   *   • we can identify the tenant (Connect id or VitalPBX code).
+   * Safe to call on every upsert — guarded by the `preWoken` set.
+   */
+  private maybePreWake(call: NormalizedCall): void {
+    if (!this.prewakeEnabled || !this.prewakeUrl) return;
+    if (this.preWoken.has(call.linkedId)) return;
+
+    const pbxVitalTenantId = (call.metadata?.pbxVitalTenantId as string | undefined) ?? null;
+    const connectTenantId = call.tenantId ?? null;
+    // Without any tenant identity the API cannot resolve who to wake — skip
+    // (the normal observed-ring path still runs once a contact rings).
+    if (!connectTenantId && !pbxVitalTenantId) return;
+
+    // If the target extension is already known this early, pass it so the API
+    // can wake surgically; otherwise the API wakes the tenant's asleep devices.
+    const knownExt = (call.extensions ?? [])
+      .map(extractShortExtension)
+      .find((x): x is string => x !== null) ?? null;
+
+    this.preWoken.add(call.linkedId);
+    this.postPrewake({
+      linkedId: call.linkedId,
+      connectTenantId,
+      pbxVitalTenantId,
+      toExtension: knownExt,
+    }).catch((err: unknown) => {
+      log.warn(
+        { linkedId: call.linkedId, err: (err as Error)?.message },
+        "mobile-prewake: notify failed",
+      );
+    });
+  }
+
+  private async postPrewake(payload: {
+    linkedId: string;
+    connectTenantId: string | null;
+    pbxVitalTenantId: string | null;
+    toExtension: string | null;
+  }): Promise<void> {
+    if (!this.prewakeUrl) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const res = await fetch(this.prewakeUrl, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(this.secret ? { "x-cdr-secret": this.secret } : {}),
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (res.ok) {
+        log.info({ linkedId: payload.linkedId, connectTenantId: payload.connectTenantId }, "mobile-prewake: notified");
+      } else {
+        const body = await res.text().catch(() => "");
+        log.warn({ status: res.status, body }, "mobile-prewake: API returned error");
+      }
+    } catch (err: unknown) {
+      clearTimeout(timer);
+      if ((err as Error)?.name === "AbortError") {
+        log.warn("mobile-prewake: API notify timed out (5s)");
+      } else {
+        log.warn({ err: (err as Error)?.message }, "mobile-prewake: API notify error");
+      }
     }
   }
 
