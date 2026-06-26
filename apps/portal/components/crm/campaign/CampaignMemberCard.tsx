@@ -22,6 +22,7 @@ export function CampaignMemberCard({
   onSelect,
   onUpdated,
   onStatusChange,
+  onOpenWorkspace,
   token,
 }: {
   member: CampaignMember;
@@ -33,6 +34,7 @@ export function CampaignMemberCard({
   onSelect: (checked: boolean) => void;
   onUpdated: () => void;
   onStatusChange: (memberId: string, status: MemberStatus) => void;
+  onOpenWorkspace?: () => void;
   token?: string;
 }) {
   const router = useRouter();
@@ -177,7 +179,22 @@ export function CampaignMemberCard({
               <span>Call</span>
             </button>
           </div>
-          <ChevronRight className="crm-queue-row-chevron h-4 w-4 shrink-0" />
+          <button
+            type="button"
+            className="crm-queue-row-chevron-button shrink-0"
+            onClick={(event) => {
+              event.stopPropagation();
+              if (onOpenWorkspace) {
+                onOpenWorkspace();
+                return;
+              }
+              router.push(workspaceHref);
+            }}
+            aria-label={`Open workspace for ${displayName}`}
+            title="Open workspace"
+          >
+            <ChevronRight className="crm-queue-row-chevron h-4 w-4" />
+          </button>
         </div>
       </article>
     );

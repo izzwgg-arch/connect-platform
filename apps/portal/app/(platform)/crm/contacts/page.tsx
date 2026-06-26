@@ -38,6 +38,7 @@ import {
   ContactOperationalRow,
   ContactListDetailPanel,
   ContactListDetailPlaceholder,
+  buildContactWorkspaceHref,
   crm,
   cn,
 } from "../../../../components/crm";
@@ -46,7 +47,6 @@ import { useSipPhone } from "../../../../hooks/useSipPhone";
 import {
   buildCampaignFilterOptions,
   buildStageFilterOptions,
-  buildTagFilterOptions,
   buildTimezoneFilterOptions,
 } from "../../../../components/crm/contact/contactFilterOptions";
 import { BulkEmailModal } from "../../../../components/crm/email/BulkEmailModal";
@@ -471,7 +471,7 @@ export default function CrmContactsPage() {
   const [search, setSearch] = useState("");
   const [stage, setStage] = useState<CrmStage | "all">("all");
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
-  const [tagFilter, setTagFilter] = useState("all");
+  const [dispositionFilter, setDispositionFilter] = useState("all");
   const [campaignFilter, setCampaignFilter] = useState("all");
   const [assignedToMe, setAssignedToMe] = useState(false);
   const [timezoneZone, setTimezoneZone] = useState<TimezoneZoneFilter>("all");
@@ -480,6 +480,7 @@ export default function CrmContactsPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [campaigns, setCampaigns] = useState<CampaignFilterOption[]>([]);
+  const [dispositions, setDispositions] = useState<{ id: string; label: string; isDefault: boolean }[]>([]);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [crmUsers, setCrmUsers] = useState<CrmUser[]>([]);
@@ -522,6 +523,7 @@ export default function CrmContactsPage() {
       pageIdx: number,
       tz: TimezoneZoneFilter,
       campaignId: string,
+      disposition: string,
     ) => {
       setLoading(true);
       setError(null);
@@ -532,6 +534,7 @@ export default function CrmContactsPage() {
         if (campaignId !== "all") params.set("campaignId", campaignId);
         if (mine) params.set("assignedToMe", "true");
         if (tz !== "all") params.set("timezoneZone", tz);
+        if (disposition !== "all") params.set("lastDisposition", disposition);
         params.set("limit", String(CONTACTS_PAGE_LIMIT));
         params.set("page", String(pageIdx));
         if (isAdmin) {
@@ -561,9 +564,9 @@ export default function CrmContactsPage() {
   }, [isAdmin, archiveScope]);
 
   useEffect(() => {
-    void load(search, stage, assignedToMe, isAdmin ? archiveScope : "active", page, timezoneZone, campaignFilter);
+    void load(search, stage, assignedToMe, isAdmin ? archiveScope : "active", page, timezoneZone, campaignFilter, dispositionFilter);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- search is applied via debounced handler; this effect refetches when scope/stage/assignee/page change
-  }, [stage, assignedToMe, archiveScope, page, timezoneZone, campaignFilter, load, isAdmin]);
+  }, [stage, assignedToMe, archiveScope, page, timezoneZone, campaignFilter, dispositionFilter, load, isAdmin]);
 
   useEffect(() => {
     setSelectedIds(new Set());
@@ -587,12 +590,25 @@ export default function CrmContactsPage() {
     };
   }, []);
 
+  // Load all dispositions so the filter always shows the full list.
+  useEffect(() => {
+    let cancelled = false;
+    apiGet<{ items: { id: string; label: string; isDefault: boolean }[] }>("/crm/quick-dispositions")
+      .then((data) => {
+        if (!cancelled) setDispositions(data.items ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const handleSearchChange = (val: string) => {
     setSearch(val);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       setPage(0);
-      void load(val, stage, assignedToMe, isAdmin ? archiveScope : "active", 0, timezoneZone, campaignFilter);
+      void load(val, stage, assignedToMe, isAdmin ? archiveScope : "active", 0, timezoneZone, campaignFilter, dispositionFilter);
     }, 320);
   };
 
@@ -759,7 +775,7 @@ export default function CrmContactsPage() {
       setSelectedIds(new Set());
       setBulkAssignUserId("");
       setBulkSkipped(0);
-      void load(search, stage, assignedToMe, isAdmin ? archiveScope : "active", page, timezoneZone, campaignFilter);
+      void load(search, stage, assignedToMe, isAdmin ? archiveScope : "active", page, timezoneZone, campaignFilter, dispositionFilter);
     } catch (e: unknown) {
       setBulkError((e as Error)?.message || "Assign to me failed");
     } finally {
@@ -802,24 +818,13 @@ export default function CrmContactsPage() {
       );
       setSmartAssignResult({ assigned: res.assigned, remaining: res.remaining });
       // Refresh the contacts list to reflect new assignments
-      void load(search, stage, assignedToMe, isAdmin ? archiveScope : "active", page, timezoneZone, campaignFilter);
+      void load(search, stage, assignedToMe, isAdmin ? archiveScope : "active", page, timezoneZone, campaignFilter, dispositionFilter);
     } catch (e: unknown) {
       setSmartAssignError((e as Error)?.message || "Smart assign failed");
     } finally {
       setSmartAssigning(false);
     }
   };
-
-  const pageTagOptions = useMemo(() => {
-    const counts = new Map<string, { tag: ContactTag; count: number }>();
-    for (const c of rows) {
-      for (const tagItem of c.tags ?? []) {
-        const existing = counts.get(tagItem.id);
-        counts.set(tagItem.id, { tag: tagItem, count: (existing?.count ?? 0) + 1 });
-      }
-    }
-    return Array.from(counts.values()).sort((a, b) => b.count - a.count || a.tag.name.localeCompare(b.tag.name));
-  }, [rows]);
 
   const campaignOptions = useMemo<SelectOption[]>(
     () => buildCampaignFilterOptions(campaigns),
@@ -829,11 +834,6 @@ export default function CrmContactsPage() {
   const queueCampaignOptions = useMemo<SelectOption[]>(
     () => campaigns.map((campaign) => ({ value: campaign.id, label: campaign.name })),
     [campaigns],
-  );
-
-  const tagOptions = useMemo<SelectOption[]>(
-    () => buildTagFilterOptions(pageTagOptions),
-    [pageTagOptions],
   );
 
   const timezoneOptions = useMemo<SelectOption[]>(
@@ -847,11 +847,8 @@ export default function CrmContactsPage() {
   );
 
   const displayedRows = useMemo(() => {
-    return rows.filter((c) => {
-      const matchesTag = tagFilter === "all" || (c.tags ?? []).some((t) => t.id === tagFilter);
-      return matchesTag && matchesQuickFilter(c, quickFilter);
-    });
-  }, [quickFilter, rows, tagFilter]);
+    return rows.filter((c) => matchesQuickFilter(c, quickFilter));
+  }, [quickFilter, rows]);
   const previewRows = useMemo(() => expandRowsForDevPreview(displayedRows), [displayedRows]);
 
   const selectableRows = useMemo(() => displayedRows.filter((r) => !isContactArchived(r)), [displayedRows]);
@@ -863,7 +860,7 @@ export default function CrmContactsPage() {
     campaignFilter !== "all" ||
     stage !== "all" ||
     quickFilter !== "all" ||
-    tagFilter !== "all" ||
+    dispositionFilter !== "all" ||
     timezoneZone !== "all" ||
     assignedToMe ||
     (isAdmin && archiveScope !== "active");
@@ -906,7 +903,8 @@ export default function CrmContactsPage() {
     setTimezoneZone("all");
     setPage(0);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    void load("", "all", false, "active", 0, "all", "all");
+    setDispositionFilter("all");
+    void load("", "all", false, "active", 0, "all", "all", "all");
   };
 
   const engagementRate = rows.length > 0 ? Math.round((summary.engaged / rows.length) * 100) : 0;
@@ -960,7 +958,7 @@ export default function CrmContactsPage() {
             sourceType: "CONTACTS",
             contactIds: Array.from(selectedIds),
             selectAll: false,
-            tagId: tagFilter !== "all" ? tagFilter : undefined,
+            lastDisposition: dispositionFilter !== "all" ? dispositionFilter : undefined,
             stage: stage !== "all" ? stage : undefined,
           }}
           onClose={() => setShowBulkEmail(false)}
@@ -1028,7 +1026,7 @@ export default function CrmContactsPage() {
                         setSearch("");
                         setPage(0);
                         if (debounceRef.current) clearTimeout(debounceRef.current);
-                        void load("", stage, assignedToMe, isAdmin ? archiveScope : "active", 0, timezoneZone, campaignFilter);
+                        void load("", stage, assignedToMe, isAdmin ? archiveScope : "active", 0, timezoneZone, campaignFilter, dispositionFilter);
                       }}
                       className="text-xs font-medium text-crm-accent hover:underline"
                     >
@@ -1052,17 +1050,20 @@ export default function CrmContactsPage() {
                   />
                 </div>
                 <div className="crm-queue-filter-field">
-                  <label htmlFor="crm-contacts-tag" className={cn(crm.label, "shrink-0")}>Tag</label>
+                  <label htmlFor="crm-contacts-disposition" className={cn(crm.label, "shrink-0")}>Disposition</label>
                   <ConnectSelect
-                    id="crm-contacts-tag"
+                    id="crm-contacts-disposition"
                     size="sm"
-                    value={tagFilter}
+                    value={dispositionFilter}
                     onChange={(value) => {
-                      setTagFilter(value);
+                      setDispositionFilter(value);
                       setPage(0);
                     }}
                     className={cn("min-w-[10rem] flex-1")}
-                    options={tagOptions.map((o) => ({ value: o.value, label: o.label }))}
+                    options={[
+                      { value: "all", label: "All dispositions" },
+                      ...dispositions.map((d) => ({ value: d.label, label: d.label })),
+                    ]}
                   />
                 </div>
                 <div className="crm-queue-filter-field">
@@ -1374,6 +1375,7 @@ export default function CrmContactsPage() {
                         page,
                         timezoneZone,
                         campaignFilter,
+                        dispositionFilter,
                       )
                     }
                   >
@@ -1441,6 +1443,7 @@ export default function CrmContactsPage() {
                         assignedLabel={assignedLabel(c.assignedTo)}
                         onToggleChecked={() => toggleSelect(c.id)}
                         onSelect={() => setActiveIndex(i)}
+                        onOpenWorkspace={() => router.push(buildContactWorkspaceHref(c.id, contactsReturnTo))}
                       />
                     ))}
                   </div>

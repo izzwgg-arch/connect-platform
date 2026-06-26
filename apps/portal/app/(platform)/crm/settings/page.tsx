@@ -55,6 +55,8 @@ type SuggestResult = {
   matched: boolean;
 };
 
+type DeskPosition = { id: string; name: string; color: string | null };
+
 type AiSettings = {
   aiEnabled: boolean;
   maxDocumentsPerReport: number;
@@ -391,6 +393,80 @@ export default function CrmSettingsPage() {
 
   const patchAiDraft = (patch: Partial<AiSettings>) => {
     setAiSettingsDraft((prev) => prev ? { ...prev, ...patch } : null);
+  };
+
+  // ── Desk Positions (contact tags) ──────────────────────────────────────────
+  const [positions, setPositions] = useState<DeskPosition[]>([]);
+  const [positionsLoading, setPositionsLoading] = useState(true);
+  const [positionsError, setPositionsError] = useState<string | null>(null);
+  const [newPositionName, setNewPositionName] = useState("");
+  const [newPositionColor, setNewPositionColor] = useState("#6366f1");
+  const [addingPosition, setAddingPosition] = useState(false);
+  const [editingPositionId, setEditingPositionId] = useState<string | null>(null);
+  const [editPositionName, setEditPositionName] = useState("");
+  const [editPositionColor, setEditPositionColor] = useState("");
+  const [savingPositionId, setSavingPositionId] = useState<string | null>(null);
+  const [deletingPositionId, setDeletingPositionId] = useState<string | null>(null);
+
+  const loadPositions = useCallback(async () => {
+    setPositionsLoading(true);
+    setPositionsError(null);
+    try {
+      const res = await apiGet<{ tags: DeskPosition[] }>("/crm/contact-tags");
+      setPositions(res.tags);
+    } catch (e: any) {
+      setPositionsError(e?.message || "Failed to load positions");
+    } finally {
+      setPositionsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadPositions(); }, [loadPositions]);
+
+  const addPosition = async () => {
+    const name = newPositionName.trim();
+    if (!name) return;
+    setAddingPosition(true);
+    setPositionsError(null);
+    try {
+      const res = await apiPost<{ tag: DeskPosition }>("/crm/contact-tags", { name, color: newPositionColor });
+      setPositions((prev) => [...prev, res.tag].sort((a, b) => a.name.localeCompare(b.name)));
+      setNewPositionName("");
+    } catch (e: any) {
+      setPositionsError(e?.message || "Failed to create position");
+    } finally {
+      setAddingPosition(false);
+    }
+  };
+
+  const savePosition = async (id: string) => {
+    const name = editPositionName.trim();
+    if (!name) return;
+    setSavingPositionId(id);
+    setPositionsError(null);
+    try {
+      const res = await apiPatch<{ tag: DeskPosition }>(`/crm/contact-tags/${id}`, { name, color: editPositionColor || null });
+      setPositions((prev) => prev.map((p) => p.id === id ? res.tag : p).sort((a, b) => a.name.localeCompare(b.name)));
+      setEditingPositionId(null);
+    } catch (e: any) {
+      setPositionsError(e?.message || "Failed to save position");
+    } finally {
+      setSavingPositionId(null);
+    }
+  };
+
+  const deletePosition = async (id: string) => {
+    if (!confirm("Delete this desk position? It will be removed from all contacts.")) return;
+    setDeletingPositionId(id);
+    setPositionsError(null);
+    try {
+      await apiDelete(`/crm/contact-tags/${id}`);
+      setPositions((prev) => prev.filter((p) => p.id !== id));
+    } catch (e: any) {
+      setPositionsError(e?.message || "Failed to delete position");
+    } finally {
+      setDeletingPositionId(null);
+    }
   };
 
   // ── Website submission email rules ─────────────────────────────────────────
@@ -1266,6 +1342,177 @@ export default function CrmSettingsPage() {
             </div>
           </div>
         ) : null}
+      </section>
+
+      {/* ── Desk Positions ──────────────────────────────────────────────────── */}
+      <section style={{ marginBottom: "2rem" }}>
+        <h2 style={{ fontSize: "1rem", fontWeight: 600, marginBottom: "1rem" }}>Desk Positions</h2>
+        <p style={{ fontSize: "0.8125rem", color: "var(--text-dim)", marginBottom: "1.25rem" }}>
+          Desk positions are custom labels you can assign to contacts. They appear as filter options on the My Queue,
+          Campaign, and Contacts pages automatically.
+        </p>
+
+        {positionsError && (
+          <div style={{ color: "var(--error, #ef4444)", fontSize: "0.8125rem", marginBottom: "0.75rem" }}>
+            {positionsError}
+          </div>
+        )}
+
+        {/* Existing positions list */}
+        {positionsLoading ? (
+          <LoadingSkeleton lines={3} />
+        ) : positions.length === 0 ? (
+          <div style={{ fontSize: "0.8125rem", color: "var(--text-dim)", marginBottom: "1rem" }}>
+            No desk positions yet. Add one below.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", marginBottom: "1.25rem" }}>
+            {positions.map((pos) =>
+              editingPositionId === pos.id ? (
+                <div
+                  key={pos.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.5rem",
+                    padding: "0.5rem 0.75rem",
+                    background: "var(--surface-2, rgba(255,255,255,0.04))",
+                    borderRadius: "0.375rem",
+                    border: "1px solid var(--border)",
+                  }}
+                >
+                  <input
+                    type="color"
+                    value={editPositionColor || "#6366f1"}
+                    onChange={(e) => setEditPositionColor(e.target.value)}
+                    style={{ width: 28, height: 28, border: "none", background: "none", cursor: "pointer", padding: 0 }}
+                  />
+                  <input
+                    autoFocus
+                    type="text"
+                    value={editPositionName}
+                    onChange={(e) => setEditPositionName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") savePosition(pos.id); if (e.key === "Escape") setEditingPositionId(null); }}
+                    style={{
+                      flex: 1,
+                      padding: "0.3125rem 0.5rem",
+                      background: "var(--input-bg, rgba(255,255,255,0.06))",
+                      border: "1px solid var(--border)",
+                      borderRadius: "0.25rem",
+                      color: "var(--text)",
+                      fontSize: "0.875rem",
+                    }}
+                  />
+                  <button
+                    onClick={() => savePosition(pos.id)}
+                    disabled={savingPositionId === pos.id}
+                    style={{ padding: "0.3125rem 0.75rem", background: "var(--accent, #3b82f6)", color: "#fff", border: "none", borderRadius: "0.25rem", cursor: "pointer", fontSize: "0.8125rem" }}
+                  >
+                    {savingPositionId === pos.id ? "Saving…" : "Save"}
+                  </button>
+                  <button
+                    onClick={() => setEditingPositionId(null)}
+                    style={{ padding: "0.3125rem 0.75rem", background: "transparent", color: "var(--text-dim)", border: "1px solid var(--border)", borderRadius: "0.25rem", cursor: "pointer", fontSize: "0.8125rem" }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <div
+                  key={pos.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.75rem",
+                    padding: "0.5rem 0.75rem",
+                    background: "var(--surface-2, rgba(255,255,255,0.04))",
+                    borderRadius: "0.375rem",
+                    border: "1px solid var(--border)",
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 12,
+                      height: 12,
+                      borderRadius: "50%",
+                      background: pos.color || "var(--text-dim)",
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span style={{ flex: 1, fontSize: "0.875rem" }}>{pos.name}</span>
+                  <button
+                    onClick={() => { setEditingPositionId(pos.id); setEditPositionName(pos.name); setEditPositionColor(pos.color || "#6366f1"); }}
+                    style={{ padding: "0.25rem 0.625rem", background: "transparent", color: "var(--text-dim)", border: "1px solid var(--border)", borderRadius: "0.25rem", cursor: "pointer", fontSize: "0.75rem" }}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => deletePosition(pos.id)}
+                    disabled={deletingPositionId === pos.id}
+                    style={{ padding: "0.25rem 0.625rem", background: "transparent", color: "var(--error, #ef4444)", border: "1px solid var(--error, #ef4444)", borderRadius: "0.25rem", cursor: "pointer", fontSize: "0.75rem" }}
+                  >
+                    {deletingPositionId === pos.id ? "…" : "Delete"}
+                  </button>
+                </div>
+              )
+            )}
+          </div>
+        )}
+
+        {/* Add new position */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+            padding: "0.75rem",
+            background: "var(--surface-2, rgba(255,255,255,0.04))",
+            borderRadius: "0.375rem",
+            border: "1px solid var(--border)",
+          }}
+        >
+          <input
+            type="color"
+            value={newPositionColor}
+            onChange={(e) => setNewPositionColor(e.target.value)}
+            title="Pick a color"
+            style={{ width: 28, height: 28, border: "none", background: "none", cursor: "pointer", padding: 0 }}
+          />
+          <input
+            type="text"
+            placeholder="New position name…"
+            value={newPositionName}
+            onChange={(e) => setNewPositionName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") addPosition(); }}
+            style={{
+              flex: 1,
+              padding: "0.4375rem 0.625rem",
+              background: "var(--input-bg, rgba(255,255,255,0.06))",
+              border: "1px solid var(--border)",
+              borderRadius: "0.375rem",
+              color: "var(--text)",
+              fontSize: "0.875rem",
+            }}
+          />
+          <button
+            onClick={addPosition}
+            disabled={addingPosition || !newPositionName.trim()}
+            style={{
+              padding: "0.4375rem 1rem",
+              background: "var(--accent, #3b82f6)",
+              color: "#fff",
+              border: "none",
+              borderRadius: "0.375rem",
+              cursor: addingPosition || !newPositionName.trim() ? "not-allowed" : "pointer",
+              opacity: addingPosition || !newPositionName.trim() ? 0.6 : 1,
+              fontSize: "0.875rem",
+              fontWeight: 500,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {addingPosition ? "Adding…" : "Add Position"}
+          </button>
+        </div>
       </section>
     </div>
   );

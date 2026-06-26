@@ -119,6 +119,73 @@ export async function registerCrmBulkEmailRoutes(app: FastifyInstance) {
     return { tags };
   });
 
+  /**
+   * POST /crm/contact-tags
+   * Creates a new ContactTag for the tenant.
+   */
+  app.post("/crm/contact-tags", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply);
+    if (!user) return;
+    const body = (req.body as any) || {};
+    const name = (body.name ?? "").trim();
+    if (!name) return reply.status(400).send({ error: "name is required" });
+    const color = body.color ?? null;
+    try {
+      const tag = await db.contactTag.create({
+        data: { tenantId: user.tenantId, name, color },
+        select: { id: true, name: true, color: true },
+      });
+      return reply.status(201).send({ tag });
+    } catch (e: any) {
+      if (e?.code === "P2002") return reply.status(409).send({ error: "A position with that name already exists" });
+      throw e;
+    }
+  });
+
+  /**
+   * PATCH /crm/contact-tags/:id
+   * Updates a ContactTag's name and/or color.
+   */
+  app.patch("/crm/contact-tags/:id", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply);
+    if (!user) return;
+    const { id } = req.params as { id: string };
+    const body = (req.body as any) || {};
+    const existing = await db.contactTag.findFirst({ where: { id, tenantId: user.tenantId } });
+    if (!existing) return reply.status(404).send({ error: "Not found" });
+    const patch: { name?: string; color?: string | null } = {};
+    if (typeof body.name === "string") {
+      const name = body.name.trim();
+      if (!name) return reply.status(400).send({ error: "name cannot be empty" });
+      patch.name = name;
+    }
+    if ("color" in body) patch.color = body.color ?? null;
+    try {
+      const tag = await db.contactTag.update({
+        where: { id },
+        data: patch,
+        select: { id: true, name: true, color: true },
+      });
+      return { tag };
+    } catch (e: any) {
+      if (e?.code === "P2002") return reply.status(409).send({ error: "A position with that name already exists" });
+      throw e;
+    }
+  });
+
+  /**
+   * DELETE /crm/contact-tags/:id
+   * Deletes a ContactTag (and its assignments via cascade).
+   */
+  app.delete("/crm/contact-tags/:id", async (req, reply) => {
+    const user = await requireCrmAccess(req, reply);
+    if (!user) return;
+    const { id } = req.params as { id: string };
+    const existing = await db.contactTag.findFirst({ where: { id, tenantId: user.tenantId } });
+    if (!existing) return reply.status(404).send({ error: "Not found" });
+    await db.contactTag.delete({ where: { id } });
+    return reply.status(204).send();
+  });
 
   /**
    * POST /crm/email/bulk-jobs

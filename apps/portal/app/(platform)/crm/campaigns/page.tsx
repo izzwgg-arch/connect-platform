@@ -1272,7 +1272,18 @@ export default function CampaignsPage() {
                             />
                           ) : null}
                         </div>
-                        <ChevronRight className="crm-queue-row-chevron h-4 w-4 shrink-0" />
+                        <button
+                          type="button"
+                          className="crm-queue-row-chevron-button shrink-0"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            router.push(`/crm/campaigns/${campaign.id}`);
+                          }}
+                          aria-label={`Open campaign ${campaign.name}`}
+                          title="Open campaign"
+                        >
+                          <ChevronRight className="crm-queue-row-chevron h-4 w-4" />
+                        </button>
                       </div>
                     </div>
                   );

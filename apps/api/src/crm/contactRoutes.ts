@@ -286,6 +286,7 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
         timezoneLabel: z.string().optional(),
         timezoneZone: z.string().optional(),
         campaignId: z.string().optional(),
+        lastDisposition: z.string().optional(),
       })
       .parse(req.query || {});
 
@@ -330,6 +331,7 @@ export async function registerCrmContactRoutes(app: FastifyInstance) {
       ...(query.stage && query.stage !== "all" ? { stage: query.stage as any } : {}),
       ...(query.assignedToMe ? { assignedToUserId: userId } : {}),
       ...(timezoneFilter ?? {}),
+      ...(query.lastDisposition ? { lastDisposition: query.lastDisposition } : {}),
     };
 
     const archiveClause = !includeArchived

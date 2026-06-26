@@ -19,6 +19,7 @@ export type ContactListRow = {
   crmStage?: CrmStage | null;
   doNotCall?: boolean;
   lastActivityAt?: string | null;
+  lastDisposition?: string | null;
   lastDispositionAt?: string | null;
   updatedAt?: string;
   timezoneIana?: string | null;
@@ -56,6 +57,7 @@ export function ContactOperationalRow({
   isChecked,
   onSelect,
   onToggleChecked,
+  onOpenWorkspace,
   assignedLabel,
 }: {
   contact: ContactListRow;
@@ -64,6 +66,7 @@ export function ContactOperationalRow({
   isChecked?: boolean;
   onSelect?: () => void;
   onToggleChecked?: () => void;
+  onOpenWorkspace?: () => void;
   assignedLabel?: string | null;
 }) {
   const archived = !!(contact.archivedAt || contact.active === false);
@@ -165,11 +168,26 @@ export function ContactOperationalRow({
           </span>
         </div>
 
-        <span className="crm-queue-row-status shrink-0 crm-queue-pill crm-queue-pill-stage">
-          {stageLabel(stage)}
-        </span>
+        <div className="crm-queue-row-status shrink-0">
+          {contact.lastDisposition ? (
+            <span className="crm-queue-row-disposition truncate">{contact.lastDisposition}</span>
+          ) : (
+            <span className="crm-queue-row-disposition crm-queue-row-disposition-empty">None</span>
+          )}
+        </div>
 
-        <ChevronRight className="crm-queue-row-chevron h-4 w-4 shrink-0" />
+        <button
+          type="button"
+          className="crm-queue-row-chevron-button shrink-0"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenWorkspace?.();
+          }}
+          aria-label={`Open workspace for ${contact.displayName}`}
+          title="Open workspace"
+        >
+          <ChevronRight className="crm-queue-row-chevron h-4 w-4" />
+        </button>
       </div>
     </div>
   );

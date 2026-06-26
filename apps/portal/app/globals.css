@@ -23328,19 +23328,58 @@ table tr:hover {
 }
 
 .crm-queue-row-status {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 999px;
-  padding: 0.24rem 0.62rem;
-  font-size: 0.78rem;
-  font-weight: 800;
+  min-width: 6.75rem;
+  max-width: 8.75rem;
   white-space: nowrap;
+  text-align: right;
+}
+
+.crm-queue-row-disposition {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.1;
+  color: var(--crm-accent);
+}
+
+.crm-queue-row-disposition-empty {
+  color: var(--crm-muted);
+  font-weight: 700;
+  opacity: 0.48;
 }
 
 .crm-queue-row-chevron {
   color: color-mix(in srgb, var(--crm-border) 90%, var(--crm-muted));
   transition: color 160ms ease, transform 160ms ease;
+}
+
+.crm-queue-row-chevron-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.crm-queue-row-chevron-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--crm-accent) 72%, transparent);
+  outline-offset: 2px;
+}
+
+.crm-queue-row-chevron-button:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .crm-queue-row:hover .crm-queue-row-chevron,
@@ -23772,7 +23811,6 @@ table tr:hover {
 }
 
 :root[data-theme="dark"] .crm-my-queue-workspace .crm-queue-pill,
-:root[data-theme="dark"] .crm-my-queue-workspace .crm-queue-row-status,
 :root[data-theme="dark"] .crm-my-queue-workspace .crm-queue-detail-status-pill {
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);

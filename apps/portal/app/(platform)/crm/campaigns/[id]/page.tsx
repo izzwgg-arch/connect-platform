@@ -752,6 +752,8 @@ export default function CampaignDetailPage() {
   const [membersPage, setMembersPage] = useState(1);
   // "" = all agents, "UNASSIGNED" = null, else userId
   const [assigneeFilter, setAssigneeFilter] = useState<string>("");
+  const [dispositionFilter, setDispositionFilter] = useState<string>("");
+  const [dispositions, setDispositions] = useState<{ id: string; label: string; isDefault: boolean; color?: string }[]>([]);
   const [search, setSearch] = useState("");
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState("");
@@ -883,11 +885,12 @@ export default function CampaignDetailPage() {
     }
   }, [campaignId, token]);
 
-  const loadMembers = useCallback(async (overrideAssignee?: string, requestedPage?: number) => {
+  const loadMembers = useCallback(async (overrideAssignee?: string, requestedPage?: number, overrideDisposition?: string) => {
     setMembersLoading(true);
     try {
       const af = overrideAssignee !== undefined ? overrideAssignee : assigneeFilter;
       const activePage = requestedPage ?? membersPage;
+      const activeDisposition = overrideDisposition !== undefined ? overrideDisposition : dispositionFilter;
       const queryParams = new URLSearchParams({
         limit: String(CAMPAIGN_MEMBER_PAGE_SIZE),
         page: String(activePage),
@@ -895,6 +898,7 @@ export default function CampaignDetailPage() {
       if (statusFilter) queryParams.set("status", statusFilter);
       if (af === "UNASSIGNED") queryParams.set("unassigned", "true");
       else if (af) queryParams.set("assignedToUserId", af);
+      if (activeDisposition) queryParams.set("lastDisposition", activeDisposition);
       const res = await apiGet<{ members: Member[]; total: number }>(
         `/crm/campaigns/${campaignId}/members?${queryParams}`,
         token
@@ -903,7 +907,7 @@ export default function CampaignDetailPage() {
       setMembersTotal(res.total);
     } catch {}
     setMembersLoading(false);
-  }, [campaignId, statusFilter, assigneeFilter, membersPage, token]);
+  }, [campaignId, statusFilter, assigneeFilter, dispositionFilter, membersPage, token]);
 
   const loadWorkload = useCallback(async () => {
     if (!isAdmin) return;
@@ -924,6 +928,9 @@ export default function CampaignDetailPage() {
       await Promise.all([
         loadCampaign(),
         apiGet<{ users: CrmUser[] }>("/crm/users", token).then((r) => setCrmUsers(r.users ?? [])).catch(() => {}),
+        apiGet<{ items: { id: string; label: string; isDefault: boolean; color?: string }[] }>("/crm/quick-dispositions", token)
+          .then((r) => setDispositions(r.items ?? []))
+          .catch(() => {}),
       ]);
       setLoading(false);
     }
@@ -1873,6 +1880,20 @@ export default function CampaignDetailPage() {
                       ...crmUsers.filter((u) => u.crmEnabled).map((u) => ({ value: u.userId, label: u.displayName || u.email })),
                     ]}
                   />
+                  <ConnectSelect
+                    value={dispositionFilter}
+                    onChange={(value) => {
+                      setMembersPage(1);
+                      setDispositionFilter(value);
+                      loadMembers(undefined, 1, value);
+                    }}
+                    size="sm"
+                    className="funders-control"
+                    options={[
+                      { value: "", label: "All dispositions" },
+                      ...dispositions.map((d) => ({ value: d.label, label: d.label })),
+                    ]}
+                  />
                 </div>
               </div>
 
@@ -2030,6 +2051,14 @@ export default function CampaignDetailPage() {
                               }}
                               onUpdated={loadMembers}
                               onStatusChange={updateMemberStatus}
+                              onOpenWorkspace={() => {
+                                const params = new URLSearchParams({
+                                  campaignId,
+                                  memberId: m.id,
+                                  returnTo: `/crm/campaigns/${campaignId}`,
+                                });
+                                router.push(`/crm/contacts/${m.contactId}?${params.toString()}`);
+                              }}
                               token={token}
                             />
                           );

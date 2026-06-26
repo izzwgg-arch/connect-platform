@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   ListOrdered, Clock, CheckCheck,
   RefreshCw, CalendarClock, X,
-  AlertCircle, Sparkles, Megaphone, Inbox, BarChart3, Globe,
+  AlertCircle, Sparkles, Megaphone, Inbox, BarChart3, Globe, Tag,
 } from "lucide-react";
 import {
   CRMPageShell,
@@ -77,10 +77,13 @@ type CampaignOption = { id: string; name: string; memberCount?: number };
 
 type CrmSettingsDefaults = { defaultQueueSort: string; defaultQueueFilter: string };
 
+type DispositionItem = { id: string; label: string; isDefault: boolean; color?: string };
+
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const SORT_MODE_KEY = "crm_queue_sort_mode";
 const CAMPAIGN_FILTER_KEY = "crm_queue_campaign_id";
+const QUEUE_DISPOSITION_FILTER_KEY = "crm_queue_last_disposition";
 const ACTIVE_INDEX_KEY = "crm_queue_active_index";
 const DEV_ROW_PREVIEW_COUNT = 18;
 const QUEUE_PAGE_SIZE = 250;
@@ -209,6 +212,9 @@ function QueuePageInner() {
   // Active campaigns for the dropdown filter
   const [campaigns, setCampaigns] = useState<CampaignOption[]>([]);
 
+  // Dispositions for the disposition filter
+  const [dispositions, setDispositions] = useState<DispositionItem[]>([]);
+
   const [opStats, setOpStats] = useState<QueueOperationalStats | null>(null);
   const [opStatsLoading, setOpStatsLoading] = useState(true);
 
@@ -225,6 +231,11 @@ function QueuePageInner() {
     const stored = localStorage.getItem(QUEUE_TIMEZONE_FILTER_KEY) as TimezoneZoneFilter | null;
     if (stored && QUEUE_TIMEZONE_ZONE_OPTIONS.some((o) => o.value === stored)) return stored;
     return "all";
+  });
+
+  const [dispositionFilter, setDispositionFilter] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return localStorage.getItem(QUEUE_DISPOSITION_FILTER_KEY) ?? null;
   });
 
   // Sort mode — precedence: URL > localStorage > tenant default > hardcoded fallback.
@@ -277,6 +288,21 @@ function QueuePageInner() {
       .catch(() => {});
   }, []);
 
+  // Load all workspace tags (positions) for the filter dropdown
+  useEffect(() => {
+    const t = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
+    apiGet<{ items: DispositionItem[] }>("/crm/quick-dispositions", t)
+      .then((r) => setDispositions(r.items ?? []))
+      .catch(() => {});
+  }, []);
+
+  // Persist tag filter
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (dispositionFilter) localStorage.setItem(QUEUE_DISPOSITION_FILTER_KEY, dispositionFilter);
+    else localStorage.removeItem(QUEUE_DISPOSITION_FILTER_KEY);
+  }, [dispositionFilter]);
+
   useEffect(() => {
     const t = typeof window !== "undefined" ? localStorage.getItem("token") ?? undefined : undefined;
     setOpStatsLoading(true);
@@ -327,12 +353,14 @@ function QueuePageInner() {
     cid?: string | null,
     tz?: TimezoneZoneFilter,
     requestedPage?: number,
+    tid?: string | null,
   ) => {
     const activeFilter = f ?? filter;
     const activeSort = s ?? sortMode;
     // cid=undefined means "use current state", cid=null means "clear", cid=string means "use it"
     const activeCampaignId = cid !== undefined ? cid : campaignId;
     const activeTz = tz ?? timezoneZone;
+    const activeDisposition = tid !== undefined ? tid : dispositionFilter;
     const activePage = Math.max(0, requestedPage ?? pageRef.current);
     setLoading(true);
     setError("");
@@ -345,6 +373,7 @@ function QueuePageInner() {
       });
       if (activeCampaignId) params.set("campaignId", activeCampaignId);
       if (activeTz !== "all") params.set("timezoneZone", activeTz);
+      if (activeDisposition) params.set("lastDisposition", activeDisposition);
       const res = await apiGet<{ queue: QueueMember[]; total: number; counts: QueueCounts; sort?: string; hasMore?: boolean }>(
         `/crm/queue?${params.toString()}`,
         token
@@ -358,7 +387,7 @@ function QueuePageInner() {
     }
     setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, sortMode, campaignId, timezoneZone, token]);
+  }, [filter, sortMode, campaignId, timezoneZone, dispositionFilter, token]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -429,6 +458,12 @@ function QueuePageInner() {
     load(undefined, undefined, undefined, zone, 0);
   }
 
+  function switchDisposition(newDisposition: string | null) {
+    setDispositionFilter(newDisposition);
+    setPage(0);
+    load(undefined, undefined, undefined, undefined, 0, newDisposition);
+  }
+
   function switchPage(nextPage: number) {
     const safePage = Math.max(0, nextPage);
     setPage(safePage);
@@ -459,9 +494,12 @@ function QueuePageInner() {
   }
 
   const queueReturnTo = useMemo(() => {
-    const q = searchParams.toString();
+    const params = new URLSearchParams(searchParams.toString());
+    if (dispositionFilter) params.set("lastDisposition", dispositionFilter);
+    else params.delete("lastDisposition");
+    const q = params.toString();
     return q ? `/crm/queue?${q}` : "/crm/queue";
-  }, [searchParams]);
+  }, [searchParams, dispositionFilter]);
 
   const activeMember = previewQueue[activeIndex] ?? null;
   const pageStart = queue.length > 0 ? page * QUEUE_PAGE_SIZE + 1 : 0;
@@ -556,6 +594,27 @@ function QueuePageInner() {
                   </div>
                 ) : null}
                 <div className="crm-queue-filter-field">
+                  <Tag className="crm-queue-filter-icon h-4 w-4 shrink-0 text-crm-muted" />
+                  <label htmlFor="crm-queue-disposition" className="sr-only">Disposition</label>
+                  <ConnectSelect
+                    id="crm-queue-disposition"
+                    size="sm"
+                    value={dispositionFilter ?? ""}
+                    onChange={(value) => switchDisposition(value || null)}
+                    className={cn("min-w-[10rem] flex-1")}
+                    disabled={loading}
+                    options={[
+                      { value: "", label: "All dispositions" },
+                      ...dispositions.map((d) => ({ value: d.label, label: d.label })),
+                    ]}
+                  />
+                  {dispositionFilter ? (
+                    <button type="button" onClick={() => switchDisposition(null)} className="text-xs font-medium text-crm-accent hover:underline">
+                      Clear
+                    </button>
+                  ) : null}
+                </div>
+                <div className="crm-queue-filter-field">
                   <Globe className="crm-queue-filter-icon h-4 w-4 shrink-0 text-crm-muted" />
                   <label htmlFor="crm-queue-timezone" className="sr-only">Timezone</label>
                   <ConnectSelect
@@ -623,6 +682,16 @@ function QueuePageInner() {
                   isTop={page === 0 && i === 0}
                   isSelected={activeIndex === i}
                   onSelect={() => setActiveIndex(i)}
+                  onOpenWorkspace={() =>
+                    router.push(
+                      buildQueueContactWorkspaceHref(
+                        m,
+                        queueReturnTo,
+                        undefined,
+                        { filter, sort: sortMode, timezone: timezoneZone },
+                      ),
+                    )
+                  }
                 />
               ))}
             </div>

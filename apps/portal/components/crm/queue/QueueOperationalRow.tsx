@@ -3,7 +3,6 @@
 import {
   AlertCircle,
   CalendarClock,
-  CheckCheck,
   ChevronRight,
   Mail,
   Megaphone,
@@ -21,8 +20,6 @@ import {
   callbackTimeLabel,
   isQueueMemberActionable,
   memberPriorityTier,
-  MEMBER_STATUS_COLORS,
-  MEMBER_STATUS_LABELS,
   priorityReason,
   relativeTime,
 } from "./queueUtils";
@@ -40,6 +37,7 @@ export function QueueOperationalRow({
   isTop,
   isSelected,
   onSelect,
+  onOpenWorkspace,
 }: {
   member: QueueMember;
   rank: number;
@@ -169,27 +167,31 @@ export function QueueOperationalRow({
               {cb.label}
             </span>
           ) : null}
-          {contact?.lastDisposition ? (
-            <span className="crm-queue-pill crm-queue-pill-muted inline-flex items-center gap-0.5">
-              <CheckCheck className="h-3 w-3" />
-              {contact.lastDisposition}
-            </span>
-          ) : null}
           {member.attemptCount > 0 && member.lastAttemptAt ? (
             <span className="crm-queue-pill crm-queue-pill-muted">{relativeTime(member.lastAttemptAt)}</span>
           ) : null}
         </div>
 
-        <span
-          className={cn(
-            "crm-queue-row-status shrink-0",
-            MEMBER_STATUS_COLORS[member.status],
+        <div className="crm-queue-row-status shrink-0">
+          {contact?.lastDisposition ? (
+            <span className="crm-queue-row-disposition truncate">{contact.lastDisposition}</span>
+          ) : (
+            <span className="crm-queue-row-disposition crm-queue-row-disposition-empty">None</span>
           )}
-        >
-          {MEMBER_STATUS_LABELS[member.status]}
-        </span>
+        </div>
 
-        <ChevronRight className="crm-queue-row-chevron h-4 w-4 shrink-0" />
+        <button
+          type="button"
+          className="crm-queue-row-chevron-button shrink-0"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenWorkspace?.();
+          }}
+          aria-label={`Open workspace for ${contact?.displayName ?? "lead"}`}
+          title="Open workspace"
+        >
+          <ChevronRight className="crm-queue-row-chevron h-4 w-4" />
+        </button>
       </div>
     </div>
   );

@@ -48,6 +48,7 @@ const MEMBER_INCLUDE = {
       archivedAt: true,
       phones: { where: { isPrimary: true }, select: { numberRaw: true }, take: 1 },
       emails: { where: { isPrimary: true }, select: { email: true }, take: 1 },
+
       crmMeta: {
         select: {
           stage: true,
@@ -812,19 +813,28 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
       timezoneZone: q.timezoneZone,
     });
 
-    const contactWhere =
+    const lastDispositionFilter = q.lastDisposition ?? null;
+
+    const contactWhere: Record<string, unknown> =
       timezoneFilter != null
         ? {
             crmMeta: { is: { tenantId, ...timezoneFilter } },
           }
         : {};
 
+    if (lastDispositionFilter) {
+      const existingMeta = (contactWhere.crmMeta as any)?.is ?? {};
+      contactWhere.crmMeta = { is: { ...existingMeta, lastDisposition: lastDispositionFilter } };
+    }
+
+    const hasContactFilter = timezoneFilter != null || lastDispositionFilter != null;
+
     const baseWhere = {
       campaignId,
       tenantId,
       ...(statusFilter ? { status: { in: statusFilter } } : {}),
       ...assigneeWhere,
-      ...(timezoneFilter != null ? { contact: contactWhere } : {}),
+      ...(hasContactFilter ? { contact: contactWhere } : {}),
     };
 
     const [members, total] = await Promise.all([
@@ -1347,6 +1357,28 @@ export async function registerCrmCampaignRoutes(app: FastifyInstance) {
     }
 
     whereClause = withQueueTimezoneContactFilter(whereClause, tenantId, q);
+
+    // ── Disposition filter ────────────────────────────────────────────────────
+    // whereClause.contact is { is: { active, archivedAt } } from
+    // crmCampaignMemberQueueLiveContactWhere, so crmMeta must go inside `is`.
+    const lastDispositionParam = q.lastDisposition ?? null;
+    if (lastDispositionParam) {
+      const existingContactFilter = (whereClause as any).contact ?? {};
+      const existingIs = existingContactFilter.is ?? {};
+      (whereClause as any).contact = {
+        ...existingContactFilter,
+        is: {
+          ...existingIs,
+          crmMeta: {
+            ...(typeof existingIs.crmMeta === "object" && existingIs.crmMeta !== null ? existingIs.crmMeta : {}),
+            is: {
+              ...(typeof (existingIs.crmMeta as any)?.is === "object" ? (existingIs.crmMeta as any).is : {}),
+              lastDisposition: lastDispositionParam,
+            },
+          },
+        },
+      };
+    }
 
     const queueCountWhere = (extra: Record<string, unknown>) =>
       withQueueTimezoneContactFilter(
