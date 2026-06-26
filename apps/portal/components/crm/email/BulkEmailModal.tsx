@@ -58,6 +58,7 @@ export type BulkEmailAudience =
       /** Current tag filter applied on the contacts page (for "all filtered" path). */
       tagId?: string;
       stage?: string;
+      lastDisposition?: string;
     }
   | {
       sourceType: "CAMPAIGN";
