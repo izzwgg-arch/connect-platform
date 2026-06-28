@@ -8132,6 +8132,46 @@ app.post("/pbx/extensions/sync", async (req, reply) => {
   if (!admin) return;
   if (!ensureCredentialCrypto(reply)) return;
   const input = z.object({ tenantId: z.string().optional() }).parse(req.body || {});
+
+  // Super-admin with no tenant selected → sync EVERY tenant's extensions across
+  // all enabled PBX instances in one shot (read-only against the PBX). This backs
+  // the global "Sync from PBX" button so an admin never has to sync tenant-by-tenant.
+  if (admin.role === "SUPER_ADMIN" && !input.tenantId) {
+    const instances = await db.pbxInstance.findMany({ where: { isEnabled: true } });
+    let totalFound = 0;
+    let totalUpserted = 0;
+    let totalDeactivated = 0;
+    let totalErrors = 0;
+    for (const instance of instances) {
+      try {
+        const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+        const client = getVitalPbxClient({
+          baseUrl: instance.baseUrl,
+          token: auth.token,
+          secret: auth.secret,
+          timeoutMs: 60000,
+        });
+        // No vitalTenantId → syncExtensionsFromPbx walks every tenant on the instance.
+        const result = await syncExtensionsFromPbx(db, instance.id, client, {});
+        totalFound += result.totalExtensions;
+        totalUpserted += result.totalUpserted;
+        totalDeactivated += result.totalDeactivated;
+        totalErrors += result.totalErrors;
+      } catch (e: any) {
+        totalErrors += 1;
+        app.log.error({ err: e, pbxInstanceId: instance.id }, "all-tenant extension sync failed for instance");
+      }
+    }
+    return {
+      ok: true,
+      allTenants: true,
+      extensionsFound: totalFound,
+      extensionsUpserted: totalUpserted,
+      extensionsDeactivated: totalDeactivated,
+      errors: totalErrors,
+    };
+  }
+
   const tenantId =
     admin.role === "SUPER_ADMIN" && input.tenantId
       ? await resolveManagedTenant(admin, input.tenantId).catch(() => null)
@@ -15594,42 +15634,53 @@ app.get("/voice/pbx/resources/:resource", async (req, reply) => {
   // Extensions: serve from synced Connect DB (Phase 1 sync) — fast, no live VitalPBX call needed.
   if (resource === "extensions") {
     let queryTenantId: string | null = null;
+    // Super-admin "all tenants" mode: when no specific tenant is selected, return
+    // every tenant's extensions in one list (the Extensions table already shows a
+    // Tenant column). This is the global directory view — so a platform admin never
+    // has to pick tenants one-by-one to confirm every extension synced.
+    let allTenants = false;
 
     if (!isRole(user, ["SUPER_ADMIN"])) {
       // Regular tenant users/admins are always scoped to their JWT tenant. Ignore
       // query/header tenant overrides so callers cannot enumerate another tenant.
       queryTenantId = user.tenantId;
     } else {
-      // Super-admin directory reads must still be tenant-scoped. Returning all
-      // extension rows and filtering in the browser caused cross-tenant flashes
-      // and exposed directory data in network responses.
       const qsTenantId = String((req.query as any)?.tenantId || "").trim();
       const headerTenantId = String((req.headers as any)["x-tenant-context"] || "").trim();
       const pbxTenantOverride = (req as any).pbxTenantOverride as string | undefined;
       const tenantCtx = qsTenantId || headerTenantId || (pbxTenantOverride ? `vpbx:${pbxTenantOverride}` : "");
-      queryTenantId = await resolveDirectoryTenantIdFromContext(tenantCtx);
+      if (tenantCtx) {
+        queryTenantId = await resolveDirectoryTenantIdFromContext(tenantCtx);
+      } else {
+        // No tenant context at all → super-admin global directory (all tenants).
+        allTenants = true;
+      }
     }
 
-    if (!queryTenantId) {
+    if (!allTenants && !queryTenantId) {
       app.log.info({ role: user.role }, "[EXT_FILTER_API] no tenant context; returning empty extension directory");
       return { resource, rows: [], source: "connect_db", tenantScoped: true };
     }
 
-      const dbExts = await db.extension.findMany({
-      where: { tenantId: queryTenantId, status: "ACTIVE", billable: true },
-        include: {
-          pbxLink: { select: { id: true, pbxExtensionId: true, pbxSipUsername: true, pbxDeviceName: true, webrtcEnabled: true, isSuspended: true, sipPasswordIssuedAt: true } },
-          ownerUser: { select: { id: true, email: true } },
+    const dbExts = await db.extension.findMany({
+      where: allTenants
+        ? { status: "ACTIVE", billable: true }
+        : { tenantId: queryTenantId as string, status: "ACTIVE", billable: true },
+      include: {
+        pbxLink: { select: { id: true, pbxExtensionId: true, pbxSipUsername: true, pbxDeviceName: true, webrtcEnabled: true, isSuspended: true, sipPasswordIssuedAt: true } },
+        ownerUser: { select: { id: true, email: true } },
         tenant: { select: { name: true } },
       },
-      orderBy: { extNumber: "asc" },
+      orderBy: allTenants
+        ? [{ tenant: { name: "asc" } }, { extNumber: "asc" }]
+        : [{ extNumber: "asc" }],
     });
     const rows = dbExts.filter(isDirectoryVisibleExtension).map(mapDirectoryExtensionRow);
     app.log.info(
-      { mode: "tenant", queryTenantId, rowCount: rows.length, filteredOut: dbExts.length - rows.length },
-      "[EXT_FILTER_API] returning tenant-scoped real extensions"
+      { mode: allTenants ? "all_tenants" : "tenant", queryTenantId, rowCount: rows.length, filteredOut: dbExts.length - rows.length },
+      "[EXT_FILTER_API] returning real extensions"
     );
-    return { resource, rows, source: "connect_db", tenantScoped: true };
+    return { resource, rows, source: "connect_db", tenantScoped: !allTenants };
   }
 
   // All other resources: proxy to VitalPBX directly.

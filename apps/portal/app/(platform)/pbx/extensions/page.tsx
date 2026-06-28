@@ -679,11 +679,14 @@ export default function PbxExtensionsPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const { tenantId, adminScope, tenant } = useAppContext();
-  const canFetchTenantExtensions = adminScope === "TENANT" && tenantId && tenantId !== "local";
+  const isTenantScoped = adminScope === "TENANT" && tenantId && tenantId !== "local";
   const state = useAsyncResource(
     () => {
-      console.log("[EXT_TENANT_FILTER] fetching tenant-scoped extensions. scope:", adminScope, "tenant:", tenant?.name ?? tenantId);
-      return canFetchTenantExtensions ? loadPbxResource("extensions", tenantId) : Promise.resolve({ resource: "extensions", rows: [] });
+      // Tenant scope → that tenant's extensions. Global/super-admin scope → ALL
+      // tenants' extensions in one list (the API returns every tenant when no
+      // tenantId is passed). No more blank page when no single tenant is picked.
+      console.log("[EXT_TENANT_FILTER] fetching extensions. scope:", adminScope, "tenant:", tenant?.name ?? tenantId);
+      return loadPbxResource("extensions", isTenantScoped ? tenantId : undefined);
     },
     ["extensions", tenantId, adminScope, reloadKey],
     { keepPreviousData: false },
