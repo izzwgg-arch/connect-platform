@@ -32195,6 +32195,99 @@ const automationRuleTimer = registerShutdownTimer(
 );
 automationRuleTimer.unref();
 
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTOMATIC PBX SYNC — tenants + extensions + inbound DIDs, on a timer
+//
+// Runs the EXACT same read-only sync as the manual "Refresh PBX Tenants" button
+// (tenant directory -> extensions -> inbound DIDs) against the default enabled
+// PBX instance, every PBX_AUTO_SYNC_INTERVAL_MS. This means extensions, tenants
+// and DIDs added on the VitalPBX side appear in Connect automatically within one
+// interval — no per-tenant clicking, for every tenant present and future.
+//
+// Strictly READ-ONLY against the PBX (GET only; never an Apply Changes, config
+// regenerate, or any tenant write — see AGENTS.md). The manual button stays for
+// when you want an instant pull. Set PBX_AUTO_SYNC_INTERVAL_MS=0 to disable.
+// ─────────────────────────────────────────────────────────────────────────────
+const PBX_AUTO_SYNC_INTERVAL_MS = Number(process.env.PBX_AUTO_SYNC_INTERVAL_MS ?? 300_000);
+let pbxAutoSyncRunning = false;
+
+async function runAutoPbxSync(): Promise<void> {
+  if (pbxAutoSyncRunning) return; // in-process guard so cycles never overlap
+  pbxAutoSyncRunning = true;
+  const startedAt = Date.now();
+  try {
+    const instance = await db.pbxInstance.findFirst({
+      where: { isEnabled: true },
+      orderBy: { updatedAt: "desc" },
+    });
+    if (!instance) return;
+    const auth = decryptJson<{ token: string; secret?: string }>(instance.apiAuthEncrypted);
+    const client = getVitalPbxClient({
+      baseUrl: instance.baseUrl,
+      token: auth.token,
+      secret: auth.secret,
+      timeoutMs: 8_000,
+    });
+
+    // 1. Tenant directory first, so brand-new PBX tenants have PbxTenantDirectory
+    //    rows before the extension mapping step runs.
+    try {
+      const tenants = await client.listTenants();
+      await syncPbxTenantDirectoryFromRows(db, instance.id, tenants);
+      PBX_TENANT_LIST_CACHE.delete(instance.id);
+    } catch (e: any) {
+      // PBX unreachable this cycle — skip the rest; the next tick retries.
+      app.log.warn({ event: "pbx_auto_sync_tenant_failed", err: e?.message }, "pbx_auto_sync_tenant_failed");
+      return;
+    }
+
+    // 2. Extensions — the part that brings newly-added extensions into Connect.
+    let ext: ExtensionSyncResult | null = null;
+    try {
+      ext = await syncExtensionsFromPbx(db, instance.id, client);
+    } catch (e: any) {
+      app.log.warn({ event: "pbx_auto_sync_ext_failed", err: e?.message }, "pbx_auto_sync_ext_failed");
+    }
+
+    // 3. Inbound DIDs — non-fatal; auto-skips when Ombutel MySQL isn't configured.
+    try {
+      await syncPbxTenantInboundDids(db, instance.id);
+    } catch (e: any) {
+      app.log.warn({ event: "pbx_auto_sync_did_failed", err: e?.message }, "pbx_auto_sync_did_failed");
+    }
+
+    app.log.info(
+      {
+        event: "pbx_auto_sync_complete",
+        pbxInstanceId: instance.id,
+        durationMs: Date.now() - startedAt,
+        extensionsFound: ext?.totalExtensions ?? null,
+        extensionsUpserted: ext?.totalUpserted ?? null,
+        extensionsDeactivated: ext?.totalDeactivated ?? null,
+        autoProvisioned: ext?.totalAutoProvisioned ?? null,
+      },
+      "pbx_auto_sync_complete",
+    );
+  } catch (e: any) {
+    app.log.warn({ event: "pbx_auto_sync_failed", err: e?.message }, "pbx_auto_sync_failed");
+  } finally {
+    pbxAutoSyncRunning = false;
+  }
+}
+
+if (PBX_AUTO_SYNC_INTERVAL_MS > 0) {
+  // Stagger the first run so it doesn't collide with boot-time cache warmups.
+  registerShutdownTimer(setTimeout(() => { void runAutoPbxSync(); }, 60_000));
+  const pbxAutoSyncTimer = registerShutdownTimer(
+    setInterval(() => { void runAutoPbxSync(); }, PBX_AUTO_SYNC_INTERVAL_MS),
+  );
+  pbxAutoSyncTimer.unref();
+  app.log.info(
+    { event: "pbx_auto_sync_scheduled", intervalMs: PBX_AUTO_SYNC_INTERVAL_MS },
+    "pbx_auto_sync_scheduled",
+  );
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PBX LIVE METRICS ENDPOINTS
