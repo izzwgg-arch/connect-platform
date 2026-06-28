@@ -959,14 +959,56 @@ export class TelephonyService {
     // T34_ext-ringgroups,801 at 069817 → DialEnd CANCEL → ring group restarted →
     // loop. The device never rejected and the caller never hung up; the requeue
     // Redirect was the sole trigger.
+    // ANDROID-SAFE cold-answer carve-out (2026-06-28).
+    //
+    // The two gates below ("extension leg already ringing/live" and "extension
+    // leg already delivered") exist to stop the ring-group voicemail loop: an
+    // AMI Redirect over a genuinely-ringing device tears down its live INVITE
+    // and (for ring groups) restarts the group forever. They must NOT change for
+    // any call where a real device responded, or for any ring-group/queue dial.
+    //
+    // But they ALSO silently broke the legitimate mobile cold-answer case for
+    // iOS: when the user swipe-kills the app, its WebRTC contact lingers as a
+    // half-open WebSocket. The next call's Dial() sends an INVITE to that DEAD
+    // contact, creating a `PJSIP/T<id>_<exten>` leg that rings into the void for
+    // the full no-answer timeout. The leg never returns 180/200/486, but it sits
+    // on `call.channels` (and flips `extensionLegSeen`), so when the rewoken app
+    // registers a FRESH contact and asks for a requeue, both gates fire and the
+    // fresh contact never receives an INVITE → "answer, no audio, never
+    // connects". Proven live: linkedId 1782671680.142801 (ext 101, 2026-06-28),
+    // single leg PJSIP/T21_101_1-00013cde, requeue skipped twice
+    // ("extension_leg_already_live"), DialEnd no-answer after 21s.
+    //
+    // We allow the requeue to proceed ONLY when BOTH hold:
+    //   (a) the requeue target is a DIRECT extension dial (`*local-dialing*`),
+    //       never a ring group / queue — so a Redirect re-runs a single Dial(),
+    //       which cannot enter the ring-group restart-at-priority-1 loop; and
+    //   (b) NO extension leg on this call ever returned a SIP response
+    //       (`extensionLegResponded` unset) — i.e. there is no real, reachable
+    //       device to disturb; every leg is a dead/zombie contact.
+    // A genuinely-ringing device (Android FGS, desk phone, any responsive
+    // endpoint) sets `extensionLegResponded` the instant it returns 180, so it
+    // stays fully protected and Android behaviour is unchanged.
+    const trunkDialContextForGate =
+      typeof call.metadata["trunkDialContext"] === "string"
+        ? call.metadata["trunkDialContext"]
+        : null;
+    const requeueTargetIsDirectExtension =
+      !!trunkDialContextForGate && /local-dialing/i.test(trunkDialContextForGate);
+    const anyExtensionLegResponded = call.metadata["extensionLegResponded"] === true;
+    const safeColdAnswerRequeue =
+      requeueTargetIsDirectExtension && !anyExtensionLegResponded;
+
     const liveExtensionLeg = call.channels.find((ch) => isExtensionLegChannel(ch));
-    if (liveExtensionLeg) {
+    if (liveExtensionLeg && !safeColdAnswerRequeue) {
       log.info(
         {
           linkedId: params.linkedId,
           state: call.state,
           liveExtensionLeg,
           channels: call.channels,
+          trunkDialContext: trunkDialContextForGate,
+          anyExtensionLegResponded,
         },
         "mobile invite requeue skipped — extension leg already ringing/live",
       );
@@ -978,6 +1020,18 @@ export class TelephonyService {
         skipped: true,
         skipReason: "extension_leg_already_live",
       };
+    }
+    if (liveExtensionLeg && safeColdAnswerRequeue) {
+      log.warn(
+        {
+          linkedId: params.linkedId,
+          state: call.state,
+          liveExtensionLeg,
+          channels: call.channels,
+          trunkDialContext: trunkDialContextForGate,
+        },
+        "mobile invite requeue PROCEEDING past dead extension leg — direct-extension dial, no device ever responded (180/200/486); requeueing so the rewoken contact gets the INVITE (cold-answer fix)",
+      );
     }
 
     // CRITICAL (DND / fast-decline race): the live-leg gate above only catches
@@ -1000,13 +1054,15 @@ export class TelephonyService {
     // Proven root cause (RSBK ext 102, linkedId 1782427691.136899, 2026-06-25):
     // ring-group DialEnd at 21.207 (app 486, ~100ms) → "AMI mobile invite requeue
     // sent" Redirect to T34_ext-ringgroups,801 at 21.864 → group restarted → loop.
-    if (call.metadata["extensionLegSeen"] === true) {
+    if (call.metadata["extensionLegSeen"] === true && !safeColdAnswerRequeue) {
       log.info(
         {
           linkedId: params.linkedId,
           state: call.state,
           channels: call.channels,
           extensionLegSeen: true,
+          trunkDialContext: trunkDialContextForGate,
+          anyExtensionLegResponded,
         },
         "mobile invite requeue skipped — extension leg already delivered (rang/declined/hung up)",
       );
@@ -1018,6 +1074,17 @@ export class TelephonyService {
         skipped: true,
         skipReason: "extension_leg_already_delivered",
       };
+    }
+    if (call.metadata["extensionLegSeen"] === true && safeColdAnswerRequeue) {
+      log.warn(
+        {
+          linkedId: params.linkedId,
+          state: call.state,
+          channels: call.channels,
+          trunkDialContext: trunkDialContextForGate,
+        },
+        "mobile invite requeue PROCEEDING past extensionLegSeen — direct-extension dial, no device ever responded (180/200/486); dead/zombie contact only (cold-answer fix)",
+      );
     }
 
     // Prefer the trunk leg as the redirect channel — that's the leg the

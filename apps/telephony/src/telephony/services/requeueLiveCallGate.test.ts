@@ -103,3 +103,75 @@ test("requeue PROCEEDS for genuine cold-start (no extension leg present)", async
     "cold-start requeue must still issue exactly one AMI Redirect",
   );
 });
+
+// iOS cold-answer fix (2026-06-28): a swipe-killed app leaves a half-open
+// WebSocket contact. The DIRECT-extension Dial() rings that DEAD contact
+// (leg created, but it NEVER returns 180/200/486 — stays at "Ring"), which
+// previously blocked the requeue and starved the rewoken fresh contact.
+// Proven live: linkedId 1782671680.142801, leg PJSIP/T21_101_1-00013cde.
+test("requeue PROCEEDS over a DEAD extension leg on a direct-extension dial (cold answer)", async () => {
+  const { svc, calls, sent } = makeService();
+  const linkedId = "1782671680.142801";
+  const trunk = "PJSIP/344022_Comfortcont-00013cdd";
+  // Trunk leg dialing extension 101 DIRECTLY (sub-local-dialing, not a ring group).
+  addChannel(calls, linkedId, "u-trunk", trunk, "Up", "101", "sub-local-dialing");
+  // Record the trunk's Dial() position so the requeue knows the target is a
+  // direct extension dial (this is what DialBegin captures live).
+  calls.onDialBegin({
+    linkedId,
+    callerIDNum: "5622096644",
+    destination: "PJSIP/T21_101_1-00013cde",
+    channel: trunk,
+    context: "sub-local-dialing",
+    exten: "101",
+  });
+  // The dead/zombie contact's leg: created and "Ring" (we are dialing it) but it
+  // NEVER responds — no 180/200/486 ever arrives.
+  addChannel(calls, linkedId, "u-ext", "PJSIP/T21_101_1-00013cde", "Ring", "101", "T21_cos-all");
+
+  const result = await svc.requeueLiveCallToDialplan({
+    linkedId,
+    fallbackExten: "101",
+    fallbackContext: "sub-local-dialing",
+  });
+
+  assert.equal(result.skipped, false, "must requeue past a dead (never-responded) extension leg");
+  assert.equal(
+    sent.filter((s) => s.action === "Redirect").length,
+    1,
+    "cold-answer requeue over a dead leg must issue exactly one AMI Redirect",
+  );
+});
+
+// ANDROID SAFETY GUARD: even on a direct-extension dial, a genuinely-ringing
+// device (it returned 180 → "Ringing") must NEVER be disturbed by a requeue.
+test("requeue is SKIPPED over a RINGING device even on a direct-extension dial (android-safe)", async () => {
+  const { svc, calls, sent } = makeService();
+  const linkedId = "1782671680.143000";
+  const trunk = "PJSIP/344022_Comfortcont-00013d00";
+  addChannel(calls, linkedId, "u-trunk", trunk, "Up", "101", "sub-local-dialing");
+  calls.onDialBegin({
+    linkedId,
+    callerIDNum: "5622096644",
+    destination: "PJSIP/T21_101_1-00013d01",
+    channel: trunk,
+    context: "sub-local-dialing",
+    exten: "101",
+  });
+  // A REAL device: its leg returned 180 → channel state "Ringing".
+  addChannel(calls, linkedId, "u-ext", "PJSIP/T21_101_1-00013d01", "Ringing", "101", "T21_cos-all");
+
+  const result = await svc.requeueLiveCallToDialplan({
+    linkedId,
+    fallbackExten: "101",
+    fallbackContext: "sub-local-dialing",
+  });
+
+  assert.equal(result.skipped, true);
+  assert.equal(result.skipReason, "extension_leg_already_live");
+  assert.equal(
+    sent.filter((s) => s.action === "Redirect").length,
+    0,
+    "must not Redirect over a device that actually rang (180), even on a direct dial",
+  );
+});

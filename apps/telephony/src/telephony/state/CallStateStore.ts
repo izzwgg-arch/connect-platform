@@ -113,6 +113,47 @@ function markExtensionLegSeen(call: NormalizedCall, channel: string | null | und
   }
 }
 
+/**
+ * True when an Asterisk channel state means the *remote endpoint's* SIP stack
+ * actively responded to our INVITE — i.e. a REAL, reachable device is there:
+ *   5 / "Ringing"  → device returned `180 Ringing`
+ *   6 / "Up"       → device returned `200 OK`
+ *   7 / "Busy"     → device returned a busy/`486` final response
+ *
+ * A dead / zombie WebSocket contact (a mobile app the user swipe-killed, whose
+ * WS lingers half-open so Asterisk still sends the INVITE into the void) gets
+ * the INVITE but NEVER replies, so its leg stays at 0/"Down", 3/"Dialing" or
+ * 4/"Ring" until the dial times out. We deliberately exclude 4/"Ring": that is
+ * "we are dialing it", NOT "it answered us".
+ */
+function channelStateIndicatesPeerResponse(raw: string | null | undefined): boolean {
+  const s = String(raw ?? "").trim().toLowerCase();
+  return s === "5" || s === "ringing" || s === "6" || s === "up" || s === "7" || s === "busy";
+}
+
+/**
+ * Durable companion to {@link markExtensionLegSeen}. Set the moment ANY real
+ * tenant-extension leg reaches a state proving the endpoint's SIP stack replied
+ * (180/200/486). Unlike `extensionLegSeen` (true even for a contact that was
+ * merely *dialed*), this is true ONLY when a device actually responded — which
+ * is exactly how we tell a genuinely-ringing device (must be protected; never
+ * disturb it) apart from a dead post-swipe-kill WebSocket contact that the PBX
+ * is ringing into the void (safe to re-dial so the freshly-rewoken contact gets
+ * the INVITE). Never cleared on hangup. See
+ * {@link TelephonyService.requeueLiveCallToDialplan}.
+ */
+function markExtensionLegResponded(
+  call: NormalizedCall,
+  channel: string | null | undefined,
+  rawChannelState: string | null | undefined,
+): void {
+  if (call.metadata["extensionLegResponded"]) return;
+  if (!isExtensionLegChannel(channel)) return;
+  if (channelStateIndicatesPeerResponse(rawChannelState)) {
+    call.metadata["extensionLegResponded"] = true;
+  }
+}
+
 function digitsOnly(value: string | null | undefined): string {
   const digits = String(value || "").replace(/\D/g, "");
   return /^1\d{10}$/.test(digits) ? digits.slice(1) : digits;
@@ -596,6 +637,7 @@ export class CallStateStore extends EventEmitter {
       call.channels.push(params.channel);
     }
     markExtensionLegSeen(call, params.channel);
+    markExtensionLegResponded(call, params.channel, params.channelState);
     // Accumulate all seen channels in metadata so they survive post-hangup channel clear.
     // CdrNotifier uses this for PJSIP endpoint → tenant resolution.
     const seen = (call.metadata["seenChannels"] as string[] | undefined) ?? [];
@@ -702,6 +744,7 @@ export class CallStateStore extends EventEmitter {
     const newState = channelStateToCallState(params.channelState);
     const channel = this.channelByUniqueId.get(params.uniqueid);
     markExtensionLegSeen(call, channel);
+    markExtensionLegResponded(call, channel, params.channelState);
     if (shouldUpgradeState(call.state, newState)) {
       call.state = newState;
       // Mark answeredAt the first time a channel goes Up (state 6).
