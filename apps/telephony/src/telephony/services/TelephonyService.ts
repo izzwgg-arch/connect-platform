@@ -877,6 +877,14 @@ export class TelephonyService {
     linkedId: string;
     fallbackExten?: string;
     fallbackContext?: string;
+    /**
+     * Why the API asked for this requeue. `device_register_complete` means a
+     * device that was ASLEEP/unregistered just finished a FRESH registration
+     * during this live call (the mobile cold-wake path). That is the only
+     * trigger allowed to supersede a leg that already "responded" — see the
+     * `triggeredByFreshWake` carve-out below.
+     */
+    trigger?: string;
   }): Promise<{
     actionId: string | null;
     channel: string | null;
@@ -996,8 +1004,25 @@ export class TelephonyService {
     const requeueTargetIsDirectExtension =
       !!trunkDialContextForGate && /local-dialing/i.test(trunkDialContextForGate);
     const anyExtensionLegResponded = call.metadata["extensionLegResponded"] === true;
+    // CRITICAL (iOS zombie-contact case, 2026-06-28): a swipe-killed iOS app
+    // leaves a half-open WebSocket contact at the SBC. When the next call dials
+    // it, that DEAD contact's leg still returns SIP 180 (the SBC answers on the
+    // dangling socket) — so `extensionLegResponded` is set even though no real
+    // device is there. "Responded" therefore CANNOT distinguish a live device
+    // from an iOS zombie. The reliable signal is `trigger`: the API only sends
+    // `device_register_complete` when a device that was asleep/unregistered has
+    // JUST completed a FRESH registration during this live call. At that instant
+    // any pre-existing leg for this extension is necessarily the OLD/stale
+    // contact (the fresh one registered after the dial and was never forked to),
+    // so re-dialing the DIRECT extension is safe and is the only way to deliver
+    // an INVITE to the now-awake contact. A genuinely-registered device (Android
+    // FGS, desk phone) never emits `device_register_complete` mid-call, so this
+    // never disturbs it; and a warm answer in progress is caught first by the
+    // `extensionAnsweredAt` gate above. Ring-group/queue targets are excluded
+    // (requeueTargetIsDirectExtension) so the historic restart loop can't recur.
+    const triggeredByFreshWake = params.trigger === "device_register_complete";
     const safeColdAnswerRequeue =
-      requeueTargetIsDirectExtension && !anyExtensionLegResponded;
+      requeueTargetIsDirectExtension && (!anyExtensionLegResponded || triggeredByFreshWake);
 
     const liveExtensionLeg = call.channels.find((ch) => isExtensionLegChannel(ch));
     if (liveExtensionLeg && !safeColdAnswerRequeue) {
@@ -1029,8 +1054,11 @@ export class TelephonyService {
           liveExtensionLeg,
           channels: call.channels,
           trunkDialContext: trunkDialContextForGate,
+          trigger: params.trigger ?? null,
+          anyExtensionLegResponded,
+          triggeredByFreshWake,
         },
-        "mobile invite requeue PROCEEDING past dead extension leg — direct-extension dial, no device ever responded (180/200/486); requeueing so the rewoken contact gets the INVITE (cold-answer fix)",
+        "mobile invite requeue PROCEEDING past existing extension leg — direct-extension dial; either no device ever responded OR a device just freshly registered (cold-answer fix), so re-dial to deliver the INVITE to the rewoken contact",
       );
     }
 
@@ -1082,8 +1110,11 @@ export class TelephonyService {
           state: call.state,
           channels: call.channels,
           trunkDialContext: trunkDialContextForGate,
+          trigger: params.trigger ?? null,
+          anyExtensionLegResponded,
+          triggeredByFreshWake,
         },
-        "mobile invite requeue PROCEEDING past extensionLegSeen — direct-extension dial, no device ever responded (180/200/486); dead/zombie contact only (cold-answer fix)",
+        "mobile invite requeue PROCEEDING past extensionLegSeen — direct-extension dial; dead contact or fresh device wake (cold-answer fix)",
       );
     }
 

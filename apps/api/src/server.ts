@@ -2757,6 +2757,13 @@ async function requestTelephonyInviteRequeue(input: {
   inviteId: string;
   linkedId?: string | null;
   exten?: string | null;
+  /**
+   * Forwarded to telephony so its requeue gate can tell a genuine cold-wake
+   * (`device_register_complete`) — the only case allowed to supersede a stale
+   * "ringing" leg (e.g. an iOS swipe-killed contact that still answers 180) —
+   * apart from a plain accept. See TelephonyService.requeueLiveCallToDialplan.
+   */
+  trigger?: string | null;
 }): Promise<void> {
   const linkedId = String(input.linkedId || "").trim();
   if (!linkedId) return;
@@ -2772,6 +2779,7 @@ async function requestTelephonyInviteRequeue(input: {
     body: JSON.stringify({
       linkedId,
       exten: input.exten || undefined,
+      trigger: input.trigger || undefined,
     }),
   });
 
@@ -2799,6 +2807,7 @@ async function tryRequeuePendingMobileInvite(input: {
       inviteId: input.inviteId || "",
       linkedId,
       exten: input.exten,
+      trigger: requeueTriggerLabel(input.trigger),
     });
     app.log.info(
       {

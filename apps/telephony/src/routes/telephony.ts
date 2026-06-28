@@ -190,10 +190,11 @@ export function registerTelephonyRoutes(
       return;
     }
 
-    const { linkedId, exten, context } = req.body as {
+    const { linkedId, exten, context, trigger } = req.body as {
       linkedId?: unknown;
       exten?: unknown;
       context?: unknown;
+      trigger?: unknown;
     };
 
     if (typeof linkedId !== "string" || !linkedId) {
@@ -206,6 +207,7 @@ export function registerTelephonyRoutes(
         linkedId,
         fallbackExten: typeof exten === "string" ? exten : undefined,
         fallbackContext: typeof context === "string" ? context : undefined,
+        trigger: typeof trigger === "string" ? trigger : undefined,
       });
       res.json({ ok: true, ...result });
     } catch (err) {
