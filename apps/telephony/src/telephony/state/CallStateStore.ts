@@ -823,6 +823,30 @@ export class CallStateStore extends EventEmitter {
       call.metadata["trunkDialChannel"] = params.channel;
     }
 
+    // Capture the EXTENSION leg's own Dial() position — the context/exten from
+    // which the dialplan dials the `PJSIP/T<id>_<exten>` leg (e.g.
+    // `sub-local-dialing,110`). For a DIRECT inbound dial the trunk dials the
+    // extension itself, so this equals the trunk position; for an IVR / auto-
+    // attendant routed call the trunk's recorded Dial position is the IVR
+    // context (e.g. `IVR-5`) while the extension is dialed one layer deeper from
+    // a `*local-dialing*` context. The mobile cold-answer requeue
+    // ({@link TelephonyService.requeueLiveCallToDialplan}) needs THIS position —
+    // never the IVR or ring-group layer — to re-deliver a fresh INVITE to a
+    // re-woken contact without re-running the IVR or restarting a ring group.
+    // Keyed on the DIALED channel being a tenant-extension leg, so a ring-group
+    // fan-out (which dials a Local/ or group context, not a PJSIP/T leg here)
+    // never records a position.
+    if (
+      isExtensionLegChannel(params.destination) &&
+      params.context &&
+      params.exten &&
+      params.exten !== "s" &&
+      params.exten !== "h"
+    ) {
+      call.metadata["extLegDialContext"] = params.context;
+      call.metadata["extLegDialExten"] = params.exten;
+    }
+
     // Earliest possible signal that the dialplan is delivering this call to a
     // real extension endpoint (mobile/desk/WebRTC). Recording it here — before
     // the leg's own Newchannel — closes the race where a DND/declined leg sends

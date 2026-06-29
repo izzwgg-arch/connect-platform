@@ -246,3 +246,94 @@ test("requeue is SKIPPED over a live extension leg even with a device_register_c
     "must not Redirect over a live extension leg, regardless of the requeue trigger",
   );
 });
+
+// COLD-ANSWER RE-DELIVERY CARVE-OUT (2026-06-29): when the app is swipe-killed,
+// its WebRTC contact lingers as a DEAD WebSocket. The next call's Dial() sends an
+// INVITE to that dead contact, creating a PJSIP/T<id>_<exten> leg that rings into
+// the void (state "Ring"=1, never returns 180/200/486, so extensionLegResponded
+// stays unset). When the rewoken app registers a fresh contact and asks to be
+// re-delivered, the requeue MUST re-deliver to the EXTENSION's own *local-dialing*
+// Dial position (NOT the trunk's IVR position) so the fresh contact gets a new
+// INVITE. Proven live: linkedId 1782746721.144584 (ext 110 via IVR-5, 2026-06-29),
+// previously skipped `extension_leg_already_live` → voicemail.
+test("requeue PROCEEDS over a DEAD (never-responded) extension leg for mobile cold-answer (IVR route)", async () => {
+  const { svc, calls, sent } = makeService();
+  const linkedId = "1782746721.144584";
+  const trunk = "PJSIP/344022_Comfortcont-000140fa";
+  // Inbound DID → IVR. The trunk's recorded Dial position is the IVR context.
+  addChannel(calls, linkedId, "u-trunk", trunk, "Up", "110", "IVR-5");
+  calls.onDialBegin({
+    linkedId,
+    callerIDNum: "5622096644",
+    destination: "Local/110@T2_cos-all-00006b5e;1",
+    channel: trunk,
+    context: "IVR-5",
+    exten: "110",
+  });
+  // One layer deeper the Local channel dials the extension from *local-dialing* —
+  // this is the safe direct-extension Dial position the requeue must target.
+  calls.onDialBegin({
+    linkedId,
+    callerIDNum: "5622096644",
+    destination: "PJSIP/T2_110_1-000140fe",
+    channel: "Local/110@T2_cos-all-00006b5e;2",
+    context: "sub-local-dialing",
+    exten: "110",
+  });
+  // The extension leg exists but is ringing a DEAD post-swipe contact: state
+  // "Ring" (1, outgoing) — never returns 180, so extensionLegResponded stays unset.
+  addChannel(calls, linkedId, "u-ext", "PJSIP/T2_110_1-000140fe", "Ring", "110", "T2_cos-all");
+
+  const result = await svc.requeueLiveCallToDialplan({
+    linkedId,
+    trigger: "device_register_complete",
+  });
+
+  assert.equal(result.skipped, false);
+  assert.equal(result.context, "sub-local-dialing");
+  assert.equal(result.exten, "110");
+  const redirects = sent.filter((s) => s.action === "Redirect");
+  assert.equal(redirects.length, 1, "cold-answer must re-deliver via exactly one Redirect");
+  assert.equal(redirects[0]?.params["Context"], "sub-local-dialing", "redirect to the extension's *local-dialing* position, NOT IVR-5");
+  assert.equal(redirects[0]?.params["Exten"], "110");
+  assert.equal(
+    redirects.some((s) => /^ivr-/i.test(String(s.params["Context"] ?? ""))),
+    false,
+    "must never re-run the IVR context on cold-answer re-delivery",
+  );
+});
+
+// LOOP-SAFETY for the carve-out: a ring-group member leg is dialed from a
+// ring-group context (NOT *local-dialing*). Even when that member's contact is
+// dead (never responded), re-delivering would re-enter the group at priority 1 →
+// the RSBK loop. Condition #2 (direct-dial-only target) must keep it skipped
+// independent of the responded flag.
+test("requeue is SKIPPED for a dead ring-group member leg (loop-safe; target is not *local-dialing*)", async () => {
+  const { svc, calls, sent } = makeService();
+  const linkedId = "1782424010.700700";
+  const trunk = "PJSIP/344022_Comfortcont-00012700";
+  addChannel(calls, linkedId, "u-trunk", trunk, "Up", "801", "T34_ext-ringgroups");
+  // Ring group fans out to a member extension from a RING-GROUP dial context.
+  calls.onDialBegin({
+    linkedId,
+    callerIDNum: "5622096644",
+    destination: "PJSIP/T34_102_1-00012714",
+    channel: "Local/102@T34_ext-ringgroups-0000aa00;2",
+    context: "T34_ring-group-dial",
+    exten: "801",
+  });
+  // Dead member contact: state "Ring" (1), never responded.
+  addChannel(calls, linkedId, "u-ext", "PJSIP/T34_102_1-00012714", "Ring", "102", "T34_cos-all");
+
+  const result = await svc.requeueLiveCallToDialplan({
+    linkedId,
+    trigger: "device_register_complete",
+  });
+
+  assert.equal(result.skipped, true, "ring-group dial must still be skipped even with a dead member contact");
+  assert.equal(
+    sent.filter((s) => s.action === "Redirect").length,
+    0,
+    "must never Redirect into/over a ring-group dial — that is the RSBK loop",
+  );
+});

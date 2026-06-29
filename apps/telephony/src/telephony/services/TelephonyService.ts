@@ -1010,8 +1010,48 @@ export class TelephonyService {
     // a normally-waking device, so the gate is back to its always-skip behavior:
     // if ANY extension leg is live or was ever seen, we never requeue. The iOS
     // cold-answer case must be solved without touching this shared Android path.
+    // COLD-ANSWER RE-DELIVERY CARVE-OUT (2026-06-29): the two skips below
+    // ("extension leg already ringing/live" and "...already delivered") were
+    // installed 2026-06-25 (131aef94) to stop the RSBK ring-group voicemail
+    // loop. They are correct for a genuinely-ringing device and for ring groups,
+    // but they ALSO blocked the legitimate mobile cold-answer case: when the app
+    // is swipe-killed, its WebRTC contact lingers as a DEAD WebSocket; the next
+    // call's Dial() sends an INVITE to that dead contact, creating a
+    // `PJSIP/T<id>_<exten>` leg that rings into the void (never returns
+    // 180/200/486). When the rewoken app registers a FRESH contact and asks to
+    // be re-delivered, both skips fire and the fresh contact never receives an
+    // INVITE → "answer, no audio, never connects" → voicemail. Proven live:
+    // linkedId 1782746721.144584 (ext 110 via IVR-5, 2026-06-29), skip reason
+    // `extension_leg_already_live`.
+    //
+    // We bypass the two skips ONLY when BOTH hold — which keeps the loop AND
+    // Android fully protected:
+    //   (1) NO extension leg on this call ever returned a SIP response
+    //       (`extensionLegResponded` unset). A genuinely-ringing device
+    //       (Android FGS, desk phone) trips it on the first 180, so it stays
+    //       protected and unchanged; only a dead/zombie contact qualifies.
+    //   (2) the re-delivery target is a DIRECT extension dial position
+    //       (`*local-dialing*`, captured as `extLegDialContext`/`extLegDialExten`
+    //       on the extension leg's own DialBegin) — NEVER a ring-group / queue /
+    //       IVR context, so the Redirect re-runs a single Dial() and cannot
+    //       re-enter a group at priority 1 (the RSBK loop is impossible).
+    const extLegDialContext =
+      typeof call.metadata["extLegDialContext"] === "string"
+        ? call.metadata["extLegDialContext"]
+        : null;
+    const extLegDialExten =
+      typeof call.metadata["extLegDialExten"] === "string"
+        ? call.metadata["extLegDialExten"]
+        : null;
+    const extensionLegResponded = call.metadata["extensionLegResponded"] === true;
+    const coldAnswerReDeliver =
+      !extensionLegResponded &&
+      !!extLegDialContext &&
+      !!extLegDialExten &&
+      /local-dialing/i.test(extLegDialContext);
+
     const liveExtensionLeg = call.channels.find((ch) => isExtensionLegChannel(ch));
-    if (liveExtensionLeg) {
+    if (liveExtensionLeg && !coldAnswerReDeliver) {
       log.info(
         {
           linkedId: params.linkedId,
@@ -1052,7 +1092,7 @@ export class TelephonyService {
     // Proven root cause (RSBK ext 102, linkedId 1782427691.136899, 2026-06-25):
     // ring-group DialEnd at 21.207 (app 486, ~100ms) → "AMI mobile invite requeue
     // sent" Redirect to T34_ext-ringgroups,801 at 21.864 → group restarted → loop.
-    if (call.metadata["extensionLegSeen"] === true) {
+    if (call.metadata["extensionLegSeen"] === true && !coldAnswerReDeliver) {
       log.info(
         {
           linkedId: params.linkedId,
@@ -1126,9 +1166,16 @@ export class TelephonyService {
     // Proven live post-revert: linkedId 1782742495.143999
     // (trigger=device_register_complete, path=zero_contact_coldstart) redirected to
     // trk-37-in,8457823064 because trunkContext/trunkExten were null.
-    const context = trunkContext;
-    const exten = trunkExten;
-    const targetSource = "trunk_dial_position";
+    // For the cold-answer carve-out, redirect to the EXTENSION's own Dial
+    // position (`*local-dialing*,<ext>`) — not the trunk's, which for an IVR
+    // route is the IVR context and would re-run the menu. Both fields are
+    // guaranteed non-null here because `coldAnswerReDeliver` already required
+    // them. Otherwise keep the proven trunk Dial position.
+    const context = coldAnswerReDeliver ? extLegDialContext : trunkContext;
+    const exten = coldAnswerReDeliver ? extLegDialExten : trunkExten;
+    const targetSource = coldAnswerReDeliver
+      ? "extension_dial_position_cold_answer"
+      : "trunk_dial_position";
 
     if (!context || !exten) {
       log.info(
