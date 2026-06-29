@@ -87,8 +87,20 @@ test("requeue is SKIPPED while an extension leg is already ringing (no Redirect)
 test("requeue PROCEEDS for genuine cold-start (no extension leg present)", async () => {
   const { svc, calls, sent } = makeService();
   const linkedId = "1782424010.999999";
+  const trunk = "PJSIP/344022_Comfortcont-00099999";
   // Only the trunk leg exists — the app was asleep, so no PJSIP/T34_* leg was created.
-  addChannel(calls, linkedId, "u-trunk", "PJSIP/344022_Comfortcont-00099999", "Up", "801", "T34_ext-ringgroups");
+  addChannel(calls, linkedId, "u-trunk", trunk, "Up", "801", "T34_ext-ringgroups");
+  // The trunk leg DID invoke Dial() into the ring group (the target just had no
+  // reachable contact), so its safe Dial position is captured. destination is the
+  // unavailable dialstring — empty here so markExtensionLegSeen stays false.
+  calls.onDialBegin({
+    linkedId,
+    callerIDNum: "5622096644",
+    destination: "",
+    channel: trunk,
+    context: "T34_ext-ringgroups",
+    exten: "801",
+  });
 
   const result = await svc.requeueLiveCallToDialplan({
     linkedId,
@@ -97,11 +109,101 @@ test("requeue PROCEEDS for genuine cold-start (no extension leg present)", async
   });
 
   assert.equal(result.skipped, false);
+  assert.equal(result.context, "T34_ext-ringgroups");
+  assert.equal(result.exten, "801");
   assert.equal(
     sent.filter((s) => s.action === "Redirect").length,
     1,
     "cold-start requeue must still issue exactly one AMI Redirect",
   );
+});
+
+// SAFE-TARGET GUARD (2026-06-29): when the trunk leg's Dial() position is unknown
+// (the call is still in the IVR — no extension Dial() yet), the requeue must NOT
+// fall back to lastContext/lastExten (which is the inbound entry trk-*-in,<DID>)
+// and re-run the whole inbound DID route. It must skip with no AMI Redirect.
+// Proven live: linkedId 1782742495.143999 (device_register_complete /
+// zero_contact_coldstart) redirected to trk-37-in,8457823064 because
+// trunkContext/trunkExten were null.
+test("requeue is SKIPPED when no trunk Dial position is known (refuses last_newchannel fallback)", async () => {
+  const { svc, calls, sent } = makeService();
+  const linkedId = "1782742495.143999";
+  // Inbound DID call sitting in the IVR — only the trunk leg, entered at the
+  // inbound trunk context with the DID as exten. No trunk-leg Dial() into an
+  // extension happened, so trunkDialContext/trunkDialExten are unset and the
+  // most-recent Newchannel context/exten are trk-37-in/<DID>.
+  addChannel(calls, linkedId, "u-trunk", "PJSIP/344022_Comfortcont-00013fb5", "Up", "8457823064", "trk-37-in");
+
+  const result = await svc.requeueLiveCallToDialplan({
+    linkedId,
+    trigger: "device_register_complete",
+  });
+
+  assert.equal(result.skipped, true);
+  assert.equal(result.skipReason, "missing_safe_redirect_target");
+  assert.equal(
+    sent.filter((s) => s.action === "Redirect").length,
+    0,
+    "must not Redirect when the safe trunk Dial position is unknown",
+  );
+});
+
+test("requeue never Redirects into a trk-*-in inbound context + DID (no IVR re-entry loop)", async () => {
+  const { svc, calls, sent } = makeService();
+  const linkedId = "1782742495.144111";
+  addChannel(calls, linkedId, "u-trunk", "PJSIP/344022_Comfortcont-00013fb6", "Up", "8457823064", "trk-37-in");
+
+  // Even if the caller supplies the inbound entry as a fallback, it must never win.
+  const result = await svc.requeueLiveCallToDialplan({
+    linkedId,
+    fallbackExten: "8457823064",
+    fallbackContext: "trk-37-in",
+    trigger: "device_register_complete",
+  });
+
+  assert.equal(result.skipped, true);
+  assert.equal(result.skipReason, "missing_safe_redirect_target");
+  assert.equal(
+    sent.filter((s) => s.action === "Redirect").length,
+    0,
+    "no AMI Redirect at all when only the inbound trk-*-in/DID is available",
+  );
+  assert.equal(
+    sent.some((s) => /trk-.*-in/i.test(String(s.params["Context"] ?? ""))),
+    false,
+    "must never AMI-Redirect into a trk-*-in inbound context",
+  );
+});
+
+test("requeue PROCEEDS to the trunk Dial position when it is known (safe redirect)", async () => {
+  const { svc, calls, sent } = makeService();
+  const linkedId = "1782742495.144222";
+  const trunk = "PJSIP/344022_Comfortcont-00099991";
+  // Inbound DID leg, currently parked at the inbound entry (trk-37-in/<DID>) …
+  addChannel(calls, linkedId, "u-trunk", trunk, "Up", "8457823064", "trk-37-in");
+  // … but the trunk has now Dial()ed the extension's local-dialing context, so the
+  // safe Dial position is captured. Empty destination → no extension leg seen.
+  calls.onDialBegin({
+    linkedId,
+    callerIDNum: "5622096644",
+    destination: "",
+    channel: trunk,
+    context: "sub-local-dialing",
+    exten: "110",
+  });
+
+  const result = await svc.requeueLiveCallToDialplan({
+    linkedId,
+    trigger: "device_register_complete",
+  });
+
+  assert.equal(result.skipped, false);
+  assert.equal(result.context, "sub-local-dialing");
+  assert.equal(result.exten, "110");
+  const redirects = sent.filter((s) => s.action === "Redirect");
+  assert.equal(redirects.length, 1, "exactly one safe Redirect to the trunk Dial position");
+  assert.equal(redirects[0]?.params["Context"], "sub-local-dialing");
+  assert.equal(redirects[0]?.params["Exten"], "110");
 });
 
 // ANDROID REGRESSION GUARD (2026-06-28): a trigger-keyed "cold-answer bypass"

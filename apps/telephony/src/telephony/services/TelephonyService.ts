@@ -1116,12 +1116,42 @@ export class TelephonyService {
       typeof call.metadata["lastExten"] === "string"
         ? call.metadata["lastExten"]
         : null;
-    const context = trunkContext || lastContext || params.fallbackContext || "";
-    const exten = trunkExten || lastExten || params.fallbackExten || "";
-    const targetSource = trunkContext && trunkExten ? "trunk_dial_position" : "last_newchannel";
+    // SAFE TARGET ONLY (2026-06-29): the redirect target must be the TRUNK leg's
+    // recorded Dial() position (captured on DialBegin into a real extension/group
+    // context). The previous `lastContext`/`lastExten` (and caller fallback) chain
+    // could resolve to the inbound entry context + DID — e.g. `trk-37-in,<DID>` —
+    // which re-runs the whole inbound DID route (IVR → ext), looping the caller to
+    // voicemail even though the device is now registered. If we do not KNOW the
+    // safe trunk Dial position, we must NOT redirect at all.
+    // Proven live post-revert: linkedId 1782742495.143999
+    // (trigger=device_register_complete, path=zero_contact_coldstart) redirected to
+    // trk-37-in,8457823064 because trunkContext/trunkExten were null.
+    const context = trunkContext;
+    const exten = trunkExten;
+    const targetSource = "trunk_dial_position";
 
     if (!context || !exten) {
-      throw new Error(`missing dialplan target for linkedId=${params.linkedId}`);
+      log.info(
+        {
+          linkedId: params.linkedId,
+          trigger: params.trigger ?? null,
+          trunkContext,
+          trunkExten,
+          lastContext,
+          lastExten,
+          fallbackContext: params.fallbackContext ?? null,
+          fallbackExten: params.fallbackExten ?? null,
+        },
+        "mobile invite requeue skipped — no safe trunk Dial position (refusing last_newchannel/DID fallback)",
+      );
+      return {
+        actionId: null,
+        channel: null,
+        exten: null,
+        context: null,
+        skipped: true,
+        skipReason: "missing_safe_redirect_target",
+      };
     }
 
     const actionId = await this.redirectChannel({
