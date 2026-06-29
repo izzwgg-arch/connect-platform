@@ -318,21 +318,30 @@ test("requeue is SKIPPED over a live extension leg even with a device_register_c
 // (1) Proven Mode-B SUCCEEDS: a stale leg is ringing (it even returned 180, so
 // the old `extensionLegResponded` carve-out would NOT have fired), a brand-new
 // contact registered AFTER the dial, and the user tapped Answer. The requeue
-// must re-deliver via exactly one Redirect to the extension's own
-// *local-dialing* position — never the IVR.
-test("MODE-B (1): stale leg + fresh not-dialed contact after dial + invite_accept ⇒ one safe Redirect", async () => {
+// must re-deliver via exactly one Redirect to the tenant's self-contained
+// COS-all extension-dial context (`T<pbx>_cos-all,<ext>`) — NEVER the IVR and
+// NEVER `sub-local-dialing` (which is not a valid standalone trunk re-entry —
+// it needs TENANT/CALL_DESTINATION set upstream and would hang the call up).
+test("MODE-B (1): stale leg + fresh not-dialed contact after dial + invite_accept ⇒ one safe Redirect to T*_cos-all", async () => {
   const { svc, calls, sent, linkedId, addFreshContact } = setupColdAnswer();
   addFreshContact();
 
   const result = await svc.requeueLiveCallToDialplan({ linkedId, trigger: "invite_accept" });
 
   assert.equal(result.skipped, false);
-  assert.equal(result.context, "sub-local-dialing");
+  // AOR is T2_110_1 ⇒ redirect target is the self-contained T2_cos-all,110 —
+  // NOT sub-local-dialing (which would land with no DIAL_STRING → hangup).
+  assert.equal(result.context, "T2_cos-all");
   assert.equal(result.exten, "110");
   const redirects = sent.filter((s) => s.action === "Redirect");
   assert.equal(redirects.length, 1, "Mode-B must re-deliver via exactly one Redirect");
-  assert.equal(redirects[0]?.params["Context"], "sub-local-dialing");
+  assert.equal(redirects[0]?.params["Context"], "T2_cos-all");
   assert.equal(redirects[0]?.params["Exten"], "110");
+  assert.notEqual(
+    redirects[0]?.params["Context"],
+    "sub-local-dialing",
+    "must NOT redirect into sub-local-dialing — it is not a self-contained trunk re-entry point",
+  );
   assert.equal(
     redirects.some((s) => /^ivr-/i.test(String(s.params["Context"] ?? ""))),
     false,

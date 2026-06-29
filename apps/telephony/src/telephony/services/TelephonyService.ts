@@ -1259,15 +1259,28 @@ export class TelephonyService {
     // Proven live post-revert: linkedId 1782742495.143999
     // (trigger=device_register_complete, path=zero_contact_coldstart) redirected to
     // trk-37-in,8457823064 because trunkContext/trunkExten were null.
-    // For the Mode-B cold-answer re-delivery, redirect to the EXTENSION's own
-    // Dial position (`*local-dialing*,<ext>`) — not the trunk's, which for an
-    // IVR route is the IVR context and would re-run the menu. Both fields are
-    // guaranteed non-null here because `modeBReDeliver` already required
-    // `isDirectExtTarget`. Otherwise keep the proven trunk Dial position.
-    const context = modeBReDeliver ? extLegDialContext : trunkContext;
+    // For the Mode-B cold-answer re-delivery, redirect to the tenant's
+    // self-contained COS-all extension-dial context (`T<pbx>_cos-all,<ext>`) —
+    // NOT the extension leg's own `sub-local-dialing` Dial position. PROVEN
+    // (prod call 1782771886.148150, 2026-06-29): redirecting the trunk straight
+    // into `sub-local-dialing,<ext>` lands with `TENANT`/`CALL_DESTINATION`
+    // unset (those are populated upstream in `T<pbx>_cos-all-init`), so
+    // `DIAL_STRING` is empty → the routine jumps past `Dial()` to `post-dial` →
+    // `Hangup`. The call cancels the stale leg and drops instead of re-forking
+    // to the fresh contact. `T<pbx>_cos-all,<ext>` (the IVR direct-dial Goto
+    // target) is self-contained: its `s` extension runs sub-set-call-vars →
+    // sub-local-dialing → `Dial()`, so it (re)dials the LIVE AOR — every current
+    // contact, including the freshly registered one — while skipping the IVR
+    // menu, the DID/trunk route, and ring groups. The pbx code is taken from the
+    // captured AOR (`T2_110_1` → `T2`); `modeBReDeliver` already guaranteed a
+    // direct-extension target, and a null pbx code falls through to the
+    // `missing_safe_redirect_target` guard below (never a DID/last_newchannel).
+    const modeBPbxCode = /^(T\d+)_/i.exec(extLegAor ?? "")?.[1] ?? null;
+    const modeBContext = modeBPbxCode ? `${modeBPbxCode}_cos-all` : null;
+    const context = modeBReDeliver ? modeBContext : trunkContext;
     const exten = modeBReDeliver ? extLegDialExten : trunkExten;
     const targetSource = modeBReDeliver
-      ? "extension_dial_position_cold_answer"
+      ? "tenant_cos_all_cold_answer"
       : "trunk_dial_position";
 
     if (!context || !exten) {
