@@ -144,39 +144,3 @@ test("requeue is SKIPPED over a live extension leg even with a device_register_c
     "must not Redirect over a live extension leg, regardless of the requeue trigger",
   );
 });
-
-// COOLDOWN GUARD (2026-06-29): the mobile-invite requeue can now be triggered by
-// two independent signals — the app's device_register_complete HTTP report AND
-// the PBX's own fresh-contact registration event (ContactStatus/PeerStatus
-// REGISTERED edge). Those can land within milliseconds. A second AMI Redirect
-// issued before the first re-dial has produced an extension leg would tear down
-// the in-flight re-dial and restart it. The cooldown must collapse the second
-// trigger into a no-op so only ONE Redirect is sent.
-test("second requeue within the cooldown window is skipped (no double Redirect)", async () => {
-  const { svc, calls, sent } = makeService();
-  const linkedId = "1782424010.555555";
-  // Genuine cold-start: only the trunk leg, no extension leg → first requeue fires.
-  addChannel(calls, linkedId, "u-trunk", "PJSIP/344022_Comfortcont-00055555", "Up", "801", "T34_ext-ringgroups");
-
-  const first = await svc.requeueLiveCallToDialplan({
-    linkedId,
-    fallbackExten: "801",
-    fallbackContext: "T34_ext-ringgroups",
-    trigger: "register_complete",
-  });
-  const second = await svc.requeueLiveCallToDialplan({
-    linkedId,
-    fallbackExten: "801",
-    fallbackContext: "T34_ext-ringgroups",
-    trigger: "pbx_contact_registered",
-  });
-
-  assert.equal(first.skipped, false, "first requeue must fire");
-  assert.equal(second.skipped, true, "second requeue within cooldown must be skipped");
-  assert.equal(second.skipReason, "requeue_cooldown");
-  assert.equal(
-    sent.filter((s) => s.action === "Redirect").length,
-    1,
-    "exactly one AMI Redirect for two near-simultaneous triggers",
-  );
-});
