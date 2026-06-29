@@ -113,4 +113,14 @@ export class AorContactRegistry {
     }
     return null;
   }
+
+  /**
+   * Read-only diagnostic snapshot of the currently-tracked contacts for an AOR
+   * (normalized URI + first-seen/registration time). Used only for logging.
+   */
+  snapshot(aor: string): { uri: string; firstSeenAt: number }[] {
+    const m = this.byAor.get(String(aor ?? "").trim());
+    if (!m) return [];
+    return Array.from(m, ([uri, firstSeenAt]) => ({ uri, firstSeenAt }));
+  }
 }

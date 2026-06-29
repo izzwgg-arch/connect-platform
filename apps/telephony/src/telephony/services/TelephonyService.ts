@@ -1098,6 +1098,51 @@ export class TelephonyService {
     const modeBReDeliver =
       isInviteAccept && isDirectExtTarget && !!freshContactUri && !modeBAlreadyRedirected; // (1)(3)(4)(5)(7)
 
+    // DIAGNOSTIC ONLY (2026-06-29): emit the full Mode-B evaluation for every
+    // invite_accept requeue so a failed killed-answer test proves exactly which
+    // predicate term left `modeBReDeliver` false. No behavior change — this log
+    // is placed before the early-return gates and reads only existing values.
+    if (isInviteAccept) {
+      let modeBReason: string | undefined;
+      if (!modeBReDeliver) {
+        if (!isInviteAccept) modeBReason = "not_invite_accept";
+        else if (!isDirectExtTarget) modeBReason = "not_direct_extension";
+        else if (modeBAlreadyRedirected) modeBReason = "already_redirected";
+        else if (!extLegAor) modeBReason = "missing_aor";
+        else if (extLegDialedAt == null) modeBReason = "missing_dialed_at";
+        else if (extLegDialedContacts.length === 0) modeBReason = "no_dialed_contacts";
+        else if (!freshContactUri) modeBReason = "no_fresh_contact";
+      }
+      log.info(
+        {
+          linkedId: params.linkedId,
+          trigger: params.trigger,
+          callState: call.state,
+          extLegAor,
+          extLegDialedAt,
+          extLegDialContext,
+          extLegDialExten,
+          extLegDialedContacts,
+          modeBAlreadyRedirected,
+          isInviteAccept,
+          isDirectExtTarget,
+          freshContactUri,
+          registryContacts: extLegAor ? this.contactRegistry.snapshot(extLegAor) : [],
+          freshContactNotDialed:
+            extLegAor && extLegDialedAt != null
+              ? this.contactRegistry.freshContactNotDialed(
+                  extLegAor,
+                  extLegDialedAt,
+                  extLegDialedContacts,
+                )
+              : null,
+          modeBReDeliver,
+          modeBReason,
+        },
+        "mode-b diag: invite_accept requeue evaluation",
+      );
+    }
+
     const liveExtensionLeg = call.channels.find((ch) => isExtensionLegChannel(ch));
     if (liveExtensionLeg && !modeBReDeliver) {
       log.info(
