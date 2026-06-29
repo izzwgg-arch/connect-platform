@@ -18,6 +18,16 @@ import {
 } from "./RegistrationStatusNotifier";
 
 const log = childLogger("TelephonyService");
+/**
+ * Minimum spacing between two AMI Redirect requeues for the SAME call. The
+ * mobile-invite requeue can now be triggered from two independent signals — the
+ * app's `device_register_complete` HTTP report AND the PBX's own fresh-contact
+ * registration event — which can land within milliseconds of each other. A
+ * second Redirect issued before the first re-dial has produced (or failed to
+ * produce) an extension leg would tear the trunk leg's in-flight re-dial down
+ * and restart it. This cooldown collapses near-simultaneous triggers into one.
+ */
+const REQUEUE_COOLDOWN_MS = 3000;
 const HOLD_DIAGNOSTIC_EVENTS = new Set([
   "Hold",
   "MusicOnHoldStart",
@@ -41,6 +51,13 @@ export class TelephonyService {
   private amiBootstrapTimers: NodeJS.Timeout[] = [];
   /** Forwards pjsip endpoint registration state to the API for per-device tracking. */
   private readonly regNotifier = new RegistrationStatusNotifier();
+  /**
+   * Last normalized registration status we observed per endpoint AOR, used to
+   * detect the *transition* into REGISTERED. We only fire the fresh-registration
+   * requeue (see {@link maybeRequeueLiveCallsForFreshRegistration}) on that edge,
+   * never on the steady stream of qualify "Reachable" heartbeats.
+   */
+  private readonly lastRegStatusByEndpoint = new Map<string, string>();
 
   constructor(
     private readonly ami: AmiClient,
@@ -490,13 +507,18 @@ export class TelephonyService {
         });
         // Forward per-endpoint registration state to the API. PeerStatus.peer
         // is "PJSIP/T25_101_1" — strip the tech prefix to get the endpoint.
-        this.regNotifier.notify({
-          endpoint: String(typed.peer || "").replace(/^PJSIP\//i, ""),
-          normalizedStatus: normalizePeerStatus(typed.peerStatus),
-          rawStatus: typed.peerStatus,
-          tenantId,
-          source: "ami_peerstatus",
-        });
+        {
+          const peerEndpoint = String(typed.peer || "").replace(/^PJSIP\//i, "");
+          const peerNormalized = normalizePeerStatus(typed.peerStatus);
+          this.regNotifier.notify({
+            endpoint: peerEndpoint,
+            normalizedStatus: peerNormalized,
+            rawStatus: typed.peerStatus,
+            tenantId,
+            source: "ami_peerstatus",
+          });
+          this.maybeRequeueLiveCallsForFreshRegistration(peerEndpoint, peerNormalized, tenantId);
+        }
         break;
       }
 
@@ -509,16 +531,21 @@ export class TelephonyService {
         });
         // Authoritative per-device signal: the AOR (e.g. "T25_101_1") maps 1:1
         // to a single mobile/WebRTC device endpoint.
-        this.regNotifier.notify({
-          endpoint: String(typed.aor || ""),
-          normalizedStatus: normalizeContactStatus(typed.contactStatus),
-          rawStatus: typed.contactStatus,
-          contactUri: typed.uri,
-          userAgent: typed.userAgent,
-          roundtripUsec: typed.roundtripUsec,
-          tenantId,
-          source: "ami_contactstatus",
-        });
+        {
+          const contactEndpoint = String(typed.aor || "");
+          const contactNormalized = normalizeContactStatus(typed.contactStatus);
+          this.regNotifier.notify({
+            endpoint: contactEndpoint,
+            normalizedStatus: contactNormalized,
+            rawStatus: typed.contactStatus,
+            contactUri: typed.uri,
+            userAgent: typed.userAgent,
+            roundtripUsec: typed.roundtripUsec,
+            tenantId,
+            source: "ami_contactstatus",
+          });
+          this.maybeRequeueLiveCallsForFreshRegistration(contactEndpoint, contactNormalized, tenantId);
+        }
         break;
       }
 
@@ -873,6 +900,94 @@ export class TelephonyService {
     return actionId;
   }
 
+  /**
+   * Fire the mobile-invite requeue the instant the PBX tells us a mobile/WebRTC
+   * endpoint has a fresh contact — independent of (and usually earlier + more
+   * reliable than) the app's own `device_register_complete` HTTP report.
+   *
+   * WHY: a mobile-only extension whose contact was pruned (qualify Unreachable →
+   * Removed) at dial time finds NO contact, so `Dial()` falls straight to
+   * voicemail and the caller hears VM instead of ringing. The pre-wake push
+   * still wakes the device, which re-registers seconds later — but by then the
+   * only thing that re-rings the still-live call is this requeue. Triggering it
+   * off the PBX's authoritative ContactStatus/PeerStatus REGISTERED edge means
+   * the re-dial happens exactly when a usable contact is guaranteed to exist.
+   *
+   * SAFE: this only *initiates* {@link requeueLiveCallToDialplan}, which keeps
+   * all of its existing guards — it skips if the call already answered, if an
+   * extension leg is live or was ever seen (a genuinely-ringing device, e.g.
+   * Android on its wake push, sets that and is never disturbed), and now also
+   * skips within REQUEUE_COOLDOWN_MS of a prior requeue. We additionally gate to
+   * the exact tenant + extension the AOR belongs to, and only on the transition
+   * INTO a registered state (never on qualify heartbeats).
+   */
+  private maybeRequeueLiveCallsForFreshRegistration(
+    endpoint: string,
+    normalizedStatus: string,
+    tenantId: string | null,
+  ): void {
+    const aor = String(endpoint || "").trim();
+    if (!aor) return;
+
+    // Only a mobile/WebRTC sibling AOR ("T<tenant>_<ext>_<device>") can sleep
+    // and miss a dial; desk-phone AORs ("T<tenant>_<ext>") are not the target.
+    const exten = parseAorExtension(aor);
+    if (!exten) return;
+
+    // Edge-trigger: act only when the status transitions INTO registered, so we
+    // never re-scan on the steady qualify "Reachable" heartbeat stream.
+    const prev = this.lastRegStatusByEndpoint.get(aor);
+    this.lastRegStatusByEndpoint.set(aor, normalizedStatus);
+    if (this.lastRegStatusByEndpoint.size > 5000) {
+      // Keep the most recent state for this AOR; drop the rest.
+      const keep = this.lastRegStatusByEndpoint.get(aor)!;
+      this.lastRegStatusByEndpoint.clear();
+      this.lastRegStatusByEndpoint.set(aor, keep);
+    }
+    if (normalizedStatus !== "REGISTERED") return;
+    if (prev === "REGISTERED") return; // already registered; not a fresh edge
+
+    // Find still-live INBOUND calls waiting on this exact tenant+extension that
+    // never reached the device (no extension leg seen / not answered). The
+    // requeue's own gates are authoritative; this pre-filter just avoids calling
+    // it for unrelated calls.
+    const candidates = this.calls.getAll().filter((c) => {
+      if (c.state === "hungup") return false;
+      if (c.direction !== "inbound") return false;
+      if (c.extensionAnsweredAt) return false;
+      if (c.metadata["extensionLegSeen"] === true) return false;
+      if (tenantId && c.tenantId && c.tenantId !== tenantId) return false;
+      return c.destination_extension === exten || c.extensions.includes(exten);
+    });
+    if (candidates.length === 0) return;
+
+    for (const c of candidates) {
+      this.requeueLiveCallToDialplan({ linkedId: c.id, trigger: "pbx_contact_registered" })
+        .then((res) => {
+          log.info(
+            {
+              linkedId: c.id,
+              endpoint: aor,
+              exten,
+              tenantId: c.tenantId,
+              skipped: res.skipped,
+              skipReason: res.skipReason ?? null,
+              actionId: res.actionId,
+            },
+            res.skipped
+              ? "fresh-registration requeue: skipped by gate"
+              : "fresh-registration requeue: re-dial issued",
+          );
+        })
+        .catch((err: unknown) => {
+          log.warn(
+            { linkedId: c.id, endpoint: aor, err: (err as Error)?.message },
+            "fresh-registration requeue: error",
+          );
+        });
+    }
+  }
+
   async requeueLiveCallToDialplan(params: {
     linkedId: string;
     fallbackExten?: string;
@@ -895,6 +1010,32 @@ export class TelephonyService {
     const call = this.calls.getById(params.linkedId);
     if (!call || call.state === "hungup") {
       throw new Error(`active call not found for linkedId=${params.linkedId}`);
+    }
+
+    // De-dupe near-simultaneous triggers (app HTTP report + PBX contact event).
+    // A redirect was issued for this call within the cooldown window; issuing a
+    // second one now would tear down the in-flight re-dial. See REQUEUE_COOLDOWN_MS.
+    const lastRequeueAt =
+      typeof call.metadata["lastRequeueAt"] === "number"
+        ? (call.metadata["lastRequeueAt"] as number)
+        : 0;
+    if (lastRequeueAt && Date.now() - lastRequeueAt < REQUEUE_COOLDOWN_MS) {
+      log.info(
+        {
+          linkedId: params.linkedId,
+          trigger: params.trigger ?? null,
+          sinceLastRequeueMs: Date.now() - lastRequeueAt,
+        },
+        "mobile invite requeue skipped — cooldown (recent requeue in flight)",
+      );
+      return {
+        actionId: null,
+        channel: null,
+        exten: null,
+        context: null,
+        skipped: true,
+        skipReason: "requeue_cooldown",
+      };
     }
 
     // CRITICAL: If a tenant-extension leg has already answered (Asterisk has
@@ -1124,6 +1265,9 @@ export class TelephonyService {
       throw new Error(`missing dialplan target for linkedId=${params.linkedId}`);
     }
 
+    // Stamp BEFORE the await so a second trigger landing in the next event-loop
+    // turn sees the cooldown and bails instead of double-redirecting.
+    call.metadata["lastRequeueAt"] = Date.now();
     const actionId = await this.redirectChannel({
       channel,
       exten,
@@ -1149,6 +1293,19 @@ export class TelephonyService {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
+/**
+ * Extract the extension number from a mobile/WebRTC PJSIP AOR.
+ *
+ * VitalPBX names a mobile/WebRTC contact's AOR `T<tenant>_<ext>_<device>`
+ * (e.g. "T2_110_1" → "110"). A bare desk-phone AOR ("T2_110") has no trailing
+ * device index and returns null — those endpoints don't sleep and miss dials,
+ * so they are not requeue targets. Returns null for anything that doesn't match.
+ */
+function parseAorExtension(aor: string): string | null {
+  const m = /^T\d+_(\d{2,6})_\d+$/i.exec(String(aor || "").trim());
+  return m ? m[1] : null;
+}
 
 /** Use linkedId when non-empty; else uniqueid so we never key calls by "". */
 function effectiveLinkedId(linkedid: string, uniqueid: string): string {
