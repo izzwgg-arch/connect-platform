@@ -5,6 +5,7 @@ import type { AriClient } from "../ari/AriClient";
 import { mapAmiFrame } from "../ami/AmiEventMapper";
 import type { CallStateStore } from "../state/CallStateStore";
 import { isExtensionLegChannel } from "../state/CallStateStore";
+import { AorContactRegistry } from "../state/AorContactRegistry";
 import { isHelperChannel } from "../normalizers/normalizeCallEvent";
 import type { ExtensionStateStore } from "../state/ExtensionStateStore";
 import type { QueueStateStore } from "../state/QueueStateStore";
@@ -41,6 +42,13 @@ export class TelephonyService {
   private amiBootstrapTimers: NodeJS.Timeout[] = [];
   /** Forwards pjsip endpoint registration state to the API for per-device tracking. */
   private readonly regNotifier = new RegistrationStatusNotifier();
+  /**
+   * Minimal per-AOR contact registry fed by the ContactStatus AMI stream — the
+   * only state the Mode-B cold-answer requeue needs to detect a contact that
+   * (re)registered AFTER the stale extension leg was dialed. Public readonly so
+   * the requeue-gate tests can seed contact observations directly.
+   */
+  readonly contactRegistry = new AorContactRegistry();
 
   constructor(
     private readonly ami: AmiClient,
@@ -325,6 +333,7 @@ export class TelephonyService {
           channel: typed.channel,
           context: typed.context,
           exten: typed.exten,
+          dialString: typed.dialString,
         });
         this.applyOutboundMohOnDialBegin(typed).catch((err) => {
           log.warn(
@@ -502,6 +511,10 @@ export class TelephonyService {
 
       case "ContactStatus": {
         const tenantId = this.resolver.resolve({ channel: typed.aor });
+        // MODE-B (2026-06-29): persist the AOR→contact registration time so the
+        // cold-answer requeue can tell a freshly re-registered contact from the
+        // (stale) contact(s) the leg was dialed to. Read-only bookkeeping.
+        this.contactRegistry.record(typed.aor, typed.uri, typed.contactStatus, Date.now());
         this.extensions.onPeerStatus({
           peer: `PJSIP/${typed.aor}`,
           peerStatus: contactStatusToPeerStatus(typed.contactStatus),
@@ -1006,35 +1019,50 @@ export class TelephonyService {
     // so the bypass Redirected the trunk while the Android extension leg was
     // still ringing → re-dial → straight to voicemail while the app re-rang
     // (confirmed live: linkedId 1782677604.143074, leg PJSIP/T21_101_1-00013d78
-    // state=ringing). The trigger cannot distinguish an iOS zombie contact from
-    // a normally-waking device, so the gate is back to its always-skip behavior:
-    // if ANY extension leg is live or was ever seen, we never requeue. The iOS
-    // cold-answer case must be solved without touching this shared Android path.
-    // COLD-ANSWER RE-DELIVERY CARVE-OUT (2026-06-29): the two skips below
+    // state=ringing). The trigger ALONE cannot distinguish a zombie contact from
+    // a normally-waking device — which is why the Mode-B bypass below requires
+    // `invite_accept` PLUS positive evidence of a fresh, not-yet-dialed contact
+    // (never the bare `device_register_complete` re-register).
+    // MODE-B COLD-ANSWER RE-DELIVERY (2026-06-29): the two skips below
     // ("extension leg already ringing/live" and "...already delivered") were
     // installed 2026-06-25 (131aef94) to stop the RSBK ring-group voicemail
     // loop. They are correct for a genuinely-ringing device and for ring groups,
-    // but they ALSO blocked the legitimate mobile cold-answer case: when the app
-    // is swipe-killed, its WebRTC contact lingers as a DEAD WebSocket; the next
-    // call's Dial() sends an INVITE to that dead contact, creating a
-    // `PJSIP/T<id>_<exten>` leg that rings into the void (never returns
-    // 180/200/486). When the rewoken app registers a FRESH contact and asks to
-    // be re-delivered, both skips fire and the fresh contact never receives an
-    // INVITE → "answer, no audio, never connects" → voicemail. Proven live:
-    // linkedId 1782746721.144584 (ext 110 via IVR-5, 2026-06-29), skip reason
-    // `extension_leg_already_live`.
+    // but they ALSO broke the production Android killed/swiped-away ANSWER:
+    // when the app is swipe-killed, its WebRTC contact lingers; the next call's
+    // Dial() forks an INVITE to that stale contact, creating a
+    // `PJSIP/T<id>_<exten>` leg. The rewoken app then registers a BRAND-NEW
+    // contact (JsSIP rotates the Contact URI every register) AFTER the dial, the
+    // user taps Answer (`invite_accept`), but the stale leg trips
+    // `extension_leg_already_live`, so the requeue is skipped and the fresh
+    // contact never receives an INVITE → voicemail. The stale contact stays
+    // `Reachable` and an earlier attempt keyed on `extensionLegResponded` also
+    // fails (the zombie returns 180). PROVEN live: prod APK call
+    // 1782764578.146922 (ext 110 / AOR T2_110_1, IVR-5 route): leg forked to
+    // {8hkh5htv, i26sm07d}; fresh contact 165frhpi registered 13s after the
+    // dial; requeue skipped `extension_leg_already_live`.
     //
-    // We bypass the two skips ONLY when BOTH hold — which keeps the loop AND
-    // Android fully protected:
-    //   (1) NO extension leg on this call ever returned a SIP response
-    //       (`extensionLegResponded` unset). A genuinely-ringing device
-    //       (Android FGS, desk phone) trips it on the first 180, so it stays
-    //       protected and unchanged; only a dead/zombie contact qualifies.
-    //   (2) the re-delivery target is a DIRECT extension dial position
+    // We bypass the two skips ONLY when ALL of these hold — which keeps the RSBK
+    // loop, queues, IVRs, desk phones AND live Android fully protected:
+    //   (1) trigger is `invite_accept` (the user actually tapped Answer) — a
+    //       bare `device_register_complete` (Android's wake re-register) can
+    //       NEVER bypass, the exact mistake reverted on 2026-06-28.
+    //   (2) call has not been answered yet (enforced by the `extensionAnsweredAt`
+    //       gate above — a bridged/answered extension is never disturbed).
+    //   (3) the re-delivery target is a DIRECT extension dial position
     //       (`*local-dialing*`, captured as `extLegDialContext`/`extLegDialExten`
     //       on the extension leg's own DialBegin) — NEVER a ring-group / queue /
     //       IVR context, so the Redirect re-runs a single Dial() and cannot
     //       re-enter a group at priority 1 (the RSBK loop is impossible).
+    //   (4)+(5) a contact for this AOR registered AFTER the leg was dialed
+    //       (`extLegDialedAt`) and is NOT one of the contacts the leg was dialed
+    //       to (`extLegDialedContacts`). A live device that did not (re)register,
+    //       or only re-qualified the SAME dialed contact, yields no fresh contact
+    //       → no bypass → it stays protected by `extension_leg_already_live`.
+    //   (6) a safe direct-extension redirect target exists (guaranteed by (3);
+    //       re-checked by the `missing_safe_redirect_target` gate — never a
+    //       `trk-*-in,<DID>` / last_newchannel fallback).
+    //   (7) one-shot: a Mode-B redirect has not already been performed for this
+    //       linkedId (`modeBRedirectPerformed`) — we never redirect twice.
     const extLegDialContext =
       typeof call.metadata["extLegDialContext"] === "string"
         ? call.metadata["extLegDialContext"]
@@ -1043,15 +1071,35 @@ export class TelephonyService {
       typeof call.metadata["extLegDialExten"] === "string"
         ? call.metadata["extLegDialExten"]
         : null;
-    const extensionLegResponded = call.metadata["extensionLegResponded"] === true;
-    const coldAnswerReDeliver =
-      !extensionLegResponded &&
-      !!extLegDialContext &&
-      !!extLegDialExten &&
-      /local-dialing/i.test(extLegDialContext);
+    const extLegDialedAt =
+      typeof call.metadata["extLegDialedAt"] === "number"
+        ? (call.metadata["extLegDialedAt"] as number)
+        : null;
+    const extLegAor =
+      typeof call.metadata["extLegAor"] === "string"
+        ? (call.metadata["extLegAor"] as string)
+        : null;
+    const extLegDialedContacts = Array.isArray(call.metadata["extLegDialedContacts"])
+      ? (call.metadata["extLegDialedContacts"] as string[])
+      : [];
+    const modeBAlreadyRedirected = call.metadata["modeBRedirectPerformed"] === true;
+
+    const isInviteAccept = params.trigger === "invite_accept"; // (1)
+    const isDirectExtTarget =
+      !!extLegDialContext && !!extLegDialExten && /local-dialing/i.test(extLegDialContext); // (3)
+    const freshContactUri =
+      isInviteAccept && isDirectExtTarget && extLegAor && extLegDialedAt != null
+        ? this.contactRegistry.freshContactNotDialed(
+            extLegAor,
+            extLegDialedAt,
+            extLegDialedContacts,
+          )
+        : null; // (4)+(5)
+    const modeBReDeliver =
+      isInviteAccept && isDirectExtTarget && !!freshContactUri && !modeBAlreadyRedirected; // (1)(3)(4)(5)(7)
 
     const liveExtensionLeg = call.channels.find((ch) => isExtensionLegChannel(ch));
-    if (liveExtensionLeg && !coldAnswerReDeliver) {
+    if (liveExtensionLeg && !modeBReDeliver) {
       log.info(
         {
           linkedId: params.linkedId,
@@ -1092,7 +1140,7 @@ export class TelephonyService {
     // Proven root cause (RSBK ext 102, linkedId 1782427691.136899, 2026-06-25):
     // ring-group DialEnd at 21.207 (app 486, ~100ms) → "AMI mobile invite requeue
     // sent" Redirect to T34_ext-ringgroups,801 at 21.864 → group restarted → loop.
-    if (call.metadata["extensionLegSeen"] === true && !coldAnswerReDeliver) {
+    if (call.metadata["extensionLegSeen"] === true && !modeBReDeliver) {
       log.info(
         {
           linkedId: params.linkedId,
@@ -1166,14 +1214,14 @@ export class TelephonyService {
     // Proven live post-revert: linkedId 1782742495.143999
     // (trigger=device_register_complete, path=zero_contact_coldstart) redirected to
     // trk-37-in,8457823064 because trunkContext/trunkExten were null.
-    // For the cold-answer carve-out, redirect to the EXTENSION's own Dial
-    // position (`*local-dialing*,<ext>`) — not the trunk's, which for an IVR
-    // route is the IVR context and would re-run the menu. Both fields are
-    // guaranteed non-null here because `coldAnswerReDeliver` already required
-    // them. Otherwise keep the proven trunk Dial position.
-    const context = coldAnswerReDeliver ? extLegDialContext : trunkContext;
-    const exten = coldAnswerReDeliver ? extLegDialExten : trunkExten;
-    const targetSource = coldAnswerReDeliver
+    // For the Mode-B cold-answer re-delivery, redirect to the EXTENSION's own
+    // Dial position (`*local-dialing*,<ext>`) — not the trunk's, which for an
+    // IVR route is the IVR context and would re-run the menu. Both fields are
+    // guaranteed non-null here because `modeBReDeliver` already required
+    // `isDirectExtTarget`. Otherwise keep the proven trunk Dial position.
+    const context = modeBReDeliver ? extLegDialContext : trunkContext;
+    const exten = modeBReDeliver ? extLegDialExten : trunkExten;
+    const targetSource = modeBReDeliver
       ? "extension_dial_position_cold_answer"
       : "trunk_dial_position";
 
@@ -1206,6 +1254,12 @@ export class TelephonyService {
       exten,
       context,
     });
+    // ONE-SHOT (condition 7): mark the Mode-B bypass as performed so a duplicate
+    // requeue for the same call (e.g. a retry) can never Redirect a second time —
+    // it falls straight back to `extension_leg_already_live`.
+    if (modeBReDeliver) {
+      call.metadata["modeBRedirectPerformed"] = true;
+    }
     log.info(
       {
         linkedId: params.linkedId,
@@ -1214,6 +1268,8 @@ export class TelephonyService {
         context,
         actionId,
         targetSource,
+        modeBReDeliver,
+        modeBFreshContact: modeBReDeliver ? freshContactUri : undefined,
         trunkContext,
         trunkExten,
         lastContext,

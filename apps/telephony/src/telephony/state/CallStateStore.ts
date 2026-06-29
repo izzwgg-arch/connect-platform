@@ -794,6 +794,13 @@ export class CallStateStore extends EventEmitter {
     context?: string;
     /** Dialplan exten of the dialing channel at Dial() invocation time. */
     exten?: string;
+    /**
+     * AMI DialBegin `DialString` (e.g. `T2_110_1/sip:8hkh5htv@host:port;...`).
+     * For an extension-leg dial it carries the exact contact URI the leg was
+     * forked to — the Mode-B cold-answer requeue uses this to tell a freshly
+     * re-registered contact apart from the contact(s) actually dialed.
+     */
+    dialString?: string;
   }): void {
     const call = this.calls.get(params.linkedId);
     if (!call || call.state === "hungup") return;
@@ -845,6 +852,40 @@ export class CallStateStore extends EventEmitter {
     ) {
       call.metadata["extLegDialContext"] = params.context;
       call.metadata["extLegDialExten"] = params.exten;
+
+      // MODE-B cold-answer evidence (2026-06-29). Record, at the instant an
+      // extension leg is dialed:
+      //   • `extLegDialedAt` — wall-clock of the FIRST extension-leg Dial() on
+      //     this call (not overwritten by later forks/attempts), so the requeue
+      //     can ask "did a contact register AFTER this?".
+      //   • `extLegAor` — the endpoint/AOR (the part before `/` in DialString,
+      //     e.g. `T2_110_1`) the leg was dialed to, matching ContactStatus.aor.
+      //   • `extLegDialedContacts` — the set of contact URIs actually dialed
+      //     (from DialString), so a re-registered contact that was NOT dialed is
+      //     detectable. JsSIP rotates the Contact URI on every register, so the
+      //     fresh contact always differs from these.
+      // These are evidence only; the redirect target stays `extLegDialContext`/
+      // `extLegDialExten` (a direct `*local-dialing*` position), never a DID.
+      if (typeof call.metadata["extLegDialedAt"] !== "number") {
+        call.metadata["extLegDialedAt"] = Date.now();
+      }
+      const dialString = String(params.dialString ?? "");
+      const slash = dialString.indexOf("/");
+      if (slash > 0) {
+        const aor = dialString.slice(0, slash).trim();
+        const dialedUri = dialString.slice(slash + 1).trim();
+        if (aor && typeof call.metadata["extLegAor"] !== "string") {
+          call.metadata["extLegAor"] = aor;
+        }
+        if (dialedUri) {
+          const existing = Array.isArray(call.metadata["extLegDialedContacts"])
+            ? (call.metadata["extLegDialedContacts"] as string[])
+            : [];
+          if (!existing.includes(dialedUri)) {
+            call.metadata["extLegDialedContacts"] = [...existing, dialedUri];
+          }
+        }
+      }
     }
 
     // Earliest possible signal that the dialplan is delivering this call to a
