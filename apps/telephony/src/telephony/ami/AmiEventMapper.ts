@@ -101,7 +101,12 @@ export function mapAmiFrame(frame: AmiFrame): TypedAmiEvent | null {
       return {
         event: "DialBegin",
         channel: g("Channel"),
-        destination: g("Destination"),
+        // AMI DialBegin carries the dialed channel as `DestChannel` (there is no
+        // `Destination` field — that was always empty). Reading the wrong field
+        // left CallStateStore.onDialBegin unable to see the extension leg, so the
+        // Mode-B cold-answer evidence (extLegAor/extLegDialedAt/extLegDialContext/
+        // extLegDialExten/extLegDialedContacts) was never captured.
+        destination: g("DestChannel"),
         callerIDNum: g("CallerIDNum"),
         callerIDName: g("CallerIDName"),
         uniqueid: g("Uniqueid"),
