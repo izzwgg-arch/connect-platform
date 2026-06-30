@@ -298,13 +298,25 @@ exten => s,1,NoOp(Connect exit router — tenant=${TENANT_SLUG} type=${EXIT_TYPE
  same =>    n(fallback),Goto(connect-default-fallback,s,1)
 
 [connect-dial-with-wake]
-; Smart push-wake wrapper. Probes PJSIP_DIAL_CONTACTS first; only fires the
-; wake API + Wait() when the target endpoint has no registered contact.
+; Entrypoint for the IVR option / exit / direct-dial routers. Inputs UNCHANGED
+; (DIAL_TARGET, WAKE_EXT, TENANT_SLUG); output UNCHANGED (Goto ${DIAL_TARGET}).
+;
+; CANARY GATING (default-closed): only endpoints explicitly enabled in the
+; Connect-owned AstDB allowlist
+;     connect/wake_canary/T<tid>_<ext> = 1
+; use the new single canonical [connect-wake-core] engine (UserEvent + grace
+; loop). EVERY other caller falls through to the LEGACY push-wake behavior
+; (PJSIP_DIAL_CONTACTS probe + curl + Wait) so existing production IVR wake
+; traffic is byte-for-byte unchanged until rollout is widened. A missing key
+; (or a missing engine) = legacy. To widen scope: add another allowlist key.
 exten => s,1,NoOp(Connect dial-with-wake ext=${WAKE_EXT} target=${DIAL_TARGET} tenant=${TENANT_SLUG})
  same =>   n,GotoIf($["${DIAL_TARGET}" = ""]?missing_target)
  same =>   n,GotoIf($["${WAKE_EXT}" = ""]?dial_now)
  same =>   n,Set(PBX_TENANT_ID=${DB(connect/t_${TENANT_SLUG}/pbx_tenant_id)})
  same =>   n,GotoIf($["${PBX_TENANT_ID}" = ""]?do_wake)
+ same =>   n,Set(WAKE_CANARY=${DB(connect/wake_canary/T${PBX_TENANT_ID}_${WAKE_EXT})})
+ same =>   n,GotoIf($[$["${WAKE_CANARY}" = "1"] & $[${DIALPLAN_EXISTS(connect-wake-core,s,1)} = 1]]?canary)
+ ; ── LEGACY push-wake path (UNCHANGED production behavior) ──────────────────
  same =>   n,Set(EP_PRIMARY=T${PBX_TENANT_ID}_${WAKE_EXT})
  same =>   n,Set(EP_SECONDARY=T${PBX_TENANT_ID}_${WAKE_EXT}_1)
  same =>   n,Set(CONTACTS_PRIMARY=${PJSIP_DIAL_CONTACTS(${EP_PRIMARY})})
@@ -324,8 +336,58 @@ exten => s,1,NoOp(Connect dial-with-wake ext=${WAKE_EXT} target=${DIAL_TARGET} t
  same =>   n(wait_only),Wait(${WAKE_WAIT})
  same =>   n(dial_now),NoOp(Dial-with-wake forwarding to ${DIAL_TARGET})
  same =>   n,Goto(${DIAL_TARGET})
+ ; ── CANARY path: single canonical engine (UserEvent + grace loop) ─────────
+ same =>   n(canary),NoOp(Connect dial-with-wake CANARY → connect-wake-core tid=${PBX_TENANT_ID} ext=${WAKE_EXT})
+ same =>   n,Set(__CONNECT_WAKE_DONE=1)
+ same =>   n,Gosub(connect-wake-core,s,1(${PBX_TENANT_ID},${WAKE_EXT},1))
+ same =>   n,Goto(${DIAL_TARGET})
  same =>   n(missing_target),NoOp(Connect dial-with-wake — DIAL_TARGET not set, falling back)
  same =>   n,Goto(connect-default-fallback,s,1)
+
+[connect-wake-core]
+; THE single canonical wake/grace engine. Gosub subroutine; ALWAYS Return()s so
+; the caller decides where to go next.
+;   ARG1 = numeric VitalPBX tenant id (TID, e.g. 2)
+;   ARG2 = extension (EXT, e.g. 110)
+;   ARG3 = wake-enabled flag (1 = may wake, anything else = probe-then-return)
+; Identity-agnostic: the caller passes tenant id + extension; the engine performs
+; NO slug/identity discovery. It is the SOLE owner of: contact probe, warm/cold
+; decision, wake emission, ringback, the grace loop, and the grace deadline.
+; The wake is a NON-BLOCKING AMI UserEvent (ConnectWake) consumed by the Connect
+; telephony service — there is NO synchronous HTTP on the call path. The only
+; AstDB read is the caller-INDEPENDENT system grace constant (defaults to 20s).
+exten => s,1,NoOp(connect-wake-core tid=${ARG1} ext=${ARG2} wake=${ARG3} state=${CHANNEL(state)})
+ same =>   n,Set(TID=${ARG1})
+ same =>   n,Set(EXT=${ARG2})
+ same =>   n,GotoIf($[$["${TID}" = ""] | $["${EXT}" = ""]]?done)
+ same =>   n,Set(EP_PRIMARY=T${TID}_${EXT})
+ same =>   n,Set(EP_SECONDARY=T${TID}_${EXT}_1)
+ same =>   n,Set(CONTACTS_PRIMARY=${PJSIP_DIAL_CONTACTS(${EP_PRIMARY})})
+ same =>   n,Set(CONTACTS_SECONDARY=${PJSIP_DIAL_CONTACTS(${EP_SECONDARY})})
+ same =>   n,NoOp(connect-wake-core probe ext=${EXT} primary='${CONTACTS_PRIMARY}' secondary='${CONTACTS_SECONDARY}')
+ same =>   n,GotoIf($[$[${LEN(${CONTACTS_PRIMARY})} > 0] | $[${LEN(${CONTACTS_SECONDARY})} > 0]]?warm)
+ same =>   n,GotoIf($["${ARG3}" != "1"]?done)
+ same =>   n,Set(GRACE=${DB(connect/system/wake_grace_secs)})
+ same =>   n,Set(GRACE=${IF($[${LEN(${GRACE})} > 0]?${GRACE}:20)})
+ same =>   n,UserEvent(ConnectWake,Tenant: ${TID},Extension: ${EXT},CallId: ${LINKEDID},From: ${CALLERID(num)})
+ same =>   n,ExecIf($["${CHANNEL(state)}" != "Up"]?Progress())
+ same =>   n,ExecIf($["${CHANNEL(state)}" != "Up"]?Ringing())
+ same =>   n,Set(GRACE_LEFT=${GRACE})
+ same =>   n(loop),GotoIf($[${GRACE_LEFT} <= 0]?expired)
+ same =>   n,Wait(1)
+ same =>   n,Set(CONTACTS_PRIMARY=${PJSIP_DIAL_CONTACTS(${EP_PRIMARY})})
+ same =>   n,Set(CONTACTS_SECONDARY=${PJSIP_DIAL_CONTACTS(${EP_SECONDARY})})
+ same =>   n,GotoIf($[$[${LEN(${CONTACTS_PRIMARY})} > 0] | $[${LEN(${CONTACTS_SECONDARY})} > 0]]?registered)
+ same =>   n,Set(GRACE_LEFT=$[${GRACE_LEFT} - 1])
+ same =>   n,Goto(loop)
+ same =>   n(registered),NoOp(connect-wake-core contact registered during grace ext=${EXT})
+ same =>   n,Return()
+ same =>   n(expired),NoOp(connect-wake-core grace expired ext=${EXT})
+ same =>   n,Return()
+ same =>   n(warm),NoOp(connect-wake-core warm — live contact ext=${EXT})
+ same =>   n,Return()
+ same =>   n(done),NoOp(connect-wake-core no-op ext=${EXT} reason=missing-args-or-wake-disabled)
+ same =>   n,Return()
 
 [connect-hold-announce]
 exten => s,1,NoOp(Connect hold announce — tenant=${TENANT_SLUG})
@@ -365,14 +427,19 @@ step "[6/9] Reload Asterisk dialplan"
 RELOAD_OUT="$(asterisk -rx 'dialplan reload' 2>&1 || true)"
 echo "  ↳ $RELOAD_OUT"
 
-# Verify the new context is loaded
-step "[7/9] Verify [connect-dial-with-wake] is loaded"
-SHOW_OUT="$(asterisk -rx 'dialplan show connect-dial-with-wake' 2>&1 || true)"
-if echo "$SHOW_OUT" | grep -q "PJSIP_DIAL_CONTACTS"; then
-  echo "  ↳ OK — wake context loaded"
+# Verify the new contexts are loaded. The contact-probe now lives ONLY in the
+# canonical [connect-wake-core] engine; [connect-dial-with-wake] is a thin
+# wrapper that Gosubs it. Verify both.
+step "[7/9] Verify [connect-wake-core] + [connect-dial-with-wake] are loaded"
+CORE_OUT="$(asterisk -rx 'dialplan show connect-wake-core' 2>&1 || true)"
+WRAP_OUT="$(asterisk -rx 'dialplan show connect-dial-with-wake' 2>&1 || true)"
+if echo "$CORE_OUT" | grep -q "PJSIP_DIAL_CONTACTS" \
+   && echo "$WRAP_OUT" | grep -q "connect-wake-core"; then
+  echo "  ↳ OK — [connect-wake-core] engine + thin [connect-dial-with-wake] wrapper loaded"
 else
-  warn "[connect-dial-with-wake] not found after reload. Output was:"
-  echo "$SHOW_OUT" | head -20
+  warn "Wake contexts not correctly loaded after reload. Output was:"
+  echo "  --- connect-wake-core ---";      echo "$CORE_OUT" | head -20
+  echo "  --- connect-dial-with-wake ---"; echo "$WRAP_OUT" | head -20
   warn "Restoring backup: $BACKUP_FILE"
   cp -a "$BACKUP_FILE" "$DIALPLAN_FILE"
   asterisk -rx "dialplan reload" >/dev/null 2>&1 || true

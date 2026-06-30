@@ -18,6 +18,7 @@ import { TelephonyBroadcaster } from "./websocket/TelephonyBroadcaster";
 import { CdrNotifier } from "./services/CdrNotifier";
 import { CrmInboundCallerEnricher } from "./services/CrmInboundCallerEnricher";
 import { MobilePushNotifier } from "./services/MobilePushNotifier";
+import { ConnectWakeConsumer } from "./services/ConnectWakeConsumer";
 import { AriBridgedActivePoller } from "./ari/AriBridgedActivePoller";
 import { PbxTenantMapCache, derivePbxTenantMapUrl } from "./state/PbxTenantMapCache";
 import { HealingEngine } from "./services/HealingEngine";
@@ -226,6 +227,13 @@ export function createTelephonyModule(server: http.Server) {
   const ariActions = new AriActions(ari);
   const healingEngine = new HealingEngine(callStore, extStore, healthService, ami, ari);
 
+  // Cold-mobile wake delivery: consumes the dialplan's non-blocking
+  // UserEvent(ConnectWake) from [connect-wake-core] and fires the existing
+  // mobile pre-wake push. Telephony owns wake delivery + debounce; the dialplan
+  // owns the wake decision + grace hold. Additive: if it fails, the call simply
+  // falls back to native voicemail after the grace window.
+  const connectWakeConsumer = new ConnectWakeConsumer(ami, pbxMapCache);
+
   // ── Periodic extension presence refresh (every 3 minutes) ───────────────
   // Re-sends ExtensionStateList + PJSIPShowContacts so that:
   //  1. Extensions bootstrapped with tenantId=null (API not ready at startup)
@@ -253,6 +261,7 @@ export function createTelephonyModule(server: http.Server) {
     ari.start();
     ariBridgedPoller.start();
     healingEngine.start();
+    connectWakeConsumer.start();
     // Run stale ghost cleanup every 60 s so zombies are evicted even when no new WS clients connect
     callStore.startPeriodicStaleCleanup(60_000);
     _metricsInterval = setInterval(refreshMetrics, 5_000);
@@ -272,6 +281,7 @@ export function createTelephonyModule(server: http.Server) {
     if (_metricsInterval) { clearInterval(_metricsInterval); _metricsInterval = null; }
     callStore.stopPeriodicStaleCleanup();
     healingEngine.stop();
+    connectWakeConsumer.stop();
     pbxMapCache.stop();
     broadcaster.stop();
     ariBridgedPoller.stop();
@@ -295,6 +305,7 @@ export function createTelephonyModule(server: http.Server) {
     extStore,
     queueStore,
     healingEngine,
+    connectWakeConsumer,
     pbxTenantMapCache: pbxMapCache,
     start,
     stop,
