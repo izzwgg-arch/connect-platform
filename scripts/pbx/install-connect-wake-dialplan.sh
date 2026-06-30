@@ -403,6 +403,14 @@ exten => s,1,NoOp(Connect hold announce — tenant=${TENANT_SLUG})
  same =>    n,Wait(${HOLD_REPEAT})
  same =>    n,Goto(loop)
  same =>    n(hangup),Hangup()
+
+; ── Connect sub-file includes (this file is the include hub for Connect dialplan)
+; MOH shim is a core Connect feature and MUST be re-included on every regen of
+; this file (its absence silently breaks tenant MOH). The cos-wake overlay is an
+; OPTIONAL canary file, so it uses #tryinclude (no error if it is absent or has
+; been rolled back).
+#include extensions__65_connect_tenant_moh.conf
+#tryinclude extensions__66_connect_cos_wake.conf
 CONNECT_DP_EOF
 
 # ── 5. Append preserved non-Connect contexts ────────────────────────────────

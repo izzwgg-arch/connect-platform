@@ -62,7 +62,7 @@ COS_CONTEXT="T${TENANT_ID}_cos-all"
 INIT_CONTEXT="T${TENANT_ID}_cos-all-init"
 
 # ── 2. Verify the canonical engine is present ───────────────────────────────
-step "[1/6] Verify [connect-wake-core] engine is loaded"
+step "[1/8] Verify [connect-wake-core] engine is loaded"
 CORE_OUT="$(asterisk -rx 'dialplan show connect-wake-core' 2>&1 || true)"
 if ! echo "$CORE_OUT" | grep -q "PJSIP_DIAL_CONTACTS"; then
   warn "[connect-wake-core] not found. Output was:"
@@ -72,7 +72,7 @@ fi
 echo "  ↳ OK — [connect-wake-core] present"
 
 # ── 3. Verify the native hand-back target exists ────────────────────────────
-step "[2/6] Verify native hand-back target [${INIT_CONTEXT}] exists"
+step "[2/8] Verify native hand-back target [${INIT_CONTEXT}] exists"
 INIT_OUT="$(asterisk -rx "dialplan show ${INIT_CONTEXT}" 2>&1 || true)"
 if ! echo "$INIT_OUT" | grep -q "Context '${INIT_CONTEXT}'"; then
   warn "[${INIT_CONTEXT}] not found — VitalPBX may not have generated tenant T${TENANT_ID} yet. Output was:"
@@ -82,7 +82,7 @@ fi
 echo "  ↳ OK — [${INIT_CONTEXT}] present"
 
 # ── 4. Snapshot any existing overlay + write the new one ────────────────────
-step "[3/6] Write Connect cos-all overlay (${COS_CONTEXT} ext ${EXT})"
+step "[3/8] Write Connect cos-all overlay (${COS_CONTEXT} ext ${EXT})"
 if [[ -f "$OVERLAY_FILE" ]]; then
   cp -a "$OVERLAY_FILE" "$BACKUP_FILE"
   echo "  ↳ backed up existing overlay to $BACKUP_FILE"
@@ -116,12 +116,36 @@ chown asterisk:asterisk "$OVERLAY_FILE"
 chmod 0644 "$OVERLAY_FILE"
 echo "  ↳ wrote $OVERLAY_FILE ($(wc -l < "$OVERLAY_FILE" | tr -d ' ') lines)"
 
+# ── 4b. Ensure the overlay is actually #include'd ───────────────────────────
+# VitalPBX's /etc/asterisk/extensions.conf does NOT glob /etc/asterisk/*.conf —
+# it only globs vitalpbx/extensions__*.conf and explicitly includes
+# extensions__60_custom.conf. So nothing loads this __66 overlay unless the
+# Connect include hub (__60_custom.conf) references it. Add a #tryinclude
+# idempotently (safe if the overlay is later rolled back). The wake installer
+# also emits this line, but we add it here too so this installer is self-
+# sufficient regardless of which wake-installer version produced __60.
+CUSTOM_DIALPLAN="/etc/asterisk/extensions__60_custom.conf"
+INCLUDE_LINE="#tryinclude extensions__66_connect_cos_wake.conf"
+step "[4/8] Ensure ${CUSTOM_DIALPLAN##*/} includes the overlay"
+if [[ ! -f "$CUSTOM_DIALPLAN" ]]; then
+  warn "$CUSTOM_DIALPLAN not found — install-connect-wake-dialplan.sh must run first."
+  rm -f "$OVERLAY_FILE"
+  die "Connect include hub missing; removed overlay."
+fi
+if grep -qxF "$INCLUDE_LINE" "$CUSTOM_DIALPLAN"; then
+  echo "  ↳ already present"
+else
+  cp -a "$CUSTOM_DIALPLAN" "${CUSTOM_DIALPLAN}.bak.$(date +%Y%m%d-%H%M%S)"
+  printf '\n%s\n' "$INCLUDE_LINE" >> "$CUSTOM_DIALPLAN"
+  echo "  ↳ appended '$INCLUDE_LINE'"
+fi
+
 # ── 5. Reload + verify the merge ────────────────────────────────────────────
-step "[4/7] Reload Asterisk dialplan"
+step "[5/8] Reload Asterisk dialplan"
 RELOAD_OUT="$(asterisk -rx 'dialplan reload' 2>&1 || true)"
 echo "  ↳ $RELOAD_OUT"
 
-step "[5/7] Verify merged context [${COS_CONTEXT}]"
+step "[6/8] Verify merged context [${COS_CONTEXT}]"
 SHOW_OUT="$(asterisk -rx "dialplan show ${COS_CONTEXT}" 2>&1 || true)"
 echo "$SHOW_OUT" | sed 's/^/      /'
 if echo "$SHOW_OUT" | grep -qE "'?${EXT}'?" \
@@ -143,7 +167,7 @@ fi
 # namespace (never a VitalPBX-owned key). Idempotent.
 CANARY_FAMILY="connect/wake_canary"
 CANARY_KEY="T${TENANT_ID}_${EXT}"
-step "[6/7] Enable AstDB canary allowlist ${CANARY_FAMILY}/${CANARY_KEY}=1"
+step "[7/8] Enable AstDB canary allowlist ${CANARY_FAMILY}/${CANARY_KEY}=1"
 asterisk -rx "database put ${CANARY_FAMILY} ${CANARY_KEY} 1" >/dev/null 2>&1 || true
 CANARY_GET="$(asterisk -rx "database get ${CANARY_FAMILY} ${CANARY_KEY}" 2>&1 || true)"
 echo "  ↳ $CANARY_GET"
@@ -153,7 +177,7 @@ if ! echo "$CANARY_GET" | grep -q "1"; then
 fi
 
 # ── 7. Done ─────────────────────────────────────────────────────────────────
-step "[7/7] Done"
+step "[8/8] Done"
 cat <<DONE
 
 ============================================================================
