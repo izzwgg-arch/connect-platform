@@ -165,6 +165,18 @@ import {
   isValidMohRuntimeClass,
   canonicalSmsPhone,
   normalizeMohRuntimeClass as normalizeSharedMohRuntimeClass,
+  MOH_CALL_SOURCES,
+  MOH_CALL_SOURCE_LABELS,
+  isMohCallSource,
+  normalizeMohCallSource,
+  resolveEffectiveMohClass,
+  buildGlobalDefaultKey,
+  buildSourcePublishKeys,
+  computeActiveScheduleOverrides,
+  computeSourceKeysClearForRollback,
+  type MohCallSource,
+  type StaticSourcePolicy,
+  type ScheduleRuleRow,
 } from "@connect/shared";
 import * as fs from "node:fs";
 import { findOrCreateConnectChatSmsThread, registerConnectChatRoutes, sendConnectChatSmsMessage } from "./connectChatRoutes";
@@ -22692,6 +22704,111 @@ async function syncNativeInboundRoutesMoh(tenantId: string, runtimeClass: string
   }
 }
 
+/**
+ * Assemble the additive per-call-source AstDB keys for a tenant publish.
+ *
+ * Loads static per-source policies (`MohSourcePolicy`) and the system-wide
+ * global default (`MohGlobalConfig`), folds in the currently-active scheduled
+ * overrides (from the same rule set already loaded for the tenant-default
+ * computation, now including targeting fields), validates every referenced
+ * runtime class for readiness, and returns the keys to append to the publish.
+ *
+ * FAIL-SAFE: a per-source class that is not PBX-ready is DROPPED (with a
+ * warning) rather than throwing — one broken per-source policy must never
+ * block the whole tenant publish or break the call path. The dialplan falls
+ * through to the tenant/extension default for any source without a key.
+ */
+async function buildTenantSourceMohPublishArtifacts(args: {
+  tenantId: string;
+  slug: string;
+  timezone: string;
+  scheduleRules: any[];
+  classForProfileId: (profileId: string) => string | null;
+  now?: Date;
+}): Promise<{
+  keys: Array<{ family: string; key: string; value: string }>;
+  globalKey: Array<{ family: string; key: string; value: string }>;
+  droppedClasses: string[];
+  sourcePolicyCount: number;
+  activeOverrideCount: number;
+}> {
+  const { tenantId, slug, timezone } = args;
+  const now = args.now ?? new Date();
+
+  const [policiesRaw, globalCfg] = await Promise.all([
+    (db as any).mohSourcePolicy.findMany({ where: { tenantId, enabled: true } }),
+    (db as any).mohGlobalConfig.findUnique({ where: { id: "global" } }).catch(() => null),
+  ]);
+
+  // Fold active schedule overrides (targeting fields default to tenant-wide/all).
+  const scheduleRows: ScheduleRuleRow[] = (args.scheduleRules as any[]).map((r) => ({
+    id: r.id,
+    profileId: r.profileId,
+    ruleType: r.ruleType,
+    weekday: r.weekday ?? null,
+    startTime: r.startTime ?? null,
+    endTime: r.endTime ?? null,
+    startAt: r.startAt ?? null,
+    endAt: r.endAt ?? null,
+    priority: r.priority ?? 0,
+    isActive: r.isActive !== false,
+    scope: r.scope ?? "tenant",
+    extension: r.extension ?? "",
+    callSource: r.callSource ?? "",
+  }));
+  const activeOverrides = computeActiveScheduleOverrides(scheduleRows, args.classForProfileId, timezone || "UTC", now);
+
+  const staticPolicies: StaticSourcePolicy[] = (policiesRaw as any[]).map((p) => ({
+    scope: p.scope === "extension" ? "extension" : "tenant",
+    extension: String(p.extension ?? ""),
+    source: String(p.source ?? ""),
+    vitalPbxMohClassName: String(p.vitalPbxMohClassName ?? ""),
+    enabled: p.enabled !== false,
+  }));
+
+  // Validate every distinct class referenced (static + active override). Drop
+  // any that is not publishable so a bad row can never poison the publish.
+  const distinctClasses = new Set<string>();
+  for (const p of staticPolicies) if (p.vitalPbxMohClassName) distinctClasses.add(p.vitalPbxMohClassName);
+  for (const o of activeOverrides) if (o.vitalPbxMohClassName) distinctClasses.add(o.vitalPbxMohClassName);
+  const ready = new Set<string>();
+  const droppedClasses: string[] = [];
+  for (const cls of distinctClasses) {
+    const r = await evaluateMohRuntimeReadiness(tenantId, cls);
+    if (r.reason) droppedClasses.push(cls);
+    else ready.add(r.selectedClass);
+  }
+  const keep = (cls: string) => ready.has(normalizeSharedMohRuntimeClass(cls));
+
+  const filteredStatic = staticPolicies.filter((p) => keep(p.vitalPbxMohClassName));
+  const filteredOverrides = activeOverrides.filter((o) => keep(o.vitalPbxMohClassName));
+
+  const keys = buildSourcePublishKeys({ slug, staticPolicies: filteredStatic, activeOverrides: filteredOverrides });
+
+  // Global default (level 4). Validate; empty/invalid → tombstone "" so the
+  // dialplan falls straight through to the PBX default.
+  let globalClass = "";
+  const rawGlobal = normalizeSharedMohRuntimeClass(globalCfg?.vitalPbxMohClassName ?? "");
+  if (rawGlobal) {
+    const gr = await evaluateMohRuntimeReadiness(tenantId, rawGlobal);
+    if (!gr.reason) globalClass = gr.selectedClass;
+    else droppedClasses.push(rawGlobal);
+  }
+  const globalKey = [buildGlobalDefaultKey(globalClass)];
+
+  if (droppedClasses.length) {
+    app.log.warn({ tenantId, slug, droppedClasses }, "moh: dropped unready per-source/global MOH classes from publish");
+  }
+
+  return {
+    keys,
+    globalKey,
+    droppedClasses,
+    sourcePolicyCount: filteredStatic.length,
+    activeOverrideCount: filteredOverrides.length,
+  };
+}
+
 /** Shared publish helper — loads state, computes effective profile, writes AstDB, logs record.
  *  Called by explicit publish, override activate/deactivate, and rollback paths.
  *  Throws on error (caller must handle). */
@@ -22742,7 +22859,19 @@ async function doMohPublish(
   const extensionOverrideRows = await readEnabledExtensionOverridesForTenant(db as any, tenantId);
   const extensionOverrideSnapshot = buildExtensionOverrideSnapshot(extensionOverrideRows);
   const extensionKeys = buildExtensionOverrideKeys(slug, extensionOverrideRows);
-  const keys = [...tenantDefaultKeys, ...extensionKeys];
+
+  // Per-call-source policies (tenant + extension) + global default, folded with
+  // any active scheduled override. Additive AstDB keys under the `/moh/src`
+  // families + `connect/system/moh_default_class`. Fail-safe: unready classes
+  // are dropped, never thrown, so the tenant default publish always proceeds.
+  const sourceArtifacts = await buildTenantSourceMohPublishArtifacts({
+    tenantId,
+    slug,
+    timezone: config.timezone || "UTC",
+    scheduleRules: rulesRaw as any[],
+    classForProfileId: (pid: string) => profileMap.get(pid)?.vitalPbxMohClassName ?? null,
+  });
+  const keys = [...tenantDefaultKeys, ...extensionKeys, ...sourceArtifacts.keys, ...sourceArtifacts.globalKey];
 
   const previousMohClass = lastPublish?.newMohClass ?? null;
   // Use last publish's keysWritten as the "previous snapshot" for rollback.
@@ -23128,6 +23257,332 @@ app.delete("/voice/moh/extension-overrides", async (req, reply) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PER-CALL-SOURCE MOH POLICIES  (tenant + extension scoped)
+//
+// Adds the "which MOH for which kind of call" dimension. Static policies live
+// in MohSourcePolicy; the publish path folds them (+ active scheduled overrides
+// + global default) into additive AstDB keys under `/moh/src`. The dialplan
+// falls through to the existing tenant/extension default keys for any source
+// with no policy, so this is a strict superset (no regression).
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── GET /voice/moh/source-policies ───────────────────────────────────────────
+app.get("/voice/moh/source-policies", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const q = z.object({
+    tenantId:  z.string().optional(),
+    scope:     z.enum(["tenant", "extension"]).optional(),
+    extension: z.string().optional(),
+  }).parse(req.query || {});
+  const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const rawTid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!rawTid) return reply.code(400).send({ error: "tenantId required" });
+  const tid = await resolveMohTenantId(rawTid);
+  if (!tid) return reply.send({ policies: [], sources: MOH_CALL_SOURCES, labels: MOH_CALL_SOURCE_LABELS });
+  try { assertMohTenantAccess(user, tid); }
+  catch (err: any) { return reply.code(err?.statusCode ?? 403).send({ error: err?.message ?? "forbidden" }); }
+  const where: any = { tenantId: tid };
+  if (q.scope) where.scope = q.scope;
+  if (typeof q.extension === "string") where.extension = q.scope === "tenant" ? "" : q.extension;
+  const policies = await (db as any).mohSourcePolicy.findMany({
+    where,
+    orderBy: [{ scope: "asc" }, { extension: "asc" }, { source: "asc" }],
+  });
+  return reply.send({ policies, sources: MOH_CALL_SOURCES, labels: MOH_CALL_SOURCE_LABELS });
+});
+
+// ── PUT /voice/moh/source-policies ───────────────────────────────────────────
+// Idempotent upsert keyed on (tenantId, extension, source). extension="" for
+// tenant scope. Validates the MOH class through the same readiness pipeline as
+// profiles/extension-overrides.
+app.put("/voice/moh/source-policies", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMoh);
+  if (!user) return;
+  const body = z.object({
+    tenantId:             z.string(),
+    scope:                z.enum(["tenant", "extension"]),
+    extension:            z.string().max(64).optional(),
+    source:               z.string().min(1).max(32),
+    vitalPbxMohClassName: z.string().min(1).max(100),
+    mohProfileId:         z.string().min(1).nullable().optional(),
+    enabled:              z.boolean().optional(),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
+  const d = body.data;
+
+  const source = normalizeMohCallSource(d.source);
+  if (!source) return reply.code(400).send({ error: "invalid_source", detail: `source must be one of: ${MOH_CALL_SOURCES.join(", ")}` });
+
+  const extension = d.scope === "extension" ? (d.extension ?? "") : "";
+  if (d.scope === "extension" && normalizeMohExtension(extension) === null) {
+    return reply.code(400).send({ error: "invalid_payload", detail: "extension shape rejected (allowed: A-Z a-z 0-9 _ -)" });
+  }
+
+  const tid = await resolveMohTenantId(d.tenantId);
+  if (!tid) return reply.code(400).send({ error: "tenant_not_linked", detail: "Link this VitalPBX tenant to a Connect tenant first." });
+  if (!canManageExtensionOverrideFor({ role: user.role, tenantId: user.tenantId }, tid)) {
+    return reply.code(403).send({ error: "forbidden" });
+  }
+  try { assertMohTenantAccess(user, tid); }
+  catch (err: any) { return reply.code(err?.statusCode ?? 403).send({ error: err?.message ?? "forbidden" }); }
+
+  if (d.scope === "extension") {
+    try { await assertExtensionExistsForTenantHelper(db as any, tid, extension); }
+    catch (err: any) { return reply.code(err?.statusCode ?? 404).send({ error: err?.message ?? "extension_not_found" }); }
+  }
+
+  let runtimeClass: string;
+  try {
+    const readiness = await assertMohRuntimeReadiness(tid, d.vitalPbxMohClassName);
+    runtimeClass = readiness.selectedClass;
+  } catch (err: any) {
+    return reply.code(err?.statusCode ?? 400).send({ error: err?.message ?? "invalid_moh_runtime_class", detail: err?.detail, readiness: err?.readiness });
+  }
+
+  if (d.mohProfileId) {
+    const profile = await (db as any).mohProfile.findUnique({ where: { id: d.mohProfileId } });
+    if (!profile || profile.tenantId !== tid) return reply.code(400).send({ error: "profile_not_in_tenant" });
+  }
+
+  const actor = (user as any).id ?? (user as any).sub ?? null;
+  const existing = await (db as any).mohSourcePolicy.findUnique({
+    where: { tenantId_extension_source: { tenantId: tid, extension, source } },
+  }).catch(() => null);
+  const policy = await (db as any).mohSourcePolicy.upsert({
+    where: { tenantId_extension_source: { tenantId: tid, extension, source } },
+    create: { tenantId: tid, scope: d.scope, extension, source, vitalPbxMohClassName: runtimeClass, mohProfileId: d.mohProfileId ?? null, enabled: d.enabled !== false, createdBy: actor, updatedBy: actor },
+    update: { scope: d.scope, vitalPbxMohClassName: runtimeClass, mohProfileId: d.mohProfileId ?? null, enabled: d.enabled !== false, updatedBy: actor },
+  });
+  return reply.code(existing ? 200 : 201).send({ policy, created: !existing });
+});
+
+// ── DELETE /voice/moh/source-policies ────────────────────────────────────────
+app.delete("/voice/moh/source-policies", async (req, reply) => {
+  const user = await requirePermission(req, reply, canManageMoh);
+  if (!user) return;
+  const body = z.object({
+    tenantId:  z.string(),
+    scope:     z.enum(["tenant", "extension"]),
+    extension: z.string().max(64).optional(),
+    source:    z.string().min(1).max(32),
+  }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
+  const d = body.data;
+  const source = normalizeMohCallSource(d.source);
+  if (!source) return reply.code(400).send({ error: "invalid_source" });
+  const extension = d.scope === "extension" ? (d.extension ?? "") : "";
+  const tid = await resolveMohTenantId(d.tenantId);
+  if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
+  if (!canManageExtensionOverrideFor({ role: user.role, tenantId: user.tenantId }, tid)) {
+    return reply.code(403).send({ error: "forbidden" });
+  }
+  try { assertMohTenantAccess(user, tid); }
+  catch (err: any) { return reply.code(err?.statusCode ?? 403).send({ error: err?.message ?? "forbidden" }); }
+  const r = await (db as any).mohSourcePolicy.deleteMany({ where: { tenantId: tid, extension, source } });
+  return reply.send({ ok: true, deleted: r.count });
+});
+
+// ── GET /voice/moh/global-default ────────────────────────────────────────────
+app.get("/voice/moh/global-default", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const cfg = await (db as any).mohGlobalConfig.findUnique({ where: { id: "global" } }).catch(() => null);
+  return reply.send({ vitalPbxMohClassName: cfg?.vitalPbxMohClassName ?? null, updatedAt: cfg?.updatedAt ?? null });
+});
+
+// ── PUT /voice/moh/global-default ────────────────────────────────────────────
+// System-wide fallback (Requirement 4, level 4). SUPER_ADMIN only. Null clears.
+app.put("/voice/moh/global-default", async (req, reply) => {
+  const user = await requirePermission(req, reply, (u) => isRole(u, ["SUPER_ADMIN"]));
+  if (!user) return;
+  const body = z.object({ vitalPbxMohClassName: z.string().max(100).nullable() }).safeParse(req.body || {});
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+  const raw = normalizeSharedMohRuntimeClass(body.data.vitalPbxMohClassName ?? "");
+  if (raw && !isValidMohRuntimeClass(raw)) {
+    return reply.code(400).send({ error: "invalid_moh_runtime_class", detail: "Global default must be a valid mohN or connect_* class, or null to clear." });
+  }
+  const actor = (user as any).id ?? null;
+  const cfg = await (db as any).mohGlobalConfig.upsert({
+    where: { id: "global" },
+    create: { id: "global", vitalPbxMohClassName: raw || null, updatedBy: actor },
+    update: { vitalPbxMohClassName: raw || null, updatedBy: actor },
+  });
+  return reply.send({ vitalPbxMohClassName: cfg.vitalPbxMohClassName ?? null, updatedAt: cfg.updatedAt });
+});
+
+// ── GET /voice/moh/resolve ───────────────────────────────────────────────────
+// Diagnostics (Requirement 11): explain exactly why a call of a given source
+// (and optional extension) resolves to a particular MOH class right now — the
+// full candidate chain + the winning level. Read-only; writes nothing.
+app.get("/voice/moh/resolve", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const q = z.object({
+    tenantId:  z.string().optional(),
+    source:    z.string().optional(),
+    extension: z.string().optional(),
+    at:        z.string().optional(),
+  }).parse(req.query || {});
+  const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const rawTid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!rawTid) return reply.code(400).send({ error: "tenantId required" });
+  const tid = await resolveMohTenantId(rawTid);
+  if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
+  try { assertMohTenantAccess(user, tid); }
+  catch (err: any) { return reply.code(err?.statusCode ?? 403).send({ error: err?.message ?? "forbidden" }); }
+
+  const source = normalizeMohCallSource(q.source ?? "internal") ?? "internal";
+  const extension = typeof q.extension === "string" && q.extension.trim() ? q.extension.trim() : "";
+  const now = q.at ? new Date(q.at) : new Date();
+
+  const [config, rulesRaw, overrideRaw, profilesRaw, sourcePolicies, extOverride, globalCfg] = await Promise.all([
+    (db as any).mohScheduleConfig.findUnique({ where: { tenantId: tid } }),
+    (db as any).mohScheduleRule.findMany({ where: { schedule: { tenantId: tid }, isActive: true } }),
+    (db as any).mohOverrideState.findUnique({ where: { tenantId: tid } }),
+    (db as any).mohProfile.findMany({ where: { tenantId: tid, isActive: true } }),
+    (db as any).mohSourcePolicy.findMany({ where: { tenantId: tid, enabled: true } }),
+    extension ? (db as any).mohExtensionOverride.findUnique({ where: { tenantId_extension: { tenantId: tid, extension } } }).catch(() => null) : Promise.resolve(null),
+    (db as any).mohGlobalConfig.findUnique({ where: { id: "global" } }).catch(() => null),
+  ]);
+
+  const profileMap = new Map<string, HoldProfileData>(
+    (profilesRaw as any[]).map((p: any) => [p.id, {
+      id: p.id, vitalPbxMohClassName: p.vitalPbxMohClassName,
+      holdAnnouncementEnabled: Boolean(p.holdAnnouncementEnabled),
+      holdAnnouncementRef: p.holdAnnouncementRef ?? null,
+      holdAnnouncementIntervalSec: p.holdAnnouncementIntervalSec ?? 30,
+      introAnnouncementRef: p.introAnnouncementRef ?? null,
+    }]),
+  );
+
+  // Tenant default (existing time/override resolution).
+  const tenantDefault = config ? computeCurrentMohProfile(config, rulesRaw as any[], overrideRaw as any, profileMap, now) : { profile: null, mode: "none" };
+
+  // Active scheduled overrides matching this (extension, source).
+  const scheduleRows: ScheduleRuleRow[] = (rulesRaw as any[]).map((r) => ({
+    id: r.id, profileId: r.profileId, ruleType: r.ruleType,
+    weekday: r.weekday ?? null, startTime: r.startTime ?? null, endTime: r.endTime ?? null,
+    startAt: r.startAt ?? null, endAt: r.endAt ?? null, priority: r.priority ?? 0,
+    isActive: r.isActive !== false, scope: r.scope ?? "tenant", extension: r.extension ?? "", callSource: r.callSource ?? "",
+  }));
+  const activeOverrides = computeActiveScheduleOverrides(scheduleRows, (pid) => profileMap.get(pid)?.vitalPbxMohClassName ?? null, config?.timezone || "UTC", now);
+  const schedExt = activeOverrides
+    .filter((o) => o.scope === "extension" && o.extension === extension && (o.source === source || o.source === "all"))
+    .sort((a, b) => (a.source === source ? -1 : 1) - (b.source === source ? -1 : 1) || b.priority - a.priority)[0] ?? null;
+
+  const findStatic = (scope: "tenant" | "extension", src: string) =>
+    (sourcePolicies as any[]).find((p) => p.scope === scope && (scope === "tenant" ? p.extension === "" : p.extension === extension) && p.source === src) ?? null;
+
+  const resolution = resolveEffectiveMohClass({
+    source,
+    scheduledExtensionClass: schedExt?.vitalPbxMohClassName ?? null,
+    scheduledExtensionRuleId: schedExt?.ruleId ?? null,
+    extensionSourceClass: extension ? findStatic("extension", source)?.vitalPbxMohClassName ?? null : null,
+    extensionDefaultClass: extension ? (extOverride?.enabled ? extOverride?.vitalPbxMohClassName ?? null : null) : null,
+    tenantSourceClass: findStatic("tenant", source)?.vitalPbxMohClassName ?? null,
+    tenantDefaultClass: tenantDefault.profile?.vitalPbxMohClassName ?? null,
+    globalDefaultClass: normalizeSharedMohRuntimeClass(globalCfg?.vitalPbxMohClassName ?? "") || null,
+  });
+
+  return reply.send({
+    tenantId: tid,
+    source,
+    sourceLabel: MOH_CALL_SOURCE_LABELS[source as MohCallSource],
+    extension: extension || null,
+    at: now.toISOString(),
+    resolved: {
+      class: resolution.class,
+      reason: resolution.reason,
+      ruleId: resolution.ruleId ?? null,
+      fallbackToPbxDefault: resolution.class === null,
+    },
+    candidates: {
+      schedule_extension: schedExt?.vitalPbxMohClassName ?? null,
+      extension_source: extension ? findStatic("extension", source)?.vitalPbxMohClassName ?? null : null,
+      extension_default: extension ? (extOverride?.enabled ? extOverride?.vitalPbxMohClassName ?? null : null) : null,
+      tenant_source: findStatic("tenant", source)?.vitalPbxMohClassName ?? null,
+      tenant_default: tenantDefault.profile?.vitalPbxMohClassName ?? null,
+      tenant_default_mode: tenantDefault.mode,
+      global_default: normalizeSharedMohRuntimeClass(globalCfg?.vitalPbxMohClassName ?? "") || null,
+    },
+  });
+});
+
+// ── GET /voice/moh/health ─────────────────────────────────────────────────────
+// Aggregate health for a tenant's MOH config (Requirement 11). Read-only.
+// Surfaces: (a) referenced runtime classes that are not present/ready in the
+// synced PBX catalog (missing class / unready audio), (b) stale schedule rules
+// (one_time rules whose window already ended but are still active), and
+// (c) the most recent failed publish. Never writes; safe to poll.
+app.get("/voice/moh/health", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+  const q = z.object({ tenantId: z.string().optional() }).parse(req.query || {});
+  const isSA = String(user.role || "").toUpperCase() === "SUPER_ADMIN";
+  const rawTid = isSA ? (q.tenantId ?? user.tenantId ?? null) : (user.tenantId ?? null);
+  if (!rawTid) return reply.code(400).send({ error: "tenantId required" });
+  const tid = await resolveMohTenantId(rawTid);
+  if (!tid) return reply.code(400).send({ error: "tenant_not_linked" });
+  try { assertMohTenantAccess(user, tid); }
+  catch (err: any) { return reply.code(err?.statusCode ?? 403).send({ error: err?.message ?? "forbidden" }); }
+
+  const now = new Date();
+  const [profiles, sourcePolicies, extOverrides, globalCfg, rules, lastFailed] = await Promise.all([
+    (db as any).mohProfile.findMany({ where: { tenantId: tid, isActive: true } }),
+    (db as any).mohSourcePolicy.findMany({ where: { tenantId: tid, enabled: true } }),
+    (db as any).mohExtensionOverride.findMany({ where: { tenantId: tid, enabled: true } }).catch(() => []),
+    (db as any).mohGlobalConfig.findUnique({ where: { id: "global" } }).catch(() => null),
+    (db as any).mohScheduleRule.findMany({ where: { schedule: { tenantId: tid } } }).catch(() => []),
+    (db as any).mohPublishRecord.findFirst({ where: { tenantId: tid, status: "failed" }, orderBy: { publishedAt: "desc" } }).catch(() => null),
+  ]);
+
+  // (a) Referenced runtime classes → readiness check (dedup by class + origin).
+  const refs: Array<{ origin: string; label: string; className: string }> = [];
+  for (const p of profiles as any[]) refs.push({ origin: "profile", label: p.name ?? p.id, className: p.vitalPbxMohClassName });
+  for (const p of sourcePolicies as any[]) refs.push({ origin: "source_policy", label: `${p.scope}${p.extension ? `:${p.extension}` : ""}/${p.source}`, className: p.vitalPbxMohClassName });
+  for (const e of extOverrides as any[]) refs.push({ origin: "extension_override", label: `ext:${e.extension}`, className: e.vitalPbxMohClassName });
+  const globalClass = normalizeSharedMohRuntimeClass(globalCfg?.vitalPbxMohClassName ?? "");
+  if (globalClass) refs.push({ origin: "global_default", label: "global", className: globalClass });
+
+  const checked = new Map<string, { ready: boolean; reason: string | null }>();
+  const missingClasses: Array<{ origin: string; label: string; className: string; reason: string }> = [];
+  for (const r of refs) {
+    if (!r.className) continue;
+    let res = checked.get(r.className);
+    if (!res) {
+      try {
+        const readiness = await evaluateMohRuntimeReadiness(tid, r.className);
+        res = { ready: !readiness.reason, reason: readiness.reason ?? null };
+      } catch { res = { ready: false, reason: "evaluation_failed" }; }
+      checked.set(r.className, res);
+    }
+    if (!res.ready) missingClasses.push({ origin: r.origin, label: r.label, className: r.className, reason: res.reason ?? "not_ready" });
+  }
+
+  // (b) Stale schedule rules: one_time windows that already closed but are still active.
+  const staleSchedules = (rules as any[])
+    .filter((r) => r.isActive !== false && r.ruleType === "one_time" && r.endAt && new Date(r.endAt) < now)
+    .map((r) => ({ id: r.id, endAt: r.endAt, scope: r.scope ?? "tenant", extension: r.extension ?? "", callSource: r.callSource ?? "all" }));
+
+  const warnings: string[] = [];
+  if (missingClasses.length) warnings.push(`${missingClasses.length} referenced MOH class(es) are not ready in the synced PBX catalog.`);
+  if (staleSchedules.length) warnings.push(`${staleSchedules.length} one-time schedule rule(s) have ended but are still marked active.`);
+  if (lastFailed) warnings.push(`Last publish failed at ${new Date(lastFailed.publishedAt).toISOString()}: ${lastFailed.error ?? "unknown error"}.`);
+
+  return reply.send({
+    tenantId: tid,
+    healthy: warnings.length === 0,
+    checkedAt: now.toISOString(),
+    warnings,
+    missingClasses,
+    staleSchedules,
+    lastFailedPublish: lastFailed ? { id: lastFailed.id, publishedAt: lastFailed.publishedAt, error: lastFailed.error ?? null, newMohClass: lastFailed.newMohClass ?? null } : null,
+    counts: { profiles: (profiles as any[]).length, sourcePolicies: (sourcePolicies as any[]).length, extensionOverrides: (extOverrides as any[]).length, globalDefault: globalClass || null },
+  });
+});
+
 // ── PUT /voice/moh/schedule ───────────────────────────────────────────────────
 app.put("/voice/moh/schedule", async (req, reply) => {
   const user = await requirePermission(req, reply, canManageMoh);
@@ -23173,6 +23628,10 @@ app.post("/voice/moh/schedule/rules", async (req, reply) => {
     startAt:    z.string().datetime().nullable().optional(),
     endAt:      z.string().datetime().nullable().optional(),
     priority:   z.number().int().default(0),
+    // ── Targeting (additive; defaults preserve legacy tenant-wide/all behavior) ──
+    scope:      z.enum(["tenant", "extension"]).default("tenant"),
+    extension:  z.string().max(64).optional(),
+    callSource: z.string().max(32).optional(),
   }).safeParse(req.body || {});
   if (!body.success) return reply.code(400).send({ error: "invalid_payload", issues: body.error.issues });
   const d = body.data;
@@ -23182,12 +23641,30 @@ app.post("/voice/moh/schedule/rules", async (req, reply) => {
   // Verify schedule belongs to tenant
   const schedule = await (db as any).mohScheduleConfig.findUnique({ where: { id: d.scheduleId } });
   if (!schedule || schedule.tenantId !== tid) return reply.code(404).send({ error: "schedule_not_found" });
+
+  // Resolve + validate targeting.
+  const scope = d.scope;
+  const extension = scope === "extension" ? (d.extension ?? "") : "";
+  if (scope === "extension") {
+    if (normalizeMohExtension(extension) === null) return reply.code(400).send({ error: "invalid_payload", detail: "extension shape rejected" });
+    try { await assertExtensionExistsForTenantHelper(db as any, tid, extension); }
+    catch (err: any) { return reply.code(err?.statusCode ?? 404).send({ error: err?.message ?? "extension_not_found" }); }
+  }
+  let callSource = "";
+  const rawSrc = String(d.callSource ?? "").trim().toLowerCase();
+  if (rawSrc && rawSrc !== "all") {
+    const norm = normalizeMohCallSource(rawSrc);
+    if (!norm) return reply.code(400).send({ error: "invalid_source", detail: `callSource must be "all" or one of: ${MOH_CALL_SOURCES.join(", ")}` });
+    callSource = norm;
+  }
+
   const rule = await (db as any).mohScheduleRule.create({
     data: {
       scheduleId: d.scheduleId, profileId: d.profileId, ruleType: d.ruleType,
       weekday: d.weekday ?? null, startTime: d.startTime ?? null, endTime: d.endTime ?? null,
       startAt: d.startAt ? new Date(d.startAt) : null, endAt: d.endAt ? new Date(d.endAt) : null,
       priority: d.priority, isActive: true,
+      scope, extension, callSource,
     },
   });
   return reply.code(201).send({ rule });
@@ -23452,6 +23929,13 @@ app.post("/voice/moh/rollback/:publishId", async (req, reply) => {
   const extensionKeysToClear = computeExtensionKeysClearForRollback(targetKeysWritten, restoreKeys);
   if (extensionKeysToClear.length) {
     restoreKeys = [...restoreKeys, ...extensionKeysToClear];
+  }
+  // Same tombstone treatment for per-call-source keys (`/moh/src` families)
+  // that the target publish ADDED relative to the prior state. Empty string =
+  // "fall through to the tenant/extension default" in the dialplan resolver.
+  const sourceKeysToClear = computeSourceKeysClearForRollback(targetKeysWritten, restoreKeys);
+  if (sourceKeysToClear.length) {
+    restoreKeys = [...restoreKeys, ...sourceKeysToClear];
   }
   const restoredExtensionSnapshot = extractExtensionSnapshotFromKeys(restoreKeys);
 

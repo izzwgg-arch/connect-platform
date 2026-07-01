@@ -980,6 +980,15 @@ When you find a new fragile area, add it here.
 - **`PbxJob`, `TenantPbxLink`, `PbxInstance`** drive provisioning. Their state
   machine (`status: LINKED|ERROR|...`, `pbxJob.status: QUEUED|RUNNING|FAILED|COMPLETED`)
   is tied to worker cycles. Mutating without the worker is risky.
+- **`prisma migrate deploy` cannot replay migration history from an empty DB
+  (open — disaster-recovery / new-environment risk).** Migration
+  `20260426020000_tenant_prompt_isolation` fails with `P3018` /
+  `column "TenantPbxPrompt.storageKey" does not exist` when replayed from
+  scratch, because it references a column introduced by a later migration.
+  Existing environments (already past that migration) are unaffected; only
+  fresh replays / new environments break. **Not an MOH defect.** Do NOT fix
+  inside the MOH branch without explicit approval. Full write-up and remediation
+  options: `docs/ops/FOLLOWUP-migration-replay-storageKey.md`.
 
 ## Realtime / websockets
 

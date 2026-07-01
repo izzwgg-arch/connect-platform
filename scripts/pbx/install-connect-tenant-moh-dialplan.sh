@@ -973,6 +973,9 @@ cat > "$TMP_NEW" <<'CONNECT_TENANT_MOH_EOF'
 ;   connect/t_<slug>/active_moh_class                          → tenant alias
 ;   connect/t_<slug>/extensions/<ext>/moh_class                → per-extension override (Phase 3B)
 ;   connect/t_<slug>/extensions/<ext>/active_moh_class         → per-extension alias  (Phase 3B)
+;   connect/t_<slug>/moh/src/<source>                          → tenant per-call-source policy
+;   connect/t_<slug>/extensions/<ext>/moh/src/<source>         → per-extension per-source policy
+;   connect/system/moh_default_class                           → system-wide global default
 ;
 ; Wired in via the VitalPBX-generated [sub-before-bridging-call] in
 ; extensions__20-baseplan.conf, which Gosubs [global-before-bridging-call-hook]
@@ -980,11 +983,21 @@ cat > "$TMP_NEW" <<'CONNECT_TENANT_MOH_EOF'
 ; be bridged so when that leg is later put on hold, MoH plays the tenant's
 ; selected class.
 ;
-; Lookup order (first non-empty wins):
-;   1. connect/t_<slug>/extensions/<ext>/moh_class          (Phase 3B)
-;   2. connect/t_<slug>/extensions/<ext>/active_moh_class   (Phase 3B alias)
-;   3. connect/t_<slug>/moh_class                           (tenant default)
-;   4. connect/t_<slug>/active_moh_class                    (tenant alias)
+; Lookup order (first non-empty wins). MOH_SRC is the call-source token derived
+; ONLY from read-only VitalPBX-owned inherited channel variables — explicit
+; __CONNECT_MOH_SRC override, then transfer (BLINDTRANSFER/ATTENDEDTRANSFER),
+; then inbound subtypes (__CALL_ORIGIN=ring-group / RESTRICTED_IVR_CALL,
+; QUEUE_AGENTS_CONTEXT), then __CALL_TYPE base classes (1→internal, 3→outbound,
+; 2→inbound_direct; 4/TRANSIT and unknown → empty). An empty MOH_SRC skips the
+; per-source reads (levels 1 and 3) so the resolver degrades to the exact
+; pre-source behavior:
+;   1. connect/t_<slug>/extensions/<ext>/moh/src/<MOH_SRC>  (per-extension per-source)
+;   2. connect/t_<slug>/extensions/<ext>/moh_class          (per-extension default)
+;      connect/t_<slug>/extensions/<ext>/active_moh_class   (per-extension alias)
+;   3. connect/t_<slug>/moh/src/<MOH_SRC>                   (tenant per-source)
+;   4. connect/t_<slug>/moh_class                           (tenant default)
+;      connect/t_<slug>/active_moh_class                    (tenant alias)
+;   5. connect/system/moh_default_class                     (global default)
 ;
 ; The per-extension lookup (1, 2) only runs when the channel name resolves
 ; cleanly to "T<TENANT_ID>_<ext>" with <ext> matching [A-Za-z0-9_-]{1,32}
@@ -1028,46 +1041,92 @@ exten => s,1,NoOp(Connect tenant MOH resolver tenant=${ARG1} caller=${ARG2} call
  same => n,GotoIf($["${TENANT_ID}" = ""]?done)
  same => n,Set(TENANT_SLUG_LOCAL=${DB(connect/pbx_tenant_map/${TENANT_ID}/slug)})
  same => n,GotoIf($["${TENANT_SLUG_LOCAL}" = ""]?done)
- ; ── Phase 3B: per-extension MOH override lookup ─────────────────────────────
- ; Runs only after TENANT_ID + TENANT_SLUG_LOCAL are resolved. Cross-checks
- ; the channel-name tenant token against TENANT_ID before reading per-
- ; extension AstDB keys. Empty-string values are tombstones (written by
- ; Phase 3A rollback) — fall through to tenant default below. Never hangs
- ; up, redirects, or alters CDR. On any parse / mismatch / lookup failure,
- ; falls through to the existing tenant-default read on the line marked
- ; "tenant-default read" below. Sentinel NoOp on the success path is
- ; "Connect tenant MOH per-extension override applied …" — also the
- ; substring `--check` probe 2a greps for.
+ ; ── Per-call-source token (MOH_SRC) ─────────────────────────────────────────
+ ; Additive + fail-safe: an EMPTY MOH_SRC (unknown source) skips every
+ ; per-source read below, so the resolver behaves EXACTLY as the pre-source
+ ; build (extension/tenant default only). MOH_SRC only ADDS specificity — it
+ ; never Dials, never redirects, never loops, never alters CDR. Mirrors
+ ; classifyDialplanMohSource() in packages/shared/src/mohCallSource.ts.
+ ;
+ ; Signals are ALL read-only VitalPBX-owned inherited channel variables — no
+ ; new variable is introduced, and none is written by this resolver. Grounded
+ ; in extensions__20-baseplan.conf ([sub-setup-call-type], [sub-local-dialing])
+ ; and the per-tenant extensions__50-<id>-dialplan.conf inbound/outbound/IVR/
+ ; ring-group entry points:
+ ;   __CALL_TYPE  = 1 LOCAL(internal) | 2 IN(inbound) | 3 OUT(outbound) | 4 TRANSIT
+ ;   __CALL_ORIGIN= ring-group | RESTRICTED_IVR_CALL | normal | ...
+ ;   QUEUE_AGENTS_CONTEXT set on queue member legs; BLINDTRANSFER/ATTENDEDTRANSFER (Asterisk-native) on transfers.
+ ; Priority: explicit override → transfer → queue/ring-group/IVR (inbound subtypes)
+ ;   → __CALL_TYPE base (internal / outbound / inbound_direct). TRANSIT (4) and
+ ;   any unknown are left EMPTY → tenant/extension default (unchanged behavior).
+ same => n,Set(MOH_SRC=)
+ ; (0) Explicit inherited override. NEVER written by this installer; honored only
+ ;     if a future Connect-owned context sets __CONNECT_MOH_SRC. Extension hook.
+ same => n,ExecIf($["${CONNECT_MOH_SRC}" != ""]?Set(MOH_SRC=${CONNECT_MOH_SRC}))
+ ; (1) transfer — most specific held-party state. Uses ONLY the Asterisk-native
+ ;     transfer channel vars, which are EMPTY on normal calls (VitalPBX itself
+ ;     gates on ${BLINDTRANSFER}="" throughout [sub-local-dialing]). We must NOT
+ ;     use __TRANSFERED_CALL here: baseplan L217 sets it =TRUE unconditionally on
+ ;     EVERY local extension dial, so it is not a transfer signal and would
+ ;     mis-bucket inbound_direct/internal/ring-group/IVR as "transfer".
+ same => n,ExecIf($[$["${MOH_SRC}" = ""] & $[$["${BLINDTRANSFER}" != ""] | $["${ATTENDEDTRANSFER}" != ""]]]?Set(MOH_SRC=transfer))
+ ; (2)/(3)/(4) inbound subtypes via VitalPBX inherited origin markers.
+ same => n,ExecIf($[$["${MOH_SRC}" = ""] & $["${__CALL_ORIGIN}" = "ring-group"]]?Set(MOH_SRC=inbound_ringgroup))
+ same => n,ExecIf($[$["${MOH_SRC}" = ""] & $["${QUEUE_AGENTS_CONTEXT}" != ""]]?Set(MOH_SRC=inbound_queue))
+ same => n,ExecIf($[$["${MOH_SRC}" = ""] & $["${__CALL_ORIGIN}" = "RESTRICTED_IVR_CALL"]]?Set(MOH_SRC=inbound_ivr))
+ ; (5) __CALL_TYPE base classes (set once at the true origin by [sub-setup-call-type],
+ ;     guarded by __CALL_TYPE_CONFIGURED so it survives to the extension leg).
+ same => n,ExecIf($[$["${MOH_SRC}" = ""] & $["${CALL_TYPE}" = "1"]]?Set(MOH_SRC=internal))
+ same => n,ExecIf($[$["${MOH_SRC}" = ""] & $["${CALL_TYPE}" = "3"]]?Set(MOH_SRC=outbound))
+ same => n,ExecIf($[$["${MOH_SRC}" = ""] & $["${CALL_TYPE}" = "2"]]?Set(MOH_SRC=inbound_direct))
+ same => n,NoOp(Connect tenant MOH source tenant_id=${TENANT_ID} slug=${TENANT_SLUG_LOCAL} call_type=${CALL_TYPE} origin=${__CALL_ORIGIN} moh_src=${MOH_SRC})
+ ; ── Resolve the channel's extension token (used by extension-scope lookups) ──
+ ; Cross-checks the channel-name tenant token against TENANT_ID before trusting
+ ; the extension segment (cross-tenant defence). CH_EXT_SAFE stays "" when the
+ ; channel is not a clean "T<TENANT_ID>_<ext>" so ext-scope reads are skipped.
  same => n,Set(EXT_OVR=)
+ same => n,Set(CH_EXT_SAFE=)
  same => n,Set(CHAN_ENDPOINT=${CHANNEL(pjsip,endpoint)})
  same => n,ExecIf($["${CHAN_ENDPOINT}" = ""]?Set(CHAN_NAME_LOCAL=${CHANNEL(name)}))
  same => n,ExecIf($["${CHAN_ENDPOINT}" = ""]?Set(CHAN_NAME_LOCAL=${CUT(CHAN_NAME_LOCAL,/,2-)}))
  same => n,ExecIf($["${CHAN_ENDPOINT}" = ""]?Set(CHAN_ENDPOINT=${REGEX("^(.+)-[0-9a-fA-F]+$" ${CHAN_NAME_LOCAL})}))
  same => n,Set(CH_HEAD=${CUT(CHAN_ENDPOINT,_,1)})
  same => n,Set(CH_TAIL=${CUT(CHAN_ENDPOINT,_,2-)})
- same => n,GotoIf($["${CH_HEAD:0:1}" != "T"]?skip_ext_ovr)
+ same => n,GotoIf($["${CH_HEAD:0:1}" != "T"]?ext_tok_done)
  same => n,Set(CH_TID=${FILTER(0-9,${CH_HEAD:1})})
- same => n,GotoIf($["${CH_TID}" = ""]?skip_ext_ovr)
- same => n,GotoIf($["${CH_TID}" != "${TENANT_ID}"]?skip_ext_ovr)
- same => n,GotoIf($["${CH_TAIL}" = ""]?skip_ext_ovr)
- same => n,Set(CH_EXT_SAFE=${FILTER(A-Za-z0-9_-,${CH_TAIL})})
- same => n,GotoIf($["${CH_EXT_SAFE}" != "${CH_TAIL}"]?skip_ext_ovr)
- same => n,GotoIf($[${LEN(${CH_EXT_SAFE})} > 32]?skip_ext_ovr)
- same => n,Set(EXT_OVR=${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${CH_EXT_SAFE}/moh_class)})
- same => n,ExecIf($["${EXT_OVR}" = ""]?Set(EXT_OVR=${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${CH_EXT_SAFE}/active_moh_class)}))
+ same => n,GotoIf($["${CH_TID}" = ""]?ext_tok_done)
+ same => n,GotoIf($["${CH_TID}" != "${TENANT_ID}"]?ext_tok_done)
+ same => n,GotoIf($["${CH_TAIL}" = ""]?ext_tok_done)
+ same => n,Set(CH_EXT_TEST=${FILTER(A-Za-z0-9_-,${CH_TAIL})})
+ same => n,GotoIf($["${CH_EXT_TEST}" != "${CH_TAIL}"]?ext_tok_done)
+ same => n,GotoIf($[${LEN(${CH_EXT_TEST})} > 32]?ext_tok_done)
+ same => n,Set(CH_EXT_SAFE=${CH_EXT_TEST})
+ same => n(ext_tok_done),NoOp(Connect tenant MOH ext token tenant_id=${TENANT_ID} ext=${CH_EXT_SAFE})
+ ; ── (1) Extension + source (highest priority) ───────────────────────────────
+ same => n,ExecIf($[$["${CH_EXT_SAFE}" != ""] & $["${MOH_SRC}" != ""]]?Set(EXT_OVR=${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${CH_EXT_SAFE}/moh/src/${MOH_SRC})}))
+ same => n,GotoIf($["${EXT_OVR}" != ""]?apply_ext)
+ ; ── (2) Extension default (per-extension override) ──────────────────────────
+ same => n,ExecIf($["${CH_EXT_SAFE}" != ""]?Set(EXT_OVR=${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${CH_EXT_SAFE}/moh_class)}))
+ same => n,ExecIf($[$["${EXT_OVR}" = ""] & $["${CH_EXT_SAFE}" != ""]]?Set(EXT_OVR=${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${CH_EXT_SAFE}/active_moh_class)}))
  same => n,GotoIf($["${EXT_OVR}" = ""]?skip_ext_ovr)
- same => n,Set(CHANNEL(musicclass)=${EXT_OVR})
+ same => n(apply_ext),Set(CHANNEL(musicclass)=${EXT_OVR})
  same => n,Set(__CONNECT_MOH=${EXT_OVR})
- same => n,NoOp(Connect tenant MOH per-extension override applied tenant_id=${TENANT_ID} slug=${TENANT_SLUG_LOCAL} ext=${CH_EXT_SAFE} class=${EXT_OVR})
+ same => n,NoOp(Connect tenant MOH per-extension override applied tenant_id=${TENANT_ID} slug=${TENANT_SLUG_LOCAL} ext=${CH_EXT_SAFE} src=${MOH_SRC} class=${EXT_OVR})
  same => n,Return()
  same => n(skip_ext_ovr),NoOp(Connect tenant MOH per-extension override skipped tenant_id=${TENANT_ID} slug=${TENANT_SLUG_LOCAL} ch=${CHAN_ENDPOINT})
- ; ── Tenant-default read (existing pre-Phase-3B path) ────────────────────────
+ ; ── (3) Tenant + source ─────────────────────────────────────────────────────
+ same => n,Set(MOH_CLASS_LOCAL=)
+ same => n,ExecIf($["${MOH_SRC}" != ""]?Set(MOH_CLASS_LOCAL=${DB(connect/t_${TENANT_SLUG_LOCAL}/moh/src/${MOH_SRC})}))
+ same => n,GotoIf($["${MOH_CLASS_LOCAL}" != ""]?apply_tenant)
+ ; ── (4) Tenant default (existing path — sentinel keys preserved) ─────────────
  same => n,Set(MOH_CLASS_LOCAL=${DB(connect/t_${TENANT_SLUG_LOCAL}/moh_class)})
  same => n,ExecIf($["${MOH_CLASS_LOCAL}" = ""]?Set(MOH_CLASS_LOCAL=${DB(connect/t_${TENANT_SLUG_LOCAL}/active_moh_class)}))
+ ; ── (5) Global default (system-wide fallback, Requirement 4 level 4) ─────────
+ same => n,ExecIf($["${MOH_CLASS_LOCAL}" = ""]?Set(MOH_CLASS_LOCAL=${DB(connect/system/moh_default_class)}))
  same => n,GotoIf($["${MOH_CLASS_LOCAL}" = ""]?done)
- same => n,Set(CHANNEL(musicclass)=${MOH_CLASS_LOCAL})
+ same => n(apply_tenant),Set(CHANNEL(musicclass)=${MOH_CLASS_LOCAL})
  same => n,Set(__CONNECT_MOH=${MOH_CLASS_LOCAL})
- same => n,NoOp(Connect tenant MOH applied tenant_id=${TENANT_ID} slug=${TENANT_SLUG_LOCAL} class=${MOH_CLASS_LOCAL})
+ same => n,NoOp(Connect tenant MOH applied tenant_id=${TENANT_ID} slug=${TENANT_SLUG_LOCAL} src=${MOH_SRC} class=${MOH_CLASS_LOCAL})
  same => n,Return()
  same => n(done),NoOp(Connect tenant MOH skipped tenant_id=${TENANT_ID} slug=${TENANT_SLUG_LOCAL} class=${MOH_CLASS_LOCAL})
  same => n,Return()

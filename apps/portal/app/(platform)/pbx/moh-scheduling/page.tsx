@@ -129,8 +129,75 @@ const SOURCE_LABELS: Record<string, string> = {
   reconciliation:  "Reconcile",
 };
 
-const TABS = ["Hold Profiles", "Assets", "Schedule", "Override", "Publish"] as const;
+const TABS = ["Hold Profiles", "Assets", "Call Types", "Schedule", "Override", "Publish"] as const;
 type Tab = typeof TABS[number];
+
+// ── Per-call-source policy types (Requirement 5/7) ───────────────────────────
+// Mirrors MohSourcePolicy on the API + MohCallSource in packages/shared. A row
+// with scope="tenant" (extension="") is a tenant-wide policy; scope="extension"
+// targets one channel token. The dialplan resolver reads these as additive
+// AstDB keys and only ever ADDS specificity over the tenant/extension default.
+interface SourcePolicy {
+  id: string;
+  tenantId: string;
+  scope: "tenant" | "extension";
+  extension: string;
+  source: string;
+  vitalPbxMohClassName: string;
+  mohProfileId: string | null;
+  enabled: boolean;
+}
+
+interface ResolveResult {
+  tenantId: string;
+  source: string;
+  sourceLabel: string;
+  extension: string | null;
+  at: string;
+  resolved: { class: string | null; reason: string; ruleId: string | null; fallbackToPbxDefault: boolean };
+  candidates: {
+    schedule_extension: string | null;
+    extension_source: string | null;
+    extension_default: string | null;
+    tenant_source: string | null;
+    tenant_default: string | null;
+    tenant_default_mode: string;
+    global_default: string | null;
+  };
+}
+
+// Human labels for the resolution reason returned by /voice/moh/resolve.
+const REASON_LABELS: Record<string, string> = {
+  schedule_extension: "Scheduled extension override (active now)",
+  extension_source:   "Extension policy for this call type",
+  extension_default:  "Extension default MOH",
+  tenant_source:      "Tenant policy for this call type",
+  tenant_default:     "Tenant default MOH",
+  global_default:     "Global system default",
+  pbx_default:        "No Connect policy — VitalPBX default plays",
+};
+
+// Call sources that CANNOT currently be resolved on a real PBX call path and
+// must therefore not be offered in the UI (Requirement 6/8 — never expose
+// functionality that isn't actually active).
+//   • mobile_app: a softphone that PLACES a call is an ordinary PJSIP extension
+//     (CALL_TYPE 1/3), indistinguishable from a desk phone in the generated
+//     dialplan; [pjsip-push] only WAKES a called mobile device. No per-call
+//     inherited variable identifies the originator as a mobile app.
+//   • parked: parking-lot hold music is controlled by res_parking.conf's
+//     `musicclass` applied when the call ENTERS the lot — not by CHANNEL(musicclass)
+//     on the bridge/connect hooks this resolver runs on. It cannot be set here.
+const UNSUPPORTED_MOH_SOURCES = new Set<string>(["mobile_app", "parked"]);
+
+// The candidate chain rendered top→bottom in priority order.
+const CANDIDATE_ORDER: Array<{ key: keyof ResolveResult["candidates"]; reason: string; label: string }> = [
+  { key: "schedule_extension", reason: "schedule_extension", label: "1 · Scheduled extension override" },
+  { key: "extension_source",   reason: "extension_source",   label: "2 · Extension + this call type" },
+  { key: "extension_default",  reason: "extension_default",  label: "3 · Extension default" },
+  { key: "tenant_source",      reason: "tenant_source",      label: "4 · Tenant + this call type" },
+  { key: "tenant_default",     reason: "tenant_default",     label: "5 · Tenant default" },
+  { key: "global_default",     reason: "global_default",     label: "6 · Global default" },
+];
 
 // ── MOH Assets (uploaded music tracks) ───────────────────────────────────────
 // Each upload becomes a MohAsset row on Connect and a MOH class on the PBX
@@ -276,6 +343,9 @@ export default function HoldSchedulingPage() {
       )}
       {!loading && activeTab === "Assets" && (
         <AssetsTab tenantId={tenantId} canUpload={can("can_upload_moh")} />
+      )}
+      {!loading && activeTab === "Call Types" && (
+        <CallTypesTab tenantId={tenantId} canManage={canManage} isSuperAdmin={isSuperAdmin} />
       )}
       {!loading && activeTab === "Schedule" && (
         <ScheduleTab schedule={schedule} profiles={profiles} tenantId={tenantId} canManage={canManage} onRefresh={reload} />
@@ -1150,6 +1220,268 @@ function PublishTab({ history, preview, tenantId, canManage, onRefresh }: {
                 {rollingBack === r.id ? "…" : "Rollback"}
               </button>
             )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tab: Call Types (per-call-source MOH policies + diagnostics)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function CallTypesTab({ tenantId, canManage, isSuperAdmin }: {
+  tenantId: string; canManage: boolean; isSuperAdmin?: boolean;
+}) {
+  const [policies, setPolicies] = useState<SourcePolicy[]>([]);
+  const [sources, setSources] = useState<string[]>([]);
+  const [labels, setLabels] = useState<Record<string, string>>({});
+  const [globalDefault, setGlobalDefault] = useState<string | null>(null);
+  const [pbxClasses, setPbxClasses] = useState<PbxMohClassRow[]>([]);
+  const [assets, setAssets] = useState<MohAsset[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  // Editor state
+  const [scope, setScope] = useState<"tenant" | "extension">("tenant");
+  const [extension, setExtension] = useState("");
+  const [editSource, setEditSource] = useState("");
+  const [editClass, setEditClass] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  // Global default editor
+  const [gdClass, setGdClass] = useState("");
+  const [gdSaving, setGdSaving] = useState(false);
+
+  // Diagnostics
+  const [dxSource, setDxSource] = useState("internal");
+  const [dxExt, setDxExt] = useState("");
+  const [dxResult, setDxResult] = useState<ResolveResult | null>(null);
+  const [dxBusy, setDxBusy] = useState(false);
+
+  // Health
+  const [health, setHealth] = useState<{ healthy: boolean; warnings: string[] } | null>(null);
+
+  const tenantSlug = tenantId?.startsWith("vpbx:") ? tenantId.slice(5) : null;
+
+  const authFetch = useCallback(async (path: string, method: string, body?: unknown) => {
+    const token = typeof window !== "undefined" ? (localStorage.getItem("token") || localStorage.getItem("cc-token") || localStorage.getItem("authToken") || "") : "";
+    const apiBase = typeof window !== "undefined" ? `${window.location.origin}/api` : (process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:3001");
+    const resp = await fetch(`${apiBase}${path}`, {
+      method,
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!resp.ok) { const b = await resp.json().catch(() => ({})); throw new Error((b as any)?.detail ?? (b as any)?.error ?? `Request failed (${resp.status})`); }
+    return resp.json().catch(() => ({}));
+  }, []);
+
+  const reload = useCallback(async () => {
+    if (!tenantId) return;
+    setLoading(true); setErr(null);
+    try {
+      const qs = `?tenantId=${encodeURIComponent(tenantId)}`;
+      const [sp, gd, cls, ast, hl] = await Promise.allSettled([
+        apiGet<{ policies: SourcePolicy[]; sources: string[]; labels: Record<string, string> }>(`/voice/moh/source-policies${qs}`),
+        apiGet<{ vitalPbxMohClassName: string | null }>(`/voice/moh/global-default`),
+        apiGet<{ classes: PbxMohClassRow[] }>(`/voice/moh/pbx-classes${qs}`),
+        apiGet<{ assets: MohAsset[] }>(`/voice/moh/assets${qs}`),
+        apiGet<{ healthy: boolean; warnings: string[] }>(`/voice/moh/health${qs}`),
+      ]);
+      if (sp.status === "fulfilled") { setPolicies(sp.value.policies ?? []); setSources(sp.value.sources ?? []); setLabels(sp.value.labels ?? {}); if (!editSource && sp.value.sources?.length) setEditSource(sp.value.sources[0]); }
+      if (gd.status === "fulfilled") { setGlobalDefault(gd.value.vitalPbxMohClassName ?? null); setGdClass(gd.value.vitalPbxMohClassName ?? ""); }
+      if (cls.status === "fulfilled") setPbxClasses(cls.value.classes ?? []);
+      if (ast.status === "fulfilled") setAssets(ast.value.assets ?? []);
+      if (hl.status === "fulfilled") setHealth({ healthy: hl.value.healthy, warnings: hl.value.warnings ?? [] });
+    } catch (e: any) { setErr(e?.message ?? "Failed to load call-type policies"); }
+    finally { setLoading(false); }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const savePolicy = async () => {
+    if (!editSource || !editClass) { setErr("Pick a call type and a MOH class."); return; }
+    if (scope === "extension" && !extension.trim()) { setErr("Enter an extension for extension-scope policies."); return; }
+    setSaving(true); setErr(null); setMsg(null);
+    try {
+      await apiPut(`/voice/moh/source-policies`, {
+        tenantId, scope, extension: scope === "extension" ? extension.trim() : "", source: editSource, vitalPbxMohClassName: editClass,
+      });
+      setMsg(`Saved ${labels[editSource] ?? editSource} → ${editClass}`);
+      setEditClass("");
+      await reload();
+    } catch (e: any) { setErr(e?.message ?? "Save failed"); }
+    finally { setSaving(false); }
+  };
+
+  const deletePolicy = async (p: SourcePolicy) => {
+    if (!confirm(`Remove the ${labels[p.source] ?? p.source} policy${p.scope === "extension" ? ` for ext ${p.extension}` : ""}? Calls will fall back to the ${p.scope === "extension" ? "extension/tenant" : "tenant/global"} default.`)) return;
+    setErr(null); setMsg(null);
+    try {
+      await authFetch(`/voice/moh/source-policies`, "DELETE", { tenantId, scope: p.scope, extension: p.extension, source: p.source });
+      setMsg("Policy removed.");
+      await reload();
+    } catch (e: any) { setErr(e?.message ?? "Delete failed"); }
+  };
+
+  const saveGlobalDefault = async () => {
+    setGdSaving(true); setErr(null); setMsg(null);
+    try {
+      await apiPut(`/voice/moh/global-default`, { vitalPbxMohClassName: gdClass.trim() || null });
+      setGlobalDefault(gdClass.trim() || null);
+      setMsg(gdClass.trim() ? `Global default set to ${gdClass.trim()}` : "Global default cleared.");
+    } catch (e: any) { setErr(e?.message ?? "Failed to set global default"); }
+    finally { setGdSaving(false); }
+  };
+
+  const runDiagnostic = async () => {
+    setDxBusy(true); setErr(null); setDxResult(null);
+    try {
+      const qs = `?tenantId=${encodeURIComponent(tenantId)}&source=${encodeURIComponent(dxSource)}${dxExt.trim() ? `&extension=${encodeURIComponent(dxExt.trim())}` : ""}`;
+      const r = await apiGet<ResolveResult>(`/voice/moh/resolve${qs}`);
+      setDxResult(r);
+    } catch (e: any) { setErr(e?.message ?? "Diagnostic failed"); }
+    finally { setDxBusy(false); }
+  };
+
+  const tenantPolicies = policies.filter((p) => p.scope === "tenant");
+  const extPolicies = policies.filter((p) => p.scope === "extension");
+  // Only expose sources that resolve on a real PBX call path.
+  const supportedSources = sources.filter((s) => !UNSUPPORTED_MOH_SOURCES.has(s));
+  const sourceOpts = supportedSources.map((s) => ({ value: s, label: labels[s] ?? s }));
+
+  return (
+    <div style={{ maxWidth: 900 }}>
+      <h2 style={{ margin: "0 0 6px", fontSize: 16, fontWeight: 600 }}>MOH by Call Type</h2>
+      <p style={{ margin: "0 0 10px", fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>
+        Assign a MOH class per call source (inbound direct/IVR/ring-group/queue, internal, outbound, transfer, parked).
+        These are <strong>additive</strong>: a call only uses a per-type class when one is set for its source — otherwise it falls through to the extension default, tenant default, then the global default, then the PBX default. Nothing here changes routing.
+      </p>
+      <p style={{ margin: "0 0 18px", fontSize: 11, color: "#64748b", lineHeight: 1.5 }}>
+        <strong style={{ color: "#94a3b8" }}>Mobile app</strong> and <strong style={{ color: "#94a3b8" }}>Parked</strong> are intentionally not offered here. A softphone that places a call is an ordinary extension in the dialplan (indistinguishable from a desk phone), and parking-lot hold music is controlled by the parking lot configuration, not by the bridge-hook resolver these policies use. They will be enabled only when a safe per-call mechanism exists.
+      </p>
+
+      {err && <div style={{ color: "#fca5a5", fontSize: 13, marginBottom: 10 }}>{err}</div>}
+      {msg && <div style={{ color: "#86efac", fontSize: 13, marginBottom: 10 }}>{msg}</div>}
+      {loading && <div style={{ fontSize: 13, color: "#64748b" }}>Loading…</div>}
+
+      {health && health.warnings.length > 0 && (
+        <div style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.4)", borderRadius: 8, padding: "10px 14px", marginBottom: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#fbbf24", marginBottom: 4 }}>MOH health warnings</div>
+          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: "#fcd34d" }}>
+            {health.warnings.map((w, i) => <li key={i}>{w}</li>)}
+          </ul>
+        </div>
+      )}
+      {health && health.healthy && (
+        <div style={{ fontSize: 12, color: "#86efac", marginBottom: 16 }}>✓ MOH config healthy — all referenced classes ready, no stale schedules or failed publishes.</div>
+      )}
+
+      {/* Diagnostics */}
+      <div style={{ ...cardStyle, flexDirection: "column", alignItems: "stretch", gap: 10, marginBottom: 22, padding: 18 }}>
+        <div style={{ fontSize: 13, fontWeight: 700 }}>Why does a call get this MOH? <span style={{ fontWeight: 400, color: "#64748b" }}>(live resolution — read-only)</span></div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <div><label style={labelStyle}>Call type</label><ConnectSelect value={dxSource} onChange={setDxSource} style={{ width: 220 }} options={sourceOpts} /></div>
+          <div><label style={labelStyle}>Extension (optional)</label><input style={{ ...inputStyle, width: 160, marginBottom: 0 }} value={dxExt} onChange={(e) => setDxExt(e.target.value)} placeholder="e.g. 101" /></div>
+          <button onClick={runDiagnostic} disabled={dxBusy} style={btnStyle("#6366f1")}>{dxBusy ? "Resolving…" : "Explain"}</button>
+        </div>
+        {dxResult && (
+          <div style={{ background: "rgba(0,0,0,0.3)", borderRadius: 8, padding: "12px 14px", marginTop: 4 }}>
+            <div style={{ fontSize: 13, marginBottom: 10 }}>
+              Result: {dxResult.resolved.class
+                ? <code style={{ color: "#86efac", background: "rgba(34,197,94,0.12)", padding: "2px 8px", borderRadius: 4 }}>{dxResult.resolved.class}</code>
+                : <span style={{ color: "#fbbf24" }}>PBX default (no Connect policy)</span>}
+              <span style={{ color: "#64748b", marginLeft: 10 }}>{REASON_LABELS[dxResult.resolved.reason] ?? dxResult.resolved.reason}</span>
+            </div>
+            {CANDIDATE_ORDER.map(({ key, reason, label }) => {
+              const val = dxResult.candidates[key];
+              const isWinner = dxResult.resolved.reason === reason;
+              return (
+                <div key={key} style={{ display: "flex", gap: 12, fontSize: 12, padding: "3px 0", opacity: val ? 1 : 0.45 }}>
+                  <span style={{ width: 18, textAlign: "center" }}>{isWinner ? "✓" : ""}</span>
+                  <span style={{ minWidth: 260, color: isWinner ? "#e2e8f0" : "#94a3b8", fontWeight: isWinner ? 700 : 400 }}>{label}</span>
+                  <code style={{ color: val ? "#cbd5e1" : "#475569" }}>{val ?? "—"}</code>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Global default */}
+      <SectionLabel>Global Default {isSuperAdmin ? "" : "(SUPER_ADMIN only)"}</SectionLabel>
+      <div style={{ ...cardStyle, gap: 12, marginBottom: 22 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 12, color: "#94a3b8" }}>Last-resort Connect default before the PBX's own default MOH.</div>
+          <div style={{ fontSize: 12, marginTop: 4 }}>Current: {globalDefault ? <code style={{ color: "#cbd5e1" }}>{globalDefault}</code> : <span style={{ color: "#64748b" }}>not set (PBX default)</span>}</div>
+        </div>
+        {isSuperAdmin && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input style={{ ...inputStyle, width: 180, marginBottom: 0 }} value={gdClass} onChange={(e) => setGdClass(e.target.value)} placeholder="mohN or connect_* (blank=clear)" />
+            <button onClick={saveGlobalDefault} disabled={gdSaving} style={btnSmall("#6366f1")}>{gdSaving ? "…" : "Save"}</button>
+          </div>
+        )}
+      </div>
+
+      {/* Editor */}
+      {canManage && (
+        <div style={{ ...cardStyle, flexDirection: "column", alignItems: "stretch", gap: 12, marginBottom: 22, padding: 18 }}>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>Add / update a call-type policy</div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div>
+              <label style={labelStyle}>Scope</label>
+              <ConnectSelect value={scope} onChange={(v) => setScope(v as "tenant" | "extension")} style={{ width: 150 }}
+                options={[{ value: "tenant", label: "Tenant-wide" }, { value: "extension", label: "Extension" }]} />
+            </div>
+            {scope === "extension" && (
+              <div><label style={labelStyle}>Extension</label><input style={{ ...inputStyle, width: 130, marginBottom: 0 }} value={extension} onChange={(e) => setExtension(e.target.value)} placeholder="e.g. 101" /></div>
+            )}
+            <div><label style={labelStyle}>Call type</label><ConnectSelect value={editSource} onChange={setEditSource} style={{ width: 210 }} options={sourceOpts} /></div>
+          </div>
+          <div>
+            <label style={labelStyle}>MOH class</label>
+            <MohClassPicker value={editClass} onChange={setEditClass} pbxClasses={pbxClasses} assets={assets} loading={loading} tenantSlug={tenantSlug} />
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <button onClick={savePolicy} disabled={saving} style={btnStyle("#6366f1")}>{saving ? "Saving…" : "Save policy"}</button>
+          </div>
+        </div>
+      )}
+
+      {/* Tenant policies */}
+      <SectionLabel>Tenant call-type policies</SectionLabel>
+      {tenantPolicies.length === 0 && <div style={emptyBox}>No tenant call-type policies. All call types use the tenant default.</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 22 }}>
+        {tenantPolicies.map((p) => (
+          <div key={p.id} style={{ ...cardStyle, fontSize: 13 }}>
+            <div style={{ flex: 1 }}>
+              <span style={{ fontWeight: 600 }}>{labels[p.source] ?? p.source}</span>
+              {!p.enabled && <span style={{ marginLeft: 8, fontSize: 10, color: "#f59e0b" }}>(disabled)</span>}
+              {UNSUPPORTED_MOH_SOURCES.has(p.source) && <span title="This source is not resolvable on a real call path yet; the policy is stored but never applied." style={{ marginLeft: 8, fontSize: 10, color: "#f59e0b" }}>(not active)</span>}
+            </div>
+            <code style={{ fontSize: 11, background: "rgba(0,0,0,0.3)", padding: "2px 7px", borderRadius: 4, color: "#94a3b8" }}>{p.vitalPbxMohClassName}</code>
+            {canManage && <button onClick={() => deletePolicy(p)} style={btnSmall("#7f1d1d")}>Remove</button>}
+          </div>
+        ))}
+      </div>
+
+      {/* Extension policies */}
+      <SectionLabel>Extension call-type policies</SectionLabel>
+      {extPolicies.length === 0 && <div style={emptyBox}>No extension call-type policies.</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {extPolicies.map((p) => (
+          <div key={p.id} style={{ ...cardStyle, fontSize: 13 }}>
+            <div style={{ flex: 1 }}>
+              <code style={{ color: "#e2e8f0" }}>{p.extension}</code>
+              <span style={{ marginLeft: 10, fontWeight: 600 }}>{labels[p.source] ?? p.source}</span>
+              {!p.enabled && <span style={{ marginLeft: 8, fontSize: 10, color: "#f59e0b" }}>(disabled)</span>}
+              {UNSUPPORTED_MOH_SOURCES.has(p.source) && <span title="This source is not resolvable on a real call path yet; the policy is stored but never applied." style={{ marginLeft: 8, fontSize: 10, color: "#f59e0b" }}>(not active)</span>}
+            </div>
+            <code style={{ fontSize: 11, background: "rgba(0,0,0,0.3)", padding: "2px 7px", borderRadius: 4, color: "#94a3b8" }}>{p.vitalPbxMohClassName}</code>
+            {canManage && <button onClick={() => deletePolicy(p)} style={btnSmall("#7f1d1d")}>Remove</button>}
           </div>
         ))}
       </div>

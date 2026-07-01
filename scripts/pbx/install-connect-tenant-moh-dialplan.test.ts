@@ -45,6 +45,15 @@ const __dirname = dirname(__filename);
 const SCRIPT_PATH = join(__dirname, "install-connect-tenant-moh-dialplan.sh");
 const SCRIPT = readFileSync(SCRIPT_PATH, "utf8");
 
+// Extract the real [sub-connect-tenant-moh] resolver context body (from the
+// header line immediately followed by `exten => s,1,` up to the next context
+// header). CRLF-tolerant. Shared by the metadata-only / classification tests.
+function resolverBody(): string {
+  const m = SCRIPT.match(/\n\[sub-connect-tenant-moh\]\r?\nexten => s,1,([\s\S]*?)\r?\n\[/);
+  assert.ok(m, "could not locate [sub-connect-tenant-moh] context body");
+  return m![1];
+}
+
 test("installer defines all three required static Asterisk contexts", () => {
   assert.match(SCRIPT, /\[sub-connect-tenant-moh\]/, "missing [sub-connect-tenant-moh] context header");
   assert.match(SCRIPT, /\[global-before-bridging-call-hook\]/, "missing [global-before-bridging-call-hook] context header");
@@ -197,6 +206,99 @@ test("installer never hardcodes a tenant or a specific moh class in the dialplan
       -1,
       `embedded dialplan must not hardcode ${JSON.stringify(banned)}`,
     );
+  }
+});
+
+test("resolver is metadata-only: no Dial/Local/Answer/Playback/Originate (no-loop / no-duplicate-leg regression)", () => {
+  // Requirement 3 + 10: MOH assignment must be control/metadata only. The
+  // resolver context may ONLY read AstDB/channel vars and Set the musicclass.
+  // If it ever gains a Dial(), Local/ channel, Answer(), Playback(), Background()
+  // or Originate() it could fork a call leg, answer for MOH, or loop — so we
+  // hard-fail here. Extract the [sub-connect-tenant-moh] context body up to the
+  // next context header. CRLF-tolerant.
+  // Anchor to the REAL context definition (header line immediately followed by
+  // `exten => s,1,`), not the documentation comment that merely names it.
+  const body = resolverBody();
+  for (const forbidden of [
+    /\bDial\s*\(/i,
+    /\bLocal\//i,
+    /\bAnswer\s*\(/i,
+    /\bPlayback\s*\(/i,
+    /\bBackground\s*\(/i,
+    /\bOriginate\b/i,
+    /\bBridge\s*\(/i,
+  ]) {
+    assert.equal(forbidden.test(body), false, `resolver must not contain ${forbidden} — MOH assignment is metadata-only`);
+  }
+  // Positive contract: the only channel mutation is CHANNEL(musicclass)/__CONNECT_MOH.
+  assert.match(body, /Set\(CHANNEL\(musicclass\)=/);
+});
+
+test("resolver per-source lookup is additive and preserves the tenant-default sentinel keys", () => {
+  // The new MOH_SRC per-source reads must NOT replace the tenant-default read.
+  // Both the per-source families and the legacy tenant/extension default keys
+  // must be present, and an empty MOH_SRC must skip the per-source reads.
+  assert.match(SCRIPT, /Set\(MOH_SRC=\)/);                                   // starts empty
+  assert.match(SCRIPT, /moh\/src\/\$\{MOH_SRC\}/);                            // per-source read
+  assert.match(SCRIPT, /connect\/system\/moh_default_class/);                // global default
+  assert.match(SCRIPT, /connect\/t_\$\{TENANT_SLUG_LOCAL\}\/moh_class/);      // tenant default preserved
+  // Per-source reads are guarded on a non-empty MOH_SRC (fail-safe to default).
+  assert.match(SCRIPT, /ExecIf\(\$\["\$\{MOH_SRC\}" != ""\]\?Set\(MOH_CLASS_LOCAL=\$\{DB\(connect\/t_\$\{TENANT_SLUG_LOCAL\}\/moh\/src\/\$\{MOH_SRC\}\)\}\)\)/);
+});
+
+test("resolver derives internal/outbound/inbound_direct from VitalPBX inherited __CALL_TYPE", () => {
+  // Phase 2: the three base call sources are classified ONLY from VitalPBX's
+  // own inherited __CALL_TYPE (read as ${CALL_TYPE}) set by [sub-setup-call-type]
+  // (1=LOCAL, 2=IN, 3=OUT, 4=TRANSIT). Each read must be guarded on an empty
+  // MOH_SRC so the higher-confidence signals (transfer/queue/ring-group/ivr)
+  // always win, and so an unknown/TRANSIT call falls through untouched.
+  const body = resolverBody();
+  assert.match(body, /ExecIf\(\$\[\$\["\$\{MOH_SRC\}" = ""\] & \$\["\$\{CALL_TYPE\}" = "1"\]\]\?Set\(MOH_SRC=internal\)\)/);
+  assert.match(body, /ExecIf\(\$\[\$\["\$\{MOH_SRC\}" = ""\] & \$\["\$\{CALL_TYPE\}" = "3"\]\]\?Set\(MOH_SRC=outbound\)\)/);
+  assert.match(body, /ExecIf\(\$\[\$\["\$\{MOH_SRC\}" = ""\] & \$\["\$\{CALL_TYPE\}" = "2"\]\]\?Set\(MOH_SRC=inbound_direct\)\)/);
+  // CALL_TYPE=4 (TRANSIT, trunk↔trunk) must NOT be mapped — no extension leg.
+  assert.equal(/CALL_TYPE\}" = "4"/.test(body), false, "TRANSIT calls must be left unclassified (no extension MOH target)");
+});
+
+test("resolver honors an explicit inherited __CONNECT_MOH_SRC override first, but never sets it", () => {
+  // Requirement 2: reuse an inherited marker; the explicit override is the
+  // documented future extension hook. It must be read (as ${CONNECT_MOH_SRC})
+  // BEFORE any classifier, and the installer must NEVER write __CONNECT_MOH_SRC
+  // (that is the caller's job in a future Connect-owned context).
+  const body = resolverBody();
+  assert.match(body, /ExecIf\(\$\["\$\{CONNECT_MOH_SRC\}" != ""\]\?Set\(MOH_SRC=\$\{CONNECT_MOH_SRC\}\)\)/);
+  assert.equal(/Set\(__CONNECT_MOH_SRC=/.test(SCRIPT), false, "installer must not SET __CONNECT_MOH_SRC — it is read-only here");
+});
+
+test("resolver classifies transfer ONLY from Asterisk-native BLINDTRANSFER/ATTENDEDTRANSFER, never __TRANSFERED_CALL", () => {
+  // Regression guard for the June-2026 hardening finding: VitalPBX baseplan sets
+  // __TRANSFERED_CALL=TRUE unconditionally on EVERY local extension dial
+  // (extensions__20-baseplan.conf L217), so it is NOT a transfer signal — using
+  // it starves inbound_direct/internal/ring-group/IVR (they would all bucket as
+  // "transfer"). Transfer must be detected from the native transfer vars, which
+  // are empty on normal calls.
+  const body = resolverBody();
+  assert.match(body, /Set\(MOH_SRC=transfer\)/);
+  assert.match(body, /\$\["\$\{BLINDTRANSFER\}" != ""\]/);
+  assert.match(body, /\$\["\$\{ATTENDEDTRANSFER\}" != ""\]/);
+  // The hazard is READING the variable; the explanatory comment names it in prose.
+  assert.equal(/\$\{__TRANSFERED_CALL\}/.test(body), false, "resolver must not READ ${__TRANSFERED_CALL} — it is TRUE on every local dial");
+});
+
+test("resolver source priority: transfer/ring-group/queue/ivr are classified before the __CALL_TYPE base classes", () => {
+  // Ordering guarantee: an inbound call that fanned out through a ring group or
+  // queue must resolve to inbound_ringgroup/inbound_queue, NOT inbound_direct,
+  // even though __CALL_TYPE=2 for all of them. Assert the specific signals'
+  // Set(MOH_SRC=...) lines all appear before the first CALL_TYPE-based line.
+  const body = resolverBody();
+  const idxTransfer = body.indexOf("Set(MOH_SRC=transfer)");
+  const idxRg = body.indexOf("Set(MOH_SRC=inbound_ringgroup)");
+  const idxQueue = body.indexOf("Set(MOH_SRC=inbound_queue)");
+  const idxIvr = body.indexOf("Set(MOH_SRC=inbound_ivr)");
+  const idxCallType = body.indexOf('$["${CALL_TYPE}" = "1"]');
+  for (const [name, idx] of [["transfer", idxTransfer], ["ringgroup", idxRg], ["queue", idxQueue], ["ivr", idxIvr]] as const) {
+    assert.ok(idx > -1, `expected ${name} classification present`);
+    assert.ok(idx < idxCallType, `${name} must be classified before the __CALL_TYPE base classes`);
   }
 });
 

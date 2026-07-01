@@ -37,6 +37,14 @@
       "types": "./src/mohRuntimeClass.ts",
       "default": "./src/mohRuntimeClass.ts"
     },
+    "./mohCallSource": {
+      "types": "./src/mohCallSource.ts",
+      "default": "./src/mohCallSource.ts"
+    },
+    "./mohSourcePublish": {
+      "types": "./src/mohSourcePublish.ts",
+      "default": "./src/mohSourcePublish.ts"
+    },
     "./ariBridgedSnapshot": {
       "types": "./src/ariBridgedSnapshot.ts",
       "default": "./src/ariBridgedSnapshot.ts"
@@ -69,7 +77,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/voicemailSyncFair.test.ts src/voicemailIngest.test.ts src/ariBridgedSnapshot.test.ts src/expoMobilePushFormat.test.ts src/portalPermissions.crm.test.ts src/portalPermissions.customRoles.test.ts src/crmEmailTemplates.test.ts src/smsInbox.test.ts src/smsText.test.ts src/webrtcCallDiagnostics.test.ts src/webrtcBlackbox.test.ts src/webrtcIncidentAlerts.test.ts src/webrtcGlobalOutageAlerts.test.ts src/apnsVoipPush.test.ts",
+    "test": "tsx --test src/voicemailSyncFair.test.ts src/voicemailIngest.test.ts src/ariBridgedSnapshot.test.ts src/expoMobilePushFormat.test.ts src/portalPermissions.crm.test.ts src/portalPermissions.customRoles.test.ts src/crmEmailTemplates.test.ts src/smsInbox.test.ts src/smsText.test.ts src/webrtcCallDiagnostics.test.ts src/webrtcBlackbox.test.ts src/webrtcIncidentAlerts.test.ts src/webrtcGlobalOutageAlerts.test.ts src/apnsVoipPush.test.ts src/mohCallSource.test.ts src/mohSourcePublish.test.ts src/mohScenarios.test.ts",
     "lint": "echo lint-shared"
   },
   "dependencies": {
