@@ -315,3 +315,129 @@ The live `moh show classes` probe reads a new **read-only** helper endpoint
 Branch-only. No deploy, no production migration, no PBX installer, no new resolver.
 The only production write was the **approved T2 base-MOH repair** via the existing
 publish path (§A).
+
+## K. Inbound hold coverage — caller-leg MOH in `[sub-local-dialing]` (production-proven 2026-07-01)
+
+### K.1 Root cause — called-leg hooks are insufficient for inbound hold
+Asterisk plays the **held party's own `CHANNEL(musicclass)`**. For an inbound
+call the held party is the **caller / Local leg** that executes VitalPBX
+`[sub-local-dialing]`:
+
+- **Inbound direct DID** → held leg is the inbound trunk channel in `[sub-local-dialing]`.
+- **Inbound via IVR / ring group / queue post-answer bridge** → held leg is the
+  `Local/<ext>@T<tid>_<ctx>;2` channel that runs `[sub-local-dialing]`.
+
+Every Connect MOH hook shipped before this change fires on the **called PJSIP
+endpoint leg**, never on that held caller/Local leg:
+
+| Hook | Dial flag | Runs on | Covers |
+|------|-----------|---------|--------|
+| `${TENANT_PREFIX}before-connecting-call-hook` | `b(sub-before-connecting-call)` | called endpoint, pre-dial | endpoint only |
+| `${TENANT_PREFIX}before-bridging-call-hook` + `global-before-bridging-call-hook` | `U(sub-before-bridging-call)` | called endpoint, post-answer | endpoint only |
+
+VitalPBX itself only sets the caller/Local leg's `musicclass` in two narrow
+cases — **hotdesk** (`sub-set-moh`) and **queue with `FORCE_QUEUE_MOH`** — neither
+of which applies to a normal inbound extension call, so the held leg stays at
+`default`.
+
+**Production evidence:** switching T2's class via AstDB changed **outbound** hold
+(held leg = called trunk = covered by `global-before-bridging`) but **not inbound**
+hold. PJSIP `moh_suggest` on the endpoint (**Candidate B**) was tested and did
+**not** drive the held peer — closed as unreliable. Adding a caller-leg hook that
+sets `CHANNEL(musicclass)` inside `[sub-local-dialing]` **before `Dial()`**
+(**Candidate A**) fixed inbound hold on the first live test.
+
+> **Conclusion (branch note):** *Called-leg (before-connecting / before-bridging)
+> hooks are insufficient for inbound hold. Caller-leg coverage in
+> `[sub-local-dialing]` before `Dial()` is required.*
+
+### K.2 The fix (installer-managed, idempotent)
+`scripts/pbx/install-connect-caller-leg-moh.sh`:
+
+1. Inserts **one** guarded line into VitalPBX-core `[sub-local-dialing]`,
+   immediately **after** the unique `U(sub-before-bridging-call` anchor (i.e. after
+   VitalPBX's own MOH/hotdesk/queue logic) and **before** `Dial(${DIAL_STRING}…)`:
+
+   ```
+   same => n,GosubIf($[${DIALPLAN_EXISTS(${TENANT_PREFIX}before-local-dial-moh-hook,s,1)}=1]?${TENANT_PREFIX}before-local-dial-moh-hook,s,1)
+   ```
+
+   `DIALPLAN_EXISTS` guard ⇒ **pure no-op** for any tenant without a hook context.
+   It does **not** alter `Dial()`, `Answer()`, `Playback()`, Local channels,
+   routes, trunks, queues, IVRs, ring groups, or extensions.
+2. Writes a **separate, Connect-owned** file
+   `extensions__67_connect_localdial_moh.conf` with **one hook per tenant that has
+   PUBLISHED Connect MOH** (`connect/pbx_tenant_map/<tid>/{slug,moh_class}` both
+   present). Each hook is self-contained + fail-safe:
+
+   ```
+   [T<tid>_before-local-dial-moh-hook]
+   exten => s,1,NoOp(...)
+    same => n,Set(CONNECT_MOH_CLASS=${DB(connect/t_<slug>/moh_class)})
+    same => n,ExecIf($["${CONNECT_MOH_CLASS}" = ""]?Set(CONNECT_MOH_CLASS=${DB(connect/t_<slug>/active_moh_class)}))
+    same => n,GotoIf($["${CONNECT_MOH_CLASS}" = ""]?done)
+    same => n,Set(CHANNEL(musicclass)=${CONNECT_MOH_CLASS})
+    same => n,Set(__CONNECT_MOH=${CONNECT_MOH_CLASS})
+    same => n(done),Return()
+   ```
+
+   Sets **only** `CHANNEL(musicclass)` + `__CONNECT_MOH`. Missing slug/class ⇒
+   `Return()` with musicclass untouched.
+3. `#tryinclude`s the `__67` file from the Connect hub `extensions__60_custom.conf`.
+
+**Safety invariants (locked by tests):**
+- Refuses if the anchor is missing or duplicated (`count != 1`).
+- Idempotent + re-apply-safe: re-running is a no-op when the marker is present;
+  after VitalPBX "Apply Changes"/upgrade regenerates the baseplan (dropping the
+  line — the `__67` file and `#tryinclude` survive), re-running restores it.
+- Writes **no** AstDB keys; touches **no** `pjsip__*`, `musiconhold__*`,
+  `extensions__50-*`, `queues__*` file. Baseplan is modified **only** by inserting
+  the single guarded line (timestamped backup + surgical rollback).
+- Non-enabled tenants no-op via `DIALPLAN_EXISTS` (no context generated for them).
+
+### K.3 Coverage matrix (proof)
+
+| Scenario | Held leg | Covered by | Result |
+|----------|----------|------------|--------|
+| **Inbound direct** hold | inbound trunk in `[sub-local-dialing]` | caller-leg GosubIf before `Dial()` | ✅ tenant class (live-proven on T2) |
+| **Inbound IVR → extension** hold | `Local/<ext>@…;2` in `[sub-local-dialing]` | caller-leg GosubIf before `Dial()` | ✅ tenant class |
+| **Inbound ring group** hold | `Local/<ext>@…;2` in `[sub-local-dialing]` | caller-leg GosubIf before `Dial()` | ✅ tenant class |
+| **Queue WAITING** music (pre-answer) | app_queue caller channel | native queue `music_group_id` (untouched) | ✅ native/separate — deliberately **not** overridden |
+| **Queue POST-answer bridge** hold | `Local/<ext>@…;2` in `[sub-local-dialing]` | caller-leg GosubIf before `Dial()` | ✅ tenant class |
+| **Outbound** hold | called **trunk** leg | existing `global-before-bridging-call-hook` (unchanged) | ✅ no regression |
+
+Why queue **waiting** stays native: the caller channel is inside `app_queue`, not
+`[sub-local-dialing]`, when it hears waiting music — the hook never runs there, so
+queue MOH remains the queue's own `music_group_id`. The **post-answer** bridge hold
+(agent puts caller on hold after answer) *does* traverse `[sub-local-dialing]` on
+the agent-dial Local leg and is therefore covered.
+
+### K.4 Automated tests
+`scripts/pbx/install-connect-caller-leg-moh.test.ts` (19 cases, `tsx --test`,
+**all green**) — string-shape regression identical in style to the cos-wake
+overlay tests. Locks: single guarded GosubIf at the correct seam; anchor
+missing/duplicate refusal; idempotency/marker guard; per-tenant hooks emitted
+**only** for published-MOH tenants; hook sets **only** `CHANNEL(musicclass)` +
+`__CONNECT_MOH`; fail-safe class guard precedes the musicclass set;
+metadata-only (no Answer/Dial/Local/Playback); no AstDB writes; no
+pjsip/musiconhold/route file writes; `--check` is read-only; surgical rollback.
+
+A throwaway functional sandbox (real constants + generator vs. a fixture
+baseplan) additionally confirmed: line lands between the anchor and `Dial()`,
+`Dial()` untouched, idempotent re-run, rollback restores the file, and
+anchor-count 0/2 both trip the refusal.
+
+### K.5 Rollback
+```
+sudo scripts/pbx/install-connect-caller-leg-moh.sh --rollback
+```
+Removes **only** the Connect-owned baseplan line (exact-marker `grep -vF`), the
+`__67` hook file, and its `#tryinclude`, then reloads. AstDB classes and all
+native/VitalPBX config are left intact. The current live proof patch on T2 is
+**not** rolled back by this branch work (no deploy performed).
+
+### K.6 Deployment status
+Branch-only. **No deploy, no migration, no PBX installer executed from this branch.**
+The productionized installer supersedes the ad-hoc `/root/connect_t2_localdial_moh.sh`
+prototype used for the T2 live proof; deploying it fleet-wide is a separate,
+owner-approved step.
