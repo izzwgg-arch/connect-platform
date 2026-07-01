@@ -211,3 +211,107 @@ asterisk -rx "dialplan show sub-connect-tenant-moh"     # => context not found (
 
 No deployment occurred. No `deploy-direct.sh`, no queue enqueue, no migration
 applied, no PBX mutation, `PBX_ALLOW_CONFIG_MUTATIONS` unset.
+
+---
+
+# ADDENDUM — MOH catalog / playability redesign (2026‑07‑01)
+
+## A. Production incident + repair (A‑Plus / T2)
+
+**Symptom:** T2 hold music went silent after its default Hold Profile was changed
+from `moh2` to `moh5` in the portal.
+
+**Root cause (grounded in PBX brain files `musiconhold__50-*.conf`):**
+- `moh2` (group 2) is **owned by T2** (`musiconhold__50-2-main.conf`, files dir
+  present, DB `fileCount=1`).
+- `moh5` (group 5) is **owned by the main/library tenant (pbxTenantId 1, slug
+  `vitalpbx`)** (`musiconhold__50-1-main.conf`, DB `fileCount=40`). It is a loaded,
+  file-backed class — *not* fileless.
+- Publishing `moh5` for T2 ran the **native sync** (`syncNativeInboundRoutesMoh` →
+  helper `/sync-tenant-moh`) which stamped **T2's own** inbound routes / extensions /
+  queues with `music_group_id=5` — pointing T2's native resources at a **foreign**
+  group. That mispointing (not a missing file) is what produced silence.
+
+**Repair (existing publish path, T2 only):** profile reset to `moh2` and
+re‑published. Publish record `cmr28svg5esxvmw1323fqugbj` (`manual moh5→moh2 success`).
+Native sync restored `music_group_id=2` on **inbound 6/6, extensions 20/20, queue 1/1**;
+helper ran `dialplan reload` + `moh reload` (exit 0). No other tenant touched.
+
+## B. The corrected model
+
+Ownership is **not** the assignment gate — **playability** is. A class is
+assignable to any tenant/extension when Asterisk can actually play it. Ownership
+only governs whether Connect may rewrite the tenant's **native** `music_group_id`.
+
+New pure helpers (`packages/shared/src/mohCatalog.ts`, fully unit-tested):
+- `classifyMohOrigin` → `tenant | main | global_default | connect_upload | unassigned`.
+- `computeMohPlayability` → `{ selectable, unavailableReason, filesPresent }`
+  (`deactivated` > `not_loaded` > `no_files`; `loadedInAsterisk=null` = unknown → not blocking).
+- `decideNativeMohSync` → run native sync **only** for an owned class; skip
+  (`foreign_class_native_sync_suppressed`) for main/other/unassigned; resolver-only
+  otherwise. **This is the defect fix.**
+
+## C. Behaviour changes
+
+| Area | Before | After |
+|------|--------|-------|
+| Refresh (`syncMohClassesFromOmbutelMysql`) | imported all groups; no playability | computes `origin`+`selectable`; optional **read-only** live `moh show classes` probe merge (graceful if helper lacks `/moh-classes`) |
+| Readiness (`evaluateMohRuntimeReadiness`) | native branch required tenant/null/main ownership; only checked row exists | assignable across owners; **gates on playability** (`moh_class_not_loaded` / `moh_class_no_files`) |
+| Native sync (`syncNativeInboundRoutesMoh`) | stamped `music_group_id` for tenant/null/main class | stamps **only** owned classes; foreign/main → skipped, resolver-only |
+| `GET /voice/moh/pbx-classes` | class list | + `origin`, `selectable`, `unavailableReason`, `filesPresent` |
+| Portal picker | listed all active classes | unavailable classes shown **disabled** with reason; unavailable count surfaced |
+
+## D. Files changed (Part C)
+- `packages/shared/src/mohCatalog.ts` (new) + `mohCatalog.test.ts` (new, 17 tests)
+- `packages/shared/src/index.ts` (export)
+- `packages/db/prisma/schema.prisma` — `PbxMohClass`: `origin`, `loadedInAsterisk`,
+  `selectable`, `unavailableReason`, `lastProbedAt` (+ index)
+- `packages/db/prisma/migrations/20260701160000_moh_catalog_playability/{migration,ROLLBACK}.sql` (additive)
+- `apps/api/src/pbxOmbutelMohClassSync.ts` — origin/playability + live-probe param
+- `apps/api/src/pbxInboundRouteHelperClient.ts` — `getPbxMohClasses` (read-only)
+- `apps/api/src/server.ts` — readiness gate, native-sync ownership rule, classes
+  endpoint fields, auto-sync live probe
+- `apps/portal/app/(platform)/pbx/moh-scheduling/page.tsx` — disabled unavailable
+  options + reason (+ fixed pre-existing missing `apiPut` import)
+
+## E. Migration impact
+Additive only. All new `PbxMohClass` columns nullable/defaulted (`selectable`
+default `true`); values recomputed on next refresh. `ROLLBACK.sql` drops them.
+No other table affected. **Not applied to production.**
+
+## F. Tests + results
+- `mohCatalog` unit: **17/17 pass** (origin incl. main/default; playability incl.
+  fileless-block, not-loaded-block, stream-ok; native-sync owned-runs /
+  foreign-skips / connect-skip / no-link-skip; `moh2→moh5→moh2` selectable).
+- All MOH shared suites together: **67/67 pass.**
+- `apps/api` tsc: 36 **pre-existing** errors, **0** in changed files/regions.
+- `apps/portal` tsc: MOH page **clean** after `apiPut` import fix.
+- Lint: clean.
+
+## G. What is fixed immediately WITHOUT the per-source resolver / any PBX change
+- Foreign/main class assignment no longer corrupts a tenant's native
+  `music_group_id` (resolver-only path). This alone prevents the `moh5→T2` silence.
+- Fileless/unloaded classes are blocked at publish (readiness gate) and disabled
+  in the UI.
+- Assigning any **file-backed** class (e.g. main‑tenant `moh5`, 40 files) to any
+  tenant is allowed; `moh2 → moh5 → moh2` flips `active_moh_class`/`moh_class` and
+  the resolver sets `CHANNEL(musicclass)` accordingly.
+
+## H. Requires an owner-side PBX helper addition (optional, additive)
+The live `moh show classes` probe reads a new **read-only** helper endpoint
+`GET /moh-classes`. Until the owner adds it, `loadedInAsterisk` stays `null`
+(unknown) and playability falls back to file-count — nothing breaks.
+
+## I. Safe rollout plan
+1. Validate schema+logic on throwaway Postgres (`scripts/validation/moh_db_validation.ts`); no prod.
+2. (Optional) owner adds read-only `/moh-classes` to the PBX route helper.
+3. Deploy API+portal via approved blue/green **after approval only**.
+4. Owner runs “Refresh from PBX” → catalog populates `origin`/`selectable`.
+5. Re-test `moh2 → moh5 → moh2` on T2: `moh5` publish must report native sync
+   `skipped: foreign_class_native_sync_suppressed`; audio still changes via resolver.
+6. No per-source resolver installer in this rollout.
+
+## J. Deployment confirmation (addendum)
+Branch-only. No deploy, no production migration, no PBX installer, no new resolver.
+The only production write was the **approved T2 base-MOH repair** via the existing
+publish path (§A).

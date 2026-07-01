@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAppContext } from "../../../../hooks/useAppContext";
 import { ConnectSelect } from "../../../../components/ConnectSelect";
-import { apiGet, apiPost, apiPatch, apiDelete } from "../../../../services/apiClient";
+import { apiGet, apiPost, apiPatch, apiPut, apiDelete } from "../../../../services/apiClient";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -401,6 +401,11 @@ interface PbxMohClassRow {
   isDefault: boolean;
   fileCount: number;
   isActive: boolean;
+  origin?: string | null;
+  loadedInAsterisk?: boolean | null;
+  selectable?: boolean;
+  unavailableReason?: string | null;
+  filesPresent?: boolean;
 }
 
 // ── MOH class picker ─────────────────────────────────────────────────────────
@@ -439,6 +444,13 @@ function MohClassPicker({
     label: string;
     group: "yours" | "system" | "other" | "upload" | "legacy";
     tenantLabel?: string | null;
+    disabled?: boolean;
+  };
+
+  const UNAVAILABLE_REASON_LABEL: Record<string, string> = {
+    no_files: "no audio files — would play silence",
+    not_loaded: "not loaded in Asterisk",
+    deactivated: "removed from PBX",
   };
 
   const GROUP_LABELS: Record<Opt["group"], string> = {
@@ -471,16 +483,24 @@ function MohClassPicker({
     return parts.join(" · ");
   };
 
+  let unavailableCount = 0;
   for (const c of pbxClasses) {
     if (!c.isActive) continue;
     const v = c.runtimeClass ?? c.mohClassName;
     if (seen.has(v)) continue;
     seen.add(v);
+    // Playability gate: a class is disabled (not choosable) when Asterisk can't
+    // play it. The API also blocks publishing such a class, so this is UI polish
+    // on top of a hard server gate.
+    const unavailable = c.selectable === false;
+    if (unavailable) unavailableCount += 1;
+    const reasonText = c.unavailableReason ? (UNAVAILABLE_REASON_LABEL[c.unavailableReason] ?? c.unavailableReason) : "unavailable";
     options.push({
       value: v,
-      label: labelFor(c),
+      label: unavailable ? `${labelFor(c)} — ${reasonText}` : labelFor(c),
       group: classify(c),
       tenantLabel: c.tenantSlug ?? null,
+      disabled: unavailable,
     });
   }
 
@@ -523,6 +543,7 @@ function MohClassPicker({
         {ownCount} yours · {systemCount} system
         {uploadCount ? ` · ${uploadCount} Connect upload${uploadCount === 1 ? "" : "s"}` : ""}
         {otherCount ? ` · ${otherCount} other` : ""}
+        {unavailableCount ? ` · ${unavailableCount} unavailable` : ""}
       </span>
       {canSyncPbx && onSync && (
         <button
@@ -557,6 +578,7 @@ function MohClassPicker({
       return list.map((o) => ({
         value: o.value,
         label: `[${GROUP_LABELS[g]}] ${o.tenantLabel && o.group === "other" ? `${o.label} (${o.tenantLabel})` : o.label}`,
+        disabled: o.disabled,
       }));
     }),
   ];

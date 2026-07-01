@@ -211,6 +211,41 @@ export function syncPbxTenantMoh(
   return callHelper<PbxTenantMohSyncResponse>(cfg, "/sync-tenant-moh", body);
 }
 
+/** One live MOH class as parsed from Asterisk `moh show classes`. */
+export type PbxMohShowClass = {
+  /** Asterisk class name, e.g. "moh2", "default". */
+  name: string;
+  /** files | mp3 | quietmp3 | custom | ... (Asterisk "Mode"). */
+  mode?: string | null;
+  /** Backing directory (files mode) — used to disambiguate silence vs audio. */
+  directory?: string | null;
+  /** Count of playable files Asterisk knows about, when the helper reports it. */
+  fileCount?: number | null;
+};
+
+export type PbxMohClassesResponse = {
+  ok: true;
+  /** Every class Asterisk currently has loaded (source of truth for playability). */
+  classes: PbxMohShowClass[];
+};
+
+/**
+ * READ-ONLY probe of live Asterisk MOH classes via the PBX route helper.
+ *
+ * Calls a GET `/moh-classes` endpoint that the helper implements by running
+ * `asterisk -rx "moh show classes"` (read-only; no reload, no write). If the
+ * helper does not implement it yet (404 / not-found), callers MUST treat that
+ * as "unknown" and leave `loadedInAsterisk = null` rather than blocking any
+ * class. This keeps Connect forward-compatible without requiring the PBX-side
+ * helper to ship first.
+ */
+export function getPbxMohClasses(
+  cfg: PbxRouteHelperConfig,
+  timeoutMs = 10_000,
+): Promise<PbxMohClassesResponse> {
+  return getHelper<PbxMohClassesResponse>(cfg, "/moh-classes", timeoutMs);
+}
+
 export type PbxVoicemailGreetingType = "unavailable" | "busy" | "temporary" | "name";
 
 export type PbxVoicemailGreetingResponse = {

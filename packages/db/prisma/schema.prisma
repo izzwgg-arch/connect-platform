@@ -3717,6 +3717,18 @@ model PbxMohClass {
   isDefault       Boolean  @default(false)
   fileCount       Int      @default(0) // rolled up from ombu_music_files
   isActive        Boolean  @default(true) // false = removed in VitalPBX on last sync
+  // ── Catalog / playability model (additive) ───────────────────────────────
+  /// Derived origin: "tenant" | "main" | "global_default" | "connect_upload" | "unassigned".
+  /// Ownership is NOT the assignment gate — this is informational + governs native sync.
+  origin          String? // see packages/shared/src/mohCatalog.ts classifyMohOrigin
+  /// true/false from a live `moh show classes` probe; null = not probed yet (unknown).
+  loadedInAsterisk Boolean?
+  /// Whether Asterisk can actually play this class (active + files/stream + loaded!=false).
+  selectable      Boolean  @default(true)
+  /// When not selectable: "deactivated" | "not_loaded" | "no_files".
+  unavailableReason String?
+  /// Last time the live Asterisk probe updated loadedInAsterisk.
+  lastProbedAt    DateTime?
   firstSeenAt     DateTime @default(now())
   lastSeenAt      DateTime @default(now())
   createdAt       DateTime @default(now())
@@ -3729,6 +3741,7 @@ model PbxMohClass {
   @@index([tenantId])
   @@index([tenantId, isActive])
   @@index([pbxInstanceId, isActive])
+  @@index([pbxInstanceId, selectable])
 }
 
 model MohAsset {

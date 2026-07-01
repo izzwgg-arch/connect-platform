@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@connect/db";
 import { decryptJson } from "@connect/security";
+import { classifyMohOrigin, computeMohPlayability } from "@connect/shared";
 
 /**
  * Read-only sync of VitalPBX Music-On-Hold *classes* (groups) into Connect's
@@ -47,11 +48,19 @@ function slugify(s: string): string {
     .replace(/^_+|_+$/g, "");
 }
 
+/**
+ * Live Asterisk MOH class facts, keyed by lowercased class name (e.g. "moh2").
+ * Provided by the caller when the read-only `moh show classes` helper probe
+ * succeeds. When omitted, `loadedInAsterisk` is left null (unknown) so
+ * file-count-based playability still works without the live probe.
+ */
+export type LiveMohClassMap = Map<string, { loaded: boolean; fileCount?: number | null }>;
+
 export async function syncMohClassesFromOmbutelMysql(
   db: PrismaClient,
   pbxInstanceId: string,
   ombuMysqlUrlEncrypted: string | null | undefined,
-  options: { deactivateMissing?: boolean } = {},
+  options: { deactivateMissing?: boolean; liveMohClasses?: LiveMohClassMap } = {},
 ): Promise<MohClassSyncResult> {
   if (!ombuMysqlUrlEncrypted?.trim()) {
     return {
@@ -249,43 +258,67 @@ export async function syncMohClassesFromOmbutelMysql(
       const existing = await (db as any).pbxMohClass.findUnique({
         where: { pbxInstanceId_pbxGroupId: { pbxInstanceId, pbxGroupId } },
       });
+
+      // Live playability enrichment. When the caller supplied a live
+      // `moh show classes` map, trust it for loaded state + file count.
+      // Without a probe this refresh preserves any prior probe result
+      // (existing.loadedInAsterisk) rather than wiping it, and falls back to
+      // file-count-based playability (loaded === null → not blocking).
+      const live = options.liveMohClasses?.get(mohClassName.toLowerCase());
+      const loadedInAsterisk: boolean | null = options.liveMohClasses
+        ? Boolean(live?.loaded)
+        : (existing?.loadedInAsterisk ?? null);
+      const mysqlFileCount = fileCountByGroup.get(pbxGroupId) ?? 0;
+      const effectiveFileCount =
+        typeof live?.fileCount === "number" && Number.isFinite(live.fileCount)
+          ? Math.max(live.fileCount, mysqlFileCount)
+          : mysqlFileCount;
+
+      const origin = classifyMohOrigin({
+        pbxTenantId: rawTenant || null,
+        isDefault,
+        mohClassName,
+      });
+      const play = computeMohPlayability({
+        isActive: true,
+        loadedInAsterisk,
+        fileCount: effectiveFileCount,
+        classType,
+      });
+
+      const commonData = {
+        tenantId: connectTenantId,
+        tenantSlug,
+        pbxTenantId: rawTenant || null,
+        name,
+        mohClassName,
+        classType,
+        streamingUrl: g.streaming_url || null,
+        streamingFormat: g.streaming_format || null,
+        isDefault,
+        fileCount: effectiveFileCount,
+        isActive: true,
+        origin,
+        loadedInAsterisk,
+        selectable: play.selectable,
+        unavailableReason: play.unavailableReason,
+        lastProbedAt: options.liveMohClasses ? now : (existing?.lastProbedAt ?? null),
+        lastSeenAt: now,
+      };
+
       if (existing) {
         await (db as any).pbxMohClass.update({
           where: { id: existing.id },
-          data: {
-            tenantId: connectTenantId,
-            tenantSlug,
-            pbxTenantId: rawTenant || null,
-            name,
-            mohClassName,
-            classType,
-            streamingUrl: g.streaming_url || null,
-            streamingFormat: g.streaming_format || null,
-            isDefault,
-            fileCount: fileCountByGroup.get(pbxGroupId) ?? 0,
-            isActive: true,
-            lastSeenAt: now,
-          },
+          data: commonData,
         });
         updated += 1;
       } else {
         await (db as any).pbxMohClass.create({
           data: {
             pbxInstanceId,
-            tenantId: connectTenantId,
-            tenantSlug,
             pbxGroupId,
-            pbxTenantId: rawTenant || null,
-            name,
-            mohClassName,
-            classType,
-            streamingUrl: g.streaming_url || null,
-            streamingFormat: g.streaming_format || null,
-            isDefault,
-            fileCount: fileCountByGroup.get(pbxGroupId) ?? 0,
-            isActive: true,
+            ...commonData,
             firstSeenAt: now,
-            lastSeenAt: now,
           },
         });
         created += 1;
@@ -301,7 +334,7 @@ export async function syncMohClassesFromOmbutelMysql(
           isActive: true,
           pbxGroupId: { notIn: seenGroupIds.length ? seenGroupIds : [-1] },
         },
-        data: { isActive: false, lastSeenAt: now },
+        data: { isActive: false, selectable: false, unavailableReason: "deactivated", lastSeenAt: now },
       });
       deactivated = res.count ?? 0;
     }

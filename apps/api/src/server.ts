@@ -174,6 +174,9 @@ import {
   buildSourcePublishKeys,
   computeActiveScheduleOverrides,
   computeSourceKeysClearForRollback,
+  classifyMohOrigin,
+  computeMohPlayability,
+  decideNativeMohSync,
   type MohCallSource,
   type StaticSourcePolicy,
   type ScheduleRuleRow,
@@ -238,6 +241,7 @@ import {
   retargetPbxInboundRoute,
   resetPbxVoicemailGreeting,
   syncPbxTenantMoh,
+  getPbxMohClasses,
   type PbxRouteHelperInspectResponse,
   type PbxVoicemailGreetingType,
   uploadPbxVoicemailGreeting,
@@ -22291,7 +22295,9 @@ type MohRuntimeReadinessReason =
   | "invalid_moh_runtime_class"
   | "connect_asset_not_pbx_ready"
   | "connect_asset_not_in_sync_manifest"
-  | "moh_runtime_class_not_synced";
+  | "moh_runtime_class_not_synced"
+  | "moh_class_not_loaded"
+  | "moh_class_no_files";
 
 type MohRuntimeReadiness = {
   selectedClass: string;
@@ -22301,6 +22307,10 @@ type MohRuntimeReadiness = {
   pbxFormat: string | null;
   manifestFileCount: number;
   pbxGroupId: number | null;
+  /** VitalPBX numeric tenant id that owns this native class (for native-sync ownership). */
+  classPbxTenantId?: string | null;
+  /** Derived origin (tenant/main/global_default/connect_upload/unassigned). */
+  origin?: string | null;
   reason?: MohRuntimeReadinessReason;
 };
 
@@ -22382,18 +22392,25 @@ async function evaluateMohRuntimeReadiness(tenantId: string, value: string): Pro
     };
   }
 
-  const row = await (db as any).pbxMohClass.findFirst({
-    where: {
-      mohClassName: runtimeClass,
-      isActive: true,
-      OR: [
-        { tenantId },
-        { tenantId: null },
-        { pbxTenantId: "1" },
-      ],
+  // Playability-gated lookup. Ownership is NOT the assignment gate — ANY class
+  // Asterisk can actually play is assignable to any tenant (see mohCatalog.ts).
+  // We therefore search across all owners, preferring the tenant's own row,
+  // then the main/library tenant, then any active row, and gate on playability.
+  const candidates = await (db as any).pbxMohClass.findMany({
+    where: { mohClassName: runtimeClass },
+    select: {
+      id: true, pbxGroupId: true, pbxTenantId: true, tenantId: true, isDefault: true,
+      isActive: true, fileCount: true, classType: true, loadedInAsterisk: true,
+      selectable: true, unavailableReason: true, origin: true,
     },
-    select: { id: true, pbxGroupId: true },
   });
+  const rank = (r: any): number => {
+    if (r.tenantId === tenantId) return 0;          // this tenant's own class
+    if (String(r.pbxTenantId ?? "") === "1") return 1; // main/library tenant
+    if (r.isActive) return 2;                        // any other active class
+    return 3;
+  };
+  const row = candidates.slice().sort((a: any, b: any) => rank(a) - rank(b))[0];
   if (!row) {
     return {
       selectedClass: runtimeClass,
@@ -22403,19 +22420,38 @@ async function evaluateMohRuntimeReadiness(tenantId: string, value: string): Pro
       pbxFormat: null,
       manifestFileCount: 0,
       pbxGroupId: null,
+      classPbxTenantId: null,
+      origin: null,
       reason: "moh_runtime_class_not_synced",
     };
   }
   const pbxGroupId = Number(row.pbxGroupId);
-  return {
+  const play = computeMohPlayability({
+    isActive: Boolean(row.isActive),
+    loadedInAsterisk: row.loadedInAsterisk ?? null,
+    fileCount: row.fileCount ?? 0,
+    classType: row.classType ?? null,
+  });
+  const origin =
+    row.origin ?? classifyMohOrigin({ pbxTenantId: row.pbxTenantId, isDefault: row.isDefault, mohClassName: runtimeClass });
+  const base = {
     selectedClass: runtimeClass,
-    classKind: "native",
-    assetReady: true,
+    classKind: "native" as const,
     pbxStorageKey: null,
     pbxFormat: null,
     manifestFileCount: 0,
     pbxGroupId: Number.isFinite(pbxGroupId) && pbxGroupId > 0 ? pbxGroupId : null,
+    classPbxTenantId: row.pbxTenantId ?? null,
+    origin,
   };
+  if (!play.selectable) {
+    return {
+      ...base,
+      assetReady: false,
+      reason: play.unavailableReason === "not_loaded" ? "moh_class_not_loaded" : "moh_class_no_files",
+    };
+  }
+  return { ...base, assetReady: true };
 }
 
 /** Wrapper that throws with a precise statusCode/detail/readiness payload.
@@ -22440,7 +22476,13 @@ async function assertMohRuntimeReadiness(tenantId: string, value: string): Promi
         `Connect MOH upload ${result.selectedClass} would not be advertised in /voice/moh/sync-manifest. The PBX media-sync helper would not mirror any file for this class.`;
       break;
     case "moh_runtime_class_not_synced":
-      detail = `Runtime MOH class ${result.selectedClass} is not present in the synced VitalPBX MOH catalog for this tenant.`;
+      detail = `Runtime MOH class ${result.selectedClass} is not present in the synced VitalPBX MOH catalog. Run “Refresh PBX classes” and pick a class from the list.`;
+      break;
+    case "moh_class_not_loaded":
+      detail = `MOH class ${result.selectedClass} exists in VitalPBX but is not loaded/playable in Asterisk (moh show classes). It would produce silence. Pick a loaded class or reload MOH on the PBX.`;
+      break;
+    case "moh_class_no_files":
+      detail = `MOH class ${result.selectedClass} has no playable audio files, so it would produce silence on hold. Pick a class that has files (or upload audio for it).`;
       break;
   }
   throw Object.assign(new Error(result.reason), { statusCode, detail, readiness: result });
@@ -22652,13 +22694,12 @@ async function syncNativeInboundRoutesMoh(tenantId: string, runtimeClass: string
         pbxTenantId: true,
       },
     }),
+    // Look up the class regardless of ownership (any active row for this name);
+    // ownership is decided below, not used to *find* the class.
     (db as any).pbxMohClass.findFirst({
-      where: {
-        mohClassName: runtimeClass,
-        isActive: true,
-        OR: [{ tenantId }, { tenantId: null }, { pbxTenantId: "1" }],
-      },
-      select: { pbxGroupId: true },
+      where: { mohClassName: runtimeClass, isActive: true },
+      orderBy: [{ pbxTenantId: "asc" }],
+      select: { pbxGroupId: true, pbxTenantId: true },
     }),
   ]);
 
@@ -22666,6 +22707,20 @@ async function syncNativeInboundRoutesMoh(tenantId: string, runtimeClass: string
   const pbxGroupId = Number(mohClass?.pbxGroupId);
   if (!link?.pbxInstanceId || !/^\d{1,10}$/.test(pbxTenantId)) return empty("tenant_pbx_link_missing");
   if (!Number.isFinite(pbxGroupId) || pbxGroupId <= 0) return empty("moh_class_missing_pbx_group_id");
+
+  // OWNERSHIP RULE (the moh5→T2 silence fix): only rewrite this tenant's native
+  // VitalPBX music_group_id when the class is owned by this tenant. For
+  // main/foreign/unassigned classes we skip native sync and rely solely on the
+  // AstDB resolver setting CHANNEL(musicclass)=<class>, which plays the correct
+  // (absolute-directory) audio without pointing T2's resources at a foreign group.
+  const nativeDecision = decideNativeMohSync({
+    classKind: "native",
+    classPbxTenantId: mohClass?.pbxTenantId ?? null,
+    tenantPbxTenantId: pbxTenantId,
+  });
+  if (!nativeDecision.run) {
+    return { ...empty(nativeDecision.reason), pbxGroupId };
+  }
 
   const helperCfg = resolvePbxRouteHelperConfig(link.pbxInstanceId);
   if (!helperCfg) return empty("pbx_route_helper_not_configured");
@@ -24487,14 +24542,31 @@ app.get("/voice/moh/pbx-classes", async (req, reply) => {
       id: true, pbxInstanceId: true, tenantId: true, tenantSlug: true,
       pbxGroupId: true, pbxTenantId: true, name: true, mohClassName: true, classType: true,
       isDefault: true, fileCount: true, isActive: true, lastSeenAt: true,
+      origin: true, loadedInAsterisk: true, selectable: true, unavailableReason: true, lastProbedAt: true,
     },
   });
   return reply.send({
-    classes: rows.map((row: any) => ({
-      ...row,
-      displayName: row.name,
-      runtimeClass: row.mohClassName,
-    })),
+    classes: rows.map((row: any) => {
+      // Recompute playability defensively so a stale stored `selectable` never
+      // lets a fileless/unloaded class through the UI (source of truth = helper).
+      const play = computeMohPlayability({
+        isActive: Boolean(row.isActive),
+        loadedInAsterisk: row.loadedInAsterisk ?? null,
+        fileCount: row.fileCount ?? 0,
+        classType: row.classType ?? null,
+      });
+      const origin =
+        row.origin ?? classifyMohOrigin({ pbxTenantId: row.pbxTenantId, isDefault: row.isDefault, mohClassName: row.mohClassName });
+      return {
+        ...row,
+        displayName: row.name,
+        runtimeClass: row.mohClassName,
+        origin,
+        filesPresent: play.filesPresent,
+        selectable: play.selectable,
+        unavailableReason: play.unavailableReason,
+      };
+    }),
   });
 });
 
@@ -24523,23 +24595,50 @@ app.post("/voice/moh/pbx-classes/auto-sync", async (req, reply) => {
     });
   }
 
+  // READ-ONLY live playability probe. Best-effort: if the PBX route helper does
+  // not implement `/moh-classes` yet (or is unreachable), we leave the live map
+  // undefined so the sync falls back to file-count-based playability without
+  // blocking any class. Never writes / reloads the PBX.
+  let liveMohClasses: Map<string, { loaded: boolean; fileCount?: number | null }> | undefined;
+  let liveProbe: { attempted: boolean; ok: boolean; count: number; reason?: string } = {
+    attempted: false, ok: false, count: 0,
+  };
+  const helperCfg = resolvePbxRouteHelperConfig(instance.id);
+  if (helperCfg) {
+    liveProbe.attempted = true;
+    try {
+      const probe = await getPbxMohClasses(helperCfg);
+      liveMohClasses = new Map(
+        (probe.classes || []).map((c) => [
+          String(c.name || "").trim().toLowerCase(),
+          { loaded: true, fileCount: typeof c.fileCount === "number" ? c.fileCount : null },
+        ]),
+      );
+      liveProbe = { attempted: true, ok: true, count: liveMohClasses.size };
+    } catch (e: any) {
+      // 404 = helper endpoint not deployed yet; anything else = transient.
+      liveProbe = { attempted: true, ok: false, count: 0, reason: e?.httpStatus === 404 ? "helper_endpoint_not_implemented" : (e?.message || "probe_failed") };
+    }
+  }
+
   const { syncMohClassesFromOmbutelMysql } = await import("./pbxOmbutelMohClassSync");
   const result = await syncMohClassesFromOmbutelMysql(
     db,
     instance.id,
     instance.ombuMysqlUrlEncrypted,
-    { deactivateMissing: body.data.deactivateMissing === true },
+    { deactivateMissing: body.data.deactivateMissing === true, liveMohClasses },
   );
 
-  app.log.info({ pbxInstanceId: instance.id, result }, "[MOH_CLASS_AUTO_SYNC] done");
+  app.log.info({ pbxInstanceId: instance.id, result, liveProbe }, "[MOH_CLASS_AUTO_SYNC] done");
   if (result.source === "skipped") {
     return reply.send({
       ok: false,
       skipReason: result.skipReason,
+      liveProbe,
       hint: "Set PbxInstance.ombuMysqlUrlEncrypted to an encrypted MySQL URL (same one used by DID sync).",
     });
   }
-  return reply.send({ ok: true, result });
+  return reply.send({ ok: true, result, liveProbe });
 });
 
 // ── POST /internal/voicemail-notify — trigger immediate sync for one mailbox ──

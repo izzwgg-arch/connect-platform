@@ -10,6 +10,7 @@ export * from "./voipMsWebhook";
 export * from "./mohRuntimeClass";
 export * from "./mohCallSource";
 export * from "./mohSourcePublish";
+export * from "./mohCatalog";
 export * from "./canonicalTenantSlug";
 export * from "./ariBridgedSnapshot";
 export * from "./expoMobilePushFormat";
