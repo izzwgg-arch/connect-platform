@@ -16,9 +16,9 @@ import { promisify } from "util";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { z } from "zod";
 import { Queue } from "bullmq";
-import IORedis from "ioredis";
 import fastifyRawBody from "fastify-raw-body";
 import { getWhatsAppInboundQueue, getWhatsAppStatusQueue } from "./queues";
+import { createRedisConnection, quietMissingRedisInDev } from "./redis";
 import { verifyMetaSignature, verifyTwilioSignature } from "./whatsapp/signature";
 import { normalizeMeta, normalizeTwilioStatus } from "./whatsapp/normalize";
 import {
@@ -285,7 +285,7 @@ app.register(fastifyMultipart, {
   limits: { fileSize: 50 * 1024 * 1024, files: 1 },
 });
 
-const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
+const redis = createRedisConnection();
 const hostMetricsCollector = new HostMetricsCollector(
   Math.max(3000, Number(process.env.SERVER_HEALTH_SAMPLE_MS || 5000)),
 );
@@ -294,7 +294,7 @@ const PBX_ARI_SNAPSHOT_TTL_SEC_FOR_STALE = Number(process.env.TELEPHONY_ARI_SNAP
 const PBX_ARI_SNAPSHOT_STALE_MS = Number(
   process.env.TELEPHONY_ARI_SNAPSHOT_STALE_MS || Math.round(PBX_ARI_SNAPSHOT_TTL_SEC_FOR_STALE * 1500),
 );
-const smsQueue = new Queue("sms-send", { connection: redis });
+const smsQueue = quietMissingRedisInDev(new Queue("sms-send", { connection: redis }));
 const canUseCredentialCrypto = hasCredentialsMasterKey();
 const providerTestMode = (process.env.SMS_PROVIDER_TEST_MODE || "true").toLowerCase() !== "false";
 const voiceSimulate = (process.env.VOICE_SIMULATE || "false").toLowerCase() === "true";

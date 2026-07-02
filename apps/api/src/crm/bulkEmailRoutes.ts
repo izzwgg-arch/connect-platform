@@ -1,15 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { db } from "@connect/db";
-import IORedis from "ioredis";
 import { Queue } from "bullmq";
 import { requireCrmAccess } from "./guard";
+import { createRedisConnection, quietMissingRedisInDev } from "../redis";
 
 // ── Queue ─────────────────────────────────────────────────────────────────────
 
-const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", {
-  maxRetriesPerRequest: null,
-});
-const bulkEmailQueue = new Queue("crm-bulk-email-job", { connection: redis });
+const redis = createRedisConnection();
+const bulkEmailQueue = quietMissingRedisInDev(new Queue("crm-bulk-email-job", { connection: redis }));
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 

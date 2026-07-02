@@ -1,11 +1,12 @@
-import IORedis from "ioredis";
+import type IORedis from "ioredis";
 import { Queue } from "bullmq";
 import { WHATSAPP_INBOUND_QUEUE, WHATSAPP_STATUS_QUEUE } from "@connect/shared/src/queues";
+import { createRedisConnection, quietMissingRedisInDev } from "./redis";
 
 let redis: IORedis | null = null;
 function getRedis(): IORedis {
   if (redis) return redis;
-  redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
+  redis = createRedisConnection();
   return redis;
 }
 
@@ -14,12 +15,12 @@ let statusQueue: Queue | null = null;
 
 export function getWhatsAppInboundQueue(): Queue {
   if (inboundQueue) return inboundQueue;
-  inboundQueue = new Queue(WHATSAPP_INBOUND_QUEUE, { connection: getRedis() as any });
+  inboundQueue = quietMissingRedisInDev(new Queue(WHATSAPP_INBOUND_QUEUE, { connection: getRedis() as any }));
   return inboundQueue;
 }
 
 export function getWhatsAppStatusQueue(): Queue {
   if (statusQueue) return statusQueue;
-  statusQueue = new Queue(WHATSAPP_STATUS_QUEUE, { connection: getRedis() as any });
+  statusQueue = quietMissingRedisInDev(new Queue(WHATSAPP_STATUS_QUEUE, { connection: getRedis() as any }));
   return statusQueue;
 }

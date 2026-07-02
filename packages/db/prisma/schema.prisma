@@ -3861,6 +3861,11 @@ model ConnectChatMessage {
   id                     String                         @id @default(cuid())
   tenantId               String
   threadId               String
+  /// Nullable AND set to NULL automatically (see senderUser onDelete: SetNull below) whenever the
+  /// sending staff account is deleted — a normal, recurring event (offboarding), not a data bug.
+  /// NEVER use `senderUserId === viewer` to decide "mine" for SMS threads; it will silently break
+  /// again every time a rep who sent messages is removed. Use `isConnectChatMessageMine()` from
+  /// apps/api/src/connectChatMessageMine.ts, which keys SMS off `direction` instead.
   senderUserId           String?
   senderExtensionId      String?
   direction              ConnectChatMessageDirection

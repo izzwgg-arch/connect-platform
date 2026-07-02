@@ -1,12 +1,11 @@
-import IORedis from "ioredis";
 import { Queue } from "bullmq";
+import { createRedisConnection, quietMissingRedisInDev } from "../redis";
 
-const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", {
-  maxRetriesPerRequest: null,
+const redis = createRedisConnection({
   lazyConnect: true,
 });
 
-export const crmEmailSendQueue = new Queue("crm-email-send", { connection: redis });
+export const crmEmailSendQueue = quietMissingRedisInDev(new Queue("crm-email-send", { connection: redis }));
 
 export type CrmEmailSendJob = {
   tenantId: string;

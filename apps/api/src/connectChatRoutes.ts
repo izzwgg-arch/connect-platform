@@ -45,6 +45,7 @@ import { fetchVoipMsMmsToChatFile, mediaKindFromMime } from "../../../packages/s
 import { upsertSmsThreadParticipants } from "./smsInboxParticipants";
 import { probeChatMedia } from "./chatMediaProbe";
 import { denoiseVoiceNote, isVoiceNoteUpload } from "./chatVoiceNoteDenoise";
+import { isConnectChatMessageMine } from "./connectChatMessageMine";
 export type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 
 function staff(user: JwtUser): string {
@@ -1316,7 +1317,7 @@ export function registerConnectChatRoutes(app: FastifyInstance, deps: ConnectCha
         senderName: m.senderUser?.email?.split("@")[0] || (threadRow?.type === "SMS" && !m.senderUserId ? threadRow.externalSmsE164 || "SMS" : "System"),
         body: deletedForEveryone ? "" : m.body,
         sentAt: m.createdAt.toISOString(),
-        mine: m.senderUserId === user.sub,
+        mine: isConnectChatMessageMine(m, threadRow?.type, user.sub),
         type: m.type,
         editedAt: m.editedAt?.toISOString() || null,
         deletedForEveryoneAt: m.deletedForEveryoneAt?.toISOString() || null,

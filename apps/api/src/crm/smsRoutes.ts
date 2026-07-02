@@ -8,6 +8,7 @@ import {
   type ConnectChatRoutesDeps,
   type JwtUser,
 } from "../connectChatRoutes";
+import { isConnectChatMessageMine } from "../connectChatMessageMine";
 import { crmRoleBypassesContactRestriction, isAdminRole, loadCrmUserAccessRole, requireCrmAccess } from "./guard";
 import { assertCrmContactAllowed } from "./crmContactAccess";
 import { canonicalSmsPhone } from "@connect/shared";
@@ -155,7 +156,7 @@ async function listThreadMessagesForCrmPanel(tenantId: string, threadId: string)
     senderId: m.senderUserId || "",
     body: m.body,
     sentAt: m.createdAt.toISOString(),
-    mine: m.direction === "OUTBOUND",
+    mine: isConnectChatMessageMine(m, "SMS", ""),
     direction: m.direction,
     type: m.type,
     deliveryStatus: m.deliveryStatus,

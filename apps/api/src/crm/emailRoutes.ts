@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { db } from "@connect/db";
-import IORedis from "ioredis";
 import { Queue } from "bullmq";
 import { encryptJson, decryptJson, hasCredentialsMasterKey } from "@connect/security";
+import { createRedisConnection, quietMissingRedisInDev } from "../redis";
 import { randomUUID } from "node:crypto";
 import { CRM_EMAIL_MERGE_FIELDS, plainTextToCrmHtml } from "@connect/shared";
 
@@ -192,9 +192,9 @@ function isValidEmailAddress(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }
 
-const redis = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379", { maxRetriesPerRequest: null });
-const emailQueue = new Queue("crm-email-send", { connection: redis });
-const emailSyncQueue = new Queue("crm-email-sync", { connection: redis });
+const redis = createRedisConnection();
+const emailQueue = quietMissingRedisInDev(new Queue("crm-email-send", { connection: redis }));
+const emailSyncQueue = quietMissingRedisInDev(new Queue("crm-email-sync", { connection: redis }));
 
 function isTemplateAdmin(user: { role?: string }) {
   return isAdminRole(user.role);

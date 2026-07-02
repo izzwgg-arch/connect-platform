@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -19,6 +19,8 @@ import { useAppContext } from "../../../../../hooks/useAppContext";
 import { PageHeader } from "../../../../../components/PageHeader";
 import { LoadingSkeleton } from "../../../../../components/LoadingSkeleton";
 import { apiGet } from "../../../../../services/apiClient";
+import { crm } from "../../../../../components/crm/crmClasses";
+import { cn } from "../../../../../components/crm/cn";
 
 type Diagnostics = {
   generatedAt: string;
@@ -85,10 +87,16 @@ type Diagnostics = {
 
 type Severity = "ok" | "warn" | "bad";
 
-function cardTone(sev: Severity): { border: string; background: string } {
-  if (sev === "ok") return { border: "#86efac", background: "#f0fdf4" };
-  if (sev === "warn") return { border: "#fcd34d", background: "#fffbeb" };
-  return { border: "#fca5a5", background: "#fef2f2" };
+function severityClass(sev: Severity) {
+  if (sev === "ok") return "border-crm-success/35";
+  if (sev === "warn") return "border-crm-warning/35";
+  return "border-crm-danger/40";
+}
+
+function severityTextClass(sev: Severity) {
+  if (sev === "ok") return "text-crm-success";
+  if (sev === "warn") return "text-crm-warning";
+  return "text-crm-danger";
 }
 
 function SectionCard({
@@ -102,22 +110,19 @@ function SectionCard({
   children: ReactNode;
   actions?: ReactNode;
 }) {
-  const t = cardTone(severity);
   const Icon = severity === "ok" ? CheckCircle2 : severity === "warn" ? AlertTriangle : AlertCircle;
-  const iconColor = severity === "ok" ? "#15803d" : severity === "warn" ? "#b45309" : "#b91c1c";
   return (
     <section
-      style={{
-        border: `1px solid ${t.border}`,
-        background: t.background,
-        borderRadius: "0.75rem",
-        padding: "1rem 1.125rem",
-        marginBottom: "1rem",
-      }}
+      className={cn(
+        crm.card,
+        crm.cardPad,
+        "mb-4 border-crm-border bg-crm-surface",
+        severityClass(severity),
+      )}
     >
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem", marginBottom: "0.75rem" }}>
-        <h2 style={{ margin: 0, fontSize: "0.9375rem", fontWeight: 700, display: "flex", alignItems: "center", gap: "0.5rem", color: "var(--text)" }}>
-          <Icon size={18} style={{ color: iconColor }} aria-hidden />
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <h2 className="m-0 flex items-center gap-2 text-sm font-bold text-crm-text">
+          <Icon size={18} className={severityTextClass(severity)} aria-hidden />
           {title}
         </h2>
         {actions}
@@ -129,11 +134,11 @@ function SectionCard({
 
 function MetricLine({ label, value, hint }: { label: string; value: string | number; hint?: string }) {
   return (
-    <div style={{ marginBottom: "0.5rem", fontSize: "0.8125rem", lineHeight: 1.5 }}>
-      <span style={{ color: "var(--text-dim)" }}>{label}: </span>
-      <strong style={{ color: "var(--text)" }}>{value}</strong>
+    <div className="mb-2 text-[0.8125rem] leading-relaxed">
+      <span className="text-crm-muted">{label}: </span>
+      <strong className="text-crm-text">{value}</strong>
       {hint ? (
-        <div style={{ fontSize: "0.75rem", color: "var(--text-dim)", marginTop: "0.15rem" }}>{hint}</div>
+        <div className="mt-0.5 text-xs text-crm-muted">{hint}</div>
       ) : null}
     </div>
   );
@@ -141,9 +146,17 @@ function MetricLine({ label, value, hint }: { label: string; value: string | num
 
 function warnLine(text: string) {
   return (
-    <div style={{ fontSize: "0.75rem", color: "#b45309", marginTop: "0.35rem", lineHeight: 1.45 }}>
+    <div className="mt-1.5 text-xs leading-relaxed text-crm-warning">
       {text}
     </div>
+  );
+}
+
+function actionLink(label: string, href: string) {
+  return (
+    <Link href={href} className="text-xs font-semibold text-crm-accent hover:text-crm-accent/85">
+      {label} →
+    </Link>
   );
 }
 
@@ -189,35 +202,30 @@ export default function CrmAdminDiagnosticsPage() {
 
   if (loading && !data) {
     return (
-      <div style={{ padding: "1.5rem" }}>
-        <PageHeader title="CRM diagnostics" subtitle="Operational health snapshot (admin only)" />
-        <LoadingSkeleton rows={6} />
+      <div className={cn("crm-page-shell min-h-full", crm.reportsWorkspace)}>
+        <div className={crm.pageInnerReports}>
+          <PageHeader title="CRM diagnostics" subtitle="Operational health snapshot (admin only)" />
+          <LoadingSkeleton rows={6} />
+        </div>
       </div>
     );
   }
 
   if (error || !data) {
     return (
-      <div style={{ padding: "1.5rem", maxWidth: 640 }}>
-        <PageHeader title="CRM diagnostics" subtitle="Operational health snapshot (admin only)" />
-        <div style={{ padding: "1rem", borderRadius: "0.75rem", border: "1px solid var(--border)", background: "var(--surface)" }}>
-          <p style={{ margin: "0 0 0.75rem", color: "var(--text)" }}>{error ?? "Unknown error"}</p>
+      <div className={cn("crm-page-shell min-h-full", crm.reportsWorkspace)}>
+        <div className={crm.pageInnerReports}>
+          <PageHeader title="CRM diagnostics" subtitle="Operational health snapshot (admin only)" />
+          <div className={cn(crm.card, crm.cardPad)}>
+          <p className="mb-3 mt-0 text-crm-text">{error ?? "Unknown error"}</p>
           <button
             type="button"
             onClick={() => void load()}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "0.35rem",
-              padding: "0.5rem 1rem",
-              borderRadius: "0.5rem",
-              border: "1px solid var(--border)",
-              background: "var(--background)",
-              cursor: "pointer",
-            }}
+            className={crm.btnSecondary}
           >
             <RefreshCw size={16} /> Retry
           </button>
+          </div>
         </div>
       </div>
     );
@@ -257,61 +265,51 @@ export default function CrmAdminDiagnosticsPage() {
         : "ok";
 
   const quickLinks = (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1.25rem" }}>
-      <Link href="/crm/queue" style={linkPill()}>
+    <div className="mb-5 flex flex-wrap gap-2">
+      <Link href="/crm/queue" className={crm.btnGhost}>
         <ListOrdered size={14} /> Queue
       </Link>
-      <Link href="/crm/campaigns" style={linkPill()}>
+      <Link href="/crm/campaigns" className={crm.btnGhost}>
         <Megaphone size={14} /> Campaigns
       </Link>
-      <Link href="/crm/import" style={linkPill()}>
+      <Link href="/crm/import" className={crm.btnGhost}>
         <FileUp size={14} /> Imports
       </Link>
-      <Link href="/crm/settings" style={linkPill()}>
+      <Link href="/crm/settings" className={crm.btnGhost}>
         <Settings2 size={14} /> Users &amp; access
       </Link>
-      <Link href="/crm/reports" style={linkPill()}>
+      <Link href="/crm/reports" className={crm.btnGhost}>
         <BarChart3 size={14} /> Reports
       </Link>
-      <Link href="/crm/wallboard" style={linkPill()}>
+      <Link href="/crm/wallboard" className={crm.btnGhost}>
         <LayoutGrid size={14} /> Wallboard
       </Link>
     </div>
   );
 
   return (
-    <div style={{ padding: "1.5rem", maxWidth: 920 }}>
-      <PageHeader
-        title="CRM diagnostics"
-        subtitle={`Snapshot at ${new Date(data.generatedAt).toLocaleString()} · Refresh is manual only (no auto-polling)`}
-      />
-      {quickLinks}
-      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "1rem" }}>
-        <button
-          type="button"
-          onClick={() => void load()}
-          disabled={loading}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "0.35rem",
-            padding: "0.45rem 0.9rem",
-            borderRadius: "0.5rem",
-            border: "1px solid var(--border)",
-            background: "var(--surface)",
-            cursor: loading ? "wait" : "pointer",
-            fontSize: "0.8125rem",
-            fontWeight: 600,
-          }}
-        >
-          <RefreshCw size={15} /> Refresh
-        </button>
-      </div>
+    <div className={cn("crm-page-shell min-h-full", crm.reportsWorkspace)}>
+      <div className={crm.pageInnerReports}>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <PageHeader
+            title="CRM diagnostics"
+            subtitle={`Snapshot at ${new Date(data.generatedAt).toLocaleString()} · Refresh is manual only (no auto-polling)`}
+          />
+          <button
+            type="button"
+            onClick={() => void load()}
+            disabled={loading}
+            className={crm.btnSecondary}
+          >
+            <RefreshCw size={15} /> Refresh
+          </button>
+        </div>
+        {quickLinks}
 
       <SectionCard
         title="Queue integrity"
         severity={queueSeverity}
-        actions={<Link href="/crm/queue" style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--accent)" }}>Open queue →</Link>}
+        actions={actionLink("Open queue", "/crm/queue")}
       >
         <MetricLine label="Active work-queue members (ACTIVE campaign · PENDING / IN_PROGRESS / CALLBACK)" value={q.totalActiveMembers} />
         <MetricLine
@@ -346,32 +344,23 @@ export default function CrmAdminDiagnosticsPage() {
       <SectionCard
         title="Import health (last 20 batches)"
         severity={importSeverity}
-        actions={<Link href="/crm/import" style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--accent)" }}>Import leads →</Link>}
+        actions={actionLink("Import leads", "/crm/import")}
       >
-        <p style={{ margin: "0 0 0.5rem", fontSize: "0.75rem", color: "var(--text-dim)" }}>
+        <p className="mb-2 mt-0 text-xs text-crm-muted">
           Imports are not linked to a single campaign in the database; assign routing happens inside each import run.
         </p>
-        <div style={{ display: "grid", gap: "0.35rem" }}>
+        <div className="grid gap-1.5">
           {imp.length === 0 ? (
-            <span style={{ fontSize: "0.8125rem", color: "var(--text-dim)" }}>No import batches yet.</span>
+            <span className="text-[0.8125rem] text-crm-muted">No import batches yet.</span>
           ) : (
             imp.map((b) => (
               <div
                 key={b.id}
-                style={{
-                  fontSize: "0.75rem",
-                  padding: "0.45rem 0.6rem",
-                  borderRadius: "0.5rem",
-                  border: "1px solid var(--border)",
-                  background: "var(--surface)",
-                  display: "grid",
-                  gridTemplateColumns: "1fr auto",
-                  gap: "0.25rem 0.75rem",
-                }}
+                className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 rounded-crm border border-crm-border/70 bg-crm-surface-2/50 px-2.5 py-2 text-xs"
               >
-                <span style={{ fontWeight: 600, color: "var(--text)" }}>{b.fileName}</span>
-                <span style={{ textAlign: "right", color: "var(--text-dim)" }}>{new Date(b.createdAt).toLocaleString()}</span>
-                <span style={{ color: "var(--text-dim)" }}>
+                <span className="font-semibold text-crm-text">{b.fileName}</span>
+                <span className="text-right text-crm-muted">{new Date(b.createdAt).toLocaleString()}</span>
+                <span className="text-crm-muted">
                   {b.status} · +{b.createdCount} ~{b.updatedCount} skip {b.skippedCount} err {b.errorCount}
                 </span>
               </div>
@@ -383,7 +372,7 @@ export default function CrmAdminDiagnosticsPage() {
       <SectionCard
         title="SMS health"
         severity={smsSeverity}
-        actions={<Link href="/settings/messaging" style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--accent)" }}>Messaging settings →</Link>}
+        actions={actionLink("Messaging settings", "/settings/messaging")}
       >
         {!s.providerConfigured && s.providerMissingWarning ? warnLine(s.providerMissingWarning) : null}
         <MetricLine label="SMS_SENT today (CRM timeline)" value={s.smsSentToday} />
@@ -406,7 +395,7 @@ export default function CrmAdminDiagnosticsPage() {
       <SectionCard
         title="Queue ownership & data quality"
         severity={ownSeverity}
-        actions={<Link href="/crm/settings" style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--accent)" }}>User access →</Link>}
+        actions={actionLink("User access", "/crm/settings")}
       >
         <MetricLine
           label="Members on ACTIVE campaigns tied to archived/inactive contacts"
@@ -428,7 +417,7 @@ export default function CrmAdminDiagnosticsPage() {
       <SectionCard
         title="Campaign health"
         severity={campSeverity}
-        actions={<Link href="/crm/campaigns" style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--accent)" }}>Campaigns →</Link>}
+        actions={actionLink("Campaigns", "/crm/campaigns")}
       >
         <MetricLine label="ACTIVE campaigns" value={c.active} />
         <MetricLine
@@ -452,7 +441,7 @@ export default function CrmAdminDiagnosticsPage() {
       <SectionCard
         title="Wallboard & telephony snapshot"
         severity={wallSeverity}
-        actions={<Link href="/crm/wallboard" style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--accent)" }}>Wallboard →</Link>}
+        actions={actionLink("Wallboard", "/crm/wallboard")}
       >
         {!w.telephonyFetchOk ? warnLine(`Telephony health fetch failed: ${w.telephonyFetchError ?? "unknown"}`) : null}
         <MetricLine label="Active telephony calls (service /health)" value={w.activeTelephonyCalls ?? "—"} />
@@ -464,24 +453,9 @@ export default function CrmAdminDiagnosticsPage() {
           value={w.crmQueueRemainingPendingOrInProgress}
           hint="Same definition as reports `queueRemaining` for wallboard panels."
         />
-        <p style={{ margin: "0.35rem 0 0", fontSize: "0.75rem", color: "var(--text-dim)", lineHeight: 1.45 }}>{w.wallboardReportsRefreshNote}</p>
+        <p className="mt-1.5 text-xs leading-relaxed text-crm-muted">{w.wallboardReportsRefreshNote}</p>
       </SectionCard>
+      </div>
     </div>
   );
-}
-
-function linkPill(): CSSProperties {
-  return {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "0.35rem",
-    padding: "0.35rem 0.65rem",
-    borderRadius: "999px",
-    border: "1px solid var(--border)",
-    background: "var(--surface)",
-    fontSize: "0.75rem",
-    fontWeight: 600,
-    color: "var(--text)",
-    textDecoration: "none",
-  };
 }
