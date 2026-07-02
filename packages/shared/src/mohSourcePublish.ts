@@ -446,3 +446,35 @@ export function buildAdminOverlayKeysForTenant(
   });
   return out;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin schedule end-of-window fallback (design choice C, 2026-07-01)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// When an admin multi-tenant schedule window ends, the reconciler must decide
+// what the target returns to. Two modes are supported per schedule:
+//   • "restore_previous" (DEFAULT): tombstone ONLY the admin-overlay keys so the
+//     exact prior effective state (extension pins, tenant defaults, PBX-control)
+//     re-takes effect with zero stale keys. No class is written.
+//   • "fallback_class": in addition to clearing the overlay, the target is pointed
+//     at an explicit class. This is a PURE decision — the caller (reconciler) owns
+//     the AstDB write. Empty/whitespace fallbackClass fails safe → restore_previous.
+//
+// This function is intentionally pure and write-free so it can be unit-tested and
+// reused by both the API and the worker reconcile loop.
+
+export type AdminFallbackPlan =
+  | { action: "restore_previous" }
+  | { action: "set_class"; vitalPbxMohClassName: string };
+
+export function resolveAdminScheduleFallback(input: {
+  fallbackMode: string | null | undefined;
+  fallbackClass: string | null | undefined;
+}): AdminFallbackPlan {
+  const mode = String(input.fallbackMode ?? "").trim().toLowerCase();
+  const cls = firstNonEmpty(input.fallbackClass);
+  if (mode === "fallback_class" && cls) {
+    return { action: "set_class", vitalPbxMohClassName: cls };
+  }
+  return { action: "restore_previous" };
+}

@@ -177,8 +177,8 @@ test("resolver fail-safes return without changing the channel on missing data", 
   assert.match(SCRIPT, /GotoIf\(\$\["\$\{TENANT_ID\}" = ""\]\?done\)/);
   assert.match(SCRIPT, /GotoIf\(\$\["\$\{TENANT_SLUG_LOCAL\}" = ""\]\?done\)/);
   assert.match(SCRIPT, /GotoIf\(\$\["\$\{MOH_CLASS_LOCAL\}" = ""\]\?done\)/);
-  // The "done" label must be a bare Return().
-  assert.match(SCRIPT, /\(done\),NoOp\(Connect tenant MOH skipped[^\n]*\)\n\s+same\s*=>\s*n,Return\(\)/);
+  // The "done" label must be a bare Return(). CRLF-tolerant.
+  assert.match(SCRIPT, /\(done\),NoOp\(Connect tenant MOH skipped[^\r\n]*\)\r?\n\s+same\s*=>\s*n,Return\(\)/);
 });
 
 test("installer never hardcodes a tenant or a specific moh class in the dialplan body", () => {
@@ -653,8 +653,11 @@ test("installer parses --help / --check / --rollback / unknown modes before any 
   // Mode dispatch must happen BEFORE the [[ $EUID -eq 0 ]] preflight or any
   // file path init so --help works as a non-root user and unknown modes
   // exit with EX_USAGE (64) rather than crashing inside an asterisk call.
-  const modeBlockMatch = SCRIPT.match(/MODE="install"\s*\ncase "\$\{1:-\}"[\s\S]*?esac/);
-  assert.ok(modeBlockMatch, "MODE dispatch case-block not found near top of script");
+  // The installer parses args with a `for arg in "$@"; do case … esac done`
+  // loop (additive `--enable-trk-wrapper=<id>` flag lives here too), then
+  // defaults MODE to install.
+  const modeBlockMatch = SCRIPT.match(/MODE=""\r?\n[\s\S]*?for arg in "\$@"; do\r?\n\s*case "\$arg" in[\s\S]*?esac\r?\ndone/);
+  assert.ok(modeBlockMatch, "MODE dispatch for/case-block not found near top of script");
   const modeBlock = modeBlockMatch[0];
   // All four canonical mode aliases must be present.
   assert.match(modeBlock, /""\|install\)/);
@@ -770,8 +773,9 @@ test("do_health_check prints PASS/FAIL per check and a structured RESULT line", 
   assert.match(body, /\[PASS\]/);
   assert.match(body, /\[FAIL\]/);
   // Final summary uses a single `RESULT:` line so monitoring can grep it.
+  // (A trailing "; %s warning(s)" clause may follow the healthy/failed count.)
   assert.match(body, /RESULT: PASS \(%s\/%s checks healthy\)/);
-  assert.match(body, /RESULT: FAIL \(%s\/%s checks failed\)/);
+  assert.match(body, /RESULT: FAIL \(%s\/%s checks failed/);
   // PASS path returns 0, FAIL path returns non-zero.
   assert.match(body, /return 0/);
   assert.match(body, /return 1/);

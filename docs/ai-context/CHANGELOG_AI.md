@@ -4,6 +4,50 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-07-02 — MOH: control mode + admin multi-tenant schedules (finish/audit + docs)
+
+**Task:** PBX / MOH — long-term control system on branch `feature/moh-per-call-source`  
+**Risk:** low (branch-only; no deploy, no migration run, no PBX/AstDB touch)
+
+### Context
+- Continues the caller-leg MOH fix (commit `3eeea050`). Commit `23ea6c6b` already
+  landed the production-grade control system (tenant/extension control mode, admin
+  multi-tenant schedules + activation ledger, worker reconciler w/ startup reconcile,
+  full resolver precedence incl. admin overlay + global default, API surface, UI,
+  additive migration `20260702000000_moh_control_and_admin_schedules`). 93 tests green.
+- This pass = audit vs the acceptance criteria + Phase 7 list, one pure gap-fill, and
+  the docs that were still missing.
+
+### What changed (this pass)
+- **`resolveAdminScheduleFallback`** (`packages/shared/src/mohSourcePublish.ts`) —
+  pure decision for design choice C fallback: `restore_previous` (default) vs
+  `set_class` (explicit `fallback_class`). + 3 unit tests (`mohAdminSchedule.test.ts`).
+- Docs: `ASTDB_KEYS.md` (admin overlay, per-source, `connect/system/moh_default_class`),
+  `DATA_MODEL.md` (new control-mode + admin-schedule models), this changelog, and
+  `docs/pbx/connect-moh-per-source-phase2-proof.md` §L (design + 8 required
+  statements + coverage matrix) and §M (Phase 9 production-safety deliverable).
+
+### Priority (Option C, approved 2026-07-01)
+admin multi-tenant schedule → ext schedule → ext pin → tenant schedule → tenant pin
+→ global default → PBX/native. Admin overlay beats ext pins **only while active**;
+normal tenant schedules never override a pinned extension.
+
+### Deferred (single remaining MOH item)
+- Live-wiring of explicit `fallback_class` into the worker reconcile (interacts with
+  the per-tenant default publisher; needs real-DB validation). Default
+  `restore_previous` is implemented + correct today.
+
+### Files touched
+- `packages/shared/src/mohSourcePublish.ts`, `packages/shared/src/mohAdminSchedule.test.ts`
+- `docs/pbx/connect-moh-per-source-phase2-proof.md`
+- `docs/ai-context/ASTDB_KEYS.md`, `DATA_MODEL.md`, `CHANGELOG_AI.md`
+
+### Not touched
+- No deploy, no migration run, no Apply Changes, no AstDB write, no live PBX, no live
+  T2 proof patch, no wake/cos-wake/mobile files, no unrelated dirty working-tree files.
+
+---
+
 ## 2026-05-23 — Admin Users: Assign CRM access + campaigns
 
 **Task:** CRM / UI / API — Admin → Users row action for CRM assignment  
