@@ -27,15 +27,19 @@ import {
   isClearableForwardKey,
   resolveEffectiveMohClass,
   tenantAdminDefaultKey,
+  tenantDefaultClassKeys,
   type MohAstDbKey,
   type MohCallSource,
   type MohSourcePolicyRow,
 } from "./mohCallSource";
 import {
+  buildAdminFallbackTenantClassKeys,
   buildAdminOverlayKeysForTenant,
   computeActiveAdminOverrides,
   isAdminScheduleActive,
+  planAdminScheduleFallback,
   resolveAdminScheduleFallback,
+  selectAdminFallbackTenantClass,
   type AdminScheduleRow,
 } from "./mohSourcePublish";
 
@@ -336,4 +340,168 @@ test("buildAdminOverlayKeysForTenant: tenant + extension targets", () => {
   const ed = extensionAdminDefaultKey("t2", "205");
   assert.equal(map.get(`${td.family}\u0000${td.key}`), "yom_tov");
   assert.equal(map.get(`${ed.family}\u0000${ed.key}`), "yom_tov");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Explicit fallback LIVE wiring (design choice C, 2026-07-01)
+//
+// The persisted/API mode token is "explicit" (NOT "fallback_class"). These prove
+// the live worker/reconcile decisions: token mapping, validity gating, PBX-safe
+// skip, multi-tenant selection, tenant-level publish, and that extension pins
+// return afterwards.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("REQUIRED: 'explicit' is the live token → set_class (mode alias mapping)", () => {
+  // The real DB/API value is "explicit"; "fallback_class" stays a tolerated alias.
+  assert.deepEqual(resolveAdminScheduleFallback({ fallbackMode: "explicit", fallbackClass: "moh2" }), {
+    action: "set_class",
+    vitalPbxMohClassName: "moh2",
+  });
+  assert.deepEqual(resolveAdminScheduleFallback({ fallbackMode: "EXPLICIT", fallbackClass: "connect_t2_lobby" }), {
+    action: "set_class",
+    vitalPbxMohClassName: "connect_t2_lobby",
+  });
+  // Alias still works so older callers/tests do not break.
+  assert.deepEqual(resolveAdminScheduleFallback({ fallbackMode: "fallback_class", fallbackClass: "moh3" }), {
+    action: "set_class",
+    vitalPbxMohClassName: "moh3",
+  });
+});
+
+test("REQUIRED: planAdminScheduleFallback gates on publish validation", () => {
+  // Valid native + connect classes → applied.
+  assert.deepEqual(planAdminScheduleFallback({ fallbackMode: "explicit", fallbackClass: "moh5" }), {
+    action: "set_class",
+    vitalPbxMohClassName: "moh5",
+  });
+  assert.deepEqual(planAdminScheduleFallback({ fallbackMode: "explicit", fallbackClass: "connect_acme_jazz" }), {
+    action: "set_class",
+    vitalPbxMohClassName: "connect_acme_jazz",
+  });
+  // Invalid/unsafe class → refused, fails safe to restore_previous (design C).
+  assert.deepEqual(planAdminScheduleFallback({ fallbackMode: "explicit", fallbackClass: "../etc/passwd" }), {
+    action: "restore_previous",
+    refusedClass: "../etc/passwd",
+  });
+  assert.deepEqual(planAdminScheduleFallback({ fallbackMode: "explicit", fallbackClass: "not a class" }), {
+    action: "restore_previous",
+    refusedClass: "not a class",
+  });
+  assert.deepEqual(planAdminScheduleFallback({ fallbackMode: "explicit", fallbackClass: "randomName" }), {
+    action: "restore_previous",
+    refusedClass: "randomName",
+  });
+});
+
+test("REQUIRED: missing / restore_previous fallback → restore_previous (no refusal)", () => {
+  assert.deepEqual(planAdminScheduleFallback({ fallbackMode: "explicit", fallbackClass: "" }), { action: "restore_previous" });
+  assert.deepEqual(planAdminScheduleFallback({ fallbackMode: "explicit", fallbackClass: null }), { action: "restore_previous" });
+  assert.deepEqual(planAdminScheduleFallback({ fallbackMode: "restore_previous", fallbackClass: "moh2" }), { action: "restore_previous" });
+});
+
+test("planAdminScheduleFallback: custom validity predicate honored", () => {
+  const only = (c: string) => c === "lobby";
+  assert.deepEqual(planAdminScheduleFallback({ fallbackMode: "explicit", fallbackClass: "lobby", isValidClass: only }), {
+    action: "set_class",
+    vitalPbxMohClassName: "lobby",
+  });
+  assert.deepEqual(planAdminScheduleFallback({ fallbackMode: "explicit", fallbackClass: "moh2", isValidClass: only }), {
+    action: "restore_previous",
+    refusedClass: "moh2",
+  });
+});
+
+test("REQUIRED: fallback publishes at TENANT level (moh_class + active_moh_class)", () => {
+  const keys = buildAdminFallbackTenantClassKeys("t2", "moh5");
+  assert.deepEqual(keys, tenantDefaultClassKeys("t2", "moh5"));
+  const map = new Map(keys.map((k) => [k.key, k.value]));
+  assert.equal(map.get("moh_class"), "moh5");
+  assert.equal(map.get("active_moh_class"), "moh5");
+  assert.ok(keys.every((k) => k.family === "connect/t_t2"), "fallback is a tenant-default key, never an overlay/extension key");
+  // Empty class → no keys (nothing to publish).
+  assert.deepEqual(buildAdminFallbackTenantClassKeys("t2", "   "), []);
+});
+
+test("fallback key set is deterministic (idempotent double-run)", () => {
+  assert.deepEqual(buildAdminFallbackTenantClassKeys("t2", "moh5"), buildAdminFallbackTenantClassKeys("t2", "moh5"));
+});
+
+test("REQUIRED: after explicit fallback, an extension pin still beats the tenant fallback", () => {
+  // Fallback set the tenant default to moh5; the overlay keys are gone. A pinned
+  // extension (read before tenant default) must still win.
+  const withPin = resolveEffectiveMohClass({
+    source: "internal",
+    adminScheduleTenantClass: "", // overlay cleared
+    extensionSourceClass: "ext_pinned",
+    tenantDefaultClass: "moh5", // fallback published here
+  });
+  assert.equal(withPin.class, "ext_pinned");
+  assert.equal(withPin.reason, "extension_source");
+  // With no pin, the tenant now sits on the explicit fallback class.
+  const noPin = resolveEffectiveMohClass({
+    source: "internal",
+    adminScheduleTenantClass: "",
+    tenantDefaultClass: "moh5",
+  });
+  assert.equal(noPin.class, "moh5");
+  assert.equal(noPin.reason, "tenant_default");
+});
+
+test("REQUIRED: selectAdminFallbackTenantClass — highest-priority valid explicit wins", () => {
+  const sel = selectAdminFallbackTenantClass({
+    tenantControlMode: "connect",
+    candidates: [
+      { scheduleId: "a", fallbackMode: "explicit", fallbackClass: "moh2", priority: 1 },
+      { scheduleId: "b", fallbackMode: "explicit", fallbackClass: "moh5", priority: 9 },
+      { scheduleId: "c", fallbackMode: "restore_previous", fallbackClass: null, priority: 100 },
+    ],
+  });
+  assert.equal(sel.appliedClass, "moh5");
+  assert.deepEqual(sel.refusedClasses, []);
+  assert.equal(sel.skippedForPbx, false);
+});
+
+test("REQUIRED: selectAdminFallbackTenantClass — PBX-controlled tenant is never forced", () => {
+  const sel = selectAdminFallbackTenantClass({
+    tenantControlMode: "pbx",
+    candidates: [{ scheduleId: "a", fallbackMode: "explicit", fallbackClass: "moh5", priority: 5 }],
+  });
+  assert.equal(sel.appliedClass, null); // no Connect class forced onto a PBX tenant
+  assert.equal(sel.skippedForPbx, true);
+});
+
+test("selectAdminFallbackTenantClass — invalid class refused, falls back to restore_previous", () => {
+  const sel = selectAdminFallbackTenantClass({
+    tenantControlMode: "connect",
+    candidates: [{ scheduleId: "a", fallbackMode: "explicit", fallbackClass: "bad name", priority: 5 }],
+  });
+  assert.equal(sel.appliedClass, null);
+  assert.deepEqual(sel.refusedClasses, ["bad name"]);
+  assert.equal(sel.skippedForPbx, false);
+});
+
+test("REQUIRED: multi-tenant explicit fallback resolves per tenant independently", () => {
+  // Two tenants ending at once, each with its own explicit fallback class; the
+  // per-tenant key sets are distinct and land only under that tenant's family.
+  const t2 = selectAdminFallbackTenantClass({
+    tenantControlMode: "connect",
+    candidates: [{ scheduleId: "s1", fallbackMode: "explicit", fallbackClass: "moh2", priority: 0 }],
+  });
+  const t3 = selectAdminFallbackTenantClass({
+    tenantControlMode: "connect",
+    candidates: [{ scheduleId: "s1", fallbackMode: "explicit", fallbackClass: "connect_t3_holiday", priority: 0 }],
+  });
+  const k2 = buildAdminFallbackTenantClassKeys("t2", t2.appliedClass!);
+  const k3 = buildAdminFallbackTenantClassKeys("t3", t3.appliedClass!);
+  assert.ok(k2.every((k) => k.family === "connect/t_t2"));
+  assert.ok(k3.every((k) => k.family === "connect/t_t3"));
+  assert.equal(new Map(k2.map((k) => [k.key, k.value])).get("moh_class"), "moh2");
+  assert.equal(new Map(k3.map((k) => [k.key, k.value])).get("moh_class"), "connect_t3_holiday");
+});
+
+test("selectAdminFallbackTenantClass — no ending explicit candidates → restore_previous (null)", () => {
+  const sel = selectAdminFallbackTenantClass({ tenantControlMode: "connect", candidates: [] });
+  assert.equal(sel.appliedClass, null);
+  assert.deepEqual(sel.refusedClasses, []);
+  assert.equal(sel.skippedForPbx, false);
 });

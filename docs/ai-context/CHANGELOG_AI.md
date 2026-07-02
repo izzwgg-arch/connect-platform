@@ -4,6 +4,44 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-07-01 — MOH: wire explicit admin-schedule fallback (live worker/reconcile)
+
+**Task:** PBX / MOH — explicit `fallback_class` live wiring on branch `feature/moh-per-call-source-clean`
+**Risk:** low (branch-only; no schema change, no deploy, no migration run, no PBX/AstDB touch)
+
+### Context
+- Closes the single deferred item from the prior pass (proof doc §M.1): the admin
+  (multi-tenant) schedule reconciler only implemented the default `restore_previous`.
+- **Key finding:** the persisted/API `fallbackMode` token is **`"explicit"`**
+  (`z.enum(["restore_previous","explicit"])`), but the pure helper only matched
+  `"fallback_class"` — so it could never have fired on real data.
+
+### What changed
+- **`packages/shared/src/mohSourcePublish.ts`** — `resolveAdminScheduleFallback` now
+  maps **`"explicit"`** (keeps `"fallback_class"` as alias). Added
+  `planAdminScheduleFallback` (layers `isValidMohRuntimeClass` publish validation →
+  fail-safe to `restore_previous` on invalid/missing class),
+  `selectAdminFallbackTenantClass` (PBX-skip + highest-priority + refusal list), and
+  `buildAdminFallbackTenantClassKeys`.
+- **`packages/shared/src/mohCallSource.ts`** — added `tenantDefaultClassKeys(slug,cls)`
+  (`connect/t_<slug>/moh_class` + `active_moh_class`).
+- **`apps/worker/src/main.ts`** (`runMohAdminScheduleCycle`) — on an ending activation
+  with `explicit` fallback, publishes the fallback class at **tenant** level, gated on
+  class validity + `Tenant.mohControlMode` (PBX-controlled tenants are never forced),
+  persists `MohLastPublishedState.mohClass`, and **publishes before closing the ledger**
+  (partial-failure safe/retryable). `restore_previous` behavior is unchanged.
+- Tests: `mohAdminSchedule.test.ts` (+13 cases) — explicit token, validity gating,
+  PBX skip, multi-tenant, extension-pin precedence return, deterministic key set.
+- Docs: proof doc §N, `DATA_MODEL.md`, `ASTDB_KEYS.md`, this entry.
+
+### Guardrails
+- **No schema change** (`fallbackMode`/`fallbackClass` already existed). No migration
+  run, no deploy, no live PBX, no AstDB write, no installer run, no Apply Changes.
+- Live T2 proof patch untouched. `20260426020000` replay bug not touched in this branch.
+- Tests green: shared MOH **99**, api mohControl **6**, installers **72**.
+
+---
+
 ## 2026-07-02 — MOH: control mode + admin multi-tenant schedules (finish/audit + docs)
 
 **Task:** PBX / MOH — long-term control system on branch `feature/moh-per-call-source`  

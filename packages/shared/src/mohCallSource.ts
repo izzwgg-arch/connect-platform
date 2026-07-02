@@ -122,6 +122,23 @@ export function tenantSourceMohFamily(slug: string): string {
   return `connect/t_${assertSlug(slug)}/moh/src`;
 }
 
+/**
+ * Build the tenant-default class keys (`connect/t_<slug>/moh_class` and its
+ * alias `active_moh_class`). This is the plain tenant fallback level the
+ * resolver reads AFTER any admin overlay / extension / per-source key. The
+ * value is written as-is (caller normalizes); an empty string tombstones it.
+ * Used by the admin-schedule explicit-fallback path to repoint a tenant's
+ * Connect-managed default class when a takeover window ends.
+ */
+export function tenantDefaultClassKeys(slug: string, value: string): MohAstDbKey[] {
+  const fam = `connect/t_${assertSlug(slug)}`;
+  const v = String(value ?? "");
+  return [
+    { family: fam, key: "moh_class", value: v },
+    { family: fam, key: "active_moh_class", value: v },
+  ];
+}
+
 /** AstDB family holding an extension's per-source classes. */
 export function extensionSourceMohFamily(slug: string, extension: string): string {
   return `connect/t_${assertSlug(slug)}/extensions/${assertExtension(extension)}/moh/src`;

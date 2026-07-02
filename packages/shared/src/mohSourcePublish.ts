@@ -27,11 +27,12 @@ import {
   buildTenantAdminOverlayKeys,
   buildTenantSourceMohKeys,
   normalizeMohCallSource,
+  tenantDefaultClassKeys,
   type MohAstDbKey,
   type MohCallSource,
   type MohSourcePolicyRow,
 } from "./mohCallSource";
-import { normalizeMohRuntimeClass } from "./mohRuntimeClass";
+import { isValidMohRuntimeClass, normalizeMohRuntimeClass } from "./mohRuntimeClass";
 
 /** AstDB family + key for the system-wide global default class. */
 export const MOH_GLOBAL_DEFAULT_FAMILY = "connect/system";
@@ -456,16 +457,23 @@ export function buildAdminOverlayKeysForTenant(
 //   • "restore_previous" (DEFAULT): tombstone ONLY the admin-overlay keys so the
 //     exact prior effective state (extension pins, tenant defaults, PBX-control)
 //     re-takes effect with zero stale keys. No class is written.
-//   • "fallback_class": in addition to clearing the overlay, the target is pointed
-//     at an explicit class. This is a PURE decision — the caller (reconciler) owns
+//   • "explicit": in addition to clearing the overlay, the target is pointed at
+//     an explicit class. This is a PURE decision — the caller (reconciler) owns
 //     the AstDB write. Empty/whitespace fallbackClass fails safe → restore_previous.
 //
-// This function is intentionally pure and write-free so it can be unit-tested and
-// reused by both the API and the worker reconcile loop.
+// NOTE ON THE MODE TOKEN: the persisted/API value for the explicit mode is
+// "explicit" (see apps/api adminScheduleBodySchema). "fallback_class" is accepted
+// as a tolerated alias so older callers/tests keep working. Both mean "set_class".
+//
+// These functions are intentionally pure and write-free so they can be
+// unit-tested and reused by both the API and the worker reconcile loop.
 
 export type AdminFallbackPlan =
   | { action: "restore_previous" }
   | { action: "set_class"; vitalPbxMohClassName: string };
+
+/** The set of `fallbackMode` tokens that mean "apply the explicit fallbackClass". */
+const EXPLICIT_FALLBACK_MODES = new Set(["explicit", "fallback_class"]);
 
 export function resolveAdminScheduleFallback(input: {
   fallbackMode: string | null | undefined;
@@ -473,8 +481,98 @@ export function resolveAdminScheduleFallback(input: {
 }): AdminFallbackPlan {
   const mode = String(input.fallbackMode ?? "").trim().toLowerCase();
   const cls = firstNonEmpty(input.fallbackClass);
-  if (mode === "fallback_class" && cls) {
+  if (EXPLICIT_FALLBACK_MODES.has(mode) && cls) {
     return { action: "set_class", vitalPbxMohClassName: cls };
   }
   return { action: "restore_previous" };
+}
+
+/**
+ * Validity-gated version used by the LIVE reconcile path. Layers the existing
+ * publish validation (`isValidMohRuntimeClass`, overridable for tests) on top of
+ * `resolveAdminScheduleFallback` so a broken/invalid explicit fallback is never
+ * silently published — it FAILS SAFE to `restore_previous` and surfaces the
+ * refused class for a warning log. Missing/empty class also fails safe. This is
+ * the design-C safety contract: "do not silently publish a broken state".
+ */
+export type AdminFallbackResolution =
+  | { action: "restore_previous"; refusedClass?: string }
+  | { action: "set_class"; vitalPbxMohClassName: string };
+
+export function planAdminScheduleFallback(input: {
+  fallbackMode: string | null | undefined;
+  fallbackClass: string | null | undefined;
+  /** Playability/validity gate; defaults to the runtime-class syntactic validator. */
+  isValidClass?: (cls: string) => boolean;
+}): AdminFallbackResolution {
+  const base = resolveAdminScheduleFallback({ fallbackMode: input.fallbackMode, fallbackClass: input.fallbackClass });
+  if (base.action !== "set_class") return { action: "restore_previous" };
+  const validate = input.isValidClass ?? isValidMohRuntimeClass;
+  if (!validate(base.vitalPbxMohClassName)) {
+    return { action: "restore_previous", refusedClass: base.vitalPbxMohClassName };
+  }
+  return { action: "set_class", vitalPbxMohClassName: base.vitalPbxMohClassName };
+}
+
+/**
+ * Build the tenant-default class keys the explicit-fallback path writes when a
+ * takeover ends (points the tenant's Connect-managed default at the fallback
+ * class). Extension static overrides are read BEFORE these keys, so they still
+ * win after the overlay is gone — the fallback is the tenant-level post-schedule
+ * baseline, never a permanent extension override. Value is normalized here.
+ */
+export function buildAdminFallbackTenantClassKeys(slug: string, vitalPbxMohClassName: string): MohAstDbKey[] {
+  const cls = normalizeMohRuntimeClass(vitalPbxMohClassName);
+  if (!cls) return [];
+  return tenantDefaultClassKeys(slug, cls);
+}
+
+/** One ending activation's schedule fallback config, for tenant-level selection. */
+export interface AdminFallbackCandidate {
+  scheduleId: string;
+  fallbackMode: string | null | undefined;
+  fallbackClass: string | null | undefined;
+  priority: number;
+}
+
+export interface AdminFallbackSelection {
+  /** Tenant-level Connect class to publish, or null for restore_previous. */
+  appliedClass: string | null;
+  /** Explicit fallback classes refused by validation (for warning logs). */
+  refusedClasses: string[];
+  /** True when a valid explicit fallback was skipped because the tenant is PBX-controlled. */
+  skippedForPbx: boolean;
+}
+
+/**
+ * Pure selection of the tenant-level explicit-fallback class among the
+ * activations ending this cycle. Encapsulates the three safety gates so the
+ * worker stays a thin caller and every branch is unit-tested:
+ *   • invalid/missing class  → refused (fail safe to restore_previous)
+ *   • tenant is PBX-controlled → skipped (never force Connect control)
+ *   • otherwise the highest-priority valid explicit fallback wins.
+ */
+export function selectAdminFallbackTenantClass(input: {
+  tenantControlMode: string | null | undefined;
+  candidates: ReadonlyArray<AdminFallbackCandidate>;
+  isValidClass?: (cls: string) => boolean;
+}): AdminFallbackSelection {
+  const isPbx = String(input.tenantControlMode ?? "connect").trim().toLowerCase() === "pbx";
+  const refusedClasses: string[] = [];
+  let skippedForPbx = false;
+  let best: { cls: string; priority: number } | null = null;
+  for (const c of input.candidates) {
+    const plan = planAdminScheduleFallback({ fallbackMode: c.fallbackMode, fallbackClass: c.fallbackClass, isValidClass: input.isValidClass });
+    if (plan.action !== "set_class") {
+      if (plan.refusedClass) refusedClasses.push(plan.refusedClass);
+      continue;
+    }
+    if (isPbx) {
+      skippedForPbx = true;
+      continue;
+    }
+    const priority = Number.isFinite(c.priority) ? c.priority : 0;
+    if (!best || priority > best.priority) best = { cls: plan.vitalPbxMohClassName, priority };
+  }
+  return { appliedClass: best ? best.cls : null, refusedClasses, skippedForPbx };
 }

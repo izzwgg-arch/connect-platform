@@ -49,11 +49,14 @@ import {
   buildAdminOverlayKeysForTenant,
   adminOverlayKeyIdsForTenant,
   adminOverlayKeyIdsForExtension,
+  selectAdminFallbackTenantClass,
+  buildAdminFallbackTenantClassKeys,
   computeForwardKeyClears,
   type ScheduleRuleRow,
   type StaticSourcePolicy,
   type AdminScheduleRow,
   type ActiveAdminOverride,
+  type AdminFallbackCandidate,
   type MohAstDbKey,
 } from "@connect/shared";
 import {
@@ -2333,12 +2336,29 @@ async function runMohAdminScheduleCycle(): Promise<void> {
     const openActivations: any[] = await (db as any).mohAdminScheduleActivation.findMany({ where: { state: "active" } });
     if (schedRows.length === 0 && openActivations.length === 0) return;
 
+    // Fallback config (mode/class) for EVERY schedule referenced by an open
+    // activation — including ones now disabled/deleted (so their end-of-window
+    // fallback still applies). Enabled+non-deleted schedules are already in
+    // schedRows; this fills the gaps.
+    const fallbackScheduleIds = new Set<string>(openActivations.map((a) => a.scheduleId));
+    const fallbackById = new Map<string, { fallbackMode: string | null; fallbackClass: string | null; priority: number }>();
+    for (const s of schedRows) fallbackById.set(s.id, { fallbackMode: s.fallbackMode ?? null, fallbackClass: s.fallbackClass ?? null, priority: Number.isFinite(s.priority) ? s.priority : 0 });
+    const missingFallbackIds = [...fallbackScheduleIds].filter((id) => !fallbackById.has(id));
+    if (missingFallbackIds.length > 0) {
+      const fbRows: any[] = await (db as any).mohAdminSchedule.findMany({
+        where: { id: { in: missingFallbackIds } },
+        select: { id: true, fallbackMode: true, fallbackClass: true, priority: true },
+      });
+      for (const r of fbRows) fallbackById.set(r.id, { fallbackMode: r.fallbackMode ?? null, fallbackClass: r.fallbackClass ?? null, priority: Number.isFinite(r.priority) ? r.priority : 0 });
+    }
+
     // Resolve slugs for every tenant referenced by a target or open activation.
     const tenantIds = new Set<string>();
     for (const s of schedRows) for (const t of s.targets) tenantIds.add(t.tenantId);
     for (const a of openActivations) tenantIds.add(a.tenantId);
-    const tenants: any[] = await (db as any).tenant.findMany({ where: { id: { in: [...tenantIds] } }, select: { id: true, name: true } });
+    const tenants: any[] = await (db as any).tenant.findMany({ where: { id: { in: [...tenantIds] } }, select: { id: true, name: true, mohControlMode: true } });
     const nameById = new Map<string, string>(tenants.map((t) => [t.id, t.name]));
+    const controlModeById = new Map<string, string>(tenants.map((t) => [t.id, String(t.mohControlMode ?? "connect").toLowerCase()]));
     const slugByTenant = new Map<string, string>();
     const tenantIdBySlug = new Map<string, string>();
     for (const tid of tenantIds) {
@@ -2398,20 +2418,68 @@ async function runMohAdminScheduleCycle(): Promise<void> {
             if (!keepIds.has(id)) tombstones.push({ family: kid.family, key: kid.key, value: "" });
           }
         }
-        const allKeys = [...desiredKeys, ...tombstones];
-        const sig = JSON.stringify(allKeys);
-        const changed = _mohAdminSignature.get(slug) !== sig;
-
-        // Reconcile the activation ledger (idempotent).
+        // Ledger snapshot (read BEFORE any write; drives OPEN/RESTORE + fallback).
         const lastState = await (db as any).mohLastPublishedState.findUnique({ where: { tenantId }, select: { mohClass: true, controlMode: true } });
         const openForTenant = openActivations.filter((a) => a.tenantId === tenantId);
         const openIndex = new Map<string, any>(openForTenant.map((a) => [winnerKey(a.scheduleId, a.tenantId, String(a.extension || "")), a]));
 
-        // OPEN new activations for current winners with no open row.
+        // ── Explicit end-of-window fallback ────────────────────────────────
+        // For every activation that is ENDING this cycle (open row, no longer a
+        // winner) with fallbackMode="explicit", plan the fallback with the same
+        // publish validation used at write time. A tenant handed back to native
+        // PBX control is NEVER force-published (design: don't force Connect on a
+        // PBX tenant). Highest-priority valid explicit fallback wins at tenant
+        // level; extension static overrides (read first) still beat it.
+        const endingCandidates: AdminFallbackCandidate[] = [];
+        for (const [wk, a] of openIndex) {
+          if (winners.has(wk)) continue; // still active → not ending
+          const fb = fallbackById.get(a.scheduleId);
+          if (fb) endingCandidates.push({ scheduleId: a.scheduleId, fallbackMode: fb.fallbackMode, fallbackClass: fb.fallbackClass, priority: fb.priority });
+        }
+        const fallbackSel = selectAdminFallbackTenantClass({
+          tenantControlMode: controlModeById.get(tenantId) ?? lastState?.controlMode ?? "connect",
+          candidates: endingCandidates,
+        });
+        for (const refused of fallbackSel.refusedClasses) {
+          console.warn(`moh admin reconcile: slug=${slug} refused invalid fallback class "${refused}" → restore_previous`);
+        }
+        if (fallbackSel.skippedForPbx) {
+          console.log(`moh admin reconcile: slug=${slug} tenant is PBX-controlled → skip explicit fallback, restore_previous`);
+        }
+        const fallbackWinner = fallbackSel.appliedClass ? { cls: fallbackSel.appliedClass } : null;
+        const fallbackKeys: MohAstDbKey[] = fallbackWinner ? (buildAdminFallbackTenantClassKeys(slug, fallbackWinner.cls) as MohAstDbKey[]) : [];
+
+        const allKeys = [...desiredKeys, ...fallbackKeys, ...tombstones];
+        const sig = JSON.stringify(allKeys);
+        const changed = _mohAdminSignature.get(slug) !== sig;
+
+        // The tenant baseline AFTER this cycle (used to snapshot any activation
+        // OPENed now, so a later restore returns to the post-fallback baseline).
+        const baselineClass = fallbackWinner ? fallbackWinner.cls : (lastState?.mohClass ?? null);
+
+        // Ledger deltas — computed now, WRITTEN only after a successful publish
+        // so a failed publish leaves the ledger intact and is retried next tick.
+        const opensToCreate: ActiveAdminOverride[] = [];
         for (const [wk, o] of winners) {
           const [, tid] = wk.split("\u0000");
           if (tid !== tenantId) continue;
           if (openIndex.has(wk)) continue;
+          opensToCreate.push(o);
+        }
+        const restoresToClose: any[] = [];
+        for (const [wk, a] of openIndex) {
+          if (winners.has(wk)) continue;
+          restoresToClose.push(a);
+        }
+
+        // Publish FIRST. On failure we do not advance the signature or the
+        // ledger, so the whole transition is retried on the next cycle.
+        if (changed) {
+          await workerPublishAstDbKeys(slug, allKeys);
+        }
+
+        // OPEN new activations for current winners with no open row.
+        for (const o of opensToCreate) {
           await (db as any).mohAdminScheduleActivation.create({
             data: {
               scheduleId: o.scheduleId,
@@ -2419,25 +2487,32 @@ async function runMohAdminScheduleCycle(): Promise<void> {
               extension: o.extension || "",
               state: "active",
               appliedClass: o.vitalPbxMohClassName,
-              previousClass: lastState?.mohClass ?? null,
+              previousClass: baselineClass,
               previousControlMode: lastState?.controlMode ?? null,
               previousKeysSnapshot: [],
             },
           });
         }
         // RESTORE open activations that are no longer winners (ended/disabled).
-        for (const [wk, a] of openIndex) {
-          if (winners.has(wk)) continue;
+        for (const a of restoresToClose) {
           await (db as any).mohAdminScheduleActivation.update({
             where: { id: a.id },
             data: { state: "restored", deactivatedAt: new Date() },
           });
         }
+        // Persist the new tenant baseline when an explicit fallback was applied,
+        // so later admin OPENs snapshot the correct previous class.
+        if (fallbackWinner) {
+          await (db as any).mohLastPublishedState.upsert({
+            where: { tenantId },
+            update: { mohClass: fallbackWinner.cls, publishedAt: new Date() },
+            create: { tenantId, mohClass: fallbackWinner.cls, holdMode: "default", controlMode: lastState?.controlMode ?? "connect" },
+          });
+        }
 
         if (changed) {
-          await workerPublishAstDbKeys(slug, allKeys);
           _mohAdminSignature.set(slug, sig);
-          console.log(`moh admin reconcile: slug=${slug} active=${activeForTenant.length} tombstones=${tombstones.length}`);
+          console.log(`moh admin reconcile: slug=${slug} active=${activeForTenant.length} tombstones=${tombstones.length}${fallbackWinner ? ` fallback=${fallbackWinner.cls}` : ""}`);
         }
       } catch (tErr: any) {
         console.error(`moh admin reconcile: error for slug ${slug}: ${tErr?.message}`);

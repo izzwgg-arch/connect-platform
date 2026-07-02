@@ -385,11 +385,19 @@ After `POST /admin/pbx/refresh-tenants` succeeds, `useAppContext.refreshPbxTenan
     admin **multi-tenant** schedules (holiday/Yom Tov music). Separate from the
     single-tenant `MohScheduleConfig` (undamaged). `scheduleKind`
     (`one_time`|`recurring` with wrap-around), `vitalPbxMohClassName`, `priority`,
-    `fallbackMode` (`restore_previous` default | `fallback_class`) + `fallbackClass`.
+    `fallbackMode` (**`restore_previous`** default | **`explicit`**) + `fallbackClass`.
+    ⚠️ The persisted/API token for the explicit mode is **`"explicit"`** (not
+    `"fallback_class"`, which the pure helper accepts only as a legacy alias).
     Targets are `(tenantId, extension?)`. The **activation** table is the
     idempotency + restore ledger: `state` (`active`→`restored`), `activatedAt`/
     `deactivatedAt`, and `previousClass`/`previousControlMode`/`previousKeysSnapshot`/
     `appliedClass` snapshots so `restore_previous` restores exactly.
+    - **End-of-window behavior (live, `runMohAdminScheduleCycle`):**
+      `restore_previous` tombstones ONLY the overlay keys; **`explicit`** additionally
+      publishes `fallbackClass` at **tenant** level (`connect/t_<slug>/moh_class` +
+      `active_moh_class`) so extension pins (read first) still win, gated on
+      `isValidMohRuntimeClass` (invalid/missing → fail-safe restore_previous) and
+      `Tenant.mohControlMode` (PBX-controlled tenants are never force-published).
 - **Priority (Option C, approved 2026-07-01):** admin overlay → ext schedule → ext
   pin → tenant schedule → tenant pin → global default → PBX. See
   `docs/pbx/connect-moh-per-source-phase2-proof.md` §L.

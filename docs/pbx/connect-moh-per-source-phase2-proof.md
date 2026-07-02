@@ -593,11 +593,84 @@ caller-leg installer **20** = **96 pass / 0 fail**.
     ring-group config, no unrelated dirty working-tree files.
 14. **No unrelated files committed:** only the MOH files in (4) are staged/committed.
 
-### M.1 One deferred item (explicit-fallback live wiring)
-`resolveAdminScheduleFallback` (choice 4's optional `fallback_class`) is implemented
-+ tested as pure logic. The worker reconciler currently implements the **default**
-`restore_previous` (overlay-only tombstone). Wiring `fallback_class` into the live
-reconcile is deferred because a whole-tenant explicit fallback interacts with the
-per-tenant default publisher (`runMohScheduleCycle`) and must be validated against a
-real DB before shipping to the reconcile loop. Tracked as the single remaining
-MOH task; default behavior is correct and safe today.
+### M.1 One deferred item (explicit-fallback live wiring) — ✅ DONE (see §N)
+`resolveAdminScheduleFallback` (choice 4's optional explicit fallback) was previously
+implemented + tested as pure logic while the worker reconciler only implemented the
+**default** `restore_previous`. That gap is now **closed** — see §N below.
+
+---
+
+## N. Explicit admin-schedule fallback — LIVE-WIRED (2026-07-01)
+
+The admin (multi-tenant) schedule reconciler now honors **both** end-of-window
+modes on the live worker path (`apps/worker/src/main.ts` → `runMohAdminScheduleCycle`).
+
+### N.0 The naming trap that was fixed
+The persisted/API `fallbackMode` token is **`"explicit"`** (`apps/api`
+`adminScheduleBodySchema` = `z.enum(["restore_previous","explicit"])`), but the
+original pure helper only matched `"fallback_class"`. It therefore could **never**
+have fired on real data. `resolveAdminScheduleFallback` now treats **`"explicit"`**
+as the live token and keeps `"fallback_class"` as a tolerated alias.
+
+### N.1 Semantics (exactly as wired)
+- **`restore_previous` / empty / unknown mode** → tombstone ONLY the admin-overlay
+  keys (unchanged). The untouched extension/tenant/PBX-control keys re-take effect
+  with zero stale keys. **No class is written.**
+- **`explicit`** → in addition to clearing the overlay, publish the fallback class as
+  the **tenant-level** Connect-managed default (`connect/t_<slug>/moh_class` +
+  `active_moh_class`) for the affected tenant, and persist it to
+  `MohLastPublishedState.mohClass` so later admin OPENs snapshot the right baseline.
+- **Extension precedence after end:** the fallback lands at **tenant** scope, and the
+  resolver reads extension keys BEFORE tenant defaults — so a pinned extension still
+  wins after the overlay clears. The explicit fallback is the tenant post-schedule
+  baseline, **not** a permanent extension override.
+  - **Owner-review note:** for an *extension-scoped* admin target ending in `explicit`,
+    the fallback is still published at **tenant** scope (per the approved "tenant-level
+    post-schedule state" design). Flagged here for explicit confirmation.
+
+### N.2 Safety gates (design-C)
+1. **Invalid/unsafe class** → refused via the same `isValidMohRuntimeClass` publish
+   validation and **fails safe to `restore_previous`** (never publishes a broken
+   state); a warning is logged with the refused class.
+2. **Missing/empty class** → `restore_previous` (fail-safe, no warning).
+3. **PBX-controlled tenant** (`Tenant.mohControlMode="pbx"`) → the explicit fallback is
+   **skipped** (never forces Connect control onto a native-MOH tenant); logged.
+4. **Highest-priority** valid explicit fallback wins when multiple activations end at
+   once; each tenant resolves independently (multi-tenant safe).
+
+### N.3 Idempotency / restart / partial-failure safety
+- The per-slug **signature guard** (`_mohAdminSignature`) means an unchanged desired
+  key set is a no-op; a re-tick never double-writes.
+- **Publish happens BEFORE the ledger is closed.** On a publish failure the signature
+  and the activation ledger are left intact, so the whole transition (overlay
+  tombstone + fallback publish + ledger close) is retried on the next 60 s tick and on
+  startup. This closes the "ledger closed but publish failed" gap for the fallback
+  path specifically.
+- The fallback `moh_class`/`active_moh_class` keys are tenant-default keys (never
+  overlay keys), so they are **never** tombstoned by the overlay-clear logic.
+
+### N.4 Pure, unit-tested decision layer
+All decisions live in pure, tested helpers in `packages/shared/src/mohSourcePublish.ts`:
+- `resolveAdminScheduleFallback` — token mapping (`explicit`/alias) → set_class.
+- `planAdminScheduleFallback` — layers `isValidMohRuntimeClass` (design-C validity).
+- `selectAdminFallbackTenantClass` — PBX-skip + highest-priority + refusal collection.
+- `buildAdminFallbackTenantClassKeys` / `tenantDefaultClassKeys` — the tenant-level keys.
+The worker is a thin caller of these. Coverage: `mohAdminSchedule.test.ts` (explicit
+token, valid/invalid/missing, custom validator, PBX skip, multi-tenant, extension-pin
+precedence return, deterministic key set).
+
+### N.5 Test results (this pass)
+- `@connect/shared` MOH suites (incl. `mohAdminSchedule.test.ts`): **99 passed / 0 failed**.
+- `apps/api` `mohControl.test.ts`: **6 passed / 0 failed**.
+- Installer string-shape suites (caller-leg + tenant-moh-dialplan): **72 passed / 0 failed**.
+- `tsc` on `@connect/shared` + `apps/worker`: MOH files clean; only the known,
+  unrelated pre-existing `webrtcGlobalOutageAlerts.test.ts` / `@connect/shared/*`
+  subpath tsc-direct errors remain (out of scope).
+
+### N.6 Guardrails honored
+- **No schema change** — `fallbackMode`/`fallbackClass` already existed.
+- **No migration run**, **no deploy**, **no live PBX**, **no AstDB write**, **no
+  installer run**, **no Apply Changes**.
+- **Live T2 proof patch untouched.**
+- The separate `20260426020000` from-empty migration replay bug is **not** touched in
+  this branch (tracked in `docs/ops/FOLLOWUP-migration-replay-storageKey.md`).

@@ -144,7 +144,7 @@ the **caller-leg** hook `[T<id>_before-local-dial-moh-hook]` (in
 
 | Family | Key | Type | Purpose |
 |---|---|---|---|
-| `connect/t_<slug>` | `admin_moh_class` | string | **Admin multi-tenant overlay** (tenant scope). Highest priority while an admin schedule window is active; tombstoned (`""`) on restore. |
+| `connect/t_<slug>` | `admin_moh_class` | string | **Admin multi-tenant overlay** (tenant scope). Highest priority while an admin schedule window is active; tombstoned (`""`) on restore. On end-of-window with `fallbackMode="explicit"`, the reconciler ALSO rewrites `moh_class`/`active_moh_class` (below) to `fallbackClass` — gated on class validity + `Tenant.mohControlMode` (PBX-controlled ⇒ skipped). |
 | `connect/t_<slug>/extensions/<ext>` | `admin_moh_class` | string | Admin overlay (extension-target scope). |
 | `connect/t_<slug>/moh/src` | `<source>` | string | Static per-call-source policy class (`inbound_direct`, `inbound_ivr`, `inbound_ringgroup`, `inbound_queue`, `outbound`, `internal`, `transfer`, …). Folds active per-tenant schedule + global default at publish time. |
 | `connect/t_<slug>/moh/admin_src` | `<source>` | string | Admin per-source overlay (rarely used; same precedence as `admin_moh_class`). |
