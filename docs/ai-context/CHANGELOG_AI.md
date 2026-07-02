@@ -4,6 +4,50 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-07-02 — MOH: caller-leg hardening (generic runtime hook)
+
+**Task:** PBX / MOH — long-term caller-leg hardening on branch `feature/moh-long-term-hardening` (from `feature/moh-per-call-source-clean` @ `8d92ba13`)
+**Risk:** low (repo-only; no schema change, no deploy, no migration run, no PBX/AstDB touch, no installer run)
+
+### Context
+- The caller-leg installer generated one `[T<tid>_before-local-dial-moh-hook]` context per
+  tenant that had **published** MOH at install time (why only `T2 T3 T21` were live). A
+  tenant that published/was-mapped later stayed a no-op until someone re-ran the installer.
+- `--check` false-negatived: it sampled the **lowest** tid in `connect/pbx_tenant_map`
+  (all mapped tenants) and grepped that tenant's per-tenant hook, which often did not exist.
+
+### What changed
+- **`scripts/pbx/install-connect-caller-leg-moh.sh`** — rewritten to install ONE generic
+  runtime context `[connect-localdial-moh]` that resolves the tenant at call time from
+  `${TENANT_PREFIX}` + AstDB (`pbx_tenant_map/<tid>/slug` → `admin_moh_class` → `moh_class`
+  → `active_moh_class`; missing anything ⇒ safe no-op). Baseplan GosubIf migrated to the
+  fixed context name; a legacy `${TENANT_PREFIX}before-local-dial-moh-hook` line is detected
+  and removed (idempotent, backed up). `--check` rewritten to verify the single context
+  (anchor==1, generic patch + no legacy line, `__67` present + `#tryinclude`, exactly one
+  on-disk definition owned by `__67`, no `__66`/legacy/duplicate, live GosubIf token +
+  loaded sentinel) — no per-tenant sampling ⇒ no false-negative. Rollback removes generic
+  **and** legacy baseplan lines. Still writes NO AstDB keys; touches only the baseplan line
+  + `__67` + the `#tryinclude`.
+- **`scripts/pbx/install-connect-caller-leg-moh.test.ts`** — rewritten: **32 passed**
+  (generic dispatch, TENANT_PREFIX derivation, no-op guards, admin→moh→active order,
+  metadata-only, legacy→generic migration, `--check` duplicate/`__66`/legacy failures,
+  read-only `--check`, surgical rollback).
+- **Zero regen linchpin:** `apps/api/src/mohReverseMapPublish.ts` already writes
+  `connect/pbx_tenant_map/<tid>/{slug,moh_class}` on every publish ⇒ future tenants covered
+  with no installer re-run. No app/worker/portal/schema change.
+- **Docs** — proof doc §P, `ASTDB_KEYS.md` caller-leg entry, this entry,
+  `moh-staging-*` notes.
+
+### Guardrails
+- No deploy, no live PBX, no installer run, no `--rollback`, no AstDB mutation, no Apply
+  Changes, no reload/restart, no production DB, no migration. Unrelated dirty files
+  (mobile/telephony/wake/cos-wake) untouched.
+- **Required later (owner-run):** re-run the installer, then re-validate **T2 inbound hold**
+  and spot-check **T3/T21 + one previously-unpublished tenant** (baseplan line + `__67` shape
+  changed). No portal branch reconciliation performed.
+
+---
+
 ## 2026-07-01 — MOH: scope admin schedule fallback by target
 
 **Task:** PBX / MOH — target-scope fallback correction on branch `feature/moh-per-call-source-clean`

@@ -137,10 +137,16 @@ Written by `apps/api` `/voice/moh/*` and `runMohScheduleCycle()` /
 `runMohAdminScheduleCycle()` in `apps/worker/src/main.ts`. **Asterisk consumers:**
 `[sub-connect-tenant-moh]` (the called-leg resolver in
 `scripts/pbx/install-connect-tenant-moh-dialplan.sh`) reads the full precedence;
-the **caller-leg** hook `[T<id>_before-local-dial-moh-hook]` (in
-`scripts/pbx/install-connect-caller-leg-moh.sh` / installed
-`extensions__67_connect_localdial_moh.conf`) reads `admin_moh_class` → `moh_class`
-→ `active_moh_class` for held-leg inbound hold.
+the **caller-leg** hook is the **generic runtime** context `[connect-localdial-moh]`
+(in `scripts/pbx/install-connect-caller-leg-moh.sh` / installed
+`extensions__67_connect_localdial_moh.conf`, 2026-07-02 hardening). At call time it
+derives the numeric tenant id from `${TENANT_PREFIX}` (`T<id>_` → `<id>`), reads
+`connect/pbx_tenant_map/<id>/slug` (absent ⇒ safe no-op), then
+`admin_moh_class` → `moh_class` → `active_moh_class` for held-leg inbound hold. Because
+the id/slug are resolved dynamically, publishing MOH later for **any** current or future
+tenant is picked up with **no** PBX regeneration (the reverse-map keys are written by
+`apps/api/src/mohReverseMapPublish.ts` on every publish). The earlier per-published-tenant
+`[T<id>_before-local-dial-moh-hook]` contexts are superseded/migrated by this generic hook.
 
 | Family | Key | Type | Purpose |
 |---|---|---|---|

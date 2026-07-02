@@ -730,3 +730,130 @@ pin and (b) leave an **untracked ghost key** (there is no per-extension
 - **No migration run**, **no deploy**, **no production DB**, **no live PBX**, **no AstDB
   write**, **no installer run**, **no Apply Changes**.
 - **Live T2 proof patch untouched.** `20260426020000` replay bug untouched.
+
+## P. Long-term caller-leg hardening — generic runtime hook (2026-07-02)
+
+**Goal.** Make the caller-leg (inbound-hold) MOH coverage independent of *"did this
+tenant have MOH published when the installer last ran."* Previously
+`install-connect-caller-leg-moh.sh` generated one `[T<tid>_before-local-dial-moh-hook]`
+context per tenant that had a published class in `connect/pbx_tenant_map` — which is why
+only `T2 T3 T21` were live. A tenant that published (or was first mapped) later stayed a
+no-op until someone re-ran the installer, and `--check` false-negatived (see P.6).
+
+**Branch:** `feature/moh-long-term-hardening` (from `feature/moh-per-call-source-clean`
+@ `8d92ba13`). **Repo-only** — no deploy, no live PBX, no AstDB write, no installer run,
+no Apply Changes, no migration. No app/worker/portal/schema change (none needed).
+
+### P.1 Decision — generic runtime hook (preferred), not per-tenant generation
+The installer now installs **ONE** Connect-owned context, `[connect-localdial-moh]`, in
+`extensions__67_connect_localdial_moh.conf`. It resolves the tenant at **call time** from
+`${TENANT_PREFIX}` + AstDB — the exact dynamic-resolution technique already proven in
+production by the called-leg resolver `[sub-connect-tenant-moh]`
+(`install-connect-tenant-moh-dialplan.sh` / `extensions__65`). The baseplan GosubIf is
+migrated to dispatch to the **fixed** context name (no `${TENANT_PREFIX}` in the dispatch):
+
+```
+; [sub-local-dialing], immediately after the U(sub-before-bridging-call anchor:
+same => n,GosubIf($[${DIALPLAN_EXISTS(connect-localdial-moh,s,1)}=1]?connect-localdial-moh,s,1)
+
+[connect-localdial-moh]                      ; the ONE generic context (in __67)
+exten => s,1,NoOp(Connect generic caller-leg MOH hook prefix=${TENANT_PREFIX} …)
+ same => n,Set(CONNECT_MOH_TID=${FILTER(0-9,${TENANT_PREFIX})})           ; T2_ → 2
+ same => n,ExecIf($["${CONNECT_MOH_TID}" = ""]?Set(CONNECT_MOH_TID=${FILTER(0-9,${CUT(TRANSFER_CONTEXT,_,1)})}))
+ same => n,GotoIf($["${CONNECT_MOH_TID}" = ""]?done)                       ; no tid ⇒ no-op
+ same => n,Set(CONNECT_MOH_SLUG=${FILTER(A-Za-z0-9_-,${DB(connect/pbx_tenant_map/${CONNECT_MOH_TID}/slug)})})
+ same => n,GotoIf($["${CONNECT_MOH_SLUG}" = ""]?done)                      ; no slug ⇒ no-op
+ same => n,Set(CONNECT_MOH_CLASS=${DB(connect/t_${CONNECT_MOH_SLUG}/admin_moh_class)})
+ same => n,ExecIf($["${CONNECT_MOH_CLASS}" = ""]?Set(CONNECT_MOH_CLASS=${DB(connect/t_${CONNECT_MOH_SLUG}/moh_class)}))
+ same => n,ExecIf($["${CONNECT_MOH_CLASS}" = ""]?Set(CONNECT_MOH_CLASS=${DB(connect/t_${CONNECT_MOH_SLUG}/active_moh_class)}))
+ same => n,GotoIf($["${CONNECT_MOH_CLASS}" = ""]?done)                     ; no class ⇒ no-op
+ same => n,Set(CHANNEL(musicclass)=${CONNECT_MOH_CLASS})
+ same => n,Set(__CONNECT_MOH=${CONNECT_MOH_CLASS})
+ same => n(done),Return()
+```
+
+**Feasibility proof (why generic is safe on this build):** every idiom above is already
+running in production in `[sub-connect-tenant-moh]` — `FILTER(0-9,…)` tenant-id parse,
+`${DB(connect/pbx_tenant_map/${…}/slug)}` dynamic read, `${DB(connect/t_${slug}/…)}`
+dynamic class read, and `GotoIf …?done → Return()` fail-safe. `${TENANT_PREFIX}` is
+available in `[sub-local-dialing]` (the pre-hardening GosubIf used it; the **live T2 hold
+test passed**, i.e. it expanded to `T2_`).
+
+### P.2 How current tenants are covered
+Any tenant whose `connect/pbx_tenant_map/<tid>/slug` + a class key
+(`admin_moh_class`/`moh_class`/`active_moh_class`) exist resolves at call time — no
+per-tenant context, no hard-coded ids. T2/T3/T21 keep working (same keys, same slug).
+
+### P.3 How future tenants are covered — **zero regeneration**
+**Linchpin:** `apps/api/src/mohReverseMapPublish.ts` writes
+`connect/pbx_tenant_map/<pbxTenantId>/{slug,moh_class}` on **every** MOH publish (rollback
+mirrors it). So the first time *any* tenant (existing or brand-new) publishes MOH, its
+reverse-map slug + class appear, and the generic hook resolves it on the very next held
+call — **without** re-running the installer or regenerating any PBX file.
+
+### P.4 What happens when no MOH is published / native control / deleted
+Missing tenant map, missing slug, empty/tombstoned class, or a tenant handed back to
+PBX/native control (all Connect keys tombstoned) ⇒ each `GotoIf …?done` fires ⇒ bare
+`Return()` ⇒ `CHANNEL(musicclass)` untouched ⇒ native VitalPBX `default`. Never hangs up,
+redirects, or alters CDR/recording.
+
+### P.5 What happens after VitalPBX "Apply Changes"
+Apply Changes / upgrade rewrites `extensions__20-baseplan.conf` and drops the inserted
+GosubIf line (the `__67` file + `#tryinclude` survive). Re-running the installer
+re-inserts the single line, idempotently. Until then the caller-leg hook is simply a
+no-op (called-leg/outbound MOH is unaffected).
+
+### P.6 `--check` false-negative — root cause + fix
+**Root cause:** the old `do_health_check` sampled the **lowest** tid from
+`connect/pbx_tenant_map` (which contains *all* mapped tenants — 1, 8, 29, 33, 35…) and
+grepped `dialplan show T<tid>_before-local-dial-moh-hook`. Since hooks existed only for
+published T2/T3/T21, sampling an unpublished low tid returned nothing → **FAIL**, even
+though the GosubIf and the real hooks were healthy.
+**Fix (falls out of the generic design):** `--check` now verifies the **single**
+`[connect-localdial-moh]` context — no per-tenant sampling. It PASSes only when: anchor
+count = 1; baseplan carries the generic GosubIf **and** no legacy per-tenant line; `__67`
+exists; `__60_custom` `#tryinclude`s it; exactly one on-disk definition of
+`[connect-localdial-moh]` owned by `__67`; no leftover `[T<n>_before-local-dial-moh-hook]`
+context; no manual `extensions__66*` caller-leg patch; the live `[sub-local-dialing]` shows
+the `connect-localdial-moh` token (single-token grep ⇒ tolerant of Asterisk
+spacing/formatting); and the live `[connect-localdial-moh]` context shows the official
+sentinel NoOp.
+
+### P.7 How to run / re-run / rollback (owner-run later; NOT run here)
+- **Install / re-apply / migrate:** `sudo ./install-connect-caller-leg-moh.sh` — idempotent;
+  migrates a legacy `${TENANT_PREFIX}before-local-dial-moh-hook` line to the generic line
+  (timestamped baseplan backup; surgical).
+- **Health check:** `sudo ./install-connect-caller-leg-moh.sh --check` (read-only).
+- **Rollback:** `sudo ./install-connect-caller-leg-moh.sh --rollback` — removes only the
+  Connect-owned baseplan line(s) (generic **and** any legacy), the `__67` file, and the
+  `#tryinclude`. Never touches AstDB, native VitalPBX MOH config, routes/trunks/queues/
+  IVRs/ring-groups/extensions, or old manual backups.
+
+### P.8 Validation status
+- **Live T2 inbound hold already passed** with `moh2` (2026-07-01, §K) — the generic hook
+  resolves T2 via the identical keys, so behavior is preserved.
+- **Required after the owner re-runs the hardened installer:** because it changes the
+  baseplan line + `__67` shape, re-validate **T2 inbound hold** once, then spot-check
+  **T3 / T21** and **at least one previously-unpublished tenant** (publish MOH, place a
+  held inbound call, confirm the chosen class plays with no installer re-run).
+- **Fleet checklist:** for each tenant — `--check` PASS; `database get connect/t_<slug>
+  moh_class` returns the expected class; a held inbound call plays it; unpublished tenants
+  play native `default` (no error).
+- **No portal branch reconciliation was performed** here — the production portal is a
+  separate live line carrying voicemail/roles/permissions work; this branch changes only
+  the PBX installer, its tests, and docs.
+
+### P.9 Tests
+`bash -n scripts/pbx/install-connect-caller-leg-moh.sh` clean; string-shape suite
+`scripts/pbx/install-connect-caller-leg-moh.test.ts` **32 passed / 0 failed** (generic
+dispatch, TENANT_PREFIX derivation, no-op guards for missing tid/slug/class, admin→moh→
+active order, metadata-only, legacy→generic migration, duplicate/`__66`/legacy-context
+`--check` failures, read-only `--check`, surgical rollback).
+
+### P.10 Guardrails honored
+- **No deploy, no live PBX, no installer run, no `--rollback`, no AstDB mutation, no Apply
+  Changes, no `database put/del/deltree`, no Asterisk reload/restart, no production DB, no
+  API/worker/portal deploy, no migration.**
+- **No app/worker/portal/schema change** — the generic hook reads keys the API/worker
+  already publish.
+- **Unrelated dirty files (mobile/telephony/wake/cos-wake/`_latency_logs`) untouched.**

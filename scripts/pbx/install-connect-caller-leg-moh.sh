@@ -21,44 +21,65 @@
 #   the held peer (Candidate B, disproven). The proven fix is to set
 #   CHANNEL(musicclass) on the leg executing [sub-local-dialing], before Dial().
 #
+# LONG-TERM HARDENING (2026-07-02): ONE generic runtime hook, not per-tenant.
+#   Earlier revisions generated one [T<tid>_before-local-dial-moh-hook] context
+#   per tenant that had PUBLISHED MOH at install time. That coupled coverage to
+#   "did this tenant have MOH published when the installer last ran" — a tenant
+#   who published (or was first mapped) later stayed a no-op until someone
+#   re-ran the installer. This revision installs ONE Connect-owned context,
+#   [connect-localdial-moh], that resolves the tenant at RUNTIME from
+#   ${TENANT_PREFIX} and AstDB. Every current AND future tenant is covered the
+#   moment its reverse-map + MOH keys exist — with NO PBX regeneration. The
+#   dynamic-resolution technique is the same one proven in production by the
+#   called-leg resolver [sub-connect-tenant-moh]
+#   (scripts/pbx/install-connect-tenant-moh-dialplan.sh).
+#
 # WHAT THIS DOES:
 #   1. Inserts ONE guarded line into the VitalPBX-core [sub-local-dialing]
 #      context, immediately AFTER the unique
 #          Set(DIAL_OPTIONS=...U(sub-before-bridging-call...))
 #      anchor and BEFORE the Dial(${DIAL_STRING}...):
-#          same => n,GosubIf($[${DIALPLAN_EXISTS(${TENANT_PREFIX}before-local-dial-moh-hook,s,1)}=1]?${TENANT_PREFIX}before-local-dial-moh-hook,s,1)
-#      The GosubIf is guarded by DIALPLAN_EXISTS, so it is a NO-OP for any tenant
-#      that does not have a generated hook context. It changes no Dial/Answer/
-#      Playback/Local/route/queue/trunk/extension — it is a single metadata Gosub.
+#          same => n,GosubIf($[${DIALPLAN_EXISTS(connect-localdial-moh,s,1)}=1]?connect-localdial-moh,s,1)
+#      The GosubIf is guarded by DIALPLAN_EXISTS, so it is a NO-OP whenever the
+#      Connect-owned context is absent (e.g. after --rollback). It changes no
+#      Dial/Answer/Playback/Local/route/queue/trunk/extension — a single Gosub.
+#      If a LEGACY per-tenant dispatch line
+#      (${TENANT_PREFIX}before-local-dial-moh-hook) is found, it is migrated:
+#      the legacy line is removed and replaced by the generic line.
 #   2. Writes a SEPARATE, Connect-owned file
 #          /etc/asterisk/extensions__67_connect_localdial_moh.conf
-#      containing one [T<tid>_before-local-dial-moh-hook] context per Connect
-#      tenant that has PUBLISHED MOH (connect/pbx_tenant_map/<tid>/{slug,moh_class}).
-#      Each hook is self-contained and fail-safe: it reads the tenant's slug-pinned
-#      AstDB class and, only if present, sets CHANNEL(musicclass) + __CONNECT_MOH.
-#      Missing slug/class ⇒ bare Return() (musicclass untouched).
+#      containing ONE [connect-localdial-moh] context. At call time it:
+#        • derives the numeric PBX tenant id from ${TENANT_PREFIX} (T<id>_ →
+#          <id>), with a TRANSFER_CONTEXT fallback;
+#        • reads connect/pbx_tenant_map/<id>/slug — absent ⇒ safe no-op Return;
+#        • reads connect/t_<slug>/admin_moh_class → moh_class → active_moh_class;
+#          none present ⇒ safe no-op Return;
+#        • else sets CHANNEL(musicclass) + __CONNECT_MOH and Returns.
+#      No tenant-specific data is baked into the file — it is identical on every
+#      host and never needs regeneration when tenants publish/change MOH.
 #   3. #tryinclude's the __67 file from the Connect include hub
 #      extensions__60_custom.conf (optional include — a rolled-back/absent file
 #      never errors; the baseplan GosubIf still no-ops via DIALPLAN_EXISTS).
-#   4. Reloads dialplan and verifies the patch line + a sample tenant hook.
+#   4. Reloads dialplan and verifies the patch line + the generic context.
 #
 # IDEMPOTENT + RE-APPLY-SAFE:
-#   Safe to re-run. If the baseplan already carries the marker it is left as-is.
-#   VitalPBX "Apply Changes"/upgrade rewrites extensions__20-baseplan.conf and
-#   will DROP the inserted line (the __67 file + #tryinclude survive). Re-running
-#   this installer restores the line. Consider wiring it into the post-apply hook
+#   Safe to re-run. If the baseplan already carries the generic marker it is
+#   left as-is (and any stale legacy per-tenant line is cleaned). VitalPBX
+#   "Apply Changes"/upgrade rewrites extensions__20-baseplan.conf and will DROP
+#   the inserted line (the __67 file + #tryinclude survive). Re-running this
+#   installer restores the line. Consider wiring it into the post-apply hook
 #   (see README) so inbound coverage is never silently lost.
 #
 # NEVER edits any pjsip__*.conf, musiconhold__*.conf, extensions__50-*.conf, or
 # any tenant route/queue/IVR/ring-group config. The ONLY VitalPBX-generated file
-# it touches is extensions__20-baseplan.conf, and ONLY to insert the single
-# guarded GosubIf line (with a timestamped backup + surgical rollback).
+# it touches is extensions__20-baseplan.conf, and ONLY to insert/migrate the
+# single guarded GosubIf line (with a timestamped backup + surgical rollback).
 #
 # This installer writes NO AstDB keys.
 #
 # Usage:
 #   chmod +x install-connect-caller-leg-moh.sh
-#   sudo ./install-connect-caller-leg-moh.sh            # install / re-apply
+#   sudo ./install-connect-caller-leg-moh.sh            # install / re-apply / migrate
 #   sudo ./install-connect-caller-leg-moh.sh --check    # read-only health probe
 #   sudo ./install-connect-caller-leg-moh.sh --rollback # remove Connect-owned patch
 #   ./install-connect-caller-leg-moh.sh --help
@@ -81,32 +102,50 @@ INCLUDE_LINE="#tryinclude extensions__67_connect_localdial_moh.conf"
 # before the Dial(${DIAL_STRING}...) at ~230, so Connect's class wins on the
 # executing (held) leg without touching the Dial.
 ANCHOR_SUBSTR='U(sub-before-bridging-call'
-MARKER="before-local-dial-moh-hook"
-# NOTE: single-quoted so every ${...} stays LITERAL for Asterisk to expand.
-GOSUB_LINE=' same => n,GosubIf($[${DIALPLAN_EXISTS(${TENANT_PREFIX}before-local-dial-moh-hook,s,1)}=1]?${TENANT_PREFIX}before-local-dial-moh-hook,s,1)'
 
-# ── Per-tenant hook generator ───────────────────────────────────────────────
-# Emits one fail-safe, metadata-only caller-leg MOH hook for a tenant. The slug
-# is pinned per tenant (proven on the Local leg where context-var tenant
-# resolution is unreliable). ${...} refs are kept LITERAL via single-quoted
-# printf format strings; only %s (tid / slug) is substituted by the shell.
-emit_localdial_moh_hook() {
-  local tid="$1" slug="$2"
-  printf '[T%s_before-local-dial-moh-hook]\n' "$tid"
-  printf 'exten => s,1,NoOp(Connect caller-leg MOH hook tid=%s slug=%s preset=${CHANNEL(musicclass)})\n' "$tid" "$slug"
-  # (0) Admin multi-tenant schedule overlay (HIGHEST priority). Slug-pinned
-  #     tenant-scope admin takeover — beats the tenant default while active. When
-  #     the admin window ends Connect tombstones this key ("") so the reads below
-  #     restore the exact prior tenant state.
-  printf ' same => n,Set(CONNECT_MOH_CLASS=${DB(connect/t_%s/admin_moh_class)})\n' "$slug"
-  # (1) Tenant default → alias fallback.
-  printf ' same => n,ExecIf($["${CONNECT_MOH_CLASS}" = ""]?Set(CONNECT_MOH_CLASS=${DB(connect/t_%s/moh_class)}))\n' "$slug"
-  printf ' same => n,ExecIf($["${CONNECT_MOH_CLASS}" = ""]?Set(CONNECT_MOH_CLASS=${DB(connect/t_%s/active_moh_class)}))\n' "$slug"
-  printf ' same => n,GotoIf($["${CONNECT_MOH_CLASS}" = ""]?done)\n'
-  printf ' same => n,Set(CHANNEL(musicclass)=${CONNECT_MOH_CLASS})\n'
-  printf ' same => n,Set(__CONNECT_MOH=${CONNECT_MOH_CLASS})\n'
-  printf ' same => n(done),Return()\n'
-  printf '\n'
+# The single generic Connect-owned context name. Also the baseplan-line marker:
+# it appears in our inserted GosubIf and NOWHERE else in the baseplan. It uses
+# HYPHENS (connect-localdial-moh); the __67 FILENAME uses UNDERSCORES
+# (connect_localdial_moh), so the two never collide in a grep -F.
+GENERIC_CTX="connect-localdial-moh"
+MARKER="connect-localdial-moh"
+
+# Legacy per-tenant dispatch marker (pre-hardening). Used to DETECT and MIGRATE
+# an older install whose baseplan called ${TENANT_PREFIX}before-local-dial-moh-hook.
+# Disjoint substring from MARKER ("local-dial" vs "localdial"), so the two
+# markers never match the same line.
+OLD_MARKER="before-local-dial-moh-hook"
+
+# Sentinel emitted on the s,1 line of the generic context — used by --check to
+# prove the OFFICIAL __67 context is the one Asterisk loaded.
+HOOK_SENTINEL="Connect generic caller-leg MOH hook"
+
+# NOTE: single-quoted so every ${...} stays LITERAL for Asterisk to expand.
+GOSUB_LINE=' same => n,GosubIf($[${DIALPLAN_EXISTS(connect-localdial-moh,s,1)}=1]?connect-localdial-moh,s,1)'
+
+# ── Generic runtime hook generator ──────────────────────────────────────────
+# Emits the ONE fail-safe, metadata-only caller-leg MOH context. The body is
+# fully static (no per-tenant data) — a heredoc kept LITERAL so every ${...}
+# reaches Asterisk verbatim. Resolution priority (first non-empty wins):
+#   admin_moh_class → moh_class → active_moh_class → no-op (native default).
+emit_generic_localdial_moh_hook() {
+  cat <<'HOOK'
+[connect-localdial-moh]
+exten => s,1,NoOp(Connect generic caller-leg MOH hook prefix=${TENANT_PREFIX} preset=${CHANNEL(musicclass)})
+ same => n,Set(CONNECT_MOH_TID=${FILTER(0-9,${TENANT_PREFIX})})
+ same => n,ExecIf($["${CONNECT_MOH_TID}" = ""]?Set(CONNECT_MOH_TID=${FILTER(0-9,${CUT(TRANSFER_CONTEXT,_,1)})}))
+ same => n,GotoIf($["${CONNECT_MOH_TID}" = ""]?done)
+ same => n,Set(CONNECT_MOH_SLUG=${FILTER(A-Za-z0-9_-,${DB(connect/pbx_tenant_map/${CONNECT_MOH_TID}/slug)})})
+ same => n,GotoIf($["${CONNECT_MOH_SLUG}" = ""]?done)
+ same => n,Set(CONNECT_MOH_CLASS=${DB(connect/t_${CONNECT_MOH_SLUG}/admin_moh_class)})
+ same => n,ExecIf($["${CONNECT_MOH_CLASS}" = ""]?Set(CONNECT_MOH_CLASS=${DB(connect/t_${CONNECT_MOH_SLUG}/moh_class)}))
+ same => n,ExecIf($["${CONNECT_MOH_CLASS}" = ""]?Set(CONNECT_MOH_CLASS=${DB(connect/t_${CONNECT_MOH_SLUG}/active_moh_class)}))
+ same => n,GotoIf($["${CONNECT_MOH_CLASS}" = ""]?done)
+ same => n,Set(CHANNEL(musicclass)=${CONNECT_MOH_CLASS})
+ same => n,Set(__CONNECT_MOH=${CONNECT_MOH_CLASS})
+ same => n,NoOp(Connect generic caller-leg MOH applied tid=${CONNECT_MOH_TID} slug=${CONNECT_MOH_SLUG} class=${CONNECT_MOH_CLASS})
+ same => n(done),Return()
+HOOK
 }
 
 # ── CLI mode dispatch (must precede any root/asterisk preflight) ────────────
@@ -125,26 +164,32 @@ install-connect-caller-leg-moh.sh — Connect caller-leg MOH hook for [sub-local
 
 Modes:
   install      (default) Insert the single guarded GosubIf into [sub-local-dialing]
-               (idempotent, re-apply-safe), write per-tenant hook contexts for
-               tenants with PUBLISHED Connect MOH, #tryinclude the hook file,
-               reload dialplan, verify. Writes NO AstDB keys.
-  --check      Read-only health probe: baseplan patched exactly once, anchor
-               unique, hook file + #tryinclude present, sample tenant hook loaded.
-  --rollback   Surgically remove ONLY the Connect-owned patch line from the
-               baseplan + the hook file + its #tryinclude line, then reload.
+               (idempotent, re-apply-safe; migrates a legacy per-tenant line),
+               write the ONE generic [connect-localdial-moh] context, #tryinclude
+               the hook file, reload dialplan, verify. Writes NO AstDB keys.
+  --check      Read-only health probe: anchor unique, baseplan carries the generic
+               GosubIf (no legacy line), hook file + #tryinclude present, exactly
+               one on-disk definition of [connect-localdial-moh] owned by __67,
+               no manual __66 patch / duplicate context, and the live dialplan
+               shows the GosubIf + the loaded generic context.
+  --rollback   Surgically remove ONLY the Connect-owned line(s) from the baseplan
+               (generic + any legacy) + the hook file + its #tryinclude, reload.
   --help       This text.
 
-Runtime source of truth (published by the Connect MOH publish path):
+Runtime source of truth (published by the Connect MOH publish path — read at
+call time, so publishing/changing MOH later needs NO installer re-run):
+  connect/pbx_tenant_map/<tid>/slug   → tenant slug (enumeration linchpin)
+  connect/t_<slug>/admin_moh_class    → admin multi-tenant overlay (highest)
   connect/t_<slug>/moh_class          → tenant class (primary)
   connect/t_<slug>/active_moh_class   → fallback alias
-  connect/pbx_tenant_map/<tid>/{slug,moh_class} → tenant enumeration
 HELP
   exit 0
 fi
 
-# ── anchor helpers (shared by install/check/rollback) ───────────────────────
-anchor_count() { grep -cF "$ANCHOR_SUBSTR" "$BASEPLAN" 2>/dev/null || true; }
-is_patched()   { grep -qF "$MARKER" "$BASEPLAN" 2>/dev/null; }
+# ── anchor / marker helpers (shared by install/check/rollback) ──────────────
+anchor_count()    { grep -cF "$ANCHOR_SUBSTR" "$BASEPLAN" 2>/dev/null || true; }
+is_patched()      { grep -qF "$MARKER" "$BASEPLAN" 2>/dev/null; }
+has_old_dispatch(){ grep -qF "$OLD_MARKER" "$BASEPLAN" 2>/dev/null; }
 
 # ── do_rollback ─────────────────────────────────────────────────────────────
 do_rollback() {
@@ -152,12 +197,13 @@ do_rollback() {
   command -v asterisk >/dev/null 2>&1 || die "asterisk binary not found in PATH"
   local removed=0 ts
   ts="$(date +%Y%m%d-%H%M%S)"
-  if [[ -f "$BASEPLAN" ]] && is_patched; then
+  if [[ -f "$BASEPLAN" ]] && { is_patched || has_old_dispatch; }; then
     cp -a "$BASEPLAN" "${BASEPLAN}.bak.connect-localdial-moh-rollback.${ts}"
-    # Remove ONLY our inserted line (the unique MARKER appears only there).
-    grep -vF "$MARKER" "$BASEPLAN" > "${BASEPLAN}.tmp.${ts}" && mv "${BASEPLAN}.tmp.${ts}" "$BASEPLAN"
+    # Remove ONLY our inserted line(s): the generic MARKER and any legacy
+    # per-tenant OLD_MARKER line. Both are Connect-owned and appear nowhere else.
+    grep -vF -e "$MARKER" -e "$OLD_MARKER" "$BASEPLAN" > "${BASEPLAN}.tmp.${ts}" && mv "${BASEPLAN}.tmp.${ts}" "$BASEPLAN"
     chown asterisk:asterisk "$BASEPLAN"; chmod 0644 "$BASEPLAN"
-    printf '[REMOVE] baseplan GosubIf line (backup ${BASEPLAN}.bak.connect-localdial-moh-rollback.%s)\n' "$ts"
+    printf '[REMOVE] baseplan Connect GosubIf line(s) (backup ${BASEPLAN}.bak.connect-localdial-moh-rollback.%s)\n' "$ts"
     removed=1
   else
     printf '[SKIP] baseplan not patched\n'
@@ -183,11 +229,16 @@ do_rollback() {
 }
 
 # ── do_health_check (read-only) ─────────────────────────────────────────────
+# Verifies the GENERIC hardened install end-to-end. No per-tenant sampling, so
+# it cannot false-negative on an unpublished tenant (the pre-hardening bug:
+# --check sampled the lowest tid in connect/pbx_tenant_map, which often had no
+# generated hook, and reported FAIL even though the healthy tenants worked).
 do_health_check() {
   command -v asterisk >/dev/null 2>&1 || die "asterisk binary not found in PATH"
   local checks=0 fail=0 cnt
   [[ -f "$BASEPLAN" ]] || die "baseplan not found: $BASEPLAN"
 
+  # 1. anchor unique
   cnt="$(anchor_count)"
   checks=$((checks + 1))
   if [[ "$cnt" = "1" ]]; then
@@ -196,20 +247,32 @@ do_health_check() {
     printf '[FAIL] anchor count=%s (need exactly 1)\n' "$cnt"; fail=$((fail + 1))
   fi
 
+  # 2. baseplan carries the generic caller-leg GosubIf
   checks=$((checks + 1))
   if is_patched; then
-    printf '[PASS] baseplan carries the caller-leg GosubIf\n'
+    printf '[PASS] baseplan carries the generic caller-leg GosubIf\n'
   else
-    printf '[FAIL] baseplan NOT patched\n'; fail=$((fail + 1))
+    printf '[FAIL] baseplan NOT patched with the generic GosubIf\n'; fail=$((fail + 1))
   fi
 
+  # 2b. no stale legacy per-tenant dispatch left in the baseplan (migration done)
+  checks=$((checks + 1))
+  if has_old_dispatch; then
+    printf '[FAIL] baseplan still calls the legacy per-tenant hook (%s) — re-run installer to migrate\n' "$OLD_MARKER"
+    fail=$((fail + 1))
+  else
+    printf '[PASS] no legacy per-tenant dispatch line in baseplan\n'
+  fi
+
+  # 3. official hook file present
   checks=$((checks + 1))
   if [[ -f "$HOOK_FILE" ]]; then
-    printf '[PASS] hook file present: %s\n' "$HOOK_FILE"
+    printf '[PASS] official hook file present: %s\n' "$HOOK_FILE"
   else
-    printf '[FAIL] hook file missing: %s\n' "$HOOK_FILE"; fail=$((fail + 1))
+    printf '[FAIL] official hook file missing: %s\n' "$HOOK_FILE"; fail=$((fail + 1))
   fi
 
+  # 4. hub #tryinclude present
   checks=$((checks + 1))
   if [[ -f "$CUSTOM_DIALPLAN" ]] && grep -qxF "$INCLUDE_LINE" "$CUSTOM_DIALPLAN"; then
     printf '[PASS] #tryinclude present in %s\n' "$CUSTOM_DIALPLAN"
@@ -217,21 +280,57 @@ do_health_check() {
     printf '[FAIL] #tryinclude missing in %s\n' "$CUSTOM_DIALPLAN"; fail=$((fail + 1))
   fi
 
-  # Sample a Connect-known tenant with published MOH and confirm its hook loaded
-  # AND that the GosubIf is visible in the live [sub-local-dialing].
-  local sample_tid
-  sample_tid="$(asterisk -rx 'database show connect/pbx_tenant_map' 2>/dev/null \
-    | awk -F'/' '/^\/connect\/pbx_tenant_map\//{print $4}' | grep -E '^[0-9]+$' | sort -un | head -n1 || true)"
+  # 5. exactly ONE on-disk definition of [connect-localdial-moh], owned by __67.
+  #    Guards against a duplicate/hand-copied definition shadowing the official one.
   checks=$((checks + 1))
-  if [[ -n "$sample_tid" ]]; then
-    if asterisk -rx "dialplan show T${sample_tid}_before-local-dial-moh-hook" 2>&1 | grep -q "CONNECT_MOH_CLASS" \
-       && asterisk -rx "dialplan show sub-local-dialing" 2>&1 | grep -q "$MARKER"; then
-      printf '[PASS] sample T%s hook loaded AND GosubIf visible in sub-local-dialing\n' "$sample_tid"
-    else
-      printf '[FAIL] sample T%s hook or GosubIf not visible\n' "$sample_tid"; fail=$((fail + 1))
-    fi
+  local def_files def_count
+  def_files="$(grep -lF '[connect-localdial-moh]' /etc/asterisk/extensions*.conf 2>/dev/null || true)"
+  def_count="$(printf '%s' "$def_files" | grep -c . || true)"
+  if [[ "$def_count" = "1" ]] && printf '%s\n' "$def_files" | grep -qxF "$HOOK_FILE"; then
+    printf '[PASS] exactly one definition of [%s], owned by %s\n' "$GENERIC_CTX" "$HOOK_FILE"
   else
-    printf '[SKIP] no Connect-known tenant in connect/pbx_tenant_map to sample\n'
+    printf '[FAIL] [%s] defined by %s file(s): %s (expected only %s)\n' "$GENERIC_CTX" "$def_count" "$(printf '%s ' $def_files)" "$HOOK_FILE"
+    fail=$((fail + 1))
+  fi
+
+  # 5b. no leftover legacy per-tenant caller-leg hook contexts on disk (stale/dupe).
+  checks=$((checks + 1))
+  local legacy_ctx_files
+  legacy_ctx_files="$(grep -lE '\[T[0-9]+_before-local-dial-moh-hook\]' /etc/asterisk/extensions*.conf 2>/dev/null || true)"
+  if [[ -z "$legacy_ctx_files" ]]; then
+    printf '[PASS] no legacy per-tenant caller-leg hook contexts on disk\n'
+  else
+    printf '[FAIL] legacy per-tenant caller-leg hook context(s) still defined in: %s\n' "$(printf '%s ' $legacy_ctx_files)"
+    fail=$((fail + 1))
+  fi
+
+  # 5c. no manual __66 caller-leg MOH proof-patch owning the hook.
+  checks=$((checks + 1))
+  local manual66
+  manual66="$(grep -lE 'before-local-dial-moh-hook|connect-localdial-moh' /etc/asterisk/extensions__66*.conf 2>/dev/null || true)"
+  if [[ -z "$manual66" ]]; then
+    printf '[PASS] no manual extensions__66*.conf caller-leg MOH patch on disk\n'
+  else
+    printf '[FAIL] manual __66 caller-leg MOH patch present (remove it; official __67 owns the hook): %s\n' "$(printf '%s ' $manual66)"
+    fail=$((fail + 1))
+  fi
+
+  # 6. live: GosubIf visible in [sub-local-dialing] (format-tolerant single-token grep).
+  #    Asterisk `dialplan show` may re-wrap app args; the context token is a single
+  #    contiguous string, so grep -F on it survives spacing/formatting differences.
+  checks=$((checks + 1))
+  if asterisk -rx "dialplan show sub-local-dialing" 2>&1 | grep -qF "$GENERIC_CTX"; then
+    printf '[PASS] live [sub-local-dialing] shows the %s GosubIf\n' "$GENERIC_CTX"
+  else
+    printf '[FAIL] live [sub-local-dialing] does NOT show the %s GosubIf\n' "$GENERIC_CTX"; fail=$((fail + 1))
+  fi
+
+  # 7. live: the generic hook context is loaded from the official file (sentinel).
+  checks=$((checks + 1))
+  if asterisk -rx "dialplan show $GENERIC_CTX" 2>&1 | grep -qF "$HOOK_SENTINEL"; then
+    printf '[PASS] live [%s] loaded (official __67 sentinel present)\n' "$GENERIC_CTX"
+  else
+    printf '[FAIL] live [%s] not loaded / official sentinel absent\n' "$GENERIC_CTX"; fail=$((fail + 1))
   fi
 
   printf '\n====================================================\n'
@@ -255,83 +354,88 @@ asterisk -rx "core show channels count" >/dev/null 2>&1 || die "asterisk -rx not
 [[ -f "$BASEPLAN" ]] || die "baseplan not found: $BASEPLAN"
 
 # ── 2. Verify the anchor is present and UNIQUE (refuse otherwise) ───────────
-step "[1/6] Verify [sub-local-dialing] anchor is present and unique"
+step "[1/5] Verify [sub-local-dialing] anchor is present and unique"
 CNT="$(anchor_count)"
 if [[ "$CNT" != "1" ]]; then
   die "Anchor '$ANCHOR_SUBSTR' count=$CNT in $BASEPLAN (need exactly 1). Refusing to patch."
 fi
 echo "  ↳ OK — anchor unique"
 
-# ── 3. Patch [sub-local-dialing] (idempotent) ───────────────────────────────
-step "[2/6] Insert the guarded caller-leg GosubIf (idempotent)"
+# ── 3. Patch [sub-local-dialing] (idempotent + legacy migration) ────────────
+step "[2/5] Insert the guarded generic caller-leg GosubIf (idempotent + migrate legacy)"
 if is_patched; then
-  echo "  ↳ already patched — leaving baseplan unchanged"
+  if has_old_dispatch; then
+    BACKUP_BP="${BASEPLAN}.bak.connect-localdial-moh.$(date +%Y%m%d-%H%M%S)"
+    cp -a "$BASEPLAN" "$BACKUP_BP"
+    grep -vF "$OLD_MARKER" "$BASEPLAN" > "${BASEPLAN}.tmp.$$" && mv "${BASEPLAN}.tmp.$$" "$BASEPLAN"
+    chown asterisk:asterisk "$BASEPLAN"; chmod 0644 "$BASEPLAN"
+    echo "  ↳ already patched; removed stale legacy per-tenant dispatch line (backup $BACKUP_BP)"
+  else
+    echo "  ↳ already patched — leaving baseplan unchanged"
+  fi
 else
   BACKUP_BP="${BASEPLAN}.bak.connect-localdial-moh.$(date +%Y%m%d-%H%M%S)"
   cp -a "$BASEPLAN" "$BACKUP_BP"
+  # Migration: drop any legacy per-tenant dispatch line first so we converge to
+  # exactly one generic GosubIf.
+  if has_old_dispatch; then
+    grep -vF "$OLD_MARKER" "$BASEPLAN" > "${BASEPLAN}.tmp.$$" && mv "${BASEPLAN}.tmp.$$" "$BASEPLAN"
+    echo "  ↳ removed legacy per-tenant dispatch line (migrating to generic hook)"
+  fi
   LN="$(grep -nF "$ANCHOR_SUBSTR" "$BASEPLAN" | head -1 | cut -d: -f1)"
   TMP_BP="${BASEPLAN}.tmp.$$"
   awk -v n="$LN" -v ins="$GOSUB_LINE" 'NR==n{print; print ins; next}{print}' "$BASEPLAN" > "$TMP_BP"
   mv "$TMP_BP" "$BASEPLAN"
   chown asterisk:asterisk "$BASEPLAN"; chmod 0644 "$BASEPLAN"
-  echo "  ↳ inserted GosubIf after baseplan line $LN (backup $BACKUP_BP)"
+  echo "  ↳ inserted generic GosubIf after baseplan line $LN (backup $BACKUP_BP)"
 fi
 
-# ── 4. Enumerate Connect tenants with PUBLISHED MOH + write hook file ───────
-step "[3/6] Generate per-tenant hook contexts for tenants with published MOH"
-TENANT_IDS="$(asterisk -rx 'database show connect/pbx_tenant_map' 2>/dev/null \
-  | awk -F'/' '/^\/connect\/pbx_tenant_map\//{print $4}' \
-  | grep -E '^[0-9]+$' | sort -un || true)"
-[[ -n "$TENANT_IDS" ]] || die "No tenants in connect/pbx_tenant_map — publish Connect MOH first."
-
+# ── 4. Write the ONE generic hook context (no per-tenant data) ──────────────
+step "[3/5] Write the generic [connect-localdial-moh] context"
 if [[ -f "$HOOK_FILE" ]]; then
   cp -a "$HOOK_FILE" "${HOOK_FILE}.bak.$(date +%Y%m%d-%H%M%S)"
 fi
-
-KEPT=""; SKIPPED=""
 {
   cat <<'HDR'
 ; ============================================================================
-; Connect caller-leg MOH hooks for [sub-local-dialing]
+; Connect caller-leg MOH hook for [sub-local-dialing]  (GENERIC / runtime)
 ; (Auto-installed by install-connect-caller-leg-moh.sh — DO NOT HAND-EDIT.)
 ;
-; One [T<tid>_before-local-dial-moh-hook] per Connect tenant with PUBLISHED MOH.
+; ONE context, [connect-localdial-moh], resolves the tenant at RUNTIME from
+; ${TENANT_PREFIX} + AstDB. It covers EVERY current and future tenant the
+; moment its reverse-map + MOH keys exist — no per-tenant regeneration, no
+; installer re-run when a tenant publishes/changes MOH later.
+;
 ; Invoked ONLY by the guarded GosubIf inserted into VitalPBX [sub-local-dialing]
-; (DIALPLAN_EXISTS gate ⇒ tenants without a hook here are a pure no-op).
-; Fail-safe + metadata-only: reads the tenant's slug-pinned AstDB class and, only
-; if present, sets CHANNEL(musicclass) + __CONNECT_MOH. Missing class ⇒ Return().
-; No Answer/Dial/Playback/Local/route/queue/trunk/extension changes.
+; (DIALPLAN_EXISTS gate ⇒ if this file is rolled back/absent the baseplan line
+; is a pure no-op). Fail-safe + metadata-only: reads the tenant's slug-pinned
+; AstDB class and, only if present, sets CHANNEL(musicclass) + __CONNECT_MOH.
+; Missing tenant map / slug / class ⇒ bare Return() (musicclass untouched →
+; native VitalPBX default). No Answer/Dial/Playback/Local/route/queue/trunk/
+; extension changes. Writes NO AstDB keys.
+;
+; Runtime read order (first non-empty wins):
+;   connect/pbx_tenant_map/<tid>/slug          (tenant identity; absent ⇒ no-op)
+;   connect/t_<slug>/admin_moh_class           (admin multi-tenant overlay)
+;   connect/t_<slug>/moh_class                 (tenant default)
+;   connect/t_<slug>/active_moh_class          (tenant alias)
 ; ============================================================================
 HDR
   printf '\n'
-  for tid in $TENANT_IDS; do
-    slug="$(asterisk -rx "database get connect/pbx_tenant_map/${tid} slug" 2>/dev/null \
-      | awk -F': ' '/^Value:/{print $2}' | tr -d '[:space:]' || true)"
-    class="$(asterisk -rx "database get connect/pbx_tenant_map/${tid} moh_class" 2>/dev/null \
-      | awk -F': ' '/^Value:/{print $2}' | tr -d '[:space:]' || true)"
-    # Requirement 6: only tenants with PUBLISHED MOH (slug AND class present).
-    if [[ -z "$slug" || -z "$class" ]]; then
-      SKIPPED="${SKIPPED}T${tid} "
-      continue
-    fi
-    # Defensive: slug must be a safe AstDB path token.
-    if [[ "$slug" != "${slug//[^A-Za-z0-9_-]/}" ]]; then
-      SKIPPED="${SKIPPED}T${tid}(bad-slug) "
-      continue
-    fi
-    KEPT="${KEPT}T${tid} "
-    emit_localdial_moh_hook "$tid" "$slug"
-  done
+  emit_generic_localdial_moh_hook
 } > "$HOOK_FILE"
 chown asterisk:asterisk "$HOOK_FILE"; chmod 0644 "$HOOK_FILE"
-echo "  ↳ wrote $HOOK_FILE (kept: ${KEPT:-none})"
-[[ -n "$SKIPPED" ]] && warn "skipped (no published MOH / bad slug): $SKIPPED"
-if [[ -z "$KEPT" ]]; then
-  warn "No tenant had published MOH — hook file has no contexts (baseplan GosubIf stays a no-op)."
-fi
+echo "  ↳ wrote $HOOK_FILE (generic runtime context — covers all current + future tenants)"
+
+# Informational only (read-only): how many tenants Connect currently maps. The
+# generic hook does NOT depend on this — it is printed purely to help operators
+# see coverage. A tenant with no reverse-map / no class is a safe no-op.
+MAPPED_COUNT="$(asterisk -rx 'database show connect/pbx_tenant_map' 2>/dev/null \
+  | awk -F'/' '/^\/connect\/pbx_tenant_map\//{print $4}' | grep -E '^[0-9]+$' | sort -un | grep -c . || true)"
+echo "  ↳ (info) tenants currently in connect/pbx_tenant_map: ${MAPPED_COUNT:-0} — all covered dynamically"
 
 # ── 5. Ensure the hook file is #tryinclude'd ────────────────────────────────
-step "[4/6] Ensure ${CUSTOM_DIALPLAN##*/} #tryinclude's the hook file"
+step "[4/5] Ensure ${CUSTOM_DIALPLAN##*/} #tryinclude's the hook file"
 if [[ ! -f "$CUSTOM_DIALPLAN" ]]; then
   warn "$CUSTOM_DIALPLAN not found — install-connect-wake-dialplan.sh must run first."
 else
@@ -345,41 +449,39 @@ else
 fi
 
 # ── 6. Reload + verify ──────────────────────────────────────────────────────
-step "[5/6] Reload dialplan"
+step "[5/5] Reload dialplan + verify GosubIf and generic context"
 RELOAD_OUT="$(asterisk -rx 'dialplan reload' 2>&1 || true)"
 echo "  ↳ $RELOAD_OUT"
 
-step "[6/6] Verify GosubIf in [sub-local-dialing] + a sample tenant hook"
-if ! asterisk -rx "dialplan show sub-local-dialing" 2>&1 | grep -q "$MARKER"; then
+if ! asterisk -rx "dialplan show sub-local-dialing" 2>&1 | grep -qF "$GENERIC_CTX"; then
   warn "GosubIf not visible in live sub-local-dialing after reload."
 fi
-SAMPLE_TID="$(printf '%s' "$KEPT" | tr ' ' '\n' | sed 's/^T//' | head -n1)"
-if [[ -n "$SAMPLE_TID" ]]; then
-  SHOW_OUT="$(asterisk -rx "dialplan show T${SAMPLE_TID}_before-local-dial-moh-hook" 2>&1 || true)"
-  echo "$SHOW_OUT" | sed 's/^/      /'
-  if echo "$SHOW_OUT" | grep -q "CONNECT_MOH_CLASS"; then
-    echo "  ↳ OK — sample T${SAMPLE_TID} caller-leg hook loaded"
-  else
-    warn "Sample hook T${SAMPLE_TID} not visible — check reload output above."
-  fi
+SHOW_OUT="$(asterisk -rx "dialplan show $GENERIC_CTX" 2>&1 || true)"
+echo "$SHOW_OUT" | sed 's/^/      /'
+if echo "$SHOW_OUT" | grep -qF "$HOOK_SENTINEL"; then
+  echo "  ↳ OK — generic [connect-localdial-moh] context loaded"
+else
+  warn "Generic context not visible — check reload output above."
 fi
 
 cat <<DONE
 
 ============================================================================
-CALLER-LEG MOH HOOK INSTALLED.
+CALLER-LEG MOH HOOK INSTALLED (GENERIC / runtime).
 
 Baseplan patch:   $BASEPLAN  (single guarded GosubIf in [sub-local-dialing])
-Hook file:        $HOOK_FILE
-Tenants gated:    ${KEPT:-none}
-Runtime source:   connect/t_<slug>/moh_class (+ active_moh_class fallback)
+Hook file:        $HOOK_FILE  (ONE generic context — no per-tenant data)
+Runtime source:   connect/pbx_tenant_map/<tid>/slug →
+                  connect/t_<slug>/{admin_moh_class,moh_class,active_moh_class}
 
 Behavior:
   • inbound direct / IVR / ring group / queue POST-answer bridge hold on the
     held caller/Local leg now uses the tenant's published MOH class.
+  • current AND future tenants are covered the moment their reverse-map + MOH
+    keys exist — publishing/changing MOH later needs NO installer re-run.
   • queue WAITING music (pre-answer) is native (queue music_group_id) — unchanged.
   • outbound (held trunk = called leg) unchanged (global-before-bridging hook).
-  • tenants without a published class / hook context → pure no-op (DIALPLAN_EXISTS).
+  • tenant with no map / slug / class → pure no-op (native default).
 
 Re-apply after VitalPBX "Apply Changes"/upgrade (idempotent):
   sudo $0
@@ -387,7 +489,7 @@ Re-apply after VitalPBX "Apply Changes"/upgrade (idempotent):
 Health check:
   sudo $0 --check
 
-Rollback (surgical — removes only the Connect-owned patch line + hook file + include):
+Rollback (surgical — removes only the Connect-owned line(s) + hook file + include):
   sudo $0 --rollback
 ============================================================================
 DONE
