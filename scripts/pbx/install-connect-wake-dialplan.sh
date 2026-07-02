@@ -365,13 +365,22 @@ exten => s,1,NoOp(connect-wake-core tid=${ARG1} ext=${ARG2} wake=${ARG3} state=$
  same =>   n,Set(CONTACTS_PRIMARY=${PJSIP_DIAL_CONTACTS(${EP_PRIMARY})})
  same =>   n,Set(CONTACTS_SECONDARY=${PJSIP_DIAL_CONTACTS(${EP_SECONDARY})})
  same =>   n,NoOp(connect-wake-core probe ext=${EXT} primary='${CONTACTS_PRIMARY}' secondary='${CONTACTS_SECONDARY}')
- same =>   n,GotoIf($[$[${LEN(${CONTACTS_PRIMARY})} > 0] | $[${LEN(${CONTACTS_SECONDARY})} > 0]]?warm)
+ same =>   n,Set(WARM=${IF($[$[${LEN(${CONTACTS_PRIMARY})} > 0] | $[${LEN(${CONTACTS_SECONDARY})} > 0]]?1:0)})
  same =>   n,GotoIf($["${ARG3}" != "1"]?done)
+ ; ── single wake emission: warm AND cold reach here exactly once (fire-and-forget) ──
+ same =>   n,UserEvent(ConnectWake,Tenant: ${TID},Extension: ${EXT},CallId: ${IF($["${CHANNEL(linkedid)}" != ""]?${CHANNEL(linkedid)}:${UNIQUEID})},From: ${CALLERID(num)})
+ same =>   n,GotoIf($["${WARM}" = "1"]?warm)
+ ; ── cold endpoint only: ringback + grace loop ──
  same =>   n,Set(GRACE=${DB(connect/system/wake_grace_secs)})
  same =>   n,Set(GRACE=${IF($[${LEN(${GRACE})} > 0]?${GRACE}:20)})
- same =>   n,UserEvent(ConnectWake,Tenant: ${TID},Extension: ${EXT},CallId: ${LINKEDID},From: ${CALLERID(num)})
+ ; Unanswered legs (direct dial) get standard early-media 180 ringback.
  same =>   n,ExecIf($["${CHANNEL(state)}" != "Up"]?Progress())
  same =>   n,ExecIf($["${CHANNEL(state)}" != "Up"]?Ringing())
+ ; Already-answered legs (e.g. arriving via the IVR) are past SIP answer and
+ ; cannot send a 180, so inject an in-band ringback cadence for the grace wait —
+ ; otherwise the caller hears dead air until the endpoint registers or grace
+ ; expires. Stopped on every cold exit below before the caller Dials.
+ same =>   n,ExecIf($["${CHANNEL(state)}" = "Up"]?Playtones(ring))
  same =>   n,Set(GRACE_LEFT=${GRACE})
  same =>   n(loop),GotoIf($[${GRACE_LEFT} <= 0]?expired)
  same =>   n,Wait(1)
@@ -381,10 +390,12 @@ exten => s,1,NoOp(connect-wake-core tid=${ARG1} ext=${ARG2} wake=${ARG3} state=$
  same =>   n,Set(GRACE_LEFT=$[${GRACE_LEFT} - 1])
  same =>   n,Goto(loop)
  same =>   n(registered),NoOp(connect-wake-core contact registered during grace ext=${EXT})
+ same =>   n,StopPlaytones()
  same =>   n,Return()
  same =>   n(expired),NoOp(connect-wake-core grace expired ext=${EXT})
+ same =>   n,StopPlaytones()
  same =>   n,Return()
- same =>   n(warm),NoOp(connect-wake-core warm — live contact ext=${EXT})
+ same =>   n(warm),NoOp(connect-wake-core warm — live contact ext=${EXT} (ConnectWake emitted fire-and-forget, no grace wait))
  same =>   n,Return()
  same =>   n(done),NoOp(connect-wake-core no-op ext=${EXT} reason=missing-args-or-wake-disabled)
  same =>   n,Return()
