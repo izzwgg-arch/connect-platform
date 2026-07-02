@@ -129,8 +129,12 @@ const SOURCE_LABELS: Record<string, string> = {
   reconciliation:  "Reconcile",
 };
 
-const TABS = ["Hold Profiles", "Assets", "Call Types", "Schedule", "Override", "Publish"] as const;
+const TABS = ["Hold Profiles", "Assets", "Call Types", "Control", "Schedule", "Admin Schedules", "Override", "Publish"] as const;
 type Tab = typeof TABS[number];
+
+// Admin (multi-tenant) schedules are a SUPER_ADMIN-only global overlay, so that
+// tab is hidden for tenant admins.
+const SUPER_ADMIN_ONLY_TABS = new Set<Tab>(["Admin Schedules"]);
 
 // ── Per-call-source policy types (Requirement 5/7) ───────────────────────────
 // Mirrors MohSourcePolicy on the API + MohCallSource in packages/shared. A row
@@ -198,6 +202,69 @@ const CANDIDATE_ORDER: Array<{ key: keyof ResolveResult["candidates"]; reason: s
   { key: "tenant_default",     reason: "tenant_default",     label: "5 · Tenant default" },
   { key: "global_default",     reason: "global_default",     label: "6 · Global default" },
 ];
+
+// ── Control mode (Connect-managed vs native PBX) — Requirement 2/4 ───────────
+type TenantControlMode = "connect" | "pbx";
+type ExtensionControlMode = "inherit" | "connect" | "pbx";
+
+interface ExtensionControlRow {
+  id: string;
+  tenantId: string;
+  extension: string;
+  controlMode: ExtensionControlMode;
+  updatedAt?: string;
+}
+
+interface ControlPayload {
+  tenantId: string;
+  tenantControlMode: TenantControlMode;
+  extensionControls: ExtensionControlRow[];
+}
+
+// ── Admin (multi-tenant) schedule — Requirement 3 (SUPER_ADMIN) ──────────────
+interface AdminScheduleTargetRow {
+  id?: string;
+  tenantId: string;
+  extension: string;
+}
+
+interface AdminSchedule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  scheduleKind: "one_time" | "recurring";
+  timezone: string;
+  vitalPbxMohClassName: string;
+  priority: number;
+  startAt: string | null;
+  endAt: string | null;
+  startWeekday: number | null;
+  startTime: string | null;
+  endWeekday: number | null;
+  endTime: string | null;
+  fallbackMode: "restore_previous" | "explicit";
+  fallbackClass: string | null;
+  isDeleted?: boolean;
+  targets: AdminScheduleTargetRow[];
+}
+
+interface AdminActivation {
+  id: string;
+  scheduleId: string;
+  tenantId: string;
+  extension: string;
+  state: string;
+  previousClass: string | null;
+  previousControlMode: string | null;
+  activatedAt?: string;
+}
+
+interface AdminTenantLite {
+  id: string;
+  name: string;
+  pbxTenantId: string | null;
+  pbxTenantName: string | null;
+}
 
 // ── MOH Assets (uploaded music tracks) ───────────────────────────────────────
 // Each upload becomes a MohAsset row on Connect and a MOH class on the PBX
@@ -323,7 +390,7 @@ export default function HoldSchedulingPage() {
 
       {/* Tabs */}
       <div style={{ display: "flex", gap: 4, borderBottom: "1px solid rgba(255,255,255,0.08)", marginBottom: 28 }}>
-        {TABS.map((tab) => (
+        {TABS.filter((tab) => isSuperAdmin || !SUPER_ADMIN_ONLY_TABS.has(tab)).map((tab) => (
           <button key={tab} onClick={() => setActiveTab(tab)} style={{
             padding: "10px 18px", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600,
             borderRadius: "6px 6px 0 0", transition: "all 0.15s",
@@ -346,6 +413,12 @@ export default function HoldSchedulingPage() {
       )}
       {!loading && activeTab === "Call Types" && (
         <CallTypesTab tenantId={tenantId} canManage={canManage} isSuperAdmin={isSuperAdmin} />
+      )}
+      {!loading && activeTab === "Control" && (
+        <ControlTab tenantId={tenantId} canManage={canManage} isSuperAdmin={isSuperAdmin} />
+      )}
+      {!loading && activeTab === "Admin Schedules" && isSuperAdmin && (
+        <AdminSchedulesTab canManage={canManage} />
       )}
       {!loading && activeTab === "Schedule" && (
         <ScheduleTab schedule={schedule} profiles={profiles} tenantId={tenantId} canManage={canManage} onRefresh={reload} />
@@ -1507,6 +1580,452 @@ function CallTypesTab({ tenantId, canManage, isSuperAdmin }: {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tab: Control (Connect-managed vs native PBX) — Requirement 2/4/7
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const TENANT_MODE_LABELS: Record<TenantControlMode, string> = {
+  connect: "Connect-managed",
+  pbx:     "PBX / native control",
+};
+const EXT_MODE_LABELS: Record<ExtensionControlMode, string> = {
+  inherit: "Inherit tenant",
+  connect: "Connect-managed",
+  pbx:     "PBX / native control",
+};
+
+function ControlTab({ tenantId, canManage, isSuperAdmin }: {
+  tenantId: string; canManage: boolean; isSuperAdmin?: boolean;
+}) {
+  const [data, setData] = useState<ControlPayload | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
+
+  // Extension control editor.
+  const [extInput, setExtInput] = useState("");
+  const [extMode, setExtMode] = useState<ExtensionControlMode>("pbx");
+
+  const reload = useCallback(async () => {
+    if (!tenantId) return;
+    setLoading(true); setErr(null);
+    try {
+      const qs = `?tenantId=${encodeURIComponent(tenantId)}`;
+      const r = await apiGet<ControlPayload>(`/voice/moh/control${qs}`);
+      setData(r);
+    } catch (e: any) { setErr(e?.message ?? "Failed to load control state"); }
+    finally { setLoading(false); }
+  }, [tenantId]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const setTenantMode = async (mode: TenantControlMode) => {
+    if (data?.tenantControlMode === mode) return;
+    if (mode === "pbx" && !confirm("Hand this tenant back to native VitalPBX MOH? Connect will remove its hold-music overrides (tenant default + per-call-type + extension keys) and stop enforcing musicclass. Connect-managed extension islands and active admin schedules are kept.")) return;
+    setBusy(true); setErr(null); setMsg(null);
+    try {
+      const r: any = await apiPut(`/voice/moh/control/tenant`, { tenantId, mode });
+      setMsg(`Tenant control set to ${TENANT_MODE_LABELS[mode]}${r?.publish?.class ? ` — published ${r.publish.class}` : ""}.`);
+      await reload();
+    } catch (e: any) { setErr(e?.message ?? "Failed to change control mode"); }
+    finally { setBusy(false); }
+  };
+
+  const saveExtControl = async () => {
+    const ext = extInput.trim();
+    if (!ext) { setErr("Enter an extension."); return; }
+    setBusy(true); setErr(null); setMsg(null);
+    try {
+      await apiPut(`/voice/moh/control/extension`, { tenantId, extension: ext, mode: extMode });
+      setMsg(extMode === "inherit" ? `Extension ${ext} now inherits the tenant default.` : `Extension ${ext} set to ${EXT_MODE_LABELS[extMode]}.`);
+      setExtInput("");
+      await reload();
+    } catch (e: any) { setErr(e?.message ?? "Failed to save extension control"); }
+    finally { setBusy(false); }
+  };
+
+  const clearExtControl = async (ext: string) => {
+    if (!confirm(`Reset extension ${ext} to inherit the tenant default?`)) return;
+    setBusy(true); setErr(null); setMsg(null);
+    try {
+      await apiPut(`/voice/moh/control/extension`, { tenantId, extension: ext, mode: "inherit" });
+      setMsg(`Extension ${ext} reset to inherit.`);
+      await reload();
+    } catch (e: any) { setErr(e?.message ?? "Failed to reset extension"); }
+    finally { setBusy(false); }
+  };
+
+  const reconcile = async () => {
+    if (!confirm("Recompute and republish MOH for this tenant now, then verify the live class on the PBX?")) return;
+    setReconciling(true); setErr(null); setMsg(null);
+    try {
+      const r: any = await apiPost(`/voice/moh/reconcile`, { tenantId });
+      setMsg(`Reconciled: ${r?.class ?? "(native)"} (${r?.mode ?? "—"}). Live verification recorded in publish history.`);
+      await reload();
+    } catch (e: any) { setErr(e?.message ?? "Reconcile failed"); }
+    finally { setReconciling(false); }
+  };
+
+  const tenantMode = data?.tenantControlMode ?? "connect";
+  const extControls = data?.extensionControls ?? [];
+
+  return (
+    <div style={{ maxWidth: 760 }}>
+      <h2 style={{ margin: "0 0 6px", fontSize: 16, fontWeight: 600 }}>Control Mode</h2>
+      <p style={{ margin: "0 0 18px", fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>
+        Decide <strong>who controls hold music</strong> for this tenant. In <strong>Connect-managed</strong> mode Connect publishes and enforces MOH per your policies/schedules.
+        In <strong>PBX / native control</strong> mode Connect stops interfering — it removes its overrides and hands the tenant back to VitalPBX&apos;s own MOH.
+        You can still pin individual extensions to Connect or PBX regardless of the tenant default.
+      </p>
+
+      {err && <div style={{ color: "#fca5a5", fontSize: 13, marginBottom: 10 }}>{err}</div>}
+      {msg && <div style={{ color: "#86efac", fontSize: 13, marginBottom: 10 }}>{msg}</div>}
+      {loading && <div style={{ fontSize: 13, color: "#64748b" }}>Loading…</div>}
+
+      {/* Tenant control toggle */}
+      <div style={{ ...cardStyle, flexDirection: "column", alignItems: "stretch", gap: 12, marginBottom: 22, padding: 18 }}>
+        <div style={{ fontSize: 13, fontWeight: 700 }}>Tenant default</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {(["connect", "pbx"] as TenantControlMode[]).map((m) => {
+            const active = tenantMode === m;
+            return (
+              <button
+                key={m}
+                onClick={() => canManage && setTenantMode(m)}
+                disabled={!canManage || busy}
+                style={{
+                  flex: 1, minWidth: 220, textAlign: "left", cursor: canManage ? "pointer" : "default",
+                  background: active ? (m === "connect" ? "rgba(99,102,241,0.15)" : "rgba(245,158,11,0.12)") : "rgba(15,23,42,0.6)",
+                  border: `1px solid ${active ? (m === "connect" ? "#6366f1" : "#f59e0b") : "rgba(255,255,255,0.1)"}`,
+                  borderRadius: 10, padding: "12px 14px",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: "50%", background: m === "connect" ? "#6366f1" : "#f59e0b" }} />
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#e2e8f0" }}>{TENANT_MODE_LABELS[m]}</span>
+                  {active && <span style={{ fontSize: 10, color: "#86efac", marginLeft: "auto" }}>ACTIVE</span>}
+                </div>
+                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6, lineHeight: 1.4 }}>
+                  {m === "connect"
+                    ? "Connect publishes & enforces MOH per your policies and schedules."
+                    : "Connect removes its overrides; VitalPBX plays its own MOH."}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+        <div>
+          <button onClick={reconcile} disabled={reconciling || !canManage} style={btnSmall("#334155")} title="Recompute desired keys, republish, remove stale AstDB keys, and verify the live class on the PBX.">
+            {reconciling ? "Reconciling…" : "↻ Reconcile & verify now"}
+          </button>
+        </div>
+      </div>
+
+      {/* Extension overrides */}
+      <SectionLabel>Extension control overrides</SectionLabel>
+      <p style={{ margin: "0 0 12px", fontSize: 11, color: "#64748b" }}>
+        Pin a specific extension to Connect or PBX control regardless of the tenant default. Choosing <strong>Inherit tenant</strong> removes the override.
+      </p>
+
+      {canManage && (
+        <div style={{ ...cardStyle, gap: 10, marginBottom: 16 }}>
+          <div><label style={labelStyle}>Extension</label><input style={{ ...inputStyle, width: 130, marginBottom: 0 }} value={extInput} onChange={(e) => setExtInput(e.target.value)} placeholder="e.g. 101" /></div>
+          <div><label style={labelStyle}>Control</label>
+            <ConnectSelect value={extMode} onChange={(v) => setExtMode(v as ExtensionControlMode)} style={{ width: 200 }}
+              options={(Object.entries(EXT_MODE_LABELS) as [ExtensionControlMode, string][]).map(([v, l]) => ({ value: v, label: l }))} />
+          </div>
+          <button onClick={saveExtControl} disabled={busy} style={{ ...btnStyle("#6366f1"), alignSelf: "flex-end" }}>{busy ? "Saving…" : "Save"}</button>
+        </div>
+      )}
+
+      {extControls.length === 0 && <div style={emptyBox}>No extension overrides. Every extension follows the tenant default ({TENANT_MODE_LABELS[tenantMode]}).</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {extControls.map((c) => (
+          <div key={c.id} style={{ ...cardStyle, fontSize: 13 }}>
+            <code style={{ color: "#e2e8f0" }}>{c.extension}</code>
+            <span style={{
+              marginLeft: 10, fontSize: 11, borderRadius: 4, padding: "2px 8px",
+              background: c.controlMode === "connect" ? "rgba(99,102,241,0.15)" : "rgba(245,158,11,0.12)",
+              color: c.controlMode === "connect" ? "#a5b4fc" : "#fbbf24",
+            }}>{EXT_MODE_LABELS[c.controlMode]}</span>
+            <div style={{ flex: 1 }} />
+            {canManage && <button onClick={() => clearExtControl(c.extension)} style={btnSmall("#334155")}>Reset to inherit</button>}
+          </div>
+        ))}
+      </div>
+
+      {!isSuperAdmin && (
+        <p style={{ marginTop: 18, fontSize: 11, color: "#475569" }}>
+          Multi-tenant (holiday / Yom Tov) schedules that override every tenant are managed by a platform SUPER_ADMIN under <strong>Admin Schedules</strong>.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tab: Admin Schedules (multi-tenant global overlay) — Requirement 3 (SUPER_ADMIN)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const WEEKDAY_OPTS = DAY_NAMES.map((d, i) => ({ value: String(i), label: d }));
+
+function emptyAdminForm(): {
+  name: string; scheduleKind: "one_time" | "recurring"; timezone: string;
+  vitalPbxMohClassName: string; priority: number;
+  startAt: string; endAt: string;
+  startWeekday: number; startTime: string; endWeekday: number; endTime: string;
+  fallbackMode: "restore_previous" | "explicit"; fallbackClass: string;
+  targets: AdminScheduleTargetRow[];
+} {
+  return {
+    name: "", scheduleKind: "one_time", timezone: "America/New_York",
+    vitalPbxMohClassName: "", priority: 0,
+    startAt: "", endAt: "",
+    startWeekday: 1, startTime: "09:00", endWeekday: 1, endTime: "17:00",
+    fallbackMode: "restore_previous", fallbackClass: "",
+    targets: [],
+  };
+}
+
+function AdminSchedulesTab({ canManage }: { canManage: boolean }) {
+  const [schedules, setSchedules] = useState<AdminSchedule[]>([]);
+  const [activations, setActivations] = useState<AdminActivation[]>([]);
+  const [tenants, setTenants] = useState<AdminTenantLite[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const [showForm, setShowForm] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [form, setForm] = useState(emptyAdminForm());
+  const [saving, setSaving] = useState(false);
+
+  // Target picker.
+  const [targetTenant, setTargetTenant] = useState("");
+  const [targetExt, setTargetExt] = useState("");
+
+  const reload = useCallback(async () => {
+    setLoading(true); setErr(null);
+    try {
+      const [sc, tn] = await Promise.allSettled([
+        apiGet<{ schedules: AdminSchedule[]; activeActivations: AdminActivation[] }>(`/voice/moh/admin-schedules`),
+        apiGet<AdminTenantLite[]>(`/admin/tenants?light=true`),
+      ]);
+      if (sc.status === "fulfilled") { setSchedules(sc.value.schedules ?? []); setActivations(sc.value.activeActivations ?? []); }
+      else setErr(sc.reason?.message ?? "Failed to load admin schedules");
+      if (tn.status === "fulfilled") setTenants(Array.isArray(tn.value) ? tn.value : []);
+    } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const tenantName = useCallback((tid: string) => tenants.find((t) => t.id === tid)?.name ?? tid, [tenants]);
+
+  const openCreate = () => { setEditId(null); setForm(emptyAdminForm()); setTargetTenant(""); setTargetExt(""); setErr(null); setShowForm(true); };
+  const openEdit = (s: AdminSchedule) => {
+    setEditId(s.id);
+    setForm({
+      name: s.name, scheduleKind: s.scheduleKind, timezone: s.timezone,
+      vitalPbxMohClassName: s.vitalPbxMohClassName, priority: s.priority,
+      startAt: s.startAt ? s.startAt.slice(0, 16) : "", endAt: s.endAt ? s.endAt.slice(0, 16) : "",
+      startWeekday: s.startWeekday ?? 1, startTime: s.startTime ?? "09:00", endWeekday: s.endWeekday ?? 1, endTime: s.endTime ?? "17:00",
+      fallbackMode: s.fallbackMode, fallbackClass: s.fallbackClass ?? "",
+      targets: (s.targets ?? []).map((t) => ({ tenantId: t.tenantId, extension: t.extension || "" })),
+    });
+    setTargetTenant(""); setTargetExt(""); setErr(null); setShowForm(true);
+  };
+
+  const addTarget = () => {
+    if (!targetTenant) { setErr("Pick a tenant to target."); return; }
+    const ext = targetExt.trim();
+    if (form.targets.some((t) => t.tenantId === targetTenant && (t.extension || "") === ext)) { setErr("That target is already added."); return; }
+    setErr(null);
+    setForm((f) => ({ ...f, targets: [...f.targets, { tenantId: targetTenant, extension: ext }] }));
+    setTargetExt("");
+  };
+  const removeTarget = (i: number) => setForm((f) => ({ ...f, targets: f.targets.filter((_, idx) => idx !== i) }));
+
+  const save = async () => {
+    if (!form.name.trim()) { setErr("Name is required."); return; }
+    if (!form.vitalPbxMohClassName.trim()) { setErr("MOH class is required."); return; }
+    if (form.targets.length === 0) { setErr("Add at least one tenant target."); return; }
+    const payload: Record<string, unknown> = {
+      name: form.name.trim(),
+      scheduleKind: form.scheduleKind,
+      timezone: form.timezone,
+      vitalPbxMohClassName: form.vitalPbxMohClassName.trim(),
+      priority: form.priority,
+      fallbackMode: form.fallbackMode,
+      fallbackClass: form.fallbackMode === "explicit" ? (form.fallbackClass.trim() || null) : null,
+      targets: form.targets.map((t) => ({ tenantId: t.tenantId, extension: t.extension || undefined })),
+    };
+    if (form.scheduleKind === "one_time") {
+      if (!form.startAt || !form.endAt) { setErr("One-time schedules need a start and end date/time."); return; }
+      payload.startAt = new Date(form.startAt).toISOString();
+      payload.endAt = new Date(form.endAt).toISOString();
+    } else {
+      payload.startWeekday = form.startWeekday; payload.startTime = form.startTime;
+      payload.endWeekday = form.endWeekday; payload.endTime = form.endTime;
+    }
+    setSaving(true); setErr(null); setMsg(null);
+    try {
+      if (editId) await apiPatch(`/voice/moh/admin-schedules/${editId}`, payload);
+      else await apiPost(`/voice/moh/admin-schedules`, payload);
+      setMsg(editId ? "Admin schedule updated." : "Admin schedule created.");
+      setShowForm(false);
+      await reload();
+    } catch (e: any) { setErr(e?.message ?? "Save failed"); }
+    finally { setSaving(false); }
+  };
+
+  const remove = async (s: AdminSchedule) => {
+    if (!confirm(`Delete admin schedule "${s.name}"? Any tenants it is actively overriding will be restored to their exact prior state on the next worker tick.`)) return;
+    setErr(null); setMsg(null);
+    try { await apiDelete(`/voice/moh/admin-schedules/${s.id}`); setMsg("Admin schedule deleted. Restore in progress."); await reload(); }
+    catch (e: any) { setErr(e?.message ?? "Delete failed"); }
+  };
+
+  const toggleEnabled = async (s: AdminSchedule) => {
+    setErr(null); setMsg(null);
+    try { await apiPatch(`/voice/moh/admin-schedules/${s.id}`, { enabled: !s.enabled }); await reload(); }
+    catch (e: any) { setErr(e?.message ?? "Toggle failed"); }
+  };
+
+  const activeByScheduleId = new Set(activations.map((a) => a.scheduleId));
+
+  return (
+    <div style={{ maxWidth: 900 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Admin Multi-Tenant Schedules</h2>
+          <p style={{ margin: "4px 0 0", fontSize: 12, color: "#64748b", lineHeight: 1.5, maxWidth: 640 }}>
+            Global holiday / Yom Tov music that takes over MOH for the selected tenants (and optionally specific extensions) during a window.
+            While active, an admin schedule <strong>overrides even pinned extension MOH</strong>. When it ends, every affected tenant/extension is restored to its exact prior state.
+          </p>
+        </div>
+        {canManage && <button onClick={openCreate} style={btnStyle("#6366f1")}>+ New Schedule</button>}
+      </div>
+
+      {err && <div style={{ color: "#fca5a5", fontSize: 13, marginBottom: 10 }}>{err}</div>}
+      {msg && <div style={{ color: "#86efac", fontSize: 13, marginBottom: 10 }}>{msg}</div>}
+      {loading && <div style={{ fontSize: 13, color: "#64748b" }}>Loading…</div>}
+
+      {schedules.length === 0 && !loading && <div style={emptyBox}>No admin schedules yet. Create one for holidays or seasonal music across multiple tenants.</div>}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {schedules.map((s) => {
+          const isActive = activeByScheduleId.has(s.id);
+          return (
+            <div key={s.id} style={{ ...cardStyle, flexDirection: "column", alignItems: "stretch", gap: 8, borderColor: isActive ? "#22c55e" : "rgba(255,255,255,0.08)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <span style={{ width: 10, height: 10, borderRadius: "50%", background: isActive ? "#22c55e" : (s.enabled ? "#6366f1" : "#475569"), flexShrink: 0 }} />
+                <span style={{ fontSize: 14, fontWeight: 700 }}>{s.name}</span>
+                {isActive && <span style={{ fontSize: 10, background: "rgba(34,197,94,0.18)", color: "#86efac", borderRadius: 4, padding: "1px 7px" }}>ACTIVE NOW</span>}
+                {!s.enabled && <span style={{ fontSize: 10, background: "rgba(100,116,139,0.2)", color: "#94a3b8", borderRadius: 4, padding: "1px 7px" }}>disabled</span>}
+                <code style={{ fontSize: 11, background: "rgba(0,0,0,0.3)", padding: "2px 7px", borderRadius: 4, color: "#94a3b8" }}>{s.vitalPbxMohClassName}</code>
+                <span style={{ fontSize: 11, color: "#64748b" }}>priority {s.priority}</span>
+                <div style={{ flex: 1 }} />
+                {canManage && <button onClick={() => toggleEnabled(s)} style={btnSmall("#334155")}>{s.enabled ? "Disable" : "Enable"}</button>}
+                {canManage && <button onClick={() => openEdit(s)} style={btnSmall("#334155")}>Edit</button>}
+                {canManage && <button onClick={() => remove(s)} style={btnSmall("#7f1d1d")}>Delete</button>}
+              </div>
+              <div style={{ fontSize: 12, color: "#94a3b8" }}>
+                {s.scheduleKind === "one_time"
+                  ? <>One-time: {s.startAt ? new Date(s.startAt).toLocaleString() : "?"} → {s.endAt ? new Date(s.endAt).toLocaleString() : "?"} ({s.timezone})</>
+                  : <>Weekly: {DAY_NAMES[s.startWeekday ?? 0]} {s.startTime} → {DAY_NAMES[s.endWeekday ?? 0]} {s.endTime} ({s.timezone})</>}
+                <span style={{ marginLeft: 10 }}>· Restore: {s.fallbackMode === "restore_previous" ? "exact prior state" : `explicit → ${s.fallbackClass ?? "?"}`}</span>
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {(s.targets ?? []).map((t, i) => (
+                  <span key={i} style={{ fontSize: 11, background: "rgba(15,23,42,0.8)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 5, padding: "2px 8px", color: "#cbd5e1" }}>
+                    {tenantName(t.tenantId)}{t.extension ? ` · ext ${t.extension}` : ""}
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {showForm && (
+        <div style={modalOverlay}>
+          <div style={modalBox}>
+            <h3 style={{ margin: "0 0 18px", fontSize: 15, fontWeight: 700 }}>{editId ? "Edit" : "New"} Admin Schedule</h3>
+            {err && <div style={{ color: "#fca5a5", fontSize: 12, marginBottom: 10 }}>{err}</div>}
+
+            <label style={labelStyle}>Name</label>
+            <input style={inputStyle} value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="e.g. Yom Tov Music" />
+
+            <label style={labelStyle}>MOH Class <span style={{ color: "#64748b", fontWeight: 400 }}>(runtime class, e.g. mohN or connect_*)</span></label>
+            <input style={inputStyle} value={form.vitalPbxMohClassName} onChange={(e) => setForm((f) => ({ ...f, vitalPbxMohClassName: e.target.value }))} placeholder="mohN or connect_slug_name" />
+
+            <label style={labelStyle}>Schedule kind</label>
+            <ConnectSelect value={form.scheduleKind} onChange={(v) => setForm((f) => ({ ...f, scheduleKind: v as "one_time" | "recurring" }))}
+              style={{ width: "100%", marginBottom: 14 }}
+              options={[{ value: "one_time", label: "One-time window (date/time)" }, { value: "recurring", label: "Recurring weekly window" }]} />
+
+            <label style={labelStyle}>Timezone</label>
+            <ConnectSelect value={form.timezone} onChange={(v) => setForm((f) => ({ ...f, timezone: v }))} searchable
+              style={{ width: "100%", marginBottom: 14 }} options={ALL_TIMEZONES.map((z) => ({ value: z, label: z }))} />
+
+            {form.scheduleKind === "one_time" ? (
+              <div style={{ display: "flex", gap: 12 }}>
+                <div style={{ flex: 1 }}><label style={labelStyle}>Start</label><input type="datetime-local" style={inputStyle} value={form.startAt} onChange={(e) => setForm((f) => ({ ...f, startAt: e.target.value }))} /></div>
+                <div style={{ flex: 1 }}><label style={labelStyle}>End</label><input type="datetime-local" style={inputStyle} value={form.endAt} onChange={(e) => setForm((f) => ({ ...f, endAt: e.target.value }))} /></div>
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 12 }}>
+                <div style={{ flex: 1 }}><label style={labelStyle}>Start day</label><ConnectSelect value={String(form.startWeekday)} onChange={(v) => setForm((f) => ({ ...f, startWeekday: parseInt(v) }))} style={{ width: "100%", marginBottom: 8 }} options={WEEKDAY_OPTS} /><input type="time" style={{ ...timeInput, width: "100%" }} value={form.startTime} onChange={(e) => setForm((f) => ({ ...f, startTime: e.target.value }))} /></div>
+                <div style={{ flex: 1 }}><label style={labelStyle}>End day</label><ConnectSelect value={String(form.endWeekday)} onChange={(v) => setForm((f) => ({ ...f, endWeekday: parseInt(v) }))} style={{ width: "100%", marginBottom: 8 }} options={WEEKDAY_OPTS} /><input type="time" style={{ ...timeInput, width: "100%" }} value={form.endTime} onChange={(e) => setForm((f) => ({ ...f, endTime: e.target.value }))} /></div>
+              </div>
+            )}
+
+            <label style={labelStyle}>Priority <span style={{ color: "#64748b", fontWeight: 400 }}>(higher wins when two admin schedules overlap)</span></label>
+            <input type="number" style={inputStyle} value={form.priority} onChange={(e) => setForm((f) => ({ ...f, priority: parseInt(e.target.value) || 0 }))} />
+
+            <label style={labelStyle}>When it ends, restore</label>
+            <ConnectSelect value={form.fallbackMode} onChange={(v) => setForm((f) => ({ ...f, fallbackMode: v as "restore_previous" | "explicit" }))}
+              style={{ width: "100%", marginBottom: form.fallbackMode === "explicit" ? 8 : 14 }}
+              options={[{ value: "restore_previous", label: "Exact prior state (recommended)" }, { value: "explicit", label: "A specific fallback class" }]} />
+            {form.fallbackMode === "explicit" && (
+              <input style={inputStyle} value={form.fallbackClass} onChange={(e) => setForm((f) => ({ ...f, fallbackClass: e.target.value }))} placeholder="fallback mohN / connect_* class" />
+            )}
+
+            <div style={{ height: 1, background: "rgba(255,255,255,0.06)", margin: "4px 0 14px" }} />
+            <SectionLabel>Targets</SectionLabel>
+            <div style={{ display: "flex", gap: 8, alignItems: "flex-end", marginBottom: 10 }}>
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>Tenant</label>
+                <ConnectSelect value={targetTenant} onChange={setTargetTenant} searchable style={{ width: "100%" }}
+                  options={[{ value: "", label: "— Select tenant —" }, ...tenants.map((t) => ({ value: t.id, label: t.pbxTenantName ? `${t.name} (${t.pbxTenantName})` : t.name }))]} />
+              </div>
+              <div><label style={labelStyle}>Ext (optional)</label><input style={{ ...inputStyle, width: 110, marginBottom: 0 }} value={targetExt} onChange={(e) => setTargetExt(e.target.value)} placeholder="all" /></div>
+              <button onClick={addTarget} style={btnSmall("#334155")}>Add</button>
+            </div>
+            {form.targets.length === 0 && <div style={{ ...emptyBox, marginBottom: 14 }}>No targets yet — add at least one tenant.</div>}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+              {form.targets.map((t, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, background: "rgba(15,23,42,0.8)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 6, padding: "6px 10px" }}>
+                  <span style={{ color: "#cbd5e1" }}>{tenantName(t.tenantId)}{t.extension ? ` · ext ${t.extension}` : " · all extensions"}</span>
+                  <div style={{ flex: 1 }} />
+                  <button onClick={() => removeTarget(i)} style={btnSmall("#7f1d1d")}>Remove</button>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={() => setShowForm(false)} style={btnSmall("#334155")}>Cancel</button>
+              <button onClick={save} disabled={saving} style={btnStyle("#6366f1")}>{saving ? "Saving…" : "Save Schedule"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

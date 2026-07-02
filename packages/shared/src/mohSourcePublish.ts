@@ -22,7 +22,9 @@
 
 import {
   MOH_CALL_SOURCES,
+  buildExtensionAdminOverlayKeys,
   buildExtensionSourceMohKeys,
+  buildTenantAdminOverlayKeys,
   buildTenantSourceMohKeys,
   normalizeMohCallSource,
   type MohAstDbKey,
@@ -282,6 +284,165 @@ export function computeActiveScheduleOverrides(
     if (a.extension !== b.extension) return a.extension < b.extension ? -1 : 1;
     if (a.source !== b.source) return a.source < b.source ? -1 : 1;
     return b.priority - a.priority;
+  });
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin (multi-tenant) schedule overlay — highest-priority takeover
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// An admin schedule is a single object that targets many tenants (and optionally
+// specific extensions). While active it writes the admin-overlay AstDB keys,
+// which the dialplan resolver reads before any per-tenant/extension key — so it
+// beats extension pins. It is time-evaluated here (timezone-safe) exactly like
+// per-tenant rules, but with support for one-time absolute windows AND recurring
+// windows that may span multiple weekdays (e.g. Fri 14:00 → Sun 23:00).
+
+/** A target of an admin schedule: a tenant, optionally narrowed to one extension. */
+export interface AdminScheduleTargetRow {
+  tenantSlug: string;
+  extension: string; // "" = whole tenant
+}
+
+/** An admin schedule row (mirrors `MohAdminSchedule` + its targets). */
+export interface AdminScheduleRow {
+  id: string;
+  enabled: boolean;
+  scheduleKind: string; // "one_time" | "recurring"
+  timezone: string;
+  vitalPbxMohClassName: string;
+  priority: number;
+  // one_time
+  startAt: Date | null;
+  endAt: Date | null;
+  // recurring (minute-of-week window, wrap-around supported)
+  startWeekday: number | null; // 0=Sun..6=Sat
+  startTime: string | null; // "HH:MM"
+  endWeekday: number | null;
+  endTime: string | null;
+  targets: ReadonlyArray<AdminScheduleTargetRow>;
+}
+
+function minuteOfWeek(now: Date, tz: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz || "UTC",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+  const DOW: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const dow = DOW[parts.find((p) => p.type === "weekday")?.value ?? ""] ?? now.getUTCDay();
+  const hh = parseInt(parts.find((p) => p.type === "hour")?.value ?? "0", 10);
+  const mm = parseInt(parts.find((p) => p.type === "minute")?.value ?? "0", 10);
+  return dow * 1440 + hh * 60 + mm;
+}
+
+/** True when an admin schedule is active at `now`. Handles one-time absolute
+ *  windows and recurring minute-of-week windows (with wrap across Sat→Sun). */
+export function isAdminScheduleActive(sched: AdminScheduleRow, now: Date): boolean {
+  if (!sched.enabled) return false;
+  if (sched.scheduleKind === "one_time") {
+    return !!(sched.startAt && sched.endAt && new Date(sched.startAt) <= now && new Date(sched.endAt) > now);
+  }
+  if (sched.scheduleKind === "recurring") {
+    if (
+      sched.startWeekday == null ||
+      sched.endWeekday == null ||
+      !sched.startTime ||
+      !sched.endTime
+    ) {
+      return false;
+    }
+    const nowMow = minuteOfWeek(now, sched.timezone || "UTC");
+    const startMow = sched.startWeekday * 1440 + toMinutes(sched.startTime);
+    const endMow = sched.endWeekday * 1440 + toMinutes(sched.endTime);
+    if (startMow === endMow) return false;
+    if (startMow < endMow) return nowMow >= startMow && nowMow < endMow;
+    // wrap-around window (e.g. Fri 22:00 → Mon 06:00)
+    return nowMow >= startMow || nowMow < endMow;
+  }
+  return false;
+}
+
+/** One resolved admin takeover for a single (tenant, extension?) target. */
+export interface ActiveAdminOverride {
+  tenantSlug: string;
+  extension: string; // "" = whole tenant
+  vitalPbxMohClassName: string;
+  scheduleId: string;
+  priority: number;
+}
+
+/**
+ * Evaluate all admin schedules at `now` and project the active ones into a flat
+ * list of per-target takeovers. `classForSchedule` may remap a schedule's class
+ * per-tenant (returns null to skip a target). Highest priority wins per target.
+ * Deterministic ordering by (tenantSlug, extension, -priority).
+ */
+export function computeActiveAdminOverrides(
+  schedules: ReadonlyArray<AdminScheduleRow>,
+  now: Date,
+  classForSchedule?: (sched: AdminScheduleRow, target: AdminScheduleTargetRow) => string | null,
+): ActiveAdminOverride[] {
+  const best = new Map<string, ActiveAdminOverride>();
+  for (const sched of schedules) {
+    if (!isAdminScheduleActive(sched, now)) continue;
+    const priority = Number.isFinite(sched.priority) ? sched.priority : 0;
+    for (const t of sched.targets) {
+      const slug = firstNonEmpty(t.tenantSlug);
+      if (!slug) continue;
+      const ext = String(t.extension || "");
+      const cls = firstNonEmpty(
+        classForSchedule ? classForSchedule(sched, t) : sched.vitalPbxMohClassName,
+      );
+      if (!cls) continue;
+      const key = `${slug}\u0000${ext}`;
+      const cur = best.get(key);
+      if (!cur || priority > cur.priority) {
+        best.set(key, { tenantSlug: slug, extension: ext, vitalPbxMohClassName: cls, scheduleId: sched.id, priority });
+      }
+    }
+  }
+  const out = [...best.values()];
+  out.sort((a, b) => {
+    if (a.tenantSlug !== b.tenantSlug) return a.tenantSlug < b.tenantSlug ? -1 : 1;
+    if (a.extension !== b.extension) return a.extension < b.extension ? -1 : 1;
+    return b.priority - a.priority;
+  });
+  return out;
+}
+
+/**
+ * Build the admin-overlay AstDB keys for ONE tenant given the active admin
+ * overrides for that tenant (filter upstream by slug). Emits the extension
+ * admin-default key for extension-scoped targets and the tenant admin-default
+ * key for whole-tenant targets. Byte-stable output.
+ */
+export function buildAdminOverlayKeysForTenant(
+  slug: string,
+  activeOverridesForTenant: ReadonlyArray<ActiveAdminOverride>,
+): MohAstDbKey[] {
+  const out: MohAstDbKey[] = [];
+  const seen = new Set<string>();
+  for (const o of activeOverridesForTenant) {
+    if (firstNonEmpty(o.tenantSlug) !== slug) continue;
+    const cls = firstNonEmpty(o.vitalPbxMohClassName);
+    if (!cls) continue;
+    const ext = String(o.extension || "");
+    const keys = ext.length > 0 ? buildExtensionAdminOverlayKeys(slug, ext, cls) : buildTenantAdminOverlayKeys(slug, cls);
+    for (const k of keys) {
+      const id = `${k.family}\u0000${k.key}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(k);
+    }
+  }
+  out.sort((a, b) => {
+    if (a.family < b.family) return -1;
+    if (a.family > b.family) return 1;
+    return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
   });
   return out;
 }

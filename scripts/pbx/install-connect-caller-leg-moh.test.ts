@@ -94,6 +94,18 @@ test("hook reads the tenant's SLUG-PINNED AstDB class with active_moh_class fall
   assert.match(gen, /Set\(CONNECT_MOH_CLASS=\$\{DB\(connect\/t_%s\/active_moh_class\)\}\)/);
 });
 
+test("hook reads the admin (multi-tenant) overlay FIRST, before the tenant default", () => {
+  // Option C priority: an active admin schedule takes over even the caller/Local
+  // leg. The hook reads connect/t_<slug>/admin_moh_class first; when the admin
+  // window ends that key is tombstoned ("") so it falls through to the tenant
+  // default → exact prior state restored.
+  const gen = hookGen();
+  assert.match(gen, /Set\(CONNECT_MOH_CLASS=\$\{DB\(connect\/t_%s\/admin_moh_class\)\}\)/);
+  const idxAdmin = gen.indexOf("admin_moh_class");
+  const idxTenant = gen.indexOf("/moh_class)}))");
+  assert.ok(idxAdmin > -1 && idxTenant > -1 && idxAdmin < idxTenant, "admin overlay read must precede tenant default");
+});
+
 test("hook is fail-safe: missing class returns WITHOUT touching musicclass", () => {
   const gen = hookGen();
   assert.match(gen, /GotoIf\(\$\["\$\{CONNECT_MOH_CLASS\}" = ""\]\?done\)/);

@@ -94,7 +94,13 @@ emit_localdial_moh_hook() {
   local tid="$1" slug="$2"
   printf '[T%s_before-local-dial-moh-hook]\n' "$tid"
   printf 'exten => s,1,NoOp(Connect caller-leg MOH hook tid=%s slug=%s preset=${CHANNEL(musicclass)})\n' "$tid" "$slug"
-  printf ' same => n,Set(CONNECT_MOH_CLASS=${DB(connect/t_%s/moh_class)})\n' "$slug"
+  # (0) Admin multi-tenant schedule overlay (HIGHEST priority). Slug-pinned
+  #     tenant-scope admin takeover — beats the tenant default while active. When
+  #     the admin window ends Connect tombstones this key ("") so the reads below
+  #     restore the exact prior tenant state.
+  printf ' same => n,Set(CONNECT_MOH_CLASS=${DB(connect/t_%s/admin_moh_class)})\n' "$slug"
+  # (1) Tenant default → alias fallback.
+  printf ' same => n,ExecIf($["${CONNECT_MOH_CLASS}" = ""]?Set(CONNECT_MOH_CLASS=${DB(connect/t_%s/moh_class)}))\n' "$slug"
   printf ' same => n,ExecIf($["${CONNECT_MOH_CLASS}" = ""]?Set(CONNECT_MOH_CLASS=${DB(connect/t_%s/active_moh_class)}))\n' "$slug"
   printf ' same => n,GotoIf($["${CONNECT_MOH_CLASS}" = ""]?done)\n'
   printf ' same => n,Set(CHANNEL(musicclass)=${CONNECT_MOH_CLASS})\n'

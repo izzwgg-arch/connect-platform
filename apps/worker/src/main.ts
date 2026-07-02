@@ -42,6 +42,19 @@ import {
   normalizeMohRuntimeClass as normalizeSharedMohRuntimeClass,
   pickCanonicalTenantSlug,
   buildExpoPushV2Item,
+  buildGlobalDefaultKey,
+  buildSourcePublishKeys,
+  computeActiveScheduleOverrides,
+  computeActiveAdminOverrides,
+  buildAdminOverlayKeysForTenant,
+  adminOverlayKeyIdsForTenant,
+  adminOverlayKeyIdsForExtension,
+  computeForwardKeyClears,
+  type ScheduleRuleRow,
+  type StaticSourcePolicy,
+  type AdminScheduleRow,
+  type ActiveAdminOverride,
+  type MohAstDbKey,
 } from "@connect/shared";
 import {
   isApnsVoipConfigured,
@@ -2090,6 +2103,67 @@ function workerComputeHoldProfile(
   return { profile: null, mode: "none" };
 }
 
+/**
+ * Build the additive per-call-source AstDB keys for the worker reconcile
+ * publish. Mirrors buildTenantSourceMohPublishArtifacts in apps/api. Fail-safe:
+ * unready classes are dropped (never throw); the tenant-default publish always
+ * proceeds regardless of a bad per-source policy.
+ */
+async function workerBuildSourceMohKeys(args: {
+  tenantId: string;
+  slug: string;
+  timezone: string;
+  scheduleRules: any[];
+  classForProfileId: (profileId: string) => string | null;
+  now: Date;
+}): Promise<Array<{ family: string; key: string; value: string }>> {
+  const { tenantId, slug, timezone } = args;
+  const [policiesRaw, globalCfg] = await Promise.all([
+    (db as any).mohSourcePolicy.findMany({ where: { tenantId, enabled: true } }),
+    (db as any).mohGlobalConfig.findUnique({ where: { id: "global" } }).catch(() => null),
+  ]);
+
+  const scheduleRows: ScheduleRuleRow[] = (args.scheduleRules as any[]).map((r) => ({
+    id: r.id, profileId: r.profileId, ruleType: r.ruleType,
+    weekday: r.weekday ?? null, startTime: r.startTime ?? null, endTime: r.endTime ?? null,
+    startAt: r.startAt ?? null, endAt: r.endAt ?? null, priority: r.priority ?? 0,
+    isActive: r.isActive !== false, scope: r.scope ?? "tenant", extension: r.extension ?? "", callSource: r.callSource ?? "",
+  }));
+  const activeOverrides = computeActiveScheduleOverrides(scheduleRows, args.classForProfileId, timezone || "UTC", args.now);
+
+  const staticPolicies: StaticSourcePolicy[] = (policiesRaw as any[]).map((p) => ({
+    scope: p.scope === "extension" ? "extension" : "tenant",
+    extension: String(p.extension ?? ""), source: String(p.source ?? ""),
+    vitalPbxMohClassName: String(p.vitalPbxMohClassName ?? ""), enabled: p.enabled !== false,
+  }));
+
+  const distinct = new Set<string>();
+  for (const p of staticPolicies) if (p.vitalPbxMohClassName) distinct.add(p.vitalPbxMohClassName);
+  for (const o of activeOverrides) if (o.vitalPbxMohClassName) distinct.add(o.vitalPbxMohClassName);
+  const ready = new Set<string>();
+  for (const cls of distinct) {
+    if (await workerHasSyncedMohRuntimeClass(tenantId, cls)) ready.add(normalizeSharedMohRuntimeClass(cls));
+  }
+  const keep = (cls: string) => ready.has(normalizeSharedMohRuntimeClass(cls));
+
+  const keys = buildSourcePublishKeys({
+    slug,
+    staticPolicies: staticPolicies.filter((p) => keep(p.vitalPbxMohClassName)),
+    activeOverrides: activeOverrides.filter((o) => keep(o.vitalPbxMohClassName)),
+  });
+
+  let globalClass = "";
+  const rawGlobal = normalizeSharedMohRuntimeClass(globalCfg?.vitalPbxMohClassName ?? "");
+  if (rawGlobal && (await workerHasSyncedMohRuntimeClass(tenantId, rawGlobal))) globalClass = rawGlobal;
+
+  return [...keys, buildGlobalDefaultKey(globalClass)];
+}
+
+// In-memory signature of the last per-source key set published per tenant.
+// Lost on restart (→ one harmless idempotent republish), which is why it is a
+// safety-net cache only and never the source of truth.
+const _mohSourceSignature = new Map<string, string>();
+
 let _mohReconcileRunning = false;
 async function runMohScheduleCycle(): Promise<void> {
   if (_mohReconcileRunning) return;
@@ -2097,7 +2171,7 @@ async function runMohScheduleCycle(): Promise<void> {
   try {
     const schedules: any[] = await (db as any).mohScheduleConfig.findMany({
       where: { isActive: true },
-      include: { tenant: { select: { name: true } } },
+      include: { tenant: { select: { name: true, mohControlMode: true } } },
     });
     if (schedules.length === 0) return;
 
@@ -2108,6 +2182,9 @@ async function runMohScheduleCycle(): Promise<void> {
     for (const sched of schedules) {
       try {
         const tenantId: string = sched.tenantId;
+        // Native PBX-control tenants are hands-off — the worker never republishes
+        // Connect keys for them. The API's control switch already tombstoned them.
+        if (String(sched.tenant?.mohControlMode ?? "").trim().toLowerCase() === "pbx") continue;
         // Prefer PbxTenantDirectory.tenantSlug over Tenant.name slug — must
         // match apps/api/src/server.ts getIvrSlugForTenant() to avoid slug
         // drift between API and worker AstDB writes (root cause of dual-family
@@ -2115,11 +2192,12 @@ async function runMohScheduleCycle(): Promise<void> {
         const slug = await workerCanonicalTenantSlug(tenantId, sched.tenant?.name);
         const fam = `connect/t_${slug}`;
 
-        const [rules, override, profilesRaw, lastState] = await Promise.all([
+        const [rules, override, profilesRaw, lastState, lastPublish] = await Promise.all([
           (db as any).mohScheduleRule.findMany({ where: { scheduleId: sched.id, isActive: true } }),
           (db as any).mohOverrideState.findUnique({ where: { tenantId } }),
           (db as any).mohProfile.findMany({ where: { tenantId, isActive: true } }),
           (db as any).mohLastPublishedState.findUnique({ where: { tenantId } }),
+          (db as any).mohPublishRecord.findFirst({ where: { tenantId, status: "success" }, orderBy: { publishedAt: "desc" }, select: { keysWritten: true } }),
         ]);
 
         const profileMap = new Map<string, WorkerHoldProfile>(
@@ -2141,10 +2219,29 @@ async function runMohScheduleCycle(): Promise<void> {
         }
         profile.vitalPbxMohClassName = runtimeClass;
 
-        // Skip if last published state matches â€” no drift, no transition
+        // Compute the additive per-call-source key set (folds in scheduled
+        // extension/tenant overrides + global default). Its signature feeds the
+        // skip decision so a schedule-driven per-source transition republishes
+        // within one cycle even when the tenant-default class/mode is unchanged.
+        const sourceKeys = await workerBuildSourceMohKeys({
+          tenantId, slug, timezone: sched.timezone || "UTC",
+          scheduleRules: rules as any[],
+          classForProfileId: (pid: string) => profileMap.get(pid)?.vitalPbxMohClassName ?? null,
+          now,
+        });
+        const sourceSig = JSON.stringify(sourceKeys);
+
+        // Skip only if BOTH the tenant default (class+mode) AND the per-source
+        // key set are unchanged since the last publish.
         const lastClass = lastState?.mohClass ?? null;
         const lastMode  = lastState?.holdMode ?? null;
-        if (profile.vitalPbxMohClassName === lastClass && mode === lastMode) continue;
+        if (
+          profile.vitalPbxMohClassName === lastClass &&
+          mode === lastMode &&
+          _mohSourceSignature.get(tenantId) === sourceSig
+        ) {
+          continue;
+        }
 
         const keys = [
           { family: fam, key: "active_moh_class",           value: profile.vitalPbxMohClassName },
@@ -2156,10 +2253,18 @@ async function runMohScheduleCycle(): Promise<void> {
           { family: fam, key: "intro_announcement_ref",     value: profile.introAnnouncementRef ?? "" },
           { family: fam, key: "hold_announce",              value: profile.holdAnnouncementEnabled ? (profile.holdAnnouncementRef ?? "") : "" },
           { family: fam, key: "hold_repeat",                value: String(profile.holdAnnouncementIntervalSec ?? 30) },
+          ...sourceKeys,
         ];
 
+        // Forward stale-key cleanup: tombstone any clearable key the previous
+        // publish wrote that this publish no longer includes (removed per-source
+        // policy, ended overlay). Guarantees no stale AstDB keys survive.
+        const prevKeys: MohAstDbKey[] = Array.isArray(lastPublish?.keysWritten) ? (lastPublish.keysWritten as MohAstDbKey[]) : [];
+        const forwardClears = computeForwardKeyClears(prevKeys, keys as MohAstDbKey[]);
+        for (const c of forwardClears) keys.push(c);
+
         const record: any = await (db as any).mohPublishRecord.create({
-          data: { tenantId, publishedBy: "system", source: "reconciliation", previousMohClass: lastClass, newMohClass: profile.vitalPbxMohClassName, keysWritten: keys, previousKeysSnapshot: [], status: "pending", isRollback: false },
+          data: { tenantId, publishedBy: "system", source: "reconciliation", controlMode: "connect", previousMohClass: lastClass, newMohClass: profile.vitalPbxMohClassName, keysWritten: keys, previousKeysSnapshot: prevKeys, status: "pending", isRollback: false },
         });
 
         try {
@@ -2173,10 +2278,11 @@ async function runMohScheduleCycle(): Promise<void> {
           await (db as any).mohPublishRecord.update({ where: { id: record.id }, data: { status: "success" } });
           await (db as any).mohLastPublishedState.upsert({
             where: { tenantId },
-            create: { tenantId, mohClass: profile.vitalPbxMohClassName, holdMode: mode },
-            update: { mohClass: profile.vitalPbxMohClassName, holdMode: mode, publishedAt: new Date() },
+            create: { tenantId, mohClass: profile.vitalPbxMohClassName, holdMode: mode, controlMode: "connect" },
+            update: { mohClass: profile.vitalPbxMohClassName, holdMode: mode, publishedAt: new Date(), controlMode: "connect" },
           });
-          console.log(`moh reconcile: published class=${profile.vitalPbxMohClassName} mode=${mode} for tenant ${tenantId}`);
+          _mohSourceSignature.set(tenantId, sourceSig);
+          console.log(`moh reconcile: published class=${profile.vitalPbxMohClassName} mode=${mode} sourceKeys=${sourceKeys.length} for tenant ${tenantId}`);
         } catch (pubErr: any) {
           await (db as any).mohPublishRecord.update({ where: { id: record.id }, data: { status: "failed", error: pubErr?.message } });
           console.error(`moh reconcile: publish failed for tenant ${tenantId}: ${pubErr?.message}`);
@@ -2191,6 +2297,165 @@ async function runMohScheduleCycle(): Promise<void> {
 }
 
 // 1-minute reconciliation cycle â€” catches schedule transitions + repairs drift
+// ── Admin (multi-tenant) MOH schedule reconcile ──────────────────────────────
+// Highest-priority overlay. Restart-safe + idempotent via the activation ledger:
+//   * a window that should be active but has no open activation → OPEN (write
+//     overlay keys, snapshot prior state);
+//   * an open activation whose window ended / was disabled / deleted → RESTORE
+//     (tombstone ONLY the overlay keys; the untouched tenant/extension keys
+//     re-take effect exactly, so prior state returns with no stale keys).
+// Runs every 60s AND once on startup (missed activations/restores reconciled).
+
+async function workerPublishAstDbKeys(slug: string, keys: any[]): Promise<void> {
+  if (keys.length === 0) return;
+  const base = (process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003").replace(/\/$/, "");
+  const secret = process.env.CDR_INGEST_SECRET?.trim() ?? "";
+  const resp = await fetch(`${base}/telephony/internal/ivr-publish`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(secret ? { "x-cdr-secret": secret } : {}) },
+    body: JSON.stringify({ tenantSlug: slug, keys }),
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!resp.ok) throw new Error(`admin moh publish HTTP ${resp.status}`);
+}
+
+const _mohAdminSignature = new Map<string, string>();
+let _mohAdminCycleRunning = false;
+async function runMohAdminScheduleCycle(): Promise<void> {
+  if (_mohAdminCycleRunning) return;
+  _mohAdminCycleRunning = true;
+  try {
+    const now = new Date();
+    const schedRows: any[] = await (db as any).mohAdminSchedule.findMany({
+      where: { enabled: true, isDeleted: false },
+      include: { targets: true },
+    });
+    const openActivations: any[] = await (db as any).mohAdminScheduleActivation.findMany({ where: { state: "active" } });
+    if (schedRows.length === 0 && openActivations.length === 0) return;
+
+    // Resolve slugs for every tenant referenced by a target or open activation.
+    const tenantIds = new Set<string>();
+    for (const s of schedRows) for (const t of s.targets) tenantIds.add(t.tenantId);
+    for (const a of openActivations) tenantIds.add(a.tenantId);
+    const tenants: any[] = await (db as any).tenant.findMany({ where: { id: { in: [...tenantIds] } }, select: { id: true, name: true } });
+    const nameById = new Map<string, string>(tenants.map((t) => [t.id, t.name]));
+    const slugByTenant = new Map<string, string>();
+    const tenantIdBySlug = new Map<string, string>();
+    for (const tid of tenantIds) {
+      const slug = await workerCanonicalTenantSlug(tid, nameById.get(tid));
+      slugByTenant.set(tid, slug);
+      tenantIdBySlug.set(slug, tid);
+    }
+
+    // Evaluate active overrides (deduped per target to the highest priority).
+    const scheduleRows: AdminScheduleRow[] = schedRows.map((r) => ({
+      id: r.id, enabled: r.enabled, scheduleKind: r.scheduleKind, timezone: r.timezone,
+      vitalPbxMohClassName: r.vitalPbxMohClassName, priority: r.priority,
+      startAt: r.startAt, endAt: r.endAt, startWeekday: r.startWeekday, startTime: r.startTime,
+      endWeekday: r.endWeekday, endTime: r.endTime,
+      targets: (r.targets as any[])
+        .map((t) => ({ tenantSlug: slugByTenant.get(t.tenantId) ?? "", extension: t.extension || "" }))
+        .filter((t) => t.tenantSlug.length > 0),
+    }));
+    const scheduleById = new Map<string, any>(schedRows.map((r) => [r.id, r]));
+    const active: ActiveAdminOverride[] = computeActiveAdminOverrides(scheduleRows, now);
+
+    // Winners keyed by (scheduleId,tenantId,extension) for ledger reconciliation.
+    const winnerKey = (scheduleId: string, tenantId: string, ext: string) => `${scheduleId}\u0000${tenantId}\u0000${ext}`;
+    const winners = new Map<string, ActiveAdminOverride>();
+    for (const o of active) {
+      const tid = tenantIdBySlug.get(o.tenantSlug);
+      if (!tid) continue;
+      winners.set(winnerKey(o.scheduleId, tid, o.extension), o);
+    }
+
+    // Group work per tenant slug (union of active + open-activation tenants).
+    const slugsToProcess = new Set<string>();
+    for (const o of active) slugsToProcess.add(o.tenantSlug);
+    for (const a of openActivations) { const s = slugByTenant.get(a.tenantId); if (s) slugsToProcess.add(s); }
+
+    for (const slug of slugsToProcess) {
+      const tenantId = tenantIdBySlug.get(slug);
+      if (!tenantId) continue;
+      try {
+        const activeForTenant = active.filter((o) => o.tenantSlug === slug);
+        const desiredKeys = buildAdminOverlayKeysForTenant(slug, activeForTenant) as MohAstDbKey[];
+        const keepIds = new Set(desiredKeys.map((k) => `${k.family}\u0000${k.key}`));
+
+        // Tombstone every overlay key id (tenant-scope + any extension that had
+        // an open activation or is an active ext target) that is NOT desired now.
+        const extScopes = new Set<string>();
+        for (const a of openActivations) if (a.tenantId === tenantId && a.extension) extScopes.add(String(a.extension));
+        for (const o of activeForTenant) if (o.extension) extScopes.add(o.extension);
+        const tombstones: MohAstDbKey[] = [];
+        for (const kid of adminOverlayKeyIdsForTenant(slug)) {
+          const id = `${kid.family}\u0000${kid.key}`;
+          if (!keepIds.has(id)) tombstones.push({ family: kid.family, key: kid.key, value: "" });
+        }
+        for (const ext of extScopes) {
+          for (const kid of adminOverlayKeyIdsForExtension(slug, ext)) {
+            const id = `${kid.family}\u0000${kid.key}`;
+            if (!keepIds.has(id)) tombstones.push({ family: kid.family, key: kid.key, value: "" });
+          }
+        }
+        const allKeys = [...desiredKeys, ...tombstones];
+        const sig = JSON.stringify(allKeys);
+        const changed = _mohAdminSignature.get(slug) !== sig;
+
+        // Reconcile the activation ledger (idempotent).
+        const lastState = await (db as any).mohLastPublishedState.findUnique({ where: { tenantId }, select: { mohClass: true, controlMode: true } });
+        const openForTenant = openActivations.filter((a) => a.tenantId === tenantId);
+        const openIndex = new Map<string, any>(openForTenant.map((a) => [winnerKey(a.scheduleId, a.tenantId, String(a.extension || "")), a]));
+
+        // OPEN new activations for current winners with no open row.
+        for (const [wk, o] of winners) {
+          const [, tid] = wk.split("\u0000");
+          if (tid !== tenantId) continue;
+          if (openIndex.has(wk)) continue;
+          await (db as any).mohAdminScheduleActivation.create({
+            data: {
+              scheduleId: o.scheduleId,
+              tenantId,
+              extension: o.extension || "",
+              state: "active",
+              appliedClass: o.vitalPbxMohClassName,
+              previousClass: lastState?.mohClass ?? null,
+              previousControlMode: lastState?.controlMode ?? null,
+              previousKeysSnapshot: [],
+            },
+          });
+        }
+        // RESTORE open activations that are no longer winners (ended/disabled).
+        for (const [wk, a] of openIndex) {
+          if (winners.has(wk)) continue;
+          await (db as any).mohAdminScheduleActivation.update({
+            where: { id: a.id },
+            data: { state: "restored", deactivatedAt: new Date() },
+          });
+        }
+
+        if (changed) {
+          await workerPublishAstDbKeys(slug, allKeys);
+          _mohAdminSignature.set(slug, sig);
+          console.log(`moh admin reconcile: slug=${slug} active=${activeForTenant.length} tombstones=${tombstones.length}`);
+        }
+      } catch (tErr: any) {
+        console.error(`moh admin reconcile: error for slug ${slug}: ${tErr?.message}`);
+      }
+    }
+    void scheduleById;
+  } catch (err: any) {
+    console.error("moh admin reconcile cycle failed", err?.message || err);
+  } finally {
+    _mohAdminCycleRunning = false;
+  }
+}
+
+setInterval(() => {
+  runMohAdminScheduleCycle().catch((err) => console.error("moh admin reconcile cycle failed", err?.message || err));
+}, 60_000);
+runMohAdminScheduleCycle().catch((err) => console.error("initial moh admin reconcile cycle failed", err?.message || err));
+
 setInterval(() => {
   runMohScheduleCycle().catch((err) => console.error("moh reconcile cycle failed", err?.message || err));
 }, 60 * 1000);

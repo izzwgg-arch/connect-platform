@@ -246,6 +246,26 @@ test("resolver per-source lookup is additive and preserves the tenant-default se
   assert.match(SCRIPT, /ExecIf\(\$\["\$\{MOH_SRC\}" != ""\]\?Set\(MOH_CLASS_LOCAL=\$\{DB\(connect\/t_\$\{TENANT_SLUG_LOCAL\}\/moh\/src\/\$\{MOH_SRC\}\)\}\)\)/);
 });
 
+test("resolver reads the admin (multi-tenant) overlay FIRST — beats ext + tenant keys", () => {
+  // Option C priority (2026-07-01): an active admin multi-tenant schedule is a
+  // global takeover that must beat even a pinned extension. The resolver reads
+  // the dedicated admin_src / admin_moh_class families before the per-extension
+  // and tenant keys, applies + Return()s when present, and the admin reads must
+  // appear BEFORE the (1) extension per-source read.
+  const body = resolverBody();
+  assert.match(body, /Set\(ADMIN_OVR=\)/);
+  assert.match(body, /DB\(connect\/t_\$\{TENANT_SLUG_LOCAL\}\/extensions\/\$\{CH_EXT_SAFE\}\/moh\/admin_src\/\$\{MOH_SRC\}\)/);
+  assert.match(body, /DB\(connect\/t_\$\{TENANT_SLUG_LOCAL\}\/extensions\/\$\{CH_EXT_SAFE\}\/admin_moh_class\)/);
+  assert.match(body, /DB\(connect\/t_\$\{TENANT_SLUG_LOCAL\}\/moh\/admin_src\/\$\{MOH_SRC\}\)/);
+  assert.match(body, /DB\(connect\/t_\$\{TENANT_SLUG_LOCAL\}\/admin_moh_class\)/);
+  // Admin overlay must be read before the extension per-source override.
+  const idxAdmin = body.indexOf("Set(ADMIN_OVR=");
+  const idxExtSrc = body.indexOf("/moh/src/${MOH_SRC})}))");
+  assert.ok(idxAdmin > -1 && idxExtSrc > -1 && idxAdmin < idxExtSrc, "admin overlay must be read before extension per-source");
+  // Applying the admin overlay Returns() so nothing below can lower the priority.
+  assert.match(body, /admin-schedule override applied[\s\S]*?Return\(\)/);
+});
+
 test("resolver derives internal/outbound/inbound_direct from VitalPBX inherited __CALL_TYPE", () => {
   // Phase 2: the three base call sources are classified ONLY from VitalPBX's
   // own inherited __CALL_TYPE (read as ${CALL_TYPE}) set by [sub-setup-call-type]

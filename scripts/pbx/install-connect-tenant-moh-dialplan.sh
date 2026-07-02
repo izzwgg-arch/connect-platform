@@ -975,6 +975,10 @@ cat > "$TMP_NEW" <<'CONNECT_TENANT_MOH_EOF'
 ;   connect/t_<slug>/extensions/<ext>/active_moh_class         → per-extension alias  (Phase 3B)
 ;   connect/t_<slug>/moh/src/<source>                          → tenant per-call-source policy
 ;   connect/t_<slug>/extensions/<ext>/moh/src/<source>         → per-extension per-source policy
+;   connect/t_<slug>/admin_moh_class                           → admin multi-tenant overlay (tenant)
+;   connect/t_<slug>/moh/admin_src/<source>                    → admin overlay (tenant, per-source)
+;   connect/t_<slug>/extensions/<ext>/admin_moh_class          → admin overlay (extension)
+;   connect/t_<slug>/extensions/<ext>/moh/admin_src/<source>   → admin overlay (extension, per-source)
 ;   connect/system/moh_default_class                           → system-wide global default
 ;
 ; Wired in via the VitalPBX-generated [sub-before-bridging-call] in
@@ -991,6 +995,10 @@ cat > "$TMP_NEW" <<'CONNECT_TENANT_MOH_EOF'
 ; 2→inbound_direct; 4/TRANSIT and unknown → empty). An empty MOH_SRC skips the
 ; per-source reads (levels 1 and 3) so the resolver degrades to the exact
 ; pre-source behavior:
+;   0. connect/t_<slug>/extensions/<ext>/moh/admin_src/<MOH_SRC>  (admin overlay, ext+source)
+;      connect/t_<slug>/extensions/<ext>/admin_moh_class          (admin overlay, ext default)
+;      connect/t_<slug>/moh/admin_src/<MOH_SRC>                   (admin overlay, tenant+source)
+;      connect/t_<slug>/admin_moh_class                           (admin overlay, tenant default)
 ;   1. connect/t_<slug>/extensions/<ext>/moh/src/<MOH_SRC>  (per-extension per-source)
 ;   2. connect/t_<slug>/extensions/<ext>/moh_class          (per-extension default)
 ;      connect/t_<slug>/extensions/<ext>/active_moh_class   (per-extension alias)
@@ -1102,6 +1110,24 @@ exten => s,1,NoOp(Connect tenant MOH resolver tenant=${ARG1} caller=${ARG2} call
  same => n,GotoIf($[${LEN(${CH_EXT_TEST})} > 32]?ext_tok_done)
  same => n,Set(CH_EXT_SAFE=${CH_EXT_TEST})
  same => n(ext_tok_done),NoOp(Connect tenant MOH ext token tenant_id=${TENANT_ID} ext=${CH_EXT_SAFE})
+ ; ── (0) Admin multi-tenant schedule overlay (HIGHEST priority) ───────────────
+ ; Written by Connect's admin-schedule worker to the dedicated admin_src /
+ ; admin_moh_class families. While present it overrides even an explicitly
+ ; pinned extension (Option C priority, 2026-07-01). When the admin window ends
+ ; Connect tombstones ONLY these keys (""), so the reads below fall straight
+ ; through to the untouched extension/tenant keys → exact prior state restored.
+ ; Order: ext+source → ext default → tenant+source → tenant default.
+ same => n,Set(ADMIN_OVR=)
+ same => n,ExecIf($[$["${CH_EXT_SAFE}" != ""] & $["${MOH_SRC}" != ""]]?Set(ADMIN_OVR=${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${CH_EXT_SAFE}/moh/admin_src/${MOH_SRC})}))
+ same => n,ExecIf($[$["${ADMIN_OVR}" = ""] & $["${CH_EXT_SAFE}" != ""]]?Set(ADMIN_OVR=${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${CH_EXT_SAFE}/admin_moh_class)}))
+ same => n,ExecIf($[$["${ADMIN_OVR}" = ""] & $["${MOH_SRC}" != ""]]?Set(ADMIN_OVR=${DB(connect/t_${TENANT_SLUG_LOCAL}/moh/admin_src/${MOH_SRC})}))
+ same => n,ExecIf($["${ADMIN_OVR}" = ""]?Set(ADMIN_OVR=${DB(connect/t_${TENANT_SLUG_LOCAL}/admin_moh_class)}))
+ same => n,GotoIf($["${ADMIN_OVR}" = ""]?skip_admin_ovr)
+ same => n,Set(CHANNEL(musicclass)=${ADMIN_OVR})
+ same => n,Set(__CONNECT_MOH=${ADMIN_OVR})
+ same => n,NoOp(Connect tenant MOH admin-schedule override applied tenant_id=${TENANT_ID} slug=${TENANT_SLUG_LOCAL} ext=${CH_EXT_SAFE} src=${MOH_SRC} class=${ADMIN_OVR})
+ same => n,Return()
+ same => n(skip_admin_ovr),NoOp(Connect tenant MOH admin-schedule overlay absent tenant_id=${TENANT_ID} slug=${TENANT_SLUG_LOCAL})
  ; ── (1) Extension + source (highest priority) ───────────────────────────────
  same => n,ExecIf($[$["${CH_EXT_SAFE}" != ""] & $["${MOH_SRC}" != ""]]?Set(EXT_OVR=${DB(connect/t_${TENANT_SLUG_LOCAL}/extensions/${CH_EXT_SAFE}/moh/src/${MOH_SRC})}))
  same => n,GotoIf($["${EXT_OVR}" != ""]?apply_ext)

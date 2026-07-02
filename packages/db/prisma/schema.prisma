@@ -823,13 +823,21 @@ model Tenant {
   ivrScheduleConfig               IvrScheduleConfig?
   ivrOverrideState                IvrOverrideState?
   ivrPublishRecords               IvrPublishRecord[]
+  // MOH control mode: "connect" = Connect manages this tenant's MOH; "pbx" =
+  // hands-off, native VitalPBX MOH (Connect suppresses/clears its keys). An
+  // active ADMIN multi-tenant schedule can still take a "pbx" tenant over for
+  // the window and restore it to "pbx" afterwards.
+  mohControlMode                  String                            @default("connect")
   mohProfiles                     MohProfile[]
   mohScheduleConfig               MohScheduleConfig?
   mohOverrideState                MohOverrideState?
   mohPublishRecords               MohPublishRecord[]
   mohLastPublishedState           MohLastPublishedState?
   mohExtensionOverrides           MohExtensionOverride[]
+  mohExtensionControls            MohExtensionControl[]
   mohSourcePolicies               MohSourcePolicy[]
+  mohAdminScheduleTargets         MohAdminScheduleTarget[]
+  mohAdminScheduleActivations     MohAdminScheduleActivation[]
   didRouteMappings                DidRouteMapping[]
   outboundRoutes                  OutboundRoute[]
   userOutboundRoutePermissions    UserOutboundRoutePermission[]
@@ -3461,6 +3469,16 @@ model MohPublishRecord {
   status                     String   @default("pending") // "pending" | "success" | "failed"
   error                      String?
   isRollback                 Boolean  @default(false)
+  // ── Live post-publish verification (read-only PBX read-back) ──
+  // verifyStatus: "verified" (Asterisk active class matches desired) | "drift"
+  //   (mismatch — surfaced in health, non-fatal) | "unverified" (probe skipped/
+  //   helper not deployed). verifiedActiveClass is what Asterisk reported.
+  verifiedAt                 DateTime?
+  verifiedActiveClass        String?
+  verifyStatus               String?
+  // Which control mode this publish reflected ("connect" | "pbx"). "pbx" rows
+  // are tombstone-only publishes that hand the tenant back to native MOH.
+  controlMode                String?
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -3581,12 +3599,135 @@ model MohAssignmentJob {
 /// Per-tenant last-known publish state — cached to avoid repeated DB queries from the worker.
 /// One row per tenant; upserted on every successful publish.
 model MohLastPublishedState {
-  tenantId    String   @id
-  mohClass    String
-  holdMode    String
-  publishedAt DateTime @default(now())
+  tenantId            String   @id
+  mohClass            String
+  holdMode            String
+  publishedAt         DateTime @default(now())
+  // Effective control mode last published ("connect" | "pbx").
+  controlMode         String?
+  // Last live read-back of Asterisk's active class + when it was verified.
+  activeClassObserved String?
+  verifiedAt          DateTime?
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+/// Per-extension MOH control mode. Lets an admin flip a single extension between
+/// Connect-managed and native PBX control independently of the tenant default.
+///   controlMode: "inherit" = follow the tenant's mohControlMode (default);
+///                "connect" = Connect manages this extension even if the tenant
+///                            is PBX-controlled; "pbx" = native VitalPBX MOH for
+///                            this extension even if the tenant is Connect-managed
+///                            (Connect clears this extension's override keys).
+/// `extension` is the normalized channel token, mirroring MohExtensionOverride.
+model MohExtensionControl {
+  id          String   @id @default(cuid())
+  tenantId    String
+  extension   String
+  controlMode String   @default("inherit") // "inherit" | "connect" | "pbx"
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  createdBy   String?
+  updatedBy   String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, extension])
+  @@index([tenantId])
+}
+
+/// Admin (multi-tenant) MOH schedule — a single object that takes over MOH for
+/// MANY tenants (and optionally specific extensions) for a window, e.g. a
+/// Yom Tov / holiday playlist across T2/T3/T21. This is the HIGHEST-priority
+/// layer (Option C, 2026-07-01): while active it overrides even an explicitly
+/// pinned extension. It is kept fully separate from the per-tenant
+/// MohScheduleConfig so the single-tenant schedule path is untouched.
+///
+/// While active, the worker writes the admin-overlay AstDB keys
+/// (connect/t_<slug>/admin_moh_class and the per-extension equivalent) and
+/// records a MohAdminScheduleActivation capturing the prior effective state.
+/// When the window ends it tombstones ONLY the overlay keys and restores from
+/// the activation record (fallbackMode) — extension overrides, tenant defaults,
+/// PBX-control settings and per-tenant schedules are never erased.
+model MohAdminSchedule {
+  id                   String   @id @default(cuid())
+  name                 String
+  enabled              Boolean  @default(true)
+  scheduleKind         String // "one_time" | "recurring"
+  timezone             String   @default("America/New_York")
+  vitalPbxMohClassName String // the takeover class (e.g. a shared holiday class)
+  priority             Int      @default(0) // higher wins when two admin schedules overlap a target
+  // one_time
+  startAt              DateTime?
+  endAt                DateTime?
+  // recurring (minute-of-week window; may span multiple weekdays / wrap)
+  startWeekday         Int? // 0=Sun…6=Sat
+  startTime            String? // "HH:MM"
+  endWeekday           Int?
+  endTime              String? // "HH:MM"
+  // Fallback when the window ends:
+  //   "restore_previous" = restore the exact prior effective state per target
+  //                        (default); "explicit" = apply fallbackClass instead.
+  fallbackMode         String   @default("restore_previous")
+  fallbackClass        String?
+  isDeleted            Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  createdBy            String?
+  updatedBy            String?
+
+  targets     MohAdminScheduleTarget[]
+  activations MohAdminScheduleActivation[]
+
+  @@index([enabled])
+  @@index([isDeleted])
+}
+
+/// A tenant (optionally a single extension) targeted by an admin schedule.
+model MohAdminScheduleTarget {
+  id         String   @id @default(cuid())
+  scheduleId String
+  tenantId   String
+  extension  String   @default("") // "" = whole tenant; channel token = one extension
+  createdAt  DateTime @default(now())
+
+  schedule MohAdminSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([scheduleId, tenantId, extension])
+  @@index([tenantId])
+  @@index([scheduleId])
+}
+
+/// Idempotency + restore ledger for admin-schedule takeovers. One row is opened
+/// (state="active") when a schedule window activates for a (tenant, extension?)
+/// target, capturing the prior effective state; it is closed (state="restored")
+/// when the window ends and the prior state is restored. This makes the worker
+/// restart-safe (missed activations/restores are reconciled on startup) and
+/// idempotent (a re-tick never double-activates).
+model MohAdminScheduleActivation {
+  id                   String    @id @default(cuid())
+  scheduleId           String
+  tenantId             String
+  extension            String    @default("")
+  state                String    @default("active") // "active" | "restored"
+  activatedAt          DateTime  @default(now())
+  deactivatedAt        DateTime?
+  // Prior effective state captured at activation, for exact restore.
+  previousClass        String? // effective class before takeover (null = PBX default)
+  previousControlMode  String? // tenant/ext control mode before takeover
+  previousKeysSnapshot Json      @default("[]") // overlay-scope keys before takeover
+  appliedClass         String // the class the takeover applied
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  schedule MohAdminSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([scheduleId])
+  @@index([tenantId])
+  @@index([state])
+  @@index([scheduleId, state])
 }
 
 // ─── DID-level routing (shared-entry architecture) ───────────────────────────

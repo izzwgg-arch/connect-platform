@@ -127,6 +127,79 @@ export function extensionSourceMohFamily(slug: string, extension: string): strin
   return `connect/t_${assertSlug(slug)}/extensions/${assertExtension(extension)}/moh/src`;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 2b. Admin (multi-tenant) schedule overlay — HIGHEST priority
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// An ADMIN multi-tenant schedule is an intentionally global takeover for the
+// selected tenants (e.g. a Yom Tov / holiday playlist that must override even
+// an explicitly pinned extension). It is written to a DEDICATED overlay key
+// family that the dialplan resolver reads BEFORE the per-tenant/extension keys,
+// so it beats extension static overrides and extension per-tenant schedules
+// while active. When the admin window ends, Connect writes empty-string
+// tombstones for the overlay keys ONLY, and the resolver falls straight back
+// through to the untouched extension/tenant keys — so the exact prior effective
+// state is restored without ever erasing extension overrides, tenant defaults,
+// PBX-control settings, or per-tenant schedules.
+//
+//   family connect/t_<slug>/moh/admin_src               key <source>   tenant admin per-source
+//   key    connect/t_<slug>                             admin_moh_class  tenant admin default (all sources)
+//   family connect/t_<slug>/extensions/<ext>/moh/admin_src  key <source> extension admin per-source
+//   key    connect/t_<slug>/extensions/<ext>            admin_moh_class  extension admin default
+
+/** AstDB family holding a tenant's admin-overlay per-source classes. */
+export function tenantAdminSourceMohFamily(slug: string): string {
+  return `connect/t_${assertSlug(slug)}/moh/admin_src`;
+}
+
+/** AstDB family holding an extension's admin-overlay per-source classes. */
+export function extensionAdminSourceMohFamily(slug: string, extension: string): string {
+  return `connect/t_${assertSlug(slug)}/extensions/${assertExtension(extension)}/moh/admin_src`;
+}
+
+/** AstDB (family,key) for a tenant's admin-overlay default class (covers all sources). */
+export function tenantAdminDefaultKey(slug: string): { family: string; key: string } {
+  return { family: `connect/t_${assertSlug(slug)}`, key: "admin_moh_class" };
+}
+
+/** AstDB (family,key) for an extension's admin-overlay default class. */
+export function extensionAdminDefaultKey(slug: string, extension: string): { family: string; key: string } {
+  return { family: `connect/t_${assertSlug(slug)}/extensions/${assertExtension(extension)}`, key: "admin_moh_class" };
+}
+
+/**
+ * All AstDB (family,key) segments that make up the admin overlay for a given
+ * (slug, optional extension). Used to compute tombstones that clear an admin
+ * takeover deterministically. `key` here is the AstDB key; `family` the family.
+ * Includes every per-source key plus the default key so a clear is exhaustive.
+ */
+export function adminOverlayKeyIdsForTenant(slug: string): Array<{ family: string; key: string }> {
+  const out: Array<{ family: string; key: string }> = [];
+  const srcFam = tenantAdminSourceMohFamily(slug);
+  for (const s of MOH_CALL_SOURCES) out.push({ family: srcFam, key: s });
+  out.push(tenantAdminDefaultKey(slug));
+  return out;
+}
+
+/** As `adminOverlayKeyIdsForTenant`, scoped to a single extension. */
+export function adminOverlayKeyIdsForExtension(slug: string, extension: string): Array<{ family: string; key: string }> {
+  const out: Array<{ family: string; key: string }> = [];
+  const srcFam = extensionAdminSourceMohFamily(slug, extension);
+  for (const s of MOH_CALL_SOURCES) out.push({ family: srcFam, key: s });
+  out.push(extensionAdminDefaultKey(slug, extension));
+  return out;
+}
+
+/** True iff a family is one of the admin-overlay families (`.../moh/admin_src`). */
+export function isAdminOverlayFamily(family: string): boolean {
+  return /\/moh\/admin_src$/.test(family);
+}
+
+/** True iff a (family,key) is an admin-overlay DEFAULT key (`admin_moh_class`). */
+export function isAdminOverlayDefaultKey(family: string, key: string): boolean {
+  return key === "admin_moh_class" && /^connect\/t_[0-9A-Za-z_-]{1,64}(\/extensions\/[0-9A-Za-z_-]{1,32})?$/.test(family);
+}
+
 /** An AstDB key triple compatible with `/telephony/internal/ivr-publish`. */
 export interface MohAstDbKey {
   family: string;
@@ -220,15 +293,31 @@ export function classifyDialplanMohSource(signals: DialplanMohSignals | null | u
 // 4. Resolution engine (Requirement 4 priority)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Ordered, stable reason codes for observability + diagnostics. */
+/** Ordered, stable reason codes for observability + diagnostics.
+ *
+ * Priority (Option C, chosen 2026-07-01):
+ *   1. admin_schedule_extension / admin_schedule_tenant — an ACTIVE admin
+ *      multi-tenant schedule is a global takeover for the selected tenants and
+ *      beats even an explicitly pinned extension.
+ *   2. schedule_extension  — an active per-tenant extension schedule.
+ *   3. extension_source / extension_default — static per-extension override.
+ *   4. tenant_source / tenant_default — per-tenant schedule (folded upstream)
+ *      and static tenant default share these levels: a per-tenant schedule is
+ *      folded into the tenant keys before resolution, so a normal tenant
+ *      schedule stays per-scope and never surprises a pinned extension.
+ *   5. global_default — system-wide default if enabled.
+ *   6. pbx_default — nothing configured → let Asterisk use its own MOH.
+ */
 export type MohResolutionReason =
-  | "schedule_extension" // (1) an active scheduled extension override
-  | "extension_source" // (2) static per-extension setting for this source
-  | "extension_default" // (2b) static per-extension default (all types)
-  | "tenant_source" // (3) tenant setting for this source
-  | "tenant_default" // (3b) tenant default (time/override resolved)
-  | "global_default" // (4) system-wide global default
-  | "pbx_default"; // (5) nothing configured → let Asterisk use its own MOH
+  | "admin_schedule_extension" // (1a) active admin schedule targeting this extension
+  | "admin_schedule_tenant" // (1b) active admin schedule targeting this tenant (beats ext pins)
+  | "schedule_extension" // (2) an active per-tenant scheduled extension override
+  | "extension_source" // (3) static per-extension setting for this source
+  | "extension_default" // (3b) static per-extension default (all types)
+  | "tenant_source" // (4) tenant setting for this source (tenant schedule folded here)
+  | "tenant_default" // (4b) tenant default (time/override resolved)
+  | "global_default" // (5) system-wide global default
+  | "pbx_default"; // (6) nothing configured → let Asterisk use its own MOH
 
 /**
  * Candidate classes at each priority level for a single (extension?, source)
@@ -248,6 +337,12 @@ export type MohResolutionReason =
  */
 export interface MohResolutionInputs {
   source: MohCallSource;
+  /** Active admin multi-tenant schedule value targeting this specific extension. */
+  adminScheduleExtensionClass?: string | null;
+  adminScheduleExtensionRuleId?: string | null;
+  /** Active admin multi-tenant schedule value targeting this tenant (all extensions). */
+  adminScheduleTenantClass?: string | null;
+  adminScheduleTenantRuleId?: string | null;
   scheduledExtensionClass?: string | null;
   scheduledExtensionRuleId?: string | null;
   extensionSourceClass?: string | null;
@@ -262,7 +357,7 @@ export interface MohResolution {
   class: string | null;
   reason: MohResolutionReason;
   source: MohCallSource;
-  /** Set only when `reason === "schedule_extension"`. */
+  /** Set only when `reason` is an admin/extension schedule reason. */
   ruleId?: string | null;
 }
 
@@ -282,6 +377,19 @@ function firstNonEmpty(value: string | null | undefined): string | null {
 export function resolveEffectiveMohClass(inp: MohResolutionInputs): MohResolution {
   const source = inp.source;
 
+  // (1) Admin multi-tenant schedule — global takeover for selected tenants.
+  //     Extension-targeted admin beats tenant-targeted admin (more specific),
+  //     and both beat an explicitly pinned extension override below.
+  const admExt = firstNonEmpty(inp.adminScheduleExtensionClass);
+  if (admExt) {
+    return { class: admExt, reason: "admin_schedule_extension", source, ruleId: inp.adminScheduleExtensionRuleId ?? null };
+  }
+  const admTen = firstNonEmpty(inp.adminScheduleTenantClass);
+  if (admTen) {
+    return { class: admTen, reason: "admin_schedule_tenant", source, ruleId: inp.adminScheduleTenantRuleId ?? null };
+  }
+
+  // (2) Per-tenant extension schedule.
   const sched = firstNonEmpty(inp.scheduledExtensionClass);
   if (sched) {
     return { class: sched, reason: "schedule_extension", source, ruleId: inp.scheduledExtensionRuleId ?? null };
@@ -343,6 +451,91 @@ export function buildExtensionSourceMohKeys(
 ): MohAstDbKey[] {
   const family = extensionSourceMohFamily(slug, extension);
   return buildSourceKeysForFamily(family, rows);
+}
+
+/**
+ * Build the admin-overlay AstDB keys for a single (tenant or extension) target.
+ * An admin schedule normally applies one class to ALL sources, so we emit the
+ * default `admin_moh_class` key. When `perSource` is provided we ALSO emit the
+ * per-source overlay keys (rare — a source-specific admin schedule). Empty
+ * class is dropped (a disabled/blank admin schedule writes nothing here; the
+ * caller tombstones separately).
+ */
+export function buildTenantAdminOverlayKeys(slug: string, cls: string): MohAstDbKey[] {
+  const v = firstNonEmpty(cls);
+  if (!v) return [];
+  const def = tenantAdminDefaultKey(slug);
+  return [{ family: def.family, key: def.key, value: v }];
+}
+
+/** Build the admin-overlay keys for a specific extension target. */
+export function buildExtensionAdminOverlayKeys(slug: string, extension: string, cls: string): MohAstDbKey[] {
+  const v = firstNonEmpty(cls);
+  if (!v) return [];
+  const def = extensionAdminDefaultKey(slug, extension);
+  return [{ family: def.family, key: def.key, value: v }];
+}
+
+/**
+ * Predicate: is a (family,key) safe to TOMBSTONE ("") on a forward publish when
+ * it is no longer desired? Only additive/override key families qualify — never
+ * the tenant announcement/hold-mode keys, which are always rewritten with a
+ * fresh value in the same publish. Clearable:
+ *   - per-source families (`.../moh/src`, `.../moh/admin_src`)
+ *   - per-extension class keys (`moh_class`, `active_moh_class`, `admin_moh_class`)
+ *   - tenant/extension admin default (`admin_moh_class`)
+ *   - reverse-map keys (`connect/pbx_tenant_map/<id>` `moh_class`|`slug`)
+ */
+export function isClearableForwardKey(family: string, key: string): boolean {
+  if (typeof family !== "string" || typeof key !== "string") return false;
+  if (/\/moh\/src$/.test(family) || /\/moh\/admin_src$/.test(family)) return true;
+  if (/^connect\/t_[0-9A-Za-z_-]{1,64}\/extensions\/[0-9A-Za-z_-]{1,32}$/.test(family)) {
+    return key === "moh_class" || key === "active_moh_class" || key === "admin_moh_class";
+  }
+  if (isAdminOverlayDefaultKey(family, key)) return true;
+  if (/^connect\/pbx_tenant_map\/\d{1,10}$/.test(family)) {
+    return key === "moh_class" || key === "slug";
+  }
+  return false;
+}
+
+/**
+ * Compute empty-string tombstones for keys that a PREVIOUS publish wrote but the
+ * NEXT publish no longer includes. This is the forward-cleanup that guarantees
+ * no stale AstDB keys survive a tenant class switch (A→B→A), a removed
+ * source/extension policy, a PBX-control switch, or an ended admin schedule.
+ *
+ * Only `isClearableForwardKey` (family,key) pairs are ever tombstoned — the
+ * always-rewritten tenant announcement/hold keys are left to the next publish's
+ * fresh values. Output is byte-stable (sorted by family then key).
+ */
+export function computeForwardKeyClears(
+  prevKeys: ReadonlyArray<MohAstDbKey>,
+  nextKeys: ReadonlyArray<MohAstDbKey>,
+): MohAstDbKey[] {
+  const next = new Set<string>();
+  for (const k of nextKeys) {
+    if (!k || typeof k.family !== "string" || typeof k.key !== "string") continue;
+    next.add(`${k.family}\u0000${k.key}`);
+  }
+  const out: MohAstDbKey[] = [];
+  const seen = new Set<string>();
+  for (const k of prevKeys) {
+    if (!k || typeof k.family !== "string" || typeof k.key !== "string") continue;
+    const id = `${k.family}\u0000${k.key}`;
+    if (next.has(id) || seen.has(id)) continue;
+    if (!isClearableForwardKey(k.family, k.key)) continue;
+    // A value that is already "" is already a tombstone — no need to re-clear.
+    if (typeof k.value === "string" && k.value.length === 0) continue;
+    seen.add(id);
+    out.push({ family: k.family, key: k.key, value: "" });
+  }
+  out.sort((a, b) => {
+    if (a.family < b.family) return -1;
+    if (a.family > b.family) return 1;
+    return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+  });
+  return out;
 }
 
 function buildSourceKeysForFamily(family: string, rows: ReadonlyArray<MohSourcePolicyRow>): MohAstDbKey[] {
