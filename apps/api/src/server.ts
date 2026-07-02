@@ -186,6 +186,7 @@ import {
 } from "@connect/shared";
 import {
   adminOverridesForSlug,
+  adminScheduleTargetScopeError,
   buildAdminOverlayKeys,
   canManageMohControl,
   classifyMohVerify,
@@ -23443,6 +23444,8 @@ app.post("/voice/moh/admin-schedules", async (req, reply) => {
   if (verr) return reply.code(400).send({ error: verr });
   const { resolved, error } = await resolveAdminScheduleTargets(parsed.data.targets);
   if (error) return reply.code(400).send({ error });
+  const scopeErr = adminScheduleTargetScopeError({ fallbackMode: parsed.data.fallbackMode ?? "restore_previous", targets: resolved });
+  if (scopeErr) return reply.code(400).send({ error: scopeErr });
   const actor = (user as any).id ?? (user as any).sub ?? "system";
   const created = await (db as any).mohAdminSchedule.create({
     data: {
@@ -23482,6 +23485,14 @@ app.patch("/voice/moh/admin-schedules/:id", async (req, reply) => {
   const merged = { ...existing, ...parsed.data };
   const verr = adminScheduleValidationError(merged);
   if (verr) return reply.code(400).send({ error: verr });
+  // Block extension-scoped explicit fallback (target-scope rule). Use the patch's
+  // targets when provided, else the schedule's existing targets, so flipping only
+  // fallbackMode to "explicit" on an extension-targeted schedule is still rejected.
+  const scopeTargets: Array<{ extension?: string | null }> = parsed.data.targets
+    ? parsed.data.targets.map((t) => ({ extension: t.extension ?? "" }))
+    : await (db as any).mohAdminScheduleTarget.findMany({ where: { scheduleId: id }, select: { extension: true } });
+  const scopeErr = adminScheduleTargetScopeError({ fallbackMode: merged.fallbackMode, targets: scopeTargets });
+  if (scopeErr) return reply.code(400).send({ error: scopeErr });
   const actor = (user as any).id ?? (user as any).sub ?? "system";
   const data: any = { updatedBy: actor };
   for (const k of ["name", "enabled", "scheduleKind", "timezone", "vitalPbxMohClassName", "priority", "startWeekday", "startTime", "endWeekday", "endTime", "fallbackMode", "fallbackClass"] as const) {

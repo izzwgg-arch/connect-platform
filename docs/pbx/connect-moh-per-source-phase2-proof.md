@@ -624,9 +624,10 @@ as the live token and keeps `"fallback_class"` as a tolerated alias.
   resolver reads extension keys BEFORE tenant defaults — so a pinned extension still
   wins after the overlay clears. The explicit fallback is the tenant post-schedule
   baseline, **not** a permanent extension override.
-  - **Owner-review note:** for an *extension-scoped* admin target ending in `explicit`,
-    the fallback is still published at **tenant** scope (per the approved "tenant-level
-    post-schedule state" design). Flagged here for explicit confirmation.
+  - **Owner-review note (RESOLVED — see Section O):** the earlier build published an
+    *extension-scoped* target's explicit fallback at **tenant** scope. That is now
+    corrected — extension-scoped explicit fallback is **blocked** (API + worker), and
+    only **whole-tenant** targets can set a tenant-level explicit fallback class.
 
 ### N.2 Safety gates (design-C)
 1. **Invalid/unsafe class** → refused via the same `isValidMohRuntimeClass` publish
@@ -674,3 +675,58 @@ precedence return, deterministic key set).
 - **Live T2 proof patch untouched.**
 - The separate `20260426020000` from-empty migration replay bug is **not** touched in
   this branch (tracked in `docs/ops/FOLLOWUP-migration-replay-storageKey.md`).
+
+## O. Target-scope fallback correction (2026-07-01)
+
+**Business rule enforced:** *admin schedule fallback must follow the target scope.*
+An extension-targeted schedule must never permanently alter tenant-level defaults.
+
+### O.1 Behavior chosen for extension-scoped explicit fallback → **BLOCK**
+Extension-level explicit fallback is **not safely supportable with the current key
+model**: the only extension-default key (`connect/t_<slug>/extensions/<ext>/moh_class` /
+`active_moh_class`) is **owned and rewritten by the extension static-override publish
+path**. Writing it from the admin-fallback path would (a) clobber the extension's own
+pin and (b) leave an **untracked ghost key** (there is no per-extension
+`MohLastPublishedState` to rewrite it). So the mission's **"OR block"** branch is taken:
+
+| Target scope | `restore_previous` | `explicit` fallback |
+| --- | --- | --- |
+| Whole-tenant (`extension=""`) | tombstone overlay only | **allowed** → tenant-level `moh_class`/`active_moh_class` + `MohLastPublishedState.mohClass` |
+| Extension (`extension="<ext>"`) | tombstone overlay only | **blocked** — must use `restore_previous` |
+
+### O.2 Two-layer enforcement
+1. **API (write-time):** `adminScheduleTargetScopeError` (`apps/api/src/mohControl.ts`)
+   rejects create/patch of an admin schedule with `fallbackMode="explicit"` (or the
+   `fallback_class` alias) when **any** target is extension-scoped →
+   `400 extension_scoped_explicit_fallback_unsupported`. Wired into both
+   `POST` and `PATCH /voice/moh/admin-schedules`.
+2. **Worker (runtime fail-safe / defense-in-depth):** `selectAdminFallbackTenantClass`
+   only lets **whole-tenant** (`extension===""`) candidates produce a tenant-level
+   `appliedClass`. Any extension-scoped explicit candidate (e.g. a legacy row created
+   before the API block) is recorded in `blockedExtensionScoped` and falls back to
+   `restore_previous` — it **can never** write `connect/t_<slug>/moh_class`. Logged per
+   schedule id.
+
+### O.3 What is unchanged
+- Tenant-scoped explicit fallback: **unchanged** (still tenant-level).
+- `restore_previous`: **unchanged** at every scope (tenant and extension) — the default,
+  safest behavior; extension overlays clear and the pinned/default class re-takes effect.
+- PBX-controlled tenants: **unchanged** (explicit fallback still skipped, never forced).
+- No stale keys / no ghost tenant override: an extension schedule never writes a tenant
+  or extension default key on end — it only tombstones its own overlay.
+
+### O.4 Tests (this pass — focused MOH suites only)
+- `packages/shared/src/mohAdminSchedule.test.ts`: **36 passed / 0 failed** — incl.
+  tenant-scoped explicit *writes* tenant class, extension-scoped explicit does **not**
+  (blocked → `blockedExtensionScoped`), mixed targets (only whole-tenant lands even at
+  lower priority), extension `restore_previous` not flagged.
+- `apps/api/src/mohControl.test.ts`: **9 passed / 0 failed** — `adminScheduleTargetScopeError`
+  allow whole-tenant explicit, block extension explicit + alias + mixed, allow
+  `restore_previous`/unknown at any scope.
+- Installer string-shape suites (caller-leg + tenant-moh-dialplan): **72 passed / 0 failed**.
+
+### O.5 Guardrails honored
+- **No schema change** (target `extension` already exists on `MohAdminScheduleTarget`).
+- **No migration run**, **no deploy**, **no production DB**, **no live PBX**, **no AstDB
+  write**, **no installer run**, **no Apply Changes**.
+- **Live T2 proof patch untouched.** `20260426020000` replay bug untouched.

@@ -20,6 +20,7 @@
 import {
   buildAdminOverlayKeysForTenant,
   computeActiveAdminOverrides,
+  isExplicitFallbackMode,
   type ActiveAdminOverride,
   type AdminScheduleRow,
   type MohAstDbKey,
@@ -103,6 +104,31 @@ export function computePbxControlTombstones(
     out.push({ family: k.family, key: k.key, value: "" });
   }
   return stableSort(out);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin-schedule target-scope validation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Enforce the target-scope fallback rule at write time:
+ *   • whole-tenant target (extension "") + explicit fallback → allowed
+ *     (publishes tenant-level fallback class).
+ *   • EXTENSION-scoped target + explicit fallback → BLOCKED. An extension-targeted
+ *     schedule must never permanently alter tenant-level defaults, and extension-
+ *     level explicit fallback is not supported with the current key model (the
+ *     extension-default key is owned by the extension static-override path). The
+ *     admin must use `restore_previous` for extension-scoped targets.
+ * `restore_previous` (and any non-explicit mode) is always allowed at any scope.
+ * Returns an error code string when the combination is disallowed, else null.
+ */
+export function adminScheduleTargetScopeError(input: {
+  fallbackMode: string | null | undefined;
+  targets: ReadonlyArray<{ extension?: string | null }>;
+}): string | null {
+  if (!isExplicitFallbackMode(input.fallbackMode)) return null;
+  const hasExtensionTarget = (input.targets ?? []).some((t) => String(t?.extension ?? "").trim().length > 0);
+  return hasExtensionTarget ? "extension_scoped_explicit_fallback_unsupported" : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

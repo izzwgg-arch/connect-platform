@@ -4,6 +4,46 @@ Tracks changes made by Cursor AI agents. Newest entry first.
 
 ---
 
+## 2026-07-01 — MOH: scope admin schedule fallback by target
+
+**Task:** PBX / MOH — target-scope fallback correction on branch `feature/moh-per-call-source-clean`
+**Risk:** low (branch-only; no schema change, no deploy, no migration run, no PBX/AstDB touch)
+
+### Context
+- The prior "explicit fallback" pass published an **extension-scoped** target's
+  explicit fallback at **tenant** scope — an extension schedule could permanently
+  alter tenant defaults. Business rule: **fallback must follow the target scope.**
+- Extension-level explicit fallback is **not** safely supportable today: the only
+  extension-default key (`connect/t_<slug>/extensions/<ext>/moh_class`) is owned by the
+  extension static-override publish path → clobber + untracked ghost-key risk. So the
+  "**OR block**" branch was chosen.
+
+### What changed
+- **`packages/shared/src/mohSourcePublish.ts`** — exported `isExplicitFallbackMode`;
+  `AdminFallbackCandidate` now carries `extension` (scope); `selectAdminFallbackTenantClass`
+  only lets **whole-tenant** (`extension===""`) candidates produce a tenant-level
+  `appliedClass`, records extension-scoped explicit ones in the new
+  `blockedExtensionScoped` list (→ `restore_previous`), never touching tenant defaults.
+- **`apps/api/src/mohControl.ts`** — new pure `adminScheduleTargetScopeError`: rejects
+  `explicit` (or `fallback_class` alias) fallback when any target is extension-scoped.
+- **`apps/api/src/server.ts`** — wired that check into `POST` + `PATCH
+  /voice/moh/admin-schedules` → `400 extension_scoped_explicit_fallback_unsupported`
+  (PATCH loads existing targets when the body omits them, so flipping only the mode is
+  still rejected).
+- **`apps/worker/src/main.ts`** — ending candidates now pass their `extension` scope;
+  extension-scoped explicit ones are logged + fall back to `restore_previous`.
+- **Tests** — `mohAdminSchedule.test.ts` (+5 scope cases, existing calls updated),
+  `mohControl.test.ts` (+3 validator cases). Focused suites: shared **36**, api **9**,
+  installers **72** — all pass.
+- **Docs** — proof doc §O (+§N.1 note resolved), `DATA_MODEL.md`, `ASTDB_KEYS.md`.
+
+### Guardrails
+- No schema change (`MohAdminScheduleTarget.extension` already existed). No migration
+  run, no deploy, no production DB, no live PBX, no AstDB write, no installer, no Apply
+  Changes. Live T2 proof patch untouched. `20260426020000` replay bug untouched.
+
+---
+
 ## 2026-07-01 — MOH: wire explicit admin-schedule fallback (live worker/reconcile)
 
 **Task:** PBX / MOH — explicit `fallback_class` live wiring on branch `feature/moh-per-call-source-clean`

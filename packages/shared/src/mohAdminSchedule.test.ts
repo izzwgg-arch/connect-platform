@@ -451,20 +451,21 @@ test("REQUIRED: selectAdminFallbackTenantClass — highest-priority valid explic
   const sel = selectAdminFallbackTenantClass({
     tenantControlMode: "connect",
     candidates: [
-      { scheduleId: "a", fallbackMode: "explicit", fallbackClass: "moh2", priority: 1 },
-      { scheduleId: "b", fallbackMode: "explicit", fallbackClass: "moh5", priority: 9 },
-      { scheduleId: "c", fallbackMode: "restore_previous", fallbackClass: null, priority: 100 },
+      { scheduleId: "a", extension: "", fallbackMode: "explicit", fallbackClass: "moh2", priority: 1 },
+      { scheduleId: "b", extension: "", fallbackMode: "explicit", fallbackClass: "moh5", priority: 9 },
+      { scheduleId: "c", extension: "", fallbackMode: "restore_previous", fallbackClass: null, priority: 100 },
     ],
   });
   assert.equal(sel.appliedClass, "moh5");
   assert.deepEqual(sel.refusedClasses, []);
   assert.equal(sel.skippedForPbx, false);
+  assert.deepEqual(sel.blockedExtensionScoped, []);
 });
 
 test("REQUIRED: selectAdminFallbackTenantClass — PBX-controlled tenant is never forced", () => {
   const sel = selectAdminFallbackTenantClass({
     tenantControlMode: "pbx",
-    candidates: [{ scheduleId: "a", fallbackMode: "explicit", fallbackClass: "moh5", priority: 5 }],
+    candidates: [{ scheduleId: "a", extension: "", fallbackMode: "explicit", fallbackClass: "moh5", priority: 5 }],
   });
   assert.equal(sel.appliedClass, null); // no Connect class forced onto a PBX tenant
   assert.equal(sel.skippedForPbx, true);
@@ -473,7 +474,7 @@ test("REQUIRED: selectAdminFallbackTenantClass — PBX-controlled tenant is neve
 test("selectAdminFallbackTenantClass — invalid class refused, falls back to restore_previous", () => {
   const sel = selectAdminFallbackTenantClass({
     tenantControlMode: "connect",
-    candidates: [{ scheduleId: "a", fallbackMode: "explicit", fallbackClass: "bad name", priority: 5 }],
+    candidates: [{ scheduleId: "a", extension: "", fallbackMode: "explicit", fallbackClass: "bad name", priority: 5 }],
   });
   assert.equal(sel.appliedClass, null);
   assert.deepEqual(sel.refusedClasses, ["bad name"]);
@@ -485,11 +486,11 @@ test("REQUIRED: multi-tenant explicit fallback resolves per tenant independently
   // per-tenant key sets are distinct and land only under that tenant's family.
   const t2 = selectAdminFallbackTenantClass({
     tenantControlMode: "connect",
-    candidates: [{ scheduleId: "s1", fallbackMode: "explicit", fallbackClass: "moh2", priority: 0 }],
+    candidates: [{ scheduleId: "s1", extension: "", fallbackMode: "explicit", fallbackClass: "moh2", priority: 0 }],
   });
   const t3 = selectAdminFallbackTenantClass({
     tenantControlMode: "connect",
-    candidates: [{ scheduleId: "s1", fallbackMode: "explicit", fallbackClass: "connect_t3_holiday", priority: 0 }],
+    candidates: [{ scheduleId: "s1", extension: "", fallbackMode: "explicit", fallbackClass: "connect_t3_holiday", priority: 0 }],
   });
   const k2 = buildAdminFallbackTenantClassKeys("t2", t2.appliedClass!);
   const k3 = buildAdminFallbackTenantClassKeys("t3", t3.appliedClass!);
@@ -504,4 +505,51 @@ test("selectAdminFallbackTenantClass — no ending explicit candidates → resto
   assert.equal(sel.appliedClass, null);
   assert.deepEqual(sel.refusedClasses, []);
   assert.equal(sel.skippedForPbx, false);
+  assert.deepEqual(sel.blockedExtensionScoped, []);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Target-scope fallback correction — extension-scoped explicit NEVER touches tenant
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("REQUIRED: tenant-scoped target explicit fallback DOES write tenant-level class", () => {
+  const sel = selectAdminFallbackTenantClass({
+    tenantControlMode: "connect",
+    candidates: [{ scheduleId: "s1", extension: "", fallbackMode: "explicit", fallbackClass: "moh5", priority: 0 }],
+  });
+  assert.equal(sel.appliedClass, "moh5");
+  assert.deepEqual(sel.blockedExtensionScoped, []);
+});
+
+test("REQUIRED: extension-scoped target explicit fallback does NOT write tenant-level class", () => {
+  const sel = selectAdminFallbackTenantClass({
+    tenantControlMode: "connect",
+    candidates: [{ scheduleId: "s1", extension: "101", fallbackMode: "explicit", fallbackClass: "moh5", priority: 9 }],
+  });
+  assert.equal(sel.appliedClass, null); // tenant default untouched
+  assert.deepEqual(sel.blockedExtensionScoped, ["s1"]); // blocked → restore_previous
+  assert.equal(sel.skippedForPbx, false);
+});
+
+test("REQUIRED: mixed targets — only the whole-tenant explicit fallback lands at tenant level", () => {
+  const sel = selectAdminFallbackTenantClass({
+    tenantControlMode: "connect",
+    candidates: [
+      { scheduleId: "ext", extension: "205", fallbackMode: "explicit", fallbackClass: "moh9", priority: 100 },
+      { scheduleId: "ten", extension: "", fallbackMode: "explicit", fallbackClass: "moh2", priority: 1 },
+    ],
+  });
+  // The extension-scoped one is blocked even though it has higher priority; the
+  // whole-tenant one wins the tenant-level class.
+  assert.equal(sel.appliedClass, "moh2");
+  assert.deepEqual(sel.blockedExtensionScoped, ["ext"]);
+});
+
+test("extension-scoped restore_previous is NOT flagged as blocked (only explicit is)", () => {
+  const sel = selectAdminFallbackTenantClass({
+    tenantControlMode: "connect",
+    candidates: [{ scheduleId: "s1", extension: "101", fallbackMode: "restore_previous", fallbackClass: null, priority: 0 }],
+  });
+  assert.equal(sel.appliedClass, null);
+  assert.deepEqual(sel.blockedExtensionScoped, []); // restore_previous, nothing to block
 });

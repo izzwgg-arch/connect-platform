@@ -475,13 +475,17 @@ export type AdminFallbackPlan =
 /** The set of `fallbackMode` tokens that mean "apply the explicit fallbackClass". */
 const EXPLICIT_FALLBACK_MODES = new Set(["explicit", "fallback_class"]);
 
+/** True when a `fallbackMode` token requests the explicit fallback class. */
+export function isExplicitFallbackMode(fallbackMode: string | null | undefined): boolean {
+  return EXPLICIT_FALLBACK_MODES.has(String(fallbackMode ?? "").trim().toLowerCase());
+}
+
 export function resolveAdminScheduleFallback(input: {
   fallbackMode: string | null | undefined;
   fallbackClass: string | null | undefined;
 }): AdminFallbackPlan {
-  const mode = String(input.fallbackMode ?? "").trim().toLowerCase();
   const cls = firstNonEmpty(input.fallbackClass);
-  if (EXPLICIT_FALLBACK_MODES.has(mode) && cls) {
+  if (isExplicitFallbackMode(input.fallbackMode) && cls) {
     return { action: "set_class", vitalPbxMohClassName: cls };
   }
   return { action: "restore_previous" };
@@ -530,6 +534,8 @@ export function buildAdminFallbackTenantClassKeys(slug: string, vitalPbxMohClass
 /** One ending activation's schedule fallback config, for tenant-level selection. */
 export interface AdminFallbackCandidate {
   scheduleId: string;
+  /** Target scope: "" = whole-tenant target; a channel token = extension-scoped. */
+  extension: string;
   fallbackMode: string | null | undefined;
   fallbackClass: string | null | undefined;
   priority: number;
@@ -542,15 +548,29 @@ export interface AdminFallbackSelection {
   refusedClasses: string[];
   /** True when a valid explicit fallback was skipped because the tenant is PBX-controlled. */
   skippedForPbx: boolean;
+  /**
+   * Schedule ids of EXTENSION-scoped targets that requested explicit fallback.
+   * These are intentionally NOT applied (they never touch tenant-level defaults):
+   * extension-scoped explicit fallback is blocked (an extension-targeted schedule
+   * must not permanently alter the tenant, and the extension-default key is owned
+   * by the extension static-override path). They fall back to restore_previous.
+   */
+  blockedExtensionScoped: string[];
 }
 
 /**
- * Pure selection of the tenant-level explicit-fallback class among the
- * activations ending this cycle. Encapsulates the three safety gates so the
- * worker stays a thin caller and every branch is unit-tested:
- *   • invalid/missing class  → refused (fail safe to restore_previous)
- *   • tenant is PBX-controlled → skipped (never force Connect control)
- *   • otherwise the highest-priority valid explicit fallback wins.
+ * Pure selection of the TENANT-level explicit-fallback class among the
+ * activations ending this cycle. Encapsulates every safety gate so the worker
+ * stays a thin caller and each branch is unit-tested:
+ *   • invalid/missing class      → refused (fail safe to restore_previous)
+ *   • EXTENSION-scoped target     → blocked (never writes tenant defaults;
+ *                                    restore_previous only — see blockedExtensionScoped)
+ *   • tenant is PBX-controlled    → skipped (never force Connect control)
+ *   • otherwise the highest-priority valid TENANT-scoped explicit fallback wins.
+ *
+ * Only whole-tenant targets (`extension === ""`) can produce a tenant-level
+ * `appliedClass`. This is the target-scope correctness rule: an extension-scoped
+ * admin schedule can never change `connect/t_<slug>/moh_class`.
  */
 export function selectAdminFallbackTenantClass(input: {
   tenantControlMode: string | null | undefined;
@@ -559,12 +579,18 @@ export function selectAdminFallbackTenantClass(input: {
 }): AdminFallbackSelection {
   const isPbx = String(input.tenantControlMode ?? "connect").trim().toLowerCase() === "pbx";
   const refusedClasses: string[] = [];
+  const blockedExtensionScoped: string[] = [];
   let skippedForPbx = false;
   let best: { cls: string; priority: number } | null = null;
   for (const c of input.candidates) {
     const plan = planAdminScheduleFallback({ fallbackMode: c.fallbackMode, fallbackClass: c.fallbackClass, isValidClass: input.isValidClass });
     if (plan.action !== "set_class") {
       if (plan.refusedClass) refusedClasses.push(plan.refusedClass);
+      continue;
+    }
+    // Extension-scoped explicit fallback never alters the tenant default.
+    if (String(c.extension ?? "").trim().length > 0) {
+      blockedExtensionScoped.push(c.scheduleId);
       continue;
     }
     if (isPbx) {
@@ -574,5 +600,5 @@ export function selectAdminFallbackTenantClass(input: {
     const priority = Number.isFinite(c.priority) ? c.priority : 0;
     if (!best || priority > best.priority) best = { cls: plan.vitalPbxMohClassName, priority };
   }
-  return { appliedClass: best ? best.cls : null, refusedClasses, skippedForPbx };
+  return { appliedClass: best ? best.cls : null, refusedClasses, skippedForPbx, blockedExtensionScoped };
 }

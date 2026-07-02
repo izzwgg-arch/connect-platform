@@ -4,6 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  adminScheduleTargetScopeError,
   canManageMohControl,
   classifyMohVerify,
   computePbxControlTombstones,
@@ -64,6 +65,49 @@ test("computePbxControlTombstones: clears every prior key (incl tenant default),
   assert.ok(!cleared.has("connect/t_acme\u0000admin_moh_class"));
   assert.ok(!cleared.has("connect/t_acme\u0000already_empty"));
   for (const k of clears) assert.equal(k.value, "");
+});
+
+test("adminScheduleTargetScopeError: whole-tenant explicit fallback is allowed", () => {
+  assert.equal(
+    adminScheduleTargetScopeError({ fallbackMode: "explicit", targets: [{ extension: "" }] }),
+    null,
+  );
+  // multiple whole-tenant targets, still allowed
+  assert.equal(
+    adminScheduleTargetScopeError({ fallbackMode: "explicit", targets: [{ extension: "" }, { extension: null }] }),
+    null,
+  );
+});
+
+test("adminScheduleTargetScopeError: extension-scoped explicit fallback is BLOCKED", () => {
+  assert.equal(
+    adminScheduleTargetScopeError({ fallbackMode: "explicit", targets: [{ extension: "101" }] }),
+    "extension_scoped_explicit_fallback_unsupported",
+  );
+  // mixed tenant + extension target → still blocked (any extension target trips it)
+  assert.equal(
+    adminScheduleTargetScopeError({ fallbackMode: "explicit", targets: [{ extension: "" }, { extension: "205" }] }),
+    "extension_scoped_explicit_fallback_unsupported",
+  );
+  // "fallback_class" alias also blocked at extension scope
+  assert.equal(
+    adminScheduleTargetScopeError({ fallbackMode: "fallback_class", targets: [{ extension: "101" }] }),
+    "extension_scoped_explicit_fallback_unsupported",
+  );
+});
+
+test("adminScheduleTargetScopeError: restore_previous allowed at ANY scope", () => {
+  assert.equal(
+    adminScheduleTargetScopeError({ fallbackMode: "restore_previous", targets: [{ extension: "101" }] }),
+    null,
+  );
+  assert.equal(
+    adminScheduleTargetScopeError({ fallbackMode: "restore_previous", targets: [{ extension: "" }] }),
+    null,
+  );
+  // unset / unknown mode → treated as non-explicit → allowed
+  assert.equal(adminScheduleTargetScopeError({ fallbackMode: null, targets: [{ extension: "101" }] }), null);
+  assert.equal(adminScheduleTargetScopeError({ fallbackMode: undefined, targets: [{ extension: "101" }] }), null);
 });
 
 test("classifyMohVerify: verified / drift / unverified / trivial", () => {

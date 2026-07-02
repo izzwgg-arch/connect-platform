@@ -398,6 +398,16 @@ After `POST /admin/pbx/refresh-tenants` succeeds, `useAppContext.refreshPbxTenan
       `active_moh_class`) so extension pins (read first) still win, gated on
       `isValidMohRuntimeClass` (invalid/missing → fail-safe restore_previous) and
       `Tenant.mohControlMode` (PBX-controlled tenants are never force-published).
+    - **Target-scope rule (2026-07-01):** explicit fallback **follows the target scope**.
+      Only a **whole-tenant** target (`extension=""`) may set a tenant-level explicit
+      fallback. **Extension-scoped** explicit fallback is **blocked** — an extension
+      schedule must never permanently alter tenant defaults, and the extension-default
+      key is owned by the extension static-override path (ghost-key risk). Enforced at
+      the API (`adminScheduleTargetScopeError` → `400
+      extension_scoped_explicit_fallback_unsupported`) and as a worker fail-safe
+      (`selectAdminFallbackTenantClass` only applies whole-tenant candidates; extension
+      candidates are recorded in `blockedExtensionScoped` → `restore_previous`).
+      Extension targets must use `restore_previous`.
 - **Priority (Option C, approved 2026-07-01):** admin overlay → ext schedule → ext
   pin → tenant schedule → tenant pin → global default → PBX. See
   `docs/pbx/connect-moh-per-source-phase2-proof.md` §L.

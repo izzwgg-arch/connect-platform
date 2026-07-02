@@ -2434,8 +2434,11 @@ async function runMohAdminScheduleCycle(): Promise<void> {
         for (const [wk, a] of openIndex) {
           if (winners.has(wk)) continue; // still active → not ending
           const fb = fallbackById.get(a.scheduleId);
-          if (fb) endingCandidates.push({ scheduleId: a.scheduleId, fallbackMode: fb.fallbackMode, fallbackClass: fb.fallbackClass, priority: fb.priority });
+          if (fb) endingCandidates.push({ scheduleId: a.scheduleId, extension: String(a.extension || ""), fallbackMode: fb.fallbackMode, fallbackClass: fb.fallbackClass, priority: fb.priority });
         }
+        // Only whole-tenant targets can set a tenant-level fallback class; an
+        // extension-scoped target NEVER alters tenant defaults (blocked here and
+        // rejected at the API). Both fall back to restore_previous.
         const fallbackSel = selectAdminFallbackTenantClass({
           tenantControlMode: controlModeById.get(tenantId) ?? lastState?.controlMode ?? "connect",
           candidates: endingCandidates,
@@ -2445,6 +2448,9 @@ async function runMohAdminScheduleCycle(): Promise<void> {
         }
         if (fallbackSel.skippedForPbx) {
           console.log(`moh admin reconcile: slug=${slug} tenant is PBX-controlled → skip explicit fallback, restore_previous`);
+        }
+        for (const sid of fallbackSel.blockedExtensionScoped) {
+          console.log(`moh admin reconcile: slug=${slug} extension-scoped explicit fallback not applied at tenant level (schedule=${sid}) → restore_previous`);
         }
         const fallbackWinner = fallbackSel.appliedClass ? { cls: fallbackSel.appliedClass } : null;
         const fallbackKeys: MohAstDbKey[] = fallbackWinner ? (buildAdminFallbackTenantClassKeys(slug, fallbackWinner.cls) as MohAstDbKey[]) : [];
