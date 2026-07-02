@@ -5,6 +5,8 @@ import { ACTION_PERMISSION_KEYS, PORTAL_PERMISSION_KEYS, isPortalPermissionKey }
 const NEW_KEYS = [
   "can_view_tenant_call_history",
   "can_view_tenant_voicemails",
+  "can_filter_voicemail_by_tenant",
+  "can_filter_voicemail_by_extension",
   "can_view_tenant_chats",
   "can_view_tenant_call_recordings",
 ];

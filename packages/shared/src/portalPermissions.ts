@@ -154,6 +154,8 @@ export const ACTION_PERMISSION_KEYS = [
   // Tenant-wide communications access (custom role grantable)
   "can_view_tenant_call_history",
   "can_view_tenant_voicemails",
+  "can_filter_voicemail_by_tenant",
+  "can_filter_voicemail_by_extension",
   "can_view_tenant_chats",
   "can_view_tenant_call_recordings",
 ] as const;
@@ -278,6 +280,7 @@ const END_USER_ACTIONS: PortalPermissionKey[] = [
 const TENANT_ADMIN_EXTRA_ACTIONS: PortalPermissionKey[] = [
   "can_edit_team",
   "can_delete_voicemail",
+  "can_filter_voicemail_by_extension",
   "can_manage_contacts",
   "can_view_reports",
   "can_view_admin",
@@ -300,6 +303,7 @@ const TENANT_ADMIN_EXTRA_ACTIONS: PortalPermissionKey[] = [
 
 const SUPER_ADMIN_EXTRA_ACTIONS: PortalPermissionKey[] = [
   "can_switch_tenants",
+  "can_filter_voicemail_by_tenant",
   "can_manage_global_settings",
   "can_sync_voip_ms_numbers",
   "can_manage_deploys",

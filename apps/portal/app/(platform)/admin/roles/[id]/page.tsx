@@ -84,6 +84,8 @@ const HIDDEN_ACTION_KEYS: Set<string> = new Set([
 const TENANT_COMM_PERMS: Array<{ key: PortalPermissionKey | string; label: string }> = [
   { key: "can_view_tenant_call_history",    label: "View all tenant call history" },
   { key: "can_view_tenant_voicemails",      label: "View all tenant voicemails" },
+  { key: "can_filter_voicemail_by_tenant",  label: "Filter voicemail by tenant" },
+  { key: "can_filter_voicemail_by_extension", label: "Filter voicemail by extension" },
   { key: "can_view_tenant_chats",           label: "View all tenant chats" },
   { key: "can_view_tenant_call_recordings", label: "View all tenant call recordings" },
 ];

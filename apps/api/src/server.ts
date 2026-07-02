@@ -16459,6 +16459,101 @@ function applyVoicemailScopeResponseHeaders(
 }
 
 // ── GET /voice/voicemail ─────────────────────────────────────────────────────
+app.get("/voice/voicemail/filter-options", async (req, reply) => {
+  const user = await requirePermission(req, reply, canViewCustomers);
+  if (!user) return;
+
+  const q = z.object({
+    tenantId: z.string().optional(),
+  }).parse(req.query || {});
+
+  const isSuperAdmin = isRole(user, ["SUPER_ADMIN"]);
+  const canFilterByTenant = isSuperAdmin && await hasEffectivePortalPermission(user, "can_filter_voicemail_by_tenant" as any);
+  const canFilterByExtension = isSuperAdmin || await hasEffectivePortalPermission(user, "can_filter_voicemail_by_extension" as any);
+
+  if (!canFilterByExtension) {
+    return reply.send({ extensions: [], voicemailScopeVersion: "hidden" });
+  }
+
+  let tenantIds: string[] = [];
+  let scopeVersion: "super-admin" | "tenant" | "contained-owned" = isSuperAdmin ? "super-admin" : "contained-owned";
+  let ownedExtensions: string[] | null = null;
+
+  if (isSuperAdmin) {
+    if (!canFilterByTenant) return reply.code(403).send({ error: "forbidden", permission: "can_filter_voicemail_by_tenant" });
+    if (!q.tenantId || q.tenantId === "global") {
+      return reply.send({ extensions: [], voicemailScopeVersion: scopeVersion });
+    }
+    tenantIds = (await resolveTenantIdFilterSet(q.tenantId)) ?? [];
+  } else {
+    const hasTenantVm = await hasEffectivePortalPermission(user, "can_view_tenant_voicemails" as any);
+    if (hasTenantVm && user.tenantId) {
+      tenantIds = (await resolveTenantIdFilterSet(user.tenantId)) ?? [];
+      scopeVersion = "tenant";
+    } else {
+      const ownedScope = await resolveVoicemailOwnedScopeForJwtUser(user);
+      if (!ownedScope.ok) {
+        return reply.send({ extensions: [], voicemailScopeVersion: scopeVersion });
+      }
+      tenantIds = ownedScope.tenantIds;
+      ownedExtensions = ownedScope.extensions;
+    }
+  }
+
+  if (tenantIds.length === 0) {
+    return reply.send({ extensions: [], voicemailScopeVersion: scopeVersion });
+  }
+
+  const connectTenantIds = tenantIds.filter((tenantId) => !tenantId.startsWith("vpbx:"));
+  const tenantWhere = tenantIds.length === 1 ? tenantIds[0] : { in: tenantIds };
+  const [voicemailMailboxes, directoryExtensions] = await Promise.all([
+    db.voicemail.findMany({
+      where: {
+        deletedAt: null,
+        tenantId: tenantWhere as any,
+        ...(ownedExtensions ? { extension: ownedExtensions.length === 1 ? ownedExtensions[0] : { in: ownedExtensions } } : {}),
+      },
+      select: { extension: true, tenantId: true },
+      distinct: ["tenantId", "extension"],
+    }),
+    connectTenantIds.length
+      ? db.extension.findMany({
+          where: {
+            tenantId: connectTenantIds.length === 1 ? connectTenantIds[0] : { in: connectTenantIds },
+            status: "ACTIVE",
+            ...(ownedExtensions ? { extNumber: ownedExtensions.length === 1 ? ownedExtensions[0] : { in: ownedExtensions } } : {}),
+          } as any,
+          select: {
+            extNumber: true,
+            displayName: true,
+            tenantId: true,
+            ownerUser: { select: { email: true, firstName: true, lastName: true, displayName: true } as any },
+          },
+        })
+      : Promise.resolve([] as any[]),
+  ]);
+
+  const labelByExtension = new Map<string, string>();
+  for (const ext of directoryExtensions as any[]) {
+    const number = String(ext.extNumber || "").trim();
+    if (!number) continue;
+    const ownerName = ext.ownerUser ? displayNameForUser(ext.ownerUser) : "";
+    const displayName = String(ext.displayName || "").trim();
+    labelByExtension.set(number, [number, displayName || ownerName].filter(Boolean).join(" - "));
+  }
+
+  const allowedOwnedSet = ownedExtensions ? new Set(ownedExtensions) : null;
+  const extensions = [...new Set(voicemailMailboxes.map((row) => String(row.extension || "").trim()).filter(Boolean))]
+    .filter((extension) => !allowedOwnedSet || allowedOwnedSet.has(extension))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+    .map((extension) => ({
+      value: extension,
+      label: labelByExtension.get(extension) || `Ext ${extension}`,
+    }));
+
+  return reply.send({ extensions, voicemailScopeVersion: scopeVersion });
+});
+
 app.get("/voice/voicemail", async (req, reply) => {
   const user = await requirePermission(req, reply, canViewCustomers);
   if (!user) return;
@@ -16471,6 +16566,11 @@ app.get("/voice/voicemail", async (req, reply) => {
   }).parse(req.query || {});
 
   const isSuperAdmin = isRole(user, ["SUPER_ADMIN"]);
+  const requestedExtensionFilter = (q.extension || "").trim();
+  const canUseExtensionFilter = isSuperAdmin || await hasEffectivePortalPermission(user, "can_filter_voicemail_by_extension" as any);
+  if (requestedExtensionFilter && !canUseExtensionFilter) {
+    return reply.code(403).send({ error: "forbidden", permission: "can_filter_voicemail_by_extension" });
+  }
   /** Logged after query — mailboxes this JWT user may list (owned-scope mode). */
   let scopedMailboxesForLog: string[] | undefined;
   /** Defense-in-depth: strip any row not matching unified scope (should never happen if Prisma where is correct). */
@@ -16503,7 +16603,7 @@ app.get("/voice/voicemail", async (req, reply) => {
       });
     }
     where.tenantId = tenantIdFilter.length === 1 ? tenantIdFilter[0]! : { in: tenantIdFilter };
-    const extQ = (q.extension || "").trim();
+    const extQ = requestedExtensionFilter;
     if (extQ) where.extension = extQ;
   } else {
     // Prefer tenant-wide vm list if user holds the custom role permission; else fall back to owned scope
@@ -16515,7 +16615,7 @@ app.get("/voice/voicemail", async (req, reply) => {
         if (tenantIdFilter && tenantIdFilter.length > 0) {
           (where as any).tenantId = tenantIdFilter.length === 1 ? tenantIdFilter[0] : { in: tenantIdFilter };
         }
-        const extQ = (q.extension || "").trim();
+        const extQ = requestedExtensionFilter;
         if (extQ) (where as any).extension = extQ;
         usedTenantWide = true;
         applyVoicemailScopeResponseHeaders(reply, "tenant", null);
@@ -16538,6 +16638,19 @@ app.get("/voice/voicemail", async (req, reply) => {
       postFetchOwnedScope = { tenantIds: ownedScope.tenantIds, extensions: ownedScope.extensions };
       scopedMailboxesForLog = ownedScope.extensions;
       where = buildVoicemailListWhere(q.folder, postFetchOwnedScope);
+      if (requestedExtensionFilter) {
+        if (!ownedScope.extensions.includes(requestedExtensionFilter)) {
+          applyVoicemailScopeResponseHeaders(reply, "contained-owned", ownedScope.extensions);
+          return reply.send({
+            voicemails: [],
+            total: 0,
+            page: q.page,
+            voicemailScopeVersion: "contained-owned",
+            scopedMailboxesForUser: ownedScope.extensions,
+          });
+        }
+        where.extension = requestedExtensionFilter;
+      }
     }
   }
 

@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import {
   Archive,
   Check,
-  ChevronDown,
   Clock,
   Copy,
   MessageSquare,
@@ -54,6 +53,21 @@ type VoicemailResponse = {
   voicemails: Voicemail[];
   total: number;
   page: number;
+};
+
+type VoicemailFilterOption = {
+  value: string;
+  label: string;
+};
+
+type VoicemailFilterOptionsResponse = {
+  extensions: VoicemailFilterOption[];
+};
+
+type AdminTenantLite = {
+  id: string;
+  name: string;
+  pbxTenantName?: string | null;
 };
 
 type MailboxData = {
@@ -641,7 +655,7 @@ function groupVoicemails(rows: Voicemail[]) {
 export default function VoicemailPage() {
   const router = useRouter();
   const phone = useSipPhone();
-  const { adminScope, tenantId: contextTenantId, can } = useAppContext();
+  const { adminScope, tenantId: contextTenantId, tenants: contextTenants, can } = useAppContext();
   // Deleting a voicemail requires can_delete_voicemail. Owner carve-out: users
   // who only see their own mailbox (no tenant-wide voicemail view) can always
   // delete their own — matching the server's own-mailbox carve-out. Tenant-wide
@@ -654,21 +668,71 @@ export default function VoicemailPage() {
   const [activePlayerId, setActivePlayerId] = useState<string | null>(null);
   const [detailPlayRequest, setDetailPlayRequest] = useState(0);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [tenantFilter, setTenantFilter] = useState("");
+  const [tenantOptions, setTenantOptions] = useState<VoicemailFilterOption[]>([]);
   const [search, setSearch] = useState("");
   const [extensionFilter, setExtensionFilter] = useState("");
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [notes, setNotes] = useState<Record<string, string>>({});
-  const showTenant = !contextTenantId && adminScope === "GLOBAL";
+  const canFilterByTenant = can("can_filter_voicemail_by_tenant");
+  const canFilterByExtension = can("can_filter_voicemail_by_extension");
+  const showTenantFilter = adminScope === "GLOBAL" && canFilterByTenant;
+  const effectiveTenantId = showTenantFilter ? tenantFilter : contextTenantId;
+  const hasTenantSelection = Boolean(effectiveTenantId && effectiveTenantId !== "local" && effectiveTenantId !== "global");
+  const showTenant = adminScope === "GLOBAL";
+
+  useEffect(() => {
+    if (!showTenantFilter) return;
+    if (tenantFilter) return;
+    if (contextTenantId && contextTenantId !== "local" && contextTenantId !== "global") {
+      setTenantFilter(contextTenantId);
+    }
+  }, [contextTenantId, showTenantFilter, tenantFilter]);
+
+  useEffect(() => {
+    if (!showTenantFilter) {
+      setTenantOptions([]);
+      return;
+    }
+    let active = true;
+    const fromContext = contextTenants.map((tenant) => ({ value: tenant.id, label: tenant.name }));
+    if (fromContext.length > 0) setTenantOptions(fromContext);
+    apiGet<AdminTenantLite[]>("/admin/tenants?light=1")
+      .then((rows) => {
+        if (!active) return;
+        setTenantOptions((rows ?? []).map((tenant) => ({
+          value: tenant.id,
+          label: tenant.pbxTenantName ? `${tenant.name} (${tenant.pbxTenantName})` : tenant.name,
+        })));
+      })
+      .catch(() => {
+        if (active && fromContext.length === 0) setTenantOptions([]);
+      });
+    return () => { active = false; };
+  }, [contextTenants, showTenantFilter]);
+
+  const extensionOptionsState = useAsyncResource<VoicemailFilterOptionsResponse>(async () => {
+    if (!canFilterByExtension) return { extensions: [] };
+    if (showTenantFilter && !hasTenantSelection) return { extensions: [] };
+    const params = new URLSearchParams();
+    if (effectiveTenantId && effectiveTenantId !== "local" && effectiveTenantId !== "global") {
+      params.set("tenantId", effectiveTenantId);
+    }
+    const qs = params.toString();
+    return apiGet<VoicemailFilterOptionsResponse>(`/voice/voicemail/filter-options${qs ? `?${qs}` : ""}`);
+  }, [canFilterByExtension, effectiveTenantId, hasTenantSelection, showTenantFilter, reloadKey]);
+
+  const extensionOptions = extensionOptionsState.status === "success" ? extensionOptionsState.data.extensions ?? [] : [];
 
   const buildQuery = useCallback((folder: FolderKey) => {
     const params = new URLSearchParams({ folder, page: String(page) });
-    if (contextTenantId) params.set("tenantId", contextTenantId);
+    if (effectiveTenantId && effectiveTenantId !== "local" && effectiveTenantId !== "global") params.set("tenantId", effectiveTenantId);
     // Super-admin global scope: never send tenantId=global — API rejects it; fetch is skipped until a tenant is selected.
-    if (extensionFilter.trim()) params.set("extension", extensionFilter.trim());
+    if (canFilterByExtension && extensionFilter.trim()) params.set("extension", extensionFilter.trim());
     return params.toString();
-  }, [contextTenantId, extensionFilter, page]);
+  }, [canFilterByExtension, effectiveTenantId, extensionFilter, page]);
 
-  const skipFetchNoTenant = adminScope === "GLOBAL" && !contextTenantId;
+  const skipFetchNoTenant = adminScope === "GLOBAL" && !hasTenantSelection;
 
   const state = useAsyncResource<MailboxData>(async () => {
     if (skipFetchNoTenant) {
@@ -696,7 +760,22 @@ export default function VoicemailPage() {
     setSelected(null);
     setActivePlayerId(null);
     setPage(1);
-  }, [contextTenantId, adminScope]);
+  }, [effectiveTenantId, adminScope]);
+
+  useEffect(() => {
+    setSelected(null);
+    setActivePlayerId(null);
+    setPage(1);
+    setExtensionFilter("");
+  }, [effectiveTenantId]);
+
+  useEffect(() => {
+    if (!extensionFilter) return;
+    if (extensionOptionsState.status !== "success") return;
+    if (!extensionOptions.some((option) => option.value === extensionFilter)) {
+      setExtensionFilter("");
+    }
+  }, [extensionFilter, extensionOptions, extensionOptionsState.status]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -763,7 +842,6 @@ export default function VoicemailPage() {
   }, [activeTab, allVoicemails, dateFilter, search]);
 
   const grouped = useMemo(() => groupVoicemails(filteredVoicemails), [filteredVoicemails]);
-  const hasFilters = Boolean(search.trim() || extensionFilter.trim() || dateFilter !== "all" || activeTab !== "inbox");
   const canGoNext = totalCount > page * 100;
 
   async function markRead(vm: Voicemail, listened: boolean) {
@@ -865,6 +943,38 @@ export default function VoicemailPage() {
             style={{ border: "none", outline: "none", boxShadow: "none" }}
           />
         </div>
+        {showTenantFilter ? (
+          <ConnectSelect
+            size="sm"
+            searchable
+            value={tenantFilter}
+            onChange={(value) => {
+              setTenantFilter(value);
+              setExtensionFilter("");
+            }}
+            style={{ minWidth: 190 }}
+            dropdownWidth={280}
+            options={[
+              { value: "", label: "Select tenant", disabled: true },
+              ...tenantOptions,
+            ]}
+          />
+        ) : null}
+        {canFilterByExtension ? (
+          <ConnectSelect
+            size="sm"
+            searchable
+            value={extensionFilter}
+            onChange={setExtensionFilter}
+            disabled={showTenantFilter && !hasTenantSelection}
+            style={{ minWidth: 170 }}
+            dropdownWidth={260}
+            options={[
+              { value: "", label: extensionOptionsState.status === "loading" ? "Loading extensions..." : "All extensions" },
+              ...extensionOptions,
+            ]}
+          />
+        ) : null}
         <ConnectSelect
           size="sm"
           value={dateFilter}
@@ -888,7 +998,7 @@ export default function VoicemailPage() {
             <div className="vm-empty">
               <EmptyState
                 title="Select a workspace"
-                message="Choose a tenant from the workspace switcher to load voicemail. Listing voicemail across all tenants is not permitted."
+                message={showTenantFilter ? "Choose a tenant from the voicemail filters to load voicemail. Listing voicemail across all tenants is not permitted." : "Choose a tenant from the workspace switcher to load voicemail. Listing voicemail across all tenants is not permitted."}
               />
             </div>
           ) : null}

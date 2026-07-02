@@ -5,6 +5,8 @@ import Fastify from "fastify";
 const NEW_KEYS = [
   "can_view_tenant_call_history",
   "can_view_tenant_voicemails",
+  "can_filter_voicemail_by_tenant",
+  "can_filter_voicemail_by_extension",
   "can_view_tenant_chats",
   "can_view_tenant_call_recordings",
 ] as const;
@@ -64,6 +66,7 @@ test("grantability: tenant admin can grant keys present via their custom roles",
   customPerms = [
     "can_view_tenant_call_history",
     "can_view_tenant_voicemails",
+    "can_filter_voicemail_by_extension",
   ];
   const app = await appAs({ sub: "u1", tenantId: "t1", role: "TENANT_ADMIN" });
   const res = await app.inject({ method: "GET", url: "/admin/custom-roles/permissions-catalog" });
@@ -71,6 +74,7 @@ test("grantability: tenant admin can grant keys present via their custom roles",
   const body = JSON.parse(res.body);
   assert.ok(body.grantableKeys.includes("can_view_tenant_call_history"));
   assert.ok(body.grantableKeys.includes("can_view_tenant_voicemails"));
+  assert.ok(body.grantableKeys.includes("can_filter_voicemail_by_extension"));
   assert.ok(!body.grantableKeys.includes("can_view_tenant_call_recordings"));
   assert.ok(!body.grantableKeys.includes("can_view_tenant_chats"));
   await app.close();
