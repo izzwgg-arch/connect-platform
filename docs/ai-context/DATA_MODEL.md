@@ -370,6 +370,39 @@ After `POST /admin/pbx/refresh-tenants` succeeds, `useAppContext.refreshPbxTenan
   worker (Phase 4) consumes `MohAssignmentJob`; dialplan resolver (Phase 3B)
   is the first consumer of these AstDB keys.
 
+## MohExtensionControl / MohAdminSchedule / MohAdminScheduleTarget / MohAdminScheduleActivation + Tenant.mohControlMode (2026-07-02, migration `20260702000000_moh_control_and_admin_schedules` — committed, NOT run)
+- **Schema:** in `packages/db/prisma/schema.prisma`; additive migration
+  `20260702000000_moh_control_and_admin_schedules` (every new column
+  nullable/defaulted, new tables independent — nothing dropped/back-filled).
+- **Purpose:** the long-term "who controls MOH + multi-tenant schedules" layer.
+  - **`Tenant.mohControlMode`** (`connect`|`pbx`, default `connect`): `pbx` hands
+    the tenant's MOH back to native VitalPBX — the reconciler tombstones every
+    Connect key and the caller-leg installer emits no hook for it.
+  - **`MohExtensionControl`** (`tenantId`,`extension`, `controlMode`
+    `inherit`|`connect`|`pbx`, unique `(tenantId,extension)`): per-extension
+    control mode; `inherit` follows the tenant.
+  - **`MohAdminSchedule`** (+ `MohAdminScheduleTarget`, `MohAdminScheduleActivation`):
+    admin **multi-tenant** schedules (holiday/Yom Tov music). Separate from the
+    single-tenant `MohScheduleConfig` (undamaged). `scheduleKind`
+    (`one_time`|`recurring` with wrap-around), `vitalPbxMohClassName`, `priority`,
+    `fallbackMode` (`restore_previous` default | `fallback_class`) + `fallbackClass`.
+    Targets are `(tenantId, extension?)`. The **activation** table is the
+    idempotency + restore ledger: `state` (`active`→`restored`), `activatedAt`/
+    `deactivatedAt`, and `previousClass`/`previousControlMode`/`previousKeysSnapshot`/
+    `appliedClass` snapshots so `restore_previous` restores exactly.
+- **Priority (Option C, approved 2026-07-01):** admin overlay → ext schedule → ext
+  pin → tenant schedule → tenant pin → global default → PBX. See
+  `docs/pbx/connect-moh-per-source-phase2-proof.md` §L.
+- **Tenant-scoped?** Yes (all FK → `Tenant`, cascade). Admin schedules span many
+  tenants via `MohAdminScheduleTarget`.
+- **High-risk?** Additive + default-preserving; existing tenants keep
+  `connect` behavior. Migration **not run** anywhere yet.
+- **Modified by:** `apps/api` `/voice/moh/control`, `/voice/moh/admin-schedules`,
+  `/voice/moh/reconcile`; `apps/worker` `runMohAdminScheduleCycle()` (60s + startup)
+  and `runMohScheduleCycle()` (skips `pbx` tenants). Pure logic in
+  `packages/shared/src/mohSourcePublish.ts` (incl. `resolveAdminScheduleFallback`)
+  and `apps/api/src/mohControl.ts`.
+
 ## DidRouteMapping / DidRouteSwitchLog
 - **Schema:** lines 2465 / 2520
 - **Purpose:** Per-DID routing config: which IVR profile + MOH profile +

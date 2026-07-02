@@ -441,3 +441,163 @@ Branch-only. **No deploy, no migration, no PBX installer executed from this bran
 The productionized installer supersedes the ad-hoc `/root/connect_t2_localdial_moh.sh`
 prototype used for the T2 live proof; deploying it fleet-wide is a separate,
 owner-approved step.
+
+## L. Control mode + admin multi-tenant schedules (2026-07-02)
+
+Commit `23ea6c6b` (branch `feature/moh-per-call-source`) adds the long-term control
+system on top of the caller-leg fix (§K). This section is the design/proof record.
+
+### L.1 Required statements (authoritative)
+1. **Candidate A caller-leg coverage is required.** Inbound hold renders from the
+   held caller/Local leg in `[sub-local-dialing]`; setting `CHANNEL(musicclass)`
+   there before `Dial()` is the proven fix (§K).
+2. **Called-leg hooks alone are insufficient.** `before-connecting` /
+   `before-bridging` run on the called PJSIP endpoint (covers outbound only), never
+   the inbound held caller/Local leg.
+3. **PBX-control mode removes Connect overrides.** Setting `Tenant.mohControlMode=pbx`
+   (or an extension's `MohExtensionControl.controlMode=pbx`) makes the reconciler
+   tombstone **every** Connect key for that scope (`computePbxControlTombstones`),
+   and the caller-leg installer emits **no** hook context for a tenant whose
+   `moh_class` is empty — native VitalPBX MOH takes over with no stale keys.
+4. **Admin multi-tenant schedules override extension pins only while active.** The
+   admin overlay (`connect/t_<slug>/admin_moh_class`, `…/extensions/<ext>/admin_moh_class`)
+   is read first by both resolvers, so an active admin window (e.g. Yom Tov / holiday)
+   beats an extension static pin. When the window ends the overlay keys are
+   tombstoned and the pin returns exactly.
+5. **Normal tenant schedules do not override pinned extension settings.** Per-tenant
+   schedules are folded into the tenant-scope keys at publish time; the resolver
+   still prefers an extension pin (`extension_source` > `tenant_*`). Proof:
+   `mohAdminSchedule.test.ts` "extension static override beats a tenant schedule".
+6. **Queue waiting MOH remains native/separate.** The waiting caller is inside
+   `app_queue`, not `[sub-local-dialing]`, so the caller-leg hook never runs there;
+   queue waiting music stays the queue's own `music_group_id`. Only the queue
+   **post-answer** bridge hold (agent-dial Local leg) is covered.
+7. **The live T2 proof patch exists and will be replaced/owned by the installer
+   during an approved deploy.** The ad-hoc `/root/connect_t2_localdial_moh.sh`
+   remains live on the PBX; the productionized installer supersedes it fleet-wide
+   on the next owner-approved deploy. This branch does not touch it.
+8. **No deploy has happened yet.** Branch-only; the additive migration
+   `20260702000000_moh_control_and_admin_schedules` is committed but **not run**
+   anywhere.
+
+### L.2 Final priority order (design choice 1 — Option C, approved 2026-07-01)
+Highest → lowest, implemented by `resolveEffectiveMohClass` (`mohCallSource.ts`)
+and mirrored in the dialplan resolver read order:
+
+1. Admin multi-tenant active schedule (global takeover; beats ext pins)
+2. Extension active schedule
+3. Extension static override
+4. Tenant active schedule (folded → per-scope, never surprises a pin)
+5. Tenant static override
+6. Global/admin default (if enabled) — `connect/system/moh_default_class`
+7. PBX / native control
+
+### L.3 Data model (design choices 2, 3, 4)
+- **Control mode (choice 2 — tenant + extension):** `Tenant.mohControlMode`
+  (`connect`|`pbx`); `MohExtensionControl.controlMode` (`inherit`|`connect`|`pbx`).
+  Per-source control mode is **intentionally not implemented** this pass (too risky).
+- **Admin schedules (choice 3 — separate models):** `MohAdminSchedule`,
+  `MohAdminScheduleTarget`, `MohAdminScheduleActivation` — kept fully separate from
+  the single-tenant `MohScheduleConfig`/`MohScheduleRule` (undamaged).
+- **Fallback (choice 4):** `MohAdminSchedule.fallbackMode` default
+  `restore_previous` + optional `fallbackClass`. Activation snapshots
+  `previousClass`/`previousControlMode`/`previousKeysSnapshot`/`appliedClass` for
+  exact restore. `resolveAdminScheduleFallback()` (`mohSourcePublish.ts`, pure +
+  unit-tested) decides `restore_previous` vs `set_class`.
+
+### L.4 Publisher / reconciler (worker)
+`apps/worker/src/main.ts`:
+- `runMohScheduleCycle()` — per-tenant publish; **skips** tenants with
+  `mohControlMode=pbx`.
+- `runMohAdminScheduleCycle()` — runs **every 60s AND once on startup**
+  (missed activations/restores reconciled). Ledger-driven + idempotent:
+  OPEN activations for new winners (snapshotting prior state), RESTORE (tombstone
+  overlay-only keys) for ended/disabled/deleted windows. Restart-safe.
+
+### L.5 Coverage matrix (tests — all green)
+| Requirement | Proof (test) | Status |
+|---|---|---|
+| tenant switch A→B→A, no stale keys | `mohAdminSchedule` "tenant switch A→B→A" | ✅ |
+| tenant/ext Connect↔PBX control | `mohControl` normalize + `computePbxControlTombstones` | ✅ |
+| stale tenant/ext keys removed | `mohAdminSchedule` `computeForwardKeyClears` / `isClearableForwardKey` | ✅ |
+| unavailable playlist refused | `mohCatalog` playability (`no_files`/`not_loaded`/`deactivated`) | ✅ |
+| ext override beats tenant static / schedule | `mohAdminSchedule`, `mohScenarios` 5 | ✅ |
+| ext inherits tenant default; ext PBX control | `mohControl` `effectiveExtensionControlMode` | ✅ |
+| tenant schedule activate/deactivate | `mohScenarios` 10/11 | ✅ |
+| admin beats ext static / ext schedule / tenant static | `mohAdminSchedule` (4 tests) | ✅ |
+| admin restore_previous exact | `mohAdminSchedule` restore proofs | ✅ |
+| admin explicit fallback decision | `mohAdminSchedule` `resolveAdminScheduleFallback` (3 tests) | ✅ (logic; live-wiring deferred, see M) |
+| multi-tenant fan-out to many tenants | `mohAdminSchedule` `computeActiveAdminOverrides` | ✅ |
+| no stale schedule residue | `mohAdminSchedule` "no stale AstDB keys" | ✅ |
+| inbound direct/IVR/RG/post-answer queue hold | installer `.test.ts` + `mohScenarios` 1-4 | ✅ |
+| queue waiting native; outbound not regressed | installer `.test.ts`; `mohScenarios` 6 | ✅ |
+| transfers not misclassified | `mohScenarios` 7/8 | ✅ |
+| non-enabled / PBX-controlled tenants no-op | installer "emitted ONLY for tenants with slug+moh_class" | ✅ |
+| installer rollback removes only its own lines/files | installer `.test.ts` rollback | ✅ |
+| live loaded selectable / unplayable blocked | `mohCatalog` playability | ✅ |
+| main/global cross-tenant; foreign native-sync skip | `mohCatalog` origin + native-sync-skip | ✅ |
+| live post-publish verify reads back state | `mohControl` `classifyMohVerify` | ✅ |
+
+Totals: `@connect/shared` MOH suites **70**, `apps/api mohControl` **6**,
+caller-leg installer **20** = **96 pass / 0 fail**.
+
+## M. Phase 9 — production-safety deliverable
+
+1. **Code diff summary (this pass, on top of `23ea6c6b`):** pure helper
+   `resolveAdminScheduleFallback` (`packages/shared/src/mohSourcePublish.ts`) + 3
+   unit tests; docs (`ASTDB_KEYS.md`, this file, `DATA_MODEL.md`, `CHANGELOG_AI.md`).
+   No runtime/reconcile/installer behavior changed in this pass.
+2. **Schema diff summary:** none new. `Tenant.mohControlMode` +
+   `MohExtensionControl` + `MohAdminSchedule(+Target,+Activation)` +
+   `MohPublishRecord`/`MohLastPublishedState` verify/control columns — all authored
+   in `23ea6c6b`, fully additive (nullable/defaulted), nothing dropped/back-filled.
+3. **Exact migration files:**
+   `packages/db/prisma/migrations/20260702000000_moh_control_and_admin_schedules/{migration.sql,ROLLBACK.sql}`
+   — committed, **NOT run** anywhere.
+4. **Exact files changed (this pass):** `packages/shared/src/mohSourcePublish.ts`,
+   `packages/shared/src/mohAdminSchedule.test.ts`,
+   `docs/pbx/connect-moh-per-source-phase2-proof.md`,
+   `docs/ai-context/ASTDB_KEYS.md`, `docs/ai-context/DATA_MODEL.md`,
+   `docs/ai-context/CHANGELOG_AI.md`.
+5. **Exact docs updated:** the four docs in (4).
+6. **Tests run + results:** `@connect/shared` MOH suites, `apps/api mohControl`,
+   caller-leg + tenant-moh installer string-shape suites — **all green** (see §L.5),
+   plus `tsc` typecheck for shared/api/worker.
+7. **Exact installer behavior:** caller-leg installer (`§K`) inserts one guarded
+   `GosubIf` in `[sub-local-dialing]`, emits `[T<id>_before-local-dial-moh-hook]`
+   only for tenants with a published `moh_class` (PBX-controlled/empty-class ⇒ no
+   context ⇒ no-op), reads `admin_moh_class`→`moh_class`→`active_moh_class`,
+   idempotent + anchor-guarded + `--rollback`. Tenant-moh installer emits
+   `[sub-connect-tenant-moh]` with the full precedence incl. admin overlay + global
+   default.
+8. **Rollback plan:** installer `--rollback` (surgical); AstDB overlay/per-source
+   keys are tombstoned by the reconciler on config change; DB `ROLLBACK.sql` drops
+   the new tables/columns (additive, safe). No prod state touched by this branch.
+9. **Tenant-by-tenant risk:** default `mohControlMode=connect` preserves current
+   behavior for every existing tenant; admin schedules are opt-in (none seeded);
+   per-tenant publish unchanged until an owner acts. T2 unaffected by this pass.
+10. **Live T2 proof patch:** untouched; remains active. Will be owned/replaced by
+    the productionized caller-leg installer on the next approved deploy.
+11. **Will the branch installer cleanly replace the live proof patch?** Yes — the
+    installer writes the same `[T2_before-local-dial-moh-hook]` context + the single
+    guarded `GosubIf`, idempotently; running it supersedes the ad-hoc script. Verify
+    with `--check` post-deploy.
+12. **Exact deploy commands (NOT run):** apply migration only via the api deploy
+    path (`scripts/deploy-api.sh`, runs `prisma migrate deploy` when
+    `packages/db/prisma/**` changed); deploy api+portal+worker via approved
+    blue/green (`scripts/deploy-direct.sh api|portal --branch …`); run
+    `sudo scripts/pbx/install-connect-caller-leg-moh.sh` +
+    `install-connect-tenant-moh-dialplan.sh` on the PBX (owner-approved).
+13. **What was not touched:** no live PBX, no AstDB write, no Apply Changes, no
+    migration run, no deploy, no wake/cos-wake/mobile files, no queue/trunk/route/IVR/
+    ring-group config, no unrelated dirty working-tree files.
+14. **No unrelated files committed:** only the MOH files in (4) are staged/committed.
+
+### M.1 One deferred item (explicit-fallback live wiring)
+`resolveAdminScheduleFallback` (choice 4's optional `fallback_class`) is implemented
++ tested as pure logic. The worker reconciler currently implements the **default**
+`restore_previous` (overlay-only tombstone). Wiring `fallback_class` into the live
+reconcile is deferred because a whole-tenant explicit fallback interacts with the
+per-tenant default publisher (`runMohScheduleCycle`) and must be validated against a
+real DB before shipping to the reconcile loop. Tracked as the single remaining
+MOH task; default behavior is correct and safe today.

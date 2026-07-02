@@ -131,6 +131,33 @@ on the canary PBX before the updated installer is run there).
   `extensionActiveMohClassKey` build the canonical strings; do not
   hand-concatenate.
 
+### Per-source MOH + admin overlay + control mode (2026-07-02)
+
+Written by `apps/api` `/voice/moh/*` and `runMohScheduleCycle()` /
+`runMohAdminScheduleCycle()` in `apps/worker/src/main.ts`. **Asterisk consumers:**
+`[sub-connect-tenant-moh]` (the called-leg resolver in
+`scripts/pbx/install-connect-tenant-moh-dialplan.sh`) reads the full precedence;
+the **caller-leg** hook `[T<id>_before-local-dial-moh-hook]` (in
+`scripts/pbx/install-connect-caller-leg-moh.sh` / installed
+`extensions__67_connect_localdial_moh.conf`) reads `admin_moh_class` → `moh_class`
+→ `active_moh_class` for held-leg inbound hold.
+
+| Family | Key | Type | Purpose |
+|---|---|---|---|
+| `connect/t_<slug>` | `admin_moh_class` | string | **Admin multi-tenant overlay** (tenant scope). Highest priority while an admin schedule window is active; tombstoned (`""`) on restore. |
+| `connect/t_<slug>/extensions/<ext>` | `admin_moh_class` | string | Admin overlay (extension-target scope). |
+| `connect/t_<slug>/moh/src` | `<source>` | string | Static per-call-source policy class (`inbound_direct`, `inbound_ivr`, `inbound_ringgroup`, `inbound_queue`, `outbound`, `internal`, `transfer`, …). Folds active per-tenant schedule + global default at publish time. |
+| `connect/t_<slug>/moh/admin_src` | `<source>` | string | Admin per-source overlay (rarely used; same precedence as `admin_moh_class`). |
+| `connect/t_<slug>/extensions/<ext>/moh/src` | `<source>` | string | Static per-source policy at extension scope. |
+
+**Resolution precedence** (highest → lowest), read by `[sub-connect-tenant-moh]`:
+admin ext overlay → admin tenant overlay → ext per-source → ext default →
+tenant per-source → tenant default → **global default** → PBX/native. Empty-string
+values are tombstones (fall through). Clearable overlay/per-source families are
+tombstoned on change; `moh_class`/`hold_mode`/announcement keys are never
+force-cleared except by an explicit **PBX-control** handoff (`mohControlMode=pbx`),
+which tombstones every Connect key so native VitalPBX MOH takes over.
+
 ### Push-wake (lives under `connect/t_<slug>` per tenant)
 
 Written by `apps/api/src/server.ts` and by the IVR publish path. Read by
@@ -191,6 +218,7 @@ because the wrapper needs these three keys for *any* tenant's call.
 | `wake_api_url` | string | URL to POST the call-wake notification to | written by Connect API on system bootstrap |
 | `wake_api_secret` | string | bearer secret for the wake POST | same |
 | `wake_wait_secs` | string (int) | seconds the wrapper waits for `DEVICE_REGISTER_COMPLETE` before fall-through | same |
+| `moh_default_class` | string | **System-wide global MOH default** — the last Connect fallback before native PBX default. Written by `/voice/moh/*` (global config) + worker MOH cycle; read by `[sub-connect-tenant-moh]`. |
 
 If `wake_api_url` is empty/absent, the wrapper short-circuits the wake
 step (PBX-only behavior). Reference: lines ~323–325 of

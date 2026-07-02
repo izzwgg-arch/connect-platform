@@ -35,6 +35,7 @@ import {
   buildAdminOverlayKeysForTenant,
   computeActiveAdminOverrides,
   isAdminScheduleActive,
+  resolveAdminScheduleFallback,
   type AdminScheduleRow,
 } from "./mohSourcePublish";
 
@@ -278,6 +279,41 @@ test("computeActiveAdminOverrides: fans out to all targets, highest priority win
   assert.ok(active.find((o) => o.tenantSlug === "t3" && o.vitalPbxMohClassName === "low_music"));
   const t21 = active.find((o) => o.tenantSlug === "t21");
   assert.equal(t21?.extension, "101");
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// End-of-window fallback decision (design choice C: restore_previous | fallback_class)
+// ─────────────────────────────────────────────────────────────────────────────
+
+test("REQUIRED: fallback default is restore_previous (exact snapshot)", () => {
+  assert.deepEqual(resolveAdminScheduleFallback({ fallbackMode: "restore_previous", fallbackClass: null }), {
+    action: "restore_previous",
+  });
+  // Unset / unknown / empty mode all fail safe to restore_previous.
+  assert.deepEqual(resolveAdminScheduleFallback({ fallbackMode: "", fallbackClass: null }), { action: "restore_previous" });
+  assert.deepEqual(resolveAdminScheduleFallback({ fallbackMode: null, fallbackClass: null }), { action: "restore_previous" });
+  assert.deepEqual(resolveAdminScheduleFallback({ fallbackMode: "weird", fallbackClass: "x" }), { action: "restore_previous" });
+});
+
+test("REQUIRED: explicit fallback_class returns the class to set", () => {
+  assert.deepEqual(resolveAdminScheduleFallback({ fallbackMode: "fallback_class", fallbackClass: "lobby_music" }), {
+    action: "set_class",
+    vitalPbxMohClassName: "lobby_music",
+  });
+  // Case/whitespace tolerant on mode; class is trimmed by firstNonEmpty upstream.
+  assert.deepEqual(resolveAdminScheduleFallback({ fallbackMode: "FALLBACK_CLASS", fallbackClass: "moh2" }), {
+    action: "set_class",
+    vitalPbxMohClassName: "moh2",
+  });
+});
+
+test("fallback_class with empty class fails safe to restore_previous", () => {
+  assert.deepEqual(resolveAdminScheduleFallback({ fallbackMode: "fallback_class", fallbackClass: "" }), {
+    action: "restore_previous",
+  });
+  assert.deepEqual(resolveAdminScheduleFallback({ fallbackMode: "fallback_class", fallbackClass: "   " }), {
+    action: "restore_previous",
+  });
 });
 
 test("buildAdminOverlayKeysForTenant: tenant + extension targets", () => {
