@@ -20,6 +20,11 @@
 //     device produced ~20s of silence before voicemail.
 //   * The CallId fix is preserved: CHANNEL(linkedid) fallback to UNIQUEID.
 //   * The engine never Answers/Dials/bridges/Local — probe + Gosub-return only.
+//   * App-reported mobile DND (connect/dnd/T<tid>_<ext>, Connect-owned — NOT
+//     VitalPBX's native feature-code DND) short-circuits BEFORE the contact
+//     probe/UserEvent/Playtones/grace loop, and fails open (falls through to
+//     the unchanged probe path) on every ambiguous case: missing key, "0",
+//     missing/malformed/future/stale timestamp.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -150,6 +155,53 @@ test("engine never Answers/Dials/bridges/Local/VoiceMail — probe + Gosub-retur
   }
 });
 
+test("app DND short-circuit reads connect/dnd BEFORE the contact probe, UserEvent, Playtones, and grace loop", () => {
+  const body = wakeCore(SCRIPT);
+  const dndReadIdx = body.indexOf("Set(APP_DND=${DB(connect/dnd/T${TID}_${EXT})})");
+  const probeLabelIdx = body.indexOf("n(probe),Set(EP_PRIMARY=");
+  const emitIdx = body.indexOf("UserEvent(ConnectWake");
+  const ringIdx = body.indexOf("?Playtones(ring)");
+  const loopIdx = body.indexOf("n(loop),GotoIf");
+  assert.ok(dndReadIdx > -1, "connect/dnd read present");
+  assert.ok(probeLabelIdx > -1, "(probe) label present on the (formerly first) contact-probe line");
+  assert.ok(dndReadIdx < probeLabelIdx, "DND read must precede the contact probe");
+  assert.ok(dndReadIdx < emitIdx, "DND read must precede UserEvent(ConnectWake)");
+  assert.ok(dndReadIdx < ringIdx, "DND read must precede Playtones(ring)");
+  assert.ok(dndReadIdx < loopIdx, "DND read must precede the grace loop");
+});
+
+test("app DND short-circuit only skips wake on an exact '1' — everything else falls through to (probe)", () => {
+  const body = wakeCore(SCRIPT);
+  assert.match(body, /GotoIf\(\$\["\$\{APP_DND\}" != "1"\]\?probe\)/, "non-'1' values (missing key, '0', anything else) must fall through to (probe)");
+});
+
+test("app DND freshness: missing/malformed/future/stale timestamp all fall through to (probe)", () => {
+  const body = wakeCore(SCRIPT);
+  // Missing timestamp (LEN = 0).
+  assert.match(body, /GotoIf\(\$\[\$\{LEN\(\$\{APP_DND_TS\}\)\} = 0\]\?probe\)/);
+  // Malformed (non-digit) timestamp via FILTER(0-9,...) round-trip check.
+  assert.match(body, /GotoIf\(\$\["\$\{APP_DND_TS\}" != "\$\{FILTER\(0-9,\$\{APP_DND_TS\}\)\}"\]\?probe\)/);
+  // Future timestamp (negative age) fails open too.
+  assert.match(body, /GotoIf\(\$\[\$\{APP_DND_AGE\} < 0\]\?probe\)/);
+  // Stale timestamp (older than the TTL) falls open.
+  assert.match(body, /GotoIf\(\$\[\$\{APP_DND_AGE\} > \$\{DND_TTL_SECS\}\]\?probe\)/);
+});
+
+test("app DND TTL constant is 72 hours (259200s), named and documented", () => {
+  const body = wakeCore(SCRIPT);
+  assert.match(body, /Set\(DND_TTL_SECS=259200\)/);
+});
+
+test("app DND fresh-and-true path Returns immediately without touching WARM/contacts/UserEvent/grace", () => {
+  const body = wakeCore(SCRIPT);
+  // The DND-active NoOp must be followed by nothing but Return(), then the (probe) label —
+  // i.e. no Set(EP_PRIMARY/WARM/...), no UserEvent, no grace Set/loop in between.
+  const m = body.match(
+    /NoOp\(connect-wake-core app DND active[^\n]*\n\s*same =>\s*n,Return\(\)\n\s*same =>\s*n\(probe\),Set\(EP_PRIMARY=/,
+  );
+  assert.ok(m, "DND-active branch must be NoOp then Return() then straight into the (probe) label with nothing in between");
+});
+
 test("brain mirror stays in sync with the installer engine on the fix-critical lines", () => {
   const script = wakeCore(SCRIPT);
   const brain = wakeCore(BRAIN);
@@ -159,6 +211,10 @@ test("brain mirror stays in sync with the installer engine on the fix-critical l
     "CallId: ${IF($[\"${CHANNEL(linkedid)}\" != \"\"]?${CHANNEL(linkedid)}:${UNIQUEID})}",
     'ExecIf($["${CHANNEL(state)}" = "Up"]?Playtones(ring))',
     "StopPlaytones()",
+    "Set(DND_TTL_SECS=259200)",
+    "Set(APP_DND=${DB(connect/dnd/T${TID}_${EXT})})",
+    "Set(APP_DND_TS=${DB(connect/dnd_ts/T${TID}_${EXT})})",
+    "n(probe),Set(EP_PRIMARY=",
   ]) {
     assert.ok(script.includes(needle), `installer engine missing: ${needle}`);
     assert.ok(brain.includes(needle), `brain mirror missing: ${needle}`);

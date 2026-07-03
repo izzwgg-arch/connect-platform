@@ -7,6 +7,7 @@ import { normalizeExtensionForClient } from "../telephony/normalizers/normalizeE
 import { normalizeQueueForClient } from "../telephony/normalizers/normalizeQueueEvent";
 import { selectPlaybackChannelName } from "./telephonyPlaybackHelpers";
 import { classifyVoicemailDropLegs } from "./voicemailDropLegs";
+import { parseDndPublishRequest } from "./dndPublish";
 import { looksDivertedToVoicemail } from "../telephony/services/MobilePushNotifier";
 
 export function registerTelephonyRoutes(
@@ -658,6 +659,45 @@ export function registerTelephonyRoutes(
       written++;
     }
     res.json({ ok: true, written });
+  });
+
+  // ── App-reported mobile DND publish ──────────────────────────────────────
+  // Narrowly-scoped internal route: writes ONLY the two Connect-owned DND
+  // AstDB families consumed by [connect-wake-core]'s DND short-circuit
+  // (scripts/pbx/install-connect-wake-dialplan.sh). Deliberately NOT folded
+  // into /telephony/internal/ivr-publish's generic family allowlist above —
+  // this route accepts no caller-supplied family/key strings at all. It only
+  // accepts numeric tenant-id and extension components, validated by strict
+  // regex, and assembles the AstDB key itself — there is no way to smuggle an
+  // arbitrary family/key through it, and no tenant-slug family-prefix check is
+  // needed because the key space is closed (connect/dnd + connect/dnd_ts only).
+  //
+  // Auth: x-cdr-secret (same shared secret as ivr-publish / CDR ingest). The
+  // caller (Connect API's POST /mobile/dnd-status) is responsible for
+  // resolving pbxTenantId/extension from the authenticated mobile user's OWN
+  // extension ownership records — this route trusts whatever tenant/ext it is
+  // given, exactly like ivr-publish trusts its caller's tenantSlug.
+  //
+  // Body: { pbxTenantId: string (1-10 digits), extension: string (1-10 digits),
+  //         dnd: "0" | "1", ts: string (unix epoch seconds, digits only) }
+  // Resp: { ok: true, written: 2, key: "T<pbxTenantId>_<extension>" }
+  router.post("/telephony/internal/dnd-publish", (req: Request, res: Response) => {
+    if (!isInternalRouteAuthorized(req)) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const parsed = parseDndPublishRequest(req.body);
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    if (!telephony.ami._isConnected) {
+      res.status(503).json({ error: "ami_not_connected" });
+      return;
+    }
+    telephony.ami.sendAction("DBPut", { Family: "connect/dnd", Key: parsed.key, Val: parsed.dnd });
+    telephony.ami.sendAction("DBPut", { Family: "connect/dnd_ts", Key: parsed.key, Val: parsed.ts });
+    res.json({ ok: true, written: 2, key: parsed.key });
   });
 
   // ── IVR AstDB snapshot read ───────────────────────────────────────────────

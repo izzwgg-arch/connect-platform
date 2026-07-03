@@ -143,6 +143,7 @@ import {
   type VoicemailOwnedScope,
 } from "./voicemailResourceScope";
 import { resolveExtensionForVoicemailNotify } from "./voicemailNotifyResolveExtension";
+import { parseDndStatusBody, planDndPublishTargets, buildDndPublishPayload } from "./mobileDndStatusCore";
 import { syncPbxTenantDirectory, syncPbxTenantDirectoryFromRows } from "./pbxTenantDirectorySync";
 import { syncPbxTenantInboundDids } from "./pbxTenantInboundDidSync";
 import { resolveCdrTenant } from "./pbxTenantResolve";
@@ -18740,6 +18741,36 @@ async function publishToAstDb(
 }
 
 /**
+ * Relay one resolved extension's DND state to telephony's narrowly-scoped
+ * /telephony/internal/dnd-publish route (connect/dnd + connect/dnd_ts only —
+ * see apps/telephony/src/routes/dndPublish.ts). Throws on any non-2xx so the
+ * caller (POST /mobile/dnd-status) can report per-extension failures without
+ * losing track of which ones succeeded.
+ */
+async function publishDndToAstDb(payload: {
+  pbxTenantId: string;
+  extension: string;
+  dnd: "0" | "1";
+  ts: string;
+}): Promise<void> {
+  const base = (process.env.TELEPHONY_INTERNAL_URL ?? "http://telephony:3003").replace(/\/$/, "");
+  const secret = process.env.CDR_INGEST_SECRET?.trim() ?? "";
+  const resp = await fetch(`${base}/telephony/internal/dnd-publish`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(secret ? { "x-cdr-secret": secret } : {}),
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new Error(`telephony dnd-publish failed: ${resp.status} ${body}`);
+  }
+}
+
+/**
  * Write per-DID routing keys to AstDB under `connect/didmap/<e164>/*`.
  *
  * Values use empty string ("") for "no override / use tenant default", which
@@ -30375,6 +30406,72 @@ app.post("/mobile/wake/event", async (req, reply) => {
   }
 
   return reply.send({ ok: true });
+});
+
+// ─── Mobile DND status report (Connect-owned app-level DND — NOT VitalPBX's
+// native feature-code DND, an unrelated mechanism) ───────────────────────────
+// Fire-and-forget target for the mobile app's dndStore (apps/mobile/src/sip/dndStore.ts).
+// Lets [connect-wake-core]'s DND short-circuit (scripts/pbx/install-connect-wake-dialplan.sh)
+// skip ConnectWake/grace/ringback for a swiped-away app that has DND on,
+// instead of treating it like a normal cold-swiped wakeable device.
+//
+// The client supplies ONLY its own dnd boolean — no tenant/extension
+// identifiers. The API resolves the caller's OWN active extension(s) from
+// ownership records (db.extension.ownerUserId scoped to user.tenantId) and
+// the caller's tenant's numeric VitalPBX tenant id (db.tenantPbxLink), then
+// relays to telephony's narrowly-scoped /telephony/internal/dnd-publish route
+// once per owned extension. A client can never write DND for any tenant/
+// extension other than its own — there is no client-supplied family/key/ext
+// input anywhere in this path.
+//
+// Best-effort by design: a user with no linked PBX extension yet, or a
+// tenant with no TenantPbxLink, is NOT an error — the endpoint still returns
+// 200 `{ ok: true, published: 0, skipped: [...] }`. A transient provisioning
+// gap on the backend must never surface as a mobile-side error/retry storm,
+// matching the existing "DND must never break call handling" philosophy
+// already used throughout apps/mobile/src/sip/dndStore.ts. Per-extension
+// telephony relay failures are likewise reported in `skipped`, not thrown.
+app.post("/mobile/dnd-status", async (req, reply) => {
+  const user = req.user as JwtUser | undefined;
+  if (!user?.sub || !user?.tenantId) return reply.code(401).send({ error: "UNAUTHORIZED" });
+
+  const parsed = parseDndStatusBody(req.body);
+  if (!parsed.ok) return reply.code(400).send({ error: parsed.error });
+
+  const [extensionRows, tenantLink] = await Promise.all([
+    db.extension.findMany({
+      where: { tenantId: user.tenantId, ownerUserId: user.sub, status: "ACTIVE" },
+      select: { extNumber: true },
+    }),
+    db.tenantPbxLink
+      .findFirst({ where: { tenantId: user.tenantId }, select: { pbxTenantId: true } })
+      .catch(() => null),
+  ]);
+
+  const extNumbers = [
+    ...new Set(extensionRows.map((e) => String(e.extNumber || "").trim()).filter(Boolean)),
+  ];
+  const pbxTenantId = tenantLink?.pbxTenantId ? String(tenantLink.pbxTenantId) : null;
+  const { publishable, skipped } = planDndPublishTargets(extNumbers, pbxTenantId);
+
+  const nowMs = Date.now();
+  let published = 0;
+  const failed: Array<{ extNumber: string; reason: string }> = [];
+  for (const extNumber of publishable) {
+    try {
+      await publishDndToAstDb(buildDndPublishPayload(pbxTenantId as string, extNumber, parsed.dnd, nowMs));
+      published++;
+    } catch (err: any) {
+      const reason = err?.message ?? "telephony_relay_failed";
+      failed.push({ extNumber, reason });
+      app.log.warn(
+        { err: reason, extNumber, tenantId: user.tenantId },
+        "mobile/dnd-status: telephony relay failed",
+      );
+    }
+  }
+
+  return reply.send({ ok: true, dnd: parsed.dnd, published, skipped: [...skipped, ...failed] });
 });
 
 // ─── Wake timeline read API (for Diagnostics screen + admin tools) ──────────

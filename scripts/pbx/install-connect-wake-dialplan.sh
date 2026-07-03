@@ -360,7 +360,38 @@ exten => s,1,NoOp(connect-wake-core tid=${ARG1} ext=${ARG2} wake=${ARG3} state=$
  same =>   n,Set(TID=${ARG1})
  same =>   n,Set(EXT=${ARG2})
  same =>   n,GotoIf($[$["${TID}" = ""] | $["${EXT}" = ""]]?done)
- same =>   n,Set(EP_PRIMARY=T${TID}_${EXT})
+ ; ── App-reported Do-Not-Disturb short-circuit (Connect-owned mobile-app DND —
+ ; NOT the native VitalPBX feature-code DND, which is a separate, unrelated
+ ; mechanism). Runs BEFORE the contact probe so a fresh DND=1 never emits
+ ; ConnectWake, never starts Playtones, and never enters the grace loop — it
+ ; Returns immediately, identical in shape to the (done) no-op exit, so native
+ ; VitalPBX call routing (dial / no-answer / voicemail) is the only thing that
+ ; runs next.
+ ;
+ ; FAILS OPEN on every ambiguous case (missing key, "0", missing/malformed
+ ; timestamp, future timestamp, or a timestamp older than DND_TTL_SECS) by
+ ; falling through to (probe) — the exact unchanged wake/grace/ringback path.
+ ; DND_TTL_SECS bounds how long a flag can suppress wake if the app crashes or
+ ; is uninstalled before clearing it; 72h is deliberately generous (DND is a
+ ; rare, deliberate user action, not a per-call heartbeat) while still
+ ; guaranteeing the extension cannot be silently blackholed forever.
+ ;
+ ; Keys (written by apps/telephony's dnd-publish route, reported by the mobile
+ ; app via POST /mobile/dnd-status):
+ ;   connect/dnd/T<tid>_<ext>     = "1" | "0"
+ ;   connect/dnd_ts/T<tid>_<ext>  = unix epoch seconds of the last report
+ same =>   n,Set(DND_TTL_SECS=259200)
+ same =>   n,Set(APP_DND=${DB(connect/dnd/T${TID}_${EXT})})
+ same =>   n,GotoIf($["${APP_DND}" != "1"]?probe)
+ same =>   n,Set(APP_DND_TS=${DB(connect/dnd_ts/T${TID}_${EXT})})
+ same =>   n,GotoIf($[${LEN(${APP_DND_TS})} = 0]?probe)
+ same =>   n,GotoIf($["${APP_DND_TS}" != "${FILTER(0-9,${APP_DND_TS})}"]?probe)
+ same =>   n,Set(APP_DND_AGE=$[${EPOCH} - ${APP_DND_TS}])
+ same =>   n,GotoIf($[${APP_DND_AGE} < 0]?probe)
+ same =>   n,GotoIf($[${APP_DND_AGE} > ${DND_TTL_SECS}]?probe)
+ same =>   n,NoOp(connect-wake-core app DND active ext=${EXT} age=${APP_DND_AGE}s — skipping wake/grace/ringback, handing back immediately)
+ same =>   n,Return()
+ same =>   n(probe),Set(EP_PRIMARY=T${TID}_${EXT})
  same =>   n,Set(EP_SECONDARY=T${TID}_${EXT}_1)
  same =>   n,Set(CONTACTS_PRIMARY=${PJSIP_DIAL_CONTACTS(${EP_PRIMARY})})
  same =>   n,Set(CONTACTS_SECONDARY=${PJSIP_DIAL_CONTACTS(${EP_SECONDARY})})

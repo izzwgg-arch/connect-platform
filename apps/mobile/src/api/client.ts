@@ -782,6 +782,25 @@ export async function postWakeEvent(
   }
 }
 
+/**
+ * Report the app's own Do-Not-Disturb state (apps/mobile/src/sip/dndStore.ts —
+ * Connect-owned, NOT VitalPBX's native feature-code DND) so
+ * [connect-wake-core]'s DND short-circuit can skip wake/grace/ringback for a
+ * swiped-away app that has DND on. Unlike {@link postWakeEvent}, this throws
+ * on failure — the caller (dndReportPolicy's bounded-retry wrapper) owns
+ * retry/error-swallowing so DND reporting can never break call handling.
+ */
+export async function reportDndStatus(token: string, dnd: boolean): Promise<void> {
+  const res = await fetch(`${API_BASE}/mobile/dnd-status`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ dnd }),
+  });
+  if (!res.ok) {
+    throw new Error(`dnd-status non-2xx: ${res.status}`);
+  }
+}
+
 export type WakeTimelineEvent = {
   id: string;
   pbxCallId: string;
