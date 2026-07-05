@@ -6,6 +6,11 @@
 
 ## ⛔ ABSOLUTE RULE — Connect must NOT modify the PBX without explicit owner permission
 
+> **Cursor specifically is STRICTLY READ-ONLY on the PBX, always.** Owner-mandated
+> (Izzy): Cursor never writes, modifies, deploys to, or configures the PBX under any
+> circumstance without the owner's explicit, per-operation, in-the-moment permission.
+> Read-only diagnostics/log reads are the only PBX interaction Cursor may perform unasked.
+
 Connect (and any agent) has **no business modifying the VitalPBX in any shape,
 type, or form** — creating/updating/deleting tenants, adding/removing inbound
 DIDs, regenerating/applying tenant config, queue or code CRUD, or any other

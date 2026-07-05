@@ -6,6 +6,17 @@
 
 ---
 
+## ⛔ FUNDAMENTAL RULE — CURSOR IS STRICTLY READ-ONLY ON THE PBX
+
+**Cursor never, under any shape or form, writes to, modifies, deploys to, configures,
+or changes ANYTHING on the PBX (VitalPBX / Asterisk at 209.145.60.79).** No exceptions.
+This is owner-mandated (Izzy) and absolute. Cursor may only READ from the PBX (diagnostics,
+snapshots, log reads). The ONLY thing that lifts this is the owner's explicit,
+per-operation, in-the-moment permission for that specific write. Absent that word from
+the owner, treat every PBX write path as forbidden and stop.
+
+---
+
 ## 0. Mission
 
 Connect Communications is a **multi-tenant business voice + messaging platform** built on
@@ -57,6 +68,13 @@ Your job is to be **narrow, surgical, and conservative**. The platform is in pro
 
 ## 2. Hard "do not" rules (skim every chat)
 
+- **Cursor is STRICTLY READ-ONLY on the PBX (209.145.60.79) — always, no exceptions.**
+  Never write, modify, deploy, configure, or change anything on the PBX. Only the owner's
+  explicit per-operation permission can ever lift this. See the FUNDAMENTAL RULE banner above.
+- **iOS work must NOT break Android.** Any change made for iOS App Store readiness must
+  touch iOS-only surfaces and pass the Android safety gate. Read
+  `IOS_WORK_ANDROID_GUARDRAILS.md` before any such change. Android is in production and
+  must not regress.
 - **Do not ad-hoc deploy on the server** (`git pull`, raw `docker compose up --build`,
   `pm2 restart`, untagged `deploy-tag.sh`). **Routine api/portal:** use **direct deploy**
   (`scripts/deploy-direct.sh` on the app host, or `scripts/release/deploy-direct.ps1` from
