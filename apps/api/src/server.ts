@@ -2997,6 +2997,34 @@ async function sendApnsVoipPushesForIncomingCallApi(input: {
   }
 
   for (const device of iosDevices) {
+    // iOS-only foreground-active gate. When the Connect app on this device has
+    // recently reported itself foreground-active (it holds a live socket and
+    // will receive the SIP INVITE directly), skip the VoIP push so the native
+    // CallKit screen does NOT appear on top of the in-app Connect incoming
+    // screen. FAILS OPEN: on any Redis miss/error we still send the push, so we
+    // never risk missing a call. Android never reaches this function.
+    try {
+      const fgActive = await redis.get("ios_fg_active:" + device.id);
+      if (fgActive) {
+        app.log.info(
+          {
+            event: "api_apns_voip_skipped_foreground_active",
+            source: "api",
+            tenantId: input.tenantId,
+            userId: input.userId,
+            callId: input.callId,
+            deviceId: device.id,
+          },
+          "api_apns_voip_skipped_foreground_active",
+        );
+        continue;
+      }
+    } catch (gateErr: any) {
+      app.log.warn(
+        { event: "api_apns_voip_fg_gate_error", deviceId: device.id, err: gateErr?.message },
+        "api_apns_voip_fg_gate_error — sending push (fail-open)",
+      );
+    }
     const tokenTail = (device.voipPushToken || "").slice(-6);
     app.log.info(
       {
@@ -29310,6 +29338,51 @@ app.post("/mobile/wake/event", async (req, reply) => {
   }
 
   return reply.send({ ok: true });
+});
+
+// ─── iOS foreground-active heartbeat ────────────────────────────────────────
+// The iOS Connect app POSTs here (~every 15s) while it is FOREGROUND and holds a
+// live SIP socket, so the incoming-call pipeline can skip the APNs VoIP push for
+// this device (see sendApnsVoipPushesForIncomingCallApi). This is what keeps the
+// native CallKit screen from appearing over the in-app Connect incoming screen
+// while the app is open. Backgrounding/quitting stops the pings; the Redis key
+// expires (short TTL) and VoIP pushes resume automatically. iOS-only by
+// construction — Android never calls this, and non-IOS devices are a no-op.
+// Fails soft: a Redis error never breaks the client.
+app.post("/mobile/foreground-active", async (req, reply) => {
+  const user = req.user as JwtUser | undefined;
+  if (!user?.sub || !user?.tenantId) return reply.code(401).send({ error: "UNAUTHORIZED" });
+
+  const body = z
+    .object({ deviceId: z.string().min(1), active: z.boolean().optional().default(true) })
+    .safeParse(req.body);
+  if (!body.success) return reply.code(400).send({ error: "invalid_payload" });
+
+  const device = await db.mobileDevice
+    .findFirst({
+      where: { id: body.data.deviceId, tenantId: user.tenantId, userId: user.sub },
+      select: { id: true, platform: true },
+    })
+    .catch(() => null);
+  if (!device) return reply.code(404).send({ error: "DEVICE_NOT_FOUND" });
+
+  // Only iOS devices participate in the VoIP-push gate; others are a harmless no-op.
+  if (device.platform !== "IOS") return reply.send({ ok: true, ignored: "not_ios" });
+
+  const key = "ios_fg_active:" + device.id;
+  try {
+    if (body.data.active) {
+      // 30s TTL; the client re-pings well within that window (~15s).
+      await redis.set(key, "1", "EX", 30);
+    } else {
+      await redis.del(key);
+    }
+  } catch (err: any) {
+    app.log.warn({ err: err?.message, deviceId: device.id }, "mobile/foreground-active: redis error");
+    return reply.send({ ok: false, reason: "redis_error" });
+  }
+
+  return reply.send({ ok: true, active: body.data.active });
 });
 
 // ─── Wake timeline read API (for Diagnostics screen + admin tools) ──────────
