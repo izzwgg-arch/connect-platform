@@ -24,11 +24,20 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * A voice note filename, independent of whatever MIME the client/OS reported.
+ * Both the mobile app (ChatTab.tsx) and the portal composer name every voice
+ * note `voice-note-<timestamp>.<ext>` — this is the one signal we fully
+ * control and can trust even when the reported MIME is wrong.
+ */
+export function isVoiceNoteFilename(filename: string): boolean {
+  return /(^|[\/\\])?voice-note[-._]/i.test(String(filename || "").toLowerCase());
+}
+
 /** A voice note is recognised by its client-assigned filename + audio MIME. */
 export function isVoiceNoteUpload(filename: string, mimeType: string): boolean {
-  const name = String(filename || "").toLowerCase();
   const mime = String(mimeType || "").toLowerCase();
-  return mime.startsWith("audio/") && /(^|[\/\\])?voice-note[-._]/.test(name);
+  return mime.startsWith("audio/") && isVoiceNoteFilename(filename);
 }
 
 export async function denoiseVoiceNote(input: Buffer): Promise<Buffer | null> {
