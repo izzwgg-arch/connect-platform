@@ -8,6 +8,7 @@ import { normalizeQueueForClient } from "../telephony/normalizers/normalizeQueue
 import { selectPlaybackChannelName } from "./telephonyPlaybackHelpers";
 import { classifyVoicemailDropLegs } from "./voicemailDropLegs";
 import { parseDndPublishRequest } from "./dndPublish";
+import { parseWakeCanaryPublishRequest, buildWakeCanaryKeyWrites } from "./wakeCanaryPublish";
 import { looksDivertedToVoicemail } from "../telephony/services/MobilePushNotifier";
 
 export function registerTelephonyRoutes(
@@ -698,6 +699,47 @@ export function registerTelephonyRoutes(
     telephony.ami.sendAction("DBPut", { Family: "connect/dnd", Key: parsed.key, Val: parsed.dnd });
     telephony.ami.sendAction("DBPut", { Family: "connect/dnd_ts", Key: parsed.key, Val: parsed.ts });
     res.json({ ok: true, written: 2, key: parsed.key });
+  });
+
+  // ── Mobile wake-canary publish ───────────────────────────────────────────
+  // Narrowly-scoped internal route (same closed-key-space model as dnd-publish):
+  // writes ONLY the four Connect-owned wake_canary AstDB families that
+  // scripts/pbx/wake-canary-reconcile.mjs owns and that [connect-wake-core] /
+  // the T<id>_cos-all overlay read. It accepts NO caller-supplied family/key —
+  // only numeric pbxTenantId + extension, validated by strict regex, with the
+  // AstDB key assembled server-side (see wakeCanaryPublish.ts). This is the
+  // in-lane "Connect normal channel" (AMI DBPut/DBDel) the autonomous wake
+  // auto-enroll worker publishes through; it can never touch any other PBX key
+  // space and performs no dialplan/config mutation.
+  //
+  // Auth: x-cdr-secret (same shared secret as ivr-publish / dnd-publish / CDR).
+  // Body: { pbxTenantId: string(1-10 digits), extension: string(1-10 digits),
+  //         enable: "0" | "1", ts: string(unix epoch seconds, digits only) }
+  // Resp: { ok: true, written: number, key: "T<pbxTenantId>_<extension>" }
+  router.post("/telephony/internal/wake-canary-publish", (req: Request, res: Response) => {
+    if (!isInternalRouteAuthorized(req)) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    const parsed = parseWakeCanaryPublishRequest(req.body);
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    if (!telephony.ami._isConnected) {
+      res.status(503).json({ error: "ami_not_connected" });
+      return;
+    }
+    let written = 0;
+    for (const w of buildWakeCanaryKeyWrites(parsed)) {
+      if (w.op === "put") {
+        telephony.ami.sendAction("DBPut", { Family: w.family, Key: w.key, Val: w.value });
+      } else {
+        telephony.ami.sendAction("DBDel", { Family: w.family, Key: w.key });
+      }
+      written++;
+    }
+    res.json({ ok: true, written, key: parsed.key });
   });
 
   // ── IVR AstDB snapshot read ───────────────────────────────────────────────

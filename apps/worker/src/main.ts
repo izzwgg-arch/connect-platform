@@ -32,6 +32,7 @@ import { findPaidBillingPeriodCoverage } from "../../api/src/billing/billingPeri
 import { consumeScheduledPlanChange } from "../../api/src/billing/billingScheduledPlanConsume";
 import { processConnectChatSmsJob } from "./connectChatSmsJob";
 import { runVoicemailSyncCycle } from "./voicemailSyncCycle";
+import { runWakeCanaryEnrollCycle } from "./wakeCanaryEnrollCycle";
 import { startVoicemailSpoolReconcileLoop } from "./voicemailSpoolReconcileCycle";
 import { runVoipMsInboundSyncCycle, runVoipMsMmsMirrorBackfill, SmsPushInput } from "./voipMsInboundSyncJob";
 import { buildBillingSchedule, type BillingSchedule } from "./billingSchedule";
@@ -1985,6 +1986,18 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 runIvrScheduleCycle().catch((err) => console.error("initial ivr schedule cycle failed", err?.message || err));
+
+// Mobile wake auto-enroll: enable-forward reconcile of the cold-mobile wake
+// fleet. Self-gated OFF unless WAKE_AUTOENROLL_ENABLED="1" (see
+// ./wakeCanaryEnrollCycle.ts) — deploying this code does NOT start any PBX
+// writes until the flag is set; owner-initiated activation.
+{
+  const wakeAutoEnrollIntervalMs = Math.max(60_000, Number(process.env.WAKE_AUTOENROLL_INTERVAL_MS || 5 * 60 * 1000) || 5 * 60 * 1000);
+  setInterval(() => {
+    runWakeCanaryEnrollCycle().catch((err) => console.error("wake autoenroll cycle failed", err?.message || err));
+  }, wakeAutoEnrollIntervalMs);
+  runWakeCanaryEnrollCycle().catch((err) => console.error("initial wake autoenroll cycle failed", err?.message || err));
+}
 
 // â”€â”€â”€ Hold Profile Scheduling â€” Option A: reconciliation/transition cycle â”€â”€â”€â”€â”€â”€
 // ROLE: This worker is a RECONCILIATION AND TRANSITION DETECTOR only.
