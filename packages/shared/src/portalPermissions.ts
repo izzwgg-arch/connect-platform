@@ -263,6 +263,10 @@ const END_USER_ACTIONS: PortalPermissionKey[] = [
   "can_view_live_calls",
   "can_view_voicemail",
   "can_view_contacts",
+  // All users (mobile + portal) can create/edit their own workspace contacts
+  // and mirror them to the phone's native address book — this isn't an
+  // admin-only action, it's basic contact-list usage.
+  "can_manage_contacts",
   "can_view_recordings",
   "can_download_recordings",
   "can_view_settings",
