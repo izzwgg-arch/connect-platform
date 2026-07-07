@@ -3,6 +3,8 @@ import {
   Animated,
   FlatList,
   Modal,
+  PanResponder,
+  Platform,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -12,6 +14,7 @@ import {
   View,
 } from 'react-native';
 import { Audio } from 'expo-av';
+import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
@@ -49,6 +52,13 @@ type DateFilter = 'any' | 'today' | 'week';
 // background — instead of showing a long skeleton on every cold start.
 const VM_LIST_CACHE_PREFIX = 'cc_vm_list_';
 const VM_LIST_CACHE_MAX = 300;
+
+// Locally-authoritative read/unread overrides, persisted per user. Once a
+// voicemail is listened or marked read on this device it renders READ forever
+// here, even if a background refetch briefly returns a stale server copy with
+// listened:false (eventual-consistency race). Mirrored to AsyncStorage so the
+// override survives an app restart too.
+const VM_READ_OVERRIDES_PREFIX = 'cc_vm_read_ov_';
 
 // Theme-driven palette. Derived from the app theme so the screen follows
 // light/dark mode instead of being hardcoded dark. The keys mirror the old
@@ -110,13 +120,33 @@ function formatDuration(sec: number): string {
 
 function formatTime(iso: string): string {
   const date = new Date(iso);
-  const now = Date.now();
-  const diffH = (now - date.getTime()) / 3600000;
   if (Number.isNaN(date.getTime())) return '';
-  if (diffH < 1) return 'Just now';
+  const diffMs = Date.now() - date.getTime();
+  const diffMin = diffMs / 60000;
+  const diffH = diffMs / 3600000;
+  if (diffMin < 1) return 'Just now';
+  if (diffMin < 60) return `${Math.floor(diffMin)}m ago`;
   if (diffH < 24) return `${Math.floor(diffH)}h ago`;
   if (diffH < 48) return 'Yesterday';
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+// Exact wall-clock time the voicemail was received (e.g. "2:34 PM"). Shown on
+// every card underneath the relative label so each voicemail always carries a
+// concrete timestamp, not just "2h ago" / a bare date.
+function formatClockTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
+// Combined relative-date + clock-time, rendered in a single tag in the card's
+// bottom-left (e.g. "Jul 2 · 9:00 AM" or "2h ago · 9:00 AM").
+function formatDateTimeTag(iso: string): string {
+  const rel = formatTime(iso);
+  const clock = formatClockTime(iso);
+  if (rel && clock) return `${rel} · ${clock}`;
+  return rel || clock;
 }
 
 function callerLabel(vm: Voicemail): string {
@@ -127,10 +157,16 @@ function hasTranscript(vm: Voicemail): boolean {
   return Boolean(vm.transcription?.trim());
 }
 
-function statusFor(vm: Voicemail): 'urgent' | 'new' | 'old' {
+type VmStatus = 'urgent' | 'new' | 'read' | 'old';
+
+function statusFor(vm: Voicemail): VmStatus {
   if (vm.folder === 'urgent') return 'urgent';
-  if (!vm.listened) return 'new';
-  return 'old';
+  // A listened voicemail reads READ (calm green), distinct from an archived
+  // OLD message. This never reverts once set locally (see read-overrides).
+  if (vm.listened) return 'read';
+  // Archived-but-unlistened messages keep the muted OLD label.
+  if (vm.folder === 'old') return 'old';
+  return 'new';
 }
 
 function dateMatches(vm: Voicemail, filter: DateFilter): boolean {
@@ -183,6 +219,8 @@ export function VoicemailTab() {
   const [menuVm, setMenuVm] = useState<Voicemail | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
+  // Brief "Number copied" confirmation toast (Fix 4).
+  const [copied, setCopied] = useState(false);
   // Spinner state that ONLY reflects a user-initiated pull-to-refresh. Background
   // polls/refetches must not flash the RefreshControl while the user is reading
   // or playing a voicemail.
@@ -190,6 +228,10 @@ export function VoicemailTab() {
   // Latest activeId, read inside the polling callback without re-subscribing.
   const activeIdRef = useRef<string | null>(null);
   useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
+  // Latest rows, read inside the background poll to detect new mail without
+  // re-subscribing the interval every time the list changes.
+  const rowsRef = useRef<Voicemail[]>([]);
+  useEffect(() => { rowsRef.current = rows; }, [rows]);
   // Latest loaded sound, mirrored into a ref so `play` can stay referentially
   // stable (so memoized VoicemailCards don't all re-render every time the
   // active sound changes) while still reading the current player synchronously.
@@ -197,6 +239,62 @@ export function VoicemailTab() {
   useEffect(() => { soundRef.current = sound; }, [sound]);
   // Last list content actually applied to `rows`, to drop no-op refetches.
   const appliedVmSigRef = useRef<string>('');
+
+  // Locally-authoritative read/unread override sets (see VM_READ_OVERRIDES_PREFIX).
+  // These are applied on top of every server/disk-cache row set so a listened
+  // voicemail can never flip back to NEW because of a stale refetch.
+  const readOverridesRef = useRef<Set<string>>(new Set());
+  const unreadOverridesRef = useRef<Set<string>>(new Set());
+
+  const applyReadOverrides = useCallback((list: Voicemail[]): Voicemail[] => {
+    const read = readOverridesRef.current;
+    const unread = unreadOverridesRef.current;
+    if (read.size === 0 && unread.size === 0) return list;
+    return list.map((vm) => {
+      if (read.has(vm.id) && !vm.listened) return { ...vm, listened: true };
+      if (unread.has(vm.id) && vm.listened) return { ...vm, listened: false };
+      return vm;
+    });
+  }, []);
+
+  const persistReadOverrides = useCallback(() => {
+    if (!token) return;
+    const key = `${VM_READ_OVERRIDES_PREFIX}${voicemailQueryUserScope(token)}`;
+    const payload = JSON.stringify({
+      read: Array.from(readOverridesRef.current),
+      unread: Array.from(unreadOverridesRef.current),
+    });
+    AsyncStorage.setItem(key, payload).catch(() => undefined);
+  }, [token]);
+
+  const markReadOverride = useCallback((ids: string[], read: boolean) => {
+    for (const id of ids) {
+      if (read) {
+        readOverridesRef.current.add(id);
+        unreadOverridesRef.current.delete(id);
+      } else {
+        unreadOverridesRef.current.add(id);
+        readOverridesRef.current.delete(id);
+      }
+    }
+    persistReadOverrides();
+  }, [persistReadOverrides]);
+
+  // Tear down any in-progress voicemail playback. Extracted so it can be
+  // reused when a call becomes active (a playing voicemail must never keep
+  // playing over a live call).
+  const stopPlayback = useCallback(() => {
+    const s = soundRef.current;
+    if (s) {
+      s.setOnPlaybackStatusUpdate(null);
+      s.pauseAsync().catch(() => undefined);
+      s.unloadAsync().catch(() => undefined);
+    }
+    soundRef.current = null;
+    setSound(null);
+    activeIdRef.current = null;
+    setActiveId(null);
+  }, []);
 
   // Bounded audio preload/cache: downloads top-5 unread/newest voicemails to
   // cacheDirectory so Play starts from a local file instead of a cold API fetch.
@@ -264,8 +362,10 @@ export function VoicemailTab() {
     const sig = voicemailListSignature(nextRows);
     if (sig === appliedVmSigRef.current) return;
     appliedVmSigRef.current = sig;
-    setRows(nextRows);
-  }, [voicemailQuery.data]);
+    // Apply local read/unread overrides so a listened voicemail never reverts
+    // to NEW because the server round-tripped a stale copy.
+    setRows(applyReadOverrides(nextRows));
+  }, [applyReadOverrides, voicemailQuery.data]);
 
   // Hydrate from the on-disk cache so the list paints instantly on open.
   // Only seeds when we don't already have rows (fresh query data wins).
@@ -279,7 +379,7 @@ export function VoicemailTab() {
         try {
           const cached = JSON.parse(raw) as Voicemail[];
           if (Array.isArray(cached) && cached.length > 0) {
-            setRows((cur) => (cur.length ? cur : cached));
+            setRows((cur) => (cur.length ? cur : applyReadOverrides(cached)));
           }
         } catch {
           /* ignore corrupt cache */
@@ -289,7 +389,35 @@ export function VoicemailTab() {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [applyReadOverrides, token]);
+
+  // Hydrate the persisted read/unread overrides, then re-apply them over any
+  // rows already on screen so a listened voicemail stays READ across restarts.
+  useEffect(() => {
+    if (!token) {
+      readOverridesRef.current = new Set();
+      unreadOverridesRef.current = new Set();
+      return undefined;
+    }
+    let cancelled = false;
+    const key = `${VM_READ_OVERRIDES_PREFIX}${voicemailQueryUserScope(token)}`;
+    AsyncStorage.getItem(key)
+      .then((raw) => {
+        if (cancelled || !raw) return;
+        try {
+          const parsed = JSON.parse(raw) as { read?: string[]; unread?: string[] };
+          readOverridesRef.current = new Set(parsed.read ?? []);
+          unreadOverridesRef.current = new Set(parsed.unread ?? []);
+          setRows((cur) => applyReadOverrides(cur));
+        } catch {
+          /* ignore corrupt overrides */
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [applyReadOverrides, token]);
 
   // Persist the freshest list to disk for the next cold start.
   useEffect(() => {
@@ -331,15 +459,44 @@ export function VoicemailTab() {
     }, [load, voicemailQuery.data, voicemailQuery.isStale]),
   );
 
-  useEffect(() => {
-    if (!token) return undefined;
-    return subscribeToVoicemail(() => {
-      // Never refetch while a voicemail is actively playing — it churns the
-      // list and interrupts playback. The poll resumes once playback stops.
-      if (activeIdRef.current) return;
-      load();
-    });
+  // Cheap background check: fetch only page 1 of each folder (instead of a full
+  // multi-page mailbox resync) and only escalate to the expensive full `load()`
+  // when that shows something the current list doesn't already have. A mailbox
+  // with thousands of voicemails previously re-fetched EVERY page of EVERY
+  // folder on every 15s tick, which saturated the connection pool to the API
+  // host and starved every other tab's own requests (observed: reload
+  // appearing "stuck" on Recent/Contacts/Team while Voicemail resynced).
+  const lightPollVoicemails = useCallback(async () => {
+    if (!token) return;
+    try {
+      const light = await getVoicemails(token, { maxPagesPerFolder: 1 });
+      const known = rowsRef.current;
+      const knownIds = new Set(known.map((vm) => vm.id));
+      const hasNewVoicemail = light.voicemails.some((vm) => !knownIds.has(vm.id));
+      // Folder totals are a cheap secondary signal: if the server now reports
+      // more messages than we've ever loaded, something changed even if it
+      // didn't surface on page 1 (e.g. a message landed straight in "old").
+      const combinedTotal = light.totals.inbox + light.totals.urgent + light.totals.old;
+      const totalsGrew = known.length > 0 && combinedTotal > known.length;
+      if (hasNewVoicemail || totalsGrew) load();
+    } catch {
+      /* transient poll error — the next 15s tick retries */
+    }
   }, [load, token]);
+
+  // Only poll while this tab is actually focused — it previously kept polling
+  // (and, worse, kept fully resyncing) in the background on every other tab.
+  useFocusEffect(
+    useCallback(() => {
+      if (!token) return undefined;
+      return subscribeToVoicemail(() => {
+        // Never refetch while a voicemail is actively playing — it churns the
+        // list and interrupts playback. The poll resumes once playback stops.
+        if (activeIdRef.current) return;
+        lightPollVoicemails();
+      });
+    }, [lightPollVoicemails, token]),
+  );
 
   useEffect(() => () => {
     sound?.unloadAsync().catch(() => undefined);
@@ -350,6 +507,24 @@ export function VoicemailTab() {
     const timer = setTimeout(() => setPlaybackError(null), 3200);
     return () => clearTimeout(timer);
   }, [playbackError]);
+
+  useEffect(() => {
+    if (!copied) return undefined;
+    const timer = setTimeout(() => setCopied(false), 1600);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
+  // Any active call must silence a playing voicemail. Covers inbound
+  // answered/connected and a new outbound call started mid-playback. The
+  // callback button (`callBack`) also stops playback synchronously before
+  // dialing; this effect is the catch-all for every other path.
+  const callIsActive =
+    sip.callState === 'dialing' || sip.callState === 'ringing' || sip.callState === 'connected';
+  useEffect(() => {
+    if (callIsActive && activeIdRef.current) {
+      stopPlayback();
+    }
+  }, [callIsActive, stopPlayback]);
 
   const stats = useMemo(() => {
     const urgent = rows.filter((vm) => vm.folder === 'urgent').length;
@@ -442,6 +617,7 @@ export function VoicemailTab() {
     const markListened = () => {
       if (!vm.listened) {
         markVoicemailListened(token, vm.id, true).catch(() => undefined);
+        markReadOverride([vm.id], true);
         setRows((current) => current.map((row) => row.id === vm.id ? { ...row, listened: true } : row));
         patchVoicemailCache((row) => row.id === vm.id, { listened: true });
       }
@@ -564,29 +740,61 @@ export function VoicemailTab() {
       }
       setPlaybackError('Could not play voicemail audio.');
     }
-  }, [audioCache, makeStatusHandler, patchVoicemailCache, progressAnim, removeVoicemailRowEverywhere, token]);
+  }, [audioCache, makeStatusHandler, markReadOverride, patchVoicemailCache, progressAnim, removeVoicemailRowEverywhere, token]);
 
   const toggleListened = useCallback((vm: Voicemail) => {
     if (!token) return;
     const next = !vm.listened;
     markVoicemailListened(token, vm.id, next).catch(() => undefined);
+    markReadOverride([vm.id], next);
     setRows((current) => current.map((row) => row.id === vm.id ? { ...row, listened: next } : row));
     patchVoicemailCache((row) => row.id === vm.id, { listened: next });
-  }, [patchVoicemailCache, token]);
+  }, [markReadOverride, patchVoicemailCache, token]);
 
   const markSelectedRead = useCallback(async () => {
     if (!token || selectedIds.length === 0) return;
     const ids = selectedIds;
     const selected = rows.filter((vm) => ids.includes(vm.id) && !vm.listened);
+    markReadOverride(ids, true);
     setRows((current) => current.map((row) => ids.includes(row.id) ? { ...row, listened: true } : row));
     patchVoicemailCache((row) => ids.includes(row.id), { listened: true });
     setSelectedIds([]);
     await Promise.all(selected.map((vm) => markVoicemailListened(token, vm.id, true).catch(() => undefined)));
-  }, [patchVoicemailCache, rows, selectedIds, token]);
+  }, [markReadOverride, patchVoicemailCache, rows, selectedIds, token]);
 
+  // Stop any playing voicemail before dialing so the callback audio isn't
+  // talking over the recording (Fix 3). The SIP call-state effect above is the
+  // catch-all for inbound / mid-call scenarios.
   const callBack = useCallback((vm: Voicemail) => {
-    if (sip.registrationState === 'registered' && vm.callerId) sip.dial(vm.callerId);
-  }, [sip]);
+    if (sip.registrationState === 'registered' && vm.callerId) {
+      stopPlayback();
+      sip.dial(vm.callerId);
+    }
+  }, [sip, stopPlayback]);
+
+  // Tap the caller number to copy just the number to the clipboard (Fix 4).
+  const copyNumber = useCallback(async (number: string) => {
+    const n = (number || '').trim();
+    if (!n) return;
+    await Clipboard.setStringAsync(n).catch(() => undefined);
+    setCopied(true);
+  }, []);
+
+  // Seek within the active voicemail from a waveform tap/scrub (Fix 6). Only
+  // the active card wires this up, so `soundRef` is always the playing sound.
+  const seekTo = useCallback(async (fraction: number) => {
+    const s = soundRef.current;
+    if (!s) return;
+    const f = Math.max(0, Math.min(1, fraction));
+    try {
+      const st = await s.getStatusAsync();
+      if (!st.isLoaded || !st.durationMillis) return;
+      await s.setPositionAsync(Math.floor(f * st.durationMillis));
+      progressAnim.setValue(f);
+    } catch {
+      /* ignore transient seek errors */
+    }
+  }, [progressAnim]);
 
   const messageCaller = useCallback((vm: Voicemail) => {
     const number = vm.callerId?.trim();
@@ -685,8 +893,11 @@ export function VoicemailTab() {
         <FlatList
           data={filtered}
           keyExtractor={(item) => item.id}
-          bounces={false}
-          alwaysBounceVertical={false}
+          // iOS needs the list to be able to bounce for pull-to-refresh to fire;
+          // Android's RefreshControl works without it. Gate on iOS so Android is
+          // byte-for-byte unchanged (see IOS_WORK_ANDROID_GUARDRAILS.md).
+          bounces={Platform.OS === 'ios'}
+          alwaysBounceVertical={Platform.OS === 'ios'}
           overScrollMode="never"
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onUserRefresh} tintColor={VM.primary} />}
           contentContainerStyle={[styles.list, { paddingBottom: spacing['5'] }]}
@@ -707,6 +918,8 @@ export function VoicemailTab() {
               onCall={() => callBack(item)}
               onMessage={() => messageCaller(item)}
               onMore={() => setMenuVm(item)}
+              onCopyNumber={copyNumber}
+              onSeek={seekTo}
             />
           )}
         />
@@ -716,6 +929,13 @@ export function VoicemailTab() {
         <View style={[styles.snackbar, { bottom: Math.max(insets.bottom, 8) + 86 }]}>
           <Ionicons name="warning-outline" size={16} color={VM.orange} />
           <Text style={styles.snackbarText}>{playbackError}</Text>
+        </View>
+      )}
+
+      {copied && (
+        <View style={[styles.snackbar, { borderColor: `${VM.green}55`, bottom: Math.max(insets.bottom, 8) + 138 }]}>
+          <Ionicons name="checkmark-circle" size={16} color={VM.green} />
+          <Text style={styles.snackbarText}>Number copied</Text>
         </View>
       )}
 
@@ -869,6 +1089,8 @@ type VoicemailCardProps = {
   onCall: () => void;
   onMessage: () => void;
   onMore: () => void;
+  onCopyNumber: (number: string) => void;
+  onSeek: (fraction: number) => void;
 };
 
 const VoicemailCard = memo(function VoicemailCard({
@@ -884,12 +1106,15 @@ const VoicemailCard = memo(function VoicemailCard({
   onCall,
   onMessage,
   onMore,
+  onCopyNumber,
+  onSeek,
 }: VoicemailCardProps) {
   const { VM, styles } = useVm();
   const status = statusFor(vm);
   const urgent = status === 'urgent';
   const unread = status === 'new';
-  const muted = status === 'old';
+  // READ and archived OLD both get the muted card treatment.
+  const muted = status === 'old' || status === 'read';
   // Played-portion color. Urgent stays orange; everything else (incl. already
   // heard) uses the brand blue so the fill always reads clearly against the
   // neutral track instead of washing out to gray.
@@ -923,15 +1148,25 @@ const VoicemailCard = memo(function VoicemailCard({
             <Text style={[styles.callerName, muted && styles.mutedText]} numberOfLines={1}>
               {callerLabel(vm)}
             </Text>
-            <StatusBadge status={status} />
           </View>
           <Text style={styles.mailboxText} numberOfLines={1}>
-            {vm.callerId || 'Unknown number'} · ext {vm.extension}
+            {vm.callerId ? (
+              <Text
+                style={styles.mailboxNumber}
+                onPress={() => onCopyNumber(vm.callerId)}
+                suppressHighlighting
+              >
+                {vm.callerId}
+              </Text>
+            ) : (
+              'Unknown number'
+            )}
+            {` · ext ${vm.extension}`}
           </Text>
         </View>
 
         <View style={styles.cardRight}>
-          <Text style={styles.timeText}>{formatTime(vm.receivedAt)}</Text>
+          <StatusBadge status={status} />
           <Text style={styles.durationPill}>{formatDuration(vm.durationSec)}</Text>
         </View>
       </View>
@@ -944,7 +1179,12 @@ const VoicemailCard = memo(function VoicemailCard({
         >
           <Ionicons name={active ? 'pause' : 'play'} size={17} color={active ? VM.text : VM.primary} />
         </TouchableOpacity>
-        <Waveform active={active} progressAnim={progressAnim} accent={accent} />
+        <Waveform
+          active={active}
+          progressAnim={progressAnim}
+          accent={accent}
+          onSeek={active ? onSeek : undefined}
+        />
       </View>
 
       {transcript && (
@@ -954,15 +1194,23 @@ const VoicemailCard = memo(function VoicemailCard({
       )}
 
       <View style={styles.actionRow}>
-        <TouchableOpacity style={[styles.actionButton, styles.callButton]} onPress={onCall} activeOpacity={0.8}>
-          <Ionicons name="call" size={17} color={VM.green} />
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.actionButton, styles.chatButton]} onPress={onMessage} activeOpacity={0.8}>
-          <Ionicons name="chatbubble-ellipses-outline" size={17} color={VM.cyan} />
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.moreButton} onPress={onMore} activeOpacity={0.8}>
-          <Ionicons name="ellipsis-horizontal" size={20} color={VM.text2} />
-        </TouchableOpacity>
+        <View style={styles.dateTimeTag}>
+          <Ionicons name="time-outline" size={12} color={VM.text3} />
+          <Text style={styles.dateTimeTagText} numberOfLines={1}>
+            {formatDateTimeTag(vm.receivedAt)}
+          </Text>
+        </View>
+        <View style={styles.actionButtons}>
+          <TouchableOpacity style={[styles.actionButton, styles.callButton]} onPress={onCall} activeOpacity={0.8}>
+            <Ionicons name="call" size={17} color={VM.green} />
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.actionButton, styles.chatButton]} onPress={onMessage} activeOpacity={0.8}>
+            <Ionicons name="chatbubble-ellipses-outline" size={17} color={VM.cyan} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.moreButton} onPress={onMore} activeOpacity={0.8}>
+            <Ionicons name="ellipsis-horizontal" size={20} color={VM.text2} />
+          </TouchableOpacity>
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -978,13 +1226,26 @@ const VoicemailCard = memo(function VoicemailCard({
   a.expanded === b.expanded,
 );
 
-function StatusBadge({ status }: { status: 'urgent' | 'new' | 'old' }) {
+function StatusBadge({ status }: { status: VmStatus }) {
   const { VM, styles } = useVm();
-  const color = status === 'urgent' ? VM.orange : status === 'new' ? VM.primary : VM.text3;
-  const bg = status === 'urgent' ? VM.orangeSoft : status === 'new' ? VM.primarySoft : 'rgba(100, 116, 139, 0.12)';
+  const color =
+    status === 'urgent' ? VM.orange
+    : status === 'new' ? VM.primary
+    : status === 'read' ? VM.green
+    : VM.text3;
+  const bg =
+    status === 'urgent' ? VM.orangeSoft
+    : status === 'new' ? VM.primarySoft
+    : status === 'read' ? VM.greenSoft
+    : 'rgba(100, 116, 139, 0.12)';
+  const label =
+    status === 'urgent' ? 'URGENT'
+    : status === 'new' ? 'NEW'
+    : status === 'read' ? 'READ'
+    : 'OLD';
   return (
     <View style={[styles.statusBadge, { backgroundColor: bg, borderColor: `${color}55` }]}>
-      <Text style={[styles.statusText, { color }]}>{status === 'urgent' ? 'URGENT' : status === 'new' ? 'NEW' : 'OLD'}</Text>
+      <Text style={[styles.statusText, { color }]}>{label}</Text>
     </View>
   );
 }
@@ -1001,13 +1262,42 @@ function Waveform({
   active,
   progressAnim,
   accent,
+  onSeek,
 }: {
   active: boolean;
   progressAnim: Animated.Value;
   accent: string;
+  // When provided (only for the active card), tapping or dragging on the wave
+  // seeks playback to that position (Fix 6).
+  onSeek?: (fraction: number) => void;
 }) {
   const { VM, styles } = useVm();
   const [width, setWidth] = useState(0);
+
+  // Live values read inside the (stable) PanResponder so it never needs to be
+  // recreated as width / active / onSeek change.
+  const widthRef = useRef(0);
+  const onSeekRef = useRef(onSeek);
+  useEffect(() => { onSeekRef.current = onSeek; }, [onSeek]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => !!onSeekRef.current,
+      onMoveShouldSetPanResponder: () => !!onSeekRef.current,
+      onPanResponderGrant: (e) => {
+        const w = widthRef.current;
+        if (w > 0 && onSeekRef.current) {
+          onSeekRef.current(Math.max(0, Math.min(1, e.nativeEvent.locationX / w)));
+        }
+      },
+      onPanResponderMove: (e) => {
+        const w = widthRef.current;
+        if (w > 0 && onSeekRef.current) {
+          onSeekRef.current(Math.max(0, Math.min(1, e.nativeEvent.locationX / w)));
+        }
+      },
+    }),
+  ).current;
 
   const bars = (color: string, dim: boolean) =>
     WAVE_BARS.map((h, idx) => (
@@ -1027,7 +1317,12 @@ function Waveform({
   return (
     <View
       style={styles.waveBars}
-      onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
+      onLayout={(e) => {
+        const w = e.nativeEvent.layout.width;
+        widthRef.current = w;
+        setWidth(w);
+      }}
+      {...panResponder.panHandlers}
     >
       {/* Unplayed track */}
       <View style={styles.waveRow}>{bars(VM.waveTrack, true)}</View>
@@ -1509,15 +1804,29 @@ function makeStyles(VM: VmPalette) {
     lineHeight: 18,
     fontWeight: '600',
   },
+  mailboxNumber: {
+    color: VM.primary,
+    textDecorationLine: 'underline',
+  },
   cardRight: {
     alignItems: 'flex-end',
     gap: spacing['1.5'],
   },
-  timeText: {
+  dateTimeTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing['1'],
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    backgroundColor: 'rgba(148, 163, 184, 0.10)',
+    flexShrink: 1,
+  },
+  dateTimeTagText: {
     color: VM.text3,
     fontSize: 12,
     lineHeight: 16,
-    fontWeight: '800',
+    fontWeight: '700',
   },
   durationPill: {
     color: VM.text2,
@@ -1593,7 +1902,12 @@ function makeStyles(VM: VmPalette) {
     marginTop: spacing['4'],
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
+    gap: spacing['2'],
+  },
+  actionButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: spacing['2'],
   },
   actionButton: {

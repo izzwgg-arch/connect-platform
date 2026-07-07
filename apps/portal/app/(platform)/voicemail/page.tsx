@@ -786,7 +786,9 @@ export default function VoicemailPage() {
       if (selected?.id === vm.id) setSelected({ ...selected, listened: true });
       setReloadKey((key) => key + 1);
     } catch {
-      // The stream endpoint also marks the item read server-side; keep playback resilient.
+      // Marking read is now driven ONLY by this explicit PATCH on real playback
+      // (the stream endpoint no longer auto-marks read). Keep playback resilient
+      // if the PATCH fails — the next successful play will retry the mark.
     }
   }
 

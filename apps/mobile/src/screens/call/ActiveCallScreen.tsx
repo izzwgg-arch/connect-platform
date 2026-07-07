@@ -5,10 +5,12 @@ import {
   StyleSheet,
   TouchableOpacity,
   Animated,
+  BackHandler,
   Modal,
   Dimensions,
   Platform,
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { clearAndroidLockScreenCallPresentation } from '../../sip/callkeep';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -121,6 +123,7 @@ function CtrlBtn({ icon, label, onPress, active, danger, disabled }: CtrlBtnProp
 
 export function ActiveCallScreen() {
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation<any>();
   const sip = useSip();
   const incomingNotif = useIncomingNotifications();
   const { isDark } = useTheme();
@@ -289,6 +292,29 @@ export function ActiveCallScreen() {
     }
   }, []);
 
+  // Minimize (Fix 2): reveal the tabs WITHOUT touching the SIP session so the
+  // user can use the rest of the app during a call. Navigating to 'Tabs' pops
+  // the ActiveCall (and any lingering IncomingCall) modal off the AppStack
+  // while leaving the Tabs navigator — and its per-tab scroll state — intact.
+  // The OngoingCallBanner in TabsWrapper then lets the user tap back into the
+  // call. This does NOT hang up: no hangup/end path is invoked here.
+  const handleMinimize = useCallback(() => {
+    try {
+      navigation.navigate('Tabs');
+    } catch {}
+  }, [navigation]);
+
+  // Hardware back = minimize, never end the call or exit the app. Returning
+  // true consumes the event so Android doesn't pop/destroy the call screen in
+  // a way that would drop the live session.
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      handleMinimize();
+      return true;
+    });
+    return () => sub.remove();
+  }, [handleMinimize]);
+
   // Auto-dismiss is handled by RootNavigator which removes this screen from
   // the stack when isCallActive becomes false (on 'idle'). Calling goBack()
   // here races with that and causes a crash — do nothing.
@@ -444,6 +470,20 @@ export function ActiveCallScreen() {
       <Animated.View
         style={[styles.glowRing, { opacity: glowOpacity, transform: [{ scale: pulseAnim }] }]}
       />
+
+      {/* Minimize control (Fix 2): back out to the tabs while keeping the call
+          running. Positioned top-left so it never disturbs the centered
+          status/timer layout. */}
+      <TouchableOpacity
+        onPress={handleMinimize}
+        activeOpacity={0.8}
+        style={[styles.minimizeBtn, { top: insets.top + 12 }]}
+        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        accessibilityRole="button"
+        accessibilityLabel="Minimize call"
+      >
+        <Ionicons name="chevron-down" size={26} color="rgba(255,255,255,0.85)" />
+      </TouchableOpacity>
 
       {/* ── Top status ── */}
       <View style={[styles.topArea, { paddingTop: insets.top + 16 }]}>
@@ -668,6 +708,18 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(59,130,246,0.09)',
     alignSelf: 'center',
     top: 80,
+  },
+
+  minimizeBtn: {
+    position: 'absolute',
+    left: 12,
+    zIndex: 70,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.06)',
   },
 
   topArea: {

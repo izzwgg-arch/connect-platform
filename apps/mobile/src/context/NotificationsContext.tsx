@@ -206,6 +206,21 @@ export type CallReadiness = {
   pushTokenRetrying: boolean;
   /** Android: whether we believe battery optimization may interfere */
   batteryOptimizationWarning: boolean;
+  /**
+   * Android: the REAL OS battery-optimization exemption state, read live from
+   * the native module (`isBatteryOptimizationIgnored`).
+   *   true  = app is exempt from Doze/optimization (good)
+   *   false = still being optimized (calls may not ring in background)
+   *   null  = unknown / not yet checked / non-Android
+   * This is the source of truth for the Settings row — never a guess.
+   */
+  batteryOptimizationIgnored: boolean | null;
+  /**
+   * Microphone (RECORD_AUDIO) runtime-permission state, read live from
+   * `PermissionsAndroid.check`. Surfaced in Settings so a user who dismissed
+   * the first-run mic prompt can re-grant it. "unknown" until first checked.
+   */
+  microphonePermission: "granted" | "denied" | "unknown";
   /** True only when all hard requirements are met */
   isFullyReady: boolean;
 };
@@ -253,7 +268,17 @@ type NotificationsState = {
   runMediaTest: () => Promise<void>;
   callReadiness: CallReadiness;
   openBatteryOptimizationSettings: () => Promise<void>;
+  /**
+   * Android: fire the system Doze-exemption "Allow" dialog directly (single-tap
+   * on most OEMs), then re-check the live status. Falls back to the settings
+   * deep-link when the native request module is unavailable.
+   */
+  requestBatteryOptimizationExclusion: () => Promise<void>;
   requestNotificationPermission: () => Promise<void>;
+  /** Android: request the microphone (RECORD_AUDIO) runtime permission, then re-check. */
+  requestMicrophonePermission: () => Promise<void>;
+  /** Re-query the live OS state for battery optimization + microphone permission. */
+  refreshDeviceReadiness: () => Promise<void>;
   /** Re-attempt push token registration (useful when the first attempt failed). */
   retryPushTokenRegistration: () => Promise<void>;
 };
@@ -1053,6 +1078,8 @@ export function NotificationsProvider({
     pushTokenError: null,
     pushTokenRetrying: false,
     batteryOptimizationWarning: Platform.OS === "android" && !!Device.isDevice,
+    batteryOptimizationIgnored: null,
+    microphonePermission: "unknown",
     isFullyReady: false,
   });
 
@@ -1606,6 +1633,95 @@ export function NotificationsProvider({
       );
     }
   }, []);
+
+  // ── Live device-readiness refresh (battery optimization + microphone) ──────
+  //
+  // Queries the ACTUAL OS state rather than a guess/"settings were opened"
+  // flag. Runs on mount and every foreground so the Settings rows always
+  // reflect reality (e.g. the user just toggled "Don't optimize" and came
+  // back). No-op / benign on iOS.
+  const refreshDeviceReadiness = useCallback(async () => {
+    if (Platform.OS !== "android") return;
+
+    // Battery optimization — real exemption state from the native module.
+    let batteryIgnored: boolean | null = null;
+    try {
+      const mod: any = (NativeModules as any)?.IncomingCallUi;
+      if (typeof mod?.isBatteryOptimizationIgnored === "function") {
+        batteryIgnored = Boolean(await mod.isBatteryOptimizationIgnored());
+      }
+    } catch {
+      batteryIgnored = null;
+    }
+
+    // Microphone — real RECORD_AUDIO grant state.
+    let micPermission: CallReadiness["microphonePermission"] = "unknown";
+    try {
+      const granted = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+      );
+      micPermission = granted ? "granted" : "denied";
+    } catch {
+      micPermission = "unknown";
+    }
+
+    setCallReadiness((prev) => ({
+      ...prev,
+      batteryOptimizationIgnored: batteryIgnored,
+      microphonePermission: micPermission,
+    }));
+  }, []);
+
+  // ── Request the Doze-exemption dialog directly, then re-check ──────────────
+  //
+  // Prefers the native `requestBatteryOptimizationExclusion()` which pops the
+  // one-tap "Allow" system dialog. Falls back to the multi-OEM settings
+  // deep-link (`openBatteryOptimizationSettings`) when that native method
+  // isn't present. Either way we re-read the real status afterward.
+  const requestBatteryOptimizationExclusion = useCallback(async () => {
+    if (Platform.OS !== "android") return;
+    try {
+      const mod: any = (NativeModules as any)?.IncomingCallUi;
+      if (typeof mod?.requestBatteryOptimizationExclusion === "function") {
+        await mod.requestBatteryOptimizationExclusion();
+      } else {
+        await openBatteryOptimizationSettings();
+      }
+    } catch {
+      await openBatteryOptimizationSettings().catch(() => undefined);
+    }
+    // The dialog result lands asynchronously; give it a beat, then re-check.
+    await new Promise((r) => setTimeout(r, 600));
+    await refreshDeviceReadiness();
+  }, [refreshDeviceReadiness]);
+
+  // ── Request the microphone runtime permission, then re-check ───────────────
+  const requestMicrophonePermission = useCallback(async () => {
+    if (Platform.OS !== "android") return;
+    try {
+      const result = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        {
+          title: "Microphone access",
+          message:
+            "Connect needs microphone access so you can be heard on calls.",
+          buttonPositive: "Allow",
+        },
+      );
+      if (result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
+        // User previously chose "Don't ask again" — the runtime prompt can no
+        // longer appear, so send them to the app's settings page instead.
+        showAppAlert(
+          "Microphone access needed",
+          "Microphone permission is blocked. Enable it in Android Settings → Apps → Connect → Permissions → Microphone.",
+          [{ text: "OK" }],
+        );
+      }
+    } catch {
+      /* best-effort — re-check below reflects whatever the user chose */
+    }
+    await refreshDeviceReadiness();
+  }, [refreshDeviceReadiness]);
 
   // ── Retry push token registration ────────────────────────────────────────
   //
@@ -4744,6 +4860,10 @@ export function NotificationsProvider({
   useEffect(() => {
     const sub = AppState.addEventListener("change", async (state) => {
       if (state !== "active") return;
+      // Re-read the live OS battery-optimization + mic state every time the app
+      // returns to the foreground (e.g. the user just came back from toggling
+      // "Don't optimize"), so the Settings rows never show a stale/guessed value.
+      refreshDeviceReadiness().catch(() => undefined);
       const perm = await Notifications.getPermissionsAsync().catch(() => null);
       if (!perm) return;
       const granted = perm.status === "granted";
@@ -4789,7 +4909,14 @@ export function NotificationsProvider({
     return () => sub.remove();
   // retryPushTokenRegistration is stable (useCallback with [token] dep)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, retryPushTokenRegistration]);
+  }, [token, retryPushTokenRegistration, refreshDeviceReadiness]);
+
+  // ── One-shot readiness check on mount ─────────────────────────────────────
+  // Ensures the Settings rows have real battery/mic state the first time they
+  // render, without waiting for a background→foreground transition.
+  useEffect(() => {
+    refreshDeviceReadiness().catch(() => undefined);
+  }, [refreshDeviceReadiness]);
 
   // ── Registration / call state telemetry ───────────────────────────────────
 
@@ -4919,7 +5046,10 @@ export function NotificationsProvider({
       runMediaTest,
       callReadiness,
       openBatteryOptimizationSettings,
+      requestBatteryOptimizationExclusion,
       requestNotificationPermission,
+      requestMicrophonePermission,
+      refreshDeviceReadiness,
       retryPushTokenRegistration,
     }),
     [
@@ -4932,7 +5062,10 @@ export function NotificationsProvider({
       safeSetInvite,
       handleAcceptInvite,
       handleDeclineInvite,
+      requestBatteryOptimizationExclusion,
       requestNotificationPermission,
+      requestMicrophonePermission,
+      refreshDeviceReadiness,
       retryPushTokenRegistration,
     ],
   );

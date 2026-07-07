@@ -17365,9 +17365,17 @@ async function finishVoicemailStreamFromBuffer(
     reply.header("Content-Disposition", `attachment; filename="voicemail-${mailbox}-${vm.id}.${responseExt}"`);
   }
 
-  if (!vm.readAt) {
-    await db.voicemail.update({ where: { id: vm.id }, data: { listened: true, readAt: new Date() } }).catch(() => undefined);
-  }
+  // NOTE: Streaming/downloading the audio must NEVER mark the voicemail as
+  // read. A voicemail is only "read" once a human actually listens to it, and
+  // that is signalled explicitly by the client via `PATCH /voice/voicemail/:id
+  // { listened: true }` when playback truly starts (mobile: markVoicemailListened
+  // on play-load; portal SmartAudioPlayer: onPlayed right before audio.play()).
+  // This endpoint is hit for many non-listen reasons — the mobile audio
+  // pre-loader (`?raw=1`), the `Range: bytes=0-0` access probe, browser
+  // <audio> range requests, and explicit downloads — none of which mean the
+  // message was heard. Auto-marking here caused voicemails to flip to READ
+  // merely by opening the voicemail list (mobile prefetch) or the page, so it
+  // was removed. Do not re-add read-marking on the stream path.
 
   sendBufferWithOptionalRange(req, reply, Buffer.from(buf), responseContentType);
 }

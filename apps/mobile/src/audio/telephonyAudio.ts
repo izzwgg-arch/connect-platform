@@ -144,6 +144,46 @@ function getDtmfWav(digit: string): string | null {
   return _dtmfWavCache[key];
 }
 
+// ─── Android ringback via InCallManager ───────────────────────────────────────
+//
+// On Android the outbound ringback must NOT be a synthesized WAV played through
+// expo-av's media stream, for two reasons the user hit directly:
+//
+//   1. No ringback at all — while InCallManager holds the call audio mode
+//      (MODE_IN_COMMUNICATION), media-stream playback is ducked/silenced, so the
+//      generated tone was created but inaudible on outgoing calls.
+//   2. Ringback stops when backgrounding — an expo-av sound is tied to the app
+//      lifecycle, so leaving the app mid-dial (to open another app) went silent
+//      even though the call was still ringing.
+//
+// InCallManager plays ringback on the voice-call stream via a native tone
+// generator: it's audible during the call and keeps playing when the app is in
+// the background, because it's owned by the call audio session, not JS. The
+// audio manager is already activated by the SIP dial path, so passing a
+// non-empty `ringback` here only starts the tone (no re-route).
+function androidStartIcmRingback(): boolean {
+  if (Platform.OS !== "android") return false;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const m = require("react-native-incall-manager").default;
+    m.start({ media: "audio", ringback: "_DTMF_" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function androidStopIcmRingback(): void {
+  if (Platform.OS !== "android") return;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const m = require("react-native-incall-manager").default;
+    if (typeof m.stopRingback === "function") m.stopRingback();
+  } catch {
+    /* module missing — nothing to stop */
+  }
+}
+
 // ─── Sound player helpers ─────────────────────────────────────────────────────
 
 async function playOnce(source: any, volume = 1.0): Promise<Audio.Sound | null> {
@@ -280,6 +320,8 @@ export async function stopAllTelephonyAudio() {
   // canonical chokepoint invoked by SIP session 'ended' / 'failed' callbacks
   // so the ringtone stops the instant the remote party CANCELs.
   stopNativeAndroidRingtone("stop_all_telephony_audio");
+  // Stop the Android InCallManager ringback tone (no-op on iOS / when idle).
+  androidStopIcmRingback();
   // Bump generation first so any in-flight startRingtone resolves and self-unloads
   // the sound it was about to assign to ringtoneSound.
   ringtoneGeneration += 1;
@@ -314,6 +356,11 @@ export async function startRingback() {
   ringtoneSound = null;
 
   ringbackStopped = false;
+
+  // Android: delegate to InCallManager's native ringback (voice-call stream,
+  // audible during the call AND background-safe). Falls through to the expo-av
+  // synthesized cadence below only if the native module is unavailable.
+  if (androidStartIcmRingback()) return;
 
   async function cycle() {
     if (ringbackStopped) return;
