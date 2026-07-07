@@ -29372,8 +29372,9 @@ app.post("/mobile/foreground-active", async (req, reply) => {
   const key = "ios_fg_active:" + device.id;
   try {
     if (body.data.active) {
-      // 30s TTL; the client re-pings well within that window (~15s).
-      await redis.set(key, "1", "EX", 30);
+      // ~10s TTL; the client re-pings every ~4s, well within that window, so a
+      // force-quit (pings stop) resumes the VoIP push within ~10s.
+      await redis.set(key, "1", "EX", 10);
     } else {
       await redis.del(key);
     }
