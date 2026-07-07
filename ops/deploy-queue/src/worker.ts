@@ -12,7 +12,7 @@ function claimNextJob(db: Database.Database, now: number, logDir: string): JobRo
       .prepare(
         `SELECT id, service, branch, commit_hash, deployed_commit, requested_by, status,
                 created_at, started_at, finished_at, log_path, error_message, dry_run,
-                current_stage, skip_reason, duration_ms
+                current_stage, skip_reason, duration_ms, force_restart
          FROM jobs WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1`,
       )
       .get() as JobRow | undefined;
@@ -61,6 +61,15 @@ function jobScript(repoRoot: string, service: string): string {
 
 function dryRunEnv(job: JobRow): Record<string, string> {
   return (job.dry_run ?? 0) ? { DEPLOY_DRY_RUN: "1" } : {};
+}
+
+/**
+ * Threads the opt-in same-commit skip bypass into the deploy script. Only
+ * scripts/deploy-<service>.sh decide what to do with it (see DEPLOY_FORCE_RESTART
+ * usage there) — this never affects fetch/checkout-safety/build/health/rollback.
+ */
+function forceRestartEnv(job: JobRow): Record<string, string> {
+  return (job.force_restart ?? 0) ? { DEPLOY_FORCE_RESTART: "1" } : {};
 }
 
 function ensureLogDir(logDir: string): void {
@@ -139,6 +148,7 @@ function runDeployScript(
         env: {
           ...process.env,
           ...dryRunEnv(job),
+          ...forceRestartEnv(job),
           DEPLOY_REPO_ROOT: repoRoot,
           DEPLOY_BRANCH: job.branch,
           DEPLOY_COMMIT: job.commit_hash ?? "",

@@ -29,6 +29,14 @@ export type JobRow = {
   duration_ms: number | null;
   /** 'auto' = enqueued by agent/system; 'manual' = enqueued via UI or authenticated admin call. */
   source: "auto" | "manual";
+  /**
+   * Opt-in, per-job bypass of the same-commit skip guards ONLY (the enqueue-level
+   * `commit_already_deployed` check in commitSkip.ts, and the script-level
+   * `no_changes`/`unrelated_paths` checks in scripts/deploy-<service>.sh via
+   * DEPLOY_FORCE_RESTART=1). Every other safety behavior — fetch, checkout-safety
+   * diff, install/build/up, health check, rollback trap — is unaffected.
+   */
+  force_restart: number;
 };
 
 export const DEPLOY_SERVICES: DeployService[] = [
@@ -65,6 +73,9 @@ function migrateJobsTable(db: Database.Database): void {
   if (!names.has("source")) {
     db.exec(`ALTER TABLE jobs ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'`);
   }
+  if (!names.has("force_restart")) {
+    db.exec(`ALTER TABLE jobs ADD COLUMN force_restart INTEGER NOT NULL DEFAULT 0`);
+  }
 }
 
 export function openQueueDb(filePath: string): Database.Database {
@@ -90,7 +101,8 @@ export function openQueueDb(filePath: string): Database.Database {
       skip_reason TEXT,
       deployed_commit TEXT,
       duration_ms INTEGER,
-      source TEXT NOT NULL DEFAULT 'manual'
+      source TEXT NOT NULL DEFAULT 'manual',
+      force_restart INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_per_service

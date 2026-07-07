@@ -32,3 +32,22 @@ export function shouldSkipCommitAlreadyDeployed(
   return resolved === trimmed;
 }
 
+/**
+ * Enqueue-time gate combining {@link shouldSkipCommitAlreadyDeployed} with the opt-in
+ * `forceRestart` bypass. `forceRestart` unconditionally short-circuits to "do not skip" —
+ * it exists so a caller can force a real restart of a service that is already pinned to
+ * the requested commit (e.g. to pick up a changed env var), without pinning a different/
+ * fake commit and without affecting the rate limit, duplicate-active-job guard, fetch,
+ * checkout-safety diff, install/build/up, health check, or rollback trap, none of which
+ * this function touches.
+ */
+export function shouldSkipEnqueueForAlreadyDeployedCommit(
+  db: DeployQueueDbForCommitSkip,
+  service: DeployService,
+  commitHash: string,
+  forceRestart: boolean,
+): boolean {
+  if (forceRestart) return false;
+  return !!commitHash && shouldSkipCommitAlreadyDeployed(db, service, commitHash);
+}
+

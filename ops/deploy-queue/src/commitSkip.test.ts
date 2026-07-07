@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   COMMIT_ALREADY_DEPLOYED_LOOKUP_SQL,
   shouldSkipCommitAlreadyDeployed,
+  shouldSkipEnqueueForAlreadyDeployedCommit,
   type DeployQueueDbForCommitSkip,
 } from "./commitSkip.js";
 
@@ -80,4 +81,45 @@ test("empty commit hash => do not skip", () => {
     }),
   };
   assert.equal(shouldSkipCommitAlreadyDeployed(db, "api", "   "), false);
+});
+
+test("shouldSkipEnqueueForAlreadyDeployedCommit: forceRestart=true always bypasses, even when the commit matches and DB would otherwise skip", () => {
+  const sha = "111000000000000000000000000000000000000";
+  const db: DeployQueueDbForCommitSkip = {
+    prepare: () => ({
+      get: () => {
+        throw new Error("forceRestart must short-circuit before any DB lookup");
+      },
+    }),
+  };
+  assert.equal(shouldSkipEnqueueForAlreadyDeployedCommit(db, "worker", sha, true), false);
+});
+
+test("shouldSkipEnqueueForAlreadyDeployedCommit: forceRestart=false defers to shouldSkipCommitAlreadyDeployed (skip case)", () => {
+  const sha = "222000000000000000000000000000000000000";
+  const db: DeployQueueDbForCommitSkip = {
+    prepare: () => ({ get: () => ({ resolved: sha }) }),
+  };
+  assert.equal(shouldSkipEnqueueForAlreadyDeployedCommit(db, "worker", sha, false), true);
+});
+
+test("shouldSkipEnqueueForAlreadyDeployedCommit: forceRestart=false defers to shouldSkipCommitAlreadyDeployed (no-skip case)", () => {
+  const db: DeployQueueDbForCommitSkip = {
+    prepare: () => ({ get: () => undefined }),
+  };
+  assert.equal(
+    shouldSkipEnqueueForAlreadyDeployedCommit(db, "worker", "333000000000000000000000000000000000000", false),
+    false,
+  );
+});
+
+test("shouldSkipEnqueueForAlreadyDeployedCommit: empty commitHash + forceRestart=false => do not skip, no DB lookup", () => {
+  const db: DeployQueueDbForCommitSkip = {
+    prepare: () => ({
+      get: () => {
+        throw new Error("no commitHash means nothing to look up");
+      },
+    }),
+  };
+  assert.equal(shouldSkipEnqueueForAlreadyDeployedCommit(db, "worker", "", false), false);
 });

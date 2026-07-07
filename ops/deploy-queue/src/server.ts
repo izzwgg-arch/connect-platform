@@ -4,13 +4,13 @@ import fs from "node:fs";
 import path from "node:path";
 import express from "express";
 import type Database from "better-sqlite3";
-import { shouldSkipCommitAlreadyDeployed } from "./commitSkip.js";
+import { shouldSkipEnqueueForAlreadyDeployedCommit } from "./commitSkip.js";
 import { countQueued, isDeployService, openQueueDb, resetStaleRunning, DEPLOY_SERVICES, type DeployService, type JobRow } from "./db.js";
 import { startWorkerLoop } from "./worker.js";
 
 const JOB_COLUMNS = `id, service, branch, commit_hash, deployed_commit, requested_by, status, dry_run,
                      created_at, started_at, finished_at, log_path, error_message,
-                     current_stage, skip_reason, duration_ms, source`;
+                     current_stage, skip_reason, duration_ms, source, force_restart`;
 
 /** Add camelCase aliases + derived `duration` so HTTP clients (and AGENTS.md) don't have to know SQLite column naming. */
 function decorateJob(row: JobRow): Record<string, unknown> {
@@ -34,6 +34,7 @@ function decorateJob(row: JobRow): Record<string, unknown> {
     duration: computedDuration,
     durationMs: computedDuration,
     source: row.source ?? "manual",
+    forceRestart: !!row.force_restart,
   };
 }
 
@@ -312,6 +313,12 @@ export function createApp(opts: CreateAppOptions) {
     const commitHash = body.commitHash != null ? String(body.commitHash).trim() : "";
     const requestedBy = String(body.requestedBy || "unknown").trim().slice(0, 200);
     const dryRun = body.dryRun === true || body.dryRun === "true" || body.dryRun === 1;
+    // Opt-in, per-job bypass of the same-commit skip guards ONLY (this enqueue-level
+    // commit_already_deployed check, plus the script-level no_changes/unrelated_paths
+    // checks via DEPLOY_FORCE_RESTART — see worker.ts). Everything else (rate limit,
+    // duplicate-active-job guard, fetch, checkout-safety diff, build/up, health check,
+    // rollback trap) is unaffected.
+    const forceRestart = body.forceRestart === true || body.forceRestart === "true" || body.forceRestart === 1;
 
     // Determine source: callers can declare "auto", or we infer from origin.
     const declaredSource = String(body.source || "").trim();
@@ -352,7 +359,8 @@ export function createApp(opts: CreateAppOptions) {
     }
 
     // Skip if this exact commit is already deployed (real success only — dry-run must never count).
-    if (commitHash && shouldSkipCommitAlreadyDeployed(db, service as DeployService, commitHash)) {
+    // forceRestart deliberately bypasses ONLY this check.
+    if (shouldSkipEnqueueForAlreadyDeployedCommit(db, service as DeployService, commitHash, forceRestart)) {
       res.status(200).json({
         skipped: true,
         reason: "commit_already_deployed",
@@ -375,10 +383,11 @@ export function createApp(opts: CreateAppOptions) {
     const id = crypto.randomUUID();
     const now = Date.now();
     const dryInt = dryRun ? 1 : 0;
+    const forceRestartInt = forceRestart ? 1 : 0;
     try {
       db.prepare(
-        `INSERT INTO jobs (id, service, branch, commit_hash, requested_by, status, created_at, started_at, finished_at, log_path, error_message, dry_run, current_stage, skip_reason, deployed_commit, duration_ms, source)
-         VALUES (?, ?, ?, ?, ?, 'queued', ?, NULL, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL, ?)`,
+        `INSERT INTO jobs (id, service, branch, commit_hash, requested_by, status, created_at, started_at, finished_at, log_path, error_message, dry_run, current_stage, skip_reason, deployed_commit, duration_ms, source, force_restart)
+         VALUES (?, ?, ?, ?, ?, 'queued', ?, NULL, NULL, NULL, NULL, ?, NULL, NULL, NULL, NULL, ?, ?)`,
       ).run(
         id,
         service,
@@ -388,6 +397,7 @@ export function createApp(opts: CreateAppOptions) {
         now,
         dryInt,
         source,
+        forceRestartInt,
       );
     } catch (e: unknown) {
       const err = e as { code?: string };

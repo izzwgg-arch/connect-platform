@@ -57,14 +57,20 @@ source "$ROOT/scripts/lib/deploy-common.sh"
 deploy_common_emit_deployed_commit "$NEW_HEAD"
 
 deploy_common_emit_stage "change-detect"
-if [[ "$OLD_HEAD" == "$NEW_HEAD" ]]; then
+# DEPLOY_FORCE_RESTART=1 is an opt-in, per-job bypass of the two same-commit skip
+# guards below ONLY (see ops/deploy-queue/src/server.ts `forceRestart`). Everything
+# after this block — install, build, docker up, health check, rollback trap — is
+# unchanged and still runs unconditionally once past these gates.
+if [[ "$OLD_HEAD" == "$NEW_HEAD" && "${DEPLOY_FORCE_RESTART:-0}" != "1" ]]; then
   deploy_common_emit_stage "done"
   deploy_common_emit_skip "no_changes"
   log "deployed commit already at ${NEW_HEAD:0:12} — skipping install/build/restart"
   exit 0
 fi
 
-if ! deploy_common_needs_rebuild "$SERVICE" "$OLD_HEAD"; then
+if [[ "${DEPLOY_FORCE_RESTART:-0}" == "1" ]]; then
+  log "DEPLOY_FORCE_RESTART=1 — bypassing no_changes/unrelated_paths skip guards, forcing install/build/restart at ${NEW_HEAD:0:12}"
+elif ! deploy_common_needs_rebuild "$SERVICE" "$OLD_HEAD"; then
   deploy_common_mark_deployed "$SERVICE" "$NEW_HEAD"
   deploy_common_emit_stage "done"
   deploy_common_emit_skip "unrelated_paths"
